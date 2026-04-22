@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-data-platform.local/schemas/report-plan.schema.json",
+  "title": "ReportPlan",
+  "type": "object",
+  "required": ["datasetId", "title", "objective", "themeKey", "modules"],
+  "properties": {
+    "datasetId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1
+    },
+    "objective": {
+      "type": "string",
+      "minLength": 1
+    },
+    "themeKey": {
+      "type": "string",
+      "minLength": 1
+    },
+    "modules": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["kind", "title", "sortOrder"],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": ["Hero", "NarrativeText", "EvidenceList", "MetricCard", "Chart", "Table", "Timeline"]
+          },
+          "title": {
+            "type": "string"
+          },
+          "sortOrder": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "expectedCopy": {
+            "type": ["string", "null"]
+          },
+          "chartIntent": {
+            "type": ["string", "null"]
+          },
+          "dataBindingSlot": {
+            "type": ["string", "null"]
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

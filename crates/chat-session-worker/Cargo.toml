@@ -1,0 +1,25 @@
+[package]
+name = "chat-session-worker"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+chrono.workspace = true
+contracts = { path = "../contracts" }
+domain-model = { path = "../domain-model" }
+event-bus = { path = "../event-bus" }
+llm-gateway = { path = "../llm-gateway" }
+observability = { path = "../observability" }
+platform-api = { path = "../platform-api" }
+prompt-registry = { path = "../prompt-registry" }
+serde_json.workspace = true
+storage = { path = "../storage" }
+tokio.workspace = true
+tool-registry = { path = "../tool-registry" }
+tracing.workspace = true
+uuid.workspace = true
+workflow-definitions = { path = "../workflow-definitions" }
+workflow-engine = { path = "../workflow-engine" }

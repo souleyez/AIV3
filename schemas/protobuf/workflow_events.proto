@@ -1,0 +1,11 @@
+syntax = "proto3";
+
+package ai_data_platform.v3.workflow;
+
+message WorkflowEventEnvelope {
+  string execution_id = 1;
+  string workflow_kind = 2;
+  string event_name = 3;
+  string occurred_at = 4;
+  bytes payload_json = 5;
+}

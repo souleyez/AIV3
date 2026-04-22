@@ -1,0 +1,12 @@
+[package]
+name = "workflow-definitions"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+chrono.workspace = true
+domain-model = { path = "../domain-model" }
+serde_json.workspace = true
+workflow-engine = { path = "../workflow-engine" }

@@ -1,0 +1,29 @@
+[package]
+name = "platform-api"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+axum.workspace = true
+chrono.workspace = true
+contracts = { path = "../contracts" }
+domain-model = { path = "../domain-model" }
+event-bus = { path = "../event-bus" }
+observability = { path = "../observability" }
+serde_json.workspace = true
+sqlx.workspace = true
+storage = { path = "../storage" }
+tokio.workspace = true
+tool-registry = { path = "../tool-registry" }
+tracing.workspace = true
+uuid.workspace = true
+workflow-definitions = { path = "../workflow-definitions" }
+workflow-engine = { path = "../workflow-engine" }
+
+[dev-dependencies]
+serde.workspace = true
+test-fixtures = { path = "../test-fixtures" }
+tower = { version = "0.5.2", features = ["util"] }

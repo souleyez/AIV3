@@ -1,0 +1,23 @@
+openapi: 3.1.0
+info:
+  title: AI Data Platform V3 Platform API
+  version: 0.1.0
+paths:
+  /healthz:
+    get:
+      summary: Liveness probe
+      responses:
+        "200":
+          description: Service is alive
+  /readyz:
+    get:
+      summary: Readiness probe
+      responses:
+        "200":
+          description: Service is ready
+  /v1/workflows/definitions:
+    get:
+      summary: List workflow definitions available in the control plane
+      responses:
+        "200":
+          description: Workflow definition descriptors
