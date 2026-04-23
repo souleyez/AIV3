@@ -98,6 +98,10 @@ Progress:
   to the existing session through `chat_session_id`.
 - 2026-04-23: Updated the web composer so selected sessions append by default,
   while "new conversation" remains an explicit host action.
+- 2026-04-23: Hardened append-turn semantics with regression coverage for
+  three completed follow-up turns, in-progress turn rejection, stable max-based
+  `turn_index` sequencing, and report-entry gate preservation across worker
+  session-manifest state transitions.
 
 ## Phase 3: Mobile-Usable Web Shell
 

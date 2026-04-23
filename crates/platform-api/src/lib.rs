@@ -8316,6 +8316,14 @@ mod tests {
         session_id: ChatSessionId,
     }
 
+    struct AppendTurnApiTestHarness {
+        app: Router,
+        storage: PgStorage,
+        tenant_id: TenantId,
+        dataset_id: DatasetId,
+        session_id: ChatSessionId,
+    }
+
     async fn build_report_entry_api_test_harness(
         report_entry: Option<Value>,
     ) -> Option<ReportEntryApiTestHarness> {
@@ -8422,6 +8430,124 @@ mod tests {
         })
     }
 
+    async fn build_append_turn_api_test_harness(
+        report_entry: Option<Value>,
+    ) -> Option<AppendTurnApiTestHarness> {
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping append turn route test: {reason}");
+                return None;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("platform-api-test-{}", Uuid::new_v4()),
+                "Platform API Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let dataset = storage
+            .datasets()
+            .create(
+                tenant.id,
+                NewDataset {
+                    key: format!("dataset-{}", Uuid::new_v4()),
+                    title: "Append Turn Dataset".to_string(),
+                    description: Some("Dataset used for append turn tests.".to_string()),
+                },
+            )
+            .await
+            .expect("dataset should be created");
+        let base_execution = create_test_workflow_execution(
+            &storage,
+            tenant.id,
+            dataset.id,
+            WorkflowKind::ChatSession,
+        )
+        .await;
+        let now = Utc::now();
+        let mut session_manifest = json!({
+            "generator": "chat-session-workflow",
+            "schema_version": "0.3.0",
+            "status": "assistant_replied",
+            "initial_prompt": "Initial question",
+            "last_prompt": "Initial question",
+            "context_binding": "creation_time",
+        });
+        if let Some(report_entry) = report_entry {
+            session_manifest
+                .as_object_mut()
+                .expect("session manifest should be an object")
+                .insert("report_entry".to_string(), report_entry);
+        }
+
+        let session = storage
+            .chat_sessions()
+            .create(
+                tenant.id,
+                &NewChatSession {
+                    id: ChatSessionId::new(),
+                    execution_id: base_execution.id,
+                    dataset_id: dataset.id,
+                    title: "Append turn session".to_string(),
+                    latest_memory_directory_id: None,
+                    latest_dataset_output_id: None,
+                    session_manifest,
+                    created_at: now,
+                },
+            )
+            .await
+            .expect("chat session should be created");
+        storage
+            .chat_messages()
+            .create(
+                tenant.id,
+                &NewChatMessage {
+                    session_id: session.id,
+                    role: ChatMessageRole::User,
+                    turn_index: 0,
+                    content: "Initial question".to_string(),
+                    message_manifest: json!({ "source": "test_user_prompt" }),
+                    created_at: now,
+                },
+            )
+            .await
+            .expect("initial user message should be created");
+        storage
+            .chat_messages()
+            .create(
+                tenant.id,
+                &NewChatMessage {
+                    session_id: session.id,
+                    role: ChatMessageRole::Assistant,
+                    turn_index: 1,
+                    content: "Initial answer".to_string(),
+                    message_manifest: json!({ "source": "test_assistant_reply" }),
+                    created_at: now,
+                },
+            )
+            .await
+            .expect("initial assistant message should be created");
+
+        let app = router(
+            storage.clone(),
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+
+        Some(AppendTurnApiTestHarness {
+            app,
+            storage,
+            tenant_id: tenant.id,
+            dataset_id: dataset.id,
+            session_id: session.id,
+        })
+    }
+
     async fn reset_and_sync_test_storage(storage: &PgStorage) {
         reset_local_postgres_storage(storage)
             .await
@@ -8466,6 +8592,112 @@ mod tests {
             .await
             .expect("workflow execution should be created");
         execution
+    }
+
+    async fn post_append_turn_request(
+        app: Router,
+        session_id: ChatSessionId,
+        prompt: &str,
+    ) -> axum::response::Response {
+        let request = axum::http::Request::builder()
+            .method("POST")
+            .uri(format!("/v1/chat-sessions/{session_id}/turns"))
+            .header(axum::http::header::CONTENT_TYPE, "application/json")
+            .body(axum::body::Body::from(
+                serde_json::to_vec(&AppendChatSessionTurnRequest {
+                    prompt: prompt.to_string(),
+                })
+                .expect("request should serialize"),
+            ))
+            .expect("request should build");
+
+        app.oneshot(request)
+            .await
+            .expect("request should return a response")
+    }
+
+    async fn complete_appended_turn(
+        storage: &PgStorage,
+        tenant_id: TenantId,
+        session_id: ChatSessionId,
+        response: &AppendChatSessionTurnResponse,
+        assistant_content: &str,
+    ) {
+        let completed_at = Utc::now();
+        let chat_turn_id = response
+            .user_message
+            .message_manifest
+            .get("chat_turn_id")
+            .and_then(Value::as_str)
+            .expect("user message should carry chat_turn_id")
+            .to_string();
+        let assistant_message = storage
+            .chat_messages()
+            .create(
+                tenant_id,
+                &NewChatMessage {
+                    session_id,
+                    role: ChatMessageRole::Assistant,
+                    turn_index: response.user_message.turn_index + 1,
+                    content: assistant_content.to_string(),
+                    message_manifest: json!({
+                        "source": "test_assistant_reply",
+                        "turn": {
+                            "turn_id": chat_turn_id,
+                            "status": "completed",
+                            "assistant_message_id": Value::Null,
+                        }
+                    }),
+                    created_at: completed_at,
+                },
+            )
+            .await
+            .expect("assistant message should be created");
+        let session = storage
+            .chat_sessions()
+            .get_by_id(tenant_id, session_id)
+            .await
+            .expect("chat session should load")
+            .expect("chat session should exist");
+        let mut session_manifest = session
+            .session_manifest
+            .as_object()
+            .cloned()
+            .unwrap_or_default();
+        let mut last_turn = session_manifest
+            .get("last_turn")
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        last_turn.insert("status".to_string(), json!("completed"));
+        last_turn.insert(
+            "assistant_message_id".to_string(),
+            json!(assistant_message.id),
+        );
+        last_turn.insert(
+            "assistant_message_persisted_at".to_string(),
+            json!(completed_at),
+        );
+        last_turn.insert("completed_at".to_string(), json!(completed_at));
+        session_manifest.insert("status".to_string(), json!("assistant_replied"));
+        session_manifest.insert(
+            "last_prompt".to_string(),
+            json!(response.user_message.content.clone()),
+        );
+        session_manifest.insert("last_turn".to_string(), Value::Object(last_turn));
+
+        storage
+            .chat_sessions()
+            .update_context(
+                tenant_id,
+                session_id,
+                session.latest_memory_directory_id,
+                session.latest_dataset_output_id,
+                &Value::Object(session_manifest),
+                completed_at,
+            )
+            .await
+            .expect("chat session should be marked completed");
     }
 
     async fn post_report_entry_request(
@@ -8869,123 +9101,16 @@ mod tests {
     #[tokio::test]
     async fn append_chat_session_turn_creates_user_message_and_new_execution() {
         let _guard = shared_local_postgres_test_lock().lock().await;
-        let storage = match local_postgres_storage().await {
-            Ok(storage) => storage,
-            Err(reason) => {
-                eprintln!("skipping append_chat_session_turn test: {reason}");
-                return;
-            }
+        let Some(harness) = build_append_turn_api_test_harness(None).await else {
+            return;
         };
-        reset_and_sync_test_storage(&storage).await;
 
-        let tenant = storage
-            .ensure_tenant(
-                &format!("platform-api-test-{}", Uuid::new_v4()),
-                "Platform API Test",
-            )
-            .await
-            .expect("tenant should exist");
-        let dataset = storage
-            .datasets()
-            .create(
-                tenant.id,
-                NewDataset {
-                    key: format!("dataset-{}", Uuid::new_v4()),
-                    title: "Append Turn Dataset".to_string(),
-                    description: Some("Dataset used for append turn tests.".to_string()),
-                },
-            )
-            .await
-            .expect("dataset should be created");
-        let base_execution = create_test_workflow_execution(
-            &storage,
-            tenant.id,
-            dataset.id,
-            WorkflowKind::ChatSession,
-        )
-        .await;
-        let now = Utc::now();
-        let session = storage
-            .chat_sessions()
-            .create(
-                tenant.id,
-                &NewChatSession {
-                    id: ChatSessionId::new(),
-                    execution_id: base_execution.id,
-                    dataset_id: dataset.id,
-                    title: "Append turn session".to_string(),
-                    latest_memory_directory_id: None,
-                    latest_dataset_output_id: None,
-                    session_manifest: json!({
-                        "generator": "chat-session-workflow",
-                        "schema_version": "0.3.0",
-                        "status": "assistant_replied",
-                        "initial_prompt": "Initial question",
-                        "last_prompt": "Initial question",
-                        "context_binding": "creation_time",
-                    }),
-                    created_at: now,
-                },
-            )
-            .await
-            .expect("chat session should be created");
-        storage
-            .chat_messages()
-            .create(
-                tenant.id,
-                &NewChatMessage {
-                    session_id: session.id,
-                    role: ChatMessageRole::User,
-                    turn_index: 0,
-                    content: "Initial question".to_string(),
-                    message_manifest: json!({ "source": "test_user_prompt" }),
-                    created_at: now,
-                },
-            )
-            .await
-            .expect("initial user message should be created");
-        storage
-            .chat_messages()
-            .create(
-                tenant.id,
-                &NewChatMessage {
-                    session_id: session.id,
-                    role: ChatMessageRole::Assistant,
-                    turn_index: 1,
-                    content: "Initial answer".to_string(),
-                    message_manifest: json!({ "source": "test_assistant_reply" }),
-                    created_at: now,
-                },
-            )
-            .await
-            .expect("initial assistant message should be created");
-
-        let app = router(
-            storage.clone(),
-            workflow_definitions::catalog(),
-            tenant.id,
-            EventBus::Disabled,
-        );
-        let request = axum::http::Request::builder()
-            .method("POST")
-            .uri(format!("/v1/chat-sessions/{}/turns", session.id))
-            .header(axum::http::header::CONTENT_TYPE, "application/json")
-            .body(axum::body::Body::from(
-                serde_json::to_vec(&AppendChatSessionTurnRequest {
-                    prompt: "Follow-up question".to_string(),
-                })
-                .expect("request should serialize"),
-            ))
-            .expect("request should build");
-
-        let response = app
-            .oneshot(request)
-            .await
-            .expect("append turn request should return a response");
+        let response =
+            post_append_turn_request(harness.app, harness.session_id, "Follow-up question").await;
         assert_eq!(response.status(), StatusCode::CREATED);
         let payload: AppendChatSessionTurnResponse = read_json_response(response).await;
 
-        assert_eq!(payload.chat_session.id, session.id);
+        assert_eq!(payload.chat_session.id, harness.session_id);
         assert_eq!(
             payload.chat_session.session_manifest["initial_prompt"],
             json!("Initial question")
@@ -8994,36 +9119,197 @@ mod tests {
             payload.chat_session.session_manifest["last_prompt"],
             json!("Follow-up question")
         );
-        assert_eq!(payload.user_message.session_id, session.id);
+        assert_eq!(payload.user_message.session_id, harness.session_id);
         assert_eq!(payload.user_message.role, ChatMessageRole::User);
         assert_eq!(payload.user_message.turn_index, 2);
         assert_eq!(payload.user_message.content, "Follow-up question");
         assert_eq!(payload.workflow_execution.kind, WorkflowKind::ChatSession);
         assert_eq!(payload.workflow_execution.status, WorkflowStatus::Pending);
 
-        let persisted_execution = storage
+        let persisted_execution = harness
+            .storage
             .workflow_executions()
-            .get_by_id(tenant.id, payload.workflow_execution.id)
+            .get_by_id(harness.tenant_id, payload.workflow_execution.id)
             .await
             .expect("workflow execution should load")
             .expect("workflow execution should exist");
-        assert_eq!(persisted_execution.dataset_id, Some(dataset.id));
+        assert_eq!(persisted_execution.dataset_id, Some(harness.dataset_id));
         assert_eq!(
             persisted_execution.context["chat_session_id"],
-            json!(session.id)
+            json!(harness.session_id)
         );
         assert_eq!(
             persisted_execution.context["prompt"],
             json!("Follow-up question")
         );
 
-        let messages = storage
+        let messages = harness
+            .storage
             .chat_messages()
-            .list_by_session(tenant.id, session.id)
+            .list_by_session(harness.tenant_id, harness.session_id)
             .await
             .expect("chat messages should list");
         assert_eq!(messages.len(), 3);
         assert_eq!(messages[2].id, payload.user_message.id);
+    }
+
+    #[tokio::test]
+    async fn append_chat_session_turn_supports_three_completed_followups() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let Some(harness) = build_append_turn_api_test_harness(None).await else {
+            return;
+        };
+
+        for (index, prompt) in ["Second question", "Third question", "Fourth question"]
+            .into_iter()
+            .enumerate()
+        {
+            let response =
+                post_append_turn_request(harness.app.clone(), harness.session_id, prompt).await;
+            assert_eq!(response.status(), StatusCode::CREATED);
+            let payload: AppendChatSessionTurnResponse = read_json_response(response).await;
+            assert_eq!(payload.user_message.turn_index, 2 + (index as i32 * 2));
+            assert_eq!(payload.user_message.content, prompt);
+
+            complete_appended_turn(
+                &harness.storage,
+                harness.tenant_id,
+                harness.session_id,
+                &payload,
+                &format!("Answer for {prompt}"),
+            )
+            .await;
+        }
+
+        let messages = harness
+            .storage
+            .chat_messages()
+            .list_by_session(harness.tenant_id, harness.session_id)
+            .await
+            .expect("chat messages should list");
+        assert_eq!(messages.len(), 8);
+        assert_eq!(
+            messages
+                .iter()
+                .map(|message| message.turn_index)
+                .collect::<Vec<_>>(),
+            vec![0, 1, 2, 3, 4, 5, 6, 7]
+        );
+
+        let session = harness
+            .storage
+            .chat_sessions()
+            .get_by_id(harness.tenant_id, harness.session_id)
+            .await
+            .expect("chat session should load")
+            .expect("chat session should exist");
+        assert_eq!(
+            session.session_manifest["status"],
+            json!("assistant_replied")
+        );
+        assert_eq!(
+            session.session_manifest["last_prompt"],
+            json!("Fourth question")
+        );
+    }
+
+    #[tokio::test]
+    async fn append_chat_session_turn_rejects_when_prior_turn_is_in_progress() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let Some(harness) = build_append_turn_api_test_harness(None).await else {
+            return;
+        };
+
+        let first_response =
+            post_append_turn_request(harness.app.clone(), harness.session_id, "Second question")
+                .await;
+        assert_eq!(first_response.status(), StatusCode::CREATED);
+
+        let second_response =
+            post_append_turn_request(harness.app, harness.session_id, "Third question").await;
+        assert_eq!(second_response.status(), StatusCode::BAD_REQUEST);
+        let payload: ApiErrorResponse = read_json_response(second_response).await;
+        assert_eq!(payload.code, "chat_session_turn_in_progress");
+
+        let messages = harness
+            .storage
+            .chat_messages()
+            .list_by_session(harness.tenant_id, harness.session_id)
+            .await
+            .expect("chat messages should list");
+        assert_eq!(messages.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn report_entry_gate_survives_append_turn_and_can_enter_report_service() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let requested_at = Utc::now();
+        let Some(harness) = build_append_turn_api_test_harness(Some(json!({
+            "state": "confirmation_required",
+            "requested_at": requested_at,
+            "resolved_at": Value::Null,
+            "resolved_action": Value::Null,
+            "suggested_title": "Prepared report title",
+            "suggested_objective": "Prepared report objective",
+            "confirmed_report_plan_id": Value::Null,
+        })))
+        .await
+        else {
+            return;
+        };
+
+        let append_response = post_append_turn_request(
+            harness.app.clone(),
+            harness.session_id,
+            "Clarify report scope",
+        )
+        .await;
+        assert_eq!(append_response.status(), StatusCode::CREATED);
+        let append_payload: AppendChatSessionTurnResponse =
+            read_json_response(append_response).await;
+        assert_eq!(
+            append_payload
+                .chat_session
+                .session_manifest_view
+                .as_ref()
+                .and_then(|manifest| manifest.report_entry.as_ref())
+                .map(|entry| entry.state.clone()),
+            Some(contracts::ModelFacingReportEntryStateView::ConfirmationRequired)
+        );
+
+        complete_appended_turn(
+            &harness.storage,
+            harness.tenant_id,
+            harness.session_id,
+            &append_payload,
+            "Report scope is ready for confirmation.",
+        )
+        .await;
+
+        let report_response = post_report_entry_request(
+            harness.app,
+            harness.session_id,
+            &UpdateChatSessionReportEntryRequest {
+                action: contracts::ChatSessionReportEntryActionView::EnterReportService,
+                title: None,
+                objective: None,
+            },
+        )
+        .await;
+        assert_eq!(report_response.status(), StatusCode::OK);
+        let report_payload: UpdateChatSessionReportEntryResponse =
+            read_json_response(report_response).await;
+        assert!(report_payload.report_plan.is_some());
+        assert!(report_payload.workflow_execution.is_some());
+        assert_eq!(
+            report_payload
+                .chat_session
+                .session_manifest_view
+                .as_ref()
+                .and_then(|manifest| manifest.report_entry.as_ref())
+                .map(|entry| entry.state.clone()),
+            Some(contracts::ModelFacingReportEntryStateView::Confirmed)
+        );
     }
 
     #[tokio::test]

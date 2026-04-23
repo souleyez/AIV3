@@ -124,6 +124,7 @@ pub fn render_completed_session_manifest(job: &ChatSessionJob) -> Value {
         "latest_memory_directory_id": job.latest_memory_directory_id,
         "latest_memory_directory_version_no": job.latest_memory_directory_version_no,
         "latest_dataset_output_id": job.latest_dataset_output_id,
+        "report_entry": report_entry_from_service_handoff(job.service_handoff.as_ref()),
     })
 }
 
@@ -184,6 +185,7 @@ pub fn render_in_flight_session_manifest(
         "latest_memory_directory_id": job.latest_memory_directory_id,
         "latest_memory_directory_version_no": job.latest_memory_directory_version_no,
         "latest_dataset_output_id": job.latest_dataset_output_id,
+        "report_entry": report_entry_from_service_handoff(job.service_handoff.as_ref()),
         "last_turn": {
             "turn_id": job.turn_id,
             "status": "pending",
@@ -340,6 +342,7 @@ pub fn render_response_ready_session_manifest(
         "latest_memory_directory_id": job.latest_memory_directory_id,
         "latest_memory_directory_version_no": job.latest_memory_directory_version_no,
         "latest_dataset_output_id": job.latest_dataset_output_id,
+        "report_entry": report_entry_from_service_handoff(job.service_handoff.as_ref()),
         "last_turn": {
             "turn_id": job.turn_id,
             "status": "pending",
@@ -518,6 +521,7 @@ pub fn render_failed_session_manifest(
         "latest_memory_directory_id": job.latest_memory_directory_id,
         "latest_memory_directory_version_no": job.latest_memory_directory_version_no,
         "latest_dataset_output_id": job.latest_dataset_output_id,
+        "report_entry": report_entry_from_service_handoff(job.service_handoff.as_ref()),
         "last_turn": {
             "turn_id": job.turn_id,
             "status": "failed",
@@ -547,6 +551,20 @@ pub fn render_failed_session_manifest(
             "started_at": job.turn_started_at,
             "completed_at": failed_at,
         },
+    })
+}
+
+fn report_entry_from_service_handoff(
+    handoff: Option<&contracts::ManifestServiceHandoffView>,
+) -> Option<contracts::ChatSessionReportEntryView> {
+    handoff.map(|handoff| contracts::ChatSessionReportEntryView {
+        state: handoff.report_entry_state.clone(),
+        requested_at: handoff.requested_at,
+        resolved_at: handoff.resolved_at,
+        resolved_action: handoff.resolved_action.clone(),
+        suggested_title: handoff.suggested_title.clone(),
+        suggested_objective: handoff.suggested_objective.clone(),
+        confirmed_report_plan_id: handoff.confirmed_report_plan_id,
     })
 }
 
@@ -1304,6 +1322,89 @@ mod tests {
             manifest["service_handoff"]["confirmed_report_plan_id"],
             json!(report_plan_id)
         );
+    }
+
+    #[test]
+    fn session_manifests_preserve_report_entry_handoff() {
+        let requested_at = Utc::now();
+        let responded_at = requested_at + chrono::TimeDelta::milliseconds(50);
+        let report_plan_id = domain_model::ReportPlanId::new();
+        let job = ChatSessionJob {
+            dataset_id: DatasetId::new(),
+            initial_prompt: "Summarize the dataset".to_string(),
+            prompt: "Turn this into a report".to_string(),
+            indexed_document_count: 2,
+            refreshed_chunks: 4,
+            prior_message_count: 3,
+            latest_memory_directory_id: None,
+            latest_memory_directory_version_no: Some(3),
+            latest_dataset_output_id: None,
+            latest_dataset_output_retrieval_evidence_ids: vec![],
+            service_handoff: Some(contracts::ManifestServiceHandoffView {
+                source: contracts::ManifestServiceHandoffSourceView::ChatSessionReportEntry,
+                service_lane: contracts::ModelFacingServiceLaneView::ReportService,
+                report_entry_state: contracts::ModelFacingReportEntryStateView::Confirmed,
+                requested_at: Some(requested_at),
+                resolved_at: Some(responded_at),
+                resolved_action: Some(
+                    contracts::ChatSessionReportEntryResolutionView::EnterReportService,
+                ),
+                suggested_title: Some("Dataset Report".to_string()),
+                suggested_objective: Some(
+                    "Turn the current dataset context into a report-ready output.".to_string(),
+                ),
+                confirmed_report_plan_id: Some(report_plan_id),
+            }),
+            turn_stream_mode: "buffered".to_string(),
+            turn_id: "turn_session_handoff".to_string(),
+            turn_started_at: requested_at,
+        };
+        let runtime = LlmRuntimeMetadata {
+            mode: llm_gateway::LlmRuntimeMode::Placeholder,
+            provider: "placeholder".to_string(),
+            model: PLACEHOLDER_MODEL.to_string(),
+            request_id: Some("req_session_handoff".to_string()),
+            finish_reason: Some(LlmFinishReason::Stop),
+            latency_ms: Some(50),
+            usage: None,
+            system_prompt_key: Some(CHAT_SESSION_PLACEHOLDER_PROMPT_KEY.to_string()),
+            system_prompt_version: Some("v1".to_string()),
+            tool_trace_count: 0,
+        };
+
+        let manifests = [
+            render_in_flight_session_manifest(&job, requested_at),
+            render_response_ready_session_manifest(
+                &job,
+                "Report handoff acknowledged",
+                &runtime,
+                &[],
+                requested_at,
+                responded_at,
+            ),
+            render_completed_session_manifest(&job),
+            render_failed_session_manifest(
+                &job,
+                requested_at,
+                responded_at,
+                Some("Report handoff failed"),
+                Some(&runtime),
+                &[],
+                None,
+            ),
+        ];
+
+        for manifest in manifests {
+            assert_eq!(manifest["report_entry"]["state"], json!("confirmed"));
+            assert_eq!(
+                manifest["report_entry"]["resolved_action"],
+                json!("enter_report_service")
+            );
+            assert_eq!(
+                manifest["report_entry"]["confirmed_report_plan_id"],
+                json!(report_plan_id)
+            );
+        }
     }
 
     #[test]

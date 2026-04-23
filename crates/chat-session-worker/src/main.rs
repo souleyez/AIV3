@@ -453,7 +453,7 @@ async fn process_task(
                         &NewChatMessage {
                             session_id: session.id,
                             role: domain_model::ChatMessageRole::Assistant,
-                            turn_index: existing_messages.len() as i32,
+                            turn_index: next_chat_message_turn_index(&existing_messages),
                             content: recovered.assistant_message_content.clone(),
                             message_manifest,
                             created_at: recovered.captured_at,
@@ -593,7 +593,7 @@ async fn process_task(
                         &NewChatMessage {
                             session_id: session.id,
                             role: domain_model::ChatMessageRole::Assistant,
-                            turn_index: existing_messages.len() as i32,
+                            turn_index: next_chat_message_turn_index(&existing_messages),
                             content: outcome.assistant_message.clone(),
                             message_manifest: outcome.message_manifest.clone(),
                             created_at: outcome.completed_at,
@@ -908,6 +908,14 @@ fn context_string(value: &serde_json::Value, key: &str) -> Option<String> {
             .map(str::to_string),
         _ => None,
     }
+}
+
+fn next_chat_message_turn_index(messages: &[ChatMessage]) -> i32 {
+    messages
+        .iter()
+        .map(|message| message.turn_index)
+        .max()
+        .map_or(0, |turn_index| turn_index + 1)
 }
 
 fn service_handoff_from_session_manifest(
@@ -1388,8 +1396,8 @@ fn parse_turn_stream_mode(value: &str) -> Result<String> {
 mod tests {
     use super::{
         find_recoverable_assistant_message, find_recoverable_event_turn,
-        find_recoverable_session_turn, find_recoverable_task_turn, payload_with_turn_recovery,
-        payload_without_turn_recovery, render_turn_recovery_payload,
+        find_recoverable_session_turn, find_recoverable_task_turn, next_chat_message_turn_index,
+        payload_with_turn_recovery, payload_without_turn_recovery, render_turn_recovery_payload,
         service_handoff_from_session_manifest,
     };
     use chrono::Utc;
@@ -1437,6 +1445,29 @@ mod tests {
             Some(contracts::ChatSessionReportEntryResolutionView::EnterReportService)
         );
         assert_eq!(handoff.confirmed_report_plan_id, Some(report_plan_id));
+    }
+
+    #[test]
+    fn next_chat_message_turn_index_uses_max_existing_index() {
+        let mut first = build_chat_message(
+            ChatMessageRole::User,
+            "initial",
+            "turn-initial",
+            build_runtime("req-initial", 0),
+            vec![],
+        );
+        first.turn_index = 0;
+        let mut later = build_chat_message(
+            ChatMessageRole::Assistant,
+            "later",
+            "turn-later",
+            build_runtime("req-later", 0),
+            vec![],
+        );
+        later.turn_index = 4;
+
+        assert_eq!(next_chat_message_turn_index(&[]), 0);
+        assert_eq!(next_chat_message_turn_index(&[first, later]), 5);
     }
 
     #[test]
