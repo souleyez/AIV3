@@ -55,7 +55,6 @@ pub fn sample_report_plan() -> ReportPlan {
 
 #[derive(Clone)]
 enum SharedLocalPostgresState {
-    Available(PgStorage),
     Unavailable(String),
 }
 
@@ -71,35 +70,35 @@ pub fn shared_local_postgres_test_lock() -> &'static Mutex<()> {
 
 pub async fn shared_local_postgres_storage() -> std::result::Result<PgStorage, String> {
     let state = shared_local_postgres_state();
-    let mut guard = state.lock().await;
-
-    if let Some(current) = guard.as_ref() {
-        return match current {
-            SharedLocalPostgresState::Available(storage) => Ok(storage.clone()),
-            SharedLocalPostgresState::Unavailable(reason) => Err(reason.clone()),
-        };
+    {
+        let guard = state.lock().await;
+        if let Some(SharedLocalPostgresState::Unavailable(reason)) = guard.as_ref() {
+            return Err(reason.clone());
+        }
     }
 
+    match local_postgres_storage().await {
+        Ok(storage) => Ok(storage),
+        Err(reason) => {
+            let mut guard = state.lock().await;
+            *guard = Some(SharedLocalPostgresState::Unavailable(reason.clone()));
+            Err(reason)
+        }
+    }
+}
+
+pub async fn local_postgres_storage() -> std::result::Result<PgStorage, String> {
     let database_url = std::env::var("PLATFORM_DATABASE_URL")
         .unwrap_or_else(|_| DEFAULT_LOCAL_DATABASE_URL.into());
-    let resolved =
-        match PgStorage::connect_with_settings(&database_url, 4, Duration::from_secs(2)).await {
-            Ok(storage) => match storage.migrate().await {
-                Ok(()) => SharedLocalPostgresState::Available(storage),
-                Err(error) => SharedLocalPostgresState::Unavailable(format!(
-                    "failed to migrate shared local postgres fixture at {database_url}: {error}"
-                )),
-            },
-            Err(error) => SharedLocalPostgresState::Unavailable(format!(
-                "failed to connect shared local postgres fixture at {database_url}: {error}"
-            )),
-        };
-
-    *guard = Some(resolved.clone());
-    match resolved {
-        SharedLocalPostgresState::Available(storage) => Ok(storage),
-        SharedLocalPostgresState::Unavailable(reason) => Err(reason),
-    }
+    let storage = PgStorage::connect_with_settings(&database_url, 4, Duration::from_secs(10))
+        .await
+        .map_err(|error| {
+            format!("failed to connect local postgres fixture at {database_url}: {error}")
+        })?;
+    storage.migrate().await.map_err(|error| {
+        format!("failed to migrate local postgres fixture at {database_url}: {error}")
+    })?;
+    Ok(storage)
 }
 
 pub async fn reset_local_postgres_storage(storage: &PgStorage) -> Result<()> {

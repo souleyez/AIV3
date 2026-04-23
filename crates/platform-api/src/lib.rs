@@ -8057,8 +8057,7 @@ mod tests {
     };
     use event_bus::{workflow_execution_transition_subject, workflow_task_enqueued_subject};
     use test_fixtures::{
-        reset_local_postgres_storage, shared_local_postgres_storage,
-        shared_local_postgres_test_lock,
+        local_postgres_storage, reset_local_postgres_storage, shared_local_postgres_test_lock,
     };
     use tool_registry::{ToolCliContract, ToolCliOutputMode, ToolDefinition, ToolInvocationMode};
     use tower::util::ServiceExt;
@@ -8092,22 +8091,16 @@ mod tests {
     async fn build_report_entry_api_test_harness(
         report_entry: Option<Value>,
     ) -> Option<ReportEntryApiTestHarness> {
-        let storage = match shared_local_postgres_storage().await {
+        let storage = match local_postgres_storage().await {
             Ok(storage) => storage,
             Err(reason) => {
                 eprintln!("skipping report_entry route test: {reason}");
                 return None;
             }
         };
-        reset_local_postgres_storage(&storage)
-            .await
-            .expect("test storage should reset");
+        reset_and_sync_test_storage(&storage).await;
 
         let workflow_catalog = workflow_definitions::catalog();
-        storage
-            .sync_workflow_definitions(&workflow_catalog.descriptors())
-            .await
-            .expect("workflow definitions should sync");
 
         let tenant = storage
             .ensure_tenant(
@@ -8199,6 +8192,52 @@ mod tests {
             tenant_id: tenant.id,
             session_id: session.id,
         })
+    }
+
+    async fn reset_and_sync_test_storage(storage: &PgStorage) {
+        reset_local_postgres_storage(storage)
+            .await
+            .expect("test storage should reset");
+
+        let workflow_catalog = workflow_definitions::catalog();
+        storage
+            .sync_workflow_definitions(&workflow_catalog.descriptors())
+            .await
+            .expect("workflow definitions should sync");
+    }
+
+    async fn create_test_workflow_execution(
+        storage: &PgStorage,
+        tenant_id: TenantId,
+        dataset_id: DatasetId,
+        kind: WorkflowKind,
+    ) -> WorkflowExecution {
+        let workflow_catalog = workflow_definitions::catalog();
+        let definition = workflow_catalog
+            .find_definition(kind.clone())
+            .expect("workflow definition should exist");
+        let now = Utc::now();
+        let execution = WorkflowExecution {
+            id: WorkflowExecutionId::new(),
+            tenant_id,
+            dataset_id: Some(dataset_id),
+            report_plan_id: None,
+            kind,
+            version: definition.version().to_string(),
+            stage: "queued".to_string(),
+            status: WorkflowStatus::Pending,
+            attempt: 0,
+            context: json!({}),
+            created_at: now,
+            updated_at: now,
+        };
+
+        storage
+            .workflow_executions()
+            .create(&execution)
+            .await
+            .expect("workflow execution should be created");
+        execution
     }
 
     async fn post_report_entry_request(
@@ -8868,22 +8907,14 @@ mod tests {
     #[tokio::test]
     async fn request_report_render_creates_execution_for_planned_report() {
         let _guard = shared_local_postgres_test_lock().lock().await;
-        let storage = match shared_local_postgres_storage().await {
+        let storage = match local_postgres_storage().await {
             Ok(storage) => storage,
             Err(reason) => {
                 eprintln!("skipping request_report_render test: {reason}");
                 return;
             }
         };
-        reset_local_postgres_storage(&storage)
-            .await
-            .expect("test storage should reset");
-
-        let workflow_catalog = workflow_definitions::catalog();
-        storage
-            .sync_workflow_definitions(&workflow_catalog.descriptors())
-            .await
-            .expect("workflow definitions should sync");
+        reset_and_sync_test_storage(&storage).await;
 
         let tenant = storage
             .ensure_tenant(
@@ -8977,7 +9008,7 @@ mod tests {
     #[tokio::test]
     async fn request_report_plan_continue_creates_execution_for_existing_draft_plan() {
         let _guard = shared_local_postgres_test_lock().lock().await;
-        let storage = match shared_local_postgres_storage().await {
+        let storage = match local_postgres_storage().await {
             Ok(storage) => storage,
             Err(reason) => {
                 eprintln!("skipping request_report_plan_continue test: {reason}");
@@ -9051,7 +9082,7 @@ mod tests {
     #[tokio::test]
     async fn request_report_publish_persists_version_and_marks_plan_published() {
         let _guard = shared_local_postgres_test_lock().lock().await;
-        let storage = match shared_local_postgres_storage().await {
+        let storage = match local_postgres_storage().await {
             Ok(storage) => storage,
             Err(reason) => {
                 eprintln!("skipping request_report_publish test: {reason}");
@@ -9243,7 +9274,7 @@ mod tests {
     #[tokio::test]
     async fn load_published_report_by_plan_returns_current_version_and_desc_versions() {
         let _guard = shared_local_postgres_test_lock().lock().await;
-        let storage = match shared_local_postgres_storage().await {
+        let storage = match local_postgres_storage().await {
             Ok(storage) => storage,
             Err(reason) => {
                 eprintln!("skipping load_published_report_by_plan test: {reason}");
@@ -9406,7 +9437,7 @@ mod tests {
     #[tokio::test]
     async fn request_memory_directory_refresh_creates_execution_for_dataset() {
         let _guard = shared_local_postgres_test_lock().lock().await;
-        let storage = match shared_local_postgres_storage().await {
+        let storage = match local_postgres_storage().await {
             Ok(storage) => storage,
             Err(reason) => {
                 eprintln!("skipping request_memory_directory_refresh test: {reason}");
@@ -9469,16 +9500,14 @@ mod tests {
     #[tokio::test]
     async fn load_document_detail_returns_document_chunks_and_retrieval_evidences() {
         let _guard = shared_local_postgres_test_lock().lock().await;
-        let storage = match shared_local_postgres_storage().await {
+        let storage = match local_postgres_storage().await {
             Ok(storage) => storage,
             Err(reason) => {
                 eprintln!("skipping load_document_detail test: {reason}");
                 return;
             }
         };
-        reset_local_postgres_storage(&storage)
-            .await
-            .expect("test storage should reset");
+        reset_and_sync_test_storage(&storage).await;
 
         let tenant = storage
             .ensure_tenant(
@@ -9516,6 +9545,13 @@ mod tests {
             .await
             .expect("document should be created");
         let now = Utc::now();
+        let evidence_execution = create_test_workflow_execution(
+            &storage,
+            tenant.id,
+            dataset.id,
+            WorkflowKind::UploadIngest,
+        )
+        .await;
         let chunks = storage
             .document_chunks()
             .replace_for_document(
@@ -9538,7 +9574,7 @@ mod tests {
             .create_many(
                 tenant.id,
                 &[storage::NewRetrievalEvidence {
-                    execution_id: WorkflowExecutionId::new(),
+                    execution_id: evidence_execution.id,
                     dataset_id: dataset.id,
                     document_id: document.id,
                     document_chunk_id: chunks[0].id,
@@ -9575,16 +9611,14 @@ mod tests {
     #[tokio::test]
     async fn compare_documents_returns_multiple_document_details() {
         let _guard = shared_local_postgres_test_lock().lock().await;
-        let storage = match shared_local_postgres_storage().await {
+        let storage = match local_postgres_storage().await {
             Ok(storage) => storage,
             Err(reason) => {
                 eprintln!("skipping compare_documents test: {reason}");
                 return;
             }
         };
-        reset_local_postgres_storage(&storage)
-            .await
-            .expect("test storage should reset");
+        reset_and_sync_test_storage(&storage).await;
 
         let tenant = storage
             .ensure_tenant(
@@ -9636,6 +9670,13 @@ mod tests {
             .await
             .expect("document B should be created");
         let now = Utc::now();
+        let evidence_execution = create_test_workflow_execution(
+            &storage,
+            tenant.id,
+            dataset.id,
+            WorkflowKind::UploadIngest,
+        )
+        .await;
         let chunks_a = storage
             .document_chunks()
             .replace_for_document(
@@ -9676,7 +9717,7 @@ mod tests {
                 tenant.id,
                 &[
                     storage::NewRetrievalEvidence {
-                        execution_id: WorkflowExecutionId::new(),
+                        execution_id: evidence_execution.id,
                         dataset_id: dataset.id,
                         document_id: document_a.id,
                         document_chunk_id: chunks_a[0].id,
@@ -9691,7 +9732,7 @@ mod tests {
                         created_at: now,
                     },
                     storage::NewRetrievalEvidence {
-                        execution_id: WorkflowExecutionId::new(),
+                        execution_id: evidence_execution.id,
                         dataset_id: dataset.id,
                         document_id: document_b.id,
                         document_chunk_id: chunks_b[0].id,
@@ -9734,16 +9775,14 @@ mod tests {
     #[tokio::test]
     async fn request_workflow_retry_restarts_failed_execution_and_enqueues_task() {
         let _guard = shared_local_postgres_test_lock().lock().await;
-        let storage = match shared_local_postgres_storage().await {
+        let storage = match local_postgres_storage().await {
             Ok(storage) => storage,
             Err(reason) => {
                 eprintln!("skipping request_workflow_retry test: {reason}");
                 return;
             }
         };
-        reset_local_postgres_storage(&storage)
-            .await
-            .expect("test storage should reset");
+        reset_and_sync_test_storage(&storage).await;
 
         let tenant = storage
             .ensure_tenant(

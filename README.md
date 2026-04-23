@@ -1,21 +1,181 @@
 # AI Data Platform V3
 
-Greenfield Rust rebuild workspace for AI Data Platform V3.
+Rust-first rebuild of the AI Data Platform. The project is now past the initial
+skeleton stage: the control plane, workflow/task runtime, several workers,
+model-facing inspect surfaces, report host actions, and a first web assistant
+shell are all present.
 
-## Scope of this bootstrap
+## Current Status
 
-- Rust workspace and crate boundaries aligned with the V3 architecture docs
-- Node workspace placeholders for `apps/web` and `apps/docs-site`
-- Initial domain model, API contracts, scope model, workflow engine skeleton
-- PostgreSQL initial schema migration for the system-of-record tables
-- Placeholder app, worker, gateway, analytics, and report crates
+Implemented baseline:
 
-## Architecture references
+- Rust workspace with explicit crate boundaries for domain, contracts, storage,
+  workflow engine, workers, report runtime, gateways, tool registry, and API.
+- PostgreSQL-backed system of record for datasets, documents, workflows, tasks,
+  artifacts, runtime traces, report plans, rendered outputs, and published
+  report versions.
+- Axum `platform-api` with dataset, document, chat session, dataset output,
+  report plan/render/publish/read, workflow retry, runtime inspect, and tool
+  registry surfaces.
+- Worker skeletons and vertical slices for ingest, retrieval, memory directory,
+  dataset output, chat session, report planning, and report rendering.
+- Model-facing runtime summaries through `runtime.inspect`, including
+  capability class, service lane, evidence state, continuation state, and
+  recommended tool keys.
+- First V3 web assistant shell in `apps/web`, reusing the old assistant layout
+  direction while consuming V3 host surfaces directly.
+
+Important current limits:
+
+- Chat currently creates new sessions from the web UI; appending a new turn to
+  an existing session is the next major chat API slice.
+- Retrieval still uses placeholder semantics; real embedding/vector recall is a
+  later phase.
+- Streaming/provider/tool-loop runtime contracts are partially modeled but not
+  yet product-grade.
+- The web report center can list report plans and published reports, but the
+  full render/publish/detail interaction flow is still being built.
+
+## Repository Layout
+
+- `apps/web` - Next.js assistant UI, default dev port `3100`
+- `apps/docs-site` - placeholder docs app
+- `crates/platform-api` - Axum HTTP API and local CLI host surfaces
+- `crates/storage` - PostgreSQL repositories and migrations
+- `crates/workflow-engine` - transition engine
+- `crates/workflow-definitions` - workflow catalog
+- `crates/*-worker` - task consumers for ingest, retrieval, memory, chat,
+  dataset output, and report runtime slices
+- `crates/contracts` - API and typed view contracts
+- `crates/tool-registry` - model/host tool surface registry
+- `docs` - architecture notes, ADRs, execution plans, and validation docs
+- `infra/compose` - local dependency stack
+
+## Local Dependencies
+
+The local compose stack includes PostgreSQL, Redis, NATS JetStream, Qdrant, and
+MinIO:
+
+```powershell
+docker compose -f .\infra\compose\docker-compose.local.yml up -d
+```
+
+PostgreSQL defaults are:
+
+```text
+postgres://ai_platform:ai_platform@localhost:5432/ai_data_platform_v3
+```
+
+`platform-api` will use that local database by default through the storage
+crate's local default.
+
+## Development
+
+Install web dependencies:
+
+```powershell
+pnpm install
+```
+
+Run the Rust API:
+
+```powershell
+$env:PLATFORM_API_ADDR = "127.0.0.1:3000"
+wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo run -p platform-api --bin platform-api"
+```
+
+Run the web app:
+
+```powershell
+pnpm --filter @ai-data-platform-v3/web dev
+```
+
+The web app defaults to `http://127.0.0.1:3100` and proxies `/api/v3/*` to
+`platform-api /v1/*`. Override the backend target with:
+
+```powershell
+$env:PLATFORM_API_BASE_URL = "http://127.0.0.1:3000"
+```
+
+Run common workers from WSL:
+
+```powershell
+wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo run -p chat-session-worker"
+wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo run -p dataset-output-worker"
+wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo run -p report-planner-worker"
+wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo run -p report-render-worker"
+```
+
+## Verification
+
+Rust checks:
+
+```powershell
+wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo fmt --all"
+wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo check --workspace"
+wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo test"
+```
+
+Web build:
+
+```powershell
+pnpm --filter @ai-data-platform-v3/web build
+```
+
+## Key Host Surfaces
+
+Representative HTTP surfaces:
+
+- `GET /v1/datasets`
+- `POST /v1/datasets`
+- `POST /v1/datasets/{dataset_id}/chat-sessions`
+- `GET /v1/chat-sessions/{session_id}/messages`
+- `POST /v1/chat-sessions/{session_id}/report-entry`
+- `POST /v1/datasets/{dataset_id}/outputs`
+- `GET /v1/report-plans`
+- `POST /v1/report-plans/{plan_id}/continue`
+- `POST /v1/report-plans/{plan_id}/renders`
+- `POST /v1/report-plans/{plan_id}/publish`
+- `GET /v1/report-plans/{plan_id}/published-report`
+- `GET /v1/workflow-executions/{execution_id}/runtime-inspect`
+- `POST /v1/workflow-executions/{execution_id}/retry`
+- `GET /v1/tools`
+
+Representative CLI surfaces live under `crates/platform-api/src/bin`, including:
+
+- `runtime-inspect-cli`
+- `chat-session-report-entry-cli`
+- `report-render-cli`
+- `report-publish-cli`
+- `report-read-published-cli`
+- `workflow-retry-cli`
+- `document-detail-cli`
+- `document-compare-cli`
+- `memory-directory-refresh-cli`
+
+## Development Plan
+
+Immediate sequence:
+
+1. Stabilize repository hygiene, dependency versions, README, and verification
+   baseline.
+2. Complete the web Report Service loop: plan detail, continue planning, render,
+   render output viewing, publish, and published detail.
+3. Add existing-session chat turn append support across API, worker, contracts,
+   and web UI.
+4. Turn the responsive web shell into a mobile-usable interaction model.
+5. Tighten provider, streaming, tool-loop, artifact commit, and recovery
+   semantics.
+6. Replace placeholder retrieval with real embedding/vector recall and evidence
+   state derivation.
+7. Freeze the V3 model-facing capability contract after the runtime facts are
+   stable enough.
+
+See `docs/plans/2026-04-23-v3-development-plan.md` for the working plan.
+
+## Architecture References
 
 - `docs/architecture/v3-rust-architecture.md`
 - `docs/architecture/v3-repository-and-module-layout.md`
 - `docs/adr/README.md`
-
-## Current status
-
-This repository contains compile-oriented skeletons. Runtime integrations, storage adapters, and UI implementation are intentionally left as the next layer of work.
+- `docs/validation/runtime-inspect-pretty.md`
