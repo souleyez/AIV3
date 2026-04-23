@@ -51,9 +51,18 @@ export default function Sidebar({
   creatingDataset,
   stats,
   loading,
+  mobileOpen = false,
+  onClose,
 }) {
   return (
-    <aside className="sidebar">
+    <aside className={`sidebar ${mobileOpen ? 'open' : ''}`}>
+      <div className="sidebar-mobile-head">
+        <strong>数据集工作台</strong>
+        <button type="button" className="ghost-btn compact-action-btn" onClick={onClose}>
+          关闭
+        </button>
+      </div>
+
       <div className="brand">
         <div className="brand-logo">AI</div>
         <div>
@@ -133,7 +142,7 @@ export default function Sidebar({
 
       <section className="side-card compact">
         <div className="card-title">当前约束</div>
-        <p>发送问题会在当前数据集下新建一条 `chat_session workflow`，右侧保留历史会话和资料输出回看。</p>
+        <p>未选会话时发送问题会新建 `chat_session workflow`；选中历史会话后会追加新一轮，右侧保留资料输出和发布结果回看。</p>
       </section>
     </aside>
   );

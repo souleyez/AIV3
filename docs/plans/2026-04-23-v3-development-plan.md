@@ -121,6 +121,12 @@ Validation:
 - Dataset switching, session selection, message sending, and report entry are
   usable in mobile viewport.
 
+Progress:
+
+- 2026-04-23: Added mobile shell controls with a dataset drawer, chat/context
+  tabs, sticky safe-area composer behavior, and narrow-screen report action
+  stacking.
+
 ## Phase 4: Runtime Semantics
 
 Goal: move from typed shell to trustworthy runtime facts.
@@ -140,6 +146,13 @@ Validation:
 - Streaming timestamps and artifact commit timestamps do not contradict each
   other.
 - `runtime.inspect` remains consistent across API and CLI.
+
+Progress:
+
+- 2026-04-23: Surfaced session/message runtime phases in the web shell from
+  `session_manifest_view.last_turn` and `message_manifest_view.turn`, covering
+  provider, stream, tool-loop, artifact commit, and finish reason state without
+  adding a new protocol surface.
 
 ## Phase 5: Real Retrieval
 

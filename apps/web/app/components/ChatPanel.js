@@ -1,6 +1,6 @@
 'use client';
 
-import { formatDateTime, formatRelativeTime, truncateText } from '../lib/formatters';
+import { formatDateTime, formatRelativeTime, formatSnakeCaseLabel, truncateText } from '../lib/formatters';
 
 const SERVICE_LANE_LABELS = {
   material_service: '资料服务',
@@ -20,6 +20,52 @@ const REPORT_ENTRY_LABELS = {
   confirmation_required: '需要 2 选 1',
   confirmed: '已进入报告服务',
 };
+
+const RUNTIME_PHASES = [
+  {
+    key: 'provider',
+    title: 'Provider',
+    field: 'provider_status',
+    labels: {
+      pending: '请求中',
+      responded: '已响应',
+      failed: '失败',
+    },
+  },
+  {
+    key: 'stream',
+    title: 'Stream',
+    field: 'stream_status',
+    labels: {
+      not_requested: '未请求',
+      pending: '进行中',
+      completed: '已完成',
+      failed: '失败',
+    },
+  },
+  {
+    key: 'tool-loop',
+    title: 'Tool loop',
+    field: 'tool_loop_status',
+    labels: {
+      not_requested: '未请求',
+      pending: '等待工具',
+      completed: '已收口',
+      failed: '失败',
+    },
+  },
+  {
+    key: 'artifact',
+    title: 'Artifact',
+    field: 'artifact_commit_status',
+    labels: {
+      not_ready: '未就绪',
+      pending: '待落库',
+      failed: '失败',
+      completed: '已落库',
+    },
+  },
+];
 
 function renderParagraphs(content) {
   const parts = String(content || '')
@@ -75,6 +121,63 @@ function buildMessageChips(message) {
   return chips;
 }
 
+function runtimeTone(value) {
+  if (value === 'failed') return 'danger';
+  if (value === 'pending' || value === 'not_ready') return 'warn';
+  if (value === 'completed' || value === 'responded') return 'green';
+  return 'neutral';
+}
+
+function renderRuntimePhaseRail(turn) {
+  if (!turn) {
+    return null;
+  }
+
+  return (
+    <div className="runtime-phase-rail" aria-label="运行时阶段">
+      {RUNTIME_PHASES.map((phase) => {
+        const value = turn[phase.field];
+        const label = phase.labels[value] || formatSnakeCaseLabel(value);
+        return (
+          <div className={`runtime-phase ${runtimeTone(value)}`} key={phase.key}>
+            <span>{phase.title}</span>
+            <strong>{label}</strong>
+          </div>
+        );
+      })}
+      {turn.finish_reason ? (
+        <div className="runtime-phase neutral">
+          <span>Finish</span>
+          <strong>{formatSnakeCaseLabel(turn.finish_reason)}</strong>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function SessionRuntimeSummary({ turn }) {
+  if (!turn) {
+    return null;
+  }
+
+  return (
+    <div className="session-runtime-summary">
+      <div className="session-runtime-head">
+        <div>
+          <span>最新运行时阶段</span>
+          <strong>
+            {formatSnakeCaseLabel(turn.status)} · {truncateText(turn.turn_id, 18)}
+          </strong>
+        </div>
+        {turn.provider_request_id ? (
+          <code>{truncateText(turn.provider_request_id, 22)}</code>
+        ) : null}
+      </div>
+      {renderRuntimePhaseRail(turn)}
+    </div>
+  );
+}
+
 function ReportEntryGate({ reportEntry, busy, onResolve }) {
   if (reportEntry?.state !== 'confirmation_required') {
     return null;
@@ -124,6 +227,7 @@ export default function ChatPanel({
   onResolveReportEntry,
 }) {
   const reportEntry = session?.session_manifest_view?.report_entry || null;
+  const latestTurn = session?.session_manifest_view?.last_turn || null;
 
   return (
     <section className="chat-panel card">
@@ -166,6 +270,8 @@ export default function ChatPanel({
         onResolve={onResolveReportEntry}
       />
 
+      <SessionRuntimeSummary turn={latestTurn} />
+
       <div className="chat-messages">
         {messageLoading ? (
           <div className="chat-empty-state loading-state">
@@ -191,6 +297,7 @@ export default function ChatPanel({
                       ))}
                     </div>
                   ) : null}
+                  {assistant ? renderRuntimePhaseRail(message.message_manifest_view?.turn) : null}
                   <div className="message-meta">
                     {formatDateTime(message.created_at)}
                   </div>

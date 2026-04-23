@@ -27,14 +27,15 @@ Implemented baseline:
 
 Important current limits:
 
-- Chat currently creates new sessions from the web UI; appending a new turn to
-  an existing session is the next major chat API slice.
+- Chat now supports both new sessions and appended turns from the web UI, but
+  worker completion is still polling-based rather than product-grade streaming.
 - Retrieval still uses placeholder semantics; real embedding/vector recall is a
   later phase.
 - Streaming/provider/tool-loop runtime contracts are partially modeled but not
   yet product-grade.
-- The web report center can list report plans and published reports, but the
-  full render/publish/detail interaction flow is still being built.
+- The web report center can drive continue/render/publish host actions and show
+  plan/detail/version state, but richer artifact preview and failure-specific UI
+  affordances are still later polish.
 
 ## Repository Layout
 
@@ -159,10 +160,10 @@ Immediate sequence:
 
 1. Stabilize repository hygiene, dependency versions, README, and verification
    baseline.
-2. Complete the web Report Service loop: plan detail, continue planning, render,
-   render output viewing, publish, and published detail.
-3. Add existing-session chat turn append support across API, worker, contracts,
-   and web UI.
+2. Keep the web Report Service loop usable while adding richer artifact and
+   failure affordances.
+3. Keep existing-session chat turn append support hardened across API, worker,
+   contracts, and web UI.
 4. Turn the responsive web shell into a mobile-usable interaction model.
 5. Tighten provider, streaming, tool-loop, artifact commit, and recovery
    semantics.

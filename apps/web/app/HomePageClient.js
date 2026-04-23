@@ -69,6 +69,8 @@ export default function HomePageClient() {
   const [datasetDraft, setDatasetDraft] = useState({ key: '', title: '' });
   const [reportSurface, setReportSurface] = useState('pc');
   const [publishNote, setPublishNote] = useState('');
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  const [mobilePanel, setMobilePanel] = useState('chat');
   const [bootstrapping, setBootstrapping] = useState(true);
   const [workspaceLoading, setWorkspaceLoading] = useState(false);
   const [messageLoading, setMessageLoading] = useState(false);
@@ -364,6 +366,7 @@ export default function HomePageClient() {
     setComposingNewSession(true);
     setSelectedSessionId(null);
     setMessages([]);
+    setMobilePanel('chat');
   }
 
   async function handleResolveReportEntry(action) {
@@ -387,6 +390,7 @@ export default function HomePageClient() {
       if (action === 'enter_report_service' && response.report_plan) {
         const started = await startWorkflowExecution(response.workflow_execution?.id);
         setSelectedReportPlanId(response.report_plan.id);
+        setMobilePanel('insights');
         setBanner(`已进入报告服务，生成 report_plan ${response.report_plan.id}，任务 ${started?.enqueued_tasks?.[0]?.id || '已入队'}。`);
       } else {
         setBanner('已保持资料服务，这条分流记录会保留在 session manifest 里。');
@@ -614,11 +618,23 @@ export default function HomePageClient() {
           setError('');
           setComposingNewSession(false);
           setSelectedDatasetId(datasetId);
+          setMobileSidebarOpen(false);
+          setMobilePanel('chat');
         }}
         creatingDataset={creatingDataset}
         stats={stats}
         loading={bootstrapping || workspaceLoading}
+        mobileOpen={mobileSidebarOpen}
+        onClose={() => setMobileSidebarOpen(false)}
       />
+      {mobileSidebarOpen ? (
+        <button
+          type="button"
+          className="mobile-drawer-backdrop"
+          aria-label="关闭数据集侧栏"
+          onClick={() => setMobileSidebarOpen(false)}
+        />
+      ) : null}
 
       <main className="main-panel main-panel-home">
         <header className="topbar">
@@ -640,10 +656,35 @@ export default function HomePageClient() {
           </div>
         </header>
 
+        <div className="mobile-shell-controls" aria-label="移动端工作区切换">
+          <button
+            type="button"
+            className="mobile-shell-button wide"
+            onClick={() => setMobileSidebarOpen(true)}
+          >
+            <span>数据集</span>
+            <strong>{selectedDataset ? selectedDataset.title : '选择数据集'}</strong>
+          </button>
+          <button
+            type="button"
+            className={`mobile-shell-button ${mobilePanel === 'chat' ? 'active' : ''}`}
+            onClick={() => setMobilePanel('chat')}
+          >
+            对话
+          </button>
+          <button
+            type="button"
+            className={`mobile-shell-button ${mobilePanel === 'insights' ? 'active' : ''}`}
+            onClick={() => setMobilePanel('insights')}
+          >
+            上下文 / 报告
+          </button>
+        </div>
+
         {banner ? <div className="page-banner success-banner">{banner}</div> : null}
         {error ? <div className="page-banner error-banner">{error}</div> : null}
 
-        <section className="workspace-grid homepage-workspace">
+        <section className={`workspace-grid homepage-workspace mobile-panel-${mobilePanel}`}>
           <ChatPanel
             dataset={selectedDataset}
             session={selectedSession}
@@ -676,6 +717,7 @@ export default function HomePageClient() {
             onSelectSession={(sessionId) => {
               setComposingNewSession(false);
               setSelectedSessionId(sessionId);
+              setMobilePanel('chat');
             }}
             onSelectReportPlan={setSelectedReportPlanId}
             onReportSurfaceChange={setReportSurface}
