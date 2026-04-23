@@ -116,6 +116,16 @@ export default function HomePageClient() {
     }
   }
 
+  async function startWorkflowExecution(executionId) {
+    if (!executionId) {
+      return null;
+    }
+
+    return fetchJson(`/api/v3/workflow-executions/${executionId}/start`, {
+      method: 'POST',
+    });
+  }
+
   async function refreshCatalog(options = {}) {
     const { preferredDatasetId = null, silent = false } = options;
     if (!silent) {
@@ -311,9 +321,10 @@ export default function HomePageClient() {
         method: 'POST',
         body: { prompt },
       });
+      const started = await startWorkflowExecution(response.workflow_execution?.id);
 
       setInput('');
-      setBanner(`已启动新会话 ${response.chat_session.title}。`);
+      setBanner(`已启动新会话 ${response.chat_session.title}，任务 ${started?.enqueued_tasks?.[0]?.id || '已入队'}。`);
       await refreshWorkspace(selectedDatasetId, {
         preferredSessionId: response.chat_session.id,
         silent: true,
@@ -344,8 +355,9 @@ export default function HomePageClient() {
       });
 
       if (action === 'enter_report_service' && response.report_plan) {
+        const started = await startWorkflowExecution(response.workflow_execution?.id);
         setSelectedReportPlanId(response.report_plan.id);
-        setBanner(`已进入报告服务，生成 report_plan ${response.report_plan.id}。`);
+        setBanner(`已进入报告服务，生成 report_plan ${response.report_plan.id}，任务 ${started?.enqueued_tasks?.[0]?.id || '已入队'}。`);
       } else {
         setBanner('已保持资料服务，这条分流记录会保留在 session manifest 里。');
       }
@@ -375,7 +387,8 @@ export default function HomePageClient() {
       const response = await fetchJson(`/api/v3/report-plans/${selectedReportPlanId}/continue`, {
         method: 'POST',
       });
-      setBanner(`已请求继续规划：workflow ${response.workflow_execution.id}。`);
+      const started = await startWorkflowExecution(response.workflow_execution?.id);
+      setBanner(`已请求继续规划：workflow ${response.workflow_execution.id}，任务 ${started?.enqueued_tasks?.[0]?.id || '已入队'}。`);
       await Promise.all([
         refreshCatalog({ preferredDatasetId: selectedDatasetId, silent: true }),
         refreshReportDetail(selectedReportPlanId, { silent: true }),
@@ -398,7 +411,8 @@ export default function HomePageClient() {
         method: 'POST',
         body: { surface: reportSurface },
       });
-      setBanner(`已请求 ${response.surface} 渲染：workflow ${response.workflow_execution.id}。`);
+      const started = await startWorkflowExecution(response.workflow_execution?.id);
+      setBanner(`已请求 ${response.surface} 渲染：workflow ${response.workflow_execution.id}，任务 ${started?.enqueued_tasks?.[0]?.id || '已入队'}。`);
       await Promise.all([
         refreshCatalog({ preferredDatasetId: selectedDatasetId, silent: true }),
         refreshReportDetail(selectedReportPlanId, { silent: true }),
