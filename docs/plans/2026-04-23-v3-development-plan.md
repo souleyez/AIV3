@@ -90,6 +90,15 @@ Validation:
 - Retry does not duplicate assistant messages.
 - Report-entry gate remains functional in multi-turn sessions.
 
+Progress:
+
+- 2026-04-23: Added `POST /v1/chat-sessions/{session_id}/turns`, persisted
+  appended user turns with stable ordering, created a fresh workflow execution
+  per turn, and taught `chat-session-worker` to resolve appended executions back
+  to the existing session through `chat_session_id`.
+- 2026-04-23: Updated the web composer so selected sessions append by default,
+  while "new conversation" remains an explicit host action.
+
 ## Phase 3: Mobile-Usable Web Shell
 
 Goal: make the current responsive UI truly usable on mobile web.

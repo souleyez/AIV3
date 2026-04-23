@@ -63,6 +63,7 @@ export default function HomePageClient() {
   const [reportAstVersions, setReportAstVersions] = useState([]);
   const [publishedReportDetail, setPublishedReportDetail] = useState(null);
   const [selectedSessionId, setSelectedSessionId] = useState(null);
+  const [composingNewSession, setComposingNewSession] = useState(false);
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [datasetDraft, setDatasetDraft] = useState({ key: '', title: '' });
@@ -168,7 +169,7 @@ export default function HomePageClient() {
   }
 
   async function refreshWorkspace(datasetId, options = {}) {
-    const { preferredSessionId = null, silent = false } = options;
+    const { preferredSessionId = null, silent = false, preserveNewSessionDraft = false } = options;
     const loadId = datasetLoadIdRef.current + 1;
     datasetLoadIdRef.current = loadId;
 
@@ -198,6 +199,9 @@ export default function HomePageClient() {
           }
           if (current && nextSessions.some((item) => item.id === current)) {
             return current;
+          }
+          if (preserveNewSessionDraft) {
+            return null;
           }
           return nextSessions[0]?.id || null;
         });
@@ -308,7 +312,7 @@ export default function HomePageClient() {
     }
   }
 
-  async function handleCreateSession() {
+  async function handleSubmitMessage() {
     const prompt = input.trim();
 
     if (!selectedDatasetId || !prompt) {
@@ -317,23 +321,49 @@ export default function HomePageClient() {
 
     setSubmitting(true);
     try {
-      const response = await fetchJson(`/api/v3/datasets/${selectedDatasetId}/chat-sessions`, {
-        method: 'POST',
-        body: { prompt },
-      });
+      const response = selectedSessionId
+        ? await fetchJson(`/api/v3/chat-sessions/${selectedSessionId}/turns`, {
+            method: 'POST',
+            body: { prompt },
+          })
+        : await fetchJson(`/api/v3/datasets/${selectedDatasetId}/chat-sessions`, {
+            method: 'POST',
+            body: { prompt },
+          });
       const started = await startWorkflowExecution(response.workflow_execution?.id);
+      const sessionTitle = response.chat_session?.title || '当前会话';
 
       setInput('');
-      setBanner(`已启动新会话 ${response.chat_session.title}，任务 ${started?.enqueued_tasks?.[0]?.id || '已入队'}。`);
-      await refreshWorkspace(selectedDatasetId, {
-        preferredSessionId: response.chat_session.id,
-        silent: true,
-      });
+      setComposingNewSession(false);
+      setBanner(
+        selectedSessionId
+          ? `已追加到会话 ${sessionTitle}，任务 ${started?.enqueued_tasks?.[0]?.id || '已入队'}。`
+          : `已启动新会话 ${sessionTitle}，任务 ${started?.enqueued_tasks?.[0]?.id || '已入队'}。`,
+      );
+      await Promise.all([
+        refreshWorkspace(selectedDatasetId, {
+          preferredSessionId: response.chat_session.id,
+          silent: true,
+        }),
+        refreshMessages(response.chat_session.id, { silent: true }),
+      ]);
     } catch (submitError) {
-      setError(submitError instanceof Error ? submitError.message : '发起会话失败');
+      setError(submitError instanceof Error ? submitError.message : '提交问题失败');
     } finally {
       setSubmitting(false);
     }
+  }
+
+  function handleStartNewConversation() {
+    if (!selectedDatasetId) {
+      return;
+    }
+
+    setBanner('已切换为新会话输入；下一次发送会创建独立 chat_session。');
+    setError('');
+    setComposingNewSession(true);
+    setSelectedSessionId(null);
+    setMessages([]);
   }
 
   async function handleResolveReportEntry(action) {
@@ -462,6 +492,7 @@ export default function HomePageClient() {
         setOutputs([]);
         setSelectedReportPlanId(null);
         setSelectedSessionId(null);
+        setComposingNewSession(false);
         setMessages([]);
       });
       return;
@@ -472,6 +503,7 @@ export default function HomePageClient() {
       setOutputs([]);
       setSelectedReportPlanId(null);
       setSelectedSessionId(null);
+      setComposingNewSession(false);
       setMessages([]);
     });
 
@@ -516,12 +548,13 @@ export default function HomePageClient() {
     const timer = window.setInterval(() => {
       refreshWorkspace(selectedDatasetId, {
         preferredSessionId: selectedSessionId,
+        preserveNewSessionDraft: composingNewSession,
         silent: true,
       });
     }, DATASET_POLL_INTERVAL_MS);
 
     return () => window.clearInterval(timer);
-  }, [selectedDatasetId, selectedSessionId]);
+  }, [selectedDatasetId, selectedSessionId, composingNewSession]);
 
   useEffect(() => {
     if (!selectedSessionId) {
@@ -579,6 +612,7 @@ export default function HomePageClient() {
         onSelectDataset={(datasetId) => {
           setBanner('');
           setError('');
+          setComposingNewSession(false);
           setSelectedDatasetId(datasetId);
         }}
         creatingDataset={creatingDataset}
@@ -617,7 +651,8 @@ export default function HomePageClient() {
             messageLoading={messageLoading}
             input={input}
             onInputChange={setInput}
-            onSubmit={handleCreateSession}
+            onSubmit={handleSubmitMessage}
+            onStartNewConversation={handleStartNewConversation}
             submitting={submitting}
             reportEntryBusy={reportEntryBusy}
             onResolveReportEntry={handleResolveReportEntry}
@@ -638,7 +673,10 @@ export default function HomePageClient() {
             reportActionBusy={reportActionBusy}
             reportSurface={reportSurface}
             publishNote={publishNote}
-            onSelectSession={setSelectedSessionId}
+            onSelectSession={(sessionId) => {
+              setComposingNewSession(false);
+              setSelectedSessionId(sessionId);
+            }}
             onSelectReportPlan={setSelectedReportPlanId}
             onReportSurfaceChange={setReportSurface}
             onPublishNoteChange={setPublishNote}

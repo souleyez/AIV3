@@ -1094,6 +1094,18 @@ pub struct CreateChatSessionResponse {
     pub workflow_execution: WorkflowExecutionView,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AppendChatSessionTurnRequest {
+    pub prompt: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AppendChatSessionTurnResponse {
+    pub chat_session: ChatSessionView,
+    pub user_message: ChatMessageView,
+    pub workflow_execution: WorkflowExecutionView,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ChatSessionReportEntryActionView {

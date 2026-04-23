@@ -6,7 +6,7 @@ Current scope:
 
 - reuse the old smart-assistant shell instead of reusing the old controller
 - sidebar dataset selection and in-place dataset creation
-- dataset-scoped chat session list, message polling, dataset outputs, and published reports
+- dataset-scoped chat session list, selected-session append turns, message polling, dataset outputs, and published reports
 - host-side `chat_session.report_entry` gate wired into the UI
 - report service control panel for selecting plans, viewing AST/render/published detail, and requesting continue/render/publish host actions
 - a thin `/api/v3/*` proxy that forwards to `platform-api /v1/*`

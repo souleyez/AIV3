@@ -7,20 +7,21 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use contracts::{
-    AdvanceWorkflowExecutionResponse, ApiErrorResponse, ChatMessageView, ChatSessionView,
-    CompareDocumentsRequest, CompareDocumentsView, CreateChatSessionRequest,
-    CreateChatSessionResponse, CreateDatasetOutputRequest, CreateDatasetOutputResponse,
-    CreateDatasetRequest, CreateDocumentIngestResponse, CreateMemoryDirectoryRefreshResponse,
-    CreateReportPlanResponse, CreateReportRenderRequest, CreateReportRenderResponse,
-    DatasetOutputView, DatasetSummary, DocumentChunkView, DocumentDetailView, DocumentSummary,
-    HealthResponse, LlmInvocationView, MemoryDirectoryView, PlanReportRequest,
-    PublishReportRequest, PublishReportResponse, PublishedReportDetailView,
-    PublishedReportVersionView, PublishedReportView, RegisterDocumentRequest,
-    RegisterDocumentResponse, ReportPlanAstVersionView, ReportPlanSummary, ReportRenderOutputView,
-    RetrievalEvidenceView, RetryWorkflowExecutionRequest, RetryWorkflowExecutionResponse,
-    ToolDefinitionView, ToolExecutionView, UpdateChatSessionReportEntryRequest,
-    UpdateChatSessionReportEntryResponse, WorkflowDefinitionView, WorkflowEventView,
-    WorkflowExecutionView, WorkflowRuntimeInspectView, WorkflowSignalRequest, WorkflowTaskView,
+    AdvanceWorkflowExecutionResponse, ApiErrorResponse, AppendChatSessionTurnRequest,
+    AppendChatSessionTurnResponse, ChatMessageView, ChatSessionView, CompareDocumentsRequest,
+    CompareDocumentsView, CreateChatSessionRequest, CreateChatSessionResponse,
+    CreateDatasetOutputRequest, CreateDatasetOutputResponse, CreateDatasetRequest,
+    CreateDocumentIngestResponse, CreateMemoryDirectoryRefreshResponse, CreateReportPlanResponse,
+    CreateReportRenderRequest, CreateReportRenderResponse, DatasetOutputView, DatasetSummary,
+    DocumentChunkView, DocumentDetailView, DocumentSummary, HealthResponse, LlmInvocationView,
+    MemoryDirectoryView, PlanReportRequest, PublishReportRequest, PublishReportResponse,
+    PublishedReportDetailView, PublishedReportVersionView, PublishedReportView,
+    RegisterDocumentRequest, RegisterDocumentResponse, ReportPlanAstVersionView, ReportPlanSummary,
+    ReportRenderOutputView, RetrievalEvidenceView, RetryWorkflowExecutionRequest,
+    RetryWorkflowExecutionResponse, ToolDefinitionView, ToolExecutionView,
+    UpdateChatSessionReportEntryRequest, UpdateChatSessionReportEntryResponse,
+    WorkflowDefinitionView, WorkflowEventView, WorkflowExecutionView, WorkflowRuntimeInspectView,
+    WorkflowSignalRequest, WorkflowTaskView,
 };
 use domain_model::{
     ChatMessage, ChatMessageId, ChatMessageRole, ChatSession, ChatSessionId, DatasetId,
@@ -138,6 +139,10 @@ pub fn router(
         .route(
             "/v1/chat-sessions/{session_id}/messages",
             get(list_chat_messages),
+        )
+        .route(
+            "/v1/chat-sessions/{session_id}/turns",
+            axum::routing::post(append_chat_session_turn),
         )
         .route(
             "/v1/chat-sessions/{session_id}/report-entry",
@@ -3109,6 +3114,140 @@ async fn create_chat_session(
     ))
 }
 
+async fn append_chat_session_turn(
+    State(state): State<AppState>,
+    Path(session_id): Path<String>,
+    Json(request): Json<AppendChatSessionTurnRequest>,
+) -> std::result::Result<(StatusCode, Json<AppendChatSessionTurnResponse>), ApiError> {
+    let session_id = parse_chat_session_id(&session_id)?;
+    validate_required("prompt", &request.prompt)?;
+
+    let session = state
+        .storage
+        .chat_sessions()
+        .get_by_id(state.tenant_id, session_id)
+        .await
+        .map_err(ApiError::from_storage)?
+        .ok_or_else(|| {
+            ApiError::not_found(
+                "chat_session_not_found",
+                format!("chat session {} was not found", session_id),
+            )
+        })?;
+    if chat_session_has_in_progress_turn(&session.session_manifest) {
+        return Err(ApiError::bad_request(
+            "chat_session_turn_in_progress",
+            format!("chat session {} already has a turn in progress", session_id),
+        ));
+    }
+
+    let latest_memory_directory = state
+        .storage
+        .memory_directories()
+        .list_by_dataset(state.tenant_id, session.dataset_id)
+        .await
+        .map_err(ApiError::from_storage)?
+        .into_iter()
+        .next();
+    let latest_dataset_output = state
+        .storage
+        .dataset_outputs()
+        .list_by_dataset(state.tenant_id, session.dataset_id)
+        .await
+        .map_err(ApiError::from_storage)?
+        .into_iter()
+        .next();
+    let existing_messages = state
+        .storage
+        .chat_messages()
+        .list_by_session(state.tenant_id, session.id)
+        .await
+        .map_err(ApiError::from_storage)?;
+    let next_turn_index = existing_messages
+        .iter()
+        .map(|message| message.turn_index)
+        .max()
+        .map_or(0, |turn_index| turn_index + 1);
+    let execution = build_initial_chat_session_execution(
+        &state,
+        session.dataset_id,
+        session.id,
+        &request.prompt,
+        latest_memory_directory.as_ref(),
+        latest_dataset_output.as_ref().map(|entry| entry.id),
+    )?;
+    let initial_event = build_initial_chat_session_event(&execution, session.id, &request.prompt);
+    let chat_turn_id = execution
+        .context
+        .get("chat_turn_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            ApiError::internal(
+                "chat_turn_id_missing",
+                "chat session execution context missing chat_turn_id".to_string(),
+            )
+        })?
+        .to_string();
+
+    state
+        .storage
+        .workflow_executions()
+        .create_with_initial_event(&execution, &initial_event)
+        .await
+        .map_err(ApiError::from_storage)?;
+    let user_message = state
+        .storage
+        .chat_messages()
+        .create(
+            state.tenant_id,
+            &NewChatMessage {
+                session_id: session.id,
+                role: ChatMessageRole::User,
+                turn_index: next_turn_index,
+                content: request.prompt.trim().to_string(),
+                message_manifest: json!({
+                    "source": "user_prompt",
+                    "workflow_execution_id": execution.id,
+                    "chat_turn_id": chat_turn_id,
+                    "append_turn": true,
+                }),
+                created_at: execution.created_at,
+            },
+        )
+        .await
+        .map_err(ApiError::from_storage)?;
+    let session_manifest = build_pending_chat_session_turn_manifest(
+        &session.session_manifest,
+        &execution,
+        &request.prompt,
+        latest_memory_directory.as_ref(),
+        latest_dataset_output.as_ref(),
+        &chat_turn_id,
+    );
+    let session = state
+        .storage
+        .chat_sessions()
+        .update_context(
+            state.tenant_id,
+            session.id,
+            latest_memory_directory.as_ref().map(|entry| entry.id),
+            latest_dataset_output.as_ref().map(|entry| entry.id),
+            &session_manifest,
+            execution.created_at,
+        )
+        .await
+        .map_err(ApiError::from_storage)?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(AppendChatSessionTurnResponse {
+            chat_session: hydrate_chat_session_view(&state, session).await?,
+            user_message: hydrate_chat_message_view(&state, user_message).await?,
+            workflow_execution: to_workflow_execution_view(execution),
+        }),
+    ))
+}
+
 async fn list_chat_messages(
     State(state): State<AppState>,
     Path(session_id): Path<String>,
@@ -4921,6 +5060,95 @@ fn build_initial_chat_session_event(
         }),
         created_at: execution.created_at,
     }
+}
+
+fn chat_session_has_in_progress_turn(session_manifest: &Value) -> bool {
+    let status = session_manifest
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if status != "pending_assistant_reply" {
+        return false;
+    }
+
+    let turn_status = session_manifest
+        .get("last_turn")
+        .and_then(|turn| turn.get("status"))
+        .and_then(Value::as_str);
+    !matches!(turn_status, Some("completed" | "failed"))
+}
+
+fn build_pending_chat_session_turn_manifest(
+    current_manifest: &Value,
+    execution: &WorkflowExecution,
+    prompt: &str,
+    latest_memory_directory: Option<&MemoryDirectory>,
+    latest_dataset_output: Option<&DatasetOutput>,
+    chat_turn_id: &str,
+) -> Value {
+    let mut manifest = current_manifest.as_object().cloned().unwrap_or_default();
+    manifest.insert(
+        "generator".to_string(),
+        Value::String("chat-session-workflow".to_string()),
+    );
+    manifest.insert(
+        "schema_version".to_string(),
+        Value::String("0.3.0".to_string()),
+    );
+    manifest.insert(
+        "status".to_string(),
+        Value::String("pending_assistant_reply".to_string()),
+    );
+    manifest
+        .entry("initial_prompt".to_string())
+        .or_insert_with(|| Value::String(prompt.trim().to_string()));
+    manifest.insert(
+        "last_prompt".to_string(),
+        Value::String(prompt.trim().to_string()),
+    );
+    manifest.insert(
+        "last_turn_kind".to_string(),
+        Value::String("placeholder_orchestration".to_string()),
+    );
+    manifest
+        .entry("context_binding".to_string())
+        .or_insert_with(|| Value::String("creation_time".to_string()));
+    manifest.insert(
+        "latest_memory_directory_id".to_string(),
+        json!(latest_memory_directory.map(|entry| entry.id)),
+    );
+    manifest.insert(
+        "latest_memory_directory_version_no".to_string(),
+        json!(latest_memory_directory.map(|entry| entry.version_no)),
+    );
+    manifest.insert(
+        "latest_dataset_output_id".to_string(),
+        json!(latest_dataset_output.map(|entry| entry.id)),
+    );
+    manifest.insert(
+        "last_turn".to_string(),
+        json!({
+            "turn_id": chat_turn_id,
+            "status": "pending",
+            "stream_mode": "buffered",
+            "provider_request_id": Value::Null,
+            "provider_status": "pending",
+            "finish_reason": Value::Null,
+            "assistant_message_id": Value::Null,
+            "tool_trace_count": 0,
+            "events": [{
+                "kind": "turn_started",
+                "at": execution.created_at,
+                "provider_request_id": Value::Null,
+                "finish_reason": Value::Null,
+                "tool_trace_count": Value::Null,
+            }],
+            "started_at": execution.created_at,
+            "completed_at": Value::Null,
+        }),
+    );
+
+    Value::Object(manifest)
 }
 
 fn build_initial_upload_ingest_event(
@@ -8636,6 +8864,166 @@ mod tests {
             ),
             "confirmation_required"
         );
+    }
+
+    #[tokio::test]
+    async fn append_chat_session_turn_creates_user_message_and_new_execution() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping append_chat_session_turn test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("platform-api-test-{}", Uuid::new_v4()),
+                "Platform API Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let dataset = storage
+            .datasets()
+            .create(
+                tenant.id,
+                NewDataset {
+                    key: format!("dataset-{}", Uuid::new_v4()),
+                    title: "Append Turn Dataset".to_string(),
+                    description: Some("Dataset used for append turn tests.".to_string()),
+                },
+            )
+            .await
+            .expect("dataset should be created");
+        let base_execution = create_test_workflow_execution(
+            &storage,
+            tenant.id,
+            dataset.id,
+            WorkflowKind::ChatSession,
+        )
+        .await;
+        let now = Utc::now();
+        let session = storage
+            .chat_sessions()
+            .create(
+                tenant.id,
+                &NewChatSession {
+                    id: ChatSessionId::new(),
+                    execution_id: base_execution.id,
+                    dataset_id: dataset.id,
+                    title: "Append turn session".to_string(),
+                    latest_memory_directory_id: None,
+                    latest_dataset_output_id: None,
+                    session_manifest: json!({
+                        "generator": "chat-session-workflow",
+                        "schema_version": "0.3.0",
+                        "status": "assistant_replied",
+                        "initial_prompt": "Initial question",
+                        "last_prompt": "Initial question",
+                        "context_binding": "creation_time",
+                    }),
+                    created_at: now,
+                },
+            )
+            .await
+            .expect("chat session should be created");
+        storage
+            .chat_messages()
+            .create(
+                tenant.id,
+                &NewChatMessage {
+                    session_id: session.id,
+                    role: ChatMessageRole::User,
+                    turn_index: 0,
+                    content: "Initial question".to_string(),
+                    message_manifest: json!({ "source": "test_user_prompt" }),
+                    created_at: now,
+                },
+            )
+            .await
+            .expect("initial user message should be created");
+        storage
+            .chat_messages()
+            .create(
+                tenant.id,
+                &NewChatMessage {
+                    session_id: session.id,
+                    role: ChatMessageRole::Assistant,
+                    turn_index: 1,
+                    content: "Initial answer".to_string(),
+                    message_manifest: json!({ "source": "test_assistant_reply" }),
+                    created_at: now,
+                },
+            )
+            .await
+            .expect("initial assistant message should be created");
+
+        let app = router(
+            storage.clone(),
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        let request = axum::http::Request::builder()
+            .method("POST")
+            .uri(format!("/v1/chat-sessions/{}/turns", session.id))
+            .header(axum::http::header::CONTENT_TYPE, "application/json")
+            .body(axum::body::Body::from(
+                serde_json::to_vec(&AppendChatSessionTurnRequest {
+                    prompt: "Follow-up question".to_string(),
+                })
+                .expect("request should serialize"),
+            ))
+            .expect("request should build");
+
+        let response = app
+            .oneshot(request)
+            .await
+            .expect("append turn request should return a response");
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let payload: AppendChatSessionTurnResponse = read_json_response(response).await;
+
+        assert_eq!(payload.chat_session.id, session.id);
+        assert_eq!(
+            payload.chat_session.session_manifest["initial_prompt"],
+            json!("Initial question")
+        );
+        assert_eq!(
+            payload.chat_session.session_manifest["last_prompt"],
+            json!("Follow-up question")
+        );
+        assert_eq!(payload.user_message.session_id, session.id);
+        assert_eq!(payload.user_message.role, ChatMessageRole::User);
+        assert_eq!(payload.user_message.turn_index, 2);
+        assert_eq!(payload.user_message.content, "Follow-up question");
+        assert_eq!(payload.workflow_execution.kind, WorkflowKind::ChatSession);
+        assert_eq!(payload.workflow_execution.status, WorkflowStatus::Pending);
+
+        let persisted_execution = storage
+            .workflow_executions()
+            .get_by_id(tenant.id, payload.workflow_execution.id)
+            .await
+            .expect("workflow execution should load")
+            .expect("workflow execution should exist");
+        assert_eq!(persisted_execution.dataset_id, Some(dataset.id));
+        assert_eq!(
+            persisted_execution.context["chat_session_id"],
+            json!(session.id)
+        );
+        assert_eq!(
+            persisted_execution.context["prompt"],
+            json!("Follow-up question")
+        );
+
+        let messages = storage
+            .chat_messages()
+            .list_by_session(tenant.id, session.id)
+            .await
+            .expect("chat messages should list");
+        assert_eq!(messages.len(), 3);
+        assert_eq!(messages[2].id, payload.user_message.id);
     }
 
     #[tokio::test]

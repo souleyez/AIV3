@@ -8,8 +8,8 @@ use chat_session_worker::{
 };
 use chrono::Utc;
 use domain_model::{
-    ChatMessage, ChatMessageRole, DatasetOutputId, DocumentLifecycle, MemoryDirectoryId,
-    WorkflowEventRecord, WorkflowStatus,
+    ChatMessage, ChatMessageRole, ChatSessionId, DatasetOutputId, DocumentLifecycle,
+    MemoryDirectoryId, WorkflowEventRecord, WorkflowStatus,
 };
 use event_bus::{workflow_task_enqueued_subject, EventBus, EventSubscription};
 use llm_gateway::{
@@ -269,11 +269,18 @@ async fn process_task(
         .filter(|value| !value.is_empty())
         .ok_or_else(|| anyhow!("workflow execution {} missing prompt", execution.id))?
         .to_string();
-    let session = storage
-        .chat_sessions()
-        .get_by_execution_id(task.tenant_id, task.execution_id)
-        .await?
-        .ok_or_else(|| anyhow!("chat session for execution {} not found", task.execution_id))?;
+    let session = match context_uuid(&execution.context, "chat_session_id").map(ChatSessionId) {
+        Some(chat_session_id) => storage
+            .chat_sessions()
+            .get_by_id(task.tenant_id, chat_session_id)
+            .await?
+            .ok_or_else(|| anyhow!("chat session {} not found", chat_session_id))?,
+        None => storage
+            .chat_sessions()
+            .get_by_execution_id(task.tenant_id, task.execution_id)
+            .await?
+            .ok_or_else(|| anyhow!("chat session for execution {} not found", task.execution_id))?,
+    };
     let existing_messages = storage
         .chat_messages()
         .list_by_session(task.tenant_id, session.id)
