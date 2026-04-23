@@ -8,6 +8,7 @@ import Sidebar from './components/Sidebar';
 const DATASET_POLL_INTERVAL_MS = 5000;
 const MESSAGE_POLL_INTERVAL_MS = 3000;
 const CATALOG_POLL_INTERVAL_MS = 12000;
+const REPORT_DETAIL_POLL_INTERVAL_MS = 6000;
 
 async function fetchJson(url, options = {}) {
   const response = await fetch(url, {
@@ -55,23 +56,32 @@ export default function HomePageClient() {
   const [reportPlans, setReportPlans] = useState([]);
   const [publishedReports, setPublishedReports] = useState([]);
   const [selectedDatasetId, setSelectedDatasetId] = useState(null);
+  const [selectedReportPlanId, setSelectedReportPlanId] = useState(null);
   const [sessions, setSessions] = useState([]);
   const [outputs, setOutputs] = useState([]);
+  const [reportRenderOutputs, setReportRenderOutputs] = useState([]);
+  const [reportAstVersions, setReportAstVersions] = useState([]);
+  const [publishedReportDetail, setPublishedReportDetail] = useState(null);
   const [selectedSessionId, setSelectedSessionId] = useState(null);
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [datasetDraft, setDatasetDraft] = useState({ key: '', title: '' });
+  const [reportSurface, setReportSurface] = useState('pc');
+  const [publishNote, setPublishNote] = useState('');
   const [bootstrapping, setBootstrapping] = useState(true);
   const [workspaceLoading, setWorkspaceLoading] = useState(false);
   const [messageLoading, setMessageLoading] = useState(false);
+  const [reportDetailLoading, setReportDetailLoading] = useState(false);
   const [creatingDataset, setCreatingDataset] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [reportEntryBusy, setReportEntryBusy] = useState(false);
+  const [reportActionBusy, setReportActionBusy] = useState('');
   const [banner, setBanner] = useState('');
   const [error, setError] = useState('');
 
   const datasetLoadIdRef = useRef(0);
   const messageLoadIdRef = useRef(0);
+  const reportDetailLoadIdRef = useRef(0);
 
   const selectedDataset = useMemo(
     () => datasets.find((dataset) => dataset.id === selectedDatasetId) || null,
@@ -89,6 +99,22 @@ export default function HomePageClient() {
     () => reportPlans.filter((plan) => plan.dataset_id === selectedDatasetId),
     [reportPlans, selectedDatasetId],
   );
+  const selectedReportPlan = useMemo(
+    () => datasetReportPlans.find((plan) => plan.id === selectedReportPlanId) || null,
+    [datasetReportPlans, selectedReportPlanId],
+  );
+
+  async function fetchPlanPublishedReport(planId) {
+    try {
+      return await fetchJson(`/api/v3/report-plans/${planId}/published-report`);
+    } catch (loadError) {
+      const message = loadError instanceof Error ? loadError.message : '';
+      if (message.includes('published report') || message.includes('Published report')) {
+        return null;
+      }
+      throw loadError;
+    }
+  }
 
   async function refreshCatalog(options = {}) {
     const { preferredDatasetId = null, silent = false } = options;
@@ -209,6 +235,44 @@ export default function HomePageClient() {
     }
   }
 
+  async function refreshReportDetail(planId, options = {}) {
+    const { silent = false } = options;
+    const loadId = reportDetailLoadIdRef.current + 1;
+    reportDetailLoadIdRef.current = loadId;
+
+    if (!silent) {
+      setReportDetailLoading(true);
+    }
+
+    try {
+      const [renderOutputItems, astVersionItems, publishedDetail] = await Promise.all([
+        fetchJson(`/api/v3/report-plans/${planId}/render-outputs`),
+        fetchJson(`/api/v3/report-plans/${planId}/ast-versions`),
+        fetchPlanPublishedReport(planId),
+      ]);
+
+      if (reportDetailLoadIdRef.current !== loadId) {
+        return;
+      }
+
+      startTransition(() => {
+        setReportRenderOutputs(sortByDateDesc(renderOutputItems, 'created_at'));
+        setReportAstVersions(sortByDateDesc(astVersionItems, 'created_at'));
+        setPublishedReportDetail(publishedDetail);
+      });
+      setError('');
+    } catch (loadError) {
+      if (reportDetailLoadIdRef.current !== loadId) {
+        return;
+      }
+      setError(loadError instanceof Error ? loadError.message : '报告详情加载失败');
+    } finally {
+      if (reportDetailLoadIdRef.current === loadId && !silent) {
+        setReportDetailLoading(false);
+      }
+    }
+  }
+
   async function handleCreateDataset() {
     const key = datasetDraft.key.trim();
     const title = datasetDraft.title.trim();
@@ -280,6 +344,7 @@ export default function HomePageClient() {
       });
 
       if (action === 'enter_report_service' && response.report_plan) {
+        setSelectedReportPlanId(response.report_plan.id);
         setBanner(`已进入报告服务，生成 report_plan ${response.report_plan.id}。`);
       } else {
         setBanner('已保持资料服务，这条分流记录会保留在 session manifest 里。');
@@ -300,6 +365,78 @@ export default function HomePageClient() {
     }
   }
 
+  async function handleContinueReportPlan() {
+    if (!selectedReportPlanId) {
+      return;
+    }
+
+    setReportActionBusy('continue');
+    try {
+      const response = await fetchJson(`/api/v3/report-plans/${selectedReportPlanId}/continue`, {
+        method: 'POST',
+      });
+      setBanner(`已请求继续规划：workflow ${response.workflow_execution.id}。`);
+      await Promise.all([
+        refreshCatalog({ preferredDatasetId: selectedDatasetId, silent: true }),
+        refreshReportDetail(selectedReportPlanId, { silent: true }),
+      ]);
+    } catch (actionError) {
+      setError(actionError instanceof Error ? actionError.message : '继续报告规划失败');
+    } finally {
+      setReportActionBusy('');
+    }
+  }
+
+  async function handleRequestReportRender() {
+    if (!selectedReportPlanId) {
+      return;
+    }
+
+    setReportActionBusy('render');
+    try {
+      const response = await fetchJson(`/api/v3/report-plans/${selectedReportPlanId}/renders`, {
+        method: 'POST',
+        body: { surface: reportSurface },
+      });
+      setBanner(`已请求 ${response.surface} 渲染：workflow ${response.workflow_execution.id}。`);
+      await Promise.all([
+        refreshCatalog({ preferredDatasetId: selectedDatasetId, silent: true }),
+        refreshReportDetail(selectedReportPlanId, { silent: true }),
+      ]);
+    } catch (actionError) {
+      setError(actionError instanceof Error ? actionError.message : '请求报告渲染失败');
+    } finally {
+      setReportActionBusy('');
+    }
+  }
+
+  async function handlePublishReport() {
+    if (!selectedReportPlanId) {
+      return;
+    }
+
+    setReportActionBusy('publish');
+    try {
+      const response = await fetchJson(`/api/v3/report-plans/${selectedReportPlanId}/publish`, {
+        method: 'POST',
+        body: {
+          surface: reportSurface,
+          publish_note: publishNote.trim() || null,
+        },
+      });
+      setPublishNote('');
+      setBanner(`已发布 ${response.version.surface} v${response.version.version_no}：${response.report.slug}。`);
+      await Promise.all([
+        refreshCatalog({ preferredDatasetId: selectedDatasetId, silent: true }),
+        refreshReportDetail(selectedReportPlanId, { silent: true }),
+      ]);
+    } catch (actionError) {
+      setError(actionError instanceof Error ? actionError.message : '发布报告失败');
+    } finally {
+      setReportActionBusy('');
+    }
+  }
+
   useEffect(() => {
     refreshCatalog();
   }, []);
@@ -309,6 +446,7 @@ export default function HomePageClient() {
       startTransition(() => {
         setSessions([]);
         setOutputs([]);
+        setSelectedReportPlanId(null);
         setSelectedSessionId(null);
         setMessages([]);
       });
@@ -318,6 +456,7 @@ export default function HomePageClient() {
     startTransition(() => {
       setSessions([]);
       setOutputs([]);
+      setSelectedReportPlanId(null);
       setSelectedSessionId(null);
       setMessages([]);
     });
@@ -332,6 +471,28 @@ export default function HomePageClient() {
     }
     refreshMessages(selectedSessionId);
   }, [selectedSessionId]);
+
+  useEffect(() => {
+    setSelectedReportPlanId((current) => {
+      if (current && datasetReportPlans.some((plan) => plan.id === current)) {
+        return current;
+      }
+      return datasetReportPlans[0]?.id || null;
+    });
+  }, [datasetReportPlans]);
+
+  useEffect(() => {
+    if (!selectedReportPlanId) {
+      startTransition(() => {
+        setReportRenderOutputs([]);
+        setReportAstVersions([]);
+        setPublishedReportDetail(null);
+      });
+      return;
+    }
+
+    refreshReportDetail(selectedReportPlanId);
+  }, [selectedReportPlanId]);
 
   useEffect(() => {
     if (!selectedDatasetId) {
@@ -370,6 +531,18 @@ export default function HomePageClient() {
 
     return () => window.clearInterval(timer);
   }, [selectedDatasetId]);
+
+  useEffect(() => {
+    if (!selectedReportPlanId) {
+      return undefined;
+    }
+
+    const timer = window.setInterval(() => {
+      refreshReportDetail(selectedReportPlanId, { silent: true });
+    }, REPORT_DETAIL_POLL_INTERVAL_MS);
+
+    return () => window.clearInterval(timer);
+  }, [selectedReportPlanId]);
 
   const stats = {
     sessions: sessions.length,
@@ -442,7 +615,27 @@ export default function HomePageClient() {
             outputs={outputs}
             reportPlans={datasetReportPlans}
             publishedReports={datasetPublishedReports}
+            selectedReportPlanId={selectedReportPlanId}
+            selectedReportPlan={selectedReportPlan}
+            reportRenderOutputs={reportRenderOutputs}
+            reportAstVersions={reportAstVersions}
+            publishedReportDetail={publishedReportDetail}
+            reportDetailLoading={reportDetailLoading}
+            reportActionBusy={reportActionBusy}
+            reportSurface={reportSurface}
+            publishNote={publishNote}
             onSelectSession={setSelectedSessionId}
+            onSelectReportPlan={setSelectedReportPlanId}
+            onReportSurfaceChange={setReportSurface}
+            onPublishNoteChange={setPublishNote}
+            onContinueReportPlan={handleContinueReportPlan}
+            onRequestReportRender={handleRequestReportRender}
+            onPublishReport={handlePublishReport}
+            onRefreshReportDetail={() => {
+              if (selectedReportPlanId) {
+                refreshReportDetail(selectedReportPlanId);
+              }
+            }}
           />
         </section>
       </main>

@@ -716,6 +716,138 @@ textarea {
   line-height: 1.7;
 }
 
+.report-control-card {
+  border-color: rgba(37, 99, 235, 0.18);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(239, 246, 255, 0.82)),
+    var(--panel);
+}
+
+.report-control {
+  display: grid;
+  gap: 14px;
+}
+
+.report-control-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.report-control-grid div,
+.report-objective-box,
+.report-detail-block {
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+  border-radius: 16px;
+  border: 1px solid #dbe7f5;
+  background: rgba(255, 255, 255, 0.76);
+}
+
+.report-control-grid span,
+.report-objective-box span {
+  color: var(--subtle);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.report-control-grid strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+
+.report-objective-box p,
+.report-hint {
+  margin: 0;
+  color: #475569;
+  line-height: 1.7;
+  font-size: 13px;
+}
+
+.surface-toggle,
+.insight-action-row,
+.publish-box {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.surface-toggle button {
+  min-height: 36px;
+  padding: 0 14px;
+  border-radius: 999px;
+  border: 1px solid #dbe7f5;
+  background: #fff;
+  color: var(--subtle);
+  font-weight: 800;
+}
+
+.surface-toggle button.active {
+  border-color: rgba(37, 99, 235, 0.34);
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+.publish-box {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.publish-box input {
+  width: 100%;
+  min-height: 42px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 0 12px;
+  background: #fff;
+  color: var(--text);
+}
+
+.report-detail-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.report-detail-block > strong {
+  font-size: 13px;
+}
+
+.mini-list {
+  display: grid;
+  gap: 8px;
+}
+
+.mini-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 10px;
+  border-radius: 12px;
+  background: rgba(248, 251, 255, 0.96);
+  color: #334155;
+  font-size: 12px;
+}
+
+.mini-row.multi {
+  align-items: flex-start;
+  flex-direction: column;
+}
+
+.mini-row span {
+  font-weight: 800;
+}
+
+.mini-row em {
+  color: var(--subtle);
+  font-style: normal;
+  overflow-wrap: anywhere;
+}
+
 @keyframes pulse {
   0%,
   80%,
@@ -749,6 +881,12 @@ textarea {
   }
 
   .chat-input-row {
+    grid-template-columns: 1fr;
+  }
+
+  .report-control-grid,
+  .report-detail-columns,
+  .publish-box {
     grid-template-columns: 1fr;
   }
 }

@@ -62,6 +62,12 @@ Validation:
 - A rendered report can be published from the web UI.
 - Published report detail can be read from the web UI.
 
+Progress:
+
+- 2026-04-23: Added the first web Report Service control panel. It can select a
+  report plan, load AST versions, render outputs, and published detail, and call
+  the existing continue/render/publish host actions.
+
 ## Phase 2: Existing-Session Chat Turn Append
 
 Goal: make the assistant a continuous conversation surface instead of a
