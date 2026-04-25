@@ -17,9 +17,9 @@ use contracts::{
     MemoryDirectoryView, PlanReportRequest, PublishReportRequest, PublishReportResponse,
     PublishedReportDetailView, PublishedReportVersionView, PublishedReportView,
     RegisterDocumentRequest, RegisterDocumentResponse, ReportPlanAstVersionView, ReportPlanSummary,
-    ReportRenderOutputView, RetrievalEvidenceView, RetryWorkflowExecutionRequest,
-    RetryWorkflowExecutionResponse, ToolDefinitionView, ToolExecutionView,
-    UpdateChatSessionReportEntryRequest, UpdateChatSessionReportEntryResponse,
+    ReportRenderOutputView, RetrievalEvidenceView, RetrievalSearchHitView, RetrievalSearchResponse,
+    RetryWorkflowExecutionRequest, RetryWorkflowExecutionResponse, ToolDefinitionView,
+    ToolExecutionView, UpdateChatSessionReportEntryRequest, UpdateChatSessionReportEntryResponse,
     WorkflowDefinitionView, WorkflowEventView, WorkflowExecutionView, WorkflowRuntimeInspectView,
     WorkflowSignalRequest, WorkflowTaskView,
 };
@@ -37,7 +37,7 @@ use event_bus::{
     workflow_execution_transition_subject, workflow_task_enqueued_subject, EventBus, EventEnvelope,
 };
 use serde_json::{json, Map, Value};
-use std::fmt::Display;
+use std::{collections::BTreeMap, fmt::Display};
 use storage::{
     NewChatMessage, NewChatSession, NewDataset, NewDocument, NewPublishedReport,
     NewPublishedReportVersion, NewReportPlan, NewWorkflowTask, PgStorage,
@@ -47,6 +47,11 @@ use tool_registry::{
 };
 use uuid::Uuid;
 use workflow_engine::{WorkflowCatalog, WorkflowRuntimeState, WorkflowSignal};
+
+const DATASET_OUTPUT_RETRIEVAL_SCAN_LIMIT: i64 = 512;
+const DATASET_OUTPUT_RETRIEVAL_BIND_LIMIT: usize = 8;
+const RETRIEVAL_SEARCH_DEFAULT_LIMIT: usize = 8;
+const RETRIEVAL_SEARCH_MAX_LIMIT: usize = 20;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -332,6 +337,22 @@ pub async fn compare_documents(
     compare_documents_with_state(&state, request).await
 }
 
+pub async fn search_dataset_retrieval(
+    storage: PgStorage,
+    tenant_id: TenantId,
+    dataset_id: DatasetId,
+    query: String,
+    limit: Option<usize>,
+) -> std::result::Result<RetrievalSearchResponse, ApiError> {
+    let state = AppState::new(
+        storage,
+        workflow_definitions::catalog(),
+        tenant_id,
+        EventBus::Disabled,
+    );
+    search_dataset_retrieval_with_state(&state, dataset_id, &query, limit).await
+}
+
 pub async fn request_workflow_retry(
     storage: PgStorage,
     tenant_id: TenantId,
@@ -588,6 +609,14 @@ pub fn render_latest_assistant_turn_summary(
         "finish_reason",
         turn.finish_reason.as_ref().map(|value| value.as_str()),
     );
+    if let Some(failure) = turn.provider_failure.as_ref() {
+        push_summary_line(&mut lines, "provider_failure_kind", failure.kind.as_str());
+        push_summary_line(
+            &mut lines,
+            "provider_failure_message",
+            failure.message.as_str(),
+        );
+    }
     push_optional_summary_line(
         &mut lines,
         "provider_requested_at",
@@ -684,6 +713,14 @@ pub fn render_dataset_output_runtime_summary(
         "finish_reason",
         runtime.finish_reason.as_ref().map(|value| value.as_str()),
     );
+    if let Some(failure) = runtime.provider_failure.as_ref() {
+        push_summary_line(&mut lines, "provider_failure_kind", failure.kind.as_str());
+        push_summary_line(
+            &mut lines,
+            "provider_failure_message",
+            failure.message.as_str(),
+        );
+    }
     push_optional_summary_line(&mut lines, "latency_ms", runtime.latency_ms);
     if let Some(usage) = runtime.usage.as_ref() {
         push_summary_line(
@@ -2019,6 +2056,228 @@ fn collect_chat_message_model_facing_signals(message: &ChatMessageView) -> Vec<S
     signals
 }
 
+fn derive_document_detail_model_facing_summary(
+    detail: &DocumentDetailView,
+) -> contracts::WorkflowModelFacingSummaryView {
+    let capability_class =
+        contracts::ModelFacingCapabilityClassView::MaterialExplanationAndSynthesis;
+    let signals = collect_document_detail_model_facing_signals(detail);
+    let evidence_state = infer_document_detail_model_facing_evidence_state(detail);
+
+    if evidence_state == contracts::ModelFacingEvidenceStateView::Degraded {
+        return degraded_model_facing_summary(capability_class, signals);
+    }
+
+    build_model_facing_summary(
+        capability_class,
+        evidence_state,
+        vec![contracts::ModelFacingNextActionView::AnswerDirectly],
+        signals,
+    )
+}
+
+fn infer_document_detail_model_facing_evidence_state(
+    detail: &DocumentDetailView,
+) -> contracts::ModelFacingEvidenceStateView {
+    if detail.document.lifecycle == contracts::DocumentLifecycleView::Failed
+        || document_detail_failed_retrieval_evidence_count(detail) > 0
+    {
+        return contracts::ModelFacingEvidenceStateView::Degraded;
+    }
+
+    if !detail.retrieval_evidences.is_empty()
+        || detail.document.lifecycle == contracts::DocumentLifecycleView::Indexed
+    {
+        return contracts::ModelFacingEvidenceStateView::LiveDetail;
+    }
+    if !detail.chunks.is_empty() {
+        return contracts::ModelFacingEvidenceStateView::SupplyOnly;
+    }
+
+    contracts::ModelFacingEvidenceStateView::CatalogMemory
+}
+
+fn collect_document_detail_model_facing_signals(detail: &DocumentDetailView) -> Vec<String> {
+    vec![
+        "workflow_kind=document_detail".to_string(),
+        "document_focus=single_document".to_string(),
+        format!(
+            "document_lifecycle={}",
+            format_document_lifecycle_view(detail.document.lifecycle.clone())
+        ),
+        format!("chunk_count={}", detail.chunks.len()),
+        format!(
+            "indexed_chunk_count={}",
+            detail
+                .chunks
+                .iter()
+                .filter(|chunk| chunk.state == contracts::DocumentChunkStateView::Indexed)
+                .count()
+        ),
+        format!(
+            "retrieval_evidence_count={}",
+            detail.retrieval_evidences.len()
+        ),
+        format!(
+            "failed_retrieval_evidence_count={}",
+            document_detail_failed_retrieval_evidence_count(detail)
+        ),
+    ]
+}
+
+fn document_detail_failed_retrieval_evidence_count(detail: &DocumentDetailView) -> usize {
+    detail
+        .retrieval_evidences
+        .iter()
+        .filter(|evidence| retrieval_evidence_has_failed_state(evidence))
+        .count()
+}
+
+fn derive_compare_documents_model_facing_summary(
+    comparison: &CompareDocumentsView,
+) -> contracts::WorkflowModelFacingSummaryView {
+    let capability_class =
+        contracts::ModelFacingCapabilityClassView::MaterialExplanationAndSynthesis;
+    let signals = collect_compare_documents_model_facing_signals(comparison);
+    let evidence_state = infer_compare_documents_model_facing_evidence_state(comparison);
+
+    if evidence_state == contracts::ModelFacingEvidenceStateView::Degraded {
+        return degraded_model_facing_summary(capability_class, signals);
+    }
+
+    let mut allowed_next_actions = vec![contracts::ModelFacingNextActionView::AnswerDirectly];
+    if !comparison.documents.is_empty() {
+        allowed_next_actions.insert(0, contracts::ModelFacingNextActionView::ReadDocumentDetail);
+    }
+
+    build_model_facing_summary(
+        capability_class,
+        evidence_state,
+        allowed_next_actions,
+        signals,
+    )
+}
+
+fn infer_compare_documents_model_facing_evidence_state(
+    comparison: &CompareDocumentsView,
+) -> contracts::ModelFacingEvidenceStateView {
+    let failed_document_count = comparison
+        .documents
+        .iter()
+        .filter(|detail| detail.document.lifecycle == contracts::DocumentLifecycleView::Failed)
+        .count();
+    let failed_retrieval_evidence_count = comparison
+        .documents
+        .iter()
+        .map(document_detail_failed_retrieval_evidence_count)
+        .sum::<usize>();
+    let total_chunk_count = comparison
+        .documents
+        .iter()
+        .map(|detail| detail.chunks.len())
+        .sum::<usize>();
+    let total_retrieval_evidence_count = comparison
+        .documents
+        .iter()
+        .map(|detail| detail.retrieval_evidences.len())
+        .sum::<usize>();
+
+    if failed_document_count > 0 || failed_retrieval_evidence_count > 0 {
+        return contracts::ModelFacingEvidenceStateView::Degraded;
+    }
+    if comparison.documents.len() >= 2
+        && (total_chunk_count > 0 || total_retrieval_evidence_count > 0)
+    {
+        return contracts::ModelFacingEvidenceStateView::Mixed;
+    }
+    if total_retrieval_evidence_count > 0 {
+        return contracts::ModelFacingEvidenceStateView::SupplyOnly;
+    }
+    if total_chunk_count > 0 {
+        return contracts::ModelFacingEvidenceStateView::CatalogMemory;
+    }
+
+    contracts::ModelFacingEvidenceStateView::CatalogMemory
+}
+
+fn collect_compare_documents_model_facing_signals(
+    comparison: &CompareDocumentsView,
+) -> Vec<String> {
+    let document_focus = infer_model_facing_document_focus(comparison.documents.len(), 0);
+    vec![
+        "workflow_kind=document_compare".to_string(),
+        format!(
+            "document_focus={}",
+            format_model_facing_document_focus(document_focus)
+        ),
+        format!("distinct_document_count={}", comparison.documents.len()),
+        format!(
+            "indexed_document_count={}",
+            comparison
+                .documents
+                .iter()
+                .filter(
+                    |detail| detail.document.lifecycle == contracts::DocumentLifecycleView::Indexed
+                )
+                .count()
+        ),
+        format!(
+            "chunk_count={}",
+            comparison
+                .documents
+                .iter()
+                .map(|detail| detail.chunks.len())
+                .sum::<usize>()
+        ),
+        format!(
+            "retrieval_evidence_count={}",
+            comparison
+                .documents
+                .iter()
+                .map(|detail| detail.retrieval_evidences.len())
+                .sum::<usize>()
+        ),
+        format!(
+            "failed_document_count={}",
+            comparison
+                .documents
+                .iter()
+                .filter(
+                    |detail| detail.document.lifecycle == contracts::DocumentLifecycleView::Failed
+                )
+                .count()
+        ),
+        format!(
+            "failed_retrieval_evidence_count={}",
+            comparison
+                .documents
+                .iter()
+                .map(document_detail_failed_retrieval_evidence_count)
+                .sum::<usize>()
+        ),
+    ]
+}
+
+fn retrieval_evidence_has_failed_state(evidence: &RetrievalEvidenceView) -> bool {
+    evidence
+        .evidence_manifest_view
+        .as_ref()
+        .map(|manifest| {
+            manifest.embedding.status == contracts::RetrievalEmbeddingStatusView::Failed
+                || manifest.recall.status == contracts::RetrievalRecallStatusView::Failed
+        })
+        .unwrap_or(false)
+}
+
+fn format_document_lifecycle_view(value: contracts::DocumentLifecycleView) -> &'static str {
+    match value {
+        contracts::DocumentLifecycleView::Received => "received",
+        contracts::DocumentLifecycleView::Extracted => "extracted",
+        contracts::DocumentLifecycleView::Indexed => "indexed",
+        contracts::DocumentLifecycleView::Failed => "failed",
+    }
+}
+
 fn derive_report_plan_model_facing_summary(
     plan: &ReportPlanSummary,
 ) -> contracts::WorkflowModelFacingSummaryView {
@@ -2710,12 +2969,13 @@ async fn list_dataset_retrieval_evidences(
         ));
     }
 
-    let evidences = state
+    let mut evidences = state
         .storage
         .retrieval_evidences()
         .list_latest_by_dataset(state.tenant_id, dataset_id, 100)
         .await
         .map_err(ApiError::from_storage)?;
+    sort_retrieval_evidences_by_relevance(&mut evidences);
 
     Ok(Json(
         evidences
@@ -2723,6 +2983,47 @@ async fn list_dataset_retrieval_evidences(
             .map(to_retrieval_evidence_view)
             .collect(),
     ))
+}
+
+async fn search_dataset_retrieval_with_state(
+    state: &AppState,
+    dataset_id: DatasetId,
+    query: &str,
+    limit: Option<usize>,
+) -> std::result::Result<RetrievalSearchResponse, ApiError> {
+    validate_required("query", query)?;
+
+    let dataset = state
+        .storage
+        .datasets()
+        .get_by_id(state.tenant_id, dataset_id)
+        .await
+        .map_err(ApiError::from_storage)?;
+    if dataset.is_none() {
+        return Err(ApiError::not_found(
+            "dataset_not_found",
+            format!(
+                "dataset {} was not found for tenant {}",
+                dataset_id, state.tenant_id
+            ),
+        ));
+    }
+
+    let limit = normalize_retrieval_search_limit(limit);
+    let evidences = state
+        .storage
+        .retrieval_evidences()
+        .list_latest_by_dataset(
+            state.tenant_id,
+            dataset_id,
+            retrieval_search_scan_limit(limit),
+        )
+        .await
+        .map_err(ApiError::from_storage)?;
+
+    Ok(RetrievalSearchResponse {
+        hits: search_retrieval_hits(&evidences, query, limit),
+    })
 }
 
 async fn create_memory_directory_refresh(
@@ -2863,15 +3164,21 @@ async fn create_dataset_output(
         .map_err(ApiError::from_storage)?
         .into_iter()
         .next();
-    let bound_retrieval_evidence_ids = state
+    let bound_retrieval_evidences = state
         .storage
         .retrieval_evidences()
-        .list_latest_by_dataset(state.tenant_id, dataset.id, 8)
+        .list_latest_by_dataset(
+            state.tenant_id,
+            dataset.id,
+            DATASET_OUTPUT_RETRIEVAL_SCAN_LIMIT,
+        )
         .await
-        .map_err(ApiError::from_storage)?
-        .into_iter()
-        .map(|evidence| evidence.id)
-        .collect::<Vec<_>>();
+        .map_err(ApiError::from_storage)?;
+    let bound_retrieval_evidence_ids = select_retrieval_evidence_ids_for_prompt(
+        &bound_retrieval_evidences,
+        request.prompt.trim(),
+        DATASET_OUTPUT_RETRIEVAL_BIND_LIMIT,
+    );
 
     let execution = build_initial_dataset_output_execution(
         &state,
@@ -3508,12 +3815,13 @@ async fn list_document_retrieval_evidences(
         ));
     }
 
-    let evidences = state
+    let mut evidences = state
         .storage
         .retrieval_evidences()
         .list_by_document(state.tenant_id, document_id)
         .await
         .map_err(ApiError::from_storage)?;
+    sort_retrieval_evidences_by_relevance(&mut evidences);
 
     Ok(Json(
         evidences
@@ -3545,21 +3853,19 @@ async fn load_document_detail_with_state(
         .list_by_document(state.tenant_id, document_id)
         .await
         .map_err(ApiError::from_storage)?;
-    let retrieval_evidences = state
+    let mut retrieval_evidences = state
         .storage
         .retrieval_evidences()
         .list_by_document(state.tenant_id, document_id)
         .await
         .map_err(ApiError::from_storage)?;
+    sort_retrieval_evidences_by_relevance(&mut retrieval_evidences);
 
-    Ok(DocumentDetailView {
-        document: to_document_summary(document),
-        chunks: chunks.into_iter().map(to_document_chunk_view).collect(),
-        retrieval_evidences: retrieval_evidences
-            .into_iter()
-            .map(to_retrieval_evidence_view)
-            .collect(),
-    })
+    Ok(to_document_detail_view(
+        document,
+        chunks,
+        retrieval_evidences,
+    ))
 }
 
 async fn compare_documents_with_state(
@@ -3618,7 +3924,7 @@ async fn compare_documents_with_state(
         documents.push(load_document_detail_with_state(state, document_id).await?);
     }
 
-    Ok(CompareDocumentsView { documents })
+    Ok(to_compare_documents_view(documents))
 }
 
 async fn register_document(
@@ -5415,6 +5721,33 @@ fn to_document_summary(document: Document) -> DocumentSummary {
     }
 }
 
+fn to_document_detail_view(
+    document: Document,
+    chunks: Vec<DocumentChunk>,
+    retrieval_evidences: Vec<RetrievalEvidence>,
+) -> DocumentDetailView {
+    let mut view = DocumentDetailView {
+        document: to_document_summary(document),
+        chunks: chunks.into_iter().map(to_document_chunk_view).collect(),
+        retrieval_evidences: retrieval_evidences
+            .into_iter()
+            .map(to_retrieval_evidence_view)
+            .collect(),
+        model_facing: None,
+    };
+    view.model_facing = Some(derive_document_detail_model_facing_summary(&view));
+    view
+}
+
+fn to_compare_documents_view(documents: Vec<DocumentDetailView>) -> CompareDocumentsView {
+    let mut view = CompareDocumentsView {
+        documents,
+        model_facing: None,
+    };
+    view.model_facing = Some(derive_compare_documents_model_facing_summary(&view));
+    view
+}
+
 fn to_document_chunk_view(chunk: DocumentChunk) -> DocumentChunkView {
     DocumentChunkView {
         id: chunk.id,
@@ -5449,6 +5782,254 @@ fn to_retrieval_evidence_view(evidence: RetrievalEvidence) -> RetrievalEvidenceV
         evidence_manifest_view,
         created_at: evidence.created_at,
     }
+}
+
+struct RankedRetrievalEvidence<'a> {
+    evidence: &'a RetrievalEvidence,
+    score: f64,
+    lexical_score: f64,
+    recall_score: f64,
+    rank_hint: usize,
+}
+
+fn rank_retrieval_evidences_for_prompt<'a>(
+    evidences: &'a [RetrievalEvidence],
+    prompt: &str,
+    limit: usize,
+) -> Vec<RankedRetrievalEvidence<'a>> {
+    if evidences.is_empty() || limit == 0 {
+        return Vec::new();
+    }
+
+    let query_weights = lexical_query_term_weights(prompt);
+    let query_norm = vector_norm(&query_weights);
+    let mut ranked = evidences
+        .iter()
+        .map(|evidence| {
+            let lexical_score = lexical_query_score(evidence, &query_weights, query_norm);
+            let score = if lexical_score > 0.0 {
+                lexical_score
+            } else {
+                evidence.recall_score
+            };
+            RankedRetrievalEvidence {
+                evidence,
+                score,
+                lexical_score,
+                recall_score: evidence.recall_score,
+                rank_hint: rank_hint_from_evidence_manifest(evidence).unwrap_or(usize::MAX),
+            }
+        })
+        .collect::<Vec<_>>();
+    ranked.sort_by(|left, right| {
+        right
+            .lexical_score
+            .partial_cmp(&left.lexical_score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| {
+                right
+                    .score
+                    .partial_cmp(&left.score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .then_with(|| {
+                right
+                    .recall_score
+                    .partial_cmp(&left.recall_score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .then_with(|| left.rank_hint.cmp(&right.rank_hint))
+            .then_with(|| right.evidence.created_at.cmp(&left.evidence.created_at))
+            .then_with(|| left.evidence.chunk_index.cmp(&right.evidence.chunk_index))
+    });
+    ranked.into_iter().take(limit).collect()
+}
+
+fn select_retrieval_evidence_ids_for_prompt(
+    evidences: &[RetrievalEvidence],
+    prompt: &str,
+    limit: usize,
+) -> Vec<RetrievalEvidenceId> {
+    rank_retrieval_evidences_for_prompt(evidences, prompt, limit)
+        .into_iter()
+        .map(|ranked| ranked.evidence.id)
+        .collect()
+}
+
+fn search_retrieval_hits(
+    evidences: &[RetrievalEvidence],
+    prompt: &str,
+    limit: usize,
+) -> Vec<RetrievalSearchHitView> {
+    rank_retrieval_evidences_for_prompt(evidences, prompt, limit)
+        .into_iter()
+        .map(|ranked| RetrievalSearchHitView {
+            retrieval_evidence_id: ranked.evidence.id,
+            document_id: ranked.evidence.document_id,
+            score: ranked.score,
+            summary: ranked.evidence.summary.clone(),
+            source_locator: ranked.evidence.source_locator.clone(),
+        })
+        .collect()
+}
+
+fn normalize_retrieval_search_limit(limit: Option<usize>) -> usize {
+    limit
+        .unwrap_or(RETRIEVAL_SEARCH_DEFAULT_LIMIT)
+        .clamp(1, RETRIEVAL_SEARCH_MAX_LIMIT)
+}
+
+fn retrieval_search_scan_limit(limit: usize) -> i64 {
+    let scan_limit = limit.saturating_mul(8);
+    let clamped = scan_limit
+        .max(RETRIEVAL_SEARCH_DEFAULT_LIMIT)
+        .min(DATASET_OUTPUT_RETRIEVAL_SCAN_LIMIT as usize);
+    i64::try_from(clamped).unwrap_or(DATASET_OUTPUT_RETRIEVAL_SCAN_LIMIT)
+}
+
+fn sort_retrieval_evidences_by_relevance(evidences: &mut [RetrievalEvidence]) {
+    evidences.sort_by(|left, right| {
+        right
+            .recall_score
+            .partial_cmp(&left.recall_score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| {
+                rank_hint_from_evidence_manifest(left)
+                    .unwrap_or(usize::MAX)
+                    .cmp(&rank_hint_from_evidence_manifest(right).unwrap_or(usize::MAX))
+            })
+            .then_with(|| left.chunk_index.cmp(&right.chunk_index))
+            .then_with(|| right.created_at.cmp(&left.created_at))
+    });
+}
+
+fn lexical_query_score(
+    evidence: &RetrievalEvidence,
+    query_weights: &BTreeMap<String, f64>,
+    query_norm: f64,
+) -> f64 {
+    if query_weights.is_empty() || query_norm <= 0.0 {
+        return 0.0;
+    }
+
+    let evidence_weights = evidence_term_weights_from_manifest(evidence);
+    let evidence_norm = vector_norm(&evidence_weights);
+    if evidence_weights.is_empty() || evidence_norm <= 0.0 {
+        return 0.0;
+    }
+
+    let dot_product = query_weights
+        .iter()
+        .filter_map(|(term, query_weight)| {
+            evidence_weights
+                .get(term)
+                .map(|evidence_weight| query_weight * evidence_weight)
+        })
+        .sum::<f64>();
+    if dot_product <= 0.0 {
+        return 0.0;
+    }
+
+    (dot_product / (query_norm * evidence_norm) * 10_000.0).round() / 10_000.0
+}
+
+fn evidence_term_weights_from_manifest(evidence: &RetrievalEvidence) -> BTreeMap<String, f64> {
+    evidence
+        .evidence_manifest
+        .get("embedding")
+        .and_then(|value| value.get("term_weights"))
+        .and_then(Value::as_object)
+        .map(|weights| {
+            weights
+                .iter()
+                .filter_map(|(term, weight)| weight.as_f64().map(|value| (term.clone(), value)))
+                .collect::<BTreeMap<_, _>>()
+        })
+        .unwrap_or_default()
+}
+
+fn rank_hint_from_evidence_manifest(evidence: &RetrievalEvidence) -> Option<usize> {
+    evidence
+        .evidence_manifest
+        .get("recall")
+        .and_then(|value| value.get("rank_hint"))
+        .and_then(Value::as_u64)
+        .map(|value| value as usize)
+}
+
+fn lexical_query_term_weights(query: &str) -> BTreeMap<String, f64> {
+    let mut frequencies: BTreeMap<String, f64> = BTreeMap::new();
+    for token in lexical_query_tokens(query) {
+        *frequencies.entry(token).or_insert(0.0) += 1.0;
+    }
+
+    frequencies
+        .into_iter()
+        .map(|(term, count)| (term, 1.0 + count.ln()))
+        .collect()
+}
+
+fn vector_norm(weights: &BTreeMap<String, f64>) -> f64 {
+    weights
+        .values()
+        .map(|weight| weight * weight)
+        .sum::<f64>()
+        .sqrt()
+}
+
+fn lexical_query_tokens(content: &str) -> Vec<String> {
+    let normalized = content
+        .chars()
+        .map(|value| {
+            if value.is_ascii_alphanumeric() {
+                value.to_ascii_lowercase()
+            } else {
+                ' '
+            }
+        })
+        .collect::<String>();
+
+    normalized
+        .split_whitespace()
+        .filter_map(normalize_lexical_query_token)
+        .collect()
+}
+
+fn normalize_lexical_query_token(token: &str) -> Option<String> {
+    if token.len() < 2 || is_lexical_stop_word(token) {
+        return None;
+    }
+
+    Some(token.to_string())
+}
+
+fn is_lexical_stop_word(token: &str) -> bool {
+    matches!(
+        token,
+        "a" | "an"
+            | "and"
+            | "are"
+            | "as"
+            | "at"
+            | "be"
+            | "by"
+            | "for"
+            | "from"
+            | "in"
+            | "into"
+            | "is"
+            | "it"
+            | "of"
+            | "on"
+            | "or"
+            | "that"
+            | "the"
+            | "this"
+            | "to"
+            | "was"
+            | "were"
+            | "with"
+    )
 }
 
 fn to_memory_directory_view(directory: MemoryDirectory) -> MemoryDirectoryView {
@@ -5581,6 +6162,35 @@ fn parse_manifest_finish_reason(value: &str) -> contracts::ManifestFinishReasonV
     }
 }
 
+fn parse_manifest_provider_failure_kind(
+    value: &str,
+) -> Option<contracts::ManifestProviderFailureKindView> {
+    match value {
+        "request_failed" => Some(contracts::ManifestProviderFailureKindView::RequestFailed),
+        "request_timeout" => Some(contracts::ManifestProviderFailureKindView::RequestTimeout),
+        "http_status" => Some(contracts::ManifestProviderFailureKindView::HttpStatus),
+        "response_body_read_failed" => {
+            Some(contracts::ManifestProviderFailureKindView::ResponseBodyReadFailed)
+        }
+        "invalid_json" => Some(contracts::ManifestProviderFailureKindView::InvalidJson),
+        "invalid_response" => Some(contracts::ManifestProviderFailureKindView::InvalidResponse),
+        "finish_reason_error" => {
+            Some(contracts::ManifestProviderFailureKindView::FinishReasonError)
+        }
+        _ => None,
+    }
+}
+
+fn parse_manifest_provider_failure(
+    value: &Value,
+) -> Option<contracts::ManifestProviderFailureView> {
+    let object = value.as_object()?;
+    Some(contracts::ManifestProviderFailureView {
+        kind: parse_manifest_provider_failure_kind(object.get("kind")?.as_str()?)?,
+        message: object.get("message")?.as_str()?.to_string(),
+    })
+}
+
 fn parse_manifest_usage(value: &Value) -> Option<contracts::ManifestTokenUsageView> {
     let object = value.as_object()?;
 
@@ -5612,6 +6222,9 @@ fn parse_manifest_runtime(value: &Value) -> Option<contracts::ManifestRuntimeVie
             .get("finish_reason")
             .and_then(Value::as_str)
             .map(parse_manifest_finish_reason),
+        provider_failure: object
+            .get("provider_failure")
+            .and_then(parse_manifest_provider_failure),
         latency_ms: object.get("latency_ms").and_then(Value::as_u64),
         usage: object.get("usage").and_then(parse_manifest_usage),
         system_prompt_key: object
@@ -5794,6 +6407,7 @@ fn parse_dataset_output_manifest(value: &Value) -> Option<contracts::DatasetOutp
                     model: None,
                     request_id: None,
                     finish_reason: None,
+                    provider_failure: None,
                     latency_ms: None,
                     usage: None,
                     system_prompt_key: None,
@@ -6472,6 +7086,9 @@ fn parse_chat_turn_runtime(value: &Value) -> Option<contracts::ChatTurnRuntimeVi
                 (_, _, None) => contracts::ChatTurnProviderStatusView::Responded,
             },
         );
+    let provider_failure = object
+        .get("provider_failure")
+        .and_then(parse_manifest_provider_failure);
     let stream_status = object
         .get("stream_status")
         .and_then(Value::as_str)
@@ -6522,6 +7139,7 @@ fn parse_chat_turn_runtime(value: &Value) -> Option<contracts::ChatTurnRuntimeVi
         stream_status,
         artifact_commit_status,
         provider_status,
+        provider_failure,
         tool_loop_status,
         provider_request_id: object
             .get("provider_request_id")
@@ -6729,6 +7347,7 @@ fn parse_chat_message_manifest(value: &Value) -> Option<contracts::ChatMessageMa
                     model: None,
                     request_id: None,
                     finish_reason: None,
+                    provider_failure: None,
                     latency_ms: None,
                     usage: None,
                     system_prompt_key: None,
@@ -6820,6 +7439,7 @@ fn manifest_runtime_from_latest_llm_invocation(
             .finish_reason
             .as_ref()
             .map(manifest_finish_reason_from_invocation),
+        provider_failure: None,
         latency_ms: latest.latency_ms,
         usage: latest
             .usage
@@ -10280,6 +10900,20 @@ mod tests {
         assert_eq!(detail.retrieval_evidences.len(), 1);
         assert_eq!(detail.retrieval_evidences[0].document_id, document.id);
         assert_eq!(detail.retrieval_evidences[0].chunk_index, 0);
+        assert_eq!(
+            detail
+                .model_facing
+                .as_ref()
+                .map(|summary| summary.evidence_state.clone()),
+            Some(contracts::ModelFacingEvidenceStateView::LiveDetail)
+        );
+        assert_eq!(
+            detail
+                .model_facing
+                .as_ref()
+                .and_then(|summary| summary.recommended_next_action.clone()),
+            Some(contracts::ModelFacingNextActionView::AnswerDirectly)
+        );
     }
 
     #[tokio::test]
@@ -10440,10 +11074,479 @@ mod tests {
         assert_eq!(comparison.documents[0].document.title, "Contract B");
         assert_eq!(comparison.documents[0].chunks.len(), 1);
         assert_eq!(comparison.documents[0].retrieval_evidences.len(), 1);
+        assert_eq!(
+            comparison.documents[0]
+                .model_facing
+                .as_ref()
+                .map(|summary| summary.evidence_state.clone()),
+            Some(contracts::ModelFacingEvidenceStateView::LiveDetail)
+        );
         assert_eq!(comparison.documents[1].document.id, document_a.id);
         assert_eq!(comparison.documents[1].document.title, "Contract A");
         assert_eq!(comparison.documents[1].chunks.len(), 1);
         assert_eq!(comparison.documents[1].retrieval_evidences.len(), 1);
+        assert_eq!(
+            comparison
+                .model_facing
+                .as_ref()
+                .map(|summary| summary.evidence_state.clone()),
+            Some(contracts::ModelFacingEvidenceStateView::Mixed)
+        );
+        assert_eq!(
+            comparison
+                .model_facing
+                .as_ref()
+                .and_then(|summary| summary.recommended_next_action.clone()),
+            Some(contracts::ModelFacingNextActionView::AnswerDirectly)
+        );
+        assert!(comparison
+            .model_facing
+            .as_ref()
+            .expect("compare documents should expose model_facing summary")
+            .allowed_tool_keys
+            .contains(&"document.read_detail".to_string()));
+    }
+
+    #[tokio::test]
+    async fn create_dataset_output_binds_query_ranked_retrieval_evidences() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping create_dataset_output retrieval ranking test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("platform-api-test-{}", Uuid::new_v4()),
+                "Platform API Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let dataset = storage
+            .datasets()
+            .create(
+                tenant.id,
+                NewDataset {
+                    key: format!("dataset-{}", Uuid::new_v4()),
+                    title: "Dataset Output Retrieval Ranking".to_string(),
+                    description: Some(
+                        "Dataset used to verify prompt-ranked retrieval evidence binding."
+                            .to_string(),
+                    ),
+                },
+            )
+            .await
+            .expect("dataset should be created");
+        let revenue_document = storage
+            .documents()
+            .create(
+                tenant.id,
+                NewDocument {
+                    dataset_id: dataset.id,
+                    title: "Revenue Notes".to_string(),
+                    object_key: "documents/revenue.md".to_string(),
+                    content_type: "text/markdown".to_string(),
+                    secret_binding_ids: Vec::new(),
+                },
+            )
+            .await
+            .expect("revenue document should be created");
+        let roadmap_document = storage
+            .documents()
+            .create(
+                tenant.id,
+                NewDocument {
+                    dataset_id: dataset.id,
+                    title: "Roadmap Notes".to_string(),
+                    object_key: "documents/roadmap.md".to_string(),
+                    content_type: "text/markdown".to_string(),
+                    secret_binding_ids: Vec::new(),
+                },
+            )
+            .await
+            .expect("roadmap document should be created");
+        let now = Utc::now();
+        let evidence_execution = create_test_workflow_execution(
+            &storage,
+            tenant.id,
+            dataset.id,
+            WorkflowKind::UploadIngest,
+        )
+        .await;
+        let revenue_chunks = storage
+            .document_chunks()
+            .replace_for_document(
+                tenant.id,
+                revenue_document.id,
+                &[storage::NewDocumentChunk {
+                    dataset_id: dataset.id,
+                    document_id: revenue_document.id,
+                    chunk_index: 0,
+                    content: "Revenue and margin expanded across enterprise sales.".to_string(),
+                    token_count: 8,
+                    metadata: json!({ "section": "finance" }),
+                    created_at: now,
+                }],
+            )
+            .await
+            .expect("revenue chunks should be created");
+        let roadmap_chunks = storage
+            .document_chunks()
+            .replace_for_document(
+                tenant.id,
+                roadmap_document.id,
+                &[storage::NewDocumentChunk {
+                    dataset_id: dataset.id,
+                    document_id: roadmap_document.id,
+                    chunk_index: 0,
+                    content: "Mobile navigation and design system roadmap updates.".to_string(),
+                    token_count: 8,
+                    metadata: json!({ "section": "product" }),
+                    created_at: now,
+                }],
+            )
+            .await
+            .expect("roadmap chunks should be created");
+        let retrieval_evidences = storage
+            .retrieval_evidences()
+            .create_many(
+                tenant.id,
+                &[
+                    storage::NewRetrievalEvidence {
+                        execution_id: evidence_execution.id,
+                        dataset_id: dataset.id,
+                        document_id: roadmap_document.id,
+                        document_chunk_id: roadmap_chunks[0].id,
+                        chunk_index: roadmap_chunks[0].chunk_index,
+                        source_locator: "documents/roadmap.md#chunk=0".to_string(),
+                        content_excerpt: "Mobile navigation and design system roadmap updates."
+                            .to_string(),
+                        summary: "Roadmap note".to_string(),
+                        payload_filter_key: "dataset/demo".to_string(),
+                        embedding_model: "local-lexical-v1".to_string(),
+                        recall_score: 0.99,
+                        evidence_manifest: json!({
+                            "embedding": {
+                                "status": "indexed",
+                                "model": "local-lexical-v1",
+                                "token_count": 8,
+                                "term_weights": {
+                                    "roadmap": 1.6,
+                                    "mobile": 1.5,
+                                    "navigation": 1.4
+                                }
+                            },
+                            "recall": {
+                                "status": "ready",
+                                "score": 0.99,
+                                "rank_hint": 1
+                            },
+                            "evidence": {
+                                "document_chunk_id": roadmap_chunks[0].id,
+                                "payload_filter_key": "dataset/demo",
+                                "source_locator": "documents/roadmap.md#chunk=0"
+                            }
+                        }),
+                        created_at: now,
+                    },
+                    storage::NewRetrievalEvidence {
+                        execution_id: evidence_execution.id,
+                        dataset_id: dataset.id,
+                        document_id: revenue_document.id,
+                        document_chunk_id: revenue_chunks[0].id,
+                        chunk_index: revenue_chunks[0].chunk_index,
+                        source_locator: "documents/revenue.md#chunk=0".to_string(),
+                        content_excerpt: "Revenue and margin expanded across enterprise sales."
+                            .to_string(),
+                        summary: "Revenue note".to_string(),
+                        payload_filter_key: "dataset/demo".to_string(),
+                        embedding_model: "local-lexical-v1".to_string(),
+                        recall_score: 0.61,
+                        evidence_manifest: json!({
+                            "embedding": {
+                                "status": "indexed",
+                                "model": "local-lexical-v1",
+                                "token_count": 8,
+                                "term_weights": {
+                                    "revenue": 1.8,
+                                    "margin": 1.6,
+                                    "sales": 1.1
+                                }
+                            },
+                            "recall": {
+                                "status": "ready",
+                                "score": 0.61,
+                                "rank_hint": 2
+                            },
+                            "evidence": {
+                                "document_chunk_id": revenue_chunks[0].id,
+                                "payload_filter_key": "dataset/demo",
+                                "source_locator": "documents/revenue.md#chunk=0"
+                            }
+                        }),
+                        created_at: now,
+                    },
+                ],
+            )
+            .await
+            .expect("retrieval evidences should be created");
+        let state = AppState::new(
+            storage.clone(),
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+
+        let (status, Json(response)) = create_dataset_output(
+            State(state),
+            Path(dataset.id.to_string()),
+            Json(CreateDatasetOutputRequest {
+                prompt: "Summarize revenue and margin changes".to_string(),
+                chat_session_id: None,
+            }),
+        )
+        .await
+        .expect("dataset output request should succeed");
+
+        assert_eq!(status, StatusCode::CREATED);
+
+        let execution = storage
+            .workflow_executions()
+            .get_by_id(tenant.id, response.workflow_execution.id)
+            .await
+            .expect("workflow execution should load")
+            .expect("workflow execution should exist");
+        let bound_retrieval_evidence_ids = execution.context["retrieval_evidence_ids"]
+            .as_array()
+            .expect("retrieval evidence ids should be present")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>();
+
+        assert_eq!(bound_retrieval_evidence_ids.len(), 2);
+        assert_eq!(
+            bound_retrieval_evidence_ids[0],
+            retrieval_evidences[1].id.to_string()
+        );
+        assert_eq!(
+            bound_retrieval_evidence_ids[1],
+            retrieval_evidences[0].id.to_string()
+        );
+    }
+
+    #[tokio::test]
+    async fn search_dataset_retrieval_returns_ranked_hits_with_document_ids() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping retrieval search test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("platform-api-test-{}", Uuid::new_v4()),
+                "Platform API Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let dataset = storage
+            .datasets()
+            .create(
+                tenant.id,
+                NewDataset {
+                    key: format!("dataset-{}", Uuid::new_v4()),
+                    title: "Retrieval Search Dataset".to_string(),
+                    description: Some(
+                        "Dataset used to verify retrieval.search host surface.".to_string(),
+                    ),
+                },
+            )
+            .await
+            .expect("dataset should be created");
+        let revenue_document = storage
+            .documents()
+            .create(
+                tenant.id,
+                NewDocument {
+                    dataset_id: dataset.id,
+                    title: "Revenue Memo".to_string(),
+                    object_key: "documents/revenue-memo.md".to_string(),
+                    content_type: "text/markdown".to_string(),
+                    secret_binding_ids: Vec::new(),
+                },
+            )
+            .await
+            .expect("revenue document should be created");
+        let roadmap_document = storage
+            .documents()
+            .create(
+                tenant.id,
+                NewDocument {
+                    dataset_id: dataset.id,
+                    title: "Roadmap Memo".to_string(),
+                    object_key: "documents/roadmap-memo.md".to_string(),
+                    content_type: "text/markdown".to_string(),
+                    secret_binding_ids: Vec::new(),
+                },
+            )
+            .await
+            .expect("roadmap document should be created");
+        let now = Utc::now();
+        let evidence_execution = create_test_workflow_execution(
+            &storage,
+            tenant.id,
+            dataset.id,
+            WorkflowKind::UploadIngest,
+        )
+        .await;
+        let revenue_chunks = storage
+            .document_chunks()
+            .replace_for_document(
+                tenant.id,
+                revenue_document.id,
+                &[storage::NewDocumentChunk {
+                    dataset_id: dataset.id,
+                    document_id: revenue_document.id,
+                    chunk_index: 0,
+                    content: "Revenue margin improved across enterprise subscriptions.".to_string(),
+                    token_count: 7,
+                    metadata: json!({ "section": "finance" }),
+                    created_at: now,
+                }],
+            )
+            .await
+            .expect("revenue chunks should be created");
+        let roadmap_chunks = storage
+            .document_chunks()
+            .replace_for_document(
+                tenant.id,
+                roadmap_document.id,
+                &[storage::NewDocumentChunk {
+                    dataset_id: dataset.id,
+                    document_id: roadmap_document.id,
+                    chunk_index: 0,
+                    content: "Roadmap covers mobile navigation and design system cleanup."
+                        .to_string(),
+                    token_count: 9,
+                    metadata: json!({ "section": "product" }),
+                    created_at: now,
+                }],
+            )
+            .await
+            .expect("roadmap chunks should be created");
+        storage
+            .retrieval_evidences()
+            .create_many(
+                tenant.id,
+                &[
+                    storage::NewRetrievalEvidence {
+                        execution_id: evidence_execution.id,
+                        dataset_id: dataset.id,
+                        document_id: roadmap_document.id,
+                        document_chunk_id: roadmap_chunks[0].id,
+                        chunk_index: roadmap_chunks[0].chunk_index,
+                        source_locator: "documents/roadmap-memo.md#chunk=0".to_string(),
+                        content_excerpt:
+                            "Roadmap covers mobile navigation and design system cleanup."
+                                .to_string(),
+                        summary: "Roadmap memo".to_string(),
+                        payload_filter_key: "dataset/retrieval-search".to_string(),
+                        embedding_model: "local-lexical-v1".to_string(),
+                        recall_score: 0.97,
+                        evidence_manifest: json!({
+                            "schema_version": "0.4.0",
+                            "embedding": {
+                                "status": "indexed",
+                                "model": "local-lexical-v1",
+                                "token_count": 9,
+                                "term_weights": {
+                                    "roadmap": 1.7,
+                                    "mobile": 1.4,
+                                    "navigation": 1.3
+                                }
+                            },
+                            "recall": {
+                                "status": "ready",
+                                "score": 0.97,
+                                "rank_hint": 1
+                            },
+                            "evidence": {
+                                "document_chunk_id": roadmap_chunks[0].id,
+                                "payload_filter_key": "dataset/retrieval-search",
+                                "source_locator": "documents/roadmap-memo.md#chunk=0"
+                            }
+                        }),
+                        created_at: now,
+                    },
+                    storage::NewRetrievalEvidence {
+                        execution_id: evidence_execution.id,
+                        dataset_id: dataset.id,
+                        document_id: revenue_document.id,
+                        document_chunk_id: revenue_chunks[0].id,
+                        chunk_index: revenue_chunks[0].chunk_index,
+                        source_locator: "documents/revenue-memo.md#chunk=0".to_string(),
+                        content_excerpt: "Revenue margin improved across enterprise subscriptions."
+                            .to_string(),
+                        summary: "Revenue memo".to_string(),
+                        payload_filter_key: "dataset/retrieval-search".to_string(),
+                        embedding_model: "local-lexical-v1".to_string(),
+                        recall_score: 0.63,
+                        evidence_manifest: json!({
+                            "schema_version": "0.4.0",
+                            "embedding": {
+                                "status": "indexed",
+                                "model": "local-lexical-v1",
+                                "token_count": 7,
+                                "term_weights": {
+                                    "revenue": 1.8,
+                                    "margin": 1.6,
+                                    "enterprise": 1.2
+                                }
+                            },
+                            "recall": {
+                                "status": "ready",
+                                "score": 0.63,
+                                "rank_hint": 2
+                            },
+                            "evidence": {
+                                "document_chunk_id": revenue_chunks[0].id,
+                                "payload_filter_key": "dataset/retrieval-search",
+                                "source_locator": "documents/revenue-memo.md#chunk=0"
+                            }
+                        }),
+                        created_at: now,
+                    },
+                ],
+            )
+            .await
+            .expect("retrieval evidences should be created");
+
+        let response = search_dataset_retrieval(
+            storage,
+            tenant.id,
+            dataset.id,
+            "Summarize revenue margin changes".to_string(),
+            Some(2),
+        )
+        .await
+        .expect("retrieval search should load hits");
+
+        assert_eq!(response.hits.len(), 2);
+        assert_eq!(response.hits[0].document_id, revenue_document.id);
+        assert_eq!(
+            response.hits[0].source_locator,
+            "documents/revenue-memo.md#chunk=0"
+        );
+        assert!(response.hits[0].score >= response.hits[1].score);
+        assert_eq!(response.hits[1].document_id, roadmap_document.id);
     }
 
     #[tokio::test]
@@ -11104,6 +12207,100 @@ mod tests {
     }
 
     #[test]
+    fn select_retrieval_evidence_ids_for_prompt_prefers_query_overlap() {
+        let now = Utc::now();
+        let revenue_id = RetrievalEvidenceId::new();
+        let roadmap_id = RetrievalEvidenceId::new();
+        let evidences = vec![
+            RetrievalEvidence {
+                id: roadmap_id,
+                tenant_id: TenantId::new(),
+                dataset_id: DatasetId::new(),
+                execution_id: WorkflowExecutionId::new(),
+                document_id: DocumentId::new(),
+                document_chunk_id: DocumentChunkId::new(),
+                chunk_index: 0,
+                source_locator: "documents/roadmap.md#chunk=0".to_string(),
+                content_excerpt: "Roadmap covers mobile navigation and design system polish."
+                    .to_string(),
+                summary: "Roadmap notes".to_string(),
+                payload_filter_key: "dataset/demo".to_string(),
+                embedding_model: "local-lexical-v1".to_string(),
+                recall_score: 0.98,
+                evidence_manifest: json!({
+                    "embedding": {
+                        "status": "indexed",
+                        "model": "local-lexical-v1",
+                        "token_count": 9,
+                        "term_weights": {
+                            "roadmap": 1.7,
+                            "mobile": 1.4,
+                            "navigation": 1.3,
+                        }
+                    },
+                    "recall": {
+                        "status": "ready",
+                        "score": 0.98,
+                        "rank_hint": 1
+                    },
+                    "evidence": {
+                        "document_chunk_id": DocumentChunkId::new(),
+                        "payload_filter_key": "dataset/demo",
+                        "source_locator": "documents/roadmap.md#chunk=0"
+                    }
+                }),
+                created_at: now,
+            },
+            RetrievalEvidence {
+                id: revenue_id,
+                tenant_id: TenantId::new(),
+                dataset_id: DatasetId::new(),
+                execution_id: WorkflowExecutionId::new(),
+                document_id: DocumentId::new(),
+                document_chunk_id: DocumentChunkId::new(),
+                chunk_index: 1,
+                source_locator: "documents/finance.md#chunk=1".to_string(),
+                content_excerpt: "Revenue grew while operating margin expanded.".to_string(),
+                summary: "Finance notes".to_string(),
+                payload_filter_key: "dataset/demo".to_string(),
+                embedding_model: "local-lexical-v1".to_string(),
+                recall_score: 0.62,
+                evidence_manifest: json!({
+                    "embedding": {
+                        "status": "indexed",
+                        "model": "local-lexical-v1",
+                        "token_count": 8,
+                        "term_weights": {
+                            "revenue": 1.8,
+                            "margin": 1.5,
+                            "operating": 1.2,
+                        }
+                    },
+                    "recall": {
+                        "status": "ready",
+                        "score": 0.62,
+                        "rank_hint": 2
+                    },
+                    "evidence": {
+                        "document_chunk_id": DocumentChunkId::new(),
+                        "payload_filter_key": "dataset/demo",
+                        "source_locator": "documents/finance.md#chunk=1"
+                    }
+                }),
+                created_at: now,
+            },
+        ];
+
+        let selected = select_retrieval_evidence_ids_for_prompt(
+            &evidences,
+            "Summarize revenue and margin changes",
+            2,
+        );
+
+        assert_eq!(selected, vec![revenue_id, roadmap_id]);
+    }
+
+    #[test]
     fn to_report_render_output_view_exposes_typed_status() {
         let now = Utc::now();
         let output = ReportRenderOutput {
@@ -11413,8 +12610,21 @@ mod tests {
                         "scope_policy": "dataset_or_session",
                         "invocation_mode": "cli",
                         "cli": {
-                            "argv": ["cargo", "run", "-p", "retrieval-cli", "--", "search"],
-                            "env_allowlist": ["PLATFORM_DATABASE_URL"],
+                            "argv": [
+                                "cargo",
+                                "run",
+                                "-p",
+                                "platform-api",
+                                "--bin",
+                                "retrieval-search-cli",
+                                "--",
+                                "search"
+                            ],
+                            "env_allowlist": [
+                                "PLATFORM_DATABASE_URL",
+                                "PLATFORM_TENANT_KEY",
+                                "PLATFORM_TENANT_NAME"
+                            ],
                             "output_mode": "json",
                             "timeout_ms": 30000
                         }
@@ -12028,6 +13238,7 @@ mod tests {
                     model: Some("placeholder-dataset-output-v1".to_string()),
                     request_id: Some("req_dataset_output_placeholder".to_string()),
                     finish_reason: Some(contracts::ManifestFinishReasonView::Stop),
+                    provider_failure: None,
                     latency_ms: Some(0),
                     usage: Some(contracts::ManifestTokenUsageView {
                         input_tokens: 11,
@@ -14913,6 +16124,10 @@ mod tests {
                             stream_mode: contracts::ChatTurnStreamModeView::Buffered,
                             stream_status: contracts::ChatTurnStreamStatusView::NotRequested,
                             provider_status: contracts::ChatTurnProviderStatusView::Responded,
+                            provider_failure: Some(contracts::ManifestProviderFailureView {
+                                kind: contracts::ManifestProviderFailureKindView::FinishReasonError,
+                                message: "openai returned finish_reason=error".to_string(),
+                            }),
                             artifact_commit_status:
                                 contracts::ChatTurnArtifactCommitStatusView::Completed,
                             tool_loop_status: contracts::ChatTurnToolLoopStatusView::NotRequested,
@@ -15000,6 +16215,230 @@ mod tests {
             .signals
             .iter()
             .any(|signal| signal == "retrieval_evidence_count=2"));
+    }
+
+    #[test]
+    fn derive_document_detail_model_facing_summary_marks_failed_retrieval_as_degraded() {
+        let now = Utc::now();
+        let detail = DocumentDetailView {
+            document: DocumentSummary {
+                id: DocumentId::new(),
+                dataset_id: DatasetId::new(),
+                title: "Broken Detail".to_string(),
+                object_key: "documents/broken.md".to_string(),
+                content_type: "text/markdown".to_string(),
+                lifecycle: contracts::DocumentLifecycleView::Indexed,
+                secret_binding_ids: Vec::new(),
+                created_at: now,
+                updated_at: now,
+            },
+            chunks: vec![DocumentChunkView {
+                id: DocumentChunkId::new(),
+                document_id: DocumentId::new(),
+                chunk_index: 0,
+                token_count: 12,
+                state: contracts::DocumentChunkStateView::Indexed,
+                content: "Broken retrieval detail".to_string(),
+                metadata: json!({}),
+                created_at: now,
+                updated_at: now,
+            }],
+            retrieval_evidences: vec![RetrievalEvidenceView {
+                id: RetrievalEvidenceId::new(),
+                dataset_id: DatasetId::new(),
+                document_id: DocumentId::new(),
+                document_chunk_id: DocumentChunkId::new(),
+                execution_id: WorkflowExecutionId::new(),
+                chunk_index: 0,
+                source_locator: "documents/broken.md#chunk=0".to_string(),
+                content_excerpt: "Broken retrieval detail".to_string(),
+                summary: "Broken retrieval detail".to_string(),
+                payload_filter_key: "dataset/broken".to_string(),
+                embedding_model: "local_lexical".to_string(),
+                recall_score: 0.0,
+                evidence_manifest: json!({
+                    "embedding": { "status": "indexed", "model": "local_lexical", "token_count": 12 },
+                    "recall": { "status": "failed", "score": 0.0, "rank_hint": 1 },
+                    "evidence": {
+                        "document_chunk_id": DocumentChunkId::new(),
+                        "payload_filter_key": "dataset/broken",
+                        "source_locator": "documents/broken.md#chunk=0"
+                    }
+                }),
+                evidence_manifest_view: Some(contracts::RetrievalEvidenceManifestView {
+                    schema_version: "0.4.0".to_string(),
+                    generator: "retrieval-worker".to_string(),
+                    dataset_id: DatasetId::new(),
+                    document_id: DocumentId::new(),
+                    document_chunk_id: DocumentChunkId::new(),
+                    chunk_index: 0,
+                    indexed_at: now,
+                    embedding: contracts::RetrievalEmbeddingManifestView {
+                        status: contracts::RetrievalEmbeddingStatusView::Indexed,
+                        model: "local_lexical".to_string(),
+                        token_count: 12,
+                    },
+                    recall: contracts::RetrievalRecallManifestView {
+                        status: contracts::RetrievalRecallStatusView::Failed,
+                        score: 0.0,
+                        rank_hint: 1,
+                    },
+                    evidence: contracts::RetrievalEvidenceLocatorManifestView {
+                        document_chunk_id: DocumentChunkId::new(),
+                        payload_filter_key: "dataset/broken".to_string(),
+                        source_locator: "documents/broken.md#chunk=0".to_string(),
+                    },
+                }),
+                created_at: now,
+            }],
+            model_facing: None,
+        };
+
+        let summary = derive_document_detail_model_facing_summary(&detail);
+
+        assert_eq!(
+            summary.capability_class,
+            contracts::ModelFacingCapabilityClassView::MaterialExplanationAndSynthesis
+        );
+        assert_eq!(
+            summary.evidence_state,
+            contracts::ModelFacingEvidenceStateView::Degraded
+        );
+        assert_eq!(
+            summary.continuation_state,
+            contracts::ModelFacingContinuationStateView::RetryRequired
+        );
+        assert_eq!(
+            summary.recommended_next_action,
+            Some(contracts::ModelFacingNextActionView::RetryExecution)
+        );
+        assert!(summary
+            .signals
+            .iter()
+            .any(|signal| signal == "failed_retrieval_evidence_count=1"));
+    }
+
+    #[test]
+    fn derive_compare_documents_model_facing_summary_marks_multi_document_detail_as_mixed() {
+        let now = Utc::now();
+        let comparison = CompareDocumentsView {
+            documents: vec![
+                DocumentDetailView {
+                    document: DocumentSummary {
+                        id: DocumentId::new(),
+                        dataset_id: DatasetId::new(),
+                        title: "Doc A".to_string(),
+                        object_key: "documents/a.md".to_string(),
+                        content_type: "text/markdown".to_string(),
+                        lifecycle: contracts::DocumentLifecycleView::Indexed,
+                        secret_binding_ids: Vec::new(),
+                        created_at: now,
+                        updated_at: now,
+                    },
+                    chunks: vec![DocumentChunkView {
+                        id: DocumentChunkId::new(),
+                        document_id: DocumentId::new(),
+                        chunk_index: 0,
+                        token_count: 8,
+                        state: contracts::DocumentChunkStateView::Indexed,
+                        content: "Document A detail".to_string(),
+                        metadata: json!({}),
+                        created_at: now,
+                        updated_at: now,
+                    }],
+                    retrieval_evidences: vec![RetrievalEvidenceView {
+                        id: RetrievalEvidenceId::new(),
+                        dataset_id: DatasetId::new(),
+                        document_id: DocumentId::new(),
+                        document_chunk_id: DocumentChunkId::new(),
+                        execution_id: WorkflowExecutionId::new(),
+                        chunk_index: 0,
+                        source_locator: "documents/a.md#chunk=0".to_string(),
+                        content_excerpt: "Document A detail".to_string(),
+                        summary: "Document A".to_string(),
+                        payload_filter_key: "dataset/a".to_string(),
+                        embedding_model: "local_lexical".to_string(),
+                        recall_score: 0.9,
+                        evidence_manifest: json!({}),
+                        evidence_manifest_view: None,
+                        created_at: now,
+                    }],
+                    model_facing: None,
+                },
+                DocumentDetailView {
+                    document: DocumentSummary {
+                        id: DocumentId::new(),
+                        dataset_id: DatasetId::new(),
+                        title: "Doc B".to_string(),
+                        object_key: "documents/b.md".to_string(),
+                        content_type: "text/markdown".to_string(),
+                        lifecycle: contracts::DocumentLifecycleView::Indexed,
+                        secret_binding_ids: Vec::new(),
+                        created_at: now,
+                        updated_at: now,
+                    },
+                    chunks: vec![DocumentChunkView {
+                        id: DocumentChunkId::new(),
+                        document_id: DocumentId::new(),
+                        chunk_index: 0,
+                        token_count: 8,
+                        state: contracts::DocumentChunkStateView::Indexed,
+                        content: "Document B detail".to_string(),
+                        metadata: json!({}),
+                        created_at: now,
+                        updated_at: now,
+                    }],
+                    retrieval_evidences: vec![RetrievalEvidenceView {
+                        id: RetrievalEvidenceId::new(),
+                        dataset_id: DatasetId::new(),
+                        document_id: DocumentId::new(),
+                        document_chunk_id: DocumentChunkId::new(),
+                        execution_id: WorkflowExecutionId::new(),
+                        chunk_index: 0,
+                        source_locator: "documents/b.md#chunk=0".to_string(),
+                        content_excerpt: "Document B detail".to_string(),
+                        summary: "Document B".to_string(),
+                        payload_filter_key: "dataset/b".to_string(),
+                        embedding_model: "local_lexical".to_string(),
+                        recall_score: 0.88,
+                        evidence_manifest: json!({}),
+                        evidence_manifest_view: None,
+                        created_at: now,
+                    }],
+                    model_facing: None,
+                },
+            ],
+            model_facing: None,
+        };
+
+        let summary = derive_compare_documents_model_facing_summary(&comparison);
+
+        assert_eq!(
+            summary.capability_class,
+            contracts::ModelFacingCapabilityClassView::MaterialExplanationAndSynthesis
+        );
+        assert_eq!(
+            summary.evidence_state,
+            contracts::ModelFacingEvidenceStateView::Mixed
+        );
+        assert_eq!(
+            summary.continuation_state,
+            contracts::ModelFacingContinuationStateView::ReadyToAnswer
+        );
+        assert_eq!(
+            summary.recommended_next_action,
+            Some(contracts::ModelFacingNextActionView::AnswerDirectly)
+        );
+        assert!(summary
+            .allowed_next_actions
+            .contains(&contracts::ModelFacingNextActionView::ReadDocumentDetail));
+        assert!(summary
+            .allowed_tool_keys
+            .contains(&"document.read_detail".to_string()));
+        assert!(summary
+            .signals
+            .iter()
+            .any(|signal| signal == "distinct_document_count=2"));
     }
 
     #[test]
@@ -15697,6 +17136,10 @@ mod tests {
                             stream_mode: contracts::ChatTurnStreamModeView::Buffered,
                             stream_status: contracts::ChatTurnStreamStatusView::NotRequested,
                             provider_status: contracts::ChatTurnProviderStatusView::Responded,
+                            provider_failure: Some(contracts::ManifestProviderFailureView {
+                                kind: contracts::ManifestProviderFailureKindView::FinishReasonError,
+                                message: "openai returned finish_reason=error".to_string(),
+                            }),
                             artifact_commit_status:
                                 contracts::ChatTurnArtifactCommitStatusView::Completed,
                             tool_loop_status: contracts::ChatTurnToolLoopStatusView::Pending,
@@ -15751,6 +17194,8 @@ mod tests {
         assert!(summary.contains("turn_id: turn_1"));
         assert!(summary.contains("provider_request_id: req_1"));
         assert!(summary.contains("finish_reason: tool_calls"));
+        assert!(summary.contains("provider_failure_kind: finish_reason_error"));
+        assert!(summary.contains("provider_failure_message: openai returned finish_reason=error"));
         assert!(summary.contains("stream_status: NotRequested"));
         assert!(summary.contains("tool_loop_status: Pending"));
         assert!(summary.contains("tool_calls_emitted_at:"));
@@ -15883,6 +17328,10 @@ mod tests {
                         model: Some("gpt-5.4".to_string()),
                         request_id: Some("req_dataset_output".to_string()),
                         finish_reason: Some(contracts::ManifestFinishReasonView::Stop),
+                        provider_failure: Some(contracts::ManifestProviderFailureView {
+                            kind: contracts::ManifestProviderFailureKindView::HttpStatus,
+                            message: "openai returned HTTP 502".to_string(),
+                        }),
                         latency_ms: Some(50),
                         usage: Some(contracts::ManifestTokenUsageView {
                             input_tokens: 10,
@@ -15915,6 +17364,8 @@ mod tests {
         assert!(summary.contains("model: gpt-5.4"));
         assert!(summary.contains("request_id: req_dataset_output"));
         assert!(summary.contains("finish_reason: stop"));
+        assert!(summary.contains("provider_failure_kind: http_status"));
+        assert!(summary.contains("provider_failure_message: openai returned HTTP 502"));
         assert!(summary.contains("token_usage: input=10, output=20, total=30"));
         assert!(summary.contains("tool_status_summary: requested=1, completed=1, failed=1"));
     }
@@ -16070,6 +17521,7 @@ mod tests {
                         model: Some("gpt-5.4".to_string()),
                         request_id: Some("req_dataset".to_string()),
                         finish_reason: Some(contracts::ManifestFinishReasonView::Stop),
+                        provider_failure: None,
                         latency_ms: Some(10),
                         usage: None,
                         system_prompt_key: None,
@@ -16119,6 +17571,7 @@ mod tests {
                             stream_mode: contracts::ChatTurnStreamModeView::Buffered,
                             stream_status: contracts::ChatTurnStreamStatusView::NotRequested,
                             provider_status: contracts::ChatTurnProviderStatusView::Responded,
+                            provider_failure: None,
                             artifact_commit_status:
                                 contracts::ChatTurnArtifactCommitStatusView::Completed,
                             tool_loop_status: contracts::ChatTurnToolLoopStatusView::NotRequested,

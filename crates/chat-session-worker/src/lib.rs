@@ -22,6 +22,7 @@ pub struct ChatSessionJob {
     pub latest_memory_directory_version_no: Option<i32>,
     pub latest_dataset_output_id: Option<DatasetOutputId>,
     pub latest_dataset_output_retrieval_evidence_ids: Vec<domain_model::RetrievalEvidenceId>,
+    pub tool_calls: Vec<LlmToolCall>,
     pub service_handoff: Option<contracts::ManifestServiceHandoffView>,
     pub turn_stream_mode: String,
     pub turn_id: String,
@@ -77,6 +78,7 @@ fn render_chat_turn_manifest(
         "stream_status": render_stream_status(&job.turn_stream_mode, provider_status),
         "artifact_commit_status": "pending",
         "provider_status": provider_status,
+        "provider_failure": render_provider_failure(runtime),
         "tool_loop_status": tool_loop_status,
         "provider_request_id": runtime.request_id.as_deref(),
         "provider_requested_at": requested_at,
@@ -193,6 +195,7 @@ pub fn render_in_flight_session_manifest(
             "stream_status": render_stream_status(&job.turn_stream_mode, "pending"),
             "artifact_commit_status": "not_ready",
             "provider_status": "pending",
+            "provider_failure": Value::Null,
             "tool_loop_status": "not_requested",
             "provider_request_id": Value::Null,
             "provider_requested_at": requested_at,
@@ -350,6 +353,7 @@ pub fn render_response_ready_session_manifest(
             "stream_status": render_stream_status(&job.turn_stream_mode, provider_status),
             "artifact_commit_status": "pending",
             "provider_status": provider_status,
+            "provider_failure": render_provider_failure(runtime),
             "tool_loop_status": tool_loop_status,
             "provider_request_id": runtime.request_id.as_deref(),
             "provider_requested_at": requested_at,
@@ -391,6 +395,8 @@ pub fn render_failed_session_manifest(
     let provider_status = runtime
         .map(provider_status_from_runtime)
         .unwrap_or("failed");
+    let provider_responded_at =
+        runtime.and_then(|value| provider_responded_at_from_runtime(value, failed_at));
     let provider_request_id = runtime.and_then(|value| value.request_id.as_deref());
     let finish_reason = runtime
         .and_then(|value| value.finish_reason.as_ref())
@@ -421,10 +427,10 @@ pub fn render_failed_session_manifest(
         }),
     ];
 
-    if runtime.is_some() {
+    if provider_responded_at.is_some() {
         events.push(json!({
             "kind": "provider_responded",
-            "at": failed_at,
+            "at": provider_responded_at,
             "provider_request_id": provider_request_id,
             "finish_reason": finish_reason,
             "tool_trace_count": tool_trace_count,
@@ -529,10 +535,13 @@ pub fn render_failed_session_manifest(
             "stream_status": render_stream_status(&job.turn_stream_mode, provider_status),
             "artifact_commit_status": artifact_commit_status,
             "provider_status": provider_status,
+            "provider_failure": runtime
+                .map(render_provider_failure)
+                .unwrap_or(Value::Null),
             "tool_loop_status": tool_loop_status,
             "provider_request_id": provider_request_id,
             "provider_requested_at": requested_at,
-            "provider_responded_at": runtime.map(|_| failed_at),
+            "provider_responded_at": provider_responded_at,
             "first_token_at": Value::Null,
             "stream_completed_at": render_stream_completed_at(&job.turn_stream_mode, provider_status, failed_at),
             "artifact_commit_ready_at": artifact_commit_ready_at,
@@ -571,12 +580,17 @@ fn report_entry_from_service_handoff(
 pub fn chat_runtime_error_message(runtime: &LlmRuntimeMetadata) -> Option<String> {
     match runtime.finish_reason {
         Some(LlmFinishReason::Error) => Some(format!(
-            "chat session provider {} returned finish_reason=error{}",
+            "chat session provider {} returned finish_reason=error{}{}",
             runtime.provider,
             runtime
                 .request_id
                 .as_ref()
                 .map(|value| format!(" (request_id={value})"))
+                .unwrap_or_default(),
+            runtime
+                .provider_failure
+                .as_ref()
+                .map(|failure| format!(" [{}: {}]", failure.kind.as_str(), failure.message))
                 .unwrap_or_default()
         )),
         _ => None,
@@ -788,21 +802,25 @@ impl ChatSessionOrchestrator for PlaceholderChatSessionOrchestrator {
             input: placeholder_message,
         })?;
         let completed_at = Utc::now();
+        let mut tool_calls = job.tool_calls.clone();
+        tool_calls.extend(response.tool_calls.clone());
+        let mut runtime = response.runtime.clone();
+        runtime.tool_trace_count = tool_calls.len();
 
         Ok(ChatSessionOutcome {
             assistant_message: response.output_text.clone(),
             message_manifest: render_assistant_message_manifest(
                 job,
                 &response.output_text,
-                &response.runtime,
-                &response.tool_calls,
+                &runtime,
+                &tool_calls,
                 requested_at,
                 completed_at,
             ),
             session_manifest: render_completed_session_manifest(job),
             completed_at,
-            runtime: response.runtime.clone(),
-            tool_calls: response.tool_calls.clone(),
+            runtime,
+            tool_calls,
         })
     }
 }
@@ -812,6 +830,29 @@ fn provider_status_from_runtime(runtime: &LlmRuntimeMetadata) -> &'static str {
         Some(LlmFinishReason::Error) => "failed",
         _ => "responded",
     }
+}
+
+fn provider_responded_at_from_runtime(
+    runtime: &LlmRuntimeMetadata,
+    terminal_at: DateTime<Utc>,
+) -> Option<DateTime<Utc>> {
+    match runtime.provider_failure.as_ref() {
+        Some(failure) if !failure.kind.provider_responded() => None,
+        _ => Some(terminal_at),
+    }
+}
+
+fn render_provider_failure(runtime: &LlmRuntimeMetadata) -> Value {
+    runtime
+        .provider_failure
+        .as_ref()
+        .map(|failure| {
+            json!({
+                "kind": failure.kind.as_str(),
+                "message": failure.message,
+            })
+        })
+        .unwrap_or(Value::Null)
 }
 
 fn render_chat_turn_events(
@@ -937,6 +978,7 @@ mod tests {
                     latest_memory_directory_version_no: Some(4),
                     latest_dataset_output_id: None,
                     latest_dataset_output_retrieval_evidence_ids: vec![],
+                    tool_calls: vec![],
                     service_handoff: None,
                     turn_stream_mode: "buffered".to_string(),
                     turn_id: "turn_placeholder".to_string(),
@@ -1102,6 +1144,7 @@ mod tests {
                         domain_model::RetrievalEvidenceId::new(),
                         domain_model::RetrievalEvidenceId::new(),
                     ],
+                    tool_calls: vec![],
                     service_handoff: None,
                     turn_stream_mode: "streaming".to_string(),
                     turn_id: "turn_provider".to_string(),
@@ -1249,6 +1292,72 @@ mod tests {
     }
 
     #[test]
+    fn precomputed_tool_calls_are_merged_into_chat_manifest_trace() {
+        let retrieval_evidence_id = domain_model::RetrievalEvidenceId::new();
+        let requested_at = Utc::now() + chrono::TimeDelta::milliseconds(25);
+        let orchestrator = PlaceholderChatSessionOrchestrator::new(
+            Arc::new(
+                llm_gateway::ScriptedLlmProvider::new("openai")
+                    .with_prompt_registry(bootstrap_default_prompt_registry())
+                    .with_response_text("provider reply")
+                    .with_tool_calls(vec![llm_gateway::LlmToolCall {
+                        call_id: Some("call_provider".to_string()),
+                        tool_name: "document.compare".to_string(),
+                        status: llm_gateway::LlmToolCallStatus::Completed,
+                        arguments: Some(json!({ "document_ids": ["doc_1", "doc_2"] })),
+                        result: Some(json!({ "summary": "comparison loaded" })),
+                    }]),
+            ),
+            "gpt-5.4",
+        );
+
+        let outcome = orchestrator
+            .generate(
+                &ChatSessionJob {
+                    dataset_id: DatasetId::new(),
+                    initial_prompt: "Summarize the latest evidence".to_string(),
+                    prompt: "Summarize the latest evidence".to_string(),
+                    indexed_document_count: 2,
+                    refreshed_chunks: 4,
+                    prior_message_count: 1,
+                    latest_memory_directory_id: None,
+                    latest_memory_directory_version_no: None,
+                    latest_dataset_output_id: None,
+                    latest_dataset_output_retrieval_evidence_ids: vec![retrieval_evidence_id],
+                    tool_calls: vec![llm_gateway::LlmToolCall {
+                        call_id: Some("call_retrieval".to_string()),
+                        tool_name: "retrieval.search".to_string(),
+                        status: llm_gateway::LlmToolCallStatus::Completed,
+                        arguments: Some(json!({ "query": "latest evidence" })),
+                        result: Some(
+                            json!({ "hits": [{ "retrieval_evidence_id": retrieval_evidence_id }] }),
+                        ),
+                    }],
+                    service_handoff: None,
+                    turn_stream_mode: "buffered".to_string(),
+                    turn_id: "turn_merged_tools".to_string(),
+                    turn_started_at: Utc::now(),
+                },
+                requested_at,
+            )
+            .expect("chat session with precomputed tool call should succeed");
+
+        assert_eq!(outcome.runtime.tool_trace_count, 2);
+        assert_eq!(
+            outcome.message_manifest["runtime"]["tool_trace_count"],
+            json!(2)
+        );
+        assert_eq!(
+            outcome.message_manifest["tool_trace"][0]["tool_name"],
+            json!("retrieval.search")
+        );
+        assert_eq!(
+            outcome.message_manifest["tool_trace"][1]["tool_name"],
+            json!("document.compare")
+        );
+    }
+
+    #[test]
     fn assistant_message_manifest_carries_report_service_handoff() {
         let requested_at = Utc::now();
         let responded_at = requested_at + chrono::TimeDelta::milliseconds(50);
@@ -1265,6 +1374,7 @@ mod tests {
                 latest_memory_directory_version_no: Some(3),
                 latest_dataset_output_id: None,
                 latest_dataset_output_retrieval_evidence_ids: vec![],
+                tool_calls: vec![],
                 service_handoff: Some(contracts::ManifestServiceHandoffView {
                     source: contracts::ManifestServiceHandoffSourceView::ChatSessionReportEntry,
                     service_lane: contracts::ModelFacingServiceLaneView::ReportService,
@@ -1291,6 +1401,7 @@ mod tests {
                 model: PLACEHOLDER_MODEL.to_string(),
                 request_id: Some("req_handoff".to_string()),
                 finish_reason: Some(LlmFinishReason::Stop),
+                provider_failure: None,
                 latency_ms: Some(50),
                 usage: None,
                 system_prompt_key: Some(CHAT_SESSION_PLACEHOLDER_PROMPT_KEY.to_string()),
@@ -1340,6 +1451,7 @@ mod tests {
             latest_memory_directory_version_no: Some(3),
             latest_dataset_output_id: None,
             latest_dataset_output_retrieval_evidence_ids: vec![],
+            tool_calls: vec![],
             service_handoff: Some(contracts::ManifestServiceHandoffView {
                 source: contracts::ManifestServiceHandoffSourceView::ChatSessionReportEntry,
                 service_lane: contracts::ModelFacingServiceLaneView::ReportService,
@@ -1365,6 +1477,7 @@ mod tests {
             model: PLACEHOLDER_MODEL.to_string(),
             request_id: Some("req_session_handoff".to_string()),
             finish_reason: Some(LlmFinishReason::Stop),
+            provider_failure: None,
             latency_ms: Some(50),
             usage: None,
             system_prompt_key: Some(CHAT_SESSION_PLACEHOLDER_PROMPT_KEY.to_string()),
@@ -1424,6 +1537,7 @@ mod tests {
                 latest_memory_directory_version_no: Some(2),
                 latest_dataset_output_id: None,
                 latest_dataset_output_retrieval_evidence_ids: vec![],
+                tool_calls: vec![],
                 service_handoff: None,
                 turn_stream_mode: "streaming".to_string(),
                 turn_id: "turn_inflight".to_string(),
@@ -1476,6 +1590,7 @@ mod tests {
             model: "gpt-5.4".to_string(),
             request_id: Some("req_response_ready".to_string()),
             finish_reason: Some(LlmFinishReason::ToolCalls),
+            provider_failure: None,
             latency_ms: Some(120),
             usage: None,
             system_prompt_key: Some("chat_session.placeholder".to_string()),
@@ -1494,6 +1609,7 @@ mod tests {
                 latest_memory_directory_version_no: Some(2),
                 latest_dataset_output_id: None,
                 latest_dataset_output_retrieval_evidence_ids: vec![],
+                tool_calls: vec![],
                 service_handoff: None,
                 turn_stream_mode: "streaming".to_string(),
                 turn_id: "turn_response_ready".to_string(),
@@ -1708,6 +1824,7 @@ mod tests {
                 latest_memory_directory_version_no: Some(2),
                 latest_dataset_output_id: None,
                 latest_dataset_output_retrieval_evidence_ids: vec![],
+                tool_calls: vec![],
                 service_handoff: None,
                 turn_stream_mode: "buffered".to_string(),
                 turn_id: "turn_failed".to_string(),
@@ -1767,6 +1884,10 @@ mod tests {
             model: "gpt-5.4".to_string(),
             request_id: Some("req_failed_runtime".to_string()),
             finish_reason: Some(LlmFinishReason::Error),
+            provider_failure: Some(llm_gateway::LlmProviderFailure {
+                kind: llm_gateway::LlmProviderFailureKind::FinishReasonError,
+                message: "openai returned finish_reason=error".to_string(),
+            }),
             latency_ms: Some(220),
             usage: None,
             system_prompt_key: Some("chat_session.placeholder".to_string()),
@@ -1785,6 +1906,7 @@ mod tests {
                 latest_memory_directory_version_no: Some(2),
                 latest_dataset_output_id: None,
                 latest_dataset_output_retrieval_evidence_ids: vec![],
+                tool_calls: vec![],
                 service_handoff: None,
                 turn_stream_mode: "buffered".to_string(),
                 turn_id: "turn_failed_runtime".to_string(),
@@ -1840,6 +1962,14 @@ mod tests {
         assert_eq!(manifest["last_turn"]["finish_reason"], json!("error"));
         assert_eq!(manifest["last_turn"]["tool_trace_count"], json!(1));
         assert_eq!(
+            manifest["last_turn"]["provider_failure"]["kind"],
+            json!("finish_reason_error")
+        );
+        assert_eq!(
+            manifest["last_turn"]["provider_failure"]["message"],
+            json!("openai returned finish_reason=error")
+        );
+        assert_eq!(
             manifest["last_turn"]["artifact_commit_status"],
             json!("not_ready")
         );
@@ -1852,6 +1982,10 @@ mod tests {
         assert_eq!(
             manifest["last_turn"]["recovery"]["runtime"]["request_id"],
             json!("req_failed_runtime")
+        );
+        assert_eq!(
+            manifest["last_turn"]["recovery"]["runtime"]["provider_failure"]["kind"],
+            json!("finish_reason_error")
         );
         assert_eq!(
             manifest["last_turn"]["recovery"]["tool_trace"][0]["status"],
@@ -1880,7 +2014,7 @@ mod tests {
     }
 
     #[test]
-    fn failed_session_manifest_marks_artifact_commit_failed_after_provider_response() {
+    fn failed_session_manifest_keeps_provider_unresponded_for_request_timeouts() {
         let dataset_id = DatasetId::new();
         let started_at = Utc::now();
         let requested_at = started_at + chrono::TimeDelta::milliseconds(25);
@@ -1889,8 +2023,12 @@ mod tests {
             mode: llm_gateway::LlmRuntimeMode::Provider,
             provider: "openai".to_string(),
             model: "gpt-5.4".to_string(),
-            request_id: Some("req_commit_failed".to_string()),
-            finish_reason: Some(LlmFinishReason::Stop),
+            request_id: None,
+            finish_reason: Some(LlmFinishReason::Error),
+            provider_failure: Some(llm_gateway::LlmProviderFailure {
+                kind: llm_gateway::LlmProviderFailureKind::RequestTimeout,
+                message: "openai request to https://api.example.test timed out".to_string(),
+            }),
             latency_ms: Some(220),
             usage: None,
             system_prompt_key: Some("chat_session.placeholder".to_string()),
@@ -1909,6 +2047,77 @@ mod tests {
                 latest_memory_directory_version_no: Some(2),
                 latest_dataset_output_id: None,
                 latest_dataset_output_retrieval_evidence_ids: vec![],
+                tool_calls: vec![],
+                service_handoff: None,
+                turn_stream_mode: "streaming".to_string(),
+                turn_id: "turn_request_timeout".to_string(),
+                turn_started_at: started_at,
+            },
+            requested_at,
+            failed_at,
+            None,
+            Some(&runtime),
+            &[],
+            None,
+        );
+
+        assert_eq!(manifest["last_turn"]["provider_status"], json!("failed"));
+        assert_eq!(
+            manifest["last_turn"]["provider_failure"]["kind"],
+            json!("request_timeout")
+        );
+        assert!(manifest["last_turn"]["provider_responded_at"].is_null());
+        assert!(manifest["last_turn"]["artifact_commit_ready_at"].is_null());
+        assert_eq!(
+            manifest["last_turn"]["events"].as_array().map(Vec::len),
+            Some(3)
+        );
+        assert_eq!(
+            manifest["last_turn"]["events"][0]["kind"],
+            json!("turn_started")
+        );
+        assert_eq!(
+            manifest["last_turn"]["events"][1]["kind"],
+            json!("provider_requested")
+        );
+        assert_eq!(
+            manifest["last_turn"]["events"][2]["kind"],
+            json!("turn_failed")
+        );
+    }
+
+    #[test]
+    fn failed_session_manifest_marks_artifact_commit_failed_after_provider_response() {
+        let dataset_id = DatasetId::new();
+        let started_at = Utc::now();
+        let requested_at = started_at + chrono::TimeDelta::milliseconds(25);
+        let failed_at = requested_at + chrono::TimeDelta::milliseconds(220);
+        let runtime = LlmRuntimeMetadata {
+            mode: llm_gateway::LlmRuntimeMode::Provider,
+            provider: "openai".to_string(),
+            model: "gpt-5.4".to_string(),
+            request_id: Some("req_commit_failed".to_string()),
+            finish_reason: Some(LlmFinishReason::Stop),
+            provider_failure: None,
+            latency_ms: Some(220),
+            usage: None,
+            system_prompt_key: Some("chat_session.placeholder".to_string()),
+            system_prompt_version: Some("v1".to_string()),
+            tool_trace_count: 0,
+        };
+        let manifest = render_failed_session_manifest(
+            &ChatSessionJob {
+                dataset_id,
+                initial_prompt: "Initial prompt".to_string(),
+                prompt: "Current prompt".to_string(),
+                indexed_document_count: 0,
+                refreshed_chunks: 0,
+                prior_message_count: 0,
+                latest_memory_directory_id: None,
+                latest_memory_directory_version_no: Some(2),
+                latest_dataset_output_id: None,
+                latest_dataset_output_retrieval_evidence_ids: vec![],
+                tool_calls: vec![],
                 service_handoff: None,
                 turn_stream_mode: "buffered".to_string(),
                 turn_id: "turn_commit_failed".to_string(),
@@ -1977,6 +2186,7 @@ mod tests {
             model: "gpt-5.4".to_string(),
             request_id: Some("req_runtime_error".to_string()),
             finish_reason: Some(LlmFinishReason::Error),
+            provider_failure: None,
             latency_ms: Some(1),
             usage: None,
             system_prompt_key: None,
@@ -1996,5 +2206,33 @@ mod tests {
             ..runtime
         };
         assert_eq!(chat_runtime_error_message(&ok_runtime), None);
+    }
+
+    #[test]
+    fn chat_runtime_error_message_includes_provider_failure_details() {
+        let runtime = LlmRuntimeMetadata {
+            mode: llm_gateway::LlmRuntimeMode::Provider,
+            provider: "openai".to_string(),
+            model: "gpt-5.4".to_string(),
+            request_id: None,
+            finish_reason: Some(LlmFinishReason::Error),
+            provider_failure: Some(llm_gateway::LlmProviderFailure {
+                kind: llm_gateway::LlmProviderFailureKind::HttpStatus,
+                message: "openai returned HTTP 502 with body upstream unavailable".to_string(),
+            }),
+            latency_ms: Some(1),
+            usage: None,
+            system_prompt_key: None,
+            system_prompt_version: None,
+            tool_trace_count: 0,
+        };
+
+        assert_eq!(
+            chat_runtime_error_message(&runtime),
+            Some(
+                "chat session provider openai returned finish_reason=error [http_status: openai returned HTTP 502 with body upstream unavailable]"
+                    .to_string()
+            )
+        );
     }
 }

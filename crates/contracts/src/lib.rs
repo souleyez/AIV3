@@ -335,10 +335,26 @@ pub struct RetrievalEvidenceView {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RetrievalSearchHitView {
+    pub retrieval_evidence_id: RetrievalEvidenceId,
+    pub document_id: DocumentId,
+    pub score: f64,
+    pub summary: String,
+    pub source_locator: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RetrievalSearchResponse {
+    pub hits: Vec<RetrievalSearchHitView>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DocumentDetailView {
     pub document: DocumentSummary,
     pub chunks: Vec<DocumentChunkView>,
     pub retrieval_evidences: Vec<RetrievalEvidenceView>,
+    #[serde(default)]
+    pub model_facing: Option<WorkflowModelFacingSummaryView>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -349,6 +365,8 @@ pub struct CompareDocumentsRequest {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CompareDocumentsView {
     pub documents: Vec<DocumentDetailView>,
+    #[serde(default)]
+    pub model_facing: Option<WorkflowModelFacingSummaryView>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -497,6 +515,38 @@ impl<'de> Deserialize<'de> for ManifestFinishReasonView {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ManifestProviderFailureKindView {
+    RequestFailed,
+    RequestTimeout,
+    HttpStatus,
+    ResponseBodyReadFailed,
+    InvalidJson,
+    InvalidResponse,
+    FinishReasonError,
+}
+
+impl ManifestProviderFailureKindView {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::RequestFailed => "request_failed",
+            Self::RequestTimeout => "request_timeout",
+            Self::HttpStatus => "http_status",
+            Self::ResponseBodyReadFailed => "response_body_read_failed",
+            Self::InvalidJson => "invalid_json",
+            Self::InvalidResponse => "invalid_response",
+            Self::FinishReasonError => "finish_reason_error",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ManifestProviderFailureView {
+    pub kind: ManifestProviderFailureKindView,
+    pub message: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ManifestTokenUsageView {
     pub input_tokens: usize,
     pub output_tokens: usize,
@@ -602,6 +652,8 @@ pub struct ManifestRuntimeView {
     pub model: Option<String>,
     pub request_id: Option<String>,
     pub finish_reason: Option<ManifestFinishReasonView>,
+    #[serde(default)]
+    pub provider_failure: Option<ManifestProviderFailureView>,
     pub latency_ms: Option<u64>,
     pub usage: Option<ManifestTokenUsageView>,
     pub system_prompt_key: Option<String>,
@@ -839,6 +891,8 @@ pub struct ChatTurnRuntimeView {
     pub stream_status: ChatTurnStreamStatusView,
     pub artifact_commit_status: ChatTurnArtifactCommitStatusView,
     pub provider_status: ChatTurnProviderStatusView,
+    #[serde(default)]
+    pub provider_failure: Option<ManifestProviderFailureView>,
     pub tool_loop_status: ChatTurnToolLoopStatusView,
     pub provider_request_id: Option<String>,
     pub provider_requested_at: Option<DateTime<Utc>>,

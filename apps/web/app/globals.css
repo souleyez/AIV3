@@ -647,6 +647,30 @@ button {
   color: #991b1b;
 }
 
+.runtime-provider-failure {
+  display: grid;
+  gap: 4px;
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(185, 28, 28, 0.16);
+  background: linear-gradient(180deg, #fff5f5, #fef2f2);
+  color: #991b1b;
+}
+
+.runtime-provider-failure strong {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.runtime-provider-failure span {
+  font-size: 12px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
 .message-meta {
   margin-top: 10px;
   color: var(--subtle);

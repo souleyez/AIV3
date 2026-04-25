@@ -155,6 +155,22 @@ function renderRuntimePhaseRail(turn) {
   );
 }
 
+function RuntimeProviderFailure({ failure }) {
+  if (!failure) {
+    return null;
+  }
+
+  return (
+    <div className="runtime-provider-failure" role="note" aria-label="provider failure">
+      <strong>Provider 失败</strong>
+      <span>
+        {formatSnakeCaseLabel(failure.kind)}
+        {failure.message ? ` · ${failure.message}` : ''}
+      </span>
+    </div>
+  );
+}
+
 function SessionRuntimeSummary({ turn }) {
   if (!turn) {
     return null;
@@ -174,6 +190,7 @@ function SessionRuntimeSummary({ turn }) {
         ) : null}
       </div>
       {renderRuntimePhaseRail(turn)}
+      <RuntimeProviderFailure failure={turn.provider_failure} />
     </div>
   );
 }
@@ -298,6 +315,9 @@ export default function ChatPanel({
                     </div>
                   ) : null}
                   {assistant ? renderRuntimePhaseRail(message.message_manifest_view?.turn) : null}
+                  {assistant ? (
+                    <RuntimeProviderFailure failure={message.message_manifest_view?.turn?.provider_failure} />
+                  ) : null}
                   <div className="message-meta">
                     {formatDateTime(message.created_at)}
                   </div>

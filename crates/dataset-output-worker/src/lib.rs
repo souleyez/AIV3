@@ -14,6 +14,7 @@ pub struct DatasetOutputJob {
     pub memory_directory_id: Option<MemoryDirectoryId>,
     pub memory_directory_version_no: Option<i32>,
     pub retrieval_evidence_ids: Vec<RetrievalEvidenceId>,
+    pub tool_calls: Vec<LlmToolCall>,
     pub service_handoff: Option<contracts::ManifestServiceHandoffView>,
 }
 
@@ -60,6 +61,11 @@ impl DatasetOutputGenerator for PlaceholderDatasetOutputGenerator {
             input: placeholder_text,
         })?;
 
+        let mut tool_calls = job.tool_calls.clone();
+        tool_calls.extend(response.tool_calls.clone());
+        let mut runtime = response.runtime.clone();
+        runtime.tool_trace_count = tool_calls.len();
+
         Ok(DatasetOutputOutcome {
             output_text: response.output_text.clone(),
             output_manifest: json!({
@@ -88,8 +94,8 @@ impl DatasetOutputGenerator for PlaceholderDatasetOutputGenerator {
                 "service_handoff": job.service_handoff.as_ref(),
                 "context_binding": "creation_time",
             }),
-            runtime: response.runtime.clone(),
-            tool_calls: response.tool_calls.clone(),
+            runtime,
+            tool_calls,
         })
     }
 }
@@ -97,12 +103,17 @@ impl DatasetOutputGenerator for PlaceholderDatasetOutputGenerator {
 pub fn dataset_runtime_error_message(runtime: &LlmRuntimeMetadata) -> Option<String> {
     match runtime.finish_reason {
         Some(llm_gateway::LlmFinishReason::Error) => Some(format!(
-            "dataset output provider {} returned finish_reason=error{}",
+            "dataset output provider {} returned finish_reason=error{}{}",
             runtime.provider,
             runtime
                 .request_id
                 .as_ref()
                 .map(|value| format!(" (request_id={value})"))
+                .unwrap_or_default(),
+            runtime
+                .provider_failure
+                .as_ref()
+                .map(|failure| format!(" [{}: {}]", failure.kind.as_str(), failure.message))
                 .unwrap_or_default()
         )),
         _ => None,
@@ -138,6 +149,7 @@ mod tests {
                     RetrievalEvidenceId::new(),
                     RetrievalEvidenceId::new(),
                 ],
+                tool_calls: vec![],
                 service_handoff: None,
             })
             .expect("placeholder dataset output should succeed");
@@ -248,6 +260,7 @@ mod tests {
                 memory_directory_id: None,
                 memory_directory_version_no: Some(3),
                 retrieval_evidence_ids: vec![RetrievalEvidenceId::new()],
+                tool_calls: vec![],
                 service_handoff: None,
             })
             .expect("scripted dataset output should succeed");
@@ -290,6 +303,54 @@ mod tests {
     }
 
     #[test]
+    fn precomputed_tool_calls_are_merged_with_provider_tool_trace() {
+        let dataset_id = DatasetId::new();
+        let retrieval_evidence_id = RetrievalEvidenceId::new();
+        let generator = PlaceholderDatasetOutputGenerator::new(
+            Arc::new(
+                llm_gateway::ScriptedLlmProvider::new("openai")
+                    .with_prompt_registry(bootstrap_default_prompt_registry())
+                    .with_response_text("provider dataset output")
+                    .with_tool_calls(vec![llm_gateway::LlmToolCall {
+                        call_id: Some("call_provider".to_string()),
+                        tool_name: "document.read_detail".to_string(),
+                        status: llm_gateway::LlmToolCallStatus::Completed,
+                        arguments: Some(json!({ "document_id": "doc_1" })),
+                        result: Some(json!({ "summary": "detail loaded" })),
+                    }]),
+            ),
+            "gpt-5.4",
+        );
+
+        let outcome = generator
+            .generate(&DatasetOutputJob {
+                dataset_id,
+                prompt: "Summarize retrieval facts".to_string(),
+                indexed_document_count: 1,
+                refreshed_chunks: 2,
+                memory_directory_id: None,
+                memory_directory_version_no: None,
+                retrieval_evidence_ids: vec![retrieval_evidence_id],
+                tool_calls: vec![llm_gateway::LlmToolCall {
+                    call_id: Some("call_retrieval".to_string()),
+                    tool_name: "retrieval.search".to_string(),
+                    status: llm_gateway::LlmToolCallStatus::Completed,
+                    arguments: Some(json!({ "query": "retrieval facts" })),
+                    result: Some(
+                        json!({ "hits": [{ "retrieval_evidence_id": retrieval_evidence_id }] }),
+                    ),
+                }],
+                service_handoff: None,
+            })
+            .expect("dataset output with precomputed tool call should succeed");
+
+        assert_eq!(outcome.runtime.tool_trace_count, 2);
+        assert_eq!(outcome.tool_calls.len(), 2);
+        assert_eq!(outcome.tool_calls[0].tool_name, "retrieval.search");
+        assert_eq!(outcome.tool_calls[1].tool_name, "document.read_detail");
+    }
+
+    #[test]
     fn dataset_runtime_error_message_only_flags_error_finish_reason() {
         let runtime = LlmRuntimeMetadata {
             mode: llm_gateway::LlmRuntimeMode::Provider,
@@ -297,6 +358,7 @@ mod tests {
             model: "gpt-5.4".to_string(),
             request_id: Some("req_dataset_output_error".to_string()),
             finish_reason: Some(llm_gateway::LlmFinishReason::Error),
+            provider_failure: None,
             latency_ms: Some(1),
             usage: None,
             system_prompt_key: None,
@@ -319,6 +381,34 @@ mod tests {
     }
 
     #[test]
+    fn dataset_runtime_error_message_includes_provider_failure_details() {
+        let runtime = LlmRuntimeMetadata {
+            mode: llm_gateway::LlmRuntimeMode::Provider,
+            provider: "openai".to_string(),
+            model: "gpt-5.4".to_string(),
+            request_id: None,
+            finish_reason: Some(llm_gateway::LlmFinishReason::Error),
+            provider_failure: Some(llm_gateway::LlmProviderFailure {
+                kind: llm_gateway::LlmProviderFailureKind::InvalidJson,
+                message: "openai returned invalid JSON payload".to_string(),
+            }),
+            latency_ms: Some(1),
+            usage: None,
+            system_prompt_key: None,
+            system_prompt_version: None,
+            tool_trace_count: 0,
+        };
+
+        assert_eq!(
+            dataset_runtime_error_message(&runtime),
+            Some(
+                "dataset output provider openai returned finish_reason=error [invalid_json: openai returned invalid JSON payload]"
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
     fn dataset_output_manifest_carries_service_handoff_when_bound() {
         let requested_at = chrono::Utc::now();
         let report_plan_id = domain_model::ReportPlanId::new();
@@ -338,6 +428,7 @@ mod tests {
                 memory_directory_id: None,
                 memory_directory_version_no: Some(1),
                 retrieval_evidence_ids: vec![RetrievalEvidenceId::new()],
+                tool_calls: vec![],
                 service_handoff: Some(contracts::ManifestServiceHandoffView {
                     source: contracts::ManifestServiceHandoffSourceView::ChatSessionReportEntry,
                     service_lane: contracts::ModelFacingServiceLaneView::ReportService,

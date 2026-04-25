@@ -13,8 +13,9 @@ use domain_model::{
 };
 use event_bus::{workflow_task_enqueued_subject, EventBus, EventSubscription};
 use llm_gateway::{
-    build_provider_from_env, render_runtime_manifest, LlmFinishReason, LlmRuntimeMetadata,
-    LlmRuntimeMode, LlmTokenUsage, LlmToolCall, LlmToolCallStatus,
+    build_provider_from_env, render_runtime_manifest, LlmFinishReason, LlmProviderError,
+    LlmProviderFailure, LlmProviderFailureKind, LlmRuntimeMetadata, LlmRuntimeMode, LlmTokenUsage,
+    LlmToolCall, LlmToolCallStatus,
 };
 use prompt_registry::bootstrap_default_prompt_registry;
 use storage::{
@@ -35,6 +36,7 @@ const DEFAULT_RUNTIME_MODEL: &str = "placeholder-chat-session-v1";
 const DEFAULT_RUNTIME_STREAM_MODE: &str = "buffered";
 const CHAT_TURN_RECOVERY_PAYLOAD_KEY: &str = "_chat_turn_recovery";
 const CHAT_TURN_RECOVERY_EVENT_NAME: &str = "chat_turn_recovery_checkpoint";
+const RETRIEVAL_SEARCH_LIMIT: usize = 8;
 
 #[derive(Debug)]
 struct ChatSessionTaskError {
@@ -123,9 +125,12 @@ impl ChatSessionTaskError {
 
 impl From<anyhow::Error> for ChatSessionTaskError {
     fn from(source: anyhow::Error) -> Self {
+        let failed_runtime = source
+            .downcast_ref::<LlmProviderError>()
+            .map(|error| error.runtime().clone());
         Self {
             source,
-            failed_runtime: None,
+            failed_runtime,
             failed_tool_calls: Vec::new(),
             failed_assistant_message_content: None,
             artifact_commit_failure_source: None,
@@ -328,6 +333,13 @@ async fn process_task(
             .into_iter()
             .next(),
     };
+    let (retrieval_search_evidence_ids, retrieval_search_tool_call) =
+        run_retrieval_search_tool(storage, task.tenant_id, dataset_id, &prompt).await;
+    let latest_dataset_output_retrieval_evidence_ids = latest_dataset_output
+        .as_ref()
+        .map(|entry| entry.retrieval_evidence_ids.clone())
+        .filter(|ids| !ids.is_empty())
+        .unwrap_or(retrieval_search_evidence_ids);
     let job = ChatSessionJob {
         dataset_id,
         initial_prompt: session
@@ -349,10 +361,8 @@ async fn process_task(
             .map(|entry| entry.version_no)
             .or(bound_memory_directory_version_no),
         latest_dataset_output_id: latest_dataset_output.as_ref().map(|entry| entry.id),
-        latest_dataset_output_retrieval_evidence_ids: latest_dataset_output
-            .as_ref()
-            .map(|entry| entry.retrieval_evidence_ids.clone())
-            .unwrap_or_default(),
+        latest_dataset_output_retrieval_evidence_ids,
+        tool_calls: vec![retrieval_search_tool_call.clone()],
         service_handoff: service_handoff_from_session_manifest(&session.session_manifest),
         turn_stream_mode: runtime_stream_mode.to_string(),
         turn_id,
@@ -498,7 +508,9 @@ async fn process_task(
                     render_completed_session_manifest(&job),
                 )
             } else {
-                let outcome = orchestrator.generate(&job, requested_at)?;
+                let outcome = orchestrator
+                    .generate(&job, requested_at)
+                    .map_err(|source| chat_task_error_with_tool_calls(source, &job.tool_calls))?;
                 if let Some(error_message) = chat_runtime_error_message(&outcome.runtime) {
                     return Err(ChatSessionTaskError {
                         source: anyhow!(error_message),
@@ -869,6 +881,91 @@ async fn process_task(
     );
 
     Ok(())
+}
+
+async fn run_retrieval_search_tool(
+    storage: &PgStorage,
+    tenant_id: domain_model::TenantId,
+    dataset_id: domain_model::DatasetId,
+    prompt: &str,
+) -> (Vec<domain_model::RetrievalEvidenceId>, LlmToolCall) {
+    let arguments = serde_json::json!({
+        "dataset_id": dataset_id,
+        "query": prompt,
+        "limit": RETRIEVAL_SEARCH_LIMIT,
+    });
+    match platform_api::search_dataset_retrieval(
+        storage.clone(),
+        tenant_id,
+        dataset_id,
+        prompt.to_string(),
+        Some(RETRIEVAL_SEARCH_LIMIT),
+    )
+    .await
+    {
+        Ok(response) => {
+            let evidence_ids = response
+                .hits
+                .iter()
+                .map(|hit| hit.retrieval_evidence_id)
+                .collect();
+            (
+                evidence_ids,
+                retrieval_search_tool_call(
+                    LlmToolCallStatus::Completed,
+                    arguments,
+                    serde_json::to_value(&response).unwrap_or_else(|error| {
+                        serde_json::json!({
+                            "error": format!("failed to serialize retrieval.search response: {error}")
+                        })
+                    }),
+                ),
+            )
+        }
+        Err(error) => {
+            tracing::warn!(
+                error = ?error,
+                dataset_id = %dataset_id,
+                "chat session worker retrieval.search tool call failed"
+            );
+            (
+                Vec::new(),
+                retrieval_search_tool_call(
+                    LlmToolCallStatus::Failed,
+                    arguments,
+                    serde_json::json!({ "error": error.to_string() }),
+                ),
+            )
+        }
+    }
+}
+
+fn retrieval_search_tool_call(
+    status: LlmToolCallStatus,
+    arguments: serde_json::Value,
+    result: serde_json::Value,
+) -> LlmToolCall {
+    LlmToolCall {
+        call_id: Some(format!("host_retrieval_search_{}", Uuid::new_v4())),
+        tool_name: "retrieval.search".to_string(),
+        status,
+        arguments: Some(arguments),
+        result: Some(result),
+    }
+}
+
+fn chat_task_error_with_tool_calls(
+    source: anyhow::Error,
+    tool_calls: &[LlmToolCall],
+) -> ChatSessionTaskError {
+    let mut error = ChatSessionTaskError::from(source);
+    if !tool_calls.is_empty() {
+        if let Some(runtime) = error.failed_runtime.as_mut() {
+            runtime.tool_trace_count = tool_calls.len();
+        }
+        error.failed_tool_calls = tool_calls.to_vec();
+    }
+    error
 }
 
 async fn wait_for_next_task_signal(task_waker: &mut EventSubscription, poll_interval_ms: u64) {
@@ -1257,6 +1354,7 @@ fn parse_runtime_manifest_value(runtime: &serde_json::Value) -> Result<LlmRuntim
         .get("finish_reason")
         .and_then(serde_json::Value::as_str)
         .map(LlmFinishReason::from_wire_value);
+    let provider_failure = parse_provider_failure(runtime.get("provider_failure"))?;
     let usage = if let Some(usage) = runtime.get("usage").and_then(serde_json::Value::as_object) {
         Some(LlmTokenUsage {
             input_tokens: usage
@@ -1292,6 +1390,7 @@ fn parse_runtime_manifest_value(runtime: &serde_json::Value) -> Result<LlmRuntim
             .and_then(serde_json::Value::as_str)
             .map(str::to_string),
         finish_reason,
+        provider_failure,
         latency_ms: runtime
             .get("latency_ms")
             .and_then(serde_json::Value::as_u64),
@@ -1306,6 +1405,30 @@ fn parse_runtime_manifest_value(runtime: &serde_json::Value) -> Result<LlmRuntim
             .map(str::to_string),
         tool_trace_count,
     })
+}
+
+fn parse_provider_failure(value: Option<&serde_json::Value>) -> Result<Option<LlmProviderFailure>> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+    let object = value
+        .as_object()
+        .ok_or_else(|| anyhow!("provider_failure must be an object"))?;
+    let kind = object
+        .get("kind")
+        .and_then(serde_json::Value::as_str)
+        .and_then(LlmProviderFailureKind::from_wire_value)
+        .ok_or_else(|| anyhow!("provider_failure missing known kind"))?;
+    let message = object
+        .get("message")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| anyhow!("provider_failure missing message"))?
+        .to_string();
+
+    Ok(Some(LlmProviderFailure { kind, message }))
 }
 
 fn parse_tool_calls_from_message_manifest(
@@ -1395,9 +1518,10 @@ fn parse_turn_stream_mode(value: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        find_recoverable_assistant_message, find_recoverable_event_turn,
-        find_recoverable_session_turn, find_recoverable_task_turn, next_chat_message_turn_index,
-        payload_with_turn_recovery, payload_without_turn_recovery, render_turn_recovery_payload,
+        chat_task_error_with_tool_calls, find_recoverable_assistant_message,
+        find_recoverable_event_turn, find_recoverable_session_turn, find_recoverable_task_turn,
+        next_chat_message_turn_index, payload_with_turn_recovery, payload_without_turn_recovery,
+        render_turn_recovery_payload, retrieval_search_tool_call,
         service_handoff_from_session_manifest,
     };
     use chrono::Utc;
@@ -1445,6 +1569,76 @@ mod tests {
             Some(contracts::ChatSessionReportEntryResolutionView::EnterReportService)
         );
         assert_eq!(handoff.confirmed_report_plan_id, Some(report_plan_id));
+    }
+
+    #[test]
+    fn retrieval_search_tool_call_records_result_payload() {
+        let call = retrieval_search_tool_call(
+            LlmToolCallStatus::Completed,
+            json!({
+                "dataset_id": domain_model::DatasetId::new(),
+                "query": "customer churn",
+                "limit": 8
+            }),
+            json!({
+                "hits": [{
+                    "retrieval_evidence_id": domain_model::RetrievalEvidenceId::new(),
+                    "document_id": domain_model::DocumentId::new(),
+                    "score": 1.5,
+                    "summary": "Churn notes",
+                    "source_locator": "documents/churn.md#chunk=2"
+                }]
+            }),
+        );
+
+        assert_eq!(call.tool_name, "retrieval.search");
+        assert_eq!(call.status, LlmToolCallStatus::Completed);
+        assert_eq!(
+            call.result.as_ref().unwrap()["hits"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn provider_failure_preserves_precomputed_tool_calls() {
+        let tool_call = retrieval_search_tool_call(
+            LlmToolCallStatus::Failed,
+            json!({ "query": "customer churn" }),
+            json!({ "error": "storage_error" }),
+        );
+        let runtime = LlmRuntimeMetadata {
+            mode: LlmRuntimeMode::Provider,
+            provider: "openai".to_string(),
+            model: "gpt-5.4".to_string(),
+            request_id: None,
+            finish_reason: Some(LlmFinishReason::Error),
+            provider_failure: Some(llm_gateway::LlmProviderFailure {
+                kind: llm_gateway::LlmProviderFailureKind::RequestTimeout,
+                message: "request timed out".to_string(),
+            }),
+            latency_ms: Some(30_000),
+            usage: None,
+            system_prompt_key: None,
+            system_prompt_version: None,
+            tool_trace_count: 0,
+        };
+
+        let error = chat_task_error_with_tool_calls(
+            llm_gateway::LlmProviderError::new(runtime, "provider failed").into(),
+            &[tool_call],
+        );
+
+        assert_eq!(error.failed_tool_calls.len(), 1);
+        assert_eq!(
+            error
+                .failed_runtime
+                .as_ref()
+                .map(|runtime| runtime.tool_trace_count),
+            Some(1)
+        );
     }
 
     #[test]
@@ -1735,6 +1929,7 @@ mod tests {
             model: "gpt-test".to_string(),
             request_id: Some(request_id.to_string()),
             finish_reason: Some(LlmFinishReason::ToolCalls),
+            provider_failure: None,
             latency_ms: Some(42),
             usage: Some(LlmTokenUsage {
                 input_tokens: 10,

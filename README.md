@@ -29,8 +29,10 @@ Important current limits:
 
 - Chat now supports both new sessions and appended turns from the web UI, but
   worker completion is still polling-based rather than product-grade streaming.
-- Retrieval still uses placeholder semantics; real embedding/vector recall is a
-  later phase.
+- Retrieval now uses local lexical signatures, prompt-ranked evidence binding,
+  real `retrieval.search` host-tool traces in dataset/chat worker generation,
+  and document detail / compare model-facing evidence states, but external
+  embedding/vector index integration is still a later phase.
 - Streaming/provider/tool-loop runtime contracts are partially modeled but not
   yet product-grade.
 - The web report center can drive continue/render/publish host actions and show
@@ -152,6 +154,7 @@ Representative CLI surfaces live under `crates/platform-api/src/bin`, including:
 - `workflow-retry-cli`
 - `document-detail-cli`
 - `document-compare-cli`
+- `retrieval-search-cli`
 - `memory-directory-refresh-cli`
 
 ## Development Plan
@@ -167,8 +170,8 @@ Immediate sequence:
 4. Turn the responsive web shell into a mobile-usable interaction model.
 5. Tighten provider, streaming, tool-loop, artifact commit, and recovery
    semantics.
-6. Replace placeholder retrieval with real embedding/vector recall and evidence
-   state derivation.
+6. Continue from local lexical retrieval toward external embedding/vector recall
+   while keeping worker tool traces and evidence state derivation durable.
 7. Freeze the V3 model-facing capability contract after the runtime facts are
    stable enough.
 

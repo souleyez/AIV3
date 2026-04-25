@@ -6,7 +6,9 @@ use dataset_output_worker::{
 };
 use domain_model::{ChatSessionId, DocumentLifecycle, MemoryDirectoryId, RetrievalEvidenceId};
 use event_bus::{workflow_task_enqueued_subject, EventBus, EventSubscription};
-use llm_gateway::{build_provider_from_env, LlmRuntimeMetadata, LlmToolCall, LlmToolCallStatus};
+use llm_gateway::{
+    build_provider_from_env, LlmProviderError, LlmRuntimeMetadata, LlmToolCall, LlmToolCallStatus,
+};
 use prompt_registry::bootstrap_default_prompt_registry;
 use storage::{
     LlmInvocationRecordInput, NewDatasetOutput, PgStorage, ToolExecutionRecordInput,
@@ -23,6 +25,7 @@ const DEFAULT_POLL_INTERVAL_MS: u64 = 1_000;
 const DEFAULT_RUNTIME_MODE: &str = "placeholder";
 const DEFAULT_RUNTIME_PROVIDER: &str = "placeholder";
 const DEFAULT_RUNTIME_MODEL: &str = "placeholder-dataset-output-v1";
+const RETRIEVAL_SEARCH_LIMIT: usize = 8;
 
 #[derive(Debug)]
 struct DatasetOutputTaskError {
@@ -33,9 +36,12 @@ struct DatasetOutputTaskError {
 
 impl From<anyhow::Error> for DatasetOutputTaskError {
     fn from(source: anyhow::Error) -> Self {
+        let failed_runtime = source
+            .downcast_ref::<LlmProviderError>()
+            .map(|error| error.runtime().clone());
         Self {
             source,
-            failed_runtime: None,
+            failed_runtime,
             failed_tool_calls: Vec::new(),
         }
     }
@@ -166,6 +172,13 @@ async fn process_task(
             .into_iter()
             .map(RetrievalEvidenceId)
             .collect::<Vec<_>>();
+    let (retrieval_search_evidence_ids, retrieval_search_tool_call) =
+        run_retrieval_search_tool(storage, task.tenant_id, dataset_id, &prompt).await;
+    let selected_retrieval_evidence_ids = if bound_retrieval_evidence_ids.is_empty() {
+        retrieval_search_evidence_ids
+    } else {
+        bound_retrieval_evidence_ids
+    };
     let bound_memory_directory = match bound_memory_directory_id {
         Some(memory_directory_id) => {
             storage
@@ -205,20 +218,17 @@ async fn process_task(
         }
         None => None,
     };
-    let retrieval_evidences = if bound_retrieval_evidence_ids.is_empty() {
-        storage
-            .retrieval_evidences()
-            .list_latest_by_dataset(task.tenant_id, dataset_id, 8)
-            .await?
+    let retrieval_evidences = if selected_retrieval_evidence_ids.is_empty() {
+        Vec::new()
     } else {
         storage
             .retrieval_evidences()
-            .list_by_ids(task.tenant_id, &bound_retrieval_evidence_ids)
+            .list_by_ids(task.tenant_id, &selected_retrieval_evidence_ids)
             .await?
     };
 
     let process_result: std::result::Result<(), DatasetOutputTaskError> = async {
-        let outcome = generator.generate(&DatasetOutputJob {
+        let job = DatasetOutputJob {
             dataset_id,
             prompt: prompt.clone(),
             indexed_document_count: indexed_documents,
@@ -237,10 +247,14 @@ async fn process_task(
                 .iter()
                 .map(|evidence| evidence.id)
                 .collect(),
+            tool_calls: vec![retrieval_search_tool_call.clone()],
             service_handoff: bound_chat_session.as_ref().and_then(|session| {
                 service_handoff_from_session_manifest(&session.session_manifest)
             }),
-        })?;
+        };
+        let outcome = generator
+            .generate(&job)
+            .map_err(|source| dataset_task_error_with_tool_calls(source, &job.tool_calls))?;
         if let Some(error_message) = dataset_runtime_error_message(&outcome.runtime) {
             return Err(DatasetOutputTaskError {
                 source: anyhow!(error_message),
@@ -399,6 +413,91 @@ async fn process_task(
     Ok(())
 }
 
+async fn run_retrieval_search_tool(
+    storage: &PgStorage,
+    tenant_id: domain_model::TenantId,
+    dataset_id: domain_model::DatasetId,
+    prompt: &str,
+) -> (Vec<RetrievalEvidenceId>, LlmToolCall) {
+    let arguments = serde_json::json!({
+        "dataset_id": dataset_id,
+        "query": prompt,
+        "limit": RETRIEVAL_SEARCH_LIMIT,
+    });
+    match platform_api::search_dataset_retrieval(
+        storage.clone(),
+        tenant_id,
+        dataset_id,
+        prompt.to_string(),
+        Some(RETRIEVAL_SEARCH_LIMIT),
+    )
+    .await
+    {
+        Ok(response) => {
+            let evidence_ids = response
+                .hits
+                .iter()
+                .map(|hit| hit.retrieval_evidence_id)
+                .collect();
+            (
+                evidence_ids,
+                retrieval_search_tool_call(
+                    LlmToolCallStatus::Completed,
+                    arguments,
+                    serde_json::to_value(&response).unwrap_or_else(|error| {
+                        serde_json::json!({
+                            "error": format!("failed to serialize retrieval.search response: {error}")
+                        })
+                    }),
+                ),
+            )
+        }
+        Err(error) => {
+            tracing::warn!(
+                error = ?error,
+                dataset_id = %dataset_id,
+                "dataset output worker retrieval.search tool call failed"
+            );
+            (
+                Vec::new(),
+                retrieval_search_tool_call(
+                    LlmToolCallStatus::Failed,
+                    arguments,
+                    serde_json::json!({ "error": error.to_string() }),
+                ),
+            )
+        }
+    }
+}
+
+fn retrieval_search_tool_call(
+    status: LlmToolCallStatus,
+    arguments: serde_json::Value,
+    result: serde_json::Value,
+) -> LlmToolCall {
+    LlmToolCall {
+        call_id: Some(format!("host_retrieval_search_{}", Uuid::new_v4())),
+        tool_name: "retrieval.search".to_string(),
+        status,
+        arguments: Some(arguments),
+        result: Some(result),
+    }
+}
+
+fn dataset_task_error_with_tool_calls(
+    source: anyhow::Error,
+    tool_calls: &[LlmToolCall],
+) -> DatasetOutputTaskError {
+    let mut error = DatasetOutputTaskError::from(source);
+    if !tool_calls.is_empty() {
+        if let Some(runtime) = error.failed_runtime.as_mut() {
+            runtime.tool_trace_count = tool_calls.len();
+        }
+        error.failed_tool_calls = tool_calls.to_vec();
+    }
+    error
+}
+
 async fn wait_for_next_task_signal(task_waker: &mut EventSubscription, poll_interval_ms: u64) {
     if let Some(event) = task_waker
         .wait_for_event(Duration::from_millis(poll_interval_ms))
@@ -543,7 +642,10 @@ fn tool_execution_records_from_tool_calls(
 
 #[cfg(test)]
 mod tests {
-    use super::service_handoff_from_session_manifest;
+    use super::{
+        dataset_task_error_with_tool_calls, retrieval_search_tool_call,
+        service_handoff_from_session_manifest,
+    };
     use chrono::Utc;
     use serde_json::json;
 
@@ -576,5 +678,75 @@ mod tests {
             contracts::ModelFacingReportEntryStateView::ConfirmationRequired
         );
         assert_eq!(handoff.requested_at, Some(now));
+    }
+
+    #[test]
+    fn retrieval_search_tool_call_records_result_payload() {
+        let call = retrieval_search_tool_call(
+            llm_gateway::LlmToolCallStatus::Completed,
+            json!({
+                "dataset_id": domain_model::DatasetId::new(),
+                "query": "revenue margin",
+                "limit": 8
+            }),
+            json!({
+                "hits": [{
+                    "retrieval_evidence_id": domain_model::RetrievalEvidenceId::new(),
+                    "document_id": domain_model::DocumentId::new(),
+                    "score": 1.25,
+                    "summary": "Revenue notes",
+                    "source_locator": "documents/finance.md#chunk=1"
+                }]
+            }),
+        );
+
+        assert_eq!(call.tool_name, "retrieval.search");
+        assert_eq!(call.status, llm_gateway::LlmToolCallStatus::Completed);
+        assert_eq!(
+            call.result.as_ref().unwrap()["hits"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn provider_failure_preserves_precomputed_tool_calls() {
+        let tool_call = retrieval_search_tool_call(
+            llm_gateway::LlmToolCallStatus::Completed,
+            json!({ "query": "risk controls" }),
+            json!({ "hits": [] }),
+        );
+        let runtime = llm_gateway::LlmRuntimeMetadata {
+            mode: llm_gateway::LlmRuntimeMode::Provider,
+            provider: "openai".to_string(),
+            model: "gpt-5.4".to_string(),
+            request_id: Some("req_failed".to_string()),
+            finish_reason: Some(llm_gateway::LlmFinishReason::Error),
+            provider_failure: Some(llm_gateway::LlmProviderFailure {
+                kind: llm_gateway::LlmProviderFailureKind::RequestTimeout,
+                message: "request timed out".to_string(),
+            }),
+            latency_ms: Some(30_000),
+            usage: None,
+            system_prompt_key: None,
+            system_prompt_version: None,
+            tool_trace_count: 0,
+        };
+
+        let error = dataset_task_error_with_tool_calls(
+            llm_gateway::LlmProviderError::new(runtime, "provider failed").into(),
+            &[tool_call],
+        );
+
+        assert_eq!(error.failed_tool_calls.len(), 1);
+        assert_eq!(
+            error
+                .failed_runtime
+                .as_ref()
+                .map(|runtime| runtime.tool_trace_count),
+            Some(1)
+        );
     }
 }

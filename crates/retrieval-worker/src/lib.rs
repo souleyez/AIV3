@@ -1,10 +1,32 @@
 use domain_model::{DatasetId, DocumentId};
+use std::collections::{BTreeMap, BTreeSet};
+
+const SIGNATURE_TERM_LIMIT: usize = 8;
+const TERM_WEIGHT_LIMIT: usize = 12;
+
+#[derive(Clone, Debug)]
+pub struct RetrievalChunkInput {
+    pub chunk_index: i32,
+    pub content: String,
+    pub token_count: usize,
+}
 
 #[derive(Clone, Debug)]
 pub struct RetrievalIndexJob {
     pub dataset_id: DatasetId,
     pub document_id: DocumentId,
-    pub chunk_count: usize,
+    pub chunks: Vec<RetrievalChunkInput>,
+}
+
+#[derive(Clone, Debug)]
+pub struct RetrievalChunkProfile {
+    pub chunk_index: i32,
+    pub recall_score: f64,
+    pub rank_hint: usize,
+    pub signature_terms: Vec<String>,
+    pub term_weights: BTreeMap<String, f64>,
+    pub vector_norm: f64,
+    pub token_count: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -12,6 +34,7 @@ pub struct RetrievalIndexOutcome {
     pub embedded_chunks: u32,
     pub payload_filter_key: String,
     pub embedding_model: String,
+    pub chunk_profiles: Vec<RetrievalChunkProfile>,
 }
 
 pub trait RetrievalIndexer {
@@ -19,16 +42,226 @@ pub trait RetrievalIndexer {
 }
 
 #[derive(Clone, Debug)]
-pub struct PlaceholderRetrievalIndexer;
+pub struct LocalLexicalRetrievalIndexer;
 
-impl RetrievalIndexer for PlaceholderRetrievalIndexer {
+impl RetrievalIndexer for LocalLexicalRetrievalIndexer {
     fn index(&self, job: &RetrievalIndexJob) -> RetrievalIndexOutcome {
+        let chunk_term_frequencies = job
+            .chunks
+            .iter()
+            .map(|chunk| term_frequencies(&chunk.content))
+            .collect::<Vec<_>>();
+        let document_frequencies = document_frequencies(&chunk_term_frequencies);
+        let chunk_count = job.chunks.len().max(1) as f64;
+
+        let mut draft_profiles = job
+            .chunks
+            .iter()
+            .zip(chunk_term_frequencies.iter())
+            .map(|(chunk, frequencies)| {
+                let weighted_terms =
+                    weighted_terms_for_chunk(frequencies, &document_frequencies, chunk_count);
+                let vector_norm = weighted_terms
+                    .iter()
+                    .map(|(_, weight)| weight * weight)
+                    .sum::<f64>()
+                    .sqrt();
+                let signature_terms = weighted_terms
+                    .iter()
+                    .take(SIGNATURE_TERM_LIMIT)
+                    .map(|(term, _)| term.clone())
+                    .collect::<Vec<_>>();
+                let term_weights = weighted_terms
+                    .iter()
+                    .take(TERM_WEIGHT_LIMIT)
+                    .map(|(term, weight)| (term.clone(), round_metric(*weight)))
+                    .collect::<BTreeMap<_, _>>();
+                let lexical_salience =
+                    lexical_salience_score(vector_norm, chunk.token_count, weighted_terms.len());
+
+                (
+                    chunk.chunk_index,
+                    chunk.token_count,
+                    signature_terms,
+                    term_weights,
+                    vector_norm,
+                    lexical_salience,
+                )
+            })
+            .collect::<Vec<_>>();
+
+        let max_salience = draft_profiles
+            .iter()
+            .map(|(_, _, _, _, _, salience)| *salience)
+            .fold(0.0_f64, f64::max);
+
+        let mut ranked = draft_profiles
+            .iter()
+            .map(|(chunk_index, _, _, _, _, salience)| (*chunk_index, *salience))
+            .collect::<Vec<_>>();
+        ranked.sort_by(|left, right| {
+            right
+                .1
+                .partial_cmp(&left.1)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| left.0.cmp(&right.0))
+        });
+        let rank_hints = ranked
+            .into_iter()
+            .enumerate()
+            .map(|(index, (chunk_index, _))| (chunk_index, index + 1))
+            .collect::<BTreeMap<_, _>>();
+
+        let chunk_profiles = draft_profiles
+            .drain(..)
+            .map(
+                |(
+                    chunk_index,
+                    token_count,
+                    signature_terms,
+                    term_weights,
+                    vector_norm,
+                    lexical_salience,
+                )| RetrievalChunkProfile {
+                    chunk_index,
+                    recall_score: if max_salience > 0.0 {
+                        round_metric(lexical_salience / max_salience)
+                    } else {
+                        0.0
+                    },
+                    rank_hint: rank_hints.get(&chunk_index).copied().unwrap_or(1),
+                    signature_terms,
+                    term_weights,
+                    vector_norm: round_metric(vector_norm),
+                    token_count,
+                },
+            )
+            .collect::<Vec<_>>();
+
         RetrievalIndexOutcome {
-            embedded_chunks: job.chunk_count as u32,
+            embedded_chunks: job.chunks.len() as u32,
             payload_filter_key: format!("dataset/{}", job.dataset_id),
-            embedding_model: "placeholder-minilm".to_string(),
+            embedding_model: "local-lexical-v1".to_string(),
+            chunk_profiles,
         }
     }
+}
+
+fn document_frequencies(
+    chunk_term_frequencies: &[BTreeMap<String, usize>],
+) -> BTreeMap<String, usize> {
+    let mut frequencies = BTreeMap::new();
+
+    for terms in chunk_term_frequencies {
+        for term in terms.keys().collect::<BTreeSet<_>>() {
+            *frequencies.entry((*term).clone()).or_insert(0) += 1;
+        }
+    }
+
+    frequencies
+}
+
+fn weighted_terms_for_chunk(
+    term_frequencies: &BTreeMap<String, usize>,
+    document_frequencies: &BTreeMap<String, usize>,
+    chunk_count: f64,
+) -> Vec<(String, f64)> {
+    let mut weighted_terms = term_frequencies
+        .iter()
+        .map(|(term, count)| {
+            let tf_weight = 1.0 + (*count as f64).ln();
+            let document_frequency = *document_frequencies.get(term).unwrap_or(&1) as f64;
+            let inverse_document_frequency =
+                ((chunk_count + 1.0) / (document_frequency + 1.0)).ln() + 1.0;
+            (term.clone(), tf_weight * inverse_document_frequency)
+        })
+        .collect::<Vec<_>>();
+    weighted_terms.sort_by(|left, right| {
+        right
+            .1
+            .partial_cmp(&left.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| left.0.cmp(&right.0))
+    });
+    weighted_terms
+}
+
+fn lexical_salience_score(vector_norm: f64, token_count: usize, weighted_term_count: usize) -> f64 {
+    if vector_norm <= 0.0 {
+        return 0.0;
+    }
+
+    let token_factor = (token_count.max(1) as f64).ln() + 1.0;
+    let diversity_factor = (weighted_term_count.max(1) as f64).sqrt();
+
+    vector_norm * token_factor * diversity_factor
+}
+
+fn term_frequencies(content: &str) -> BTreeMap<String, usize> {
+    let mut frequencies = BTreeMap::new();
+    for token in tokenize(content) {
+        *frequencies.entry(token).or_insert(0) += 1;
+    }
+    frequencies
+}
+
+fn tokenize(content: &str) -> Vec<String> {
+    let normalized = content
+        .chars()
+        .map(|value| {
+            if value.is_ascii_alphanumeric() {
+                value.to_ascii_lowercase()
+            } else {
+                ' '
+            }
+        })
+        .collect::<String>();
+
+    normalized
+        .split_whitespace()
+        .filter_map(normalize_token)
+        .collect()
+}
+
+fn normalize_token(token: &str) -> Option<String> {
+    if token.len() < 2 || is_stop_word(token) {
+        return None;
+    }
+
+    Some(token.to_string())
+}
+
+fn is_stop_word(token: &str) -> bool {
+    matches!(
+        token,
+        "a" | "an"
+            | "and"
+            | "are"
+            | "as"
+            | "at"
+            | "be"
+            | "by"
+            | "for"
+            | "from"
+            | "in"
+            | "into"
+            | "is"
+            | "it"
+            | "of"
+            | "on"
+            | "or"
+            | "that"
+            | "the"
+            | "this"
+            | "to"
+            | "was"
+            | "were"
+            | "with"
+    )
+}
+
+fn round_metric(value: f64) -> f64 {
+    (value * 10_000.0).round() / 10_000.0
 }
 
 #[cfg(test)]
@@ -36,16 +269,59 @@ mod tests {
     use super::*;
 
     #[test]
-    fn placeholder_retrieval_indexer_uses_chunk_count() {
+    fn local_lexical_retrieval_indexer_uses_chunk_content() {
         let dataset_id = DatasetId::new();
-        let outcome = PlaceholderRetrievalIndexer.index(&RetrievalIndexJob {
+        let outcome = LocalLexicalRetrievalIndexer.index(&RetrievalIndexJob {
             dataset_id,
             document_id: DocumentId::new(),
-            chunk_count: 7,
+            chunks: vec![
+                RetrievalChunkInput {
+                    chunk_index: 0,
+                    content: "Revenue revenue margin margin operating profit".to_string(),
+                    token_count: 6,
+                },
+                RetrievalChunkInput {
+                    chunk_index: 1,
+                    content: "Product roadmap design system mobile navigation".to_string(),
+                    token_count: 6,
+                },
+            ],
         });
 
-        assert_eq!(outcome.embedded_chunks, 7);
+        assert_eq!(outcome.embedded_chunks, 2);
         assert_eq!(outcome.payload_filter_key, format!("dataset/{dataset_id}"));
-        assert_eq!(outcome.embedding_model, "placeholder-minilm");
+        assert_eq!(outcome.embedding_model, "local-lexical-v1");
+        assert_eq!(outcome.chunk_profiles.len(), 2);
+        assert_eq!(outcome.chunk_profiles[0].chunk_index, 0);
+        assert_eq!(outcome.chunk_profiles[1].chunk_index, 1);
+        assert_eq!(outcome.chunk_profiles[0].token_count, 6);
+        assert!(!outcome.chunk_profiles[0].signature_terms.is_empty());
+        assert!(outcome.chunk_profiles[0]
+            .term_weights
+            .contains_key("revenue"));
+        assert!(outcome.chunk_profiles[1]
+            .term_weights
+            .contains_key("roadmap"));
+        assert!(outcome
+            .chunk_profiles
+            .iter()
+            .all(|profile| profile.rank_hint >= 1));
+        assert!(outcome
+            .chunk_profiles
+            .iter()
+            .all(|profile| (0.0..=1.0).contains(&profile.recall_score)));
+    }
+
+    #[test]
+    fn tokenize_drops_stop_words_and_normalizes_terms() {
+        assert_eq!(
+            tokenize("The revenue, margin, and growth plan."),
+            vec![
+                "revenue".to_string(),
+                "margin".to_string(),
+                "growth".to_string(),
+                "plan".to_string(),
+            ]
+        );
     }
 }

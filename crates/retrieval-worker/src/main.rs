@@ -2,8 +2,11 @@ use anyhow::{anyhow, Result};
 use chrono::Utc;
 use domain_model::DocumentLifecycle;
 use event_bus::{workflow_task_enqueued_subject, EventBus, EventSubscription};
-use retrieval_worker::{PlaceholderRetrievalIndexer, RetrievalIndexJob, RetrievalIndexer};
+use retrieval_worker::{
+    LocalLexicalRetrievalIndexer, RetrievalChunkInput, RetrievalIndexJob, RetrievalIndexer,
+};
 use serde_json::json;
+use std::collections::BTreeMap;
 use storage::{NewRetrievalEvidence, PgStorage, DEFAULT_LOCAL_DATABASE_URL};
 use tokio::time::Duration;
 use workflow_engine::{WorkflowCatalog, WorkflowSignal};
@@ -29,7 +32,7 @@ async fn main() -> Result<()> {
     let storage = PgStorage::connect(&database_url).await?;
     let workflow_catalog = workflow_definitions::catalog();
     let event_bus = EventBus::connect_from_env_or_disabled("PLATFORM_NATS_URL").await;
-    let indexer = PlaceholderRetrievalIndexer;
+    let indexer = LocalLexicalRetrievalIndexer;
     let wake_subject = workflow_task_enqueued_subject(&queue, &task_key);
     let mut task_waker = event_bus
         .subscribe_queue_or_disabled(
@@ -118,65 +121,85 @@ async fn process_task(
         let outcome = indexer.index(&RetrievalIndexJob {
             dataset_id,
             document_id,
-            chunk_count: chunks.len(),
+            chunks: chunks
+                .iter()
+                .map(|chunk| RetrievalChunkInput {
+                    chunk_index: chunk.chunk_index,
+                    content: chunk.content.clone(),
+                    token_count: chunk.token_count.max(0) as usize,
+                })
+                .collect(),
         });
         let embedding_model = outcome.embedding_model.clone();
         let payload_filter_key = outcome.payload_filter_key.clone();
-        let retrieval_evidences = storage
-            .retrieval_evidences()
-            .create_many(
-                task.tenant_id,
-                &chunks
-                    .iter()
-                    .map(|chunk| NewRetrievalEvidence {
-                        execution_id: task.execution_id,
-                        dataset_id,
-                        document_id,
-                        document_chunk_id: chunk.id,
-                        chunk_index: chunk.chunk_index,
-                        source_locator: format!(
+        let chunk_profiles = BTreeMap::from_iter(
+            outcome
+                .chunk_profiles
+                .iter()
+                .cloned()
+                .map(|profile| (profile.chunk_index, profile)),
+        );
+        let mut new_retrieval_evidences = Vec::with_capacity(chunks.len());
+        for chunk in &chunks {
+            let profile = chunk_profiles.get(&chunk.chunk_index).ok_or_else(|| {
+                anyhow!(
+                    "retrieval lexical profile missing for document {} chunk {}",
+                    document_id,
+                    chunk.chunk_index
+                )
+            })?;
+            new_retrieval_evidences.push(NewRetrievalEvidence {
+                execution_id: task.execution_id,
+                dataset_id,
+                document_id,
+                document_chunk_id: chunk.id,
+                chunk_index: chunk.chunk_index,
+                source_locator: format!("document://{document_id}/chunks/{}", chunk.chunk_index),
+                content_excerpt: excerpt(&chunk.content, 240),
+                summary: format!(
+                    "{} chunk {} indexed for lexical retrieval recall.",
+                    document.title, chunk.chunk_index
+                ),
+                payload_filter_key: payload_filter_key.clone(),
+                embedding_model: embedding_model.clone(),
+                recall_score: profile.recall_score,
+                evidence_manifest: json!({
+                    "schema_version": "0.4.0",
+                    "generator": "retrieval-worker",
+                    "dataset_id": dataset_id,
+                    "document_id": document_id,
+                    "document_chunk_id": chunk.id,
+                    "chunk_index": chunk.chunk_index,
+                    "indexed_at": indexed_at,
+                    "embedding": {
+                        "status": "indexed",
+                        "model": &embedding_model,
+                        "token_count": profile.token_count,
+                        "strategy": "local_lexical_v1",
+                        "signature_terms": profile.signature_terms,
+                        "term_weights": profile.term_weights,
+                        "vector_norm": profile.vector_norm,
+                    },
+                    "recall": {
+                        "status": "ready",
+                        "score": profile.recall_score,
+                        "rank_hint": profile.rank_hint,
+                    },
+                    "evidence": {
+                        "document_chunk_id": chunk.id,
+                        "payload_filter_key": &payload_filter_key,
+                        "source_locator": format!(
                             "document://{document_id}/chunks/{}",
                             chunk.chunk_index
                         ),
-                        content_excerpt: excerpt(&chunk.content, 240),
-                        summary: format!(
-                            "{} chunk {} indexed for placeholder retrieval recall.",
-                            document.title, chunk.chunk_index
-                        ),
-                        payload_filter_key: payload_filter_key.clone(),
-                        embedding_model: embedding_model.clone(),
-                        recall_score: placeholder_recall_score(chunk.chunk_index),
-                        evidence_manifest: json!({
-                            "schema_version": "0.3.0",
-                            "generator": "retrieval-worker",
-                            "dataset_id": dataset_id,
-                            "document_id": document_id,
-                            "document_chunk_id": chunk.id,
-                            "chunk_index": chunk.chunk_index,
-                            "indexed_at": indexed_at,
-                            "embedding": {
-                                "status": "indexed",
-                                "model": &embedding_model,
-                                "token_count": chunk.token_count,
-                            },
-                            "recall": {
-                                "status": "ready",
-                                "score": placeholder_recall_score(chunk.chunk_index),
-                                "rank_hint": chunk.chunk_index + 1,
-                            },
-                            "evidence": {
-                                "document_chunk_id": chunk.id,
-                                "payload_filter_key": &payload_filter_key,
-                                "source_locator": format!(
-                                    "document://{document_id}/chunks/{}",
-                                    chunk.chunk_index
-                                ),
-                            },
-                        }),
-                        created_at: indexed_at,
-                    })
-                    .collect::<Vec<_>>(),
-            )
+                    },
+                }),
+                created_at: indexed_at,
+            });
+        }
+        let retrieval_evidences = storage
+            .retrieval_evidences()
+            .create_many(task.tenant_id, &new_retrieval_evidences)
             .await?;
         let indexed_chunks = storage
             .document_chunks()
@@ -185,7 +208,7 @@ async fn process_task(
                 document_id,
                 &json!({
                     "retrieval": {
-                        "indexer": "placeholder",
+                        "indexer": "local_lexical",
                         "indexed_at": indexed_at,
                         "embedding_model": &embedding_model,
                         "payload_filter_key": &payload_filter_key,
@@ -204,7 +227,7 @@ async fn process_task(
                 Some(&document.title),
                 &json!({
                     "retrieval": {
-                        "indexer": "placeholder",
+                        "indexer": "local_lexical",
                         "indexed_at": indexed_at,
                         "embedding_model": &embedding_model,
                         "embedded_chunks": outcome.embedded_chunks,
@@ -254,7 +277,7 @@ async fn process_task(
                 Some(&document.title),
                 &json!({
                     "retrieval": {
-                        "indexer": "placeholder",
+                        "indexer": "local_lexical",
                         "failed_at": Utc::now(),
                         "last_error": error_message,
                     }
@@ -314,11 +337,6 @@ fn excerpt(content: &str, max_chars: usize) -> String {
         value.push_str("...");
     }
     value
-}
-
-fn placeholder_recall_score(chunk_index: i32) -> f64 {
-    let rank = (chunk_index.max(0) + 1) as f64;
-    (1.0 / rank * 100.0).round() / 100.0
 }
 
 async fn wait_for_next_task_signal(task_waker: &mut EventSubscription, poll_interval_ms: u64) {

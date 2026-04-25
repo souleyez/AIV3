@@ -207,6 +207,8 @@
 - `model`
 - `request_id`
 - `finish_reason`
+- `provider_failure_kind`
+- `provider_failure_message`
 - `latency_ms`
 - `token_usage`
 - `tool_status_summary`
@@ -216,6 +218,21 @@
 - `requested > 0`：还有工具调用没完成
 - `failed > 0`：至少有工具调用失败
 - `completed > 0`：已有工具调用成功返回
+
+如果 provider 在请求阶段或响应解析阶段失败，当前还会额外给出：
+
+- `provider_failure_kind`
+- `provider_failure_message`
+
+常见 `provider_failure_kind`：
+
+- `request_failed`：请求没发出去或网络层直接失败
+- `request_timeout`：请求超时
+- `http_status`：provider 已返回 HTTP 非 2xx
+- `response_body_read_failed`：HTTP 已返回，但 body 读取失败
+- `invalid_json`：body 读取成功，但 JSON 无法解析
+- `invalid_response`：JSON 结构不符合当前协议预期
+- `finish_reason_error`：provider 返回了可解析响应，但 `finish_reason=error`
 
 ### `Report Plan Runtime`
 
@@ -284,6 +301,8 @@
 - `tool_loop_status`
 - `provider_request_id`
 - `finish_reason`
+- `provider_failure_kind`
+- `provider_failure_message`
 - `provider_requested_at`
 - `provider_responded_at`
 - `first_token_at`
@@ -299,7 +318,7 @@
 时间点解释：
 
 - `provider_requested_at`：provider 请求发出
-- `provider_responded_at`：provider 已返回
+- `provider_responded_at`：provider 已返回；如果失败发生在请求发出前或超时，这里会保持为空
 - `first_token_at`：streaming 模式下首个 token 对外可见的时间点
 - `stream_completed_at`：streaming 模式下流本身已经结束；不等于 artifact 已持久化
 - `artifact_commit_ready_at`：assistant artifact 已进入可提交窗口，接下来才可能真正落库
@@ -328,6 +347,13 @@
 - `pending`：artifact 已可提交，但 assistant message 还没真正持久化
 - `failed`：artifact 已进入可提交窗口，但 turn 已终态失败且 assistant message 没有落库
 - `completed`：assistant artifact 已完成持久化
+
+如果当前 turn 的 provider 失败原因已被 durable runtime 记录，还会补充：
+
+- `provider_failure_kind`
+- `provider_failure_message`
+
+这两项和 dataset output runtime 的含义一致，适合快速区分“请求压根没成功发出去”和“provider 已响应但 payload/finish_reason 有问题”。
 
 如果 `artifact_commit_ready_at` 已有值，但 `assistant_message_persisted_at` 为空，说明当前正处在 artifact commit 窗口里，还没有真正完成落库。
 

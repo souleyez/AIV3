@@ -122,10 +122,18 @@ pub fn bootstrap_default_tool_registry() -> InMemoryToolRegistry {
                         "type": "object",
                         "properties": {
                             "retrieval_evidence_id": { "type": "string" },
+                            "document_id": { "type": "string" },
                             "score": { "type": "number" },
-                            "summary": { "type": "string" }
+                            "summary": { "type": "string" },
+                            "source_locator": { "type": "string" }
                         },
-                        "required": ["retrieval_evidence_id", "score"]
+                        "required": [
+                            "retrieval_evidence_id",
+                            "document_id",
+                            "score",
+                            "summary",
+                            "source_locator"
+                        ]
                     }
                 }
             },
@@ -136,11 +144,17 @@ pub fn bootstrap_default_tool_registry() -> InMemoryToolRegistry {
                 "cargo".to_string(),
                 "run".to_string(),
                 "-p".to_string(),
-                "retrieval-cli".to_string(),
+                "platform-api".to_string(),
+                "--bin".to_string(),
+                "retrieval-search-cli".to_string(),
                 "--".to_string(),
                 "search".to_string(),
             ],
-            env_allowlist: vec!["PLATFORM_DATABASE_URL".to_string()],
+            env_allowlist: vec![
+                "PLATFORM_DATABASE_URL".to_string(),
+                "PLATFORM_TENANT_KEY".to_string(),
+                "PLATFORM_TENANT_NAME".to_string(),
+            ],
             output_mode: ToolCliOutputMode::Json,
             timeout_ms: Some(30_000),
         },
@@ -412,9 +426,12 @@ pub fn bootstrap_default_tool_registry() -> InMemoryToolRegistry {
                 "retrieval_evidences": {
                     "type": "array",
                     "items": { "type": "object" }
+                },
+                "model_facing": {
+                    "type": ["object", "null"]
                 }
             },
-            "required": ["document", "chunks", "retrieval_evidences"]
+            "required": ["document", "chunks", "retrieval_evidences", "model_facing"]
         }),
         ToolCliContract {
             argv: vec![
@@ -456,9 +473,12 @@ pub fn bootstrap_default_tool_registry() -> InMemoryToolRegistry {
                 "documents": {
                     "type": "array",
                     "items": { "type": "object" }
+                },
+                "model_facing": {
+                    "type": ["object", "null"]
                 }
             },
-            "required": ["documents"]
+            "required": ["documents", "model_facing"]
         }),
         ToolCliContract {
             argv: vec![
@@ -981,6 +1001,48 @@ mod tests {
     }
 
     #[test]
+    fn retrieval_search_tool_exposes_real_cli_contract_and_hit_metadata() {
+        let registry = bootstrap_default_tool_registry();
+        let tool = registry
+            .get("retrieval.search")
+            .expect("retrieval.search should be registered");
+
+        assert_eq!(tool.scope_policy, "dataset_or_session");
+        assert_eq!(tool.input_schema["required"], json!(["query"]));
+        assert_eq!(
+            tool.output_schema["properties"]["hits"]["items"]["required"],
+            json!([
+                "retrieval_evidence_id",
+                "document_id",
+                "score",
+                "summary",
+                "source_locator"
+            ])
+        );
+        assert_eq!(
+            tool.cli.as_ref().map(|cli| cli.argv.clone()),
+            Some(vec![
+                "cargo".to_string(),
+                "run".to_string(),
+                "-p".to_string(),
+                "platform-api".to_string(),
+                "--bin".to_string(),
+                "retrieval-search-cli".to_string(),
+                "--".to_string(),
+                "search".to_string(),
+            ])
+        );
+        assert_eq!(
+            tool.cli.as_ref().map(|cli| cli.env_allowlist.clone()),
+            Some(vec![
+                "PLATFORM_DATABASE_URL".to_string(),
+                "PLATFORM_TENANT_KEY".to_string(),
+                "PLATFORM_TENANT_NAME".to_string(),
+            ])
+        );
+    }
+
+    #[test]
     fn document_read_detail_tool_exposes_cli_contract_and_document_scope() {
         let registry = bootstrap_default_tool_registry();
         let tool = registry
@@ -991,7 +1053,11 @@ mod tests {
         assert_eq!(tool.input_schema["required"], json!(["document_id"]));
         assert_eq!(
             tool.output_schema["required"],
-            json!(["document", "chunks", "retrieval_evidences"])
+            json!(["document", "chunks", "retrieval_evidences", "model_facing"])
+        );
+        assert_eq!(
+            tool.output_schema["properties"]["model_facing"]["type"],
+            json!(["object", "null"])
         );
         assert_eq!(
             tool.cli.as_ref().map(|cli| cli.argv.last().cloned()),
@@ -1020,7 +1086,14 @@ mod tests {
             tool.input_schema["properties"]["document_ids"]["minItems"],
             json!(2)
         );
-        assert_eq!(tool.output_schema["required"], json!(["documents"]));
+        assert_eq!(
+            tool.output_schema["required"],
+            json!(["documents", "model_facing"])
+        );
+        assert_eq!(
+            tool.output_schema["properties"]["model_facing"]["type"],
+            json!(["object", "null"])
+        );
         assert_eq!(
             tool.cli.as_ref().map(|cli| cli.argv.last().cloned()),
             Some(Some("--".to_string()))

@@ -153,6 +153,10 @@ Progress:
   `session_manifest_view.last_turn` and `message_manifest_view.turn`, covering
   provider, stream, tool-loop, artifact commit, and finish reason state without
   adding a new protocol surface.
+- 2026-04-25: Added durable `provider_failure` facts across gateway, workers,
+  contracts, platform API, runtime inspect summaries, and the web shell. Request
+  failures/timeouts no longer pretend the provider responded, while post-response
+  failures carry typed failure kind/message for operators and UI.
 
 ## Phase 5: Real Retrieval
 
@@ -173,6 +177,28 @@ Validation:
 - Single-document detail can reach `live_detail`.
 - Multi-document comparison can reach `mixed`.
 - Retrieval failures produce `degraded` instead of unsupported confidence.
+
+Progress:
+
+- 2026-04-25: Replaced chunk-index placeholder retrieval scoring with a local
+  lexical indexer in `retrieval-worker`, storing signature terms, term weights,
+  rank hints, and salience-derived recall scores in retrieval evidence
+  manifests.
+- 2026-04-25: Dataset output creation now binds prompt-ranked retrieval
+  evidences instead of blindly taking the latest few rows, and document/detail
+  retrieval lists are sorted by durable relevance facts.
+- 2026-04-25: `document.read_detail` and `document.compare` now expose
+  model-facing summaries derived from durable document lifecycle and retrieval
+  evidence facts, letting single-document detail reach `live_detail`,
+  multi-document compare reach `mixed`, and retrieval failures degrade cleanly.
+- 2026-04-25: `retrieval.search` is now a real host tool backed by
+  prompt-ranked lexical retrieval hits, exposed through
+  `platform-api --bin retrieval-search-cli` with document ids and source
+  locators for downstream detail/compare actions.
+- 2026-04-25: `dataset-output-worker` and `chat-session-worker` now execute
+  `retrieval.search` before generation, merge the host tool call with provider
+  tool traces, and preserve the retrieval tool trace even when provider
+  generation fails.
 
 ## Phase 6: Model-Facing Contract Freeze
 

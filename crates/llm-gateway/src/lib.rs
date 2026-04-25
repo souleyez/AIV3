@@ -3,7 +3,7 @@ use prompt_registry::InMemoryPromptRegistry;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::fmt::Debug;
+use std::fmt::{self, Debug, Display};
 use std::sync::Arc;
 use std::time::Instant;
 use uuid::Uuid;
@@ -32,6 +32,82 @@ pub enum LlmFinishReason {
     Error,
     Other(String),
 }
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LlmProviderFailureKind {
+    RequestFailed,
+    RequestTimeout,
+    HttpStatus,
+    ResponseBodyReadFailed,
+    InvalidJson,
+    InvalidResponse,
+    FinishReasonError,
+}
+
+impl LlmProviderFailureKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::RequestFailed => "request_failed",
+            Self::RequestTimeout => "request_timeout",
+            Self::HttpStatus => "http_status",
+            Self::ResponseBodyReadFailed => "response_body_read_failed",
+            Self::InvalidJson => "invalid_json",
+            Self::InvalidResponse => "invalid_response",
+            Self::FinishReasonError => "finish_reason_error",
+        }
+    }
+
+    pub fn from_wire_value(value: &str) -> Option<Self> {
+        match value {
+            "request_failed" => Some(Self::RequestFailed),
+            "request_timeout" => Some(Self::RequestTimeout),
+            "http_status" => Some(Self::HttpStatus),
+            "response_body_read_failed" => Some(Self::ResponseBodyReadFailed),
+            "invalid_json" => Some(Self::InvalidJson),
+            "invalid_response" => Some(Self::InvalidResponse),
+            "finish_reason_error" => Some(Self::FinishReasonError),
+            _ => None,
+        }
+    }
+
+    pub fn provider_responded(&self) -> bool {
+        !matches!(self, Self::RequestFailed | Self::RequestTimeout)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LlmProviderFailure {
+    pub kind: LlmProviderFailureKind,
+    pub message: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct LlmProviderError {
+    runtime: LlmRuntimeMetadata,
+    message: String,
+}
+
+impl LlmProviderError {
+    pub fn new(runtime: LlmRuntimeMetadata, message: impl Into<String>) -> Self {
+        Self {
+            runtime,
+            message: message.into(),
+        }
+    }
+
+    pub fn runtime(&self) -> &LlmRuntimeMetadata {
+        &self.runtime
+    }
+}
+
+impl Display for LlmProviderError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for LlmProviderError {}
 
 impl LlmFinishReason {
     pub fn as_str(&self) -> &str {
@@ -95,6 +171,7 @@ pub struct LlmRuntimeMetadata {
     pub model: String,
     pub request_id: Option<String>,
     pub finish_reason: Option<LlmFinishReason>,
+    pub provider_failure: Option<LlmProviderFailure>,
     pub latency_ms: Option<u64>,
     pub usage: Option<LlmTokenUsage>,
     pub system_prompt_key: Option<String>,
@@ -123,6 +200,10 @@ pub fn render_runtime_manifest(runtime: &LlmRuntimeMetadata) -> Value {
         "model": runtime.model.as_str(),
         "request_id": runtime.request_id.as_deref(),
         "finish_reason": runtime.finish_reason.as_ref().map(LlmFinishReason::as_str),
+        "provider_failure": runtime.provider_failure.as_ref().map(|failure| json!({
+            "kind": failure.kind.as_str(),
+            "message": failure.message,
+        })),
         "latency_ms": runtime.latency_ms,
         "usage": runtime.usage.as_ref().map(|usage| json!({
             "input_tokens": usage.input_tokens,
@@ -227,6 +308,7 @@ impl LlmProvider for PlaceholderLlmProvider {
             model: request.model.clone(),
             request_id: Some(Uuid::new_v4().to_string()),
             finish_reason: Some(LlmFinishReason::Stop),
+            provider_failure: None,
             latency_ms: Some(started_at.elapsed().as_millis() as u64),
             usage: Some(usage),
             system_prompt_key: request.system_prompt_key.clone(),
@@ -329,6 +411,10 @@ impl LlmProvider for ScriptedLlmProvider {
                     .unwrap_or_else(|| Uuid::new_v4().to_string()),
             ),
             finish_reason: Some(self.finish_reason.clone()),
+            provider_failure: provider_failure_for_finish_reason(
+                &self.provider_name,
+                Some(&self.finish_reason),
+            ),
             latency_ms: Some(self.latency_ms),
             usage: Some(usage),
             system_prompt_key: request.system_prompt_key.clone(),
@@ -409,50 +495,133 @@ impl LlmProvider for OpenAiCompatibleLlmProvider {
             http_request = http_request.bearer_auth(api_key);
         }
 
-        let response = http_request
-            .send()
-            .with_context(|| format!("{} request to {endpoint} failed", self.provider_name))?;
+        let response = match http_request.send() {
+            Ok(response) => response,
+            Err(error) => {
+                let kind = if error.is_timeout() {
+                    LlmProviderFailureKind::RequestTimeout
+                } else {
+                    LlmProviderFailureKind::RequestFailed
+                };
+                let message = format!(
+                    "{} request to {endpoint} failed: {error}",
+                    self.provider_name
+                );
+                return Err(self
+                    .provider_error(request, kind, message, started_at)
+                    .into());
+            }
+        };
         let status = response.status();
-        let response_body = response
-            .text()
-            .with_context(|| format!("{} response body read failed", self.provider_name))?;
+        let response_body = match response.text() {
+            Ok(body) => body,
+            Err(error) => {
+                let message = format!("{} response body read failed: {error}", self.provider_name);
+                return Err(self
+                    .provider_error(
+                        request,
+                        LlmProviderFailureKind::ResponseBodyReadFailed,
+                        message,
+                        started_at,
+                    )
+                    .into());
+            }
+        };
 
         if !status.is_success() {
-            return Err(anyhow!(
+            let message = format!(
                 "{} returned HTTP {} with body {}",
                 self.provider_name,
                 status.as_u16(),
                 response_body
-            ));
+            );
+            return Err(self
+                .provider_error(
+                    request,
+                    LlmProviderFailureKind::HttpStatus,
+                    message,
+                    started_at,
+                )
+                .into());
         }
 
-        let value = serde_json::from_str::<Value>(&response_body).with_context(|| {
-            format!(
-                "{} returned invalid JSON payload from {endpoint}: {}",
-                self.provider_name, response_body
-            )
-        })?;
-        let choice = value
+        let value = match serde_json::from_str::<Value>(&response_body) {
+            Ok(value) => value,
+            Err(error) => {
+                let message = format!(
+                    "{} returned invalid JSON payload from {endpoint}: {}",
+                    self.provider_name, response_body
+                );
+                return Err(self
+                    .provider_error(
+                        request,
+                        LlmProviderFailureKind::InvalidJson,
+                        format!("{message} ({error})"),
+                        started_at,
+                    )
+                    .into());
+            }
+        };
+        let Some(choice) = value
             .get("choices")
             .and_then(Value::as_array)
             .and_then(|choices| choices.first())
-            .ok_or_else(|| anyhow!("{} response missing choices[0]", self.provider_name))?;
-        let output_text = extract_chat_completion_text(choice).ok_or_else(|| {
-            anyhow!(
+        else {
+            let message = format!("{} response missing choices[0]", self.provider_name);
+            return Err(self
+                .provider_error(
+                    request,
+                    LlmProviderFailureKind::InvalidResponse,
+                    message,
+                    started_at,
+                )
+                .into());
+        };
+        let Some(output_text) = extract_chat_completion_text(choice) else {
+            let message = format!(
                 "{} response missing assistant message content",
                 self.provider_name
-            )
-        })?;
-        let tool_calls = extract_chat_completion_tool_calls(choice)?;
+            );
+            return Err(self
+                .provider_error(
+                    request,
+                    LlmProviderFailureKind::InvalidResponse,
+                    message,
+                    started_at,
+                )
+                .into());
+        };
+        let tool_calls = match extract_chat_completion_tool_calls(choice) {
+            Ok(tool_calls) => tool_calls,
+            Err(error) => {
+                let message = format!(
+                    "{} response has invalid tool calls: {error}",
+                    self.provider_name
+                );
+                return Err(self
+                    .provider_error(
+                        request,
+                        LlmProviderFailureKind::InvalidResponse,
+                        message,
+                        started_at,
+                    )
+                    .into());
+            }
+        };
+        let finish_reason = choice
+            .get("finish_reason")
+            .and_then(Value::as_str)
+            .map(LlmFinishReason::from_wire_value);
         let runtime = LlmRuntimeMetadata {
             mode: LlmRuntimeMode::Provider,
             provider: self.provider_name.clone(),
             model: request.model.clone(),
             request_id: value.get("id").and_then(Value::as_str).map(str::to_string),
-            finish_reason: choice
-                .get("finish_reason")
-                .and_then(Value::as_str)
-                .map(LlmFinishReason::from_wire_value),
+            finish_reason: finish_reason.clone(),
+            provider_failure: provider_failure_for_finish_reason(
+                &self.provider_name,
+                finish_reason.as_ref(),
+            ),
             latency_ms: Some(started_at.elapsed().as_millis() as u64),
             usage: parse_usage(value.get("usage")),
             system_prompt_key: request.system_prompt_key.clone(),
@@ -465,6 +634,35 @@ impl LlmProvider for OpenAiCompatibleLlmProvider {
             runtime,
             tool_calls,
         })
+    }
+}
+
+impl OpenAiCompatibleLlmProvider {
+    fn provider_error(
+        &self,
+        request: &LlmRequest,
+        kind: LlmProviderFailureKind,
+        message: String,
+        started_at: Instant,
+    ) -> LlmProviderError {
+        let runtime = LlmRuntimeMetadata {
+            mode: LlmRuntimeMode::Provider,
+            provider: self.provider_name.clone(),
+            model: request.model.clone(),
+            request_id: None,
+            finish_reason: Some(LlmFinishReason::Error),
+            provider_failure: Some(LlmProviderFailure {
+                kind,
+                message: message.clone(),
+            }),
+            latency_ms: Some(started_at.elapsed().as_millis() as u64),
+            usage: None,
+            system_prompt_key: request.system_prompt_key.clone(),
+            system_prompt_version: resolve_prompt_version(&self.prompt_registry, request),
+            tool_trace_count: 0,
+        };
+
+        LlmProviderError::new(runtime, message)
     }
 }
 
@@ -636,6 +834,20 @@ fn estimate_usage(input: &str, output: &str) -> LlmTokenUsage {
 
 fn estimate_token_count(value: &str) -> usize {
     value.split_whitespace().count()
+}
+
+fn provider_failure_for_finish_reason(
+    provider_name: &str,
+    finish_reason: Option<&LlmFinishReason>,
+) -> Option<LlmProviderFailure> {
+    if !matches!(finish_reason, Some(LlmFinishReason::Error)) {
+        return None;
+    }
+
+    Some(LlmProviderFailure {
+        kind: LlmProviderFailureKind::FinishReasonError,
+        message: format!("{provider_name} returned finish_reason=error"),
+    })
 }
 
 #[cfg(test)]
@@ -866,6 +1078,7 @@ mod tests {
             model: "gpt-5.4".to_string(),
             request_id: Some("req_runtime_manifest".to_string()),
             finish_reason: Some(LlmFinishReason::ToolCalls),
+            provider_failure: None,
             latency_ms: Some(123),
             usage: Some(LlmTokenUsage {
                 input_tokens: 7,
@@ -882,6 +1095,7 @@ mod tests {
         assert_eq!(manifest["model"], json!("gpt-5.4"));
         assert_eq!(manifest["request_id"], json!("req_runtime_manifest"));
         assert_eq!(manifest["finish_reason"], json!("tool_calls"));
+        assert!(manifest["provider_failure"].is_null());
         assert_eq!(manifest["latency_ms"], json!(123));
         assert_eq!(manifest["usage"]["total_tokens"], json!(12));
         assert_eq!(
