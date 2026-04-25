@@ -4,9 +4,9 @@
 
 **Goal:** Build a V3-native static page visual workbench where the first customer-visible artifact is a polished visual draft image, followed by an editable/static report render from the same report plan and dataset evidence.
 
-**Architecture:** Keep `ReportPlan`, report AST versions, retrieval evidence, and report render outputs as the source of truth. Add a new durable `ReportVisualDraft` layer in front of report rendering, with a mock-first image provider and a later configurable image provider. The visual draft guides layout and style only; it must never become the factual source or a publishable report version by itself.
+**Architecture:** Keep `ReportPlan`, report AST versions, retrieval evidence, and report render outputs as the source of truth. Add a new durable `ReportVisualDraft` layer in front of report rendering, with mock generation locally and real GPT image generation delegated to the user's Cloudflare remote Codex endpoint. The visual draft guides layout and style only; it must never become the factual source or a publishable report version by itself.
 
-**Tech Stack:** Rust workspace (`domain-model`, `contracts`, `storage`, `platform-api`, `workflow-definitions`, new visual worker/runtime), PostgreSQL, local filesystem asset storage for MVP image bytes, Next.js web shell in `apps/web`, existing `report-planner-worker` and `report-render-worker`.
+**Tech Stack:** Rust workspace (`domain-model`, `contracts`, `storage`, `platform-api`, `workflow-definitions`, new visual worker/runtime), PostgreSQL, local filesystem asset storage for mock/local copies, Cloudflare Workers remote Codex endpoint in `C:\Users\soulzyn\Desktop\codex\cf-codex-workstation` with optional frontdoor in `C:\Users\soulzyn\Desktop\codex\cf-codex-frontdoor`, Next.js web shell in `apps/web`, existing `report-planner-worker` and `report-render-worker`.
 
 ---
 
@@ -24,7 +24,7 @@ The first implementation target is a mock-only MVP:
 - It can render a deterministic mock image preview from local bytes.
 - The web UI shows the image before asking the user to render/publish the editable report.
 
-Real image generation is intentionally a second step. Do not hard-code a current OpenAI image model in the plan or implementation; use provider configuration such as `STATIC_PAGE_VISUAL_IMAGE_MODEL` and verify the correct model/API shape against official provider docs during implementation.
+Real image generation is intentionally a Cloudflare-side second step. V3 must not call OpenAI image APIs directly in production; it calls a protected Cloudflare remote Codex image endpoint. Do not hard-code a current OpenAI image model in V3; forward a configurable `model` string to Cloudflare and verify the correct provider API shape against official docs when implementing the Cloudflare worker.
 
 ## Non-Negotiable Product Rules
 
@@ -32,7 +32,9 @@ Real image generation is intentionally a second step. Do not hard-code a current
 - The source of truth remains dataset evidence, `ReportPlan`, `ReportPlanAstVersion`, and render output manifests.
 - Visual drafts are not publishable report versions.
 - Mock provider must be shippable and testable without image credits.
-- Any real provider must be behind `STATIC_PAGE_VISUAL_DRAFT_ENABLED=true`.
+- Any real provider must be `cloudflare-codex` behind `STATIC_PAGE_VISUAL_DRAFT_ENABLED=true`.
+- Browser code and V3 Rust services must never see the OpenAI image API key.
+- Cloudflare stores image-provider secrets and handles provider-specific request/response parsing.
 - If visual generation fails, the report plan remains usable.
 - If editable report rendering fails after visual success, the image remains visible.
 
@@ -53,6 +55,8 @@ pub struct ReportVisualDraft {
     pub model: String,
     pub image_object_key: Option<String>,
     pub image_url_path: Option<String>,
+    pub remote_request_id: Option<String>,
+    pub remote_asset_url: Option<String>,
     pub mime_type: Option<String>,
     pub prompt: String,
     pub revised_prompt: Option<String>,
@@ -86,6 +90,8 @@ create table if not exists report_visual_drafts (
   model text not null,
   image_object_key text,
   image_url_path text,
+  remote_request_id text,
+  remote_asset_url text,
   mime_type text,
   prompt text not null,
   revised_prompt text,
@@ -122,6 +128,81 @@ storage/static-page-visual-drafts/<draft-id>/draft.png
 ```
 
 Use object keys in persisted state so this can move to R2/S3/MinIO later without changing contracts.
+
+## Cloudflare Remote Codex Image Boundary
+
+Real GPT image generation belongs in the Cloudflare remote Codex layer, not in the V3 Rust platform.
+
+Existing Cloudflare projects:
+
+- `C:\Users\soulzyn\Desktop\codex\cf-codex-workstation`
+- `C:\Users\soulzyn\Desktop\codex\cf-codex-frontdoor`
+
+Preferred public endpoint:
+
+```text
+POST https://codex.souleye.cc/api/image/static-page-draft
+```
+
+Workstation direct endpoint:
+
+```text
+POST https://cf-codex-workstation.soulzyn.workers.dev/api/image/static-page-draft
+```
+
+V3 request shape:
+
+```json
+{
+  "requestId": "report_visual_draft_uuid",
+  "prompt": "Chinese enterprise static page visual draft...",
+  "model": "configured-by-v3-or-cloudflare",
+  "size": "1536x1024",
+  "quality": "high",
+  "responseFormat": "b64_json",
+  "metadata": {
+    "source": "ai-data-platform-v3",
+    "datasetId": "dataset_uuid",
+    "reportPlanId": "report_plan_uuid",
+    "visualStyle": "premium_consulting"
+  }
+}
+```
+
+V3 response shape:
+
+```json
+{
+  "status": "ready",
+  "provider": "cloudflare-codex",
+  "model": "actual-image-model",
+  "imageBase64": "...",
+  "mimeType": "image/png",
+  "prompt": "...",
+  "revisedPrompt": null,
+  "remoteRequestId": "cf-image-...",
+  "remoteAssetUrl": null,
+  "generatedAt": "2026-04-25T00:00:00Z"
+}
+```
+
+Security rules:
+
+- V3 calls Cloudflare with `Authorization: Bearer <STATIC_PAGE_VISUAL_DRAFT_REMOTE_TOKEN>`.
+- Cloudflare stores image provider keys as Worker secrets.
+- The browser never calls Cloudflare image generation directly.
+- The browser never receives provider credentials.
+- Cloudflare should avoid logging full prompts when prompts include customer evidence.
+- Cloudflare should log request ids, provider/model, status, latency, and sanitized error kinds.
+
+Cloudflare implementation notes:
+
+- Implement the endpoint in `cf-codex-workstation` first.
+- Add optional frontdoor pass-through only after workstation tests pass.
+- Keep this endpoint independent of any generic Codex Responses proxy.
+- Validate request size and prompt length before calling the image provider.
+- Return base64 image bytes for V3 local persistence first.
+- Later, Cloudflare may save the image to R2 and return `remoteAssetUrl`; V3 should still persist durable metadata.
 
 ## Task 1: Add Visual Draft Domain And Contract Types
 
@@ -180,6 +261,8 @@ pub struct ReportVisualDraftView {
     pub provider: String,
     pub model: String,
     pub image_url_path: Option<String>,
+    pub remote_request_id: Option<String>,
+    pub remote_asset_url: Option<String>,
     pub mime_type: Option<String>,
     pub prompt: String,
     pub revised_prompt: Option<String>,
@@ -229,6 +312,7 @@ Add tests for:
 - migration SQL mentions `report_visual_drafts`
 - status helper roundtrips
 - repository mapping preserves `image_object_key`, `image_url_path`, `draft_manifest`
+- repository mapping preserves `remote_request_id` and `remote_asset_url`
 
 Use existing storage unit-test style; avoid requiring a live database for pure migration checks.
 
@@ -259,6 +343,8 @@ pub struct NewReportVisualDraft {
     pub model: String,
     pub image_object_key: Option<String>,
     pub image_url_path: Option<String>,
+    pub remote_request_id: Option<String>,
+    pub remote_asset_url: Option<String>,
     pub mime_type: Option<String>,
     pub prompt: String,
     pub revised_prompt: Option<String>,
@@ -304,6 +390,7 @@ Test that the helper:
 - rejects path traversal in ids/file names
 - writes PNG bytes under `storage/static-page-visual-drafts/<draft-id>/draft.png`
 - returns a stable image URL path `/v1/static-page-visual-drafts/<id>/image`
+- can store Cloudflare-returned base64 bytes as a local copy without trusting remote file names
 
 Run:
 
@@ -325,6 +412,8 @@ pub fn visual_draft_image_path(root: &Path, draft_id: ReportVisualDraftId) -> Pa
 pub fn visual_draft_image_url_path(draft_id: ReportVisualDraftId) -> String;
 pub fn write_visual_draft_image(root: &Path, draft_id: ReportVisualDraftId, bytes: &[u8]) -> Result<String>;
 ```
+
+The local asset store is still needed even when Cloudflare returns the image. V3 stores a local copy for stable `/v1/static-page-visual-drafts/{draft_id}/image` reads; `remote_asset_url` is metadata, not the primary browser image source in MVP.
 
 **Step 3: Run tests**
 
@@ -523,6 +612,8 @@ pub struct StaticPageVisualDraftProviderResult {
     pub mime_type: String,
     pub prompt: String,
     pub revised_prompt: Option<String>,
+    pub remote_request_id: Option<String>,
+    pub remote_asset_url: Option<String>,
     pub generated_at: DateTime<Utc>,
 }
 
@@ -557,6 +648,120 @@ wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo
 git add Cargo.toml crates/static-page-visual-runtime
 git commit -m "Add mock static page visual runtime"
 ```
+
+## Task 6A: Add Cloudflare Remote Codex Image Endpoint
+
+**Files:**
+
+- Modify: `C:\Users\soulzyn\Desktop\codex\cf-codex-workstation\src\index.ts`
+- Modify/Add test: `C:\Users\soulzyn\Desktop\codex\cf-codex-workstation\test\index.spec.ts`
+- Optional Modify: `C:\Users\soulzyn\Desktop\codex\cf-codex-frontdoor\worker.js`
+- Optional Modify: `C:\Users\soulzyn\Desktop\codex\cf-codex-workstation\README.md`
+
+**Step 1: Write failing auth tests**
+
+Add tests:
+
+- `POST /api/image/static-page-draft` without bearer token returns `401`
+- wrong bearer token returns `401`
+- valid bearer token reaches the mocked image provider
+
+Run:
+
+```powershell
+cd C:\Users\soulzyn\Desktop\codex\cf-codex-workstation
+npm test -- --run
+```
+
+Expected: FAIL until endpoint exists.
+
+**Step 2: Write mocked provider success test**
+
+Mock the upstream image provider response and assert:
+
+- response status is `200`
+- payload has `status: "ready"`
+- payload has `provider: "cloudflare-codex"`
+- payload has `imageBase64`
+- payload has `mimeType`
+- payload has `remoteRequestId`
+
+Do not hit OpenAI or any real image API in tests.
+
+**Step 3: Add Cloudflare env/secrets contract**
+
+Worker secrets/vars:
+
+- `IMAGE_PROXY_TOKEN`
+- `OPENAI_IMAGE_API_KEY`
+- `OPENAI_IMAGE_BASE_URL`
+- `OPENAI_IMAGE_MODEL`
+- optional `STATIC_PAGE_VISUAL_MAX_PROMPT_CHARS`
+
+The model value must be read from Cloudflare env. Verify the current official OpenAI image model and endpoint before setting production secrets.
+
+**Step 4: Implement endpoint in workstation**
+
+Endpoint:
+
+```text
+POST /api/image/static-page-draft
+```
+
+Validation:
+
+- require bearer token
+- require non-empty prompt
+- enforce max prompt length
+- allow only expected `size`, `quality`, and `responseFormat` values
+- generate or forward a request id
+- return sanitized provider errors
+
+**Step 5: Keep GPT image calls Cloudflare-side**
+
+The workstation endpoint owns:
+
+- image provider auth
+- provider request shape
+- provider response parsing
+- provider latency/error classification
+
+V3 owns:
+
+- visual brief construction
+- Cloudflare request metadata
+- durable `ReportVisualDraft` state
+- local copy persistence
+- UI polling and display
+
+**Step 6: Optionally add frontdoor pass-through**
+
+If `codex.souleye.cc` is the stable public endpoint, add a pass-through in:
+
+```text
+C:\Users\soulzyn\Desktop\codex\cf-codex-frontdoor\worker.js
+```
+
+Keep workstation direct URL usable for diagnostics.
+
+**Step 7: Run tests and deploy separately**
+
+```powershell
+cd C:\Users\soulzyn\Desktop\codex\cf-codex-workstation
+npm test -- --run
+npx wrangler deploy
+```
+
+If frontdoor changes:
+
+```powershell
+cd C:\Users\soulzyn\Desktop\codex\cf-codex-frontdoor
+npx wrangler deploy
+```
+
+**Step 8: Commit in Cloudflare repo**
+
+Commit Cloudflare changes in their own repository, not in `ai-data-platform-v3`.
 
 ## Task 7: Add Visual Draft Workflow Definition
 
@@ -967,7 +1172,7 @@ git add apps/web/app/HomePageClient.js apps/web/app/components/ChatPanel.js apps
 git commit -m "Add chat handoff to static page workbench"
 ```
 
-## Task 15: Add Real Image Provider Behind Flag
+## Task 15: Add Cloudflare-Codex Provider Client Behind Flag
 
 **Files:**
 
@@ -975,18 +1180,21 @@ git commit -m "Add chat handoff to static page workbench"
 - Test: `crates/static-page-visual-runtime/src/lib.rs`
 - Modify: `README.md`
 
-**Step 1: Verify provider docs before implementation**
+**Step 1: Verify the Cloudflare endpoint contract**
 
-Before writing provider code, check the current official provider documentation for:
+Before writing V3 provider code, confirm the Cloudflare endpoint is available:
 
-- model name
-- endpoint
-- auth header
-- response image payload shape
-- size/quality parameters
-- streaming support, if any
+```text
+POST https://codex.souleye.cc/api/image/static-page-draft
+```
 
-Do not rely on stale model names from the old plan.
+or direct workstation:
+
+```text
+POST https://cf-codex-workstation.soulzyn.workers.dev/api/image/static-page-draft
+```
+
+V3 should not verify the upstream OpenAI image API directly. Cloudflare owns that provider-specific integration.
 
 **Step 2: Write tests with injected HTTP client**
 
@@ -994,33 +1202,52 @@ Do not make tests hit the network.
 
 Test:
 
-- missing API key returns unavailable
-- provider sends configured model
-- provider parses base64 image response
+- missing remote URL returns unavailable
+- missing remote token returns unavailable
+- provider sends bearer token to remote URL
+- provider forwards configured model/size/quality
+- provider parses `imageBase64`, `mimeType`, `remoteRequestId`, and `remoteAssetUrl`
 - non-2xx response returns a typed error
+- `status: failed` response maps to provider failure
 
-**Step 3: Implement provider**
+**Step 3: Implement Cloudflare provider**
 
 Support env:
 
 - `STATIC_PAGE_VISUAL_DRAFT_ENABLED`
-- `STATIC_PAGE_VISUAL_DRAFT_PROVIDER`
+- `STATIC_PAGE_VISUAL_DRAFT_PROVIDER=cloudflare-codex`
+- `STATIC_PAGE_VISUAL_DRAFT_REMOTE_URL`
+- `STATIC_PAGE_VISUAL_DRAFT_REMOTE_TOKEN`
 - `STATIC_PAGE_VISUAL_IMAGE_MODEL`
-- `STATIC_PAGE_VISUAL_IMAGE_BASE_URL`
-- `OPENAI_IMAGE_API_KEY`
-- fallback `OPENAI_API_KEY`
+- `STATIC_PAGE_VISUAL_IMAGE_SIZE`
+- `STATIC_PAGE_VISUAL_IMAGE_QUALITY`
 
-**Step 4: Run tests**
+Do not support `openai-direct` in V3 production code. If a local direct provider is ever needed for debugging, keep it behind a separate explicitly named feature flag and do not document it as the normal route.
+
+**Step 4: Persist Cloudflare metadata**
+
+Map response fields into `ReportVisualDraft`:
+
+- `remote_request_id`
+- `remote_asset_url`
+- `provider`
+- `model`
+- `revised_prompt`
+- `mime_type`
+
+Persist a local image copy from `imageBase64` when present.
+
+**Step 5: Run tests**
 
 ```powershell
 wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo test -p static-page-visual-runtime && cargo check --workspace"
 ```
 
-**Step 5: Commit**
+**Step 6: Commit**
 
 ```powershell
 git add crates/static-page-visual-runtime/src/lib.rs README.md
-git commit -m "Add configurable visual image provider"
+git commit -m "Add Cloudflare visual image provider"
 ```
 
 ## Task 16: Documentation And Smoke Test
@@ -1046,6 +1273,18 @@ $env:STATIC_PAGE_VISUAL_DRAFT_ENABLED = "true"
 $env:STATIC_PAGE_VISUAL_DRAFT_PROVIDER = "mock"
 ```
 
+Document Cloudflare provider env:
+
+```powershell
+$env:STATIC_PAGE_VISUAL_DRAFT_ENABLED = "true"
+$env:STATIC_PAGE_VISUAL_DRAFT_PROVIDER = "cloudflare-codex"
+$env:STATIC_PAGE_VISUAL_DRAFT_REMOTE_URL = "https://codex.souleye.cc"
+$env:STATIC_PAGE_VISUAL_DRAFT_REMOTE_TOKEN = "<token>"
+$env:STATIC_PAGE_VISUAL_IMAGE_MODEL = "<configured-on-cloudflare>"
+```
+
+Make clear that `OPENAI_IMAGE_API_KEY` belongs in the Cloudflare Worker secret store, not in the V3 platform environment.
+
 **Step 2: Add smoke checklist**
 
 Checklist:
@@ -1056,6 +1295,7 @@ Checklist:
 - workbench loads context
 - visual draft starts
 - mock image appears
+- Cloudflare provider can be smoke-tested from V3 with a non-customer prompt after workstation deployment
 - report render can be requested after image
 - visual draft failure does not block existing Report Service controls
 
@@ -1079,11 +1319,13 @@ git commit -m "Document static page visual workbench"
 ## Rollout Strategy
 
 1. Ship mock provider UI first.
-2. Review visual workbench UX with deterministic mock images.
-3. Enable real image provider only with explicit env flag and API key.
-4. Keep existing Report Service control panel as the reliable fallback.
-5. Add auto-render-after-image only if manual render feels too slow in customer demos.
-6. Add image-to-blueprint parsing only after proving that static report renders diverge too much from visual drafts.
+2. Add and deploy the Cloudflare remote Codex image endpoint in `cf-codex-workstation`.
+3. Connect V3 with `STATIC_PAGE_VISUAL_DRAFT_PROVIDER=cloudflare-codex`.
+4. Keep OpenAI image keys only in Cloudflare Worker secrets.
+5. Review visual workbench UX with deterministic mock images and one controlled Cloudflare image smoke test.
+6. Keep existing Report Service control panel as the reliable fallback.
+7. Add auto-render-after-image only if manual render feels too slow in customer demos.
+8. Add image-to-blueprint parsing only after proving that static report renders diverge too much from visual drafts.
 
 ## Final Verification Before Push
 
