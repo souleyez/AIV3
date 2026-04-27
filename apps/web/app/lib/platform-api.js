@@ -22,6 +22,10 @@ export async function proxyPlatformApiRequest(request, pathSegments) {
 
     if (contentType) headers.set('content-type', contentType);
     if (accept) headers.set('accept', accept);
+    const secretBindingIds = request.headers.get('x-ai-data-platform-secret-binding-ids');
+    if (secretBindingIds) {
+      headers.set('x-ai-data-platform-secret-binding-ids', secretBindingIds);
+    }
 
     const response = await fetch(targetUrl, {
       method: request.method,

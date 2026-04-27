@@ -1,49 +1,60 @@
+use assistant_runtime::{candidates_to_values, plan_scope, ScopePlannerInput};
 use axum::{
-    extract::{Path, State},
-    http::StatusCode,
+    extract::{Path, Query, State},
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::get,
     Json, Router,
 };
 use chrono::{DateTime, Utc};
 use contracts::{
-    AdvanceWorkflowExecutionResponse, ApiErrorResponse, AppendChatSessionTurnRequest,
-    AppendChatSessionTurnResponse, AssistantRunMessageView, ChatMessageView, ChatSessionView,
-    CompareDocumentsRequest, CompareDocumentsView, CreateAssistantRunRequest,
-    CreateAssistantRunResponse, CreateChatSessionRequest, CreateChatSessionResponse,
+    AdvanceWorkflowExecutionResponse, ApiErrorResponse, AppendAssistantRunEventRequest,
+    AppendAssistantRunEventResponse, AppendChatSessionTurnRequest, AppendChatSessionTurnResponse,
+    AssistantRunDetailView, AssistantRunEventView, AssistantRunMessageView, AssistantRunView,
+    ChatMessageView, ChatSessionView, CompareDocumentsRequest, CompareDocumentsView,
+    ConversationMemoryItemView, CreateAssistantRunRequest, CreateAssistantRunResponse,
+    CreateChatSessionRequest, CreateChatSessionResponse, CreateConversationMemoryItemRequest,
     CreateDatasetOutputRequest, CreateDatasetOutputResponse, CreateDatasetRequest,
+    CreateDatasetSecretBindingRequest, CreateDatasetSecretBindingResponse,
     CreateDocumentIngestResponse, CreateMemoryDirectoryRefreshResponse, CreateReportPlanResponse,
     CreateReportRenderRequest, CreateReportRenderResponse, DatasetOutputView, DatasetSummary,
     DocumentChunkView, DocumentDetailView, DocumentSummary, HealthResponse, LlmInvocationView,
     MemoryDirectoryView, PlanReportRequest, PublishReportRequest, PublishReportResponse,
     PublishedReportDetailView, PublishedReportVersionView, PublishedReportView,
     RegisterDocumentRequest, RegisterDocumentResponse, ReportPlanAstVersionView, ReportPlanSummary,
-    ReportRenderOutputView, RetrievalEvidenceView, RetrievalSearchHitView, RetrievalSearchResponse,
-    RetryWorkflowExecutionRequest, RetryWorkflowExecutionResponse, ToolDefinitionView,
-    ToolExecutionView, UpdateChatSessionReportEntryRequest, UpdateChatSessionReportEntryResponse,
-    WorkflowDefinitionView, WorkflowEventView, WorkflowExecutionView, WorkflowRuntimeInspectView,
-    WorkflowSignalRequest, WorkflowTaskView,
+    ReportRenderOutputView, ResolveDatasetSecretBindingsRequest,
+    ResolveDatasetSecretBindingsResponse, RetrievalEvidenceView, RetrievalSearchHitView,
+    RetrievalSearchResponse, RetryWorkflowExecutionRequest, RetryWorkflowExecutionResponse,
+    ToolDefinitionView, ToolExecutionView, UpdateChatSessionReportEntryRequest,
+    UpdateChatSessionReportEntryResponse, WorkflowDefinitionView, WorkflowEventView,
+    WorkflowExecutionView, WorkflowRuntimeInspectView, WorkflowSignalRequest, WorkflowTaskView,
 };
 use domain_model::{
-    ChatMessage, ChatMessageId, ChatMessageRole, ChatSession, ChatSessionId, DatasetId,
-    DatasetOutput, DatasetOutputId, Document, DocumentChunk, DocumentChunkId, DocumentId,
+    AssistantRun, AssistantRunEvent, AssistantRunId, ChatMessage, ChatMessageId, ChatMessageRole,
+    ChatSession, ChatSessionId, ConversationMemoryItem, Dataset, DatasetId, DatasetOutput,
+    DatasetOutputId, DatasetVisibility, Document, DocumentChunk, DocumentChunkId, DocumentId,
     LlmInvocation, LlmInvocationFinishReason, LlmInvocationMode, LlmInvocationSourceKind,
     MemoryDirectory, MemoryDirectoryId, PublishedReport, PublishedReportId, PublishedReportVersion,
     PublishedSurface, ReportPlan, ReportPlanAstVersion, ReportPlanId, ReportRenderOutput,
-    RetrievalEvidence, RetrievalEvidenceId, TenantId, ToolExecution, ToolExecutionSourceKind,
-    ToolExecutionStatus, WorkflowEventRecord, WorkflowExecution, WorkflowExecutionId, WorkflowKind,
-    WorkflowStatus, WorkflowTask,
+    RetrievalEvidence, RetrievalEvidenceId, SecretBindingId, SecretScopeLevel, TenantId,
+    ToolExecution, ToolExecutionSourceKind, ToolExecutionStatus, WorkflowEventRecord,
+    WorkflowExecution, WorkflowExecutionId, WorkflowKind, WorkflowStatus, WorkflowTask,
 };
 use event_bus::{
     workflow_execution_transition_subject, workflow_task_enqueued_subject, EventBus, EventEnvelope,
 };
 use llm_gateway::{build_provider_from_env, render_runtime_manifest, LlmRequest};
 use prompt_registry::bootstrap_default_prompt_registry;
+use serde::Deserialize;
 use serde_json::{json, Map, Value};
-use std::{collections::BTreeMap, fmt::Display};
+use std::{
+    collections::{BTreeMap, HashSet},
+    fmt::Display,
+};
 use storage::{
-    NewChatMessage, NewChatSession, NewDataset, NewDocument, NewPublishedReport,
-    NewPublishedReportVersion, NewReportPlan, NewWorkflowTask, PgStorage,
+    NewAssistantRun, NewAssistantRunEvent, NewChatMessage, NewChatSession,
+    NewConversationMemoryItem, NewDataset, NewDocument, NewPublishedReport,
+    NewPublishedReportVersion, NewReportPlan, NewSecretBinding, NewWorkflowTask, PgStorage,
 };
 use tool_registry::{
     bootstrap_default_tool_registry, ToolCliOutputMode, ToolDefinition, ToolInvocationMode,
@@ -56,6 +67,26 @@ const DATASET_OUTPUT_RETRIEVAL_BIND_LIMIT: usize = 8;
 const RETRIEVAL_SEARCH_DEFAULT_LIMIT: usize = 8;
 const RETRIEVAL_SEARCH_MAX_LIMIT: usize = 20;
 const DEFAULT_ASSISTANT_RUN_RUNTIME_MODEL: &str = "placeholder-assistant-run-v1";
+const ASSISTANT_RUN_EVIDENCE_DEFAULT_LIMIT: usize = 4;
+const ASSISTANT_RUN_EVIDENCE_MAX_LIMIT: usize = 8;
+const ASSISTANT_RUN_EVIDENCE_DATASET_LIMIT: usize = 2;
+const ACTIVE_SECRET_BINDING_IDS_HEADER: &str = "x-ai-data-platform-secret-binding-ids";
+const PUBLIC_DATASET_WARNING: &str = "该数据集是公开数据集，所有用户可见";
+
+const DEFAULT_PUBLIC_DATASETS: &[(&str, &str, &str)] = &[
+    ("orders", "订单", "默认公开订单数据集。"),
+    ("customer-service", "客服", "默认公开客服数据集。"),
+    ("enterprise-qa", "企业问答", "默认公开企业问答数据集。"),
+    ("web-capture", "网页采集", "默认公开网页采集数据集。"),
+    ("unclassified", "未分类", "默认公开未分类数据集。"),
+];
+
+#[derive(Debug, Deserialize)]
+struct ConversationMemoryQuery {
+    local_thread_id: Option<String>,
+    query: Option<String>,
+    limit: Option<i64>,
+}
 
 #[derive(Clone)]
 pub struct AppState {
@@ -117,6 +148,14 @@ pub fn router(
         .route("/readyz", get(readyz))
         .route("/v1/datasets", get(list_datasets).post(create_dataset))
         .route(
+            "/v1/dataset-secret-bindings",
+            axum::routing::post(create_dataset_secret_binding),
+        )
+        .route(
+            "/v1/dataset-secret-bindings/resolve",
+            axum::routing::post(resolve_dataset_secret_bindings),
+        )
+        .route(
             "/v1/datasets/{dataset_id}/memory-directories",
             get(list_memory_directories),
         )
@@ -160,6 +199,19 @@ pub fn router(
         .route(
             "/v1/assistant-runs",
             axum::routing::post(create_assistant_run),
+        )
+        .route("/v1/assistant-runs/{run_id}", get(get_assistant_run))
+        .route(
+            "/v1/assistant-runs/{run_id}/events",
+            axum::routing::post(append_assistant_run_event),
+        )
+        .route(
+            "/v1/assistant-runs/{run_id}/conversation-memory-candidates",
+            get(list_assistant_run_conversation_memory_candidates),
+        )
+        .route(
+            "/v1/conversation-memory-items",
+            get(list_conversation_memory_items).post(create_conversation_memory_item),
         )
         .route(
             "/v1/documents/{document_id}/chunks",
@@ -300,7 +352,7 @@ pub async fn request_report_render(
         tenant_id,
         EventBus::Disabled,
     );
-    create_report_render_response(&state, plan_id, request).await
+    create_report_render_response(&state, plan_id, request, &[]).await
 }
 
 pub async fn request_memory_directory_refresh(
@@ -314,7 +366,7 @@ pub async fn request_memory_directory_refresh(
         tenant_id,
         EventBus::Disabled,
     );
-    create_memory_directory_refresh_response(&state, dataset_id).await
+    create_memory_directory_refresh_response(&state, dataset_id, &[]).await
 }
 
 pub async fn load_document_detail(
@@ -328,7 +380,7 @@ pub async fn load_document_detail(
         tenant_id,
         EventBus::Disabled,
     );
-    load_document_detail_with_state(&state, document_id).await
+    load_document_detail_with_state(&state, document_id, &[]).await
 }
 
 pub async fn compare_documents(
@@ -342,7 +394,7 @@ pub async fn compare_documents(
         tenant_id,
         EventBus::Disabled,
     );
-    compare_documents_with_state(&state, request).await
+    compare_documents_with_state(&state, request, &[]).await
 }
 
 pub async fn search_dataset_retrieval(
@@ -358,7 +410,7 @@ pub async fn search_dataset_retrieval(
         tenant_id,
         EventBus::Disabled,
     );
-    search_dataset_retrieval_with_state(&state, dataset_id, &query, limit).await
+    search_dataset_retrieval_with_state(&state, dataset_id, &query, limit, &[]).await
 }
 
 pub async fn request_workflow_retry(
@@ -387,7 +439,7 @@ pub async fn request_report_plan_continue(
         tenant_id,
         EventBus::Disabled,
     );
-    continue_report_plan_response(&state, plan_id).await
+    continue_report_plan_response(&state, plan_id, &[]).await
 }
 
 pub async fn request_report_publish(
@@ -402,7 +454,7 @@ pub async fn request_report_publish(
         tenant_id,
         EventBus::Disabled,
     );
-    publish_report_response(&state, plan_id, request).await
+    publish_report_response(&state, plan_id, request, &[]).await
 }
 
 pub async fn load_published_report(
@@ -416,7 +468,7 @@ pub async fn load_published_report(
         tenant_id,
         EventBus::Disabled,
     );
-    load_published_report_detail_with_state(&state, report_id).await
+    load_published_report_detail_with_state(&state, report_id, &[]).await
 }
 
 pub async fn load_published_report_by_plan(
@@ -430,7 +482,7 @@ pub async fn load_published_report_by_plan(
         tenant_id,
         EventBus::Disabled,
     );
-    load_published_report_detail_by_plan_with_state(&state, plan_id).await
+    load_published_report_detail_by_plan_with_state(&state, plan_id, &[]).await
 }
 
 pub fn render_workflow_runtime_pretty_summaries(
@@ -2865,9 +2917,280 @@ async fn list_tools(State(state): State<AppState>) -> Json<Vec<ToolDefinitionVie
     Json(state.tools)
 }
 
+fn active_secret_binding_ids_from_headers(
+    headers: &HeaderMap,
+) -> std::result::Result<Vec<SecretBindingId>, ApiError> {
+    let Some(value) = headers.get(ACTIVE_SECRET_BINDING_IDS_HEADER) else {
+        return Ok(Vec::new());
+    };
+    let raw = value.to_str().map_err(|_| {
+        ApiError::bad_request(
+            "invalid_secret_binding_ids_header",
+            format!("{ACTIVE_SECRET_BINDING_IDS_HEADER} must be valid utf-8"),
+        )
+    })?;
+    raw.split(',')
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+        .map(|entry| {
+            Uuid::parse_str(entry)
+                .map(SecretBindingId)
+                .map_err(|error| {
+                    ApiError::bad_request(
+                        "invalid_secret_binding_id",
+                        format!("invalid secret binding id {entry}: {error}"),
+                    )
+                })
+        })
+        .collect()
+}
+
+fn merge_secret_binding_ids(
+    left: &[SecretBindingId],
+    right: &[SecretBindingId],
+) -> Vec<SecretBindingId> {
+    let mut merged = Vec::with_capacity(left.len() + right.len());
+    for id in left.iter().chain(right.iter()) {
+        if !merged.iter().any(|existing| existing == id) {
+            merged.push(*id);
+        }
+    }
+    merged
+}
+
+fn dataset_is_visible(dataset: &Dataset, active_secret_binding_ids: &[SecretBindingId]) -> bool {
+    dataset.visibility == DatasetVisibility::Public
+        || dataset.default_secret_binding_ids.iter().any(|secret_id| {
+            active_secret_binding_ids
+                .iter()
+                .any(|active_id| active_id == secret_id)
+        })
+}
+
+fn filter_visible_datasets(
+    datasets: Vec<Dataset>,
+    active_secret_binding_ids: &[SecretBindingId],
+) -> Vec<Dataset> {
+    datasets
+        .into_iter()
+        .filter(|dataset| dataset_is_visible(dataset, active_secret_binding_ids))
+        .collect()
+}
+
+fn dataset_not_found_error(dataset_id: DatasetId) -> ApiError {
+    ApiError::not_found(
+        "dataset_not_found",
+        format!(
+            "dataset {} was not found for tenant or current access scope",
+            dataset_id
+        ),
+    )
+}
+
+async fn load_visible_dataset(
+    state: &AppState,
+    dataset_id: DatasetId,
+    active_secret_binding_ids: &[SecretBindingId],
+) -> std::result::Result<Dataset, ApiError> {
+    let dataset = state
+        .storage
+        .datasets()
+        .get_by_id(state.tenant_id, dataset_id)
+        .await
+        .map_err(ApiError::from_storage)?
+        .ok_or_else(|| dataset_not_found_error(dataset_id))?;
+    if !dataset_is_visible(&dataset, active_secret_binding_ids) {
+        return Err(dataset_not_found_error(dataset_id));
+    }
+    Ok(dataset)
+}
+
+async fn load_visible_document(
+    state: &AppState,
+    document_id: DocumentId,
+    active_secret_binding_ids: &[SecretBindingId],
+) -> std::result::Result<Document, ApiError> {
+    let document = state
+        .storage
+        .documents()
+        .get_by_id(state.tenant_id, document_id)
+        .await
+        .map_err(ApiError::from_storage)?
+        .ok_or_else(|| {
+            ApiError::not_found(
+                "document_not_found",
+                format!("document {} was not found", document_id),
+            )
+        })?;
+    load_visible_dataset(state, document.dataset_id, active_secret_binding_ids).await?;
+    Ok(document)
+}
+
+async fn load_visible_report_plan(
+    state: &AppState,
+    plan_id: ReportPlanId,
+    active_secret_binding_ids: &[SecretBindingId],
+) -> std::result::Result<ReportPlan, ApiError> {
+    let plan = state
+        .storage
+        .report_plans()
+        .get_by_id(state.tenant_id, plan_id)
+        .await
+        .map_err(ApiError::from_storage)?
+        .ok_or_else(|| {
+            ApiError::not_found(
+                "report_plan_not_found",
+                format!("report plan {} was not found", plan_id),
+            )
+        })?;
+    load_visible_dataset(state, plan.dataset_id, active_secret_binding_ids).await?;
+    Ok(plan)
+}
+
+async fn ensure_default_public_datasets(state: &AppState) -> std::result::Result<(), ApiError> {
+    let existing = state
+        .storage
+        .datasets()
+        .list_by_tenant(state.tenant_id)
+        .await
+        .map_err(ApiError::from_storage)?;
+    let existing_keys: HashSet<String> = existing.into_iter().map(|dataset| dataset.key).collect();
+    for (key, title, description) in DEFAULT_PUBLIC_DATASETS {
+        if existing_keys.contains(*key) {
+            continue;
+        }
+        state
+            .storage
+            .datasets()
+            .create_with_metadata(
+                state.tenant_id,
+                NewDataset {
+                    key: (*key).to_string(),
+                    title: (*title).to_string(),
+                    description: Some((*description).to_string()),
+                },
+                json!({
+                    "visibility": DatasetVisibility::Public.as_str(),
+                    "default_secret_binding_ids": [],
+                    "default_dataset": true,
+                }),
+            )
+            .await
+            .map_err(ApiError::from_storage)?;
+    }
+    Ok(())
+}
+
+fn dataset_summary(dataset: Dataset, access_warning: Option<String>) -> DatasetSummary {
+    DatasetSummary {
+        id: dataset.id,
+        key: dataset.key,
+        title: dataset.title,
+        lifecycle: dataset.lifecycle,
+        visibility: dataset.visibility,
+        secret_binding_ids: dataset.default_secret_binding_ids,
+        access_warning,
+    }
+}
+
+async fn create_dataset_secret_binding(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<CreateDatasetSecretBindingRequest>,
+) -> std::result::Result<(StatusCode, Json<CreateDatasetSecretBindingResponse>), ApiError> {
+    validate_required("fingerprint", &request.fingerprint)?;
+    let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
+    let dataset =
+        load_visible_dataset(&state, request.dataset_id, &active_secret_binding_ids).await?;
+    let label = trim_optional(request.label).unwrap_or_else(|| "local-browser-key".to_string());
+    let binding = state
+        .storage
+        .secret_bindings()
+        .create(
+            state.tenant_id,
+            NewSecretBinding {
+                dataset_id: dataset.id,
+                document_id: None,
+                scope_level: SecretScopeLevel::Dataset,
+                provider_key: label,
+                cipher_text: "local-only".to_string(),
+                fingerprint: request.fingerprint.trim().to_string(),
+            },
+        )
+        .await
+        .map_err(ApiError::from_storage)?;
+    let next_secret_binding_ids =
+        merge_secret_binding_ids(&dataset.default_secret_binding_ids, &[binding.id]);
+    let updated_dataset = state
+        .storage
+        .datasets()
+        .update_metadata(
+            state.tenant_id,
+            dataset.id,
+            &json!({
+                "visibility": DatasetVisibility::Private.as_str(),
+                "default_secret_binding_ids": next_secret_binding_ids,
+            }),
+        )
+        .await
+        .map_err(ApiError::from_storage)?;
+    let active_secret_binding_ids =
+        merge_secret_binding_ids(&active_secret_binding_ids, &[binding.id]);
+
+    Ok((
+        StatusCode::CREATED,
+        Json(CreateDatasetSecretBindingResponse {
+            dataset: dataset_summary(updated_dataset, None),
+            secret_binding_id: binding.id,
+            active_secret_binding_ids,
+        }),
+    ))
+}
+
+async fn resolve_dataset_secret_bindings(
+    State(state): State<AppState>,
+    Json(request): Json<ResolveDatasetSecretBindingsRequest>,
+) -> std::result::Result<Json<ResolveDatasetSecretBindingsResponse>, ApiError> {
+    validate_required("fingerprint", &request.fingerprint)?;
+    let bindings = state
+        .storage
+        .secret_bindings()
+        .list_by_fingerprint(state.tenant_id, request.fingerprint.trim())
+        .await
+        .map_err(ApiError::from_storage)?;
+    let secret_binding_ids: Vec<SecretBindingId> =
+        bindings.iter().map(|binding| binding.id).collect();
+    let mut datasets = Vec::new();
+    for binding in bindings {
+        if datasets
+            .iter()
+            .any(|dataset: &DatasetSummary| dataset.id == binding.dataset_id)
+        {
+            continue;
+        }
+        if let Some(dataset) = state
+            .storage
+            .datasets()
+            .get_by_id(state.tenant_id, binding.dataset_id)
+            .await
+            .map_err(ApiError::from_storage)?
+        {
+            datasets.push(dataset_summary(dataset, None));
+        }
+    }
+
+    Ok(Json(ResolveDatasetSecretBindingsResponse {
+        secret_binding_ids,
+        datasets,
+    }))
+}
+
 async fn list_datasets(
     State(state): State<AppState>,
+    headers: HeaderMap,
 ) -> std::result::Result<Json<Vec<DatasetSummary>>, ApiError> {
+    ensure_default_public_datasets(&state).await?;
+    let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
     let datasets = state
         .storage
         .datasets()
@@ -2876,14 +3199,9 @@ async fn list_datasets(
         .map_err(ApiError::from_storage)?;
 
     Ok(Json(
-        datasets
+        filter_visible_datasets(datasets, &active_secret_binding_ids)
             .into_iter()
-            .map(|dataset| DatasetSummary {
-                id: dataset.id,
-                key: dataset.key,
-                title: dataset.title,
-                lifecycle: dataset.lifecycle,
-            })
+            .map(|dataset| dataset_summary(dataset, None))
             .collect(),
     ))
 }
@@ -2895,51 +3213,86 @@ async fn create_dataset(
     validate_required("key", &request.key)?;
     validate_required("title", &request.title)?;
 
+    let secret_fingerprint = trim_optional(request.secret_fingerprint);
+    let requested_secret_binding_ids = request.secret_binding_ids.clone();
+    let visibility = if requested_secret_binding_ids.is_empty() && secret_fingerprint.is_none() {
+        DatasetVisibility::Public
+    } else {
+        request.visibility.unwrap_or(DatasetVisibility::Private)
+    };
+    let access_warning =
+        (visibility == DatasetVisibility::Public).then(|| PUBLIC_DATASET_WARNING.to_string());
+
     let dataset = state
         .storage
         .datasets()
-        .create(
+        .create_with_metadata(
             state.tenant_id,
             NewDataset {
                 key: request.key.trim().to_string(),
                 title: request.title.trim().to_string(),
                 description: trim_optional(request.description),
             },
+            json!({
+                "visibility": visibility.as_str(),
+                "default_secret_binding_ids": requested_secret_binding_ids,
+            }),
         )
         .await
         .map_err(ApiError::from_storage)?;
+    let dataset = if let Some(fingerprint) = secret_fingerprint {
+        validate_required("secret_fingerprint", &fingerprint)?;
+        let label =
+            trim_optional(request.secret_label).unwrap_or_else(|| "local-browser-key".to_string());
+        let binding = state
+            .storage
+            .secret_bindings()
+            .create(
+                state.tenant_id,
+                NewSecretBinding {
+                    dataset_id: dataset.id,
+                    document_id: None,
+                    scope_level: SecretScopeLevel::Dataset,
+                    provider_key: label,
+                    cipher_text: "local-only".to_string(),
+                    fingerprint,
+                },
+            )
+            .await
+            .map_err(ApiError::from_storage)?;
+        let next_secret_binding_ids =
+            merge_secret_binding_ids(&dataset.default_secret_binding_ids, &[binding.id]);
+        state
+            .storage
+            .datasets()
+            .update_metadata(
+                state.tenant_id,
+                dataset.id,
+                &json!({
+                    "visibility": DatasetVisibility::Private.as_str(),
+                    "default_secret_binding_ids": next_secret_binding_ids,
+                }),
+            )
+            .await
+            .map_err(ApiError::from_storage)?
+    } else {
+        dataset
+    };
 
     Ok((
         StatusCode::CREATED,
-        Json(DatasetSummary {
-            id: dataset.id,
-            key: dataset.key,
-            title: dataset.title,
-            lifecycle: dataset.lifecycle,
-        }),
+        Json(dataset_summary(dataset, access_warning)),
     ))
 }
 
 async fn list_memory_directories(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(dataset_id): Path<String>,
 ) -> std::result::Result<Json<Vec<MemoryDirectoryView>>, ApiError> {
     let dataset_id = parse_dataset_id(&dataset_id)?;
-    let dataset = state
-        .storage
-        .datasets()
-        .get_by_id(state.tenant_id, dataset_id)
-        .await
-        .map_err(ApiError::from_storage)?;
-    if dataset.is_none() {
-        return Err(ApiError::not_found(
-            "dataset_not_found",
-            format!(
-                "dataset {} was not found for tenant {}",
-                dataset_id, state.tenant_id
-            ),
-        ));
-    }
+    let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
+    load_visible_dataset(&state, dataset_id, &active_secret_binding_ids).await?;
 
     let directories = state
         .storage
@@ -2958,24 +3311,12 @@ async fn list_memory_directories(
 
 async fn list_dataset_retrieval_evidences(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(dataset_id): Path<String>,
 ) -> std::result::Result<Json<Vec<RetrievalEvidenceView>>, ApiError> {
     let dataset_id = parse_dataset_id(&dataset_id)?;
-    let dataset = state
-        .storage
-        .datasets()
-        .get_by_id(state.tenant_id, dataset_id)
-        .await
-        .map_err(ApiError::from_storage)?;
-    if dataset.is_none() {
-        return Err(ApiError::not_found(
-            "dataset_not_found",
-            format!(
-                "dataset {} was not found for tenant {}",
-                dataset_id, state.tenant_id
-            ),
-        ));
-    }
+    let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
+    load_visible_dataset(&state, dataset_id, &active_secret_binding_ids).await?;
 
     let mut evidences = state
         .storage
@@ -2998,24 +3339,11 @@ async fn search_dataset_retrieval_with_state(
     dataset_id: DatasetId,
     query: &str,
     limit: Option<usize>,
+    active_secret_binding_ids: &[SecretBindingId],
 ) -> std::result::Result<RetrievalSearchResponse, ApiError> {
     validate_required("query", query)?;
 
-    let dataset = state
-        .storage
-        .datasets()
-        .get_by_id(state.tenant_id, dataset_id)
-        .await
-        .map_err(ApiError::from_storage)?;
-    if dataset.is_none() {
-        return Err(ApiError::not_found(
-            "dataset_not_found",
-            format!(
-                "dataset {} was not found for tenant {}",
-                dataset_id, state.tenant_id
-            ),
-        ));
-    }
+    load_visible_dataset(state, dataset_id, active_secret_binding_ids).await?;
 
     let limit = normalize_retrieval_search_limit(limit);
     let evidences = state
@@ -3036,10 +3364,14 @@ async fn search_dataset_retrieval_with_state(
 
 async fn create_memory_directory_refresh(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(dataset_id): Path<String>,
 ) -> std::result::Result<(StatusCode, Json<CreateMemoryDirectoryRefreshResponse>), ApiError> {
     let dataset_id = parse_dataset_id(&dataset_id)?;
-    let response = create_memory_directory_refresh_response(&state, dataset_id).await?;
+    let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
+    let response =
+        create_memory_directory_refresh_response(&state, dataset_id, &active_secret_binding_ids)
+            .await?;
 
     Ok((StatusCode::CREATED, Json(response)))
 }
@@ -3047,22 +3379,9 @@ async fn create_memory_directory_refresh(
 async fn create_memory_directory_refresh_response(
     state: &AppState,
     dataset_id: DatasetId,
+    active_secret_binding_ids: &[SecretBindingId],
 ) -> std::result::Result<CreateMemoryDirectoryRefreshResponse, ApiError> {
-    let dataset = state
-        .storage
-        .datasets()
-        .get_by_id(state.tenant_id, dataset_id)
-        .await
-        .map_err(ApiError::from_storage)?
-        .ok_or_else(|| {
-            ApiError::not_found(
-                "dataset_not_found",
-                format!(
-                    "dataset {} was not found for tenant {}",
-                    dataset_id, state.tenant_id
-                ),
-            )
-        })?;
+    let dataset = load_visible_dataset(state, dataset_id, active_secret_binding_ids).await?;
 
     let execution = build_initial_memory_directory_execution(&state, dataset.id)?;
     let initial_event = build_initial_memory_directory_event(&execution);
@@ -3080,24 +3399,12 @@ async fn create_memory_directory_refresh_response(
 
 async fn list_dataset_outputs(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(dataset_id): Path<String>,
 ) -> std::result::Result<Json<Vec<DatasetOutputView>>, ApiError> {
     let dataset_id = parse_dataset_id(&dataset_id)?;
-    let dataset = state
-        .storage
-        .datasets()
-        .get_by_id(state.tenant_id, dataset_id)
-        .await
-        .map_err(ApiError::from_storage)?;
-    if dataset.is_none() {
-        return Err(ApiError::not_found(
-            "dataset_not_found",
-            format!(
-                "dataset {} was not found for tenant {}",
-                dataset_id, state.tenant_id
-            ),
-        ));
-    }
+    let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
+    load_visible_dataset(&state, dataset_id, &active_secret_binding_ids).await?;
 
     let outputs = state
         .storage
@@ -3116,27 +3423,15 @@ async fn list_dataset_outputs(
 
 async fn create_dataset_output(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(dataset_id): Path<String>,
     Json(request): Json<CreateDatasetOutputRequest>,
 ) -> std::result::Result<(StatusCode, Json<CreateDatasetOutputResponse>), ApiError> {
     let dataset_id = parse_dataset_id(&dataset_id)?;
     validate_required("prompt", &request.prompt)?;
 
-    let dataset = state
-        .storage
-        .datasets()
-        .get_by_id(state.tenant_id, dataset_id)
-        .await
-        .map_err(ApiError::from_storage)?
-        .ok_or_else(|| {
-            ApiError::not_found(
-                "dataset_not_found",
-                format!(
-                    "dataset {} was not found for tenant {}",
-                    dataset_id, state.tenant_id
-                ),
-            )
-        })?;
+    let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
+    let dataset = load_visible_dataset(&state, dataset_id, &active_secret_binding_ids).await?;
     let bound_chat_session = match request.chat_session_id {
         Some(chat_session_id) => {
             let session = state
@@ -3251,24 +3546,12 @@ async fn list_dataset_output_retrieval_evidences(
 
 async fn list_chat_sessions(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(dataset_id): Path<String>,
 ) -> std::result::Result<Json<Vec<ChatSessionView>>, ApiError> {
     let dataset_id = parse_dataset_id(&dataset_id)?;
-    let dataset = state
-        .storage
-        .datasets()
-        .get_by_id(state.tenant_id, dataset_id)
-        .await
-        .map_err(ApiError::from_storage)?;
-    if dataset.is_none() {
-        return Err(ApiError::not_found(
-            "dataset_not_found",
-            format!(
-                "dataset {} was not found for tenant {}",
-                dataset_id, state.tenant_id
-            ),
-        ));
-    }
+    let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
+    load_visible_dataset(&state, dataset_id, &active_secret_binding_ids).await?;
 
     let sessions = state
         .storage
@@ -3287,27 +3570,15 @@ async fn list_chat_sessions(
 
 async fn create_chat_session(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(dataset_id): Path<String>,
     Json(request): Json<CreateChatSessionRequest>,
 ) -> std::result::Result<(StatusCode, Json<CreateChatSessionResponse>), ApiError> {
     let dataset_id = parse_dataset_id(&dataset_id)?;
     validate_required("prompt", &request.prompt)?;
 
-    let dataset = state
-        .storage
-        .datasets()
-        .get_by_id(state.tenant_id, dataset_id)
-        .await
-        .map_err(ApiError::from_storage)?
-        .ok_or_else(|| {
-            ApiError::not_found(
-                "dataset_not_found",
-                format!(
-                    "dataset {} was not found for tenant {}",
-                    dataset_id, state.tenant_id
-                ),
-            )
-        })?;
+    let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
+    let dataset = load_visible_dataset(&state, dataset_id, &active_secret_binding_ids).await?;
     let latest_memory_directory = state
         .storage
         .memory_directories()
@@ -3564,9 +3835,58 @@ async fn append_chat_session_turn(
 }
 
 async fn create_assistant_run(
-    Json(request): Json<CreateAssistantRunRequest>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(mut request): Json<CreateAssistantRunRequest>,
 ) -> std::result::Result<(StatusCode, Json<CreateAssistantRunResponse>), ApiError> {
     validate_required("prompt", &request.prompt)?;
+    let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
+    ensure_default_public_datasets(&state).await?;
+    let visible_datasets = filter_visible_datasets(
+        state
+            .storage
+            .datasets()
+            .list_by_tenant(state.tenant_id)
+            .await
+            .map_err(ApiError::from_storage)?,
+        &active_secret_binding_ids,
+    );
+    let selected_dataset_id = request
+        .selected_scope
+        .as_ref()
+        .and_then(selected_dataset_id_from_scope);
+    let local_thread_id = request
+        .local_thread_id
+        .as_ref()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    let conversation_memory_available = if let Some(local_thread_id) = local_thread_id.as_ref() {
+        !state
+            .storage
+            .conversation_memory_items()
+            .list_by_local_thread(state.tenant_id, local_thread_id, None, 1)
+            .await
+            .map_err(ApiError::from_storage)?
+            .is_empty()
+    } else {
+        false
+    };
+    let scope_plan = plan_scope(ScopePlannerInput {
+        prompt: &request.prompt,
+        visible_datasets: &visible_datasets,
+        selected_dataset_id,
+        conversation_memory_available,
+    });
+    request.scope_candidates = candidates_to_values(&scope_plan.candidates);
+    request.selected_scope = Some(scope_plan.selected_scope.clone());
+    let selected_scope = scope_plan.selected_scope.clone();
+    let evidence_state = build_assistant_run_evidence_state(
+        &state,
+        &selected_scope,
+        &request.prompt,
+        &active_secret_binding_ids,
+    )
+    .await?;
 
     let runtime_mode =
         std::env::var("ASSISTANT_RUN_RUNTIME_MODE").unwrap_or_else(|_| "placeholder".to_string());
@@ -3574,13 +3894,17 @@ async fn create_assistant_run(
         std::env::var("ASSISTANT_RUN_RUNTIME_PROVIDER").unwrap_or_else(|_| runtime_mode.clone());
     let runtime_model = std::env::var("ASSISTANT_RUN_RUNTIME_MODEL")
         .unwrap_or_else(|_| DEFAULT_ASSISTANT_RUN_RUNTIME_MODEL.to_string());
+    let runtime_mode_for_trail = runtime_mode.clone();
+    let runtime_provider_for_trail = runtime_provider.clone();
+    let runtime_model_for_trail = runtime_model.clone();
     let provider_input = if runtime_mode == "placeholder" {
         format!(
-            "普通聊天运行时占位回复：后端 AssistantRun 已接收问题，真实模型接入后会直接返回模型回答。\n\nPrompt: {}",
-            request.prompt.trim()
+            "普通聊天运行时占位回复：后端 AssistantRun 已接收问题，真实模型接入后会直接返回模型回答。\n\nPrompt: {}\n\n供料状态: {}",
+            request.prompt.trim(),
+            assistant_run_evidence_status_label(&evidence_state)
         )
     } else {
-        build_assistant_run_provider_input(&request)
+        build_assistant_run_provider_input_with_evidence(&request, Some(&evidence_state))
     };
     let scope_candidates = request.scope_candidates.clone();
 
@@ -3606,20 +3930,305 @@ async fn create_assistant_run(
     })?
     .map_err(|error| ApiError::internal("assistant_run_provider_failed", error.to_string()))?;
 
+    let now = Utc::now();
+    let runtime_manifest = render_runtime_manifest(&response.runtime);
+    let planned_candidate_count = scope_candidates.len();
+    let scope_candidates = Value::Array(scope_candidates.clone());
+    let context_policy = request.context_policy_hint.clone().unwrap_or_else(|| {
+        json!({
+            "history_policy": "intent_gated",
+            "supply_policy": "host_supplies_model_answers",
+        })
+    });
+    let supplied_evidence_count = assistant_run_evidence_supplied_count(&evidence_state);
+    let execution_trail = vec![
+        json!({
+            "status": "completed",
+            "label": "接收用户问题",
+            "at": now,
+        }),
+        json!({
+            "status": "completed",
+            "label": "规划供料候选",
+            "candidate_count": planned_candidate_count,
+            "hint": scope_plan.hint,
+            "at": now,
+        }),
+        json!({
+            "status": "completed",
+            "label": "检索供料证据",
+            "supplied_count": supplied_evidence_count,
+            "evidence_status": evidence_state.get("status").and_then(Value::as_str).unwrap_or("unknown"),
+            "at": now,
+        }),
+        json!({
+            "status": "completed",
+            "label": "普通聊天运行时返回",
+            "runtime_mode": runtime_mode_for_trail,
+            "provider": runtime_provider_for_trail,
+            "model": runtime_model_for_trail,
+            "at": now,
+        }),
+    ];
+    let output_artifacts = vec![json!({
+        "type": "assistant_message",
+        "role": ChatMessageRole::Assistant.as_str(),
+        "content": response.output_text,
+    })];
+    let run = state
+        .storage
+        .assistant_runs()
+        .create(
+            state.tenant_id,
+            &NewAssistantRun {
+                local_thread_id,
+                user_prompt: request.prompt.trim().to_string(),
+                startup_briefing: request
+                    .startup_briefing
+                    .clone()
+                    .unwrap_or_else(|| json!({})),
+                selected_scope: selected_scope.clone(),
+                scope_candidates: scope_candidates.clone(),
+                context_policy,
+                evidence_state: evidence_state.clone(),
+                service_lane: "ordinary_chat".to_string(),
+                execution_trail: Value::Array(execution_trail.clone()),
+                output_artifacts: Value::Array(output_artifacts.clone()),
+                runtime_manifest: runtime_manifest.clone(),
+                created_at: now,
+            },
+        )
+        .await
+        .map_err(ApiError::from_storage)?;
+    state
+        .storage
+        .assistant_runs()
+        .append_event(
+            state.tenant_id,
+            run.id,
+            &NewAssistantRunEvent {
+                event_name: "assistant_run.completed".to_string(),
+                payload: json!({
+                    "service_lane": run.service_lane.clone(),
+                    "runtime": runtime_manifest.clone(),
+                }),
+                created_at: now,
+            },
+        )
+        .await
+        .map_err(ApiError::from_storage)?;
+
     Ok((
         StatusCode::CREATED,
         Json(CreateAssistantRunResponse {
+            assistant_run_id: run.id,
             assistant_message: AssistantRunMessageView {
                 role: ChatMessageRole::Assistant,
-                content: response.output_text,
+                content: output_artifacts
+                    .first()
+                    .and_then(|artifact| artifact.get("content"))
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
             },
-            runtime: render_runtime_manifest(&response.runtime),
-            scope_candidates,
+            runtime: run.runtime_manifest,
+            selected_scope,
+            scope_candidates: value_array(scope_candidates),
+            evidence_state,
+            execution_trail,
+            output_artifacts,
+            required_confirmations: Vec::new(),
         }),
     ))
 }
 
+async fn get_assistant_run(
+    State(state): State<AppState>,
+    Path(run_id): Path<String>,
+) -> std::result::Result<Json<AssistantRunDetailView>, ApiError> {
+    let run_id = parse_assistant_run_id(&run_id)?;
+    let run = state
+        .storage
+        .assistant_runs()
+        .get_by_id(state.tenant_id, run_id)
+        .await
+        .map_err(ApiError::from_storage)?
+        .ok_or_else(|| {
+            ApiError::not_found(
+                "assistant_run_not_found",
+                format!("assistant run {} was not found", run_id),
+            )
+        })?;
+    let events = state
+        .storage
+        .assistant_runs()
+        .list_events(state.tenant_id, run_id)
+        .await
+        .map_err(ApiError::from_storage)?;
+
+    Ok(Json(AssistantRunDetailView {
+        run: to_assistant_run_view(run),
+        events: events
+            .into_iter()
+            .map(to_assistant_run_event_view)
+            .collect(),
+    }))
+}
+
+async fn append_assistant_run_event(
+    State(state): State<AppState>,
+    Path(run_id): Path<String>,
+    Json(request): Json<AppendAssistantRunEventRequest>,
+) -> std::result::Result<(StatusCode, Json<AppendAssistantRunEventResponse>), ApiError> {
+    let run_id = parse_assistant_run_id(&run_id)?;
+    validate_required("event_name", &request.event_name)?;
+    let run = state
+        .storage
+        .assistant_runs()
+        .get_by_id(state.tenant_id, run_id)
+        .await
+        .map_err(ApiError::from_storage)?
+        .ok_or_else(|| {
+            ApiError::not_found(
+                "assistant_run_not_found",
+                format!("assistant run {} was not found", run_id),
+            )
+        })?;
+    let event = state
+        .storage
+        .assistant_runs()
+        .append_event(
+            state.tenant_id,
+            run_id,
+            &NewAssistantRunEvent {
+                event_name: request.event_name.trim().to_string(),
+                payload: request.payload,
+                created_at: Utc::now(),
+            },
+        )
+        .await
+        .map_err(ApiError::from_storage)?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(AppendAssistantRunEventResponse {
+            run: to_assistant_run_view(run),
+            event: to_assistant_run_event_view(event),
+        }),
+    ))
+}
+
+async fn create_conversation_memory_item(
+    State(state): State<AppState>,
+    Json(request): Json<CreateConversationMemoryItemRequest>,
+) -> std::result::Result<(StatusCode, Json<ConversationMemoryItemView>), ApiError> {
+    validate_required("local_thread_id", &request.local_thread_id)?;
+    validate_required("item_kind", &request.item_kind)?;
+    validate_required("summary", &request.summary)?;
+    let item = state
+        .storage
+        .conversation_memory_items()
+        .create(
+            state.tenant_id,
+            &NewConversationMemoryItem {
+                local_thread_id: request.local_thread_id.trim().to_string(),
+                role: request.role,
+                item_kind: request.item_kind.trim().to_string(),
+                summary: request.summary.trim().to_string(),
+                source_message_refs: request.source_message_refs,
+                artifact_refs: request.artifact_refs,
+                metadata: request.metadata,
+                created_at: Utc::now(),
+            },
+        )
+        .await
+        .map_err(ApiError::from_storage)?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(to_conversation_memory_item_view(item)),
+    ))
+}
+
+async fn list_conversation_memory_items(
+    State(state): State<AppState>,
+    Query(query): Query<ConversationMemoryQuery>,
+) -> std::result::Result<Json<Vec<ConversationMemoryItemView>>, ApiError> {
+    let local_thread_id = required_field("local_thread_id", query.local_thread_id)?;
+    validate_required("local_thread_id", &local_thread_id)?;
+    let items = state
+        .storage
+        .conversation_memory_items()
+        .list_by_local_thread(
+            state.tenant_id,
+            local_thread_id.trim(),
+            query.query.as_deref(),
+            query.limit.unwrap_or(20),
+        )
+        .await
+        .map_err(ApiError::from_storage)?;
+
+    Ok(Json(
+        items
+            .into_iter()
+            .map(to_conversation_memory_item_view)
+            .collect(),
+    ))
+}
+
+async fn list_assistant_run_conversation_memory_candidates(
+    State(state): State<AppState>,
+    Path(run_id): Path<String>,
+    Query(query): Query<ConversationMemoryQuery>,
+) -> std::result::Result<Json<Vec<ConversationMemoryItemView>>, ApiError> {
+    let run_id = parse_assistant_run_id(&run_id)?;
+    let run = state
+        .storage
+        .assistant_runs()
+        .get_by_id(state.tenant_id, run_id)
+        .await
+        .map_err(ApiError::from_storage)?
+        .ok_or_else(|| {
+            ApiError::not_found(
+                "assistant_run_not_found",
+                format!("assistant run {} was not found", run_id),
+            )
+        })?;
+    let local_thread_id = run.local_thread_id.ok_or_else(|| {
+        ApiError::bad_request(
+            "assistant_run_local_thread_missing",
+            "assistant run has no local thread id for conversation memory lookup".to_string(),
+        )
+    })?;
+    let items = state
+        .storage
+        .conversation_memory_items()
+        .list_by_local_thread(
+            state.tenant_id,
+            local_thread_id.trim(),
+            query.query.as_deref(),
+            query.limit.unwrap_or(20),
+        )
+        .await
+        .map_err(ApiError::from_storage)?;
+
+    Ok(Json(
+        items
+            .into_iter()
+            .map(to_conversation_memory_item_view)
+            .collect(),
+    ))
+}
+
+#[cfg(test)]
 fn build_assistant_run_provider_input(request: &CreateAssistantRunRequest) -> String {
+    build_assistant_run_provider_input_with_evidence(request, None)
+}
+
+fn build_assistant_run_provider_input_with_evidence(
+    request: &CreateAssistantRunRequest,
+    evidence_state: Option<&Value>,
+) -> String {
     let mut sections = vec![
         "你是智能数据工作台里的普通聊天运行时。".to_string(),
         "原则：不替用户编排答案；只根据用户问题、启动简报、范围候选和必要历史直接回答。"
@@ -3636,6 +4245,26 @@ fn build_assistant_run_provider_input(request: &CreateAssistantRunRequest) -> St
         sections.push(format!(
             "范围候选：{}",
             serde_json::to_string(&request.scope_candidates).unwrap_or_else(|_| "[]".to_string())
+        ));
+    }
+    if let Some(selected_scope) = request.selected_scope.as_ref() {
+        sections.push(format!(
+            "当前选中范围：{}",
+            serde_json::to_string(selected_scope).unwrap_or_else(|_| "{}".to_string())
+        ));
+    }
+    if let Some(evidence_state) = evidence_state {
+        if evidence_state.get("status").and_then(Value::as_str) != Some("not_requested") {
+            sections.push(format!(
+                "供料证据：{}",
+                serde_json::to_string(evidence_state).unwrap_or_else(|_| "{}".to_string())
+            ));
+        }
+    }
+    if let Some(current_artifact) = request.current_artifact.as_ref() {
+        sections.push(format!(
+            "当前打开产物：{}",
+            serde_json::to_string(current_artifact).unwrap_or_else(|_| "{}".to_string())
         ));
     }
 
@@ -3655,6 +4284,115 @@ fn build_assistant_run_provider_input(request: &CreateAssistantRunRequest) -> St
 
     sections.push(format!("用户问题：{}", request.prompt.trim()));
     sections.join("\n\n")
+}
+
+async fn build_assistant_run_evidence_state(
+    state: &AppState,
+    selected_scope: &Value,
+    prompt: &str,
+    active_secret_binding_ids: &[SecretBindingId],
+) -> std::result::Result<Value, ApiError> {
+    let dataset_ids = selected_dataset_ids_from_scope(selected_scope);
+    if dataset_ids.is_empty() {
+        return Ok(json!({
+            "status": "not_requested",
+            "policy": "host_supplies_model_answers",
+            "supplied_items": [],
+        }));
+    }
+
+    let limit = assistant_run_evidence_limit();
+    let mut supplied_items = Vec::new();
+    let mut supplied_datasets = Vec::new();
+
+    for dataset_id in dataset_ids
+        .into_iter()
+        .take(ASSISTANT_RUN_EVIDENCE_DATASET_LIMIT)
+    {
+        let dataset = load_visible_dataset(state, dataset_id, active_secret_binding_ids).await?;
+        supplied_datasets.push(json!({
+            "id": dataset.id,
+            "key": dataset.key.clone(),
+            "title": dataset.title.clone(),
+            "visibility": dataset.visibility.as_str(),
+        }));
+
+        let evidences = state
+            .storage
+            .retrieval_evidences()
+            .list_latest_by_dataset(
+                state.tenant_id,
+                dataset.id,
+                retrieval_search_scan_limit(limit),
+            )
+            .await
+            .map_err(ApiError::from_storage)?;
+
+        for ranked in rank_retrieval_evidences_for_prompt(&evidences, prompt, limit) {
+            supplied_items.push(json!({
+                "type": "retrieval_evidence",
+                "dataset_id": ranked.evidence.dataset_id,
+                "document_id": ranked.evidence.document_id,
+                "document_chunk_id": ranked.evidence.document_chunk_id,
+                "retrieval_evidence_id": ranked.evidence.id,
+                "chunk_index": ranked.evidence.chunk_index,
+                "source_locator": ranked.evidence.source_locator.clone(),
+                "summary": ranked.evidence.summary.clone(),
+                "content_excerpt": ranked.evidence.content_excerpt.clone(),
+                "payload_filter_key": ranked.evidence.payload_filter_key.clone(),
+                "score": ranked.score,
+                "lexical_score": ranked.lexical_score,
+                "recall_score": ranked.recall_score,
+                "evidence_manifest": ranked.evidence.evidence_manifest.clone(),
+            }));
+        }
+    }
+
+    let status = if supplied_items.is_empty() {
+        "empty"
+    } else {
+        "supplied"
+    };
+    Ok(json!({
+        "status": status,
+        "policy": "host_supplies_model_answers",
+        "selected_scope": selected_scope,
+        "datasets": supplied_datasets,
+        "supplied_items": supplied_items,
+        "limit": limit,
+    }))
+}
+
+fn assistant_run_evidence_limit() -> usize {
+    std::env::var("ASSISTANT_RUN_EVIDENCE_LIMIT")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(ASSISTANT_RUN_EVIDENCE_DEFAULT_LIMIT)
+        .clamp(1, ASSISTANT_RUN_EVIDENCE_MAX_LIMIT)
+}
+
+fn assistant_run_evidence_supplied_count(evidence_state: &Value) -> usize {
+    evidence_state
+        .get("supplied_items")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0)
+}
+
+fn assistant_run_evidence_status_label(evidence_state: &Value) -> String {
+    let status = evidence_state
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    match status {
+        "supplied" => format!(
+            "已检索 {} 条证据",
+            assistant_run_evidence_supplied_count(evidence_state)
+        ),
+        "empty" => "已选中数据集，但暂未检索到可供料证据".to_string(),
+        "not_requested" => "未请求数据集供料".to_string(),
+        other => other.to_string(),
+    }
 }
 
 async fn list_chat_messages(
@@ -3839,7 +4577,21 @@ async fn apply_chat_session_report_entry_update_with_state(
 
 async fn list_documents(
     State(state): State<AppState>,
+    headers: HeaderMap,
 ) -> std::result::Result<Json<Vec<DocumentSummary>>, ApiError> {
+    let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
+    let visible_dataset_ids: HashSet<DatasetId> = filter_visible_datasets(
+        state
+            .storage
+            .datasets()
+            .list_by_tenant(state.tenant_id)
+            .await
+            .map_err(ApiError::from_storage)?,
+        &active_secret_binding_ids,
+    )
+    .into_iter()
+    .map(|dataset| dataset.id)
+    .collect();
     let documents = state
         .storage
         .documents()
@@ -3848,44 +4600,45 @@ async fn list_documents(
         .map_err(ApiError::from_storage)?;
 
     Ok(Json(
-        documents.into_iter().map(to_document_summary).collect(),
+        documents
+            .into_iter()
+            .filter(|document| visible_dataset_ids.contains(&document.dataset_id))
+            .map(to_document_summary)
+            .collect(),
     ))
 }
 
 async fn get_document_detail(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(document_id): Path<String>,
 ) -> std::result::Result<Json<DocumentDetailView>, ApiError> {
     let document_id = parse_document_id(&document_id)?;
-    let detail = load_document_detail_with_state(&state, document_id).await?;
+    let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
+    let detail =
+        load_document_detail_with_state(&state, document_id, &active_secret_binding_ids).await?;
     Ok(Json(detail))
 }
 
 async fn compare_documents_route(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(request): Json<CompareDocumentsRequest>,
 ) -> std::result::Result<Json<CompareDocumentsView>, ApiError> {
-    let comparison = compare_documents_with_state(&state, request).await?;
+    let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
+    let comparison =
+        compare_documents_with_state(&state, request, &active_secret_binding_ids).await?;
     Ok(Json(comparison))
 }
 
 async fn list_document_chunks(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(document_id): Path<String>,
 ) -> std::result::Result<Json<Vec<DocumentChunkView>>, ApiError> {
     let document_id = parse_document_id(&document_id)?;
-    let document = state
-        .storage
-        .documents()
-        .get_by_id(state.tenant_id, document_id)
-        .await
-        .map_err(ApiError::from_storage)?;
-    if document.is_none() {
-        return Err(ApiError::not_found(
-            "document_not_found",
-            format!("document {} was not found", document_id),
-        ));
-    }
+    let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
+    load_visible_document(&state, document_id, &active_secret_binding_ids).await?;
 
     let chunks = state
         .storage
@@ -3901,21 +4654,12 @@ async fn list_document_chunks(
 
 async fn list_document_retrieval_evidences(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(document_id): Path<String>,
 ) -> std::result::Result<Json<Vec<RetrievalEvidenceView>>, ApiError> {
     let document_id = parse_document_id(&document_id)?;
-    let document = state
-        .storage
-        .documents()
-        .get_by_id(state.tenant_id, document_id)
-        .await
-        .map_err(ApiError::from_storage)?;
-    if document.is_none() {
-        return Err(ApiError::not_found(
-            "document_not_found",
-            format!("document {} was not found", document_id),
-        ));
-    }
+    let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
+    load_visible_document(&state, document_id, &active_secret_binding_ids).await?;
 
     let mut evidences = state
         .storage
@@ -3936,19 +4680,9 @@ async fn list_document_retrieval_evidences(
 async fn load_document_detail_with_state(
     state: &AppState,
     document_id: DocumentId,
+    active_secret_binding_ids: &[SecretBindingId],
 ) -> std::result::Result<DocumentDetailView, ApiError> {
-    let document = state
-        .storage
-        .documents()
-        .get_by_id(state.tenant_id, document_id)
-        .await
-        .map_err(ApiError::from_storage)?
-        .ok_or_else(|| {
-            ApiError::not_found(
-                "document_not_found",
-                format!("document {} was not found", document_id),
-            )
-        })?;
+    let document = load_visible_document(state, document_id, active_secret_binding_ids).await?;
     let chunks = state
         .storage
         .document_chunks()
@@ -3973,6 +4707,7 @@ async fn load_document_detail_with_state(
 async fn compare_documents_with_state(
     state: &AppState,
     request: CompareDocumentsRequest,
+    active_secret_binding_ids: &[SecretBindingId],
 ) -> std::result::Result<CompareDocumentsView, ApiError> {
     let mut unique_document_ids = Vec::new();
     for document_id in request.document_ids {
@@ -3993,18 +4728,8 @@ async fn compare_documents_with_state(
 
     let mut expected_dataset: Option<(DocumentId, DatasetId)> = None;
     for document_id in &unique_document_ids {
-        let document = state
-            .storage
-            .documents()
-            .get_by_id(state.tenant_id, *document_id)
-            .await
-            .map_err(ApiError::from_storage)?
-            .ok_or_else(|| {
-                ApiError::not_found(
-                    "document_not_found",
-                    format!("document {} was not found", document_id),
-                )
-            })?;
+        let document =
+            load_visible_document(state, *document_id, active_secret_binding_ids).await?;
 
         if let Some((expected_document_id, expected_dataset_id)) = expected_dataset {
             if document.dataset_id != expected_dataset_id {
@@ -4023,7 +4748,9 @@ async fn compare_documents_with_state(
 
     let mut documents = Vec::with_capacity(unique_document_ids.len());
     for document_id in unique_document_ids {
-        documents.push(load_document_detail_with_state(state, document_id).await?);
+        documents.push(
+            load_document_detail_with_state(state, document_id, active_secret_binding_ids).await?,
+        );
     }
 
     Ok(to_compare_documents_view(documents))
@@ -4031,27 +4758,18 @@ async fn compare_documents_with_state(
 
 async fn register_document(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(request): Json<RegisterDocumentRequest>,
 ) -> std::result::Result<(StatusCode, Json<RegisterDocumentResponse>), ApiError> {
     validate_required("title", &request.title)?;
     validate_required("object_key", &request.object_key)?;
     validate_required("content_type", &request.content_type)?;
 
-    let dataset = state
-        .storage
-        .datasets()
-        .get_by_id(state.tenant_id, request.dataset_id)
-        .await
-        .map_err(ApiError::from_storage)?;
-    if dataset.is_none() {
-        return Err(ApiError::not_found(
-            "dataset_not_found",
-            format!(
-                "dataset {} was not found for tenant {}",
-                request.dataset_id, state.tenant_id
-            ),
-        ));
-    }
+    let active_secret_binding_ids = merge_secret_binding_ids(
+        &active_secret_binding_ids_from_headers(&headers)?,
+        &request.secret_binding_ids,
+    );
+    load_visible_dataset(&state, request.dataset_id, &active_secret_binding_ids).await?;
 
     let document = state
         .storage
@@ -4080,21 +4798,12 @@ async fn register_document(
 
 async fn create_document_ingest(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(document_id): Path<String>,
 ) -> std::result::Result<(StatusCode, Json<CreateDocumentIngestResponse>), ApiError> {
     let document_id = parse_document_id(&document_id)?;
-    let document = state
-        .storage
-        .documents()
-        .get_by_id(state.tenant_id, document_id)
-        .await
-        .map_err(ApiError::from_storage)?
-        .ok_or_else(|| {
-            ApiError::not_found(
-                "document_not_found",
-                format!("document {} was not found", document_id),
-            )
-        })?;
+    let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
+    let document = load_visible_document(&state, document_id, &active_secret_binding_ids).await?;
 
     let execution = build_initial_upload_ingest_execution(&state, &document)?;
     let initial_event = build_initial_upload_ingest_event(&execution, &document);
@@ -4116,25 +4825,14 @@ async fn create_document_ingest(
 
 async fn create_report_plan(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(request): Json<PlanReportRequest>,
 ) -> std::result::Result<(StatusCode, Json<CreateReportPlanResponse>), ApiError> {
     validate_required("title", &request.title)?;
     validate_required("objective", &request.objective)?;
 
-    let datasets = state.storage.datasets();
-    let dataset = datasets
-        .get_by_id(state.tenant_id, request.dataset_id)
-        .await
-        .map_err(ApiError::from_storage)?;
-    if dataset.is_none() {
-        return Err(ApiError::not_found(
-            "dataset_not_found",
-            format!(
-                "dataset {} was not found for tenant {}",
-                request.dataset_id, state.tenant_id
-            ),
-        ));
-    }
+    let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
+    load_visible_dataset(&state, request.dataset_id, &active_secret_binding_ids).await?;
 
     let (plan, execution) = create_report_plan_and_execution(
         &state,
@@ -4159,7 +4857,21 @@ async fn create_report_plan(
 
 async fn list_report_plans(
     State(state): State<AppState>,
+    headers: HeaderMap,
 ) -> std::result::Result<Json<Vec<ReportPlanSummary>>, ApiError> {
+    let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
+    let visible_dataset_ids: HashSet<DatasetId> = filter_visible_datasets(
+        state
+            .storage
+            .datasets()
+            .list_by_tenant(state.tenant_id)
+            .await
+            .map_err(ApiError::from_storage)?,
+        &active_secret_binding_ids,
+    )
+    .into_iter()
+    .map(|dataset| dataset.id)
+    .collect();
     let plans = state
         .storage
         .report_plans()
@@ -4169,6 +4881,9 @@ async fn list_report_plans(
 
     let mut views = Vec::with_capacity(plans.len());
     for plan in plans {
+        if !visible_dataset_ids.contains(&plan.dataset_id) {
+            continue;
+        }
         views.push(hydrate_report_plan_summary(&state, plan).await?);
     }
 
@@ -4177,21 +4892,12 @@ async fn list_report_plans(
 
 async fn list_report_plan_ast_versions(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(plan_id): Path<String>,
 ) -> std::result::Result<Json<Vec<ReportPlanAstVersionView>>, ApiError> {
     let plan_id = parse_plan_id(&plan_id)?;
-    let plan = state
-        .storage
-        .report_plans()
-        .get_by_id(state.tenant_id, plan_id)
-        .await
-        .map_err(ApiError::from_storage)?;
-    if plan.is_none() {
-        return Err(ApiError::not_found(
-            "report_plan_not_found",
-            format!("report plan {} was not found", plan_id),
-        ));
-    }
+    let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
+    load_visible_report_plan(&state, plan_id, &active_secret_binding_ids).await?;
 
     let versions = state
         .storage
@@ -4210,10 +4916,13 @@ async fn list_report_plan_ast_versions(
 
 async fn continue_report_plan(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(plan_id): Path<String>,
 ) -> std::result::Result<Json<CreateReportPlanResponse>, ApiError> {
     let plan_id = parse_plan_id(&plan_id)?;
-    let response = continue_report_plan_response(&state, plan_id).await?;
+    let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
+    let response =
+        continue_report_plan_response(&state, plan_id, &active_secret_binding_ids).await?;
     Ok(Json(response))
 }
 
@@ -4258,19 +4967,9 @@ async fn create_report_plan_and_execution(
 async fn continue_report_plan_response(
     state: &AppState,
     plan_id: ReportPlanId,
+    active_secret_binding_ids: &[SecretBindingId],
 ) -> std::result::Result<CreateReportPlanResponse, ApiError> {
-    let plan = state
-        .storage
-        .report_plans()
-        .get_by_id(state.tenant_id, plan_id)
-        .await
-        .map_err(ApiError::from_storage)?
-        .ok_or_else(|| {
-            ApiError::not_found(
-                "report_plan_not_found",
-                format!("report plan {} was not found", plan_id),
-            )
-        })?;
+    let plan = load_visible_report_plan(state, plan_id, active_secret_binding_ids).await?;
     if plan.status != domain_model::ReportPlanStatus::Draft || plan.current_ast_version_id.is_some()
     {
         return Err(ApiError::bad_request(
@@ -4318,11 +5017,14 @@ async fn continue_report_plan_response(
 
 async fn publish_report(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(plan_id): Path<String>,
     Json(request): Json<PublishReportRequest>,
 ) -> std::result::Result<(StatusCode, Json<PublishReportResponse>), ApiError> {
     let plan_id = parse_plan_id(&plan_id)?;
-    let response = publish_report_response(&state, plan_id, request).await?;
+    let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
+    let response =
+        publish_report_response(&state, plan_id, request, &active_secret_binding_ids).await?;
 
     Ok((StatusCode::CREATED, Json(response)))
 }
@@ -4331,19 +5033,9 @@ async fn publish_report_response(
     state: &AppState,
     plan_id: ReportPlanId,
     request: PublishReportRequest,
+    active_secret_binding_ids: &[SecretBindingId],
 ) -> std::result::Result<PublishReportResponse, ApiError> {
-    let plan = state
-        .storage
-        .report_plans()
-        .get_by_id(state.tenant_id, plan_id)
-        .await
-        .map_err(ApiError::from_storage)?
-        .ok_or_else(|| {
-            ApiError::not_found(
-                "report_plan_not_found",
-                format!("report plan {} was not found", plan_id),
-            )
-        })?;
+    let plan = load_visible_report_plan(state, plan_id, active_secret_binding_ids).await?;
     let render_output = state
         .storage
         .report_render_outputs()
@@ -4437,11 +5129,14 @@ async fn publish_report_response(
 
 async fn create_report_render(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(plan_id): Path<String>,
     Json(request): Json<CreateReportRenderRequest>,
 ) -> std::result::Result<(StatusCode, Json<CreateReportRenderResponse>), ApiError> {
     let plan_id = parse_plan_id(&plan_id)?;
-    let response = create_report_render_response(&state, plan_id, request).await?;
+    let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
+    let response =
+        create_report_render_response(&state, plan_id, request, &active_secret_binding_ids).await?;
 
     Ok((StatusCode::CREATED, Json(response)))
 }
@@ -4450,20 +5145,10 @@ async fn create_report_render_response(
     state: &AppState,
     plan_id: ReportPlanId,
     request: CreateReportRenderRequest,
+    active_secret_binding_ids: &[SecretBindingId],
 ) -> std::result::Result<CreateReportRenderResponse, ApiError> {
     let surface = request.surface;
-    let plan = state
-        .storage
-        .report_plans()
-        .get_by_id(state.tenant_id, plan_id)
-        .await
-        .map_err(ApiError::from_storage)?
-        .ok_or_else(|| {
-            ApiError::not_found(
-                "report_plan_not_found",
-                format!("report plan {} was not found", plan_id),
-            )
-        })?;
+    let plan = load_visible_report_plan(state, plan_id, active_secret_binding_ids).await?;
     let ast_version_id = plan.current_ast_version_id.ok_or_else(|| {
         ApiError::bad_request(
             "report_plan_not_planned",
@@ -4499,21 +5184,12 @@ async fn create_report_render_response(
 
 async fn list_report_render_outputs(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(plan_id): Path<String>,
 ) -> std::result::Result<Json<Vec<ReportRenderOutputView>>, ApiError> {
     let plan_id = parse_plan_id(&plan_id)?;
-    let plan = state
-        .storage
-        .report_plans()
-        .get_by_id(state.tenant_id, plan_id)
-        .await
-        .map_err(ApiError::from_storage)?;
-    if plan.is_none() {
-        return Err(ApiError::not_found(
-            "report_plan_not_found",
-            format!("report plan {} was not found", plan_id),
-        ));
-    }
+    let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
+    load_visible_report_plan(&state, plan_id, &active_secret_binding_ids).await?;
 
     let outputs = state
         .storage
@@ -4532,35 +5208,63 @@ async fn list_report_render_outputs(
 
 async fn get_report_plan_published_report(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(plan_id): Path<String>,
 ) -> std::result::Result<Json<PublishedReportDetailView>, ApiError> {
     let plan_id = parse_plan_id(&plan_id)?;
-    let detail = load_published_report_detail_by_plan_with_state(&state, plan_id).await?;
+    let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
+    let detail = load_published_report_detail_by_plan_with_state(
+        &state,
+        plan_id,
+        &active_secret_binding_ids,
+    )
+    .await?;
     Ok(Json(detail))
 }
 
 async fn list_published_reports(
     State(state): State<AppState>,
+    headers: HeaderMap,
 ) -> std::result::Result<Json<Vec<PublishedReportView>>, ApiError> {
+    let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
+    let visible_dataset_ids: HashSet<DatasetId> = filter_visible_datasets(
+        state
+            .storage
+            .datasets()
+            .list_by_tenant(state.tenant_id)
+            .await
+            .map_err(ApiError::from_storage)?,
+        &active_secret_binding_ids,
+    )
+    .into_iter()
+    .map(|dataset| dataset.id)
+    .collect();
     let reports = state
         .storage
         .published_reports()
         .list_by_tenant(state.tenant_id)
         .await
-        .map_err(ApiError::from_storage)?
-        .into_iter()
-        .map(to_published_report_view)
-        .collect();
+        .map_err(ApiError::from_storage)?;
 
-    Ok(Json(reports))
+    Ok(Json(
+        reports
+            .into_iter()
+            .filter(|report| visible_dataset_ids.contains(&report.dataset_id))
+            .map(to_published_report_view)
+            .collect(),
+    ))
 }
 
 async fn get_published_report(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(report_id): Path<String>,
 ) -> std::result::Result<Json<PublishedReportDetailView>, ApiError> {
     let report_id = parse_published_report_id(&report_id)?;
-    let detail = load_published_report_detail_with_state(&state, report_id).await?;
+    let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
+    let detail =
+        load_published_report_detail_with_state(&state, report_id, &active_secret_binding_ids)
+            .await?;
     Ok(Json(detail))
 }
 
@@ -5621,6 +6325,50 @@ fn parse_chat_session_id(raw: &str) -> std::result::Result<ChatSessionId, ApiErr
     Uuid::parse_str(raw).map(ChatSessionId).map_err(|_| {
         ApiError::bad_request(
             "invalid_chat_session_id",
+            format!("{raw} is not a valid UUID"),
+        )
+    })
+}
+
+fn selected_dataset_id_from_scope(scope: &Value) -> Option<DatasetId> {
+    selected_dataset_ids_from_scope(scope).into_iter().next()
+}
+
+fn selected_dataset_ids_from_scope(scope: &Value) -> Vec<DatasetId> {
+    let Some(object) = scope.as_object() else {
+        return Vec::new();
+    };
+
+    let mut dataset_ids = Vec::new();
+    for key in ["datasets", "selected"] {
+        let Some(items) = object.get(key).and_then(Value::as_array) else {
+            continue;
+        };
+        for item in items {
+            let Some(dataset_id) = dataset_id_from_scope_item(item) else {
+                continue;
+            };
+            if !dataset_ids.contains(&dataset_id) {
+                dataset_ids.push(dataset_id);
+            }
+        }
+    }
+    dataset_ids
+}
+
+fn dataset_id_from_scope_item(item: &Value) -> Option<DatasetId> {
+    let raw = item.as_str().or_else(|| {
+        item.as_object()
+            .and_then(|object| object.get("id"))
+            .and_then(Value::as_str)
+    })?;
+    Uuid::parse_str(raw).ok().map(DatasetId)
+}
+
+fn parse_assistant_run_id(raw: &str) -> std::result::Result<AssistantRunId, ApiError> {
+    Uuid::parse_str(raw).map(AssistantRunId).map_err(|_| {
+        ApiError::bad_request(
+            "invalid_assistant_run_id",
             format!("{raw} is not a valid UUID"),
         )
     })
@@ -8348,6 +9096,7 @@ fn to_published_report_version_view(version: PublishedReportVersion) -> Publishe
 async fn load_published_report_detail_with_state(
     state: &AppState,
     report_id: PublishedReportId,
+    active_secret_binding_ids: &[SecretBindingId],
 ) -> std::result::Result<PublishedReportDetailView, ApiError> {
     let report = state
         .storage
@@ -8361,25 +9110,16 @@ async fn load_published_report_detail_with_state(
                 format!("published report {} was not found", report_id),
             )
         })?;
+    load_visible_dataset(state, report.dataset_id, active_secret_binding_ids).await?;
     hydrate_published_report_detail_view(state, report).await
 }
 
 async fn load_published_report_detail_by_plan_with_state(
     state: &AppState,
     plan_id: ReportPlanId,
+    active_secret_binding_ids: &[SecretBindingId],
 ) -> std::result::Result<PublishedReportDetailView, ApiError> {
-    let plan = state
-        .storage
-        .report_plans()
-        .get_by_id(state.tenant_id, plan_id)
-        .await
-        .map_err(ApiError::from_storage)?
-        .ok_or_else(|| {
-            ApiError::not_found(
-                "report_plan_not_found",
-                format!("report plan {} was not found", plan_id),
-            )
-        })?;
+    let plan = load_visible_report_plan(state, plan_id, active_secret_binding_ids).await?;
     let report = state
         .storage
         .published_reports()
@@ -8493,6 +9233,58 @@ fn to_workflow_execution_view(execution: WorkflowExecution) -> WorkflowExecution
         status: execution.status,
         stage: execution.stage,
         updated_at: execution.updated_at,
+    }
+}
+
+fn value_array(value: Value) -> Vec<Value> {
+    match value {
+        Value::Array(items) => items,
+        _ => Vec::new(),
+    }
+}
+
+fn to_assistant_run_view(run: AssistantRun) -> AssistantRunView {
+    AssistantRunView {
+        id: run.id,
+        local_thread_id: run.local_thread_id,
+        user_prompt: run.user_prompt,
+        startup_briefing: run.startup_briefing,
+        selected_scope: run.selected_scope,
+        scope_candidates: value_array(run.scope_candidates),
+        context_policy: run.context_policy,
+        evidence_state: run.evidence_state,
+        service_lane: run.service_lane,
+        execution_trail: value_array(run.execution_trail),
+        output_artifacts: value_array(run.output_artifacts),
+        runtime: run.runtime_manifest,
+        created_at: run.created_at,
+        updated_at: run.updated_at,
+    }
+}
+
+fn to_assistant_run_event_view(event: AssistantRunEvent) -> AssistantRunEventView {
+    AssistantRunEventView {
+        id: event.id,
+        run_id: event.run_id,
+        sequence_no: event.sequence_no,
+        event_name: event.event_name,
+        payload: event.payload,
+        created_at: event.created_at,
+    }
+}
+
+fn to_conversation_memory_item_view(item: ConversationMemoryItem) -> ConversationMemoryItemView {
+    ConversationMemoryItemView {
+        id: item.id,
+        local_thread_id: item.local_thread_id,
+        role: item.role,
+        item_kind: item.item_kind,
+        summary: item.summary,
+        source_message_refs: item.source_message_refs,
+        artifact_refs: item.artifact_refs,
+        metadata: item.metadata,
+        created_at: item.created_at,
+        updated_at: item.updated_at,
     }
 }
 
@@ -8997,14 +9789,14 @@ impl std::error::Error for ApiError {}
 mod tests {
     use super::*;
     use domain_model::{
-        ChatMessageId, ChatSession, DatasetId, DatasetOutput, DatasetOutputId, DocumentChunk,
-        DocumentChunkId, DocumentChunkState, LlmInvocation, LlmInvocationFinishReason,
-        LlmInvocationId, LlmInvocationMode, LlmInvocationSourceKind, MemoryDirectory,
-        MemoryDirectoryId, PublishedSurface, ReportPlan, ReportPlanAstVersionId, ReportPlanId,
-        ReportPlanStatus, ReportRenderOutput, ReportRenderOutputId, ReportRenderOutputStatus,
-        RetrievalEvidence, RetrievalEvidenceId, SecretBindingId, TenantId, ToolExecution,
-        ToolExecutionId, ToolExecutionSourceKind, ToolExecutionStatus, WorkflowExecutionId,
-        WorkflowStatus,
+        ChatMessageId, ChatSession, Dataset, DatasetId, DatasetLifecycle, DatasetOutput,
+        DatasetOutputId, DatasetVisibility, DocumentChunk, DocumentChunkId, DocumentChunkState,
+        LlmInvocation, LlmInvocationFinishReason, LlmInvocationId, LlmInvocationMode,
+        LlmInvocationSourceKind, MemoryDirectory, MemoryDirectoryId, PublishedSurface, ReportPlan,
+        ReportPlanAstVersionId, ReportPlanId, ReportPlanStatus, ReportRenderOutput,
+        ReportRenderOutputId, ReportRenderOutputStatus, RetrievalEvidence, RetrievalEvidenceId,
+        SecretBindingId, TenantId, ToolExecution, ToolExecutionId, ToolExecutionSourceKind,
+        ToolExecutionStatus, WorkflowExecutionId, WorkflowStatus,
     };
     use event_bus::{workflow_execution_transition_subject, workflow_task_enqueued_subject};
     use test_fixtures::{
@@ -9017,14 +9809,22 @@ mod tests {
     fn assistant_run_provider_input_includes_briefing_scope_and_history() {
         let input = build_assistant_run_provider_input(&CreateAssistantRunRequest {
             prompt: "继续总结订单风险".to_string(),
+            local_thread_id: Some("browser-thread-1".to_string()),
             startup_briefing: Some(json!({
                 "productTruth": "智能数据工作台",
                 "visibleDatasetCount": 2,
+            })),
+            selected_scope: Some(json!({
+                "datasets": ["orders"],
             })),
             scope_candidates: vec![json!({
                 "type": "dataset",
                 "label": "订单",
             })],
+            context_policy_hint: Some(json!({
+                "history_policy": "intent_gated",
+            })),
+            current_artifact: None,
             messages: vec![
                 AssistantRunMessageView {
                     role: ChatMessageRole::User,
@@ -9039,8 +9839,710 @@ mod tests {
 
         assert!(input.contains("智能数据工作台"));
         assert!(input.contains("范围候选"));
+        assert!(input.contains("当前选中范围"));
         assert!(input.contains("assistant: 已预选订单数据集"));
         assert!(input.contains("用户问题：继续总结订单风险"));
+    }
+
+    #[tokio::test]
+    async fn assistant_run_is_persisted_and_events_can_be_appended() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_MODE", "placeholder");
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping assistant run persistence test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("assistant-run-test-{}", Uuid::new_v4()),
+                "Assistant Run Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage,
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+
+        let (status, Json(response)) = create_assistant_run(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(CreateAssistantRunRequest {
+                prompt: "普通问答：今天先聊项目架构".to_string(),
+                local_thread_id: Some("browser-thread-test".to_string()),
+                startup_briefing: Some(json!({
+                    "visibleDatasetCount": 0,
+                    "capabilities": ["ordinary_chat", "static_page_plan"],
+                })),
+                selected_scope: Some(json!({
+                    "mode": "ordinary_chat",
+                    "selected": [],
+                })),
+                scope_candidates: vec![json!({
+                    "type": "conversation_memory",
+                    "label": "当前浏览器历史",
+                    "confidence": 0.4,
+                })],
+                context_policy_hint: Some(json!({
+                    "history_policy": "intent_gated",
+                })),
+                current_artifact: None,
+                messages: Vec::new(),
+            }),
+        )
+        .await
+        .expect("assistant run should be created");
+
+        assert_eq!(status, StatusCode::CREATED);
+        assert!(!response.assistant_run_id.to_string().is_empty());
+        assert_eq!(response.selected_scope["mode"], json!("ordinary_chat"));
+        assert!(response.scope_candidates.is_empty());
+        assert_eq!(response.execution_trail.len(), 3);
+
+        let Json(detail) = get_assistant_run(
+            State(state.clone()),
+            Path(response.assistant_run_id.to_string()),
+        )
+        .await
+        .expect("assistant run detail should load");
+        assert_eq!(detail.run.id, response.assistant_run_id);
+        assert_eq!(
+            detail.run.local_thread_id.as_deref(),
+            Some("browser-thread-test")
+        );
+        assert_eq!(detail.run.service_lane, "ordinary_chat");
+        assert_eq!(detail.events.len(), 1);
+        assert_eq!(detail.events[0].event_name, "assistant_run.completed");
+
+        let (event_status, Json(event_response)) = append_assistant_run_event(
+            State(state),
+            Path(response.assistant_run_id.to_string()),
+            Json(AppendAssistantRunEventRequest {
+                event_name: "assistant_run.note".to_string(),
+                payload: json!({
+                    "label": "用户要求继续执行",
+                }),
+            }),
+        )
+        .await
+        .expect("assistant run event should append");
+        assert_eq!(event_status, StatusCode::CREATED);
+        assert_eq!(event_response.event.sequence_no, 2);
+        assert_eq!(event_response.event.event_name, "assistant_run.note");
+    }
+
+    #[tokio::test]
+    async fn conversation_memory_items_can_be_listed_for_assistant_run() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_MODE", "placeholder");
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping conversation memory route test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("conversation-memory-test-{}", Uuid::new_v4()),
+                "Conversation Memory Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage,
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+
+        let (memory_status, Json(memory_item)) = create_conversation_memory_item(
+            State(state.clone()),
+            Json(CreateConversationMemoryItemRequest {
+                local_thread_id: "browser-thread-memory".to_string(),
+                role: ChatMessageRole::User,
+                item_kind: "user_statement".to_string(),
+                summary: "用户刚才关注订单风险和客服投诉。".to_string(),
+                source_message_refs: json!(["local-message-1"]),
+                artifact_refs: json!([]),
+                metadata: json!({"source": "browser_summary"}),
+            }),
+        )
+        .await
+        .expect("conversation memory should be created");
+        assert_eq!(memory_status, StatusCode::CREATED);
+        assert_eq!(memory_item.item_kind, "user_statement");
+
+        let (run_status, Json(run_response)) = create_assistant_run(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(CreateAssistantRunRequest {
+                prompt: "继续刚才的订单风险".to_string(),
+                local_thread_id: Some("browser-thread-memory".to_string()),
+                startup_briefing: Some(json!({"visibleDatasetCount": 0})),
+                selected_scope: Some(json!({"mode": "ordinary_chat"})),
+                scope_candidates: Vec::new(),
+                context_policy_hint: None,
+                current_artifact: None,
+                messages: Vec::new(),
+            }),
+        )
+        .await
+        .expect("assistant run should be created");
+        assert_eq!(run_status, StatusCode::CREATED);
+
+        let Json(candidates) = list_assistant_run_conversation_memory_candidates(
+            State(state.clone()),
+            Path(run_response.assistant_run_id.to_string()),
+            Query(ConversationMemoryQuery {
+                local_thread_id: None,
+                query: Some("订单风险".to_string()),
+                limit: Some(10),
+            }),
+        )
+        .await
+        .expect("conversation memory candidates should list");
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].id, memory_item.id);
+
+        let Json(thread_items) = list_conversation_memory_items(
+            State(state),
+            Query(ConversationMemoryQuery {
+                local_thread_id: Some("browser-thread-memory".to_string()),
+                query: None,
+                limit: Some(10),
+            }),
+        )
+        .await
+        .expect("thread conversation memory should list");
+        assert_eq!(thread_items.len(), 1);
+        assert_eq!(thread_items[0].summary, "用户刚才关注订单风险和客服投诉。");
+    }
+
+    #[tokio::test]
+    async fn assistant_run_scope_planner_only_uses_visible_datasets() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_MODE", "placeholder");
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping assistant scope visibility test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("assistant-scope-visibility-test-{}", Uuid::new_v4()),
+                "Assistant Scope Visibility Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage,
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        let private_secret_binding_id = SecretBindingId::new();
+        let private_dataset = state
+            .storage
+            .datasets()
+            .create_with_metadata(
+                state.tenant_id,
+                NewDataset {
+                    key: format!("private-orders-{}", Uuid::new_v4()),
+                    title: "私密订单".to_string(),
+                    description: Some("只能由匹配本地密钥看到的订单数据集。".to_string()),
+                },
+                json!({
+                    "visibility": DatasetVisibility::Private.as_str(),
+                    "default_secret_binding_ids": [private_secret_binding_id],
+                }),
+            )
+            .await
+            .expect("private dataset should be created");
+
+        let (_, Json(without_secret)) = create_assistant_run(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(CreateAssistantRunRequest {
+                prompt: "帮我继续看私密订单风险".to_string(),
+                local_thread_id: Some("scope-visibility-thread".to_string()),
+                startup_briefing: Some(json!({})),
+                selected_scope: None,
+                scope_candidates: vec![json!({
+                    "type": "dataset",
+                    "id": private_dataset.id,
+                    "label": private_dataset.title,
+                    "source": "untrusted_frontend",
+                })],
+                context_policy_hint: None,
+                current_artifact: None,
+                messages: Vec::new(),
+            }),
+        )
+        .await
+        .expect("assistant run should be created without secret");
+        assert!(!without_secret
+            .scope_candidates
+            .iter()
+            .any(|candidate| candidate.get("id") == Some(&json!(private_dataset.id))));
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            ACTIVE_SECRET_BINDING_IDS_HEADER,
+            axum::http::HeaderValue::from_str(&private_secret_binding_id.to_string())
+                .expect("secret header should parse"),
+        );
+        let (_, Json(with_secret)) = create_assistant_run(
+            State(state),
+            headers,
+            Json(CreateAssistantRunRequest {
+                prompt: "帮我继续看私密订单风险".to_string(),
+                local_thread_id: Some("scope-visibility-thread".to_string()),
+                startup_briefing: Some(json!({})),
+                selected_scope: None,
+                scope_candidates: Vec::new(),
+                context_policy_hint: None,
+                current_artifact: None,
+                messages: Vec::new(),
+            }),
+        )
+        .await
+        .expect("assistant run should be created with secret");
+        assert!(with_secret
+            .scope_candidates
+            .iter()
+            .any(|candidate| candidate.get("id") == Some(&json!(private_dataset.id))));
+    }
+
+    #[tokio::test]
+    async fn assistant_run_supplies_ranked_retrieval_evidence_for_selected_scope() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_MODE", "placeholder");
+        std::env::remove_var("ASSISTANT_RUN_EVIDENCE_LIMIT");
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping assistant run evidence supply test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("assistant-evidence-supply-test-{}", Uuid::new_v4()),
+                "Assistant Evidence Supply Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage,
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        let dataset = state
+            .storage
+            .datasets()
+            .create(
+                state.tenant_id,
+                NewDataset {
+                    key: format!("orders-evidence-{}", Uuid::new_v4()),
+                    title: "订单风险".to_string(),
+                    description: Some("订单履约和延期风险资料。".to_string()),
+                },
+            )
+            .await
+            .expect("dataset should be created");
+        let document = state
+            .storage
+            .documents()
+            .create(
+                state.tenant_id,
+                NewDocument {
+                    dataset_id: dataset.id,
+                    title: "Order Risk Notes".to_string(),
+                    object_key: "documents/order-risk-notes.md".to_string(),
+                    content_type: "text/markdown".to_string(),
+                    secret_binding_ids: Vec::new(),
+                    metadata: json!({}),
+                },
+            )
+            .await
+            .expect("document should be created");
+        let now = Utc::now();
+        let evidence_execution = create_test_workflow_execution(
+            &state.storage,
+            state.tenant_id,
+            dataset.id,
+            WorkflowKind::UploadIngest,
+        )
+        .await;
+        let chunks = state
+            .storage
+            .document_chunks()
+            .replace_for_document(
+                state.tenant_id,
+                document.id,
+                &[
+                    storage::NewDocumentChunk {
+                        dataset_id: dataset.id,
+                        document_id: document.id,
+                        chunk_index: 0,
+                        content: "Order delay risk rises when warehouse handoff exceeds two days."
+                            .to_string(),
+                        token_count: 12,
+                        metadata: json!({"section": "risk"}),
+                        created_at: now,
+                    },
+                    storage::NewDocumentChunk {
+                        dataset_id: dataset.id,
+                        document_id: document.id,
+                        chunk_index: 1,
+                        content: "Customer newsletter engagement improved last month.".to_string(),
+                        token_count: 8,
+                        metadata: json!({"section": "newsletter"}),
+                        created_at: now,
+                    },
+                ],
+            )
+            .await
+            .expect("document chunks should be created");
+        let evidences = state
+            .storage
+            .retrieval_evidences()
+            .create_many(
+                state.tenant_id,
+                &[
+                    storage::NewRetrievalEvidence {
+                        execution_id: evidence_execution.id,
+                        dataset_id: dataset.id,
+                        document_id: document.id,
+                        document_chunk_id: chunks[0].id,
+                        chunk_index: chunks[0].chunk_index,
+                        source_locator: "documents/order-risk-notes.md#chunk=0".to_string(),
+                        content_excerpt:
+                            "Order delay risk rises when warehouse handoff exceeds two days."
+                                .to_string(),
+                        summary: "Order delay risk evidence".to_string(),
+                        payload_filter_key: "dataset/order-risk".to_string(),
+                        embedding_model: "placeholder-minilm".to_string(),
+                        recall_score: 0.30,
+                        evidence_manifest: json!({
+                            "embedding": {
+                                "term_weights": {
+                                    "order": 1.0,
+                                    "delay": 1.0,
+                                    "risk": 1.0
+                                }
+                            },
+                            "recall": { "rank_hint": 2 }
+                        }),
+                        created_at: now,
+                    },
+                    storage::NewRetrievalEvidence {
+                        execution_id: evidence_execution.id,
+                        dataset_id: dataset.id,
+                        document_id: document.id,
+                        document_chunk_id: chunks[1].id,
+                        chunk_index: chunks[1].chunk_index,
+                        source_locator: "documents/order-risk-notes.md#chunk=1".to_string(),
+                        content_excerpt: "Customer newsletter engagement improved last month."
+                            .to_string(),
+                        summary: "Newsletter engagement evidence".to_string(),
+                        payload_filter_key: "dataset/newsletter".to_string(),
+                        embedding_model: "placeholder-minilm".to_string(),
+                        recall_score: 0.99,
+                        evidence_manifest: json!({
+                            "embedding": {
+                                "term_weights": {
+                                    "newsletter": 1.0,
+                                    "engagement": 1.0
+                                }
+                            },
+                            "recall": { "rank_hint": 1 }
+                        }),
+                        created_at: now,
+                    },
+                ],
+            )
+            .await
+            .expect("retrieval evidence should be created");
+
+        let (status, Json(response)) = create_assistant_run(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(CreateAssistantRunRequest {
+                prompt: "order delay risk summary".to_string(),
+                local_thread_id: Some("assistant-evidence-thread".to_string()),
+                startup_briefing: Some(json!({"visibleDatasetCount": 1})),
+                selected_scope: Some(json!({
+                    "mode": "user_selected",
+                    "datasets": [dataset.id],
+                })),
+                scope_candidates: Vec::new(),
+                context_policy_hint: None,
+                current_artifact: None,
+                messages: Vec::new(),
+            }),
+        )
+        .await
+        .expect("assistant run should be created");
+
+        assert_eq!(status, StatusCode::CREATED);
+        assert_eq!(response.selected_scope["mode"], json!("user_selected"));
+        assert_eq!(response.evidence_state["status"], json!("supplied"));
+        assert_eq!(
+            response.evidence_state["supplied_items"][0]["retrieval_evidence_id"],
+            json!(evidences[0].id)
+        );
+        assert!(response
+            .assistant_message
+            .content
+            .contains("供料状态: 已检索 2 条证据"));
+        assert!(response.execution_trail.iter().any(|step| {
+            step.get("label") == Some(&json!("检索供料证据"))
+                && step.get("supplied_count") == Some(&json!(2))
+        }));
+
+        let Json(detail) =
+            get_assistant_run(State(state), Path(response.assistant_run_id.to_string()))
+                .await
+                .expect("assistant run detail should load");
+        assert_eq!(detail.run.evidence_state["status"], json!("supplied"));
+        assert_eq!(
+            detail.run.evidence_state["supplied_items"][0]["summary"],
+            json!("Order delay risk evidence")
+        );
+    }
+
+    fn test_dataset(
+        visibility: DatasetVisibility,
+        secret_binding_ids: Vec<SecretBindingId>,
+    ) -> Dataset {
+        Dataset {
+            id: DatasetId::new(),
+            tenant_id: TenantId::new(),
+            key: format!("dataset-{}", Uuid::new_v4()),
+            title: "Dataset Visibility Test".to_string(),
+            description: None,
+            lifecycle: DatasetLifecycle::Active,
+            visibility,
+            default_secret_binding_ids: secret_binding_ids,
+            metadata: BTreeMap::new(),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        }
+    }
+
+    #[test]
+    fn dataset_visibility_allows_public_without_secret() {
+        let dataset = test_dataset(DatasetVisibility::Public, Vec::new());
+
+        assert!(dataset_is_visible(&dataset, &[]));
+    }
+
+    #[test]
+    fn dataset_visibility_hides_private_without_matching_secret() {
+        let secret_binding_id = SecretBindingId::new();
+        let dataset = test_dataset(DatasetVisibility::Private, vec![secret_binding_id]);
+
+        assert!(!dataset_is_visible(&dataset, &[]));
+        assert!(!dataset_is_visible(&dataset, &[SecretBindingId::new()]));
+        assert!(dataset_is_visible(&dataset, &[secret_binding_id]));
+    }
+
+    #[tokio::test]
+    async fn create_dataset_secret_binding_marks_dataset_private() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping dataset secret binding route test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("dataset-secret-test-{}", Uuid::new_v4()),
+                "Dataset Secret Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let dataset = storage
+            .datasets()
+            .create(
+                tenant.id,
+                NewDataset {
+                    key: format!("private-{}", Uuid::new_v4()),
+                    title: "Private Dataset".to_string(),
+                    description: None,
+                },
+            )
+            .await
+            .expect("dataset should be created");
+        let state = AppState::new(
+            storage,
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+
+        let (status, Json(response)) = create_dataset_secret_binding(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(CreateDatasetSecretBindingRequest {
+                dataset_id: dataset.id,
+                fingerprint: "local-secret-fingerprint".to_string(),
+                label: None,
+            }),
+        )
+        .await
+        .expect("secret binding should be created");
+
+        assert_eq!(status, StatusCode::CREATED);
+        assert_eq!(response.dataset.visibility, DatasetVisibility::Private);
+        assert_eq!(
+            response.secret_binding_id,
+            response.dataset.secret_binding_ids[0]
+        );
+
+        let Json(without_secret) = list_datasets(State(state.clone()), HeaderMap::new())
+            .await
+            .expect("datasets should list");
+        assert!(!without_secret
+            .iter()
+            .any(|item| item.id == response.dataset.id));
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            ACTIVE_SECRET_BINDING_IDS_HEADER,
+            axum::http::HeaderValue::from_str(&response.secret_binding_id.to_string())
+                .expect("secret binding header should parse"),
+        );
+        let Json(with_secret) = list_datasets(State(state), headers)
+            .await
+            .expect("datasets should list with secret");
+        assert!(with_secret
+            .iter()
+            .any(|item| item.id == response.dataset.id));
+    }
+
+    #[tokio::test]
+    async fn create_dataset_with_secret_fingerprint_returns_private_dataset() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping private dataset create route test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("private-create-test-{}", Uuid::new_v4()),
+                "Private Create Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage,
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+
+        let (status, Json(dataset)) = create_dataset(
+            State(state),
+            Json(CreateDatasetRequest {
+                key: format!("secret-create-{}", Uuid::new_v4()),
+                title: "Secret Created Dataset".to_string(),
+                description: None,
+                visibility: None,
+                secret_binding_ids: Vec::new(),
+                secret_fingerprint: Some("create-secret-fingerprint".to_string()),
+                secret_label: Some("local-test".to_string()),
+            }),
+        )
+        .await
+        .expect("private dataset should be created");
+
+        assert_eq!(status, StatusCode::CREATED);
+        assert_eq!(dataset.visibility, DatasetVisibility::Private);
+        assert_eq!(dataset.secret_binding_ids.len(), 1);
+        assert_eq!(dataset.access_warning, None);
+    }
+
+    #[tokio::test]
+    async fn resolve_dataset_secret_bindings_returns_matching_private_dataset() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping dataset secret resolve route test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("secret-resolve-test-{}", Uuid::new_v4()),
+                "Secret Resolve Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage,
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        let (_, Json(dataset)) = create_dataset(
+            State(state.clone()),
+            Json(CreateDatasetRequest {
+                key: format!("resolve-secret-{}", Uuid::new_v4()),
+                title: "Resolvable Private Dataset".to_string(),
+                description: None,
+                visibility: None,
+                secret_binding_ids: Vec::new(),
+                secret_fingerprint: Some("resolve-fingerprint".to_string()),
+                secret_label: Some("resolve-test".to_string()),
+            }),
+        )
+        .await
+        .expect("private dataset should be created");
+
+        let Json(response) = resolve_dataset_secret_bindings(
+            State(state),
+            Json(ResolveDatasetSecretBindingsRequest {
+                fingerprint: "resolve-fingerprint".to_string(),
+            }),
+        )
+        .await
+        .expect("secret should resolve");
+
+        assert_eq!(response.secret_binding_ids, dataset.secret_binding_ids);
+        assert_eq!(response.datasets.len(), 1);
+        assert_eq!(response.datasets[0].id, dataset.id);
+        assert_eq!(response.datasets[0].visibility, DatasetVisibility::Private);
     }
 
     fn sample_chat_session_for_report_entry(
@@ -11441,6 +12943,7 @@ mod tests {
 
         let (status, Json(response)) = create_dataset_output(
             State(state),
+            HeaderMap::new(),
             Path(dataset.id.to_string()),
             Json(CreateDatasetOutputRequest {
                 prompt: "Summarize revenue and margin changes".to_string(),

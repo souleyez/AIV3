@@ -118,6 +118,79 @@ Conclusion:
 - Frontend upload now records the selected/auto-classified dataset, confidence, reason, media kind, and background-required capabilities at registration time.
 - Heavy work remains in background workflows: content parsing, VLM enrichment, media transcription, indexing, and report/static-page supply.
 
+2026-04-27 dataset visibility/security foundation slice completed:
+
+- Added first-class `DatasetVisibility` with `public` and `private` states in the domain model and dataset API contracts.
+- Dataset metadata now defaults to `visibility=public` and stores `default_secret_binding_ids` for future local-key/private-scope enforcement.
+- Dataset summaries now expose visibility, secret-binding ids, and a public-scope warning when a dataset is created without a private secret.
+- `GET /v1/datasets` now ensures the default public datasets exist: `订单`, `客服`, `企业问答`, `网页采集`, and `未分类`.
+- Platform API now accepts `X-AI-Data-Platform-Secret-Binding-Ids` as the active local secret-binding scope and filters private datasets server-side.
+- Main dataset-bound surfaces now use the same visibility gate: dataset list, memory directories, retrieval evidences, retrieval search, dataset outputs, chat sessions, documents, document chunks/detail/evidence, compare, ingest start, report planning, report continuation, render, publish, render-output listing, and published-report reads/listing.
+- The web API proxy now forwards the active secret-binding header, and the browser client has local-storage plumbing for future local-key UI.
+- This is the security foundation only. Remaining work is user-facing key creation/verification, real secret binding/grant CRUD, startup briefing filtering from backend data, and enforcing the same visibility snapshot inside future AssistantRun/static-page persistent records.
+
+2026-04-27 local secret binding first slice completed:
+
+- Added dataset-level secret binding creation in storage using the existing `secret_bindings` table. The server stores provider label, fingerprint, and binding relationship, not the raw local key.
+- Added `POST /v1/dataset-secret-bindings` so an existing visible dataset can be converted to private and bound to a local secret-binding id.
+- Extended `POST /v1/datasets` to accept an optional local secret fingerprint and create a private dataset in the same backend flow, avoiding a visible public dataset gap between create and bind.
+- The web dataset create form now has an optional local-secret field. When filled, the browser computes a SHA-256 fingerprint locally, sends only the fingerprint, stores the raw key and binding id in browser-local storage, and then sends the binding id on later API calls.
+- Upload registration now includes the current local secret-binding ids so documents created by the current terminal inherit the active local key.
+- This is still the simple local-key model. Remaining work is a proper key management surface, unlock/switch/revoke flows, device fingerprint grants, and migration from binding-id headers toward verified secret-grant headers.
+
+2026-04-27 local secret unlock/switch slice completed:
+
+- Added fingerprint lookup for dataset-level secret bindings so a user can enter the same local key on another browser/terminal and unlock matching private datasets.
+- Added `POST /v1/dataset-secret-bindings/resolve`, returning matching binding ids and private dataset summaries only after the browser sends the locally computed fingerprint.
+- Added a compact left-rail local secret panel for unlocking and clearing the current browser's local key state.
+- Added a left-rail action to bind the currently selected visible dataset to the entered local key, so existing public datasets can be converted to private without recreating them.
+- New private dataset creation now merges the newly created binding with existing browser-active bindings and immediately updates the active binding count.
+- Clearing the local key only removes browser-local secret state and active binding ids; it does not delete datasets or server-side bindings.
+- Unlocking stores the raw key only in browser-local storage, stores binding ids for later request headers, refreshes the visible dataset list, and prefers the first unlocked dataset as the active supply scope.
+- Remaining work is audited key lifecycle, revoke/rotate UX, multi-key display, better private-dataset warnings during upload, and replacing raw local storage with a stronger browser-side protection model if the product later needs it.
+
+2026-04-27 AssistantRun persistence first slice completed:
+
+- Added `AssistantRunId` and `AssistantRunEventId` plus domain structs for assistant runs and run events.
+- Added API contracts for persistent assistant run views, run detail, event append, selected scope, evidence state, execution trail, output artifacts, and required confirmations.
+- Added PostgreSQL system-of-record tables `assistant_runs` and `assistant_run_events`, including tenant/local-thread indexes and ordered event storage.
+- Added storage repository methods to create a run, read a run, append/list events, update selected scope, update evidence state, and attach output artifacts.
+- `POST /v1/assistant-runs` now persists each ordinary assistant run after the runtime returns, stores startup briefing, selected scope, scope candidates, context policy, runtime manifest, execution trail, output artifacts, and a completion event.
+- Added `GET /v1/assistant-runs/{run_id}` and `POST /v1/assistant-runs/{run_id}/events` for durable run inspection and lightweight continuous-execution progress notes.
+- The browser now sends a stable browser-local `local_thread_id` with ordinary no-dataset AssistantRun requests, preserving the principle that each terminal/browser has independent conversation records.
+- This is the persistence shell only. Remaining work is hidden conversation memory, provider-backed scope planner persistence, selected-scope RAG/detail supply, run continuation, and report/static-page capability calls attached to the same run.
+
+2026-04-27 hidden conversation memory first slice completed:
+
+- Added `ConversationMemoryItemId` and a hidden conversation memory domain model for local thread id, role, item kind, summary, source message refs, artifact refs, metadata, and timestamps.
+- Added PostgreSQL table `conversation_memory_items` with tenant/local-thread indexing.
+- Added storage methods to create conversation memory items and list candidates by browser-local thread id with optional summary query filtering.
+- Added `POST /v1/conversation-memory-items` and `GET /v1/conversation-memory-items` for browser-local memory summary sync.
+- Added `GET /v1/assistant-runs/{run_id}/conversation-memory-candidates`, which resolves the run's local thread and returns memory candidates without requiring the browser to expose that thread id again.
+- The web client now best-effort stores only user statements from ordinary local chat as hidden memory summaries. It does not upload assistant output artifacts, and it does not block chat if memory sync fails.
+- This is still candidate storage, not automatic context injection. Remaining work is model/host intent selection, summarization quality, dedupe/compaction, retention policy, and explicit artifact-summary handling.
+
+2026-04-27 backend scope planner first slice completed:
+
+- Added `assistant-runtime` as the first backend runtime crate for assistant orchestration.
+- Implemented a deterministic scope planner matching the current product principle: user-selected dataset wins, visible dataset name/business-topic hits become candidates, and hidden conversation memory is only offered when the prompt references prior context.
+- `POST /v1/assistant-runs` now runs the backend scope planner against server-filtered visible datasets and the browser-local conversation-memory availability signal.
+- Frontend-supplied `scope_candidates` are no longer trusted as the persisted candidate source; the backend recomputes candidates after dataset visibility filtering.
+- AssistantRun now stores backend-planned `scope_candidates`, `selected_scope`, and a short execution-trail step for candidate planning.
+- The web client now consumes backend `scope_candidates` and `selected_scope` from ordinary AssistantRun responses, refreshing the catalog when the backend preselects a dataset.
+- Added regression coverage that an untrusted frontend candidate cannot leak a private dataset unless the matching local secret-binding header is present.
+- This is still a deterministic planner. Remaining work is provider-backed scope planning, richer document-level candidates, evidence retrieval after candidate selection, and controlled continuous execution based on the same run context.
+
+2026-04-27 AssistantRun selected-scope evidence supply first slice completed:
+
+- `POST /v1/assistant-runs` now treats backend-planned `selected_scope` as authoritative instead of persisting the frontend-selected scope verbatim.
+- When the backend-selected scope contains visible datasets, AssistantRun retrieves latest retrieval evidences from those datasets, ranks them against the user prompt, and stores the result in `evidence_state`.
+- Provider-backed AssistantRun input now includes the supplied evidence state so the model receives host-provided material while still owning the final answer.
+- Placeholder AssistantRun output now surfaces only a short supply status such as `已检索 2 条证据`, avoiding fake local answer composition.
+- The run execution trail now includes `检索供料证据` with evidence status and supplied count.
+- Added regression coverage that selected-scope evidence is ranked, persisted, returned in run detail, and reflected in the run trail.
+- This is the first evidence supply slice. Remaining work is richer document-level scope selection, hidden conversation-memory retrieval injection, multi-step continuation actions, provider-backed planning, and static-page/report capability calls attached to the same run.
+
 Verification:
 
 - `npm run build` in `apps/web` passed.
@@ -132,6 +205,34 @@ Verification:
 - `wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo fmt --check && cargo check -p platform-api -p ingest-worker -p document-vlm-runtime && cargo test -p document-vlm-runtime -p ingest-worker"` passed, including media partial parsing coverage.
 - `node --test apps/web/app/lib/upload-classifier.test.mjs` passed, including audio/video detection coverage.
 - `wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo fmt --check && cargo check -p platform-api -p storage -p ingest-worker -p document-vlm-runtime && cargo test -p document-vlm-runtime -p ingest-worker"` passed after adding registration metadata.
+- `wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo test -p storage dataset_metadata"` passed.
+- `wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo test -p platform-api dataset_visibility"` passed.
+- `wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo check -p contracts -p storage -p platform-api"` passed.
+- `node --test app/lib/assistant-startup-briefing.test.mjs app/lib/scope-planner.test.mjs app/lib/upload-classifier.test.mjs` in `apps/web` passed.
+- `npm run build` in `apps/web` passed after adding dataset visibility header plumbing.
+- `wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo test -p platform-api create_dataset_secret_binding_marks_dataset_private"` passed.
+- `wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo test -p platform-api create_dataset_with_secret_fingerprint_returns_private_dataset"` passed.
+- `wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo test -p platform-api resolve_dataset_secret_bindings_returns_matching_private_dataset"` passed.
+- `wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo fmt --check && cargo check -p contracts -p storage -p platform-api"` passed after local secret unlock support.
+- `node --test app/lib/assistant-startup-briefing.test.mjs app/lib/scope-planner.test.mjs app/lib/upload-classifier.test.mjs` in `apps/web` passed after local secret unlock support.
+- `npm run build` in `apps/web` passed after local secret unlock support.
+- `npm run build` in `apps/web` passed after adding selected-dataset local secret binding in the left rail.
+- `wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo fmt --check && cargo test -p storage assistant_run && cargo test -p platform-api assistant_run"` passed after AssistantRun persistence.
+- `node --test app/lib/assistant-startup-briefing.test.mjs app/lib/scope-planner.test.mjs app/lib/upload-classifier.test.mjs` in `apps/web` passed after browser-local AssistantRun thread ids.
+- `npm run build` in `apps/web` passed after browser-local AssistantRun thread ids.
+- `wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo fmt --check && cargo test -p storage conversation_memory && cargo test -p platform-api conversation_memory"` passed after hidden conversation memory storage/API.
+- `wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo check -p contracts -p storage -p platform-api"` passed after hidden conversation memory storage/API.
+- `node --test app/lib/assistant-startup-briefing.test.mjs app/lib/scope-planner.test.mjs app/lib/upload-classifier.test.mjs` in `apps/web` passed after hidden conversation memory frontend sync.
+- `npm run build` in `apps/web` passed after hidden conversation memory frontend sync.
+- `wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo test -p assistant-runtime"` passed after backend scope planner runtime.
+- `wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo test -p platform-api assistant_run_scope_planner_only_uses_visible_datasets && cargo test -p platform-api assistant_run"` passed after AssistantRun scope planner integration.
+- `wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo fmt --check && cargo check -p assistant-runtime -p contracts -p storage -p platform-api"` passed after AssistantRun scope planner integration.
+- `node --test app/lib/assistant-startup-briefing.test.mjs app/lib/scope-planner.test.mjs app/lib/upload-classifier.test.mjs` in `apps/web` passed after consuming backend scope candidates.
+- `npm run build` in `apps/web` passed after consuming backend scope candidates.
+- `wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo test -p platform-api assistant_run"` passed after AssistantRun selected-scope evidence supply.
+- `wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo fmt --check && cargo check -p assistant-runtime -p contracts -p storage -p platform-api"` passed after AssistantRun selected-scope evidence supply.
+- `node --test app/lib/assistant-startup-briefing.test.mjs app/lib/scope-planner.test.mjs app/lib/upload-classifier.test.mjs` in `apps/web` passed after AssistantRun selected-scope evidence supply.
+- `npm run build` in `apps/web` passed after AssistantRun selected-scope evidence supply.
 
 ## Locked Product Decisions
 

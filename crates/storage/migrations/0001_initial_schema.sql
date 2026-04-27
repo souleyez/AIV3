@@ -276,6 +276,49 @@ create table if not exists dataset_outputs (
 alter table dataset_outputs
     add column if not exists retrieval_evidence_ids uuid[] not null default '{}'::uuid[];
 
+create table if not exists assistant_runs (
+    id uuid primary key default gen_random_uuid(),
+    tenant_id uuid not null references tenants (id) on delete cascade,
+    local_thread_id text,
+    user_prompt text not null,
+    startup_briefing jsonb not null default '{}'::jsonb,
+    selected_scope jsonb not null default '{}'::jsonb,
+    scope_candidates jsonb not null default '[]'::jsonb,
+    context_policy jsonb not null default '{}'::jsonb,
+    evidence_state jsonb not null default '{}'::jsonb,
+    service_lane text not null default 'ordinary_chat',
+    execution_trail jsonb not null default '[]'::jsonb,
+    output_artifacts jsonb not null default '[]'::jsonb,
+    runtime_manifest jsonb not null default '{}'::jsonb,
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now()
+);
+
+create table if not exists assistant_run_events (
+    id uuid primary key default gen_random_uuid(),
+    tenant_id uuid not null references tenants (id) on delete cascade,
+    run_id uuid not null references assistant_runs (id) on delete cascade,
+    sequence_no integer not null,
+    event_name text not null,
+    payload jsonb not null default '{}'::jsonb,
+    created_at timestamptz not null default now(),
+    unique (run_id, sequence_no)
+);
+
+create table if not exists conversation_memory_items (
+    id uuid primary key default gen_random_uuid(),
+    tenant_id uuid not null references tenants (id) on delete cascade,
+    local_thread_id text not null,
+    role text not null,
+    item_kind text not null,
+    summary text not null,
+    source_message_refs jsonb not null default '[]'::jsonb,
+    artifact_refs jsonb not null default '[]'::jsonb,
+    metadata jsonb not null default '{}'::jsonb,
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now()
+);
+
 create table if not exists chat_sessions (
     id uuid primary key default gen_random_uuid(),
     tenant_id uuid not null references tenants (id) on delete cascade,
@@ -448,6 +491,10 @@ create index if not exists idx_retrieval_evidences_document_created on retrieval
 create index if not exists idx_retrieval_evidences_execution on retrieval_evidences (execution_id);
 create index if not exists idx_dataset_outputs_dataset_created on dataset_outputs (dataset_id, created_at desc);
 create index if not exists idx_dataset_outputs_execution on dataset_outputs (execution_id);
+create index if not exists idx_assistant_runs_tenant_created on assistant_runs (tenant_id, created_at desc);
+create index if not exists idx_assistant_runs_local_thread on assistant_runs (tenant_id, local_thread_id, created_at desc);
+create index if not exists idx_assistant_run_events_run_sequence on assistant_run_events (run_id, sequence_no);
+create index if not exists idx_conversation_memory_thread_updated on conversation_memory_items (tenant_id, local_thread_id, updated_at desc);
 create index if not exists idx_chat_sessions_dataset_created on chat_sessions (dataset_id, created_at desc);
 create index if not exists idx_chat_sessions_execution on chat_sessions (execution_id);
 create index if not exists idx_chat_messages_session_turn on chat_messages (session_id, turn_index asc);

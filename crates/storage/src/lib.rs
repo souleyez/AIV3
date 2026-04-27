@@ -1,17 +1,19 @@
 use anyhow::{anyhow, Result};
 use chrono::{DateTime, Utc};
 use domain_model::{
-    ChatMessage, ChatMessageId, ChatMessageRole, ChatSession, ChatSessionId, Dataset, DatasetId,
-    DatasetLifecycle, DatasetOutput, DatasetOutputId, Document, DocumentChunk, DocumentChunkId,
-    DocumentChunkState, DocumentId, DocumentLifecycle, LlmInvocation, LlmInvocationFinishReason,
-    LlmInvocationId, LlmInvocationMode, LlmInvocationSourceKind, LlmTokenUsage, MemoryDirectory,
-    MemoryDirectoryId, PublishedReport, PublishedReportId, PublishedReportVersion,
-    PublishedReportVersionId, ReportPlan, ReportPlanAstVersion, ReportPlanAstVersionId,
-    ReportPlanId, ReportPlanStatus, ReportRenderOutput, ReportRenderOutputId,
-    ReportRenderOutputStatus, RetrievalEvidence, RetrievalEvidenceId, SecretBindingId, Tenant,
-    TenantId, ToolExecution, ToolExecutionId, ToolExecutionSourceKind, ToolExecutionStatus,
-    WorkflowEventId, WorkflowEventRecord, WorkflowExecution, WorkflowExecutionId, WorkflowKind,
-    WorkflowStatus, WorkflowTask, WorkflowTaskId, WorkflowTaskStatus,
+    AssistantRun, AssistantRunEvent, AssistantRunEventId, AssistantRunId, ChatMessage,
+    ChatMessageId, ChatMessageRole, ChatSession, ChatSessionId, ConversationMemoryItem,
+    ConversationMemoryItemId, Dataset, DatasetId, DatasetLifecycle, DatasetOutput, DatasetOutputId,
+    DatasetVisibility, Document, DocumentChunk, DocumentChunkId, DocumentChunkState, DocumentId,
+    DocumentLifecycle, LlmInvocation, LlmInvocationFinishReason, LlmInvocationId,
+    LlmInvocationMode, LlmInvocationSourceKind, LlmTokenUsage, MemoryDirectory, MemoryDirectoryId,
+    PublishedReport, PublishedReportId, PublishedReportVersion, PublishedReportVersionId,
+    ReportPlan, ReportPlanAstVersion, ReportPlanAstVersionId, ReportPlanId, ReportPlanStatus,
+    ReportRenderOutput, ReportRenderOutputId, ReportRenderOutputStatus, RetrievalEvidence,
+    RetrievalEvidenceId, SecretBinding, SecretBindingId, SecretScopeLevel, Tenant, TenantId,
+    ToolExecution, ToolExecutionId, ToolExecutionSourceKind, ToolExecutionStatus, WorkflowEventId,
+    WorkflowEventRecord, WorkflowExecution, WorkflowExecutionId, WorkflowKind, WorkflowStatus,
+    WorkflowTask, WorkflowTaskId, WorkflowTaskStatus,
 };
 use serde_json::{Map, Value};
 use sqlx::{postgres::PgPoolOptions, Executor, PgPool, Row};
@@ -54,6 +56,9 @@ pub const TABLES: &[&str] = &[
     "memory_directories",
     "retrieval_evidences",
     "dataset_outputs",
+    "assistant_run_events",
+    "assistant_runs",
+    "conversation_memory_items",
     "chat_sessions",
     "chat_messages",
     "llm_invocations",
@@ -83,6 +88,16 @@ pub struct NewDocument {
     pub content_type: String,
     pub secret_binding_ids: Vec<SecretBindingId>,
     pub metadata: Value,
+}
+
+#[derive(Clone, Debug)]
+pub struct NewSecretBinding {
+    pub dataset_id: DatasetId,
+    pub document_id: Option<DocumentId>,
+    pub scope_level: SecretScopeLevel,
+    pub provider_key: String,
+    pub cipher_text: String,
+    pub fingerprint: String,
 }
 
 #[derive(Clone, Debug)]
@@ -166,6 +181,41 @@ pub struct NewDatasetOutput {
     pub memory_directory_id: Option<MemoryDirectoryId>,
     pub retrieval_evidence_ids: Vec<RetrievalEvidenceId>,
     pub output_manifest: Value,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug)]
+pub struct NewAssistantRun {
+    pub local_thread_id: Option<String>,
+    pub user_prompt: String,
+    pub startup_briefing: Value,
+    pub selected_scope: Value,
+    pub scope_candidates: Value,
+    pub context_policy: Value,
+    pub evidence_state: Value,
+    pub service_lane: String,
+    pub execution_trail: Value,
+    pub output_artifacts: Value,
+    pub runtime_manifest: Value,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug)]
+pub struct NewAssistantRunEvent {
+    pub event_name: String,
+    pub payload: Value,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug)]
+pub struct NewConversationMemoryItem {
+    pub local_thread_id: String,
+    pub role: ChatMessageRole,
+    pub item_kind: String,
+    pub summary: String,
+    pub source_message_refs: Value,
+    pub artifact_refs: Value,
+    pub metadata: Value,
     pub created_at: DateTime<Utc>,
 }
 
@@ -353,6 +403,12 @@ impl PgStorage {
         }
     }
 
+    pub fn secret_bindings(&self) -> PgSecretBindingRepository {
+        PgSecretBindingRepository {
+            pool: self.pool.clone(),
+        }
+    }
+
     pub fn document_chunks(&self) -> PgDocumentChunkRepository {
         PgDocumentChunkRepository {
             pool: self.pool.clone(),
@@ -407,6 +463,18 @@ impl PgStorage {
         }
     }
 
+    pub fn assistant_runs(&self) -> PgAssistantRunRepository {
+        PgAssistantRunRepository {
+            pool: self.pool.clone(),
+        }
+    }
+
+    pub fn conversation_memory_items(&self) -> PgConversationMemoryItemRepository {
+        PgConversationMemoryItemRepository {
+            pool: self.pool.clone(),
+        }
+    }
+
     pub fn chat_sessions(&self) -> PgChatSessionRepository {
         PgChatSessionRepository {
             pool: self.pool.clone(),
@@ -457,10 +525,20 @@ pub struct PgDatasetRepository {
 
 impl PgDatasetRepository {
     pub async fn create(&self, tenant_id: TenantId, new_dataset: NewDataset) -> Result<Dataset> {
+        self.create_with_metadata(tenant_id, new_dataset, Value::Null)
+            .await
+    }
+
+    pub async fn create_with_metadata(
+        &self,
+        tenant_id: TenantId,
+        new_dataset: NewDataset,
+        metadata: Value,
+    ) -> Result<Dataset> {
         let row = sqlx::query(
             r#"
             insert into datasets (tenant_id, key, title, description, lifecycle, metadata)
-            values ($1, $2, $3, $4, $5, '{}'::jsonb)
+            values ($1, $2, $3, $4, $5, $6)
             returning id, tenant_id, key, title, description, lifecycle, metadata, created_at, updated_at
             "#,
         )
@@ -469,6 +547,7 @@ impl PgDatasetRepository {
         .bind(new_dataset.title)
         .bind(new_dataset.description)
         .bind(DatasetLifecycle::Draft.as_str())
+        .bind(dataset_initial_metadata(&metadata)?)
         .fetch_one(&self.pool)
         .await?;
 
@@ -510,11 +589,101 @@ impl PgDatasetRepository {
 
         row.as_ref().map(map_dataset_row).transpose()
     }
+
+    pub async fn update_metadata(
+        &self,
+        tenant_id: TenantId,
+        dataset_id: DatasetId,
+        metadata_updates: &Value,
+    ) -> Result<Dataset> {
+        let current = self
+            .get_by_id(tenant_id, dataset_id)
+            .await?
+            .ok_or_else(|| anyhow!("dataset {dataset_id} was not found"))?;
+        let merged_metadata = merge_dataset_metadata(&current.metadata, metadata_updates)?;
+        let row = sqlx::query(
+            r#"
+            update datasets
+            set metadata = $3,
+                updated_at = now()
+            where tenant_id = $1 and id = $2
+            returning id, tenant_id, key, title, description, lifecycle, metadata, created_at, updated_at
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(dataset_id.0)
+        .bind(merged_metadata)
+        .fetch_one(&self.pool)
+        .await?;
+
+        map_dataset_row(&row)
+    }
 }
 
 #[derive(Clone)]
 pub struct PgDocumentRepository {
     pool: PgPool,
+}
+
+#[derive(Clone)]
+pub struct PgSecretBindingRepository {
+    pool: PgPool,
+}
+
+impl PgSecretBindingRepository {
+    pub async fn create(
+        &self,
+        tenant_id: TenantId,
+        new_binding: NewSecretBinding,
+    ) -> Result<SecretBinding> {
+        let row = sqlx::query(
+            r#"
+            insert into secret_bindings (
+                tenant_id,
+                dataset_id,
+                document_id,
+                scope_level,
+                provider_key,
+                cipher_text,
+                fingerprint
+            )
+            values ($1, $2, $3, $4, $5, $6, $7)
+            returning id, tenant_id, dataset_id, document_id, scope_level, provider_key, cipher_text, fingerprint, created_at
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(new_binding.dataset_id.0)
+        .bind(new_binding.document_id.map(|id| id.0))
+        .bind(new_binding.scope_level.as_str())
+        .bind(new_binding.provider_key)
+        .bind(new_binding.cipher_text)
+        .bind(new_binding.fingerprint)
+        .fetch_one(&self.pool)
+        .await?;
+
+        map_secret_binding_row(&row)
+    }
+
+    pub async fn list_by_fingerprint(
+        &self,
+        tenant_id: TenantId,
+        fingerprint: &str,
+    ) -> Result<Vec<SecretBinding>> {
+        let rows = sqlx::query(
+            r#"
+            select id, tenant_id, dataset_id, document_id, scope_level, provider_key, cipher_text, fingerprint, created_at
+            from secret_bindings
+            where tenant_id = $1 and fingerprint = $2
+            order by created_at desc
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(fingerprint)
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.iter().map(map_secret_binding_row).collect()
+    }
 }
 
 impl PgDocumentRepository {
@@ -1715,6 +1884,305 @@ impl PgDatasetOutputRepository {
         .await?;
 
         row.as_ref().map(map_dataset_output_row).transpose()
+    }
+}
+
+#[derive(Clone)]
+pub struct PgAssistantRunRepository {
+    pool: PgPool,
+}
+
+impl PgAssistantRunRepository {
+    pub async fn create(
+        &self,
+        tenant_id: TenantId,
+        new_run: &NewAssistantRun,
+    ) -> Result<AssistantRun> {
+        let row = sqlx::query(
+            r#"
+            insert into assistant_runs (
+                tenant_id,
+                local_thread_id,
+                user_prompt,
+                startup_briefing,
+                selected_scope,
+                scope_candidates,
+                context_policy,
+                evidence_state,
+                service_lane,
+                execution_trail,
+                output_artifacts,
+                runtime_manifest,
+                created_at,
+                updated_at
+            )
+            values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $13)
+            returning id, tenant_id, local_thread_id, user_prompt, startup_briefing,
+                      selected_scope, scope_candidates, context_policy, evidence_state,
+                      service_lane, execution_trail, output_artifacts, runtime_manifest,
+                      created_at, updated_at
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(new_run.local_thread_id.as_deref())
+        .bind(&new_run.user_prompt)
+        .bind(&new_run.startup_briefing)
+        .bind(&new_run.selected_scope)
+        .bind(&new_run.scope_candidates)
+        .bind(&new_run.context_policy)
+        .bind(&new_run.evidence_state)
+        .bind(&new_run.service_lane)
+        .bind(&new_run.execution_trail)
+        .bind(&new_run.output_artifacts)
+        .bind(&new_run.runtime_manifest)
+        .bind(new_run.created_at)
+        .fetch_one(&self.pool)
+        .await?;
+
+        map_assistant_run_row(&row)
+    }
+
+    pub async fn get_by_id(
+        &self,
+        tenant_id: TenantId,
+        run_id: AssistantRunId,
+    ) -> Result<Option<AssistantRun>> {
+        let row = sqlx::query(
+            r#"
+            select id, tenant_id, local_thread_id, user_prompt, startup_briefing,
+                   selected_scope, scope_candidates, context_policy, evidence_state,
+                   service_lane, execution_trail, output_artifacts, runtime_manifest,
+                   created_at, updated_at
+            from assistant_runs
+            where tenant_id = $1 and id = $2
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(run_id.0)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        row.as_ref().map(map_assistant_run_row).transpose()
+    }
+
+    pub async fn append_event(
+        &self,
+        tenant_id: TenantId,
+        run_id: AssistantRunId,
+        new_event: &NewAssistantRunEvent,
+    ) -> Result<AssistantRunEvent> {
+        let row = sqlx::query(
+            r#"
+            with next_sequence as (
+                select coalesce(max(sequence_no), 0) + 1 as sequence_no
+                from assistant_run_events
+                where tenant_id = $1 and run_id = $2
+            )
+            insert into assistant_run_events (
+                tenant_id,
+                run_id,
+                sequence_no,
+                event_name,
+                payload,
+                created_at
+            )
+            select $1, $2, next_sequence.sequence_no, $3, $4, $5
+            from next_sequence
+            returning id, tenant_id, run_id, sequence_no, event_name, payload, created_at
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(run_id.0)
+        .bind(&new_event.event_name)
+        .bind(&new_event.payload)
+        .bind(new_event.created_at)
+        .fetch_one(&self.pool)
+        .await?;
+
+        map_assistant_run_event_row(&row)
+    }
+
+    pub async fn list_events(
+        &self,
+        tenant_id: TenantId,
+        run_id: AssistantRunId,
+    ) -> Result<Vec<AssistantRunEvent>> {
+        let rows = sqlx::query(
+            r#"
+            select id, tenant_id, run_id, sequence_no, event_name, payload, created_at
+            from assistant_run_events
+            where tenant_id = $1 and run_id = $2
+            order by sequence_no asc, created_at asc
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(run_id.0)
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.iter().map(map_assistant_run_event_row).collect()
+    }
+
+    pub async fn update_selected_scope(
+        &self,
+        tenant_id: TenantId,
+        run_id: AssistantRunId,
+        selected_scope: &Value,
+    ) -> Result<AssistantRun> {
+        self.update_json_field(tenant_id, run_id, "selected_scope", selected_scope)
+            .await
+    }
+
+    pub async fn update_evidence_state(
+        &self,
+        tenant_id: TenantId,
+        run_id: AssistantRunId,
+        evidence_state: &Value,
+    ) -> Result<AssistantRun> {
+        self.update_json_field(tenant_id, run_id, "evidence_state", evidence_state)
+            .await
+    }
+
+    pub async fn attach_output_artifacts(
+        &self,
+        tenant_id: TenantId,
+        run_id: AssistantRunId,
+        output_artifacts: &Value,
+    ) -> Result<AssistantRun> {
+        self.update_json_field(tenant_id, run_id, "output_artifacts", output_artifacts)
+            .await
+    }
+
+    async fn update_json_field(
+        &self,
+        tenant_id: TenantId,
+        run_id: AssistantRunId,
+        field_name: &str,
+        value: &Value,
+    ) -> Result<AssistantRun> {
+        let allowed = matches!(
+            field_name,
+            "selected_scope" | "evidence_state" | "output_artifacts"
+        );
+        if !allowed {
+            return Err(anyhow!(
+                "unsupported assistant run JSON field: {field_name}"
+            ));
+        }
+        let sql = format!(
+            r#"
+            update assistant_runs
+            set {field_name} = $3,
+                updated_at = now()
+            where tenant_id = $1 and id = $2
+            returning id, tenant_id, local_thread_id, user_prompt, startup_briefing,
+                      selected_scope, scope_candidates, context_policy, evidence_state,
+                      service_lane, execution_trail, output_artifacts, runtime_manifest,
+                      created_at, updated_at
+            "#
+        );
+        let row = sqlx::query(&sql)
+            .bind(tenant_id.0)
+            .bind(run_id.0)
+            .bind(value)
+            .fetch_one(&self.pool)
+            .await?;
+
+        map_assistant_run_row(&row)
+    }
+}
+
+#[derive(Clone)]
+pub struct PgConversationMemoryItemRepository {
+    pool: PgPool,
+}
+
+impl PgConversationMemoryItemRepository {
+    pub async fn create(
+        &self,
+        tenant_id: TenantId,
+        new_item: &NewConversationMemoryItem,
+    ) -> Result<ConversationMemoryItem> {
+        let row = sqlx::query(
+            r#"
+            insert into conversation_memory_items (
+                tenant_id,
+                local_thread_id,
+                role,
+                item_kind,
+                summary,
+                source_message_refs,
+                artifact_refs,
+                metadata,
+                created_at,
+                updated_at
+            )
+            values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9)
+            returning id, tenant_id, local_thread_id, role, item_kind, summary,
+                      source_message_refs, artifact_refs, metadata, created_at, updated_at
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(&new_item.local_thread_id)
+        .bind(new_item.role.as_str())
+        .bind(&new_item.item_kind)
+        .bind(&new_item.summary)
+        .bind(&new_item.source_message_refs)
+        .bind(&new_item.artifact_refs)
+        .bind(&new_item.metadata)
+        .bind(new_item.created_at)
+        .fetch_one(&self.pool)
+        .await?;
+
+        map_conversation_memory_item_row(&row)
+    }
+
+    pub async fn list_by_local_thread(
+        &self,
+        tenant_id: TenantId,
+        local_thread_id: &str,
+        query: Option<&str>,
+        limit: i64,
+    ) -> Result<Vec<ConversationMemoryItem>> {
+        let normalized_limit = limit.clamp(1, 100);
+        let rows = if let Some(query) = query.map(str::trim).filter(|value| !value.is_empty()) {
+            sqlx::query(
+                r#"
+                select id, tenant_id, local_thread_id, role, item_kind, summary,
+                       source_message_refs, artifact_refs, metadata, created_at, updated_at
+                from conversation_memory_items
+                where tenant_id = $1
+                  and local_thread_id = $2
+                  and summary ilike $3
+                order by updated_at desc, created_at desc
+                limit $4
+                "#,
+            )
+            .bind(tenant_id.0)
+            .bind(local_thread_id)
+            .bind(format!("%{query}%"))
+            .bind(normalized_limit)
+            .fetch_all(&self.pool)
+            .await?
+        } else {
+            sqlx::query(
+                r#"
+                select id, tenant_id, local_thread_id, role, item_kind, summary,
+                       source_message_refs, artifact_refs, metadata, created_at, updated_at
+                from conversation_memory_items
+                where tenant_id = $1 and local_thread_id = $2
+                order by updated_at desc, created_at desc
+                limit $3
+                "#,
+            )
+            .bind(tenant_id.0)
+            .bind(local_thread_id)
+            .bind(normalized_limit)
+            .fetch_all(&self.pool)
+            .await?
+        };
+
+        rows.iter().map(map_conversation_memory_item_row).collect()
     }
 }
 
@@ -2943,6 +3411,9 @@ impl PgWorkflowTaskRepository {
 fn map_dataset_row(row: &sqlx::postgres::PgRow) -> Result<Dataset> {
     let lifecycle = row.get::<String, _>("lifecycle");
     let metadata = row.get::<Value, _>("metadata");
+    let visibility = dataset_visibility_from_metadata(&metadata);
+    let default_secret_binding_ids =
+        secret_binding_ids_from_metadata_key(&metadata, "default_secret_binding_ids")?;
 
     Ok(Dataset {
         id: DatasetId(row.get::<Uuid, _>("id")),
@@ -2952,7 +3423,8 @@ fn map_dataset_row(row: &sqlx::postgres::PgRow) -> Result<Dataset> {
         description: row.get("description"),
         lifecycle: DatasetLifecycle::from_str(&lifecycle)
             .ok_or_else(|| anyhow!("unknown dataset lifecycle: {lifecycle}"))?,
-        default_secret_binding_ids: Vec::new(),
+        visibility,
+        default_secret_binding_ids,
         metadata: json_object_to_btree_map(metadata)?,
         created_at: row.get("created_at"),
         updated_at: row.get("updated_at"),
@@ -2976,6 +3448,23 @@ fn map_document_row(row: &sqlx::postgres::PgRow) -> Result<Document> {
         metadata: json_object_to_btree_map(metadata)?,
         created_at: row.get("created_at"),
         updated_at: row.get("updated_at"),
+    })
+}
+
+fn map_secret_binding_row(row: &sqlx::postgres::PgRow) -> Result<SecretBinding> {
+    let scope_level = row.get::<String, _>("scope_level");
+
+    Ok(SecretBinding {
+        id: SecretBindingId(row.get::<Uuid, _>("id")),
+        tenant_id: TenantId(row.get::<Uuid, _>("tenant_id")),
+        dataset_id: DatasetId(row.get::<Uuid, _>("dataset_id")),
+        document_id: row.get::<Option<Uuid>, _>("document_id").map(DocumentId),
+        scope_level: SecretScopeLevel::from_str(&scope_level)
+            .ok_or_else(|| anyhow!("unknown secret scope level: {scope_level}"))?,
+        provider_key: row.get("provider_key"),
+        cipher_text: row.get("cipher_text"),
+        fingerprint: row.get("fingerprint"),
+        created_at: row.get("created_at"),
     })
 }
 
@@ -3131,6 +3620,56 @@ fn map_dataset_output_row(row: &sqlx::postgres::PgRow) -> Result<DatasetOutput> 
             .collect(),
         output_manifest: row.get("output_manifest"),
         created_at: row.get("created_at"),
+    })
+}
+
+fn map_assistant_run_row(row: &sqlx::postgres::PgRow) -> Result<AssistantRun> {
+    Ok(AssistantRun {
+        id: AssistantRunId(row.get::<Uuid, _>("id")),
+        tenant_id: TenantId(row.get::<Uuid, _>("tenant_id")),
+        local_thread_id: row.get("local_thread_id"),
+        user_prompt: row.get("user_prompt"),
+        startup_briefing: row.get("startup_briefing"),
+        selected_scope: row.get("selected_scope"),
+        scope_candidates: row.get("scope_candidates"),
+        context_policy: row.get("context_policy"),
+        evidence_state: row.get("evidence_state"),
+        service_lane: row.get("service_lane"),
+        execution_trail: row.get("execution_trail"),
+        output_artifacts: row.get("output_artifacts"),
+        runtime_manifest: row.get("runtime_manifest"),
+        created_at: row.get("created_at"),
+        updated_at: row.get("updated_at"),
+    })
+}
+
+fn map_assistant_run_event_row(row: &sqlx::postgres::PgRow) -> Result<AssistantRunEvent> {
+    Ok(AssistantRunEvent {
+        id: AssistantRunEventId(row.get::<Uuid, _>("id")),
+        tenant_id: TenantId(row.get::<Uuid, _>("tenant_id")),
+        run_id: AssistantRunId(row.get::<Uuid, _>("run_id")),
+        sequence_no: row.get("sequence_no"),
+        event_name: row.get("event_name"),
+        payload: row.get("payload"),
+        created_at: row.get("created_at"),
+    })
+}
+
+fn map_conversation_memory_item_row(row: &sqlx::postgres::PgRow) -> Result<ConversationMemoryItem> {
+    let role = row.get::<String, _>("role");
+    Ok(ConversationMemoryItem {
+        id: ConversationMemoryItemId(row.get::<Uuid, _>("id")),
+        tenant_id: TenantId(row.get::<Uuid, _>("tenant_id")),
+        local_thread_id: row.get("local_thread_id"),
+        role: ChatMessageRole::from_str(&role)
+            .ok_or_else(|| anyhow!("unknown conversation memory role: {role}"))?,
+        item_kind: row.get("item_kind"),
+        summary: row.get("summary"),
+        source_message_refs: row.get("source_message_refs"),
+        artifact_refs: row.get("artifact_refs"),
+        metadata: row.get("metadata"),
+        created_at: row.get("created_at"),
+        updated_at: row.get("updated_at"),
     })
 }
 
@@ -3445,6 +3984,39 @@ fn json_object_to_btree_map(value: Value) -> Result<BTreeMap<String, Value>> {
     }
 }
 
+fn dataset_initial_metadata(metadata: &Value) -> Result<Value> {
+    let mut merged = metadata.as_object().cloned().unwrap_or_else(Map::new);
+    let visibility = merged
+        .get("visibility")
+        .and_then(Value::as_str)
+        .and_then(DatasetVisibility::from_str)
+        .unwrap_or(DatasetVisibility::Public);
+    merged.insert(
+        "visibility".to_string(),
+        Value::String(visibility.as_str().to_string()),
+    );
+    if !merged.contains_key("default_secret_binding_ids") {
+        merged.insert(
+            "default_secret_binding_ids".to_string(),
+            Value::Array(Vec::new()),
+        );
+    }
+    secret_binding_ids_from_metadata_key(
+        &Value::Object(merged.clone()),
+        "default_secret_binding_ids",
+    )?;
+    Ok(Value::Object(merged))
+}
+
+fn dataset_visibility_from_metadata(metadata: &Value) -> DatasetVisibility {
+    metadata
+        .as_object()
+        .and_then(|map| map.get("visibility"))
+        .and_then(Value::as_str)
+        .and_then(DatasetVisibility::from_str)
+        .unwrap_or(DatasetVisibility::Public)
+}
+
 fn document_metadata_with_secret_binding_ids(secret_binding_ids: &[SecretBindingId]) -> Value {
     Value::Object(Map::from_iter([(
         "secret_binding_ids".to_string(),
@@ -3471,10 +4043,33 @@ fn document_initial_metadata(
     Ok(Value::Object(merged))
 }
 
+fn merge_dataset_metadata(
+    current_metadata: &BTreeMap<String, Value>,
+    metadata_updates: &Value,
+) -> Result<Value> {
+    let updates = metadata_updates
+        .as_object()
+        .ok_or_else(|| anyhow!("dataset metadata updates must be a JSON object"))?;
+    let mut merged = Map::from_iter(current_metadata.clone());
+
+    for (key, value) in updates {
+        merged.insert(key.clone(), value.clone());
+    }
+
+    dataset_initial_metadata(&Value::Object(merged))
+}
+
 fn secret_binding_ids_from_metadata(metadata: &Value) -> Result<Vec<SecretBindingId>> {
+    secret_binding_ids_from_metadata_key(metadata, "secret_binding_ids")
+}
+
+fn secret_binding_ids_from_metadata_key(
+    metadata: &Value,
+    key: &str,
+) -> Result<Vec<SecretBindingId>> {
     let Some(entries) = metadata
         .as_object()
-        .and_then(|map| map.get("secret_binding_ids"))
+        .and_then(|map| map.get(key))
         .and_then(Value::as_array)
     else {
         return Ok(Vec::new());
@@ -3485,7 +4080,7 @@ fn secret_binding_ids_from_metadata(metadata: &Value) -> Result<Vec<SecretBindin
         .map(|entry| {
             let raw = entry
                 .as_str()
-                .ok_or_else(|| anyhow!("secret_binding_ids entries must be strings"))?;
+                .ok_or_else(|| anyhow!("{key} entries must be strings"))?;
             Uuid::parse_str(raw)
                 .map(SecretBindingId)
                 .map_err(|error| anyhow!("invalid secret binding id {raw}: {error}"))
@@ -3803,6 +4398,12 @@ mod tests {
             .contains("create table if not exists dataset_outputs"));
         assert!(INITIAL_SCHEMA
             .sql
+            .contains("create table if not exists assistant_runs"));
+        assert!(INITIAL_SCHEMA
+            .sql
+            .contains("create table if not exists assistant_run_events"));
+        assert!(INITIAL_SCHEMA
+            .sql
             .contains("create table if not exists chat_sessions"));
         assert!(INITIAL_SCHEMA
             .sql
@@ -3819,6 +4420,32 @@ mod tests {
         assert!(INITIAL_SCHEMA
             .sql
             .contains("create table if not exists workflow_tasks"));
+    }
+
+    #[test]
+    fn assistant_run_schema_mentions_run_and_event_tables() {
+        assert!(TABLES.contains(&"assistant_runs"));
+        assert!(TABLES.contains(&"assistant_run_events"));
+        assert!(INITIAL_SCHEMA
+            .sql
+            .contains("create table if not exists assistant_runs"));
+        assert!(INITIAL_SCHEMA
+            .sql
+            .contains("create table if not exists assistant_run_events"));
+        assert!(INITIAL_SCHEMA
+            .sql
+            .contains("idx_assistant_run_events_run_sequence"));
+    }
+
+    #[test]
+    fn conversation_memory_schema_mentions_hidden_memory_table() {
+        assert!(TABLES.contains(&"conversation_memory_items"));
+        assert!(INITIAL_SCHEMA
+            .sql
+            .contains("create table if not exists conversation_memory_items"));
+        assert!(INITIAL_SCHEMA
+            .sql
+            .contains("idx_conversation_memory_thread_updated"));
     }
 
     #[test]
@@ -3857,6 +4484,39 @@ mod tests {
             secret_binding_ids_from_metadata(&metadata).expect("secret binding ids should parse");
 
         assert_eq!(parsed, secret_binding_ids);
+    }
+
+    #[test]
+    fn dataset_metadata_defaults_to_public_visibility() {
+        let metadata = dataset_initial_metadata(&Value::Null).expect("metadata should normalize");
+
+        assert_eq!(metadata["visibility"], json!("public"));
+        assert_eq!(metadata["default_secret_binding_ids"], json!([]));
+        assert_eq!(
+            dataset_visibility_from_metadata(&metadata),
+            DatasetVisibility::Public
+        );
+    }
+
+    #[test]
+    fn dataset_metadata_preserves_private_secret_bindings() {
+        let secret_binding_ids = vec![SecretBindingId::new(), SecretBindingId::new()];
+        let metadata = dataset_initial_metadata(&json!({
+            "visibility": "private",
+            "default_secret_binding_ids": secret_binding_ids,
+        }))
+        .expect("metadata should normalize");
+
+        assert_eq!(metadata["visibility"], json!("private"));
+        assert_eq!(
+            dataset_visibility_from_metadata(&metadata),
+            DatasetVisibility::Private
+        );
+        assert_eq!(
+            secret_binding_ids_from_metadata_key(&metadata, "default_secret_binding_ids")
+                .expect("ids should parse"),
+            secret_binding_ids
+        );
     }
 
     #[test]

@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 use domain_model::{
-    ChatMessageId, ChatMessageRole, ChatSessionId, DatasetId, DatasetLifecycle, DatasetOutputId,
+    AssistantRunEventId, AssistantRunId, ChatMessageId, ChatMessageRole, ChatSessionId,
+    ConversationMemoryItemId, DatasetId, DatasetLifecycle, DatasetOutputId, DatasetVisibility,
     DocumentChunkId, DocumentId, LlmInvocationId, MemoryDirectoryId, PublishedReportId,
     PublishedReportVersionId, PublishedSurface, ReportPlanAstVersionId, ReportPlanId,
     ReportRenderOutputId, RetrievalEvidenceId, SecretBindingId, ToolExecutionId, WorkflowEventId,
@@ -212,6 +213,14 @@ pub struct CreateDatasetRequest {
     pub key: String,
     pub title: String,
     pub description: Option<String>,
+    #[serde(default)]
+    pub visibility: Option<DatasetVisibility>,
+    #[serde(default)]
+    pub secret_binding_ids: Vec<SecretBindingId>,
+    #[serde(default)]
+    pub secret_fingerprint: Option<String>,
+    #[serde(default)]
+    pub secret_label: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -220,6 +229,36 @@ pub struct DatasetSummary {
     pub key: String,
     pub title: String,
     pub lifecycle: DatasetLifecycle,
+    pub visibility: DatasetVisibility,
+    pub secret_binding_ids: Vec<SecretBindingId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub access_warning: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CreateDatasetSecretBindingRequest {
+    pub dataset_id: DatasetId,
+    pub fingerprint: String,
+    #[serde(default)]
+    pub label: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CreateDatasetSecretBindingResponse {
+    pub dataset: DatasetSummary,
+    pub secret_binding_id: SecretBindingId,
+    pub active_secret_binding_ids: Vec<SecretBindingId>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ResolveDatasetSecretBindingsRequest {
+    pub fingerprint: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ResolveDatasetSecretBindingsResponse {
+    pub secret_binding_ids: Vec<SecretBindingId>,
+    pub datasets: Vec<DatasetSummary>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1160,18 +1199,107 @@ pub struct AssistantRunMessageView {
 pub struct CreateAssistantRunRequest {
     pub prompt: String,
     #[serde(default)]
+    pub local_thread_id: Option<String>,
+    #[serde(default)]
     pub startup_briefing: Option<Value>,
     #[serde(default)]
+    pub selected_scope: Option<Value>,
+    #[serde(default)]
     pub scope_candidates: Vec<Value>,
+    #[serde(default)]
+    pub context_policy_hint: Option<Value>,
+    #[serde(default)]
+    pub current_artifact: Option<Value>,
     #[serde(default)]
     pub messages: Vec<AssistantRunMessageView>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CreateAssistantRunResponse {
+    pub assistant_run_id: AssistantRunId,
     pub assistant_message: AssistantRunMessageView,
     pub runtime: Value,
+    pub selected_scope: Value,
     pub scope_candidates: Vec<Value>,
+    pub evidence_state: Value,
+    pub execution_trail: Vec<Value>,
+    pub output_artifacts: Vec<Value>,
+    pub required_confirmations: Vec<Value>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AssistantRunView {
+    pub id: AssistantRunId,
+    pub local_thread_id: Option<String>,
+    pub user_prompt: String,
+    pub startup_briefing: Value,
+    pub selected_scope: Value,
+    pub scope_candidates: Vec<Value>,
+    pub context_policy: Value,
+    pub evidence_state: Value,
+    pub service_lane: String,
+    pub execution_trail: Vec<Value>,
+    pub output_artifacts: Vec<Value>,
+    pub runtime: Value,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AssistantRunEventView {
+    pub id: AssistantRunEventId,
+    pub run_id: AssistantRunId,
+    pub sequence_no: i32,
+    pub event_name: String,
+    pub payload: Value,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AssistantRunDetailView {
+    pub run: AssistantRunView,
+    pub events: Vec<AssistantRunEventView>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AppendAssistantRunEventRequest {
+    pub event_name: String,
+    #[serde(default)]
+    pub payload: Value,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AppendAssistantRunEventResponse {
+    pub run: AssistantRunView,
+    pub event: AssistantRunEventView,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CreateConversationMemoryItemRequest {
+    pub local_thread_id: String,
+    pub role: ChatMessageRole,
+    pub item_kind: String,
+    pub summary: String,
+    #[serde(default)]
+    pub source_message_refs: Value,
+    #[serde(default)]
+    pub artifact_refs: Value,
+    #[serde(default)]
+    pub metadata: Value,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ConversationMemoryItemView {
+    pub id: ConversationMemoryItemId,
+    pub local_thread_id: String,
+    pub role: ChatMessageRole,
+    pub item_kind: String,
+    pub summary: String,
+    pub source_message_refs: Value,
+    pub artifact_refs: Value,
+    pub metadata: Value,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

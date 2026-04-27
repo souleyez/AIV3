@@ -21,6 +21,7 @@ members = [
     "crates/report-runtime",
     "crates/report-compiler",
     "crates/report-publisher",
+    "crates/assistant-runtime",
     "crates/storage",
     "crates/analytics",
     "crates/event-bus",

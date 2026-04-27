@@ -29,15 +29,94 @@ const CATALOG_POLL_INTERVAL_MS = 12000;
 const REPORT_DETAIL_POLL_INTERVAL_MS = 6000;
 const LOCAL_CHAT_STORAGE_KEY = 'aidp-v3-local-chat-messages';
 const LOCAL_ACTIVITY_STORAGE_KEY = 'aidp-v3-local-activity-events';
+const LOCAL_THREAD_ID_STORAGE_KEY = 'aidp-v3-local-thread-id';
+const LOCAL_SECRET_BINDING_IDS_STORAGE_KEY = 'aidp-v3-secret-binding-ids';
+const LOCAL_SECRET_VALUE_STORAGE_KEY = 'aidp-v3-local-secret-value';
+
+function readLocalThreadId() {
+  if (typeof window === 'undefined') {
+    return 'server-render-thread';
+  }
+  try {
+    const existing = window.localStorage.getItem(LOCAL_THREAD_ID_STORAGE_KEY);
+    if (existing) {
+      return existing;
+    }
+    const next = globalThis.crypto?.randomUUID?.() || `thread-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    window.localStorage.setItem(LOCAL_THREAD_ID_STORAGE_KEY, next);
+    return next;
+  } catch {
+    return 'browser-thread-unavailable';
+  }
+}
+
+function readLocalSecretBindingIdsHeader() {
+  if (typeof window === 'undefined') {
+    return '';
+  }
+  try {
+    const raw = window.localStorage.getItem(LOCAL_SECRET_BINDING_IDS_STORAGE_KEY) || '';
+    return raw
+      .split(',')
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .join(',');
+  } catch {
+    return '';
+  }
+}
+
+function readLocalSecretBindingIds() {
+  return readLocalSecretBindingIdsHeader()
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function writeLocalSecretState(secretValue, secretBindingIds) {
+  if (typeof window === 'undefined') {
+    return;
+  }
+  const normalizedBindingIds = [...new Set((secretBindingIds || []).filter(Boolean))];
+  window.localStorage.setItem(LOCAL_SECRET_BINDING_IDS_STORAGE_KEY, normalizedBindingIds.join(','));
+  if (secretValue) {
+    window.localStorage.setItem(LOCAL_SECRET_VALUE_STORAGE_KEY, secretValue);
+  }
+}
+
+function clearLocalSecretState() {
+  if (typeof window === 'undefined') {
+    return;
+  }
+  window.localStorage.removeItem(LOCAL_SECRET_BINDING_IDS_STORAGE_KEY);
+  window.localStorage.removeItem(LOCAL_SECRET_VALUE_STORAGE_KEY);
+}
+
+async function fingerprintLocalSecret(secretValue) {
+  const normalized = String(secretValue || '').trim();
+  if (!normalized) {
+    return '';
+  }
+  if (!globalThis.crypto?.subtle) {
+    throw new Error('当前浏览器不支持本地密钥指纹计算。');
+  }
+  const bytes = new TextEncoder().encode(normalized);
+  const digest = await globalThis.crypto.subtle.digest('SHA-256', bytes);
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, '0'))
+    .join('');
+}
 
 async function fetchJson(url, options = {}) {
   const isFormData = typeof FormData !== 'undefined' && options.body instanceof FormData;
+  const secretBindingIds = readLocalSecretBindingIdsHeader();
   const response = await fetch(url, {
     cache: 'no-store',
     ...options,
     headers: {
       Accept: 'application/json',
       ...(options.body && !isFormData ? { 'Content-Type': 'application/json' } : {}),
+      ...(secretBindingIds ? { 'X-AI-Data-Platform-Secret-Binding-Ids': secretBindingIds } : {}),
       ...(options.headers || {}),
     },
     body: options.body && !isFormData && typeof options.body !== 'string'
@@ -74,6 +153,23 @@ function sortDatasets(items) {
   );
 }
 
+function firstDatasetIdFromScope(scope) {
+  const datasets = Array.isArray(scope?.datasets)
+    ? scope.datasets
+    : Array.isArray(scope?.selected)
+      ? scope.selected
+      : [];
+  return datasets.find(Boolean) || '';
+}
+
+function scopeHintFromCandidates(candidates) {
+  const labels = (Array.isArray(candidates) ? candidates : [])
+    .map((candidate) => candidate?.label)
+    .filter(Boolean)
+    .slice(0, 3);
+  return labels.length ? `可能相关：${labels.join('、')}` : '';
+}
+
 function createLocalMessage(role, content) {
   return {
     id: `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -99,7 +195,9 @@ export default function HomePageClient() {
   const [messages, setMessages] = useState([]);
   const [localMessages, setLocalMessages] = useState([]);
   const [input, setInput] = useState('');
-  const [datasetDraft, setDatasetDraft] = useState({ key: '', title: '' });
+  const [datasetDraft, setDatasetDraft] = useState({ key: '', title: '', secret: '' });
+  const [localSecretDraft, setLocalSecretDraft] = useState('');
+  const [activeSecretCount, setActiveSecretCount] = useState(0);
   const [reportSurface, setReportSurface] = useState('pc');
   const [publishNote, setPublishNote] = useState('');
   const [mobileViewport, setMobileViewport] = useState(false);
@@ -110,6 +208,7 @@ export default function HomePageClient() {
   const [messageLoading, setMessageLoading] = useState(false);
   const [reportDetailLoading, setReportDetailLoading] = useState(false);
   const [creatingDataset, setCreatingDataset] = useState(false);
+  const [resolvingSecret, setResolvingSecret] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [uploadingFiles, setUploadingFiles] = useState(false);
   const [reportEntryBusy, setReportEntryBusy] = useState(false);
@@ -374,6 +473,7 @@ export default function HomePageClient() {
   async function handleCreateDataset() {
     const key = datasetDraft.key.trim();
     const title = datasetDraft.title.trim();
+    const secret = String(datasetDraft.secret || '').trim();
 
     if (!key || !title) {
       setError('新建数据集至少需要 key 和标题。');
@@ -382,18 +482,138 @@ export default function HomePageClient() {
 
     setCreatingDataset(true);
     try {
+      const fingerprint = secret ? await fingerprintLocalSecret(secret) : '';
       const dataset = await fetchJson('/api/v3/datasets', {
         method: 'POST',
-        body: { key, title },
+        body: {
+          key,
+          title,
+          ...(fingerprint ? { secret_fingerprint: fingerprint, secret_label: `local-${key}` } : {}),
+        },
       });
-      setDatasetDraft({ key: '', title: '' });
-      setBanner(`已创建数据集 ${dataset.title}。`);
-      await refreshCatalog({ preferredDatasetId: dataset.id, silent: true });
+      let nextDataset = dataset;
+      let secretNote = '';
+      if (secret && dataset.secret_binding_ids?.length) {
+        const nextBindingIds = [...readLocalSecretBindingIds(), ...dataset.secret_binding_ids];
+        writeLocalSecretState(secret, nextBindingIds);
+        setActiveSecretCount([...new Set(nextBindingIds)].length);
+        secretNote = ' 已绑定本地密钥，后续请求会优先带当前密钥。';
+      }
+      setDatasetDraft({ key: '', title: '', secret: '' });
+      setBanner(
+        `已创建数据集 ${nextDataset.title}。${secretNote || (nextDataset.access_warning ? ` ${nextDataset.access_warning}。` : '')}`,
+      );
+      await refreshCatalog({ preferredDatasetId: nextDataset.id, silent: true });
     } catch (createError) {
       setError(createError instanceof Error ? createError.message : '创建数据集失败');
     } finally {
       setCreatingDataset(false);
     }
+  }
+
+  async function handleResolveLocalSecret() {
+    const secret = String(localSecretDraft || '').trim();
+    if (!secret) {
+      setError('请输入本地密钥。');
+      return;
+    }
+
+    setResolvingSecret(true);
+    setError('');
+    try {
+      const fingerprint = await fingerprintLocalSecret(secret);
+      const response = await fetchJson('/api/v3/dataset-secret-bindings/resolve', {
+        method: 'POST',
+        body: { fingerprint },
+      });
+      const bindingIds = response.secret_binding_ids || [];
+      if (!bindingIds.length) {
+        clearLocalSecretState();
+        setActiveSecretCount(0);
+        setBanner('未找到匹配的私密数据集。');
+        await refreshCatalog({ silent: true });
+        return;
+      }
+      writeLocalSecretState(secret, bindingIds);
+      setActiveSecretCount(bindingIds.length);
+      setLocalSecretDraft('');
+      const unlockedTitles = (response.datasets || []).map((dataset) => dataset.title).join('、');
+      setBanner(`已解锁 ${bindingIds.length} 个本地绑定${unlockedTitles ? `：${unlockedTitles}` : ''}。`);
+      await refreshCatalog({ preferredDatasetId: response.datasets?.[0]?.id || selectedDatasetId, silent: true });
+    } catch (resolveError) {
+      setError(resolveError instanceof Error ? resolveError.message : '解锁本地密钥失败');
+    } finally {
+      setResolvingSecret(false);
+    }
+  }
+
+  async function handleBindSelectedDatasetSecret() {
+    const secret = String(localSecretDraft || '').trim();
+    if (!selectedDataset?.id) {
+      setError('请先选择要绑定为私密的数据集。');
+      return;
+    }
+    if (!secret) {
+      setError('请输入本地密钥。');
+      return;
+    }
+
+    setResolvingSecret(true);
+    setError('');
+    try {
+      const fingerprint = await fingerprintLocalSecret(secret);
+      const response = await fetchJson('/api/v3/dataset-secret-bindings', {
+        method: 'POST',
+        body: {
+          dataset_id: selectedDataset.id,
+          fingerprint,
+          label: `local-${selectedDataset.key || selectedDataset.title || 'dataset'}`,
+        },
+      });
+      const bindingIds = response.active_secret_binding_ids || response.dataset?.secret_binding_ids || [];
+      writeLocalSecretState(secret, bindingIds);
+      setActiveSecretCount(bindingIds.length);
+      setLocalSecretDraft('');
+      setBanner(`已将 ${response.dataset?.title || selectedDataset.title} 绑定为私密数据集。`);
+      await refreshCatalog({ preferredDatasetId: response.dataset?.id || selectedDataset.id, silent: true });
+    } catch (bindError) {
+      setError(bindError instanceof Error ? bindError.message : '绑定本地密钥失败');
+    } finally {
+      setResolvingSecret(false);
+    }
+  }
+
+  async function handleClearLocalSecret() {
+    clearLocalSecretState();
+    setActiveSecretCount(0);
+    setLocalSecretDraft('');
+    setSelectedDatasetId(null);
+    setBanner('已清除当前浏览器的本地密钥。');
+    await refreshCatalog({ silent: true });
+  }
+
+  function rememberLocalUserStatement(message, assistantRunId = '') {
+    const summary = String(message?.content || '').trim();
+    if (!summary) {
+      return;
+    }
+    fetchJson('/api/v3/conversation-memory-items', {
+      method: 'POST',
+      body: {
+        local_thread_id: readLocalThreadId(),
+        role: 'user',
+        item_kind: 'user_statement',
+        summary,
+        source_message_refs: [message.id].filter(Boolean),
+        artifact_refs: [],
+        metadata: {
+          source: 'browser_local_chat',
+          assistant_run_id: assistantRunId || null,
+        },
+      },
+    }).catch(() => {
+      // Conversation memory is best-effort; chat must not wait on background supply indexing.
+    });
   }
 
   function findDatasetForUploadPayload(items, payload) {
@@ -447,7 +667,7 @@ export default function HomePageClient() {
         title: file.name || `上传文件 ${index + 1}`,
         object_key: savedFile?.object_key || buildLocalUploadObjectKey(file, Date.now() + index),
         content_type: savedFile?.content_type || file.type || 'application/octet-stream',
-        secret_binding_ids: [],
+        secret_binding_ids: readLocalSecretBindingIds(),
         metadata: {
           initial_classification: {
             dataset_id: targetDataset.id,
@@ -633,11 +853,13 @@ export default function HomePageClient() {
         });
         let assistantContent = '';
         let usedBackendAssistantRun = false;
+        let assistantRunId = '';
         try {
           const assistantRun = await fetchJson('/api/v3/assistant-runs', {
             method: 'POST',
             body: {
               prompt,
+              local_thread_id: readLocalThreadId(),
               startup_briefing: briefing,
               scope_candidates: nextScopePlan.candidates,
               messages: localMessages
@@ -645,7 +867,21 @@ export default function HomePageClient() {
                 .map((message) => ({ role: message.role, content: message.content })),
             },
           });
+          assistantRunId = assistantRun?.assistant_run_id || '';
           assistantContent = assistantRun?.assistant_message?.content || '';
+          const backendCandidates = Array.isArray(assistantRun?.scope_candidates)
+            ? assistantRun.scope_candidates
+            : [];
+          if (backendCandidates.length) {
+            setScopePlan({
+              candidates: backendCandidates,
+              hint: scopeHintFromCandidates(backendCandidates),
+            });
+          }
+          const backendDatasetId = firstDatasetIdFromScope(assistantRun?.selected_scope);
+          if (backendDatasetId) {
+            await refreshCatalog({ preferredDatasetId: backendDatasetId, silent: true });
+          }
           usedBackendAssistantRun = Boolean(assistantContent);
         } catch (assistantRunError) {
           assistantContent = [
@@ -658,6 +894,7 @@ export default function HomePageClient() {
 
         const assistantMessage = createLocalMessage('assistant', assistantContent);
         setLocalMessages((current) => [...current, userMessage, assistantMessage].slice(-40));
+        rememberLocalUserStatement(userMessage, assistantRunId);
         setInput('');
         setComposingNewSession(false);
         setBanner(
@@ -944,6 +1181,10 @@ export default function HomePageClient() {
   }, []);
 
   useEffect(() => {
+    setActiveSecretCount(readLocalSecretBindingIds().length);
+  }, []);
+
+  useEffect(() => {
     if (typeof window === 'undefined') {
       return;
     }
@@ -1117,6 +1358,13 @@ export default function HomePageClient() {
     onDatasetDraftChange: (field, value) =>
       setDatasetDraft((current) => ({ ...current, [field]: value })),
     onCreateDataset: handleCreateDataset,
+    localSecretDraft,
+    activeSecretCount,
+    resolvingSecret,
+    onLocalSecretDraftChange: setLocalSecretDraft,
+    onResolveLocalSecret: handleResolveLocalSecret,
+    onBindSelectedDatasetSecret: handleBindSelectedDatasetSecret,
+    onClearLocalSecret: handleClearLocalSecret,
     onSelectDataset: (datasetId) => {
       setBanner('');
       setError('');

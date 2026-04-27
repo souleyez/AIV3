@@ -65,6 +65,9 @@ id_type!(PublishedReportVersionId);
 id_type!(RetrievalEvidenceId);
 id_type!(LlmInvocationId);
 id_type!(ToolExecutionId);
+id_type!(AssistantRunId);
+id_type!(AssistantRunEventId);
+id_type!(ConversationMemoryItemId);
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum DatasetLifecycle {
@@ -87,6 +90,30 @@ impl DatasetLifecycle {
             "draft" => Some(Self::Draft),
             "active" => Some(Self::Active),
             "archived" => Some(Self::Archived),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DatasetVisibility {
+    Public,
+    Private,
+}
+
+impl DatasetVisibility {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Public => "public",
+            Self::Private => "private",
+        }
+    }
+
+    pub fn from_str(value: &str) -> Option<Self> {
+        match value {
+            "public" => Some(Self::Public),
+            "private" => Some(Self::Private),
             _ => None,
         }
     }
@@ -148,6 +175,23 @@ impl DocumentChunkState {
 pub enum SecretScopeLevel {
     Dataset,
     Document,
+}
+
+impl SecretScopeLevel {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Dataset => "dataset",
+            Self::Document => "document",
+        }
+    }
+
+    pub fn from_str(value: &str) -> Option<Self> {
+        match value {
+            "dataset" => Some(Self::Dataset),
+            "document" => Some(Self::Document),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -495,6 +539,51 @@ impl PublishedSurface {
     }
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct AssistantRun {
+    pub id: AssistantRunId,
+    pub tenant_id: TenantId,
+    pub local_thread_id: Option<String>,
+    pub user_prompt: String,
+    pub startup_briefing: Value,
+    pub selected_scope: Value,
+    pub scope_candidates: Value,
+    pub context_policy: Value,
+    pub evidence_state: Value,
+    pub service_lane: String,
+    pub execution_trail: Value,
+    pub output_artifacts: Value,
+    pub runtime_manifest: Value,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct AssistantRunEvent {
+    pub id: AssistantRunEventId,
+    pub tenant_id: TenantId,
+    pub run_id: AssistantRunId,
+    pub sequence_no: i32,
+    pub event_name: String,
+    pub payload: Value,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct ConversationMemoryItem {
+    pub id: ConversationMemoryItemId,
+    pub tenant_id: TenantId,
+    pub local_thread_id: String,
+    pub role: ChatMessageRole,
+    pub item_kind: String,
+    pub summary: String,
+    pub source_message_refs: Value,
+    pub artifact_refs: Value,
+    pub metadata: Value,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -630,6 +719,7 @@ pub struct Dataset {
     pub title: String,
     pub description: Option<String>,
     pub lifecycle: DatasetLifecycle,
+    pub visibility: DatasetVisibility,
     pub default_secret_binding_ids: Vec<SecretBindingId>,
     pub metadata: BTreeMap<String, Value>,
     pub created_at: DateTime<Utc>,

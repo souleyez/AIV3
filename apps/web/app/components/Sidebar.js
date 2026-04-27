@@ -33,9 +33,75 @@ function DatasetCreateForm({
           disabled={creating}
         />
       </label>
+      <label className="side-form-field">
+        <span>本地密钥</span>
+        <input
+          value={draft.secret || ''}
+          onChange={(event) => onChange('secret', event.target.value)}
+          placeholder="可选，填写后创建私密数据集"
+          disabled={creating}
+          type="password"
+        />
+      </label>
       <button className="primary-btn side-form-submit" type="submit" disabled={creating}>
         {creating ? '创建中...' : '创建并切换'}
       </button>
+    </form>
+  );
+}
+
+function LocalSecretPanel({
+  secretDraft,
+  selectedDataset,
+  activeSecretCount,
+  resolving,
+  onSecretDraftChange,
+  onResolveSecret,
+  onBindSelectedDatasetSecret,
+  onClearSecret,
+}) {
+  const bindLabel = selectedDataset?.visibility === 'private'
+    ? '增加当前数据集密钥'
+    : '绑定当前数据集为私密';
+
+  return (
+    <form
+      className="side-card side-form"
+      onSubmit={(event) => {
+        event.preventDefault();
+        onResolveSecret();
+      }}
+    >
+      <div className="card-title">本地密钥</div>
+      <label className="side-form-field">
+        <span>当前终端密钥</span>
+        <input
+          value={secretDraft}
+          onChange={(event) => onSecretDraftChange(event.target.value)}
+          placeholder="输入密钥以解锁私密数据集"
+          disabled={resolving}
+          type="password"
+        />
+      </label>
+      <button className="primary-btn side-form-submit" type="submit" disabled={resolving}>
+        {resolving ? '解锁中...' : '解锁数据集'}
+      </button>
+      <button
+        className="ghost-btn side-form-submit"
+        type="button"
+        onClick={onBindSelectedDatasetSecret}
+        disabled={resolving || !selectedDataset}
+      >
+        {bindLabel}
+      </button>
+      <button className="ghost-btn side-form-submit" type="button" onClick={onClearSecret} disabled={resolving}>
+        清除本地密钥
+      </button>
+      <p className="side-form-hint">
+        已启用 {activeSecretCount} 个本地绑定。
+        {selectedDataset ? ` 当前选中：${selectedDataset.title}。` : ' 选中数据集后可绑定为私密。'}
+        密钥只缓存在当前浏览器。
+      </p>
     </form>
   );
 }
@@ -47,6 +113,13 @@ export default function Sidebar({
   datasetDraft,
   onDatasetDraftChange,
   onCreateDataset,
+  localSecretDraft,
+  activeSecretCount,
+  resolvingSecret,
+  onLocalSecretDraftChange,
+  onResolveLocalSecret,
+  onBindSelectedDatasetSecret,
+  onClearLocalSecret,
   onSelectDataset,
   onClearDatasetSelection,
   creatingDataset,
@@ -96,6 +169,17 @@ export default function Sidebar({
         onSubmit={onCreateDataset}
       />
 
+      <LocalSecretPanel
+        secretDraft={localSecretDraft}
+        selectedDataset={selectedDataset}
+        activeSecretCount={activeSecretCount}
+        resolving={resolvingSecret}
+        onSecretDraftChange={onLocalSecretDraftChange}
+        onResolveSecret={onResolveLocalSecret}
+        onBindSelectedDatasetSecret={onBindSelectedDatasetSecret}
+        onClearSecret={onClearLocalSecret}
+      />
+
       <section className="side-card">
         <div className="card-title">数据集</div>
         <div className="dataset-list">
@@ -125,7 +209,7 @@ export default function Sidebar({
                     {preselected ? <small>预选</small> : null}
                   </span>
                   <span className="dataset-item-meta">
-                    {dataset.key} · {dataset.lifecycle}
+                    {dataset.key} · {dataset.visibility === 'private' ? '私密' : '公开'} · {dataset.lifecycle}
                   </span>
                 </button>
               );

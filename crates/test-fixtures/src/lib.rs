@@ -1,8 +1,8 @@
 use anyhow::Result;
 use chrono::Utc;
 use domain_model::{
-    Dataset, DatasetId, DatasetLifecycle, ReportModule, ReportModuleId, ReportModuleKind,
-    ReportPlan, ReportPlanId, ReportPlanStatus, SecretBindingId, TenantId,
+    Dataset, DatasetId, DatasetLifecycle, DatasetVisibility, ReportModule, ReportModuleId,
+    ReportModuleKind, ReportPlan, ReportPlanId, ReportPlanStatus, SecretBindingId, TenantId,
 };
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -19,6 +19,7 @@ pub fn sample_dataset() -> Dataset {
         title: "Sample Dataset".to_string(),
         description: Some("Fixture dataset used for early workflow testing.".to_string()),
         lifecycle: DatasetLifecycle::Active,
+        visibility: DatasetVisibility::Private,
         default_secret_binding_ids: vec![SecretBindingId::new()],
         metadata: BTreeMap::from([("source".to_string(), json!("fixture"))]),
         created_at: Utc::now(),
