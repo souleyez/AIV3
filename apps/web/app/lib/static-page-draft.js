@@ -115,6 +115,24 @@ const GRID_COLUMNS = 12;
 const DEFAULT_STYLE_DIRECTION = 'client-delivery';
 const STYLE_KEYS = new Set(STATIC_PAGE_STYLE_DIRECTIONS.map((item) => item.key));
 const VISUALIZATION_TYPES = new Set(STATIC_PAGE_VISUALIZATION_TYPES.map((item) => item.type));
+const MODULE_TARGET_KEYWORDS = [
+  { id: 'hero', keywords: ['结论', '核心', '标题', '开头', '主判断', '判断'] },
+  { id: 'kpi', keywords: ['指标', 'kpi', '数字', '数据卡', '量化'] },
+  { id: 'trend', keywords: ['趋势', '变化', '走势', '折线', '时间'] },
+  { id: 'risk', keywords: ['风险', '机会', '隐患', '预警'] },
+  { id: 'next-steps', keywords: ['建议', '动作', '下一步', '计划', '推进'] },
+];
+const VISUALIZATION_KEYWORDS = [
+  { type: 'bar-chart', keywords: ['柱状图', '柱图', '条形图', '对比图'] },
+  { type: 'line-chart', keywords: ['折线图', '趋势图', '曲线图'] },
+  { type: 'donut-chart', keywords: ['环图', '饼图', '占比图', '构成图'] },
+  { type: 'kpi-cards', keywords: ['指标卡', 'kpi卡', '卡片'] },
+  { type: 'timeline', keywords: ['时间线', '路线图', '阶段'] },
+  { type: 'risk-matrix', keywords: ['风险矩阵', '优先级矩阵'] },
+  { type: 'table', keywords: ['表格', '明细表', '证据表'] },
+  { type: 'text-insight', keywords: ['文本', '洞察块', '说明块'] },
+  { type: 'headline', keywords: ['大标题', '主标题', '关键结论'] },
+];
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
@@ -173,6 +191,44 @@ function normalizeMobileOrder(modules, order) {
     if (!seen.has(id)) next.push(id);
   });
   return next;
+}
+
+function promptContains(prompt, keywords) {
+  return keywords.some((keyword) => prompt.includes(keyword.toLowerCase()));
+}
+
+function inferTargetModuleId(draft, prompt, fallback = 'hero') {
+  const modules = Array.isArray(draft?.modules) ? draft.modules : [];
+  const titleMatch = modules.find((module) => prompt.includes(String(module.title || '').toLowerCase()));
+  if (titleMatch) return titleMatch.id;
+
+  const keywordMatch = MODULE_TARGET_KEYWORDS.find((item) => promptContains(prompt, item.keywords));
+  if (keywordMatch && modules.some((module) => module.id === keywordMatch.id)) return keywordMatch.id;
+
+  if (promptContains(prompt, ['柱状图', '折线图', '环图', '趋势图', '对比图'])) {
+    return modules.some((module) => module.id === 'trend') ? 'trend' : fallback;
+  }
+
+  return modules.some((module) => module.id === fallback) ? fallback : modules[0]?.id;
+}
+
+function inferVisualizationType(prompt) {
+  return VISUALIZATION_KEYWORDS.find((item) => promptContains(prompt, item.keywords))?.type || null;
+}
+
+function firstModuleOrder(draft, moduleId) {
+  const currentOrder = normalizeMobileOrder(draft.modules, draft.mobileOrder);
+  return [moduleId, ...currentOrder.filter((id) => id !== moduleId)];
+}
+
+function lastModuleOrder(draft, moduleId) {
+  const currentOrder = normalizeMobileOrder(draft.modules, draft.mobileOrder);
+  return [...currentOrder.filter((id) => id !== moduleId), moduleId];
+}
+
+function shortModuleContent(module) {
+  const title = module.title || '这个模块';
+  return `${title}保留关键结论、数据依据和行动含义，减少解释性文字。`;
 }
 
 export function buildInitialStaticPageDraft({
@@ -324,6 +380,130 @@ export function applyStaticPageOperation(draft, operation = {}) {
 
 export function applyStaticPageOperations(draft, operations = []) {
   return operations.reduce((current, operation) => applyStaticPageOperation(current, operation), draft);
+}
+
+export function interpretStaticPagePrompt(draft, prompt = '') {
+  const rawPrompt = String(prompt || '').trim();
+  const normalizedPrompt = rawPrompt.toLowerCase();
+  const operations = [];
+  const summaryParts = [];
+
+  if (!draft || !rawPrompt) {
+    return {
+      prompt: rawPrompt,
+      summary: '没有可应用的静态页修改意图。',
+      operations,
+    };
+  }
+
+  const targetModuleId = inferTargetModuleId(draft, normalizedPrompt);
+  const targetModule = draft.modules.find((module) => module.id === targetModuleId);
+
+  if (promptContains(normalizedPrompt, ['老板', '高层', '董事会', '决策层', '管理层', 'ceo', '总裁'])) {
+    operations.push({ type: 'change_style_direction', styleDirection: 'decision-brief' });
+    summaryParts.push('改成高层决策简报，结论先行并突出行动重点');
+  }
+
+  if (promptContains(normalizedPrompt, ['客户交付', '交付报告', '售前', '方案', '客户汇报', '解释清楚'])) {
+    operations.push({ type: 'change_style_direction', styleDirection: 'client-delivery' });
+    summaryParts.push('改成客户交付报告，保留更完整的解释结构');
+  }
+
+  if (promptContains(normalizedPrompt, ['看板', '大屏', '运营监控', '数据密度', '指标密度'])) {
+    operations.push({ type: 'change_style_direction', styleDirection: 'data-command' });
+    summaryParts.push('改成数据运营看板，提高指标和图表密度');
+  }
+
+  if (promptContains(normalizedPrompt, ['风险', '隐患', '预警'])
+    && promptContains(normalizedPrompt, ['突出', '强调', '优先', '放前', '前面', '高亮', '重点'])) {
+    operations.push({
+      type: 'update_module',
+      targetModuleId: 'risk',
+      patch: {
+        title: '优先风险与机会',
+        content: '把客户需要优先处理的风险、影响范围和可推进机会放在更显眼的位置。',
+        layout: { x: 0, y: 3, w: 7, h: 4 },
+      },
+    });
+    operations.push({ type: 'reorder_modules', order: firstModuleOrder(draft, 'risk') });
+    summaryParts.push('把风险模块前置并放大，优先呈现风险和机会');
+  }
+
+  if (promptContains(normalizedPrompt, ['建议', '下一步', '动作'])
+    && promptContains(normalizedPrompt, ['最后', '结尾', '放后', '收尾'])) {
+    operations.push({ type: 'reorder_modules', order: lastModuleOrder(draft, 'next-steps') });
+    summaryParts.push('把建议动作放到页面收尾位置');
+  }
+
+  if (promptContains(normalizedPrompt, ['减少文字', '少点字', '少一点字', '精简', '压缩', '简短'])) {
+    draft.modules.forEach((module) => {
+      operations.push({
+        type: 'update_module',
+        targetModuleId: module.id,
+        patch: { content: shortModuleContent(module) },
+      });
+    });
+    summaryParts.push('压缩所有模块文案，只保留结论、数据依据和行动含义');
+  }
+
+  const visualizationType = inferVisualizationType(normalizedPrompt);
+  if (visualizationType && targetModuleId) {
+    operations.push({
+      type: 'change_visualization',
+      targetModuleId,
+      visualizationType,
+    });
+    summaryParts.push(`把${targetModule?.title || '目标模块'}改成${visualizationLabel(visualizationType)}`);
+  }
+
+  if (promptContains(normalizedPrompt, ['增加', '新增', '添加', '加一个', '补充', '多一个'])
+    && promptContains(normalizedPrompt, ['数据', '明细', '证据', '分布', '来源'])) {
+    operations.push({
+      type: 'add_module',
+      module: {
+        id: `evidence-${draft.modules.length + 1}`,
+        role: 'evidence',
+        title: '补充数据证据',
+        content: '新增一块数据证据，用来解释关键结论背后的来源、分布或明细。',
+        dataBinding: {
+          type: 'conversation_evidence',
+          label: '来自会话补充证据',
+          sourceId: 'evidence',
+        },
+        visualization: {
+          type: promptContains(normalizedPrompt, ['分布', '占比', '构成']) ? 'donut-chart' : 'table',
+          label: promptContains(normalizedPrompt, ['分布', '占比', '构成'])
+            ? visualizationLabel('donut-chart')
+            : visualizationLabel('table'),
+        },
+        layout: { x: 0, y: draft.modules.length * 2, w: 6, h: 3 },
+      },
+    });
+    summaryParts.push('新增数据证据模块，补充来源、分布或明细');
+  }
+
+  if (!summaryParts.length && targetModuleId) {
+    operations.push({
+      type: 'update_module',
+      targetModuleId,
+      patch: {
+        content: `${targetModule?.content || '保留当前内容'} 修改方向：${rawPrompt}`,
+      },
+    });
+    summaryParts.push(`围绕${targetModule?.title || '目标模块'}应用用户修改意图`);
+  }
+
+  const summary = `模型理解：${summaryParts.join('；')}。`;
+  operations.push({
+    type: 'refresh_summary',
+    modelSummary: summary,
+  });
+
+  return {
+    prompt: rawPrompt,
+    summary,
+    operations,
+  };
 }
 
 export function buildStaticPageImagePayload(draft, { oneClick = false } = {}) {

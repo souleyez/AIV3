@@ -2,9 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   applyStaticPageOperation,
+  applyStaticPageOperations,
   buildInitialStaticPageDraft,
   buildStaticPageFinalRenderPayload,
   buildStaticPageImagePayload,
+  interpretStaticPagePrompt,
   validateMobileOrder,
   validateStaticPageLayout,
 } from './static-page-draft.js';
@@ -100,4 +102,60 @@ test('image and final render payloads include confirmed structure', () => {
   assert.equal(imagePayload.modules.length, 5);
   assert.equal(finalPayload.previewImage.assetKey, 'preview-1.png');
   assert.equal(validateMobileOrder(finalPayload.modules, finalPayload.mobileOrder), true);
+});
+
+test('prompt interpreter changes tone for decision makers', () => {
+  const draft = buildInitialStaticPageDraft();
+  const interpretation = interpretStaticPagePrompt(draft, '整体更像给老板看的，结论先行');
+  const next = applyStaticPageOperations(draft, interpretation.operations);
+
+  assert.equal(next.styleDirection, 'decision-brief');
+  assert.match(next.modelSummary, /高层决策简报/);
+});
+
+test('prompt interpreter highlights risk and moves it first on mobile', () => {
+  const draft = buildInitialStaticPageDraft();
+  const interpretation = interpretStaticPagePrompt(draft, '突出风险，把风险放到前面');
+  const next = applyStaticPageOperations(draft, interpretation.operations);
+
+  assert.equal(next.mobileOrder[0], 'risk');
+  assert.equal(next.modules.find((module) => module.id === 'risk').title, '优先风险与机会');
+  assert.equal(validateMobileOrder(next.modules, next.mobileOrder), true);
+});
+
+test('prompt interpreter switches a target module chart type', () => {
+  const draft = buildInitialStaticPageDraft();
+  const interpretation = interpretStaticPagePrompt(draft, '把趋势变化换成柱状图');
+  const next = applyStaticPageOperations(draft, interpretation.operations);
+
+  assert.equal(next.modules.find((module) => module.id === 'trend').visualization.type, 'bar-chart');
+});
+
+test('prompt interpreter reduces copy across modules', () => {
+  const draft = buildInitialStaticPageDraft();
+  const interpretation = interpretStaticPagePrompt(draft, '减少文字，整体精简一点');
+  const next = applyStaticPageOperations(draft, interpretation.operations);
+
+  assert.equal(next.modules.every((module) => module.content.includes('减少解释性文字')), true);
+  assert.match(next.modelSummary, /压缩所有模块文案/);
+});
+
+test('prompt interpreter adds an evidence data module', () => {
+  const draft = buildInitialStaticPageDraft();
+  const interpretation = interpretStaticPagePrompt(draft, '新增一个数据来源明细，最好用表格');
+  const next = applyStaticPageOperations(draft, interpretation.operations);
+  const addedModule = next.modules.find((module) => module.id === 'evidence-6');
+
+  assert.equal(next.modules.length, 6);
+  assert.equal(addedModule.visualization.type, 'table');
+  assert.equal(validateMobileOrder(next.modules, next.mobileOrder), true);
+});
+
+test('prompt interpreter selects data dashboard direction', () => {
+  const draft = buildInitialStaticPageDraft();
+  const interpretation = interpretStaticPagePrompt(draft, '做成运营看板，提高数据密度');
+  const next = applyStaticPageOperations(draft, interpretation.operations);
+
+  assert.equal(next.styleDirection, 'data-command');
+  assert.match(next.modelSummary, /数据运营看板/);
 });

@@ -6,7 +6,12 @@ import HomeMobileShell from './components/HomeMobileShell';
 import HomeWorkspaceToolbar from './components/HomeWorkspaceToolbar';
 import InsightPanel from './components/InsightPanel';
 import Sidebar from './components/Sidebar';
-import { applyStaticPageOperation, buildInitialStaticPageDraft } from './lib/static-page-draft';
+import {
+  applyStaticPageOperation,
+  applyStaticPageOperations,
+  buildInitialStaticPageDraft,
+  interpretStaticPagePrompt,
+} from './lib/static-page-draft';
 
 const DATASET_POLL_INTERVAL_MS = 5000;
 const MESSAGE_POLL_INTERVAL_MS = 3000;
@@ -360,7 +365,7 @@ export default function HomePageClient() {
         oneClick: /一键|直接|马上|立即|跳过/.test(prompt),
         prompt,
       });
-    } else if (activeStaticPageDraft && /调整|修改|换成|改成|突出|减少|增加|放大|缩小|移动|排序/.test(prompt)) {
+    } else if (activeStaticPageDraft && /调整|修改|换成|改成|突出|减少|增加|放大|缩小|移动|排序|风格|老板|高层|风险|柱状图|折线图|环图|看板|精简/.test(prompt)) {
       handleApplyStaticPagePrompt(prompt);
     }
 
@@ -447,16 +452,14 @@ export default function HomePageClient() {
       return handleStartStaticPageDraft({ prompt });
     }
 
-    const draft = applyStaticPageOperation(activeStaticPageDraft, {
-      type: 'refresh_summary',
-      modelSummary: `模型已收到修改意图：${prompt}`,
-    });
+    const interpretation = interpretStaticPagePrompt(activeStaticPageDraft, prompt);
+    const draft = applyStaticPageOperations(activeStaticPageDraft, interpretation.operations);
     setStaticPageDrafts((current) => ({
       ...current,
       [draft.id]: draft,
     }));
     setActiveStaticPageDraftId(draft.id);
-    setBanner('已记录静态页修改意图，后续会由模型转换成结构化操作。');
+    setBanner(`已按模型理解刷新静态页规划：${interpretation.summary}`);
     return draft;
   }
 

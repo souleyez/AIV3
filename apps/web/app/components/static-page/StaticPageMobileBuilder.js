@@ -49,12 +49,16 @@ export default function StaticPageMobileBuilder({
       <div className="static-page-mobile-preview">
         <span>{STYLE_LABELS[draft.styleDirection] || draft.styleDirection}</span>
         <strong>{draft.objective}</strong>
-        <p>{draft.modelSummary}</p>
         <div className="static-page-mobile-preview-bars">
           {draft.modules.map((module) => (
             <i key={module.id} style={{ width: `${Math.max(36, Math.min(100, (module.layout?.w || 4) * 8))}%` }} />
           ))}
         </div>
+      </div>
+
+      <div className="static-page-mobile-model-summary">
+        <span>模型理解</span>
+        <p>{draft.modelSummary}</p>
       </div>
 
       <div className="static-page-mobile-intent">

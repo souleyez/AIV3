@@ -2237,6 +2237,7 @@ body {
 }
 
 .static-page-mobile-preview,
+.static-page-mobile-model-summary,
 .static-page-mobile-intent,
 .static-page-mobile-section-title,
 .static-page-mobile-empty,
@@ -2254,6 +2255,7 @@ body {
 }
 
 .static-page-mobile-preview span,
+.static-page-mobile-model-summary span,
 .static-page-mobile-section-title span,
 .static-page-mobile-intent label {
   color: #93c5fd;
@@ -2268,6 +2270,7 @@ body {
 }
 
 .static-page-mobile-preview p,
+.static-page-mobile-model-summary p,
 .static-page-mobile-empty p {
   margin: 0;
   color: #9aa7b9;
@@ -2286,6 +2289,12 @@ body {
   height: 8px;
   border-radius: 999px;
   background: linear-gradient(90deg, rgba(33, 214, 165, 0.75), rgba(59, 130, 246, 0.88));
+}
+
+.static-page-mobile-model-summary {
+  display: grid;
+  gap: 6px;
+  padding: 13px 14px;
 }
 
 .static-page-mobile-intent {
