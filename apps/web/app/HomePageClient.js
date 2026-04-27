@@ -417,6 +417,7 @@ export default function HomePageClient() {
     }
 
     setReportActionBusy('continue');
+    setError('');
     try {
       const response = await fetchJson(`/api/v3/report-plans/${selectedReportPlanId}/continue`, {
         method: 'POST',
@@ -440,6 +441,7 @@ export default function HomePageClient() {
     }
 
     setReportActionBusy('render');
+    setError('');
     try {
       const response = await fetchJson(`/api/v3/report-plans/${selectedReportPlanId}/renders`, {
         method: 'POST',
@@ -464,6 +466,7 @@ export default function HomePageClient() {
     }
 
     setReportActionBusy('publish');
+    setError('');
     try {
       const response = await fetchJson(`/api/v3/report-plans/${selectedReportPlanId}/publish`, {
         method: 'POST',
@@ -480,6 +483,31 @@ export default function HomePageClient() {
       ]);
     } catch (actionError) {
       setError(actionError instanceof Error ? actionError.message : '发布报告失败');
+    } finally {
+      setReportActionBusy('');
+    }
+  }
+
+  async function handleRetryWorkflowExecution(executionId) {
+    if (!executionId) {
+      return;
+    }
+
+    setReportActionBusy(`retry:${executionId}`);
+    setError('');
+    try {
+      const response = await fetchJson(`/api/v3/workflow-executions/${executionId}/retry`, {
+        method: 'POST',
+        body: { reason: 'web_report_control_retry' },
+      });
+      const restart = response.restart_transition || response.retry_transition;
+      setBanner(`已请求重试 workflow ${restart.execution.id}，任务 ${restart.enqueued_tasks?.[0]?.id || '已入队'}。`);
+      await Promise.all([
+        refreshCatalog({ preferredDatasetId: selectedDatasetId, silent: true }),
+        selectedReportPlanId ? refreshReportDetail(selectedReportPlanId, { silent: true }) : Promise.resolve(),
+      ]);
+    } catch (retryError) {
+      setError(retryError instanceof Error ? retryError.message : '重试 workflow 失败');
     } finally {
       setReportActionBusy('');
     }
@@ -725,6 +753,7 @@ export default function HomePageClient() {
             onContinueReportPlan={handleContinueReportPlan}
             onRequestReportRender={handleRequestReportRender}
             onPublishReport={handlePublishReport}
+            onRetryWorkflowExecution={handleRetryWorkflowExecution}
             onRefreshReportDetail={() => {
               if (selectedReportPlanId) {
                 refreshReportDetail(selectedReportPlanId);

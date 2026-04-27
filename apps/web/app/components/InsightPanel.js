@@ -34,12 +34,76 @@ function hasPublishableAsset(output) {
   return output?.status === 'rendered' && Boolean(firstAssetPath(output.asset_manifest));
 }
 
+function latestOutputForSurface(renderOutputs, surface) {
+  return renderOutputs.find((output) => output.surface === surface) || null;
+}
+
 function canContinuePlan(plan) {
   return plan?.status === 'draft' && !plan.current_ast_version_id;
 }
 
 function canRenderPlan(plan) {
   return Boolean(plan?.current_ast_version_id);
+}
+
+function buildReportControlNotice({
+  plan,
+  surface,
+  latestSurfaceOutput,
+  latestPublishableOutput,
+  publishedDetail,
+  actionBusy,
+}) {
+  if (!plan) return null;
+
+  if (actionBusy) {
+    return {
+      tone: 'info',
+      title: 'Host action 正在执行',
+      detail: '控制台会自动轮询详情；如果 worker 写回了新 AST、render output 或发布版本，这里会同步刷新。',
+    };
+  }
+
+  if (!plan.current_ast_version_id) {
+    return {
+      tone: 'warn',
+      title: '还不能渲染',
+      detail: '当前 report plan 还没有 AST 版本，先继续规划，让 worker 写回可渲染结构。',
+    };
+  }
+
+  if (latestSurfaceOutput?.status === 'failed') {
+    return {
+      tone: 'danger',
+      title: `${SURFACE_LABELS[surface] || surface} 最近一次渲染失败`,
+      detail: `可直接重试 workflow ${truncateText(latestSurfaceOutput.execution_id, 18)}，或进入 runtime.inspect 查看失败细节。`,
+    };
+  }
+
+  if (latestSurfaceOutput?.status === 'rendered' && !firstAssetPath(latestSurfaceOutput.asset_manifest)) {
+    return {
+      tone: 'warn',
+      title: '渲染已完成但缺少资产路径',
+      detail: '这个 render output 不能发布。需要重试渲染，或检查 report-render-worker 的 asset manifest 写回。',
+    };
+  }
+
+  if (latestPublishableOutput) {
+    const currentVersion = publishedDetail?.current_version;
+    return {
+      tone: currentVersion ? 'success' : 'ready',
+      title: currentVersion ? '已有发布版本' : '可以发布',
+      detail: currentVersion
+        ? `当前版本是 v${currentVersion.version_no}；如需覆盖交付状态，可以发布新的 ${SURFACE_LABELS[surface] || surface} 版本。`
+        : `已有可发布的 ${SURFACE_LABELS[surface] || surface} 渲染资产，确认后可发布为 published report。`,
+    };
+  }
+
+  return {
+    tone: 'info',
+    title: '可以启动渲染',
+    detail: `AST 已就绪，但当前还没有可发布的 ${SURFACE_LABELS[surface] || surface} render output。`,
+  };
 }
 
 function ReportPlanDetail({
@@ -56,15 +120,25 @@ function ReportPlanDetail({
   onContinue,
   onRender,
   onPublish,
+  onRetryWorkflowExecution,
   onRefresh,
 }) {
   if (!plan) {
     return <EmptySection text="选择一个 report plan 后，这里会显示 AST、渲染输出和发布版本。" />;
   }
 
+  const latestSurfaceOutput = latestOutputForSurface(renderOutputs, surface);
   const latestPublishableOutput = renderOutputs.find(
     (output) => output.surface === surface && hasPublishableAsset(output),
   );
+  const notice = buildReportControlNotice({
+    plan,
+    surface,
+    latestSurfaceOutput,
+    latestPublishableOutput,
+    publishedDetail,
+    actionBusy,
+  });
   const disableActions = Boolean(actionBusy);
 
   return (
@@ -105,6 +179,13 @@ function ReportPlanDetail({
           </button>
         ))}
       </div>
+
+      {notice ? (
+        <div className={`report-status-callout ${notice.tone}`.trim()}>
+          <strong>{notice.title}</strong>
+          <span>{notice.detail}</span>
+        </div>
+      ) : null}
 
       <div className="insight-action-row">
         <button
@@ -169,14 +250,36 @@ function ReportPlanDetail({
           <strong>渲染输出</strong>
           {renderOutputs.length ? (
             <div className="mini-list">
-              {renderOutputs.map((output) => (
-                <div className="mini-row multi" key={output.id}>
-                  <span>
-                    {SURFACE_LABELS[output.surface] || output.surface} · {formatSnakeCaseLabel(output.status)}
-                  </span>
-                  <em>{truncateText(firstAssetPath(output.asset_manifest) || output.id, 42)}</em>
-                </div>
-              ))}
+              {renderOutputs.map((output) => {
+                const assetPath = firstAssetPath(output.asset_manifest);
+                const failed = output.status === 'failed';
+                const retryBusy = actionBusy === `retry:${output.execution_id}`;
+                return (
+                  <div className={`mini-row multi report-output-row ${failed ? 'failed' : ''}`.trim()} key={output.id}>
+                    <div className="report-output-copy">
+                      <span>
+                        {SURFACE_LABELS[output.surface] || output.surface} · {formatSnakeCaseLabel(output.status)}
+                      </span>
+                      <em>{truncateText(assetPath || output.id, 42)}</em>
+                      <small>
+                        {output.model_facing?.recommended_tool_key || (failed ? 'workflow.retry' : 'report.publish')}
+                        {' · '}
+                        workflow {truncateText(output.execution_id, 14)}
+                      </small>
+                    </div>
+                    {failed ? (
+                      <button
+                        type="button"
+                        className="ghost-btn compact-action-btn report-row-action"
+                        disabled={disableActions}
+                        onClick={() => onRetryWorkflowExecution(output.execution_id)}
+                      >
+                        {retryBusy ? '重试中...' : '重试'}
+                      </button>
+                    ) : null}
+                  </div>
+                );
+              })}
             </div>
           ) : (
             <EmptySection text="暂无 render output。" />
@@ -228,6 +331,7 @@ export default function InsightPanel({
   onContinueReportPlan,
   onRequestReportRender,
   onPublishReport,
+  onRetryWorkflowExecution,
   onRefreshReportDetail,
 }) {
   return (
@@ -346,6 +450,7 @@ export default function InsightPanel({
           onContinue={onContinueReportPlan}
           onRender={onRequestReportRender}
           onPublish={onPublishReport}
+          onRetryWorkflowExecution={onRetryWorkflowExecution}
           onRefresh={onRefreshReportDetail}
         />
       </section>

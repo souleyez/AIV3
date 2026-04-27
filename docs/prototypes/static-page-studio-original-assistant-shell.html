@@ -1,0 +1,1309 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>静态页生成 - 原版智能助手外观稿</title>
+  <style>
+    :root {
+      --bg: #04070c;
+      --bg-elevated: #06080c;
+      --panel: rgba(10, 14, 21, 0.78);
+      --panel-soft: rgba(13, 18, 28, 0.86);
+      --line: rgba(148, 163, 184, 0.11);
+      --text: #f4f7fb;
+      --subtle: #93a4bd;
+      --primary: #3b82f6;
+      --primary-deep: #2563eb;
+      --success: #16a34a;
+      --warning: #f59e0b;
+      --danger: #ef4444;
+      --workspace-shell-rail-width: 240px;
+      --workspace-shell-toolbar-height: 64px;
+      --workspace-shell-dark: linear-gradient(180deg, #2a3039, #222831);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      margin: 0;
+      min-height: 100%;
+      color: var(--text);
+      background: var(--bg-elevated);
+      font-family: Inter, "PingFang SC", "Microsoft YaHei", sans-serif;
+    }
+
+    button,
+    textarea,
+    input {
+      font: inherit;
+    }
+
+    button {
+      border: 0;
+      cursor: default;
+    }
+
+    .home-shell {
+      width: 100vw;
+      height: 100vh;
+      overflow: hidden;
+      background: var(--bg-elevated);
+    }
+
+    .home-main-panel {
+      position: relative;
+      isolation: isolate;
+      height: 100%;
+      display: grid;
+      grid-template-rows: var(--workspace-shell-toolbar-height) minmax(0, 1fr);
+      padding: 0 20px;
+      overflow: hidden;
+    }
+
+    .home-main-panel::before {
+      position: absolute;
+      z-index: 0;
+      top: 0;
+      left: 20px;
+      right: 20px;
+      height: var(--workspace-shell-toolbar-height);
+      content: "";
+      background: var(--workspace-shell-dark);
+    }
+
+    .home-main-panel::after {
+      position: absolute;
+      z-index: 0;
+      top: var(--workspace-shell-toolbar-height);
+      left: 20px;
+      bottom: 20px;
+      width: var(--workspace-shell-rail-width);
+      content: "";
+      background: var(--workspace-shell-dark);
+    }
+
+    .home-toolbar {
+      position: relative;
+      z-index: 4;
+      height: var(--workspace-shell-toolbar-height);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+      color: #eef3fb;
+      background: var(--workspace-shell-dark);
+    }
+
+    .home-toolbar-left,
+    .home-toolbar-right {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+    }
+
+    .home-toolbar-brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      margin-left: 14px;
+      white-space: nowrap;
+    }
+
+    .home-toolbar-brand-mark {
+      display: grid;
+      width: 36px;
+      height: 36px;
+      place-items: center;
+      border-radius: 12px;
+      color: #f7fbff;
+      background: linear-gradient(135deg, #3b82f6, #22c55e);
+      font-size: 13px;
+      font-weight: 800;
+    }
+
+    .home-toolbar-brand-name {
+      font-size: 26px;
+      font-weight: 850;
+      letter-spacing: -0.04em;
+    }
+
+    .home-toolbar-nav {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .home-toolbar-nav-link,
+    .toolbar-pill,
+    .toolbar-secret {
+      min-height: 34px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 12px;
+      color: #eef3fb;
+      background: transparent;
+      padding: 0 12px;
+      font-size: 13px;
+      font-weight: 750;
+      text-decoration: none;
+    }
+
+    .home-toolbar-nav-link.active,
+    .home-toolbar-nav-link:hover {
+      background: rgba(255, 255, 255, 0.08);
+    }
+
+    .toolbar-pill {
+      gap: 8px;
+      background: rgba(2, 6, 11, 0.54);
+      border-radius: 14px;
+      font-weight: 650;
+    }
+
+    .toolbar-pill strong {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 24px;
+      height: 20px;
+      border-radius: 99px;
+      padding: 0 6px;
+      background: rgba(255, 255, 255, 0.08);
+      color: #eef4fb;
+      font-size: 11px;
+    }
+
+    .toolbar-pill .good {
+      color: #bbf7d0;
+      background: rgba(22, 163, 74, 0.22);
+    }
+
+    .toolbar-pill .bad {
+      color: #fecaca;
+      background: rgba(239, 68, 68, 0.22);
+    }
+
+    .toolbar-secret {
+      margin-right: 10px;
+      background: linear-gradient(180deg, #4f8df7, #2f6fe9);
+      box-shadow: none;
+    }
+
+    .home-desktop-grid {
+      position: relative;
+      z-index: 2;
+      min-height: 0;
+      height: 100%;
+      display: grid;
+      grid-template-columns: var(--workspace-shell-rail-width) minmax(360px, 0.9fr) minmax(480px, 1.1fr);
+      gap: 0;
+      align-items: stretch;
+    }
+
+    .home-desktop-grid::before {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      left: calc(var(--workspace-shell-rail-width) - 1px);
+      width: 1px;
+      content: "";
+      background: rgba(148, 163, 184, 0.11);
+    }
+
+    .home-desktop-grid::after {
+      position: absolute;
+      top: 0;
+      left: calc(var(--workspace-shell-rail-width) - 1px);
+      right: 0;
+      height: 1px;
+      content: "";
+      background: rgba(148, 163, 184, 0.11);
+    }
+
+    .home-dataset-rail {
+      position: relative;
+      z-index: 3;
+      display: grid;
+      grid-template-rows: auto auto auto minmax(0, 1fr);
+      align-content: start;
+      gap: 14px;
+      height: 100%;
+      padding: 14px;
+      color: #eef3fb;
+      background: transparent;
+    }
+
+    .dataset-create {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+    }
+
+    .rail-input,
+    .rail-btn,
+    .compact-btn,
+    .ghost-btn,
+    .primary-btn {
+      min-height: 34px;
+      border-radius: 12px;
+      color: #eef3fb;
+      background: rgba(255, 255, 255, 0.045);
+      border: 1px solid rgba(255, 255, 255, 0.04);
+      padding: 0 12px;
+      font-size: 12px;
+      font-weight: 750;
+    }
+
+    .rail-input {
+      width: 100%;
+      outline: 0;
+      color: #f8fbff;
+    }
+
+    .rail-input::placeholder {
+      color: #8ea0ba;
+    }
+
+    .rail-note {
+      margin: 0;
+      color: #93a4bd;
+      font-size: 12px;
+      line-height: 1.55;
+    }
+
+    .source-chip-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .source-chip {
+      display: inline-flex;
+      min-height: 26px;
+      align-items: center;
+      justify-content: center;
+      border-radius: 999px;
+      color: #dce4f1;
+      background: rgba(255, 255, 255, 0.06);
+      padding: 0 9px;
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    .dataset-list {
+      display: grid;
+      align-content: start;
+      gap: 8px;
+      min-height: 0;
+      overflow-y: auto;
+      padding-right: 4px;
+    }
+
+    .dataset-item {
+      position: relative;
+      min-height: 38px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: #d6dfec;
+      background: rgba(255, 255, 255, 0.02);
+      border-radius: 12px;
+      padding: 7px 10px 7px 14px;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .dataset-item.active {
+      color: #ffffff;
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.082), rgba(255, 255, 255, 0.045)),
+        radial-gradient(circle at left center, rgba(118, 134, 158, 0.08), transparent 36%);
+    }
+
+    .dataset-item.active::before {
+      position: absolute;
+      left: 0;
+      top: 7px;
+      bottom: 7px;
+      width: 3px;
+      border-radius: 999px;
+      content: "";
+      background: linear-gradient(180deg, #d9e2ef, #91a0b8);
+    }
+
+    .dataset-count {
+      margin-left: auto;
+      min-width: 30px;
+      height: 20px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.08);
+      color: #edf2f9;
+      font-size: 11px;
+    }
+
+    .home-chat-stage {
+      min-width: 0;
+      min-height: 0;
+      height: 100%;
+      display: flex;
+      overflow: hidden;
+      padding: 18px 0 0 18px;
+    }
+
+    .chat-panel {
+      flex: 1 1 auto;
+      min-width: 0;
+      min-height: 0;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      padding: 14px 14px 0;
+      color: #e8eef7;
+      background: transparent;
+      border: 0;
+    }
+
+    .chat-messages {
+      flex: 1 1 auto;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      overflow-y: auto;
+      padding: 8px 4px 12px;
+      scrollbar-width: none;
+    }
+
+    .chat-messages::-webkit-scrollbar {
+      display: none;
+    }
+
+    .message {
+      display: flex;
+      gap: 8px;
+      align-items: flex-start;
+    }
+
+    .message.user {
+      justify-content: flex-end;
+    }
+
+    .avatar {
+      width: 28px;
+      height: 28px;
+      flex: 0 0 auto;
+      display: grid;
+      place-items: center;
+      border-radius: 10px;
+      color: #d8e2f0;
+      background: rgba(88, 111, 152, 0.28);
+      font-size: 11px;
+      font-weight: 800;
+    }
+
+    .bubble {
+      max-width: 78%;
+      border-radius: 16px;
+      background: rgba(16, 20, 28, 0.9);
+      padding: 12px 14px;
+      color: #e6edf7;
+      font-size: 12px;
+      line-height: 1.7;
+    }
+
+    .bubble h3 {
+      margin: 0 0 6px;
+      font-size: 13px;
+      color: #f8fbff;
+    }
+
+    .bubble p {
+      margin: 0;
+    }
+
+    .message-meta {
+      margin-top: 8px;
+      color: #8da0bc;
+      font-size: 10px;
+    }
+
+    .operation-card {
+      display: grid;
+      gap: 10px;
+      margin-top: 12px;
+      padding: 12px;
+      border-radius: 16px;
+      background: rgba(255, 255, 255, 0.035);
+    }
+
+    .operation-card-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .operation-card-title {
+      display: grid;
+      gap: 2px;
+    }
+
+    .operation-card-title strong {
+      color: #f8fbff;
+      font-size: 13px;
+    }
+
+    .operation-card-title span {
+      color: #8da0bc;
+      font-size: 10px;
+    }
+
+    .mini-pill {
+      display: inline-flex;
+      align-items: center;
+      min-height: 24px;
+      padding: 0 8px;
+      border-radius: 999px;
+      color: #bcd2f1;
+      background: rgba(59, 130, 246, 0.16);
+      font-size: 10px;
+      font-weight: 750;
+    }
+
+    .operation-lines {
+      display: grid;
+      gap: 6px;
+    }
+
+    .operation-line {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      min-height: 30px;
+      align-items: center;
+      border-radius: 10px;
+      background: rgba(255, 255, 255, 0.035);
+      padding: 0 9px;
+      color: #d9e4f4;
+      font-size: 11px;
+    }
+
+    .operation-line code {
+      color: #9bb7df;
+      font-family: "Cascadia Mono", Consolas, monospace;
+      font-size: 10px;
+      font-weight: 800;
+    }
+
+    .chat-composer-wrap {
+      position: relative;
+      flex: 0 0 auto;
+      margin-top: auto;
+      padding: 8px;
+      border-radius: 16px 16px 0 0;
+      background: #dde3ea;
+    }
+
+    .chat-input-row {
+      display: grid;
+      grid-template-columns: 1fr 86px;
+      gap: 8px;
+      align-items: end;
+    }
+
+    .chat-input-row textarea {
+      width: 100%;
+      min-height: 74px;
+      resize: none;
+      outline: 0;
+      border: 0;
+      padding: 6px;
+      color: #f8fbff;
+      background: transparent;
+      font-size: 13px;
+      line-height: 1.6;
+    }
+
+    .chat-input-side-actions {
+      display: grid;
+      gap: 8px;
+    }
+
+    .send-btn,
+    .upload-btn {
+      min-height: 34px;
+      border-radius: 14px;
+      color: #ffffff;
+      background: linear-gradient(180deg, #4f8df7, #2f6fe9);
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .upload-btn {
+      background: rgba(255, 255, 255, 0.15);
+      color: #f3f7fb;
+    }
+
+    .insight-panel {
+      min-width: 0;
+      min-height: 0;
+      height: 100%;
+      padding: 18px 0 0 12px;
+      margin-left: 12px;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+      gap: 14px;
+      color: #e8eef7;
+    }
+
+    .insight-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 0 12px 0 0;
+    }
+
+    .insight-title {
+      display: grid;
+      gap: 6px;
+    }
+
+    .insight-title h2 {
+      margin: 0;
+      font-size: 20px;
+      line-height: 1.2;
+    }
+
+    .insight-title span {
+      color: #8ea0ba;
+      font-size: 12px;
+    }
+
+    .insight-actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .primary-btn {
+      background: linear-gradient(180deg, #4f8df7, #2f6fe9);
+    }
+
+    .static-page-panel {
+      min-height: 0;
+      overflow: hidden;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr) auto;
+      gap: 12px;
+      padding: 0 12px 14px 0;
+    }
+
+    .progress-strip {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .progress-step {
+      min-height: 34px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 0 8px;
+      border-radius: 12px;
+      color: #aebbd0;
+      background: rgba(255, 255, 255, 0.03);
+      font-size: 11px;
+      font-weight: 750;
+    }
+
+    .progress-step strong {
+      display: grid;
+      place-items: center;
+      width: 20px;
+      height: 20px;
+      border-radius: 999px;
+      color: #e7eef8;
+      background: rgba(255, 255, 255, 0.08);
+      font-size: 10px;
+    }
+
+    .progress-step.active {
+      color: #f8fbff;
+      background: rgba(59, 130, 246, 0.14);
+    }
+
+    .progress-step.active strong {
+      background: #3b82f6;
+    }
+
+    .planner-surface {
+      min-height: 0;
+      overflow-y: auto;
+      display: grid;
+      align-content: start;
+      gap: 12px;
+      scrollbar-width: none;
+      padding-right: 4px;
+    }
+
+    .planner-surface::-webkit-scrollbar {
+      display: none;
+    }
+
+    .planner-hero,
+    .module-card,
+    .direction-card,
+    .queue-card {
+      border-radius: 18px;
+      background: rgba(255, 255, 255, 0.035);
+      border: 1px solid rgba(148, 163, 184, 0.08);
+      padding: 14px;
+    }
+
+    .planner-hero {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 180px;
+      gap: 16px;
+      align-items: center;
+    }
+
+    .planner-hero h3,
+    .module-card h3,
+    .direction-card h3,
+    .queue-card h3 {
+      margin: 0;
+      color: #f7fbff;
+      font-size: 15px;
+      line-height: 1.35;
+    }
+
+    .planner-hero p,
+    .module-card p,
+    .direction-card p,
+    .queue-card p {
+      margin: 8px 0 0;
+      color: #8da0bc;
+      font-size: 12px;
+      line-height: 1.65;
+    }
+
+    .preview-phone {
+      height: 142px;
+      border-radius: 22px;
+      background:
+        radial-gradient(circle at top, rgba(59, 130, 246, 0.24), transparent 42%),
+        #080c12;
+      border: 1px solid rgba(148, 163, 184, 0.1);
+      padding: 10px;
+      display: grid;
+      gap: 6px;
+      align-content: start;
+    }
+
+    .phone-line {
+      height: 10px;
+      border-radius: 999px;
+      background: rgba(148, 163, 184, 0.18);
+    }
+
+    .phone-line.long { width: 92%; }
+    .phone-line.mid { width: 66%; }
+    .phone-line.short { width: 46%; }
+
+    .module-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .module-card {
+      min-height: 108px;
+      position: relative;
+    }
+
+    .module-card.wide {
+      grid-column: span 2;
+    }
+
+    .module-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-bottom: 8px;
+    }
+
+    .module-meta span {
+      display: inline-flex;
+      min-height: 22px;
+      align-items: center;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.055);
+      color: #bcc9dc;
+      padding: 0 7px;
+      font-size: 10px;
+      font-weight: 750;
+    }
+
+    .bar-stack {
+      display: grid;
+      gap: 8px;
+      margin-top: 12px;
+    }
+
+    .bar-row {
+      display: grid;
+      grid-template-columns: 56px minmax(0, 1fr) 28px;
+      gap: 8px;
+      align-items: center;
+      color: #8da0bc;
+      font-size: 11px;
+    }
+
+    .bar-track {
+      height: 9px;
+      border-radius: 999px;
+      background: rgba(148, 163, 184, 0.16);
+      overflow: hidden;
+    }
+
+    .bar-fill {
+      height: 100%;
+      border-radius: inherit;
+      background: #46627f;
+    }
+
+    .kpi-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+      margin-top: 10px;
+    }
+
+    .kpi {
+      border-radius: 14px;
+      background: rgba(255, 255, 255, 0.04);
+      padding: 10px;
+      color: #8da0bc;
+      font-size: 11px;
+    }
+
+    .kpi strong {
+      display: block;
+      color: #f7fbff;
+      font-size: 22px;
+      line-height: 1.1;
+    }
+
+    .direction-row {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .direction-card.active {
+      border-color: rgba(59, 130, 246, 0.28);
+      background: rgba(59, 130, 246, 0.1);
+    }
+
+    .queue-card {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 14px;
+    }
+
+    .queue-progress {
+      flex: 0 0 180px;
+      height: 8px;
+      border-radius: 999px;
+      background: rgba(148, 163, 184, 0.16);
+      overflow: hidden;
+    }
+
+    .queue-progress span {
+      display: block;
+      width: 58%;
+      height: 100%;
+      border-radius: inherit;
+      background: #46627f;
+    }
+
+    .mobile-screen {
+      display: none;
+    }
+
+    @media (max-width: 900px) {
+      html,
+      body {
+        height: 100%;
+        overflow: hidden;
+      }
+
+      .home-shell {
+        display: none;
+      }
+
+      .mobile-screen {
+        position: fixed;
+        inset: 0;
+        min-height: 100svh;
+        max-height: 100dvh;
+        display: grid;
+        grid-template-rows: 52px minmax(0, 1fr);
+        overflow: hidden;
+        background:
+          radial-gradient(circle at top, rgba(94, 120, 169, 0.14), transparent 34%),
+          linear-gradient(180deg, #04070c 0%, #070b11 100%);
+      }
+
+      .mobile-topbar {
+        z-index: 10;
+        height: 52px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0 16px;
+        color: #dbe4f0;
+        background: rgba(5, 8, 12, 0.92);
+        backdrop-filter: blur(14px);
+      }
+
+      .mobile-topbar strong {
+        color: #f5f8fc;
+        font-size: 19px;
+        font-weight: 800;
+        letter-spacing: 0.02em;
+      }
+
+      .mobile-topbar button {
+        min-height: 34px;
+        border-radius: 999px;
+        padding: 0 12px;
+        color: #eef4fb;
+        background: rgba(255, 255, 255, 0.08);
+        font-size: 12px;
+        font-weight: 750;
+      }
+
+      .mobile-stage {
+        position: relative;
+        min-height: 0;
+        overflow: hidden;
+      }
+
+      .mobile-chat {
+        height: 100%;
+        overflow-y: auto;
+        padding: 12px 14px 202px;
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+      }
+
+      .mobile-message {
+        display: flex;
+        gap: 8px;
+        align-items: flex-start;
+      }
+
+      .mobile-bubble {
+        max-width: calc(100% - 40px);
+        border-radius: 18px;
+        background: rgba(16, 20, 28, 0.9);
+        padding: 12px 14px;
+        color: #e6edf7;
+        font-size: 13px;
+        line-height: 1.7;
+      }
+
+      .mobile-bubble h3 {
+        margin: 0 0 6px;
+        font-size: 14px;
+      }
+
+      .mobile-static-card {
+        display: grid;
+        gap: 10px;
+        margin-top: 10px;
+        padding: 12px;
+        border-radius: 18px;
+        background: rgba(255, 255, 255, 0.045);
+      }
+
+      .mobile-module-list {
+        display: grid;
+        gap: 8px;
+      }
+
+      .mobile-module {
+        min-height: 54px;
+        display: grid;
+        grid-template-columns: 22px minmax(0, 1fr) auto;
+        gap: 8px;
+        align-items: center;
+        border-radius: 16px;
+        background: rgba(255, 255, 255, 0.045);
+        padding: 9px 10px;
+      }
+
+      .drag-handle {
+        height: 32px;
+        border-radius: 999px;
+        background:
+          radial-gradient(circle, rgba(206, 217, 233, 0.42) 1.3px, transparent 1.9px) center / 7px 7px repeat-y,
+          rgba(255, 255, 255, 0.04);
+      }
+
+      .mobile-module strong {
+        display: block;
+        color: #f7fbff;
+        font-size: 13px;
+      }
+
+      .mobile-module span {
+        display: block;
+        margin-top: 2px;
+        color: #8da0bc;
+        font-size: 11px;
+      }
+
+      .mobile-module em {
+        color: #9ab5df;
+        font-size: 11px;
+        font-style: normal;
+      }
+
+      .mobile-card-actions {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+      }
+
+      .mobile-card-actions button {
+        min-height: 40px;
+        border-radius: 14px;
+        color: #eef4fb;
+        background: rgba(255, 255, 255, 0.08);
+        font-size: 12px;
+        font-weight: 750;
+      }
+
+      .mobile-card-actions button.primary {
+        background: rgba(255, 255, 255, 0.18);
+        color: #fff;
+      }
+
+      .mobile-composer {
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        z-index: 20;
+        padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
+        background:
+          linear-gradient(180deg, rgba(4, 7, 12, 0) 0%, rgba(4, 7, 12, 0.36) 22%, rgba(6, 9, 14, 0.9) 62%, rgba(6, 9, 14, 0.98) 100%);
+      }
+
+      .mobile-input-shell {
+        display: grid;
+        gap: 10px;
+        padding: 12px 14px;
+        border-radius: 24px;
+        background: linear-gradient(180deg, rgba(92, 98, 111, 0.94), rgba(63, 69, 80, 0.97));
+        box-shadow: 0 14px 32px rgba(0, 0, 0, 0.24);
+      }
+
+      .mobile-input-shell textarea {
+        width: 100%;
+        height: 44px;
+        resize: none;
+        border: 0;
+        outline: 0;
+        color: #f6f9fd;
+        background: transparent;
+        font-size: 16px;
+        line-height: 1.6;
+      }
+
+      .mobile-input-actions {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 8px;
+      }
+
+      .mobile-input-actions button {
+        min-height: 42px;
+        border-radius: 14px;
+        color: #f4f7fb;
+        background: rgba(255, 255, 255, 0.12);
+        font-size: 13px;
+        font-weight: 750;
+      }
+
+      .mobile-input-actions button.send {
+        background: rgba(255, 255, 255, 0.22);
+        color: #fff;
+      }
+    }
+  </style>
+</head>
+<body>
+  <section class="home-shell" aria-label="桌面端静态页生成 UI">
+    <main class="home-main-panel">
+      <header class="home-toolbar">
+        <div class="home-toolbar-left">
+          <div class="home-toolbar-brand">
+            <span class="home-toolbar-brand-mark">AI</span>
+            <span class="home-toolbar-brand-name">智能助手</span>
+          </div>
+          <nav class="home-toolbar-nav" aria-label="主导航">
+            <a class="home-toolbar-nav-link active" href="#">智能会话</a>
+            <a class="home-toolbar-nav-link" href="#">数据集</a>
+            <a class="home-toolbar-nav-link" href="#">采集源</a>
+            <a class="home-toolbar-nav-link" href="#">静态页</a>
+            <a class="home-toolbar-nav-link" href="#">成员</a>
+            <a class="home-toolbar-nav-link" href="#">审计</a>
+          </nav>
+        </div>
+        <div class="home-toolbar-right">
+          <span class="toolbar-pill">系统健康 <strong class="good">正常</strong></span>
+          <span class="toolbar-pill">已连接数据源 <strong>3</strong></span>
+          <span class="toolbar-pill">模型连接 <strong class="bad">未连通</strong></span>
+          <button class="toolbar-secret" type="button">输入密钥</button>
+        </div>
+      </header>
+
+      <section class="home-desktop-grid">
+        <aside class="home-dataset-rail">
+          <div class="dataset-create">
+            <input class="rail-input" value="新建数据集" readonly />
+            <button class="rail-btn" type="button">增加分组</button>
+          </div>
+          <p class="rail-note">当前未启用密钥授权，新建分组将保持公共可见。</p>
+          <div class="source-chip-row">
+            <span class="source-chip">全部数据集 39</span>
+            <span class="source-chip">当前范围 经营数据</span>
+          </div>
+          <div class="dataset-list">
+            <div class="dataset-item active">经营数据<span class="dataset-count">18</span></div>
+            <div class="dataset-item">订单数据<span class="dataset-count">8</span></div>
+            <div class="dataset-item">客户反馈<span class="dataset-count">6</span></div>
+            <div class="dataset-item">报表模板<span class="dataset-count">7</span></div>
+          </div>
+        </aside>
+
+        <section class="home-chat-stage">
+          <div class="chat-panel">
+            <div class="chat-messages">
+              <article class="message">
+                <div class="avatar">AI</div>
+                <div class="bubble">
+                  <h3>欢迎使用</h3>
+                  <p>当前系统已接入聊天、数据集、数据源与成员管理的基础框架。你可以直接提问，或让模型按当前对话生成静态页。</p>
+                  <div class="message-meta">模式：read-only / 支持来源、引用与编排状态展示</div>
+                </div>
+              </article>
+
+              <article class="message user">
+                <div class="bubble user-bubble">根据刚才的经营分析，帮我生成一页给老板看的静态页，风险提前，少一点字。</div>
+              </article>
+
+              <article class="message">
+                <div class="avatar">AI</div>
+                <div class="bubble">
+                  <h3>已生成静态页规划</h3>
+                  <p>我会保留原智能助手外观，在右侧结果区展示规划；移动端则以聊天卡片 + 上下拖拽模块列表确认。</p>
+                  <div class="operation-card">
+                    <div class="operation-card-head">
+                      <div class="operation-card-title">
+                        <strong>模型理解结果</strong>
+                        <span>StaticPageDraftOperation · 4 项变更</span>
+                      </div>
+                      <span class="mini-pill">待确认</span>
+                    </div>
+                    <div class="operation-lines">
+                      <div class="operation-line"><code>reflow_layout</code><span>风险模块提前</span></div>
+                      <div class="operation-line"><code>rewrite_copy</code><span>压缩文字</span></div>
+                      <div class="operation-line"><code>change_chart</code><span>趋势图放大</span></div>
+                      <div class="operation-line"><code>select_direction</code><span>高层决策简报</span></div>
+                    </div>
+                  </div>
+                </div>
+              </article>
+            </div>
+
+            <div class="chat-composer-wrap">
+              <div class="chat-input-row">
+                <textarea readonly>直接提问。比如：把风险模块上移，按这个规划先生成效果图。</textarea>
+                <div class="chat-input-side-actions">
+                  <button class="upload-btn" type="button">上传文件</button>
+                  <button class="send-btn" type="button">发送</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <aside class="insight-panel">
+          <div class="insight-head">
+            <div class="insight-title">
+              <h2>静态页规划</h2>
+              <span>从当前会话生成 · 尚未排队出图</span>
+            </div>
+            <div class="insight-actions">
+              <button class="ghost-btn" type="button">收起</button>
+              <button class="primary-btn" type="button">排队生成</button>
+            </div>
+          </div>
+
+          <div class="static-page-panel">
+            <div class="progress-strip">
+              <div class="progress-step active"><strong>1</strong>规划</div>
+              <div class="progress-step active"><strong>2</strong>修改</div>
+              <div class="progress-step"><strong>3</strong>方向</div>
+              <div class="progress-step"><strong>4</strong>排队</div>
+              <div class="progress-step"><strong>5</strong>确认</div>
+              <div class="progress-step"><strong>6</strong>制作</div>
+            </div>
+
+            <div class="planner-surface">
+              <section class="planner-hero">
+                <div>
+                  <h3>核心判断：增长还在，但风险已经前置</h3>
+                  <p>模型按老板阅读场景压缩说明文字，只保留结论、关键指标、趋势和下一步动作。</p>
+                </div>
+                <div class="preview-phone" aria-label="手机静态页预览">
+                  <span class="phone-line long"></span>
+                  <span class="phone-line mid"></span>
+                  <span class="phone-line short"></span>
+                  <span class="phone-line long"></span>
+                </div>
+              </section>
+
+              <section class="module-grid">
+                <article class="module-card wide">
+                  <div class="module-meta"><span>Hero</span><span>headline</span><span>会话摘要</span></div>
+                  <h3>第一页先讲结论</h3>
+                  <p>标题和摘要由模型生成，用户可以直接说“更像给老板看”。</p>
+                </article>
+
+                <article class="module-card">
+                  <div class="module-meta"><span>KPI</span><span>kpi-cards</span></div>
+                  <h3>关键指标</h3>
+                  <div class="kpi-grid">
+                    <div class="kpi"><strong>39</strong>文档总量</div>
+                    <div class="kpi"><strong>97%</strong>就绪率</div>
+                    <div class="kpi"><strong>4</strong>风险</div>
+                  </div>
+                </article>
+
+                <article class="module-card">
+                  <div class="module-meta"><span>Trend</span><span>line-chart</span></div>
+                  <h3>趋势变化</h3>
+                  <div class="bar-stack">
+                    <div class="bar-row"><span>收入</span><div class="bar-track"><div class="bar-fill" style="width: 84%"></div></div><span>84</span></div>
+                    <div class="bar-row"><span>转化</span><div class="bar-track"><div class="bar-fill" style="width: 68%"></div></div><span>68</span></div>
+                    <div class="bar-row"><span>风险</span><div class="bar-track"><div class="bar-fill" style="width: 42%"></div></div><span>42</span></div>
+                  </div>
+                </article>
+
+                <article class="module-card wide">
+                  <div class="module-meta"><span>Risk</span><span>risk-matrix</span><span>提前展示</span></div>
+                  <h3>需要提前处理的风险</h3>
+                  <p>交付资源排期、数据口径不一致、客户确认周期。手机端只支持上下拖拽排序。</p>
+                </article>
+              </section>
+
+              <section class="direction-row">
+                <article class="direction-card active">
+                  <h3>高层决策简报</h3>
+                  <p>强结论、少废话、KPI 和风险优先。</p>
+                </article>
+                <article class="direction-card">
+                  <h3>客户交付报告</h3>
+                  <p>干净可信，适合客户确认。</p>
+                </article>
+                <article class="direction-card">
+                  <h3>数据运营看板</h3>
+                  <p>指标密度更高，适合内部复盘。</p>
+                </article>
+              </section>
+            </div>
+
+            <section class="queue-card">
+              <div>
+                <h3>资源排队</h3>
+                <p>确认后进入效果图队列，可以联系商务开通高级用户跳过等待。</p>
+              </div>
+              <div class="queue-progress"><span></span></div>
+            </section>
+          </div>
+        </aside>
+      </section>
+    </main>
+  </section>
+
+  <section class="mobile-screen" aria-label="移动端静态页生成 UI">
+    <header class="mobile-topbar">
+      <strong>AI智能助手</strong>
+      <button type="button">密钥</button>
+    </header>
+    <main class="mobile-stage">
+      <div class="mobile-chat">
+        <article class="mobile-message">
+          <div class="avatar">AI</div>
+          <div class="mobile-bubble">
+            <h3>欢迎使用</h3>
+            <p>当前系统已接入聊天、数据集、数据源与成员管理的基础框架。</p>
+            <div class="message-meta">模式：read-only / 支持来源、引用与编排状态展示</div>
+          </div>
+        </article>
+
+        <article class="mobile-message">
+          <div class="avatar">AI</div>
+          <div class="mobile-bubble">
+            <h3>静态页规划已生成</h3>
+            <p>手机端不做二维排版，只允许按住左侧拖拽柄上下调整模块顺序；大小和布局交给模型重排。</p>
+            <section class="mobile-static-card">
+              <div class="mobile-module-list">
+                <div class="mobile-module"><span class="drag-handle"></span><div><strong>核心判断</strong><span>headline · 会话摘要</span></div><em>上移</em></div>
+                <div class="mobile-module"><span class="drag-handle"></span><div><strong>关键指标</strong><span>kpi-cards · 经营数据</span></div><em>拖拽</em></div>
+                <div class="mobile-module"><span class="drag-handle"></span><div><strong>风险提醒</strong><span>risk-matrix · 提前展示</span></div><em>拖拽</em></div>
+                <div class="mobile-module"><span class="drag-handle"></span><div><strong>下一步动作</strong><span>timeline · 行动建议</span></div><em>下移</em></div>
+              </div>
+              <div class="mobile-card-actions">
+                <button type="button">重新理解</button>
+                <button class="primary" type="button">排队生成</button>
+              </div>
+            </section>
+          </div>
+        </article>
+      </div>
+
+      <div class="mobile-composer">
+        <div class="mobile-input-shell">
+          <textarea readonly>把风险模块放到第二个，少一点文字。</textarea>
+          <div class="mobile-input-actions">
+            <button type="button">上传文件</button>
+            <button type="button">语音</button>
+            <button class="send" type="button">发送</button>
+          </div>
+        </div>
+      </div>
+    </main>
+  </section>
+</body>
+</html>

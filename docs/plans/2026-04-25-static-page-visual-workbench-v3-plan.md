@@ -1,5 +1,9 @@
 # Static Page Visual Workbench V3 Implementation Plan
 
+> Status: Deferred as of 2026-04-26.
+>
+> Product decision: do not clone the original `ai-data-platform` static page workbench and do not plan a gradual replacement. The original workbench was not good enough as a product surface and has not been formally delivered to customers. Keep this plan as technical reference only. When static page work resumes, redesign it around the V3 platform model and a fresh product workflow.
+
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** Build a V3-native static page visual workbench where the first customer-visible artifact is a polished visual draft image, followed by an editable/static report render from the same report plan and dataset evidence.

@@ -921,6 +921,54 @@ textarea {
   color: #1d4ed8;
 }
 
+.report-status-callout {
+  display: grid;
+  gap: 5px;
+  padding: 12px 13px;
+  border-radius: 16px;
+  border: 1px solid rgba(37, 99, 235, 0.16);
+  background: rgba(239, 246, 255, 0.72);
+}
+
+.report-status-callout strong {
+  font-size: 13px;
+}
+
+.report-status-callout span {
+  color: #475569;
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.report-status-callout.ready,
+.report-status-callout.success {
+  border-color: rgba(21, 128, 61, 0.18);
+  background: rgba(240, 253, 244, 0.86);
+}
+
+.report-status-callout.ready strong,
+.report-status-callout.success strong {
+  color: #166534;
+}
+
+.report-status-callout.warn {
+  border-color: rgba(180, 83, 9, 0.18);
+  background: rgba(255, 251, 235, 0.9);
+}
+
+.report-status-callout.warn strong {
+  color: #92400e;
+}
+
+.report-status-callout.danger {
+  border-color: rgba(185, 28, 28, 0.18);
+  background: rgba(254, 242, 242, 0.92);
+}
+
+.report-status-callout.danger strong {
+  color: #991b1b;
+}
+
 .publish-box {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -967,6 +1015,33 @@ textarea {
 .mini-row.multi {
   align-items: flex-start;
   flex-direction: column;
+}
+
+.report-output-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.report-output-row.failed {
+  border: 1px solid rgba(185, 28, 28, 0.16);
+  background: rgba(254, 242, 242, 0.7);
+}
+
+.report-output-copy {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.report-output-copy small {
+  color: var(--subtle);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.report-row-action {
+  justify-self: end;
 }
 
 .mini-row span {

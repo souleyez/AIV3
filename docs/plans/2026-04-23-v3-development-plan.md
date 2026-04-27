@@ -67,6 +67,9 @@ Progress:
 - 2026-04-23: Added the first web Report Service control panel. It can select a
   report plan, load AST versions, render outputs, and published detail, and call
   the existing continue/render/publish host actions.
+- 2026-04-26: Added report-control readiness/failure callouts and a web retry
+  action for failed render workflows, so failed render outputs now point to a
+  concrete recovery path instead of only showing a disabled publish state.
 
 ## Phase 2: Existing-Session Chat Turn Append
 
