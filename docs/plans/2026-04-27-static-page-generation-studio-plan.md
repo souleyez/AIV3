@@ -4,7 +4,7 @@
 
 **Goal:** Build static page generation inside the V3 intelligent assistant, matching the original assistant UI 1:1 on desktop and mobile, while allowing users to drive planning, layout, data binding, style choice, image preview, and final page generation mainly through natural language.
 
-**Architecture:** The static page flow is not a separate visual product and not a revival of the old static workbench. It becomes a first-class assistant capability: chat is the control surface, the right insight/result area is the desktop planning surface, and mobile shows the same workflow as assistant message cards with only vertical module reordering. Draft state is schema-first, model-operated, and later persisted through V3 Rust APIs and queued image/static-page workers.
+**Architecture:** The static page flow is not a separate visual product and not a revival of the old static workbench. It becomes a first-class assistant capability embedded inside the assistant page: chat is the control surface, the right insight/result area is the desktop planning and building surface, and mobile enters an in-page static page build mode that keeps the original assistant shell while using a vertical module builder. Draft state is schema-first, model-operated, and later persisted through V3 Rust APIs and queued image/static-page workers.
 
 **Tech Stack:** Next.js 16 / React 19 in `apps/web`, existing `/api/v3/*` proxy, Rust `platform-api`, `contracts`, `domain-model`, `storage`, future static-page runtime/worker/renderer crates, `react-grid-layout` for desktop planning canvas, `@dnd-kit/core` and `@dnd-kit/sortable` for mobile vertical ordering, `@puckeditor/core` as a future component-render adapter, `recharts` for first static charts, optional Apache ECharts for advanced charts, Cloudflare/Codex image queue integration.
 
@@ -34,8 +34,9 @@ Conclusion:
 - Do not make copied form filling the main interaction.
 - Users should describe changes in natural language; the model translates them into draft operations.
 - Direct manipulation exists only where it is natural: desktop module drag/resize, mobile vertical module ordering, and light inline corrections.
-- Desktop planning lives in the assistant's right-side insight/result area.
-- Mobile planning lives inside the assistant flow as a card or full-screen preview state, keeping the original mobile assistant topbar/composer/drawer behavior.
+- Desktop planning and static page construction live inside the assistant page's right-side insight/result area.
+- Mobile must also build the static page inside the assistant page. It is not read-only and not just a status card.
+- Mobile uses an in-page `静态页构建` mode: vertical module composition, module order changes, content/data/chart summaries, natural-language edits, queue state, preview confirmation, and final render status.
 - The earlier "single clean popup page" idea is superseded by the newer 1:1 UI requirement. If a separate window is later needed, it must still use the same original assistant shell language and not introduce a new product skin.
 - The "write fixed styles" wording is removed. The product offers three curated style directions that can be model-selected or user-confirmed.
 
@@ -66,8 +67,10 @@ Mobile contract:
 - Keep chat as the default single visible surface.
 - Keep bottom composer behavior.
 - Keep dataset/result surfaces as drawer or switched panels.
-- Static page planning appears as an assistant card with a preview and vertical module list.
-- Mobile only supports up/down reordering for modules; no freeform grid dragging or resizing on phone.
+- Static page construction appears as an in-page mobile build panel, entered from an assistant message or a top/bottom action.
+- The mobile build panel shows a live static page structure preview, vertical module list, style direction, generation state, and final render state.
+- Mobile only supports up/down reordering for modules; no freeform grid dragging or arbitrary resizing on phone.
+- Mobile users can still complete the whole build flow: plan, adjust, confirm style, queue image, confirm effect image, and generate the final static page.
 
 ## User Flow
 
@@ -93,12 +96,13 @@ Desktop:
 Mobile:
 
 1. User remains in the original mobile assistant shell.
-2. Static page draft appears as an assistant message card.
-3. Card shows current planning status, preview thumbnail, style direction, and module list.
+2. Static page draft starts from chat and opens the in-page `静态页构建` mode.
+3. The build mode shows current planning status, live structure preview, style direction, and module list.
 4. User can drag modules only vertically to reorder them.
 5. User changes content mainly by sending natural-language messages.
-6. The model updates the draft and returns a refreshed card.
-7. Queue, preview confirmation, and final static page status are shown as assistant cards.
+6. The model updates the draft and refreshes the mobile build mode.
+7. Queue, preview confirmation, and final static page generation all happen in the same mobile build mode.
+8. User can return to chat without losing the draft.
 
 ## Data Model Draft
 
@@ -352,29 +356,34 @@ Puck positioning:
 9. Run `pnpm --filter @ai-data-platform-v3/web build`.
 10. Commit message: `feat(web): add desktop static page planning panel`.
 
-### Task 5: Add Mobile Static Page Card
+### Task 5: Add Mobile Static Page Build Mode
 
 **Files:**
 
 - Modify: `apps/web/app/components/HomeMobileShell.js`
 - Modify: `apps/web/app/components/ChatPanel.js`
-- Create: `apps/web/app/components/static-page/StaticPageMobileCard.js`
+- Create: `apps/web/app/components/static-page/StaticPageMobileBuilder.js`
 - Create: `apps/web/app/components/static-page/StaticPageMobileModuleList.js`
 - Modify: `apps/web/app/globals.css`
 
 **Steps:**
 
-1. Render active static page draft as an assistant card in the mobile chat flow.
-2. Show status, style direction, preview area, and module list.
-3. Use `@dnd-kit/core` and `@dnd-kit/sortable`.
-4. Use `verticalListSortingStrategy`.
-5. Only allow vertical reordering on mobile.
-6. Convert reorder results into `reorder_modules` operations.
-7. Do not show desktop grid handles on mobile.
-8. Keep the original mobile composer and topbar visible.
-9. Run `pnpm --filter @ai-data-platform-v3/web build`.
-10. Manually test touch-like ordering in browser mobile emulation.
-11. Commit message: `feat(web): add mobile static page planning card`.
+1. Add a mobile `静态页构建` panel inside the existing assistant page, not a popup and not a separate product skin.
+2. Let the user enter the panel from an assistant message, `一键生成静态页`, or the mobile result switcher.
+3. Show status, style direction, live structure preview, image preview area, and module list.
+4. Use `@dnd-kit/core` and `@dnd-kit/sortable`.
+5. Use `verticalListSortingStrategy`.
+6. Only allow vertical reordering on mobile.
+7. Convert reorder results into `reorder_modules` operations.
+8. Show each module's title, content summary, data source, and visualization type.
+9. Do not show desktop grid handles on mobile.
+10. Keep the original mobile topbar and navigation behavior.
+11. Keep natural-language editing available from the mobile composer or an inline prompt bar.
+12. Support the complete mobile build flow: planning, style confirmation, queue, effect preview confirmation, and final static page render status.
+13. The mobile panel may use a full-height in-page view, but it must preserve a clear return path to chat.
+14. Run `pnpm --filter @ai-data-platform-v3/web build`.
+15. Manually test touch-like ordering and build-flow progression in browser mobile emulation.
+16. Commit message: `feat(web): add mobile static page build mode`.
 
 ### Task 6: Add Model-Operated Intent Handling
 
@@ -390,7 +399,7 @@ Puck positioning:
 1. Add `interpretStaticPagePromptLocally(draft, prompt)` as a deterministic first slice.
 2. Return structured operations, not free text patches.
 3. Support Chinese prompts for changing tone, adding data, reducing text, highlighting risk, switching chart type, reordering modules, and changing style direction.
-4. Show `模型理解` summary in the static page planning panel and mobile card.
+4. Show `模型理解` summary in the static page planning panel and mobile build panel.
 5. Let users override by sending another natural-language message.
 6. Tests cover at least six prompt examples.
 7. Run `node --test apps/web/app/lib/static-page-draft.test.mjs`.
@@ -403,7 +412,7 @@ Puck positioning:
 
 - Create: `apps/web/app/components/static-page/StaticPageStyleDirectionPicker.js`
 - Modify: `apps/web/app/components/static-page/StaticPagePlanningPanel.js`
-- Modify: `apps/web/app/components/static-page/StaticPageMobileCard.js`
+- Modify: `apps/web/app/components/static-page/StaticPageMobileBuilder.js`
 - Modify: `apps/web/app/globals.css`
 
 **Steps:**
@@ -422,7 +431,7 @@ Puck positioning:
 
 - Modify: `apps/web/app/lib/static-page-draft.js`
 - Modify: `apps/web/app/components/static-page/StaticPagePlanningPanel.js`
-- Modify: `apps/web/app/components/static-page/StaticPageMobileCard.js`
+- Modify: `apps/web/app/components/static-page/StaticPageMobileBuilder.js`
 - Modify: `apps/web/app/globals.css`
 
 **Steps:**
@@ -441,7 +450,7 @@ Puck positioning:
 
 - Create: `apps/web/app/components/static-page/StaticPageFinalRender.js`
 - Modify: `apps/web/app/components/static-page/StaticPagePlanningPanel.js`
-- Modify: `apps/web/app/components/static-page/StaticPageMobileCard.js`
+- Modify: `apps/web/app/components/static-page/StaticPageMobileBuilder.js`
 - Modify: `apps/web/app/globals.css`
 
 **Steps:**
@@ -545,7 +554,7 @@ Puck positioning:
 - Modify: `crates/platform-api/src/lib.rs`
 - Modify: `apps/web/app/lib/platform-api.js`
 - Modify: `apps/web/app/components/static-page/StaticPagePlanningPanel.js`
-- Modify: `apps/web/app/components/static-page/StaticPageMobileCard.js`
+- Modify: `apps/web/app/components/static-page/StaticPageMobileBuilder.js`
 
 **Steps:**
 
@@ -553,7 +562,7 @@ Puck positioning:
 2. Persist confirmed preview asset key.
 3. Block final render until preview is confirmed.
 4. Allow `重新生成效果图` to submit a new job from the same draft.
-5. Show confirmation state in desktop and mobile cards.
+5. Show confirmation state in desktop and mobile build surfaces.
 6. Add tests.
 7. Commit message: `feat(static-page): confirm effect previews`.
 
@@ -588,7 +597,7 @@ Reason:
 - It gives backend work a concrete draft schema and operation contract.
 - It avoids wasting time on a separate popup/editor surface the product direction no longer wants.
 
-Do not start Tasks 10-15 until desktop and mobile static page planning feel correct in the assistant shell.
+Do not start Tasks 10-15 until desktop and mobile static page building both feel correct in the assistant shell.
 
 ## Verification Commands
 
@@ -616,8 +625,9 @@ Manual acceptance:
 - Desktop right panel shows planned modules on a grid.
 - Desktop modules can be moved and resized.
 - Module cards show title, content, data source, and visualization type without opening a form.
-- Mobile shows the static page draft as an assistant card.
+- Mobile shows an in-page static page build mode, not just a status card.
 - Mobile modules can be reordered vertically.
+- Mobile can complete the static page build flow through final render status.
 - Natural-language changes update the whole draft through model operations.
 - Three style directions are available and model-selectable.
 - Queue state shows the business upgrade copy.
