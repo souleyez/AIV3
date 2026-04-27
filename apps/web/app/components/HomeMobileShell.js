@@ -4,6 +4,7 @@ import { useState } from 'react';
 import ChatPanel from './ChatPanel';
 import InsightPanel from './InsightPanel';
 import Sidebar from './Sidebar';
+import StaticPageMobileBuilder from './static-page/StaticPageMobileBuilder';
 
 export default function HomeMobileShell({
   sidebarProps,
@@ -14,9 +15,28 @@ export default function HomeMobileShell({
   loading,
   banner,
   error,
+  staticPageDraft,
+  onApplyStaticPageOperation,
+  onApplyStaticPagePrompt,
 }) {
   const [datasetOpen, setDatasetOpen] = useState(false);
   const [resultsOpen, setResultsOpen] = useState(false);
+  const [surface, setSurface] = useState('chat');
+  const [staticPageIntent, setStaticPageIntent] = useState('');
+
+  function handleStartStaticPageDraft(options = {}) {
+    const draft = chatPanelProps.onStartStaticPageDraft?.(options);
+    setSurface('static-page');
+    return draft;
+  }
+
+  function handleSubmitStaticPageIntent() {
+    const prompt = staticPageIntent.trim();
+    if (!prompt) return;
+    onApplyStaticPagePrompt?.(prompt);
+    setStaticPageIntent('');
+    setSurface('static-page');
+  }
 
   return (
     <div className="mobile-home-shell">
@@ -47,11 +67,25 @@ export default function HomeMobileShell({
       {banner ? <div className="page-banner success-banner mobile-home-banner">{banner}</div> : null}
       {error ? <div className="page-banner error-banner mobile-home-banner">{error}</div> : null}
 
-      <main className="mobile-home-stage">
-        <ChatPanel
-          {...chatPanelProps}
-          panelClassName="chat-panel-mobile-home"
-        />
+      <main className={`mobile-home-stage mobile-home-stage-${surface}`}>
+        {surface === 'static-page' ? (
+          <StaticPageMobileBuilder
+            draft={staticPageDraft}
+            intent={staticPageIntent}
+            onIntentChange={setStaticPageIntent}
+            onSubmitIntent={handleSubmitStaticPageIntent}
+            onReorderModules={(order) => onApplyStaticPageOperation?.({ type: 'reorder_modules', order })}
+            onOneClick={() => handleStartStaticPageDraft({ oneClick: true })}
+            onBackToChat={() => setSurface('chat')}
+          />
+        ) : (
+          <ChatPanel
+            {...chatPanelProps}
+            panelClassName="chat-panel-mobile-home"
+            onStartStaticPageDraft={handleStartStaticPageDraft}
+            onOpenStaticPageBuilder={() => setSurface('static-page')}
+          />
+        )}
       </main>
 
       <nav className="mobile-home-bottom-nav" aria-label="移动端工作区">
@@ -59,9 +93,18 @@ export default function HomeMobileShell({
           <span>数据集</span>
           <strong>{selectedDataset ? '已选' : '未选'}</strong>
         </button>
-        <button type="button" className="active">
+        <button type="button" className={surface === 'chat' ? 'active' : ''} onClick={() => setSurface('chat')}>
           <span>对话</span>
-          <strong>当前</strong>
+          <strong>{surface === 'chat' ? '当前' : '返回'}</strong>
+        </button>
+        <button
+          type="button"
+          className={surface === 'static-page' ? 'active' : ''}
+          onClick={() => setSurface('static-page')}
+          disabled={!staticPageDraft}
+        >
+          <span>静态页</span>
+          <strong>{staticPageDraft ? '构建' : '待生成'}</strong>
         </button>
         <button type="button" onClick={() => setResultsOpen(true)} disabled={!selectedDataset}>
           <span>结果</span>

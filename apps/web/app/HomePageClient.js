@@ -835,6 +835,9 @@ export default function HomePageClient() {
         loading={bootstrapping || workspaceLoading}
         banner={banner}
         error={error}
+        staticPageDraft={activeStaticPageDraft}
+        onApplyStaticPageOperation={handleApplyStaticPageOperation}
+        onApplyStaticPagePrompt={handleApplyStaticPagePrompt}
       />
     );
   }
