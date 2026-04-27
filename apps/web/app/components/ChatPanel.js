@@ -242,12 +242,13 @@ export default function ChatPanel({
   submitting,
   reportEntryBusy,
   onResolveReportEntry,
+  panelClassName = '',
 }) {
   const reportEntry = session?.session_manifest_view?.report_entry || null;
   const latestTurn = session?.session_manifest_view?.last_turn || null;
 
   return (
-    <section className="chat-panel card">
+    <section className={`chat-panel card ${panelClassName}`.trim()}>
       <div className="panel-header chat-header">
         <div>
           <h3>{session ? session.title : dataset ? `${dataset.title} · 新问答` : '选择数据集后开始'}</h3>

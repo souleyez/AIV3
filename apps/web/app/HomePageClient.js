@@ -2,6 +2,8 @@
 
 import { startTransition, useEffect, useMemo, useRef, useState } from 'react';
 import ChatPanel from './components/ChatPanel';
+import HomeMobileShell from './components/HomeMobileShell';
+import HomeWorkspaceToolbar from './components/HomeWorkspaceToolbar';
 import InsightPanel from './components/InsightPanel';
 import Sidebar from './components/Sidebar';
 
@@ -69,6 +71,11 @@ export default function HomePageClient() {
   const [datasetDraft, setDatasetDraft] = useState({ key: '', title: '' });
   const [reportSurface, setReportSurface] = useState('pc');
   const [publishNote, setPublishNote] = useState('');
+  const [mobileViewport, setMobileViewport] = useState(() =>
+    typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+      ? window.matchMedia('(max-width: 960px)').matches
+      : false,
+  );
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [mobilePanel, setMobilePanel] = useState('chat');
   const [bootstrapping, setBootstrapping] = useState(true);
@@ -105,6 +112,10 @@ export default function HomePageClient() {
   const selectedReportPlan = useMemo(
     () => datasetReportPlans.find((plan) => plan.id === selectedReportPlanId) || null,
     [datasetReportPlans, selectedReportPlanId],
+  );
+  const toolbarSourceItems = useMemo(
+    () => (selectedDataset ? [{ name: selectedDataset.title, status: 'healthy' }] : []),
+    [selectedDataset],
   );
 
   async function fetchPlanPublishedReport(planId) {
@@ -514,6 +525,18 @@ export default function HomePageClient() {
   }
 
   useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+      return undefined;
+    }
+
+    const mediaQuery = window.matchMedia('(max-width: 960px)');
+    const syncViewport = () => setMobileViewport(mediaQuery.matches);
+    syncViewport();
+    mediaQuery.addEventListener('change', syncViewport);
+    return () => mediaQuery.removeEventListener('change', syncViewport);
+  }, []);
+
+  useEffect(() => {
     refreshCatalog();
   }, []);
 
@@ -629,32 +652,94 @@ export default function HomePageClient() {
     plans: datasetReportPlans.length,
     published: datasetPublishedReports.length,
   };
+  const sidebarProps = {
+    datasets,
+    selectedDatasetId,
+    selectedDataset,
+    datasetDraft,
+    onDatasetDraftChange: (field, value) =>
+      setDatasetDraft((current) => ({ ...current, [field]: value })),
+    onCreateDataset: handleCreateDataset,
+    onSelectDataset: (datasetId) => {
+      setBanner('');
+      setError('');
+      setComposingNewSession(false);
+      setSelectedDatasetId(datasetId);
+      setMobileSidebarOpen(false);
+      setMobilePanel('chat');
+    },
+    creatingDataset,
+    stats,
+    loading: bootstrapping || workspaceLoading,
+    mobileOpen: mobileSidebarOpen,
+    onClose: () => setMobileSidebarOpen(false),
+  };
+  const chatPanelProps = {
+    dataset: selectedDataset,
+    session: selectedSession,
+    messages,
+    messageLoading,
+    input,
+    onInputChange: setInput,
+    onSubmit: handleSubmitMessage,
+    onStartNewConversation: handleStartNewConversation,
+    submitting,
+    reportEntryBusy,
+    onResolveReportEntry: handleResolveReportEntry,
+  };
+  const insightPanelProps = {
+    dataset: selectedDataset,
+    sessions,
+    selectedSessionId,
+    outputs,
+    reportPlans: datasetReportPlans,
+    publishedReports: datasetPublishedReports,
+    selectedReportPlanId,
+    selectedReportPlan,
+    reportRenderOutputs,
+    reportAstVersions,
+    publishedReportDetail,
+    reportDetailLoading,
+    reportActionBusy,
+    reportSurface,
+    publishNote,
+    onSelectSession: (sessionId) => {
+      setComposingNewSession(false);
+      setSelectedSessionId(sessionId);
+      setMobilePanel('chat');
+    },
+    onSelectReportPlan: setSelectedReportPlanId,
+    onReportSurfaceChange: setReportSurface,
+    onPublishNoteChange: setPublishNote,
+    onContinueReportPlan: handleContinueReportPlan,
+    onRequestReportRender: handleRequestReportRender,
+    onPublishReport: handlePublishReport,
+    onRetryWorkflowExecution: handleRetryWorkflowExecution,
+    onRefreshReportDetail: () => {
+      if (selectedReportPlanId) {
+        refreshReportDetail(selectedReportPlanId);
+      }
+    },
+  };
 
-  return (
-    <div className="app-shell">
-      <Sidebar
-        datasets={datasets}
-        selectedDatasetId={selectedDatasetId}
+  if (mobileViewport) {
+    return (
+      <HomeMobileShell
+        sidebarProps={sidebarProps}
+        chatPanelProps={chatPanelProps}
+        insightPanelProps={insightPanelProps}
         selectedDataset={selectedDataset}
-        datasetDraft={datasetDraft}
-        onDatasetDraftChange={(field, value) =>
-          setDatasetDraft((current) => ({ ...current, [field]: value }))
-        }
-        onCreateDataset={handleCreateDataset}
-        onSelectDataset={(datasetId) => {
-          setBanner('');
-          setError('');
-          setComposingNewSession(false);
-          setSelectedDatasetId(datasetId);
-          setMobileSidebarOpen(false);
-          setMobilePanel('chat');
-        }}
-        creatingDataset={creatingDataset}
         stats={stats}
         loading={bootstrapping || workspaceLoading}
-        mobileOpen={mobileSidebarOpen}
-        onClose={() => setMobileSidebarOpen(false)}
+        banner={banner}
+        error={error}
       />
+    );
+  }
+
+  return (
+    <div className="app-shell assistant-shell">
+      <Sidebar {...sidebarProps} />
       {mobileSidebarOpen ? (
         <button
           type="button"
@@ -665,101 +750,20 @@ export default function HomePageClient() {
       ) : null}
 
       <main className="main-panel main-panel-home">
-        <header className="topbar">
-          <div className="topbar-title-row">
-            <h2>智能助手</h2>
-            <span className="topbar-inline-note">
-              沿用老版工作台壳子，但控制器改成直接消费 V3 host surface。左侧数据集切换已接通。
-            </span>
-          </div>
-          <div className="topbar-actions">
-            <div className="topbar-summary-card">
-              <span>Dataset</span>
-              <strong>{selectedDataset ? `${selectedDataset.title} (${selectedDataset.key})` : '未选择'}</strong>
-            </div>
-            <div className="topbar-summary-card">
-              <span>Status</span>
-              <strong>{workspaceLoading ? '加载中' : '就绪'}</strong>
-            </div>
-          </div>
-        </header>
-
-        <div className="mobile-shell-controls" aria-label="移动端工作区切换">
-          <button
-            type="button"
-            className="mobile-shell-button wide"
-            onClick={() => setMobileSidebarOpen(true)}
-          >
-            <span>数据集</span>
-            <strong>{selectedDataset ? selectedDataset.title : '选择数据集'}</strong>
-          </button>
-          <button
-            type="button"
-            className={`mobile-shell-button ${mobilePanel === 'chat' ? 'active' : ''}`}
-            onClick={() => setMobilePanel('chat')}
-          >
-            对话
-          </button>
-          <button
-            type="button"
-            className={`mobile-shell-button ${mobilePanel === 'insights' ? 'active' : ''}`}
-            onClick={() => setMobilePanel('insights')}
-          >
-            上下文 / 报告
-          </button>
-        </div>
+        <HomeWorkspaceToolbar
+          selectedDataset={selectedDataset}
+          stats={stats}
+          loading={bootstrapping}
+          workspaceLoading={workspaceLoading}
+          sourceItems={toolbarSourceItems}
+        />
 
         {banner ? <div className="page-banner success-banner">{banner}</div> : null}
         {error ? <div className="page-banner error-banner">{error}</div> : null}
 
         <section className={`workspace-grid homepage-workspace mobile-panel-${mobilePanel}`}>
-          <ChatPanel
-            dataset={selectedDataset}
-            session={selectedSession}
-            messages={messages}
-            messageLoading={messageLoading}
-            input={input}
-            onInputChange={setInput}
-            onSubmit={handleSubmitMessage}
-            onStartNewConversation={handleStartNewConversation}
-            submitting={submitting}
-            reportEntryBusy={reportEntryBusy}
-            onResolveReportEntry={handleResolveReportEntry}
-          />
-          <InsightPanel
-            dataset={selectedDataset}
-            sessions={sessions}
-            selectedSessionId={selectedSessionId}
-            outputs={outputs}
-            reportPlans={datasetReportPlans}
-            publishedReports={datasetPublishedReports}
-            selectedReportPlanId={selectedReportPlanId}
-            selectedReportPlan={selectedReportPlan}
-            reportRenderOutputs={reportRenderOutputs}
-            reportAstVersions={reportAstVersions}
-            publishedReportDetail={publishedReportDetail}
-            reportDetailLoading={reportDetailLoading}
-            reportActionBusy={reportActionBusy}
-            reportSurface={reportSurface}
-            publishNote={publishNote}
-            onSelectSession={(sessionId) => {
-              setComposingNewSession(false);
-              setSelectedSessionId(sessionId);
-              setMobilePanel('chat');
-            }}
-            onSelectReportPlan={setSelectedReportPlanId}
-            onReportSurfaceChange={setReportSurface}
-            onPublishNoteChange={setPublishNote}
-            onContinueReportPlan={handleContinueReportPlan}
-            onRequestReportRender={handleRequestReportRender}
-            onPublishReport={handlePublishReport}
-            onRetryWorkflowExecution={handleRetryWorkflowExecution}
-            onRefreshReportDetail={() => {
-              if (selectedReportPlanId) {
-                refreshReportDetail(selectedReportPlanId);
-              }
-            }}
-          />
+          <ChatPanel {...chatPanelProps} />
+          <InsightPanel {...insightPanelProps} />
         </section>
       </main>
     </div>

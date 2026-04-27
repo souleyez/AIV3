@@ -72,10 +72,13 @@ export default function Sidebar({
       </div>
 
       <section className="nav-section">
-        <div className="nav-title">当前能力</div>
-        <div className="nav-item nav-item-static active">数据集切换</div>
-        <div className="nav-item nav-item-static">会话回看</div>
-        <div className="nav-item nav-item-static">资料输出 / 发布结果</div>
+        <div className="nav-title">工作区</div>
+        <div className="nav-item nav-item-static active">智能会话</div>
+        <div className="nav-item nav-item-static">数据集</div>
+        <div className="nav-item nav-item-static">采集源</div>
+        <div className="nav-item nav-item-static">静态页</div>
+        <div className="nav-item nav-item-static">成员</div>
+        <div className="nav-item nav-item-static">审计</div>
       </section>
 
       <section className="side-card">
