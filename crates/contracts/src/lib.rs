@@ -1107,6 +1107,8 @@ pub struct RegisterDocumentRequest {
     pub object_key: String,
     pub content_type: String,
     pub secret_binding_ids: Vec<SecretBindingId>,
+    #[serde(default)]
+    pub metadata: Value,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1146,6 +1148,30 @@ pub struct CreateChatSessionRequest {
 pub struct CreateChatSessionResponse {
     pub chat_session: ChatSessionView,
     pub workflow_execution: WorkflowExecutionView,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AssistantRunMessageView {
+    pub role: ChatMessageRole,
+    pub content: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CreateAssistantRunRequest {
+    pub prompt: String,
+    #[serde(default)]
+    pub startup_briefing: Option<Value>,
+    #[serde(default)]
+    pub scope_candidates: Vec<Value>,
+    #[serde(default)]
+    pub messages: Vec<AssistantRunMessageView>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CreateAssistantRunResponse {
+    pub assistant_message: AssistantRunMessageView,
+    pub runtime: Value,
+    pub scope_candidates: Vec<Value>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

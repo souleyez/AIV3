@@ -6,28 +6,43 @@ import HomeMobileShell from './components/HomeMobileShell';
 import HomeWorkspaceToolbar from './components/HomeWorkspaceToolbar';
 import InsightPanel from './components/InsightPanel';
 import Sidebar from './components/Sidebar';
+import { buildAssistantStartupBriefing, formatStartupBriefingForModel } from './lib/assistant-startup-briefing';
+import { planAssistantScope, selectPlannerDatasetId } from './lib/scope-planner';
 import {
   applyStaticPageOperation,
   applyStaticPageOperations,
   buildInitialStaticPageDraft,
   interpretStaticPagePrompt,
 } from './lib/static-page-draft';
+import {
+  buildLocalUploadObjectKey,
+  buildUploadDatasetPayload,
+  classifyUploadTarget,
+  inferUploadMediaKind,
+  isPublicUploadClassification,
+  summarizeUploadClassification,
+} from './lib/upload-classifier';
 
 const DATASET_POLL_INTERVAL_MS = 5000;
 const MESSAGE_POLL_INTERVAL_MS = 3000;
 const CATALOG_POLL_INTERVAL_MS = 12000;
 const REPORT_DETAIL_POLL_INTERVAL_MS = 6000;
+const LOCAL_CHAT_STORAGE_KEY = 'aidp-v3-local-chat-messages';
+const LOCAL_ACTIVITY_STORAGE_KEY = 'aidp-v3-local-activity-events';
 
 async function fetchJson(url, options = {}) {
+  const isFormData = typeof FormData !== 'undefined' && options.body instanceof FormData;
   const response = await fetch(url, {
     cache: 'no-store',
     ...options,
     headers: {
       Accept: 'application/json',
-      ...(options.body ? { 'Content-Type': 'application/json' } : {}),
+      ...(options.body && !isFormData ? { 'Content-Type': 'application/json' } : {}),
       ...(options.headers || {}),
     },
-    body: options.body && typeof options.body !== 'string' ? JSON.stringify(options.body) : options.body,
+    body: options.body && !isFormData && typeof options.body !== 'string'
+      ? JSON.stringify(options.body)
+      : options.body,
   });
 
   const contentType = response.headers.get('content-type') || '';
@@ -59,6 +74,15 @@ function sortDatasets(items) {
   );
 }
 
+function createLocalMessage(role, content) {
+  return {
+    id: `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    role,
+    content,
+    created_at: new Date().toISOString(),
+  };
+}
+
 export default function HomePageClient() {
   const [datasets, setDatasets] = useState([]);
   const [reportPlans, setReportPlans] = useState([]);
@@ -73,6 +97,7 @@ export default function HomePageClient() {
   const [selectedSessionId, setSelectedSessionId] = useState(null);
   const [composingNewSession, setComposingNewSession] = useState(false);
   const [messages, setMessages] = useState([]);
+  const [localMessages, setLocalMessages] = useState([]);
   const [input, setInput] = useState('');
   const [datasetDraft, setDatasetDraft] = useState({ key: '', title: '' });
   const [reportSurface, setReportSurface] = useState('pc');
@@ -86,16 +111,20 @@ export default function HomePageClient() {
   const [reportDetailLoading, setReportDetailLoading] = useState(false);
   const [creatingDataset, setCreatingDataset] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [uploadingFiles, setUploadingFiles] = useState(false);
   const [reportEntryBusy, setReportEntryBusy] = useState(false);
   const [reportActionBusy, setReportActionBusy] = useState('');
   const [banner, setBanner] = useState('');
   const [error, setError] = useState('');
   const [staticPageDrafts, setStaticPageDrafts] = useState({});
   const [activeStaticPageDraftId, setActiveStaticPageDraftId] = useState(null);
+  const [scopePlan, setScopePlan] = useState({ candidates: [], hint: '' });
+  const [activityEvents, setActivityEvents] = useState([]);
 
   const datasetLoadIdRef = useRef(0);
   const messageLoadIdRef = useRef(0);
   const reportDetailLoadIdRef = useRef(0);
+  const fileInputRef = useRef(null);
 
   const selectedDataset = useMemo(
     () => datasets.find((dataset) => dataset.id === selectedDatasetId) || null,
@@ -121,6 +150,21 @@ export default function HomePageClient() {
     () => staticPageDrafts[activeStaticPageDraftId] || null,
     [activeStaticPageDraftId, staticPageDrafts],
   );
+  const visibleMessages = useMemo(
+    () => (selectedDatasetId || selectedSessionId ? messages : localMessages),
+    [localMessages, messages, selectedDatasetId, selectedSessionId],
+  );
+  const assistantStartupBriefing = useMemo(
+    () => buildAssistantStartupBriefing({
+      datasets,
+      reportPlans,
+      publishedReports,
+      latestMessages: visibleMessages,
+      activityEvents,
+      selectedDataset,
+    }),
+    [activityEvents, datasets, publishedReports, reportPlans, selectedDataset, visibleMessages],
+  );
   const toolbarSourceItems = useMemo(
     () => (selectedDataset ? [{ name: selectedDataset.title, status: 'healthy' }] : []),
     [selectedDataset],
@@ -130,12 +174,15 @@ export default function HomePageClient() {
     return /静态页|静态页面|页面规划|一页|生成页面|落地页/.test(String(prompt || ''));
   }
 
-  function buildStaticPageConversationSummary(prompt = '') {
-    const latestAssistantMessage = [...messages].reverse().find((message) => message.role === 'assistant');
-    const latestMessage = latestAssistantMessage || messages[messages.length - 1];
+  function buildStaticPageConversationSummary(prompt = '', options = {}) {
+    const draftDataset = options.dataset || selectedDataset;
+    const draftSession = options.session || selectedSession;
+    const sourceMessages = options.messages || visibleMessages;
+    const latestAssistantMessage = [...sourceMessages].reverse().find((message) => message.role === 'assistant');
+    const latestMessage = latestAssistantMessage || sourceMessages[sourceMessages.length - 1];
     const summaryParts = [
-      selectedDataset ? `数据集：${selectedDataset.title}` : '',
-      selectedSession ? `会话：${selectedSession.title}` : '',
+      draftDataset ? `数据集：${draftDataset.title}` : '未选数据集，按普通对话意图规划。',
+      draftSession ? `会话：${draftSession.title}` : '',
       latestMessage?.content ? `最近内容：${latestMessage.content}` : '',
       prompt ? `用户要求：${prompt}` : '',
     ].filter(Boolean);
@@ -192,7 +239,7 @@ export default function HomePageClient() {
           if (current && nextDatasets.some((item) => item.id === current)) {
             return current;
           }
-          return nextDatasets[0]?.id || null;
+          return null;
         });
       });
       setError('');
@@ -349,30 +396,290 @@ export default function HomePageClient() {
     }
   }
 
+  function findDatasetForUploadPayload(items, payload) {
+    return (Array.isArray(items) ? items : []).find((dataset) =>
+      dataset?.key === payload.key || dataset?.title === payload.title,
+    ) || null;
+  }
+
+  async function ensureUploadTargetDataset(classification, availableDatasets) {
+    if (classification?.dataset?.id) {
+      return { dataset: classification.dataset, created: false };
+    }
+
+    const payload = buildUploadDatasetPayload(classification);
+    const existingDataset = findDatasetForUploadPayload(availableDatasets, payload);
+    if (existingDataset?.id) {
+      return { dataset: existingDataset, created: false };
+    }
+
+    try {
+      const createdDataset = await fetchJson('/api/v3/datasets', {
+        method: 'POST',
+        body: payload,
+      });
+      return { dataset: createdDataset, created: true };
+    } catch (createError) {
+      const latestDatasets = await fetchJson('/api/v3/datasets');
+      const fallbackDataset = findDatasetForUploadPayload(latestDatasets, payload);
+      if (fallbackDataset?.id) {
+        return { dataset: fallbackDataset, created: false };
+      }
+      throw createError;
+    }
+  }
+
+  async function saveFilesForLocalIngest(files) {
+    const formData = new FormData();
+    files.forEach((file) => formData.append('files', file, file.name));
+    const response = await fetchJson('/api/v3/local-document-uploads', {
+      method: 'POST',
+      body: formData,
+    });
+    return Array.isArray(response?.files) ? response.files : [];
+  }
+
+  async function registerAndIngestUploadedFile(file, savedFile, targetDataset, classification, index) {
+    const registered = await fetchJson('/api/v3/documents', {
+      method: 'POST',
+      body: {
+        dataset_id: targetDataset.id,
+        title: file.name || `上传文件 ${index + 1}`,
+        object_key: savedFile?.object_key || buildLocalUploadObjectKey(file, Date.now() + index),
+        content_type: savedFile?.content_type || file.type || 'application/octet-stream',
+        secret_binding_ids: [],
+        metadata: {
+          initial_classification: {
+            dataset_id: targetDataset.id,
+            dataset_title: targetDataset.title,
+            confidence: classification?.confidence || 'none',
+            source: classification?.source || 'unknown',
+            reason: classification?.reason || '',
+            media_kind: inferUploadMediaKind(file) || undefined,
+          },
+          processing_policy: {
+            foreground_allowed: ['save_file', 'preclassify', 'register_document', 'enqueue_ingest'],
+            background_required: ['parse_content', 'vlm_enrichment', 'media_transcription', 'indexing', 'report_supply'],
+          },
+          parse_state: {
+            stage: 'queued',
+            user_blocking: false,
+          },
+        },
+      },
+    });
+    const ingestResponse = await fetchJson(`/api/v3/documents/${registered.document.id}/ingest`, {
+      method: 'POST',
+    });
+    const started = await startWorkflowExecution(ingestResponse.workflow_execution?.id);
+    return {
+      file,
+      document: registered.document,
+      workflowExecution: ingestResponse.workflow_execution,
+      started,
+      targetDataset,
+      classification,
+    };
+  }
+
+  function handleUploadButtonClick() {
+    if (uploadingFiles) {
+      return;
+    }
+    fileInputRef.current?.click();
+  }
+
+  async function handleUploadFiles(event) {
+    const files = Array.from(event.target.files || []);
+    event.target.value = '';
+    if (!files.length) {
+      return;
+    }
+
+    setUploadingFiles(true);
+    setError('');
+
+    try {
+      let availableDatasets = datasets;
+      const uploadResults = [];
+      const createdDatasetTitles = [];
+      const savedFiles = await saveFilesForLocalIngest(files);
+
+      if (savedFiles.length !== files.length) {
+        throw new Error('上传文件保存数量不一致，已停止登记。');
+      }
+
+      for (const [index, file] of files.entries()) {
+        const classification = classifyUploadTarget({
+          file,
+          datasets: availableDatasets,
+          selectedDatasetId,
+        });
+        const { dataset: targetDataset, created } = await ensureUploadTargetDataset(classification, availableDatasets);
+        if (created) {
+          createdDatasetTitles.push(targetDataset.title);
+          availableDatasets = sortDatasets([...availableDatasets, targetDataset]);
+        }
+        const result = await registerAndIngestUploadedFile(file, savedFiles[index], targetDataset, classification, index);
+        uploadResults.push(result);
+      }
+
+      const firstResult = uploadResults[0];
+      const targetDataset = selectedDataset?.id
+        ? selectedDataset
+        : firstResult?.targetDataset || null;
+      const uniqueTargets = [...new Map(uploadResults.map((result) => [result.targetDataset.id, result.targetDataset])).values()];
+      const summary = summarizeUploadClassification({
+        fileCount: files.length,
+        datasetTitle: uniqueTargets.length === 1 ? uniqueTargets[0].title : uniqueTargets.map((dataset) => dataset.title).join('、'),
+        classification: firstResult?.classification,
+      });
+      const publicWarning = uploadResults.some((result) => isPublicUploadClassification(result.classification))
+        ? ' 未选私密数据集时当前按公开/default 数据集处理。'
+        : '';
+      const workflowLabel = uploadResults
+        .map((result) => result.started?.enqueued_tasks?.[0]?.id)
+        .filter(Boolean)
+        .slice(0, 2)
+        .join('、');
+
+      setActivityEvents((current) => [
+        {
+          id: `activity-${Date.now()}`,
+          kind: 'upload_event',
+          summary: `上传分类：${files.map((file) => file.name).join('、')} -> ${uniqueTargets.map((dataset) => dataset.title).join('、')}`,
+          created_at: new Date().toISOString(),
+          dataset_ids: uniqueTargets.map((dataset) => dataset.id),
+        },
+        ...current,
+      ].slice(0, 20));
+      setScopePlan({
+        candidates: uniqueTargets.map((dataset) => ({
+          type: 'dataset',
+          id: dataset.id,
+          label: dataset.title,
+          confidence: 'high',
+          reason: '上传文件已自动归类到该数据集',
+          source: 'upload_classified',
+        })),
+        hint: `上传已归类：${uniqueTargets.map((dataset) => dataset.title).join('、')}`,
+      });
+      if (targetDataset?.id) {
+        setSelectedDatasetId(targetDataset.id);
+      }
+      setBanner(
+        [
+          summary,
+          createdDatasetTitles.length ? `已补建默认公开数据集：${createdDatasetTitles.join('、')}。` : '',
+          workflowLabel ? `解析任务已入队：${workflowLabel}。` : '解析任务已提交。',
+          publicWarning,
+        ].filter(Boolean).join(' '),
+      );
+      await refreshCatalog({ preferredDatasetId: targetDataset?.id || selectedDatasetId, silent: true });
+      if (targetDataset?.id || selectedDatasetId) {
+        await refreshWorkspace(targetDataset?.id || selectedDatasetId, { silent: true, preserveNewSessionDraft: true });
+      }
+    } catch (uploadError) {
+      setError(uploadError instanceof Error ? uploadError.message : '上传登记失败');
+    } finally {
+      setUploadingFiles(false);
+    }
+  }
+
   async function handleSubmitMessage() {
     const prompt = input.trim();
 
-    if (!selectedDatasetId || !prompt) {
+    if (!prompt) {
       return;
+    }
+
+    const nextScopePlan = planAssistantScope({
+      prompt,
+      datasets,
+      selectedDatasetId,
+      conversationMemory: visibleMessages,
+    });
+    setScopePlan(nextScopePlan);
+    const plannedDatasetId = selectedDatasetId || selectPlannerDatasetId(nextScopePlan);
+    const effectiveDatasetId = plannedDatasetId || '';
+    const effectiveDataset = datasets.find((dataset) => dataset.id === effectiveDatasetId) || null;
+
+    if (effectiveDatasetId && effectiveDatasetId !== selectedDatasetId) {
+      setSelectedDatasetId(effectiveDatasetId);
     }
 
     if (promptRequestsStaticPage(prompt)) {
       handleStartStaticPageDraft({
         oneClick: /一键|直接|马上|立即|跳过/.test(prompt),
         prompt,
+        datasetId: effectiveDatasetId,
+        dataset: effectiveDataset,
       });
     } else if (activeStaticPageDraft && /调整|修改|换成|改成|突出|减少|增加|放大|缩小|移动|排序|风格|老板|高层|风险|柱状图|折线图|环图|看板|精简/.test(prompt)) {
       handleApplyStaticPagePrompt(prompt);
     }
 
+    if (!effectiveDatasetId) {
+      setSubmitting(true);
+      try {
+        const userMessage = createLocalMessage('user', prompt);
+        const briefing = buildAssistantStartupBriefing({
+          datasets,
+          reportPlans,
+          publishedReports,
+          latestMessages: [...localMessages, userMessage],
+          activityEvents,
+          selectedDataset: null,
+        });
+        let assistantContent = '';
+        let usedBackendAssistantRun = false;
+        try {
+          const assistantRun = await fetchJson('/api/v3/assistant-runs', {
+            method: 'POST',
+            body: {
+              prompt,
+              startup_briefing: briefing,
+              scope_candidates: nextScopePlan.candidates,
+              messages: localMessages
+                .slice(-12)
+                .map((message) => ({ role: message.role, content: message.content })),
+            },
+          });
+          assistantContent = assistantRun?.assistant_message?.content || '';
+          usedBackendAssistantRun = Boolean(assistantContent);
+        } catch (assistantRunError) {
+          assistantContent = [
+            '已进入普通聊天模式；当前没有锁定数据集，所以不会强行检索资料。',
+            formatStartupBriefingForModel(briefing),
+            nextScopePlan.hint ? `供料判断：${nextScopePlan.hint}。你也可以在左侧取消或改选。` : '供料判断：暂未命中具体数据集。',
+            `AssistantRun 暂不可用：${assistantRunError instanceof Error ? assistantRunError.message : '请求失败'}。`,
+          ].join('\n\n');
+        }
+
+        const assistantMessage = createLocalMessage('assistant', assistantContent);
+        setLocalMessages((current) => [...current, userMessage, assistantMessage].slice(-40));
+        setInput('');
+        setComposingNewSession(false);
+        setBanner(
+          usedBackendAssistantRun
+            ? '已通过 AssistantRun 返回普通聊天；记录只缓存在当前浏览器。'
+            : 'AssistantRun 暂不可用，已用本地占位回复保留这轮普通聊天。',
+        );
+        setError('');
+      } finally {
+        setSubmitting(false);
+      }
+      return;
+    }
+
     setSubmitting(true);
     try {
-      const response = selectedSessionId
+      const response = selectedSessionId && selectedDatasetId
         ? await fetchJson(`/api/v3/chat-sessions/${selectedSessionId}/turns`, {
             method: 'POST',
             body: { prompt },
           })
-        : await fetchJson(`/api/v3/datasets/${selectedDatasetId}/chat-sessions`, {
+        : await fetchJson(`/api/v3/datasets/${effectiveDatasetId}/chat-sessions`, {
             method: 'POST',
             body: { prompt },
           });
@@ -387,7 +694,7 @@ export default function HomePageClient() {
           : `已启动新会话 ${sessionTitle}，任务 ${started?.enqueued_tasks?.[0]?.id || '已入队'}。`,
       );
       await Promise.all([
-        refreshWorkspace(selectedDatasetId, {
+        refreshWorkspace(effectiveDatasetId, {
           preferredSessionId: response.chat_session.id,
           silent: true,
         }),
@@ -401,29 +708,32 @@ export default function HomePageClient() {
   }
 
   function handleStartNewConversation() {
-    if (!selectedDatasetId) {
-      return;
-    }
-
-    setBanner('已切换为新会话输入；下一次发送会创建独立 chat_session。');
+    setBanner(
+      selectedDatasetId
+        ? '已切换为新会话输入；下一次发送会创建独立 chat_session。'
+        : '已开始新的普通聊天；本地缓存只保留当前浏览器的轻量记录。',
+    );
     setError('');
     setComposingNewSession(true);
     setSelectedSessionId(null);
     setMessages([]);
+    if (!selectedDatasetId) {
+      setLocalMessages([]);
+    }
     setMobilePanel('chat');
   }
 
   function handleStartStaticPageDraft(options = {}) {
-    const { oneClick = false, prompt = '' } = options;
-    if (!selectedDatasetId) {
-      setError('先选择数据集，再生成静态页。');
-      return null;
-    }
+    const { oneClick = false, prompt = '', datasetId = selectedDatasetId, dataset = selectedDataset } = options;
+    const draftDatasetId = datasetId || '';
 
     const baseDraft = buildInitialStaticPageDraft({
-      datasetId: selectedDatasetId,
+      datasetId: draftDatasetId,
       sessionId: selectedSessionId,
-      conversationSummary: buildStaticPageConversationSummary(prompt),
+      conversationSummary: buildStaticPageConversationSummary(prompt, {
+        dataset,
+        messages: visibleMessages,
+      }),
     });
     const draft = oneClick
       ? applyStaticPageOperation(baseDraft, {
@@ -437,7 +747,7 @@ export default function HomePageClient() {
       [draft.id]: draft,
     }));
     setActiveStaticPageDraftId(draft.id);
-    setBanner(oneClick ? '已按 AI 理解创建静态页草稿，并进入效果图排队。' : '已创建静态页草稿，下一步会在右侧展示规划。');
+    setBanner(oneClick ? '已按 AI 理解创建静态页草稿，并进入效果图排队。' : '已创建静态页草稿，下一步会展示页面规划。');
     setError('');
     setMobilePanel('insights');
     return draft;
@@ -634,6 +944,58 @@ export default function HomePageClient() {
   }, []);
 
   useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+    try {
+      const raw = window.localStorage.getItem(LOCAL_CHAT_STORAGE_KEY);
+      const parsed = raw ? JSON.parse(raw) : [];
+      if (Array.isArray(parsed)) {
+        setLocalMessages(parsed.slice(-40));
+      }
+    } catch {
+      setLocalMessages([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+    try {
+      window.localStorage.setItem(LOCAL_CHAT_STORAGE_KEY, JSON.stringify(localMessages.slice(-40)));
+    } catch {
+      // Ignore cache write failures; chat can still continue in memory.
+    }
+  }, [localMessages]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+    try {
+      const raw = window.localStorage.getItem(LOCAL_ACTIVITY_STORAGE_KEY);
+      const parsed = raw ? JSON.parse(raw) : [];
+      if (Array.isArray(parsed)) {
+        setActivityEvents(parsed.slice(0, 20));
+      }
+    } catch {
+      setActivityEvents([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+    try {
+      window.localStorage.setItem(LOCAL_ACTIVITY_STORAGE_KEY, JSON.stringify(activityEvents.slice(0, 20)));
+    } catch {
+      // Activity cache is only a local briefing hint; ignore write failures.
+    }
+  }, [activityEvents]);
+
+  useEffect(() => {
     if (!selectedDatasetId) {
       startTransition(() => {
         setSessions([]);
@@ -763,27 +1125,42 @@ export default function HomePageClient() {
       setMobileSidebarOpen(false);
       setMobilePanel('chat');
     },
+    onClearDatasetSelection: () => {
+      setBanner('已切回普通聊天；没有选中数据集时不会强行检索。');
+      setError('');
+      setComposingNewSession(false);
+      setSelectedDatasetId(null);
+      setSelectedSessionId(null);
+      setScopePlan({ candidates: [], hint: '' });
+      setMobileSidebarOpen(false);
+      setMobilePanel('chat');
+    },
     creatingDataset,
     stats,
     loading: bootstrapping || workspaceLoading,
     mobileOpen: mobileSidebarOpen,
     onClose: () => setMobileSidebarOpen(false),
+    scopePlan,
   };
   const chatPanelProps = {
     dataset: selectedDataset,
     session: selectedSession,
-    messages,
+    messages: visibleMessages,
     messageLoading,
     input,
     onInputChange: setInput,
     onSubmit: handleSubmitMessage,
     onStartNewConversation: handleStartNewConversation,
-    submitting,
+    submitting: submitting || uploadingFiles,
+    uploadingFiles,
+    onUploadClick: handleUploadButtonClick,
     reportEntryBusy,
     onResolveReportEntry: handleResolveReportEntry,
     staticPageDraft: activeStaticPageDraft,
     onStartStaticPageDraft: handleStartStaticPageDraft,
     onOpenStaticPageBuilder: () => setMobilePanel('insights'),
+    startupBriefing: assistantStartupBriefing,
+    scopePlan,
   };
   const insightPanelProps = {
     dataset: selectedDataset,
@@ -822,28 +1199,42 @@ export default function HomePageClient() {
     onStartStaticPageDraft: handleStartStaticPageDraft,
     onApplyStaticPageOperation: handleApplyStaticPageOperation,
   };
+  const uploadInput = (
+    <input
+      ref={fileInputRef}
+      className="hidden-file-input"
+      type="file"
+      multiple
+      onChange={handleUploadFiles}
+      aria-label="上传文件并自动分类"
+    />
+  );
 
   if (mobileViewport) {
     return (
-      <HomeMobileShell
-        sidebarProps={sidebarProps}
-        chatPanelProps={chatPanelProps}
-        insightPanelProps={insightPanelProps}
-        selectedDataset={selectedDataset}
-        stats={stats}
-        loading={bootstrapping || workspaceLoading}
-        banner={banner}
-        error={error}
-        staticPageDraft={activeStaticPageDraft}
-        onApplyStaticPageOperation={handleApplyStaticPageOperation}
-        onApplyStaticPagePrompt={handleApplyStaticPagePrompt}
-      />
+      <>
+        <HomeMobileShell
+          sidebarProps={sidebarProps}
+          chatPanelProps={chatPanelProps}
+          insightPanelProps={insightPanelProps}
+          selectedDataset={selectedDataset}
+          stats={stats}
+          loading={bootstrapping || workspaceLoading}
+          banner={banner}
+          error={error}
+          staticPageDraft={activeStaticPageDraft}
+          onApplyStaticPageOperation={handleApplyStaticPageOperation}
+          onApplyStaticPagePrompt={handleApplyStaticPagePrompt}
+        />
+        {uploadInput}
+      </>
     );
   }
 
   return (
     <div className="app-shell assistant-shell">
       <Sidebar {...sidebarProps} />
+      {uploadInput}
       {mobileSidebarOpen ? (
         <button
           type="button"

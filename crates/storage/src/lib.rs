@@ -82,6 +82,7 @@ pub struct NewDocument {
     pub object_key: String,
     pub content_type: String,
     pub secret_binding_ids: Vec<SecretBindingId>,
+    pub metadata: Value,
 }
 
 #[derive(Clone, Debug)]
@@ -539,9 +540,10 @@ impl PgDocumentRepository {
         .bind(new_document.object_key)
         .bind(new_document.content_type)
         .bind(DocumentLifecycle::Received.as_str())
-        .bind(document_metadata_with_secret_binding_ids(
+        .bind(document_initial_metadata(
             &new_document.secret_binding_ids,
-        ))
+            &new_document.metadata,
+        )?)
         .fetch_one(&self.pool)
         .await?;
 
@@ -3453,6 +3455,20 @@ fn document_metadata_with_secret_binding_ids(secret_binding_ids: &[SecretBinding
                 .collect(),
         ),
     )]))
+}
+
+fn document_initial_metadata(
+    secret_binding_ids: &[SecretBindingId],
+    metadata: &Value,
+) -> Result<Value> {
+    let mut merged = metadata.as_object().cloned().unwrap_or_else(Map::new);
+    let secret_metadata = document_metadata_with_secret_binding_ids(secret_binding_ids);
+    if let Some(secret_object) = secret_metadata.as_object() {
+        for (key, value) in secret_object {
+            merged.insert(key.clone(), value.clone());
+        }
+    }
+    Ok(Value::Object(merged))
 }
 
 fn secret_binding_ids_from_metadata(metadata: &Value) -> Result<Vec<SecretBindingId>> {

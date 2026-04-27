@@ -60,7 +60,7 @@ export default function HomeMobileShell({
       </header>
 
       <div className="mobile-home-status-strip">
-        <span>{selectedDataset ? selectedDataset.title : '选择数据集后开始'}</span>
+        <span>{selectedDataset ? selectedDataset.title : '普通聊天 · 未选数据集'}</span>
         <strong>{loading ? '同步中' : `会话 ${stats.sessions} · 报告 ${stats.plans}`}</strong>
       </div>
 

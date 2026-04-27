@@ -48,12 +48,20 @@ export default function Sidebar({
   onDatasetDraftChange,
   onCreateDataset,
   onSelectDataset,
+  onClearDatasetSelection,
   creatingDataset,
   stats,
   loading,
   mobileOpen = false,
   onClose,
+  scopePlan,
 }) {
+  const scopeCandidateIds = new Set(
+    (scopePlan?.candidates || [])
+      .filter((candidate) => candidate.type === 'dataset')
+      .map((candidate) => candidate.id),
+  );
+
   return (
     <aside className={`sidebar ${mobileOpen ? 'open' : ''}`}>
       <div className="sidebar-mobile-head">
@@ -81,21 +89,41 @@ export default function Sidebar({
         <div className="nav-item nav-item-static">审计</div>
       </section>
 
+      <DatasetCreateForm
+        draft={datasetDraft}
+        creating={creatingDataset}
+        onChange={onDatasetDraftChange}
+        onSubmit={onCreateDataset}
+      />
+
       <section className="side-card">
         <div className="card-title">数据集</div>
         <div className="dataset-list">
+          <button
+            type="button"
+            className={`dataset-item ordinary-chat-item ${selectedDatasetId ? '' : 'active'}`}
+            onClick={onClearDatasetSelection}
+            disabled={loading && !selectedDatasetId}
+          >
+            <span className="dataset-item-title">普通聊天</span>
+            <span className="dataset-item-meta">未锁定数据集 · 命中资料意图后预选</span>
+          </button>
           {datasets.length ? (
             datasets.map((dataset) => {
               const active = dataset.id === selectedDatasetId;
+              const preselected = !active && scopeCandidateIds.has(dataset.id);
               return (
                 <button
                   key={dataset.id}
                   type="button"
-                  className={`dataset-item ${active ? 'active' : ''}`}
+                  className={`dataset-item ${active ? 'active' : ''} ${preselected ? 'preselected' : ''}`.trim()}
                   onClick={() => onSelectDataset(dataset.id)}
                   disabled={loading && !active}
                 >
-                  <span className="dataset-item-title">{dataset.title}</span>
+                  <span className="dataset-item-title">
+                    {dataset.title}
+                    {preselected ? <small>预选</small> : null}
+                  </span>
                   <span className="dataset-item-meta">
                     {dataset.key} · {dataset.lifecycle}
                   </span>
@@ -104,18 +132,11 @@ export default function Sidebar({
             })
           ) : (
             <div className="side-card-empty">
-              还没有数据集。先在下面创建一个，前端就能切进对应工作台。
+              还没有数据集。可以先普通聊天，也可以在上面创建一个公开数据集。
             </div>
           )}
         </div>
       </section>
-
-      <DatasetCreateForm
-        draft={datasetDraft}
-        creating={creatingDataset}
-        onChange={onDatasetDraftChange}
-        onSubmit={onCreateDataset}
-      />
 
       <section className="side-card compact">
         <div className="card-title">当前上下文</div>
@@ -145,7 +166,7 @@ export default function Sidebar({
 
       <section className="side-card compact">
         <div className="card-title">当前约束</div>
-        <p>未选会话时发送问题会新建 `chat_session workflow`；选中历史会话后会追加新一轮，右侧保留资料输出和发布结果回看。</p>
+        <p>未选数据集时按普通聊天；选中或预选数据集后才供料检索。右侧只保留草稿、成品和历史输出回看。</p>
       </section>
     </aside>
   );

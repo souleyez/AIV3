@@ -10,6 +10,7 @@ members = [
     "crates/tool-registry",
     "crates/mcp-gateway",
     "crates/llm-gateway",
+    "crates/document-vlm-runtime",
     "crates/ingest-worker",
     "crates/retrieval-worker",
     "crates/memory-worker",
@@ -38,6 +39,7 @@ authors = ["AI Data Platform Team"]
 async-nats = "0.47.0"
 anyhow = "1.0.100"
 axum = { version = "0.8.6", features = ["json", "macros"] }
+base64 = "0.22.1"
 chrono = { version = "0.4.42", features = ["clock", "serde"] }
 futures-util = "0.3.31"
 reqwest = { version = "0.13.2", default-features = false, features = ["blocking", "json", "rustls"] }
@@ -49,3 +51,4 @@ tokio = { version = "1.48.0", features = ["macros", "rt-multi-thread", "signal"]
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter", "fmt", "json"] }
 uuid = { version = "1.18.1", features = ["serde", "v4"] }
+zip = { version = "8.6.0", default-features = false, features = ["deflate"] }

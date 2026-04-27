@@ -2,7 +2,7 @@ use anyhow::{anyhow, Result};
 use chrono::Utc;
 use domain_model::DocumentLifecycle;
 use event_bus::{workflow_task_enqueued_subject, EventBus, EventSubscription};
-use ingest_worker::{IngestJob, IngestProcessor, PlaceholderIngestProcessor};
+use ingest_worker::{IngestJob, IngestOutcome, IngestProcessor, LocalIngestProcessor};
 use serde_json::{json, Value};
 use storage::{NewDocumentChunk, PgStorage, DEFAULT_LOCAL_DATABASE_URL};
 use tokio::time::Duration;
@@ -29,7 +29,7 @@ async fn main() -> Result<()> {
     let storage = PgStorage::connect(&database_url).await?;
     let workflow_catalog = workflow_definitions::catalog();
     let event_bus = EventBus::connect_from_env_or_disabled("PLATFORM_NATS_URL").await;
-    let processor = PlaceholderIngestProcessor;
+    let processor = LocalIngestProcessor;
     let wake_subject = workflow_task_enqueued_subject(&queue, &task_key);
     let mut task_waker = event_bus
         .subscribe_queue_or_disabled(
@@ -99,29 +99,32 @@ async fn process_task(
     let job = IngestJob {
         dataset_id,
         document_id,
+        title: document.title.clone(),
+        object_key: document.object_key.clone(),
         content_type: document.content_type.clone(),
     };
     let current_title = document.title.clone();
     let current_content_type = document.content_type.clone();
+    let current_object_key = document.object_key.clone();
 
     let process_result: Result<()> = async {
         let outcome = processor.process(&job);
-        let chunks = build_placeholder_chunks(
-            dataset_id,
-            document_id,
-            &current_title,
-            &current_content_type,
-            outcome.chunk_count,
-        );
+        let chunk_count = outcome.chunk_count();
+        let chunks = build_document_chunks(dataset_id, document_id, &outcome);
         storage
             .document_chunks()
             .replace_for_document(task.tenant_id, document_id, &chunks)
             .await?;
         let metadata_updates = json!({
             "ingest": {
-                "processor": "placeholder",
-                "chunk_count": outcome.chunk_count,
+                "processor": if outcome.used_placeholder { "placeholder" } else { "local_parser" },
+                "parse_method": outcome.parse_method.clone(),
+                "cloud_structured_provider": if outcome.parse_method.contains("vlm") { "minimax" } else { "" },
+                "parse_metadata": outcome.metadata.clone(),
+                "chunk_count": chunk_count,
+                "extracted_chars": outcome.extracted_chars,
                 "content_type": current_content_type,
+                "object_key": current_object_key,
                 "extracted_at": Utc::now(),
             }
         });
@@ -140,7 +143,10 @@ async fn process_task(
             "document_id": updated_document.id,
             "dataset_id": updated_document.dataset_id,
             "content_type": updated_document.content_type,
-            "chunk_count": outcome.chunk_count,
+            "chunk_count": chunk_count,
+                "parse_method": outcome.parse_method.clone(),
+                "cloud_structured_provider": if outcome.parse_method.contains("vlm") { "minimax" } else { "" },
+                "extracted_chars": outcome.extracted_chars,
             "lifecycle": updated_document.lifecycle.as_str(),
             "title": updated_document.title,
         });
@@ -225,34 +231,37 @@ async fn process_task(
     Ok(())
 }
 
-fn build_placeholder_chunks(
+fn build_document_chunks(
     dataset_id: domain_model::DatasetId,
     document_id: domain_model::DocumentId,
-    title: &str,
-    content_type: &str,
-    chunk_count: u32,
+    outcome: &IngestOutcome,
 ) -> Vec<NewDocumentChunk> {
     let created_at = Utc::now();
 
-    (0..chunk_count)
-        .map(|index| NewDocumentChunk {
+    outcome
+        .chunks
+        .iter()
+        .enumerate()
+        .map(|(index, content)| NewDocumentChunk {
             dataset_id,
             document_id,
             chunk_index: index as i32,
-            content: format!(
-                "Placeholder extracted chunk {} for {} ({})",
-                index + 1,
-                title,
-                content_type
-            ),
-            token_count: 64,
+            content: content.clone(),
+            token_count: estimate_token_count(content),
             metadata: json!({
-                "extractor": "placeholder",
+                "extractor": if outcome.used_placeholder { "placeholder" } else { "local_parser" },
+                "parse_method": outcome.parse_method.clone(),
+                "parse_metadata": outcome.metadata.clone(),
                 "source": "upload_ingest_workflow",
             }),
             created_at,
         })
         .collect()
+}
+
+fn estimate_token_count(content: &str) -> i32 {
+    let estimated = (content.chars().count() / 4).max(1);
+    estimated.try_into().unwrap_or(i32::MAX)
 }
 
 fn context_uuid_string(value: &Value, key: &str) -> Result<Option<uuid::Uuid>> {

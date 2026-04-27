@@ -3,6 +3,7 @@
 /.vscode
 /.DS_Store
 /tmp
+/storage
 **/node_modules
 **/.next
 **/.turbo

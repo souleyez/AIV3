@@ -8,8 +8,9 @@ use axum::{
 use chrono::{DateTime, Utc};
 use contracts::{
     AdvanceWorkflowExecutionResponse, ApiErrorResponse, AppendChatSessionTurnRequest,
-    AppendChatSessionTurnResponse, ChatMessageView, ChatSessionView, CompareDocumentsRequest,
-    CompareDocumentsView, CreateChatSessionRequest, CreateChatSessionResponse,
+    AppendChatSessionTurnResponse, AssistantRunMessageView, ChatMessageView, ChatSessionView,
+    CompareDocumentsRequest, CompareDocumentsView, CreateAssistantRunRequest,
+    CreateAssistantRunResponse, CreateChatSessionRequest, CreateChatSessionResponse,
     CreateDatasetOutputRequest, CreateDatasetOutputResponse, CreateDatasetRequest,
     CreateDocumentIngestResponse, CreateMemoryDirectoryRefreshResponse, CreateReportPlanResponse,
     CreateReportRenderRequest, CreateReportRenderResponse, DatasetOutputView, DatasetSummary,
@@ -36,6 +37,8 @@ use domain_model::{
 use event_bus::{
     workflow_execution_transition_subject, workflow_task_enqueued_subject, EventBus, EventEnvelope,
 };
+use llm_gateway::{build_provider_from_env, render_runtime_manifest, LlmRequest};
+use prompt_registry::bootstrap_default_prompt_registry;
 use serde_json::{json, Map, Value};
 use std::{collections::BTreeMap, fmt::Display};
 use storage::{
@@ -52,6 +55,7 @@ const DATASET_OUTPUT_RETRIEVAL_SCAN_LIMIT: i64 = 512;
 const DATASET_OUTPUT_RETRIEVAL_BIND_LIMIT: usize = 8;
 const RETRIEVAL_SEARCH_DEFAULT_LIMIT: usize = 8;
 const RETRIEVAL_SEARCH_MAX_LIMIT: usize = 20;
+const DEFAULT_ASSISTANT_RUN_RUNTIME_MODEL: &str = "placeholder-assistant-run-v1";
 
 #[derive(Clone)]
 pub struct AppState {
@@ -152,6 +156,10 @@ pub fn router(
         .route(
             "/v1/chat-sessions/{session_id}/report-entry",
             axum::routing::post(update_chat_session_report_entry_route),
+        )
+        .route(
+            "/v1/assistant-runs",
+            axum::routing::post(create_assistant_run),
         )
         .route(
             "/v1/documents/{document_id}/chunks",
@@ -3555,6 +3563,100 @@ async fn append_chat_session_turn(
     ))
 }
 
+async fn create_assistant_run(
+    Json(request): Json<CreateAssistantRunRequest>,
+) -> std::result::Result<(StatusCode, Json<CreateAssistantRunResponse>), ApiError> {
+    validate_required("prompt", &request.prompt)?;
+
+    let runtime_mode =
+        std::env::var("ASSISTANT_RUN_RUNTIME_MODE").unwrap_or_else(|_| "placeholder".to_string());
+    let runtime_provider =
+        std::env::var("ASSISTANT_RUN_RUNTIME_PROVIDER").unwrap_or_else(|_| runtime_mode.clone());
+    let runtime_model = std::env::var("ASSISTANT_RUN_RUNTIME_MODEL")
+        .unwrap_or_else(|_| DEFAULT_ASSISTANT_RUN_RUNTIME_MODEL.to_string());
+    let provider_input = if runtime_mode == "placeholder" {
+        format!(
+            "普通聊天运行时占位回复：后端 AssistantRun 已接收问题，真实模型接入后会直接返回模型回答。\n\nPrompt: {}",
+            request.prompt.trim()
+        )
+    } else {
+        build_assistant_run_provider_input(&request)
+    };
+    let scope_candidates = request.scope_candidates.clone();
+
+    let response = tokio::task::spawn_blocking(move || {
+        let provider = build_provider_from_env(
+            "ASSISTANT_RUN",
+            &runtime_mode,
+            runtime_provider,
+            bootstrap_default_prompt_registry(),
+        )?;
+        provider.complete(&LlmRequest {
+            model: runtime_model,
+            system_prompt_key: None,
+            input: provider_input,
+        })
+    })
+    .await
+    .map_err(|error| {
+        ApiError::internal(
+            "assistant_run_join_failed",
+            format!("assistant run worker join failed: {error}"),
+        )
+    })?
+    .map_err(|error| ApiError::internal("assistant_run_provider_failed", error.to_string()))?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(CreateAssistantRunResponse {
+            assistant_message: AssistantRunMessageView {
+                role: ChatMessageRole::Assistant,
+                content: response.output_text,
+            },
+            runtime: render_runtime_manifest(&response.runtime),
+            scope_candidates,
+        }),
+    ))
+}
+
+fn build_assistant_run_provider_input(request: &CreateAssistantRunRequest) -> String {
+    let mut sections = vec![
+        "你是智能数据工作台里的普通聊天运行时。".to_string(),
+        "原则：不替用户编排答案；只根据用户问题、启动简报、范围候选和必要历史直接回答。"
+            .to_string(),
+    ];
+
+    if let Some(briefing) = request.startup_briefing.as_ref() {
+        sections.push(format!(
+            "启动简报：{}",
+            serde_json::to_string(briefing).unwrap_or_else(|_| "{}".to_string())
+        ));
+    }
+    if !request.scope_candidates.is_empty() {
+        sections.push(format!(
+            "范围候选：{}",
+            serde_json::to_string(&request.scope_candidates).unwrap_or_else(|_| "[]".to_string())
+        ));
+    }
+
+    let history = request
+        .messages
+        .iter()
+        .rev()
+        .take(12)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .map(|message| format!("{}: {}", message.role.as_str(), message.content.trim()))
+        .collect::<Vec<_>>();
+    if !history.is_empty() {
+        sections.push(format!("最近对话：\n{}", history.join("\n")));
+    }
+
+    sections.push(format!("用户问题：{}", request.prompt.trim()));
+    sections.join("\n\n")
+}
+
 async fn list_chat_messages(
     State(state): State<AppState>,
     Path(session_id): Path<String>,
@@ -3962,6 +4064,7 @@ async fn register_document(
                 object_key: request.object_key.trim().to_string(),
                 content_type: request.content_type.trim().to_string(),
                 secret_binding_ids: request.secret_binding_ids,
+                metadata: request.metadata,
             },
         )
         .await
@@ -8910,6 +9013,36 @@ mod tests {
     use tool_registry::{ToolCliContract, ToolCliOutputMode, ToolDefinition, ToolInvocationMode};
     use tower::util::ServiceExt;
 
+    #[test]
+    fn assistant_run_provider_input_includes_briefing_scope_and_history() {
+        let input = build_assistant_run_provider_input(&CreateAssistantRunRequest {
+            prompt: "继续总结订单风险".to_string(),
+            startup_briefing: Some(json!({
+                "productTruth": "智能数据工作台",
+                "visibleDatasetCount": 2,
+            })),
+            scope_candidates: vec![json!({
+                "type": "dataset",
+                "label": "订单",
+            })],
+            messages: vec![
+                AssistantRunMessageView {
+                    role: ChatMessageRole::User,
+                    content: "刚才先看销售".to_string(),
+                },
+                AssistantRunMessageView {
+                    role: ChatMessageRole::Assistant,
+                    content: "已预选订单数据集".to_string(),
+                },
+            ],
+        });
+
+        assert!(input.contains("智能数据工作台"));
+        assert!(input.contains("范围候选"));
+        assert!(input.contains("assistant: 已预选订单数据集"));
+        assert!(input.contains("用户问题：继续总结订单风险"));
+    }
+
     fn sample_chat_session_for_report_entry(
         title: &str,
         session_manifest: Value,
@@ -10834,6 +10967,7 @@ mod tests {
                     object_key: "documents/q1-notes.md".to_string(),
                     content_type: "text/markdown".to_string(),
                     secret_binding_ids: Vec::new(),
+                    metadata: json!({}),
                 },
             )
             .await
@@ -10959,6 +11093,7 @@ mod tests {
                     object_key: "documents/contract-a.md".to_string(),
                     content_type: "text/markdown".to_string(),
                     secret_binding_ids: Vec::new(),
+                    metadata: json!({}),
                 },
             )
             .await
@@ -10973,6 +11108,7 @@ mod tests {
                     object_key: "documents/contract-b.md".to_string(),
                     content_type: "text/markdown".to_string(),
                     secret_binding_ids: Vec::new(),
+                    metadata: json!({}),
                 },
             )
             .await
@@ -11151,6 +11287,7 @@ mod tests {
                     object_key: "documents/revenue.md".to_string(),
                     content_type: "text/markdown".to_string(),
                     secret_binding_ids: Vec::new(),
+                    metadata: json!({}),
                 },
             )
             .await
@@ -11165,6 +11302,7 @@ mod tests {
                     object_key: "documents/roadmap.md".to_string(),
                     content_type: "text/markdown".to_string(),
                     secret_binding_ids: Vec::new(),
+                    metadata: json!({}),
                 },
             )
             .await
@@ -11381,6 +11519,7 @@ mod tests {
                     object_key: "documents/revenue-memo.md".to_string(),
                     content_type: "text/markdown".to_string(),
                     secret_binding_ids: Vec::new(),
+                    metadata: json!({}),
                 },
             )
             .await
@@ -11395,6 +11534,7 @@ mod tests {
                     object_key: "documents/roadmap-memo.md".to_string(),
                     content_type: "text/markdown".to_string(),
                     secret_binding_ids: Vec::new(),
+                    metadata: json!({}),
                 },
             )
             .await

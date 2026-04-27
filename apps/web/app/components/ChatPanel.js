@@ -18,7 +18,7 @@ const CONTINUATION_LABELS = {
 
 const REPORT_ENTRY_LABELS = {
   not_applicable: '保持资料服务',
-  confirmation_required: '需要 2 选 1',
+  confirmation_required: '待确认报告入口',
   confirmed: '已进入报告服务',
 };
 
@@ -69,7 +69,8 @@ const RUNTIME_PHASES = [
 ];
 
 function renderParagraphs(content) {
-  const parts = String(content || '')
+  const displayContent = stripThinkingBlocks(content);
+  const parts = displayContent
     .split(/\n{2,}/)
     .map((part) => part.trim())
     .filter(Boolean);
@@ -83,6 +84,12 @@ function renderParagraphs(content) {
       {part}
     </p>
   ));
+}
+
+function stripThinkingBlocks(content) {
+  const raw = String(content || '');
+  const withoutThinking = raw.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+  return withoutThinking || raw;
 }
 
 function buildMessageChips(message) {
@@ -205,7 +212,7 @@ function ReportEntryGate({ reportEntry, busy, onResolve }) {
     <div className="report-entry-gate">
       <div className="report-entry-head">
         <strong>检测到报告入口分流</strong>
-        <span>这条会话已经给出 host-side `2 选 1` gate。</span>
+        <span>模型认为可以进入报告服务；宿主只提供入口，不替模型编排正文。</span>
       </div>
       <div className="report-entry-body">
         <div className="report-entry-copy">
@@ -231,6 +238,35 @@ function ReportEntryGate({ reportEntry, busy, onResolve }) {
   );
 }
 
+function AssistantContextStrip({ dataset, startupBriefing, scopePlan }) {
+  const candidates = Array.isArray(scopePlan?.candidates) ? scopePlan.candidates : [];
+  const datasetCandidates = candidates.filter((candidate) => candidate.type === 'dataset');
+  const memoryCandidate = candidates.find((candidate) => candidate.type === 'conversation_memory');
+
+  return (
+    <div className="assistant-context-strip">
+      <div className="assistant-context-main">
+        <span>{dataset ? '当前供料' : '普通聊天'}</span>
+        <strong>{dataset?.title || '未选数据集'}</strong>
+        <p>
+          可见数据集 {startupBriefing?.visibleDatasetCount || 0} 个，
+          文档 {startupBriefing?.visibleDocumentCount || 0} 份。
+          {scopePlan?.hint ? ` ${scopePlan.hint}` : ' 暂未命中具体供料范围。'}
+        </p>
+      </div>
+      <div className="assistant-context-chips" aria-label="模型范围判断">
+        {datasetCandidates.map((candidate) => (
+          <span className="message-chip blue" key={`${candidate.type}-${candidate.id}`}>
+            预选 {candidate.label}
+          </span>
+        ))}
+        {memoryCandidate ? <span className="message-chip neutral">参考本轮对话</span> : null}
+        {!datasetCandidates.length && !memoryCandidate ? <span className="message-chip neutral">不强行检索</span> : null}
+      </div>
+    </div>
+  );
+}
+
 export default function ChatPanel({
   dataset,
   session,
@@ -247,6 +283,10 @@ export default function ChatPanel({
   staticPageDraft = null,
   onStartStaticPageDraft,
   onOpenStaticPageBuilder,
+  startupBriefing,
+  scopePlan,
+  onUploadClick,
+  uploadingFiles = false,
 }) {
   const reportEntry = session?.session_manifest_view?.report_entry || null;
   const latestTurn = session?.session_manifest_view?.last_turn || null;
@@ -255,13 +295,13 @@ export default function ChatPanel({
     <section className={`chat-panel card ${panelClassName}`.trim()}>
       <div className="panel-header chat-header">
         <div>
-          <h3>{session ? session.title : dataset ? `${dataset.title} · 新问答` : '选择数据集后开始'}</h3>
+          <h3>{session ? session.title : dataset ? `${dataset.title} · 新问答` : '普通聊天 · 未选数据集'}</h3>
           <p>
             {session
               ? `会话 ${truncateText(session.id, 16)} · 最后更新 ${formatRelativeTime(session.updated_at)}`
               : dataset
                 ? `当前选择 ${dataset.title}，发送问题会在这个数据集下启动新的 chat_session workflow。`
-                : '左侧先选数据集，右侧会自动加载这个数据集下的历史会话和发布结果。'}
+                : '可以直接提问；系统会先做范围判断，命中资料意图时再预选相关数据集。'}
           </p>
         </div>
         {session ? (
@@ -282,23 +322,16 @@ export default function ChatPanel({
             >
               新会话
             </button>
-            <button
-              type="button"
-              className="primary-btn compact-action-btn"
-              onClick={() => onStartStaticPageDraft?.({ oneClick: false })}
-              disabled={!dataset}
-            >
-              生成静态页
-            </button>
           </div>
         ) : dataset ? (
           <div className="header-pill-row">
             <button
               type="button"
-              className="primary-btn compact-action-btn"
-              onClick={() => onStartStaticPageDraft?.({ oneClick: false })}
+              className="ghost-btn compact-action-btn"
+              onClick={onStartNewConversation}
+              disabled={submitting}
             >
-              生成静态页
+              新会话
             </button>
           </div>
         ) : null}
@@ -316,6 +349,12 @@ export default function ChatPanel({
         draft={staticPageDraft}
         onOpenBuilder={onOpenStaticPageBuilder}
         onOneClick={() => onStartStaticPageDraft?.({ oneClick: true })}
+      />
+
+      <AssistantContextStrip
+        dataset={dataset}
+        startupBriefing={startupBriefing}
+        scopePlan={scopePlan}
       />
 
       <div className="chat-messages">
@@ -357,11 +396,11 @@ export default function ChatPanel({
           })
         ) : (
           <div className="chat-empty-state">
-            <h4>{dataset ? '从当前数据集发起新会话' : '选择数据集后开始'}</h4>
+            <h4>{dataset ? '从当前数据集发起新会话' : '可以直接聊天'}</h4>
             <p>
               {dataset
                 ? '输入问题会创建独立 chat_session；选中右侧历史会话后，底部输入会追加到该会话的新一轮。'
-                : '左侧先选数据集，右侧会自动加载这个数据集下的历史会话和发布结果。'}
+                : '未选数据集时按普通模型聊天处理；如果问题命中资料范围，系统会在左侧预选相关数据集并优先供料。'}
             </p>
           </div>
         )}
@@ -371,9 +410,20 @@ export default function ChatPanel({
         <div className="composer-note">
           {session
             ? '当前输入会追加到已选会话；如需分开上下文，点右上角“新会话”后再发送。'
-            : '当前输入会在所选数据集下创建新会话；右侧可随时切回历史会话继续追问。'}
+            : dataset
+              ? '当前输入会在所选数据集下创建新会话；右侧可随时切回历史会话继续追问。'
+              : '未选数据集时先普通聊天；系统只做供料范围判断，不替模型编排答案。'}
         </div>
         <div className="chat-input-row">
+          <button
+            className="ghost-btn upload-btn"
+            type="button"
+            onClick={onUploadClick}
+            disabled={!onUploadClick || submitting}
+            title={onUploadClick ? '上传文件并自动分类' : '上传分类接口待接入'}
+          >
+            {uploadingFiles ? '上传中...' : '上传'}
+          </button>
           <textarea
             value={input}
             onChange={(event) => onInputChange(event.target.value)}
@@ -382,26 +432,26 @@ export default function ChatPanel({
                 ? session
                   ? `继续追问 ${session.title}`
                   : `围绕 ${dataset.title} 提问，系统会在这个数据集下创建一条新会话`
-                : '先在左侧选择数据集'
+                : '直接提问；系统会按意图预选资料范围'
             }
-            disabled={!dataset || submitting}
+            disabled={submitting}
             onKeyDown={(event) => {
               if (event.key === 'Enter' && !event.shiftKey) {
                 event.preventDefault();
-                if (dataset && !submitting) {
+                if (!submitting) {
                   onSubmit();
                 }
               }
             }}
           />
-          <button className="primary-btn send-btn" type="button" onClick={onSubmit} disabled={!dataset || submitting}>
-            {submitting ? '提交中...' : session ? '追加一轮' : '发起会话'}
+          <button className="primary-btn send-btn" type="button" onClick={onSubmit} disabled={!input.trim() || submitting}>
+            {submitting ? '提交中...' : session ? '追加一轮' : dataset ? '发起会话' : '发送'}
           </button>
           <button
             className="ghost-btn static-page-one-click-btn"
             type="button"
             onClick={() => onStartStaticPageDraft?.({ oneClick: true })}
-            disabled={!dataset || submitting}
+            disabled={submitting}
           >
             一键生成静态页
           </button>

@@ -8,6 +8,7 @@ authors.workspace = true
 [dependencies]
 anyhow.workspace = true
 chrono.workspace = true
+document-vlm-runtime = { path = "../document-vlm-runtime" }
 domain-model = { path = "../domain-model" }
 event-bus = { path = "../event-bus" }
 observability = { path = "../observability" }
@@ -19,3 +20,4 @@ tracing.workspace = true
 uuid.workspace = true
 workflow-definitions = { path = "../workflow-definitions" }
 workflow-engine = { path = "../workflow-engine" }
+zip.workspace = true

@@ -1,16 +1,41 @@
+use document_vlm_runtime::{
+    build_enriched_image_text, run_document_image_vlm_from_env, DocumentImageVlmConfig,
+    DocumentImageVlmPayload,
+};
 use domain_model::{DatasetId, DocumentId};
+use serde_json::{json, Value};
+use std::{
+    fs,
+    fs::File,
+    io::Read,
+    path::{Path, PathBuf},
+    process::Command,
+};
+use zip::ZipArchive;
 
 #[derive(Clone, Debug)]
 pub struct IngestJob {
     pub dataset_id: DatasetId,
     pub document_id: DocumentId,
+    pub title: String,
+    pub object_key: String,
     pub content_type: String,
 }
 
 #[derive(Clone, Debug)]
 pub struct IngestOutcome {
-    pub chunk_count: u32,
+    pub chunks: Vec<String>,
     pub inferred_title: Option<String>,
+    pub parse_method: String,
+    pub extracted_chars: usize,
+    pub used_placeholder: bool,
+    pub metadata: Value,
+}
+
+impl IngestOutcome {
+    pub fn chunk_count(&self) -> u32 {
+        self.chunks.len().try_into().unwrap_or(u32::MAX)
+    }
 }
 
 pub trait IngestProcessor {
@@ -18,42 +43,1630 @@ pub trait IngestProcessor {
 }
 
 #[derive(Clone, Debug, Default)]
-pub struct PlaceholderIngestProcessor;
+pub struct LocalIngestProcessor;
 
-impl IngestProcessor for PlaceholderIngestProcessor {
+impl IngestProcessor for LocalIngestProcessor {
     fn process(&self, job: &IngestJob) -> IngestOutcome {
-        let chunk_count = if job.content_type.contains("pdf") {
-            12
-        } else {
-            4
-        };
-
-        IngestOutcome {
-            chunk_count,
-            inferred_title: None,
+        match extract_document_text(&job.object_key, &job.content_type) {
+            Ok(extracted) if !extracted.text.trim().is_empty() => {
+                let chunks = split_text_chunks(&extracted.text, 1_800);
+                IngestOutcome {
+                    extracted_chars: extracted.text.chars().count(),
+                    chunks,
+                    inferred_title: None,
+                    parse_method: extracted.method,
+                    used_placeholder: false,
+                    metadata: extracted.metadata,
+                }
+            }
+            _ => build_placeholder_outcome(job),
         }
     }
+}
+
+pub type PlaceholderIngestProcessor = LocalIngestProcessor;
+
+#[derive(Clone, Debug)]
+pub struct ExtractedDocumentText {
+    pub text: String,
+    pub method: String,
+    pub metadata: Value,
+}
+
+pub fn extract_document_text(
+    object_key: &str,
+    content_type: &str,
+) -> std::io::Result<ExtractedDocumentText> {
+    let path = resolve_local_object_path(object_key).ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::NotFound, "local object file not found")
+    })?;
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| format!(".{}", value.to_ascii_lowercase()))
+        .unwrap_or_else(|| infer_extension_from_content_type(content_type));
+
+    if is_direct_text_extension(&extension) {
+        let text = fs::read_to_string(&path).or_else(|_| {
+            fs::read(&path).map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+        })?;
+        let text = if matches!(extension.as_str(), ".html" | ".htm" | ".xml") {
+            strip_markup_tags(&text)
+        } else {
+            text
+        };
+        return Ok(extracted_text(text, format!("local-text{}", extension)));
+    }
+
+    if extension == ".pdf" {
+        if let Some(extracted) = extract_pdf_text(&path) {
+            return Ok(extracted);
+        }
+    }
+
+    if is_image_extension(&extension) {
+        return Ok(extract_image_document_text(&path));
+    }
+
+    if is_audio_extension(&extension) || is_video_extension(&extension) {
+        return Ok(extract_media_document_text(
+            &path,
+            if is_video_extension(&extension) {
+                "video"
+            } else {
+                "audio"
+            },
+        ));
+    }
+
+    if extension == ".docx" {
+        if let Some(text) = extract_docx_text(&path) {
+            return Ok(extracted_text(text, "docx-ooxml"));
+        }
+    }
+
+    if matches!(extension.as_str(), ".xlsx" | ".xlsm") {
+        if let Some(text) = extract_xlsx_text(&path) {
+            return Ok(extracted_text(text, "xlsx-ooxml"));
+        }
+    }
+
+    if matches!(extension.as_str(), ".pptx" | ".pptm") {
+        let base_text = extract_pptx_text(&path);
+        if let Some(vlm_text) = extract_presentation_with_vlm_render(&path) {
+            let text = [base_text.unwrap_or_default(), vlm_text]
+                .into_iter()
+                .filter(|part| !part.trim().is_empty())
+                .collect::<Vec<_>>()
+                .join("\n\n");
+            return Ok(ExtractedDocumentText {
+                text,
+                method: "pptx-ooxml+presentation-vlm".to_string(),
+                metadata: json!({
+                    "vlm": {
+                        "provider": "minimax",
+                        "source": "presentation-rendered-pages"
+                    }
+                }),
+            });
+        }
+        if let Some(text) = base_text {
+            return Ok(extracted_text(text, "pptx-ooxml"));
+        }
+    }
+
+    if let Some(markdown) = extract_with_markitdown(&path) {
+        return Ok(extracted_text(markdown, "markitdown"));
+    }
+
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "no local parser produced text",
+    ))
+}
+
+fn extracted_text(text: impl Into<String>, method: impl Into<String>) -> ExtractedDocumentText {
+    ExtractedDocumentText {
+        text: text.into(),
+        method: method.into(),
+        metadata: json!({}),
+    }
+}
+
+pub fn split_text_chunks(text: &str, max_chars: usize) -> Vec<String> {
+    let normalized = text
+        .replace('\0', "")
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    if normalized.is_empty() {
+        return Vec::new();
+    }
+
+    let mut chunks = Vec::new();
+    let mut current = String::new();
+    for paragraph in normalized.split("\n\n") {
+        let paragraph = paragraph.trim();
+        if paragraph.is_empty() {
+            continue;
+        }
+        if current.chars().count() + paragraph.chars().count() + 2 > max_chars
+            && !current.is_empty()
+        {
+            chunks.push(current.trim().to_string());
+            current.clear();
+        }
+        if paragraph.chars().count() > max_chars {
+            if !current.is_empty() {
+                chunks.push(current.trim().to_string());
+                current.clear();
+            }
+            chunks.extend(split_long_text(paragraph, max_chars));
+            continue;
+        }
+        if !current.is_empty() {
+            current.push_str("\n\n");
+        }
+        current.push_str(paragraph);
+    }
+    if !current.trim().is_empty() {
+        chunks.push(current.trim().to_string());
+    }
+
+    chunks
+}
+
+fn build_placeholder_outcome(job: &IngestJob) -> IngestOutcome {
+    let chunk_count = if job.content_type.contains("pdf") {
+        12
+    } else {
+        4
+    };
+    let chunks = (0..chunk_count)
+        .map(|index| {
+            format!(
+                "Placeholder extracted chunk {} for {} ({})",
+                index + 1,
+                job.title,
+                job.content_type
+            )
+        })
+        .collect::<Vec<_>>();
+
+    IngestOutcome {
+        chunks,
+        inferred_title: None,
+        parse_method: "placeholder".to_string(),
+        extracted_chars: 0,
+        used_placeholder: true,
+        metadata: json!({}),
+    }
+}
+
+fn resolve_local_object_path(object_key: &str) -> Option<PathBuf> {
+    let raw = object_key.trim().trim_start_matches("file://");
+    if raw.is_empty() {
+        return None;
+    }
+
+    let direct = PathBuf::from(raw);
+    if direct.is_file() {
+        return Some(direct);
+    }
+
+    let root = std::env::var("PLATFORM_LOCAL_OBJECT_ROOT").ok()?;
+    let rooted = Path::new(&root).join(raw);
+    rooted.is_file().then_some(rooted)
+}
+
+fn infer_extension_from_content_type(content_type: &str) -> String {
+    let lower = content_type.to_ascii_lowercase();
+    if lower.contains("markdown") {
+        ".md".to_string()
+    } else if lower.contains("csv") {
+        ".csv".to_string()
+    } else if lower.contains("json") {
+        ".json".to_string()
+    } else if lower.contains("html") || lower.contains("xml") {
+        ".html".to_string()
+    } else if lower.contains("pdf") {
+        ".pdf".to_string()
+    } else if lower.contains("jpeg") || lower.contains("jpg") {
+        ".jpg".to_string()
+    } else if lower.contains("png") {
+        ".png".to_string()
+    } else if lower.contains("webp") {
+        ".webp".to_string()
+    } else if lower.contains("mp3") || lower.contains("mpeg") {
+        ".mp3".to_string()
+    } else if lower.contains("wav") {
+        ".wav".to_string()
+    } else if lower.contains("mp4") {
+        ".mp4".to_string()
+    } else if lower.contains("quicktime") {
+        ".mov".to_string()
+    } else if lower.starts_with("audio/") {
+        ".mp3".to_string()
+    } else if lower.starts_with("video/") {
+        ".mp4".to_string()
+    } else if lower.starts_with("image/") {
+        ".png".to_string()
+    } else if lower.starts_with("text/") {
+        ".txt".to_string()
+    } else {
+        String::new()
+    }
+}
+
+fn is_direct_text_extension(extension: &str) -> bool {
+    matches!(
+        extension,
+        ".txt" | ".md" | ".csv" | ".json" | ".html" | ".htm" | ".xml"
+    )
+}
+
+fn is_image_extension(extension: &str) -> bool {
+    matches!(
+        extension,
+        ".png" | ".jpg" | ".jpeg" | ".webp" | ".bmp" | ".tif" | ".tiff" | ".gif"
+    )
+}
+
+fn is_audio_extension(extension: &str) -> bool {
+    matches!(
+        extension,
+        ".mp3" | ".wav" | ".m4a" | ".aac" | ".flac" | ".ogg" | ".opus"
+    )
+}
+
+fn is_video_extension(extension: &str) -> bool {
+    matches!(
+        extension,
+        ".mp4" | ".mov" | ".mkv" | ".webm" | ".avi" | ".mpeg" | ".mpg"
+    )
+}
+
+fn extract_pdf_text(path: &Path) -> Option<ExtractedDocumentText> {
+    extract_pdf_with_pdftotext(path)
+        .map(|text| extracted_text(text, "pdf-pdftotext"))
+        .or_else(|| extract_pdf_with_python(path).map(|text| extracted_text(text, "pdf-python")))
+        .or_else(|| {
+            extract_pdf_with_ocrmypdf(path).map(|text| extracted_text(text, "pdf-ocrmypdf"))
+        })
+        .or_else(|| {
+            extract_pdf_with_tesseract_render(path)
+                .map(|text| extracted_text(text, "pdf-tesseract-render"))
+        })
+        .or_else(|| extract_pdf_with_vlm_render(path))
+        .or_else(|| extract_pdf_literal_text(path).map(|text| extracted_text(text, "pdf-literal")))
+}
+
+fn extract_pdf_with_pdftotext(path: &Path) -> Option<String> {
+    let path_arg = path.to_string_lossy().to_string();
+    let candidates = [
+        std::env::var("PDFTOTEXT_BIN").ok(),
+        Some("pdftotext".to_string()),
+    ];
+    for command in candidates.into_iter().flatten() {
+        if let Some(output) = run_text_command(&command, &[path_arg.as_str(), "-"]) {
+            if let Some(text) = normalize_extracted_text(&output.replace('\x0c', "\n")) {
+                return Some(text);
+            }
+        }
+    }
+    None
+}
+
+fn extract_pdf_with_python(path: &Path) -> Option<String> {
+    let path_arg = path.to_string_lossy().to_string();
+    let script = r#"
+import sys
+try:
+    from pypdf import PdfReader
+except Exception:
+    from PyPDF2 import PdfReader
+reader = PdfReader(sys.argv[1])
+for page in reader.pages:
+    text = page.extract_text() or ""
+    if text:
+        print(text)
+"#;
+    for command in python_command_candidates() {
+        if let Some(output) = run_text_command(&command, &["-c", script, path_arg.as_str()]) {
+            if let Some(text) = normalize_extracted_text(&output.replace('\x0c', "\n")) {
+                return Some(text);
+            }
+        }
+    }
+    None
+}
+
+fn extract_pdf_with_ocrmypdf(path: &Path) -> Option<String> {
+    let temp_dir = create_temp_dir("aidp-ocrmypdf").ok()?;
+    let sidecar_path = temp_dir.join("sidecar.txt");
+    let output_pdf_path = temp_dir.join("ocr-output.pdf");
+    let path_arg = path.to_string_lossy().to_string();
+    let sidecar_arg = sidecar_path.to_string_lossy().to_string();
+    let output_arg = output_pdf_path.to_string_lossy().to_string();
+    let args = [
+        "--force-ocr",
+        "--skip-big",
+        "50",
+        "--sidecar",
+        sidecar_arg.as_str(),
+        path_arg.as_str(),
+        output_arg.as_str(),
+    ];
+
+    let mut extracted = None;
+    for command in direct_command_candidates("OCRMYPDF_BIN", "ocrmypdf") {
+        if run_status_command(&command, &args) {
+            extracted = fs::read_to_string(&sidecar_path)
+                .ok()
+                .and_then(|text| normalize_extracted_text(&text.replace('\x0c', "\n")));
+            if extracted.is_some() {
+                break;
+            }
+        }
+    }
+    let _ = fs::remove_dir_all(&temp_dir);
+    extracted
+}
+
+fn extract_pdf_with_tesseract_render(path: &Path) -> Option<String> {
+    let path_arg = path.to_string_lossy().to_string();
+    let max_pages = std::env::var("DOCUMENT_PDF_OCR_MAX_PAGES")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(4)
+        .max(1)
+        .to_string();
+    let script = r#"
+import os, shutil, subprocess, sys, tempfile
+try:
+    from pdf2image import convert_from_path
+except Exception:
+    sys.exit(2)
+work = tempfile.mkdtemp(prefix="aidp-pdf-render-")
+try:
+    max_pages = max(1, int(sys.argv[2]))
+    pages = convert_from_path(sys.argv[1], first_page=1, last_page=max_pages)
+    tesseract = os.environ.get("TESSERACT_BIN", "tesseract")
+    texts = []
+    for index, image in enumerate(pages):
+        image_path = os.path.join(work, f"page-{index + 1}.png")
+        image.save(image_path)
+        result = subprocess.run([tesseract, image_path, "stdout", "--psm", "3"], capture_output=True, text=True, encoding="utf-8", errors="ignore")
+        if result.returncode == 0 and result.stdout.strip():
+            texts.append(result.stdout.strip())
+    print("\f".join(texts))
+finally:
+    shutil.rmtree(work, ignore_errors=True)
+"#;
+    for command in python_command_candidates() {
+        if let Some(output) = run_text_command(
+            &command,
+            &["-c", script, path_arg.as_str(), max_pages.as_str()],
+        ) {
+            if let Some(text) = normalize_extracted_text(&output.replace('\x0c', "\n")) {
+                return Some(text);
+            }
+        }
+    }
+    None
+}
+
+fn extract_pdf_with_vlm_render(path: &Path) -> Option<ExtractedDocumentText> {
+    if !DocumentImageVlmConfig::from_env().available() {
+        return None;
+    }
+
+    let temp_dir = create_temp_dir("aidp-pdf-vlm-render").ok()?;
+    let rendered = render_pdf_pages_to_images(path, &temp_dir, "DOCUMENT_PDF_VLM_MAX_PAGES", 4);
+    let mut blocks = Vec::new();
+    let mut pages = Vec::new();
+    for (index, image_path) in rendered.iter().enumerate() {
+        let page_title = format!(
+            "{} - Page {}",
+            path.file_name()
+                .and_then(|value| value.to_str())
+                .unwrap_or("PDF"),
+            index + 1
+        );
+        if let Some(response) = run_document_image_vlm_from_env(&page_title, image_path, "") {
+            pages.push(json!({
+                "page_number": index + 1,
+                "model": response.model,
+                "payload": response.payload,
+            }));
+            blocks.push(format!(
+                "# Page {}\n\n{}",
+                index + 1,
+                build_enriched_image_text(
+                    image_path
+                        .file_name()
+                        .and_then(|value| value.to_str())
+                        .unwrap_or("page.png"),
+                    None,
+                    &response.payload,
+                )
+            ));
+        }
+    }
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    if blocks.is_empty() {
+        return None;
+    }
+    let text = normalize_extracted_text(&format!(
+        "[PDF VLM understanding]\n\n{}",
+        blocks.join("\n\n")
+    ))?;
+    Some(ExtractedDocumentText {
+        text,
+        method: "pdf-vlm".to_string(),
+        metadata: json!({
+            "vlm": {
+                "provider": "minimax",
+                "source": "pdf-rendered-pages",
+                "pages": pages,
+            }
+        }),
+    })
+}
+
+fn extract_presentation_with_vlm_render(path: &Path) -> Option<String> {
+    if !DocumentImageVlmConfig::from_env().available() {
+        return None;
+    }
+
+    let temp_dir = create_temp_dir("aidp-presentation-vlm-render").ok()?;
+    let pdf_path = convert_presentation_to_pdf(path, &temp_dir);
+    let rendered = pdf_path
+        .as_deref()
+        .map(|pdf_path| {
+            render_pdf_pages_to_images(
+                pdf_path,
+                &temp_dir,
+                "DOCUMENT_PRESENTATION_VLM_MAX_SLIDES",
+                4,
+            )
+        })
+        .unwrap_or_default();
+    let mut blocks = Vec::new();
+    for (index, image_path) in rendered.iter().enumerate() {
+        let slide_title = format!(
+            "{} - Slide {}",
+            path.file_name()
+                .and_then(|value| value.to_str())
+                .unwrap_or("Presentation"),
+            index + 1
+        );
+        if let Some(response) = run_document_image_vlm_from_env(&slide_title, image_path, "") {
+            blocks.push(format!(
+                "# Slide {}\n\n{}",
+                index + 1,
+                build_enriched_image_text(
+                    image_path
+                        .file_name()
+                        .and_then(|value| value.to_str())
+                        .unwrap_or("slide.png"),
+                    None,
+                    &response.payload,
+                )
+            ));
+        }
+    }
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    if blocks.is_empty() {
+        return None;
+    }
+    normalize_extracted_text(&format!(
+        "[Presentation VLM understanding]\n\n{}",
+        blocks.join("\n\n")
+    ))
+}
+
+fn convert_presentation_to_pdf(path: &Path, output_dir: &Path) -> Option<PathBuf> {
+    let path_arg = path.to_string_lossy().to_string();
+    let output_arg = output_dir.to_string_lossy().to_string();
+    let args = [
+        "--headless",
+        "--convert-to",
+        "pdf",
+        "--outdir",
+        output_arg.as_str(),
+        path_arg.as_str(),
+    ];
+    for command in presentation_converter_candidates() {
+        if !run_status_command(&command, &args) {
+            continue;
+        }
+        let expected = output_dir.join(format!(
+            "{}.pdf",
+            path.file_stem()
+                .and_then(|value| value.to_str())
+                .unwrap_or("output")
+        ));
+        if expected.is_file() {
+            return Some(expected);
+        }
+        if let Some(found) = fs::read_dir(output_dir).ok().and_then(|entries| {
+            entries
+                .filter_map(Result::ok)
+                .map(|entry| entry.path())
+                .find(|path| {
+                    path.extension()
+                        .and_then(|value| value.to_str())
+                        .is_some_and(|ext| ext.eq_ignore_ascii_case("pdf"))
+                })
+        }) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+fn render_pdf_pages_to_images(
+    path: &Path,
+    output_dir: &Path,
+    max_pages_env: &str,
+    default_max_pages: usize,
+) -> Vec<PathBuf> {
+    let path_arg = path.to_string_lossy().to_string();
+    let output_arg = output_dir.to_string_lossy().to_string();
+    let max_pages = std::env::var(max_pages_env)
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(default_max_pages)
+        .max(1)
+        .to_string();
+    let script = r#"
+import os, sys
+try:
+    from pdf2image import convert_from_path
+except Exception:
+    sys.exit(2)
+out = sys.argv[2]
+os.makedirs(out, exist_ok=True)
+max_pages = max(1, int(sys.argv[3]))
+pages = convert_from_path(sys.argv[1], first_page=1, last_page=max_pages)
+for index, image in enumerate(pages):
+    image_path = os.path.join(out, f"page-{index + 1}.png")
+    image.save(image_path)
+    print(image_path)
+"#;
+    for command in python_command_candidates() {
+        if let Some(output) = run_text_command(
+            &command,
+            &[
+                "-c",
+                script,
+                path_arg.as_str(),
+                output_arg.as_str(),
+                max_pages.as_str(),
+            ],
+        ) {
+            let paths = output
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+                .map(PathBuf::from)
+                .filter(|path| path.is_file())
+                .collect::<Vec<_>>();
+            if !paths.is_empty() {
+                return paths;
+            }
+        }
+    }
+    Vec::new()
+}
+
+fn extract_pdf_literal_text(path: &Path) -> Option<String> {
+    let bytes = fs::read(path).ok()?;
+    let mut cursor = 0;
+    let mut literals = Vec::new();
+    while cursor < bytes.len() {
+        if bytes[cursor] == b'(' {
+            if let Some((literal, next_cursor)) = decode_pdf_literal_at(&bytes, cursor) {
+                let tail_end = (next_cursor + 48).min(bytes.len());
+                let tail = String::from_utf8_lossy(&bytes[next_cursor..tail_end]);
+                if tail.contains("Tj")
+                    || tail.contains("TJ")
+                    || is_probably_pdf_text_literal(&literal)
+                {
+                    literals.push(literal);
+                }
+                cursor = next_cursor;
+                continue;
+            }
+        }
+        cursor += 1;
+    }
+
+    normalize_extracted_text(&literals.join("\n"))
+}
+
+fn decode_pdf_literal_at(bytes: &[u8], start: usize) -> Option<(String, usize)> {
+    let mut cursor = start + 1;
+    let mut depth = 1;
+    let mut output = Vec::new();
+
+    while cursor < bytes.len() {
+        match bytes[cursor] {
+            b'\\' => {
+                cursor += 1;
+                if cursor >= bytes.len() {
+                    break;
+                }
+                match bytes[cursor] {
+                    b'n' => output.push(b'\n'),
+                    b'r' => output.push(b'\n'),
+                    b't' => output.push(b'\t'),
+                    b'b' => output.push(8),
+                    b'f' => output.push(12),
+                    b'(' => output.push(b'('),
+                    b')' => output.push(b')'),
+                    b'\\' => output.push(b'\\'),
+                    b'\r' => {
+                        if bytes.get(cursor + 1) == Some(&b'\n') {
+                            cursor += 1;
+                        }
+                    }
+                    b'\n' => {}
+                    b'0'..=b'7' => {
+                        let mut value: u16 = 0;
+                        let mut count = 0;
+                        while count < 3 && cursor < bytes.len() && bytes[cursor].is_ascii_digit() {
+                            let digit = bytes[cursor] - b'0';
+                            if digit > 7 {
+                                break;
+                            }
+                            value = value.saturating_mul(8).saturating_add(digit.into());
+                            cursor += 1;
+                            count += 1;
+                        }
+                        output.push(value.min(u8::MAX.into()) as u8);
+                        continue;
+                    }
+                    other => output.push(other),
+                }
+            }
+            b'(' => {
+                depth += 1;
+                output.push(b'(');
+            }
+            b')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some((decode_pdf_string_bytes(&output), cursor + 1));
+                }
+                output.push(b')');
+            }
+            other => output.push(other),
+        }
+        cursor += 1;
+    }
+
+    None
+}
+
+fn decode_pdf_string_bytes(bytes: &[u8]) -> String {
+    if bytes.starts_with(&[0xFE, 0xFF]) && bytes.len() > 2 {
+        let utf16 = bytes[2..]
+            .chunks_exact(2)
+            .map(|pair| u16::from_be_bytes([pair[0], pair[1]]))
+            .collect::<Vec<_>>();
+        if let Ok(text) = String::from_utf16(&utf16) {
+            return text;
+        }
+    }
+    String::from_utf8_lossy(bytes).into_owned()
+}
+
+fn is_probably_pdf_text_literal(text: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed.chars().count() < 4 {
+        return false;
+    }
+    let meaningful = trimmed
+        .chars()
+        .filter(|ch| ch.is_alphanumeric() || ch.is_ascii_punctuation())
+        .count();
+    meaningful >= 4 && !trimmed.starts_with('/')
+}
+
+fn extract_image_document_text(path: &Path) -> ExtractedDocumentText {
+    let image_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("image");
+    let ocr_text = extract_image_text_with_tesseract(path);
+
+    if let Some(response) =
+        run_document_image_vlm_from_env(image_name, path, ocr_text.as_deref().unwrap_or(""))
+    {
+        return ExtractedDocumentText {
+            text: build_enriched_image_text(image_name, ocr_text.as_deref(), &response.payload),
+            method: if ocr_text.is_some() {
+                "image-ocr+vlm".to_string()
+            } else {
+                "image-vlm".to_string()
+            },
+            metadata: build_image_vlm_metadata(response.model, response.payload),
+        };
+    }
+
+    if let Some(ocr_text) = ocr_text {
+        return ExtractedDocumentText {
+            text: format!("Image file: {image_name}\n\nOCR text:\n{ocr_text}"),
+            method: "image-ocr".to_string(),
+            metadata: json!({}),
+        };
+    }
+
+    ExtractedDocumentText {
+        text: format!("Image file: {image_name}\n\nOCR text was not extracted from this image."),
+        method: "image-ocr-empty".to_string(),
+        metadata: json!({}),
+    }
+}
+
+fn build_image_vlm_metadata(model: String, payload: DocumentImageVlmPayload) -> Value {
+    json!({
+        "vlm": {
+            "provider": "minimax",
+            "model": model,
+            "source": "image-document",
+            "payload": payload,
+        }
+    })
+}
+
+#[derive(Clone, Debug)]
+struct MediaTranscript {
+    text: String,
+    source: String,
+}
+
+fn extract_media_document_text(path: &Path, media_kind: &str) -> ExtractedDocumentText {
+    let media_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("media");
+    let probe = probe_media_metadata(path);
+    let transcript = extract_media_transcript(path);
+    let transcript_text = transcript.as_ref().map(|item| item.text.as_str());
+    let metadata_summary = summarize_media_probe(probe.as_ref());
+    let parse_status = if transcript_text.is_some_and(|text| !text.trim().is_empty()) {
+        "transcribed"
+    } else {
+        "partial"
+    };
+    let text = [
+        format!("Media file: {media_name}"),
+        format!("Media type: {media_kind}"),
+        (!metadata_summary.is_empty())
+            .then(|| format!("Media metadata:\n{metadata_summary}"))
+            .unwrap_or_default(),
+        transcript_text
+            .filter(|text| !text.trim().is_empty())
+            .map(|text| format!("Transcript:\n{text}"))
+            .unwrap_or_else(|| {
+                "Transcript was not extracted because no configured media transcription command produced text.".to_string()
+            }),
+    ]
+    .into_iter()
+    .filter(|part| !part.trim().is_empty())
+    .collect::<Vec<_>>()
+    .join("\n\n");
+
+    ExtractedDocumentText {
+        text,
+        method: if parse_status == "transcribed" {
+            "media-transcript".to_string()
+        } else {
+            "media-partial".to_string()
+        },
+        metadata: json!({
+            "media": {
+                "kind": media_kind,
+                "parse_status": parse_status,
+                "probe": probe,
+                "transcript_extracted": parse_status == "transcribed",
+                "transcript_source": transcript.map(|item| item.source),
+            }
+        }),
+    }
+}
+
+fn probe_media_metadata(path: &Path) -> Option<Value> {
+    let path_arg = path.to_string_lossy().to_string();
+    for command in direct_command_candidates("FFPROBE_BIN", "ffprobe") {
+        if let Some(output) = run_text_command(
+            &command,
+            &[
+                "-v",
+                "error",
+                "-print_format",
+                "json",
+                "-show_format",
+                "-show_streams",
+                path_arg.as_str(),
+            ],
+        ) {
+            if let Ok(value) = serde_json::from_str::<Value>(&output) {
+                return Some(value);
+            }
+        }
+    }
+    None
+}
+
+fn summarize_media_probe(probe: Option<&Value>) -> String {
+    let Some(probe) = probe else {
+        return String::new();
+    };
+    let mut lines = Vec::new();
+    if let Some(format) = probe.get("format").and_then(Value::as_object) {
+        if let Some(format_name) = format.get("format_name").and_then(Value::as_str) {
+            lines.push(format!("Format: {format_name}"));
+        }
+        if let Some(duration) = format.get("duration").and_then(Value::as_str) {
+            lines.push(format!("Duration seconds: {duration}"));
+        }
+        if let Some(size) = format.get("size").and_then(Value::as_str) {
+            lines.push(format!("Size bytes: {size}"));
+        }
+    }
+    if let Some(streams) = probe.get("streams").and_then(Value::as_array) {
+        lines.extend(streams.iter().enumerate().filter_map(|(index, stream)| {
+            let kind = stream.get("codec_type").and_then(Value::as_str)?;
+            let codec = stream
+                .get("codec_name")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
+            Some(format!("Stream {}: {} {}", index + 1, kind, codec))
+        }));
+    }
+    lines.join("\n")
+}
+
+fn extract_media_transcript(path: &Path) -> Option<MediaTranscript> {
+    let path_arg = path.to_string_lossy().to_string();
+    if let Ok(command) = std::env::var("MEDIA_TRANSCRIBE_BIN") {
+        let command = command.trim();
+        if !command.is_empty() {
+            if let Some(output) = run_text_command(command, &[path_arg.as_str()]) {
+                if let Some(text) = normalize_extracted_text(&output) {
+                    return Some(MediaTranscript {
+                        text,
+                        source: "MEDIA_TRANSCRIBE_BIN".to_string(),
+                    });
+                }
+            }
+        }
+    }
+    None
+}
+
+fn extract_image_text_with_tesseract(path: &Path) -> Option<String> {
+    let commands = direct_command_candidates("TESSERACT_BIN", "tesseract");
+    let languages = tesseract_language_candidates();
+    let psm_values = ["6", "3"];
+    extract_image_text_with_tesseract_candidates(path, &commands, &languages, &psm_values)
+}
+
+fn extract_image_text_with_tesseract_candidates(
+    path: &Path,
+    commands: &[String],
+    languages: &[String],
+    psm_values: &[&str],
+) -> Option<String> {
+    let path_arg = path.to_string_lossy().to_string();
+    let mut best_text = String::new();
+    for command in commands {
+        for language in languages {
+            for psm in psm_values {
+                let args = [
+                    path_arg.as_str(),
+                    "stdout",
+                    "-l",
+                    language.as_str(),
+                    "--psm",
+                    psm,
+                ];
+                if let Some(text) = run_text_command(command, &args) {
+                    if text.chars().count() > best_text.chars().count() {
+                        best_text = text;
+                    }
+                }
+            }
+        }
+    }
+    normalize_extracted_text(&best_text)
+}
+
+fn extract_docx_text(path: &Path) -> Option<String> {
+    let xml = read_zip_entry_to_string(path, "word/document.xml")?;
+    normalize_extracted_text(&decode_xml_entities(&strip_markup_tags(
+        &xml.replace("</w:p>", "\n").replace("</w:tc>", "\t"),
+    )))
+}
+
+fn extract_pptx_text(path: &Path) -> Option<String> {
+    let mut archive = open_zip_archive(path)?;
+    let mut slide_entries = Vec::new();
+    for index in 0..archive.len() {
+        let name = {
+            let file = archive.by_index(index).ok()?;
+            file.name().to_string()
+        };
+        if name.starts_with("ppt/slides/slide") && name.ends_with(".xml") {
+            slide_entries.push(name);
+        }
+    }
+    slide_entries.sort();
+
+    let mut slides = Vec::new();
+    for name in slide_entries {
+        let xml = read_zip_entry_from_archive(&mut archive, &name)?;
+        let text = decode_xml_entities(&strip_markup_tags(
+            &xml.replace("</a:p>", "\n").replace("</p:sp>", "\n"),
+        ));
+        if let Some(normalized) = normalize_extracted_text(&text) {
+            slides.push(normalized);
+        }
+    }
+
+    normalize_extracted_text(&slides.join("\n\n"))
+}
+
+fn extract_xlsx_text(path: &Path) -> Option<String> {
+    let mut archive = open_zip_archive(path)?;
+    let shared_strings = read_zip_entry_from_archive(&mut archive, "xl/sharedStrings.xml")
+        .map(|xml| extract_shared_strings(&xml))
+        .unwrap_or_default();
+
+    let mut sheet_entries = Vec::new();
+    for index in 0..archive.len() {
+        let name = {
+            let file = archive.by_index(index).ok()?;
+            file.name().to_string()
+        };
+        if name.starts_with("xl/worksheets/sheet") && name.ends_with(".xml") {
+            sheet_entries.push(name);
+        }
+    }
+    sheet_entries.sort();
+
+    let mut sheets = Vec::new();
+    for (sheet_index, name) in sheet_entries.into_iter().enumerate() {
+        let xml = read_zip_entry_from_archive(&mut archive, &name)?;
+        if let Some(text) = extract_sheet_text(&xml, &shared_strings) {
+            sheets.push(format!("# Sheet {}\n{}", sheet_index + 1, text));
+        }
+    }
+
+    normalize_extracted_text(&sheets.join("\n\n"))
+}
+
+fn open_zip_archive(path: &Path) -> Option<ZipArchive<File>> {
+    let file = File::open(path).ok()?;
+    ZipArchive::new(file).ok()
+}
+
+fn read_zip_entry_to_string(path: &Path, entry_name: &str) -> Option<String> {
+    let mut archive = open_zip_archive(path)?;
+    read_zip_entry_from_archive(&mut archive, entry_name)
+}
+
+fn read_zip_entry_from_archive(archive: &mut ZipArchive<File>, entry_name: &str) -> Option<String> {
+    let mut file = archive.by_name(entry_name).ok()?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes).ok()?;
+    Some(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+fn extract_shared_strings(xml: &str) -> Vec<String> {
+    split_xml_segments(xml, "si")
+        .into_iter()
+        .filter_map(|segment| {
+            normalize_extracted_text(&decode_xml_entities(&strip_markup_tags(
+                &segment.replace("</t>", " "),
+            )))
+        })
+        .collect()
+}
+
+fn extract_sheet_text(xml: &str, shared_strings: &[String]) -> Option<String> {
+    let rows = split_xml_segments(xml, "row")
+        .into_iter()
+        .filter_map(|row| {
+            let cells = split_xml_elements(&row, "c")
+                .into_iter()
+                .filter_map(|cell| extract_cell_text(&cell, shared_strings))
+                .collect::<Vec<_>>();
+            (!cells.is_empty()).then(|| cells.join("\t"))
+        })
+        .collect::<Vec<_>>();
+
+    normalize_extracted_text(&rows.join("\n"))
+}
+
+fn extract_cell_text(cell_xml: &str, shared_strings: &[String]) -> Option<String> {
+    let cell_type_shared = cell_xml.contains("t=\"s\"") || cell_xml.contains("t='s'");
+    let inline_text = first_xml_tag_text(cell_xml, "t")
+        .map(|text| decode_xml_entities(&text))
+        .and_then(|text| normalize_extracted_text(&text));
+    if !cell_type_shared {
+        return inline_text.or_else(|| {
+            first_xml_tag_text(cell_xml, "v")
+                .map(|text| decode_xml_entities(&text))
+                .and_then(|text| normalize_extracted_text(&text))
+        });
+    }
+
+    let index = first_xml_tag_text(cell_xml, "v")?
+        .trim()
+        .parse::<usize>()
+        .ok()?;
+    shared_strings.get(index).cloned()
+}
+
+fn split_xml_segments(xml: &str, tag: &str) -> Vec<String> {
+    let mut segments = Vec::new();
+    let mut cursor = 0;
+    let open_prefix = format!("<{tag}");
+    let close_tag = format!("</{tag}>");
+    while let Some(open_offset) = xml[cursor..].find(&open_prefix) {
+        let open = cursor + open_offset;
+        let Some(open_end_offset) = xml[open..].find('>') else {
+            break;
+        };
+        let content_start = open + open_end_offset + 1;
+        let Some(close_offset) = xml[content_start..].find(&close_tag) else {
+            break;
+        };
+        let close = content_start + close_offset;
+        segments.push(xml[content_start..close].to_string());
+        cursor = close + close_tag.len();
+    }
+    segments
+}
+
+fn split_xml_elements(xml: &str, tag: &str) -> Vec<String> {
+    let mut segments = Vec::new();
+    let mut cursor = 0;
+    let open_prefix = format!("<{tag}");
+    let close_tag = format!("</{tag}>");
+    while let Some(open_offset) = xml[cursor..].find(&open_prefix) {
+        let open = cursor + open_offset;
+        let Some(open_end_offset) = xml[open..].find('>') else {
+            break;
+        };
+        let content_start = open + open_end_offset + 1;
+        let Some(close_offset) = xml[content_start..].find(&close_tag) else {
+            break;
+        };
+        let close_end = content_start + close_offset + close_tag.len();
+        segments.push(xml[open..close_end].to_string());
+        cursor = close_end;
+    }
+    segments
+}
+
+fn first_xml_tag_text(xml: &str, tag: &str) -> Option<String> {
+    split_xml_segments(xml, tag).into_iter().next()
+}
+
+fn extract_with_markitdown(path: &Path) -> Option<String> {
+    let path_arg = path.to_string_lossy().to_string();
+    for command in direct_command_candidates("MARKITDOWN_BIN", "markitdown") {
+        if let Some(output) = run_text_command(&command, &[path_arg.as_str()]) {
+            return Some(output);
+        }
+    }
+
+    for command in python_command_candidates() {
+        if let Some(output) = run_text_command(&command, &["-m", "markitdown", path_arg.as_str()]) {
+            return Some(output);
+        }
+    }
+
+    None
+}
+
+fn direct_command_candidates(env_name: &str, fallback: &str) -> Vec<String> {
+    let mut candidates = Vec::new();
+    if let Ok(configured) = std::env::var(env_name) {
+        let configured = configured.trim();
+        if !configured.is_empty() {
+            candidates.push(configured.to_string());
+        }
+    }
+    if !fallback.trim().is_empty() {
+        candidates.push(fallback.to_string());
+    }
+    candidates.dedup();
+    candidates
+}
+
+fn presentation_converter_candidates() -> Vec<String> {
+    let mut candidates = direct_command_candidates("LIBREOFFICE_BIN", "soffice");
+    candidates.push("libreoffice".to_string());
+    candidates.dedup();
+    candidates
+}
+
+fn python_command_candidates() -> Vec<String> {
+    let mut candidates = Vec::new();
+    if let Ok(configured) = std::env::var("PYTHON_BIN") {
+        let configured = configured.trim();
+        if !configured.is_empty() {
+            candidates.push(configured.to_string());
+        }
+    }
+    candidates.push("python3".to_string());
+    candidates.push("python".to_string());
+    candidates.dedup();
+    candidates
+}
+
+fn tesseract_language_candidates() -> Vec<String> {
+    let configured = [
+        std::env::var("TESSERACT_LANGS").ok(),
+        std::env::var("TESSERACT_LANG").ok(),
+    ]
+    .into_iter()
+    .flatten()
+    .flat_map(|value| {
+        value
+            .split(|ch: char| ch == ',' || ch.is_whitespace())
+            .map(str::trim)
+            .filter(|item| !item.is_empty())
+            .map(str::to_string)
+            .collect::<Vec<_>>()
+    });
+    let mut candidates = configured.collect::<Vec<_>>();
+    candidates.extend(
+        ["chi_sim+eng", "chi_sim", "eng"]
+            .into_iter()
+            .map(str::to_string),
+    );
+    candidates.dedup();
+    candidates
+}
+
+fn run_text_command(command: &str, args: &[&str]) -> Option<String> {
+    let output = Command::new(command).args(args).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout)
+        .replace('\0', "")
+        .trim()
+        .to_string();
+    (!text.is_empty()).then_some(text)
+}
+
+fn run_status_command(command: &str, args: &[&str]) -> bool {
+    Command::new(command)
+        .args(args)
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
+fn create_temp_dir(prefix: &str) -> std::io::Result<PathBuf> {
+    let base = std::env::temp_dir();
+    for attempt in 0..10 {
+        let unique = format!(
+            "{}-{}-{}-{}",
+            prefix,
+            std::process::id(),
+            unix_timestamp_nanos(),
+            attempt
+        );
+        let path = base.join(unique);
+        match fs::create_dir(&path) {
+            Ok(()) => return Ok(path),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        "temporary directory collision",
+    ))
+}
+
+fn unix_timestamp_nanos() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0)
+}
+
+fn strip_markup_tags(text: &str) -> String {
+    let mut output = String::with_capacity(text.len());
+    let mut inside_tag = false;
+    for ch in text.chars() {
+        match ch {
+            '<' => inside_tag = true,
+            '>' => {
+                inside_tag = false;
+                output.push(' ');
+            }
+            _ if !inside_tag => output.push(ch),
+            _ => {}
+        }
+    }
+    output
+}
+
+fn decode_xml_entities(text: &str) -> String {
+    text.replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&")
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+}
+
+fn normalize_extracted_text(text: &str) -> Option<String> {
+    let normalized = text
+        .replace('\0', "")
+        .lines()
+        .map(collapse_line_spaces_preserving_tabs)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_string();
+    (!normalized.is_empty()).then_some(normalized)
+}
+
+fn collapse_line_spaces_preserving_tabs(line: &str) -> String {
+    line.split('\t')
+        .map(|part| part.split_whitespace().collect::<Vec<_>>().join(" "))
+        .collect::<Vec<_>>()
+        .join("\t")
+        .trim()
+        .to_string()
+}
+
+fn split_long_text(text: &str, max_chars: usize) -> Vec<String> {
+    let mut chunks = Vec::new();
+    let mut current = String::new();
+    for ch in text.chars() {
+        if current.chars().count() >= max_chars {
+            chunks.push(current);
+            current = String::new();
+        }
+        current.push(ch);
+    }
+    if !current.is_empty() {
+        chunks.push(current);
+    }
+    chunks
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{
+        io::Write,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+    use zip::{write::SimpleFileOptions, ZipWriter};
 
     #[test]
-    fn placeholder_ingest_processor_returns_stable_chunk_counts() {
-        let processor = PlaceholderIngestProcessor;
+    fn local_ingest_processor_returns_stable_placeholder_chunks_without_file() {
+        let processor = LocalIngestProcessor;
         let pdf_job = IngestJob {
             dataset_id: DatasetId::new(),
             document_id: DocumentId::new(),
+            title: "Q1 PDF".to_string(),
+            object_key: "missing.pdf".to_string(),
             content_type: "application/pdf".to_string(),
         };
         let markdown_job = IngestJob {
             dataset_id: DatasetId::new(),
             document_id: DocumentId::new(),
+            title: "Notes".to_string(),
+            object_key: "missing.md".to_string(),
             content_type: "text/markdown".to_string(),
         };
 
-        assert_eq!(processor.process(&pdf_job).chunk_count, 12);
-        assert_eq!(processor.process(&markdown_job).chunk_count, 4);
+        assert_eq!(processor.process(&pdf_job).chunk_count(), 12);
+        assert_eq!(processor.process(&markdown_job).chunk_count(), 4);
+    }
+
+    #[test]
+    fn local_ingest_processor_extracts_real_markdown_text_from_object_key() {
+        let file_path = write_temp_file(
+            "real-upload.md",
+            "# Title\n\nThis is a real uploaded document.",
+        );
+        let processor = LocalIngestProcessor;
+        let outcome = processor.process(&IngestJob {
+            dataset_id: DatasetId::new(),
+            document_id: DocumentId::new(),
+            title: "real-upload.md".to_string(),
+            object_key: file_path.to_string_lossy().to_string(),
+            content_type: "text/markdown".to_string(),
+        });
+
+        assert!(!outcome.used_placeholder);
+        assert_eq!(outcome.parse_method, "local-text.md");
+        assert_eq!(outcome.chunk_count(), 1);
+        assert!(outcome.chunks[0].contains("real uploaded document"));
+        let _ = fs::remove_file(file_path);
+    }
+
+    #[test]
+    fn local_ingest_processor_extracts_simple_pdf_literal_text() {
+        let file_path = write_temp_file(
+            "simple.pdf",
+            r#"%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /Contents 4 0 R >> endobj
+4 0 obj << /Length 76 >> stream
+BT /F1 12 Tf 72 720 Td (Quarterly Report) Tj T* (Orders grew 20%) Tj ET
+endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF"#,
+        );
+
+        let outcome = LocalIngestProcessor.process(&IngestJob {
+            dataset_id: DatasetId::new(),
+            document_id: DocumentId::new(),
+            title: "simple.pdf".to_string(),
+            object_key: file_path.to_string_lossy().to_string(),
+            content_type: "application/pdf".to_string(),
+        });
+
+        let body = outcome.chunks.join("\n");
+        assert!(!outcome.used_placeholder);
+        assert!(outcome.parse_method.starts_with("pdf-"));
+        assert!(body.contains("Quarterly Report"));
+        assert!(body.contains("Orders grew 20%"));
+        let _ = fs::remove_file(file_path);
+    }
+
+    #[test]
+    fn local_ingest_processor_marks_image_ocr_empty_without_placeholder() {
+        with_env_var("DOCUMENT_IMAGE_PARSE_MODE", Some("ocr-only"), || {
+            let file_path = write_temp_file("uploaded-screenshot", "not a real image");
+
+            let outcome = LocalIngestProcessor.process(&IngestJob {
+                dataset_id: DatasetId::new(),
+                document_id: DocumentId::new(),
+                title: "uploaded-screenshot".to_string(),
+                object_key: file_path.to_string_lossy().to_string(),
+                content_type: "image/png".to_string(),
+            });
+
+            let body = outcome.chunks.join("\n");
+            assert!(!outcome.used_placeholder);
+            assert_eq!(outcome.parse_method, "image-ocr-empty");
+            assert!(body.contains("Image file:"));
+            assert!(body.contains("OCR text was not extracted"));
+            let _ = fs::remove_file(file_path);
+        });
+    }
+
+    #[test]
+    fn local_ingest_processor_does_not_call_vlm_when_disabled() {
+        with_env_var("DOCUMENT_IMAGE_PARSE_MODE", Some("ocr-only"), || {
+            let file_path = write_temp_file("uploaded-screenshot", "not a real image");
+
+            let outcome = LocalIngestProcessor.process(&IngestJob {
+                dataset_id: DatasetId::new(),
+                document_id: DocumentId::new(),
+                title: "uploaded-screenshot".to_string(),
+                object_key: file_path.to_string_lossy().to_string(),
+                content_type: "image/png".to_string(),
+            });
+
+            assert_eq!(outcome.parse_method, "image-ocr-empty");
+            let _ = fs::remove_file(file_path);
+        });
+    }
+
+    #[test]
+    fn image_vlm_metadata_preserves_structured_payload() {
+        let metadata = build_image_vlm_metadata(
+            "MiniMax-M2.5-highspeed".to_string(),
+            DocumentImageVlmPayload {
+                summary: "高明中港城客流截图".to_string(),
+                visual_summary: "图片展示商场分区客流驾驶舱。".to_string(),
+                transcribed_text: "A区 2180 人次".to_string(),
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(metadata["vlm"]["provider"], json!("minimax"));
+        assert_eq!(metadata["vlm"]["model"], json!("MiniMax-M2.5-highspeed"));
+        assert_eq!(
+            metadata["vlm"]["payload"]["summary"],
+            json!("高明中港城客流截图")
+        );
+        assert_eq!(
+            metadata["vlm"]["payload"]["transcribedText"],
+            json!("A区 2180 人次")
+        );
+    }
+
+    #[test]
+    fn local_ingest_processor_marks_audio_without_fake_transcript() {
+        with_env_var("MEDIA_TRANSCRIBE_BIN", None, || {
+            let file_path = write_temp_file("call-recording.mp3", "not a real audio file");
+
+            let outcome = LocalIngestProcessor.process(&IngestJob {
+                dataset_id: DatasetId::new(),
+                document_id: DocumentId::new(),
+                title: "call-recording.mp3".to_string(),
+                object_key: file_path.to_string_lossy().to_string(),
+                content_type: "audio/mpeg".to_string(),
+            });
+
+            let body = outcome.chunks.join("\n");
+            assert!(!outcome.used_placeholder);
+            assert_eq!(outcome.parse_method, "media-partial");
+            assert!(body.contains("Media type: audio"));
+            assert!(body.contains("Transcript was not extracted"));
+            assert_eq!(outcome.metadata["media"]["kind"], json!("audio"));
+            assert_eq!(outcome.metadata["media"]["parse_status"], json!("partial"));
+            assert_eq!(
+                outcome.metadata["media"]["transcript_extracted"],
+                json!(false)
+            );
+            let _ = fs::remove_file(file_path);
+        });
+    }
+
+    #[test]
+    fn split_text_chunks_splits_long_unicode_text_on_char_boundaries() {
+        let chunks = split_text_chunks("订单分析很好。客服反馈也很好。", 8);
+
+        assert!(chunks.len() > 1);
+        assert!(chunks.iter().all(|chunk| chunk.chars().count() <= 8));
+    }
+
+    #[test]
+    fn local_ingest_processor_extracts_docx_xml_text() {
+        let file_path = write_temp_zip(
+            "sample.docx",
+            &[(
+                "word/document.xml",
+                r#"<w:document><w:body><w:p><w:r><w:t>客户说明</w:t></w:r></w:p><w:p><w:r><w:t>订单增长 20%</w:t></w:r></w:p></w:body></w:document>"#,
+            )],
+        );
+
+        let outcome = LocalIngestProcessor.process(&IngestJob {
+            dataset_id: DatasetId::new(),
+            document_id: DocumentId::new(),
+            title: "sample.docx".to_string(),
+            object_key: file_path.to_string_lossy().to_string(),
+            content_type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                .to_string(),
+        });
+
+        assert!(!outcome.used_placeholder);
+        assert_eq!(outcome.parse_method, "docx-ooxml");
+        assert!(outcome.chunks.join("\n").contains("客户说明"));
+        assert!(outcome.chunks.join("\n").contains("订单增长 20%"));
+        let _ = fs::remove_file(file_path);
+    }
+
+    #[test]
+    fn local_ingest_processor_extracts_xlsx_shared_strings_and_values() {
+        let file_path = write_temp_zip(
+            "orders.xlsx",
+            &[
+                (
+                    "xl/sharedStrings.xml",
+                    r#"<sst><si><t>订单号</t></si><si><t>金额</t></si><si><t>A001</t></si></sst>"#,
+                ),
+                (
+                    "xl/worksheets/sheet1.xml",
+                    r#"<worksheet><sheetData><row r="1"><c t="s"><v>0</v></c><c t="s"><v>1</v></c></row><row r="2"><c t="s"><v>2</v></c><c><v>1280</v></c></row></sheetData></worksheet>"#,
+                ),
+            ],
+        );
+
+        let outcome = LocalIngestProcessor.process(&IngestJob {
+            dataset_id: DatasetId::new(),
+            document_id: DocumentId::new(),
+            title: "orders.xlsx".to_string(),
+            object_key: file_path.to_string_lossy().to_string(),
+            content_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                .to_string(),
+        });
+
+        let body = outcome.chunks.join("\n");
+        assert!(!outcome.used_placeholder);
+        assert_eq!(outcome.parse_method, "xlsx-ooxml");
+        assert!(body.contains("订单号\t金额"));
+        assert!(body.contains("A001\t1280"));
+        let _ = fs::remove_file(file_path);
+    }
+
+    #[test]
+    fn local_ingest_processor_extracts_pptx_slide_text() {
+        let file_path = write_temp_zip(
+            "deck.pptx",
+            &[(
+                "ppt/slides/slide1.xml",
+                r#"<p:sld><p:cSld><p:spTree><p:sp><p:txBody><a:p><a:r><a:t>经营看板</a:t></a:r></a:p><a:p><a:r><a:t>客服风险下降</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>"#,
+            )],
+        );
+
+        let outcome = LocalIngestProcessor.process(&IngestJob {
+            dataset_id: DatasetId::new(),
+            document_id: DocumentId::new(),
+            title: "deck.pptx".to_string(),
+            object_key: file_path.to_string_lossy().to_string(),
+            content_type:
+                "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+                    .to_string(),
+        });
+
+        let body = outcome.chunks.join("\n");
+        assert!(!outcome.used_placeholder);
+        assert_eq!(outcome.parse_method, "pptx-ooxml");
+        assert!(body.contains("经营看板"));
+        assert!(body.contains("客服风险下降"));
+        let _ = fs::remove_file(file_path);
+    }
+
+    fn write_temp_file(name: &str, content: &str) -> PathBuf {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be available")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("{suffix}-{name}"));
+        fs::write(&path, content).expect("temp file should be written");
+        path
+    }
+
+    fn write_temp_zip(name: &str, entries: &[(&str, &str)]) -> PathBuf {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be available")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("{suffix}-{name}"));
+        let file = File::create(&path).expect("zip file should be created");
+        let mut writer = ZipWriter::new(file);
+        for (entry_name, content) in entries {
+            writer
+                .start_file(*entry_name, SimpleFileOptions::default())
+                .expect("zip entry should start");
+            writer
+                .write_all(content.as_bytes())
+                .expect("zip entry should be written");
+        }
+        writer.finish().expect("zip should finish");
+        path
+    }
+
+    fn with_env_var<T>(name: &str, value: Option<&str>, run: impl FnOnce() -> T) -> T {
+        let previous = std::env::var(name).ok();
+        match value {
+            Some(value) => std::env::set_var(name, value),
+            None => std::env::remove_var(name),
+        }
+        let result = run();
+        match previous {
+            Some(previous) => std::env::set_var(name, previous),
+            None => std::env::remove_var(name),
+        }
+        result
     }
 }
