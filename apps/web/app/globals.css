@@ -813,6 +813,184 @@ textarea {
   font-weight: 800;
 }
 
+.static-page-planning-card {
+  gap: 14px;
+}
+
+.static-page-planning-empty {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border-radius: 18px;
+  border: 1px solid rgba(37, 99, 235, 0.16);
+  background: rgba(239, 246, 255, 0.8);
+}
+
+.static-page-planning-empty strong {
+  color: var(--text);
+}
+
+.static-page-planning-empty p {
+  margin: 0;
+  color: var(--subtle);
+  line-height: 1.65;
+}
+
+.static-page-planning-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.static-page-planning-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.static-page-planning-summary div,
+.static-page-model-summary,
+.static-page-planning-hint {
+  display: grid;
+  gap: 5px;
+  padding: 12px;
+  border-radius: 16px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  background: rgba(248, 251, 255, 0.9);
+}
+
+.static-page-planning-summary span,
+.static-page-model-summary span,
+.static-page-planning-hint span {
+  color: var(--subtle);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.static-page-planning-summary strong,
+.static-page-planning-hint strong {
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.static-page-model-summary p {
+  margin: 0;
+  color: var(--text);
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+
+.static-page-canvas-shell {
+  min-width: 0;
+  padding: 12px;
+  border-radius: 20px;
+  border: 1px dashed rgba(37, 99, 235, 0.22);
+  background:
+    linear-gradient(rgba(37, 99, 235, 0.06) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(37, 99, 235, 0.06) 1px, transparent 1px),
+    rgba(248, 251, 255, 0.72);
+  background-size: 54px 54px;
+  overflow: hidden;
+}
+
+.static-page-grid-layout {
+  min-height: 560px;
+}
+
+.static-page-grid-item {
+  transition: box-shadow 0.16s ease, transform 0.16s ease;
+}
+
+.static-page-grid-item.react-grid-placeholder {
+  border-radius: 16px;
+  background: rgba(37, 99, 235, 0.16);
+  opacity: 1;
+}
+
+.static-page-grid-item.react-draggable-dragging,
+.static-page-grid-item.resizing {
+  z-index: 5;
+}
+
+.static-page-module-card {
+  height: 100%;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 16px;
+  border: 1px solid rgba(37, 99, 235, 0.14);
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 14px 28px rgba(15, 23, 42, 0.08);
+  overflow: hidden;
+}
+
+.static-page-module-drag-handle {
+  display: grid;
+  gap: 3px;
+  cursor: grab;
+}
+
+.static-page-module-drag-handle:active {
+  cursor: grabbing;
+}
+
+.static-page-module-drag-handle span {
+  color: var(--primary-deep);
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.static-page-module-drag-handle strong {
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.3;
+}
+
+.static-page-module-card p {
+  margin: 0;
+  color: var(--subtle);
+  font-size: 12px;
+  line-height: 1.55;
+  overflow: hidden;
+}
+
+.static-page-module-meta {
+  display: grid;
+  gap: 4px;
+}
+
+.static-page-module-meta span,
+.static-page-module-layout {
+  color: #475569;
+  font-size: 11px;
+  font-weight: 750;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.static-page-module-layout {
+  justify-self: start;
+  padding: 4px 7px;
+  border-radius: 999px;
+  color: #1d4ed8;
+  background: rgba(37, 99, 235, 0.09);
+}
+
+.react-resizable-handle {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  width: 16px;
+  height: 16px;
+  border-right: 2px solid rgba(37, 99, 235, 0.55);
+  border-bottom: 2px solid rgba(37, 99, 235, 0.55);
+  border-radius: 2px;
+  cursor: se-resize;
+}
+
 .insight-panel {
   min-height: 0;
   display: grid;
@@ -1465,6 +1643,58 @@ body {
 }
 
 .assistant-shell .static-page-notice-copy p {
+  color: #9aa7b9;
+}
+
+.assistant-shell .static-page-planning-empty,
+.assistant-shell .static-page-planning-summary div,
+.assistant-shell .static-page-model-summary,
+.assistant-shell .static-page-planning-hint,
+.assistant-shell .static-page-canvas-shell {
+  background: rgba(255, 255, 255, 0.045);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+.assistant-shell .static-page-planning-empty strong,
+.assistant-shell .static-page-planning-summary strong,
+.assistant-shell .static-page-planning-hint strong,
+.assistant-shell .static-page-model-summary p {
+  color: #f8fbff;
+}
+
+.assistant-shell .static-page-planning-empty p,
+.assistant-shell .static-page-planning-summary span,
+.assistant-shell .static-page-model-summary span,
+.assistant-shell .static-page-planning-hint span {
+  color: #9aa7b9;
+}
+
+.assistant-shell .static-page-canvas-shell {
+  background:
+    linear-gradient(rgba(255, 255, 255, 0.045) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.045) 1px, transparent 1px),
+    rgba(10, 15, 22, 0.3);
+  background-size: 54px 54px;
+}
+
+.assistant-shell .static-page-module-card {
+  background: rgba(20, 27, 37, 0.94);
+  border-color: rgba(255, 255, 255, 0.09);
+  box-shadow: 0 16px 34px rgba(0, 0, 0, 0.24);
+}
+
+.assistant-shell .static-page-module-drag-handle span,
+.assistant-shell .static-page-module-layout {
+  color: #93c5fd;
+  background: rgba(59, 130, 246, 0.12);
+}
+
+.assistant-shell .static-page-module-drag-handle strong {
+  color: #f8fbff;
+}
+
+.assistant-shell .static-page-module-card p,
+.assistant-shell .static-page-module-meta span {
   color: #9aa7b9;
 }
 

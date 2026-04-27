@@ -1,6 +1,7 @@
 'use client';
 
 import { formatDateTime, formatRelativeTime, formatSnakeCaseLabel, truncateText } from '../lib/formatters';
+import StaticPagePlanningPanel from './static-page/StaticPagePlanningPanel';
 
 const SURFACE_LABELS = {
   pc: 'PC',
@@ -333,6 +334,9 @@ export default function InsightPanel({
   onPublishReport,
   onRetryWorkflowExecution,
   onRefreshReportDetail,
+  staticPageDraft,
+  onStartStaticPageDraft,
+  onApplyStaticPageOperation,
 }) {
   return (
     <aside className="insight-panel">
@@ -369,6 +373,18 @@ export default function InsightPanel({
             <EmptySection text="当前数据集还没有会话。" />
           )}
         </div>
+      </section>
+
+      <section className="card insight-card static-page-planning-card">
+        <SectionHeader
+          title="静态页规划"
+          subtitle={staticPageDraft ? `${staticPageDraft.modules.length} 个模块，可拖拽编排` : '等待对话生成规划'}
+        />
+        <StaticPagePlanningPanel
+          draft={staticPageDraft}
+          onStartDraft={onStartStaticPageDraft}
+          onApplyOperation={onApplyStaticPageOperation}
+        />
       </section>
 
       <section className="card insight-card">

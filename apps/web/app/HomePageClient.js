@@ -460,6 +460,20 @@ export default function HomePageClient() {
     return draft;
   }
 
+  function handleApplyStaticPageOperation(operation) {
+    if (!activeStaticPageDraft || !operation?.type) {
+      return null;
+    }
+
+    const draft = applyStaticPageOperation(activeStaticPageDraft, operation);
+    setStaticPageDrafts((current) => ({
+      ...current,
+      [draft.id]: draft,
+    }));
+    setActiveStaticPageDraftId(draft.id);
+    return draft;
+  }
+
   async function handleResolveReportEntry(action) {
     if (!selectedSessionId) {
       return;
@@ -805,6 +819,9 @@ export default function HomePageClient() {
         refreshReportDetail(selectedReportPlanId);
       }
     },
+    staticPageDraft: activeStaticPageDraft,
+    onStartStaticPageDraft: handleStartStaticPageDraft,
+    onApplyStaticPageOperation: handleApplyStaticPageOperation,
   };
 
   if (mobileViewport) {
