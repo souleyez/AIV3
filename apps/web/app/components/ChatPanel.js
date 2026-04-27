@@ -1,6 +1,7 @@
 'use client';
 
 import { formatDateTime, formatRelativeTime, formatSnakeCaseLabel, truncateText } from '../lib/formatters';
+import StaticPageAssistantNotice from './static-page/StaticPageAssistantNotice';
 
 const SERVICE_LANE_LABELS = {
   material_service: '资料服务',
@@ -243,6 +244,9 @@ export default function ChatPanel({
   reportEntryBusy,
   onResolveReportEntry,
   panelClassName = '',
+  staticPageDraft = null,
+  onStartStaticPageDraft,
+  onOpenStaticPageBuilder,
 }) {
   const reportEntry = session?.session_manifest_view?.report_entry || null;
   const latestTurn = session?.session_manifest_view?.last_turn || null;
@@ -278,6 +282,24 @@ export default function ChatPanel({
             >
               新会话
             </button>
+            <button
+              type="button"
+              className="primary-btn compact-action-btn"
+              onClick={() => onStartStaticPageDraft?.({ oneClick: false })}
+              disabled={!dataset}
+            >
+              生成静态页
+            </button>
+          </div>
+        ) : dataset ? (
+          <div className="header-pill-row">
+            <button
+              type="button"
+              className="primary-btn compact-action-btn"
+              onClick={() => onStartStaticPageDraft?.({ oneClick: false })}
+            >
+              生成静态页
+            </button>
           </div>
         ) : null}
       </div>
@@ -289,6 +311,12 @@ export default function ChatPanel({
       />
 
       <SessionRuntimeSummary turn={latestTurn} />
+
+      <StaticPageAssistantNotice
+        draft={staticPageDraft}
+        onOpenBuilder={onOpenStaticPageBuilder}
+        onOneClick={() => onStartStaticPageDraft?.({ oneClick: true })}
+      />
 
       <div className="chat-messages">
         {messageLoading ? (
@@ -368,6 +396,14 @@ export default function ChatPanel({
           />
           <button className="primary-btn send-btn" type="button" onClick={onSubmit} disabled={!dataset || submitting}>
             {submitting ? '提交中...' : session ? '追加一轮' : '发起会话'}
+          </button>
+          <button
+            className="ghost-btn static-page-one-click-btn"
+            type="button"
+            onClick={() => onStartStaticPageDraft?.({ oneClick: true })}
+            disabled={!dataset || submitting}
+          >
+            一键生成静态页
           </button>
         </div>
       </div>

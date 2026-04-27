@@ -739,7 +739,7 @@ button {
 
 .chat-input-row {
   display: grid;
-  grid-template-columns: 1fr 132px;
+  grid-template-columns: 1fr 132px 156px;
   gap: 12px;
   align-items: end;
 }
@@ -756,6 +756,61 @@ textarea {
 
 .send-btn {
   height: 52px;
+}
+
+.static-page-one-click-btn {
+  height: 52px;
+  white-space: nowrap;
+}
+
+.static-page-assistant-notice {
+  display: grid;
+  gap: 12px;
+  padding: 14px 16px;
+  border-radius: 18px;
+  border: 1px solid rgba(37, 99, 235, 0.18);
+  background: linear-gradient(180deg, rgba(219, 234, 254, 0.8), rgba(248, 250, 252, 0.94));
+}
+
+.static-page-notice-copy {
+  display: grid;
+  gap: 5px;
+}
+
+.static-page-notice-copy span {
+  color: var(--primary-deep);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.static-page-notice-copy strong {
+  color: var(--text);
+}
+
+.static-page-notice-copy p {
+  margin: 0;
+  color: var(--subtle);
+  line-height: 1.65;
+}
+
+.static-page-notice-meta,
+.static-page-notice-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.static-page-notice-meta span {
+  display: inline-flex;
+  min-height: 26px;
+  align-items: center;
+  padding: 0 9px;
+  border-radius: 999px;
+  color: #1d4ed8;
+  background: rgba(37, 99, 235, 0.1);
+  font-size: 12px;
+  font-weight: 800;
 }
 
 .insight-panel {
@@ -1377,6 +1432,7 @@ body {
 
 .assistant-shell .bubble,
 .assistant-shell .chat-empty-state,
+.assistant-shell .static-page-assistant-notice,
 .assistant-shell .session-runtime-summary,
 .assistant-shell .report-entry-gate,
 .assistant-shell .report-control-grid div,
@@ -1395,6 +1451,20 @@ body {
 }
 
 .assistant-shell .chat-empty-state p {
+  color: #9aa7b9;
+}
+
+.assistant-shell .static-page-notice-copy span,
+.assistant-shell .static-page-notice-meta span {
+  color: #93c5fd;
+  background: rgba(59, 130, 246, 0.14);
+}
+
+.assistant-shell .static-page-notice-copy strong {
+  color: #f8fbff;
+}
+
+.assistant-shell .static-page-notice-copy p {
   color: #9aa7b9;
 }
 
@@ -1765,11 +1835,26 @@ body {
 
 .chat-panel-mobile-home .bubble,
 .chat-panel-mobile-home .chat-empty-state,
+.chat-panel-mobile-home .static-page-assistant-notice,
 .chat-panel-mobile-home .session-runtime-summary,
 .chat-panel-mobile-home .report-entry-gate {
   background: rgba(255, 255, 255, 0.055);
   border-color: rgba(255, 255, 255, 0.08);
   color: #dce6f4;
+}
+
+.chat-panel-mobile-home .static-page-notice-copy span,
+.chat-panel-mobile-home .static-page-notice-meta span {
+  color: #93c5fd;
+  background: rgba(59, 130, 246, 0.14);
+}
+
+.chat-panel-mobile-home .static-page-notice-copy strong {
+  color: #f8fbff;
+}
+
+.chat-panel-mobile-home .static-page-notice-copy p {
+  color: #9aa7b9;
 }
 
 .chat-panel-mobile-home .user-bubble {

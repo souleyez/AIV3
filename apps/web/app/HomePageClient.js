@@ -6,6 +6,7 @@ import HomeMobileShell from './components/HomeMobileShell';
 import HomeWorkspaceToolbar from './components/HomeWorkspaceToolbar';
 import InsightPanel from './components/InsightPanel';
 import Sidebar from './components/Sidebar';
+import { applyStaticPageOperation, buildInitialStaticPageDraft } from './lib/static-page-draft';
 
 const DATASET_POLL_INTERVAL_MS = 5000;
 const MESSAGE_POLL_INTERVAL_MS = 3000;
@@ -88,6 +89,8 @@ export default function HomePageClient() {
   const [reportActionBusy, setReportActionBusy] = useState('');
   const [banner, setBanner] = useState('');
   const [error, setError] = useState('');
+  const [staticPageDrafts, setStaticPageDrafts] = useState({});
+  const [activeStaticPageDraftId, setActiveStaticPageDraftId] = useState(null);
 
   const datasetLoadIdRef = useRef(0);
   const messageLoadIdRef = useRef(0);
@@ -113,10 +116,30 @@ export default function HomePageClient() {
     () => datasetReportPlans.find((plan) => plan.id === selectedReportPlanId) || null,
     [datasetReportPlans, selectedReportPlanId],
   );
+  const activeStaticPageDraft = useMemo(
+    () => staticPageDrafts[activeStaticPageDraftId] || null,
+    [activeStaticPageDraftId, staticPageDrafts],
+  );
   const toolbarSourceItems = useMemo(
     () => (selectedDataset ? [{ name: selectedDataset.title, status: 'healthy' }] : []),
     [selectedDataset],
   );
+
+  function promptRequestsStaticPage(prompt) {
+    return /静态页|静态页面|页面规划|一页|生成页面|落地页/.test(String(prompt || ''));
+  }
+
+  function buildStaticPageConversationSummary(prompt = '') {
+    const latestAssistantMessage = [...messages].reverse().find((message) => message.role === 'assistant');
+    const latestMessage = latestAssistantMessage || messages[messages.length - 1];
+    const summaryParts = [
+      selectedDataset ? `数据集：${selectedDataset.title}` : '',
+      selectedSession ? `会话：${selectedSession.title}` : '',
+      latestMessage?.content ? `最近内容：${latestMessage.content}` : '',
+      prompt ? `用户要求：${prompt}` : '',
+    ].filter(Boolean);
+    return summaryParts.join('\n');
+  }
 
   async function fetchPlanPublishedReport(planId) {
     try {
@@ -332,6 +355,15 @@ export default function HomePageClient() {
       return;
     }
 
+    if (promptRequestsStaticPage(prompt)) {
+      handleStartStaticPageDraft({
+        oneClick: /一键|直接|马上|立即|跳过/.test(prompt),
+        prompt,
+      });
+    } else if (activeStaticPageDraft && /调整|修改|换成|改成|突出|减少|增加|放大|缩小|移动|排序/.test(prompt)) {
+      handleApplyStaticPagePrompt(prompt);
+    }
+
     setSubmitting(true);
     try {
       const response = selectedSessionId
@@ -378,6 +410,54 @@ export default function HomePageClient() {
     setSelectedSessionId(null);
     setMessages([]);
     setMobilePanel('chat');
+  }
+
+  function handleStartStaticPageDraft(options = {}) {
+    const { oneClick = false, prompt = '' } = options;
+    if (!selectedDatasetId) {
+      setError('先选择数据集，再生成静态页。');
+      return null;
+    }
+
+    const baseDraft = buildInitialStaticPageDraft({
+      datasetId: selectedDatasetId,
+      sessionId: selectedSessionId,
+      conversationSummary: buildStaticPageConversationSummary(prompt),
+    });
+    const draft = oneClick
+      ? applyStaticPageOperation(baseDraft, {
+          type: 'queue_image_job',
+          queueMessage: '已按 AI 理解跳过手工调整，资源正在排队，可以联系商务开通高级用户跳过等待。',
+        })
+      : baseDraft;
+
+    setStaticPageDrafts((current) => ({
+      ...current,
+      [draft.id]: draft,
+    }));
+    setActiveStaticPageDraftId(draft.id);
+    setBanner(oneClick ? '已按 AI 理解创建静态页草稿，并进入效果图排队。' : '已创建静态页草稿，下一步会在右侧展示规划。');
+    setError('');
+    setMobilePanel('insights');
+    return draft;
+  }
+
+  function handleApplyStaticPagePrompt(prompt) {
+    if (!activeStaticPageDraft) {
+      return handleStartStaticPageDraft({ prompt });
+    }
+
+    const draft = applyStaticPageOperation(activeStaticPageDraft, {
+      type: 'refresh_summary',
+      modelSummary: `模型已收到修改意图：${prompt}`,
+    });
+    setStaticPageDrafts((current) => ({
+      ...current,
+      [draft.id]: draft,
+    }));
+    setActiveStaticPageDraftId(draft.id);
+    setBanner('已记录静态页修改意图，后续会由模型转换成结构化操作。');
+    return draft;
   }
 
   async function handleResolveReportEntry(action) {
@@ -549,6 +629,7 @@ export default function HomePageClient() {
         setSelectedSessionId(null);
         setComposingNewSession(false);
         setMessages([]);
+        setActiveStaticPageDraftId(null);
       });
       return;
     }
@@ -560,6 +641,7 @@ export default function HomePageClient() {
       setSelectedSessionId(null);
       setComposingNewSession(false);
       setMessages([]);
+      setActiveStaticPageDraftId(null);
     });
 
     refreshWorkspace(selectedDatasetId);
@@ -686,6 +768,9 @@ export default function HomePageClient() {
     submitting,
     reportEntryBusy,
     onResolveReportEntry: handleResolveReportEntry,
+    staticPageDraft: activeStaticPageDraft,
+    onStartStaticPageDraft: handleStartStaticPageDraft,
+    onOpenStaticPageBuilder: () => setMobilePanel('insights'),
   };
   const insightPanelProps = {
     dataset: selectedDataset,
