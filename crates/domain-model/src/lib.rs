@@ -68,6 +68,9 @@ id_type!(ToolExecutionId);
 id_type!(AssistantRunId);
 id_type!(AssistantRunEventId);
 id_type!(ConversationMemoryItemId);
+id_type!(StaticPageDraftId);
+id_type!(StaticPageImageJobId);
+id_type!(StaticPageRenderOutputId);
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum DatasetLifecycle {
@@ -582,6 +585,146 @@ pub struct ConversationMemoryItem {
     pub metadata: Value,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum StaticPageDraftStatus {
+    Draft,
+    Planned,
+    Queued,
+    Previewed,
+    Confirmed,
+    Rendered,
+    Archived,
+}
+
+impl StaticPageDraftStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Draft => "draft",
+            Self::Planned => "planned",
+            Self::Queued => "queued",
+            Self::Previewed => "previewed",
+            Self::Confirmed => "confirmed",
+            Self::Rendered => "rendered",
+            Self::Archived => "archived",
+        }
+    }
+
+    pub fn from_str(value: &str) -> Option<Self> {
+        match value {
+            "draft" => Some(Self::Draft),
+            "planned" => Some(Self::Planned),
+            "queued" => Some(Self::Queued),
+            "previewed" => Some(Self::Previewed),
+            "confirmed" => Some(Self::Confirmed),
+            "rendered" => Some(Self::Rendered),
+            "archived" => Some(Self::Archived),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct StaticPageDraft {
+    pub id: StaticPageDraftId,
+    pub tenant_id: TenantId,
+    pub assistant_run_id: AssistantRunId,
+    pub title: String,
+    pub status: StaticPageDraftStatus,
+    pub selected_scope: Value,
+    pub visibility_snapshot: Value,
+    pub source_refs: Value,
+    pub draft_payload: Value,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum StaticPageImageJobStatus {
+    Queued,
+    Running,
+    PreviewReady,
+    Failed,
+    Confirmed,
+}
+
+impl StaticPageImageJobStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Queued => "queued",
+            Self::Running => "running",
+            Self::PreviewReady => "preview_ready",
+            Self::Failed => "failed",
+            Self::Confirmed => "confirmed",
+        }
+    }
+
+    pub fn from_str(value: &str) -> Option<Self> {
+        match value {
+            "queued" => Some(Self::Queued),
+            "running" => Some(Self::Running),
+            "preview_ready" => Some(Self::PreviewReady),
+            "failed" => Some(Self::Failed),
+            "confirmed" => Some(Self::Confirmed),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct StaticPageImageJob {
+    pub id: StaticPageImageJobId,
+    pub tenant_id: TenantId,
+    pub draft_id: StaticPageDraftId,
+    pub assistant_run_id: AssistantRunId,
+    pub status: StaticPageImageJobStatus,
+    pub queue_position: Option<i32>,
+    pub image_prompt_payload: Value,
+    pub preview_asset_key: Option<String>,
+    pub failure_reason: Option<String>,
+    pub confirmed_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum StaticPageRenderOutputStatus {
+    Rendered,
+    Failed,
+}
+
+impl StaticPageRenderOutputStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Rendered => "rendered",
+            Self::Failed => "failed",
+        }
+    }
+
+    pub fn from_str(value: &str) -> Option<Self> {
+        match value {
+            "rendered" => Some(Self::Rendered),
+            "failed" => Some(Self::Failed),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct StaticPageRenderOutput {
+    pub id: StaticPageRenderOutputId,
+    pub tenant_id: TenantId,
+    pub draft_id: StaticPageDraftId,
+    pub assistant_run_id: AssistantRunId,
+    pub image_job_id: Option<StaticPageImageJobId>,
+    pub status: StaticPageRenderOutputStatus,
+    pub html: String,
+    pub asset_manifest: Value,
+    pub created_at: DateTime<Utc>,
 }
 
 #[cfg(test)]

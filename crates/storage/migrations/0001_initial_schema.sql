@@ -319,6 +319,47 @@ create table if not exists conversation_memory_items (
     updated_at timestamptz not null default now()
 );
 
+create table if not exists static_page_drafts (
+    id uuid primary key default gen_random_uuid(),
+    tenant_id uuid not null references tenants (id) on delete cascade,
+    assistant_run_id uuid not null references assistant_runs (id) on delete cascade,
+    title text not null,
+    status text not null default 'draft',
+    selected_scope jsonb not null default '{}'::jsonb,
+    visibility_snapshot jsonb not null default '{}'::jsonb,
+    source_refs jsonb not null default '{}'::jsonb,
+    draft_payload jsonb not null default '{}'::jsonb,
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now()
+);
+
+create table if not exists static_page_image_jobs (
+    id uuid primary key default gen_random_uuid(),
+    tenant_id uuid not null references tenants (id) on delete cascade,
+    draft_id uuid not null references static_page_drafts (id) on delete cascade,
+    assistant_run_id uuid not null references assistant_runs (id) on delete cascade,
+    status text not null default 'queued',
+    queue_position integer,
+    image_prompt_payload jsonb not null default '{}'::jsonb,
+    preview_asset_key text,
+    failure_reason text,
+    confirmed_at timestamptz,
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now()
+);
+
+create table if not exists static_page_render_outputs (
+    id uuid primary key default gen_random_uuid(),
+    tenant_id uuid not null references tenants (id) on delete cascade,
+    draft_id uuid not null references static_page_drafts (id) on delete cascade,
+    assistant_run_id uuid not null references assistant_runs (id) on delete cascade,
+    image_job_id uuid references static_page_image_jobs (id) on delete set null,
+    status text not null default 'rendered',
+    html text not null,
+    asset_manifest jsonb not null default '{}'::jsonb,
+    created_at timestamptz not null default now()
+);
+
 create table if not exists chat_sessions (
     id uuid primary key default gen_random_uuid(),
     tenant_id uuid not null references tenants (id) on delete cascade,

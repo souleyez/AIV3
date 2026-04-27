@@ -6,6 +6,7 @@ const JOB_LABELS = {
   running: '生成中',
   preview_ready: '效果图待确认',
   failed: '生成失败',
+  confirmed: '效果图已确认',
 };
 
 function modulePreviewWidth(module) {

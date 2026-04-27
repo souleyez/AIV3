@@ -182,6 +182,8 @@ pub fn candidates_to_values(candidates: &[ScopeCandidate]) -> Vec<Value> {
 }
 
 fn selected_scope_from_candidates(candidates: &[ScopeCandidate]) -> Value {
+    let conversation_memory = conversation_memory_scope_from_candidates(candidates);
+
     if let Some(dataset) = candidates.iter().find(|candidate| {
         candidate.candidate_type == ScopeCandidateType::Dataset
             && candidate.source == "user_selected"
@@ -189,7 +191,7 @@ fn selected_scope_from_candidates(candidates: &[ScopeCandidate]) -> Value {
         return json!({
             "mode": "user_selected",
             "datasets": [dataset.id],
-            "conversation_memory": [],
+            "conversation_memory": conversation_memory,
         });
     }
 
@@ -203,19 +205,26 @@ fn selected_scope_from_candidates(candidates: &[ScopeCandidate]) -> Value {
         return json!({
             "mode": "preselected",
             "datasets": [dataset.id],
-            "conversation_memory": [],
+            "conversation_memory": conversation_memory,
             "reason": dataset.reason,
         });
     }
 
-    let has_memory = candidates
-        .iter()
-        .any(|candidate| candidate.candidate_type == ScopeCandidateType::ConversationMemory);
     json!({
         "mode": "ordinary_chat",
         "datasets": [],
-        "conversation_memory": if has_memory { json!(["local-thread"]) } else { json!([]) },
+        "conversation_memory": conversation_memory,
     })
+}
+
+fn conversation_memory_scope_from_candidates(candidates: &[ScopeCandidate]) -> Value {
+    let memory_ids = candidates
+        .iter()
+        .filter(|candidate| candidate.candidate_type == ScopeCandidateType::ConversationMemory)
+        .map(|candidate| candidate.id.as_str())
+        .filter(|id| !id.is_empty())
+        .collect::<Vec<_>>();
+    json!(memory_ids)
 }
 
 fn dataset_label(dataset: &Dataset) -> String {
@@ -301,6 +310,28 @@ mod tests {
         assert_eq!(plan.candidates[0].id, orders.id.to_string());
         assert_eq!(plan.candidates[0].source, "user_selected");
         assert_eq!(plan.selected_scope["mode"], json!("user_selected"));
+    }
+
+    #[test]
+    fn selected_dataset_can_still_include_conversation_memory() {
+        let orders = dataset("订单", "orders");
+        let plan = plan_scope(ScopePlannerInput {
+            prompt: "继续刚才那版订单风险",
+            visible_datasets: &[orders.clone()],
+            selected_dataset_id: Some(orders.id),
+            conversation_memory_available: true,
+        });
+
+        assert_eq!(plan.candidates[0].id, orders.id.to_string());
+        assert!(plan
+            .candidates
+            .iter()
+            .any(|candidate| candidate.candidate_type == ScopeCandidateType::ConversationMemory));
+        assert_eq!(plan.selected_scope["mode"], json!("user_selected"));
+        assert_eq!(
+            plan.selected_scope["conversation_memory"],
+            json!(["local-thread"])
+        );
     }
 
     #[test]

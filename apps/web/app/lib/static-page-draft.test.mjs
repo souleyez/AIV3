@@ -202,3 +202,25 @@ test('final render request stores local mock renderer payload', () => {
   assert.equal(rendering.finalPage.renderer, 'local-static-page-mock');
   assert.equal(rendering.finalPage.payload.previewImage.assetKey, 'preview-1.png');
 });
+
+test('final render request accepts backend rendered output', () => {
+  const confirmed = applyStaticPageOperation(buildInitialStaticPageDraft(), {
+    type: 'confirm_preview',
+    previewImage: { assetKey: 'preview-1.png' },
+  });
+  const rendered = applyStaticPageOperation(confirmed, {
+    type: 'request_final_render',
+    finalPage: {
+      status: 'rendered',
+      renderer: 'platform-api-static-page-renderer',
+      renderOutputId: 'render-1',
+      html: '<main>核心判断</main>',
+      assetManifest: { preview_asset_key: 'preview-1.png' },
+    },
+  });
+
+  assert.equal(rendered.status, 'rendered');
+  assert.equal(rendered.finalPage.status, 'rendered');
+  assert.equal(rendered.finalPage.renderOutputId, 'render-1');
+  assert.match(rendered.finalPage.html, /核心判断/);
+});

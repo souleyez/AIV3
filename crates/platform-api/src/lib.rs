@@ -10,24 +10,33 @@ use chrono::{DateTime, Utc};
 use contracts::{
     AdvanceWorkflowExecutionResponse, ApiErrorResponse, AppendAssistantRunEventRequest,
     AppendAssistantRunEventResponse, AppendChatSessionTurnRequest, AppendChatSessionTurnResponse,
-    AssistantRunDetailView, AssistantRunEventView, AssistantRunMessageView, AssistantRunView,
-    ChatMessageView, ChatSessionView, CompareDocumentsRequest, CompareDocumentsView,
-    ConversationMemoryItemView, CreateAssistantRunRequest, CreateAssistantRunResponse,
-    CreateChatSessionRequest, CreateChatSessionResponse, CreateConversationMemoryItemRequest,
-    CreateDatasetOutputRequest, CreateDatasetOutputResponse, CreateDatasetRequest,
-    CreateDatasetSecretBindingRequest, CreateDatasetSecretBindingResponse,
-    CreateDocumentIngestResponse, CreateMemoryDirectoryRefreshResponse, CreateReportPlanResponse,
-    CreateReportRenderRequest, CreateReportRenderResponse, DatasetOutputView, DatasetSummary,
-    DocumentChunkView, DocumentDetailView, DocumentSummary, HealthResponse, LlmInvocationView,
-    MemoryDirectoryView, PlanReportRequest, PublishReportRequest, PublishReportResponse,
-    PublishedReportDetailView, PublishedReportVersionView, PublishedReportView,
-    RegisterDocumentRequest, RegisterDocumentResponse, ReportPlanAstVersionView, ReportPlanSummary,
-    ReportRenderOutputView, ResolveDatasetSecretBindingsRequest,
-    ResolveDatasetSecretBindingsResponse, RetrievalEvidenceView, RetrievalSearchHitView,
-    RetrievalSearchResponse, RetryWorkflowExecutionRequest, RetryWorkflowExecutionResponse,
-    ToolDefinitionView, ToolExecutionView, UpdateChatSessionReportEntryRequest,
-    UpdateChatSessionReportEntryResponse, WorkflowDefinitionView, WorkflowEventView,
-    WorkflowExecutionView, WorkflowRuntimeInspectView, WorkflowSignalRequest, WorkflowTaskView,
+    AppendStaticPageDraftOperationsRequest, AppendStaticPageDraftOperationsResponse,
+    ApplyStaticPageDraftIntentRequest, ApplyStaticPageDraftIntentResponse, AssistantRunDetailView,
+    AssistantRunEventView, AssistantRunMessageView, AssistantRunView, ChatMessageView,
+    ChatSessionView, CompareDocumentsRequest, CompareDocumentsView,
+    ConfirmStaticPageImageJobRequest, ConfirmStaticPageImageJobResponse,
+    ContinueAssistantRunRequest, ContinueAssistantRunResponse, ConversationMemoryItemView,
+    CreateAssistantRunRequest, CreateAssistantRunResponse, CreateChatSessionRequest,
+    CreateChatSessionResponse, CreateConversationMemoryItemRequest, CreateDatasetOutputRequest,
+    CreateDatasetOutputResponse, CreateDatasetRequest, CreateDatasetSecretBindingRequest,
+    CreateDatasetSecretBindingResponse, CreateDocumentIngestResponse,
+    CreateMemoryDirectoryRefreshResponse, CreateReportPlanResponse, CreateReportRenderRequest,
+    CreateReportRenderResponse, CreateStaticPageDraftRequest, CreateStaticPageDraftResponse,
+    CreateStaticPageImageJobRequest, CreateStaticPageImageJobResponse,
+    CreateStaticPageRenderRequest, CreateStaticPageRenderResponse, DatasetOutputView,
+    DatasetSummary, DocumentChunkView, DocumentDetailView, DocumentSummary, HealthResponse,
+    LlmInvocationView, MemoryDirectoryView, PlanReportRequest, PublishReportRequest,
+    PublishReportResponse, PublishedReportDetailView, PublishedReportVersionView,
+    PublishedReportView, RegisterDocumentRequest, RegisterDocumentResponse,
+    ReportPlanAstVersionView, ReportPlanSummary, ReportRenderOutputView,
+    ResolveDatasetSecretBindingsRequest, ResolveDatasetSecretBindingsResponse,
+    RetrievalEvidenceView, RetrievalSearchHitView, RetrievalSearchResponse,
+    RetryWorkflowExecutionRequest, RetryWorkflowExecutionResponse, StaticPageDraftView,
+    StaticPageImageJobView, StaticPageRenderOutputView, ToolDefinitionView, ToolExecutionView,
+    UpdateChatSessionReportEntryRequest, UpdateChatSessionReportEntryResponse,
+    UpdateStaticPageDraftRequest, UpdateStaticPageDraftResponse, WorkflowDefinitionView,
+    WorkflowEventView, WorkflowExecutionView, WorkflowRuntimeInspectView, WorkflowSignalRequest,
+    WorkflowTaskView,
 };
 use domain_model::{
     AssistantRun, AssistantRunEvent, AssistantRunId, ChatMessage, ChatMessageId, ChatMessageRole,
@@ -36,7 +45,9 @@ use domain_model::{
     LlmInvocation, LlmInvocationFinishReason, LlmInvocationMode, LlmInvocationSourceKind,
     MemoryDirectory, MemoryDirectoryId, PublishedReport, PublishedReportId, PublishedReportVersion,
     PublishedSurface, ReportPlan, ReportPlanAstVersion, ReportPlanId, ReportRenderOutput,
-    RetrievalEvidence, RetrievalEvidenceId, SecretBindingId, SecretScopeLevel, TenantId,
+    RetrievalEvidence, RetrievalEvidenceId, SecretBindingId, SecretScopeLevel, StaticPageDraft,
+    StaticPageDraftId, StaticPageDraftStatus, StaticPageImageJob, StaticPageImageJobId,
+    StaticPageImageJobStatus, StaticPageRenderOutput, StaticPageRenderOutputStatus, TenantId,
     ToolExecution, ToolExecutionSourceKind, ToolExecutionStatus, WorkflowEventRecord,
     WorkflowExecution, WorkflowExecutionId, WorkflowKind, WorkflowStatus, WorkflowTask,
 };
@@ -47,6 +58,10 @@ use llm_gateway::{build_provider_from_env, render_runtime_manifest, LlmRequest};
 use prompt_registry::bootstrap_default_prompt_registry;
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
+use static_page_runtime::{
+    interpret_static_page_intent_deterministic, interpret_static_page_intent_with_provider,
+    sanitize_static_page_operations, StaticPageIntentOutcome, StaticPageIntentRequest,
+};
 use std::{
     collections::{BTreeMap, HashSet},
     fmt::Display,
@@ -54,7 +69,8 @@ use std::{
 use storage::{
     NewAssistantRun, NewAssistantRunEvent, NewChatMessage, NewChatSession,
     NewConversationMemoryItem, NewDataset, NewDocument, NewPublishedReport,
-    NewPublishedReportVersion, NewReportPlan, NewSecretBinding, NewWorkflowTask, PgStorage,
+    NewPublishedReportVersion, NewReportPlan, NewSecretBinding, NewStaticPageDraft,
+    NewStaticPageImageJob, NewStaticPageRenderOutput, NewWorkflowTask, PgStorage,
 };
 use tool_registry::{
     bootstrap_default_tool_registry, ToolCliOutputMode, ToolDefinition, ToolInvocationMode,
@@ -67,9 +83,14 @@ const DATASET_OUTPUT_RETRIEVAL_BIND_LIMIT: usize = 8;
 const RETRIEVAL_SEARCH_DEFAULT_LIMIT: usize = 8;
 const RETRIEVAL_SEARCH_MAX_LIMIT: usize = 20;
 const DEFAULT_ASSISTANT_RUN_RUNTIME_MODEL: &str = "placeholder-assistant-run-v1";
+const DEFAULT_STATIC_PAGE_INTENT_RUNTIME_MODEL: &str = "static-page-intent-v1";
 const ASSISTANT_RUN_EVIDENCE_DEFAULT_LIMIT: usize = 4;
 const ASSISTANT_RUN_EVIDENCE_MAX_LIMIT: usize = 8;
 const ASSISTANT_RUN_EVIDENCE_DATASET_LIMIT: usize = 2;
+const ASSISTANT_RUN_CONVERSATION_MEMORY_DEFAULT_LIMIT: i64 = 4;
+const ASSISTANT_RUN_CONVERSATION_MEMORY_MAX_LIMIT: i64 = 8;
+const ASSISTANT_RUN_CONTINUE_DEFAULT_MAX_STEPS: usize = 3;
+const ASSISTANT_RUN_CONTINUE_MAX_STEPS: usize = 5;
 const ACTIVE_SECRET_BINDING_IDS_HEADER: &str = "x-ai-data-platform-secret-binding-ids";
 const PUBLIC_DATASET_WARNING: &str = "该数据集是公开数据集，所有用户可见";
 
@@ -206,8 +227,44 @@ pub fn router(
             axum::routing::post(append_assistant_run_event),
         )
         .route(
+            "/v1/assistant-runs/{run_id}/continue",
+            axum::routing::post(continue_assistant_run),
+        )
+        .route(
             "/v1/assistant-runs/{run_id}/conversation-memory-candidates",
             get(list_assistant_run_conversation_memory_candidates),
+        )
+        .route(
+            "/v1/assistant-runs/{run_id}/static-page-drafts",
+            axum::routing::post(create_static_page_draft_for_assistant_run),
+        )
+        .route(
+            "/v1/static-page-drafts/{draft_id}",
+            get(get_static_page_draft).patch(update_static_page_draft),
+        )
+        .route(
+            "/v1/static-page-drafts/{draft_id}/operations",
+            axum::routing::post(append_static_page_draft_operations),
+        )
+        .route(
+            "/v1/static-page-drafts/{draft_id}/intent",
+            axum::routing::post(apply_static_page_draft_intent),
+        )
+        .route(
+            "/v1/static-page-drafts/{draft_id}/image-jobs",
+            axum::routing::post(create_static_page_image_job),
+        )
+        .route(
+            "/v1/static-page-image-jobs/{job_id}",
+            get(get_static_page_image_job),
+        )
+        .route(
+            "/v1/static-page-image-jobs/{job_id}/confirm",
+            axum::routing::post(confirm_static_page_image_job),
+        )
+        .route(
+            "/v1/static-page-drafts/{draft_id}/renders",
+            axum::routing::post(create_static_page_render),
         )
         .route(
             "/v1/conversation-memory-items",
@@ -3884,6 +3941,7 @@ async fn create_assistant_run(
         &state,
         &selected_scope,
         &request.prompt,
+        local_thread_id.as_deref(),
         &active_secret_binding_ids,
     )
     .await?;
@@ -4118,6 +4176,167 @@ async fn append_assistant_run_event(
     ))
 }
 
+async fn continue_assistant_run(
+    State(state): State<AppState>,
+    Path(run_id): Path<String>,
+    Json(request): Json<ContinueAssistantRunRequest>,
+) -> std::result::Result<(StatusCode, Json<ContinueAssistantRunResponse>), ApiError> {
+    let run_id = parse_assistant_run_id(&run_id)?;
+    let run = state
+        .storage
+        .assistant_runs()
+        .get_by_id(state.tenant_id, run_id)
+        .await
+        .map_err(ApiError::from_storage)?
+        .ok_or_else(|| {
+            ApiError::not_found(
+                "assistant_run_not_found",
+                format!("assistant run {} was not found", run_id),
+            )
+        })?;
+
+    let continue_prompt = request
+        .prompt
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("继续执行当前 AssistantRun。")
+        .to_string();
+    let max_steps = normalize_assistant_run_continue_max_steps(request.max_steps);
+    let runtime_mode =
+        std::env::var("ASSISTANT_RUN_RUNTIME_MODE").unwrap_or_else(|_| "placeholder".to_string());
+    let runtime_provider =
+        std::env::var("ASSISTANT_RUN_RUNTIME_PROVIDER").unwrap_or_else(|_| runtime_mode.clone());
+    let runtime_model = std::env::var("ASSISTANT_RUN_RUNTIME_MODEL")
+        .unwrap_or_else(|_| DEFAULT_ASSISTANT_RUN_RUNTIME_MODEL.to_string());
+    let runtime_mode_for_trail = runtime_mode.clone();
+    let runtime_provider_for_trail = runtime_provider.clone();
+    let runtime_model_for_trail = runtime_model.clone();
+    let provider_input = if runtime_mode == "placeholder" {
+        format!(
+            "AssistantRun 继续执行占位回复：后端已接收继续指令，真实模型接入后会基于同一个运行上下文继续回答或请求平台能力。\n\nRun: {}\nContinue prompt: {}\nMax steps: {}\n供料状态: {}",
+            run.id,
+            continue_prompt,
+            max_steps,
+            assistant_run_evidence_status_label(&run.evidence_state)
+        )
+    } else {
+        build_assistant_run_continue_provider_input(&run, &request, &continue_prompt, max_steps)
+    };
+
+    let response = tokio::task::spawn_blocking(move || {
+        let provider = build_provider_from_env(
+            "ASSISTANT_RUN",
+            &runtime_mode,
+            runtime_provider,
+            bootstrap_default_prompt_registry(),
+        )?;
+        provider.complete(&LlmRequest {
+            model: runtime_model,
+            system_prompt_key: None,
+            input: provider_input,
+        })
+    })
+    .await
+    .map_err(|error| {
+        ApiError::internal(
+            "assistant_run_continue_join_failed",
+            format!("assistant run continue worker join failed: {error}"),
+        )
+    })?
+    .map_err(|error| {
+        ApiError::internal("assistant_run_continue_provider_failed", error.to_string())
+    })?;
+
+    let now = Utc::now();
+    let runtime_manifest = render_runtime_manifest(&response.runtime);
+    let mut execution_trail = value_array(run.execution_trail.clone());
+    execution_trail.push(json!({
+        "status": "completed",
+        "label": "继续执行",
+        "prompt": continue_prompt,
+        "max_steps": max_steps,
+        "runtime_mode": runtime_mode_for_trail,
+        "provider": runtime_provider_for_trail,
+        "model": runtime_model_for_trail,
+        "at": now,
+    }));
+    let mut output_artifacts = value_array(run.output_artifacts.clone());
+    output_artifacts.push(json!({
+        "type": "assistant_message",
+        "role": ChatMessageRole::Assistant.as_str(),
+        "content": response.output_text,
+        "source": "assistant_run_continue",
+        "created_at": now,
+    }));
+
+    state
+        .storage
+        .assistant_runs()
+        .update_execution_trail(
+            state.tenant_id,
+            run_id,
+            &Value::Array(execution_trail.clone()),
+        )
+        .await
+        .map_err(ApiError::from_storage)?;
+    let updated_run = state
+        .storage
+        .assistant_runs()
+        .attach_output_artifacts(
+            state.tenant_id,
+            run_id,
+            &Value::Array(output_artifacts.clone()),
+        )
+        .await
+        .map_err(ApiError::from_storage)?;
+    let event = state
+        .storage
+        .assistant_runs()
+        .append_event(
+            state.tenant_id,
+            run_id,
+            &NewAssistantRunEvent {
+                event_name: "assistant_run.continued".to_string(),
+                payload: json!({
+                    "prompt": continue_prompt,
+                    "max_steps": max_steps,
+                    "runtime": runtime_manifest.clone(),
+                }),
+                created_at: now,
+            },
+        )
+        .await
+        .map_err(ApiError::from_storage)?;
+    let assistant_message = AssistantRunMessageView {
+        role: ChatMessageRole::Assistant,
+        content: output_artifacts
+            .last()
+            .and_then(|artifact| artifact.get("content"))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+    };
+    let selected_scope = updated_run.selected_scope.clone();
+    let evidence_state = updated_run.evidence_state.clone();
+    let run_view = to_assistant_run_view(updated_run);
+
+    Ok((
+        StatusCode::CREATED,
+        Json(ContinueAssistantRunResponse {
+            run: run_view,
+            assistant_message,
+            runtime: runtime_manifest,
+            event: to_assistant_run_event_view(event),
+            selected_scope,
+            evidence_state,
+            execution_trail,
+            output_artifacts,
+            required_confirmations: Vec::new(),
+        }),
+    ))
+}
+
 async fn create_conversation_memory_item(
     State(state): State<AppState>,
     Json(request): Json<CreateConversationMemoryItemRequest>,
@@ -4147,6 +4366,540 @@ async fn create_conversation_memory_item(
     Ok((
         StatusCode::CREATED,
         Json(to_conversation_memory_item_view(item)),
+    ))
+}
+
+async fn create_static_page_draft_for_assistant_run(
+    State(state): State<AppState>,
+    Path(run_id): Path<String>,
+    Json(request): Json<CreateStaticPageDraftRequest>,
+) -> std::result::Result<(StatusCode, Json<CreateStaticPageDraftResponse>), ApiError> {
+    let run_id = parse_assistant_run_id(&run_id)?;
+    let run = state
+        .storage
+        .assistant_runs()
+        .get_by_id(state.tenant_id, run_id)
+        .await
+        .map_err(ApiError::from_storage)?
+        .ok_or_else(|| {
+            ApiError::not_found(
+                "assistant_run_not_found",
+                format!("assistant run {} was not found", run_id),
+            )
+        })?;
+    let prompt = request
+        .prompt
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(run.user_prompt.trim());
+    let title = request
+        .title
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| derive_static_page_draft_title(prompt));
+    let selected_scope = request
+        .selected_scope
+        .clone()
+        .unwrap_or_else(|| run.selected_scope.clone());
+    let visibility_snapshot = request
+        .visibility_snapshot
+        .clone()
+        .unwrap_or_else(|| build_static_page_visibility_snapshot(&run, &selected_scope));
+    let source_refs = if request.source_refs.is_null() {
+        build_static_page_source_refs(&run)
+    } else {
+        request.source_refs.clone()
+    };
+    let draft_payload = if request.draft_payload.is_null() {
+        build_initial_static_page_draft_payload(&run, prompt)
+    } else {
+        request.draft_payload.clone()
+    };
+    let status =
+        status_from_static_page_payload(&draft_payload).unwrap_or(StaticPageDraftStatus::Draft);
+
+    let draft = state
+        .storage
+        .static_page_drafts()
+        .create(
+            state.tenant_id,
+            &NewStaticPageDraft {
+                assistant_run_id: run.id,
+                title,
+                status,
+                selected_scope,
+                visibility_snapshot,
+                source_refs,
+                draft_payload,
+                created_at: Utc::now(),
+            },
+        )
+        .await
+        .map_err(ApiError::from_storage)?;
+    state
+        .storage
+        .assistant_runs()
+        .append_event(
+            state.tenant_id,
+            run.id,
+            &NewAssistantRunEvent {
+                event_name: "static_page_draft.created".to_string(),
+                payload: json!({
+                    "draft_id": draft.id,
+                    "title": draft.title,
+                    "status": draft.status.as_str(),
+                }),
+                created_at: draft.created_at,
+            },
+        )
+        .await
+        .map_err(ApiError::from_storage)?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(CreateStaticPageDraftResponse {
+            draft: to_static_page_draft_view(draft),
+        }),
+    ))
+}
+
+async fn get_static_page_draft(
+    State(state): State<AppState>,
+    Path(draft_id): Path<String>,
+) -> std::result::Result<Json<StaticPageDraftView>, ApiError> {
+    let draft_id = parse_static_page_draft_id(&draft_id)?;
+    let draft = load_static_page_draft_or_404(&state, draft_id).await?;
+
+    Ok(Json(to_static_page_draft_view(draft)))
+}
+
+async fn update_static_page_draft(
+    State(state): State<AppState>,
+    Path(draft_id): Path<String>,
+    Json(request): Json<UpdateStaticPageDraftRequest>,
+) -> std::result::Result<Json<UpdateStaticPageDraftResponse>, ApiError> {
+    let draft_id = parse_static_page_draft_id(&draft_id)?;
+    let mut draft = load_static_page_draft_or_404(&state, draft_id).await?;
+
+    if let Some(title) = request.title {
+        validate_required("title", &title)?;
+        draft.title = title.trim().to_string();
+    }
+    if let Some(status) = request.status {
+        draft.status = status.to_domain();
+    }
+    if let Some(selected_scope) = request.selected_scope {
+        draft.selected_scope = selected_scope;
+    }
+    if let Some(visibility_snapshot) = request.visibility_snapshot {
+        draft.visibility_snapshot = visibility_snapshot;
+    }
+    if let Some(source_refs) = request.source_refs {
+        draft.source_refs = source_refs;
+    }
+    if let Some(draft_payload) = request.draft_payload {
+        draft.status = status_from_static_page_payload(&draft_payload).unwrap_or(draft.status);
+        draft.draft_payload = draft_payload;
+    }
+
+    let updated = state
+        .storage
+        .static_page_drafts()
+        .update(state.tenant_id, &draft)
+        .await
+        .map_err(ApiError::from_storage)?;
+    append_static_page_draft_run_event(
+        &state,
+        &updated,
+        "static_page_draft.updated",
+        json!({
+            "draft_id": updated.id,
+            "title": updated.title,
+            "status": updated.status.as_str(),
+        }),
+    )
+    .await?;
+
+    Ok(Json(UpdateStaticPageDraftResponse {
+        draft: to_static_page_draft_view(updated),
+    }))
+}
+
+async fn append_static_page_draft_operations(
+    State(state): State<AppState>,
+    Path(draft_id): Path<String>,
+    Json(request): Json<AppendStaticPageDraftOperationsRequest>,
+) -> std::result::Result<(StatusCode, Json<AppendStaticPageDraftOperationsResponse>), ApiError> {
+    let draft_id = parse_static_page_draft_id(&draft_id)?;
+    let mut draft = load_static_page_draft_or_404(&state, draft_id).await?;
+    let operations = validate_static_page_operations(request.operations)?;
+    if operations.is_empty() && request.draft_payload.is_none() {
+        return Err(ApiError::bad_request(
+            "validation_error",
+            "operations or draft_payload is required".to_string(),
+        ));
+    }
+
+    let summary = request
+        .summary
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| summarize_static_page_operations(&operations));
+    let draft_payload = request.draft_payload.unwrap_or_else(|| {
+        let mut payload = apply_static_page_operations_to_payload(
+            draft.draft_payload.clone(),
+            &operations,
+            Some(&summary),
+        );
+        append_static_page_operations_metadata(
+            &mut payload,
+            &operations,
+            request.prompt.as_deref(),
+            &summary,
+        );
+        payload
+    });
+    draft.status = status_from_static_page_payload(&draft_payload)
+        .or_else(|| status_from_static_page_operations(&operations))
+        .unwrap_or(draft.status);
+    draft.draft_payload = draft_payload;
+
+    let updated = state
+        .storage
+        .static_page_drafts()
+        .update(state.tenant_id, &draft)
+        .await
+        .map_err(ApiError::from_storage)?;
+    append_static_page_draft_run_event(
+        &state,
+        &updated,
+        "static_page_draft.operations_appended",
+        json!({
+            "draft_id": updated.id,
+            "operation_count": operations.len(),
+            "summary": summary,
+        }),
+    )
+    .await?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(AppendStaticPageDraftOperationsResponse {
+            draft: to_static_page_draft_view(updated),
+            operations,
+            summary,
+        }),
+    ))
+}
+
+async fn apply_static_page_draft_intent(
+    State(state): State<AppState>,
+    Path(draft_id): Path<String>,
+    Json(request): Json<ApplyStaticPageDraftIntentRequest>,
+) -> std::result::Result<(StatusCode, Json<ApplyStaticPageDraftIntentResponse>), ApiError> {
+    let draft_id = parse_static_page_draft_id(&draft_id)?;
+    validate_required("prompt", &request.prompt)?;
+    let mut draft = load_static_page_draft_or_404(&state, draft_id).await?;
+    let prompt = request.prompt.trim().to_string();
+    let message_count = request.messages.len();
+    let messages = request.messages;
+    let base_payload = request
+        .draft_payload
+        .unwrap_or_else(|| draft.draft_payload.clone());
+    let intent = interpret_static_page_draft_intent_for_api(
+        &state,
+        &draft,
+        &prompt,
+        &base_payload,
+        messages,
+    )
+    .await?;
+    let mut draft_payload = apply_static_page_operations_to_payload(
+        base_payload,
+        &intent.operations,
+        Some(&intent.summary),
+    );
+    append_static_page_operations_metadata(
+        &mut draft_payload,
+        &intent.operations,
+        Some(&prompt),
+        &intent.summary,
+    );
+    draft.status = status_from_static_page_payload(&draft_payload)
+        .or_else(|| status_from_static_page_operations(&intent.operations))
+        .unwrap_or(StaticPageDraftStatus::Planned);
+    draft.draft_payload = draft_payload;
+
+    let updated = state
+        .storage
+        .static_page_drafts()
+        .update(state.tenant_id, &draft)
+        .await
+        .map_err(ApiError::from_storage)?;
+    append_static_page_draft_run_event(
+        &state,
+        &updated,
+        "static_page_draft.intent_applied",
+        json!({
+            "draft_id": updated.id,
+            "prompt": prompt,
+            "summary": intent.summary,
+            "operation_count": intent.operations.len(),
+            "message_count": message_count,
+            "runtime": intent.runtime,
+        }),
+    )
+    .await?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(ApplyStaticPageDraftIntentResponse {
+            draft: to_static_page_draft_view(updated),
+            operations: intent.operations,
+            summary: intent.summary,
+        }),
+    ))
+}
+
+async fn create_static_page_image_job(
+    State(state): State<AppState>,
+    Path(draft_id): Path<String>,
+    Json(request): Json<CreateStaticPageImageJobRequest>,
+) -> std::result::Result<(StatusCode, Json<CreateStaticPageImageJobResponse>), ApiError> {
+    let draft_id = parse_static_page_draft_id(&draft_id)?;
+    let mut draft = load_static_page_draft_or_404(&state, draft_id).await?;
+    let image_prompt_payload = if request.image_prompt_payload.is_null() {
+        build_static_page_image_prompt_payload(&draft, request.prompt.as_deref())
+    } else {
+        request.image_prompt_payload
+    };
+    let job = state
+        .storage
+        .static_page_image_jobs()
+        .create(
+            state.tenant_id,
+            &NewStaticPageImageJob {
+                draft_id: draft.id,
+                assistant_run_id: draft.assistant_run_id,
+                status: StaticPageImageJobStatus::Queued,
+                queue_position: Some(1),
+                image_prompt_payload,
+                preview_asset_key: None,
+                failure_reason: None,
+                confirmed_at: None,
+                created_at: Utc::now(),
+            },
+        )
+        .await
+        .map_err(ApiError::from_storage)?;
+    let operations = vec![json!({
+        "type": "queue_image_job",
+        "jobId": job.id,
+        "queuePosition": job.queue_position,
+        "queueMessage": "资源正在排队，可以联系商务开通高级用户跳过等待。",
+    })];
+    draft.draft_payload = apply_static_page_operations_to_payload(
+        draft.draft_payload,
+        &operations,
+        Some("效果图任务已进入资源队列。"),
+    );
+    append_static_page_operations_metadata(
+        &mut draft.draft_payload,
+        &operations,
+        request.prompt.as_deref(),
+        "效果图任务已进入资源队列。",
+    );
+    draft.status = StaticPageDraftStatus::Queued;
+    let draft = state
+        .storage
+        .static_page_drafts()
+        .update(state.tenant_id, &draft)
+        .await
+        .map_err(ApiError::from_storage)?;
+    append_static_page_draft_run_event(
+        &state,
+        &draft,
+        "static_page_image_job.created",
+        json!({
+            "draft_id": draft.id,
+            "image_job_id": job.id,
+            "status": job.status.as_str(),
+            "queue_position": job.queue_position,
+        }),
+    )
+    .await?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(CreateStaticPageImageJobResponse {
+            image_job: to_static_page_image_job_view(job),
+        }),
+    ))
+}
+
+async fn get_static_page_image_job(
+    State(state): State<AppState>,
+    Path(job_id): Path<String>,
+) -> std::result::Result<Json<StaticPageImageJobView>, ApiError> {
+    let job_id = parse_static_page_image_job_id(&job_id)?;
+    let job = load_static_page_image_job_or_404(&state, job_id).await?;
+    Ok(Json(to_static_page_image_job_view(job)))
+}
+
+async fn confirm_static_page_image_job(
+    State(state): State<AppState>,
+    Path(job_id): Path<String>,
+    Json(request): Json<ConfirmStaticPageImageJobRequest>,
+) -> std::result::Result<Json<ConfirmStaticPageImageJobResponse>, ApiError> {
+    let job_id = parse_static_page_image_job_id(&job_id)?;
+    let mut job = load_static_page_image_job_or_404(&state, job_id).await?;
+    if matches!(job.status, StaticPageImageJobStatus::Failed) {
+        return Err(ApiError::bad_request(
+            "static_page_image_job_failed",
+            "failed image jobs cannot be confirmed".to_string(),
+        ));
+    }
+    let preview_asset_key = request
+        .preview_asset_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| job.preview_asset_key.clone())
+        .unwrap_or_else(|| format!("static-page-previews/{}.json", job.id));
+    job.status = StaticPageImageJobStatus::Confirmed;
+    job.queue_position = None;
+    job.preview_asset_key = Some(preview_asset_key.clone());
+    job.failure_reason = None;
+    job.confirmed_at = Some(Utc::now());
+    let job = state
+        .storage
+        .static_page_image_jobs()
+        .update(state.tenant_id, &job)
+        .await
+        .map_err(ApiError::from_storage)?;
+    let mut draft = load_static_page_draft_or_404(&state, job.draft_id).await?;
+    let operations = vec![json!({
+        "type": "confirm_preview",
+        "previewImage": {
+            "kind": "static-page-effect-preview",
+            "assetKey": preview_asset_key,
+            "imageJobId": job.id,
+        }
+    })];
+    draft.draft_payload = apply_static_page_operations_to_payload(
+        draft.draft_payload,
+        &operations,
+        Some("效果图已确认，可以进入最终静态页渲染。"),
+    );
+    append_static_page_operations_metadata(
+        &mut draft.draft_payload,
+        &operations,
+        None,
+        "效果图已确认，可以进入最终静态页渲染。",
+    );
+    draft.status = StaticPageDraftStatus::Confirmed;
+    let draft = state
+        .storage
+        .static_page_drafts()
+        .update(state.tenant_id, &draft)
+        .await
+        .map_err(ApiError::from_storage)?;
+    append_static_page_draft_run_event(
+        &state,
+        &draft,
+        "static_page_image_job.confirmed",
+        json!({
+            "draft_id": draft.id,
+            "image_job_id": job.id,
+            "preview_asset_key": job.preview_asset_key,
+        }),
+    )
+    .await?;
+
+    Ok(Json(ConfirmStaticPageImageJobResponse {
+        image_job: to_static_page_image_job_view(job),
+        draft: to_static_page_draft_view(draft),
+    }))
+}
+
+async fn create_static_page_render(
+    State(state): State<AppState>,
+    Path(draft_id): Path<String>,
+    Json(request): Json<CreateStaticPageRenderRequest>,
+) -> std::result::Result<(StatusCode, Json<CreateStaticPageRenderResponse>), ApiError> {
+    let draft_id = parse_static_page_draft_id(&draft_id)?;
+    let mut draft = load_static_page_draft_or_404(&state, draft_id).await?;
+    let image_job =
+        resolve_confirmed_static_page_image_job(&state, &draft, request.image_job_id).await?;
+    let html = build_static_page_render_html(&draft, image_job.as_ref());
+    let asset_manifest = build_static_page_render_asset_manifest(&draft, image_job.as_ref());
+    let render_output = state
+        .storage
+        .static_page_render_outputs()
+        .create(
+            state.tenant_id,
+            &NewStaticPageRenderOutput {
+                draft_id: draft.id,
+                assistant_run_id: draft.assistant_run_id,
+                image_job_id: image_job.as_ref().map(|job| job.id),
+                status: StaticPageRenderOutputStatus::Rendered,
+                html,
+                asset_manifest,
+                created_at: Utc::now(),
+            },
+        )
+        .await
+        .map_err(ApiError::from_storage)?;
+    let operations = vec![json!({
+        "type": "request_final_render",
+        "finalPage": {
+            "status": "rendered",
+            "renderOutputId": render_output.id,
+            "assetManifest": render_output.asset_manifest,
+        }
+    })];
+    draft.draft_payload = apply_static_page_operations_to_payload(
+        draft.draft_payload,
+        &operations,
+        Some("最终静态页已根据确认效果图和模块规划生成。"),
+    );
+    append_static_page_operations_metadata(
+        &mut draft.draft_payload,
+        &operations,
+        None,
+        "最终静态页已根据确认效果图和模块规划生成。",
+    );
+    draft.status = StaticPageDraftStatus::Rendered;
+    let draft = state
+        .storage
+        .static_page_drafts()
+        .update(state.tenant_id, &draft)
+        .await
+        .map_err(ApiError::from_storage)?;
+    append_static_page_draft_run_event(
+        &state,
+        &draft,
+        "static_page_render.created",
+        json!({
+            "draft_id": draft.id,
+            "render_output_id": render_output.id,
+            "image_job_id": render_output.image_job_id,
+        }),
+    )
+    .await?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(CreateStaticPageRenderResponse {
+            render_output: to_static_page_render_output_view(render_output),
+            draft: to_static_page_draft_view(draft),
+        }),
     ))
 }
 
@@ -4286,14 +5039,70 @@ fn build_assistant_run_provider_input_with_evidence(
     sections.join("\n\n")
 }
 
+fn build_assistant_run_continue_provider_input(
+    run: &AssistantRun,
+    request: &ContinueAssistantRunRequest,
+    continue_prompt: &str,
+    max_steps: usize,
+) -> String {
+    let mut sections = vec![
+        "你是智能数据工作台里的 AssistantRun 连续执行运行时。".to_string(),
+        "原则：不替用户编造系统动作；如果需要平台能力，只提出下一步动作需求；基于已有供料直接继续回答。"
+            .to_string(),
+        format!("运行ID：{}", run.id),
+        format!("原始问题：{}", run.user_prompt.trim()),
+        format!("继续指令：{}", continue_prompt.trim()),
+        format!("本次最多连续动作数：{}", max_steps),
+        format!(
+            "当前选中范围：{}",
+            serde_json::to_string(&run.selected_scope).unwrap_or_else(|_| "{}".to_string())
+        ),
+        format!(
+            "供料状态：{}",
+            serde_json::to_string(&run.evidence_state).unwrap_or_else(|_| "{}".to_string())
+        ),
+    ];
+
+    if let Some(current_artifact) = request.current_artifact.as_ref() {
+        sections.push(format!(
+            "当前打开产物：{}",
+            serde_json::to_string(current_artifact).unwrap_or_else(|_| "{}".to_string())
+        ));
+    }
+
+    let history = request
+        .messages
+        .iter()
+        .rev()
+        .take(8)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .map(|message| format!("{}: {}", message.role.as_str(), message.content.trim()))
+        .collect::<Vec<_>>();
+    if !history.is_empty() {
+        sections.push(format!("继续前最近对话：\n{}", history.join("\n")));
+    }
+
+    sections.join("\n\n")
+}
+
+fn normalize_assistant_run_continue_max_steps(value: Option<usize>) -> usize {
+    value
+        .unwrap_or(ASSISTANT_RUN_CONTINUE_DEFAULT_MAX_STEPS)
+        .clamp(1, ASSISTANT_RUN_CONTINUE_MAX_STEPS)
+}
+
 async fn build_assistant_run_evidence_state(
     state: &AppState,
     selected_scope: &Value,
     prompt: &str,
+    local_thread_id: Option<&str>,
     active_secret_binding_ids: &[SecretBindingId],
 ) -> std::result::Result<Value, ApiError> {
     let dataset_ids = selected_dataset_ids_from_scope(selected_scope);
-    if dataset_ids.is_empty() {
+    let conversation_memory_requested = selected_scope_requests_conversation_memory(selected_scope);
+    if dataset_ids.is_empty() && !conversation_memory_requested {
         return Ok(json!({
             "status": "not_requested",
             "policy": "host_supplies_model_answers",
@@ -4304,6 +5113,7 @@ async fn build_assistant_run_evidence_state(
     let limit = assistant_run_evidence_limit();
     let mut supplied_items = Vec::new();
     let mut supplied_datasets = Vec::new();
+    let mut supplied_memory_items = Vec::new();
 
     for dataset_id in dataset_ids
         .into_iter()
@@ -4348,6 +5158,46 @@ async fn build_assistant_run_evidence_state(
         }
     }
 
+    if conversation_memory_requested {
+        if let Some(local_thread_id) = local_thread_id
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            let items = state
+                .storage
+                .conversation_memory_items()
+                .list_by_local_thread(
+                    state.tenant_id,
+                    local_thread_id,
+                    None,
+                    assistant_run_conversation_memory_limit(),
+                )
+                .await
+                .map_err(ApiError::from_storage)?;
+
+            for item in items
+                .into_iter()
+                .filter(assistant_run_memory_item_is_supply_eligible)
+            {
+                let supplied_item = json!({
+                    "type": "conversation_memory_item",
+                    "conversation_memory_item_id": item.id,
+                    "local_thread_id": item.local_thread_id,
+                    "role": item.role.as_str(),
+                    "item_kind": item.item_kind,
+                    "summary": item.summary,
+                    "source_message_refs": item.source_message_refs,
+                    "artifact_refs": item.artifact_refs,
+                    "metadata": item.metadata,
+                    "created_at": item.created_at,
+                    "updated_at": item.updated_at,
+                });
+                supplied_memory_items.push(supplied_item.clone());
+                supplied_items.push(supplied_item);
+            }
+        }
+    }
+
     let status = if supplied_items.is_empty() {
         "empty"
     } else {
@@ -4358,6 +5208,7 @@ async fn build_assistant_run_evidence_state(
         "policy": "host_supplies_model_answers",
         "selected_scope": selected_scope,
         "datasets": supplied_datasets,
+        "conversation_memory_items": supplied_memory_items,
         "supplied_items": supplied_items,
         "limit": limit,
     }))
@@ -4369,6 +5220,22 @@ fn assistant_run_evidence_limit() -> usize {
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(ASSISTANT_RUN_EVIDENCE_DEFAULT_LIMIT)
         .clamp(1, ASSISTANT_RUN_EVIDENCE_MAX_LIMIT)
+}
+
+fn assistant_run_conversation_memory_limit() -> i64 {
+    std::env::var("ASSISTANT_RUN_CONVERSATION_MEMORY_LIMIT")
+        .ok()
+        .and_then(|value| value.parse::<i64>().ok())
+        .unwrap_or(ASSISTANT_RUN_CONVERSATION_MEMORY_DEFAULT_LIMIT)
+        .clamp(1, ASSISTANT_RUN_CONVERSATION_MEMORY_MAX_LIMIT)
+}
+
+fn assistant_run_memory_item_is_supply_eligible(item: &ConversationMemoryItem) -> bool {
+    item.role == ChatMessageRole::User
+        && !matches!(
+            item.item_kind.as_str(),
+            "assistant_output" | "artifact_output" | "generated_artifact"
+        )
 }
 
 fn assistant_run_evidence_supplied_count(evidence_state: &Value) -> usize {
@@ -4386,10 +5253,10 @@ fn assistant_run_evidence_status_label(evidence_state: &Value) -> String {
         .unwrap_or("unknown");
     match status {
         "supplied" => format!(
-            "已检索 {} 条证据",
+            "已检索 {} 条供料项",
             assistant_run_evidence_supplied_count(evidence_state)
         ),
-        "empty" => "已选中数据集，但暂未检索到可供料证据".to_string(),
+        "empty" => "已请求供料，但暂未检索到可用内容".to_string(),
         "not_requested" => "未请求数据集供料".to_string(),
         other => other.to_string(),
     }
@@ -6356,6 +7223,22 @@ fn selected_dataset_ids_from_scope(scope: &Value) -> Vec<DatasetId> {
     dataset_ids
 }
 
+fn selected_scope_requests_conversation_memory(scope: &Value) -> bool {
+    scope
+        .as_object()
+        .and_then(|object| object.get("conversation_memory"))
+        .and_then(Value::as_array)
+        .map(|items| {
+            items.iter().any(|item| {
+                item.as_str()
+                    .map(str::trim)
+                    .map(|value| !value.is_empty())
+                    .unwrap_or(false)
+            })
+        })
+        .unwrap_or(false)
+}
+
 fn dataset_id_from_scope_item(item: &Value) -> Option<DatasetId> {
     let raw = item.as_str().or_else(|| {
         item.as_object()
@@ -6369,6 +7252,26 @@ fn parse_assistant_run_id(raw: &str) -> std::result::Result<AssistantRunId, ApiE
     Uuid::parse_str(raw).map(AssistantRunId).map_err(|_| {
         ApiError::bad_request(
             "invalid_assistant_run_id",
+            format!("{raw} is not a valid UUID"),
+        )
+    })
+}
+
+fn parse_static_page_draft_id(raw: &str) -> std::result::Result<StaticPageDraftId, ApiError> {
+    Uuid::parse_str(raw).map(StaticPageDraftId).map_err(|_| {
+        ApiError::bad_request(
+            "invalid_static_page_draft_id",
+            format!("{raw} is not a valid UUID"),
+        )
+    })
+}
+
+fn parse_static_page_image_job_id(
+    raw: &str,
+) -> std::result::Result<StaticPageImageJobId, ApiError> {
+    Uuid::parse_str(raw).map(StaticPageImageJobId).map_err(|_| {
+        ApiError::bad_request(
+            "invalid_static_page_image_job_id",
             format!("{raw} is not a valid UUID"),
         )
     })
@@ -9273,6 +10176,50 @@ fn to_assistant_run_event_view(event: AssistantRunEvent) -> AssistantRunEventVie
     }
 }
 
+fn to_static_page_draft_view(draft: StaticPageDraft) -> StaticPageDraftView {
+    StaticPageDraftView {
+        id: draft.id,
+        assistant_run_id: draft.assistant_run_id,
+        title: draft.title,
+        status: contracts::StaticPageDraftStatusView::from_domain(draft.status),
+        selected_scope: draft.selected_scope,
+        visibility_snapshot: draft.visibility_snapshot,
+        source_refs: draft.source_refs,
+        draft_payload: draft.draft_payload,
+        created_at: draft.created_at,
+        updated_at: draft.updated_at,
+    }
+}
+
+fn to_static_page_image_job_view(job: StaticPageImageJob) -> StaticPageImageJobView {
+    StaticPageImageJobView {
+        id: job.id,
+        draft_id: job.draft_id,
+        assistant_run_id: job.assistant_run_id,
+        status: contracts::StaticPageImageJobStatusView::from_domain(job.status),
+        queue_position: job.queue_position,
+        image_prompt_payload: job.image_prompt_payload,
+        preview_asset_key: job.preview_asset_key,
+        failure_reason: job.failure_reason,
+        confirmed_at: job.confirmed_at,
+        created_at: job.created_at,
+        updated_at: job.updated_at,
+    }
+}
+
+fn to_static_page_render_output_view(output: StaticPageRenderOutput) -> StaticPageRenderOutputView {
+    StaticPageRenderOutputView {
+        id: output.id,
+        draft_id: output.draft_id,
+        assistant_run_id: output.assistant_run_id,
+        image_job_id: output.image_job_id,
+        status: contracts::StaticPageRenderOutputStatusView::from_domain(output.status),
+        html: output.html,
+        asset_manifest: output.asset_manifest,
+        created_at: output.created_at,
+    }
+}
+
 fn to_conversation_memory_item_view(item: ConversationMemoryItem) -> ConversationMemoryItemView {
     ConversationMemoryItemView {
         id: item.id,
@@ -9695,6 +10642,725 @@ fn derive_chat_session_report_plan_objective(session: &ChatSession) -> String {
     }
 }
 
+fn derive_static_page_draft_title(prompt: &str) -> String {
+    let normalized = prompt.split_whitespace().collect::<Vec<_>>().join(" ");
+    if normalized.is_empty() {
+        return "静态页草稿".to_string();
+    }
+    let total_chars = normalized.chars().count();
+    let mut title = normalized.chars().take(42).collect::<String>();
+    if total_chars > 42 {
+        title.push_str("...");
+    }
+    format!("静态页：{title}")
+}
+
+fn build_static_page_source_refs(run: &AssistantRun) -> Value {
+    json!({
+        "assistant_run_id": run.id,
+        "local_thread_id": run.local_thread_id,
+        "output_artifact_count": value_array(run.output_artifacts.clone()).len(),
+    })
+}
+
+fn build_static_page_visibility_snapshot(run: &AssistantRun, selected_scope: &Value) -> Value {
+    json!({
+        "assistant_run_id": run.id,
+        "selected_scope": selected_scope,
+        "policy": "assistant_run_scope_snapshot",
+        "created_from_evidence_state": run.evidence_state.get("status").and_then(Value::as_str).unwrap_or("unknown"),
+    })
+}
+
+fn build_initial_static_page_draft_payload(run: &AssistantRun, prompt: &str) -> Value {
+    json!({
+        "version": 1,
+        "status": "draft",
+        "title": derive_static_page_draft_title(prompt),
+        "prompt": prompt,
+        "modules": [],
+        "style_direction": Value::Null,
+        "data_bindings": [],
+        "assistant_context": {
+            "assistant_run_id": run.id,
+            "selected_scope": run.selected_scope,
+            "evidence_state": run.evidence_state,
+        },
+    })
+}
+
+fn build_static_page_image_prompt_payload(draft: &StaticPageDraft, prompt: Option<&str>) -> Value {
+    let payload = &draft.draft_payload;
+    json!({
+        "draft_id": draft.id,
+        "assistant_run_id": draft.assistant_run_id,
+        "title": draft.title,
+        "prompt": prompt.map(str::trim).filter(|value| !value.is_empty()),
+        "style_direction": static_page_payload_string(payload, &["styleDirection", "style_direction"])
+            .unwrap_or_else(|| "client-delivery".to_string()),
+        "selected_scope": draft.selected_scope,
+        "visibility_snapshot": draft.visibility_snapshot,
+        "modules": static_page_payload_modules(payload),
+        "data_bindings": payload.get("data_bindings").cloned().unwrap_or_else(|| json!([])),
+        "queue_copy": "资源正在排队，可以联系商务开通高级用户跳过等待。",
+    })
+}
+
+fn build_static_page_render_asset_manifest(
+    draft: &StaticPageDraft,
+    image_job: Option<&StaticPageImageJob>,
+) -> Value {
+    let payload = &draft.draft_payload;
+    let modules = static_page_payload_modules(payload);
+    json!({
+        "draft_id": draft.id,
+        "assistant_run_id": draft.assistant_run_id,
+        "style_direction": static_page_payload_string(payload, &["styleDirection", "style_direction"])
+            .unwrap_or_else(|| "client-delivery".to_string()),
+        "preview_asset_key": image_job.and_then(|job| job.preview_asset_key.clone()),
+        "module_count": modules.as_array().map(Vec::len).unwrap_or(0),
+        "modules": modules,
+        "renderer": "static-page-renderer-skeleton",
+    })
+}
+
+fn build_static_page_render_html(
+    draft: &StaticPageDraft,
+    image_job: Option<&StaticPageImageJob>,
+) -> String {
+    let payload = &draft.draft_payload;
+    let style = static_page_payload_string(payload, &["styleDirection", "style_direction"])
+        .unwrap_or_else(|| "client-delivery".to_string());
+    let preview = image_job
+        .and_then(|job| job.preview_asset_key.as_deref())
+        .unwrap_or("no-preview");
+    let module_html = static_page_payload_modules(payload)
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|module| {
+            let title = module
+                .get("title")
+                .and_then(Value::as_str)
+                .unwrap_or("未命名模块");
+            let content = module
+                .get("content")
+                .and_then(Value::as_str)
+                .unwrap_or("等待模型补齐内容。");
+            let data_label = module
+                .get("dataBinding")
+                .or_else(|| module.get("data_binding"))
+                .and_then(|binding| binding.get("label"))
+                .and_then(Value::as_str)
+                .unwrap_or("数据绑定待确认");
+            let visualization = module
+                .get("visualization")
+                .and_then(|visualization| visualization.get("type"))
+                .and_then(Value::as_str)
+                .unwrap_or("text-insight");
+            format!(
+                "<section class=\"module\"><h2>{}</h2><p>{}</p><small>{}</small><div class=\"chart\" data-chart=\"{}\">{}</div></section>",
+                escape_html(title),
+                escape_html(content),
+                escape_html(data_label),
+                escape_html(visualization),
+                escape_html(visualization),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!(
+        "<!doctype html><html><head><meta charset=\"utf-8\"><title>{}</title></head><body class=\"static-page style-{}\" data-preview=\"{}\"><main><h1>{}</h1>{}</main></body></html>",
+        escape_html(&draft.title),
+        escape_html(&style),
+        escape_html(preview),
+        escape_html(&draft.title),
+        module_html,
+    )
+}
+
+fn static_page_payload_modules(payload: &Value) -> Value {
+    payload
+        .get("modules")
+        .and_then(Value::as_array)
+        .cloned()
+        .map(Value::Array)
+        .unwrap_or_else(|| Value::Array(Vec::new()))
+}
+
+fn static_page_payload_string(payload: &Value, keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|key| {
+        payload
+            .get(*key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+    })
+}
+
+fn escape_html(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
+}
+
+async fn load_static_page_draft_or_404(
+    state: &AppState,
+    draft_id: StaticPageDraftId,
+) -> std::result::Result<StaticPageDraft, ApiError> {
+    state
+        .storage
+        .static_page_drafts()
+        .get_by_id(state.tenant_id, draft_id)
+        .await
+        .map_err(ApiError::from_storage)?
+        .ok_or_else(|| {
+            ApiError::not_found(
+                "static_page_draft_not_found",
+                format!("static page draft {} was not found", draft_id),
+            )
+        })
+}
+
+async fn load_static_page_image_job_or_404(
+    state: &AppState,
+    job_id: StaticPageImageJobId,
+) -> std::result::Result<StaticPageImageJob, ApiError> {
+    state
+        .storage
+        .static_page_image_jobs()
+        .get_by_id(state.tenant_id, job_id)
+        .await
+        .map_err(ApiError::from_storage)?
+        .ok_or_else(|| {
+            ApiError::not_found(
+                "static_page_image_job_not_found",
+                format!("static page image job {} was not found", job_id),
+            )
+        })
+}
+
+async fn resolve_confirmed_static_page_image_job(
+    state: &AppState,
+    draft: &StaticPageDraft,
+    requested_job_id: Option<StaticPageImageJobId>,
+) -> std::result::Result<Option<StaticPageImageJob>, ApiError> {
+    let job = if let Some(job_id) = requested_job_id {
+        Some(load_static_page_image_job_or_404(state, job_id).await?)
+    } else {
+        state
+            .storage
+            .static_page_image_jobs()
+            .list_by_draft(state.tenant_id, draft.id)
+            .await
+            .map_err(ApiError::from_storage)?
+            .into_iter()
+            .find(|job| matches!(job.status, StaticPageImageJobStatus::Confirmed))
+    };
+    let Some(job) = job else {
+        return Err(ApiError::bad_request(
+            "static_page_preview_not_confirmed",
+            "confirm an effect preview before rendering the final static page".to_string(),
+        ));
+    };
+    if job.draft_id != draft.id {
+        return Err(ApiError::bad_request(
+            "static_page_image_job_mismatch",
+            "image job does not belong to this static page draft".to_string(),
+        ));
+    }
+    if !matches!(job.status, StaticPageImageJobStatus::Confirmed) {
+        return Err(ApiError::bad_request(
+            "static_page_preview_not_confirmed",
+            "confirm an effect preview before rendering the final static page".to_string(),
+        ));
+    }
+    Ok(Some(job))
+}
+
+async fn append_static_page_draft_run_event(
+    state: &AppState,
+    draft: &StaticPageDraft,
+    event_name: &str,
+    payload: Value,
+) -> std::result::Result<(), ApiError> {
+    state
+        .storage
+        .assistant_runs()
+        .append_event(
+            state.tenant_id,
+            draft.assistant_run_id,
+            &NewAssistantRunEvent {
+                event_name: event_name.to_string(),
+                payload,
+                created_at: Utc::now(),
+            },
+        )
+        .await
+        .map_err(ApiError::from_storage)?;
+    Ok(())
+}
+
+async fn interpret_static_page_draft_intent_for_api(
+    state: &AppState,
+    draft: &StaticPageDraft,
+    prompt: &str,
+    draft_payload: &Value,
+    messages: Vec<AssistantRunMessageView>,
+) -> std::result::Result<StaticPageIntentOutcome, ApiError> {
+    let run = state
+        .storage
+        .assistant_runs()
+        .get_by_id(state.tenant_id, draft.assistant_run_id)
+        .await
+        .map_err(ApiError::from_storage)?
+        .ok_or_else(|| {
+            ApiError::not_found(
+                "assistant_run_not_found",
+                format!("assistant run {} was not found", draft.assistant_run_id),
+            )
+        })?;
+    let runtime_request = StaticPageIntentRequest {
+        prompt: prompt.to_string(),
+        draft_payload: draft_payload.clone(),
+        assistant_run_id: Some(draft.assistant_run_id.to_string()),
+        startup_briefing: run.startup_briefing.clone(),
+        selected_scope: draft.selected_scope.clone(),
+        evidence_state: run.evidence_state.clone(),
+        conversation_memory_refs: static_page_conversation_memory_refs(&run),
+        messages: messages
+            .into_iter()
+            .map(|message| {
+                json!({
+                    "role": message.role.as_str(),
+                    "content": message.content,
+                })
+            })
+            .collect(),
+    };
+    let runtime_mode = std::env::var("STATIC_PAGE_INTENT_RUNTIME_MODE")
+        .unwrap_or_else(|_| "deterministic".to_string());
+    if runtime_mode != "provider" {
+        return interpret_static_page_intent_deterministic(&runtime_request).map_err(|error| {
+            ApiError::internal(
+                "static_page_intent_runtime_failed",
+                format!("static page deterministic intent failed: {error}"),
+            )
+        });
+    }
+
+    let runtime_provider = std::env::var("STATIC_PAGE_INTENT_RUNTIME_PROVIDER")
+        .unwrap_or_else(|_| "static_page_intent_provider".to_string());
+    let runtime_model = std::env::var("STATIC_PAGE_INTENT_RUNTIME_MODEL")
+        .unwrap_or_else(|_| DEFAULT_STATIC_PAGE_INTENT_RUNTIME_MODEL.to_string());
+    let provider_request = runtime_request.clone();
+    let provider_result = tokio::task::spawn_blocking(move || {
+        let provider = build_provider_from_env(
+            "STATIC_PAGE_INTENT",
+            "provider",
+            runtime_provider,
+            bootstrap_default_prompt_registry(),
+        )?;
+        interpret_static_page_intent_with_provider(
+            &provider_request,
+            provider.as_ref(),
+            Some(&runtime_model),
+        )
+    })
+    .await
+    .map_err(|error| {
+        ApiError::internal(
+            "static_page_intent_join_failed",
+            format!("static page intent worker join failed: {error}"),
+        )
+    })?;
+
+    match provider_result {
+        Ok(outcome) => Ok(outcome),
+        Err(error) => {
+            let mut fallback =
+                interpret_static_page_intent_deterministic(&runtime_request).map_err(|fallback| {
+                    ApiError::internal(
+                        "static_page_intent_runtime_failed",
+                        format!(
+                            "static page provider failed ({error}); deterministic fallback also failed: {fallback}"
+                        ),
+                    )
+                })?;
+            fallback.runtime = json!({
+                "source": "provider_fallback",
+                "provider_failure": error.to_string(),
+                "fallback": fallback.runtime,
+            });
+            Ok(fallback)
+        }
+    }
+}
+
+fn static_page_conversation_memory_refs(run: &AssistantRun) -> Vec<Value> {
+    value_array(
+        run.evidence_state
+            .get("supplied_items")
+            .cloned()
+            .unwrap_or(Value::Null),
+    )
+    .into_iter()
+    .filter(|item| item.get("type").and_then(Value::as_str) == Some("conversation_memory_item"))
+    .collect()
+}
+
+fn validate_static_page_operations(
+    operations: Vec<Value>,
+) -> std::result::Result<Vec<Value>, ApiError> {
+    sanitize_static_page_operations(operations)
+        .map_err(|error| ApiError::bad_request("invalid_static_page_operation", error.to_string()))
+}
+
+fn summarize_static_page_operations(operations: &[Value]) -> String {
+    if operations.is_empty() {
+        return "未追加静态页操作。".to_string();
+    }
+    let mut types = BTreeMap::<String, usize>::new();
+    for operation in operations {
+        if let Some(operation_type) = static_page_operation_type(operation) {
+            *types.entry(operation_type.to_string()).or_default() += 1;
+        }
+    }
+    let labels = types
+        .into_iter()
+        .map(|(operation_type, count)| format!("{operation_type} x{count}"))
+        .collect::<Vec<_>>()
+        .join("，");
+    format!("已追加静态页操作：{labels}。")
+}
+
+fn status_from_static_page_payload(payload: &Value) -> Option<StaticPageDraftStatus> {
+    let status = payload
+        .as_object()
+        .and_then(|object| object.get("status"))
+        .and_then(Value::as_str)
+        .map(str::trim)?;
+    match status {
+        "draft" => Some(StaticPageDraftStatus::Draft),
+        "planning" | "planned" => Some(StaticPageDraftStatus::Planned),
+        "queued" => Some(StaticPageDraftStatus::Queued),
+        "preview_ready" | "previewed" => Some(StaticPageDraftStatus::Previewed),
+        "effect_confirmed" | "confirmed" => Some(StaticPageDraftStatus::Confirmed),
+        "rendering" | "rendered" => Some(StaticPageDraftStatus::Rendered),
+        "archived" => Some(StaticPageDraftStatus::Archived),
+        _ => None,
+    }
+}
+
+fn status_from_static_page_operations(operations: &[Value]) -> Option<StaticPageDraftStatus> {
+    operations.iter().fold(None, |status, operation| {
+        match static_page_operation_type(operation) {
+            Some("queue_image_job") => Some(StaticPageDraftStatus::Queued),
+            Some("mark_preview_ready") => Some(StaticPageDraftStatus::Previewed),
+            Some("confirm_preview") => Some(StaticPageDraftStatus::Confirmed),
+            Some("request_final_render") => Some(StaticPageDraftStatus::Rendered),
+            Some(_) => Some(status.unwrap_or(StaticPageDraftStatus::Planned)),
+            None => status,
+        }
+    })
+}
+
+fn static_page_operation_type(operation: &Value) -> Option<&str> {
+    operation
+        .as_object()
+        .and_then(|object| object.get("type"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+fn apply_static_page_operations_to_payload(
+    mut payload: Value,
+    operations: &[Value],
+    summary: Option<&str>,
+) -> Value {
+    ensure_json_object(&mut payload);
+    for operation in operations {
+        apply_static_page_operation_to_payload(&mut payload, operation);
+    }
+    if let Some(summary) = summary.filter(|value| !value.trim().is_empty()) {
+        set_payload_string(&mut payload, "modelSummary", summary);
+        set_payload_string(&mut payload, "model_summary", summary);
+    }
+    payload
+}
+
+fn apply_static_page_operation_to_payload(payload: &mut Value, operation: &Value) {
+    let Some(operation_type) = static_page_operation_type(operation) else {
+        return;
+    };
+    match operation_type {
+        "change_style_direction" => {
+            if let Some(style) = operation
+                .get("styleDirection")
+                .or_else(|| operation.get("style_direction"))
+                .and_then(Value::as_str)
+            {
+                set_payload_string(payload, "styleDirection", style);
+                set_payload_string(payload, "style_direction", style);
+            }
+        }
+        "refresh_summary" => {
+            if let Some(summary) = operation
+                .get("modelSummary")
+                .or_else(|| operation.get("model_summary"))
+                .and_then(Value::as_str)
+            {
+                set_payload_string(payload, "modelSummary", summary);
+                set_payload_string(payload, "model_summary", summary);
+            }
+        }
+        "update_module" => {
+            if let (Some(module_id), Some(patch)) = (
+                static_page_operation_module_id(operation),
+                operation.get("patch"),
+            ) {
+                merge_static_page_module(payload, module_id, patch);
+            }
+        }
+        "change_visualization" => {
+            if let (Some(module_id), Some(visualization_type)) = (
+                static_page_operation_module_id(operation),
+                operation.get("visualizationType").and_then(Value::as_str),
+            ) {
+                merge_static_page_module(
+                    payload,
+                    module_id,
+                    &json!({
+                        "visualization": {
+                            "type": visualization_type,
+                        },
+                    }),
+                );
+            }
+        }
+        "change_data_binding" => {
+            if let (Some(module_id), Some(data_binding)) = (
+                static_page_operation_module_id(operation),
+                operation.get("dataBinding"),
+            ) {
+                merge_static_page_module(
+                    payload,
+                    module_id,
+                    &json!({
+                        "dataBinding": data_binding,
+                    }),
+                );
+            }
+        }
+        "add_module" => {
+            if let Some(module) = operation.get("module") {
+                push_static_page_module(payload, module.clone());
+            }
+        }
+        "remove_module" => {
+            if let Some(module_id) = static_page_operation_module_id(operation) {
+                remove_static_page_module(payload, module_id);
+            }
+        }
+        "move_module" | "resize_module" => {
+            if let (Some(module_id), Some(layout)) = (
+                static_page_operation_module_id(operation),
+                operation.get("layout").or_else(|| operation.get("patch")),
+            ) {
+                merge_static_page_module(
+                    payload,
+                    module_id,
+                    &json!({
+                        "layout": layout,
+                    }),
+                );
+            }
+        }
+        "reorder_modules" => {
+            if let Some(order) = operation.get("order").and_then(Value::as_array) {
+                set_payload_value(payload, "mobileOrder", Value::Array(order.clone()));
+            }
+        }
+        "queue_image_job" => {
+            set_payload_string(payload, "status", "queued");
+            set_payload_value(
+                payload,
+                "imageJob",
+                json!({
+                    "id": operation.get("jobId").cloned().unwrap_or(Value::Null),
+                    "status": "queued",
+                    "queuePosition": operation.get("queuePosition").cloned().unwrap_or(Value::Null),
+                    "queueMessage": operation
+                        .get("queueMessage")
+                        .and_then(Value::as_str)
+                        .unwrap_or("资源正在排队，可以联系商务开通高级用户跳过等待。"),
+                }),
+            );
+        }
+        "mark_preview_ready" => {
+            set_payload_string(payload, "status", "preview_ready");
+            if let Some(preview) = operation.get("previewImage") {
+                set_payload_value(payload, "previewImage", preview.clone());
+            }
+        }
+        "confirm_preview" => {
+            set_payload_string(payload, "status", "effect_confirmed");
+            if let Some(preview) = operation.get("previewImage") {
+                set_payload_value(payload, "previewImage", preview.clone());
+            }
+        }
+        "request_final_render" => {
+            set_payload_string(payload, "status", "rendering");
+            if let Some(final_page) = operation
+                .get("finalPage")
+                .or_else(|| operation.get("payload"))
+            {
+                set_payload_value(payload, "finalPage", final_page.clone());
+            }
+        }
+        _ => {}
+    }
+}
+
+fn append_static_page_operations_metadata(
+    payload: &mut Value,
+    operations: &[Value],
+    prompt: Option<&str>,
+    summary: &str,
+) {
+    ensure_json_object(payload);
+    let Some(object) = payload.as_object_mut() else {
+        return;
+    };
+    let entry = object
+        .entry("operations".to_string())
+        .or_insert_with(|| Value::Array(Vec::new()));
+    if !entry.is_array() {
+        *entry = Value::Array(Vec::new());
+    }
+    if let Some(items) = entry.as_array_mut() {
+        let applied_at = Utc::now().to_rfc3339();
+        for operation in operations {
+            let mut operation = operation.clone();
+            if let Some(object) = operation.as_object_mut() {
+                object
+                    .entry("appliedAt".to_string())
+                    .or_insert_with(|| json!(applied_at));
+                if let Some(prompt) = prompt.map(str::trim).filter(|value| !value.is_empty()) {
+                    object
+                        .entry("prompt".to_string())
+                        .or_insert_with(|| json!(prompt));
+                }
+            }
+            items.push(operation);
+        }
+    }
+    object.insert("lastOperationSummary".to_string(), json!(summary));
+}
+
+fn static_page_operation_module_id(operation: &Value) -> Option<&str> {
+    operation
+        .get("targetModuleId")
+        .or_else(|| operation.get("moduleId"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+fn merge_static_page_module(payload: &mut Value, module_id: &str, patch: &Value) {
+    let Some(modules) = payload
+        .as_object_mut()
+        .and_then(|object| object.get_mut("modules"))
+        .and_then(Value::as_array_mut)
+    else {
+        return;
+    };
+    let Some(module) = modules.iter_mut().find(|module| {
+        module
+            .as_object()
+            .and_then(|object| object.get("id"))
+            .and_then(Value::as_str)
+            == Some(module_id)
+    }) else {
+        return;
+    };
+    merge_json_value(module, patch);
+}
+
+fn push_static_page_module(payload: &mut Value, module: Value) {
+    ensure_json_object(payload);
+    let Some(object) = payload.as_object_mut() else {
+        return;
+    };
+    let modules = object
+        .entry("modules".to_string())
+        .or_insert_with(|| Value::Array(Vec::new()));
+    if !modules.is_array() {
+        *modules = Value::Array(Vec::new());
+    }
+    if let Some(items) = modules.as_array_mut() {
+        items.push(module);
+    }
+}
+
+fn remove_static_page_module(payload: &mut Value, module_id: &str) {
+    let Some(modules) = payload
+        .as_object_mut()
+        .and_then(|object| object.get_mut("modules"))
+        .and_then(Value::as_array_mut)
+    else {
+        return;
+    };
+    modules.retain(|module| {
+        module
+            .as_object()
+            .and_then(|object| object.get("id"))
+            .and_then(Value::as_str)
+            != Some(module_id)
+    });
+}
+
+fn merge_json_value(target: &mut Value, patch: &Value) {
+    match (target, patch) {
+        (Value::Object(target_object), Value::Object(patch_object)) => {
+            for (key, value) in patch_object {
+                match target_object.get_mut(key) {
+                    Some(existing) => merge_json_value(existing, value),
+                    None => {
+                        target_object.insert(key.clone(), value.clone());
+                    }
+                }
+            }
+        }
+        (target, patch) => {
+            *target = patch.clone();
+        }
+    }
+}
+
+fn ensure_json_object(value: &mut Value) {
+    if !value.is_object() {
+        *value = Value::Object(Map::new());
+    }
+}
+
+fn set_payload_string(payload: &mut Value, key: &str, value: &str) {
+    set_payload_value(payload, key, json!(value));
+}
+
+fn set_payload_value(payload: &mut Value, key: &str, value: Value) {
+    ensure_json_object(payload);
+    if let Some(object) = payload.as_object_mut() {
+        object.insert(key.to_string(), value);
+    }
+}
+
 #[derive(Debug)]
 pub struct ApiError {
     status: StatusCode,
@@ -9904,7 +11570,7 @@ mod tests {
         assert!(!response.assistant_run_id.to_string().is_empty());
         assert_eq!(response.selected_scope["mode"], json!("ordinary_chat"));
         assert!(response.scope_candidates.is_empty());
-        assert_eq!(response.execution_trail.len(), 3);
+        assert_eq!(response.execution_trail.len(), 4);
 
         let Json(detail) = get_assistant_run(
             State(state.clone()),
@@ -9936,6 +11602,387 @@ mod tests {
         assert_eq!(event_status, StatusCode::CREATED);
         assert_eq!(event_response.event.sequence_no, 2);
         assert_eq!(event_response.event.event_name, "assistant_run.note");
+    }
+
+    #[tokio::test]
+    async fn assistant_run_continue_appends_event_trail_and_output() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_MODE", "placeholder");
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping assistant run continue test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("assistant-run-continue-test-{}", Uuid::new_v4()),
+                "Assistant Run Continue Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage,
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+
+        let (_, Json(run_response)) = create_assistant_run(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(CreateAssistantRunRequest {
+                prompt: "先看一下当前项目".to_string(),
+                local_thread_id: Some("assistant-run-continue-thread".to_string()),
+                startup_briefing: Some(json!({"visibleDatasetCount": 0})),
+                selected_scope: Some(json!({"mode": "ordinary_chat"})),
+                scope_candidates: Vec::new(),
+                context_policy_hint: None,
+                current_artifact: None,
+                messages: Vec::new(),
+            }),
+        )
+        .await
+        .expect("assistant run should be created");
+
+        let (continue_status, Json(continue_response)) = continue_assistant_run(
+            State(state.clone()),
+            Path(run_response.assistant_run_id.to_string()),
+            Json(ContinueAssistantRunRequest {
+                prompt: Some("继续下一步，最多别超过 9 步".to_string()),
+                max_steps: Some(9),
+                current_artifact: Some(json!({"type": "none"})),
+                messages: vec![AssistantRunMessageView {
+                    role: ChatMessageRole::User,
+                    content: "继续".to_string(),
+                }],
+            }),
+        )
+        .await
+        .expect("assistant run should continue");
+
+        assert_eq!(continue_status, StatusCode::CREATED);
+        assert_eq!(
+            continue_response.event.event_name,
+            "assistant_run.continued"
+        );
+        assert_eq!(continue_response.event.sequence_no, 2);
+        assert_eq!(continue_response.event.payload["max_steps"], json!(5));
+        assert!(continue_response
+            .assistant_message
+            .content
+            .contains("AssistantRun 继续执行占位回复"));
+        assert!(continue_response.execution_trail.iter().any(|step| {
+            step.get("label") == Some(&json!("继续执行"))
+                && step.get("max_steps") == Some(&json!(5))
+        }));
+        assert_eq!(continue_response.output_artifacts.len(), 2);
+
+        let Json(detail) = get_assistant_run(
+            State(state),
+            Path(run_response.assistant_run_id.to_string()),
+        )
+        .await
+        .expect("assistant run detail should load");
+        assert_eq!(detail.events.len(), 2);
+        assert_eq!(detail.run.output_artifacts.len(), 2);
+        assert!(detail.run.execution_trail.iter().any(|step| {
+            step.get("label") == Some(&json!("继续执行"))
+                && step.get("max_steps") == Some(&json!(5))
+        }));
+    }
+
+    #[tokio::test]
+    async fn static_page_draft_can_be_created_under_assistant_run() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_MODE", "placeholder");
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping static page draft test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("static-page-draft-test-{}", Uuid::new_v4()),
+                "Static Page Draft Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage,
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+
+        let (_, Json(run_response)) = create_assistant_run(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(CreateAssistantRunRequest {
+                prompt: "生成一页经营分析静态页".to_string(),
+                local_thread_id: Some("static-page-draft-thread".to_string()),
+                startup_briefing: Some(json!({"capabilities": ["static_page_plan"]})),
+                selected_scope: Some(json!({"mode": "ordinary_chat"})),
+                scope_candidates: Vec::new(),
+                context_policy_hint: None,
+                current_artifact: None,
+                messages: Vec::new(),
+            }),
+        )
+        .await
+        .expect("assistant run should be created");
+
+        let (draft_status, Json(draft_response)) = create_static_page_draft_for_assistant_run(
+            State(state.clone()),
+            Path(run_response.assistant_run_id.to_string()),
+            Json(CreateStaticPageDraftRequest {
+                title: Some("经营分析静态页".to_string()),
+                prompt: Some("生成一页经营分析静态页".to_string()),
+                selected_scope: None,
+                visibility_snapshot: None,
+                source_refs: Value::Null,
+                draft_payload: json!({
+                    "version": 1,
+                    "status": "planning",
+                    "styleDirection": "client-delivery",
+                    "mobileOrder": ["hero", "kpi", "trend", "risk", "next-steps"],
+                    "modules": [
+                        { "id": "hero", "title": "核心判断", "content": "先给出主结论。" },
+                        { "id": "kpi", "title": "关键指标", "content": "展示指标。" },
+                        { "id": "trend", "title": "趋势变化", "content": "展示趋势。" },
+                        { "id": "risk", "title": "风险与机会", "content": "展示风险。" },
+                        { "id": "next-steps", "title": "建议动作", "content": "展示动作。" }
+                    ]
+                }),
+            }),
+        )
+        .await
+        .expect("static page draft should be created");
+
+        assert_eq!(draft_status, StatusCode::CREATED);
+        assert_eq!(draft_response.draft.title, "经营分析静态页");
+        assert_eq!(
+            draft_response.draft.status,
+            contracts::StaticPageDraftStatusView::Planned
+        );
+        assert_eq!(
+            draft_response.draft.assistant_run_id,
+            run_response.assistant_run_id
+        );
+        assert_eq!(
+            draft_response.draft.draft_payload["modules"][0]["title"],
+            json!("核心判断")
+        );
+
+        let Json(loaded) = get_static_page_draft(
+            State(state.clone()),
+            Path(draft_response.draft.id.to_string()),
+        )
+        .await
+        .expect("static page draft should load");
+        assert_eq!(loaded.id, draft_response.draft.id);
+        assert_eq!(
+            loaded.visibility_snapshot["policy"],
+            json!("assistant_run_scope_snapshot")
+        );
+
+        let (intent_status, Json(intent_response)) = apply_static_page_draft_intent(
+            State(state.clone()),
+            Path(draft_response.draft.id.to_string()),
+            Json(ApplyStaticPageDraftIntentRequest {
+                prompt: "给老板看，突出风险，趋势换成柱状图".to_string(),
+                draft_payload: None,
+                messages: Vec::new(),
+            }),
+        )
+        .await
+        .expect("static page intent should apply");
+        assert_eq!(intent_status, StatusCode::CREATED);
+        assert_eq!(
+            intent_response.draft.status,
+            contracts::StaticPageDraftStatusView::Planned
+        );
+        assert_eq!(
+            intent_response.draft.draft_payload["styleDirection"],
+            json!("decision-brief")
+        );
+        assert_eq!(
+            intent_response.draft.draft_payload["modules"][3]["title"],
+            json!("优先风险与机会")
+        );
+        assert!(intent_response
+            .operations
+            .iter()
+            .any(|operation| operation["type"] == json!("change_visualization")));
+
+        let (operation_status, Json(operation_response)) = append_static_page_draft_operations(
+            State(state.clone()),
+            Path(draft_response.draft.id.to_string()),
+            Json(AppendStaticPageDraftOperationsRequest {
+                prompt: Some("直接排队出效果图".to_string()),
+                summary: None,
+                operations: vec![json!({
+                    "type": "queue_image_job",
+                    "queuePosition": 2,
+                })],
+                draft_payload: None,
+            }),
+        )
+        .await
+        .expect("static page operations should append");
+        assert_eq!(operation_status, StatusCode::CREATED);
+        assert_eq!(
+            operation_response.draft.status,
+            contracts::StaticPageDraftStatusView::Queued
+        );
+        assert_eq!(
+            operation_response.draft.draft_payload["imageJob"]["status"],
+            json!("queued")
+        );
+
+        let invalid_operation = append_static_page_draft_operations(
+            State(state.clone()),
+            Path(draft_response.draft.id.to_string()),
+            Json(AppendStaticPageDraftOperationsRequest {
+                prompt: Some("执行未知操作".to_string()),
+                summary: None,
+                operations: vec![json!({
+                    "type": "run_shell",
+                })],
+                draft_payload: None,
+            }),
+        )
+        .await
+        .expect_err("unknown static page operation should be rejected");
+        assert_eq!(
+            invalid_operation.payload.code,
+            "invalid_static_page_operation"
+        );
+
+        let render_before_confirm = create_static_page_render(
+            State(state.clone()),
+            Path(draft_response.draft.id.to_string()),
+            Json(CreateStaticPageRenderRequest { image_job_id: None }),
+        )
+        .await
+        .expect_err("render should require confirmed preview");
+        assert_eq!(
+            render_before_confirm.payload.code,
+            "static_page_preview_not_confirmed"
+        );
+
+        let (job_status, Json(job_response)) = create_static_page_image_job(
+            State(state.clone()),
+            Path(draft_response.draft.id.to_string()),
+            Json(CreateStaticPageImageJobRequest {
+                prompt: Some("生成一张经营分析效果图".to_string()),
+                image_prompt_payload: Value::Null,
+            }),
+        )
+        .await
+        .expect("static page image job should be created");
+        assert_eq!(job_status, StatusCode::CREATED);
+        assert_eq!(
+            job_response.image_job.status,
+            contracts::StaticPageImageJobStatusView::Queued
+        );
+        assert_eq!(job_response.image_job.queue_position, Some(1));
+        assert_eq!(
+            job_response.image_job.image_prompt_payload["queue_copy"],
+            json!("资源正在排队，可以联系商务开通高级用户跳过等待。")
+        );
+
+        let Json(loaded_job) = get_static_page_image_job(
+            State(state.clone()),
+            Path(job_response.image_job.id.to_string()),
+        )
+        .await
+        .expect("static page image job should load");
+        assert_eq!(loaded_job.id, job_response.image_job.id);
+
+        let Json(confirmed) = confirm_static_page_image_job(
+            State(state.clone()),
+            Path(job_response.image_job.id.to_string()),
+            Json(ConfirmStaticPageImageJobRequest {
+                preview_asset_key: Some("previews/static-page-1.png".to_string()),
+            }),
+        )
+        .await
+        .expect("static page image job should confirm");
+        assert_eq!(
+            confirmed.image_job.status,
+            contracts::StaticPageImageJobStatusView::Confirmed
+        );
+        assert_eq!(
+            confirmed.draft.status,
+            contracts::StaticPageDraftStatusView::Confirmed
+        );
+        assert_eq!(
+            confirmed.draft.draft_payload["previewImage"]["assetKey"],
+            json!("previews/static-page-1.png")
+        );
+
+        let (render_status, Json(render_response)) = create_static_page_render(
+            State(state.clone()),
+            Path(draft_response.draft.id.to_string()),
+            Json(CreateStaticPageRenderRequest {
+                image_job_id: Some(job_response.image_job.id),
+            }),
+        )
+        .await
+        .expect("static page render should be created");
+        assert_eq!(render_status, StatusCode::CREATED);
+        assert_eq!(
+            render_response.render_output.status,
+            contracts::StaticPageRenderOutputStatusView::Rendered
+        );
+        assert!(render_response.render_output.html.contains("核心判断"));
+        assert!(render_response
+            .render_output
+            .html
+            .contains("previews/static-page-1.png"));
+        assert_eq!(
+            render_response.draft.status,
+            contracts::StaticPageDraftStatusView::Rendered
+        );
+
+        let Json(detail) = get_assistant_run(
+            State(state),
+            Path(run_response.assistant_run_id.to_string()),
+        )
+        .await
+        .expect("assistant run detail should load");
+        assert!(detail
+            .events
+            .iter()
+            .any(|event| event.event_name == "static_page_draft.created"));
+        assert!(detail
+            .events
+            .iter()
+            .any(|event| event.event_name == "static_page_draft.intent_applied"));
+        assert!(detail
+            .events
+            .iter()
+            .any(|event| event.event_name == "static_page_draft.operations_appended"));
+        assert!(detail
+            .events
+            .iter()
+            .any(|event| event.event_name == "static_page_image_job.created"));
+        assert!(detail
+            .events
+            .iter()
+            .any(|event| event.event_name == "static_page_image_job.confirmed"));
+        assert!(detail
+            .events
+            .iter()
+            .any(|event| event.event_name == "static_page_render.created"));
     }
 
     #[tokio::test]
@@ -9999,6 +12046,19 @@ mod tests {
         .await
         .expect("assistant run should be created");
         assert_eq!(run_status, StatusCode::CREATED);
+        assert_eq!(
+            run_response.selected_scope["conversation_memory"],
+            json!(["local-thread"])
+        );
+        assert_eq!(run_response.evidence_state["status"], json!("supplied"));
+        assert_eq!(
+            run_response.evidence_state["supplied_items"][0]["type"],
+            json!("conversation_memory_item")
+        );
+        assert_eq!(
+            run_response.evidence_state["supplied_items"][0]["summary"],
+            json!("用户刚才关注订单风险和客服投诉。")
+        );
 
         let Json(candidates) = list_assistant_run_conversation_memory_candidates(
             State(state.clone()),
@@ -10312,7 +12372,7 @@ mod tests {
         assert!(response
             .assistant_message
             .content
-            .contains("供料状态: 已检索 2 条证据"));
+            .contains("供料状态: 已检索 2 条供料项"));
         assert!(response.execution_trail.iter().any(|step| {
             step.get("label") == Some(&json!("检索供料证据"))
                 && step.get("supplied_count") == Some(&json!(2))

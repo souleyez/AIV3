@@ -4,7 +4,8 @@ use domain_model::{
     ConversationMemoryItemId, DatasetId, DatasetLifecycle, DatasetOutputId, DatasetVisibility,
     DocumentChunkId, DocumentId, LlmInvocationId, MemoryDirectoryId, PublishedReportId,
     PublishedReportVersionId, PublishedSurface, ReportPlanAstVersionId, ReportPlanId,
-    ReportRenderOutputId, RetrievalEvidenceId, SecretBindingId, ToolExecutionId, WorkflowEventId,
+    ReportRenderOutputId, RetrievalEvidenceId, SecretBindingId, StaticPageDraftId,
+    StaticPageImageJobId, StaticPageRenderOutputId, ToolExecutionId, WorkflowEventId,
     WorkflowExecutionId, WorkflowKind, WorkflowStatus, WorkflowTaskId, WorkflowTaskStatus,
 };
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -1228,6 +1229,31 @@ pub struct CreateAssistantRunResponse {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ContinueAssistantRunRequest {
+    #[serde(default)]
+    pub prompt: Option<String>,
+    #[serde(default)]
+    pub max_steps: Option<usize>,
+    #[serde(default)]
+    pub current_artifact: Option<Value>,
+    #[serde(default)]
+    pub messages: Vec<AssistantRunMessageView>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ContinueAssistantRunResponse {
+    pub run: AssistantRunView,
+    pub assistant_message: AssistantRunMessageView,
+    pub runtime: Value,
+    pub event: AssistantRunEventView,
+    pub selected_scope: Value,
+    pub evidence_state: Value,
+    pub execution_trail: Vec<Value>,
+    pub output_artifacts: Vec<Value>,
+    pub required_confirmations: Vec<Value>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AssistantRunView {
     pub id: AssistantRunId,
     pub local_thread_id: Option<String>,
@@ -1272,6 +1298,237 @@ pub struct AppendAssistantRunEventRequest {
 pub struct AppendAssistantRunEventResponse {
     pub run: AssistantRunView,
     pub event: AssistantRunEventView,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CreateStaticPageDraftRequest {
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub prompt: Option<String>,
+    #[serde(default)]
+    pub selected_scope: Option<Value>,
+    #[serde(default)]
+    pub visibility_snapshot: Option<Value>,
+    #[serde(default)]
+    pub source_refs: Value,
+    #[serde(default)]
+    pub draft_payload: Value,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum StaticPageDraftStatusView {
+    Draft,
+    Planned,
+    Queued,
+    Previewed,
+    Confirmed,
+    Rendered,
+    Archived,
+}
+
+impl StaticPageDraftStatusView {
+    pub fn from_domain(value: domain_model::StaticPageDraftStatus) -> Self {
+        match value {
+            domain_model::StaticPageDraftStatus::Draft => Self::Draft,
+            domain_model::StaticPageDraftStatus::Planned => Self::Planned,
+            domain_model::StaticPageDraftStatus::Queued => Self::Queued,
+            domain_model::StaticPageDraftStatus::Previewed => Self::Previewed,
+            domain_model::StaticPageDraftStatus::Confirmed => Self::Confirmed,
+            domain_model::StaticPageDraftStatus::Rendered => Self::Rendered,
+            domain_model::StaticPageDraftStatus::Archived => Self::Archived,
+        }
+    }
+
+    pub fn to_domain(&self) -> domain_model::StaticPageDraftStatus {
+        match self {
+            Self::Draft => domain_model::StaticPageDraftStatus::Draft,
+            Self::Planned => domain_model::StaticPageDraftStatus::Planned,
+            Self::Queued => domain_model::StaticPageDraftStatus::Queued,
+            Self::Previewed => domain_model::StaticPageDraftStatus::Previewed,
+            Self::Confirmed => domain_model::StaticPageDraftStatus::Confirmed,
+            Self::Rendered => domain_model::StaticPageDraftStatus::Rendered,
+            Self::Archived => domain_model::StaticPageDraftStatus::Archived,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct StaticPageDraftView {
+    pub id: StaticPageDraftId,
+    pub assistant_run_id: AssistantRunId,
+    pub title: String,
+    pub status: StaticPageDraftStatusView,
+    pub selected_scope: Value,
+    pub visibility_snapshot: Value,
+    pub source_refs: Value,
+    pub draft_payload: Value,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CreateStaticPageDraftResponse {
+    pub draft: StaticPageDraftView,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct UpdateStaticPageDraftRequest {
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub status: Option<StaticPageDraftStatusView>,
+    #[serde(default)]
+    pub selected_scope: Option<Value>,
+    #[serde(default)]
+    pub visibility_snapshot: Option<Value>,
+    #[serde(default)]
+    pub source_refs: Option<Value>,
+    #[serde(default)]
+    pub draft_payload: Option<Value>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct UpdateStaticPageDraftResponse {
+    pub draft: StaticPageDraftView,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AppendStaticPageDraftOperationsRequest {
+    #[serde(default)]
+    pub prompt: Option<String>,
+    #[serde(default)]
+    pub summary: Option<String>,
+    #[serde(default)]
+    pub operations: Vec<Value>,
+    #[serde(default)]
+    pub draft_payload: Option<Value>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AppendStaticPageDraftOperationsResponse {
+    pub draft: StaticPageDraftView,
+    pub operations: Vec<Value>,
+    pub summary: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ApplyStaticPageDraftIntentRequest {
+    pub prompt: String,
+    #[serde(default)]
+    pub draft_payload: Option<Value>,
+    #[serde(default)]
+    pub messages: Vec<AssistantRunMessageView>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ApplyStaticPageDraftIntentResponse {
+    pub draft: StaticPageDraftView,
+    pub operations: Vec<Value>,
+    pub summary: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CreateStaticPageImageJobRequest {
+    #[serde(default)]
+    pub prompt: Option<String>,
+    #[serde(default)]
+    pub image_prompt_payload: Value,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum StaticPageImageJobStatusView {
+    Queued,
+    Running,
+    PreviewReady,
+    Failed,
+    Confirmed,
+}
+
+impl StaticPageImageJobStatusView {
+    pub fn from_domain(value: domain_model::StaticPageImageJobStatus) -> Self {
+        match value {
+            domain_model::StaticPageImageJobStatus::Queued => Self::Queued,
+            domain_model::StaticPageImageJobStatus::Running => Self::Running,
+            domain_model::StaticPageImageJobStatus::PreviewReady => Self::PreviewReady,
+            domain_model::StaticPageImageJobStatus::Failed => Self::Failed,
+            domain_model::StaticPageImageJobStatus::Confirmed => Self::Confirmed,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct StaticPageImageJobView {
+    pub id: StaticPageImageJobId,
+    pub draft_id: StaticPageDraftId,
+    pub assistant_run_id: AssistantRunId,
+    pub status: StaticPageImageJobStatusView,
+    pub queue_position: Option<i32>,
+    pub image_prompt_payload: Value,
+    pub preview_asset_key: Option<String>,
+    pub failure_reason: Option<String>,
+    pub confirmed_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CreateStaticPageImageJobResponse {
+    pub image_job: StaticPageImageJobView,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ConfirmStaticPageImageJobRequest {
+    #[serde(default)]
+    pub preview_asset_key: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ConfirmStaticPageImageJobResponse {
+    pub image_job: StaticPageImageJobView,
+    pub draft: StaticPageDraftView,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CreateStaticPageRenderRequest {
+    #[serde(default)]
+    pub image_job_id: Option<StaticPageImageJobId>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum StaticPageRenderOutputStatusView {
+    Rendered,
+    Failed,
+}
+
+impl StaticPageRenderOutputStatusView {
+    pub fn from_domain(value: domain_model::StaticPageRenderOutputStatus) -> Self {
+        match value {
+            domain_model::StaticPageRenderOutputStatus::Rendered => Self::Rendered,
+            domain_model::StaticPageRenderOutputStatus::Failed => Self::Failed,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct StaticPageRenderOutputView {
+    pub id: StaticPageRenderOutputId,
+    pub draft_id: StaticPageDraftId,
+    pub assistant_run_id: AssistantRunId,
+    pub image_job_id: Option<StaticPageImageJobId>,
+    pub status: StaticPageRenderOutputStatusView,
+    pub html: String,
+    pub asset_manifest: Value,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CreateStaticPageRenderResponse {
+    pub render_output: StaticPageRenderOutputView,
+    pub draft: StaticPageDraftView,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

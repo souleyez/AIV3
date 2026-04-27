@@ -1142,6 +1142,15 @@ textarea {
   background: linear-gradient(135deg, rgba(248, 250, 252, 0.96), rgba(226, 232, 240, 0.94));
 }
 
+.static-page-final-frame {
+  width: 100%;
+  min-height: 420px;
+  border: 0;
+  border-radius: 20px;
+  background: #fff;
+  box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.08);
+}
+
 .static-page-final-sheet.decision-brief {
   background: linear-gradient(135deg, rgba(15, 23, 42, 0.95), rgba(30, 41, 59, 0.94));
 }

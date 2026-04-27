@@ -19,6 +19,7 @@ prompt-registry = { path = "../prompt-registry" }
 serde.workspace = true
 serde_json.workspace = true
 sqlx.workspace = true
+static-page-runtime = { path = "../static-page-runtime" }
 storage = { path = "../storage" }
 tokio.workspace = true
 tool-registry = { path = "../tool-registry" }

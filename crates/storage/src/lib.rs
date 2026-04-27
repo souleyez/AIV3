@@ -10,10 +10,13 @@ use domain_model::{
     PublishedReport, PublishedReportId, PublishedReportVersion, PublishedReportVersionId,
     ReportPlan, ReportPlanAstVersion, ReportPlanAstVersionId, ReportPlanId, ReportPlanStatus,
     ReportRenderOutput, ReportRenderOutputId, ReportRenderOutputStatus, RetrievalEvidence,
-    RetrievalEvidenceId, SecretBinding, SecretBindingId, SecretScopeLevel, Tenant, TenantId,
-    ToolExecution, ToolExecutionId, ToolExecutionSourceKind, ToolExecutionStatus, WorkflowEventId,
-    WorkflowEventRecord, WorkflowExecution, WorkflowExecutionId, WorkflowKind, WorkflowStatus,
-    WorkflowTask, WorkflowTaskId, WorkflowTaskStatus,
+    RetrievalEvidenceId, SecretBinding, SecretBindingId, SecretScopeLevel, StaticPageDraft,
+    StaticPageDraftId, StaticPageDraftStatus, StaticPageImageJob, StaticPageImageJobId,
+    StaticPageImageJobStatus, StaticPageRenderOutput, StaticPageRenderOutputId,
+    StaticPageRenderOutputStatus, Tenant, TenantId, ToolExecution, ToolExecutionId,
+    ToolExecutionSourceKind, ToolExecutionStatus, WorkflowEventId, WorkflowEventRecord,
+    WorkflowExecution, WorkflowExecutionId, WorkflowKind, WorkflowStatus, WorkflowTask,
+    WorkflowTaskId, WorkflowTaskStatus,
 };
 use serde_json::{Map, Value};
 use sqlx::{postgres::PgPoolOptions, Executor, PgPool, Row};
@@ -59,6 +62,9 @@ pub const TABLES: &[&str] = &[
     "assistant_run_events",
     "assistant_runs",
     "conversation_memory_items",
+    "static_page_drafts",
+    "static_page_image_jobs",
+    "static_page_render_outputs",
     "chat_sessions",
     "chat_messages",
     "llm_invocations",
@@ -216,6 +222,42 @@ pub struct NewConversationMemoryItem {
     pub source_message_refs: Value,
     pub artifact_refs: Value,
     pub metadata: Value,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug)]
+pub struct NewStaticPageDraft {
+    pub assistant_run_id: AssistantRunId,
+    pub title: String,
+    pub status: StaticPageDraftStatus,
+    pub selected_scope: Value,
+    pub visibility_snapshot: Value,
+    pub source_refs: Value,
+    pub draft_payload: Value,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug)]
+pub struct NewStaticPageImageJob {
+    pub draft_id: StaticPageDraftId,
+    pub assistant_run_id: AssistantRunId,
+    pub status: StaticPageImageJobStatus,
+    pub queue_position: Option<i32>,
+    pub image_prompt_payload: Value,
+    pub preview_asset_key: Option<String>,
+    pub failure_reason: Option<String>,
+    pub confirmed_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug)]
+pub struct NewStaticPageRenderOutput {
+    pub draft_id: StaticPageDraftId,
+    pub assistant_run_id: AssistantRunId,
+    pub image_job_id: Option<StaticPageImageJobId>,
+    pub status: StaticPageRenderOutputStatus,
+    pub html: String,
+    pub asset_manifest: Value,
     pub created_at: DateTime<Utc>,
 }
 
@@ -471,6 +513,24 @@ impl PgStorage {
 
     pub fn conversation_memory_items(&self) -> PgConversationMemoryItemRepository {
         PgConversationMemoryItemRepository {
+            pool: self.pool.clone(),
+        }
+    }
+
+    pub fn static_page_drafts(&self) -> PgStaticPageDraftRepository {
+        PgStaticPageDraftRepository {
+            pool: self.pool.clone(),
+        }
+    }
+
+    pub fn static_page_image_jobs(&self) -> PgStaticPageImageJobRepository {
+        PgStaticPageImageJobRepository {
+            pool: self.pool.clone(),
+        }
+    }
+
+    pub fn static_page_render_outputs(&self) -> PgStaticPageRenderOutputRepository {
+        PgStaticPageRenderOutputRepository {
             pool: self.pool.clone(),
         }
     }
@@ -2053,6 +2113,16 @@ impl PgAssistantRunRepository {
             .await
     }
 
+    pub async fn update_execution_trail(
+        &self,
+        tenant_id: TenantId,
+        run_id: AssistantRunId,
+        execution_trail: &Value,
+    ) -> Result<AssistantRun> {
+        self.update_json_field(tenant_id, run_id, "execution_trail", execution_trail)
+            .await
+    }
+
     async fn update_json_field(
         &self,
         tenant_id: TenantId,
@@ -2062,7 +2132,7 @@ impl PgAssistantRunRepository {
     ) -> Result<AssistantRun> {
         let allowed = matches!(
             field_name,
-            "selected_scope" | "evidence_state" | "output_artifacts"
+            "selected_scope" | "evidence_state" | "execution_trail" | "output_artifacts"
         );
         if !allowed {
             return Err(anyhow!(
@@ -2183,6 +2253,323 @@ impl PgConversationMemoryItemRepository {
         };
 
         rows.iter().map(map_conversation_memory_item_row).collect()
+    }
+}
+
+#[derive(Clone)]
+pub struct PgStaticPageDraftRepository {
+    pool: PgPool,
+}
+
+impl PgStaticPageDraftRepository {
+    pub async fn create(
+        &self,
+        tenant_id: TenantId,
+        new_draft: &NewStaticPageDraft,
+    ) -> Result<StaticPageDraft> {
+        let row = sqlx::query(
+            r#"
+            insert into static_page_drafts (
+                tenant_id,
+                assistant_run_id,
+                title,
+                status,
+                selected_scope,
+                visibility_snapshot,
+                source_refs,
+                draft_payload,
+                created_at,
+                updated_at
+            )
+            values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9)
+            returning id, tenant_id, assistant_run_id, title, status, selected_scope,
+                      visibility_snapshot, source_refs, draft_payload, created_at, updated_at
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(new_draft.assistant_run_id.0)
+        .bind(&new_draft.title)
+        .bind(new_draft.status.as_str())
+        .bind(&new_draft.selected_scope)
+        .bind(&new_draft.visibility_snapshot)
+        .bind(&new_draft.source_refs)
+        .bind(&new_draft.draft_payload)
+        .bind(new_draft.created_at)
+        .fetch_one(&self.pool)
+        .await?;
+
+        map_static_page_draft_row(&row)
+    }
+
+    pub async fn get_by_id(
+        &self,
+        tenant_id: TenantId,
+        draft_id: StaticPageDraftId,
+    ) -> Result<Option<StaticPageDraft>> {
+        let row = sqlx::query(
+            r#"
+            select id, tenant_id, assistant_run_id, title, status, selected_scope,
+                   visibility_snapshot, source_refs, draft_payload, created_at, updated_at
+            from static_page_drafts
+            where tenant_id = $1 and id = $2
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(draft_id.0)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        row.as_ref().map(map_static_page_draft_row).transpose()
+    }
+
+    pub async fn list_by_assistant_run(
+        &self,
+        tenant_id: TenantId,
+        assistant_run_id: AssistantRunId,
+    ) -> Result<Vec<StaticPageDraft>> {
+        let rows = sqlx::query(
+            r#"
+            select id, tenant_id, assistant_run_id, title, status, selected_scope,
+                   visibility_snapshot, source_refs, draft_payload, created_at, updated_at
+            from static_page_drafts
+            where tenant_id = $1 and assistant_run_id = $2
+            order by updated_at desc, created_at desc
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(assistant_run_id.0)
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.iter().map(map_static_page_draft_row).collect()
+    }
+
+    pub async fn update(
+        &self,
+        tenant_id: TenantId,
+        draft: &StaticPageDraft,
+    ) -> Result<StaticPageDraft> {
+        let row = sqlx::query(
+            r#"
+            update static_page_drafts
+            set title = $3,
+                status = $4,
+                selected_scope = $5,
+                visibility_snapshot = $6,
+                source_refs = $7,
+                draft_payload = $8,
+                updated_at = now()
+            where tenant_id = $1 and id = $2
+            returning id, tenant_id, assistant_run_id, title, status, selected_scope,
+                      visibility_snapshot, source_refs, draft_payload, created_at, updated_at
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(draft.id.0)
+        .bind(&draft.title)
+        .bind(draft.status.as_str())
+        .bind(&draft.selected_scope)
+        .bind(&draft.visibility_snapshot)
+        .bind(&draft.source_refs)
+        .bind(&draft.draft_payload)
+        .fetch_one(&self.pool)
+        .await?;
+
+        map_static_page_draft_row(&row)
+    }
+}
+
+#[derive(Clone)]
+pub struct PgStaticPageImageJobRepository {
+    pool: PgPool,
+}
+
+impl PgStaticPageImageJobRepository {
+    pub async fn create(
+        &self,
+        tenant_id: TenantId,
+        new_job: &NewStaticPageImageJob,
+    ) -> Result<StaticPageImageJob> {
+        let row = sqlx::query(
+            r#"
+            insert into static_page_image_jobs (
+                tenant_id,
+                draft_id,
+                assistant_run_id,
+                status,
+                queue_position,
+                image_prompt_payload,
+                preview_asset_key,
+                failure_reason,
+                confirmed_at,
+                created_at,
+                updated_at
+            )
+            values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10)
+            returning id, tenant_id, draft_id, assistant_run_id, status, queue_position,
+                      image_prompt_payload, preview_asset_key, failure_reason, confirmed_at,
+                      created_at, updated_at
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(new_job.draft_id.0)
+        .bind(new_job.assistant_run_id.0)
+        .bind(new_job.status.as_str())
+        .bind(new_job.queue_position)
+        .bind(&new_job.image_prompt_payload)
+        .bind(&new_job.preview_asset_key)
+        .bind(&new_job.failure_reason)
+        .bind(new_job.confirmed_at)
+        .bind(new_job.created_at)
+        .fetch_one(&self.pool)
+        .await?;
+
+        map_static_page_image_job_row(&row)
+    }
+
+    pub async fn get_by_id(
+        &self,
+        tenant_id: TenantId,
+        job_id: StaticPageImageJobId,
+    ) -> Result<Option<StaticPageImageJob>> {
+        let row = sqlx::query(
+            r#"
+            select id, tenant_id, draft_id, assistant_run_id, status, queue_position,
+                   image_prompt_payload, preview_asset_key, failure_reason, confirmed_at,
+                   created_at, updated_at
+            from static_page_image_jobs
+            where tenant_id = $1 and id = $2
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(job_id.0)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        row.as_ref().map(map_static_page_image_job_row).transpose()
+    }
+
+    pub async fn list_by_draft(
+        &self,
+        tenant_id: TenantId,
+        draft_id: StaticPageDraftId,
+    ) -> Result<Vec<StaticPageImageJob>> {
+        let rows = sqlx::query(
+            r#"
+            select id, tenant_id, draft_id, assistant_run_id, status, queue_position,
+                   image_prompt_payload, preview_asset_key, failure_reason, confirmed_at,
+                   created_at, updated_at
+            from static_page_image_jobs
+            where tenant_id = $1 and draft_id = $2
+            order by updated_at desc, created_at desc
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(draft_id.0)
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.iter().map(map_static_page_image_job_row).collect()
+    }
+
+    pub async fn update(
+        &self,
+        tenant_id: TenantId,
+        job: &StaticPageImageJob,
+    ) -> Result<StaticPageImageJob> {
+        let row = sqlx::query(
+            r#"
+            update static_page_image_jobs
+            set status = $3,
+                queue_position = $4,
+                image_prompt_payload = $5,
+                preview_asset_key = $6,
+                failure_reason = $7,
+                confirmed_at = $8,
+                updated_at = now()
+            where tenant_id = $1 and id = $2
+            returning id, tenant_id, draft_id, assistant_run_id, status, queue_position,
+                      image_prompt_payload, preview_asset_key, failure_reason, confirmed_at,
+                      created_at, updated_at
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(job.id.0)
+        .bind(job.status.as_str())
+        .bind(job.queue_position)
+        .bind(&job.image_prompt_payload)
+        .bind(&job.preview_asset_key)
+        .bind(&job.failure_reason)
+        .bind(job.confirmed_at)
+        .fetch_one(&self.pool)
+        .await?;
+
+        map_static_page_image_job_row(&row)
+    }
+}
+
+#[derive(Clone)]
+pub struct PgStaticPageRenderOutputRepository {
+    pool: PgPool,
+}
+
+impl PgStaticPageRenderOutputRepository {
+    pub async fn create(
+        &self,
+        tenant_id: TenantId,
+        new_output: &NewStaticPageRenderOutput,
+    ) -> Result<StaticPageRenderOutput> {
+        let row = sqlx::query(
+            r#"
+            insert into static_page_render_outputs (
+                tenant_id,
+                draft_id,
+                assistant_run_id,
+                image_job_id,
+                status,
+                html,
+                asset_manifest,
+                created_at
+            )
+            values ($1, $2, $3, $4, $5, $6, $7, $8)
+            returning id, tenant_id, draft_id, assistant_run_id, image_job_id, status,
+                      html, asset_manifest, created_at
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(new_output.draft_id.0)
+        .bind(new_output.assistant_run_id.0)
+        .bind(new_output.image_job_id.map(|id| id.0))
+        .bind(new_output.status.as_str())
+        .bind(&new_output.html)
+        .bind(&new_output.asset_manifest)
+        .bind(new_output.created_at)
+        .fetch_one(&self.pool)
+        .await?;
+
+        map_static_page_render_output_row(&row)
+    }
+
+    pub async fn list_by_draft(
+        &self,
+        tenant_id: TenantId,
+        draft_id: StaticPageDraftId,
+    ) -> Result<Vec<StaticPageRenderOutput>> {
+        let rows = sqlx::query(
+            r#"
+            select id, tenant_id, draft_id, assistant_run_id, image_job_id, status,
+                   html, asset_manifest, created_at
+            from static_page_render_outputs
+            where tenant_id = $1 and draft_id = $2
+            order by created_at desc
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(draft_id.0)
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.iter().map(map_static_page_render_output_row).collect()
     }
 }
 
@@ -3670,6 +4057,63 @@ fn map_conversation_memory_item_row(row: &sqlx::postgres::PgRow) -> Result<Conve
         metadata: row.get("metadata"),
         created_at: row.get("created_at"),
         updated_at: row.get("updated_at"),
+    })
+}
+
+fn map_static_page_draft_row(row: &sqlx::postgres::PgRow) -> Result<StaticPageDraft> {
+    let status = row.get::<String, _>("status");
+    Ok(StaticPageDraft {
+        id: StaticPageDraftId(row.get::<Uuid, _>("id")),
+        tenant_id: TenantId(row.get::<Uuid, _>("tenant_id")),
+        assistant_run_id: AssistantRunId(row.get::<Uuid, _>("assistant_run_id")),
+        title: row.get("title"),
+        status: StaticPageDraftStatus::from_str(&status)
+            .ok_or_else(|| anyhow!("unknown static page draft status: {status}"))?,
+        selected_scope: row.get("selected_scope"),
+        visibility_snapshot: row.get("visibility_snapshot"),
+        source_refs: row.get("source_refs"),
+        draft_payload: row.get("draft_payload"),
+        created_at: row.get("created_at"),
+        updated_at: row.get("updated_at"),
+    })
+}
+
+fn map_static_page_image_job_row(row: &sqlx::postgres::PgRow) -> Result<StaticPageImageJob> {
+    let status = row.get::<String, _>("status");
+    Ok(StaticPageImageJob {
+        id: StaticPageImageJobId(row.get::<Uuid, _>("id")),
+        tenant_id: TenantId(row.get::<Uuid, _>("tenant_id")),
+        draft_id: StaticPageDraftId(row.get::<Uuid, _>("draft_id")),
+        assistant_run_id: AssistantRunId(row.get::<Uuid, _>("assistant_run_id")),
+        status: StaticPageImageJobStatus::from_str(&status)
+            .ok_or_else(|| anyhow!("unknown static page image job status: {status}"))?,
+        queue_position: row.get("queue_position"),
+        image_prompt_payload: row.get("image_prompt_payload"),
+        preview_asset_key: row.get("preview_asset_key"),
+        failure_reason: row.get("failure_reason"),
+        confirmed_at: row.get("confirmed_at"),
+        created_at: row.get("created_at"),
+        updated_at: row.get("updated_at"),
+    })
+}
+
+fn map_static_page_render_output_row(
+    row: &sqlx::postgres::PgRow,
+) -> Result<StaticPageRenderOutput> {
+    let status = row.get::<String, _>("status");
+    Ok(StaticPageRenderOutput {
+        id: StaticPageRenderOutputId(row.get::<Uuid, _>("id")),
+        tenant_id: TenantId(row.get::<Uuid, _>("tenant_id")),
+        draft_id: StaticPageDraftId(row.get::<Uuid, _>("draft_id")),
+        assistant_run_id: AssistantRunId(row.get::<Uuid, _>("assistant_run_id")),
+        image_job_id: row
+            .get::<Option<Uuid>, _>("image_job_id")
+            .map(StaticPageImageJobId),
+        status: StaticPageRenderOutputStatus::from_str(&status)
+            .ok_or_else(|| anyhow!("unknown static page render output status: {status}"))?,
+        html: row.get("html"),
+        asset_manifest: row.get("asset_manifest"),
+        created_at: row.get("created_at"),
     })
 }
 

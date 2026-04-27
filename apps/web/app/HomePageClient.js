@@ -12,6 +12,8 @@ import {
   applyStaticPageOperation,
   applyStaticPageOperations,
   buildInitialStaticPageDraft,
+  buildMockStaticPagePreview,
+  buildStaticPageImagePayload,
   interpretStaticPagePrompt,
 } from './lib/static-page-draft';
 import {
@@ -30,8 +32,10 @@ const REPORT_DETAIL_POLL_INTERVAL_MS = 6000;
 const LOCAL_CHAT_STORAGE_KEY = 'aidp-v3-local-chat-messages';
 const LOCAL_ACTIVITY_STORAGE_KEY = 'aidp-v3-local-activity-events';
 const LOCAL_THREAD_ID_STORAGE_KEY = 'aidp-v3-local-thread-id';
+const LOCAL_ASSISTANT_RUN_ID_STORAGE_KEY = 'aidp-v3-local-assistant-run-id';
 const LOCAL_SECRET_BINDING_IDS_STORAGE_KEY = 'aidp-v3-secret-binding-ids';
 const LOCAL_SECRET_VALUE_STORAGE_KEY = 'aidp-v3-local-secret-value';
+const STATIC_PAGE_QUEUE_MESSAGE = '资源正在排队，可以联系商务开通高级用户跳过等待。';
 
 function readLocalThreadId() {
   if (typeof window === 'undefined') {
@@ -179,6 +183,36 @@ function createLocalMessage(role, content) {
   };
 }
 
+function promptRequestsAssistantContinue(prompt) {
+  return /继续|接着|下一步|刚才|上面|之前|这个|那版|修改|调整|改成|换成|按计划|照这个|沿用|再来|继续吧/.test(String(prompt || ''));
+}
+
+function readLocalAssistantRunId() {
+  if (typeof window === 'undefined') {
+    return '';
+  }
+  try {
+    return window.localStorage.getItem(LOCAL_ASSISTANT_RUN_ID_STORAGE_KEY) || '';
+  } catch {
+    return '';
+  }
+}
+
+function writeLocalAssistantRunId(runId) {
+  if (typeof window === 'undefined') {
+    return;
+  }
+  try {
+    if (runId) {
+      window.localStorage.setItem(LOCAL_ASSISTANT_RUN_ID_STORAGE_KEY, runId);
+    } else {
+      window.localStorage.removeItem(LOCAL_ASSISTANT_RUN_ID_STORAGE_KEY);
+    }
+  } catch {
+    // AssistantRun id is a convenience cache; chat still works without it.
+  }
+}
+
 export default function HomePageClient() {
   const [datasets, setDatasets] = useState([]);
   const [reportPlans, setReportPlans] = useState([]);
@@ -219,6 +253,7 @@ export default function HomePageClient() {
   const [activeStaticPageDraftId, setActiveStaticPageDraftId] = useState(null);
   const [scopePlan, setScopePlan] = useState({ candidates: [], hint: '' });
   const [activityEvents, setActivityEvents] = useState([]);
+  const [lastAssistantRunId, setLastAssistantRunId] = useState('');
 
   const datasetLoadIdRef = useRef(0);
   const messageLoadIdRef = useRef(0);
@@ -286,6 +321,289 @@ export default function HomePageClient() {
       prompt ? `用户要求：${prompt}` : '',
     ].filter(Boolean);
     return summaryParts.join('\n');
+  }
+
+  function buildStaticPageDraftSelectedScope(draft) {
+    if (draft?.datasetId) {
+      return {
+        mode: 'selected_datasets',
+        selected: [{ type: 'dataset', id: draft.datasetId }],
+        datasets: [{ type: 'dataset', id: draft.datasetId }],
+      };
+    }
+    return {
+      mode: 'ordinary_chat',
+      selected: [],
+    };
+  }
+
+  function buildStaticPageDraftSourceRefs(draft) {
+    return {
+      local_thread_id: readLocalThreadId(),
+      local_draft_id: draft?.localDraftId || draft?.id || '',
+      dataset_id: draft?.datasetId || null,
+      chat_session_id: draft?.sessionId || null,
+      source: draft?.source || {},
+    };
+  }
+
+  function mergeBackendStaticPageDraft(localDraft, backendDraft) {
+    const payload = backendDraft?.draft_payload && typeof backendDraft.draft_payload === 'object'
+      ? backendDraft.draft_payload
+      : {};
+    const merged = {
+      ...localDraft,
+      ...payload,
+      id: backendDraft?.id || localDraft.id,
+      localDraftId: localDraft.localDraftId || localDraft.id,
+      backendDraftId: backendDraft?.id || localDraft.backendDraftId || '',
+      assistantRunId: backendDraft?.assistant_run_id || localDraft.assistantRunId || '',
+      backendStatus: backendDraft?.status || localDraft.backendStatus || '',
+      backendUpdatedAt: backendDraft?.updated_at || localDraft.backendUpdatedAt || '',
+    };
+    if (backendDraft?.status === 'rendered' && merged.finalPage?.status === 'rendered') {
+      merged.status = 'rendered';
+    }
+    if (backendDraft?.status === 'confirmed' && merged.status !== 'rendered') {
+      merged.status = 'effect_confirmed';
+    }
+    return merged;
+  }
+
+  function isBackendStaticPageImageJobId(jobId) {
+    return Boolean(jobId) && !String(jobId).startsWith('mock-image-job-');
+  }
+
+  function staticPageImageJobQueueOperation(imageJob, fallback = {}) {
+    return {
+      type: 'queue_image_job',
+      jobId: imageJob?.id || fallback.jobId || fallback.id,
+      queuePosition: imageJob?.queue_position ?? imageJob?.queuePosition ?? fallback.queuePosition ?? null,
+      queueMessage: fallback.queueMessage || STATIC_PAGE_QUEUE_MESSAGE,
+    };
+  }
+
+  function buildConfirmedStaticPagePreview(draft, imageJob, fallbackPreview = null) {
+    return {
+      ...(fallbackPreview || buildMockStaticPagePreview(draft)),
+      kind: 'static-page-effect-preview',
+      assetKey: imageJob?.preview_asset_key || fallbackPreview?.assetKey || `static-page-previews/${imageJob?.id || draft.id}.json`,
+      imageJobId: imageJob?.id || draft?.imageJob?.id || null,
+    };
+  }
+
+  function replaceDraftWithOperation(baseDraft, operation) {
+    const draft = applyStaticPageOperation(baseDraft, operation);
+    setStaticPageDrafts((current) => ({
+      ...current,
+      [draft.id]: draft,
+    }));
+    setActiveStaticPageDraftId(draft.id);
+    return draft;
+  }
+
+  function replaceStaticPageDraft(previousId, draft) {
+    setStaticPageDrafts((current) => {
+      const next = { ...current };
+      if (previousId && previousId !== draft.id) {
+        delete next[previousId];
+      }
+      next[draft.id] = draft;
+      return next;
+    });
+    setActiveStaticPageDraftId(draft.id);
+  }
+
+  async function createBackendStaticPageDraft(localDraft, { assistantRunId, prompt = '' } = {}) {
+    if (!assistantRunId || localDraft?.backendDraftId) {
+      return localDraft;
+    }
+    const response = await fetchJson(`/api/v3/assistant-runs/${assistantRunId}/static-page-drafts`, {
+      method: 'POST',
+      body: {
+        title: localDraft?.objective || '静态页草稿',
+        prompt,
+        selected_scope: localDraft?.datasetId ? buildStaticPageDraftSelectedScope(localDraft) : null,
+        source_refs: buildStaticPageDraftSourceRefs(localDraft),
+        draft_payload: {
+          ...localDraft,
+          assistantRunId,
+        },
+      },
+    });
+    const draft = mergeBackendStaticPageDraft(localDraft, response?.draft);
+    replaceStaticPageDraft(localDraft.id, draft);
+    if (draft?.imageJob?.status === 'queued' && !isBackendStaticPageImageJobId(draft.imageJob.id)) {
+      createBackendStaticPageImageJob(draft, { prompt, oneClick: true }).catch((syncError) => {
+        setBanner(`静态页草稿已同步；效果图队列暂不可用：${syncError instanceof Error ? syncError.message : '请求失败'}。`);
+      });
+    }
+    return draft;
+  }
+
+  function syncStaticPageDraftCreate(localDraft, options = {}) {
+    createBackendStaticPageDraft(localDraft, options).catch((syncError) => {
+      setBanner(`静态页草稿已保存在本地；后端草稿同步暂不可用：${syncError instanceof Error ? syncError.message : '请求失败'}。`);
+    });
+  }
+
+  function syncStaticPageDraftOperations(previousDraft, nextDraft, operations = [], options = {}) {
+    const backendDraftId = previousDraft?.backendDraftId || nextDraft?.backendDraftId;
+    if (!backendDraftId) {
+      return;
+    }
+    fetchJson(`/api/v3/static-page-drafts/${backendDraftId}/operations`, {
+      method: 'POST',
+      body: {
+        prompt: options.prompt || null,
+        summary: options.summary || null,
+        operations,
+        draft_payload: nextDraft,
+      },
+    }).then((response) => {
+      const draft = mergeBackendStaticPageDraft(nextDraft, response?.draft);
+      replaceStaticPageDraft(nextDraft.id, draft);
+    }).catch((syncError) => {
+      setBanner(`静态页修改已先保存在本地；后端操作同步暂不可用：${syncError instanceof Error ? syncError.message : '请求失败'}。`);
+    });
+  }
+
+  function syncStaticPageDraftIntent(baseDraft, prompt) {
+    if (!baseDraft?.backendDraftId) {
+      return;
+    }
+    fetchJson(`/api/v3/static-page-drafts/${baseDraft.backendDraftId}/intent`, {
+      method: 'POST',
+      body: {
+        prompt,
+        draft_payload: baseDraft,
+        messages: visibleMessages.slice(-8).map((message) => ({
+          role: message.role,
+          content: message.content,
+        })),
+      },
+    }).then((response) => {
+      const draft = mergeBackendStaticPageDraft(baseDraft, response?.draft);
+      replaceStaticPageDraft(baseDraft.id, draft);
+      setBanner(`已按后端意图解释刷新静态页规划：${response?.summary || '修改已应用'}。`);
+    }).catch((syncError) => {
+      setBanner(`静态页修改已先保存在本地；后端意图解释暂不可用：${syncError instanceof Error ? syncError.message : '请求失败'}。`);
+    });
+  }
+
+  async function createBackendStaticPageImageJob(baseDraft, operation = {}) {
+    if (!baseDraft?.backendDraftId) {
+      throw new Error('静态页草稿还没有同步到后端。');
+    }
+    const response = await fetchJson(`/api/v3/static-page-drafts/${baseDraft.backendDraftId}/image-jobs`, {
+      method: 'POST',
+      body: {
+        prompt: operation.prompt || null,
+        image_prompt_payload: operation.imagePromptPayload || buildStaticPageImagePayload(baseDraft, {
+          oneClick: Boolean(operation.oneClick),
+        }),
+      },
+    });
+    const imageJob = response?.image_job;
+    const latestDraft = staticPageDrafts[baseDraft.id] || staticPageDrafts[baseDraft.backendDraftId] || baseDraft;
+    const draft = replaceDraftWithOperation(latestDraft, staticPageImageJobQueueOperation(imageJob, operation));
+    setBanner(`效果图任务已进入资源队列，当前前方约 ${imageJob?.queue_position ?? 1} 个任务。`);
+    return { imageJob, draft };
+  }
+
+  async function ensureBackendStaticPageImageJob(baseDraft, operation = {}) {
+    if (isBackendStaticPageImageJobId(baseDraft?.imageJob?.id)) {
+      return {
+        imageJob: {
+          id: baseDraft.imageJob.id,
+          queue_position: baseDraft.imageJob.queuePosition ?? null,
+          preview_asset_key: baseDraft.previewImage?.assetKey || null,
+        },
+        draft: baseDraft,
+      };
+    }
+    return createBackendStaticPageImageJob(baseDraft, operation);
+  }
+
+  async function confirmBackendStaticPagePreview(baseDraft, operation = {}) {
+    if (!baseDraft?.backendDraftId) {
+      throw new Error('静态页草稿还没有同步到后端。');
+    }
+    const ensured = await ensureBackendStaticPageImageJob(baseDraft, operation);
+    const imageJobId = ensured.imageJob?.id;
+    if (!imageJobId) {
+      throw new Error('效果图任务不存在。');
+    }
+    const draftWithJob = ensured.draft || baseDraft;
+    const preview = operation.previewImage || draftWithJob.previewImage || buildMockStaticPagePreview(draftWithJob);
+    const response = await fetchJson(`/api/v3/static-page-image-jobs/${imageJobId}/confirm`, {
+      method: 'POST',
+      body: {
+        preview_asset_key: preview?.assetKey || null,
+      },
+    });
+    const confirmedPreview = buildConfirmedStaticPagePreview(draftWithJob, response?.image_job, preview);
+    const localConfirmed = applyStaticPageOperation(draftWithJob, {
+      type: 'confirm_preview',
+      previewImage: confirmedPreview,
+      imageJobStatus: 'confirmed',
+    });
+    const merged = mergeBackendStaticPageDraft(localConfirmed, response?.draft);
+    const draft = {
+      ...merged,
+      status: merged.status === 'rendered' ? 'rendered' : 'effect_confirmed',
+      previewImage: confirmedPreview,
+      imageJob: {
+        ...localConfirmed.imageJob,
+        id: response?.image_job?.id || imageJobId,
+        status: 'confirmed',
+        queuePosition: null,
+        queueMessage: STATIC_PAGE_QUEUE_MESSAGE,
+      },
+    };
+    replaceStaticPageDraft(baseDraft.id, draft);
+    setBanner('效果图已确认，下一步可以按效果制作静态页。');
+    return { imageJob: response?.image_job, draft };
+  }
+
+  async function createBackendStaticPageRender(baseDraft, operation = {}) {
+    if (!baseDraft?.backendDraftId) {
+      throw new Error('静态页草稿还没有同步到后端。');
+    }
+    let draft = baseDraft;
+    let imageJobId = isBackendStaticPageImageJobId(draft.imageJob?.id) ? draft.imageJob.id : '';
+    if (draft.imageJob?.status !== 'confirmed') {
+      const confirmed = await confirmBackendStaticPagePreview(draft, operation);
+      draft = confirmed.draft;
+      imageJobId = confirmed.imageJob?.id || draft.imageJob?.id || imageJobId;
+    }
+    const response = await fetchJson(`/api/v3/static-page-drafts/${draft.backendDraftId}/renders`, {
+      method: 'POST',
+      body: {
+        image_job_id: imageJobId || null,
+      },
+    });
+    const renderOutput = response?.render_output;
+    const rendered = applyStaticPageOperation(draft, {
+      type: 'request_final_render',
+      finalPage: {
+        status: 'rendered',
+        renderer: 'platform-api-static-page-renderer',
+        renderOutputId: renderOutput?.id || '',
+        imageJobId: renderOutput?.image_job_id || imageJobId || null,
+        assetManifest: renderOutput?.asset_manifest || {},
+        html: renderOutput?.html || '',
+      },
+    });
+    const merged = mergeBackendStaticPageDraft(rendered, response?.draft);
+    const finalDraft = {
+      ...merged,
+      status: 'rendered',
+      finalPage: rendered.finalPage,
+    };
+    replaceStaticPageDraft(baseDraft.id, finalDraft);
+    setBanner('最终静态页已按确认效果图生成。');
+    return { renderOutput, draft: finalDraft };
   }
 
   async function fetchPlanPublishedReport(planId) {
@@ -616,6 +934,56 @@ export default function HomePageClient() {
     });
   }
 
+  async function requestOrdinaryAssistantRun({
+    prompt,
+    userMessage,
+    briefing,
+    nextScopePlan,
+    continueRunId = '',
+  }) {
+    const messages = localMessages
+      .slice(-12)
+      .map((message) => ({ role: message.role, content: message.content }));
+    if (continueRunId && promptRequestsAssistantContinue(prompt)) {
+      try {
+        const continued = await fetchJson(`/api/v3/assistant-runs/${continueRunId}/continue`, {
+          method: 'POST',
+          body: {
+            prompt,
+            max_steps: 3,
+            current_artifact: activeStaticPageDraft || null,
+            messages,
+          },
+        });
+        return {
+          response: continued,
+          assistantRunId: continued?.run?.id || continueRunId,
+          assistantContent: continued?.assistant_message?.content || '',
+          continued: true,
+        };
+      } catch (continueError) {
+        setLastAssistantRunId('');
+      }
+    }
+
+    const created = await fetchJson('/api/v3/assistant-runs', {
+      method: 'POST',
+      body: {
+        prompt,
+        local_thread_id: readLocalThreadId(),
+        startup_briefing: briefing,
+        scope_candidates: nextScopePlan.candidates,
+        messages: [...messages, { role: userMessage.role, content: userMessage.content }].slice(-12),
+      },
+    });
+    return {
+      response: created,
+      assistantRunId: created?.assistant_run_id || '',
+      assistantContent: created?.assistant_message?.content || '',
+      continued: false,
+    };
+  }
+
   function findDatasetForUploadPayload(items, payload) {
     return (Array.isArray(items) ? items : []).find((dataset) =>
       dataset?.key === payload.key || dataset?.title === payload.title,
@@ -828,15 +1196,16 @@ export default function HomePageClient() {
       setSelectedDatasetId(effectiveDatasetId);
     }
 
+    let pendingStaticPageDraft = null;
     if (promptRequestsStaticPage(prompt)) {
-      handleStartStaticPageDraft({
+      pendingStaticPageDraft = handleStartStaticPageDraft({
         oneClick: /一键|直接|马上|立即|跳过/.test(prompt),
         prompt,
         datasetId: effectiveDatasetId,
         dataset: effectiveDataset,
       });
     } else if (activeStaticPageDraft && /调整|修改|换成|改成|突出|减少|增加|放大|缩小|移动|排序|风格|老板|高层|风险|柱状图|折线图|环图|看板|精简/.test(prompt)) {
-      handleApplyStaticPagePrompt(prompt);
+      pendingStaticPageDraft = handleApplyStaticPagePrompt(prompt);
     }
 
     if (!effectiveDatasetId) {
@@ -854,23 +1223,27 @@ export default function HomePageClient() {
         let assistantContent = '';
         let usedBackendAssistantRun = false;
         let assistantRunId = '';
+        let usedAssistantRunContinue = false;
         try {
-          const assistantRun = await fetchJson('/api/v3/assistant-runs', {
-            method: 'POST',
-            body: {
-              prompt,
-              local_thread_id: readLocalThreadId(),
-              startup_briefing: briefing,
-              scope_candidates: nextScopePlan.candidates,
-              messages: localMessages
-                .slice(-12)
-                .map((message) => ({ role: message.role, content: message.content })),
-            },
+          const assistantRun = await requestOrdinaryAssistantRun({
+            prompt,
+            userMessage,
+            briefing,
+            nextScopePlan,
+            continueRunId: lastAssistantRunId,
           });
-          assistantRunId = assistantRun?.assistant_run_id || '';
-          assistantContent = assistantRun?.assistant_message?.content || '';
-          const backendCandidates = Array.isArray(assistantRun?.scope_candidates)
-            ? assistantRun.scope_candidates
+          assistantRunId = assistantRun.assistantRunId || '';
+          assistantContent = assistantRun.assistantContent || '';
+          usedAssistantRunContinue = assistantRun.continued;
+          if (assistantRunId) {
+            setLastAssistantRunId(assistantRunId);
+            if (pendingStaticPageDraft && !pendingStaticPageDraft.backendDraftId) {
+              syncStaticPageDraftCreate(pendingStaticPageDraft, { assistantRunId, prompt });
+            }
+          }
+          const responsePayload = assistantRun.response || {};
+          const backendCandidates = Array.isArray(responsePayload?.scope_candidates)
+            ? responsePayload.scope_candidates
             : [];
           if (backendCandidates.length) {
             setScopePlan({
@@ -878,7 +1251,7 @@ export default function HomePageClient() {
               hint: scopeHintFromCandidates(backendCandidates),
             });
           }
-          const backendDatasetId = firstDatasetIdFromScope(assistantRun?.selected_scope);
+          const backendDatasetId = firstDatasetIdFromScope(responsePayload?.selected_scope);
           if (backendDatasetId) {
             await refreshCatalog({ preferredDatasetId: backendDatasetId, silent: true });
           }
@@ -899,7 +1272,9 @@ export default function HomePageClient() {
         setComposingNewSession(false);
         setBanner(
           usedBackendAssistantRun
-            ? '已通过 AssistantRun 返回普通聊天；记录只缓存在当前浏览器。'
+            ? usedAssistantRunContinue
+              ? '已在同一个 AssistantRun 上继续执行；记录只缓存在当前浏览器。'
+              : '已通过 AssistantRun 返回普通聊天；记录只缓存在当前浏览器。'
             : 'AssistantRun 暂不可用，已用本地占位回复保留这轮普通聊天。',
         );
         setError('');
@@ -954,6 +1329,7 @@ export default function HomePageClient() {
     setComposingNewSession(true);
     setSelectedSessionId(null);
     setMessages([]);
+    setLastAssistantRunId('');
     if (!selectedDatasetId) {
       setLocalMessages([]);
     }
@@ -961,7 +1337,13 @@ export default function HomePageClient() {
   }
 
   function handleStartStaticPageDraft(options = {}) {
-    const { oneClick = false, prompt = '', datasetId = selectedDatasetId, dataset = selectedDataset } = options;
+    const {
+      oneClick = false,
+      prompt = '',
+      datasetId = selectedDatasetId,
+      dataset = selectedDataset,
+      assistantRunId = lastAssistantRunId,
+    } = options;
     const draftDatasetId = datasetId || '';
 
     const baseDraft = buildInitialStaticPageDraft({
@@ -987,6 +1369,9 @@ export default function HomePageClient() {
     setBanner(oneClick ? '已按 AI 理解创建静态页草稿，并进入效果图排队。' : '已创建静态页草稿，下一步会展示页面规划。');
     setError('');
     setMobilePanel('insights');
+    if (assistantRunId) {
+      syncStaticPageDraftCreate(draft, { assistantRunId, prompt });
+    }
     return draft;
   }
 
@@ -1003,6 +1388,9 @@ export default function HomePageClient() {
     }));
     setActiveStaticPageDraftId(draft.id);
     setBanner(`已按模型理解刷新静态页规划：${interpretation.summary}`);
+    if (activeStaticPageDraft.backendDraftId) {
+      syncStaticPageDraftIntent(activeStaticPageDraft, prompt);
+    }
     return draft;
   }
 
@@ -1011,12 +1399,36 @@ export default function HomePageClient() {
       return null;
     }
 
-    const draft = applyStaticPageOperation(activeStaticPageDraft, operation);
-    setStaticPageDrafts((current) => ({
-      ...current,
-      [draft.id]: draft,
-    }));
-    setActiveStaticPageDraftId(draft.id);
+    const draft = replaceDraftWithOperation(activeStaticPageDraft, operation);
+
+    if (operation.type === 'queue_image_job') {
+      if (activeStaticPageDraft.backendDraftId) {
+        createBackendStaticPageImageJob(activeStaticPageDraft, operation).catch((syncError) => {
+          setBanner(`效果图已先进入本地排队；后端队列暂不可用：${syncError instanceof Error ? syncError.message : '请求失败'}。`);
+        });
+      }
+      return draft;
+    }
+
+    if (operation.type === 'confirm_preview') {
+      if (draft.backendDraftId) {
+        confirmBackendStaticPagePreview(draft, operation).catch((syncError) => {
+          setBanner(`效果图已先在本地确认；后端确认暂不可用：${syncError instanceof Error ? syncError.message : '请求失败'}。`);
+        });
+      }
+      return draft;
+    }
+
+    if (operation.type === 'request_final_render') {
+      if (draft.backendDraftId) {
+        createBackendStaticPageRender(draft, operation).catch((syncError) => {
+          setBanner(`静态页已先在本地生成模拟版；后端渲染暂不可用：${syncError instanceof Error ? syncError.message : '请求失败'}。`);
+        });
+      }
+      return draft;
+    }
+
+    syncStaticPageDraftOperations(activeStaticPageDraft, draft, [operation]);
     return draft;
   }
 
@@ -1182,7 +1594,12 @@ export default function HomePageClient() {
 
   useEffect(() => {
     setActiveSecretCount(readLocalSecretBindingIds().length);
+    setLastAssistantRunId(readLocalAssistantRunId());
   }, []);
+
+  useEffect(() => {
+    writeLocalAssistantRunId(lastAssistantRunId);
+  }, [lastAssistantRunId]);
 
   useEffect(() => {
     if (typeof window === 'undefined') {

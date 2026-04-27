@@ -31,7 +31,11 @@ export default function StaticPageFinalRender({
   compact = false,
 }) {
   const canRequestRender = draft?.status === 'effect_confirmed';
-  const hasFinalPage = draft?.finalPage?.status === 'mock_ready' || draft?.status === 'rendering';
+  const finalStatus = draft?.finalPage?.status || '';
+  const hasFinalPage = ['mock_ready', 'rendered'].includes(finalStatus)
+    || draft?.status === 'rendering'
+    || draft?.status === 'rendered';
+  const backendHtml = typeof draft?.finalPage?.html === 'string' ? draft.finalPage.html : '';
   const payload = draft ? buildStaticPageFinalRenderPayload(draft) : null;
 
   if (!draft) return null;
@@ -52,7 +56,7 @@ export default function StaticPageFinalRender({
     <section className={`static-page-final-render${compact ? ' compact' : ''}`}>
       <div className="static-page-final-head">
         <span>最终静态页</span>
-        <strong>{hasFinalPage ? '本地模拟已生成' : '可生成'}</strong>
+        <strong>{finalStatus === 'rendered' ? '后端已生成' : hasFinalPage ? '本地模拟已生成' : '可生成'}</strong>
       </div>
 
       {!hasFinalPage ? (
@@ -67,25 +71,36 @@ export default function StaticPageFinalRender({
 
       {hasFinalPage ? (
         <>
-          <div className={`static-page-final-sheet ${payload.styleDirection}`}>
-            <div className="static-page-final-cover">
-              <span>{STYLE_LABELS[payload.styleDirection] || payload.styleDirection}</span>
-              <strong>{draft.objective}</strong>
-              <p>{draft.modelSummary}</p>
+          {backendHtml ? (
+            <iframe
+              className="static-page-final-frame"
+              title="后端生成的静态页预览"
+              srcDoc={backendHtml}
+              sandbox=""
+            />
+          ) : (
+            <div className={`static-page-final-sheet ${payload.styleDirection}`}>
+              <div className="static-page-final-cover">
+                <span>{STYLE_LABELS[payload.styleDirection] || payload.styleDirection}</span>
+                <strong>{draft.objective}</strong>
+                <p>{draft.modelSummary}</p>
+              </div>
+              <div className="static-page-final-modules">
+                {orderedModules(draft, compact).map((module) => (
+                  <article key={module.id} className="static-page-final-module">
+                    <span>{visualizationLabel(module)}</span>
+                    <strong>{module.title}</strong>
+                    <p>{module.content}</p>
+                    <em>{module.dataBinding?.label || '数据待绑定'}</em>
+                  </article>
+                ))}
+              </div>
             </div>
-            <div className="static-page-final-modules">
-              {orderedModules(draft, compact).map((module) => (
-                <article key={module.id} className="static-page-final-module">
-                  <span>{visualizationLabel(module)}</span>
-                  <strong>{module.title}</strong>
-                  <p>{module.content}</p>
-                  <em>{module.dataBinding?.label || '数据待绑定'}</em>
-                </article>
-              ))}
-            </div>
-          </div>
+          )}
           <p className="static-page-final-note">
-            后端 renderer 尚未接入，当前结果来自前端 mock；真实数据图表会在数据绑定完成后渲染。
+            {finalStatus === 'rendered'
+              ? '后端 renderer 已按确认效果图和模块规划生成静态页。'
+              : '后端 renderer 尚未接入，当前结果来自前端 mock；真实数据图表会在数据绑定完成后渲染。'}
           </p>
         </>
       ) : null}

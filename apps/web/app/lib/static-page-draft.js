@@ -115,7 +115,7 @@ const GRID_COLUMNS = 12;
 const DEFAULT_STYLE_DIRECTION = 'client-delivery';
 const STYLE_KEYS = new Set(STATIC_PAGE_STYLE_DIRECTIONS.map((item) => item.key));
 const VISUALIZATION_TYPES = new Set(STATIC_PAGE_VISUALIZATION_TYPES.map((item) => item.type));
-const IMAGE_JOB_STATUSES = new Set(['idle', 'queued', 'running', 'preview_ready', 'failed']);
+const IMAGE_JOB_STATUSES = new Set(['idle', 'queued', 'running', 'preview_ready', 'failed', 'confirmed']);
 const MODULE_TARGET_KEYWORDS = [
   { id: 'hero', keywords: ['结论', '核心', '标题', '开头', '主判断', '判断'] },
   { id: 'kpi', keywords: ['指标', 'kpi', '数字', '数据卡', '量化'] },
@@ -403,7 +403,7 @@ export function applyStaticPageOperation(draft, operation = {}) {
     next.status = 'effect_confirmed';
     next.imageJob = {
       ...next.imageJob,
-      status: 'preview_ready',
+      status: operation.imageJobStatus || 'preview_ready',
       queuePosition: null,
     };
     next.previewImage = operation.previewImage || next.previewImage;
@@ -421,14 +421,25 @@ export function applyStaticPageOperation(draft, operation = {}) {
   }
 
   if (type === 'request_final_render') {
-    next.status = 'rendering';
-    next.finalPage = {
-      ...next.finalPage,
-      status: 'mock_ready',
-      renderer: 'local-static-page-mock',
-      notice: '后端 renderer 尚未接入，当前为前端静态页模拟结果。',
-      payload: operation.payload || buildStaticPageFinalRenderPayload(next),
-    };
+    const backendFinalPage = operation.finalPage && typeof operation.finalPage === 'object'
+      ? operation.finalPage
+      : null;
+    next.status = backendFinalPage?.status === 'rendered' ? 'rendered' : 'rendering';
+    next.finalPage = backendFinalPage
+      ? {
+          ...next.finalPage,
+          ...backendFinalPage,
+          status: backendFinalPage.status || 'rendered',
+          renderer: backendFinalPage.renderer || 'platform-api-static-page-renderer',
+          payload: backendFinalPage.payload || buildStaticPageFinalRenderPayload(next),
+        }
+      : {
+          ...next.finalPage,
+          status: 'mock_ready',
+          renderer: 'local-static-page-mock',
+          notice: '后端 renderer 尚未接入，当前为前端静态页模拟结果。',
+          payload: operation.payload || buildStaticPageFinalRenderPayload(next),
+        };
   }
 
   next.mobileOrder = normalizeMobileOrder(next.modules, next.mobileOrder);

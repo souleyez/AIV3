@@ -191,6 +191,83 @@ Conclusion:
 - Added regression coverage that selected-scope evidence is ranked, persisted, returned in run detail, and reflected in the run trail.
 - This is the first evidence supply slice. Remaining work is richer document-level scope selection, hidden conversation-memory retrieval injection, multi-step continuation actions, provider-backed planning, and static-page/report capability calls attached to the same run.
 
+2026-04-27 AssistantRun hidden conversation-memory injection slice completed:
+
+- Scope planner now preserves hidden conversation memory in `selected_scope` even when a user-selected or preselected dataset is also present.
+- When `selected_scope.conversation_memory` contains `local-thread`, `POST /v1/assistant-runs` retrieves browser-local hidden memory for the run's `local_thread_id`.
+- Hidden memory supply is appended to `evidence_state.supplied_items` as `conversation_memory_item`, alongside normal retrieval evidence.
+- AssistantRun only injects user-role memory items by default and excludes assistant/artifact output-like item kinds, keeping the first slice aligned with the product rule that conversation memory is mainly "用户说过什么".
+- Placeholder output now reports supplied "供料项" instead of only "证据", because a run may include dataset evidence and hidden conversation memory at the same time.
+- Added regression coverage that history-referencing runs supply hidden memory, persist it in run detail, and still support dataset plus memory scope planning.
+- Remaining work is higher-quality memory summarization/dedupe, provider-backed memory intent classification, memory compaction/retention policy, and richer artifact-summary handling.
+
+2026-04-27 AssistantRun continue API first slice completed:
+
+- Added `ContinueAssistantRunRequest` and `ContinueAssistantRunResponse` contracts.
+- Added `POST /v1/assistant-runs/{run_id}/continue` as the bounded continuous-execution entry point.
+- Continue requests reuse the existing run's selected scope, evidence state, local thread, output artifacts, and runtime configuration.
+- The endpoint clamps `max_steps` to 1-5, appends a `继续执行` trail step, appends a new assistant-message output artifact, and records an `assistant_run.continued` event.
+- Placeholder mode returns a short continuation acknowledgement instead of pretending to execute report/static-page actions.
+- Provider mode gets a model input containing run id, original prompt, continue instruction, max step budget, selected scope, supplied evidence, current artifact, and recent messages.
+- Storage now supports updating `execution_trail` as a first-class AssistantRun JSON field.
+- Remaining work is attaching concrete platform actions to continue loops: retrieval/detail refresh, report/static-page draft creation, operation application, image queue submission, confirmation gates, and model-requested tool calls.
+
+2026-04-27 AssistantRun frontend continue wiring first slice completed:
+
+- Browser ordinary chat now caches the latest `assistant_run_id` per local terminal/browser.
+- If the user sends a follow-up that looks like `继续`, `刚才`, `下一步`, `修改`, or similar, the web client first calls `POST /v1/assistant-runs/{run_id}/continue`.
+- Continue calls include recent local messages, the active static-page draft if any, and a conservative `max_steps=3`.
+- If continue fails because the old run is gone or the backend is unavailable, the browser clears the cached run id and falls back to creating a fresh AssistantRun.
+- Starting a new conversation clears the cached AssistantRun id, matching the product rule that each browser-local conversation is independent.
+- This is still ordinary no-dataset chat wiring only. Selected-dataset chat sessions and future report/static-page workspaces still need to migrate toward AssistantRun-backed continuation.
+
+2026-04-27 AssistantRun static page draft backend/API slice completed:
+
+- Added first-class `StaticPageDraftId`, draft status, and `StaticPageDraft` domain model rooted under `assistant_run_id`.
+- Added PostgreSQL `static_page_drafts` storage with selected scope snapshot, visibility snapshot, source refs, and schema-first draft payload.
+- Added `POST /v1/assistant-runs/{run_id}/static-page-drafts` and `GET /v1/static-page-drafts/{draft_id}` for AssistantRun-rooted draft creation and loading.
+- Added `PATCH /v1/static-page-drafts/{draft_id}` for draft payload/status/title updates.
+- Added `POST /v1/static-page-drafts/{draft_id}/operations` so model/client operations can be appended and persisted against the durable draft.
+- Added `POST /v1/static-page-drafts/{draft_id}/intent` with deterministic Chinese intent fallback for style direction, risk emphasis, text compression, module ordering, and chart changes.
+- Static page draft creation, update, operation append, and intent application now append AssistantRun events so continuous execution has a visible trail.
+- The web client now creates an immediate local draft, then syncs it to the backend when an AssistantRun id exists. Later module operations and natural-language edits sync to the backend when a durable draft exists, with local fallback if the backend is unavailable.
+- Remaining work is provider-backed static-page intent runtime, operation schema hardening, image queue/job persistence, preview confirmation, final renderer output persistence, right-shelf durable draft listing, and selected-dataset chat migration toward AssistantRun-backed static-page creation.
+
+2026-04-27 static page intent runtime slice completed:
+
+- Added `static-page-runtime` as the dedicated static-page intent interpretation crate.
+- The runtime accepts prompt, draft payload, AssistantRun id, startup briefing, selected scope, supplied evidence state, conversation memory refs, and recent messages.
+- Deterministic fallback now covers Chinese prompts for executive style, client delivery style, data-dashboard style, risk emphasis, text compression, selected-scope data binding, conversation-memory binding, and chart changes.
+- Provider-backed operation generation is available behind `STATIC_PAGE_INTENT_RUNTIME_MODE=provider`, `STATIC_PAGE_INTENT_RUNTIME_PROVIDER`, `STATIC_PAGE_INTENT_RUNTIME_MODEL`, and the shared OpenAI-compatible `STATIC_PAGE_INTENT_RUNTIME_*` env wiring.
+- Provider output must be strict JSON with `summary` and `operations`. Invalid provider output falls back to deterministic interpretation rather than applying unsafe model JSON.
+- Static page operations now pass through a runtime white-list sanitizer before being applied. Unknown operation types and unsafe JSON keys such as `__proto__`, `constructor`, and `prototype` are rejected.
+- `POST /v1/static-page-drafts/{draft_id}/intent` now calls `static-page-runtime` and stores runtime metadata in the AssistantRun event payload.
+- `POST /v1/static-page-drafts/{draft_id}/operations` now reuses the same sanitizer, so client/model operations share one safety gate.
+- Remaining work is stronger typed operation structs, richer provider prompt templates, model-requested tool-call loops, image job persistence, queue polling, preview confirmation, and final renderer output persistence.
+
+2026-04-27 static page image/render persistence skeleton completed:
+
+- Added `StaticPageImageJobId`, `StaticPageRenderOutputId`, image job status, and render output status to the domain model.
+- Added PostgreSQL `static_page_image_jobs` and `static_page_render_outputs` tables plus storage repositories.
+- Added `POST /v1/static-page-drafts/{draft_id}/image-jobs` to create a durable effect-image queue record from the confirmed draft modules, style direction, selected scope, visibility snapshot, and data bindings.
+- Added `GET /v1/static-page-image-jobs/{job_id}` for queue polling.
+- Added `POST /v1/static-page-image-jobs/{job_id}/confirm` to persist a confirmed preview asset key and update the draft to `confirmed`.
+- Added `POST /v1/static-page-drafts/{draft_id}/renders` to create a skeleton final HTML render output after preview confirmation.
+- Final render is blocked until a confirmed preview exists, preserving the product gate that customers must confirm the effect preview before static-page generation.
+- The render skeleton includes module titles, content, data labels, chart placeholders, style direction class, and confirmed preview metadata.
+- Image job creation, preview confirmation, and final render creation append AssistantRun events so the chat can show concise continuous-execution steps later.
+- Remaining work is real `static_page_image_generation` workflow/worker, Cloudflare/Codex image endpoint integration, queue-position polling from the remote queue, static-page renderer crate, richer chart rendering, and frontend polling/display wiring.
+
+2026-04-27 static page frontend image/render API wiring completed:
+
+- The web static-page flow now calls the durable backend image job API when the user clicks `生成效果图` or one-click output enters the queue.
+- Local draft state is updated with the backend image job id and queue position, while still falling back to local queue state if the backend is unavailable.
+- `确认效果图` now confirms the backend image job when a durable draft exists and stores the confirmed preview asset key in the draft payload.
+- `按效果制作静态页` now calls `POST /v1/static-page-drafts/{draft_id}/renders`, passing the confirmed image job id and storing the returned render output id, asset manifest, and HTML in the frontend draft state.
+- The final static-page preview can display backend-rendered HTML in an isolated iframe, while retaining the existing local mock render when no backend render exists.
+- One-click static-page creation now submits a backend image job after the AssistantRun-backed draft is created, avoiding a queued-looking local draft without a durable image job row.
+- Remaining work is true queue polling, remote Cloudflare/Codex image artifact pickup, worker status transitions from `queued` to `preview_ready`, right-shelf durable draft/render listing, and replacing skeleton HTML with a dedicated renderer.
+
 Verification:
 
 - `npm run build` in `apps/web` passed.
@@ -233,6 +310,32 @@ Verification:
 - `wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo fmt --check && cargo check -p assistant-runtime -p contracts -p storage -p platform-api"` passed after AssistantRun selected-scope evidence supply.
 - `node --test app/lib/assistant-startup-briefing.test.mjs app/lib/scope-planner.test.mjs app/lib/upload-classifier.test.mjs` in `apps/web` passed after AssistantRun selected-scope evidence supply.
 - `npm run build` in `apps/web` passed after AssistantRun selected-scope evidence supply.
+- `wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo test -p assistant-runtime"` passed after AssistantRun hidden conversation-memory injection.
+- `wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo test -p platform-api assistant_run"` passed after AssistantRun hidden conversation-memory injection.
+- `wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo fmt --check && cargo check -p assistant-runtime -p contracts -p storage -p platform-api"` passed after AssistantRun hidden conversation-memory injection.
+- `node --test app/lib/assistant-startup-briefing.test.mjs app/lib/scope-planner.test.mjs app/lib/upload-classifier.test.mjs` in `apps/web` passed after AssistantRun hidden conversation-memory injection.
+- `npm run build` in `apps/web` passed after AssistantRun hidden conversation-memory injection.
+- `wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo test -p platform-api assistant_run_continue_appends_event_trail_and_output"` passed after AssistantRun continue API.
+- `wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo test -p platform-api assistant_run"` passed after AssistantRun continue API.
+- `wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo fmt --check && cargo check -p assistant-runtime -p contracts -p storage -p platform-api"` passed after AssistantRun continue API.
+- `node --test app/lib/assistant-startup-briefing.test.mjs app/lib/scope-planner.test.mjs app/lib/upload-classifier.test.mjs` in `apps/web` passed after AssistantRun continue API.
+- `npm run build` in `apps/web` passed after AssistantRun continue API.
+- `wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo fmt --check && cargo test -p platform-api assistant_run"` passed after AssistantRun frontend continue wiring.
+- `node --test app/lib/assistant-startup-briefing.test.mjs app/lib/scope-planner.test.mjs app/lib/upload-classifier.test.mjs` in `apps/web` passed after AssistantRun frontend continue wiring.
+- `npm run build` in `apps/web` passed after AssistantRun frontend continue wiring.
+- `wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo test -p platform-api static_page"` passed after static page draft API creation/update/operation/intent support.
+- `wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo fmt --check && cargo check -p assistant-runtime -p contracts -p storage -p platform-api && cargo test -p platform-api assistant_run"` passed after static page draft API creation/update/operation/intent support.
+- `node --test app/lib/static-page-draft.test.mjs app/lib/assistant-startup-briefing.test.mjs app/lib/scope-planner.test.mjs app/lib/upload-classifier.test.mjs` in `apps/web` passed after static page backend sync wiring.
+- `npm run build` in `apps/web` passed after static page backend sync wiring.
+- `wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo fmt --check && cargo test -p static-page-runtime && cargo test -p platform-api static_page"` passed after static page intent runtime extraction.
+- `wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo check -p static-page-runtime -p assistant-runtime -p contracts -p storage -p platform-api && cargo test -p platform-api assistant_run"` passed after static page intent runtime extraction.
+- `node --test app/lib/static-page-draft.test.mjs app/lib/assistant-startup-briefing.test.mjs app/lib/scope-planner.test.mjs app/lib/upload-classifier.test.mjs` in `apps/web` passed after static page intent runtime extraction.
+- `npm run build` in `apps/web` passed after static page intent runtime extraction.
+- `wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo test -p platform-api static_page"` passed after static page image/render persistence skeleton.
+- `node --test app/lib/static-page-draft.test.mjs` in `apps/web` passed after frontend image/render API wiring.
+- `npm run build` in `apps/web` passed after frontend image/render API wiring.
+- `node --test app/lib/static-page-draft.test.mjs app/lib/assistant-startup-briefing.test.mjs app/lib/scope-planner.test.mjs app/lib/upload-classifier.test.mjs` in `apps/web` passed after frontend image/render API wiring.
+- `wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo fmt --check && cargo test -p platform-api static_page"` passed after frontend image/render API wiring.
 
 ## Locked Product Decisions
 
