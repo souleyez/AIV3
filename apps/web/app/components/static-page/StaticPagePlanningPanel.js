@@ -1,6 +1,7 @@
 'use client';
 
 import StaticPageEffectPreview from './StaticPageEffectPreview';
+import StaticPageFinalRender from './StaticPageFinalRender';
 import StaticPagePlanningCanvas from './StaticPagePlanningCanvas';
 import StaticPageStyleDirectionPicker from './StaticPageStyleDirectionPicker';
 
@@ -55,6 +56,8 @@ export default function StaticPagePlanningPanel({
       />
 
       <StaticPageEffectPreview draft={draft} onApplyOperation={onApplyOperation} />
+
+      <StaticPageFinalRender draft={draft} onApplyOperation={onApplyOperation} />
 
       <StaticPagePlanningCanvas draft={draft} onApplyOperation={onApplyOperation} />
 

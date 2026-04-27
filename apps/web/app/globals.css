@@ -1013,6 +1013,136 @@ textarea {
   gap: 8px;
 }
 
+.static-page-final-render {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 18px;
+  border: 1px solid rgba(37, 99, 235, 0.14);
+  background: rgba(15, 23, 42, 0.035);
+}
+
+.static-page-final-render.locked p,
+.static-page-final-note {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.static-page-final-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.static-page-final-head span,
+.static-page-final-module span,
+.static-page-final-module em {
+  color: var(--subtle);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 800;
+}
+
+.static-page-final-head strong,
+.static-page-final-cover strong,
+.static-page-final-module strong {
+  color: var(--text);
+}
+
+.static-page-final-sheet {
+  overflow: hidden;
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border-radius: 20px;
+  border: 1px solid rgba(148, 163, 184, 0.15);
+  background: linear-gradient(135deg, rgba(248, 250, 252, 0.96), rgba(226, 232, 240, 0.94));
+}
+
+.static-page-final-sheet.decision-brief {
+  background: linear-gradient(135deg, rgba(15, 23, 42, 0.95), rgba(30, 41, 59, 0.94));
+}
+
+.static-page-final-sheet.client-delivery {
+  background: linear-gradient(135deg, rgba(240, 249, 255, 0.96), rgba(255, 251, 235, 0.92));
+}
+
+.static-page-final-sheet.data-command {
+  background: linear-gradient(135deg, rgba(6, 78, 59, 0.94), rgba(15, 23, 42, 0.95));
+}
+
+.static-page-final-cover {
+  display: grid;
+  gap: 7px;
+  padding: 14px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.62);
+}
+
+.static-page-final-sheet.decision-brief .static-page-final-cover,
+.static-page-final-sheet.data-command .static-page-final-cover,
+.static-page-final-sheet.decision-brief .static-page-final-module,
+.static-page-final-sheet.data-command .static-page-final-module {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+.static-page-final-cover span {
+  color: #2563eb;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.static-page-final-cover p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.static-page-final-sheet.decision-brief .static-page-final-cover span,
+.static-page-final-sheet.data-command .static-page-final-cover span {
+  color: #93c5fd;
+}
+
+.static-page-final-sheet.decision-brief .static-page-final-cover strong,
+.static-page-final-sheet.data-command .static-page-final-cover strong,
+.static-page-final-sheet.decision-brief .static-page-final-module strong,
+.static-page-final-sheet.data-command .static-page-final-module strong {
+  color: #f8fbff;
+}
+
+.static-page-final-sheet.decision-brief .static-page-final-cover p,
+.static-page-final-sheet.data-command .static-page-final-cover p,
+.static-page-final-sheet.decision-brief .static-page-final-module p,
+.static-page-final-sheet.data-command .static-page-final-module p,
+.static-page-final-sheet.decision-brief .static-page-final-module em,
+.static-page-final-sheet.data-command .static-page-final-module em {
+  color: #cbd5e1;
+}
+
+.static-page-final-modules {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+}
+
+.static-page-final-module {
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+  border-radius: 16px;
+  border: 1px solid rgba(148, 163, 184, 0.15);
+  background: rgba(255, 255, 255, 0.66);
+}
+
+.static-page-final-module p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
 .static-page-canvas-shell {
   min-width: 0;
   padding: 12px;
@@ -1785,6 +1915,7 @@ body {
 .assistant-shell .static-page-model-summary,
 .assistant-shell .static-page-style-picker,
 .assistant-shell .static-page-effect-preview,
+.assistant-shell .static-page-final-render,
 .assistant-shell .static-page-planning-hint,
 .assistant-shell .static-page-canvas-shell {
   background: rgba(255, 255, 255, 0.045);
@@ -1800,7 +1931,8 @@ body {
 .assistant-shell .static-page-effect-head strong,
 .assistant-shell .static-page-queue-card strong,
 .assistant-shell .static-page-preview-card strong,
-.assistant-shell .static-page-preview-placeholder strong {
+.assistant-shell .static-page-preview-placeholder strong,
+.assistant-shell .static-page-final-head strong {
   color: #f8fbff;
 }
 
@@ -1814,7 +1946,8 @@ body {
 .assistant-shell .static-page-effect-head span,
 .assistant-shell .static-page-effect-head em,
 .assistant-shell .static-page-queue-card span,
-.assistant-shell .static-page-preview-card span {
+.assistant-shell .static-page-preview-card span,
+.assistant-shell .static-page-final-head span {
   color: #9aa7b9;
 }
 
@@ -1840,6 +1973,11 @@ body {
 }
 
 .assistant-shell .static-page-preview-placeholder p {
+  color: #9aa7b9;
+}
+
+.assistant-shell .static-page-final-render.locked p,
+.assistant-shell .static-page-final-note {
   color: #9aa7b9;
 }
 
@@ -2507,6 +2645,20 @@ body {
 .static-page-effect-preview.compact .static-page-effect-actions {
   display: grid;
   grid-template-columns: 1fr;
+}
+
+.static-page-final-render.compact {
+  padding: 13px 14px;
+  background: rgba(255, 255, 255, 0.055);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+.static-page-final-render.compact .static-page-final-modules {
+  grid-template-columns: 1fr;
+}
+
+.static-page-final-render.compact .static-page-final-sheet {
+  padding: 10px;
 }
 
 .static-page-mobile-intent {

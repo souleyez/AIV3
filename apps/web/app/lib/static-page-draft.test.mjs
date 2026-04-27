@@ -189,3 +189,16 @@ test('mock preview payload follows current style and module layout', () => {
   assert.equal(preview.title, '数据运营看板');
   assert.equal(preview.modules[0].width, 12);
 });
+
+test('final render request stores local mock renderer payload', () => {
+  const confirmed = applyStaticPageOperation(buildInitialStaticPageDraft(), {
+    type: 'confirm_preview',
+    previewImage: { assetKey: 'preview-1.png' },
+  });
+  const rendering = applyStaticPageOperation(confirmed, { type: 'request_final_render' });
+
+  assert.equal(rendering.status, 'rendering');
+  assert.equal(rendering.finalPage.status, 'mock_ready');
+  assert.equal(rendering.finalPage.renderer, 'local-static-page-mock');
+  assert.equal(rendering.finalPage.payload.previewImage.assetKey, 'preview-1.png');
+});

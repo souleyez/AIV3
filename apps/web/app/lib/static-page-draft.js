@@ -424,7 +424,10 @@ export function applyStaticPageOperation(draft, operation = {}) {
     next.status = 'rendering';
     next.finalPage = {
       ...next.finalPage,
-      status: 'queued',
+      status: 'mock_ready',
+      renderer: 'local-static-page-mock',
+      notice: '后端 renderer 尚未接入，当前为前端静态页模拟结果。',
+      payload: operation.payload || buildStaticPageFinalRenderPayload(next),
     };
   }
 
