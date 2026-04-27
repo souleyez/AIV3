@@ -1,5 +1,6 @@
 'use client';
 
+import StaticPageEffectPreview from './StaticPageEffectPreview';
 import StaticPageMobileModuleList from './StaticPageMobileModuleList';
 import StaticPageStyleDirectionPicker from './StaticPageStyleDirectionPicker';
 
@@ -14,6 +15,7 @@ export default function StaticPageMobileBuilder({
   intent,
   onIntentChange,
   onSubmitIntent,
+  onApplyOperation,
   onReorderModules,
   onChangeStyleDirection,
   onOneClick,
@@ -68,6 +70,8 @@ export default function StaticPageMobileBuilder({
         value={draft.styleDirection}
         onChange={onChangeStyleDirection}
       />
+
+      <StaticPageEffectPreview compact draft={draft} onApplyOperation={onApplyOperation} />
 
       <div className="static-page-mobile-intent">
         <label htmlFor="static-page-mobile-intent">告诉模型怎么改</label>

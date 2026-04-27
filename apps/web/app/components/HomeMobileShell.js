@@ -74,6 +74,7 @@ export default function HomeMobileShell({
             intent={staticPageIntent}
             onIntentChange={setStaticPageIntent}
             onSubmitIntent={handleSubmitStaticPageIntent}
+            onApplyOperation={onApplyStaticPageOperation}
             onReorderModules={(order) => onApplyStaticPageOperation?.({ type: 'reorder_modules', order })}
             onChangeStyleDirection={(styleDirection) => onApplyStaticPageOperation?.({
               type: 'change_style_direction',

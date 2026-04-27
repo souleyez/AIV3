@@ -4,6 +4,7 @@ import {
   applyStaticPageOperation,
   applyStaticPageOperations,
   buildInitialStaticPageDraft,
+  buildMockStaticPagePreview,
   buildStaticPageFinalRenderPayload,
   buildStaticPageImagePayload,
   interpretStaticPagePrompt,
@@ -158,4 +159,33 @@ test('prompt interpreter selects data dashboard direction', () => {
 
   assert.equal(next.styleDirection, 'data-command');
   assert.match(next.modelSummary, /数据运营看板/);
+});
+
+test('image queue flow creates deterministic mock preview and confirmation state', () => {
+  const draft = buildInitialStaticPageDraft({ datasetId: 'dataset-1' });
+  const queued = applyStaticPageOperation(draft, {
+    type: 'queue_image_job',
+    queuePosition: 3,
+  });
+  const ready = applyStaticPageOperation(queued, { type: 'mark_preview_ready' });
+  const confirmed = applyStaticPageOperation(ready, { type: 'confirm_preview' });
+
+  assert.equal(queued.status, 'queued');
+  assert.equal(queued.imageJob.status, 'queued');
+  assert.equal(queued.imageJob.queueMessage, '资源正在排队，可以联系商务开通高级用户跳过等待。');
+  assert.equal(ready.status, 'preview_ready');
+  assert.equal(ready.previewImage.kind, 'mock-effect-preview');
+  assert.equal(ready.previewImage.modules.length, ready.modules.length);
+  assert.equal(confirmed.status, 'effect_confirmed');
+});
+
+test('mock preview payload follows current style and module layout', () => {
+  const draft = applyStaticPageOperation(buildInitialStaticPageDraft(), {
+    type: 'change_style_direction',
+    styleDirection: 'data-command',
+  });
+  const preview = buildMockStaticPagePreview(draft);
+
+  assert.equal(preview.title, '数据运营看板');
+  assert.equal(preview.modules[0].width, 12);
 });

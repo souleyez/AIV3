@@ -1,5 +1,6 @@
 'use client';
 
+import StaticPageEffectPreview from './StaticPageEffectPreview';
 import StaticPagePlanningCanvas from './StaticPagePlanningCanvas';
 import StaticPageStyleDirectionPicker from './StaticPageStyleDirectionPicker';
 
@@ -52,6 +53,8 @@ export default function StaticPagePlanningPanel({
         value={draft.styleDirection}
         onChange={(styleDirection) => onApplyOperation?.({ type: 'change_style_direction', styleDirection })}
       />
+
+      <StaticPageEffectPreview draft={draft} onApplyOperation={onApplyOperation} />
 
       <StaticPagePlanningCanvas draft={draft} onApplyOperation={onApplyOperation} />
 

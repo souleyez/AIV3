@@ -115,6 +115,7 @@ const GRID_COLUMNS = 12;
 const DEFAULT_STYLE_DIRECTION = 'client-delivery';
 const STYLE_KEYS = new Set(STATIC_PAGE_STYLE_DIRECTIONS.map((item) => item.key));
 const VISUALIZATION_TYPES = new Set(STATIC_PAGE_VISUALIZATION_TYPES.map((item) => item.type));
+const IMAGE_JOB_STATUSES = new Set(['idle', 'queued', 'running', 'preview_ready', 'failed']);
 const MODULE_TARGET_KEYWORDS = [
   { id: 'hero', keywords: ['结论', '核心', '标题', '开头', '主判断', '判断'] },
   { id: 'kpi', keywords: ['指标', 'kpi', '数字', '数据卡', '量化'] },
@@ -229,6 +230,23 @@ function lastModuleOrder(draft, moduleId) {
 function shortModuleContent(module) {
   const title = module.title || '这个模块';
   return `${title}保留关键结论、数据依据和行动含义，减少解释性文字。`;
+}
+
+export function buildMockStaticPagePreview(draft) {
+  const style = STATIC_PAGE_STYLE_DIRECTIONS.find((item) => item.key === draft.styleDirection);
+  return {
+    kind: 'mock-effect-preview',
+    assetKey: `mock-preview-${draft.id}.json`,
+    title: style?.label || draft.styleDirection,
+    subtitle: draft.objective,
+    queueMessage: draft.imageJob?.queueMessage || '资源正在排队，可以联系商务开通高级用户跳过等待。',
+    modules: draft.modules.map((module) => ({
+      id: module.id,
+      title: module.title,
+      visualizationType: module.visualization?.type || 'text-insight',
+      width: normalizeLayout(module.layout).w,
+    })),
+  };
 }
 
 export function buildInitialStaticPageDraft({
@@ -353,16 +371,53 @@ export function applyStaticPageOperation(draft, operation = {}) {
     next.status = 'queued';
     next.imageJob = {
       ...next.imageJob,
-      id: operation.jobId || next.imageJob.id,
+      id: operation.jobId || next.imageJob.id || `mock-image-job-${next.id}`,
       status: 'queued',
       queuePosition: operation.queuePosition ?? next.imageJob.queuePosition,
       queueMessage: operation.queueMessage || '资源正在排队，可以联系商务开通高级用户跳过等待。',
     };
   }
 
+  if (type === 'update_image_job_status' && IMAGE_JOB_STATUSES.has(operation.status)) {
+    next.status = operation.status === 'preview_ready' ? 'preview_ready' : next.status;
+    next.imageJob = {
+      ...next.imageJob,
+      status: operation.status,
+      queuePosition: operation.queuePosition ?? next.imageJob.queuePosition,
+      queueMessage: operation.queueMessage || next.imageJob.queueMessage,
+    };
+  }
+
+  if (type === 'mark_preview_ready') {
+    next.status = 'preview_ready';
+    next.imageJob = {
+      ...next.imageJob,
+      status: 'preview_ready',
+      queuePosition: null,
+      queueMessage: '',
+    };
+    next.previewImage = operation.previewImage || buildMockStaticPagePreview(next);
+  }
+
   if (type === 'confirm_preview') {
     next.status = 'effect_confirmed';
+    next.imageJob = {
+      ...next.imageJob,
+      status: 'preview_ready',
+      queuePosition: null,
+    };
     next.previewImage = operation.previewImage || next.previewImage;
+  }
+
+  if (type === 'reset_image_job') {
+    next.status = 'planning';
+    next.imageJob = {
+      id: null,
+      status: 'idle',
+      queuePosition: null,
+      queueMessage: '',
+    };
+    next.previewImage = null;
   }
 
   if (type === 'request_final_render') {

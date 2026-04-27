@@ -939,6 +939,80 @@ textarea {
   line-height: 1.5;
 }
 
+.static-page-effect-preview {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 18px;
+  border: 1px solid rgba(37, 99, 235, 0.14);
+  background: rgba(15, 23, 42, 0.035);
+}
+
+.static-page-effect-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.static-page-effect-head div {
+  display: grid;
+  gap: 4px;
+}
+
+.static-page-effect-head span,
+.static-page-effect-head em,
+.static-page-queue-card span,
+.static-page-preview-card span {
+  color: var(--subtle);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 800;
+}
+
+.static-page-effect-head strong,
+.static-page-queue-card strong,
+.static-page-preview-card strong,
+.static-page-preview-placeholder strong {
+  color: var(--text);
+}
+
+.static-page-queue-card,
+.static-page-preview-card,
+.static-page-preview-placeholder {
+  display: grid;
+  gap: 7px;
+  padding: 12px;
+  border-radius: 16px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  background: rgba(255, 255, 255, 0.62);
+}
+
+.static-page-preview-placeholder p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.static-page-preview-lines {
+  display: grid;
+  gap: 7px;
+  padding-top: 4px;
+}
+
+.static-page-preview-lines i {
+  display: block;
+  height: 9px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(37, 99, 235, 0.8), rgba(20, 184, 166, 0.8));
+}
+
+.static-page-effect-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .static-page-canvas-shell {
   min-width: 0;
   padding: 12px;
@@ -1710,6 +1784,7 @@ body {
 .assistant-shell .static-page-planning-summary div,
 .assistant-shell .static-page-model-summary,
 .assistant-shell .static-page-style-picker,
+.assistant-shell .static-page-effect-preview,
 .assistant-shell .static-page-planning-hint,
 .assistant-shell .static-page-canvas-shell {
   background: rgba(255, 255, 255, 0.045);
@@ -1721,7 +1796,11 @@ body {
 .assistant-shell .static-page-planning-hint strong,
 .assistant-shell .static-page-model-summary p,
 .assistant-shell .static-page-style-picker-head strong,
-.assistant-shell .static-page-style-option strong {
+.assistant-shell .static-page-style-option strong,
+.assistant-shell .static-page-effect-head strong,
+.assistant-shell .static-page-queue-card strong,
+.assistant-shell .static-page-preview-card strong,
+.assistant-shell .static-page-preview-placeholder strong {
   color: #f8fbff;
 }
 
@@ -1731,7 +1810,11 @@ body {
 .assistant-shell .static-page-planning-hint span,
 .assistant-shell .static-page-style-picker-head span,
 .assistant-shell .static-page-style-option span,
-.assistant-shell .static-page-style-option em {
+.assistant-shell .static-page-style-option em,
+.assistant-shell .static-page-effect-head span,
+.assistant-shell .static-page-effect-head em,
+.assistant-shell .static-page-queue-card span,
+.assistant-shell .static-page-preview-card span {
   color: #9aa7b9;
 }
 
@@ -1746,6 +1829,17 @@ body {
 }
 
 .assistant-shell .static-page-style-option p {
+  color: #9aa7b9;
+}
+
+.assistant-shell .static-page-queue-card,
+.assistant-shell .static-page-preview-card,
+.assistant-shell .static-page-preview-placeholder {
+  background: rgba(255, 255, 255, 0.045);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+.assistant-shell .static-page-preview-placeholder p {
   color: #9aa7b9;
 }
 
@@ -2395,6 +2489,24 @@ body {
 .static-page-style-picker.compact .static-page-style-option {
   background: rgba(7, 11, 17, 0.45);
   border-color: rgba(255, 255, 255, 0.08);
+}
+
+.static-page-effect-preview.compact {
+  padding: 13px 14px;
+  background: rgba(255, 255, 255, 0.055);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+.static-page-effect-preview.compact .static-page-queue-card,
+.static-page-effect-preview.compact .static-page-preview-card,
+.static-page-effect-preview.compact .static-page-preview-placeholder {
+  background: rgba(7, 11, 17, 0.45);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+.static-page-effect-preview.compact .static-page-effect-actions {
+  display: grid;
+  grid-template-columns: 1fr;
 }
 
 .static-page-mobile-intent {
