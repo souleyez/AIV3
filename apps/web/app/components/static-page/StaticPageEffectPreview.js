@@ -21,7 +21,9 @@ export default function StaticPageEffectPreview({
   const imageJob = draft?.imageJob || {};
   const jobStatus = imageJob.status || 'idle';
   const preview = draft?.previewImage;
-  const confirmed = draft?.status === 'effect_confirmed';
+  const confirmed = draft?.status === 'effect_confirmed'
+    || draft?.status === 'rendering'
+    || Boolean(draft?.finalPage);
   const hasPreview = jobStatus === 'preview_ready' || draft?.status === 'effect_confirmed';
   const queueMessage = imageJob.queueMessage || preview?.queueMessage || '资源正在排队，可以联系商务开通高级用户跳过等待。';
 

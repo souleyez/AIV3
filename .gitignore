@@ -8,3 +8,6 @@
 **/.turbo
 **/.env
 **/.env.local
+/.next-dev-local*.log
+/.platform-api-local*.log
+/test-nohup.log

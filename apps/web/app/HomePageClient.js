@@ -77,11 +77,7 @@ export default function HomePageClient() {
   const [datasetDraft, setDatasetDraft] = useState({ key: '', title: '' });
   const [reportSurface, setReportSurface] = useState('pc');
   const [publishNote, setPublishNote] = useState('');
-  const [mobileViewport, setMobileViewport] = useState(() =>
-    typeof window !== 'undefined' && typeof window.matchMedia === 'function'
-      ? window.matchMedia('(max-width: 960px)').matches
-      : false,
-  );
+  const [mobileViewport, setMobileViewport] = useState(false);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [mobilePanel, setMobilePanel] = useState('chat');
   const [bootstrapping, setBootstrapping] = useState(true);
