@@ -1,6 +1,7 @@
 'use client';
 
 import StaticPagePlanningCanvas from './StaticPagePlanningCanvas';
+import StaticPageStyleDirectionPicker from './StaticPageStyleDirectionPicker';
 
 const STYLE_LABELS = {
   'decision-brief': '高层决策简报',
@@ -46,6 +47,11 @@ export default function StaticPagePlanningPanel({
         <span>模型理解</span>
         <p>{draft.modelSummary}</p>
       </div>
+
+      <StaticPageStyleDirectionPicker
+        value={draft.styleDirection}
+        onChange={(styleDirection) => onApplyOperation?.({ type: 'change_style_direction', styleDirection })}
+      />
 
       <StaticPagePlanningCanvas draft={draft} onApplyOperation={onApplyOperation} />
 

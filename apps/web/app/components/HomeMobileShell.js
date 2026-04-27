@@ -75,6 +75,10 @@ export default function HomeMobileShell({
             onIntentChange={setStaticPageIntent}
             onSubmitIntent={handleSubmitStaticPageIntent}
             onReorderModules={(order) => onApplyStaticPageOperation?.({ type: 'reorder_modules', order })}
+            onChangeStyleDirection={(styleDirection) => onApplyStaticPageOperation?.({
+              type: 'change_style_direction',
+              styleDirection,
+            })}
             onOneClick={() => handleStartStaticPageDraft({ oneClick: true })}
             onBackToChat={() => setSurface('chat')}
           />

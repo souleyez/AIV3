@@ -1,6 +1,7 @@
 'use client';
 
 import StaticPageMobileModuleList from './StaticPageMobileModuleList';
+import StaticPageStyleDirectionPicker from './StaticPageStyleDirectionPicker';
 
 const STYLE_LABELS = {
   'decision-brief': '高层决策简报',
@@ -14,6 +15,7 @@ export default function StaticPageMobileBuilder({
   onIntentChange,
   onSubmitIntent,
   onReorderModules,
+  onChangeStyleDirection,
   onOneClick,
   onBackToChat,
 }) {
@@ -60,6 +62,12 @@ export default function StaticPageMobileBuilder({
         <span>模型理解</span>
         <p>{draft.modelSummary}</p>
       </div>
+
+      <StaticPageStyleDirectionPicker
+        compact
+        value={draft.styleDirection}
+        onChange={onChangeStyleDirection}
+      />
 
       <div className="static-page-mobile-intent">
         <label htmlFor="static-page-mobile-intent">告诉模型怎么改</label>

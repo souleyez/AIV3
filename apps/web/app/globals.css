@@ -879,6 +879,66 @@ textarea {
   overflow-wrap: anywhere;
 }
 
+.static-page-style-picker {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 18px;
+  border: 1px solid rgba(37, 99, 235, 0.14);
+  background: rgba(37, 99, 235, 0.045);
+}
+
+.static-page-style-picker-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+}
+
+.static-page-style-picker-head span,
+.static-page-style-option span,
+.static-page-style-option em {
+  color: var(--subtle);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 800;
+}
+
+.static-page-style-picker-head strong,
+.static-page-style-option strong {
+  color: var(--text);
+}
+
+.static-page-style-options {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
+  gap: 10px;
+}
+
+.static-page-style-option {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+  text-align: left;
+  border-radius: 16px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  background: rgba(255, 255, 255, 0.65);
+  cursor: pointer;
+}
+
+.static-page-style-option.active {
+  border-color: rgba(37, 99, 235, 0.46);
+  background: linear-gradient(135deg, rgba(37, 99, 235, 0.12), rgba(20, 184, 166, 0.12));
+  box-shadow: 0 14px 32px rgba(37, 99, 235, 0.13);
+}
+
+.static-page-style-option p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
 .static-page-canvas-shell {
   min-width: 0;
   padding: 12px;
@@ -1649,6 +1709,7 @@ body {
 .assistant-shell .static-page-planning-empty,
 .assistant-shell .static-page-planning-summary div,
 .assistant-shell .static-page-model-summary,
+.assistant-shell .static-page-style-picker,
 .assistant-shell .static-page-planning-hint,
 .assistant-shell .static-page-canvas-shell {
   background: rgba(255, 255, 255, 0.045);
@@ -1658,14 +1719,33 @@ body {
 .assistant-shell .static-page-planning-empty strong,
 .assistant-shell .static-page-planning-summary strong,
 .assistant-shell .static-page-planning-hint strong,
-.assistant-shell .static-page-model-summary p {
+.assistant-shell .static-page-model-summary p,
+.assistant-shell .static-page-style-picker-head strong,
+.assistant-shell .static-page-style-option strong {
   color: #f8fbff;
 }
 
 .assistant-shell .static-page-planning-empty p,
 .assistant-shell .static-page-planning-summary span,
 .assistant-shell .static-page-model-summary span,
-.assistant-shell .static-page-planning-hint span {
+.assistant-shell .static-page-planning-hint span,
+.assistant-shell .static-page-style-picker-head span,
+.assistant-shell .static-page-style-option span,
+.assistant-shell .static-page-style-option em {
+  color: #9aa7b9;
+}
+
+.assistant-shell .static-page-style-option {
+  background: rgba(255, 255, 255, 0.045);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+.assistant-shell .static-page-style-option.active {
+  background: linear-gradient(135deg, rgba(37, 99, 235, 0.24), rgba(20, 184, 166, 0.16));
+  border-color: rgba(96, 165, 250, 0.52);
+}
+
+.assistant-shell .static-page-style-option p {
   color: #9aa7b9;
 }
 
@@ -2295,6 +2375,26 @@ body {
   display: grid;
   gap: 6px;
   padding: 13px 14px;
+}
+
+.static-page-style-picker.compact {
+  padding: 13px 14px;
+  background: rgba(255, 255, 255, 0.055);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+.static-page-style-picker.compact .static-page-style-picker-head {
+  display: grid;
+  gap: 4px;
+}
+
+.static-page-style-picker.compact .static-page-style-options {
+  grid-template-columns: 1fr;
+}
+
+.static-page-style-picker.compact .static-page-style-option {
+  background: rgba(7, 11, 17, 0.45);
+  border-color: rgba(255, 255, 255, 0.08);
 }
 
 .static-page-mobile-intent {
