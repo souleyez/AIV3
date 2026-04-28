@@ -8,8 +8,8 @@ use reqwest::blocking::Client;
 use serde_json::{json, Value};
 use static_page_worker::{
     context_uuid, extract_first_image_artifact, merge_orchestrator_state,
-    poll_static_page_visual_task, submit_static_page_visual_task, task_failure_message,
-    CodexOrchestratorConfig,
+    normalize_artifact_asset_key, poll_static_page_visual_task, submit_static_page_visual_task,
+    task_failure_message, CodexOrchestratorConfig,
 };
 use storage::{NewAssistantRunEvent, PgStorage, DEFAULT_LOCAL_DATABASE_URL};
 use tokio::time::Duration;
@@ -168,7 +168,9 @@ async fn process_task(
             storage,
         )
         .await?;
-        let artifact = extract_first_image_artifact(&completed_task)?;
+        let mut artifact = extract_first_image_artifact(&completed_task)?;
+        artifact.asset_key =
+            normalize_artifact_asset_key(&artifact.asset_key, &orchestrator_config.base_url);
         mark_job_preview_ready(storage, &job, &artifact.asset_key).await?;
         append_assistant_event(
             storage,
@@ -395,6 +397,7 @@ async fn mark_job_failed(
         .get_by_id(job.tenant_id, job.draft_id)
         .await?
     {
+        draft.status = StaticPageDraftStatus::Planned;
         draft.draft_payload = mark_draft_image_job_failed(&draft.draft_payload, job, error_message);
         storage
             .static_page_drafts()
@@ -431,6 +434,17 @@ fn mark_draft_preview_ready(payload: &Value, job: &StaticPageImageJob, asset_key
             "modules": [],
         }),
     );
+    let preview_contract = json!({
+        "version": 1,
+        "kind": "static-page-preview-contract",
+        "status": "preview_ready",
+        "imageJobId": job.id,
+        "assetKey": asset_key,
+        "queuePosition": null,
+        "renderExpectation": "final HTML/CSS/SVG should reproduce the confirmed preview without baking editable text or charts into the image",
+    });
+    object.insert("previewContract".to_string(), preview_contract.clone());
+    object.insert("preview_contract".to_string(), preview_contract);
     Value::Object(object)
 }
 
@@ -440,6 +454,7 @@ fn mark_draft_image_job_failed(
     error_message: &str,
 ) -> Value {
     let mut object = payload.as_object().cloned().unwrap_or_default();
+    object.insert("status".to_string(), Value::String("planning".to_string()));
     object.insert(
         "imageJob".to_string(),
         json!({
@@ -449,6 +464,18 @@ fn mark_draft_image_job_failed(
             "queueMessage": error_message,
         }),
     );
+    let preview_contract = json!({
+        "version": 1,
+        "kind": "static-page-preview-contract",
+        "status": "failed",
+        "imageJobId": job.id,
+        "assetKey": null,
+        "queuePosition": null,
+        "failureReason": error_message,
+        "renderExpectation": "final HTML/CSS/SVG should reproduce the confirmed preview without baking editable text or charts into the image",
+    });
+    object.insert("previewContract".to_string(), preview_contract.clone());
+    object.insert("preview_contract".to_string(), preview_contract);
     Value::Object(object)
 }
 

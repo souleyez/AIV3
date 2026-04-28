@@ -73,7 +73,7 @@ export default function StaticPagePlanningCanvas({ draft, onApplyOperation }) {
         >
           {draft.modules.map((module) => (
             <div key={module.id} className="static-page-grid-item">
-              <StaticPageModuleCard module={module} />
+              <StaticPageModuleCard module={module} onApplyOperation={onApplyOperation} />
             </div>
           ))}
         </GridLayout>

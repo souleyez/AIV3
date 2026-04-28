@@ -305,8 +305,60 @@ Conclusion:
 - `POST /v1/static-page-drafts/{draft_id}/image-jobs` now creates and starts the workflow automatically, so the browser still has one simple "generate effect image" action while backend queue execution is durable.
 - Remaining work is deployment wiring for the provided server env file, queue-position fidelity against the remote queue, browser display of real bitmap artifacts instead of the current preview card, retry/cancel UX, and final workerized static-page render/export packaging.
 
+2026-04-28 static page real preview display slice completed:
+
+- The active static-page workspace now polls its backend draft more aggressively while the image job is `queued` or `running`, instead of waiting only for the slower right-shelf refresh.
+- Backend image job hydration now maps `preview_ready` into the local draft state, carries the real `preview_asset_key`, and uses a customer-facing "effect image generated" queue message.
+- The effect-preview component now renders real remote image artifacts when the asset key is an HTTP URL, data image, blob URL, or same-origin API path.
+- Backend image jobs no longer expose the local "view mock effect image" shortcut while they are still running, preventing accidental confirmation of a simulated preview when a real Codex image is pending.
+- The static-page worker now normalizes relative codex-web artifact paths such as `/api/codex/artifacts/...` against `CODEX_ORCHESTRATOR_BASE_URL` before storing `preview_asset_key`, so the browser can load images from the orchestrator host instead of the V3 API host.
+- Failed image jobs now return the draft to an editable planning state, show the failure reason in the effect-preview panel, and allow the user to submit a fresh image job from the same draft.
+- Re-generating an effect image clears stale preview/final-render state so a new job cannot accidentally reuse an old confirmed image or rendered page.
+- A live Cloudflare Codex Orchestrator smoke test against `https://souleye.cc` completed with task `task_524ec187-c6df-4e37-9c01-bb21bc481a0b`, `artifactStatus=available`, one PNG image artifact, and a locally downloaded verification copy under ignored `.storage/static-page-smoke-tests/`.
+- Remaining work is wiring the deployed V3 worker process to the provided production env file, cancel UX, queue-position fidelity against remote runtime guardrails, and final workerized static-page render/export packaging.
+
+2026-04-28 static page DesignSpec / visual-contract slice completed:
+
+- Reframed the system contract so the effect image is a `visual contract`, while `StaticPageDraft` / `DesignSpec` remains the source of truth for final HTML/CSS/SVG output.
+- Frontend static-page drafts now carry `visualSpec`, `renderSpec`, `dataSnapshot`, and `previewContract` alongside modules, layout, data binding, visualization type, style direction, mobile order, image job, preview, and final render state.
+- `visualSpec` defines renderer-safe palette, typography, surface, decoration, and density presets for `decision-brief`, `client-delivery`, and `data-command`.
+- `renderSpec` declares the renderer-safe contract: 12-column desktop grid, mobile single-column order, DOM text, SVG/chart components, supported editable fields, and generation guardrails that prevent the image model from inventing visuals the renderer cannot reproduce.
+- `dataSnapshot` records module-level bindings and evidence/source references so image generation and final rendering can describe the same data contract.
+- `previewContract` stores status, image job id, preview asset key, confirmation state, and a design fingerprint. Editing module content, layout, data binding, visualization, mobile order, or style after preview confirmation marks the preview contract stale and clears the stale preview/final render.
+- Backend draft creation now seeds the same contract fields, and backend image prompt payloads now include `visual_spec`, `render_spec`, `data_snapshot`, `preview_contract`, and a short `design_contract` explaining that the image is not the final source code.
+- Backend queue, preview-ready, confirm, and failed states update `previewContract` / `preview_contract` so the durable draft can tell whether the current bitmap preview still matches the current design.
+- `static-page-renderer` now reads `visualSpec`, `renderSpec`, `dataSnapshot`, and `previewContract`, exposes them in the asset manifest, and applies visual-spec colors/radius as CSS variables in the standalone HTML.
+- Remaining work is making the renderer fully layout-aware, rendering real chart components from `dataSnapshot`, adding screenshot/VLM visual-diff scoring against the confirmed effect image, and moving final render/export packaging into a background worker.
+
+2026-04-28 static page layout-aware renderer first slice completed:
+
+- The dedicated `static-page-renderer` now renders modules inside a 12-column CSS grid instead of a single-column card stack.
+- Each module consumes its `layout` `{ x, y, w, h }` and emits grid column/span, row span, minimum height, module id, and a mobile order variable.
+- Mobile rendering degrades to a single-column ordered stack using the existing `mobileOrder`, keeping mobile static-page generation usable without desktop drag precision.
+- Chart placeholders have been replaced with first-pass renderer-owned visualizations for `headline`, `kpi-cards`, `bar-chart`, `line-chart`, `donut-chart`, `table`, `timeline`, `risk-matrix`, and `text-insight`.
+- Chart data is read from module visualization data, module-level data, or matching `dataSnapshot.moduleBindings`; when no data is present, the renderer uses deterministic fallback points rather than empty broken charts.
+- The generated HTML keeps text, metrics, and chart marks as DOM/SVG structures, preserving the rule that final static pages should not be bitmap-only copies of the effect image.
+- Renderer tests now cover grid layout output, mobile ordering metadata, visual-spec CSS variables, data-snapshot chart extraction, and multiple chart variants.
+- Remaining work is replacing deterministic fallback points with real RAG/data-query snapshots, adding richer data-bound chart semantics, exporting packaged assets, and adding screenshot/VLM visual-diff scoring against the confirmed effect image.
+
+2026-04-28 static page module adjustment UX slice completed:
+
+- Desktop module cards now include a collapsed `微调模块` editor, keeping the default planning canvas clean while still allowing direct adjustment when needed.
+- Users can directly adjust module title, module body copy, data binding label, and visualization type from the module card.
+- Mobile static-page builder now reuses the same module card editor inside the sortable module list, so mobile users can reorder vertically and still adjust module content without a desktop-only dependency.
+- Module adjustments are emitted as a single `update_module` operation, preserving the existing backend operation persistence path and avoiding multiple stale updates from one UI edit.
+- A module edit after preview confirmation marks the preview contract stale and clears stale preview/final render state, forcing a fresh effect image before final static page generation.
+- The desktop and mobile hints now explicitly tell users they can expand module micro-adjustment for title, content, data, and chart changes.
+- Remaining work is model-assisted field suggestions inside the module editor, richer data-source selection from actual dataset fields, and bulk operations for "apply this wording style to all modules".
+
 Verification:
 
+- `node --test app/lib/static-page-draft.test.mjs` passed after module adjustment operation coverage.
+- `wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo test -p static-page-renderer"` passed after layout-aware renderer wiring.
+- `wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo fmt --check"` passed after layout-aware renderer wiring.
+- `node --test app/lib/static-page-draft.test.mjs app/lib/assistant-startup-briefing.test.mjs app/lib/scope-planner.test.mjs app/lib/upload-classifier.test.mjs` in `apps/web` passed after DesignSpec / visual-contract wiring.
+- `wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo test -p static-page-renderer -p static-page-worker"` passed after DesignSpec / visual-contract wiring.
+- `wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo check -p platform-api"` passed after DesignSpec / visual-contract wiring.
 - `npm run build` in `apps/web` passed.
 - `node --test app/lib/static-page-draft.test.mjs app/lib/assistant-startup-briefing.test.mjs app/lib/scope-planner.test.mjs app/lib/upload-classifier.test.mjs` passed.
 - `wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo fmt --check"` passed.
@@ -386,6 +438,13 @@ Verification:
 - `wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo test -p platform-api static_page"` passed after automatically starting the static-page image generation workflow.
 - `wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo check -p static-page-worker -p static-page-renderer -p static-page-runtime -p assistant-runtime -p contracts -p storage -p platform-api"` passed after static-page worker integration.
 - `npm run build` in `apps/web` passed after static-page worker integration.
+- `node --test app/lib/static-page-draft.test.mjs app/lib/assistant-startup-briefing.test.mjs app/lib/scope-planner.test.mjs app/lib/upload-classifier.test.mjs` in `apps/web` passed after real preview display wiring.
+- `npm run build` in `apps/web` passed after real preview display wiring.
+- `wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo fmt --check && cargo test -p static-page-worker"` passed after artifact URL normalization.
+- `node --test app/lib/static-page-draft.test.mjs app/lib/assistant-startup-briefing.test.mjs app/lib/scope-planner.test.mjs app/lib/upload-classifier.test.mjs` in `apps/web` passed after image-job failure/retry UX hardening.
+- `npm run build` in `apps/web` passed after image-job failure/retry UX hardening.
+- `wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo fmt --check && cargo test -p static-page-worker"` passed after image-job failure/retry UX hardening.
+- Live Cloudflare Codex Orchestrator smoke test passed with a completed `static-page-visual` task and downloadable PNG artifact after reading the runtime key from ignored local storage.
 
 ## Locked Product Decisions
 

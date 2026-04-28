@@ -10880,13 +10880,39 @@ fn build_static_page_visibility_snapshot(run: &AssistantRun, selected_scope: &Va
 }
 
 fn build_initial_static_page_draft_payload(run: &AssistantRun, prompt: &str) -> Value {
+    let style_direction = "client-delivery";
+    let visual_spec = build_static_page_visual_spec(style_direction);
+    let render_spec = build_static_page_render_spec();
+    let data_snapshot = json!({
+        "version": 1,
+        "source": "assistant_run",
+        "selected_scope": run.selected_scope,
+        "evidence_status": run.evidence_state.get("status").cloned().unwrap_or(Value::Null),
+        "module_bindings": [],
+    });
+    let preview_contract = build_static_page_preview_contract(
+        style_direction,
+        &Value::Array(Vec::new()),
+        &render_spec,
+        None,
+    );
     json!({
         "version": 1,
         "status": "draft",
         "title": derive_static_page_draft_title(prompt),
         "prompt": prompt,
         "modules": [],
-        "style_direction": Value::Null,
+        "mobileOrder": [],
+        "styleDirection": style_direction,
+        "style_direction": style_direction,
+        "visualSpec": visual_spec.clone(),
+        "visual_spec": visual_spec,
+        "renderSpec": render_spec.clone(),
+        "render_spec": render_spec,
+        "dataSnapshot": data_snapshot.clone(),
+        "data_snapshot": data_snapshot,
+        "previewContract": preview_contract.clone(),
+        "preview_contract": preview_contract,
         "data_bindings": [],
         "assistant_context": {
             "assistant_run_id": run.id,
@@ -10898,19 +10924,207 @@ fn build_initial_static_page_draft_payload(run: &AssistantRun, prompt: &str) -> 
 
 fn build_static_page_image_prompt_payload(draft: &StaticPageDraft, prompt: Option<&str>) -> Value {
     let payload = &draft.draft_payload;
+    let style_direction =
+        static_page_payload_string(payload, &["styleDirection", "style_direction"])
+            .unwrap_or_else(|| "client-delivery".to_string());
+    let modules = static_page_payload_modules(payload);
+    let visual_spec = static_page_payload_value(payload, &["visualSpec", "visual_spec"])
+        .unwrap_or_else(|| build_static_page_visual_spec(&style_direction));
+    let render_spec = static_page_payload_value(payload, &["renderSpec", "render_spec"])
+        .unwrap_or_else(build_static_page_render_spec);
+    let data_snapshot = static_page_payload_value(payload, &["dataSnapshot", "data_snapshot"])
+        .unwrap_or_else(|| build_static_page_data_snapshot(payload, &draft.selected_scope));
+    let preview_contract =
+        static_page_payload_value(payload, &["previewContract", "preview_contract"])
+            .unwrap_or_else(|| {
+                build_static_page_preview_contract(&style_direction, &modules, &render_spec, None)
+            });
     json!({
         "draft_id": draft.id,
         "assistant_run_id": draft.assistant_run_id,
         "title": draft.title,
         "prompt": prompt.map(str::trim).filter(|value| !value.is_empty()),
-        "style_direction": static_page_payload_string(payload, &["styleDirection", "style_direction"])
-            .unwrap_or_else(|| "client-delivery".to_string()),
+        "style_direction": style_direction,
+        "visual_spec": visual_spec,
+        "render_spec": render_spec,
+        "data_snapshot": data_snapshot,
+        "preview_contract": preview_contract,
+        "design_contract": {
+            "contract_source": "StaticPageDraft",
+            "visual_source": "effect image is a preview contract, not final source code",
+            "final_source": "draft_payload visual_spec/render_spec/modules/data_snapshot",
+            "editable_core": "DOM text + SVG/chart components",
+        },
         "selected_scope": draft.selected_scope,
         "visibility_snapshot": draft.visibility_snapshot,
-        "modules": static_page_payload_modules(payload),
+        "modules": modules,
         "data_bindings": payload.get("data_bindings").cloned().unwrap_or_else(|| json!([])),
         "queue_copy": "资源正在排队，可以联系商务开通高级用户跳过等待。",
     })
+}
+
+fn build_static_page_visual_spec(style_direction: &str) -> Value {
+    match style_direction {
+        "decision-brief" => json!({
+            "version": 1,
+            "styleDirection": "decision-brief",
+            "palette": {
+                "background": "#0f172a",
+                "surface": "rgba(255,255,255,0.08)",
+                "text": "#f8fafc",
+                "mutedText": "#cbd5e1",
+                "accent": "#93c5fd",
+                "chart": "#38bdf8"
+            },
+            "typography": {
+                "headingFamily": "Aptos Display, ui-sans-serif, system-ui",
+                "bodyFamily": "Aptos, ui-sans-serif, system-ui",
+                "density": "compact"
+            },
+            "surface": {
+                "radius": 26,
+                "shadow": "deep",
+                "decoration": "subtle-gradient"
+            }
+        }),
+        "data-command" => json!({
+            "version": 1,
+            "styleDirection": "data-command",
+            "palette": {
+                "background": "#064e3b",
+                "surface": "rgba(255,255,255,0.09)",
+                "text": "#ecfeff",
+                "mutedText": "#cbd5e1",
+                "accent": "#5eead4",
+                "chart": "#22d3ee"
+            },
+            "typography": {
+                "headingFamily": "Aptos Display, ui-sans-serif, system-ui",
+                "bodyFamily": "Aptos, ui-sans-serif, system-ui",
+                "density": "dense"
+            },
+            "surface": {
+                "radius": 22,
+                "shadow": "glow",
+                "decoration": "command-gradient"
+            }
+        }),
+        _ => json!({
+            "version": 1,
+            "styleDirection": "client-delivery",
+            "palette": {
+                "background": "#f7f8fb",
+                "surface": "rgba(255,255,255,0.76)",
+                "text": "#101827",
+                "mutedText": "#475569",
+                "accent": "#2563eb",
+                "chart": "#0ea5e9"
+            },
+            "typography": {
+                "headingFamily": "Aptos Display, ui-sans-serif, system-ui",
+                "bodyFamily": "Aptos, ui-sans-serif, system-ui",
+                "density": "balanced"
+            },
+            "surface": {
+                "radius": 26,
+                "shadow": "soft",
+                "decoration": "warm-gradient"
+            }
+        }),
+    }
+}
+
+fn build_static_page_render_spec() -> Value {
+    json!({
+        "renderer": "static-page-renderer-v1",
+        "layoutEngine": "css-grid-12",
+        "desktopGrid": {
+            "columns": 12,
+            "rowHeight": 96
+        },
+        "mobileLayout": "single-column-sortable",
+        "componentModel": "dom-text-svg-chart",
+        "chartRuntime": "recharts-first-echarts-optional",
+        "editableContent": ["title", "content", "dataBinding", "visualization", "layout"],
+        "generationGuardrails": [
+            "效果图必须服从模块网格布局和移动端顺序",
+            "正文、指标、图表在最终静态页中必须是真 DOM 或 SVG，不允许只烘焙进图片",
+            "复杂背景、纹理、装饰可以作为图片资产，核心数据表达必须可重新渲染",
+            "避免 3D 透视、真实摄影 UI、不可复刻字体效果和过度复杂玻璃反射"
+        ]
+    })
+}
+
+fn build_static_page_data_snapshot(payload: &Value, selected_scope: &Value) -> Value {
+    let module_bindings = static_page_payload_modules(payload)
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|module| {
+            json!({
+                "moduleId": module.get("id").cloned().unwrap_or(Value::Null),
+                "title": module.get("title").cloned().unwrap_or(Value::Null),
+                "binding": module
+                    .get("dataBinding")
+                    .or_else(|| module.get("data_binding"))
+                    .cloned()
+                    .unwrap_or(Value::Null),
+                "visualizationType": module
+                    .get("visualization")
+                    .and_then(|visualization| visualization.get("type"))
+                    .cloned()
+                    .unwrap_or_else(|| json!("text-insight")),
+            })
+        })
+        .collect::<Vec<_>>();
+    json!({
+        "version": 1,
+        "source": "static_page_draft",
+        "selected_scope": selected_scope,
+        "module_bindings": module_bindings,
+    })
+}
+
+fn build_static_page_preview_contract(
+    style_direction: &str,
+    modules: &Value,
+    render_spec: &Value,
+    patch: Option<Value>,
+) -> Value {
+    let contract_source = json!({
+        "style_direction": style_direction,
+        "modules": modules,
+        "render_spec": render_spec,
+    });
+    let mut contract = json!({
+        "version": 1,
+        "kind": "static-page-preview-contract",
+        "status": "not_requested",
+        "draftFingerprint": static_page_design_fingerprint(&contract_source),
+        "imageJobId": Value::Null,
+        "assetKey": Value::Null,
+        "confirmedAt": Value::Null,
+        "renderExpectation": "final HTML/CSS/SVG should reproduce the confirmed preview without baking editable text or charts into the image",
+    });
+    if let Some(patch) = patch {
+        merge_json_value(&mut contract, &patch);
+        set_payload_string(
+            &mut contract,
+            "draftFingerprint",
+            &static_page_design_fingerprint(&contract_source),
+        );
+    }
+    contract
+}
+
+fn static_page_design_fingerprint(value: &Value) -> String {
+    let serialized = serde_json::to_string(value).unwrap_or_else(|_| "{}".to_string());
+    let mut hash: u32 = 0;
+    for byte in serialized.bytes() {
+        hash = hash.wrapping_mul(31).wrapping_add(byte as u32);
+    }
+    format!("design-{hash:08x}")
 }
 
 fn static_page_payload_modules(payload: &Value) -> Value {
@@ -10931,6 +11145,10 @@ fn static_page_payload_string(payload: &Value, keys: &[&str]) -> Option<String> 
             .filter(|value| !value.is_empty())
             .map(ToOwned::to_owned)
     })
+}
+
+fn static_page_payload_value(payload: &Value, keys: &[&str]) -> Option<Value> {
+    keys.iter().find_map(|key| payload.get(*key).cloned())
 }
 
 async fn load_static_page_draft_or_404(
@@ -11216,6 +11434,7 @@ fn apply_static_page_operations_to_payload(
         set_payload_string(&mut payload, "modelSummary", summary);
         set_payload_string(&mut payload, "model_summary", summary);
     }
+    refresh_static_page_payload_design_contract(&mut payload);
     payload
 }
 
@@ -11326,17 +11545,49 @@ fn apply_static_page_operation_to_payload(payload: &mut Value, operation: &Value
                         .unwrap_or("资源正在排队，可以联系商务开通高级用户跳过等待。"),
                 }),
             );
+            set_payload_value(
+                payload,
+                "previewContract",
+                json!({
+                    "status": "queued",
+                    "imageJobId": operation.get("jobId").cloned().unwrap_or(Value::Null),
+                    "assetKey": Value::Null,
+                    "queuePosition": operation.get("queuePosition").cloned().unwrap_or(Value::Null),
+                    "confirmedAt": Value::Null,
+                }),
+            );
         }
         "mark_preview_ready" => {
             set_payload_string(payload, "status", "preview_ready");
             if let Some(preview) = operation.get("previewImage") {
                 set_payload_value(payload, "previewImage", preview.clone());
+                set_payload_value(
+                    payload,
+                    "previewContract",
+                    json!({
+                        "status": "preview_ready",
+                        "imageJobId": preview.get("imageJobId").cloned().unwrap_or(Value::Null),
+                        "assetKey": preview.get("assetKey").cloned().unwrap_or(Value::Null),
+                        "queuePosition": Value::Null,
+                    }),
+                );
             }
         }
         "confirm_preview" => {
             set_payload_string(payload, "status", "effect_confirmed");
             if let Some(preview) = operation.get("previewImage") {
                 set_payload_value(payload, "previewImage", preview.clone());
+                set_payload_value(
+                    payload,
+                    "previewContract",
+                    json!({
+                        "status": "confirmed",
+                        "imageJobId": preview.get("imageJobId").cloned().unwrap_or(Value::Null),
+                        "assetKey": preview.get("assetKey").cloned().unwrap_or(Value::Null),
+                        "queuePosition": Value::Null,
+                        "confirmedAt": Utc::now(),
+                    }),
+                );
             }
         }
         "request_final_render" => {
@@ -11350,6 +11601,43 @@ fn apply_static_page_operation_to_payload(payload: &mut Value, operation: &Value
         }
         _ => {}
     }
+}
+
+fn refresh_static_page_payload_design_contract(payload: &mut Value) {
+    ensure_json_object(payload);
+    let style_direction =
+        static_page_payload_string(payload, &["styleDirection", "style_direction"])
+            .unwrap_or_else(|| "client-delivery".to_string());
+    let modules = static_page_payload_modules(payload);
+    let visual_spec = build_static_page_visual_spec(&style_direction);
+    let render_spec = static_page_payload_value(payload, &["renderSpec", "render_spec"])
+        .unwrap_or_else(build_static_page_render_spec);
+    let selected_scope = payload
+        .get("assistant_context")
+        .and_then(|context| context.get("selected_scope"))
+        .cloned()
+        .or_else(|| payload.get("selected_scope").cloned())
+        .unwrap_or(Value::Null);
+    let data_snapshot = build_static_page_data_snapshot(payload, &selected_scope);
+    let previous_contract =
+        static_page_payload_value(payload, &["previewContract", "preview_contract"]);
+    let preview_contract = build_static_page_preview_contract(
+        &style_direction,
+        &modules,
+        &render_spec,
+        previous_contract,
+    );
+
+    set_payload_string(payload, "styleDirection", &style_direction);
+    set_payload_string(payload, "style_direction", &style_direction);
+    set_payload_value(payload, "visualSpec", visual_spec.clone());
+    set_payload_value(payload, "visual_spec", visual_spec);
+    set_payload_value(payload, "renderSpec", render_spec.clone());
+    set_payload_value(payload, "render_spec", render_spec);
+    set_payload_value(payload, "dataSnapshot", data_snapshot.clone());
+    set_payload_value(payload, "data_snapshot", data_snapshot);
+    set_payload_value(payload, "previewContract", preview_contract.clone());
+    set_payload_value(payload, "preview_contract", preview_contract);
 }
 
 fn append_static_page_operations_metadata(
@@ -12051,6 +12339,14 @@ mod tests {
             job_response.image_job.image_prompt_payload["queue_copy"],
             json!("资源正在排队，可以联系商务开通高级用户跳过等待。")
         );
+        assert_eq!(
+            job_response.image_job.image_prompt_payload["design_contract"]["editable_core"],
+            json!("DOM text + SVG/chart components")
+        );
+        assert_eq!(
+            job_response.image_job.image_prompt_payload["render_spec"]["componentModel"],
+            json!("dom-text-svg-chart")
+        );
         let image_workflows = state
             .storage
             .workflow_executions()
@@ -12114,6 +12410,10 @@ mod tests {
             confirmed.draft.draft_payload["previewImage"]["assetKey"],
             json!("previews/static-page-1.png")
         );
+        assert_eq!(
+            confirmed.draft.draft_payload["previewContract"]["status"],
+            json!("confirmed")
+        );
 
         let (render_status, Json(render_response)) = create_static_page_render(
             State(state.clone()),
@@ -12134,6 +12434,14 @@ mod tests {
             .render_output
             .html
             .contains("previews/static-page-1.png"));
+        assert_eq!(
+            render_response.render_output.asset_manifest["design_contract"]["preview_role"],
+            json!("visual_contract")
+        );
+        assert_eq!(
+            render_response.render_output.asset_manifest["render_spec"]["componentModel"],
+            json!("dom-text-svg-chart")
+        );
         assert_eq!(
             render_response.draft.status,
             contracts::StaticPageDraftStatusView::Rendered

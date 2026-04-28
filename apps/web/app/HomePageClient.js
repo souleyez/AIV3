@@ -30,6 +30,7 @@ const MESSAGE_POLL_INTERVAL_MS = 3000;
 const CATALOG_POLL_INTERVAL_MS = 12000;
 const REPORT_DETAIL_POLL_INTERVAL_MS = 6000;
 const STATIC_PAGE_SHELF_POLL_INTERVAL_MS = 12000;
+const STATIC_PAGE_ACTIVE_JOB_POLL_INTERVAL_MS = 4000;
 const LOCAL_CHAT_STORAGE_KEY = 'aidp-v3-local-chat-messages';
 const LOCAL_ACTIVITY_STORAGE_KEY = 'aidp-v3-local-activity-events';
 const LOCAL_THREAD_ID_STORAGE_KEY = 'aidp-v3-local-thread-id';
@@ -418,14 +419,34 @@ export default function HomePageClient() {
       return draft;
     }
     const status = imageJob.status === 'confirmed' ? 'confirmed' : imageJob.status;
+    const nextStatus = (() => {
+      if (draft.status === 'rendered' || draft.status === 'effect_confirmed') {
+        return draft.status;
+      }
+      if (status === 'preview_ready') {
+        return 'preview_ready';
+      }
+      if (status === 'confirmed') {
+        return 'effect_confirmed';
+      }
+      if (status === 'queued' || status === 'running') {
+        return 'queued';
+      }
+      if (status === 'failed') {
+        return 'planning';
+      }
+      return draft.status;
+    })();
     return {
       ...draft,
+      status: nextStatus,
       imageJob: {
         ...(draft.imageJob || {}),
         id: imageJob.id,
         status,
         queuePosition: imageJob.queue_position ?? null,
-        queueMessage: imageJob.failure_reason || STATIC_PAGE_QUEUE_MESSAGE,
+        queueMessage: imageJob.failure_reason
+          || (status === 'preview_ready' ? '效果图已生成，等待客户确认。' : STATIC_PAGE_QUEUE_MESSAGE),
       },
       previewImage: imageJob.preview_asset_key
         ? buildConfirmedStaticPagePreview(draft, imageJob, draft.previewImage)
@@ -602,6 +623,29 @@ export default function HomePageClient() {
       if (!silent) {
         setBanner(`静态页草稿架暂不可用：${shelfError instanceof Error ? shelfError.message : '请求失败'}。`);
       }
+    }
+  }
+
+  async function refreshBackendStaticPageDraft(backendDraftId, options = {}) {
+    const { silent = true } = options;
+    if (!backendDraftId) {
+      return null;
+    }
+    try {
+      const backendDraft = await fetchJson(`/api/v3/static-page-drafts/${backendDraftId}`);
+      const hydratedDraft = await hydrateBackendStaticPageDraft(backendDraft);
+      if (hydratedDraft?.id) {
+        setStaticPageDrafts((current) => ({
+          ...current,
+          [hydratedDraft.id]: hydratedDraft,
+        }));
+      }
+      return hydratedDraft;
+    } catch (refreshError) {
+      if (!silent) {
+        setBanner(`静态页状态刷新暂不可用：${refreshError instanceof Error ? refreshError.message : '请求失败'}。`);
+      }
+      return null;
     }
   }
 
@@ -1889,6 +1933,21 @@ export default function HomePageClient() {
 
     return () => window.clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    const backendDraftId = activeStaticPageDraft?.backendDraftId;
+    const jobStatus = activeStaticPageDraft?.imageJob?.status;
+    if (!backendDraftId || !['queued', 'running'].includes(jobStatus)) {
+      return undefined;
+    }
+
+    refreshBackendStaticPageDraft(backendDraftId, { silent: true });
+    const timer = window.setInterval(() => {
+      refreshBackendStaticPageDraft(backendDraftId, { silent: true });
+    }, STATIC_PAGE_ACTIVE_JOB_POLL_INTERVAL_MS);
+
+    return () => window.clearInterval(timer);
+  }, [activeStaticPageDraft?.backendDraftId, activeStaticPageDraft?.imageJob?.status]);
 
   useEffect(() => {
     if (!selectedReportPlanId) {

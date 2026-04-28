@@ -16,8 +16,9 @@ import {
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
+import StaticPageModuleCard from './StaticPageModuleCard';
 
-function SortableModuleItem({ module }) {
+function SortableModuleItem({ module, onApplyOperation }) {
   const {
     attributes,
     listeners,
@@ -47,19 +48,12 @@ function SortableModuleItem({ module }) {
         <span></span>
         <span></span>
       </button>
-      <div className="static-page-mobile-module-copy">
-        <div className="static-page-mobile-module-head">
-          <strong>{module.title}</strong>
-          <span>{module.visualization?.label || module.visualization?.type || '未选择图表'}</span>
-        </div>
-        <p>{module.content}</p>
-        <em>{module.dataBinding?.label || '未绑定数据'}</em>
-      </div>
+      <StaticPageModuleCard compact module={module} onApplyOperation={onApplyOperation} />
     </article>
   );
 }
 
-export default function StaticPageMobileModuleList({ draft, onReorder }) {
+export default function StaticPageMobileModuleList({ draft, onReorder, onApplyOperation }) {
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
@@ -88,7 +82,7 @@ export default function StaticPageMobileModuleList({ draft, onReorder }) {
       <SortableContext items={orderedIds} strategy={verticalListSortingStrategy}>
         <div className="static-page-mobile-module-list">
           {orderedModules.map((module) => (
-            <SortableModuleItem key={module.id} module={module} />
+            <SortableModuleItem key={module.id} module={module} onApplyOperation={onApplyOperation} />
           ))}
         </div>
       </SortableContext>

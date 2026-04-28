@@ -1079,6 +1079,7 @@ textarea {
 .static-page-effect-head span,
 .static-page-effect-head em,
 .static-page-queue-card span,
+.static-page-failure-card span,
 .static-page-preview-card span {
   color: var(--subtle);
   font-size: 12px;
@@ -1088,13 +1089,16 @@ textarea {
 
 .static-page-effect-head strong,
 .static-page-queue-card strong,
+.static-page-failure-card strong,
 .static-page-preview-card strong,
 .static-page-preview-placeholder strong {
   color: var(--text);
 }
 
 .static-page-queue-card,
+.static-page-failure-card,
 .static-page-preview-card,
+.static-page-preview-image-card,
 .static-page-preview-placeholder {
   display: grid;
   gap: 7px;
@@ -1102,6 +1106,44 @@ textarea {
   border-radius: 16px;
   border: 1px solid rgba(148, 163, 184, 0.14);
   background: rgba(255, 255, 255, 0.62);
+}
+
+.static-page-failure-card {
+  border-color: rgba(239, 68, 68, 0.2);
+  background: rgba(239, 68, 68, 0.08);
+}
+
+.static-page-preview-image-card {
+  margin: 0;
+  overflow: hidden;
+  padding: 0;
+}
+
+.static-page-preview-image-card img {
+  display: block;
+  width: 100%;
+  max-height: 380px;
+  object-fit: contain;
+  background:
+    radial-gradient(circle at 20% 20%, rgba(37, 99, 235, 0.1), transparent 32%),
+    rgba(15, 23, 42, 0.06);
+}
+
+.static-page-preview-image-card figcaption {
+  display: grid;
+  gap: 4px;
+  padding: 12px;
+}
+
+.static-page-preview-image-card span {
+  color: var(--subtle);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 800;
+}
+
+.static-page-preview-image-card strong {
+  color: var(--text);
 }
 
 .static-page-preview-placeholder p {
@@ -1303,14 +1345,23 @@ textarea {
 .static-page-module-card {
   height: 100%;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto auto;
+  grid-template-rows: auto minmax(0, 1fr) auto auto auto;
   gap: 8px;
   padding: 12px;
   border-radius: 16px;
   border: 1px solid rgba(37, 99, 235, 0.14);
   background: rgba(255, 255, 255, 0.94);
   box-shadow: 0 14px 28px rgba(15, 23, 42, 0.08);
-  overflow: hidden;
+  overflow: auto;
+}
+
+.static-page-module-card.compact {
+  height: auto;
+  min-height: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
 }
 
 .static-page-module-drag-handle {
@@ -1366,6 +1417,75 @@ textarea {
   border-radius: 999px;
   color: #1d4ed8;
   background: rgba(37, 99, 235, 0.09);
+}
+
+.static-page-module-editor {
+  min-width: 0;
+  touch-action: auto;
+}
+
+.static-page-module-editor summary {
+  cursor: pointer;
+  color: #1d4ed8;
+  font-size: 11px;
+  font-weight: 900;
+  list-style: none;
+}
+
+.static-page-module-editor summary::-webkit-details-marker {
+  display: none;
+}
+
+.static-page-module-editor summary::after {
+  content: ' · 标题/内容/数据/图表';
+  color: #64748b;
+  font-weight: 750;
+}
+
+.static-page-module-editor-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  padding-top: 8px;
+}
+
+.static-page-module-editor-grid label {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.static-page-module-editor-grid label.wide {
+  grid-column: 1 / -1;
+}
+
+.static-page-module-editor-grid span {
+  color: #64748b;
+  font-size: 10px;
+  font-weight: 900;
+}
+
+.static-page-module-editor-grid input,
+.static-page-module-editor-grid textarea,
+.static-page-module-editor-grid select {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  border-radius: 10px;
+  padding: 8px 9px;
+  color: #0f172a;
+  background: rgba(241, 245, 249, 0.92);
+  font-size: 12px;
+  font: inherit;
+}
+
+.static-page-module-editor-grid textarea {
+  resize: vertical;
+  line-height: 1.45;
+}
+
+.static-page-module-editor-grid button {
+  align-self: end;
 }
 
 .react-resizable-handle {
@@ -2073,7 +2193,9 @@ body {
 .assistant-shell .static-page-style-option strong,
 .assistant-shell .static-page-effect-head strong,
 .assistant-shell .static-page-queue-card strong,
+.assistant-shell .static-page-failure-card strong,
 .assistant-shell .static-page-preview-card strong,
+.assistant-shell .static-page-preview-image-card strong,
 .assistant-shell .static-page-preview-placeholder strong,
 .assistant-shell .static-page-final-head strong {
   color: #f8fbff;
@@ -2089,7 +2211,9 @@ body {
 .assistant-shell .static-page-effect-head span,
 .assistant-shell .static-page-effect-head em,
 .assistant-shell .static-page-queue-card span,
+.assistant-shell .static-page-failure-card span,
 .assistant-shell .static-page-preview-card span,
+.assistant-shell .static-page-preview-image-card span,
 .assistant-shell .static-page-final-head span {
   color: #9aa7b9;
 }
@@ -2109,7 +2233,9 @@ body {
 }
 
 .assistant-shell .static-page-queue-card,
+.assistant-shell .static-page-failure-card,
 .assistant-shell .static-page-preview-card,
+.assistant-shell .static-page-preview-image-card,
 .assistant-shell .static-page-preview-placeholder {
   background: rgba(255, 255, 255, 0.045);
   border-color: rgba(255, 255, 255, 0.08);
@@ -2151,6 +2277,22 @@ body {
 .assistant-shell .static-page-module-card p,
 .assistant-shell .static-page-module-meta span {
   color: #9aa7b9;
+}
+
+.assistant-shell .static-page-module-editor summary {
+  color: #93c5fd;
+}
+
+.assistant-shell .static-page-module-editor summary::after,
+.assistant-shell .static-page-module-editor-grid span {
+  color: #9aa7b9;
+}
+
+.assistant-shell .static-page-module-editor-grid input,
+.assistant-shell .static-page-module-editor-grid textarea,
+.assistant-shell .static-page-module-editor-grid select {
+  color: #f8fbff;
+  background: rgba(9, 13, 20, 0.72);
 }
 
 .assistant-shell .user-bubble {
@@ -2789,10 +2931,16 @@ body {
 }
 
 .static-page-effect-preview.compact .static-page-queue-card,
+.static-page-effect-preview.compact .static-page-failure-card,
 .static-page-effect-preview.compact .static-page-preview-card,
+.static-page-effect-preview.compact .static-page-preview-image-card,
 .static-page-effect-preview.compact .static-page-preview-placeholder {
   background: rgba(7, 11, 17, 0.45);
   border-color: rgba(255, 255, 255, 0.08);
+}
+
+.static-page-effect-preview.compact .static-page-preview-image-card img {
+  max-height: 260px;
 }
 
 .static-page-effect-preview.compact .static-page-effect-actions {
@@ -2844,7 +2992,7 @@ body {
   grid-template-columns: 42px minmax(0, 1fr);
   gap: 10px;
   padding: 12px;
-  touch-action: none;
+  touch-action: auto;
 }
 
 .static-page-mobile-module.dragging {
@@ -2860,6 +3008,7 @@ body {
   gap: 4px;
   border-radius: 14px;
   background: rgba(59, 130, 246, 0.14);
+  touch-action: none;
 }
 
 .static-page-mobile-module-handle span {

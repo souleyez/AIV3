@@ -91,10 +91,14 @@ export default function StaticPageMobileBuilder({
 
       <div className="static-page-mobile-section-title">
         <strong>模块顺序</strong>
-        <span>手机端只做上下排序，大小由桌面或模型处理。</span>
+        <span>手机端支持上下排序，也可展开模块微调标题、内容、数据和图表。</span>
       </div>
 
-      <StaticPageMobileModuleList draft={draft} onReorder={onReorderModules} />
+      <StaticPageMobileModuleList
+        draft={draft}
+        onReorder={onReorderModules}
+        onApplyOperation={onApplyOperation}
+      />
     </section>
   );
 }

@@ -266,6 +266,24 @@ pub fn extract_first_image_artifact(
     })
 }
 
+pub fn normalize_artifact_asset_key(asset_key: &str, orchestrator_base_url: &str) -> String {
+    let trimmed = asset_key.trim();
+    if trimmed.starts_with("http://")
+        || trimmed.starts_with("https://")
+        || trimmed.starts_with("data:image/")
+        || trimmed.starts_with("blob:")
+    {
+        return trimmed.to_string();
+    }
+
+    let base = orchestrator_base_url.trim_end_matches('/');
+    if trimmed.starts_with('/') {
+        return format!("{base}{trimmed}");
+    }
+
+    format!("{base}/{trimmed}")
+}
+
 pub fn merge_orchestrator_state(image_prompt_payload: &Value, state: Value) -> Value {
     let mut object = image_prompt_payload
         .as_object()
@@ -397,6 +415,28 @@ mod tests {
 
         let error = extract_first_image_artifact(&task).expect_err("missing artifact");
         assert!(error.to_string().contains("required image artifact"));
+    }
+
+    #[test]
+    fn normalizes_relative_artifact_urls_against_orchestrator_base() {
+        assert_eq!(
+            normalize_artifact_asset_key(
+                "/api/codex/artifacts/artifact_1?download=1",
+                "http://127.0.0.1:3003/"
+            ),
+            "http://127.0.0.1:3003/api/codex/artifacts/artifact_1?download=1"
+        );
+        assert_eq!(
+            normalize_artifact_asset_key(
+                "api/codex/artifacts/artifact_2?download=1",
+                "http://127.0.0.1:3003"
+            ),
+            "http://127.0.0.1:3003/api/codex/artifacts/artifact_2?download=1"
+        );
+        assert_eq!(
+            normalize_artifact_asset_key("data:image/png;base64,abc", "http://127.0.0.1:3003"),
+            "data:image/png;base64,abc"
+        );
     }
 
     #[test]

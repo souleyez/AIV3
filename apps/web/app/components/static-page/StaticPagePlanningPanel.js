@@ -63,7 +63,7 @@ export default function StaticPagePlanningPanel({
 
       <div className="static-page-planning-hint">
         <strong>桌面规划模式</strong>
-        <span>拖动模块标题条调整位置，拖右下角调整大小；手机端后续会使用纵向构建模式。</span>
+        <span>拖动模块标题条调整位置，拖右下角调整大小；展开“微调模块”可改标题、内容、数据说明和图表。</span>
       </div>
     </div>
   );

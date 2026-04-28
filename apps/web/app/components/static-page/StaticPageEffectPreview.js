@@ -9,8 +9,19 @@ const JOB_LABELS = {
   confirmed: '效果图已确认',
 };
 
+const DEFAULT_QUEUE_MESSAGE = '资源正在排队，可以联系商务开通高级用户跳过等待。';
+
 function modulePreviewWidth(module) {
   return `${Math.max(32, Math.min(100, Number(module.width || 4) * 8))}%`;
+}
+
+function isRenderablePreviewAsset(assetKey) {
+  const value = String(assetKey || '').trim();
+  return /^https?:\/\//.test(value)
+    || value.startsWith('data:image/')
+    || value.startsWith('blob:')
+    || value.startsWith('/api/')
+    || value.startsWith('/_next/');
 }
 
 export default function StaticPageEffectPreview({
@@ -22,17 +33,23 @@ export default function StaticPageEffectPreview({
   const imageJob = draft?.imageJob || {};
   const jobStatus = imageJob.status || 'idle';
   const preview = draft?.previewImage;
+  const previewAssetKey = preview?.assetKey || '';
+  const canRenderPreviewImage = isRenderablePreviewAsset(previewAssetKey);
+  const isBackendJob = Boolean(imageJob.id) && !String(imageJob.id).startsWith('mock-image-job-');
   const confirmed = draft?.status === 'effect_confirmed'
     || draft?.status === 'rendering'
     || Boolean(draft?.finalPage);
   const hasPreview = jobStatus === 'preview_ready' || draft?.status === 'effect_confirmed';
-  const queueMessage = imageJob.queueMessage || preview?.queueMessage || '资源正在排队，可以联系商务开通高级用户跳过等待。';
+  const queueMessage = imageJob.queueMessage || preview?.queueMessage || DEFAULT_QUEUE_MESSAGE;
+  const failureMessage = jobStatus === 'failed'
+    ? (imageJob.queueMessage || '效果图生成失败，可以重新生成。')
+    : '';
 
   function queuePreview() {
     onApplyOperation?.({
       type: 'queue_image_job',
       queuePosition: 2,
-      queueMessage,
+      queueMessage: DEFAULT_QUEUE_MESSAGE,
     });
   }
 
@@ -61,30 +78,47 @@ export default function StaticPageEffectPreview({
         </div>
       ) : null}
 
-      {hasPreview && preview ? (
-        <div className="static-page-preview-card">
-          <span>{preview.title}</span>
-          <strong>{preview.subtitle}</strong>
-          <div className="static-page-preview-lines">
-            {preview.modules.map((module) => (
-              <i key={module.id} style={{ width: modulePreviewWidth(module) }} title={module.title} />
-            ))}
-          </div>
+      {jobStatus === 'failed' ? (
+        <div className="static-page-failure-card">
+          <strong>效果图生成失败</strong>
+          <span>{failureMessage}</span>
         </div>
+      ) : null}
+
+      {hasPreview && preview ? (
+        canRenderPreviewImage ? (
+          <figure className="static-page-preview-image-card">
+            <img src={previewAssetKey} alt={preview.title || '静态页效果图'} loading="lazy" />
+            <figcaption>
+              <span>{preview.title || '静态页效果图'}</span>
+              <strong>{preview.subtitle || '由远程生图队列生成，等待客户确认'}</strong>
+            </figcaption>
+          </figure>
+        ) : (
+          <div className="static-page-preview-card">
+            <span>{preview.title}</span>
+            <strong>{preview.subtitle}</strong>
+            <div className="static-page-preview-lines">
+              {(preview.modules || []).map((module) => (
+                <i key={module.id} style={{ width: modulePreviewWidth(module) }} title={module.title} />
+              ))}
+            </div>
+          </div>
+        )
       ) : (
         <div className="static-page-preview-placeholder">
           <strong>先生成一张效果图给客户确认</strong>
-          <p>这里先用确定性模拟图占位，后续会替换成 Cloudflare 队列返回的真实图片。</p>
+          <p>后端会通过 Codex 远程队列生成真实图片，等待中仍可继续修改规划。</p>
         </div>
       )}
 
       <div className="static-page-effect-actions">
         {jobStatus === 'idle' || jobStatus === 'failed' ? (
           <button type="button" className="primary-btn compact-action-btn" onClick={queuePreview}>
-            生成效果图
+            {jobStatus === 'failed' ? '重新生成效果图' : '生成效果图'}
           </button>
         ) : null}
-        {jobStatus === 'queued' || jobStatus === 'running' ? (
+        {(jobStatus === 'queued' || jobStatus === 'running') && !isBackendJob ? (
           <button type="button" className="primary-btn compact-action-btn" onClick={finishMockPreview}>
             查看模拟效果图
           </button>

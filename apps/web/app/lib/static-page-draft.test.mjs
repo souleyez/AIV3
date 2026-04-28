@@ -7,6 +7,9 @@ import {
   buildMockStaticPagePreview,
   buildStaticPageFinalRenderPayload,
   buildStaticPageImagePayload,
+  buildStaticPagePreviewContract,
+  buildStaticPageRenderSpec,
+  buildStaticPageVisualSpec,
   interpretStaticPagePrompt,
   validateMobileOrder,
   validateStaticPageLayout,
@@ -25,6 +28,10 @@ test('buildInitialStaticPageDraft creates default modules and mobile order', () 
   assert.equal(draft.modules.length, 5);
   assert.deepEqual(draft.mobileOrder, draft.modules.map((module) => module.id));
   assert.equal(draft.source.evidenceIds[0], 'ev-1');
+  assert.equal(draft.visualSpec.styleDirection, 'client-delivery');
+  assert.equal(draft.renderSpec.componentModel, 'dom-text-svg-chart');
+  assert.equal(draft.previewContract.status, 'not_requested');
+  assert.equal(draft.dataSnapshot.moduleBindings.length, 5);
 });
 
 test('applyStaticPageOperation updates module copy without mutating original draft', () => {
@@ -86,6 +93,7 @@ test('style direction and visualization operations are validated', () => {
   });
 
   assert.equal(withChart.styleDirection, 'decision-brief');
+  assert.equal(withChart.visualSpec.styleDirection, 'decision-brief');
   assert.equal(withChart.modules.find((module) => module.id === 'trend').visualization.type, 'bar-chart');
   assert.equal(invalidStyle.styleDirection, 'decision-brief');
 });
@@ -101,8 +109,24 @@ test('image and final render payloads include confirmed structure', () => {
 
   assert.equal(imagePayload.oneClick, true);
   assert.equal(imagePayload.modules.length, 5);
+  assert.equal(imagePayload.designContract.editableCore, 'dom-text-svg-chart');
+  assert.equal(imagePayload.previewContract.status, 'confirmed');
   assert.equal(finalPayload.previewImage.assetKey, 'preview-1.png');
+  assert.equal(finalPayload.visualSpec.styleDirection, 'client-delivery');
   assert.equal(validateMobileOrder(finalPayload.modules, finalPayload.mobileOrder), true);
+});
+
+test('design contract fingerprint changes after layout or content edits', () => {
+  const draft = buildInitialStaticPageDraft();
+  const originalContract = buildStaticPagePreviewContract(draft);
+  const edited = applyStaticPageOperation(draft, {
+    type: 'update_module',
+    targetModuleId: 'hero',
+    patch: { content: '更新后的核心判断。' },
+  });
+
+  assert.notEqual(edited.previewContract.draftFingerprint, originalContract.draftFingerprint);
+  assert.equal(edited.previewContract.status, 'not_requested');
 });
 
 test('prompt interpreter changes tone for decision makers', () => {
@@ -179,6 +203,47 @@ test('image queue flow creates deterministic mock preview and confirmation state
   assert.equal(confirmed.status, 'effect_confirmed');
 });
 
+test('requeueing an image job clears stale preview and final render state', () => {
+  const confirmed = applyStaticPageOperation(buildInitialStaticPageDraft(), {
+    type: 'confirm_preview',
+    previewImage: { assetKey: 'preview-1.png' },
+  });
+  const rendered = applyStaticPageOperation(confirmed, {
+    type: 'request_final_render',
+    finalPage: {
+      status: 'rendered',
+      renderer: 'platform-api-static-page-renderer',
+      renderOutputId: 'render-1',
+      html: '<main>旧结果</main>',
+    },
+  });
+  const queued = applyStaticPageOperation(rendered, {
+    type: 'queue_image_job',
+    jobId: 'job-2',
+  });
+
+  assert.equal(queued.status, 'queued');
+  assert.equal(queued.imageJob.id, 'job-2');
+  assert.equal(queued.previewImage, null);
+  assert.equal(queued.finalPage, null);
+});
+
+test('failed image job status returns draft to editable planning state', () => {
+  const queued = applyStaticPageOperation(buildInitialStaticPageDraft(), {
+    type: 'queue_image_job',
+    jobId: 'job-1',
+  });
+  const failed = applyStaticPageOperation(queued, {
+    type: 'update_image_job_status',
+    status: 'failed',
+    queueMessage: 'CODEX_AUTH_REQUIRED',
+  });
+
+  assert.equal(failed.status, 'planning');
+  assert.equal(failed.imageJob.status, 'failed');
+  assert.equal(failed.imageJob.queueMessage, 'CODEX_AUTH_REQUIRED');
+});
+
 test('mock preview payload follows current style and module layout', () => {
   const draft = applyStaticPageOperation(buildInitialStaticPageDraft(), {
     type: 'change_style_direction',
@@ -223,4 +288,60 @@ test('final render request accepts backend rendered output', () => {
   assert.equal(rendered.finalPage.status, 'rendered');
   assert.equal(rendered.finalPage.renderOutputId, 'render-1');
   assert.match(rendered.finalPage.html, /核心判断/);
+});
+
+test('editing after preview confirmation marks the visual contract stale', () => {
+  const confirmed = applyStaticPageOperation(buildInitialStaticPageDraft(), {
+    type: 'confirm_preview',
+    previewImage: { assetKey: 'preview-1.png' },
+  });
+  const edited = applyStaticPageOperation(confirmed, {
+    type: 'change_style_direction',
+    styleDirection: 'data-command',
+  });
+
+  assert.equal(edited.previewContract.status, 'stale');
+  assert.equal(edited.previewContract.previousAssetKey, 'preview-1.png');
+  assert.equal(edited.previewImage, null);
+  assert.equal(edited.imageJob.status, 'idle');
+});
+
+test('module edit patch can update copy data binding and chart as one durable operation', () => {
+  const confirmed = applyStaticPageOperation(buildInitialStaticPageDraft(), {
+    type: 'confirm_preview',
+    previewImage: { assetKey: 'preview-1.png' },
+  });
+  const edited = applyStaticPageOperation(confirmed, {
+    type: 'update_module',
+    targetModuleId: 'trend',
+    patch: {
+      title: '客户增长趋势',
+      content: '重点展示最近三个月高价值客户增长。',
+      dataBinding: {
+        label: '客户订单趋势数据',
+      },
+      visualization: {
+        type: 'bar-chart',
+        label: '分类对比柱状图',
+      },
+    },
+  });
+  const module = edited.modules.find((item) => item.id === 'trend');
+
+  assert.equal(module.title, '客户增长趋势');
+  assert.equal(module.content, '重点展示最近三个月高价值客户增长。');
+  assert.equal(module.dataBinding.label, '客户订单趋势数据');
+  assert.equal(module.visualization.type, 'bar-chart');
+  assert.equal(edited.dataSnapshot.moduleBindings.find((item) => item.moduleId === 'trend').binding.label, '客户订单趋势数据');
+  assert.equal(edited.previewContract.status, 'stale');
+  assert.equal(edited.finalPage, null);
+});
+
+test('static page visual and render spec builders expose renderer-safe constraints', () => {
+  const visualSpec = buildStaticPageVisualSpec('data-command');
+  const renderSpec = buildStaticPageRenderSpec();
+
+  assert.equal(visualSpec.styleDirection, 'data-command');
+  assert.equal(renderSpec.layoutEngine, 'css-grid-12');
+  assert.ok(renderSpec.generationGuardrails.some((rule) => rule.includes('DOM')));
 });

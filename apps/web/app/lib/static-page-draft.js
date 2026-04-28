@@ -116,6 +116,17 @@ const DEFAULT_STYLE_DIRECTION = 'client-delivery';
 const STYLE_KEYS = new Set(STATIC_PAGE_STYLE_DIRECTIONS.map((item) => item.key));
 const VISUALIZATION_TYPES = new Set(STATIC_PAGE_VISUALIZATION_TYPES.map((item) => item.type));
 const IMAGE_JOB_STATUSES = new Set(['idle', 'queued', 'running', 'preview_ready', 'failed', 'confirmed']);
+const DESIGN_MUTATION_TYPES = new Set([
+  'update_module',
+  'add_module',
+  'remove_module',
+  'move_module',
+  'resize_module',
+  'change_visualization',
+  'change_data_binding',
+  'reorder_modules',
+  'change_style_direction',
+]);
 const MODULE_TARGET_KEYWORDS = [
   { id: 'hero', keywords: ['结论', '核心', '标题', '开头', '主判断', '判断'] },
   { id: 'kpi', keywords: ['指标', 'kpi', '数字', '数据卡', '量化'] },
@@ -135,8 +146,196 @@ const VISUALIZATION_KEYWORDS = [
   { type: 'headline', keywords: ['大标题', '主标题', '关键结论'] },
 ];
 
+const STATIC_PAGE_VISUAL_SPEC_PRESETS = {
+  'decision-brief': {
+    palette: {
+      background: '#0f172a',
+      surface: 'rgba(255,255,255,0.08)',
+      text: '#f8fafc',
+      mutedText: '#cbd5e1',
+      accent: '#93c5fd',
+      chart: '#38bdf8',
+    },
+    typography: {
+      headingFamily: 'Aptos Display, ui-sans-serif, system-ui',
+      bodyFamily: 'Aptos, ui-sans-serif, system-ui',
+      density: 'compact',
+    },
+    surface: {
+      radius: 26,
+      shadow: 'deep',
+      decoration: 'subtle-gradient',
+    },
+  },
+  'client-delivery': {
+    palette: {
+      background: '#f7f8fb',
+      surface: 'rgba(255,255,255,0.76)',
+      text: '#101827',
+      mutedText: '#475569',
+      accent: '#2563eb',
+      chart: '#0ea5e9',
+    },
+    typography: {
+      headingFamily: 'Aptos Display, ui-sans-serif, system-ui',
+      bodyFamily: 'Aptos, ui-sans-serif, system-ui',
+      density: 'balanced',
+    },
+    surface: {
+      radius: 26,
+      shadow: 'soft',
+      decoration: 'warm-gradient',
+    },
+  },
+  'data-command': {
+    palette: {
+      background: '#064e3b',
+      surface: 'rgba(255,255,255,0.09)',
+      text: '#ecfeff',
+      mutedText: '#cbd5e1',
+      accent: '#5eead4',
+      chart: '#22d3ee',
+    },
+    typography: {
+      headingFamily: 'Aptos Display, ui-sans-serif, system-ui',
+      bodyFamily: 'Aptos, ui-sans-serif, system-ui',
+      density: 'dense',
+    },
+    surface: {
+      radius: 22,
+      shadow: 'glow',
+      decoration: 'command-gradient',
+    },
+  },
+};
+
+const STATIC_PAGE_RENDER_SPEC = {
+  renderer: 'static-page-renderer-v1',
+  layoutEngine: 'css-grid-12',
+  desktopGrid: { columns: GRID_COLUMNS, rowHeight: 96 },
+  mobileLayout: 'single-column-sortable',
+  componentModel: 'dom-text-svg-chart',
+  chartRuntime: 'recharts-first-echarts-optional',
+  editableContent: ['title', 'content', 'dataBinding', 'visualization', 'layout'],
+  generationGuardrails: [
+    '效果图必须服从模块网格布局和移动端顺序',
+    '正文、指标、图表在最终静态页中必须是真 DOM 或 SVG，不允许只烘焙进图片',
+    '复杂背景、纹理、装饰可以作为图片资产，核心数据表达必须可重新渲染',
+    '避免 3D 透视、真实摄影 UI、不可复刻字体效果和过度复杂玻璃反射',
+  ],
+};
+
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
+}
+
+export function buildStaticPageVisualSpec(styleDirection = DEFAULT_STYLE_DIRECTION) {
+  const preset = STATIC_PAGE_VISUAL_SPEC_PRESETS[styleDirection]
+    || STATIC_PAGE_VISUAL_SPEC_PRESETS[DEFAULT_STYLE_DIRECTION];
+  return {
+    version: 1,
+    styleDirection: STYLE_KEYS.has(styleDirection) ? styleDirection : DEFAULT_STYLE_DIRECTION,
+    ...clone(preset),
+  };
+}
+
+export function buildStaticPageRenderSpec() {
+  return clone(STATIC_PAGE_RENDER_SPEC);
+}
+
+function stableStringify(value) {
+  if (Array.isArray(value)) {
+    return `[${value.map(stableStringify).join(',')}]`;
+  }
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function designFingerprint(value) {
+  const text = stableStringify(value);
+  let hash = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    hash = (Math.imul(31, hash) + text.charCodeAt(index)) | 0;
+  }
+  return `design-${(hash >>> 0).toString(16).padStart(8, '0')}`;
+}
+
+export function buildStaticPageDataSnapshot(draft) {
+  const modules = Array.isArray(draft?.modules) ? draft.modules : [];
+  return {
+    version: 1,
+    source: 'static-page-draft',
+    selectedDatasetId: draft?.datasetId || null,
+    selectedSessionId: draft?.sessionId || null,
+    evidenceIds: Array.isArray(draft?.source?.evidenceIds) ? [...draft.source.evidenceIds] : [],
+    moduleBindings: modules.map((module) => ({
+      moduleId: module.id,
+      title: module.title,
+      binding: clone(module.dataBinding || {}),
+      visualizationType: module.visualization?.type || 'text-insight',
+    })),
+  };
+}
+
+export function buildStaticPagePreviewContract(draft, patch = {}) {
+  const contractSource = {
+    styleDirection: draft?.styleDirection || DEFAULT_STYLE_DIRECTION,
+    visualSpec: draft?.visualSpec || buildStaticPageVisualSpec(draft?.styleDirection),
+    renderSpec: draft?.renderSpec || buildStaticPageRenderSpec(),
+    modules: (Array.isArray(draft?.modules) ? draft.modules : []).map((module) => ({
+      id: module.id,
+      title: module.title,
+      content: module.content,
+      dataBinding: module.dataBinding,
+      visualization: module.visualization,
+      layout: normalizeLayout(module.layout),
+    })),
+    mobileOrder: normalizeMobileOrder(
+      Array.isArray(draft?.modules) ? draft.modules : [],
+      draft?.mobileOrder || [],
+    ),
+  };
+  const base = {
+    version: 1,
+    kind: 'static-page-preview-contract',
+    status: 'not_requested',
+    draftFingerprint: designFingerprint(contractSource),
+    imageJobId: null,
+    assetKey: null,
+    confirmedAt: null,
+    renderExpectation: 'final HTML/CSS/SVG should reproduce the confirmed preview without baking editable text or charts into the image',
+  };
+  return {
+    ...base,
+    ...patch,
+    version: base.version,
+    kind: base.kind,
+    draftFingerprint: base.draftFingerprint,
+    renderExpectation: base.renderExpectation,
+  };
+}
+
+function refreshStaticPageDesignSpec(draft, { markPreviewStale = false } = {}) {
+  draft.visualSpec = buildStaticPageVisualSpec(draft.styleDirection || DEFAULT_STYLE_DIRECTION);
+  draft.renderSpec = draft.renderSpec || buildStaticPageRenderSpec();
+  draft.dataSnapshot = buildStaticPageDataSnapshot(draft);
+  const previousContract = draft.previewContract || {};
+  draft.previewContract = buildStaticPagePreviewContract(draft, previousContract);
+  if (markPreviewStale && previousContract.status && !['not_requested', 'queued', 'running', 'failed'].includes(previousContract.status)) {
+    draft.previewContract.status = 'stale';
+    draft.previewContract.previousAssetKey = previousContract.assetKey || draft.previewImage?.assetKey || null;
+    draft.previewImage = null;
+    draft.finalPage = null;
+    draft.imageJob = {
+      id: null,
+      status: 'idle',
+      queuePosition: null,
+      queueMessage: '',
+    };
+  }
+  return draft;
 }
 
 function visualizationLabel(type) {
@@ -256,7 +455,7 @@ export function buildInitialStaticPageDraft({
   evidenceIds = [],
 } = {}) {
   const modules = clone(DEFAULT_STATIC_PAGE_MODULES);
-  return {
+  const draft = {
     id: `draft-local-${datasetId || 'dataset'}-${sessionId || 'session'}`,
     datasetId,
     sessionId,
@@ -272,6 +471,10 @@ export function buildInitialStaticPageDraft({
     modelSummary: conversationSummary || '模型将根据当前会话和数据集生成静态页结构。',
     mobileOrder: modules.map((module) => module.id),
     modules,
+    visualSpec: buildStaticPageVisualSpec(DEFAULT_STYLE_DIRECTION),
+    renderSpec: buildStaticPageRenderSpec(),
+    dataSnapshot: null,
+    previewContract: null,
     operations: [],
     imageJob: {
       id: null,
@@ -282,6 +485,7 @@ export function buildInitialStaticPageDraft({
     previewImage: null,
     finalPage: null,
   };
+  return refreshStaticPageDesignSpec(draft);
 }
 
 export function validateStaticPageLayout(layout) {
@@ -361,6 +565,7 @@ export function applyStaticPageOperation(draft, operation = {}) {
 
   if (type === 'change_style_direction' && STYLE_KEYS.has(operation.styleDirection)) {
     next.styleDirection = operation.styleDirection;
+    next.visualSpec = buildStaticPageVisualSpec(operation.styleDirection);
   }
 
   if (type === 'refresh_summary' && operation.modelSummary) {
@@ -376,16 +581,38 @@ export function applyStaticPageOperation(draft, operation = {}) {
       queuePosition: operation.queuePosition ?? next.imageJob.queuePosition,
       queueMessage: operation.queueMessage || '资源正在排队，可以联系商务开通高级用户跳过等待。',
     };
+    next.previewImage = null;
+    next.finalPage = null;
+    next.previewContract = buildStaticPagePreviewContract(next, {
+      status: 'queued',
+      imageJobId: next.imageJob.id,
+      queuePosition: next.imageJob.queuePosition,
+      assetKey: null,
+      confirmedAt: null,
+    });
   }
 
   if (type === 'update_image_job_status' && IMAGE_JOB_STATUSES.has(operation.status)) {
-    next.status = operation.status === 'preview_ready' ? 'preview_ready' : next.status;
+    next.status = operation.status === 'preview_ready'
+      ? 'preview_ready'
+      : operation.status === 'failed'
+        ? 'planning'
+        : next.status;
     next.imageJob = {
       ...next.imageJob,
       status: operation.status,
       queuePosition: operation.queuePosition ?? next.imageJob.queuePosition,
       queueMessage: operation.queueMessage || next.imageJob.queueMessage,
     };
+    next.previewContract = buildStaticPagePreviewContract(next, {
+      ...(next.previewContract || {}),
+      status: operation.status,
+      imageJobId: next.imageJob.id,
+      queuePosition: next.imageJob.queuePosition,
+      failureReason: operation.status === 'failed'
+        ? (operation.queueMessage || next.imageJob.queueMessage || '效果图生成失败')
+        : undefined,
+    });
   }
 
   if (type === 'mark_preview_ready') {
@@ -397,6 +624,13 @@ export function applyStaticPageOperation(draft, operation = {}) {
       queueMessage: '',
     };
     next.previewImage = operation.previewImage || buildMockStaticPagePreview(next);
+    next.previewContract = buildStaticPagePreviewContract(next, {
+      ...(next.previewContract || {}),
+      status: 'preview_ready',
+      imageJobId: next.imageJob.id,
+      assetKey: next.previewImage?.assetKey || null,
+      queuePosition: null,
+    });
   }
 
   if (type === 'confirm_preview') {
@@ -407,6 +641,14 @@ export function applyStaticPageOperation(draft, operation = {}) {
       queuePosition: null,
     };
     next.previewImage = operation.previewImage || next.previewImage;
+    next.previewContract = buildStaticPagePreviewContract(next, {
+      ...(next.previewContract || {}),
+      status: 'confirmed',
+      imageJobId: next.imageJob.id,
+      assetKey: next.previewImage?.assetKey || next.previewContract?.assetKey || null,
+      queuePosition: null,
+      confirmedAt: operation.confirmedAt || next.previewContract?.confirmedAt || null,
+    });
   }
 
   if (type === 'reset_image_job') {
@@ -418,6 +660,7 @@ export function applyStaticPageOperation(draft, operation = {}) {
       queueMessage: '',
     };
     next.previewImage = null;
+    next.previewContract = buildStaticPagePreviewContract(next);
   }
 
   if (type === 'request_final_render') {
@@ -443,6 +686,7 @@ export function applyStaticPageOperation(draft, operation = {}) {
   }
 
   next.mobileOrder = normalizeMobileOrder(next.modules, next.mobileOrder);
+  refreshStaticPageDesignSpec(next, { markPreviewStale: DESIGN_MUTATION_TYPES.has(type) });
   next.operations = [...(next.operations || []), clone(operation)];
   return next;
 }
@@ -576,6 +820,8 @@ export function interpretStaticPagePrompt(draft, prompt = '') {
 }
 
 export function buildStaticPageImagePayload(draft, { oneClick = false } = {}) {
+  const visualSpec = draft.visualSpec || buildStaticPageVisualSpec(draft.styleDirection);
+  const renderSpec = draft.renderSpec || buildStaticPageRenderSpec();
   return {
     draftId: draft.id,
     datasetId: draft.datasetId,
@@ -584,6 +830,16 @@ export function buildStaticPageImagePayload(draft, { oneClick = false } = {}) {
     objective: draft.objective,
     audience: draft.audience,
     styleDirection: draft.styleDirection,
+    visualSpec,
+    renderSpec,
+    dataSnapshot: draft.dataSnapshot || buildStaticPageDataSnapshot(draft),
+    previewContract: draft.previewContract || buildStaticPagePreviewContract(draft),
+    designContract: {
+      contractSource: 'StaticPageDraft',
+      renderer: renderSpec.renderer,
+      editableCore: renderSpec.componentModel,
+      guardrails: renderSpec.generationGuardrails,
+    },
     modelSummary: draft.modelSummary,
     modules: draft.modules.map((module) => ({
       id: module.id,
@@ -600,6 +856,10 @@ export function buildStaticPageFinalRenderPayload(draft) {
   return {
     draftId: draft.id,
     styleDirection: draft.styleDirection,
+    visualSpec: draft.visualSpec || buildStaticPageVisualSpec(draft.styleDirection),
+    renderSpec: draft.renderSpec || buildStaticPageRenderSpec(),
+    dataSnapshot: draft.dataSnapshot || buildStaticPageDataSnapshot(draft),
+    previewContract: draft.previewContract || buildStaticPagePreviewContract(draft),
     previewImage: draft.previewImage,
     mobileOrder: normalizeMobileOrder(draft.modules, draft.mobileOrder),
     modules: draft.modules.map((module) => ({
