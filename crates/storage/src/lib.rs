@@ -2344,6 +2344,36 @@ impl PgStaticPageDraftRepository {
         rows.iter().map(map_static_page_draft_row).collect()
     }
 
+    pub async fn list_by_local_thread(
+        &self,
+        tenant_id: TenantId,
+        local_thread_id: &str,
+        limit: i64,
+    ) -> Result<Vec<StaticPageDraft>> {
+        let rows = sqlx::query(
+            r#"
+            select d.id, d.tenant_id, d.assistant_run_id, d.title, d.status,
+                   d.selected_scope, d.visibility_snapshot, d.source_refs,
+                   d.draft_payload, d.created_at, d.updated_at
+            from static_page_drafts d
+            join assistant_runs r
+              on r.id = d.assistant_run_id
+             and r.tenant_id = d.tenant_id
+            where d.tenant_id = $1
+              and r.local_thread_id = $2
+            order by d.updated_at desc, d.created_at desc
+            limit $3
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(local_thread_id)
+        .bind(limit.max(1))
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.iter().map(map_static_page_draft_row).collect()
+    }
+
     pub async fn update(
         &self,
         tenant_id: TenantId,

@@ -256,7 +256,7 @@ Conclusion:
 - Final render is blocked until a confirmed preview exists, preserving the product gate that customers must confirm the effect preview before static-page generation.
 - The render skeleton includes module titles, content, data labels, chart placeholders, style direction class, and confirmed preview metadata.
 - Image job creation, preview confirmation, and final render creation append AssistantRun events so the chat can show concise continuous-execution steps later.
-- Remaining work is real `static_page_image_generation` workflow/worker, Cloudflare/Codex image endpoint integration, queue-position polling from the remote queue, static-page renderer crate, richer chart rendering, and frontend polling/display wiring.
+- Remaining work is remote queue-position fidelity, browser display of real image artifacts, richer chart rendering, workerized final render/export packaging, and frontend polling/display hardening.
 
 2026-04-27 static page frontend image/render API wiring completed:
 
@@ -267,6 +267,43 @@ Conclusion:
 - The final static-page preview can display backend-rendered HTML in an isolated iframe, while retaining the existing local mock render when no backend render exists.
 - One-click static-page creation now submits a backend image job after the AssistantRun-backed draft is created, avoiding a queued-looking local draft without a durable image job row.
 - Remaining work is true queue polling, remote Cloudflare/Codex image artifact pickup, worker status transitions from `queued` to `preview_ready`, right-shelf durable draft/render listing, and replacing skeleton HTML with a dedicated renderer.
+
+2026-04-27 static page durable shelf slice completed:
+
+- Added `GET /v1/static-page-drafts` so the browser can list current-terminal static page drafts by `local_thread_id`, or list drafts under a specific AssistantRun.
+- Added `GET /v1/static-page-drafts/{draft_id}/image-jobs` and `GET /v1/static-page-drafts/{draft_id}/renders` for right-shelf hydration and future polling.
+- Added storage support for listing static page drafts through the AssistantRun local-thread relationship, plus indexes for draft/job/render lookup.
+- The web client now loads the current terminal's static page draft shelf on startup and polls it periodically.
+- The right panel now has a `静态页成品` shelf showing durable草稿/成品 status, module count, update time, and click-to-open behavior.
+- Reloaded rendered drafts can hydrate the latest backend render output and display backend HTML preview again instead of losing the generated page to local state.
+- Remaining work is moving the active desktop planning workspace fully into the main chat area, replacing skeleton HTML with a dedicated renderer, and connecting real queue polling to remote image generation status.
+
+2026-04-28 static page main workspace alignment completed:
+
+- The desktop assistant main chat area now becomes the active static-page planning/render workspace when a draft or finished static page is open.
+- The bottom composer remains visible while the static-page workspace is open, so the user can continue asking for changes in natural language.
+- The right panel no longer renders the active planning canvas; it only keeps the durable `静态页成品` shelf alongside existing sessions/reports/outputs.
+- Mobile keeps its dedicated vertical static-page builder instead of showing the desktop planning canvas inside the mobile chat surface.
+- A `返回聊天记录` action clears the active static-page workspace without deleting the shelf item.
+- Remaining work is real queue polling, Cloudflare/Codex image worker integration, dedicated renderer output, and richer chart rendering from bound data.
+
+2026-04-28 static page renderer extraction completed:
+
+- Added `static-page-renderer` as a dedicated Rust crate for static-page HTML and asset-manifest generation.
+- `platform-api` now calls the renderer crate from `POST /v1/static-page-drafts/{draft_id}/renders` instead of owning ad-hoc HTML assembly.
+- The renderer input includes draft id, AssistantRun id, draft payload, selected scope snapshot, visibility snapshot, confirmed preview asset key, and image job id.
+- The renderer output includes escaped standalone HTML and an asset manifest with renderer id, module count, modules, selected scope, visibility snapshot, preview asset, and image job reference.
+- Added renderer tests for HTML/manifest output and HTML escaping.
+- Remaining work is real data-bound chart rendering, richer layout-aware HTML/CSS, asset export packaging, and worker-side render execution instead of synchronous API rendering.
+
+2026-04-28 static page Codex image worker first slice completed:
+
+- Added `static_page_image_generation_workflow` to the workflow catalog with queue `static_page` and task key `generate_static_page_image`.
+- Added `static-page-worker` as the first real background worker for static-page effect previews.
+- The worker reads `CODEX_ORCHESTRATOR_ACCESS_KEY` only from the server environment, calls the canonical Codex Orchestrator v1 task API, submits `kind=static-page-visual`, and requests an `image-artifact` from the Cloudflare runtime.
+- The worker stores orchestrator task state inside the image job payload, polls until completion, extracts the first returned image artifact URL/data URL, marks the job `preview_ready`, updates the draft payload, and appends an AssistantRun event.
+- `POST /v1/static-page-drafts/{draft_id}/image-jobs` now creates and starts the workflow automatically, so the browser still has one simple "generate effect image" action while backend queue execution is durable.
+- Remaining work is deployment wiring for the provided server env file, queue-position fidelity against the remote queue, browser display of real bitmap artifacts instead of the current preview card, retry/cancel UX, and final workerized static-page render/export packaging.
 
 Verification:
 
@@ -336,6 +373,19 @@ Verification:
 - `npm run build` in `apps/web` passed after frontend image/render API wiring.
 - `node --test app/lib/static-page-draft.test.mjs app/lib/assistant-startup-briefing.test.mjs app/lib/scope-planner.test.mjs app/lib/upload-classifier.test.mjs` in `apps/web` passed after frontend image/render API wiring.
 - `wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo fmt --check && cargo test -p platform-api static_page"` passed after frontend image/render API wiring.
+- `npm run build` in `apps/web` passed after durable static page shelf wiring.
+- `wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo fmt --check && cargo test -p platform-api static_page"` passed after durable static page shelf wiring.
+- `node --test app/lib/static-page-draft.test.mjs app/lib/assistant-startup-briefing.test.mjs app/lib/scope-planner.test.mjs app/lib/upload-classifier.test.mjs` in `apps/web` passed after durable static page shelf wiring.
+- `npm run build` in `apps/web` passed after moving the active desktop static-page workspace into the main chat area.
+- `node --test app/lib/static-page-draft.test.mjs app/lib/assistant-startup-briefing.test.mjs app/lib/scope-planner.test.mjs app/lib/upload-classifier.test.mjs` in `apps/web` passed after moving the active desktop static-page workspace into the main chat area.
+- `wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo fmt --check && cargo test -p platform-api static_page"` passed after moving the active desktop static-page workspace into the main chat area.
+- `wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo check -p static-page-runtime -p assistant-runtime -p contracts -p storage -p platform-api"` passed after moving the active desktop static-page workspace into the main chat area.
+- `wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo fmt --check && cargo test -p static-page-renderer && cargo test -p platform-api static_page"` passed after extracting the static-page renderer crate.
+- `wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo check -p static-page-renderer -p static-page-runtime -p assistant-runtime -p contracts -p storage -p platform-api"` passed after extracting the static-page renderer crate.
+- `wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo fmt --check && cargo test -p static-page-worker && cargo test -p workflow-definitions"` passed after adding the Codex static-page image worker.
+- `wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo test -p platform-api static_page"` passed after automatically starting the static-page image generation workflow.
+- `wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo check -p static-page-worker -p static-page-renderer -p static-page-runtime -p assistant-runtime -p contracts -p storage -p platform-api"` passed after static-page worker integration.
+- `npm run build` in `apps/web` passed after static-page worker integration.
 
 ## Locked Product Decisions
 

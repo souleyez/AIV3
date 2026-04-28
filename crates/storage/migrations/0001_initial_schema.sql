@@ -536,6 +536,9 @@ create index if not exists idx_assistant_runs_tenant_created on assistant_runs (
 create index if not exists idx_assistant_runs_local_thread on assistant_runs (tenant_id, local_thread_id, created_at desc);
 create index if not exists idx_assistant_run_events_run_sequence on assistant_run_events (run_id, sequence_no);
 create index if not exists idx_conversation_memory_thread_updated on conversation_memory_items (tenant_id, local_thread_id, updated_at desc);
+create index if not exists idx_static_page_drafts_assistant_run on static_page_drafts (tenant_id, assistant_run_id, updated_at desc);
+create index if not exists idx_static_page_image_jobs_draft on static_page_image_jobs (tenant_id, draft_id, updated_at desc);
+create index if not exists idx_static_page_render_outputs_draft on static_page_render_outputs (tenant_id, draft_id, created_at desc);
 create index if not exists idx_chat_sessions_dataset_created on chat_sessions (dataset_id, created_at desc);
 create index if not exists idx_chat_sessions_execution on chat_sessions (execution_id);
 create index if not exists idx_chat_messages_session_turn on chat_messages (session_id, turn_index asc);

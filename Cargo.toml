@@ -23,6 +23,8 @@ members = [
     "crates/report-publisher",
     "crates/assistant-runtime",
     "crates/static-page-runtime",
+    "crates/static-page-renderer",
+    "crates/static-page-worker",
     "crates/storage",
     "crates/analytics",
     "crates/event-bus",

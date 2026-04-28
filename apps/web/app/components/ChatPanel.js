@@ -2,6 +2,7 @@
 
 import { formatDateTime, formatRelativeTime, formatSnakeCaseLabel, truncateText } from '../lib/formatters';
 import StaticPageAssistantNotice from './static-page/StaticPageAssistantNotice';
+import StaticPagePlanningPanel from './static-page/StaticPagePlanningPanel';
 
 const SERVICE_LANE_LABELS = {
   material_service: '资料服务',
@@ -282,7 +283,10 @@ export default function ChatPanel({
   panelClassName = '',
   staticPageDraft = null,
   onStartStaticPageDraft,
+  onApplyStaticPageOperation,
   onOpenStaticPageBuilder,
+  onCloseStaticPageDraft,
+  showStaticPageWorkspace = true,
   startupBriefing,
   scopePlan,
   onUploadClick,
@@ -290,6 +294,7 @@ export default function ChatPanel({
 }) {
   const reportEntry = session?.session_manifest_view?.report_entry || null;
   const latestTurn = session?.session_manifest_view?.last_turn || null;
+  const showingStaticPageWorkspace = showStaticPageWorkspace && Boolean(staticPageDraft);
 
   return (
     <section className={`chat-panel card ${panelClassName}`.trim()}>
@@ -345,11 +350,13 @@ export default function ChatPanel({
 
       <SessionRuntimeSummary turn={latestTurn} />
 
-      <StaticPageAssistantNotice
-        draft={staticPageDraft}
-        onOpenBuilder={onOpenStaticPageBuilder}
-        onOneClick={() => onStartStaticPageDraft?.({ oneClick: true })}
-      />
+      {!showingStaticPageWorkspace ? (
+        <StaticPageAssistantNotice
+          draft={staticPageDraft}
+          onOpenBuilder={onOpenStaticPageBuilder}
+          onOneClick={() => onStartStaticPageDraft?.({ oneClick: true })}
+        />
+      ) : null}
 
       <AssistantContextStrip
         dataset={dataset}
@@ -357,8 +364,26 @@ export default function ChatPanel({
         scopePlan={scopePlan}
       />
 
-      <div className="chat-messages">
-        {messageLoading ? (
+      {showingStaticPageWorkspace ? (
+        <div className="chat-static-page-workspace">
+          <div className="chat-static-page-head">
+            <div>
+              <span>当前工作台</span>
+              <strong>{staticPageDraft?.status === 'rendered' ? '静态页成品' : '静态页规划'}</strong>
+            </div>
+            <button type="button" className="ghost-btn compact-action-btn" onClick={onCloseStaticPageDraft}>
+              返回聊天记录
+            </button>
+          </div>
+          <StaticPagePlanningPanel
+            draft={staticPageDraft}
+            onStartDraft={onStartStaticPageDraft}
+            onApplyOperation={onApplyStaticPageOperation}
+          />
+        </div>
+      ) : (
+        <div className="chat-messages">
+          {messageLoading ? (
           <div className="chat-empty-state loading-state">
             <span className="loading-dot"></span>
             <span className="loading-dot"></span>
@@ -403,8 +428,9 @@ export default function ChatPanel({
                 : '未选数据集时按普通模型聊天处理；如果问题命中资料范围，系统会在左侧预选相关数据集并优先供料。'}
             </p>
           </div>
-        )}
-      </div>
+          )}
+        </div>
+      )}
 
       <div className="chat-composer-wrap">
         <div className="composer-note">

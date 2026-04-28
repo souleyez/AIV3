@@ -381,6 +381,7 @@ pub enum WorkflowKind {
     UploadIngest,
     ReportPlan,
     ReportRender,
+    StaticPageImageGeneration,
 }
 
 impl WorkflowKind {
@@ -392,6 +393,7 @@ impl WorkflowKind {
             Self::UploadIngest => "upload_ingest_workflow",
             Self::ReportPlan => "report_plan_workflow",
             Self::ReportRender => "report_render_workflow",
+            Self::StaticPageImageGeneration => "static_page_image_generation_workflow",
         }
     }
 
@@ -403,6 +405,7 @@ impl WorkflowKind {
             "upload_ingest_workflow" => Some(Self::UploadIngest),
             "report_plan_workflow" => Some(Self::ReportPlan),
             "report_render_workflow" => Some(Self::ReportRender),
+            "static_page_image_generation_workflow" => Some(Self::StaticPageImageGeneration),
             _ => None,
         }
     }

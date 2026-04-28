@@ -29,6 +29,7 @@ const DATASET_POLL_INTERVAL_MS = 5000;
 const MESSAGE_POLL_INTERVAL_MS = 3000;
 const CATALOG_POLL_INTERVAL_MS = 12000;
 const REPORT_DETAIL_POLL_INTERVAL_MS = 6000;
+const STATIC_PAGE_SHELF_POLL_INTERVAL_MS = 12000;
 const LOCAL_CHAT_STORAGE_KEY = 'aidp-v3-local-chat-messages';
 const LOCAL_ACTIVITY_STORAGE_KEY = 'aidp-v3-local-activity-events';
 const LOCAL_THREAD_ID_STORAGE_KEY = 'aidp-v3-local-thread-id';
@@ -155,6 +156,14 @@ function sortDatasets(items) {
   return [...(Array.isArray(items) ? items : [])].sort((left, right) =>
     String(left?.title || left?.key || '').localeCompare(String(right?.title || right?.key || ''), 'zh-CN'),
   );
+}
+
+function sortStaticPageDrafts(items) {
+  return [...(Array.isArray(items) ? items : [])].sort((left, right) => {
+    const leftValue = new Date(left?.backendUpdatedAt || left?.updated_at || left?.updatedAt || left?.created_at || 0).getTime();
+    const rightValue = new Date(right?.backendUpdatedAt || right?.updated_at || right?.updatedAt || right?.created_at || 0).getTime();
+    return rightValue - leftValue;
+  });
 }
 
 function firstDatasetIdFromScope(scope) {
@@ -284,6 +293,10 @@ export default function HomePageClient() {
     () => staticPageDrafts[activeStaticPageDraftId] || null,
     [activeStaticPageDraftId, staticPageDrafts],
   );
+  const staticPageDraftItems = useMemo(
+    () => sortStaticPageDrafts(Object.values(staticPageDrafts)),
+    [staticPageDrafts],
+  );
   const visibleMessages = useMemo(
     () => (selectedDatasetId || selectedSessionId ? messages : localMessages),
     [localMessages, messages, selectedDatasetId, selectedSessionId],
@@ -368,6 +381,56 @@ export default function HomePageClient() {
       merged.status = 'effect_confirmed';
     }
     return merged;
+  }
+
+  function normalizeBackendStaticPageDraft(backendDraft) {
+    const payload = backendDraft?.draft_payload && typeof backendDraft.draft_payload === 'object'
+      ? backendDraft.draft_payload
+      : {};
+    return mergeBackendStaticPageDraft({
+      ...payload,
+      id: payload.id || backendDraft?.id,
+      localDraftId: payload.localDraftId || backendDraft?.source_refs?.local_draft_id || backendDraft?.id,
+    }, backendDraft);
+  }
+
+  function mergeStaticPageRenderOutput(draft, renderOutput) {
+    if (!draft || !renderOutput) {
+      return draft;
+    }
+    return {
+      ...draft,
+      status: renderOutput.status === 'rendered' ? 'rendered' : draft.status,
+      finalPage: {
+        ...(draft.finalPage || {}),
+        status: renderOutput.status || draft.finalPage?.status || 'rendered',
+        renderer: 'platform-api-static-page-renderer',
+        renderOutputId: renderOutput.id,
+        imageJobId: renderOutput.image_job_id || draft.finalPage?.imageJobId || null,
+        assetManifest: renderOutput.asset_manifest || draft.finalPage?.assetManifest || {},
+        html: renderOutput.html || draft.finalPage?.html || '',
+      },
+    };
+  }
+
+  function mergeStaticPageImageJob(draft, imageJob) {
+    if (!draft || !imageJob) {
+      return draft;
+    }
+    const status = imageJob.status === 'confirmed' ? 'confirmed' : imageJob.status;
+    return {
+      ...draft,
+      imageJob: {
+        ...(draft.imageJob || {}),
+        id: imageJob.id,
+        status,
+        queuePosition: imageJob.queue_position ?? null,
+        queueMessage: imageJob.failure_reason || STATIC_PAGE_QUEUE_MESSAGE,
+      },
+      previewImage: imageJob.preview_asset_key
+        ? buildConfirmedStaticPagePreview(draft, imageJob, draft.previewImage)
+        : draft.previewImage,
+    };
   }
 
   function isBackendStaticPageImageJobId(jobId) {
@@ -489,6 +552,57 @@ export default function HomePageClient() {
     }).catch((syncError) => {
       setBanner(`静态页修改已先保存在本地；后端意图解释暂不可用：${syncError instanceof Error ? syncError.message : '请求失败'}。`);
     });
+  }
+
+  async function hydrateBackendStaticPageDraft(backendDraft) {
+    let draft = normalizeBackendStaticPageDraft(backendDraft);
+    const shouldLoadJobs = draft?.backendDraftId && (draft.imageJob?.id || ['queued', 'preview_ready', 'effect_confirmed'].includes(draft.status));
+    const shouldLoadRenders = draft?.backendDraftId && (draft.finalPage?.renderOutputId || draft.status === 'rendered' || draft.backendStatus === 'rendered');
+
+    const [imageJobs, renderOutputs] = await Promise.all([
+      shouldLoadJobs
+        ? fetchJson(`/api/v3/static-page-drafts/${draft.backendDraftId}/image-jobs`).catch(() => [])
+        : Promise.resolve([]),
+      shouldLoadRenders
+        ? fetchJson(`/api/v3/static-page-drafts/${draft.backendDraftId}/renders`).catch(() => [])
+        : Promise.resolve([]),
+    ]);
+
+    const latestJob = Array.isArray(imageJobs) ? imageJobs[0] : null;
+    const latestRender = Array.isArray(renderOutputs) ? renderOutputs[0] : null;
+    draft = mergeStaticPageImageJob(draft, latestJob);
+    draft = mergeStaticPageRenderOutput(draft, latestRender);
+    return draft;
+  }
+
+  async function refreshStaticPageDraftShelf(options = {}) {
+    const { silent = true } = options;
+    const query = new URLSearchParams({
+      local_thread_id: readLocalThreadId(),
+      limit: '12',
+    });
+    try {
+      const backendDrafts = await fetchJson(`/api/v3/static-page-drafts?${query.toString()}`);
+      const hydratedDrafts = await Promise.all(
+        (Array.isArray(backendDrafts) ? backendDrafts : []).map((item) => hydrateBackendStaticPageDraft(item)),
+      );
+      setStaticPageDrafts((current) => {
+        const next = { ...current };
+        hydratedDrafts.forEach((draft) => {
+          if (draft?.id) {
+            next[draft.id] = draft;
+          }
+        });
+        return next;
+      });
+      if (!silent) {
+        setBanner(hydratedDrafts.length ? `已刷新 ${hydratedDrafts.length} 个静态页草稿/成品。` : '当前终端还没有静态页草稿。');
+      }
+    } catch (shelfError) {
+      if (!silent) {
+        setBanner(`静态页草稿架暂不可用：${shelfError instanceof Error ? shelfError.message : '请求失败'}。`);
+      }
+    }
   }
 
   async function createBackendStaticPageImageJob(baseDraft, operation = {}) {
@@ -1375,6 +1489,21 @@ export default function HomePageClient() {
     return draft;
   }
 
+  function handleSelectStaticPageDraft(draftId) {
+    const draft = staticPageDrafts[draftId];
+    if (!draft) {
+      return;
+    }
+    setActiveStaticPageDraftId(draftId);
+    setBanner(draft.status === 'rendered' ? '已打开已生成静态页，可继续在对话框提出修改。' : '已打开静态页草稿，可继续规划或生成。');
+    setMobilePanel('insights');
+  }
+
+  function handleCloseStaticPageDraft() {
+    setActiveStaticPageDraftId(null);
+    setBanner('已返回聊天记录；右侧静态页成品架可随时重新打开草稿或成品。');
+  }
+
   function handleApplyStaticPagePrompt(prompt) {
     if (!activeStaticPageDraft) {
       return handleStartStaticPageDraft({ prompt });
@@ -1593,6 +1722,10 @@ export default function HomePageClient() {
   }, []);
 
   useEffect(() => {
+    refreshStaticPageDraftShelf({ silent: true });
+  }, []);
+
+  useEffect(() => {
     setActiveSecretCount(readLocalSecretBindingIds().length);
     setLastAssistantRunId(readLocalAssistantRunId());
   }, []);
@@ -1750,6 +1883,14 @@ export default function HomePageClient() {
   }, [selectedDatasetId]);
 
   useEffect(() => {
+    const timer = window.setInterval(() => {
+      refreshStaticPageDraftShelf({ silent: true });
+    }, STATIC_PAGE_SHELF_POLL_INTERVAL_MS);
+
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
     if (!selectedReportPlanId) {
       return undefined;
     }
@@ -1823,7 +1964,9 @@ export default function HomePageClient() {
     onResolveReportEntry: handleResolveReportEntry,
     staticPageDraft: activeStaticPageDraft,
     onStartStaticPageDraft: handleStartStaticPageDraft,
+    onApplyStaticPageOperation: handleApplyStaticPageOperation,
     onOpenStaticPageBuilder: () => setMobilePanel('insights'),
+    onCloseStaticPageDraft: handleCloseStaticPageDraft,
     startupBriefing: assistantStartupBriefing,
     scopePlan,
   };
@@ -1861,8 +2004,9 @@ export default function HomePageClient() {
       }
     },
     staticPageDraft: activeStaticPageDraft,
-    onStartStaticPageDraft: handleStartStaticPageDraft,
-    onApplyStaticPageOperation: handleApplyStaticPageOperation,
+    staticPageDrafts: staticPageDraftItems,
+    onSelectStaticPageDraft: handleSelectStaticPageDraft,
+    onRefreshStaticPageDrafts: () => refreshStaticPageDraftShelf({ silent: false }),
   };
   const uploadInput = (
     <input

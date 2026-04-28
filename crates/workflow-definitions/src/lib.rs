@@ -325,6 +325,14 @@ pub fn registry() -> Vec<DynWorkflowDefinition> {
             success_stage: "report_render_completed",
             next_step: None,
         }),
+        Arc::new(LinearWorkflowDefinition {
+            kind: WorkflowKind::StaticPageImageGeneration,
+            summary: "Generate static-page visual preview images through the Codex orchestrator.",
+            queue: "static_page",
+            task_key: "generate_static_page_image",
+            success_stage: "static_page_image_generated",
+            next_step: None,
+        }),
     ]
 }
 
@@ -353,9 +361,10 @@ mod tests {
         let entries = registry();
         let names: Vec<_> = entries.iter().map(|entry| entry.kind().as_str()).collect();
 
-        assert_eq!(entries.len(), 6);
+        assert_eq!(entries.len(), 7);
         assert!(names.contains(&"chat_session_workflow"));
         assert!(names.contains(&"report_render_workflow"));
+        assert!(names.contains(&"static_page_image_generation_workflow"));
     }
 
     #[test]

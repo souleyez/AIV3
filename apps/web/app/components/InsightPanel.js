@@ -1,11 +1,22 @@
 'use client';
 
 import { formatDateTime, formatRelativeTime, formatSnakeCaseLabel, truncateText } from '../lib/formatters';
-import StaticPagePlanningPanel from './static-page/StaticPagePlanningPanel';
 
 const SURFACE_LABELS = {
   pc: 'PC',
   mobile: 'Mobile',
+};
+
+const STATIC_PAGE_STATUS_LABELS = {
+  planning: '规划中',
+  queued: '效果图排队',
+  preview_ready: '待确认效果图',
+  effect_confirmed: '效果图已确认',
+  rendering: '生成中',
+  rendered: '已生成',
+  draft: '草稿',
+  planned: '已规划',
+  confirmed: '已确认',
 };
 
 function SectionHeader({ title, subtitle }) {
@@ -45,6 +56,16 @@ function canContinuePlan(plan) {
 
 function canRenderPlan(plan) {
   return Boolean(plan?.current_ast_version_id);
+}
+
+function staticPageStatusLabel(draft) {
+  return STATIC_PAGE_STATUS_LABELS[draft?.status]
+    || STATIC_PAGE_STATUS_LABELS[draft?.backendStatus]
+    || formatSnakeCaseLabel(draft?.status || draft?.backendStatus || 'draft');
+}
+
+function staticPageUpdatedAt(draft) {
+  return draft?.backendUpdatedAt || draft?.updated_at || draft?.updatedAt || draft?.created_at || '';
 }
 
 function buildReportControlNotice({
@@ -335,8 +356,9 @@ export default function InsightPanel({
   onRetryWorkflowExecution,
   onRefreshReportDetail,
   staticPageDraft,
-  onStartStaticPageDraft,
-  onApplyStaticPageOperation,
+  staticPageDrafts = [],
+  onSelectStaticPageDraft,
+  onRefreshStaticPageDrafts,
 }) {
   return (
     <aside className="insight-panel">
@@ -375,16 +397,41 @@ export default function InsightPanel({
         </div>
       </section>
 
-      <section className="card insight-card static-page-planning-card">
+      <section className="card insight-card">
         <SectionHeader
-          title="静态页规划"
-          subtitle={staticPageDraft ? `${staticPageDraft.modules.length} 个模块，可拖拽编排` : '等待对话生成规划'}
+          title="静态页成品"
+          subtitle={staticPageDrafts.length ? `${staticPageDrafts.length} 个草稿/成品` : '当前终端暂无记录'}
         />
-        <StaticPagePlanningPanel
-          draft={staticPageDraft}
-          onStartDraft={onStartStaticPageDraft}
-          onApplyOperation={onApplyStaticPageOperation}
-        />
+        <div className="insight-list">
+          {staticPageDrafts.length ? (
+            staticPageDrafts.map((draft) => {
+              const active = staticPageDraft?.id === draft.id;
+              return (
+                <button
+                  key={draft.id}
+                  type="button"
+                  className={`insight-item ${active ? 'active' : ''}`}
+                  onClick={() => onSelectStaticPageDraft?.(draft.id)}
+                >
+                  <div className="insight-item-head">
+                    <strong>{truncateText(draft.objective || draft.title || '静态页草稿', 30)}</strong>
+                    <span>{formatRelativeTime(staticPageUpdatedAt(draft))}</span>
+                  </div>
+                  <p>{truncateText(draft.modelSummary || draft.finalPage?.notice || '点击后在当前页面继续规划或查看生成结果。', 96)}</p>
+                  <div className="insight-meta-row">
+                    <span>{staticPageStatusLabel(draft)}</span>
+                    <span>{draft.modules?.length || 0} 个模块</span>
+                  </div>
+                </button>
+              );
+            })
+          ) : (
+            <EmptySection text="对话生成静态页后，会保存在这里。" />
+          )}
+        </div>
+        <button type="button" className="ghost-btn compact-action-btn" onClick={onRefreshStaticPageDrafts}>
+          刷新草稿架
+        </button>
       </section>
 
       <section className="card insight-card">

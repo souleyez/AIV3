@@ -58,6 +58,7 @@ use llm_gateway::{build_provider_from_env, render_runtime_manifest, LlmRequest};
 use prompt_registry::bootstrap_default_prompt_registry;
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
+use static_page_renderer::{render_static_page, StaticPageRenderRequest};
 use static_page_runtime::{
     interpret_static_page_intent_deterministic, interpret_static_page_intent_with_provider,
     sanitize_static_page_operations, StaticPageIntentOutcome, StaticPageIntentRequest,
@@ -91,6 +92,8 @@ const ASSISTANT_RUN_CONVERSATION_MEMORY_DEFAULT_LIMIT: i64 = 4;
 const ASSISTANT_RUN_CONVERSATION_MEMORY_MAX_LIMIT: i64 = 8;
 const ASSISTANT_RUN_CONTINUE_DEFAULT_MAX_STEPS: usize = 3;
 const ASSISTANT_RUN_CONTINUE_MAX_STEPS: usize = 5;
+const STATIC_PAGE_DRAFT_LIST_DEFAULT_LIMIT: i64 = 12;
+const STATIC_PAGE_DRAFT_LIST_MAX_LIMIT: i64 = 50;
 const ACTIVE_SECRET_BINDING_IDS_HEADER: &str = "x-ai-data-platform-secret-binding-ids";
 const PUBLIC_DATASET_WARNING: &str = "该数据集是公开数据集，所有用户可见";
 
@@ -106,6 +109,13 @@ const DEFAULT_PUBLIC_DATASETS: &[(&str, &str, &str)] = &[
 struct ConversationMemoryQuery {
     local_thread_id: Option<String>,
     query: Option<String>,
+    limit: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct StaticPageDraftListQuery {
+    local_thread_id: Option<String>,
+    assistant_run_id: Option<String>,
     limit: Option<i64>,
 }
 
@@ -238,6 +248,7 @@ pub fn router(
             "/v1/assistant-runs/{run_id}/static-page-drafts",
             axum::routing::post(create_static_page_draft_for_assistant_run),
         )
+        .route("/v1/static-page-drafts", get(list_static_page_drafts))
         .route(
             "/v1/static-page-drafts/{draft_id}",
             get(get_static_page_draft).patch(update_static_page_draft),
@@ -252,7 +263,7 @@ pub fn router(
         )
         .route(
             "/v1/static-page-drafts/{draft_id}/image-jobs",
-            axum::routing::post(create_static_page_image_job),
+            get(list_static_page_image_jobs).post(create_static_page_image_job),
         )
         .route(
             "/v1/static-page-image-jobs/{job_id}",
@@ -264,7 +275,7 @@ pub fn router(
         )
         .route(
             "/v1/static-page-drafts/{draft_id}/renders",
-            axum::routing::post(create_static_page_render),
+            get(list_static_page_render_outputs).post(create_static_page_render),
         )
         .route(
             "/v1/conversation-memory-items",
@@ -2748,7 +2759,7 @@ fn infer_model_facing_capability_class(
             contracts::ModelFacingCapabilityClassView::MaterialExplanationAndSynthesis
         }
         WorkflowKind::ReportPlan => contracts::ModelFacingCapabilityClassView::ReportPlanning,
-        WorkflowKind::ReportRender => {
+        WorkflowKind::ReportRender | WorkflowKind::StaticPageImageGeneration => {
             contracts::ModelFacingCapabilityClassView::ReportGenerationAndEditing
         }
         WorkflowKind::UploadIngest => {
@@ -4466,6 +4477,43 @@ async fn create_static_page_draft_for_assistant_run(
     ))
 }
 
+async fn list_static_page_drafts(
+    State(state): State<AppState>,
+    Query(query): Query<StaticPageDraftListQuery>,
+) -> std::result::Result<Json<Vec<StaticPageDraftView>>, ApiError> {
+    let limit = normalize_static_page_draft_list_limit(query.limit);
+    let drafts = if let Some(run_id) = query
+        .assistant_run_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let run_id = parse_assistant_run_id(run_id)?;
+        state
+            .storage
+            .static_page_drafts()
+            .list_by_assistant_run(state.tenant_id, run_id)
+            .await
+            .map_err(ApiError::from_storage)?
+            .into_iter()
+            .take(limit as usize)
+            .collect()
+    } else {
+        let local_thread_id = required_field("local_thread_id", query.local_thread_id)?;
+        validate_required("local_thread_id", &local_thread_id)?;
+        state
+            .storage
+            .static_page_drafts()
+            .list_by_local_thread(state.tenant_id, local_thread_id.trim(), limit)
+            .await
+            .map_err(ApiError::from_storage)?
+    };
+
+    Ok(Json(
+        drafts.into_iter().map(to_static_page_draft_view).collect(),
+    ))
+}
+
 async fn get_static_page_draft(
     State(state): State<AppState>,
     Path(draft_id): Path<String>,
@@ -4666,6 +4714,25 @@ async fn apply_static_page_draft_intent(
     ))
 }
 
+async fn list_static_page_image_jobs(
+    State(state): State<AppState>,
+    Path(draft_id): Path<String>,
+) -> std::result::Result<Json<Vec<StaticPageImageJobView>>, ApiError> {
+    let draft_id = parse_static_page_draft_id(&draft_id)?;
+    let draft = load_static_page_draft_or_404(&state, draft_id).await?;
+    let jobs = state
+        .storage
+        .static_page_image_jobs()
+        .list_by_draft(state.tenant_id, draft.id)
+        .await
+        .map_err(ApiError::from_storage)?;
+    Ok(Json(
+        jobs.into_iter()
+            .map(to_static_page_image_job_view)
+            .collect(),
+    ))
+}
+
 async fn create_static_page_image_job(
     State(state): State<AppState>,
     Path(draft_id): Path<String>,
@@ -4697,6 +4764,29 @@ async fn create_static_page_image_job(
         )
         .await
         .map_err(ApiError::from_storage)?;
+    let workflow_execution = build_initial_static_page_image_generation_execution(
+        &state,
+        &draft,
+        &job,
+        request.prompt.as_deref(),
+    )?;
+    let initial_event =
+        build_initial_static_page_image_generation_event(&workflow_execution, &draft, &job);
+    state
+        .storage
+        .workflow_executions()
+        .create_with_initial_event(&workflow_execution, &initial_event)
+        .await
+        .map_err(ApiError::from_storage)?;
+    let started = apply_workflow_signal_with_dependencies(
+        &state.storage,
+        &state.workflow_catalog,
+        &state.event_bus,
+        state.tenant_id,
+        workflow_execution.id,
+        WorkflowSignal::Start,
+    )
+    .await?;
     let operations = vec![json!({
         "type": "queue_image_job",
         "jobId": job.id,
@@ -4730,6 +4820,8 @@ async fn create_static_page_image_job(
             "image_job_id": job.id,
             "status": job.status.as_str(),
             "queue_position": job.queue_position,
+            "workflow_execution_id": workflow_execution.id,
+            "workflow_task_id": started.enqueued_tasks.first().map(|task| task.id),
         }),
     )
     .await?;
@@ -4837,8 +4929,18 @@ async fn create_static_page_render(
     let mut draft = load_static_page_draft_or_404(&state, draft_id).await?;
     let image_job =
         resolve_confirmed_static_page_image_job(&state, &draft, request.image_job_id).await?;
-    let html = build_static_page_render_html(&draft, image_job.as_ref());
-    let asset_manifest = build_static_page_render_asset_manifest(&draft, image_job.as_ref());
+    let rendered = render_static_page(&StaticPageRenderRequest {
+        draft_id: draft.id.to_string(),
+        assistant_run_id: draft.assistant_run_id.to_string(),
+        title: draft.title.clone(),
+        draft_payload: draft.draft_payload.clone(),
+        selected_scope: draft.selected_scope.clone(),
+        visibility_snapshot: draft.visibility_snapshot.clone(),
+        preview_asset_key: image_job
+            .as_ref()
+            .and_then(|job| job.preview_asset_key.clone()),
+        image_job_id: image_job.as_ref().map(|job| job.id.to_string()),
+    });
     let render_output = state
         .storage
         .static_page_render_outputs()
@@ -4849,8 +4951,8 @@ async fn create_static_page_render(
                 assistant_run_id: draft.assistant_run_id,
                 image_job_id: image_job.as_ref().map(|job| job.id),
                 status: StaticPageRenderOutputStatus::Rendered,
-                html,
-                asset_manifest,
+                html: rendered.html,
+                asset_manifest: rendered.asset_manifest,
                 created_at: Utc::now(),
             },
         )
@@ -4900,6 +5002,26 @@ async fn create_static_page_render(
             render_output: to_static_page_render_output_view(render_output),
             draft: to_static_page_draft_view(draft),
         }),
+    ))
+}
+
+async fn list_static_page_render_outputs(
+    State(state): State<AppState>,
+    Path(draft_id): Path<String>,
+) -> std::result::Result<Json<Vec<StaticPageRenderOutputView>>, ApiError> {
+    let draft_id = parse_static_page_draft_id(&draft_id)?;
+    let draft = load_static_page_draft_or_404(&state, draft_id).await?;
+    let outputs = state
+        .storage
+        .static_page_render_outputs()
+        .list_by_draft(state.tenant_id, draft.id)
+        .await
+        .map_err(ApiError::from_storage)?;
+    Ok(Json(
+        outputs
+            .into_iter()
+            .map(to_static_page_render_output_view)
+            .collect(),
     ))
 }
 
@@ -6954,6 +7076,61 @@ fn build_initial_report_render_execution(
     })
 }
 
+fn build_initial_static_page_image_generation_execution(
+    state: &AppState,
+    draft: &StaticPageDraft,
+    job: &StaticPageImageJob,
+    prompt: Option<&str>,
+) -> std::result::Result<WorkflowExecution, ApiError> {
+    let definition = state
+        .workflow_catalog
+        .find_definition(WorkflowKind::StaticPageImageGeneration)
+        .ok_or_else(|| {
+            ApiError::internal(
+                "workflow_definition_missing",
+                "static_page_image_generation workflow definition is not registered".to_string(),
+            )
+        })?;
+    let now = Utc::now();
+    let execution_id = WorkflowExecutionId::new();
+    let runtime_state = definition.initial_state(execution_id, now);
+    let mut context = runtime_state.context;
+    context.insert(
+        "retries_remaining".to_string(),
+        Value::Number(runtime_state.retries_remaining.into()),
+    );
+    context.insert(
+        "static_page_draft_id".to_string(),
+        Value::String(draft.id.to_string()),
+    );
+    context.insert(
+        "static_page_image_job_id".to_string(),
+        Value::String(job.id.to_string()),
+    );
+    context.insert(
+        "assistant_run_id".to_string(),
+        Value::String(draft.assistant_run_id.to_string()),
+    );
+    if let Some(prompt) = prompt.map(str::trim).filter(|value| !value.is_empty()) {
+        context.insert("prompt".to_string(), Value::String(prompt.to_string()));
+    }
+
+    Ok(WorkflowExecution {
+        id: execution_id,
+        tenant_id: state.tenant_id,
+        dataset_id: None,
+        report_plan_id: None,
+        kind: WorkflowKind::StaticPageImageGeneration,
+        version: runtime_state.version,
+        stage: runtime_state.stage,
+        status: runtime_state.status,
+        attempt: 0,
+        context: Value::Object(context),
+        created_at: now,
+        updated_at: now,
+    })
+}
+
 fn build_initial_execution_event(
     execution: &WorkflowExecution,
     report_plan_id: domain_model::ReportPlanId,
@@ -6969,6 +7146,29 @@ fn build_initial_execution_event(
             "status": execution.status.as_str(),
             "stage": execution.stage,
             "report_plan_id": report_plan_id,
+        }),
+        created_at: execution.created_at,
+    }
+}
+
+fn build_initial_static_page_image_generation_event(
+    execution: &WorkflowExecution,
+    draft: &StaticPageDraft,
+    job: &StaticPageImageJob,
+) -> WorkflowEventRecord {
+    WorkflowEventRecord {
+        id: domain_model::WorkflowEventId::new(),
+        execution_id: execution.id,
+        sequence_no: 1,
+        event_name: "workflow.execution_created".to_string(),
+        payload: json!({
+            "kind": execution.kind.as_str(),
+            "version": execution.version,
+            "status": execution.status.as_str(),
+            "stage": execution.stage,
+            "assistant_run_id": draft.assistant_run_id,
+            "static_page_draft_id": draft.id,
+            "static_page_image_job_id": job.id,
         }),
         created_at: execution.created_at,
     }
@@ -7639,6 +7839,13 @@ fn retrieval_search_scan_limit(limit: usize) -> i64 {
         .max(RETRIEVAL_SEARCH_DEFAULT_LIMIT)
         .min(DATASET_OUTPUT_RETRIEVAL_SCAN_LIMIT as usize);
     i64::try_from(clamped).unwrap_or(DATASET_OUTPUT_RETRIEVAL_SCAN_LIMIT)
+}
+
+fn normalize_static_page_draft_list_limit(limit: Option<i64>) -> i64 {
+    limit
+        .unwrap_or(STATIC_PAGE_DRAFT_LIST_DEFAULT_LIMIT)
+        .max(1)
+        .min(STATIC_PAGE_DRAFT_LIST_MAX_LIMIT)
 }
 
 fn sort_retrieval_evidences_by_relevance(evidences: &mut [RetrievalEvidence]) {
@@ -10706,80 +10913,6 @@ fn build_static_page_image_prompt_payload(draft: &StaticPageDraft, prompt: Optio
     })
 }
 
-fn build_static_page_render_asset_manifest(
-    draft: &StaticPageDraft,
-    image_job: Option<&StaticPageImageJob>,
-) -> Value {
-    let payload = &draft.draft_payload;
-    let modules = static_page_payload_modules(payload);
-    json!({
-        "draft_id": draft.id,
-        "assistant_run_id": draft.assistant_run_id,
-        "style_direction": static_page_payload_string(payload, &["styleDirection", "style_direction"])
-            .unwrap_or_else(|| "client-delivery".to_string()),
-        "preview_asset_key": image_job.and_then(|job| job.preview_asset_key.clone()),
-        "module_count": modules.as_array().map(Vec::len).unwrap_or(0),
-        "modules": modules,
-        "renderer": "static-page-renderer-skeleton",
-    })
-}
-
-fn build_static_page_render_html(
-    draft: &StaticPageDraft,
-    image_job: Option<&StaticPageImageJob>,
-) -> String {
-    let payload = &draft.draft_payload;
-    let style = static_page_payload_string(payload, &["styleDirection", "style_direction"])
-        .unwrap_or_else(|| "client-delivery".to_string());
-    let preview = image_job
-        .and_then(|job| job.preview_asset_key.as_deref())
-        .unwrap_or("no-preview");
-    let module_html = static_page_payload_modules(payload)
-        .as_array()
-        .cloned()
-        .unwrap_or_default()
-        .into_iter()
-        .map(|module| {
-            let title = module
-                .get("title")
-                .and_then(Value::as_str)
-                .unwrap_or("未命名模块");
-            let content = module
-                .get("content")
-                .and_then(Value::as_str)
-                .unwrap_or("等待模型补齐内容。");
-            let data_label = module
-                .get("dataBinding")
-                .or_else(|| module.get("data_binding"))
-                .and_then(|binding| binding.get("label"))
-                .and_then(Value::as_str)
-                .unwrap_or("数据绑定待确认");
-            let visualization = module
-                .get("visualization")
-                .and_then(|visualization| visualization.get("type"))
-                .and_then(Value::as_str)
-                .unwrap_or("text-insight");
-            format!(
-                "<section class=\"module\"><h2>{}</h2><p>{}</p><small>{}</small><div class=\"chart\" data-chart=\"{}\">{}</div></section>",
-                escape_html(title),
-                escape_html(content),
-                escape_html(data_label),
-                escape_html(visualization),
-                escape_html(visualization),
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    format!(
-        "<!doctype html><html><head><meta charset=\"utf-8\"><title>{}</title></head><body class=\"static-page style-{}\" data-preview=\"{}\"><main><h1>{}</h1>{}</main></body></html>",
-        escape_html(&draft.title),
-        escape_html(&style),
-        escape_html(preview),
-        escape_html(&draft.title),
-        module_html,
-    )
-}
-
 fn static_page_payload_modules(payload: &Value) -> Value {
     payload
         .get("modules")
@@ -10798,15 +10931,6 @@ fn static_page_payload_string(payload: &Value, keys: &[&str]) -> Option<String> 
             .filter(|value| !value.is_empty())
             .map(ToOwned::to_owned)
     })
-}
-
-fn escape_html(value: &str) -> String {
-    value
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&#39;")
 }
 
 async fn load_static_page_draft_or_404(
@@ -11781,6 +11905,35 @@ mod tests {
             json!("核心判断")
         );
 
+        let Json(local_thread_drafts) = list_static_page_drafts(
+            State(state.clone()),
+            Query(StaticPageDraftListQuery {
+                local_thread_id: Some("static-page-draft-thread".to_string()),
+                assistant_run_id: None,
+                limit: Some(10),
+            }),
+        )
+        .await
+        .expect("static page drafts should list by local thread");
+        assert_eq!(local_thread_drafts.len(), 1);
+        assert_eq!(local_thread_drafts[0].id, draft_response.draft.id);
+
+        let Json(run_drafts) = list_static_page_drafts(
+            State(state.clone()),
+            Query(StaticPageDraftListQuery {
+                local_thread_id: None,
+                assistant_run_id: Some(run_response.assistant_run_id.to_string()),
+                limit: Some(10),
+            }),
+        )
+        .await
+        .expect("static page drafts should list by assistant run");
+        assert_eq!(run_drafts.len(), 1);
+        assert_eq!(
+            run_drafts[0].assistant_run_id,
+            run_response.assistant_run_id
+        );
+
         let Json(loaded) = get_static_page_draft(
             State(state.clone()),
             Path(draft_response.draft.id.to_string()),
@@ -11898,6 +12051,30 @@ mod tests {
             job_response.image_job.image_prompt_payload["queue_copy"],
             json!("资源正在排队，可以联系商务开通高级用户跳过等待。")
         );
+        let image_workflows = state
+            .storage
+            .workflow_executions()
+            .list_by_tenant(state.tenant_id)
+            .await
+            .expect("workflow executions should list");
+        let image_workflow = image_workflows
+            .iter()
+            .find(|execution| execution.kind == WorkflowKind::StaticPageImageGeneration)
+            .expect("static page image generation workflow should be created");
+        assert_eq!(image_workflow.status, WorkflowStatus::Running);
+        assert_eq!(
+            image_workflow.context["static_page_image_job_id"],
+            json!(job_response.image_job.id.to_string())
+        );
+        let image_tasks = state
+            .storage
+            .workflow_tasks()
+            .list_by_execution(image_workflow.id)
+            .await
+            .expect("static page image workflow tasks should list");
+        assert_eq!(image_tasks.len(), 1);
+        assert_eq!(image_tasks[0].queue, "static_page");
+        assert_eq!(image_tasks[0].task_key, "generate_static_page_image");
 
         let Json(loaded_job) = get_static_page_image_job(
             State(state.clone()),
@@ -11906,6 +12083,15 @@ mod tests {
         .await
         .expect("static page image job should load");
         assert_eq!(loaded_job.id, job_response.image_job.id);
+
+        let Json(image_jobs) = list_static_page_image_jobs(
+            State(state.clone()),
+            Path(draft_response.draft.id.to_string()),
+        )
+        .await
+        .expect("static page image jobs should list");
+        assert_eq!(image_jobs.len(), 1);
+        assert_eq!(image_jobs[0].id, job_response.image_job.id);
 
         let Json(confirmed) = confirm_static_page_image_job(
             State(state.clone()),
@@ -11952,6 +12138,15 @@ mod tests {
             render_response.draft.status,
             contracts::StaticPageDraftStatusView::Rendered
         );
+
+        let Json(render_outputs) = list_static_page_render_outputs(
+            State(state.clone()),
+            Path(draft_response.draft.id.to_string()),
+        )
+        .await
+        .expect("static page render outputs should list");
+        assert_eq!(render_outputs.len(), 1);
+        assert_eq!(render_outputs[0].id, render_response.render_output.id);
 
         let Json(detail) = get_assistant_run(
             State(state),

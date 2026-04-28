@@ -1,5 +1,5 @@
 [package]
-name = "platform-api"
+name = "static-page-worker"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -7,28 +7,17 @@ authors.workspace = true
 
 [dependencies]
 anyhow.workspace = true
-assistant-runtime = { path = "../assistant-runtime" }
-axum.workspace = true
 chrono.workspace = true
-contracts = { path = "../contracts" }
 domain-model = { path = "../domain-model" }
 event-bus = { path = "../event-bus" }
-llm-gateway = { path = "../llm-gateway" }
 observability = { path = "../observability" }
-prompt-registry = { path = "../prompt-registry" }
+platform-api = { path = "../platform-api" }
+reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-sqlx.workspace = true
-static-page-renderer = { path = "../static-page-renderer" }
-static-page-runtime = { path = "../static-page-runtime" }
 storage = { path = "../storage" }
 tokio.workspace = true
-tool-registry = { path = "../tool-registry" }
 tracing.workspace = true
 uuid.workspace = true
 workflow-definitions = { path = "../workflow-definitions" }
 workflow-engine = { path = "../workflow-engine" }
-
-[dev-dependencies]
-test-fixtures = { path = "../test-fixtures" }
-tower = { version = "0.5.2", features = ["util"] }

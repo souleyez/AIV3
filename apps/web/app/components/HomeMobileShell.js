@@ -89,6 +89,7 @@ export default function HomeMobileShell({
             panelClassName="chat-panel-mobile-home"
             onStartStaticPageDraft={handleStartStaticPageDraft}
             onOpenStaticPageBuilder={() => setSurface('static-page')}
+            showStaticPageWorkspace={false}
           />
         )}
       </main>
