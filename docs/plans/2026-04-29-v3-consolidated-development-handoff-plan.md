@@ -338,6 +338,9 @@ Static-page data snapshots now derive `field_candidates` from selected scope, As
 **Status 2026-04-29 AssistantRun routing batch:** completed locally.
 Static-page creation and backend-synced static-page edits now prefer AssistantRun even when a dataset is selected, so selected scope is supplied to the model and module edits can use the ReAct tool path. The local prompt interpreter remains only as a fallback when there is no backend draft/run or AssistantRun is unavailable.
 
+**Status 2026-04-29 ReAct preview/render action batch:** completed locally.
+`submit_static_page_image_preview` and `render_static_page` now execute real V3 backend actions for the current persisted static-page draft only. The Host verifies the draft belongs to the active AssistantRun before queueing image preview generation or creating the final static-page render. Rendering before preview confirmation is rejected as a structured ReAct observation instead of aborting the loop.
+
 **Files:**
 
 - Modify: `apps/web/app/lib/static-page-draft.js`
@@ -386,6 +389,12 @@ Static-page creation and backend-synced static-page edits now prefer AssistantRu
 - The current shell no longer exposes `cargo`/`rustc`; rerun the Rust checks when the Rust toolchain PATH is restored.
 - `node --test apps/web/app/lib/static-page-draft.test.mjs apps/web/app/lib/scope-planner.test.mjs`
 - `npm run build` in `apps/web`
+
+**Verified 2026-04-29 ReAct preview/render action batch:**
+
+- `wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo test -p platform-api assistant_run_react_static_page"`
+- `wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo test -p platform-api assistant_run_react"`
+- `wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo test -p static-page-renderer"`
 
 ### Slice 5: Real Static-Page Data Snapshot Path
 

@@ -15508,6 +15508,206 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn assistant_run_react_static_page_preview_and_render_use_current_backend_draft() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        clear_assistant_openclaw_env();
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_MODE", "placeholder");
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping react static page preview/render test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("react-static-page-render-test-{}", Uuid::new_v4()),
+                "ReAct Static Page Render Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage,
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+
+        let (_, Json(run_response)) = create_assistant_run(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(CreateAssistantRunRequest {
+                prompt: "生成一页经营分析静态页".to_string(),
+                local_thread_id: Some("react-static-page-render-thread".to_string()),
+                startup_briefing: Some(json!({"capabilities": ["static_page_plan"]})),
+                selected_scope: Some(json!({"mode": "ordinary_chat"})),
+                scope_candidates: Vec::new(),
+                context_policy_hint: None,
+                current_artifact: None,
+                messages: Vec::new(),
+            }),
+        )
+        .await
+        .expect("assistant run should be created");
+
+        let (_, Json(draft_response)) = create_static_page_draft_for_assistant_run(
+            State(state.clone()),
+            Path(run_response.assistant_run_id.to_string()),
+            Json(CreateStaticPageDraftRequest {
+                title: Some("经营分析静态页".to_string()),
+                prompt: Some("生成一页经营分析静态页".to_string()),
+                selected_scope: None,
+                visibility_snapshot: None,
+                source_refs: Value::Null,
+                draft_payload: json!({
+                    "version": 1,
+                    "status": "planning",
+                    "styleDirection": "client-delivery",
+                    "modules": [
+                        { "id": "hero", "title": "核心判断", "content": "收入增长，履约风险可控。" },
+                        { "id": "trend", "title": "趋势变化", "content": "展示订单金额变化。" }
+                    ]
+                }),
+            }),
+        )
+        .await
+        .expect("static page draft should be created");
+        let current_artifact = json!({
+            "backendDraftId": draft_response.draft.id.to_string(),
+            "kind": "static_page_draft",
+        });
+        let mut evidence_state = json!({"status": "not_requested"});
+
+        let render_before_confirm = execute_assistant_run_react_action(
+            &state,
+            &react_test_action(
+                AssistantRunReActStatus::Act,
+                AssistantRunReactActionType::RenderStaticPage,
+                json!({}),
+            ),
+            &json!({"mode": "ordinary_chat"}),
+            &mut evidence_state,
+            Some(&current_artifact),
+            Some(run_response.assistant_run_id),
+            "直接制作最终静态页",
+            Some("react-static-page-render-thread"),
+            &[],
+        )
+        .await
+        .expect("react render before confirmation should be handled");
+        assert_eq!(
+            render_before_confirm.observation["message"],
+            json!("static_page_preview_not_confirmed")
+        );
+
+        let image_action = react_test_action(
+            AssistantRunReActStatus::Act,
+            AssistantRunReactActionType::SubmitStaticPageImagePreview,
+            json!({"prompt": "生成经营分析效果图"}),
+        );
+        let image_result = execute_assistant_run_react_action(
+            &state,
+            &image_action,
+            &json!({"mode": "ordinary_chat"}),
+            &mut evidence_state,
+            Some(&current_artifact),
+            Some(run_response.assistant_run_id),
+            "生成经营分析效果图",
+            Some("react-static-page-render-thread"),
+            &[],
+        )
+        .await
+        .expect("react image preview should queue");
+        assert_eq!(image_result.observation["status"], json!("completed"));
+        assert_eq!(
+            image_result.observation["items"][0]["type"],
+            json!("static_page_image_job")
+        );
+        assert_eq!(image_result.observation["queue_position"], json!(1));
+        let image_job_id = image_result.observation["image_job_id"]
+            .as_str()
+            .expect("image job id should be returned")
+            .to_string();
+
+        let Json(queued_draft) = get_static_page_draft(
+            State(state.clone()),
+            Path(draft_response.draft.id.to_string()),
+        )
+        .await
+        .expect("queued static page draft should load");
+        assert_eq!(
+            queued_draft.status,
+            contracts::StaticPageDraftStatusView::Queued
+        );
+
+        let Json(confirmed) = confirm_static_page_image_job(
+            State(state.clone()),
+            Path(image_job_id.clone()),
+            Json(ConfirmStaticPageImageJobRequest {
+                preview_asset_key: Some("previews/react-static-page.png".to_string()),
+            }),
+        )
+        .await
+        .expect("image preview should confirm");
+        assert_eq!(
+            confirmed.image_job.status,
+            contracts::StaticPageImageJobStatusView::Confirmed
+        );
+
+        let render_result = execute_assistant_run_react_action(
+            &state,
+            &react_test_action(
+                AssistantRunReActStatus::Act,
+                AssistantRunReactActionType::RenderStaticPage,
+                json!({"image_job_id": image_job_id}),
+            ),
+            &json!({"mode": "ordinary_chat"}),
+            &mut evidence_state,
+            Some(&current_artifact),
+            Some(run_response.assistant_run_id),
+            "按确认效果制作最终静态页",
+            Some("react-static-page-render-thread"),
+            &[],
+        )
+        .await
+        .expect("react render should create final output");
+        assert_eq!(render_result.observation["status"], json!("completed"));
+        assert_eq!(
+            render_result.observation["items"][0]["type"],
+            json!("static_page_render_output")
+        );
+
+        let Json(render_outputs) = list_static_page_render_outputs(
+            State(state.clone()),
+            Path(draft_response.draft.id.to_string()),
+        )
+        .await
+        .expect("render outputs should list");
+        assert_eq!(render_outputs.len(), 1);
+        assert!(render_outputs[0].html.contains("核心判断"));
+        assert!(render_outputs[0]
+            .html
+            .contains("previews/react-static-page.png"));
+
+        let Json(detail) = get_assistant_run(
+            State(state),
+            Path(run_response.assistant_run_id.to_string()),
+        )
+        .await
+        .expect("assistant run detail should load");
+        assert!(detail
+            .events
+            .iter()
+            .any(|event| event.event_name == "static_page_image_job.created"));
+        assert!(detail
+            .events
+            .iter()
+            .any(|event| event.event_name == "static_page_render.created"));
+    }
+
+    #[tokio::test]
     async fn conversation_memory_items_can_be_listed_for_assistant_run() {
         let _guard = shared_local_postgres_test_lock().lock().await;
         std::env::set_var("ASSISTANT_RUN_RUNTIME_MODE", "placeholder");

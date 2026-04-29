@@ -1,6 +1,12 @@
+use axum::{
+    extract::{Path, State},
+    Json,
+};
 use chrono::Utc;
+use contracts::{CreateStaticPageImageJobRequest, CreateStaticPageRenderRequest};
 use domain_model::{
     AssistantRunId, Document, DocumentChunk, DocumentId, SecretBindingId, StaticPageDraftId,
+    StaticPageImageJobId,
 };
 use serde_json::{json, Value};
 use std::{collections::BTreeMap, env};
@@ -151,6 +157,25 @@ pub(crate) async fn execute_assistant_run_react_action(
                     action, operations, true,
                 ))
             }
+        }
+        AssistantRunReactActionType::SubmitStaticPageImagePreview => {
+            submit_static_page_image_preview_for_current_draft(
+                state,
+                action,
+                current_artifact,
+                active_assistant_run_id,
+                prompt,
+            )
+            .await
+        }
+        AssistantRunReactActionType::RenderStaticPage => {
+            render_static_page_for_current_draft(
+                state,
+                action,
+                current_artifact,
+                active_assistant_run_id,
+            )
+            .await
         }
         _ => Ok(rejected_react_tool_result(
             action,
@@ -327,6 +352,226 @@ async fn apply_static_page_module_operations_to_current_draft(
         }),
         final_answer: None,
     })
+}
+
+async fn submit_static_page_image_preview_for_current_draft(
+    state: &AppState,
+    action: &AssistantRunNextAction,
+    current_artifact: Option<&Value>,
+    active_assistant_run_id: Option<AssistantRunId>,
+    prompt: &str,
+) -> std::result::Result<AssistantRunReactToolResult, ApiError> {
+    let Some(draft_id) = current_static_page_draft_id(current_artifact) else {
+        return Ok(rejected_react_tool_result(
+            action,
+            "current_static_page_draft_required",
+        ));
+    };
+    let Some(active_assistant_run_id) = active_assistant_run_id else {
+        return Ok(rejected_react_tool_result(
+            action,
+            "active_assistant_run_required",
+        ));
+    };
+    if let Some(rejected) =
+        reject_if_static_page_draft_not_current(state, action, draft_id, active_assistant_run_id)
+            .await?
+    {
+        return Ok(rejected);
+    }
+
+    let image_prompt_payload = action
+        .arguments
+        .get("image_prompt_payload")
+        .or_else(|| action.arguments.get("imagePromptPayload"))
+        .cloned()
+        .unwrap_or(Value::Null);
+    let image_prompt = action
+        .arguments
+        .get("prompt")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(prompt)
+        .to_string();
+    let (_status, Json(response)) = crate::create_static_page_image_job(
+        State(state.clone()),
+        Path(draft_id.to_string()),
+        Json(CreateStaticPageImageJobRequest {
+            prompt: Some(image_prompt),
+            image_prompt_payload,
+        }),
+    )
+    .await?;
+    let image_job_status =
+        serde_json::to_value(&response.image_job.status).unwrap_or_else(|_| json!("unknown"));
+
+    Ok(AssistantRunReactToolResult {
+        observation: json!({
+            "status": "completed",
+            "action_type": action.action_type.as_str(),
+            "actionType": action.action_type.as_str(),
+            "message": "static page image preview queued",
+            "items": [{
+                "type": "static_page_image_job",
+                "image_job_id": response.image_job.id.to_string(),
+                "draft_id": response.image_job.draft_id.to_string(),
+                "status": image_job_status,
+                "queue_position": response.image_job.queue_position,
+            }],
+            "limits": {},
+            "draft_id": response.image_job.draft_id.to_string(),
+            "image_job_id": response.image_job.id.to_string(),
+            "queue_position": response.image_job.queue_position,
+        }),
+        trail_step: json!({
+            "status": "completed",
+            "label": "提交效果图生成",
+            "react_action": action.action_type.as_str(),
+            "draft_id": response.image_job.draft_id.to_string(),
+            "image_job_id": response.image_job.id.to_string(),
+            "queue_position": response.image_job.queue_position,
+            "at": Utc::now(),
+        }),
+        final_answer: None,
+    })
+}
+
+async fn render_static_page_for_current_draft(
+    state: &AppState,
+    action: &AssistantRunNextAction,
+    current_artifact: Option<&Value>,
+    active_assistant_run_id: Option<AssistantRunId>,
+) -> std::result::Result<AssistantRunReactToolResult, ApiError> {
+    let Some(draft_id) = current_static_page_draft_id(current_artifact) else {
+        return Ok(rejected_react_tool_result(
+            action,
+            "current_static_page_draft_required",
+        ));
+    };
+    let Some(active_assistant_run_id) = active_assistant_run_id else {
+        return Ok(rejected_react_tool_result(
+            action,
+            "active_assistant_run_required",
+        ));
+    };
+    if let Some(rejected) =
+        reject_if_static_page_draft_not_current(state, action, draft_id, active_assistant_run_id)
+            .await?
+    {
+        return Ok(rejected);
+    }
+
+    let image_job_id = match static_page_image_job_id_from_arguments(&action.arguments) {
+        Ok(value) => value,
+        Err(message) => return Ok(rejected_react_tool_result(action, message)),
+    };
+    let response = crate::create_static_page_render(
+        State(state.clone()),
+        Path(draft_id.to_string()),
+        Json(CreateStaticPageRenderRequest { image_job_id }),
+    )
+    .await;
+    let (_status, Json(response)) = match response {
+        Ok(response) => response,
+        Err(error) if error.payload.code == "static_page_preview_not_confirmed" => {
+            return Ok(rejected_react_tool_result(
+                action,
+                "static_page_preview_not_confirmed",
+            ));
+        }
+        Err(error) if error.payload.code == "static_page_image_job_mismatch" => {
+            return Ok(rejected_react_tool_result(
+                action,
+                "static_page_image_job_mismatch",
+            ));
+        }
+        Err(error) => return Err(error),
+    };
+    let render_status =
+        serde_json::to_value(&response.render_output.status).unwrap_or_else(|_| json!("unknown"));
+
+    Ok(AssistantRunReactToolResult {
+        observation: json!({
+            "status": "completed",
+            "action_type": action.action_type.as_str(),
+            "actionType": action.action_type.as_str(),
+            "message": "static page rendered",
+            "items": [{
+                "type": "static_page_render_output",
+                "render_output_id": response.render_output.id.to_string(),
+                "draft_id": response.render_output.draft_id.to_string(),
+                "status": render_status,
+                "image_job_id": response.render_output.image_job_id.map(|id| id.to_string()),
+            }],
+            "limits": {},
+            "draft_id": response.render_output.draft_id.to_string(),
+            "render_output_id": response.render_output.id.to_string(),
+            "draft_status": response.draft.status,
+        }),
+        trail_step: json!({
+            "status": "completed",
+            "label": "制作最终静态页",
+            "react_action": action.action_type.as_str(),
+            "draft_id": response.render_output.draft_id.to_string(),
+            "render_output_id": response.render_output.id.to_string(),
+            "at": Utc::now(),
+        }),
+        final_answer: None,
+    })
+}
+
+async fn reject_if_static_page_draft_not_current(
+    state: &AppState,
+    action: &AssistantRunNextAction,
+    draft_id: StaticPageDraftId,
+    active_assistant_run_id: AssistantRunId,
+) -> std::result::Result<Option<AssistantRunReactToolResult>, ApiError> {
+    let Some(draft) = state
+        .storage
+        .static_page_drafts()
+        .get_by_id(state.tenant_id, draft_id)
+        .await
+        .map_err(ApiError::from_storage)?
+    else {
+        return Ok(Some(rejected_react_tool_result(
+            action,
+            "static_page_draft_not_found",
+        )));
+    };
+    if draft.assistant_run_id != active_assistant_run_id {
+        return Ok(Some(rejected_react_tool_result(
+            action,
+            "current_static_page_draft_run_mismatch",
+        )));
+    }
+    Ok(None)
+}
+
+fn static_page_image_job_id_from_arguments(
+    arguments: &Value,
+) -> std::result::Result<Option<StaticPageImageJobId>, &'static str> {
+    let Some(raw) = [
+        "image_job_id",
+        "imageJobId",
+        "static_page_image_job_id",
+        "job_id",
+        "jobId",
+    ]
+    .iter()
+    .find_map(|key| {
+        arguments
+            .get(*key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    }) else {
+        return Ok(None);
+    };
+    Uuid::parse_str(raw)
+        .map(StaticPageImageJobId)
+        .map(Some)
+        .map_err(|_| "invalid_static_page_image_job_id")
 }
 
 fn current_static_page_draft_id(current_artifact: Option<&Value>) -> Option<StaticPageDraftId> {
