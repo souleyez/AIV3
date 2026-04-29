@@ -79,6 +79,13 @@ use tool_registry::{
 use uuid::Uuid;
 use workflow_engine::{WorkflowCatalog, WorkflowRuntimeState, WorkflowSignal};
 
+mod react_agent_contract;
+
+use react_agent_contract::{
+    parse_assistant_run_next_action, AssistantRunReActActionType as AssistantRunReactActionType,
+    AssistantRunReActDecision as AssistantRunNextAction,
+};
+
 const DATASET_OUTPUT_RETRIEVAL_SCAN_LIMIT: i64 = 512;
 const DATASET_OUTPUT_RETRIEVAL_BIND_LIMIT: usize = 8;
 const RETRIEVAL_SEARCH_DEFAULT_LIMIT: usize = 8;
@@ -94,65 +101,6 @@ const ASSISTANT_RUN_CONTINUE_DEFAULT_MAX_STEPS: usize = 3;
 const ASSISTANT_RUN_CONTINUE_MAX_STEPS: usize = 5;
 const ASSISTANT_RUN_REACT_DEFAULT_MAX_STEPS: usize = 3;
 const ASSISTANT_RUN_REACT_MAX_STEPS: usize = 5;
-const ASSISTANT_RUN_REACT_ARGUMENT_MAX_BYTES: usize = 16 * 1024;
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum AssistantRunReactActionType {
-    RetrieveEvidence,
-    ReadDocumentDetail,
-    RecallConversationMemory,
-    CreateStaticPageDraft,
-    UpdateStaticPageModule,
-    SubmitStaticPageImagePreview,
-    RenderStaticPage,
-    CreateReportDraft,
-    OpenClawMemoryRecall,
-    OpenClawReadonlyExecution,
-    FinalAnswer,
-}
-
-impl AssistantRunReactActionType {
-    fn from_str(value: &str) -> Option<Self> {
-        match value.trim() {
-            "retrieve_evidence" => Some(Self::RetrieveEvidence),
-            "read_document_detail" => Some(Self::ReadDocumentDetail),
-            "recall_conversation_memory" => Some(Self::RecallConversationMemory),
-            "create_static_page_draft" => Some(Self::CreateStaticPageDraft),
-            "update_static_page_module" => Some(Self::UpdateStaticPageModule),
-            "submit_static_page_image_preview" => Some(Self::SubmitStaticPageImagePreview),
-            "render_static_page" => Some(Self::RenderStaticPage),
-            "create_report_draft" => Some(Self::CreateReportDraft),
-            "openclaw_memory_recall" => Some(Self::OpenClawMemoryRecall),
-            "openclaw_readonly_execution" => Some(Self::OpenClawReadonlyExecution),
-            "final_answer" => Some(Self::FinalAnswer),
-            _ => None,
-        }
-    }
-
-    fn as_str(&self) -> &'static str {
-        match self {
-            Self::RetrieveEvidence => "retrieve_evidence",
-            Self::ReadDocumentDetail => "read_document_detail",
-            Self::RecallConversationMemory => "recall_conversation_memory",
-            Self::CreateStaticPageDraft => "create_static_page_draft",
-            Self::UpdateStaticPageModule => "update_static_page_module",
-            Self::SubmitStaticPageImagePreview => "submit_static_page_image_preview",
-            Self::RenderStaticPage => "render_static_page",
-            Self::CreateReportDraft => "create_report_draft",
-            Self::OpenClawMemoryRecall => "openclaw_memory_recall",
-            Self::OpenClawReadonlyExecution => "openclaw_readonly_execution",
-            Self::FinalAnswer => "final_answer",
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq)]
-struct AssistantRunNextAction {
-    action_type: AssistantRunReactActionType,
-    reason_summary: String,
-    arguments: Value,
-    requires_confirmation: bool,
-}
 
 #[derive(Clone, Debug)]
 struct AssistantRunReactOutcome {
@@ -6042,89 +5990,6 @@ async fn execute_assistant_run_react_action(
     }
 }
 
-fn parse_assistant_run_next_action(
-    output_text: &str,
-) -> std::result::Result<AssistantRunNextAction, String> {
-    let payload = parse_json_object_from_model_output(output_text)?;
-    let object = payload
-        .as_object()
-        .ok_or_else(|| "ReAct action payload must be a JSON object".to_string())?;
-    let action_type = object
-        .get("action_type")
-        .and_then(Value::as_str)
-        .and_then(AssistantRunReactActionType::from_str)
-        .ok_or_else(|| "unknown or missing action_type".to_string())?;
-    let reason_summary = object
-        .get("reason_summary")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or(action_type.as_str())
-        .to_string();
-    let arguments = object
-        .get("arguments")
-        .cloned()
-        .unwrap_or_else(|| json!({}));
-    if !arguments.is_object() {
-        return Err("arguments must be a JSON object".to_string());
-    }
-    let argument_bytes = serde_json::to_vec(&arguments)
-        .map_err(|error| format!("arguments must be serializable JSON: {error}"))?
-        .len();
-    if argument_bytes > ASSISTANT_RUN_REACT_ARGUMENT_MAX_BYTES {
-        return Err(format!(
-            "arguments exceed {} bytes",
-            ASSISTANT_RUN_REACT_ARGUMENT_MAX_BYTES
-        ));
-    }
-    if contains_unsafe_json_key(&arguments) {
-        return Err("arguments contain unsafe key".to_string());
-    }
-    let requires_confirmation = object
-        .get("requires_confirmation")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-
-    Ok(AssistantRunNextAction {
-        action_type,
-        reason_summary,
-        arguments,
-        requires_confirmation,
-    })
-}
-
-fn parse_json_object_from_model_output(output_text: &str) -> std::result::Result<Value, String> {
-    let trimmed = output_text.trim();
-    if trimmed.is_empty() {
-        return Err("model output is empty".to_string());
-    }
-    if let Ok(value) = serde_json::from_str::<Value>(trimmed) {
-        return Ok(value);
-    }
-    let start = trimmed
-        .find('{')
-        .ok_or_else(|| "model output does not contain a JSON object".to_string())?;
-    let end = trimmed
-        .rfind('}')
-        .ok_or_else(|| "model output does not contain a complete JSON object".to_string())?;
-    if end <= start {
-        return Err("model output has invalid JSON object bounds".to_string());
-    }
-    serde_json::from_str::<Value>(&trimmed[start..=end])
-        .map_err(|error| format!("model output JSON is invalid: {error}"))
-}
-
-fn contains_unsafe_json_key(value: &Value) -> bool {
-    match value {
-        Value::Object(object) => object.iter().any(|(key, value)| {
-            matches!(key.as_str(), "__proto__" | "constructor" | "prototype")
-                || contains_unsafe_json_key(value)
-        }),
-        Value::Array(items) => items.iter().any(contains_unsafe_json_key),
-        _ => false,
-    }
-}
-
 fn assistant_run_react_enabled(runtime_mode: &str) -> bool {
     runtime_mode != "placeholder" && env_flag("ASSISTANT_RUN_REACT_ENABLED", false)
 }
@@ -6142,6 +6007,7 @@ fn assistant_run_react_action_label(action_type: &AssistantRunReactActionType) -
         AssistantRunReactActionType::RetrieveEvidence => "检索供料证据",
         AssistantRunReactActionType::ReadDocumentDetail => "读取文档详情",
         AssistantRunReactActionType::RecallConversationMemory => "召回对话记忆",
+        AssistantRunReactActionType::ListReportOptions => "列出报表选项",
         AssistantRunReactActionType::CreateStaticPageDraft => "创建静态页草稿",
         AssistantRunReactActionType::UpdateStaticPageModule => "更新静态页模块",
         AssistantRunReactActionType::SubmitStaticPageImagePreview => "提交效果图生成",
@@ -13560,10 +13426,15 @@ mod tests {
         });
         let ordinary_scope = json!({"mode": "ordinary_chat"});
         let final_action = AssistantRunNextAction {
+            status: crate::react_agent_contract::AssistantRunReActStatus::FinalAnswer,
+            intent: None,
             action_type: AssistantRunReactActionType::FinalAnswer,
             reason_summary: "直接回答".to_string(),
             arguments: json!({"content": "未供料回答"}),
             requires_confirmation: false,
+            answer: Some("未供料回答".to_string()),
+            citations: Vec::new(),
+            conversation_state: json!({}),
         };
 
         assert!(assistant_run_react_should_repair_terminal_action(
