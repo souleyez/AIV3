@@ -264,6 +264,9 @@ Next outcomes:
 
 ### Slice 3: Host-Controlled ReAct AssistantRun Loop
 
+**Status 2026-04-29:** backend first slice implemented in `crates/platform-api/src/lib.rs`.
+AssistantRun create and continue paths now support a config-gated Host-Controlled ReAct loop with strict action JSON parsing, step limits, V3-owned retrieval/visibility checks, static-page module operation sanitization, persisted ReAct events, and concise execution-trail steps. Contracts/storage changes were not required for this phase because existing AssistantRun events, output artifacts, and evidence-state fields were sufficient. Static-page write actions are currently returned as sanitized operations/observations rather than silently applying to drafts; applying them to a selected draft belongs to Slice 4.
+
 **Files:**
 
 - Modify: `crates/platform-api/src/lib.rs`
@@ -291,6 +294,12 @@ Next outcomes:
 - UI-facing trail contains concise steps without exposing hidden chain-of-thought.
 - Static-page module updates can be requested by the model through the same action contract used by user micro-adjustments.
 - Existing ordinary chat still works when ReAct is disabled.
+
+**Verified 2026-04-29:**
+
+- `cargo check -p platform-api`
+- `cargo test -p platform-api assistant_run_react`
+- `cargo test -p platform-api assistant_run`
 
 ### Slice 4: Static-Page Module Editing And Data Binding
 
@@ -496,13 +505,23 @@ Do not change static-page behavior while adding the provider.
 Keep OpenClaw disabled by default and fully fallback-safe.
 ```
 
-If Slice 1 and Slice 2 are already committed, start with Slice 3:
+If Slice 1 and Slice 2 are already committed but Slice 3 is not, start with Slice 3:
 
 ```text
 Implement Host-Controlled ReAct inside AssistantRun.
 Use docs/plans/2026-04-29-v3-consolidated-development-handoff-plan.md as the active plan.
 The model may propose actions, but V3 validates, executes, records, and limits every action.
 Keep ordinary chat and deterministic static-page fallback working when ReAct is disabled.
+```
+
+If Slice 3 is already committed, start with Slice 4:
+
+```text
+Implement static-page module editing and data binding.
+Use docs/plans/2026-04-29-v3-consolidated-development-handoff-plan.md as the active plan.
+Let model-requested update_static_page_module operations target the current draft only through V3 schemas.
+Keep draft mutation behind visibility checks, confirmation/staleness rules, and sanitized operation contracts.
+Add tests for title/content edits, visualization switch, chart/data binding patches, and stale preview/final render markers.
 ```
 
 Reason:

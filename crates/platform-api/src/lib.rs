@@ -54,7 +54,7 @@ use domain_model::{
 use event_bus::{
     workflow_execution_transition_subject, workflow_task_enqueued_subject, EventBus, EventEnvelope,
 };
-use llm_gateway::{build_provider_from_env, render_runtime_manifest, LlmRequest};
+use llm_gateway::{build_provider_from_env, render_runtime_manifest, LlmRequest, LlmResponse};
 use prompt_registry::bootstrap_default_prompt_registry;
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
@@ -92,6 +92,89 @@ const ASSISTANT_RUN_CONVERSATION_MEMORY_DEFAULT_LIMIT: i64 = 4;
 const ASSISTANT_RUN_CONVERSATION_MEMORY_MAX_LIMIT: i64 = 8;
 const ASSISTANT_RUN_CONTINUE_DEFAULT_MAX_STEPS: usize = 3;
 const ASSISTANT_RUN_CONTINUE_MAX_STEPS: usize = 5;
+const ASSISTANT_RUN_REACT_DEFAULT_MAX_STEPS: usize = 3;
+const ASSISTANT_RUN_REACT_MAX_STEPS: usize = 5;
+const ASSISTANT_RUN_REACT_ARGUMENT_MAX_BYTES: usize = 16 * 1024;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum AssistantRunReactActionType {
+    RetrieveEvidence,
+    ReadDocumentDetail,
+    RecallConversationMemory,
+    CreateStaticPageDraft,
+    UpdateStaticPageModule,
+    SubmitStaticPageImagePreview,
+    RenderStaticPage,
+    CreateReportDraft,
+    OpenClawMemoryRecall,
+    OpenClawReadonlyExecution,
+    FinalAnswer,
+}
+
+impl AssistantRunReactActionType {
+    fn from_str(value: &str) -> Option<Self> {
+        match value.trim() {
+            "retrieve_evidence" => Some(Self::RetrieveEvidence),
+            "read_document_detail" => Some(Self::ReadDocumentDetail),
+            "recall_conversation_memory" => Some(Self::RecallConversationMemory),
+            "create_static_page_draft" => Some(Self::CreateStaticPageDraft),
+            "update_static_page_module" => Some(Self::UpdateStaticPageModule),
+            "submit_static_page_image_preview" => Some(Self::SubmitStaticPageImagePreview),
+            "render_static_page" => Some(Self::RenderStaticPage),
+            "create_report_draft" => Some(Self::CreateReportDraft),
+            "openclaw_memory_recall" => Some(Self::OpenClawMemoryRecall),
+            "openclaw_readonly_execution" => Some(Self::OpenClawReadonlyExecution),
+            "final_answer" => Some(Self::FinalAnswer),
+            _ => None,
+        }
+    }
+
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::RetrieveEvidence => "retrieve_evidence",
+            Self::ReadDocumentDetail => "read_document_detail",
+            Self::RecallConversationMemory => "recall_conversation_memory",
+            Self::CreateStaticPageDraft => "create_static_page_draft",
+            Self::UpdateStaticPageModule => "update_static_page_module",
+            Self::SubmitStaticPageImagePreview => "submit_static_page_image_preview",
+            Self::RenderStaticPage => "render_static_page",
+            Self::CreateReportDraft => "create_report_draft",
+            Self::OpenClawMemoryRecall => "openclaw_memory_recall",
+            Self::OpenClawReadonlyExecution => "openclaw_readonly_execution",
+            Self::FinalAnswer => "final_answer",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct AssistantRunNextAction {
+    action_type: AssistantRunReactActionType,
+    reason_summary: String,
+    arguments: Value,
+    requires_confirmation: bool,
+}
+
+#[derive(Clone, Debug)]
+struct AssistantRunReactOutcome {
+    runtime_manifest: Value,
+    evidence_state: Value,
+    execution_trail_steps: Vec<Value>,
+    output_artifacts: Vec<Value>,
+    events: Vec<AssistantRunReactEvent>,
+}
+
+#[derive(Clone, Debug)]
+struct AssistantRunReactEvent {
+    event_name: String,
+    payload: Value,
+}
+
+#[derive(Clone, Debug)]
+struct AssistantRunReactActionResult {
+    observation: Value,
+    trail_step: Value,
+    final_answer: Option<String>,
+}
 const STATIC_PAGE_DRAFT_LIST_DEFAULT_LIMIT: i64 = 12;
 const STATIC_PAGE_DRAFT_LIST_MAX_LIMIT: i64 = 50;
 const ACTIVE_SECRET_BINDING_IDS_HEADER: &str = "x-ai-data-platform-secret-binding-ids";
@@ -3948,7 +4031,7 @@ async fn create_assistant_run(
     request.scope_candidates = candidates_to_values(&scope_plan.candidates);
     request.selected_scope = Some(scope_plan.selected_scope.clone());
     let selected_scope = scope_plan.selected_scope.clone();
-    let evidence_state = build_assistant_run_evidence_state(
+    let mut evidence_state = build_assistant_run_evidence_state(
         &state,
         &selected_scope,
         &request.prompt,
@@ -3966,41 +4049,73 @@ async fn create_assistant_run(
     let runtime_mode_for_trail = runtime_mode.clone();
     let runtime_provider_for_trail = runtime_provider.clone();
     let runtime_model_for_trail = runtime_model.clone();
-    let provider_input = if runtime_mode == "placeholder" {
-        format!(
-            "普通聊天运行时占位回复：后端 AssistantRun 已接收问题，真实模型接入后会直接返回模型回答。\n\nPrompt: {}\n\n供料状态: {}",
-            request.prompt.trim(),
-            assistant_run_evidence_status_label(&evidence_state)
+    let scope_candidates = request.scope_candidates.clone();
+    let react_enabled = assistant_run_react_enabled(&runtime_mode);
+    let react_outcome = if react_enabled {
+        Some(
+            run_assistant_run_react_for_create(
+                &state,
+                &request,
+                &selected_scope,
+                evidence_state.clone(),
+                local_thread_id.as_deref(),
+                &active_secret_binding_ids,
+                &runtime_mode,
+                &runtime_provider,
+                &runtime_model,
+            )
+            .await?,
         )
     } else {
-        build_assistant_run_provider_input_with_evidence(&request, Some(&evidence_state))
+        None
     };
-    let scope_candidates = request.scope_candidates.clone();
 
-    let response = tokio::task::spawn_blocking(move || {
-        let provider = build_provider_from_env(
-            "ASSISTANT_RUN",
-            &runtime_mode,
-            runtime_provider,
-            bootstrap_default_prompt_registry(),
-        )?;
-        provider.complete(&LlmRequest {
-            model: runtime_model,
-            system_prompt_key: None,
-            input: provider_input,
-        })
-    })
-    .await
-    .map_err(|error| {
-        ApiError::internal(
-            "assistant_run_join_failed",
-            format!("assistant run worker join failed: {error}"),
-        )
-    })?
-    .map_err(|error| ApiError::internal("assistant_run_provider_failed", error.to_string()))?;
+    let (runtime_manifest, mut react_trail_steps, output_artifacts, react_events) =
+        match react_outcome {
+            Some(outcome) => {
+                evidence_state = outcome.evidence_state;
+                (
+                    outcome.runtime_manifest,
+                    outcome.execution_trail_steps,
+                    outcome.output_artifacts,
+                    outcome.events,
+                )
+            }
+            None => {
+                let provider_input = if runtime_mode == "placeholder" {
+                    format!(
+                        "普通聊天运行时占位回复：后端 AssistantRun 已接收问题，真实模型接入后会直接返回模型回答。\n\nPrompt: {}\n\n供料状态: {}",
+                        request.prompt.trim(),
+                        assistant_run_evidence_status_label(&evidence_state)
+                    )
+                } else {
+                    build_assistant_run_provider_input_with_evidence(
+                        &request,
+                        Some(&evidence_state),
+                    )
+                };
+                let response = complete_assistant_run_provider(
+                    runtime_mode.clone(),
+                    runtime_provider.clone(),
+                    runtime_model.clone(),
+                    provider_input,
+                )
+                .await?;
+                let runtime_manifest = render_runtime_manifest(&response.runtime);
+                (
+                    runtime_manifest,
+                    Vec::new(),
+                    vec![json!({
+                        "type": "assistant_message",
+                        "role": ChatMessageRole::Assistant.as_str(),
+                        "content": response.output_text,
+                    })],
+                    Vec::new(),
+                )
+            }
+        };
 
     let now = Utc::now();
-    let runtime_manifest = render_runtime_manifest(&response.runtime);
     let planned_candidate_count = scope_candidates.len();
     let scope_candidates = Value::Array(scope_candidates.clone());
     let context_policy = request.context_policy_hint.clone().unwrap_or_else(|| {
@@ -4010,7 +4125,7 @@ async fn create_assistant_run(
         })
     });
     let supplied_evidence_count = assistant_run_evidence_supplied_count(&evidence_state);
-    let execution_trail = vec![
+    let mut execution_trail = vec![
         json!({
             "status": "completed",
             "label": "接收用户问题",
@@ -4030,20 +4145,27 @@ async fn create_assistant_run(
             "evidence_status": evidence_state.get("status").and_then(Value::as_str).unwrap_or("unknown"),
             "at": now,
         }),
-        json!({
+    ];
+    if react_enabled {
+        execution_trail.push(json!({
+            "status": "completed",
+            "label": "Host-Controlled ReAct 运行",
+            "runtime_mode": runtime_mode_for_trail,
+            "provider": runtime_provider_for_trail,
+            "model": runtime_model_for_trail,
+            "at": now,
+        }));
+        execution_trail.append(&mut react_trail_steps);
+    } else {
+        execution_trail.push(json!({
             "status": "completed",
             "label": "普通聊天运行时返回",
             "runtime_mode": runtime_mode_for_trail,
             "provider": runtime_provider_for_trail,
             "model": runtime_model_for_trail,
             "at": now,
-        }),
-    ];
-    let output_artifacts = vec![json!({
-        "type": "assistant_message",
-        "role": ChatMessageRole::Assistant.as_str(),
-        "content": response.output_text,
-    })];
+        }));
+    }
     let run = state
         .storage
         .assistant_runs()
@@ -4069,6 +4191,22 @@ async fn create_assistant_run(
         )
         .await
         .map_err(ApiError::from_storage)?;
+    for event in react_events {
+        state
+            .storage
+            .assistant_runs()
+            .append_event(
+                state.tenant_id,
+                run.id,
+                &NewAssistantRunEvent {
+                    event_name: event.event_name,
+                    payload: event.payload,
+                    created_at: now,
+                },
+            )
+            .await
+            .map_err(ApiError::from_storage)?;
+    }
     state
         .storage
         .assistant_runs()
@@ -4189,10 +4327,12 @@ async fn append_assistant_run_event(
 
 async fn continue_assistant_run(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(run_id): Path<String>,
     Json(request): Json<ContinueAssistantRunRequest>,
 ) -> std::result::Result<(StatusCode, Json<ContinueAssistantRunResponse>), ApiError> {
     let run_id = parse_assistant_run_id(&run_id)?;
+    let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
     let run = state
         .storage
         .assistant_runs()
@@ -4223,62 +4363,102 @@ async fn continue_assistant_run(
     let runtime_mode_for_trail = runtime_mode.clone();
     let runtime_provider_for_trail = runtime_provider.clone();
     let runtime_model_for_trail = runtime_model.clone();
-    let provider_input = if runtime_mode == "placeholder" {
-        format!(
-            "AssistantRun 继续执行占位回复：后端已接收继续指令，真实模型接入后会基于同一个运行上下文继续回答或请求平台能力。\n\nRun: {}\nContinue prompt: {}\nMax steps: {}\n供料状态: {}",
-            run.id,
-            continue_prompt,
-            max_steps,
-            assistant_run_evidence_status_label(&run.evidence_state)
+    let mut evidence_state = run.evidence_state.clone();
+    let react_enabled = assistant_run_react_enabled(&runtime_mode);
+    let react_outcome = if react_enabled {
+        Some(
+            run_assistant_run_react_for_continue(
+                &state,
+                &run,
+                &request,
+                &continue_prompt,
+                max_steps,
+                &mut evidence_state,
+                &active_secret_binding_ids,
+                &runtime_mode,
+                &runtime_provider,
+                &runtime_model,
+            )
+            .await?,
         )
     } else {
-        build_assistant_run_continue_provider_input(&run, &request, &continue_prompt, max_steps)
+        None
     };
 
-    let response = tokio::task::spawn_blocking(move || {
-        let provider = build_provider_from_env(
-            "ASSISTANT_RUN",
-            &runtime_mode,
-            runtime_provider,
-            bootstrap_default_prompt_registry(),
-        )?;
-        provider.complete(&LlmRequest {
-            model: runtime_model,
-            system_prompt_key: None,
-            input: provider_input,
-        })
-    })
-    .await
-    .map_err(|error| {
-        ApiError::internal(
-            "assistant_run_continue_join_failed",
-            format!("assistant run continue worker join failed: {error}"),
-        )
-    })?
-    .map_err(|error| {
-        ApiError::internal("assistant_run_continue_provider_failed", error.to_string())
-    })?;
+    let (runtime_manifest, mut react_trail_steps, assistant_artifacts, react_events) =
+        match react_outcome {
+            Some(outcome) => {
+                evidence_state = outcome.evidence_state;
+                (
+                    outcome.runtime_manifest,
+                    outcome.execution_trail_steps,
+                    outcome.output_artifacts,
+                    outcome.events,
+                )
+            }
+            None => {
+                let provider_input = if runtime_mode == "placeholder" {
+                    format!(
+                        "AssistantRun 继续执行占位回复：后端已接收继续指令，真实模型接入后会基于同一个运行上下文继续回答或请求平台能力。\n\nRun: {}\nContinue prompt: {}\nMax steps: {}\n供料状态: {}",
+                        run.id,
+                        continue_prompt,
+                        max_steps,
+                        assistant_run_evidence_status_label(&run.evidence_state)
+                    )
+                } else {
+                    build_assistant_run_continue_provider_input(
+                        &run,
+                        &request,
+                        &continue_prompt,
+                        max_steps,
+                    )
+                };
+                let response = complete_assistant_run_provider(
+                    runtime_mode.clone(),
+                    runtime_provider.clone(),
+                    runtime_model.clone(),
+                    provider_input,
+                )
+                .await
+                .map_err(|error| {
+                    ApiError::internal("assistant_run_continue_provider_failed", error.to_string())
+                })?;
+                (
+                    render_runtime_manifest(&response.runtime),
+                    Vec::new(),
+                    vec![json!({
+                        "type": "assistant_message",
+                        "role": ChatMessageRole::Assistant.as_str(),
+                        "content": response.output_text,
+                        "source": "assistant_run_continue",
+                    })],
+                    Vec::new(),
+                )
+            }
+        };
 
     let now = Utc::now();
-    let runtime_manifest = render_runtime_manifest(&response.runtime);
     let mut execution_trail = value_array(run.execution_trail.clone());
     execution_trail.push(json!({
         "status": "completed",
         "label": "继续执行",
         "prompt": continue_prompt,
         "max_steps": max_steps,
+        "react_enabled": react_enabled,
         "runtime_mode": runtime_mode_for_trail,
         "provider": runtime_provider_for_trail,
         "model": runtime_model_for_trail,
         "at": now,
     }));
+    execution_trail.append(&mut react_trail_steps);
     let mut output_artifacts = value_array(run.output_artifacts.clone());
-    output_artifacts.push(json!({
-        "type": "assistant_message",
-        "role": ChatMessageRole::Assistant.as_str(),
-        "content": response.output_text,
-        "source": "assistant_run_continue",
-        "created_at": now,
+    output_artifacts.extend(assistant_artifacts.into_iter().map(|mut artifact| {
+        if let Some(object) = artifact.as_object_mut() {
+            object
+                .entry("created_at".to_string())
+                .or_insert_with(|| json!(now));
+        }
+        artifact
     }));
 
     state
@@ -4291,6 +4471,12 @@ async fn continue_assistant_run(
         )
         .await
         .map_err(ApiError::from_storage)?;
+    state
+        .storage
+        .assistant_runs()
+        .update_evidence_state(state.tenant_id, run_id, &evidence_state)
+        .await
+        .map_err(ApiError::from_storage)?;
     let updated_run = state
         .storage
         .assistant_runs()
@@ -4301,6 +4487,22 @@ async fn continue_assistant_run(
         )
         .await
         .map_err(ApiError::from_storage)?;
+    for event in react_events {
+        state
+            .storage
+            .assistant_runs()
+            .append_event(
+                state.tenant_id,
+                run_id,
+                &NewAssistantRunEvent {
+                    event_name: event.event_name,
+                    payload: event.payload,
+                    created_at: now,
+                },
+            )
+            .await
+            .map_err(ApiError::from_storage)?;
+    }
     let event = state
         .storage
         .assistant_runs()
@@ -5207,6 +5409,804 @@ fn build_assistant_run_continue_provider_input(
     }
 
     sections.join("\n\n")
+}
+
+async fn complete_assistant_run_provider(
+    runtime_mode: String,
+    runtime_provider: String,
+    runtime_model: String,
+    provider_input: String,
+) -> std::result::Result<LlmResponse, ApiError> {
+    tokio::task::spawn_blocking(move || {
+        let provider = build_provider_from_env(
+            "ASSISTANT_RUN",
+            &runtime_mode,
+            runtime_provider,
+            bootstrap_default_prompt_registry(),
+        )?;
+        provider.complete(&LlmRequest {
+            model: runtime_model,
+            system_prompt_key: None,
+            input: provider_input,
+        })
+    })
+    .await
+    .map_err(|error| {
+        ApiError::internal(
+            "assistant_run_join_failed",
+            format!("assistant run worker join failed: {error}"),
+        )
+    })?
+    .map_err(|error| ApiError::internal("assistant_run_provider_failed", error.to_string()))
+}
+
+async fn run_assistant_run_react_for_create(
+    state: &AppState,
+    request: &CreateAssistantRunRequest,
+    selected_scope: &Value,
+    initial_evidence_state: Value,
+    local_thread_id: Option<&str>,
+    active_secret_binding_ids: &[SecretBindingId],
+    runtime_mode: &str,
+    runtime_provider: &str,
+    runtime_model: &str,
+) -> std::result::Result<AssistantRunReactOutcome, ApiError> {
+    let max_steps = assistant_run_react_max_steps();
+    let mut evidence_state = initial_evidence_state;
+    let mut observations = Vec::<Value>::new();
+    let mut events = Vec::<AssistantRunReactEvent>::new();
+    let mut execution_trail_steps = Vec::<Value>::new();
+    let mut runtime_manifest = json!({
+        "mode": runtime_mode,
+        "provider": runtime_provider,
+        "model": runtime_model,
+        "react": {
+            "enabled": true,
+            "max_steps": max_steps,
+        },
+    });
+    let mut assistant_message = String::new();
+
+    for step_index in 1..=max_steps {
+        let provider_input = build_assistant_run_react_provider_input(
+            request,
+            Some(&evidence_state),
+            &observations,
+            step_index,
+            max_steps,
+        );
+        let response = complete_assistant_run_provider(
+            runtime_mode.to_string(),
+            runtime_provider.to_string(),
+            runtime_model.to_string(),
+            provider_input,
+        )
+        .await?;
+        runtime_manifest = render_runtime_manifest(&response.runtime);
+
+        let action = match parse_assistant_run_next_action(&response.output_text) {
+            Ok(action) => action,
+            Err(error) => {
+                assistant_message = response.output_text.trim().to_string();
+                if assistant_message.is_empty() {
+                    assistant_message = format!("模型未返回有效 ReAct 动作：{error}");
+                }
+                events.push(AssistantRunReactEvent {
+                    event_name: "assistant_run.react.invalid_action".to_string(),
+                    payload: json!({
+                        "step": step_index,
+                        "error": error,
+                        "fallback": "final_answer",
+                    }),
+                });
+                execution_trail_steps.push(json!({
+                    "status": "completed",
+                    "label": "模型直接回答",
+                    "react_step": step_index,
+                    "fallback": "invalid_action",
+                    "at": Utc::now(),
+                }));
+                break;
+            }
+        };
+
+        events.push(AssistantRunReactEvent {
+            event_name: "assistant_run.react.action_requested".to_string(),
+            payload: json!({
+                "step": step_index,
+                "action_type": action.action_type.as_str(),
+                "reason_summary": action.reason_summary.clone(),
+                "requires_confirmation": action.requires_confirmation,
+            }),
+        });
+
+        let result = execute_assistant_run_react_action(
+            state,
+            &action,
+            selected_scope,
+            &mut evidence_state,
+            request.prompt.trim(),
+            local_thread_id,
+            active_secret_binding_ids,
+        )
+        .await;
+
+        let result = match result {
+            Ok(result) => result,
+            Err(error) => AssistantRunReactActionResult {
+                observation: json!({
+                    "status": "failed",
+                    "action_type": action.action_type.as_str(),
+                    "error": error.to_string(),
+                }),
+                trail_step: json!({
+                    "status": "failed",
+                    "label": assistant_run_react_action_label(&action.action_type),
+                    "react_step": step_index,
+                    "error": error.to_string(),
+                    "at": Utc::now(),
+                }),
+                final_answer: None,
+            },
+        };
+
+        observations.push(result.observation.clone());
+        execution_trail_steps.push(result.trail_step);
+        events.push(AssistantRunReactEvent {
+            event_name: if result.final_answer.is_some() {
+                "assistant_run.react.final_answer".to_string()
+            } else {
+                "assistant_run.react.action_completed".to_string()
+            },
+            payload: json!({
+                "step": step_index,
+                "action_type": action.action_type.as_str(),
+                "observation": result.observation,
+            }),
+        });
+
+        if let Some(final_answer) = result.final_answer {
+            assistant_message = final_answer;
+            break;
+        }
+    }
+
+    if assistant_message.trim().is_empty() {
+        assistant_message = format!(
+            "已达到连续执行步数上限（{} 步）。请确认是否继续，或补充下一步要求。",
+            max_steps
+        );
+        events.push(AssistantRunReactEvent {
+            event_name: "assistant_run.react.step_limit_reached".to_string(),
+            payload: json!({
+                "max_steps": max_steps,
+                "observation_count": observations.len(),
+            }),
+        });
+        execution_trail_steps.push(json!({
+            "status": "completed",
+            "label": "达到连续执行上限",
+            "max_steps": max_steps,
+            "at": Utc::now(),
+        }));
+    }
+
+    let output_artifacts = vec![json!({
+        "type": "assistant_message",
+        "role": ChatMessageRole::Assistant.as_str(),
+        "content": assistant_message,
+        "source": "assistant_run_react",
+    })];
+
+    Ok(AssistantRunReactOutcome {
+        runtime_manifest,
+        evidence_state,
+        execution_trail_steps,
+        output_artifacts,
+        events,
+    })
+}
+
+async fn run_assistant_run_react_for_continue(
+    state: &AppState,
+    run: &AssistantRun,
+    request: &ContinueAssistantRunRequest,
+    continue_prompt: &str,
+    max_steps: usize,
+    initial_evidence_state: &mut Value,
+    active_secret_binding_ids: &[SecretBindingId],
+    runtime_mode: &str,
+    runtime_provider: &str,
+    runtime_model: &str,
+) -> std::result::Result<AssistantRunReactOutcome, ApiError> {
+    let max_steps = max_steps.clamp(1, ASSISTANT_RUN_REACT_MAX_STEPS);
+    let mut evidence_state = initial_evidence_state.clone();
+    let mut observations = Vec::<Value>::new();
+    let mut events = Vec::<AssistantRunReactEvent>::new();
+    let mut execution_trail_steps = Vec::<Value>::new();
+    let mut runtime_manifest = json!({
+        "mode": runtime_mode,
+        "provider": runtime_provider,
+        "model": runtime_model,
+        "react": {
+            "enabled": true,
+            "max_steps": max_steps,
+            "entrypoint": "continue_assistant_run",
+        },
+    });
+    let mut assistant_message = String::new();
+
+    for step_index in 1..=max_steps {
+        let provider_input = build_assistant_run_react_continue_provider_input(
+            run,
+            request,
+            continue_prompt,
+            Some(&evidence_state),
+            &observations,
+            step_index,
+            max_steps,
+        );
+        let response = complete_assistant_run_provider(
+            runtime_mode.to_string(),
+            runtime_provider.to_string(),
+            runtime_model.to_string(),
+            provider_input,
+        )
+        .await?;
+        runtime_manifest = render_runtime_manifest(&response.runtime);
+
+        let action = match parse_assistant_run_next_action(&response.output_text) {
+            Ok(action) => action,
+            Err(error) => {
+                assistant_message = response.output_text.trim().to_string();
+                if assistant_message.is_empty() {
+                    assistant_message = format!("模型未返回有效 ReAct 动作：{error}");
+                }
+                events.push(AssistantRunReactEvent {
+                    event_name: "assistant_run.react.invalid_action".to_string(),
+                    payload: json!({
+                        "step": step_index,
+                        "error": error,
+                        "fallback": "final_answer",
+                        "entrypoint": "continue_assistant_run",
+                    }),
+                });
+                execution_trail_steps.push(json!({
+                    "status": "completed",
+                    "label": "模型直接回答",
+                    "react_step": step_index,
+                    "fallback": "invalid_action",
+                    "at": Utc::now(),
+                }));
+                break;
+            }
+        };
+
+        events.push(AssistantRunReactEvent {
+            event_name: "assistant_run.react.action_requested".to_string(),
+            payload: json!({
+                "step": step_index,
+                "action_type": action.action_type.as_str(),
+                "reason_summary": action.reason_summary.clone(),
+                "requires_confirmation": action.requires_confirmation,
+                "entrypoint": "continue_assistant_run",
+            }),
+        });
+
+        let result = execute_assistant_run_react_action(
+            state,
+            &action,
+            &run.selected_scope,
+            &mut evidence_state,
+            continue_prompt.trim(),
+            run.local_thread_id.as_deref(),
+            active_secret_binding_ids,
+        )
+        .await;
+
+        let result = match result {
+            Ok(result) => result,
+            Err(error) => AssistantRunReactActionResult {
+                observation: json!({
+                    "status": "failed",
+                    "action_type": action.action_type.as_str(),
+                    "error": error.to_string(),
+                }),
+                trail_step: json!({
+                    "status": "failed",
+                    "label": assistant_run_react_action_label(&action.action_type),
+                    "react_step": step_index,
+                    "error": error.to_string(),
+                    "at": Utc::now(),
+                }),
+                final_answer: None,
+            },
+        };
+
+        observations.push(result.observation.clone());
+        execution_trail_steps.push(result.trail_step);
+        events.push(AssistantRunReactEvent {
+            event_name: if result.final_answer.is_some() {
+                "assistant_run.react.final_answer".to_string()
+            } else {
+                "assistant_run.react.action_completed".to_string()
+            },
+            payload: json!({
+                "step": step_index,
+                "action_type": action.action_type.as_str(),
+                "observation": result.observation,
+                "entrypoint": "continue_assistant_run",
+            }),
+        });
+
+        if let Some(final_answer) = result.final_answer {
+            assistant_message = final_answer;
+            break;
+        }
+    }
+
+    if assistant_message.trim().is_empty() {
+        assistant_message = format!(
+            "已达到连续执行步数上限（{} 步）。请确认是否继续，或补充下一步要求。",
+            max_steps
+        );
+        events.push(AssistantRunReactEvent {
+            event_name: "assistant_run.react.step_limit_reached".to_string(),
+            payload: json!({
+                "max_steps": max_steps,
+                "observation_count": observations.len(),
+                "entrypoint": "continue_assistant_run",
+            }),
+        });
+        execution_trail_steps.push(json!({
+            "status": "completed",
+            "label": "达到连续执行上限",
+            "max_steps": max_steps,
+            "at": Utc::now(),
+        }));
+    }
+
+    *initial_evidence_state = evidence_state.clone();
+    let output_artifacts = vec![json!({
+        "type": "assistant_message",
+        "role": ChatMessageRole::Assistant.as_str(),
+        "content": assistant_message,
+        "source": "assistant_run_react_continue",
+    })];
+
+    Ok(AssistantRunReactOutcome {
+        runtime_manifest,
+        evidence_state,
+        execution_trail_steps,
+        output_artifacts,
+        events,
+    })
+}
+
+fn build_assistant_run_react_provider_input(
+    request: &CreateAssistantRunRequest,
+    evidence_state: Option<&Value>,
+    observations: &[Value],
+    step_index: usize,
+    max_steps: usize,
+) -> String {
+    let mut sections = vec![
+        "你是智能数据工作台里的 Host-Controlled ReAct 运行时。".to_string(),
+        "你只能提出下一步动作，不能假装已经执行平台动作。V3 Host 会验证、执行、记录并返回 observation。".to_string(),
+        "只返回一个 JSON 对象，禁止 Markdown，禁止解释 JSON 外的文字。".to_string(),
+        "JSON Schema: {\"action_type\":\"retrieve_evidence|read_document_detail|recall_conversation_memory|create_static_page_draft|update_static_page_module|submit_static_page_image_preview|render_static_page|create_report_draft|openclaw_memory_recall|openclaw_readonly_execution|final_answer\",\"reason_summary\":\"给用户看的简短原因\",\"arguments\":{},\"requires_confirmation\":false}".to_string(),
+        "如果已经可以回答，使用 action_type=final_answer，arguments.content 放最终正文。".to_string(),
+        format!("当前 ReAct 步骤：{step_index}/{max_steps}"),
+    ];
+    sections.push(build_assistant_run_provider_input_with_evidence(
+        request,
+        evidence_state,
+    ));
+    if !observations.is_empty() {
+        sections.push(format!(
+            "已完成 observation：{}",
+            serde_json::to_string(observations).unwrap_or_else(|_| "[]".to_string())
+        ));
+    }
+    sections.join("\n\n")
+}
+
+fn build_assistant_run_react_continue_provider_input(
+    run: &AssistantRun,
+    request: &ContinueAssistantRunRequest,
+    continue_prompt: &str,
+    evidence_state: Option<&Value>,
+    observations: &[Value],
+    step_index: usize,
+    max_steps: usize,
+) -> String {
+    let mut sections = vec![
+        "你是智能数据工作台里的 Host-Controlled ReAct 继续执行运行时。".to_string(),
+        "你只能提出下一步动作，不能假装已经执行平台动作。V3 Host 会验证、执行、记录并返回 observation。".to_string(),
+        "只返回一个 JSON 对象，禁止 Markdown，禁止解释 JSON 外的文字。".to_string(),
+        "JSON Schema: {\"action_type\":\"retrieve_evidence|read_document_detail|recall_conversation_memory|create_static_page_draft|update_static_page_module|submit_static_page_image_preview|render_static_page|create_report_draft|openclaw_memory_recall|openclaw_readonly_execution|final_answer\",\"reason_summary\":\"给用户看的简短原因\",\"arguments\":{},\"requires_confirmation\":false}".to_string(),
+        "如果已经可以回答，使用 action_type=final_answer，arguments.content 放最终正文。".to_string(),
+        format!("当前 ReAct 步骤：{step_index}/{max_steps}"),
+        format!("运行ID：{}", run.id),
+        format!("原始问题：{}", run.user_prompt.trim()),
+        format!("继续指令：{}", continue_prompt.trim()),
+        format!(
+            "当前选中范围：{}",
+            serde_json::to_string(&run.selected_scope).unwrap_or_else(|_| "{}".to_string())
+        ),
+        format!(
+            "当前供料状态：{}",
+            serde_json::to_string(&evidence_state.cloned().unwrap_or(Value::Null))
+                .unwrap_or_else(|_| "{}".to_string())
+        ),
+    ];
+
+    if let Some(current_artifact) = request.current_artifact.as_ref() {
+        sections.push(format!(
+            "当前打开产物：{}",
+            serde_json::to_string(current_artifact).unwrap_or_else(|_| "{}".to_string())
+        ));
+    }
+
+    let history = request
+        .messages
+        .iter()
+        .rev()
+        .take(8)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .map(|message| format!("{}: {}", message.role.as_str(), message.content.trim()))
+        .collect::<Vec<_>>();
+    if !history.is_empty() {
+        sections.push(format!("继续前最近对话：\n{}", history.join("\n")));
+    }
+    if !observations.is_empty() {
+        sections.push(format!(
+            "已完成 observation：{}",
+            serde_json::to_string(observations).unwrap_or_else(|_| "[]".to_string())
+        ));
+    }
+
+    sections.join("\n\n")
+}
+
+async fn execute_assistant_run_react_action(
+    state: &AppState,
+    action: &AssistantRunNextAction,
+    selected_scope: &Value,
+    evidence_state: &mut Value,
+    prompt: &str,
+    local_thread_id: Option<&str>,
+    active_secret_binding_ids: &[SecretBindingId],
+) -> std::result::Result<AssistantRunReactActionResult, ApiError> {
+    match action.action_type {
+        AssistantRunReactActionType::FinalAnswer => {
+            let content = action
+                .arguments
+                .get("content")
+                .or_else(|| action.arguments.get("answer"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or(action.reason_summary.as_str())
+                .to_string();
+            Ok(AssistantRunReactActionResult {
+                observation: json!({
+                    "status": "completed",
+                    "action_type": action.action_type.as_str(),
+                    "content_length": content.chars().count(),
+                }),
+                trail_step: json!({
+                    "status": "completed",
+                    "label": "模型生成最终回答",
+                    "react_action": action.action_type.as_str(),
+                    "reason_summary": action.reason_summary.clone(),
+                    "at": Utc::now(),
+                }),
+                final_answer: Some(content),
+            })
+        }
+        AssistantRunReactActionType::RetrieveEvidence => {
+            ensure_react_requested_dataset_is_selected(&action.arguments, selected_scope)?;
+            let query = action
+                .arguments
+                .get("query")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or(prompt);
+            let refreshed = build_assistant_run_evidence_state(
+                state,
+                selected_scope,
+                query,
+                local_thread_id,
+                active_secret_binding_ids,
+            )
+            .await?;
+            let supplied_count = assistant_run_evidence_supplied_count(&refreshed);
+            *evidence_state = refreshed.clone();
+            Ok(AssistantRunReactActionResult {
+                observation: json!({
+                    "status": "completed",
+                    "action_type": action.action_type.as_str(),
+                    "supplied_count": supplied_count,
+                    "evidence_status": refreshed.get("status").and_then(Value::as_str).unwrap_or("unknown"),
+                }),
+                trail_step: json!({
+                    "status": "completed",
+                    "label": "检索供料证据",
+                    "react_action": action.action_type.as_str(),
+                    "supplied_count": supplied_count,
+                    "at": Utc::now(),
+                }),
+                final_answer: None,
+            })
+        }
+        AssistantRunReactActionType::RecallConversationMemory => {
+            let memory_scope = ensure_scope_requests_conversation_memory(selected_scope.clone());
+            let refreshed = build_assistant_run_evidence_state(
+                state,
+                &memory_scope,
+                prompt,
+                local_thread_id,
+                active_secret_binding_ids,
+            )
+            .await?;
+            let memory_count = refreshed
+                .get("conversation_memory_items")
+                .and_then(Value::as_array)
+                .map(Vec::len)
+                .unwrap_or(0);
+            *evidence_state = refreshed.clone();
+            Ok(AssistantRunReactActionResult {
+                observation: json!({
+                    "status": "completed",
+                    "action_type": action.action_type.as_str(),
+                    "memory_count": memory_count,
+                }),
+                trail_step: json!({
+                    "status": "completed",
+                    "label": "召回对话记忆",
+                    "react_action": action.action_type.as_str(),
+                    "memory_count": memory_count,
+                    "at": Utc::now(),
+                }),
+                final_answer: None,
+            })
+        }
+        AssistantRunReactActionType::UpdateStaticPageModule => {
+            let operations = react_static_page_operations_from_arguments(&action.arguments)?;
+            Ok(AssistantRunReactActionResult {
+                observation: json!({
+                    "status": "completed",
+                    "action_type": action.action_type.as_str(),
+                    "operation_count": operations.len(),
+                    "operations": operations,
+                }),
+                trail_step: json!({
+                    "status": "completed",
+                    "label": "更新静态页模块",
+                    "react_action": action.action_type.as_str(),
+                    "operation_count": operations.len(),
+                    "at": Utc::now(),
+                }),
+                final_answer: None,
+            })
+        }
+        _ => Ok(AssistantRunReactActionResult {
+            observation: json!({
+                "status": "rejected",
+                "action_type": action.action_type.as_str(),
+                "reason": "action_not_implemented_in_first_slice",
+            }),
+            trail_step: json!({
+                "status": "rejected",
+                "label": assistant_run_react_action_label(&action.action_type),
+                "react_action": action.action_type.as_str(),
+                "reason": "首版暂未启用该动作",
+                "at": Utc::now(),
+            }),
+            final_answer: None,
+        }),
+    }
+}
+
+fn parse_assistant_run_next_action(
+    output_text: &str,
+) -> std::result::Result<AssistantRunNextAction, String> {
+    let payload = parse_json_object_from_model_output(output_text)?;
+    let object = payload
+        .as_object()
+        .ok_or_else(|| "ReAct action payload must be a JSON object".to_string())?;
+    let action_type = object
+        .get("action_type")
+        .and_then(Value::as_str)
+        .and_then(AssistantRunReactActionType::from_str)
+        .ok_or_else(|| "unknown or missing action_type".to_string())?;
+    let reason_summary = object
+        .get("reason_summary")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(action_type.as_str())
+        .to_string();
+    let arguments = object
+        .get("arguments")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    if !arguments.is_object() {
+        return Err("arguments must be a JSON object".to_string());
+    }
+    let argument_bytes = serde_json::to_vec(&arguments)
+        .map_err(|error| format!("arguments must be serializable JSON: {error}"))?
+        .len();
+    if argument_bytes > ASSISTANT_RUN_REACT_ARGUMENT_MAX_BYTES {
+        return Err(format!(
+            "arguments exceed {} bytes",
+            ASSISTANT_RUN_REACT_ARGUMENT_MAX_BYTES
+        ));
+    }
+    if contains_unsafe_json_key(&arguments) {
+        return Err("arguments contain unsafe key".to_string());
+    }
+    let requires_confirmation = object
+        .get("requires_confirmation")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+
+    Ok(AssistantRunNextAction {
+        action_type,
+        reason_summary,
+        arguments,
+        requires_confirmation,
+    })
+}
+
+fn parse_json_object_from_model_output(output_text: &str) -> std::result::Result<Value, String> {
+    let trimmed = output_text.trim();
+    if trimmed.is_empty() {
+        return Err("model output is empty".to_string());
+    }
+    if let Ok(value) = serde_json::from_str::<Value>(trimmed) {
+        return Ok(value);
+    }
+    let start = trimmed
+        .find('{')
+        .ok_or_else(|| "model output does not contain a JSON object".to_string())?;
+    let end = trimmed
+        .rfind('}')
+        .ok_or_else(|| "model output does not contain a complete JSON object".to_string())?;
+    if end <= start {
+        return Err("model output has invalid JSON object bounds".to_string());
+    }
+    serde_json::from_str::<Value>(&trimmed[start..=end])
+        .map_err(|error| format!("model output JSON is invalid: {error}"))
+}
+
+fn contains_unsafe_json_key(value: &Value) -> bool {
+    match value {
+        Value::Object(object) => object.iter().any(|(key, value)| {
+            matches!(key.as_str(), "__proto__" | "constructor" | "prototype")
+                || contains_unsafe_json_key(value)
+        }),
+        Value::Array(items) => items.iter().any(contains_unsafe_json_key),
+        _ => false,
+    }
+}
+
+fn assistant_run_react_enabled(runtime_mode: &str) -> bool {
+    runtime_mode != "placeholder" && env_flag("ASSISTANT_RUN_REACT_ENABLED", false)
+}
+
+fn assistant_run_react_max_steps() -> usize {
+    std::env::var("ASSISTANT_RUN_REACT_MAX_STEPS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(ASSISTANT_RUN_REACT_DEFAULT_MAX_STEPS)
+        .clamp(1, ASSISTANT_RUN_REACT_MAX_STEPS)
+}
+
+fn assistant_run_react_action_label(action_type: &AssistantRunReactActionType) -> &'static str {
+    match action_type {
+        AssistantRunReactActionType::RetrieveEvidence => "检索供料证据",
+        AssistantRunReactActionType::ReadDocumentDetail => "读取文档详情",
+        AssistantRunReactActionType::RecallConversationMemory => "召回对话记忆",
+        AssistantRunReactActionType::CreateStaticPageDraft => "创建静态页草稿",
+        AssistantRunReactActionType::UpdateStaticPageModule => "更新静态页模块",
+        AssistantRunReactActionType::SubmitStaticPageImagePreview => "提交效果图生成",
+        AssistantRunReactActionType::RenderStaticPage => "制作最终静态页",
+        AssistantRunReactActionType::CreateReportDraft => "创建报表草稿",
+        AssistantRunReactActionType::OpenClawMemoryRecall => "调用 OpenClaw 记忆",
+        AssistantRunReactActionType::OpenClawReadonlyExecution => "调用 OpenClaw 只读执行",
+        AssistantRunReactActionType::FinalAnswer => "模型生成最终回答",
+    }
+}
+
+fn ensure_react_requested_dataset_is_selected(
+    arguments: &Value,
+    selected_scope: &Value,
+) -> std::result::Result<(), ApiError> {
+    let Some(requested_dataset_id) = arguments
+        .get("dataset_id")
+        .or_else(|| arguments.get("datasetId"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(());
+    };
+    let requested_dataset_id = Uuid::parse_str(requested_dataset_id)
+        .map(DatasetId)
+        .map_err(|_| {
+            ApiError::bad_request("invalid_react_action", "dataset_id is invalid".to_string())
+        })?;
+    if selected_dataset_ids_from_scope(selected_scope)
+        .into_iter()
+        .any(|dataset_id| dataset_id == requested_dataset_id)
+    {
+        return Ok(());
+    }
+    Err(ApiError::bad_request(
+        "react_dataset_not_selected",
+        "ReAct retrieve_evidence can only use the current selected dataset scope".to_string(),
+    ))
+}
+
+fn ensure_scope_requests_conversation_memory(mut selected_scope: Value) -> Value {
+    ensure_json_object(&mut selected_scope);
+    if let Some(object) = selected_scope.as_object_mut() {
+        object
+            .entry("conversation_memory".to_string())
+            .or_insert_with(|| json!(["current_thread"]));
+    }
+    selected_scope
+}
+
+fn react_static_page_operations_from_arguments(
+    arguments: &Value,
+) -> std::result::Result<Vec<Value>, ApiError> {
+    let operations = if let Some(operations) = arguments.get("operations").and_then(Value::as_array)
+    {
+        operations.clone()
+    } else {
+        let module_id = arguments
+            .get("module_id")
+            .or_else(|| arguments.get("moduleId"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                ApiError::bad_request(
+                    "invalid_react_action",
+                    "update_static_page_module requires module_id or operations".to_string(),
+                )
+            })?;
+        let patch = arguments.get("patch").cloned().ok_or_else(|| {
+            ApiError::bad_request(
+                "invalid_react_action",
+                "update_static_page_module requires patch or operations".to_string(),
+            )
+        })?;
+        vec![json!({
+            "type": "update_module",
+            "targetModuleId": module_id,
+            "patch": patch,
+        })]
+    };
+    validate_static_page_operations(operations)
+}
+
+fn env_flag(key: &str, default_value: bool) -> bool {
+    std::env::var(key)
+        .ok()
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(default_value)
 }
 
 fn normalize_assistant_run_continue_max_steps(value: Option<usize>) -> usize {
@@ -11925,6 +12925,475 @@ mod tests {
         assert!(input.contains("用户问题：继续总结订单风险"));
     }
 
+    #[test]
+    fn assistant_run_react_action_parser_rejects_unknown_and_unsafe_actions() {
+        let action = parse_assistant_run_next_action(
+            r#"{"action_type":"final_answer","reason_summary":"完成","arguments":{"content":"可以回答"},"requires_confirmation":false}"#,
+        )
+        .expect("valid action should parse");
+
+        assert_eq!(action.action_type, AssistantRunReactActionType::FinalAnswer);
+        assert_eq!(action.arguments["content"], json!("可以回答"));
+
+        let unknown = parse_assistant_run_next_action(
+            r#"{"action_type":"run_shell","reason_summary":"执行命令","arguments":{},"requires_confirmation":false}"#,
+        )
+        .expect_err("unknown actions must be rejected");
+        assert!(unknown.contains("action_type"));
+
+        let unsafe_key = parse_assistant_run_next_action(
+            r#"{"action_type":"final_answer","reason_summary":"污染对象","arguments":{"__proto__":{"polluted":true}},"requires_confirmation":false}"#,
+        )
+        .expect_err("unsafe argument keys must be rejected");
+        assert!(unsafe_key.contains("unsafe"));
+    }
+
+    #[test]
+    fn assistant_run_react_retrieve_rejects_dataset_outside_selected_scope() {
+        let allowed_dataset_id = DatasetId::new();
+        let denied_dataset_id = DatasetId::new();
+        let selected_scope = json!({
+            "mode": "selected",
+            "selected": [{"type": "dataset", "id": allowed_dataset_id.to_string()}],
+        });
+
+        let error = ensure_react_requested_dataset_is_selected(
+            &json!({"dataset_id": denied_dataset_id.to_string()}),
+            &selected_scope,
+        )
+        .expect_err("retrieval must stay inside selected scope");
+
+        assert_eq!(error.payload.code, "react_dataset_not_selected");
+    }
+
+    #[test]
+    fn assistant_run_react_static_page_update_arguments_become_sanitized_operations() {
+        let operations = react_static_page_operations_from_arguments(&json!({
+            "module_id": "revenue-kpi",
+            "patch": {
+                "title": "收入表现",
+                "content": "突出最近 30 天增长",
+                "visualization": {"type": "kpi"}
+            }
+        }))
+        .expect("module patch should become update operation");
+
+        assert_eq!(operations.len(), 1);
+        assert_eq!(operations[0]["type"], json!("update_module"));
+        assert_eq!(operations[0]["targetModuleId"], json!("revenue-kpi"));
+        assert_eq!(operations[0]["patch"]["title"], json!("收入表现"));
+
+        let unsafe_patch = react_static_page_operations_from_arguments(&json!({
+            "module_id": "revenue-kpi",
+            "patch": {"__proto__": {"polluted": true}}
+        }))
+        .expect_err("unsafe static page patch should be rejected");
+        assert_eq!(unsafe_patch.payload.code, "invalid_static_page_operation");
+    }
+
+    #[tokio::test]
+    async fn assistant_run_react_executes_retrieval_then_final_answer() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        clear_assistant_openclaw_env();
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping assistant run react provider test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+        let addr = listener.local_addr().expect("addr");
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_MODE", "provider");
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_PROVIDER", "openclaw");
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_MODEL", "assistant-run-react-v1");
+        std::env::set_var("ASSISTANT_RUN_REACT_ENABLED", "true");
+        std::env::set_var("OPENCLAW_EXTENSION_ENABLED", "true");
+        std::env::set_var("OPENCLAW_GATEWAY_BASE_URL", format!("http://{addr}"));
+        std::env::set_var("OPENCLAW_GATEWAY_TOKEN", "test-openclaw-token");
+
+        let server = thread::spawn(move || {
+            let mut requests = Vec::new();
+            for index in 0..2 {
+                let (mut stream, _) = listener.accept().expect("accept");
+                let request = read_http_request(&mut stream);
+                requests.push(request.clone());
+                assert!(request.contains("POST /v1/responses HTTP/1.1"));
+                if index == 0 {
+                    assert!(request.contains("ReAct 可见测试库"));
+                    assert!(!request.contains("ReAct 不可见测试库"));
+                    let action = json!({
+                        "action_type": "retrieve_evidence",
+                        "reason_summary": "先检索当前选中数据集",
+                        "arguments": {"query": "订单风险"},
+                        "requires_confirmation": false
+                    })
+                    .to_string();
+                    let body = json!({
+                        "id": "resp_assistant_run_react_retrieve",
+                        "output_text": action
+                    })
+                    .to_string();
+                    write_http_json_response(&mut stream, 200, &body);
+                } else {
+                    assert!(request.contains("retrieve_evidence"));
+                    assert!(request.contains("supplied_count"));
+                    let action = json!({
+                        "action_type": "final_answer",
+                        "reason_summary": "已经可以回答",
+                        "arguments": {"content": "ReAct 已基于宿主检索结果回答。"},
+                        "requires_confirmation": false
+                    })
+                    .to_string();
+                    let body = json!({
+                        "id": "resp_assistant_run_react_final",
+                        "output_text": action
+                    })
+                    .to_string();
+                    write_http_json_response(&mut stream, 200, &body);
+                }
+            }
+            requests
+        });
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("assistant-run-react-test-{}", Uuid::new_v4()),
+                "Assistant Run ReAct Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage,
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        let visible_dataset = state
+            .storage
+            .datasets()
+            .create_with_metadata(
+                tenant.id,
+                NewDataset {
+                    key: format!("react-visible-{}", Uuid::new_v4()),
+                    title: "ReAct 可见测试库".to_string(),
+                    description: Some("visible dataset".to_string()),
+                },
+                json!({
+                    "visibility": DatasetVisibility::Public.as_str(),
+                }),
+            )
+            .await
+            .expect("visible dataset");
+        let _hidden_dataset = state
+            .storage
+            .datasets()
+            .create_with_metadata(
+                tenant.id,
+                NewDataset {
+                    key: format!("react-hidden-{}", Uuid::new_v4()),
+                    title: "ReAct 不可见测试库".to_string(),
+                    description: Some("hidden dataset".to_string()),
+                },
+                json!({
+                    "visibility": DatasetVisibility::Private.as_str(),
+                    "default_secret_binding_ids": [SecretBindingId::new()],
+                }),
+            )
+            .await
+            .expect("hidden dataset");
+
+        let (status, Json(response)) = create_assistant_run(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(CreateAssistantRunRequest {
+                prompt: "总结 ReAct 可见测试库的订单风险".to_string(),
+                local_thread_id: Some("assistant-run-react-thread".to_string()),
+                startup_briefing: Some(json!({
+                    "productTruth": "智能数据工作台",
+                    "visibleDatasetCount": 1,
+                })),
+                selected_scope: Some(json!({
+                    "mode": "selected",
+                    "selected": [{"type": "dataset", "id": visible_dataset.id.to_string()}],
+                })),
+                scope_candidates: Vec::new(),
+                context_policy_hint: None,
+                current_artifact: None,
+                messages: Vec::new(),
+            }),
+        )
+        .await
+        .expect("assistant run should use react provider");
+
+        let requests = server.join().expect("server join");
+        clear_assistant_openclaw_env();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(status, StatusCode::CREATED);
+        assert_eq!(
+            response.assistant_message.content,
+            "ReAct 已基于宿主检索结果回答。"
+        );
+        assert!(response.execution_trail.iter().any(|step| {
+            step.get("label") == Some(&json!("Host-Controlled ReAct 运行"))
+                && step.get("provider") == Some(&json!("openclaw"))
+        }));
+        assert!(response
+            .execution_trail
+            .iter()
+            .any(|step| step.get("label") == Some(&json!("检索供料证据"))));
+        assert!(response
+            .execution_trail
+            .iter()
+            .any(|step| step.get("label") == Some(&json!("模型生成最终回答"))));
+
+        let Json(detail) =
+            get_assistant_run(State(state), Path(response.assistant_run_id.to_string()))
+                .await
+                .expect("assistant run detail should load");
+        let event_names = detail
+            .events
+            .iter()
+            .map(|event| event.event_name.as_str())
+            .collect::<Vec<_>>();
+        assert!(event_names.contains(&"assistant_run.react.action_requested"));
+        assert!(event_names.contains(&"assistant_run.react.action_completed"));
+        assert!(event_names.contains(&"assistant_run.react.final_answer"));
+        assert!(event_names.contains(&"assistant_run.completed"));
+    }
+
+    #[tokio::test]
+    async fn assistant_run_react_stops_at_configured_step_limit() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        clear_assistant_openclaw_env();
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping assistant run react step limit test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+        let addr = listener.local_addr().expect("addr");
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_MODE", "provider");
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_PROVIDER", "openclaw");
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_MODEL", "assistant-run-react-v1");
+        std::env::set_var("ASSISTANT_RUN_REACT_ENABLED", "true");
+        std::env::set_var("ASSISTANT_RUN_REACT_MAX_STEPS", "1");
+        std::env::set_var("OPENCLAW_EXTENSION_ENABLED", "true");
+        std::env::set_var("OPENCLAW_GATEWAY_BASE_URL", format!("http://{addr}"));
+        std::env::set_var("OPENCLAW_GATEWAY_TOKEN", "test-openclaw-token");
+
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let request = read_http_request(&mut stream);
+            assert!(request.contains("POST /v1/responses HTTP/1.1"));
+            let action = json!({
+                "action_type": "retrieve_evidence",
+                "reason_summary": "还需要检索",
+                "arguments": {"query": "继续查"},
+                "requires_confirmation": false
+            })
+            .to_string();
+            let body = json!({
+                "id": "resp_assistant_run_react_step_limit",
+                "output_text": action
+            })
+            .to_string();
+            write_http_json_response(&mut stream, 200, &body);
+        });
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("assistant-run-react-limit-test-{}", Uuid::new_v4()),
+                "Assistant Run ReAct Limit Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage,
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+
+        let (status, Json(response)) = create_assistant_run(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(CreateAssistantRunRequest {
+                prompt: "普通聊天也允许模型先请求检索".to_string(),
+                local_thread_id: Some("assistant-run-react-limit-thread".to_string()),
+                startup_briefing: Some(json!({
+                    "productTruth": "智能数据工作台",
+                })),
+                selected_scope: Some(json!({
+                    "mode": "ordinary_chat",
+                    "selected": [],
+                })),
+                scope_candidates: Vec::new(),
+                context_policy_hint: None,
+                current_artifact: None,
+                messages: Vec::new(),
+            }),
+        )
+        .await
+        .expect("assistant run should stop at react step limit");
+
+        server.join().expect("server join");
+        clear_assistant_openclaw_env();
+        assert_eq!(status, StatusCode::CREATED);
+        assert!(response
+            .assistant_message
+            .content
+            .contains("已达到连续执行步数上限"));
+        assert!(response
+            .execution_trail
+            .iter()
+            .any(|step| step.get("label") == Some(&json!("达到连续执行上限"))));
+
+        let Json(detail) =
+            get_assistant_run(State(state), Path(response.assistant_run_id.to_string()))
+                .await
+                .expect("assistant run detail should load");
+        assert!(detail
+            .events
+            .iter()
+            .any(|event| event.event_name == "assistant_run.react.step_limit_reached"));
+    }
+
+    #[tokio::test]
+    async fn assistant_run_react_continue_appends_trail_output_and_events() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        clear_assistant_openclaw_env();
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping assistant run react continue test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("assistant-run-react-continue-test-{}", Uuid::new_v4()),
+                "Assistant Run ReAct Continue Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage,
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+
+        let (_, Json(run_response)) = create_assistant_run(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(CreateAssistantRunRequest {
+                prompt: "先梳理项目后续动作".to_string(),
+                local_thread_id: Some("assistant-run-react-continue-thread".to_string()),
+                startup_briefing: Some(json!({"visibleDatasetCount": 0})),
+                selected_scope: Some(json!({"mode": "ordinary_chat"})),
+                scope_candidates: Vec::new(),
+                context_policy_hint: None,
+                current_artifact: None,
+                messages: Vec::new(),
+            }),
+        )
+        .await
+        .expect("assistant run should be created");
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+        let addr = listener.local_addr().expect("addr");
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_MODE", "provider");
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_PROVIDER", "openclaw");
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_MODEL", "assistant-run-react-v1");
+        std::env::set_var("ASSISTANT_RUN_REACT_ENABLED", "true");
+        std::env::set_var("OPENCLAW_EXTENSION_ENABLED", "true");
+        std::env::set_var("OPENCLAW_GATEWAY_BASE_URL", format!("http://{addr}"));
+        std::env::set_var("OPENCLAW_GATEWAY_TOKEN", "test-openclaw-token");
+
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let request = read_http_request(&mut stream);
+            assert!(request.contains("POST /v1/responses HTTP/1.1"));
+            assert!(request.contains("Host-Controlled ReAct"));
+            assert!(request.contains("继续指令"));
+            let action = json!({
+                "action_type": "final_answer",
+                "reason_summary": "继续执行完成",
+                "arguments": {"content": "ReAct 继续执行已返回最终回答。"},
+                "requires_confirmation": false
+            })
+            .to_string();
+            let body = json!({
+                "id": "resp_assistant_run_react_continue_final",
+                "output_text": action
+            })
+            .to_string();
+            write_http_json_response(&mut stream, 200, &body);
+        });
+
+        let (continue_status, Json(continue_response)) = continue_assistant_run(
+            State(state.clone()),
+            HeaderMap::new(),
+            Path(run_response.assistant_run_id.to_string()),
+            Json(ContinueAssistantRunRequest {
+                prompt: Some("继续执行下一步".to_string()),
+                max_steps: Some(2),
+                current_artifact: Some(json!({"type": "assistant_run"})),
+                messages: vec![AssistantRunMessageView {
+                    role: ChatMessageRole::User,
+                    content: "继续".to_string(),
+                }],
+            }),
+        )
+        .await
+        .expect("assistant run should continue with react");
+
+        server.join().expect("server join");
+        clear_assistant_openclaw_env();
+        assert_eq!(continue_status, StatusCode::CREATED);
+        assert_eq!(
+            continue_response.assistant_message.content,
+            "ReAct 继续执行已返回最终回答。"
+        );
+        assert_eq!(
+            continue_response.event.event_name,
+            "assistant_run.continued"
+        );
+        assert!(continue_response.execution_trail.iter().any(|step| {
+            step.get("label") == Some(&json!("继续执行"))
+                && step.get("react_enabled") == Some(&json!(true))
+        }));
+        assert!(continue_response
+            .execution_trail
+            .iter()
+            .any(|step| step.get("label") == Some(&json!("模型生成最终回答"))));
+        assert_eq!(continue_response.output_artifacts.len(), 2);
+
+        let Json(detail) = get_assistant_run(
+            State(state),
+            Path(run_response.assistant_run_id.to_string()),
+        )
+        .await
+        .expect("assistant run detail should load");
+        let event_names = detail
+            .events
+            .iter()
+            .map(|event| event.event_name.as_str())
+            .collect::<Vec<_>>();
+        assert!(event_names.contains(&"assistant_run.react.action_requested"));
+        assert!(event_names.contains(&"assistant_run.react.final_answer"));
+        assert!(event_names.contains(&"assistant_run.continued"));
+    }
+
     #[tokio::test]
     async fn assistant_run_openclaw_provider_uses_filtered_host_context() {
         let _guard = shared_local_postgres_test_lock().lock().await;
@@ -12190,6 +13659,7 @@ mod tests {
 
         let (continue_status, Json(continue_response)) = continue_assistant_run(
             State(state.clone()),
+            HeaderMap::new(),
             Path(run_response.assistant_run_id.to_string()),
             Json(ContinueAssistantRunRequest {
                 prompt: Some("继续下一步，最多别超过 9 步".to_string()),
@@ -22031,6 +23501,8 @@ mod tests {
             "ASSISTANT_RUN_RUNTIME_MODE",
             "ASSISTANT_RUN_RUNTIME_PROVIDER",
             "ASSISTANT_RUN_RUNTIME_MODEL",
+            "ASSISTANT_RUN_REACT_ENABLED",
+            "ASSISTANT_RUN_REACT_MAX_STEPS",
             "OPENCLAW_EXTENSION_ENABLED",
             "OPENCLAW_GATEWAY_BASE_URL",
             "OPENCLAW_GATEWAY_URL",
