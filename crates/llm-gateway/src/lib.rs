@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::fmt::{self, Debug, Display};
 use std::sync::Arc;
+use std::time::Duration;
 use std::time::Instant;
 use uuid::Uuid;
 
@@ -193,6 +194,22 @@ pub struct OpenAiCompatibleLlmProviderConfig {
     pub api_key: Option<String>,
 }
 
+#[derive(Clone, Debug)]
+pub struct OpenClawLlmProviderConfig {
+    pub gateway_base_url: String,
+    pub token: Option<String>,
+    pub agent_id: Option<String>,
+    pub model: Option<String>,
+    pub model_override: Option<String>,
+    pub prefer_responses: bool,
+    pub timeout_ms: u64,
+}
+
+const OPENCLAW_CORRECTIVE_RETRY_INSTRUCTIONS: [&str; 2] = [
+    "直接回答用户当前问题。不要自我介绍，不要谈内部状态，不要说自己刚启动、没有名字、没有记忆，也不要让用户给你起名。",
+    "只输出最终答案。不要泄露工具调用、函数参数、JSON 工具轨迹或内部执行文本。",
+];
+
 pub fn render_runtime_manifest(runtime: &LlmRuntimeMetadata) -> Value {
     json!({
         "mode": runtime.mode.as_str(),
@@ -234,6 +251,11 @@ pub fn build_provider_from_env(
             PlaceholderLlmProvider::new(runtime_provider).with_prompt_registry(prompt_registry),
         )),
         "provider" => {
+            if runtime_provider == "openclaw" {
+                let provider = build_openclaw_provider_from_env(runtime_provider, prompt_registry)?;
+                return Ok(Arc::new(provider));
+            }
+
             if let Ok(api_base_url) = std::env::var(format!("{env_prefix}_RUNTIME_BASE_URL")) {
                 let api_path = std::env::var(format!("{env_prefix}_RUNTIME_API_PATH"))
                     .unwrap_or_else(|_| "/v1/chat/completions".to_string());
@@ -666,6 +688,379 @@ impl OpenAiCompatibleLlmProvider {
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct OpenClawLlmProvider {
+    provider_name: String,
+    config: OpenClawLlmProviderConfig,
+    prompt_registry: InMemoryPromptRegistry,
+    client: Client,
+}
+
+impl OpenClawLlmProvider {
+    pub fn new(
+        provider_name: impl Into<String>,
+        config: OpenClawLlmProviderConfig,
+    ) -> Result<Self> {
+        Ok(Self {
+            provider_name: provider_name.into(),
+            client: Client::builder()
+                .timeout(Duration::from_millis(config.timeout_ms.max(1)))
+                .build()
+                .context("failed to build OpenClaw HTTP client")?,
+            config,
+            prompt_registry: InMemoryPromptRegistry::default(),
+        })
+    }
+
+    pub fn with_prompt_registry(mut self, prompt_registry: InMemoryPromptRegistry) -> Self {
+        self.prompt_registry = prompt_registry;
+        self
+    }
+
+    fn complete_responses(&self, request: &LlmRequest) -> Result<LlmResponse> {
+        self.complete_responses_with_instruction(request, None)
+    }
+
+    fn complete_responses_with_instruction(
+        &self,
+        request: &LlmRequest,
+        additional_instruction: Option<&str>,
+    ) -> Result<LlmResponse> {
+        let started_at = Instant::now();
+        let endpoint = join_url(&self.config.gateway_base_url, "/v1/responses");
+        let system_prompt = self.resolve_system_prompt(request);
+        let model = self.resolve_request_model(request);
+        let mut body = json!({
+            "model": model,
+            "user": "v3",
+            "input": request.input,
+            "temperature": 0.2,
+            "reasoning": {
+                "effort": "medium",
+                "summary": "auto",
+            },
+        });
+        let instructions =
+            merge_openclaw_instructions(system_prompt.as_deref(), additional_instruction);
+        if let Some(instructions) = instructions {
+            body["instructions"] = json!(instructions);
+        }
+
+        let value = self.send_json(request, &endpoint, &body, started_at)?;
+        let Some(output_text) = extract_responses_output_text(&value) else {
+            let message = format!("{} response missing output text", self.provider_name);
+            return Err(self
+                .provider_error(
+                    request,
+                    LlmProviderFailureKind::InvalidResponse,
+                    message,
+                    started_at,
+                )
+                .into());
+        };
+        let runtime = LlmRuntimeMetadata {
+            mode: LlmRuntimeMode::Provider,
+            provider: self.provider_name.clone(),
+            model,
+            request_id: value.get("id").and_then(Value::as_str).map(str::to_string),
+            finish_reason: Some(LlmFinishReason::Stop),
+            provider_failure: None,
+            latency_ms: Some(started_at.elapsed().as_millis() as u64),
+            usage: parse_usage(value.get("usage")),
+            system_prompt_key: request.system_prompt_key.clone(),
+            system_prompt_version: resolve_prompt_version(&self.prompt_registry, request),
+            tool_trace_count: 0,
+        };
+
+        Ok(LlmResponse {
+            output_text,
+            runtime,
+            tool_calls: Vec::new(),
+        })
+    }
+
+    fn complete_chat(&self, request: &LlmRequest) -> Result<LlmResponse> {
+        self.complete_chat_with_instruction(request, None)
+    }
+
+    fn complete_chat_with_instruction(
+        &self,
+        request: &LlmRequest,
+        additional_instruction: Option<&str>,
+    ) -> Result<LlmResponse> {
+        let started_at = Instant::now();
+        let endpoint = join_url(&self.config.gateway_base_url, "/v1/chat/completions");
+        let system_prompt = self.resolve_system_prompt(request);
+        let model = self.resolve_request_model(request);
+        let mut messages = Vec::new();
+        if let Some(system_prompt) =
+            merge_openclaw_instructions(system_prompt.as_deref(), additional_instruction)
+        {
+            messages.push(json!({
+                "role": "system",
+                "content": system_prompt,
+            }));
+        }
+        messages.push(json!({
+            "role": "user",
+            "content": request.input,
+        }));
+        let body = json!({
+            "model": model,
+            "user": "v3",
+            "temperature": 0.2,
+            "messages": messages,
+        });
+
+        let value = self.send_json(request, &endpoint, &body, started_at)?;
+        let Some(choice) = value
+            .get("choices")
+            .and_then(Value::as_array)
+            .and_then(|choices| choices.first())
+        else {
+            let message = format!("{} response missing choices[0]", self.provider_name);
+            return Err(self
+                .provider_error(
+                    request,
+                    LlmProviderFailureKind::InvalidResponse,
+                    message,
+                    started_at,
+                )
+                .into());
+        };
+        let Some(output_text) = extract_chat_completion_text(choice) else {
+            let message = format!(
+                "{} response missing assistant message content",
+                self.provider_name
+            );
+            return Err(self
+                .provider_error(
+                    request,
+                    LlmProviderFailureKind::InvalidResponse,
+                    message,
+                    started_at,
+                )
+                .into());
+        };
+        let tool_calls = extract_chat_completion_tool_calls(choice).map_err(|error| {
+            self.provider_error(
+                request,
+                LlmProviderFailureKind::InvalidResponse,
+                format!(
+                    "{} response has invalid tool calls: {error}",
+                    self.provider_name
+                ),
+                started_at,
+            )
+        })?;
+        let finish_reason = choice
+            .get("finish_reason")
+            .and_then(Value::as_str)
+            .map(LlmFinishReason::from_wire_value);
+        let runtime = LlmRuntimeMetadata {
+            mode: LlmRuntimeMode::Provider,
+            provider: self.provider_name.clone(),
+            model,
+            request_id: value.get("id").and_then(Value::as_str).map(str::to_string),
+            finish_reason: finish_reason.clone(),
+            provider_failure: provider_failure_for_finish_reason(
+                &self.provider_name,
+                finish_reason.as_ref(),
+            ),
+            latency_ms: Some(started_at.elapsed().as_millis() as u64),
+            usage: parse_usage(value.get("usage")),
+            system_prompt_key: request.system_prompt_key.clone(),
+            system_prompt_version: resolve_prompt_version(&self.prompt_registry, request),
+            tool_trace_count: tool_calls.len(),
+        };
+
+        Ok(LlmResponse {
+            output_text,
+            runtime,
+            tool_calls,
+        })
+    }
+
+    fn resolve_system_prompt(&self, request: &LlmRequest) -> Option<String> {
+        request
+            .system_prompt_key
+            .as_deref()
+            .and_then(|key| self.prompt_registry.active(key))
+            .map(|prompt| prompt.body.clone())
+    }
+
+    fn resolve_request_model(&self, request: &LlmRequest) -> String {
+        self.config
+            .model
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(request.model.as_str())
+            .to_string()
+    }
+
+    fn retry_bad_responses_output(
+        &self,
+        request: &LlmRequest,
+        first_response: LlmResponse,
+    ) -> LlmResponse {
+        if !looks_like_openclaw_retryable_bad_output(&first_response.output_text) {
+            return first_response;
+        }
+
+        for instruction in OPENCLAW_CORRECTIVE_RETRY_INSTRUCTIONS {
+            if let Ok(response) =
+                self.complete_responses_with_instruction(request, Some(instruction))
+            {
+                if !looks_like_openclaw_retryable_bad_output(&response.output_text) {
+                    return response;
+                }
+            }
+        }
+
+        first_response
+    }
+
+    fn retry_bad_chat_output(
+        &self,
+        request: &LlmRequest,
+        first_response: LlmResponse,
+    ) -> LlmResponse {
+        if !looks_like_openclaw_retryable_bad_output(&first_response.output_text) {
+            return first_response;
+        }
+
+        for instruction in OPENCLAW_CORRECTIVE_RETRY_INSTRUCTIONS {
+            if let Ok(response) = self.complete_chat_with_instruction(request, Some(instruction)) {
+                if !looks_like_openclaw_retryable_bad_output(&response.output_text) {
+                    return response;
+                }
+            }
+        }
+
+        first_response
+    }
+
+    fn send_json(
+        &self,
+        request: &LlmRequest,
+        endpoint: &str,
+        body: &Value,
+        started_at: Instant,
+    ) -> Result<Value, LlmProviderError> {
+        let mut http_request = self.client.post(endpoint).json(body);
+        if let Some(token) = self.config.token.as_deref() {
+            http_request = http_request.bearer_auth(token);
+        }
+        if let Some(agent_id) = self.config.agent_id.as_deref() {
+            http_request = http_request.header("x-openclaw-agent-id", agent_id);
+        }
+        if let Some(model_override) = self.config.model_override.as_deref() {
+            http_request = http_request.header("x-openclaw-model", model_override);
+        }
+
+        let response = match http_request.send() {
+            Ok(response) => response,
+            Err(error) => {
+                let kind = if error.is_timeout() {
+                    LlmProviderFailureKind::RequestTimeout
+                } else {
+                    LlmProviderFailureKind::RequestFailed
+                };
+                let message = format!(
+                    "{} request to {endpoint} failed: {error}",
+                    self.provider_name
+                );
+                return Err(self.provider_error(request, kind, message, started_at));
+            }
+        };
+        let status = response.status();
+        let response_body = match response.text() {
+            Ok(body) => body,
+            Err(error) => {
+                let message = format!("{} response body read failed: {error}", self.provider_name);
+                return Err(self.provider_error(
+                    request,
+                    LlmProviderFailureKind::ResponseBodyReadFailed,
+                    message,
+                    started_at,
+                ));
+            }
+        };
+        if !status.is_success() {
+            let message = format!(
+                "{} returned HTTP {} with body {}",
+                self.provider_name,
+                status.as_u16(),
+                response_body
+            );
+            return Err(self.provider_error(
+                request,
+                LlmProviderFailureKind::HttpStatus,
+                message,
+                started_at,
+            ));
+        }
+
+        serde_json::from_str::<Value>(&response_body).map_err(|error| {
+            let message = format!(
+                "{} returned invalid JSON payload from {endpoint}: {} ({error})",
+                self.provider_name, response_body
+            );
+            self.provider_error(
+                request,
+                LlmProviderFailureKind::InvalidJson,
+                message,
+                started_at,
+            )
+        })
+    }
+
+    fn provider_error(
+        &self,
+        request: &LlmRequest,
+        kind: LlmProviderFailureKind,
+        message: String,
+        started_at: Instant,
+    ) -> LlmProviderError {
+        let runtime = LlmRuntimeMetadata {
+            mode: LlmRuntimeMode::Provider,
+            provider: self.provider_name.clone(),
+            model: request.model.clone(),
+            request_id: None,
+            finish_reason: Some(LlmFinishReason::Error),
+            provider_failure: Some(LlmProviderFailure {
+                kind,
+                message: message.clone(),
+            }),
+            latency_ms: Some(started_at.elapsed().as_millis() as u64),
+            usage: None,
+            system_prompt_key: request.system_prompt_key.clone(),
+            system_prompt_version: resolve_prompt_version(&self.prompt_registry, request),
+            tool_trace_count: 0,
+        };
+
+        LlmProviderError::new(runtime, message)
+    }
+}
+
+impl LlmProvider for OpenClawLlmProvider {
+    fn name(&self) -> &str {
+        &self.provider_name
+    }
+
+    fn complete(&self, request: &LlmRequest) -> Result<LlmResponse> {
+        if self.config.prefer_responses {
+            if let Ok(response) = self.complete_responses(request) {
+                return Ok(self.retry_bad_responses_output(request, response));
+            }
+        }
+
+        let response = self.complete_chat(request)?;
+        Ok(self.retry_bad_chat_output(request, response))
+    }
+}
+
 fn build_scripted_provider_from_env(
     env_prefix: &str,
     runtime_provider: String,
@@ -708,6 +1103,56 @@ fn build_scripted_provider_from_env(
     Ok(provider)
 }
 
+fn build_openclaw_provider_from_env(
+    runtime_provider: String,
+    prompt_registry: InMemoryPromptRegistry,
+) -> Result<OpenClawLlmProvider> {
+    if !env_flag("OPENCLAW_EXTENSION_ENABLED", false) {
+        return Err(anyhow!(
+            "OPENCLAW_EXTENSION_ENABLED must be true to use runtime provider openclaw"
+        ));
+    }
+
+    let gateway_base_url = std::env::var("OPENCLAW_GATEWAY_BASE_URL")
+        .or_else(|_| std::env::var("OPENCLAW_GATEWAY_URL"))
+        .map_err(|_| {
+            anyhow!(
+                "OPENCLAW_GATEWAY_BASE_URL is required when runtime provider openclaw is selected"
+            )
+        })?;
+    let token = std::env::var("OPENCLAW_GATEWAY_TOKEN").ok();
+    if token.as_deref().map(str::trim).unwrap_or("").is_empty()
+        && !env_flag("OPENCLAW_GATEWAY_TOKEN_OPTIONAL", false)
+    {
+        return Err(anyhow!(
+            "OPENCLAW_GATEWAY_TOKEN is required unless OPENCLAW_GATEWAY_TOKEN_OPTIONAL=true"
+        ));
+    }
+    let timeout_ms = std::env::var("OPENCLAW_TIMEOUT_MS")
+        .ok()
+        .map(|value| {
+            value
+                .parse::<u64>()
+                .map_err(|error| anyhow!("invalid OPENCLAW_TIMEOUT_MS value {value}: {error}"))
+        })
+        .transpose()?
+        .unwrap_or(60_000);
+
+    OpenClawLlmProvider::new(
+        runtime_provider,
+        OpenClawLlmProviderConfig {
+            gateway_base_url,
+            token,
+            agent_id: std::env::var("OPENCLAW_AGENT_ID").ok(),
+            model: std::env::var("OPENCLAW_MODEL").ok(),
+            model_override: std::env::var("OPENCLAW_MODEL_OVERRIDE").ok(),
+            prefer_responses: env_flag("OPENCLAW_PREFER_RESPONSES", true),
+            timeout_ms,
+        },
+    )
+    .map(|provider| provider.with_prompt_registry(prompt_registry))
+}
+
 fn resolve_prompt_version(
     prompt_registry: &InMemoryPromptRegistry,
     request: &LlmRequest,
@@ -717,6 +1162,43 @@ fn resolve_prompt_version(
             .active(key)
             .map(|prompt| prompt.active_version.clone())
     })
+}
+
+fn env_flag(key: &str, default_value: bool) -> bool {
+    std::env::var(key)
+        .ok()
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(default_value)
+}
+
+fn merge_openclaw_instructions(
+    system_prompt: Option<&str>,
+    additional_instruction: Option<&str>,
+) -> Option<String> {
+    let mut parts = Vec::new();
+    if let Some(system_prompt) = system_prompt
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        parts.push(system_prompt.to_string());
+    }
+    if let Some(additional_instruction) = additional_instruction
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        parts.push(additional_instruction.to_string());
+    }
+
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("\n\n"))
+    }
 }
 
 fn join_url(base: &str, path: &str) -> String {
@@ -814,6 +1296,95 @@ fn extract_chat_completion_tool_calls(choice: &Value) -> Result<Vec<LlmToolCall>
         .collect()
 }
 
+fn looks_like_openclaw_retryable_bad_output(content: &str) -> bool {
+    looks_like_openclaw_onboarding_drift(content)
+        || looks_like_openclaw_leaked_tool_call_content(content)
+        || looks_like_openclaw_native_tool_failure(content)
+}
+
+fn looks_like_openclaw_onboarding_drift(content: &str) -> bool {
+    let content = content.trim().to_ascii_lowercase();
+    if content.is_empty() {
+        return false;
+    }
+
+    (content.contains("刚启动")
+        || content.contains("第一次")
+        || content.contains("first time")
+        || content.contains("just started")
+        || content.contains("no memory"))
+        && (content.contains("起名")
+            || content.contains("名字")
+            || content.contains("name me")
+            || content.contains("give me a name")
+            || content.contains("没有名字"))
+}
+
+fn looks_like_openclaw_leaked_tool_call_content(content: &str) -> bool {
+    let trimmed = content.trim();
+    let lower = trimmed.to_ascii_lowercase();
+
+    lower.contains("<tool_call")
+        || lower.contains("</tool_call")
+        || lower.contains("function_call")
+        || lower.contains("\"tool_calls\"")
+        || lower.contains("\"tool_call\"")
+        || (trimmed.starts_with('{')
+            && (lower.contains("\"arguments\"")
+                || lower.contains("\"function\"")
+                || lower.contains("\"tool\"")))
+}
+
+fn looks_like_openclaw_native_tool_failure(content: &str) -> bool {
+    let lower = content.trim().to_ascii_lowercase();
+    lower.contains("cannot read properties of undefined")
+        || lower.contains("tool failed")
+        || lower.contains("search failed")
+        || lower.contains("web search")
+            && (lower.contains("failed") || lower.contains("unavailable"))
+        || lower.contains("无法访问外部搜索")
+        || lower.contains("无法联网搜索")
+        || lower.contains("工具调用失败")
+}
+
+fn extract_responses_output_text(value: &Value) -> Option<String> {
+    if let Some(text) = value.get("output_text").and_then(Value::as_str) {
+        let text = text.trim();
+        if !text.is_empty() {
+            return Some(text.to_string());
+        }
+    }
+
+    let mut parts = Vec::new();
+    for output in value.get("output")?.as_array()? {
+        if let Some(text) = output.get("text").and_then(Value::as_str) {
+            if !text.trim().is_empty() {
+                parts.push(text.to_string());
+            }
+        }
+        let Some(content) = output.get("content").and_then(Value::as_array) else {
+            continue;
+        };
+        for item in content {
+            if let Some(text) = item
+                .get("text")
+                .or_else(|| item.get("output_text"))
+                .and_then(Value::as_str)
+            {
+                if !text.trim().is_empty() {
+                    parts.push(text.to_string());
+                }
+            }
+        }
+    }
+
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("\n"))
+    }
+}
+
 fn parse_tool_arguments(value: &str) -> Result<Value> {
     match serde_json::from_str(value) {
         Ok(parsed) => Ok(parsed),
@@ -855,7 +1426,8 @@ mod tests {
     use super::*;
     use prompt_registry::{bootstrap_default_prompt_registry, CHAT_SESSION_PLACEHOLDER_PROMPT_KEY};
     use std::io::{Read, Write};
-    use std::net::TcpListener;
+    use std::net::{TcpListener, TcpStream};
+    use std::sync::{Mutex, OnceLock};
     use std::thread;
 
     #[test]
@@ -1071,6 +1643,297 @@ mod tests {
     }
 
     #[test]
+    fn openclaw_provider_builds_from_global_env_when_enabled() {
+        let _guard = openclaw_env_lock().lock().expect("openclaw env lock");
+        clear_openclaw_env();
+        std::env::set_var("OPENCLAW_EXTENSION_ENABLED", "true");
+        std::env::set_var("OPENCLAW_GATEWAY_BASE_URL", "http://127.0.0.1:65530");
+        std::env::set_var("OPENCLAW_GATEWAY_TOKEN", "test-openclaw-token");
+
+        let provider = build_provider_from_env(
+            "ASSISTANT_RUN",
+            "provider",
+            "openclaw",
+            bootstrap_default_prompt_registry(),
+        )
+        .expect("openclaw provider should build from global env");
+
+        assert_eq!(provider.name(), "openclaw");
+        clear_openclaw_env();
+    }
+
+    #[test]
+    fn openclaw_provider_requires_base_url_and_token_by_default() {
+        let _guard = openclaw_env_lock().lock().expect("openclaw env lock");
+        clear_openclaw_env();
+        std::env::set_var("OPENCLAW_EXTENSION_ENABLED", "true");
+
+        let missing_base = build_provider_from_env(
+            "ASSISTANT_RUN",
+            "provider",
+            "openclaw",
+            bootstrap_default_prompt_registry(),
+        )
+        .expect_err("missing base url should fail");
+        assert!(missing_base
+            .to_string()
+            .contains("OPENCLAW_GATEWAY_BASE_URL"));
+
+        std::env::set_var("OPENCLAW_GATEWAY_BASE_URL", "http://127.0.0.1:65530");
+        let missing_token = build_provider_from_env(
+            "ASSISTANT_RUN",
+            "provider",
+            "openclaw",
+            bootstrap_default_prompt_registry(),
+        )
+        .expect_err("missing token should fail by default");
+        assert!(missing_token.to_string().contains("OPENCLAW_GATEWAY_TOKEN"));
+
+        std::env::set_var("OPENCLAW_GATEWAY_TOKEN_OPTIONAL", "true");
+        let provider = build_provider_from_env(
+            "ASSISTANT_RUN",
+            "provider",
+            "openclaw",
+            bootstrap_default_prompt_registry(),
+        )
+        .expect("token optional should allow provider construction");
+        assert_eq!(provider.name(), "openclaw");
+        clear_openclaw_env();
+    }
+
+    #[test]
+    fn openclaw_provider_prefers_responses_endpoint_and_parses_output_text() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+        let addr = listener.local_addr().expect("addr");
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let request = read_http_request(&mut stream);
+            assert!(request.contains("POST /v1/responses HTTP/1.1"));
+            assert!(
+                request.contains("Authorization: Bearer test-openclaw-token")
+                    || request.contains("authorization: Bearer test-openclaw-token")
+            );
+            assert!(
+                request.contains("x-openclaw-agent-id: agent-test")
+                    || request.contains("X-Openclaw-Agent-Id: agent-test")
+                    || request.contains("X-OpenClaw-Agent-Id: agent-test")
+            );
+            assert!(
+                request.contains("x-openclaw-model: override-model")
+                    || request.contains("X-Openclaw-Model: override-model")
+                    || request.contains("X-OpenClaw-Model: override-model")
+            );
+            assert!(request.contains("\"model\":\"openclaw-model\""));
+            assert!(request.contains("\"input\":\"Explain revenue\""));
+            let body = json!({
+                "id": "resp_openclaw_1",
+                "output": [{
+                    "type": "message",
+                    "content": [{
+                        "type": "output_text",
+                        "text": "OpenClaw answer"
+                    }]
+                }],
+                "usage": {
+                    "input_tokens": 10,
+                    "output_tokens": 4,
+                    "total_tokens": 14
+                }
+            })
+            .to_string();
+            write_http_json_response(&mut stream, 200, &body);
+        });
+
+        let provider = OpenClawLlmProvider::new(
+            "openclaw",
+            OpenClawLlmProviderConfig {
+                gateway_base_url: format!("http://{addr}"),
+                token: Some("test-openclaw-token".to_string()),
+                agent_id: Some("agent-test".to_string()),
+                model: None,
+                model_override: Some("override-model".to_string()),
+                prefer_responses: true,
+                timeout_ms: 60_000,
+            },
+        )
+        .expect("provider");
+        let response = provider
+            .complete(&LlmRequest {
+                model: "openclaw-model".to_string(),
+                system_prompt_key: None,
+                input: "Explain revenue".to_string(),
+            })
+            .expect("openclaw responses call should succeed");
+
+        server.join().expect("server join");
+        assert_eq!(response.output_text, "OpenClaw answer");
+        assert_eq!(response.runtime.mode, LlmRuntimeMode::Provider);
+        assert_eq!(response.runtime.provider, "openclaw");
+        assert_eq!(response.runtime.model, "openclaw-model");
+        assert_eq!(
+            response.runtime.request_id.as_deref(),
+            Some("resp_openclaw_1")
+        );
+        assert_eq!(response.runtime.finish_reason, Some(LlmFinishReason::Stop));
+        assert_eq!(
+            response.runtime.usage,
+            Some(LlmTokenUsage {
+                input_tokens: 10,
+                output_tokens: 4,
+                total_tokens: 14,
+            })
+        );
+    }
+
+    #[test]
+    fn openclaw_provider_falls_back_to_chat_completions() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+        let addr = listener.local_addr().expect("addr");
+        let server = thread::spawn(move || {
+            let (mut responses_stream, _) = listener.accept().expect("accept responses");
+            let responses_request = read_http_request(&mut responses_stream);
+            assert!(responses_request.contains("POST /v1/responses HTTP/1.1"));
+            write_http_json_response(
+                &mut responses_stream,
+                404,
+                "{\"error\":\"responses unavailable\"}",
+            );
+
+            let (mut chat_stream, _) = listener.accept().expect("accept chat");
+            let chat_request = read_http_request(&mut chat_stream);
+            assert!(chat_request.contains("POST /v1/chat/completions HTTP/1.1"));
+            assert!(chat_request.contains("\"messages\""));
+            let body = json!({
+                "id": "chatcmpl_openclaw_1",
+                "choices": [{
+                    "message": {
+                        "role": "assistant",
+                        "content": "Fallback answer"
+                    },
+                    "finish_reason": "stop"
+                }],
+                "usage": {
+                    "prompt_tokens": 8,
+                    "completion_tokens": 3,
+                    "total_tokens": 11
+                }
+            })
+            .to_string();
+            write_http_json_response(&mut chat_stream, 200, &body);
+        });
+
+        let provider = OpenClawLlmProvider::new(
+            "openclaw",
+            OpenClawLlmProviderConfig {
+                gateway_base_url: format!("http://{addr}"),
+                token: Some("test-openclaw-token".to_string()),
+                agent_id: None,
+                model: None,
+                model_override: None,
+                prefer_responses: true,
+                timeout_ms: 60_000,
+            },
+        )
+        .expect("provider");
+        let response = provider
+            .complete(&LlmRequest {
+                model: "openclaw-model".to_string(),
+                system_prompt_key: None,
+                input: "Fallback please".to_string(),
+            })
+            .expect("openclaw chat fallback should succeed");
+
+        server.join().expect("server join");
+        assert_eq!(response.output_text, "Fallback answer");
+        assert_eq!(response.runtime.provider, "openclaw");
+        assert_eq!(
+            response.runtime.request_id.as_deref(),
+            Some("chatcmpl_openclaw_1")
+        );
+        assert_eq!(response.runtime.finish_reason, Some(LlmFinishReason::Stop));
+        assert_eq!(
+            response.runtime.usage,
+            Some(LlmTokenUsage {
+                input_tokens: 8,
+                output_tokens: 3,
+                total_tokens: 11,
+            })
+        );
+    }
+
+    #[test]
+    fn openclaw_retry_detectors_match_bad_outputs() {
+        assert!(looks_like_openclaw_onboarding_drift(
+            "我是刚启动的智能助手，还没有名字，你可以给我起名。"
+        ));
+        assert!(looks_like_openclaw_leaked_tool_call_content(
+            "{\"tool_calls\":[{\"function\":{\"name\":\"search\"}}]}"
+        ));
+        assert!(looks_like_openclaw_native_tool_failure(
+            "Cannot read properties of undefined (reading 'input')"
+        ));
+        assert!(!looks_like_openclaw_retryable_bad_output(
+            "这里是根据当前数据整理出的收入结论。"
+        ));
+    }
+
+    #[test]
+    fn openclaw_provider_retries_on_onboarding_drift() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+        let addr = listener.local_addr().expect("addr");
+        let server = thread::spawn(move || {
+            let (mut first_stream, _) = listener.accept().expect("accept first");
+            let first_request = read_http_request(&mut first_stream);
+            assert!(first_request.contains("POST /v1/responses HTTP/1.1"));
+            let first_body = json!({
+                "id": "resp_openclaw_bad",
+                "output_text": "我是刚启动的智能助手，还没有名字，你可以给我起名。"
+            })
+            .to_string();
+            write_http_json_response(&mut first_stream, 200, &first_body);
+
+            let (mut retry_stream, _) = listener.accept().expect("accept retry");
+            let retry_request = read_http_request(&mut retry_stream);
+            assert!(retry_request.contains("POST /v1/responses HTTP/1.1"));
+            assert!(retry_request.contains("直接回答用户当前问题"));
+            let retry_body = json!({
+                "id": "resp_openclaw_retry",
+                "output_text": "这是重试后的有效回答。"
+            })
+            .to_string();
+            write_http_json_response(&mut retry_stream, 200, &retry_body);
+        });
+
+        let provider = OpenClawLlmProvider::new(
+            "openclaw",
+            OpenClawLlmProviderConfig {
+                gateway_base_url: format!("http://{addr}"),
+                token: Some("test-openclaw-token".to_string()),
+                agent_id: None,
+                model: None,
+                model_override: None,
+                prefer_responses: true,
+                timeout_ms: 60_000,
+            },
+        )
+        .expect("provider");
+        let response = provider
+            .complete(&LlmRequest {
+                model: "openclaw-model".to_string(),
+                system_prompt_key: None,
+                input: "回答当前经营问题".to_string(),
+            })
+            .expect("retry should recover bad openclaw output");
+
+        server.join().expect("server join");
+        assert_eq!(response.output_text, "这是重试后的有效回答。");
+        assert_eq!(
+            response.runtime.request_id.as_deref(),
+            Some("resp_openclaw_retry")
+        );
+    }
+
+    #[test]
     fn render_runtime_manifest_serializes_runtime_metadata() {
         let manifest = render_runtime_manifest(&LlmRuntimeMetadata {
             mode: LlmRuntimeMode::Provider,
@@ -1104,5 +1967,72 @@ mod tests {
         );
         assert_eq!(manifest["system_prompt_version"], json!("v1"));
         assert_eq!(manifest["tool_trace_count"], json!(2));
+    }
+
+    fn openclaw_env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    fn clear_openclaw_env() {
+        for key in [
+            "OPENCLAW_EXTENSION_ENABLED",
+            "OPENCLAW_GATEWAY_BASE_URL",
+            "OPENCLAW_GATEWAY_TOKEN",
+            "OPENCLAW_GATEWAY_TOKEN_OPTIONAL",
+            "OPENCLAW_AGENT_ID",
+            "OPENCLAW_MODEL",
+            "OPENCLAW_MODEL_OVERRIDE",
+            "OPENCLAW_PREFER_RESPONSES",
+            "OPENCLAW_TIMEOUT_MS",
+        ] {
+            std::env::remove_var(key);
+        }
+    }
+
+    fn read_http_request(stream: &mut TcpStream) -> String {
+        let mut request_bytes = Vec::new();
+        let mut buffer = [0_u8; 1024];
+        let mut expected_len = None;
+        loop {
+            let read = stream.read(&mut buffer).expect("read");
+            if read == 0 {
+                break;
+            }
+            request_bytes.extend_from_slice(&buffer[..read]);
+            let request = String::from_utf8_lossy(&request_bytes);
+            if expected_len.is_none() {
+                expected_len = request.split("\r\n").find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    if name.eq_ignore_ascii_case("content-length") {
+                        value.trim().parse::<usize>().ok()
+                    } else {
+                        None
+                    }
+                });
+            }
+            if let Some(headers_end) = request.find("\r\n\r\n") {
+                let body_len = request_bytes.len() - (headers_end + 4);
+                if body_len >= expected_len.unwrap_or(0) {
+                    break;
+                }
+            }
+        }
+        String::from_utf8_lossy(&request_bytes).to_string()
+    }
+
+    fn write_http_json_response(stream: &mut TcpStream, status: u16, body: &str) {
+        let reason = match status {
+            200 => "OK",
+            404 => "Not Found",
+            500 => "Internal Server Error",
+            _ => "OK",
+        };
+        let response = format!(
+            "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        stream.write_all(response.as_bytes()).expect("write");
     }
 }
