@@ -401,6 +401,9 @@ Static-page creation and backend-synced static-page edits now prefer AssistantRu
 **Status 2026-04-29 initial renderer batch:** in progress.
 The backend data snapshot now attaches per-module evidence-derived `sampleData` and `dataQuality` when a module has a recognized `fieldPath`. The renderer now reads module `dataBinding`, snapshot module bindings, and snapshot `sampleData` before drawing charts. If chart data is missing, it renders an explicit "数据待确认" notice instead of fake placeholder numbers.
 
+**Status 2026-04-29 explicit evidence values batch:** completed locally.
+Static-page data snapshots now prefer explicit numeric values extracted from retrieval evidence text before falling back to keyword signal scores. Evidence lines such as `1月,订单金额,1200` become chart-ready `sampleData` with `kind: "evidence_value"` and `dataQuality: "evidence_value"`. The renderer has a regression test proving final HTML uses snapshot sample values instead of showing missing-data placeholders.
+
 **Files:**
 
 - Modify: `crates/platform-api/src/lib.rs`
@@ -428,6 +431,15 @@ The backend data snapshot now attaches per-module evidence-derived `sampleData` 
 - `cargo test -p platform-api static_page_data_snapshot_extracts_field_candidates_from_evidence_state`
 - `cargo test -p static-page-renderer`
 - `cargo test -p platform-api static_page_draft_can_be_created_under_assistant_run`
+- `npm run build` in `apps/web`
+
+**Verified 2026-04-29 explicit evidence values batch:**
+
+- `wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo fmt --all --check"`
+- `wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo test -p platform-api static_page_data_snapshot"`
+- `wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo test -p static-page-renderer"`
+- `wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo test -p static-page-runtime"`
+- `wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo test -p platform-api static_page_draft_can_be_created_under_assistant_run"`
 - `npm run build` in `apps/web`
 
 ### Slice 6: Final Render Worker And Export Package

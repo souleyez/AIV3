@@ -955,4 +955,44 @@ mod tests {
         assert!(result.html.contains("数据待确认"));
         assert!(!result.html.contains(">当前<"));
     }
+
+    #[test]
+    fn render_static_page_uses_snapshot_sample_data_values() {
+        let result = render_static_page(&StaticPageRenderRequest {
+            draft_id: "draft-real-values".to_string(),
+            assistant_run_id: "run-real-values".to_string(),
+            title: "真实数据测试".to_string(),
+            draft_payload: json!({
+                "modules": [{
+                    "id": "trend",
+                    "title": "订单趋势",
+                    "content": "使用检索证据里的显式数值。",
+                    "dataBinding": {
+                        "label": "订单金额",
+                        "fieldPath": "orders.amount"
+                    },
+                    "visualization": { "type": "line-chart" }
+                }],
+                "dataSnapshot": {
+                    "module_bindings": [{
+                        "moduleId": "trend",
+                        "sampleData": [
+                            { "label": "1月", "value": 1200, "kind": "evidence_value" },
+                            { "label": "2月", "value": 1380, "kind": "evidence_value" }
+                        ],
+                        "dataQuality": "evidence_value"
+                    }]
+                }
+            }),
+            selected_scope: Value::Null,
+            visibility_snapshot: Value::Null,
+            preview_asset_key: None,
+            image_job_id: None,
+        });
+
+        assert!(result.html.contains("line-chart"));
+        assert!(result.html.contains("1月: 1200"));
+        assert!(result.html.contains("2月: 1380"));
+        assert!(!result.html.contains("数据待确认"));
+    }
 }

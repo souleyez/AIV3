@@ -12378,15 +12378,7 @@ fn build_static_page_data_snapshot_with_evidence(
         .into_iter()
         .map(|module| {
             let sample_data = build_static_page_module_sample_data(&module, evidence_state);
-            let data_quality = if sample_data
-                .as_array()
-                .map(|items| !items.is_empty())
-                .unwrap_or(false)
-            {
-                "evidence_signal"
-            } else {
-                "not_available"
-            };
+            let data_quality = static_page_sample_data_quality(&sample_data);
             json!({
                 "moduleId": module.get("id").cloned().unwrap_or(Value::Null),
                 "title": module.get("title").cloned().unwrap_or(Value::Null),
@@ -12690,6 +12682,12 @@ fn build_static_page_module_sample_data(module: &Value, evidence_state: Option<&
         return json!([]);
     };
 
+    let explicit_points =
+        build_static_page_explicit_metric_points(evidence_items, field_path, &keywords);
+    if !explicit_points.is_empty() {
+        return Value::Array(explicit_points);
+    }
+
     let points = evidence_items
         .iter()
         .filter(|item| {
@@ -12712,6 +12710,185 @@ fn build_static_page_module_sample_data(module: &Value, evidence_state: Option<&
         .take(6)
         .collect::<Vec<_>>();
     Value::Array(points)
+}
+
+fn static_page_sample_data_quality(sample_data: &Value) -> &'static str {
+    let Some(items) = sample_data.as_array() else {
+        return "not_available";
+    };
+    if items.is_empty() {
+        return "not_available";
+    }
+    if items
+        .iter()
+        .any(|item| item.get("kind").and_then(Value::as_str) == Some("evidence_value"))
+    {
+        return "evidence_value";
+    }
+    "evidence_signal"
+}
+
+fn build_static_page_explicit_metric_points(
+    evidence_items: &[Value],
+    field_path: &str,
+    keywords: &[&str],
+) -> Vec<Value> {
+    evidence_items
+        .iter()
+        .filter(|item| {
+            item.get("type").and_then(Value::as_str).unwrap_or_default() == "retrieval_evidence"
+        })
+        .enumerate()
+        .flat_map(|(evidence_index, item)| {
+            static_page_evidence_value_lines(item)
+                .into_iter()
+                .enumerate()
+                .filter_map(move |(line_index, line)| {
+                    let line_lower = line.to_lowercase();
+                    if !static_page_text_contains_any(&line_lower, keywords) {
+                        return None;
+                    }
+                    let value = static_page_metric_value_from_line(&line)?;
+                    Some(json!({
+                        "label": static_page_metric_label_from_line(&line, item, evidence_index, line_index, keywords),
+                        "value": value,
+                        "kind": "evidence_value",
+                        "fieldPath": field_path,
+                        "evidenceIds": static_page_evidence_ids(item),
+                        "evidenceRef": static_page_evidence_ref(item),
+                    }))
+                })
+                .collect::<Vec<_>>()
+        })
+        .take(6)
+        .collect()
+}
+
+fn static_page_evidence_value_lines(item: &Value) -> Vec<String> {
+    let mut text = String::new();
+    for key in ["content_excerpt", "summary"] {
+        if let Some(value) = item.get(key).and_then(Value::as_str) {
+            if !text.is_empty() {
+                text.push('\n');
+            }
+            text.push_str(value);
+        }
+    }
+    text.split(|character| matches!(character, '\n' | '\r' | ';' | '；'))
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+fn static_page_metric_value_from_line(line: &str) -> Option<f64> {
+    let candidates = static_page_number_candidates(line);
+    if candidates.is_empty() {
+        return None;
+    }
+    if candidates.len() == 1 {
+        let value = candidates.first().copied()?;
+        if static_page_number_looks_like_year(value)
+            || (static_page_number_looks_like_period_part(value)
+                && static_page_line_mentions_period(line))
+        {
+            return None;
+        }
+        return Some(value);
+    }
+
+    candidates
+        .iter()
+        .copied()
+        .filter(|value| !static_page_number_looks_like_year(*value))
+        .next_back()
+        .or_else(|| candidates.last().copied())
+}
+
+fn static_page_number_candidates(line: &str) -> Vec<f64> {
+    let mut values = Vec::new();
+    let mut token = String::new();
+    for character in line.chars().chain(std::iter::once(' ')) {
+        let can_continue_number = character.is_ascii_digit()
+            || character == '.'
+            || character == ','
+            || ((character == '-' || character == '+') && token.is_empty());
+        if can_continue_number {
+            token.push(character);
+            continue;
+        }
+        if token.chars().any(|candidate| candidate.is_ascii_digit()) {
+            let normalized = token.replace(',', "");
+            if let Ok(value) = normalized.parse::<f64>() {
+                values.push(value);
+            }
+        }
+        token.clear();
+    }
+    values
+}
+
+fn static_page_number_looks_like_year(value: f64) -> bool {
+    (1900.0..=2100.0).contains(&value) && value.fract().abs() < f64::EPSILON
+}
+
+fn static_page_number_looks_like_period_part(value: f64) -> bool {
+    (1.0..=31.0).contains(&value) && value.fract().abs() < f64::EPSILON
+}
+
+fn static_page_line_mentions_period(line: &str) -> bool {
+    let lower = line.to_lowercase();
+    ["月", "日", "date", "month", "period", "季度", "周"]
+        .iter()
+        .any(|marker| lower.contains(marker))
+}
+
+fn static_page_metric_label_from_line(
+    line: &str,
+    item: &Value,
+    evidence_index: usize,
+    line_index: usize,
+    keywords: &[&str],
+) -> String {
+    for part in line.split([',', '，', '|', '\t']) {
+        let candidate = part.trim();
+        if candidate.is_empty() {
+            continue;
+        }
+        let candidate_lower = candidate.to_lowercase();
+        if static_page_text_contains_any(&candidate_lower, keywords) {
+            continue;
+        }
+        if static_page_string_is_numeric_only(candidate) {
+            continue;
+        }
+        return candidate.chars().take(18).collect();
+    }
+
+    if line_index == 0 {
+        static_page_evidence_point_label(item, evidence_index)
+    } else {
+        format!(
+            "{}-{}",
+            static_page_evidence_point_label(item, evidence_index),
+            line_index + 1
+        )
+    }
+}
+
+fn static_page_string_is_numeric_only(value: &str) -> bool {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    let numeric_chars = trimmed
+        .chars()
+        .filter(|character| {
+            character.is_ascii_digit()
+                || matches!(character, '.' | ',' | '-' | '+' | '%' | ' ' | '万' | '亿')
+        })
+        .count();
+    numeric_chars == trimmed.chars().count()
 }
 
 fn static_page_field_keywords(field_path: &str) -> Vec<&'static str> {
@@ -14900,6 +15077,77 @@ mod tests {
                 .unwrap_or_default()
                 > 0.0
         );
+    }
+
+    #[test]
+    fn static_page_data_snapshot_prefers_explicit_evidence_values() {
+        let dataset_id = DatasetId::new();
+        let selected_scope = json!({
+            "mode": "user_selected",
+            "datasets": [dataset_id.to_string()],
+        });
+        let payload = json!({
+            "modules": [
+                {
+                    "id": "trend",
+                    "title": "订单趋势",
+                    "dataBinding": {
+                        "sourceId": "evidence",
+                        "fieldPath": "orders.amount"
+                    },
+                    "visualization": {
+                        "type": "line-chart",
+                        "chartOptions": {
+                            "dataKey": "orders.amount"
+                        }
+                    }
+                }
+            ]
+        });
+        let evidence_state = json!({
+            "status": "supplied",
+            "supplied_items": [
+                {
+                    "type": "retrieval_evidence",
+                    "dataset_id": dataset_id.to_string(),
+                    "document_id": Uuid::new_v4().to_string(),
+                    "document_chunk_id": Uuid::new_v4().to_string(),
+                    "retrieval_evidence_id": Uuid::new_v4().to_string(),
+                    "source_locator": "documents/orders.csv#chunk=0",
+                    "summary": "月度订单金额表",
+                    "content_excerpt": "1月,订单金额,1200\n2月,订单金额,1380\n2026-03,订单金额,1510",
+                    "payload_filter_key": "dataset/orders",
+                    "evidence_manifest": {
+                        "embedding": {
+                            "term_weights": {
+                                "order": 1.0,
+                                "revenue": 0.9
+                            }
+                        }
+                    }
+                }
+            ]
+        });
+
+        let snapshot = build_static_page_data_snapshot_with_evidence(
+            &payload,
+            &selected_scope,
+            Some(&evidence_state),
+            "assistant_run",
+        );
+        let sample_data = value_array(snapshot["module_bindings"][0]["sampleData"].clone());
+
+        assert_eq!(
+            snapshot["module_bindings"][0]["dataQuality"],
+            json!("evidence_value")
+        );
+        assert_eq!(sample_data[0]["label"], json!("1月"));
+        assert_eq!(sample_data[0]["value"], json!(1200.0));
+        assert_eq!(sample_data[1]["label"], json!("2月"));
+        assert_eq!(sample_data[1]["value"], json!(1380.0));
+        assert!(sample_data
+            .iter()
+            .all(|point| point["kind"] == json!("evidence_value")));
     }
 
     #[tokio::test]
