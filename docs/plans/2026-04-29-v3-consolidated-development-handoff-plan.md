@@ -404,6 +404,9 @@ The backend data snapshot now attaches per-module evidence-derived `sampleData` 
 **Status 2026-04-29 explicit evidence values batch:** completed locally.
 Static-page data snapshots now prefer explicit numeric values extracted from retrieval evidence text before falling back to keyword signal scores. Evidence lines such as `1月,订单金额,1200` become chart-ready `sampleData` with `kind: "evidence_value"` and `dataQuality: "evidence_value"`. The renderer has a regression test proving final HTML uses snapshot sample values instead of showing missing-data placeholders.
 
+**Status 2026-04-29 explicit module data contract batch:** completed locally.
+Static-page data snapshots now also prefer user/model-edited module data before falling back to retrieved evidence or keyword signal scores. This supports natural-language module data edits such as `visualization.data: [{ month, amount }]` and records them as `sampleData` with `kind: "module_data"` / `dataQuality: "module_data"`. The platform has a regression test proving the same `dataSnapshot` is sent to the image prompt payload and final render asset manifest, while the renderer now accepts common label/value aliases such as `month`, `x`, `amount`, `y`, `金额`, and numeric strings.
+
 **Files:**
 
 - Modify: `crates/platform-api/src/lib.rs`
@@ -441,6 +444,12 @@ Static-page data snapshots now prefer explicit numeric values extracted from ret
 - `wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo test -p static-page-runtime"`
 - `wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo test -p platform-api static_page_draft_can_be_created_under_assistant_run"`
 - `npm run build` in `apps/web`
+
+**Verified 2026-04-29 explicit module data contract batch:**
+
+- `wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo fmt --all --check"`
+- `wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo test -p platform-api static_page_data_snapshot"`
+- `wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo test -p static-page-renderer"`
 
 ### Slice 6: Final Render Worker And Export Package
 

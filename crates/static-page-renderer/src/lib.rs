@@ -550,18 +550,48 @@ fn chart_point_from_value(index: usize, value: &Value) -> Option<ChartPoint> {
         });
     }
     let object = value.as_object()?;
-    let label = ["label", "name", "category", "date", "period", "title"]
-        .iter()
-        .find_map(|key| object.get(*key).and_then(Value::as_str))
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| format!("项{}", index + 1));
-    let value = ["value", "amount", "count", "score", "rate", "total"]
-        .iter()
-        .find_map(|key| object.get(*key).and_then(Value::as_f64))
-        .or_else(|| object.values().find_map(Value::as_f64))?;
+    let label = [
+        "label", "name", "month", "date", "period", "category", "title", "x", "月份", "日期",
+        "分类",
+    ]
+    .iter()
+    .find_map(|key| object.get(*key).and_then(Value::as_str))
+    .map(str::trim)
+    .filter(|value| !value.is_empty())
+    .map(ToOwned::to_owned)
+    .unwrap_or_else(|| format!("项{}", index + 1));
+    let value = [
+        "value",
+        "amount",
+        "count",
+        "score",
+        "rate",
+        "total",
+        "y",
+        "订单金额",
+        "金额",
+        "收入",
+        "数量",
+    ]
+    .iter()
+    .find_map(|key| object.get(*key).and_then(chart_json_number))
+    .or_else(|| object.values().find_map(chart_json_number))?;
     Some(ChartPoint { label, value })
+}
+
+fn chart_json_number(value: &Value) -> Option<f64> {
+    if let Some(number) = value.as_f64() {
+        return Some(number);
+    }
+    let text = value.as_str()?.trim();
+    if text.is_empty() {
+        return None;
+    }
+    text.trim_end_matches('%')
+        .replace(',', "")
+        .replace('，', "")
+        .parse::<f64>()
+        .ok()
 }
 
 fn max_chart_value(points: &[ChartPoint]) -> f64 {
@@ -983,6 +1013,38 @@ mod tests {
                         "dataQuality": "evidence_value"
                     }]
                 }
+            }),
+            selected_scope: Value::Null,
+            visibility_snapshot: Value::Null,
+            preview_asset_key: None,
+            image_job_id: None,
+        });
+
+        assert!(result.html.contains("line-chart"));
+        assert!(result.html.contains("1月: 1200"));
+        assert!(result.html.contains("2月: 1380"));
+        assert!(!result.html.contains("数据待确认"));
+    }
+
+    #[test]
+    fn render_static_page_accepts_module_month_amount_data() {
+        let result = render_static_page(&StaticPageRenderRequest {
+            draft_id: "draft-module-values".to_string(),
+            assistant_run_id: "run-module-values".to_string(),
+            title: "模块数据测试".to_string(),
+            draft_payload: json!({
+                "modules": [{
+                    "id": "trend",
+                    "title": "订单趋势",
+                    "content": "使用模块内用户确认的数据。",
+                    "visualization": {
+                        "type": "line-chart",
+                        "data": [
+                            { "month": "1月", "amount": "1200" },
+                            { "month": "2月", "amount": "1380" }
+                        ]
+                    }
+                }]
             }),
             selected_scope: Value::Null,
             visibility_snapshot: Value::Null,

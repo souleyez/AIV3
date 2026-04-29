@@ -12650,24 +12650,11 @@ fn build_static_page_field_candidates(
 }
 
 fn build_static_page_module_sample_data(module: &Value, evidence_state: Option<&Value>) -> Value {
-    let field_path = module
-        .get("dataBinding")
-        .or_else(|| module.get("data_binding"))
-        .and_then(|binding| {
-            binding
-                .get("fieldPath")
-                .or_else(|| binding.get("field_path"))
-                .or_else(|| binding.get("field"))
-        })
-        .or_else(|| {
-            module
-                .get("visualization")
-                .and_then(|visualization| visualization.get("chartOptions"))
-                .and_then(|chart_options| chart_options.get("dataKey"))
-        })
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
+    let field_path = static_page_module_field_path(module);
+    let explicit_points = build_static_page_module_explicit_points(module, field_path);
+    if !explicit_points.is_empty() {
+        return Value::Array(explicit_points);
+    }
     let Some(field_path) = field_path else {
         return json!([]);
     };
@@ -12712,6 +12699,222 @@ fn build_static_page_module_sample_data(module: &Value, evidence_state: Option<&
     Value::Array(points)
 }
 
+fn static_page_module_field_path(module: &Value) -> Option<&str> {
+    module
+        .get("dataBinding")
+        .or_else(|| module.get("data_binding"))
+        .and_then(|binding| {
+            binding
+                .get("fieldPath")
+                .or_else(|| binding.get("field_path"))
+                .or_else(|| binding.get("field"))
+        })
+        .or_else(|| {
+            module
+                .get("visualization")
+                .and_then(|visualization| visualization.get("chartOptions"))
+                .and_then(|chart_options| chart_options.get("dataKey"))
+        })
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+fn build_static_page_module_explicit_points(
+    module: &Value,
+    field_path: Option<&str>,
+) -> Vec<Value> {
+    for candidate in static_page_module_explicit_data_candidates(module) {
+        let points = static_page_explicit_points_from_value(candidate, field_path);
+        if !points.is_empty() {
+            return points;
+        }
+    }
+    Vec::new()
+}
+
+fn static_page_module_explicit_data_candidates(module: &Value) -> Vec<&Value> {
+    let mut candidates = Vec::new();
+    if let Some(visualization) = module.get("visualization") {
+        for key in [
+            "sampleData",
+            "sample_data",
+            "data",
+            "values",
+            "rows",
+            "items",
+        ] {
+            if let Some(value) = visualization.get(key) {
+                candidates.push(value);
+            }
+        }
+    }
+    if let Some(binding) = module
+        .get("dataBinding")
+        .or_else(|| module.get("data_binding"))
+    {
+        for key in [
+            "sampleData",
+            "sample_data",
+            "data",
+            "values",
+            "rows",
+            "items",
+        ] {
+            if let Some(value) = binding.get(key) {
+                candidates.push(value);
+            }
+        }
+    }
+    for key in [
+        "sampleData",
+        "sample_data",
+        "data",
+        "values",
+        "rows",
+        "items",
+    ] {
+        if let Some(value) = module.get(key) {
+            candidates.push(value);
+        }
+    }
+    candidates
+}
+
+fn static_page_explicit_points_from_value(value: &Value, field_path: Option<&str>) -> Vec<Value> {
+    if let Some(array) = value.as_array() {
+        return static_page_explicit_points_from_array(array, field_path);
+    }
+    for key in [
+        "sampleData",
+        "sample_data",
+        "data",
+        "values",
+        "rows",
+        "items",
+    ] {
+        if let Some(array) = value.get(key).and_then(Value::as_array) {
+            let points = static_page_explicit_points_from_array(array, field_path);
+            if !points.is_empty() {
+                return points;
+            }
+        }
+    }
+    Vec::new()
+}
+
+fn static_page_explicit_points_from_array(array: &[Value], field_path: Option<&str>) -> Vec<Value> {
+    array
+        .iter()
+        .enumerate()
+        .filter_map(|(index, item)| static_page_explicit_point_from_item(item, index, field_path))
+        .take(12)
+        .collect()
+}
+
+fn static_page_explicit_point_from_item(
+    item: &Value,
+    index: usize,
+    field_path: Option<&str>,
+) -> Option<Value> {
+    let value = static_page_explicit_point_value(item)?;
+    let label = static_page_explicit_point_label(item, index);
+    let mut point = Map::new();
+    point.insert("label".to_string(), json!(label));
+    point.insert("value".to_string(), json!(value));
+    point.insert(
+        "kind".to_string(),
+        item.get("kind")
+            .and_then(Value::as_str)
+            .map(|kind| json!(kind))
+            .unwrap_or_else(|| json!("module_data")),
+    );
+    point.insert("source".to_string(), json!("module_explicit_data"));
+    if let Some(field_path) = field_path {
+        point.insert("fieldPath".to_string(), json!(field_path));
+    }
+    Some(Value::Object(point))
+}
+
+fn static_page_explicit_point_value(item: &Value) -> Option<f64> {
+    if let Some(value) = static_page_json_number(item) {
+        return Some(value);
+    }
+    if let Some(array) = item.as_array() {
+        return array.iter().find_map(static_page_json_number);
+    }
+    let object = item.as_object()?;
+    for key in [
+        "value",
+        "amount",
+        "count",
+        "total",
+        "score",
+        "metric",
+        "y",
+        "订单金额",
+        "金额",
+        "收入",
+        "数量",
+    ] {
+        if let Some(value) = object.get(key).and_then(static_page_json_number) {
+            return Some(value);
+        }
+    }
+    object.values().find_map(static_page_json_number)
+}
+
+fn static_page_explicit_point_label(item: &Value, index: usize) -> String {
+    if let Some(array) = item.as_array() {
+        if let Some(label) = array
+            .iter()
+            .find_map(|value| value.as_str().map(str::trim))
+            .filter(|value| !value.is_empty())
+        {
+            return label.chars().take(18).collect();
+        }
+    }
+    if let Some(object) = item.as_object() {
+        for key in [
+            "label", "name", "month", "date", "period", "category", "x", "月份", "日期", "分类",
+        ] {
+            if let Some(label) = object
+                .get(key)
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                return label.chars().take(18).collect();
+            }
+        }
+        for value in object.values() {
+            if let Some(label) = value
+                .as_str()
+                .map(str::trim)
+                .filter(|candidate| !candidate.is_empty())
+            {
+                return label.chars().take(18).collect();
+            }
+        }
+    }
+    format!("数据 {}", index + 1)
+}
+
+fn static_page_json_number(value: &Value) -> Option<f64> {
+    if let Some(number) = value.as_f64() {
+        return Some(number);
+    }
+    let text = value.as_str()?.trim();
+    if text.is_empty() {
+        return None;
+    }
+    let normalized = text
+        .trim_end_matches('%')
+        .replace(',', "")
+        .replace('，', "");
+    normalized.parse::<f64>().ok()
+}
+
 fn static_page_sample_data_quality(sample_data: &Value) -> &'static str {
     let Some(items) = sample_data.as_array() else {
         return "not_available";
@@ -12724,6 +12927,12 @@ fn static_page_sample_data_quality(sample_data: &Value) -> &'static str {
         .any(|item| item.get("kind").and_then(Value::as_str) == Some("evidence_value"))
     {
         return "evidence_value";
+    }
+    if items
+        .iter()
+        .any(|item| item.get("kind").and_then(Value::as_str) == Some("module_data"))
+    {
+        return "module_data";
     }
     "evidence_signal"
 }
@@ -15148,6 +15357,95 @@ mod tests {
         assert!(sample_data
             .iter()
             .all(|point| point["kind"] == json!("evidence_value")));
+    }
+
+    #[test]
+    fn static_page_data_snapshot_preserves_module_explicit_data_for_preview_and_render() {
+        let payload = apply_static_page_operations_to_payload(
+            json!({
+                "version": 1,
+                "status": "planning",
+                "styleDirection": "client-delivery",
+                "modules": [{
+                    "id": "trend",
+                    "title": "订单趋势",
+                    "content": "用户已手工确认月度订单金额。",
+                    "dataBinding": {
+                        "sourceId": "selected_scope",
+                        "fieldPath": "orders.amount",
+                        "label": "订单金额"
+                    },
+                    "visualization": {
+                        "type": "line-chart",
+                        "data": [
+                            { "month": "1月", "amount": 1200 },
+                            { "month": "2月", "amount": 1380 }
+                        ]
+                    }
+                }],
+                "assistant_context": {
+                    "selected_scope": {
+                        "mode": "ordinary_chat"
+                    },
+                    "evidence_state": {
+                        "status": "not_requested"
+                    }
+                }
+            }),
+            &[json!({
+                "type": "queue_image_job",
+                "jobId": StaticPageImageJobId::new(),
+                "queuePosition": 1,
+            })],
+            Some("效果图任务已进入资源队列。"),
+        );
+        let data_snapshot = payload["dataSnapshot"].clone();
+        let sample_data = value_array(data_snapshot["module_bindings"][0]["sampleData"].clone());
+
+        assert_eq!(
+            data_snapshot["module_bindings"][0]["dataQuality"],
+            json!("module_data")
+        );
+        assert_eq!(sample_data[0]["label"], json!("1月"));
+        assert_eq!(sample_data[0]["value"], json!(1200.0));
+        assert_eq!(sample_data[1]["label"], json!("2月"));
+        assert_eq!(sample_data[1]["value"], json!(1380.0));
+
+        let now = Utc::now();
+        let draft = StaticPageDraft {
+            id: StaticPageDraftId::new(),
+            tenant_id: TenantId::new(),
+            assistant_run_id: AssistantRunId::new(),
+            title: "经营分析静态页".to_string(),
+            status: StaticPageDraftStatus::Queued,
+            selected_scope: json!({"mode": "ordinary_chat"}),
+            visibility_snapshot: json!({"policy": "test"}),
+            source_refs: Value::Null,
+            draft_payload: payload,
+            created_at: now,
+            updated_at: now,
+        };
+
+        let image_prompt_payload = build_static_page_image_prompt_payload(
+            &draft,
+            Some("按用户确认数据生成经营分析效果图"),
+        );
+        assert_eq!(image_prompt_payload["data_snapshot"], data_snapshot);
+
+        let rendered = render_static_page(&StaticPageRenderRequest {
+            draft_id: draft.id.to_string(),
+            assistant_run_id: draft.assistant_run_id.to_string(),
+            title: draft.title.clone(),
+            draft_payload: draft.draft_payload.clone(),
+            selected_scope: draft.selected_scope.clone(),
+            visibility_snapshot: draft.visibility_snapshot.clone(),
+            preview_asset_key: Some("previews/static-page-explicit-data.png".to_string()),
+            image_job_id: Some(StaticPageImageJobId::new().to_string()),
+        });
+        assert_eq!(rendered.asset_manifest["data_snapshot"], data_snapshot);
+        assert!(rendered.html.contains("1月: 1200"));
+        assert!(rendered.html.contains("2月: 1380"));
+        assert!(!rendered.html.contains("数据待确认"));
     }
 
     #[tokio::test]
