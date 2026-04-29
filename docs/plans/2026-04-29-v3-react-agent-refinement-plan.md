@@ -10,6 +10,31 @@
 
 ---
 
+## Implementation Status
+
+Status as of 2026-04-29: first refinement pass completed.
+
+Completed:
+
+- Task 1 typed ReAct contract module.
+- Task 2 weak planning catalog.
+- Task 3 ReAct tool registry extraction.
+- Task 4 protocol repair matrix.
+- Task 5 report handoff tool.
+- Task 6 bounded `read_document_detail` tool.
+- Task 7 redacted ReAct trace in runtime manifest/execution trail.
+- Task 8 frontend safe progress display in the assistant main panel.
+- Task 9 gated OpenClaw memory/readonly bridge stubs.
+- Task 10 runtime-flag and handoff documentation update.
+
+Remaining future hardening:
+
+- Apply model-requested `update_static_page_module` operations to the active draft through V3 draft mutation rules in Slice 4.
+- Replace OpenClaw stubs with real sidecar adapters only behind explicit gates and allowlists.
+- Add deeper end-to-end UI tests once AssistantRun progress and static-page mutation are more stable.
+
+---
+
 ## 0. Current State And Source References
 
 Current V3 state:

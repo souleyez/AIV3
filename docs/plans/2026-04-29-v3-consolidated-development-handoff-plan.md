@@ -27,7 +27,7 @@ Detailed source documents remain valid as references:
 Latest committed code baseline:
 
 ```text
-dd14693 feat(static-page): harden visual generation workflow
+Current branch includes the completed first ReAct refinement pass through gated OpenClaw bridge stubs; use `git log --oneline` for the exact latest commit.
 ```
 
 Plan files in this consolidation slice:
@@ -46,6 +46,7 @@ Recent verified capabilities:
 - Ingest worker has local text, OOXML, PDF, OCR fallback, MiniMax document VLM slice, and first media upload slice.
 - Dataset visibility foundation exists with local key binding, public/private dataset filtering, and selected-scope semantics.
 - AssistantRun persistence exists for ordinary chat, hidden conversation memory, deterministic scope planning, evidence supply, continue API, static-page draft creation, and output artifacts.
+- AssistantRun ReAct refinement now includes typed contract parsing, weak planning catalog, extracted tool registry, protocol-repair matrix, report handoff, bounded document-detail reads, redacted trace summaries, frontend safe progress display, and gated OpenClaw memory/readonly bridge stubs.
 - Static-page runtime has deterministic and provider-backed intent interpretation with operation sanitization.
 - Static-page image worker can call the Cloudflare/Codex queue, poll artifact status, normalize artifact URLs, and record failures.
 - Static-page renderer is layout-aware and can render core module types into HTML/SVG with design contract data.
@@ -273,13 +274,13 @@ Next outcomes:
 
 ### Slice 3: Host-Controlled ReAct AssistantRun Loop
 
-**Status 2026-04-29:** backend first slice implemented in `crates/platform-api/src/lib.rs`.
-AssistantRun create and continue paths now support a config-gated Host-Controlled ReAct loop with strict action JSON parsing, step limits, V3-owned retrieval/visibility checks, static-page module operation sanitization, persisted ReAct events, and concise execution-trail steps. Contracts/storage changes were not required for this phase because existing AssistantRun events, output artifacts, and evidence-state fields were sufficient. Static-page write actions are currently returned as sanitized operations/observations rather than silently applying to drafts; applying them to a selected draft belongs to Slice 4.
+**Status 2026-04-29:** first ReAct refinement pass completed.
+AssistantRun create and continue paths now support a config-gated Host-Controlled ReAct loop with strict typed action JSON parsing, weak planning catalog, step limits, V3-owned retrieval/visibility checks, bounded `read_document_detail`, report handoff invariants, static-page module operation sanitization, redacted ReAct trace summaries, safe frontend progress display, and gated OpenClaw bridge stubs. Contracts/storage migrations were not required for this pass because existing AssistantRun events, output artifacts, runtime manifest, and execution-trail fields were sufficient. Static-page write actions are still returned as sanitized operations/observations rather than silently mutating arbitrary drafts; applying them to the selected current draft belongs to Slice 4.
 
 **Reference alignment 2026-04-29:** compared with `C:/Users/soulzyn/Desktop/codex/ai-data-platform-java-client/docs/architecture/react-agent-architecture-reference.md`.
-The Java reference confirms the same boundary: model owns intent/next action/final wording, while V3 owns identity, scope, permission checks, whitelisted tool execution, limits, and audit. V3 should keep planning catalogs weak, treat observations/evidence state as the only answerable supply, repair premature terminal answers with `policy_observation`, and reserve fallback for runtime degradation rather than normal protocol steering. The first protocol-repair guard is now implemented for scoped data: if selected datasets or conversation memory require supply and the model emits `final_answer` before any supply observation/evidence state, V3 appends a policy observation and continues.
+The Java reference confirms the same boundary: model owns intent/next action/final wording, while V3 owns identity, scope, permission checks, whitelisted tool execution, limits, and audit. The implemented V3 pass now keeps planning catalogs weak, treats observations/evidence state as answerable supply, repairs premature terminal answers and report choices with `policy_observation`, returns denied IDs only, avoids raw observations in persisted ReAct events, and reserves fallback for runtime degradation rather than normal protocol steering.
 
-**Detailed refinement plan 2026-04-29:** `docs/plans/2026-04-29-v3-react-agent-refinement-plan.md` is now the active sub-plan for the next ReAct pass. It keeps current V3 behavior, then extracts a typed contract module, weak planning catalog, tool registry, protocol-repair matrix, report handoff, document-detail reading, redacted trace persistence, frontend progress alignment, and optional OpenClaw bridge actions.
+**Detailed refinement plan 2026-04-29:** `docs/plans/2026-04-29-v3-react-agent-refinement-plan.md` records the completed first refinement pass and remains the reference for future hardening.
 
 **Files:**
 
@@ -302,6 +303,7 @@ The Java reference confirms the same boundary: model owns intent/next action/fin
 8. Keep deterministic fallback only for runtime outage, malformed JSON that cannot be parsed safely, infrastructure failure, explicit ReAct disablement, or step-limit exhaustion.
 9. Add tests for valid retrieval action, invalid action rejection, hidden dataset denial, static-page module update action, final answer, premature final-answer repair, and step-limit stop.
 10. For post-first-slice cleanup, follow the task order in `docs/plans/2026-04-29-v3-react-agent-refinement-plan.md` instead of expanding the monolithic `crates/platform-api/src/lib.rs` implementation further.
+11. Completed refinement pass added `read_document_detail`, `list_report_options`, `report_choice`, redacted `react_trace`, safe frontend progress, and gated `openclaw_memory_recall` / `openclaw_readonly_execution` stubs.
 
 **Acceptance:**
 
@@ -316,7 +318,11 @@ The Java reference confirms the same boundary: model owns intent/next action/fin
 
 - `cargo check -p platform-api`
 - `cargo test -p platform-api assistant_run_react`
+- `cargo test -p platform-api react_agent_contract`
+- `cargo test -p platform-api react_agent_tools`
+- `cargo test -p platform-api openclaw_react`
 - `cargo test -p platform-api assistant_run`
+- `npm run build` in `apps/web`
 
 ### Slice 4: Static-Page Module Editing And Data Binding
 
@@ -544,7 +550,7 @@ The backend data snapshot now attaches per-module evidence-derived `sampleData` 
 
 Start with Slice 0 if the consolidated plan is not committed.
 
-Current 2026-04-29 transition note: if the current in-progress batch is still uncommitted, first clean/test/commit it as one coherent slice covering static-page module data binding, real-data renderer behavior, premature ReAct final-answer repair, and this ReAct refinement plan. After that commit, do not keep adding logic to the monolithic AssistantRun block; use the detailed ReAct refinement plan to extract the contract/catalog/tool-registry pieces.
+Current 2026-04-29 transition note: the first ReAct refinement pass is complete. A fresh thread should not restart contract/catalog/tool-registry work unless tests fail or requirements change. Continue with Slice 4 static-page module mutation/data-binding integration, because that is the core customer-facing product loop.
 
 If Slice 0 is already committed but Slice 1 and Slice 2 are not yet committed, start with Slice 1:
 
@@ -568,7 +574,7 @@ If Slice 3 first backend slice is committed but the detailed ReAct refinement is
 
 ```text
 Refine Host-Controlled ReAct using docs/plans/2026-04-29-v3-react-agent-refinement-plan.md.
-Begin with Task 1 through Task 3: typed contract module, weak planning catalog, and tool registry.
+Begin at the first incomplete task: typed contract module, weak planning catalog, tool registry, protocol repair, report handoff, document detail, trace, frontend progress, or OpenClaw bridge.
 Keep current V3 product actions working while extracting structure from crates/platform-api/src/lib.rs.
 Do not add OpenClaw bridge actions until the registry and protocol repair matrix are in place.
 ```
@@ -585,12 +591,12 @@ Add tests for title/content edits, visualization switch, chart/data binding patc
 
 Reason:
 
-- It is isolated and testable.
-- It unlocks provider-backed AssistantRun and static-page intent without touching UI.
-- It validates the optional-extension boundary before adding memory/local execution.
-- It will not distract from static-page core because no runtime lane changes unless env selects `openclaw`.
+- It is the visible product value: users can talk naturally, then refine module titles, text, data binding, chart type, and layout.
+- ReAct now provides the safe execution frame for model-requested module edits.
+- The right shelf/main workspace model is already in place; the next gains should be draft mutation reliability and visual/data fidelity.
+- OpenClaw remains optional and should not distract from static-page core unless a concrete bridge adapter is being tested.
 
-After Slice 1 and Slice 2, implement Slice 3 before deeper static-page work. ReAct is the execution frame that lets natural-language requests safely drive module edits, retrieval, preview generation, and report/static-page actions. Then continue to Slice 4 because module editing/data binding is the static-page product core.
+ReAct is now the execution frame that lets natural-language requests safely drive module edits, retrieval, preview generation, and report/static-page actions. Continue Slice 4 before deeper OpenClaw/local-execution work unless the user explicitly asks to prioritize the sidecar.
 
 ## Verification Commands
 
@@ -609,6 +615,10 @@ cargo test -p llm-gateway openclaw
 cargo test -p static-page-runtime
 cargo test -p static-page-renderer -p static-page-worker
 cargo test -p platform-api assistant_run
+cargo test -p platform-api assistant_run_react
+cargo test -p platform-api react_agent_contract
+cargo test -p platform-api react_agent_tools
+cargo test -p platform-api openclaw_react
 ```
 
 Rust full verification:

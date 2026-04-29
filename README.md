@@ -17,6 +17,10 @@ Implemented baseline:
 - Axum `platform-api` with dataset, document, chat session, dataset output,
   report plan/render/publish/read, workflow retry, runtime inspect, and tool
   registry surfaces.
+- AssistantRun ordinary chat now has a feature-gated Host-Controlled ReAct loop
+  with typed action parsing, weak planning catalog, scoped retrieval, bounded
+  document-detail reads, report handoff, redacted trace summaries, safe progress
+  UI, and optional OpenClaw bridge stubs.
 - Worker skeletons and vertical slices for ingest, retrieval, memory directory,
   dataset output, chat session, report planning, and report rendering.
 - Model-facing runtime summaries through `runtime.inspect`, including
@@ -35,6 +39,8 @@ Important current limits:
   embedding/vector index integration is still a later phase.
 - Streaming/provider/tool-loop runtime contracts are partially modeled but not
   yet product-grade.
+- OpenClaw bridge actions are intentionally gated and stubbed; real sidecar
+  memory/execution adapters still need a dedicated integration pass.
 - The web report center can drive continue/render/publish host actions and show
   plan/detail/version state, but richer artifact preview and failure-specific UI
   affordances are still later polish.
@@ -57,7 +63,7 @@ Important current limits:
 ## Local Dependencies
 
 The local compose stack includes PostgreSQL, Redis, NATS JetStream, Qdrant, and
-MinIO:
+MinIO. Fresh environments target PostgreSQL 17.9:
 
 ```powershell
 docker compose -f .\infra\compose\docker-compose.local.yml up -d
@@ -71,6 +77,28 @@ postgres://ai_platform:ai_platform@localhost:5432/ai_data_platform_v3
 
 `platform-api` will use that local database by default through the storage
 crate's local default.
+
+## Runtime Flags
+
+AssistantRun ReAct is disabled by default and can be enabled per environment:
+
+```powershell
+$env:ASSISTANT_RUN_REACT_ENABLED = "true"
+$env:ASSISTANT_RUN_REACT_MAX_STEPS = "3"
+$env:ASSISTANT_RUN_RUNTIME_PROVIDER = "openclaw" # optional
+$env:ASSISTANT_RUN_RUNTIME_MODEL = "assistant-run-react-v1"
+```
+
+OpenClaw remains optional and off unless explicitly enabled:
+
+```powershell
+$env:OPENCLAW_EXTENSION_ENABLED = "true"
+$env:OPENCLAW_GATEWAY_BASE_URL = "http://127.0.0.1:8787"
+$env:OPENCLAW_GATEWAY_TOKEN = "<server-side-token>"
+$env:OPENCLAW_MEMORY_ENABLED = "true"
+$env:OPENCLAW_READONLY_EXECUTION_ENABLED = "true"
+$env:OPENCLAW_READONLY_EXECUTION_ALLOWLIST = "inspect_local_index"
+```
 
 ## Development
 
