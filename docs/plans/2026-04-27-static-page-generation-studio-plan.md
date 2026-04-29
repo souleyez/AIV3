@@ -2,6 +2,8 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
+**2026-04-29 consolidation note:** Use `docs/plans/2026-04-29-v3-consolidated-development-handoff-plan.md` as the active next-thread execution entry. This document remains the detailed source record for static-page, assistant shell, parsing, visibility, AssistantRun, and renderer decisions.
+
 **Goal:** Build static page generation, report creation, and knowledge-augmented chat inside the V3 intelligent assistant, matching the original assistant UI 1:1 on desktop and mobile, while allowing users to drive planning, layout, data binding, style choice, image preview, final page generation, and report outputs mainly through natural language.
 
 **Architecture:** The assistant is chat-first and dataset-enhanced. If no dataset is selected, chat behaves like normal model chat with a concise platform/database briefing. A lightweight scope planner can preselect relevant visible datasets and conversation memory as supply candidates, then the host retrieves evidence/detail and feeds the model without locally composing the final answer. Static page and report work is embedded in the same assistant page: the main chat area becomes the active report/static-page workspace, while the right panel always remains the finished-output and draft shelf. Draft state is schema-first, model-operated, and later persisted through V3 Rust APIs and queued image/static-page workers.
