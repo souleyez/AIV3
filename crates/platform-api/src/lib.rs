@@ -79,8 +79,10 @@ use tool_registry::{
 use uuid::Uuid;
 use workflow_engine::{WorkflowCatalog, WorkflowRuntimeState, WorkflowSignal};
 
+mod react_agent_catalog;
 mod react_agent_contract;
 
+use react_agent_catalog::build_assistant_run_react_planning_catalog;
 use react_agent_contract::{
     parse_assistant_run_next_action, AssistantRunReActActionType as AssistantRunReactActionType,
     AssistantRunReActDecision as AssistantRunNextAction,
@@ -5764,6 +5766,16 @@ fn build_assistant_run_react_provider_input(
     step_index: usize,
     max_steps: usize,
 ) -> String {
+    let null_value = Value::Null;
+    let startup_briefing = request.startup_briefing.as_ref().unwrap_or(&null_value);
+    let selected_scope = request.selected_scope.as_ref().unwrap_or(&null_value);
+    let evidence_for_catalog = evidence_state.unwrap_or(&null_value);
+    let planning_catalog = build_assistant_run_react_planning_catalog(
+        startup_briefing,
+        &request.scope_candidates,
+        selected_scope,
+        evidence_for_catalog,
+    );
     let mut sections = vec![
         "你是智能数据工作台里的 Host-Controlled ReAct 运行时。".to_string(),
         "你只能提出下一步动作，不能假装已经执行平台动作。V3 Host 会验证、执行、记录并返回 observation。".to_string(),
@@ -5774,16 +5786,44 @@ fn build_assistant_run_react_provider_input(
         "如果已经可以回答，使用 action_type=final_answer，arguments.content 放最终正文。".to_string(),
         format!("当前 ReAct 步骤：{step_index}/{max_steps}"),
     ];
-    sections.push(build_assistant_run_provider_input_with_evidence(
-        request,
-        evidence_state,
+    sections.push(format!(
+        "弱规划目录（只用于选择工具，不可直接作为回答证据）：{}",
+        serde_json::to_string(&planning_catalog).unwrap_or_else(|_| "{}".to_string())
     ));
+    if let Some(evidence_state) = evidence_state {
+        if evidence_state.get("status").and_then(Value::as_str) != Some("not_requested") {
+            sections.push(format!(
+                "可回答供料证据：{}",
+                serde_json::to_string(evidence_state).unwrap_or_else(|_| "{}".to_string())
+            ));
+        }
+    }
+    if let Some(current_artifact) = request.current_artifact.as_ref() {
+        sections.push(format!(
+            "当前打开产物：{}",
+            serde_json::to_string(current_artifact).unwrap_or_else(|_| "{}".to_string())
+        ));
+    }
+    let history = request
+        .messages
+        .iter()
+        .rev()
+        .take(8)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .map(|message| format!("{}: {}", message.role.as_str(), message.content.trim()))
+        .collect::<Vec<_>>();
+    if !history.is_empty() {
+        sections.push(format!("最近对话：\n{}", history.join("\n")));
+    }
     if !observations.is_empty() {
         sections.push(format!(
             "已完成 observation：{}",
             serde_json::to_string(observations).unwrap_or_else(|_| "[]".to_string())
         ));
     }
+    sections.push(format!("用户问题：{}", request.prompt.trim()));
     sections.join("\n\n")
 }
 
@@ -5796,6 +5836,15 @@ fn build_assistant_run_react_continue_provider_input(
     step_index: usize,
     max_steps: usize,
 ) -> String {
+    let null_value = Value::Null;
+    let scope_candidates = value_array(run.scope_candidates.clone());
+    let evidence_for_catalog = evidence_state.unwrap_or(&null_value);
+    let planning_catalog = build_assistant_run_react_planning_catalog(
+        &run.startup_briefing,
+        &scope_candidates,
+        &run.selected_scope,
+        evidence_for_catalog,
+    );
     let mut sections = vec![
         "你是智能数据工作台里的 Host-Controlled ReAct 继续执行运行时。".to_string(),
         "你只能提出下一步动作，不能假装已经执行平台动作。V3 Host 会验证、执行、记录并返回 observation。".to_string(),
@@ -5809,15 +5858,18 @@ fn build_assistant_run_react_continue_provider_input(
         format!("原始问题：{}", run.user_prompt.trim()),
         format!("继续指令：{}", continue_prompt.trim()),
         format!(
-            "当前选中范围：{}",
-            serde_json::to_string(&run.selected_scope).unwrap_or_else(|_| "{}".to_string())
-        ),
-        format!(
-            "当前供料状态：{}",
-            serde_json::to_string(&evidence_state.cloned().unwrap_or(Value::Null))
-                .unwrap_or_else(|_| "{}".to_string())
+            "弱规划目录（只用于选择工具，不可直接作为回答证据）：{}",
+            serde_json::to_string(&planning_catalog).unwrap_or_else(|_| "{}".to_string())
         ),
     ];
+    if let Some(evidence_state) = evidence_state {
+        if evidence_state.get("status").and_then(Value::as_str) != Some("not_requested") {
+            sections.push(format!(
+                "可回答供料证据：{}",
+                serde_json::to_string(evidence_state).unwrap_or_else(|_| "{}".to_string())
+            ));
+        }
+    }
 
     if let Some(current_artifact) = request.current_artifact.as_ref() {
         sections.push(format!(
@@ -13392,6 +13444,53 @@ mod tests {
         assert!(input.contains("当前选中范围"));
         assert!(input.contains("assistant: 已预选订单数据集"));
         assert!(input.contains("用户问题：继续总结订单风险"));
+    }
+
+    #[test]
+    fn assistant_run_react_provider_input_uses_weak_planning_catalog() {
+        let input = build_assistant_run_react_provider_input(
+            &CreateAssistantRunRequest {
+                prompt: "看订单风险".to_string(),
+                local_thread_id: Some("browser-thread-1".to_string()),
+                startup_briefing: Some(json!({
+                    "visibleDatasetCount": 1,
+                    "apiKey": "secret-provider-key",
+                })),
+                selected_scope: Some(json!({
+                    "mode": "selected",
+                    "selected": [{"type": "dataset", "id": "orders"}],
+                })),
+                scope_candidates: vec![json!({
+                    "type": "dataset",
+                    "id": "orders",
+                    "title": "订单数据集",
+                    "visibility": "private",
+                    "documentCount": 1,
+                    "documents": [{
+                        "id": "doc-orders",
+                        "title": "订单明细",
+                        "parseStatus": "completed",
+                        "body": "订单正文不该进入规划目录",
+                        "chunkText": "订单切片正文不该进入规划目录",
+                    }],
+                })],
+                context_policy_hint: None,
+                current_artifact: None,
+                messages: Vec::new(),
+            },
+            Some(&json!({"status": "not_requested", "supplied_items": []})),
+            &[],
+            1,
+            3,
+        );
+
+        assert!(input.contains("弱规划目录"));
+        assert!(input.contains("订单数据集"));
+        assert!(input.contains("doc-orders"));
+        assert!(input.contains("tool_selection_only"));
+        assert!(!input.contains("secret-provider-key"));
+        assert!(!input.contains("订单正文不该进入规划目录"));
+        assert!(!input.contains("订单切片正文不该进入规划目录"));
     }
 
     #[test]
