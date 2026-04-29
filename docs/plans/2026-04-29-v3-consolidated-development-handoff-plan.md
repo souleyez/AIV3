@@ -332,6 +332,12 @@ The frontend draft model now exposes data-source candidates, stronger module upd
 **Status 2026-04-29 field discovery batch:** in progress.
 Static-page data snapshots now derive `field_candidates` from selected scope, AssistantRun evidence state, retrieval summaries/excerpts, and retrieval term weights. Frontend draft snapshots preserve backend field suggestions, add safe evidence fallbacks, and expose those fields through a lightweight datalist inside the collapsed module editor. This keeps module data binding model-operable without turning the product into a manual form builder.
 
+**Status 2026-04-29 ReAct draft mutation batch:** completed locally.
+`update_static_page_module` can now apply sanitized module operations directly to the current persisted static-page draft when the active AssistantRun matches the draft owner. The operation path updates the draft payload, status, metadata, and AssistantRun audit event, while create-path or non-current drafts still return sanitized operations without mutating storage. The web client refreshes the active backend draft after AssistantRun responses so natural-language module edits show in the main workspace quickly.
+
+**Status 2026-04-29 AssistantRun routing batch:** completed locally.
+Static-page creation and backend-synced static-page edits now prefer AssistantRun even when a dataset is selected, so selected scope is supplied to the model and module edits can use the ReAct tool path. The local prompt interpreter remains only as a fallback when there is no backend draft/run or AssistantRun is unavailable.
+
 **Files:**
 
 - Modify: `apps/web/app/lib/static-page-draft.js`
@@ -372,6 +378,13 @@ Static-page data snapshots now derive `field_candidates` from selected scope, As
 - `cargo test -p platform-api static_page_data_snapshot_extracts_field_candidates_from_evidence_state`
 - `cargo test -p platform-api static_page_draft_can_be_created_under_assistant_run`
 - `cargo test -p static-page-runtime`
+- `npm run build` in `apps/web`
+
+**Verification note 2026-04-29 ReAct draft mutation batch:**
+
+- Rust checks passed before the final create-path guard tightening: `cargo test -p platform-api assistant_run_react_static_page_module_update_applies_current_backend_draft`, `cargo test -p platform-api assistant_run_react_provider_input_uses_weak_planning_catalog`, `cargo test -p platform-api assistant_run_react`, and `cargo test -p static-page-runtime`.
+- The current shell no longer exposes `cargo`/`rustc`; rerun the Rust checks when the Rust toolchain PATH is restored.
+- `node --test apps/web/app/lib/static-page-draft.test.mjs apps/web/app/lib/scope-planner.test.mjs`
 - `npm run build` in `apps/web`
 
 ### Slice 5: Real Static-Page Data Snapshot Path

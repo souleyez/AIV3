@@ -274,6 +274,10 @@ function promptRequestsAssistantContinue(prompt) {
   return /继续|接着|下一步|刚才|上面|之前|这个|那版|修改|调整|改成|换成|按计划|照这个|沿用|再来|继续吧/.test(String(prompt || ''));
 }
 
+function promptRequestsStaticPageEdit(prompt) {
+  return /调整|修改|换成|改成|突出|减少|增加|放大|缩小|移动|排序|风格|老板|高层|风险|柱状图|折线图|环图|看板|精简/.test(String(prompt || ''));
+}
+
 function readLocalAssistantRunId() {
   if (typeof window === 'undefined') {
     return '';
@@ -426,6 +430,26 @@ export default function HomePageClient() {
     return {
       mode: 'ordinary_chat',
       selected: [],
+    };
+  }
+
+  function buildAssistantRunSelectedScope(datasetId, scopePlan) {
+    const conversationMemory = (scopePlan?.candidates || []).some((candidate) => candidate.type === 'conversation_memory')
+      ? ['local-thread']
+      : [];
+    if (datasetId) {
+      return {
+        mode: 'user_selected',
+        datasets: [datasetId],
+        selected: [{ type: 'dataset', id: datasetId }],
+        conversation_memory: conversationMemory,
+      };
+    }
+    return {
+      mode: 'ordinary_chat',
+      datasets: [],
+      selected: [],
+      conversation_memory: conversationMemory,
     };
   }
 
@@ -1176,6 +1200,7 @@ export default function HomePageClient() {
     briefing,
     nextScopePlan,
     continueRunId = '',
+    selectedScope = null,
   }) {
     const messages = localMessages
       .slice(-12)
@@ -1208,7 +1233,9 @@ export default function HomePageClient() {
         prompt,
         local_thread_id: readLocalThreadId(),
         startup_briefing: briefing,
+        selected_scope: selectedScope,
         scope_candidates: nextScopePlan.candidates,
+        current_artifact: activeStaticPageDraft || null,
         messages: [...messages, { role: userMessage.role, content: userMessage.content }].slice(-12),
       },
     });
@@ -1433,28 +1460,34 @@ export default function HomePageClient() {
     }
 
     let pendingStaticPageDraft = null;
+    const staticPageCreateRequested = promptRequestsStaticPage(prompt);
+    const staticPageEditRequested = Boolean(activeStaticPageDraft && promptRequestsStaticPageEdit(prompt));
+    const backendStaticPageEditRequested = Boolean(staticPageEditRequested && activeStaticPageDraft?.backendDraftId && lastAssistantRunId);
+    const shouldUseAssistantRun = !effectiveDatasetId || staticPageCreateRequested || backendStaticPageEditRequested;
     if (promptRequestsStaticPage(prompt)) {
       pendingStaticPageDraft = handleStartStaticPageDraft({
         oneClick: /一键|直接|马上|立即|跳过/.test(prompt),
         prompt,
         datasetId: effectiveDatasetId,
         dataset: effectiveDataset,
+        assistantRunId: '',
       });
-    } else if (activeStaticPageDraft && /调整|修改|换成|改成|突出|减少|增加|放大|缩小|移动|排序|风格|老板|高层|风险|柱状图|折线图|环图|看板|精简/.test(prompt)) {
+    } else if (staticPageEditRequested && !backendStaticPageEditRequested) {
       pendingStaticPageDraft = handleApplyStaticPagePrompt(prompt);
     }
 
-    if (!effectiveDatasetId) {
+    if (shouldUseAssistantRun) {
       setSubmitting(true);
       try {
         const userMessage = createLocalMessage('user', prompt);
+        const assistantSelectedScope = buildAssistantRunSelectedScope(effectiveDatasetId, nextScopePlan);
         const briefing = buildAssistantStartupBriefing({
           datasets,
           reportPlans,
           publishedReports,
           latestMessages: [...localMessages, userMessage],
           activityEvents,
-          selectedDataset: null,
+          selectedDataset: effectiveDataset,
         });
         let assistantContent = '';
         let usedBackendAssistantRun = false;
@@ -1467,6 +1500,7 @@ export default function HomePageClient() {
             briefing,
             nextScopePlan,
             continueRunId: lastAssistantRunId,
+            selectedScope: assistantSelectedScope,
           });
           assistantRunId = assistantRun.assistantRunId || '';
           assistantContent = assistantRun.assistantContent || '';
@@ -1498,8 +1532,14 @@ export default function HomePageClient() {
           usedBackendAssistantRun = Boolean(assistantContent);
         } catch (assistantRunError) {
           setAssistantRunProgress(null);
+          if (backendStaticPageEditRequested) {
+            pendingStaticPageDraft = handleApplyStaticPagePrompt(prompt);
+          }
+          const scopeDescription = effectiveDataset
+            ? `当前选中数据集：${effectiveDataset.title || effectiveDataset.key || '当前数据集'}，本地兜底会继续优先使用该范围。`
+            : '当前没有锁定数据集，所以不会强行检索资料。';
           assistantContent = [
-            '已进入普通聊天模式；当前没有锁定数据集，所以不会强行检索资料。',
+            `已进入普通聊天模式；${scopeDescription}`,
             formatStartupBriefingForModel(briefing),
             nextScopePlan.hint ? `供料判断：${nextScopePlan.hint}。你也可以在左侧取消或改选。` : '供料判断：暂未命中具体数据集。',
             `AssistantRun 暂不可用：${assistantRunError instanceof Error ? assistantRunError.message : '请求失败'}。`,
@@ -1513,8 +1553,10 @@ export default function HomePageClient() {
         setComposingNewSession(false);
         setBanner(
           usedBackendAssistantRun
-            ? usedAssistantRunContinue
-              ? '已在同一个 AssistantRun 上继续执行；记录只缓存在当前浏览器。'
+            ? backendStaticPageEditRequested && usedAssistantRunContinue
+              ? '已让模型在当前静态页草稿上继续执行；记录只缓存在当前浏览器。'
+              : usedAssistantRunContinue
+                ? '已在同一个 AssistantRun 上继续执行；记录只缓存在当前浏览器。'
               : '已通过 AssistantRun 返回普通聊天；记录只缓存在当前浏览器。'
             : 'AssistantRun 暂不可用，已用本地占位回复保留这轮普通聊天。',
         );
