@@ -1,13 +1,18 @@
 use chrono::Utc;
-use domain_model::{Document, DocumentChunk, DocumentId, SecretBindingId};
+use domain_model::{
+    AssistantRunId, Document, DocumentChunk, DocumentId, SecretBindingId, StaticPageDraftId,
+};
 use serde_json::{json, Value};
 use std::{collections::BTreeMap, env};
 use uuid::Uuid;
 
 use crate::{
-    build_assistant_run_evidence_state, ensure_react_requested_dataset_is_selected,
-    ensure_scope_requests_conversation_memory, load_visible_document,
-    react_static_page_operations_from_arguments, ApiError, AppState,
+    append_static_page_draft_run_event, append_static_page_operations_metadata,
+    apply_static_page_operations_to_payload, build_assistant_run_evidence_state,
+    ensure_react_requested_dataset_is_selected, ensure_scope_requests_conversation_memory,
+    load_visible_document, react_static_page_operations_from_arguments,
+    status_from_static_page_operations, status_from_static_page_payload,
+    summarize_static_page_operations, ApiError, AppState,
 };
 
 use crate::react_agent_contract::{
@@ -27,6 +32,8 @@ pub(crate) async fn execute_assistant_run_react_action(
     action: &AssistantRunNextAction,
     selected_scope: &Value,
     evidence_state: &mut Value,
+    current_artifact: Option<&Value>,
+    active_assistant_run_id: Option<AssistantRunId>,
     prompt: &str,
     local_thread_id: Option<&str>,
     active_secret_binding_ids: &[SecretBindingId],
@@ -126,26 +133,24 @@ pub(crate) async fn execute_assistant_run_react_action(
         }
         AssistantRunReactActionType::UpdateStaticPageModule => {
             let operations = react_static_page_operations_from_arguments(&action.arguments)?;
-            Ok(AssistantRunReactToolResult {
-                observation: json!({
-                    "status": "completed",
-                    "action_type": action.action_type.as_str(),
-                    "actionType": action.action_type.as_str(),
-                    "message": "static page module operation sanitized",
-                    "items": [],
-                    "limits": {},
-                    "operation_count": operations.len(),
-                    "operations": operations,
-                }),
-                trail_step: json!({
-                    "status": "completed",
-                    "label": "更新静态页模块",
-                    "react_action": action.action_type.as_str(),
-                    "operation_count": operations.len(),
-                    "at": Utc::now(),
-                }),
-                final_answer: None,
-            })
+            if let (Some(draft_id), Some(active_assistant_run_id)) = (
+                current_static_page_draft_id(current_artifact),
+                active_assistant_run_id,
+            ) {
+                apply_static_page_module_operations_to_current_draft(
+                    state,
+                    action,
+                    draft_id,
+                    active_assistant_run_id,
+                    operations,
+                    prompt,
+                )
+                .await
+            } else {
+                Ok(static_page_module_operations_sanitized_result(
+                    action, operations, true,
+                ))
+            }
         }
         _ => Ok(rejected_react_tool_result(
             action,
@@ -201,6 +206,149 @@ pub(crate) fn assistant_run_react_policy_observation(
         }),
         final_answer: None,
     }
+}
+
+fn static_page_module_operations_sanitized_result(
+    action: &AssistantRunNextAction,
+    operations: Vec<Value>,
+    requires_host_application: bool,
+) -> AssistantRunReactToolResult {
+    AssistantRunReactToolResult {
+        observation: json!({
+            "status": "completed",
+            "action_type": action.action_type.as_str(),
+            "actionType": action.action_type.as_str(),
+            "message": if requires_host_application {
+                "static page module operation sanitized; no current persisted draft was supplied"
+            } else {
+                "static page module operation sanitized"
+            },
+            "items": [],
+            "limits": {},
+            "operation_count": operations.len(),
+            "operations": operations,
+            "requires_host_application": requires_host_application,
+        }),
+        trail_step: json!({
+            "status": "completed",
+            "label": "更新静态页模块",
+            "react_action": action.action_type.as_str(),
+            "operation_count": operations.len(),
+            "requires_host_application": requires_host_application,
+            "at": Utc::now(),
+        }),
+        final_answer: None,
+    }
+}
+
+async fn apply_static_page_module_operations_to_current_draft(
+    state: &AppState,
+    action: &AssistantRunNextAction,
+    draft_id: StaticPageDraftId,
+    active_assistant_run_id: AssistantRunId,
+    operations: Vec<Value>,
+    prompt: &str,
+) -> std::result::Result<AssistantRunReactToolResult, ApiError> {
+    let mut draft = state
+        .storage
+        .static_page_drafts()
+        .get_by_id(state.tenant_id, draft_id)
+        .await
+        .map_err(ApiError::from_storage)?
+        .ok_or_else(|| {
+            ApiError::not_found(
+                "static_page_draft_not_found",
+                format!("static page draft {} was not found", draft_id),
+            )
+        })?;
+    if draft.assistant_run_id != active_assistant_run_id {
+        return Ok(rejected_react_tool_result(
+            action,
+            "current_static_page_draft_run_mismatch",
+        ));
+    }
+
+    let summary = summarize_static_page_operations(&operations);
+    let mut draft_payload = apply_static_page_operations_to_payload(
+        draft.draft_payload.clone(),
+        &operations,
+        Some(&summary),
+    );
+    append_static_page_operations_metadata(&mut draft_payload, &operations, Some(prompt), &summary);
+    draft.status = status_from_static_page_payload(&draft_payload)
+        .or_else(|| status_from_static_page_operations(&operations))
+        .unwrap_or(draft.status);
+    draft.draft_payload = draft_payload;
+
+    let updated = state
+        .storage
+        .static_page_drafts()
+        .update(state.tenant_id, &draft)
+        .await
+        .map_err(ApiError::from_storage)?;
+    append_static_page_draft_run_event(
+        state,
+        &updated,
+        "static_page_draft.react_operations_applied",
+        json!({
+            "draft_id": updated.id,
+            "operation_count": operations.len(),
+            "summary": summary,
+            "react_action": action.action_type.as_str(),
+        }),
+    )
+    .await?;
+
+    Ok(AssistantRunReactToolResult {
+        observation: json!({
+            "status": "completed",
+            "action_type": action.action_type.as_str(),
+            "actionType": action.action_type.as_str(),
+            "message": "static page draft updated",
+            "items": [{
+                "type": "static_page_draft",
+                "draft_id": updated.id.to_string(),
+                "status": updated.status.as_str(),
+            }],
+            "limits": {},
+            "operation_count": operations.len(),
+            "operations": operations,
+            "draft_id": updated.id.to_string(),
+            "draft_status": updated.status.as_str(),
+        }),
+        trail_step: json!({
+            "status": "completed",
+            "label": "更新静态页模块",
+            "react_action": action.action_type.as_str(),
+            "operation_count": operations.len(),
+            "draft_id": updated.id.to_string(),
+            "draft_status": updated.status.as_str(),
+            "at": Utc::now(),
+        }),
+        final_answer: None,
+    })
+}
+
+fn current_static_page_draft_id(current_artifact: Option<&Value>) -> Option<StaticPageDraftId> {
+    let artifact = current_artifact?;
+    [
+        "backendDraftId",
+        "backend_draft_id",
+        "staticPageDraftId",
+        "static_page_draft_id",
+        "draft_id",
+        "id",
+    ]
+    .iter()
+    .find_map(|key| {
+        artifact
+            .get(*key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .and_then(|value| Uuid::parse_str(value).ok())
+            .map(StaticPageDraftId)
+    })
 }
 
 fn final_answer_result(action: &AssistantRunNextAction) -> AssistantRunReactToolResult {

@@ -5497,6 +5497,8 @@ async fn run_assistant_run_react_for_create(
                 &action,
                 selected_scope,
                 &mut evidence_state,
+                request.current_artifact.as_ref(),
+                None,
                 request.prompt.trim(),
                 local_thread_id,
                 active_secret_binding_ids,
@@ -5705,6 +5707,8 @@ async fn run_assistant_run_react_for_continue(
                 &action,
                 &run.selected_scope,
                 &mut evidence_state,
+                request.current_artifact.as_ref(),
+                Some(run.id),
                 continue_prompt.trim(),
                 run.local_thread_id.as_deref(),
                 active_secret_binding_ids,
@@ -5837,6 +5841,7 @@ fn build_assistant_run_react_provider_input(
         "目录、候选列表和系统说明只用于规划下一步，不是可引用证据。".to_string(),
         "选中数据集或对话记忆时，final_answer 必须基于已返回的 observation；否则先选择 retrieve_evidence、read_document_detail 或 recall_conversation_memory。".to_string(),
         "工具选择：retrieve_evidence 用于发现候选证据；read_document_detail 用于需要原文措辞、OCR、表格或画像字段等细节时，document_id 必须来自选中范围或已返回 observation；最终引用只能来自 observation。".to_string(),
+        "如果当前打开产物是静态页草稿，用户要求修改标题、内容、图表、数据绑定或布局时，优先用 update_static_page_module；Host 只会把操作应用到当前已持久化草稿。".to_string(),
         "OpenClaw 是可选外挂能力；openclaw_memory_recall 和 openclaw_readonly_execution 可能被 Host 拒绝，不能绕过 V3 选中范围、记忆和只读限制。".to_string(),
         "如果用户表达报表意图，先用 list_report_options；收到该 observation 后，才能用 report_choice，并只在 arguments.choice 填 continue_qa 或 create_report，不能编写报表正文。".to_string(),
         "如果已经可以回答，使用 action_type=final_answer，arguments.content 放最终正文。".to_string(),
@@ -5909,6 +5914,7 @@ fn build_assistant_run_react_continue_provider_input(
         "目录、候选列表和系统说明只用于规划下一步，不是可引用证据。".to_string(),
         "选中数据集或对话记忆时，final_answer 必须基于已返回的 observation；否则先选择 retrieve_evidence、read_document_detail 或 recall_conversation_memory。".to_string(),
         "工具选择：retrieve_evidence 用于发现候选证据；read_document_detail 用于需要原文措辞、OCR、表格或画像字段等细节时，document_id 必须来自选中范围或已返回 observation；最终引用只能来自 observation。".to_string(),
+        "如果当前打开产物是静态页草稿，用户要求修改标题、内容、图表、数据绑定或布局时，优先用 update_static_page_module；Host 只会把操作应用到当前已持久化草稿。".to_string(),
         "OpenClaw 是可选外挂能力；openclaw_memory_recall 和 openclaw_readonly_execution 可能被 Host 拒绝，不能绕过 V3 选中范围、记忆和只读限制。".to_string(),
         "如果用户表达报表意图，先用 list_report_options；收到该 observation 后，才能用 report_choice，并只在 arguments.choice 填 continue_qa 或 create_report，不能编写报表正文。".to_string(),
         "如果已经可以回答，使用 action_type=final_answer，arguments.content 放最终正文。".to_string(),
@@ -15339,6 +15345,166 @@ mod tests {
             .events
             .iter()
             .any(|event| event.event_name == "static_page_render.created"));
+    }
+
+    #[tokio::test]
+    async fn assistant_run_react_static_page_module_update_applies_current_backend_draft() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        clear_assistant_openclaw_env();
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_MODE", "placeholder");
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping react static page draft apply test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("react-static-page-apply-test-{}", Uuid::new_v4()),
+                "ReAct Static Page Apply Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage,
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+
+        let (_, Json(run_response)) = create_assistant_run(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(CreateAssistantRunRequest {
+                prompt: "生成一页经营分析静态页".to_string(),
+                local_thread_id: Some("react-static-page-apply-thread".to_string()),
+                startup_briefing: Some(json!({"capabilities": ["static_page_plan"]})),
+                selected_scope: Some(json!({"mode": "ordinary_chat"})),
+                scope_candidates: Vec::new(),
+                context_policy_hint: None,
+                current_artifact: None,
+                messages: Vec::new(),
+            }),
+        )
+        .await
+        .expect("assistant run should be created");
+
+        let (_, Json(draft_response)) = create_static_page_draft_for_assistant_run(
+            State(state.clone()),
+            Path(run_response.assistant_run_id.to_string()),
+            Json(CreateStaticPageDraftRequest {
+                title: Some("经营分析静态页".to_string()),
+                prompt: Some("生成一页经营分析静态页".to_string()),
+                selected_scope: None,
+                visibility_snapshot: None,
+                source_refs: Value::Null,
+                draft_payload: json!({
+                    "version": 1,
+                    "status": "planning",
+                    "styleDirection": "client-delivery",
+                    "modules": [
+                        { "id": "hero", "title": "核心判断", "content": "先给出主结论。" },
+                        { "id": "trend", "title": "趋势变化", "content": "展示趋势。" }
+                    ]
+                }),
+            }),
+        )
+        .await
+        .expect("static page draft should be created");
+
+        let action = react_test_action(
+            AssistantRunReActStatus::Act,
+            AssistantRunReactActionType::UpdateStaticPageModule,
+            json!({
+                "operations": [{
+                    "type": "update_module",
+                    "targetModuleId": "trend",
+                    "patch": {
+                        "title": "订单趋势",
+                        "content": "展示订单金额按月变化。",
+                        "dataBinding": {
+                            "type": "selected_scope",
+                            "label": "订单金额",
+                            "sourceId": "selected_scope",
+                            "fieldPath": "orders.amount"
+                        },
+                        "visualization": {
+                            "type": "line-chart",
+                            "chartOptions": {
+                                "dataKey": "orders.amount",
+                                "showAxis": true
+                            }
+                        }
+                    }
+                }]
+            }),
+        );
+        let mut evidence_state = json!({"status": "not_requested"});
+        let current_artifact = json!({
+            "backendDraftId": draft_response.draft.id.to_string(),
+            "kind": "static_page_draft",
+        });
+
+        let result = execute_assistant_run_react_action(
+            &state,
+            &action,
+            &json!({"mode": "ordinary_chat"}),
+            &mut evidence_state,
+            Some(&current_artifact),
+            Some(run_response.assistant_run_id),
+            "把趋势模块接订单金额并改成折线图",
+            Some("react-static-page-apply-thread"),
+            &[],
+        )
+        .await
+        .expect("react static page update should apply");
+
+        assert_eq!(result.observation["status"], json!("completed"));
+        assert_eq!(
+            result.observation["items"][0]["draft_id"],
+            json!(draft_response.draft.id.to_string())
+        );
+        assert_eq!(result.observation["operation_count"], json!(1));
+
+        let Json(updated) = get_static_page_draft(
+            State(state.clone()),
+            Path(draft_response.draft.id.to_string()),
+        )
+        .await
+        .expect("updated static page draft should load");
+        let trend_module = value_array(updated.draft_payload["modules"].clone())
+            .into_iter()
+            .find(|module| module["id"] == json!("trend"))
+            .expect("trend module should exist");
+        assert_eq!(trend_module["title"], json!("订单趋势"));
+        assert_eq!(
+            trend_module["dataBinding"]["fieldPath"],
+            json!("orders.amount")
+        );
+        assert_eq!(
+            trend_module["visualization"]["chartOptions"]["dataKey"],
+            json!("orders.amount")
+        );
+        assert!(
+            value_array(updated.draft_payload["dataSnapshot"]["module_bindings"].clone())
+                .iter()
+                .any(|binding| binding["moduleId"] == json!("trend")
+                    && binding["fieldPath"] == json!("orders.amount"))
+        );
+
+        let Json(detail) = get_assistant_run(
+            State(state),
+            Path(run_response.assistant_run_id.to_string()),
+        )
+        .await
+        .expect("assistant run detail should load");
+        assert!(detail
+            .events
+            .iter()
+            .any(|event| event.event_name == "static_page_draft.react_operations_applied"));
     }
 
     #[tokio::test]

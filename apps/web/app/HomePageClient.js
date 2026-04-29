@@ -1492,6 +1492,9 @@ export default function HomePageClient() {
           if (backendDatasetId) {
             await refreshCatalog({ preferredDatasetId: backendDatasetId, silent: true });
           }
+          if (activeStaticPageDraft?.backendDraftId) {
+            await refreshBackendStaticPageDraft(activeStaticPageDraft.backendDraftId, { silent: true });
+          }
           usedBackendAssistantRun = Boolean(assistantContent);
         } catch (assistantRunError) {
           setAssistantRunProgress(null);
