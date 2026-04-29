@@ -107,6 +107,11 @@ pub(crate) async fn execute_assistant_run_react_action(
                 final_answer: None,
             })
         }
+        AssistantRunReactActionType::ListReportOptions => {
+            ensure_react_requested_dataset_is_selected(&action.arguments, selected_scope)?;
+            Ok(list_report_options_result(action, selected_scope))
+        }
+        AssistantRunReactActionType::ReportChoice => Ok(report_choice_result(action)),
         AssistantRunReactActionType::UpdateStaticPageModule => {
             let operations = react_static_page_operations_from_arguments(&action.arguments)?;
             Ok(AssistantRunReactToolResult {
@@ -217,6 +222,72 @@ fn final_answer_result(action: &AssistantRunNextAction) -> AssistantRunReactTool
     }
 }
 
+fn list_report_options_result(
+    action: &AssistantRunNextAction,
+    selected_scope: &Value,
+) -> AssistantRunReactToolResult {
+    let choices = report_choice_items();
+    let choice_count = choices.len();
+    AssistantRunReactToolResult {
+        observation: json!({
+            "status": "completed",
+            "action_type": action.action_type.as_str(),
+            "actionType": action.action_type.as_str(),
+            "message": "report choices listed",
+            "items": choices,
+            "limits": {},
+            "selectedScope": selected_scope,
+        }),
+        trail_step: json!({
+            "status": "completed",
+            "label": "列出报表选项",
+            "react_action": action.action_type.as_str(),
+            "choice_count": choice_count,
+            "at": Utc::now(),
+        }),
+        final_answer: None,
+    }
+}
+
+fn report_choice_result(action: &AssistantRunNextAction) -> AssistantRunReactToolResult {
+    let choice = action
+        .arguments
+        .get("choice")
+        .or_else(|| action.arguments.get("key"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("continue_qa");
+    let (choice, message) = match choice {
+        "create_report" => ("create_report", "已选择生成报表，下一步进入报表流程。"),
+        _ => ("continue_qa", "已选择继续问答。"),
+    };
+
+    AssistantRunReactToolResult {
+        observation: json!({
+            "status": "completed",
+            "action_type": action.action_type.as_str(),
+            "actionType": action.action_type.as_str(),
+            "message": "report choice recorded",
+            "items": [{
+                "key": choice,
+                "label": if choice == "create_report" { "生成报表" } else { "继续问答" },
+                "type": "report_choice"
+            }],
+            "limits": {},
+            "choice": choice,
+        }),
+        trail_step: json!({
+            "status": "completed",
+            "label": "选择报表流向",
+            "react_action": action.action_type.as_str(),
+            "choice": choice,
+            "at": Utc::now(),
+        }),
+        final_answer: Some(message.to_string()),
+    }
+}
+
 fn rejected_react_tool_result(
     action: &AssistantRunNextAction,
     reason: &str,
@@ -241,6 +312,13 @@ fn rejected_react_tool_result(
         }),
         final_answer: None,
     }
+}
+
+fn report_choice_items() -> Vec<Value> {
+    vec![
+        json!({"key": "continue_qa", "label": "继续问答", "type": "report_choice"}),
+        json!({"key": "create_report", "label": "生成报表", "type": "report_choice"}),
+    ]
 }
 
 #[cfg(test)]
@@ -299,5 +377,44 @@ mod tests {
         assert_eq!(result.observation["items"], json!([]));
         assert_eq!(result.observation["limits"], json!({}));
         assert!(result.final_answer.is_none());
+    }
+
+    #[test]
+    fn list_report_options_returns_exact_product_choices() {
+        let action = test_action(AssistantRunReactActionType::ListReportOptions);
+        let selected_scope = json!({
+            "mode": "selected",
+            "selected": [{"type": "dataset", "id": "dataset-1"}],
+        });
+        let result = list_report_options_result(&action, &selected_scope);
+
+        assert_eq!(result.observation["status"], json!("completed"));
+        assert_eq!(
+            result.observation["items"],
+            json!([
+                {"key": "continue_qa", "label": "继续问答", "type": "report_choice"},
+                {"key": "create_report", "label": "生成报表", "type": "report_choice"}
+            ])
+        );
+        assert!(result.final_answer.is_none());
+    }
+
+    #[test]
+    fn report_choice_records_handoff_without_report_body() {
+        let mut action = test_action(AssistantRunReactActionType::ReportChoice);
+        action.status = AssistantRunReActStatus::ReportChoice;
+        action.arguments = json!({"choice": "create_report"});
+
+        let result = report_choice_result(&action);
+        let observation = serde_json::to_string(&result.observation).expect("observation");
+
+        assert_eq!(result.observation["choice"], json!("create_report"));
+        assert_eq!(
+            result.final_answer.as_deref(),
+            Some("已选择生成报表，下一步进入报表流程。")
+        );
+        assert!(!observation.contains("report_body"));
+        assert!(!observation.contains("sections"));
+        assert!(!observation.contains("markdown"));
     }
 }

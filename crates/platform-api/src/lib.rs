@@ -5774,9 +5774,10 @@ fn build_assistant_run_react_provider_input(
         "你是智能数据工作台里的 Host-Controlled ReAct 运行时。".to_string(),
         "你只能提出下一步动作，不能假装已经执行平台动作。V3 Host 会验证、执行、记录并返回 observation。".to_string(),
         "只返回一个 JSON 对象，禁止 Markdown，禁止解释 JSON 外的文字。".to_string(),
-        "JSON Schema: {\"action_type\":\"retrieve_evidence|read_document_detail|recall_conversation_memory|create_static_page_draft|update_static_page_module|submit_static_page_image_preview|render_static_page|create_report_draft|openclaw_memory_recall|openclaw_readonly_execution|final_answer\",\"reason_summary\":\"给用户看的简短原因\",\"arguments\":{},\"requires_confirmation\":false}".to_string(),
+        "JSON Schema: {\"action_type\":\"retrieve_evidence|read_document_detail|recall_conversation_memory|list_report_options|report_choice|create_static_page_draft|update_static_page_module|submit_static_page_image_preview|render_static_page|create_report_draft|openclaw_memory_recall|openclaw_readonly_execution|final_answer\",\"reason_summary\":\"给用户看的简短原因\",\"arguments\":{},\"requires_confirmation\":false}".to_string(),
         "目录、候选列表和系统说明只用于规划下一步，不是可引用证据。".to_string(),
         "选中数据集或对话记忆时，final_answer 必须基于已返回的 observation；否则先选择 retrieve_evidence、read_document_detail 或 recall_conversation_memory。".to_string(),
+        "如果用户表达报表意图，先用 list_report_options；收到该 observation 后，才能用 report_choice，并只在 arguments.choice 填 continue_qa 或 create_report，不能编写报表正文。".to_string(),
         "如果已经可以回答，使用 action_type=final_answer，arguments.content 放最终正文。".to_string(),
         format!("当前 ReAct 步骤：{step_index}/{max_steps}"),
     ];
@@ -5843,9 +5844,10 @@ fn build_assistant_run_react_continue_provider_input(
         "你是智能数据工作台里的 Host-Controlled ReAct 继续执行运行时。".to_string(),
         "你只能提出下一步动作，不能假装已经执行平台动作。V3 Host 会验证、执行、记录并返回 observation。".to_string(),
         "只返回一个 JSON 对象，禁止 Markdown，禁止解释 JSON 外的文字。".to_string(),
-        "JSON Schema: {\"action_type\":\"retrieve_evidence|read_document_detail|recall_conversation_memory|create_static_page_draft|update_static_page_module|submit_static_page_image_preview|render_static_page|create_report_draft|openclaw_memory_recall|openclaw_readonly_execution|final_answer\",\"reason_summary\":\"给用户看的简短原因\",\"arguments\":{},\"requires_confirmation\":false}".to_string(),
+        "JSON Schema: {\"action_type\":\"retrieve_evidence|read_document_detail|recall_conversation_memory|list_report_options|report_choice|create_static_page_draft|update_static_page_module|submit_static_page_image_preview|render_static_page|create_report_draft|openclaw_memory_recall|openclaw_readonly_execution|final_answer\",\"reason_summary\":\"给用户看的简短原因\",\"arguments\":{},\"requires_confirmation\":false}".to_string(),
         "目录、候选列表和系统说明只用于规划下一步，不是可引用证据。".to_string(),
         "选中数据集或对话记忆时，final_answer 必须基于已返回的 observation；否则先选择 retrieve_evidence、read_document_detail 或 recall_conversation_memory。".to_string(),
+        "如果用户表达报表意图，先用 list_report_options；收到该 observation 后，才能用 report_choice，并只在 arguments.choice 填 continue_qa 或 create_report，不能编写报表正文。".to_string(),
         "如果已经可以回答，使用 action_type=final_answer，arguments.content 放最终正文。".to_string(),
         format!("当前 ReAct 步骤：{step_index}/{max_steps}"),
         format!("运行ID：{}", run.id),
@@ -13717,6 +13719,44 @@ mod tests {
             repeated_repair.observation["repair_code"],
             json!("repeated_no_progress_action")
         );
+    }
+
+    #[test]
+    fn assistant_run_react_report_choice_requires_list_options() {
+        let report_choice = react_test_action(
+            AssistantRunReActStatus::ReportChoice,
+            AssistantRunReactActionType::ReportChoice,
+            json!({"choice": "create_report", "content": "不应该在这里生成报表正文"}),
+        );
+        let selected_scope = json!({
+            "mode": "selected",
+            "selected": [{"type": "dataset", "id": DatasetId::new().to_string()}],
+        });
+        let evidence_state = json!({"status": "empty", "supplied_items": []});
+
+        let repair =
+            build_react_protocol_repair(&report_choice, &[], &selected_scope, &evidence_state)
+                .expect("report_choice must be repaired before list_report_options");
+        assert_eq!(
+            repair.observation["actionType"],
+            json!("policy_observation")
+        );
+        assert!(repair.final_answer.is_none());
+
+        assert!(build_react_protocol_repair(
+            &report_choice,
+            &[json!({
+                "status": "completed",
+                "action_type": "list_report_options",
+                "items": [
+                    {"key": "continue_qa", "label": "继续问答", "type": "report_choice"},
+                    {"key": "create_report", "label": "生成报表", "type": "report_choice"}
+                ]
+            })],
+            &selected_scope,
+            &evidence_state,
+        )
+        .is_none());
     }
 
     #[test]
