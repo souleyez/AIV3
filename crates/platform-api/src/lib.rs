@@ -66,6 +66,7 @@ use static_page_runtime::{
 use std::{
     collections::{BTreeMap, BTreeSet, HashSet},
     fmt::Display,
+    time::Instant,
 };
 use storage::{
     NewAssistantRun, NewAssistantRunEvent, NewChatMessage, NewChatSession,
@@ -109,6 +110,8 @@ const ASSISTANT_RUN_CONTINUE_DEFAULT_MAX_STEPS: usize = 3;
 const ASSISTANT_RUN_CONTINUE_MAX_STEPS: usize = 5;
 const ASSISTANT_RUN_REACT_DEFAULT_MAX_STEPS: usize = 3;
 const ASSISTANT_RUN_REACT_MAX_STEPS: usize = 5;
+const ASSISTANT_RUN_REACT_REASON_TRACE_LIMIT: usize = 240;
+const ASSISTANT_RUN_REACT_MESSAGE_TRACE_LIMIT: usize = 240;
 
 #[derive(Clone, Debug)]
 struct AssistantRunReactOutcome {
@@ -5406,6 +5409,8 @@ async fn run_assistant_run_react_for_create(
     let mut observations = Vec::<Value>::new();
     let mut events = Vec::<AssistantRunReactEvent>::new();
     let mut execution_trail_steps = Vec::<Value>::new();
+    let trace_id = Uuid::new_v4();
+    let mut react_trace_steps = Vec::<Value>::new();
     let mut runtime_manifest = json!({
         "mode": runtime_mode,
         "provider": runtime_provider,
@@ -5418,6 +5423,7 @@ async fn run_assistant_run_react_for_create(
     let mut assistant_message = String::new();
 
     for step_index in 1..=max_steps {
+        let step_started = Instant::now();
         let provider_input = build_assistant_run_react_provider_input(
             request,
             Some(&evidence_state),
@@ -5445,10 +5451,17 @@ async fn run_assistant_run_react_for_create(
                     event_name: "assistant_run.react.invalid_action".to_string(),
                     payload: json!({
                         "step": step_index,
-                        "error": error,
+                        "safe_error_code": "invalid_action",
                         "fallback": "final_answer",
                     }),
                 });
+                react_trace_steps.push(assistant_run_react_invalid_trace_step(
+                    trace_id,
+                    None,
+                    step_index,
+                    "invalid_action",
+                    step_started.elapsed().as_millis(),
+                ));
                 execution_trail_steps.push(json!({
                     "status": "completed",
                     "label": "模型直接回答",
@@ -5465,7 +5478,7 @@ async fn run_assistant_run_react_for_create(
             payload: json!({
                 "step": step_index,
                 "action_type": action.action_type.as_str(),
-                "reason_summary": action.reason_summary.clone(),
+                "reason_summary": redact_react_trace_text(&action.reason_summary, ASSISTANT_RUN_REACT_REASON_TRACE_LIMIT),
                 "requires_confirmation": action.requires_confirmation,
             }),
         });
@@ -5493,23 +5506,32 @@ async fn run_assistant_run_react_for_create(
 
         let result = match result {
             Ok(result) => result,
-            Err(error) => AssistantRunReactActionResult {
+            Err(_) => AssistantRunReactActionResult {
                 observation: json!({
                     "status": "failed",
                     "action_type": action.action_type.as_str(),
-                    "error": error.to_string(),
+                    "error_code": "tool_failed",
                 }),
                 trail_step: json!({
                     "status": "failed",
                     "label": assistant_run_react_action_label(&action.action_type),
                     "react_step": step_index,
-                    "error": error.to_string(),
+                    "error_code": "tool_failed",
                     "at": Utc::now(),
                 }),
                 final_answer: None,
             },
         };
 
+        let observation_summary = assistant_run_react_observation_summary(&result.observation);
+        react_trace_steps.push(assistant_run_react_trace_step(
+            trace_id,
+            None,
+            step_index,
+            &action,
+            &observation_summary,
+            step_started.elapsed().as_millis(),
+        ));
         observations.push(result.observation.clone());
         execution_trail_steps.push(result.trail_step);
         events.push(AssistantRunReactEvent {
@@ -5521,7 +5543,7 @@ async fn run_assistant_run_react_for_create(
             payload: json!({
                 "step": step_index,
                 "action_type": action.action_type.as_str(),
-                "observation": result.observation,
+                "observation_summary": observation_summary,
             }),
         });
 
@@ -5550,6 +5572,12 @@ async fn run_assistant_run_react_for_create(
             "at": Utc::now(),
         }));
     }
+    assistant_run_react_attach_trace(&mut runtime_manifest, trace_id, None, &react_trace_steps);
+    execution_trail_steps.push(assistant_run_react_trace_trail_step(
+        trace_id,
+        None,
+        &react_trace_steps,
+    ));
 
     let output_artifacts = vec![json!({
         "type": "assistant_message",
@@ -5584,6 +5612,8 @@ async fn run_assistant_run_react_for_continue(
     let mut observations = Vec::<Value>::new();
     let mut events = Vec::<AssistantRunReactEvent>::new();
     let mut execution_trail_steps = Vec::<Value>::new();
+    let trace_id = Uuid::new_v4();
+    let mut react_trace_steps = Vec::<Value>::new();
     let mut runtime_manifest = json!({
         "mode": runtime_mode,
         "provider": runtime_provider,
@@ -5597,6 +5627,7 @@ async fn run_assistant_run_react_for_continue(
     let mut assistant_message = String::new();
 
     for step_index in 1..=max_steps {
+        let step_started = Instant::now();
         let provider_input = build_assistant_run_react_continue_provider_input(
             run,
             request,
@@ -5626,11 +5657,18 @@ async fn run_assistant_run_react_for_continue(
                     event_name: "assistant_run.react.invalid_action".to_string(),
                     payload: json!({
                         "step": step_index,
-                        "error": error,
+                        "safe_error_code": "invalid_action",
                         "fallback": "final_answer",
                         "entrypoint": "continue_assistant_run",
                     }),
                 });
+                react_trace_steps.push(assistant_run_react_invalid_trace_step(
+                    trace_id,
+                    Some(run.id),
+                    step_index,
+                    "invalid_action",
+                    step_started.elapsed().as_millis(),
+                ));
                 execution_trail_steps.push(json!({
                     "status": "completed",
                     "label": "模型直接回答",
@@ -5647,7 +5685,7 @@ async fn run_assistant_run_react_for_continue(
             payload: json!({
                 "step": step_index,
                 "action_type": action.action_type.as_str(),
-                "reason_summary": action.reason_summary.clone(),
+                "reason_summary": redact_react_trace_text(&action.reason_summary, ASSISTANT_RUN_REACT_REASON_TRACE_LIMIT),
                 "requires_confirmation": action.requires_confirmation,
                 "entrypoint": "continue_assistant_run",
             }),
@@ -5676,23 +5714,32 @@ async fn run_assistant_run_react_for_continue(
 
         let result = match result {
             Ok(result) => result,
-            Err(error) => AssistantRunReactActionResult {
+            Err(_) => AssistantRunReactActionResult {
                 observation: json!({
                     "status": "failed",
                     "action_type": action.action_type.as_str(),
-                    "error": error.to_string(),
+                    "error_code": "tool_failed",
                 }),
                 trail_step: json!({
                     "status": "failed",
                     "label": assistant_run_react_action_label(&action.action_type),
                     "react_step": step_index,
-                    "error": error.to_string(),
+                    "error_code": "tool_failed",
                     "at": Utc::now(),
                 }),
                 final_answer: None,
             },
         };
 
+        let observation_summary = assistant_run_react_observation_summary(&result.observation);
+        react_trace_steps.push(assistant_run_react_trace_step(
+            trace_id,
+            Some(run.id),
+            step_index,
+            &action,
+            &observation_summary,
+            step_started.elapsed().as_millis(),
+        ));
         observations.push(result.observation.clone());
         execution_trail_steps.push(result.trail_step);
         events.push(AssistantRunReactEvent {
@@ -5704,7 +5751,7 @@ async fn run_assistant_run_react_for_continue(
             payload: json!({
                 "step": step_index,
                 "action_type": action.action_type.as_str(),
-                "observation": result.observation,
+                "observation_summary": observation_summary,
                 "entrypoint": "continue_assistant_run",
             }),
         });
@@ -5735,6 +5782,18 @@ async fn run_assistant_run_react_for_continue(
             "at": Utc::now(),
         }));
     }
+
+    assistant_run_react_attach_trace(
+        &mut runtime_manifest,
+        trace_id,
+        Some(run.id),
+        &react_trace_steps,
+    );
+    execution_trail_steps.push(assistant_run_react_trace_trail_step(
+        trace_id,
+        Some(run.id),
+        &react_trace_steps,
+    ));
 
     *initial_evidence_state = evidence_state.clone();
     let output_artifacts = vec![json!({
@@ -5909,6 +5968,187 @@ fn assistant_run_react_max_steps() -> usize {
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(ASSISTANT_RUN_REACT_DEFAULT_MAX_STEPS)
         .clamp(1, ASSISTANT_RUN_REACT_MAX_STEPS)
+}
+
+fn assistant_run_react_attach_trace(
+    runtime_manifest: &mut Value,
+    trace_id: Uuid,
+    assistant_run_id: Option<AssistantRunId>,
+    trace_steps: &[Value],
+) {
+    let trace = assistant_run_react_trace_manifest(trace_id, assistant_run_id, trace_steps);
+    if let Some(object) = runtime_manifest.as_object_mut() {
+        object.insert("react_trace".to_string(), trace);
+    } else {
+        *runtime_manifest = json!({
+            "runtime": runtime_manifest.clone(),
+            "react_trace": trace,
+        });
+    }
+}
+
+fn assistant_run_react_trace_manifest(
+    trace_id: Uuid,
+    assistant_run_id: Option<AssistantRunId>,
+    trace_steps: &[Value],
+) -> Value {
+    json!({
+        "trace_id": trace_id.to_string(),
+        "assistant_run_id": assistant_run_id.map(|id| id.to_string()),
+        "steps": trace_steps,
+    })
+}
+
+fn assistant_run_react_trace_trail_step(
+    trace_id: Uuid,
+    assistant_run_id: Option<AssistantRunId>,
+    trace_steps: &[Value],
+) -> Value {
+    json!({
+        "status": "completed",
+        "label": "ReAct 安全追踪",
+        "trace_id": trace_id.to_string(),
+        "assistant_run_id": assistant_run_id.map(|id| id.to_string()),
+        "step_count": trace_steps.len(),
+        "react_trace": trace_steps,
+        "at": Utc::now(),
+    })
+}
+
+fn assistant_run_react_invalid_trace_step(
+    trace_id: Uuid,
+    assistant_run_id: Option<AssistantRunId>,
+    pass_number: usize,
+    safe_error_code: &str,
+    duration_ms: u128,
+) -> Value {
+    json!({
+        "trace_id": trace_id.to_string(),
+        "assistant_run_id": assistant_run_id.map(|id| id.to_string()),
+        "pass_number": pass_number,
+        "action_type": "invalid_action",
+        "reason_summary": "",
+        "status": "failed",
+        "denied_count": 0,
+        "returned_count": 0,
+        "duration_ms": bounded_duration_ms(duration_ms),
+        "safe_error_code": safe_error_code,
+        "safe_message": "模型未返回有效动作",
+    })
+}
+
+fn assistant_run_react_trace_step(
+    trace_id: Uuid,
+    assistant_run_id: Option<AssistantRunId>,
+    pass_number: usize,
+    action: &AssistantRunNextAction,
+    observation_summary: &Value,
+    duration_ms: u128,
+) -> Value {
+    json!({
+        "trace_id": trace_id.to_string(),
+        "assistant_run_id": assistant_run_id.map(|id| id.to_string()),
+        "pass_number": pass_number,
+        "action_type": action.action_type.as_str(),
+        "reason_summary": redact_react_trace_text(&action.reason_summary, ASSISTANT_RUN_REACT_REASON_TRACE_LIMIT),
+        "status": observation_summary.get("status").and_then(Value::as_str).unwrap_or("unknown"),
+        "denied_count": observation_summary.get("denied_count").and_then(Value::as_u64).unwrap_or(0),
+        "returned_count": observation_summary.get("returned_count").and_then(Value::as_u64).unwrap_or(0),
+        "duration_ms": bounded_duration_ms(duration_ms),
+        "safe_error_code": observation_summary.get("safe_error_code").cloned().unwrap_or(Value::Null),
+        "safe_message": observation_summary.get("safe_message").and_then(Value::as_str).unwrap_or(""),
+    })
+}
+
+fn assistant_run_react_observation_summary(observation: &Value) -> Value {
+    let status = observation
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let action_type = observation
+        .get("action_type")
+        .or_else(|| observation.get("actionType"))
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let denied_count = observation
+        .get("denied")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or_default();
+    let returned_count = assistant_run_react_returned_count(observation);
+    let safe_error_code = observation
+        .get("repair_code")
+        .or_else(|| observation.get("error_code"))
+        .and_then(Value::as_str)
+        .map(|value| redact_react_trace_text(value, ASSISTANT_RUN_REACT_MESSAGE_TRACE_LIMIT))
+        .or_else(|| {
+            observation
+                .get("error")
+                .and_then(Value::as_str)
+                .map(|_| "tool_failed".to_string())
+        });
+    let safe_message = observation
+        .get("message")
+        .and_then(Value::as_str)
+        .map(|value| redact_react_trace_text(value, ASSISTANT_RUN_REACT_MESSAGE_TRACE_LIMIT))
+        .or_else(|| {
+            observation
+                .get("error")
+                .and_then(Value::as_str)
+                .map(|_| "工具执行失败".to_string())
+        })
+        .unwrap_or_default();
+
+    json!({
+        "status": status,
+        "action_type": action_type,
+        "denied_count": denied_count,
+        "returned_count": returned_count,
+        "safe_error_code": safe_error_code,
+        "safe_message": safe_message,
+    })
+}
+
+fn assistant_run_react_returned_count(observation: &Value) -> usize {
+    observation
+        .get("items")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .or_else(|| {
+            observation
+                .get("supplied_items")
+                .and_then(Value::as_array)
+                .map(Vec::len)
+        })
+        .or_else(|| {
+            observation
+                .get("supplied_count")
+                .and_then(Value::as_u64)
+                .map(|value| value as usize)
+        })
+        .unwrap_or_default()
+}
+
+fn bounded_duration_ms(duration_ms: u128) -> u64 {
+    duration_ms.min(u64::MAX as u128) as u64
+}
+
+fn redact_react_trace_text(raw: &str, max_chars: usize) -> String {
+    let value = raw.trim().chars().take(max_chars).collect::<String>();
+    let lower = value.to_ascii_lowercase();
+    if lower.contains("secret")
+        || lower.contains("token")
+        || lower.contains("password")
+        || lower.contains("api_key")
+        || lower.contains("apikey")
+        || lower.contains("authorization")
+        || lower.contains("bearer ")
+        || lower.contains("sk-")
+    {
+        "[redacted]".to_string()
+    } else {
+        value
+    }
 }
 
 #[allow(dead_code)]
@@ -13543,6 +13783,39 @@ mod tests {
     }
 
     #[test]
+    fn assistant_run_react_trace_summary_is_redacted_and_counted() {
+        let mut action = react_test_action(
+            AssistantRunReActStatus::Act,
+            AssistantRunReactActionType::ReadDocumentDetail,
+            json!({"document_id": Uuid::new_v4().to_string()}),
+        );
+        action.reason_summary = "读取 secret-provider-key 原文".to_string();
+        let observation = json!({
+            "status": "completed",
+            "action_type": "read_document_detail",
+            "message": "token secret-provider-key was present",
+            "items": [{
+                "content": "raw document secret-provider-key must not enter trace",
+            }],
+            "denied": ["document:denied-secret-provider-key"],
+        });
+
+        let summary = assistant_run_react_observation_summary(&observation);
+        let trace_step =
+            assistant_run_react_trace_step(Uuid::new_v4(), None, 1, &action, &summary, 12);
+        let serialized =
+            serde_json::to_string(&json!({"summary": summary, "trace_step": trace_step.clone()}))
+                .expect("trace should serialize");
+
+        assert!(!serialized.contains("secret-provider-key"));
+        assert!(!serialized.contains("raw document"));
+        assert_eq!(trace_step["returned_count"], json!(1));
+        assert_eq!(trace_step["denied_count"], json!(1));
+        assert_eq!(trace_step["reason_summary"], json!("[redacted]"));
+        assert_eq!(trace_step["safe_message"], json!("[redacted]"));
+    }
+
+    #[test]
     fn assistant_run_react_action_parser_rejects_unknown_and_unsafe_actions() {
         let action = parse_assistant_run_next_action(
             r#"{"action_type":"final_answer","reason_summary":"完成","arguments":{"content":"可以回答"},"requires_confirmation":false}"#,
@@ -13963,6 +14236,19 @@ mod tests {
             .execution_trail
             .iter()
             .any(|step| step.get("label") == Some(&json!("模型生成最终回答"))));
+        assert!(response
+            .execution_trail
+            .iter()
+            .any(|step| step.get("label") == Some(&json!("ReAct 安全追踪"))));
+        let trace_steps = response.runtime["react_trace"]["steps"]
+            .as_array()
+            .expect("react trace steps should be persisted");
+        assert_eq!(trace_steps.len(), 2);
+        assert!(trace_steps.iter().all(|step| {
+            step.get("safe_message").is_some()
+                && step.get("returned_count").is_some()
+                && step.get("duration_ms").is_some()
+        }));
 
         let Json(detail) =
             get_assistant_run(State(state), Path(response.assistant_run_id.to_string()))
@@ -13977,6 +14263,11 @@ mod tests {
         assert!(event_names.contains(&"assistant_run.react.action_completed"));
         assert!(event_names.contains(&"assistant_run.react.final_answer"));
         assert!(event_names.contains(&"assistant_run.completed"));
+        assert!(detail.events.iter().any(|event| {
+            event.event_name == "assistant_run.react.action_completed"
+                && event.payload.get("observation_summary").is_some()
+                && event.payload.get("observation").is_none()
+        }));
     }
 
     #[tokio::test]
