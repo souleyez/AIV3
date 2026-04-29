@@ -81,11 +81,17 @@ use workflow_engine::{WorkflowCatalog, WorkflowRuntimeState, WorkflowSignal};
 
 mod react_agent_catalog;
 mod react_agent_contract;
+mod react_agent_tools;
 
 use react_agent_catalog::build_assistant_run_react_planning_catalog;
 use react_agent_contract::{
     parse_assistant_run_next_action, AssistantRunReActActionType as AssistantRunReactActionType,
     AssistantRunReActDecision as AssistantRunNextAction,
+};
+use react_agent_tools::{
+    assistant_run_react_action_label, assistant_run_react_policy_observation,
+    execute_assistant_run_react_action,
+    AssistantRunReactToolResult as AssistantRunReactActionResult,
 };
 
 const DATASET_OUTPUT_RETRIEVAL_SCAN_LIMIT: i64 = 512;
@@ -119,12 +125,6 @@ struct AssistantRunReactEvent {
     payload: Value,
 }
 
-#[derive(Clone, Debug)]
-struct AssistantRunReactActionResult {
-    observation: Value,
-    trail_step: Value,
-    final_answer: Option<String>,
-}
 const STATIC_PAGE_DRAFT_LIST_DEFAULT_LIMIT: i64 = 12;
 const STATIC_PAGE_DRAFT_LIST_MAX_LIMIT: i64 = 50;
 const ACTIVE_SECRET_BINDING_IDS_HEADER: &str = "x-ai-data-platform-secret-binding-ids";
@@ -5901,147 +5901,6 @@ fn build_assistant_run_react_continue_provider_input(
     sections.join("\n\n")
 }
 
-async fn execute_assistant_run_react_action(
-    state: &AppState,
-    action: &AssistantRunNextAction,
-    selected_scope: &Value,
-    evidence_state: &mut Value,
-    prompt: &str,
-    local_thread_id: Option<&str>,
-    active_secret_binding_ids: &[SecretBindingId],
-) -> std::result::Result<AssistantRunReactActionResult, ApiError> {
-    match action.action_type {
-        AssistantRunReactActionType::FinalAnswer => {
-            let content = action
-                .arguments
-                .get("content")
-                .or_else(|| action.arguments.get("answer"))
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .unwrap_or(action.reason_summary.as_str())
-                .to_string();
-            Ok(AssistantRunReactActionResult {
-                observation: json!({
-                    "status": "completed",
-                    "action_type": action.action_type.as_str(),
-                    "content_length": content.chars().count(),
-                }),
-                trail_step: json!({
-                    "status": "completed",
-                    "label": "模型生成最终回答",
-                    "react_action": action.action_type.as_str(),
-                    "reason_summary": action.reason_summary.clone(),
-                    "at": Utc::now(),
-                }),
-                final_answer: Some(content),
-            })
-        }
-        AssistantRunReactActionType::RetrieveEvidence => {
-            ensure_react_requested_dataset_is_selected(&action.arguments, selected_scope)?;
-            let query = action
-                .arguments
-                .get("query")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .unwrap_or(prompt);
-            let refreshed = build_assistant_run_evidence_state(
-                state,
-                selected_scope,
-                query,
-                local_thread_id,
-                active_secret_binding_ids,
-            )
-            .await?;
-            let supplied_count = assistant_run_evidence_supplied_count(&refreshed);
-            *evidence_state = refreshed.clone();
-            Ok(AssistantRunReactActionResult {
-                observation: json!({
-                    "status": "completed",
-                    "action_type": action.action_type.as_str(),
-                    "supplied_count": supplied_count,
-                    "evidence_status": refreshed.get("status").and_then(Value::as_str).unwrap_or("unknown"),
-                }),
-                trail_step: json!({
-                    "status": "completed",
-                    "label": "检索供料证据",
-                    "react_action": action.action_type.as_str(),
-                    "supplied_count": supplied_count,
-                    "at": Utc::now(),
-                }),
-                final_answer: None,
-            })
-        }
-        AssistantRunReactActionType::RecallConversationMemory => {
-            let memory_scope = ensure_scope_requests_conversation_memory(selected_scope.clone());
-            let refreshed = build_assistant_run_evidence_state(
-                state,
-                &memory_scope,
-                prompt,
-                local_thread_id,
-                active_secret_binding_ids,
-            )
-            .await?;
-            let memory_count = refreshed
-                .get("conversation_memory_items")
-                .and_then(Value::as_array)
-                .map(Vec::len)
-                .unwrap_or(0);
-            *evidence_state = refreshed.clone();
-            Ok(AssistantRunReactActionResult {
-                observation: json!({
-                    "status": "completed",
-                    "action_type": action.action_type.as_str(),
-                    "memory_count": memory_count,
-                }),
-                trail_step: json!({
-                    "status": "completed",
-                    "label": "召回对话记忆",
-                    "react_action": action.action_type.as_str(),
-                    "memory_count": memory_count,
-                    "at": Utc::now(),
-                }),
-                final_answer: None,
-            })
-        }
-        AssistantRunReactActionType::UpdateStaticPageModule => {
-            let operations = react_static_page_operations_from_arguments(&action.arguments)?;
-            Ok(AssistantRunReactActionResult {
-                observation: json!({
-                    "status": "completed",
-                    "action_type": action.action_type.as_str(),
-                    "operation_count": operations.len(),
-                    "operations": operations,
-                }),
-                trail_step: json!({
-                    "status": "completed",
-                    "label": "更新静态页模块",
-                    "react_action": action.action_type.as_str(),
-                    "operation_count": operations.len(),
-                    "at": Utc::now(),
-                }),
-                final_answer: None,
-            })
-        }
-        _ => Ok(AssistantRunReactActionResult {
-            observation: json!({
-                "status": "rejected",
-                "action_type": action.action_type.as_str(),
-                "reason": "action_not_implemented_in_first_slice",
-            }),
-            trail_step: json!({
-                "status": "rejected",
-                "label": assistant_run_react_action_label(&action.action_type),
-                "react_action": action.action_type.as_str(),
-                "reason": "首版暂未启用该动作",
-                "at": Utc::now(),
-            }),
-            final_answer: None,
-        }),
-    }
-}
-
 fn assistant_run_react_enabled(runtime_mode: &str) -> bool {
     runtime_mode != "placeholder" && env_flag("ASSISTANT_RUN_REACT_ENABLED", false)
 }
@@ -6052,23 +5911,6 @@ fn assistant_run_react_max_steps() -> usize {
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(ASSISTANT_RUN_REACT_DEFAULT_MAX_STEPS)
         .clamp(1, ASSISTANT_RUN_REACT_MAX_STEPS)
-}
-
-fn assistant_run_react_action_label(action_type: &AssistantRunReactActionType) -> &'static str {
-    match action_type {
-        AssistantRunReactActionType::RetrieveEvidence => "检索供料证据",
-        AssistantRunReactActionType::ReadDocumentDetail => "读取文档详情",
-        AssistantRunReactActionType::RecallConversationMemory => "召回对话记忆",
-        AssistantRunReactActionType::ListReportOptions => "列出报表选项",
-        AssistantRunReactActionType::CreateStaticPageDraft => "创建静态页草稿",
-        AssistantRunReactActionType::UpdateStaticPageModule => "更新静态页模块",
-        AssistantRunReactActionType::SubmitStaticPageImagePreview => "提交效果图生成",
-        AssistantRunReactActionType::RenderStaticPage => "制作最终静态页",
-        AssistantRunReactActionType::CreateReportDraft => "创建报表草稿",
-        AssistantRunReactActionType::OpenClawMemoryRecall => "调用 OpenClaw 记忆",
-        AssistantRunReactActionType::OpenClawReadonlyExecution => "调用 OpenClaw 只读执行",
-        AssistantRunReactActionType::FinalAnswer => "模型生成最终回答",
-    }
 }
 
 fn assistant_run_react_should_repair_terminal_action(
@@ -6109,36 +5951,6 @@ fn assistant_run_react_has_supply_observation(
                         )
                     })
         })
-}
-
-fn assistant_run_react_policy_observation(
-    action: &AssistantRunNextAction,
-    message: &str,
-    step_index: usize,
-) -> AssistantRunReactActionResult {
-    AssistantRunReactActionResult {
-        observation: json!({
-            "status": "denied",
-            "action_type": "policy_observation",
-            "message": message,
-            "denied": [format!("terminal:{}", action.action_type.as_str())],
-            "items": [],
-            "limits": {
-                "requested": 1,
-                "returned": 0,
-                "maxAllowed": 1,
-            },
-        }),
-        trail_step: json!({
-            "status": "denied",
-            "label": "ReAct 协议修复",
-            "react_action": action.action_type.as_str(),
-            "react_step": step_index,
-            "reason": message,
-            "at": Utc::now(),
-        }),
-        final_answer: None,
-    }
 }
 
 fn ensure_react_requested_dataset_is_selected(
