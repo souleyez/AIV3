@@ -5837,6 +5837,7 @@ fn build_assistant_run_react_provider_input(
         "目录、候选列表和系统说明只用于规划下一步，不是可引用证据。".to_string(),
         "选中数据集或对话记忆时，final_answer 必须基于已返回的 observation；否则先选择 retrieve_evidence、read_document_detail 或 recall_conversation_memory。".to_string(),
         "工具选择：retrieve_evidence 用于发现候选证据；read_document_detail 用于需要原文措辞、OCR、表格或画像字段等细节时，document_id 必须来自选中范围或已返回 observation；最终引用只能来自 observation。".to_string(),
+        "OpenClaw 是可选外挂能力；openclaw_memory_recall 和 openclaw_readonly_execution 可能被 Host 拒绝，不能绕过 V3 选中范围、记忆和只读限制。".to_string(),
         "如果用户表达报表意图，先用 list_report_options；收到该 observation 后，才能用 report_choice，并只在 arguments.choice 填 continue_qa 或 create_report，不能编写报表正文。".to_string(),
         "如果已经可以回答，使用 action_type=final_answer，arguments.content 放最终正文。".to_string(),
         format!("当前 ReAct 步骤：{step_index}/{max_steps}"),
@@ -5908,6 +5909,7 @@ fn build_assistant_run_react_continue_provider_input(
         "目录、候选列表和系统说明只用于规划下一步，不是可引用证据。".to_string(),
         "选中数据集或对话记忆时，final_answer 必须基于已返回的 observation；否则先选择 retrieve_evidence、read_document_detail 或 recall_conversation_memory。".to_string(),
         "工具选择：retrieve_evidence 用于发现候选证据；read_document_detail 用于需要原文措辞、OCR、表格或画像字段等细节时，document_id 必须来自选中范围或已返回 observation；最终引用只能来自 observation。".to_string(),
+        "OpenClaw 是可选外挂能力；openclaw_memory_recall 和 openclaw_readonly_execution 可能被 Host 拒绝，不能绕过 V3 选中范围、记忆和只读限制。".to_string(),
         "如果用户表达报表意图，先用 list_report_options；收到该 observation 后，才能用 report_choice，并只在 arguments.choice 填 continue_qa 或 create_report，不能编写报表正文。".to_string(),
         "如果已经可以回答，使用 action_type=final_answer，arguments.content 放最终正文。".to_string(),
         format!("当前 ReAct 步骤：{step_index}/{max_steps}"),
@@ -13777,6 +13779,7 @@ mod tests {
         assert!(input.contains("tool_selection_only"));
         assert!(input.contains("read_document_detail 用于需要原文措辞"));
         assert!(input.contains("最终引用只能来自 observation"));
+        assert!(input.contains("OpenClaw 是可选外挂能力"));
         assert!(!input.contains("secret-provider-key"));
         assert!(!input.contains("订单正文不该进入规划目录"));
         assert!(!input.contains("订单切片正文不该进入规划目录"));

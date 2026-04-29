@@ -1,7 +1,7 @@
 use chrono::Utc;
 use domain_model::{Document, DocumentChunk, DocumentId, SecretBindingId};
 use serde_json::{json, Value};
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, env};
 use uuid::Uuid;
 
 use crate::{
@@ -118,6 +118,12 @@ pub(crate) async fn execute_assistant_run_react_action(
             Ok(list_report_options_result(action, selected_scope))
         }
         AssistantRunReactActionType::ReportChoice => Ok(report_choice_result(action)),
+        AssistantRunReactActionType::OpenClawMemoryRecall => {
+            Ok(openclaw_memory_recall_result(action, local_thread_id))
+        }
+        AssistantRunReactActionType::OpenClawReadonlyExecution => {
+            Ok(openclaw_readonly_execution_result(action))
+        }
         AssistantRunReactActionType::UpdateStaticPageModule => {
             let operations = react_static_page_operations_from_arguments(&action.arguments)?;
             Ok(AssistantRunReactToolResult {
@@ -313,11 +319,132 @@ fn rejected_react_tool_result(
             "status": "rejected",
             "label": assistant_run_react_action_label(&action.action_type),
             "react_action": action.action_type.as_str(),
-            "reason": "首版暂未启用该动作",
+            "reason": reason,
             "at": Utc::now(),
         }),
         final_answer: None,
     }
+}
+
+fn openclaw_memory_recall_result(
+    action: &AssistantRunNextAction,
+    local_thread_id: Option<&str>,
+) -> AssistantRunReactToolResult {
+    if !react_env_flag("OPENCLAW_EXTENSION_ENABLED", false) {
+        return rejected_react_tool_result(action, "openclaw_extension_disabled");
+    }
+    if !react_env_flag("OPENCLAW_MEMORY_ENABLED", false) {
+        return rejected_react_tool_result(action, "openclaw_memory_disabled");
+    }
+
+    let query = action
+        .arguments
+        .get("query")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("current conversation");
+    ok_openclaw_stub_result(
+        action,
+        "OpenClaw memory bridge enabled",
+        json!({
+            "type": "openclaw_memory",
+            "status": "bridge_stub",
+            "query": truncate_for_openclaw_stub(query, 160),
+            "local_thread_id": local_thread_id.unwrap_or_default(),
+        }),
+    )
+}
+
+fn openclaw_readonly_execution_result(
+    action: &AssistantRunNextAction,
+) -> AssistantRunReactToolResult {
+    if !react_env_flag("OPENCLAW_EXTENSION_ENABLED", false) {
+        return rejected_react_tool_result(action, "openclaw_extension_disabled");
+    }
+    if !react_env_flag("OPENCLAW_READONLY_EXECUTION_ENABLED", false) {
+        return rejected_react_tool_result(action, "openclaw_readonly_execution_disabled");
+    }
+    let capability = action
+        .arguments
+        .get("capability")
+        .or_else(|| action.arguments.get("tool"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let Some(capability) = capability else {
+        return rejected_react_tool_result(
+            action,
+            "openclaw_readonly_execution_capability_required",
+        );
+    };
+    if !openclaw_readonly_capability_allowed(capability) {
+        return rejected_react_tool_result(action, "openclaw_readonly_execution_not_allowlisted");
+    }
+
+    ok_openclaw_stub_result(
+        action,
+        "OpenClaw readonly execution bridge enabled",
+        json!({
+            "type": "openclaw_readonly_execution",
+            "status": "bridge_stub",
+            "capability": truncate_for_openclaw_stub(capability, 96),
+        }),
+    )
+}
+
+fn ok_openclaw_stub_result(
+    action: &AssistantRunNextAction,
+    message: &str,
+    item: Value,
+) -> AssistantRunReactToolResult {
+    AssistantRunReactToolResult {
+        observation: json!({
+            "status": "completed",
+            "action_type": action.action_type.as_str(),
+            "actionType": action.action_type.as_str(),
+            "message": message,
+            "items": [item],
+            "limits": {
+                "mode": "stub",
+                "externalExecution": false,
+            },
+        }),
+        trail_step: json!({
+            "status": "completed",
+            "label": assistant_run_react_action_label(&action.action_type),
+            "react_action": action.action_type.as_str(),
+            "returned_count": 1,
+            "at": Utc::now(),
+        }),
+        final_answer: None,
+    }
+}
+
+fn react_env_flag(key: &str, default_value: bool) -> bool {
+    env::var(key)
+        .ok()
+        .map(|value| {
+            let normalized = value.trim().to_ascii_lowercase();
+            matches!(normalized.as_str(), "1" | "true" | "yes" | "on")
+        })
+        .unwrap_or(default_value)
+}
+
+fn openclaw_readonly_capability_allowed(capability: &str) -> bool {
+    env::var("OPENCLAW_READONLY_EXECUTION_ALLOWLIST")
+        .ok()
+        .map(|raw| {
+            raw.split(',')
+                .map(str::trim)
+                .filter(|item| !item.is_empty())
+                .any(|item| item == capability)
+        })
+        .unwrap_or(false)
+}
+
+fn truncate_for_openclaw_stub(value: &str, max_chars: usize) -> String {
+    value.chars().take(max_chars).collect()
 }
 
 fn report_choice_items() -> Vec<Value> {
@@ -594,6 +721,23 @@ mod tests {
     use domain_model::{
         DatasetId, DocumentChunkId, DocumentChunkState, DocumentLifecycle, TenantId,
     };
+    use std::sync::{Mutex, OnceLock};
+
+    fn openclaw_env_test_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    fn clear_openclaw_tool_env() {
+        for key in [
+            "OPENCLAW_EXTENSION_ENABLED",
+            "OPENCLAW_MEMORY_ENABLED",
+            "OPENCLAW_READONLY_EXECUTION_ENABLED",
+            "OPENCLAW_READONLY_EXECUTION_ALLOWLIST",
+        ] {
+            env::remove_var(key);
+        }
+    }
 
     fn test_action(action_type: AssistantRunReactActionType) -> AssistantRunNextAction {
         AssistantRunNextAction {
@@ -627,6 +771,86 @@ mod tests {
         assert_eq!(result.observation["items"], json!([]));
         assert_eq!(result.observation["limits"], json!({}));
         assert!(result.final_answer.is_none());
+    }
+
+    #[test]
+    fn openclaw_react_memory_recall_is_disabled_by_default() {
+        let _guard = openclaw_env_test_lock().lock().expect("openclaw env lock");
+        clear_openclaw_tool_env();
+        let action = test_action(AssistantRunReactActionType::OpenClawMemoryRecall);
+        let result = openclaw_memory_recall_result(&action, Some("thread-a"));
+
+        assert_eq!(result.observation["status"], json!("rejected"));
+        assert_eq!(
+            result.observation["message"],
+            json!("openclaw_extension_disabled")
+        );
+        assert!(result.final_answer.is_none());
+    }
+
+    #[test]
+    fn openclaw_react_memory_recall_enabled_returns_labeled_stub() {
+        let _guard = openclaw_env_test_lock().lock().expect("openclaw env lock");
+        clear_openclaw_tool_env();
+        env::set_var("OPENCLAW_EXTENSION_ENABLED", "true");
+        env::set_var("OPENCLAW_MEMORY_ENABLED", "true");
+        let mut action = test_action(AssistantRunReactActionType::OpenClawMemoryRecall);
+        action.arguments = json!({"query": "客户上次说了什么"});
+        let result = openclaw_memory_recall_result(&action, Some("thread-a"));
+        clear_openclaw_tool_env();
+
+        assert_eq!(result.observation["status"], json!("completed"));
+        assert_eq!(
+            result.observation["items"][0]["type"],
+            json!("openclaw_memory")
+        );
+        assert_eq!(
+            result.observation["items"][0]["status"],
+            json!("bridge_stub")
+        );
+        assert_eq!(
+            result.observation["limits"]["externalExecution"],
+            json!(false)
+        );
+    }
+
+    #[test]
+    fn openclaw_react_readonly_execution_requires_enablement_and_allowlist() {
+        let _guard = openclaw_env_test_lock().lock().expect("openclaw env lock");
+        clear_openclaw_tool_env();
+        let mut action = test_action(AssistantRunReactActionType::OpenClawReadonlyExecution);
+        action.arguments = json!({"capability": "inspect_local_index"});
+
+        let disabled = openclaw_readonly_execution_result(&action);
+        assert_eq!(
+            disabled.observation["message"],
+            json!("openclaw_extension_disabled")
+        );
+
+        env::set_var("OPENCLAW_EXTENSION_ENABLED", "true");
+        env::set_var("OPENCLAW_READONLY_EXECUTION_ENABLED", "true");
+        let not_allowlisted = openclaw_readonly_execution_result(&action);
+        assert_eq!(
+            not_allowlisted.observation["message"],
+            json!("openclaw_readonly_execution_not_allowlisted")
+        );
+
+        env::set_var(
+            "OPENCLAW_READONLY_EXECUTION_ALLOWLIST",
+            "inspect_local_index",
+        );
+        let allowed = openclaw_readonly_execution_result(&action);
+        clear_openclaw_tool_env();
+
+        assert_eq!(allowed.observation["status"], json!("completed"));
+        assert_eq!(
+            allowed.observation["items"][0]["type"],
+            json!("openclaw_readonly_execution")
+        );
+        assert_eq!(
+            allowed.observation["limits"]["externalExecution"],
+            json!(false)
+        );
     }
 
     #[test]
