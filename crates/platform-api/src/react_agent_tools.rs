@@ -1,11 +1,13 @@
 use chrono::Utc;
-use domain_model::SecretBindingId;
+use domain_model::{Document, DocumentChunk, DocumentId, SecretBindingId};
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
+use uuid::Uuid;
 
 use crate::{
     build_assistant_run_evidence_state, ensure_react_requested_dataset_is_selected,
-    ensure_scope_requests_conversation_memory, react_static_page_operations_from_arguments,
-    ApiError, AppState,
+    ensure_scope_requests_conversation_memory, load_visible_document,
+    react_static_page_operations_from_arguments, ApiError, AppState,
 };
 
 use crate::react_agent_contract::{
@@ -31,6 +33,10 @@ pub(crate) async fn execute_assistant_run_react_action(
 ) -> std::result::Result<AssistantRunReactToolResult, ApiError> {
     match action.action_type {
         AssistantRunReactActionType::FinalAnswer => Ok(final_answer_result(action)),
+        AssistantRunReactActionType::ReadDocumentDetail => {
+            read_document_detail_result(state, action, selected_scope, active_secret_binding_ids)
+                .await
+        }
         AssistantRunReactActionType::RetrieveEvidence => {
             ensure_react_requested_dataset_is_selected(&action.arguments, selected_scope)?;
             let query = action
@@ -321,10 +327,273 @@ fn report_choice_items() -> Vec<Value> {
     ]
 }
 
+const REACT_READ_DOCUMENT_MAX_DOCUMENTS: usize = 3;
+const REACT_READ_DOCUMENT_MAX_CHUNKS_PER_DOCUMENT: usize = 8;
+const REACT_READ_DOCUMENT_MAX_CHARS: usize = 8000;
+const REACT_READ_DOCUMENT_FIELD_CHAR_LIMIT: usize = 1200;
+
+async fn read_document_detail_result(
+    state: &AppState,
+    action: &AssistantRunNextAction,
+    selected_scope: &Value,
+    active_secret_binding_ids: &[SecretBindingId],
+) -> std::result::Result<AssistantRunReactToolResult, ApiError> {
+    let requested_document_ids = requested_document_ids_from_action(action, selected_scope);
+    if requested_document_ids.is_empty() {
+        return Ok(rejected_react_tool_result(action, "document_id_required"));
+    }
+
+    let selected_dataset_ids = selected_scope_id_strings(selected_scope, "dataset");
+    let selected_document_ids = selected_scope_id_strings(selected_scope, "document");
+    let mut items = Vec::new();
+    let mut denied = Vec::new();
+    let mut returned_chars = 0usize;
+
+    for document_id in requested_document_ids
+        .into_iter()
+        .take(REACT_READ_DOCUMENT_MAX_DOCUMENTS)
+    {
+        let document =
+            match load_visible_document(state, document_id, active_secret_binding_ids).await {
+                Ok(document) => document,
+                Err(_) => {
+                    denied.push(format!("document:{document_id}"));
+                    continue;
+                }
+            };
+
+        if !document_allowed_by_selected_scope(
+            &document,
+            &selected_dataset_ids,
+            &selected_document_ids,
+        ) {
+            denied.push(format!("document:{document_id}"));
+            continue;
+        }
+
+        let chunks = state
+            .storage
+            .document_chunks()
+            .list_by_document(state.tenant_id, document_id)
+            .await
+            .map_err(ApiError::from_storage)?;
+        items.push(document_detail_item(
+            &document,
+            chunks,
+            &mut returned_chars,
+            REACT_READ_DOCUMENT_MAX_CHARS,
+        ));
+        if returned_chars >= REACT_READ_DOCUMENT_MAX_CHARS {
+            break;
+        }
+    }
+
+    let status = if items.is_empty() && !denied.is_empty() {
+        "rejected"
+    } else {
+        "completed"
+    };
+    let item_count = items.len();
+    let denied_count = denied.len();
+
+    Ok(AssistantRunReactToolResult {
+        observation: json!({
+            "status": status,
+            "action_type": action.action_type.as_str(),
+            "actionType": action.action_type.as_str(),
+            "message": if status == "completed" { "document detail supplied" } else { "document detail denied" },
+            "items": items,
+            "denied": denied,
+            "limits": {
+                "maxDocuments": REACT_READ_DOCUMENT_MAX_DOCUMENTS,
+                "maxChunksPerDocument": REACT_READ_DOCUMENT_MAX_CHUNKS_PER_DOCUMENT,
+                "maxCharacters": REACT_READ_DOCUMENT_MAX_CHARS,
+                "returnedCharacters": returned_chars,
+            },
+        }),
+        trail_step: json!({
+            "status": status,
+            "label": "读取文档详情",
+            "react_action": action.action_type.as_str(),
+            "item_count": item_count,
+            "denied_count": denied_count,
+            "at": Utc::now(),
+        }),
+        final_answer: None,
+    })
+}
+
+fn requested_document_ids_from_action(
+    action: &AssistantRunNextAction,
+    selected_scope: &Value,
+) -> Vec<DocumentId> {
+    let mut ids = Vec::new();
+    if let Some(raw) = action
+        .arguments
+        .get("document_id")
+        .or_else(|| action.arguments.get("documentId"))
+        .and_then(Value::as_str)
+    {
+        push_document_id(&mut ids, raw);
+    }
+    if let Some(raw_items) = action
+        .arguments
+        .get("document_ids")
+        .or_else(|| action.arguments.get("documentIds"))
+        .and_then(Value::as_array)
+    {
+        for item in raw_items {
+            if let Some(raw) = item.as_str() {
+                push_document_id(&mut ids, raw);
+            }
+        }
+    }
+    if ids.is_empty() {
+        for raw in selected_scope_id_strings(selected_scope, "document") {
+            push_document_id(&mut ids, &raw);
+        }
+    }
+    ids.truncate(REACT_READ_DOCUMENT_MAX_DOCUMENTS);
+    ids
+}
+
+fn push_document_id(ids: &mut Vec<DocumentId>, raw: &str) {
+    let Some(id) = Uuid::parse_str(raw.trim()).ok().map(DocumentId) else {
+        return;
+    };
+    if !ids.contains(&id) {
+        ids.push(id);
+    }
+}
+
+fn selected_scope_id_strings(selected_scope: &Value, expected_type: &str) -> Vec<String> {
+    let mut ids = Vec::new();
+    let Some(object) = selected_scope.as_object() else {
+        return ids;
+    };
+    let keys: &[&str] = match expected_type {
+        "dataset" => &["datasets", "selected"],
+        "document" => &["documents", "selected"],
+        _ => &["selected"],
+    };
+    for key in keys {
+        let Some(items) = object.get(*key).and_then(Value::as_array) else {
+            continue;
+        };
+        for item in items {
+            let item_type = item
+                .as_object()
+                .and_then(|object| object.get("type"))
+                .and_then(Value::as_str);
+            if item_type.is_some_and(|item_type| item_type != expected_type) {
+                continue;
+            }
+            let raw = item.as_str().or_else(|| {
+                item.as_object()
+                    .and_then(|object| object.get("id"))
+                    .and_then(Value::as_str)
+            });
+            if let Some(raw) = raw.map(str::trim).filter(|value| !value.is_empty()) {
+                let id = raw.to_string();
+                if !ids.contains(&id) {
+                    ids.push(id);
+                }
+            }
+        }
+    }
+    ids
+}
+
+fn document_allowed_by_selected_scope(
+    document: &Document,
+    selected_dataset_ids: &[String],
+    selected_document_ids: &[String],
+) -> bool {
+    if !selected_document_ids.is_empty() {
+        return selected_document_ids.contains(&document.id.to_string());
+    }
+    !selected_dataset_ids.is_empty()
+        && selected_dataset_ids.contains(&document.dataset_id.to_string())
+}
+
+fn document_detail_item(
+    document: &Document,
+    chunks: Vec<DocumentChunk>,
+    returned_chars: &mut usize,
+    max_chars: usize,
+) -> Value {
+    let mut chunk_items = Vec::new();
+    for chunk in chunks
+        .into_iter()
+        .take(REACT_READ_DOCUMENT_MAX_CHUNKS_PER_DOCUMENT)
+    {
+        if *returned_chars >= max_chars {
+            break;
+        }
+        let remaining = max_chars.saturating_sub(*returned_chars);
+        let content = truncate_chars(&chunk.content, remaining);
+        *returned_chars += content.chars().count();
+        chunk_items.push(json!({
+            "chunk_id": chunk.id.to_string(),
+            "chunk_index": chunk.chunk_index,
+            "state": chunk.state.as_str(),
+            "token_count": chunk.token_count,
+            "content": content,
+            "fields": bounded_chunk_fields(&chunk.metadata),
+        }));
+    }
+
+    json!({
+        "document_id": document.id.to_string(),
+        "dataset_id": document.dataset_id.to_string(),
+        "title": document.title,
+        "content_type": document.content_type,
+        "lifecycle": document.lifecycle.as_str(),
+        "chunks": chunk_items,
+    })
+}
+
+fn bounded_chunk_fields(metadata: &BTreeMap<String, Value>) -> Value {
+    let mut fields = serde_json::Map::new();
+    for (output_key, keys) in [
+        ("ocr", ["ocr", "ocr_text", "ocrText"]),
+        ("table", ["table", "table_text", "tableText"]),
+        ("profile", ["profile", "profile_values", "profileValues"]),
+    ] {
+        for key in keys {
+            if let Some(value) = metadata.get(key) {
+                fields.insert(
+                    output_key.to_string(),
+                    Value::String(truncate_chars(
+                        &value_to_bounded_string(value),
+                        REACT_READ_DOCUMENT_FIELD_CHAR_LIMIT,
+                    )),
+                );
+                break;
+            }
+        }
+    }
+    Value::Object(fields)
+}
+
+fn value_to_bounded_string(value: &Value) -> String {
+    value
+        .as_str()
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| serde_json::to_string(value).unwrap_or_default())
+}
+
+fn truncate_chars(value: &str, max_chars: usize) -> String {
+    value.chars().take(max_chars).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::react_agent_contract::AssistantRunReActStatus;
+    use domain_model::{
+        DatasetId, DocumentChunkId, DocumentChunkState, DocumentLifecycle, TenantId,
+    };
 
     fn test_action(action_type: AssistantRunReactActionType) -> AssistantRunNextAction {
         AssistantRunNextAction {
@@ -416,5 +685,98 @@ mod tests {
         assert!(!observation.contains("report_body"));
         assert!(!observation.contains("sections"));
         assert!(!observation.contains("markdown"));
+    }
+
+    #[test]
+    fn react_read_document_detail_bounds_chunks_characters_and_metadata_fields() {
+        let tenant_id = TenantId::new();
+        let dataset_id = DatasetId::new();
+        let document_id = DocumentId::new();
+        let document = Document {
+            id: document_id,
+            tenant_id,
+            dataset_id,
+            title: "订单明细".to_string(),
+            object_key: "uploads/orders.csv".to_string(),
+            content_type: "text/csv".to_string(),
+            lifecycle: DocumentLifecycle::Indexed,
+            secret_binding_ids: Vec::new(),
+            metadata: BTreeMap::new(),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+        let chunks = (0..12)
+            .map(|index| {
+                let mut metadata = BTreeMap::new();
+                if index == 0 {
+                    metadata.insert("ocrText".to_string(), json!("OCR".repeat(700)));
+                    metadata.insert("tableText".to_string(), json!({"rows": ["A", "B"]}));
+                    metadata.insert("profileValues".to_string(), json!({"amount": "number"}));
+                }
+                DocumentChunk {
+                    id: DocumentChunkId::new(),
+                    tenant_id,
+                    dataset_id,
+                    document_id,
+                    chunk_index: index,
+                    content: "明细内容".repeat(20),
+                    token_count: 100,
+                    state: DocumentChunkState::Indexed,
+                    metadata,
+                    created_at: Utc::now(),
+                    updated_at: Utc::now(),
+                }
+            })
+            .collect::<Vec<_>>();
+        let mut returned_chars = 0usize;
+        let item = document_detail_item(&document, chunks, &mut returned_chars, 1200);
+
+        assert_eq!(item["document_id"], json!(document_id.to_string()));
+        assert_eq!(
+            item["chunks"].as_array().expect("chunks").len(),
+            REACT_READ_DOCUMENT_MAX_CHUNKS_PER_DOCUMENT
+        );
+        assert!(returned_chars <= 1200);
+        assert!(
+            item["chunks"][0]["fields"]["ocr"]
+                .as_str()
+                .expect("ocr")
+                .chars()
+                .count()
+                <= REACT_READ_DOCUMENT_FIELD_CHAR_LIMIT
+        );
+        assert!(item["chunks"][0]["fields"].get("table").is_some());
+        assert!(item["chunks"][0]["fields"].get("profile").is_some());
+    }
+
+    #[test]
+    fn react_read_document_detail_scope_check_denies_outside_document() {
+        let tenant_id = TenantId::new();
+        let dataset_id = DatasetId::new();
+        let selected_document_id = DocumentId::new();
+        let outside_document = Document {
+            id: DocumentId::new(),
+            tenant_id,
+            dataset_id,
+            title: "未选中文档".to_string(),
+            object_key: "uploads/outside.txt".to_string(),
+            content_type: "text/plain".to_string(),
+            lifecycle: DocumentLifecycle::Indexed,
+            secret_binding_ids: Vec::new(),
+            metadata: BTreeMap::new(),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+
+        assert!(!document_allowed_by_selected_scope(
+            &outside_document,
+            &[],
+            &[selected_document_id.to_string()],
+        ));
+        assert!(document_allowed_by_selected_scope(
+            &outside_document,
+            &[dataset_id.to_string()],
+            &[],
+        ));
     }
 }

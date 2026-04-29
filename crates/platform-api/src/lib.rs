@@ -5777,6 +5777,7 @@ fn build_assistant_run_react_provider_input(
         "JSON Schema: {\"action_type\":\"retrieve_evidence|read_document_detail|recall_conversation_memory|list_report_options|report_choice|create_static_page_draft|update_static_page_module|submit_static_page_image_preview|render_static_page|create_report_draft|openclaw_memory_recall|openclaw_readonly_execution|final_answer\",\"reason_summary\":\"给用户看的简短原因\",\"arguments\":{},\"requires_confirmation\":false}".to_string(),
         "目录、候选列表和系统说明只用于规划下一步，不是可引用证据。".to_string(),
         "选中数据集或对话记忆时，final_answer 必须基于已返回的 observation；否则先选择 retrieve_evidence、read_document_detail 或 recall_conversation_memory。".to_string(),
+        "工具选择：retrieve_evidence 用于发现候选证据；read_document_detail 用于需要原文措辞、OCR、表格或画像字段等细节时，document_id 必须来自选中范围或已返回 observation；最终引用只能来自 observation。".to_string(),
         "如果用户表达报表意图，先用 list_report_options；收到该 observation 后，才能用 report_choice，并只在 arguments.choice 填 continue_qa 或 create_report，不能编写报表正文。".to_string(),
         "如果已经可以回答，使用 action_type=final_answer，arguments.content 放最终正文。".to_string(),
         format!("当前 ReAct 步骤：{step_index}/{max_steps}"),
@@ -5847,6 +5848,7 @@ fn build_assistant_run_react_continue_provider_input(
         "JSON Schema: {\"action_type\":\"retrieve_evidence|read_document_detail|recall_conversation_memory|list_report_options|report_choice|create_static_page_draft|update_static_page_module|submit_static_page_image_preview|render_static_page|create_report_draft|openclaw_memory_recall|openclaw_readonly_execution|final_answer\",\"reason_summary\":\"给用户看的简短原因\",\"arguments\":{},\"requires_confirmation\":false}".to_string(),
         "目录、候选列表和系统说明只用于规划下一步，不是可引用证据。".to_string(),
         "选中数据集或对话记忆时，final_answer 必须基于已返回的 observation；否则先选择 retrieve_evidence、read_document_detail 或 recall_conversation_memory。".to_string(),
+        "工具选择：retrieve_evidence 用于发现候选证据；read_document_detail 用于需要原文措辞、OCR、表格或画像字段等细节时，document_id 必须来自选中范围或已返回 observation；最终引用只能来自 observation。".to_string(),
         "如果用户表达报表意图，先用 list_report_options；收到该 observation 后，才能用 report_choice，并只在 arguments.choice 填 continue_qa 或 create_report，不能编写报表正文。".to_string(),
         "如果已经可以回答，使用 action_type=final_answer，arguments.content 放最终正文。".to_string(),
         format!("当前 ReAct 步骤：{step_index}/{max_steps}"),
@@ -13533,6 +13535,8 @@ mod tests {
         assert!(input.contains("订单数据集"));
         assert!(input.contains("doc-orders"));
         assert!(input.contains("tool_selection_only"));
+        assert!(input.contains("read_document_detail 用于需要原文措辞"));
+        assert!(input.contains("最终引用只能来自 observation"));
         assert!(!input.contains("secret-provider-key"));
         assert!(!input.contains("订单正文不该进入规划目录"));
         assert!(!input.contains("订单切片正文不该进入规划目录"));
