@@ -557,7 +557,10 @@ fn infer_visualization_type(prompt: &str) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use llm_gateway::ScriptedLlmProvider;
+    use llm_gateway::{OpenClawLlmProvider, OpenClawLlmProviderConfig, ScriptedLlmProvider};
+    use std::io::{Read, Write};
+    use std::net::{TcpListener, TcpStream};
+    use std::thread;
 
     fn sample_request(prompt: &str) -> StaticPageIntentRequest {
         StaticPageIntentRequest {
@@ -662,5 +665,109 @@ mod tests {
         assert_eq!(outcome.summary, "模型调整了图表。");
         assert_eq!(outcome.operations.len(), 1);
         assert_eq!(outcome.runtime["source"], json!("provider"));
+    }
+
+    #[test]
+    fn provider_interpreter_accepts_openclaw_provider_output() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+        let addr = listener.local_addr().expect("addr");
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let request = read_http_request(&mut stream);
+            assert!(request.contains("POST /v1/responses HTTP/1.1"));
+            assert!(request.contains("\"model\":\"static-page-intent-v1\""));
+            assert!(request.contains("JSON"));
+            let body = json!({
+                "id": "resp_static_page_openclaw",
+                "output_text": json!({
+                    "summary": "已根据用户要求调整模块。",
+                    "operations": [{
+                        "type": "update_module",
+                        "targetModuleId": "kpi",
+                        "patch": {
+                            "title": "收入表现"
+                        }
+                    }]
+                }).to_string()
+            })
+            .to_string();
+            write_http_json_response(&mut stream, 200, &body);
+        });
+
+        let provider = OpenClawLlmProvider::new(
+            "openclaw",
+            OpenClawLlmProviderConfig {
+                gateway_base_url: format!("http://{addr}"),
+                token: Some("test-openclaw-token".to_string()),
+                agent_id: None,
+                model: None,
+                model_override: None,
+                prefer_responses: true,
+                timeout_ms: 60_000,
+            },
+        )
+        .expect("provider");
+        let outcome = interpret_static_page_intent_with_provider(
+            &sample_request("把 KPI 模块标题改成收入表现"),
+            &provider,
+            Some("static-page-intent-v1"),
+        )
+        .expect("openclaw provider output should parse");
+
+        server.join().expect("server join");
+        assert_eq!(outcome.summary, "已根据用户要求调整模块。");
+        assert_eq!(outcome.operations.len(), 1);
+        assert_eq!(outcome.operations[0]["type"], json!("update_module"));
+        assert_eq!(outcome.runtime["provider"], json!("openclaw"));
+        assert_eq!(
+            outcome.runtime["llm"]["request_id"],
+            json!("resp_static_page_openclaw")
+        );
+    }
+
+    fn read_http_request(stream: &mut TcpStream) -> String {
+        let mut request_bytes = Vec::new();
+        let mut buffer = [0_u8; 1024];
+        let mut expected_len = None;
+        loop {
+            let read = stream.read(&mut buffer).expect("read");
+            if read == 0 {
+                break;
+            }
+            request_bytes.extend_from_slice(&buffer[..read]);
+            let request = String::from_utf8_lossy(&request_bytes);
+            if expected_len.is_none() {
+                expected_len = request.split("\r\n").find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    if name.eq_ignore_ascii_case("content-length") {
+                        value.trim().parse::<usize>().ok()
+                    } else {
+                        None
+                    }
+                });
+            }
+            if let Some(headers_end) = request.find("\r\n\r\n") {
+                let body_len = request_bytes.len() - (headers_end + 4);
+                if body_len >= expected_len.unwrap_or(0) {
+                    break;
+                }
+            }
+        }
+        String::from_utf8_lossy(&request_bytes).to_string()
+    }
+
+    fn write_http_json_response(stream: &mut TcpStream, status: u16, body: &str) {
+        let reason = match status {
+            200 => "OK",
+            404 => "Not Found",
+            500 => "Internal Server Error",
+            _ => "OK",
+        };
+        let response = format!(
+            "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        stream.write_all(response.as_bytes()).expect("write");
     }
 }

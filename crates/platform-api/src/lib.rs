@@ -11877,6 +11877,9 @@ mod tests {
         ToolExecutionStatus, WorkflowExecutionId, WorkflowStatus,
     };
     use event_bus::{workflow_execution_transition_subject, workflow_task_enqueued_subject};
+    use std::io::{Read, Write};
+    use std::net::{TcpListener, TcpStream};
+    use std::thread;
     use test_fixtures::{
         local_postgres_storage, reset_local_postgres_storage, shared_local_postgres_test_lock,
     };
@@ -11920,6 +11923,131 @@ mod tests {
         assert!(input.contains("当前选中范围"));
         assert!(input.contains("assistant: 已预选订单数据集"));
         assert!(input.contains("用户问题：继续总结订单风险"));
+    }
+
+    #[tokio::test]
+    async fn assistant_run_openclaw_provider_uses_filtered_host_context() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        clear_assistant_openclaw_env();
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping assistant run openclaw provider test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+        let addr = listener.local_addr().expect("addr");
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_MODE", "provider");
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_PROVIDER", "openclaw");
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_MODEL", "assistant-run-openclaw-v1");
+        std::env::set_var("OPENCLAW_EXTENSION_ENABLED", "true");
+        std::env::set_var("OPENCLAW_GATEWAY_BASE_URL", format!("http://{addr}"));
+        std::env::set_var("OPENCLAW_GATEWAY_TOKEN", "test-openclaw-token");
+
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let request = read_http_request(&mut stream);
+            assert!(request.contains("POST /v1/responses HTTP/1.1"));
+            assert!(request.contains("\"model\":\"assistant-run-openclaw-v1\""));
+            assert!(request.contains("OpenClaw 可见测试库"));
+            assert!(!request.contains("OpenClaw 不可见测试库"));
+            let body = json!({
+                "id": "resp_assistant_run_openclaw",
+                "output_text": "OpenClaw 已基于 V3 供料回答。"
+            })
+            .to_string();
+            write_http_json_response(&mut stream, 200, &body);
+        });
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("assistant-run-openclaw-test-{}", Uuid::new_v4()),
+                "Assistant Run OpenClaw Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage,
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        let visible_dataset = state
+            .storage
+            .datasets()
+            .create_with_metadata(
+                tenant.id,
+                NewDataset {
+                    key: format!("openclaw-visible-{}", Uuid::new_v4()),
+                    title: "OpenClaw 可见测试库".to_string(),
+                    description: Some("visible dataset".to_string()),
+                },
+                json!({
+                    "visibility": DatasetVisibility::Public.as_str(),
+                }),
+            )
+            .await
+            .expect("visible dataset");
+        let _hidden_dataset = state
+            .storage
+            .datasets()
+            .create_with_metadata(
+                tenant.id,
+                NewDataset {
+                    key: format!("openclaw-hidden-{}", Uuid::new_v4()),
+                    title: "OpenClaw 不可见测试库".to_string(),
+                    description: Some("hidden dataset".to_string()),
+                },
+                json!({
+                    "visibility": DatasetVisibility::Private.as_str(),
+                    "default_secret_binding_ids": [SecretBindingId::new()],
+                }),
+            )
+            .await
+            .expect("hidden dataset");
+
+        let (status, Json(response)) = create_assistant_run(
+            State(state),
+            HeaderMap::new(),
+            Json(CreateAssistantRunRequest {
+                prompt: "总结 OpenClaw 可见测试库".to_string(),
+                local_thread_id: Some("assistant-run-openclaw-thread".to_string()),
+                startup_briefing: Some(json!({
+                    "productTruth": "智能数据工作台",
+                    "visibleDatasetCount": 1,
+                })),
+                selected_scope: Some(json!({
+                    "mode": "selected",
+                    "selected": [{"type": "dataset", "id": visible_dataset.id.to_string()}],
+                })),
+                scope_candidates: Vec::new(),
+                context_policy_hint: None,
+                current_artifact: None,
+                messages: Vec::new(),
+            }),
+        )
+        .await
+        .expect("assistant run should use openclaw provider");
+
+        server.join().expect("server join");
+        clear_assistant_openclaw_env();
+        assert_eq!(status, StatusCode::CREATED);
+        assert_eq!(
+            response.assistant_message.content,
+            "OpenClaw 已基于 V3 供料回答。"
+        );
+        assert_eq!(response.runtime["provider"], json!("openclaw"));
+        assert_eq!(
+            response.runtime["request_id"],
+            json!("resp_assistant_run_openclaw")
+        );
+        assert!(response.execution_trail.iter().any(|step| {
+            step.get("label") == Some(&json!("普通聊天运行时返回"))
+                && step.get("provider") == Some(&json!("openclaw"))
+        }));
     }
 
     #[tokio::test]
@@ -21896,5 +22024,71 @@ mod tests {
         assert_eq!(view.dataset_output_id, None);
         assert_eq!(view.chat_message_id, None);
         assert_eq!(view.status, contracts::ManifestToolCallStatusView::Failed);
+    }
+
+    fn clear_assistant_openclaw_env() {
+        for key in [
+            "ASSISTANT_RUN_RUNTIME_MODE",
+            "ASSISTANT_RUN_RUNTIME_PROVIDER",
+            "ASSISTANT_RUN_RUNTIME_MODEL",
+            "OPENCLAW_EXTENSION_ENABLED",
+            "OPENCLAW_GATEWAY_BASE_URL",
+            "OPENCLAW_GATEWAY_URL",
+            "OPENCLAW_GATEWAY_TOKEN",
+            "OPENCLAW_GATEWAY_TOKEN_OPTIONAL",
+            "OPENCLAW_AGENT_ID",
+            "OPENCLAW_MODEL",
+            "OPENCLAW_MODEL_OVERRIDE",
+            "OPENCLAW_PREFER_RESPONSES",
+            "OPENCLAW_TIMEOUT_MS",
+        ] {
+            std::env::remove_var(key);
+        }
+    }
+
+    fn read_http_request(stream: &mut TcpStream) -> String {
+        let mut request_bytes = Vec::new();
+        let mut buffer = [0_u8; 1024];
+        let mut expected_len = None;
+        loop {
+            let read = stream.read(&mut buffer).expect("read");
+            if read == 0 {
+                break;
+            }
+            request_bytes.extend_from_slice(&buffer[..read]);
+            let request = String::from_utf8_lossy(&request_bytes);
+            if expected_len.is_none() {
+                expected_len = request.split("\r\n").find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    if name.eq_ignore_ascii_case("content-length") {
+                        value.trim().parse::<usize>().ok()
+                    } else {
+                        None
+                    }
+                });
+            }
+            if let Some(headers_end) = request.find("\r\n\r\n") {
+                let body_len = request_bytes.len() - (headers_end + 4);
+                if body_len >= expected_len.unwrap_or(0) {
+                    break;
+                }
+            }
+        }
+        String::from_utf8_lossy(&request_bytes).to_string()
+    }
+
+    fn write_http_json_response(stream: &mut TcpStream, status: u16, body: &str) {
+        let reason = match status {
+            200 => "OK",
+            404 => "Not Found",
+            500 => "Internal Server Error",
+            _ => "OK",
+        };
+        let response = format!(
+            "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        stream.write_all(response.as_bytes()).expect("write");
     }
 }
