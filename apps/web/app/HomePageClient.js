@@ -38,6 +38,83 @@ const LOCAL_ASSISTANT_RUN_ID_STORAGE_KEY = 'aidp-v3-local-assistant-run-id';
 const LOCAL_SECRET_BINDING_IDS_STORAGE_KEY = 'aidp-v3-secret-binding-ids';
 const LOCAL_SECRET_VALUE_STORAGE_KEY = 'aidp-v3-local-secret-value';
 const STATIC_PAGE_QUEUE_MESSAGE = '资源正在排队，可以联系商务开通高级用户跳过等待。';
+const ASSISTANT_RUN_PROGRESS_LIMIT = 8;
+const ASSISTANT_RUN_TRACE_LIMIT = 6;
+
+function limitAssistantRunText(value, maxLength = 80) {
+  const text = String(value || '').trim();
+  if (!text) {
+    return '';
+  }
+  return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text;
+}
+
+function sanitizeAssistantRunTrailStep(step) {
+  if (!step || typeof step !== 'object') {
+    return null;
+  }
+  const label = limitAssistantRunText(step.label || step.react_action || step.status, 44);
+  if (!label) {
+    return null;
+  }
+  return {
+    label,
+    status: limitAssistantRunText(step.status || 'completed', 24),
+    message: limitAssistantRunText(step.safe_message || step.message || step.hint || '', 72),
+    suppliedCount: Number.isFinite(Number(step.supplied_count)) ? Number(step.supplied_count) : null,
+    returnedCount: Number.isFinite(Number(step.returned_count ?? step.item_count)) ? Number(step.returned_count ?? step.item_count) : null,
+    deniedCount: Number.isFinite(Number(step.denied_count)) ? Number(step.denied_count) : null,
+    stepCount: Number.isFinite(Number(step.step_count)) ? Number(step.step_count) : null,
+    reactStep: Number.isFinite(Number(step.react_step)) ? Number(step.react_step) : null,
+  };
+}
+
+function sanitizeAssistantRunTraceStep(step) {
+  if (!step || typeof step !== 'object') {
+    return null;
+  }
+  const actionType = limitAssistantRunText(step.action_type || 'react_action', 40);
+  if (!actionType) {
+    return null;
+  }
+  return {
+    actionType,
+    status: limitAssistantRunText(step.status || 'unknown', 24),
+    message: limitAssistantRunText(step.safe_message || '', 72),
+    deniedCount: Number.isFinite(Number(step.denied_count)) ? Number(step.denied_count) : 0,
+    returnedCount: Number.isFinite(Number(step.returned_count)) ? Number(step.returned_count) : 0,
+    durationMs: Number.isFinite(Number(step.duration_ms)) ? Number(step.duration_ms) : null,
+  };
+}
+
+function buildAssistantRunProgress(response, continued = false) {
+  const run = response?.run || {};
+  const runtime = response?.runtime || run.runtime || {};
+  const trail = Array.isArray(response?.execution_trail)
+    ? response.execution_trail
+    : Array.isArray(run.execution_trail)
+      ? run.execution_trail
+      : [];
+  const trace = Array.isArray(runtime?.react_trace?.steps) ? runtime.react_trace.steps : [];
+  const steps = trail
+    .map(sanitizeAssistantRunTrailStep)
+    .filter(Boolean)
+    .slice(-ASSISTANT_RUN_PROGRESS_LIMIT);
+  const traceSteps = trace
+    .map(sanitizeAssistantRunTraceStep)
+    .filter(Boolean)
+    .slice(-ASSISTANT_RUN_TRACE_LIMIT);
+
+  if (!steps.length && !traceSteps.length) {
+    return null;
+  }
+  return {
+    runId: response?.assistant_run_id || run.id || '',
+    continued,
+    steps,
+    traceSteps,
+  };
+}
 
 function readLocalThreadId() {
   if (typeof window === 'undefined') {
@@ -264,6 +341,7 @@ export default function HomePageClient() {
   const [scopePlan, setScopePlan] = useState({ candidates: [], hint: '' });
   const [activityEvents, setActivityEvents] = useState([]);
   const [lastAssistantRunId, setLastAssistantRunId] = useState('');
+  const [assistantRunProgress, setAssistantRunProgress] = useState(null);
 
   const datasetLoadIdRef = useRef(0);
   const messageLoadIdRef = useRef(0);
@@ -1400,6 +1478,7 @@ export default function HomePageClient() {
             }
           }
           const responsePayload = assistantRun.response || {};
+          setAssistantRunProgress(buildAssistantRunProgress(responsePayload, usedAssistantRunContinue));
           const backendCandidates = Array.isArray(responsePayload?.scope_candidates)
             ? responsePayload.scope_candidates
             : [];
@@ -1415,6 +1494,7 @@ export default function HomePageClient() {
           }
           usedBackendAssistantRun = Boolean(assistantContent);
         } catch (assistantRunError) {
+          setAssistantRunProgress(null);
           assistantContent = [
             '已进入普通聊天模式；当前没有锁定数据集，所以不会强行检索资料。',
             formatStartupBriefingForModel(briefing),
@@ -1442,6 +1522,7 @@ export default function HomePageClient() {
       return;
     }
 
+    setAssistantRunProgress(null);
     setSubmitting(true);
     try {
       const response = selectedSessionId && selectedDatasetId
@@ -1488,6 +1569,7 @@ export default function HomePageClient() {
     setSelectedSessionId(null);
     setMessages([]);
     setLastAssistantRunId('');
+    setAssistantRunProgress(null);
     if (!selectedDatasetId) {
       setLocalMessages([]);
     }
@@ -1986,6 +2068,7 @@ export default function HomePageClient() {
       setBanner('');
       setError('');
       setComposingNewSession(false);
+      setAssistantRunProgress(null);
       setSelectedDatasetId(datasetId);
       setMobileSidebarOpen(false);
       setMobilePanel('chat');
@@ -1997,6 +2080,7 @@ export default function HomePageClient() {
       setSelectedDatasetId(null);
       setSelectedSessionId(null);
       setScopePlan({ candidates: [], hint: '' });
+      setAssistantRunProgress(null);
       setMobileSidebarOpen(false);
       setMobilePanel('chat');
     },
@@ -2028,6 +2112,7 @@ export default function HomePageClient() {
     onCloseStaticPageDraft: handleCloseStaticPageDraft,
     startupBriefing: assistantStartupBriefing,
     scopePlan,
+    assistantRunProgress,
   };
   const insightPanelProps = {
     dataset: selectedDataset,

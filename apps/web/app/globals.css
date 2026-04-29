@@ -662,6 +662,16 @@ button {
   color: #166534;
 }
 
+.message-chip.warn {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.message-chip.danger {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
 .assistant-context-strip {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -702,6 +712,67 @@ button {
   display: flex;
   flex-wrap: wrap;
   justify-content: flex-end;
+  gap: 8px;
+}
+
+.assistant-run-progress-panel {
+  display: grid;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 18px;
+  background: linear-gradient(135deg, rgba(236, 253, 245, 0.82), rgba(240, 249, 255, 0.72));
+  color: #0f172a;
+}
+
+.assistant-run-progress-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.assistant-run-progress-head span,
+.assistant-run-progress-head em {
+  color: var(--subtle);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.assistant-run-progress-head strong {
+  display: block;
+  margin-top: 3px;
+  font-size: 13px;
+}
+
+.assistant-run-progress-steps {
+  display: grid;
+  gap: 7px;
+}
+
+.assistant-run-progress-step {
+  display: grid;
+  gap: 2px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.68);
+}
+
+.assistant-run-progress-step strong {
+  font-size: 12px;
+}
+
+.assistant-run-progress-step span {
+  color: var(--subtle);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.assistant-run-trace-row {
+  display: flex;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
@@ -2667,6 +2738,7 @@ body {
 .chat-panel-mobile-home .bubble,
 .chat-panel-mobile-home .chat-empty-state,
 .chat-panel-mobile-home .assistant-context-strip,
+.chat-panel-mobile-home .assistant-run-progress-panel,
 .chat-panel-mobile-home .static-page-assistant-notice,
 .chat-panel-mobile-home .session-runtime-summary,
 .chat-panel-mobile-home .report-entry-gate {
@@ -2680,8 +2752,20 @@ body {
 }
 
 .chat-panel-mobile-home .assistant-context-main span,
-.chat-panel-mobile-home .assistant-context-main p {
+.chat-panel-mobile-home .assistant-context-main p,
+.chat-panel-mobile-home .assistant-run-progress-head span,
+.chat-panel-mobile-home .assistant-run-progress-head em,
+.chat-panel-mobile-home .assistant-run-progress-step span {
   color: #9aa7b9;
+}
+
+.chat-panel-mobile-home .assistant-run-progress-head strong,
+.chat-panel-mobile-home .assistant-run-progress-step strong {
+  color: #f8fbff;
+}
+
+.chat-panel-mobile-home .assistant-run-progress-step {
+  background: rgba(255, 255, 255, 0.055);
 }
 
 .chat-panel-mobile-home .static-page-notice-copy span,

@@ -268,6 +268,51 @@ function AssistantContextStrip({ dataset, startupBriefing, scopePlan }) {
   );
 }
 
+function AssistantRunProgressPanel({ progress }) {
+  if (!progress || (!progress.steps?.length && !progress.traceSteps?.length)) {
+    return null;
+  }
+
+  const title = progress.continued ? '连续执行进度' : '本轮执行进度';
+  return (
+    <div className="assistant-run-progress-panel" aria-label="AssistantRun 安全进度">
+      <div className="assistant-run-progress-head">
+        <div>
+          <span>{title}</span>
+          <strong>{progress.runId ? truncateText(progress.runId, 18) : 'AssistantRun'}</strong>
+        </div>
+        {progress.traceSteps?.length ? <em>{progress.traceSteps.length} 个模型动作</em> : null}
+      </div>
+      {progress.steps?.length ? (
+        <div className="assistant-run-progress-steps">
+          {progress.steps.map((step, index) => (
+            <div className={`assistant-run-progress-step ${step.status || 'completed'}`} key={`${step.label}-${index}`}>
+              <strong>{step.label}</strong>
+              <span>
+                {step.message || formatSnakeCaseLabel(step.status)}
+                {step.suppliedCount !== null ? ` · 供料 ${step.suppliedCount}` : ''}
+                {step.returnedCount !== null ? ` · 返回 ${step.returnedCount}` : ''}
+                {step.deniedCount ? ` · 拒绝 ${step.deniedCount}` : ''}
+              </span>
+            </div>
+          ))}
+        </div>
+      ) : null}
+      {progress.traceSteps?.length ? (
+        <div className="assistant-run-trace-row">
+          {progress.traceSteps.map((step, index) => (
+            <span className={`message-chip ${runtimeTone(step.status)}`} key={`${step.actionType}-${index}`}>
+              {formatSnakeCaseLabel(step.actionType)}
+              {step.returnedCount ? ` · ${step.returnedCount}` : ''}
+              {step.durationMs !== null ? ` · ${step.durationMs}ms` : ''}
+            </span>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export default function ChatPanel({
   dataset,
   session,
@@ -289,6 +334,7 @@ export default function ChatPanel({
   showStaticPageWorkspace = true,
   startupBriefing,
   scopePlan,
+  assistantRunProgress,
   onUploadClick,
   uploadingFiles = false,
 }) {
@@ -363,6 +409,8 @@ export default function ChatPanel({
         startupBriefing={startupBriefing}
         scopePlan={scopePlan}
       />
+
+      <AssistantRunProgressPanel progress={assistantRunProgress} />
 
       {showingStaticPageWorkspace ? (
         <div className="chat-static-page-workspace">
