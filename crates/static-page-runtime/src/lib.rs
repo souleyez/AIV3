@@ -133,13 +133,21 @@ fn sanitize_static_page_operation(mut operation: Value) -> Result<Value> {
     }
 
     match operation_type {
-        "update_module"
-        | "remove_module"
-        | "move_module"
-        | "resize_module"
-        | "change_data_binding" => {
+        "update_module" => {
             require_non_empty_string(&operation, "targetModuleId")
                 .or_else(|_| require_non_empty_string(&operation, "moduleId"))?;
+            validate_update_module_patch(&operation)?;
+        }
+        "remove_module" | "move_module" | "resize_module" | "change_data_binding" => {
+            require_non_empty_string(&operation, "targetModuleId")
+                .or_else(|_| require_non_empty_string(&operation, "moduleId"))?;
+            if operation_type == "change_data_binding" {
+                validate_data_binding(
+                    operation
+                        .get("dataBinding")
+                        .ok_or_else(|| anyhow!("change_data_binding must include dataBinding"))?,
+                )?;
+            }
         }
         "change_style_direction" => {
             let style = require_non_empty_string(&operation, "styleDirection")?;
@@ -155,6 +163,9 @@ fn sanitize_static_page_operation(mut operation: Value) -> Result<Value> {
                 return Err(anyhow!(
                     "unsupported static page visualization type: {visualization}"
                 ));
+            }
+            if let Some(chart_options) = operation.get("chartOptions") {
+                validate_chart_options(chart_options)?;
             }
         }
         "add_module" => {
@@ -187,11 +198,161 @@ fn normalize_static_page_operation(operation: &mut Value) {
     rename_key(object, "module_id", "moduleId");
     rename_key(object, "style_direction", "styleDirection");
     rename_key(object, "visualization_type", "visualizationType");
+    rename_key(object, "data_binding", "dataBinding");
+    rename_key(object, "chart_options", "chartOptions");
     rename_key(object, "model_summary", "modelSummary");
     rename_key(object, "queue_position", "queuePosition");
     rename_key(object, "queue_message", "queueMessage");
     rename_key(object, "preview_image", "previewImage");
     rename_key(object, "final_page", "finalPage");
+    if let Some(patch) = object.get_mut("patch").and_then(Value::as_object_mut) {
+        rename_key(patch, "data_label", "dataLabel");
+        rename_key(patch, "data_binding", "dataBinding");
+        rename_key(patch, "chart_options", "chartOptions");
+        if let Some(data_binding) = patch.get_mut("dataBinding").and_then(Value::as_object_mut) {
+            normalize_data_binding_object(data_binding);
+        }
+        if let Some(visualization) = patch
+            .get_mut("visualization")
+            .and_then(Value::as_object_mut)
+        {
+            rename_key(visualization, "chart_options", "chartOptions");
+        }
+    }
+    if let Some(data_binding) = object.get_mut("dataBinding").and_then(Value::as_object_mut) {
+        normalize_data_binding_object(data_binding);
+    }
+}
+
+fn normalize_data_binding_object(object: &mut Map<String, Value>) {
+    rename_key(object, "source_id", "sourceId");
+    rename_key(object, "field_path", "fieldPath");
+    rename_key(object, "evidence_ids", "evidenceIds");
+}
+
+fn validate_update_module_patch(operation: &Value) -> Result<()> {
+    let patch = operation
+        .get("patch")
+        .ok_or_else(|| anyhow!("update_module must include patch"))?;
+    let Some(object) = patch.as_object() else {
+        return Err(anyhow!("update_module patch must be an object"));
+    };
+
+    for key in object.keys() {
+        if !matches!(
+            key.as_str(),
+            "title"
+                | "content"
+                | "dataLabel"
+                | "dataBinding"
+                | "visualization"
+                | "chartOptions"
+                | "layout"
+        ) {
+            return Err(anyhow!("unsupported update_module patch field: {key}"));
+        }
+    }
+
+    if let Some(title) = object.get("title") {
+        validate_optional_string(title, "patch.title")?;
+    }
+    if let Some(content) = object.get("content") {
+        validate_optional_string(content, "patch.content")?;
+    }
+    if let Some(data_label) = object.get("dataLabel") {
+        validate_optional_string(data_label, "patch.dataLabel")?;
+    }
+    if let Some(data_binding) = object.get("dataBinding") {
+        validate_data_binding(data_binding)?;
+    }
+    if let Some(visualization) = object.get("visualization") {
+        validate_visualization_patch(visualization)?;
+    }
+    if let Some(chart_options) = object.get("chartOptions") {
+        validate_chart_options(chart_options)?;
+    }
+
+    Ok(())
+}
+
+fn validate_optional_string(value: &Value, field_name: &str) -> Result<()> {
+    if value.is_null() || value.as_str().is_some() {
+        Ok(())
+    } else {
+        Err(anyhow!("{field_name} must be a string when provided"))
+    }
+}
+
+fn validate_data_binding(value: &Value) -> Result<()> {
+    let Some(object) = value.as_object() else {
+        return Err(anyhow!("dataBinding must be an object"));
+    };
+    for key in object.keys() {
+        if !matches!(
+            key.as_str(),
+            "type" | "label" | "sourceId" | "fieldPath" | "field" | "aggregation" | "evidenceIds"
+        ) {
+            return Err(anyhow!("unsupported dataBinding field: {key}"));
+        }
+    }
+    for key in [
+        "type",
+        "label",
+        "sourceId",
+        "fieldPath",
+        "field",
+        "aggregation",
+    ] {
+        if let Some(value) = object.get(key) {
+            validate_optional_string(value, &format!("dataBinding.{key}"))?;
+        }
+    }
+    if let Some(evidence_ids) = object.get("evidenceIds") {
+        if !evidence_ids.is_array() {
+            return Err(anyhow!("dataBinding.evidenceIds must be an array"));
+        }
+    }
+    Ok(())
+}
+
+fn validate_visualization_patch(value: &Value) -> Result<()> {
+    let Some(object) = value.as_object() else {
+        return Err(anyhow!("visualization must be an object"));
+    };
+    for key in object.keys() {
+        if !matches!(key.as_str(), "type" | "label" | "chartOptions") {
+            return Err(anyhow!("unsupported visualization field: {key}"));
+        }
+    }
+    if let Some(visualization_type) = object.get("type").and_then(Value::as_str) {
+        if !is_supported_visualization_type(visualization_type) {
+            return Err(anyhow!(
+                "unsupported static page visualization type: {visualization_type}"
+            ));
+        }
+    }
+    if let Some(label) = object.get("label") {
+        validate_optional_string(label, "visualization.label")?;
+    }
+    if let Some(chart_options) = object.get("chartOptions") {
+        validate_chart_options(chart_options)?;
+    }
+    Ok(())
+}
+
+fn validate_chart_options(value: &Value) -> Result<()> {
+    let Some(object) = value.as_object() else {
+        return Err(anyhow!("chartOptions must be an object"));
+    };
+    for key in object.keys() {
+        if !matches!(
+            key.as_str(),
+            "showLegend" | "showAxis" | "valueFormat" | "dataKey" | "categoryKey" | "seriesKey"
+        ) {
+            return Err(anyhow!("unsupported chartOptions field: {key}"));
+        }
+    }
+    Ok(())
 }
 
 fn rename_key(object: &mut Map<String, Value>, from: &str, to: &str) {
@@ -277,6 +438,9 @@ fn build_provider_input(request: &StaticPageIntentRequest) -> String {
             "Schema: {\"summary\":\"short Chinese summary\",\"operations\":[StaticPageDraftOperation...]}",
             "Do not answer the user directly. Do not include markdown fences.",
             "Allowed operation types: update_module, add_module, remove_module, move_module, resize_module, change_visualization, change_data_binding, reorder_modules, change_style_direction, refresh_summary, queue_image_job, update_image_job_status, mark_preview_ready, confirm_preview, reset_image_job, request_final_render.",
+            "For module edits prefer update_module.patch with title, content, dataBinding, visualization, chartOptions, and layout.",
+            "For data binding use dataBinding={type,label,sourceId,fieldPath,aggregation,evidenceIds}. For charts use visualization={type,label,chartOptions}.",
+            "Prefer fieldPath values from draft_payload.dataSnapshot.field_candidates or draft_payload.data_snapshot.field_candidates when they exist.",
             "Use only visible selected_scope and supplied evidence. Never invent private data."
         ],
         "prompt": request.prompt,
@@ -637,6 +801,74 @@ mod tests {
 
         assert!(unknown.is_err());
         assert!(unsafe_key.is_err());
+    }
+
+    #[test]
+    fn operation_sanitizer_accepts_full_module_edit_contract() {
+        let operations = sanitize_static_page_operations(vec![json!({
+            "type": "update_module",
+            "targetModuleId": "trend",
+            "patch": {
+                "title": "订单趋势",
+                "content": "展示订单金额按月变化。",
+                "dataBinding": {
+                    "type": "selected_scope",
+                    "label": "订单金额",
+                    "sourceId": "selected_scope",
+                    "fieldPath": "orders.amount",
+                    "aggregation": "sum",
+                    "evidenceIds": ["ev-1"]
+                },
+                "visualization": {
+                    "type": "line-chart",
+                    "label": "趋势折线图",
+                    "chartOptions": {
+                        "showLegend": true,
+                        "showAxis": true,
+                        "valueFormat": "currency",
+                        "dataKey": "orders.amount",
+                        "categoryKey": "month"
+                    }
+                },
+                "chartOptions": {
+                    "seriesKey": "segment"
+                }
+            }
+        })])
+        .expect("full edit operation should sanitize");
+
+        assert_eq!(operations.len(), 1);
+        assert_eq!(
+            operations[0]["patch"]["dataBinding"]["sourceId"],
+            json!("selected_scope")
+        );
+        assert_eq!(
+            operations[0]["patch"]["visualization"]["type"],
+            json!("line-chart")
+        );
+    }
+
+    #[test]
+    fn operation_sanitizer_rejects_unsupported_module_patch_fields() {
+        let unknown_patch_field = sanitize_static_page_operations(vec![json!({
+            "type": "update_module",
+            "targetModuleId": "trend",
+            "patch": {
+                "html": "<script>alert(1)</script>"
+            }
+        })]);
+        let invalid_chart = sanitize_static_page_operations(vec![json!({
+            "type": "update_module",
+            "targetModuleId": "trend",
+            "patch": {
+                "visualization": {
+                    "type": "three-dimensional-pie"
+                }
+            }
+        })]);
+
+        assert!(unknown_patch_field.is_err());
+        assert!(invalid_chart.is_err());
     }
 
     #[test]

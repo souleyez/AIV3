@@ -22,9 +22,17 @@ function layoutChanged(previous, next) {
     || previous.h !== next.h;
 }
 
+function draftFieldCandidates(draft) {
+  return draft.dataSnapshot?.fieldCandidates
+    || draft.dataSnapshot?.field_candidates
+    || draft.data_snapshot?.field_candidates
+    || [];
+}
+
 export default function StaticPagePlanningCanvas({ draft, onApplyOperation }) {
   const { width, containerRef, mounted } = useContainerWidth({ initialWidth: 680 });
   const layout = draft.modules.map(moduleLayout);
+  const fieldCandidates = draftFieldCandidates(draft);
 
   function emitChangedLayout(_nextLayout, _oldItem, newItem, operationType) {
     const changed = newItem || _nextLayout.find((item) => {
@@ -73,7 +81,11 @@ export default function StaticPagePlanningCanvas({ draft, onApplyOperation }) {
         >
           {draft.modules.map((module) => (
             <div key={module.id} className="static-page-grid-item">
-              <StaticPageModuleCard module={module} onApplyOperation={onApplyOperation} />
+              <StaticPageModuleCard
+                module={module}
+                fieldCandidates={fieldCandidates}
+                onApplyOperation={onApplyOperation}
+              />
             </div>
           ))}
         </GridLayout>

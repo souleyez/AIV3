@@ -1,7 +1,11 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { STATIC_PAGE_VISUALIZATION_TYPES } from '../../lib/static-page-draft';
+import {
+  STATIC_PAGE_DATA_SOURCE_TYPES,
+  STATIC_PAGE_VISUALIZATION_TYPES,
+  buildStaticPageModuleUpdateOperation,
+} from '../../lib/static-page-draft';
 
 function stopControlPropagation(event) {
   event.stopPropagation();
@@ -11,11 +15,27 @@ function visualizationLabel(type) {
   return STATIC_PAGE_VISUALIZATION_TYPES.find((item) => item.type === type)?.label || type;
 }
 
-export default function StaticPageModuleCard({ module, onApplyOperation, compact = false }) {
+function candidateFieldPath(candidate) {
+  return candidate?.fieldPath || candidate?.field_path || candidate?.field || '';
+}
+
+function candidateLabel(candidate) {
+  return candidate?.label || candidateFieldPath(candidate);
+}
+
+export default function StaticPageModuleCard({
+  module,
+  onApplyOperation,
+  compact = false,
+  fieldCandidates = [],
+}) {
+  const fieldListId = `static-page-field-candidates-${module.id}`;
   const [draft, setDraft] = useState({
     title: module.title || '',
     content: module.content || '',
     dataLabel: module.dataBinding?.label || '',
+    dataSourceId: module.dataBinding?.sourceId || 'model',
+    dataField: module.dataBinding?.fieldPath || '',
     visualizationType: module.visualization?.type || 'text-insight',
   });
 
@@ -24,34 +44,47 @@ export default function StaticPageModuleCard({ module, onApplyOperation, compact
       title: module.title || '',
       content: module.content || '',
       dataLabel: module.dataBinding?.label || '',
+      dataSourceId: module.dataBinding?.sourceId || 'model',
+      dataField: module.dataBinding?.fieldPath || '',
       visualizationType: module.visualization?.type || 'text-insight',
     });
-  }, [module.id, module.title, module.content, module.dataBinding?.label, module.visualization?.type]);
+  }, [
+    module.id,
+    module.title,
+    module.content,
+    module.dataBinding?.label,
+    module.dataBinding?.sourceId,
+    module.dataBinding?.fieldPath,
+    module.visualization?.type,
+  ]);
 
   const dirty = draft.title !== (module.title || '')
     || draft.content !== (module.content || '')
     || draft.dataLabel !== (module.dataBinding?.label || '')
+    || draft.dataSourceId !== (module.dataBinding?.sourceId || 'model')
+    || draft.dataField !== (module.dataBinding?.fieldPath || '')
     || draft.visualizationType !== (module.visualization?.type || 'text-insight');
 
   function applyModuleEdit() {
     if (!dirty) return;
-    onApplyOperation?.({
-      type: 'update_module',
-      targetModuleId: module.id,
-      patch: {
+    const sourcePreset = STATIC_PAGE_DATA_SOURCE_TYPES.find((item) => item.sourceId === draft.dataSourceId)
+      || STATIC_PAGE_DATA_SOURCE_TYPES[0];
+    onApplyOperation?.(
+      buildStaticPageModuleUpdateOperation(module, {
         title: draft.title.trim() || module.title || '未命名模块',
         content: draft.content.trim() || module.content || '补充这个模块要表达的内容。',
         dataBinding: {
-          ...(module.dataBinding || {}),
+          type: sourcePreset.type,
+          sourceId: sourcePreset.sourceId,
           label: draft.dataLabel.trim() || '数据绑定待确认',
+          fieldPath: draft.dataField.trim() || null,
         },
         visualization: {
-          ...(module.visualization || {}),
           type: draft.visualizationType,
           label: visualizationLabel(draft.visualizationType),
         },
-      },
-    });
+      }),
+    );
   }
 
   return (
@@ -81,12 +114,47 @@ export default function StaticPageModuleCard({ module, onApplyOperation, compact
               />
             </label>
             <label>
-              <span>数据</span>
+              <span>数据名称</span>
               <input
                 value={draft.dataLabel}
                 onChange={(event) => setDraft((current) => ({ ...current, dataLabel: event.target.value }))}
                 onBlur={applyModuleEdit}
               />
+            </label>
+            <label>
+              <span>数据源</span>
+              <select
+                value={draft.dataSourceId}
+                onChange={(event) => setDraft((current) => ({ ...current, dataSourceId: event.target.value }))}
+                onBlur={applyModuleEdit}
+              >
+                {STATIC_PAGE_DATA_SOURCE_TYPES.map((item) => (
+                  <option key={item.sourceId} value={item.sourceId}>{item.label}</option>
+                ))}
+              </select>
+            </label>
+            <label>
+              <span>字段</span>
+              <input
+                value={draft.dataField}
+                placeholder="自动识别"
+                list={fieldListId}
+                onChange={(event) => setDraft((current) => ({ ...current, dataField: event.target.value }))}
+                onBlur={applyModuleEdit}
+              />
+              {fieldCandidates.length > 0 ? (
+                <datalist id={fieldListId}>
+                  {fieldCandidates.map((candidate) => {
+                    const fieldPath = candidateFieldPath(candidate);
+                    if (!fieldPath) return null;
+                    return (
+                      <option key={`${candidate?.sourceId || 'field'}:${fieldPath}`} value={fieldPath}>
+                        {candidateLabel(candidate)}
+                      </option>
+                    );
+                  })}
+                </datalist>
+              ) : null}
             </label>
             <label className="wide">
               <span>内容</span>

@@ -28,6 +28,45 @@ export const STATIC_PAGE_VISUALIZATION_TYPES = [
   { type: 'text-insight', label: '洞察文本块' },
 ];
 
+export const STATIC_PAGE_DATA_SOURCE_TYPES = [
+  {
+    sourceId: 'model',
+    type: 'model_summary',
+    label: '模型总结',
+    description: '使用当前对话和页面目标生成的摘要内容。',
+  },
+  {
+    sourceId: 'selected_scope',
+    type: 'selected_scope',
+    label: '当前选中范围',
+    description: '优先使用左侧已选中的公开或密钥匹配数据集。',
+  },
+  {
+    sourceId: 'evidence',
+    type: 'retrieval_evidence',
+    label: '检索证据',
+    description: '使用当前回答命中的文档片段、解析结果或检索证据。',
+  },
+  {
+    sourceId: 'conversation_memory',
+    type: 'conversation_memory',
+    label: '对话历史',
+    description: '使用本终端缓存的相关历史对话。',
+  },
+  {
+    sourceId: 'session',
+    type: 'conversation_summary',
+    label: '当前会话摘要',
+    description: '使用当前报表/静态页会话里已经确认的上下文。',
+  },
+  {
+    sourceId: 'dataset',
+    type: 'dataset_metrics',
+    label: '数据集指标摘要',
+    description: '使用数据集解析出的指标、字段和统计摘要。',
+  },
+];
+
 export const DEFAULT_STATIC_PAGE_MODULES = [
   {
     id: 'hero',
@@ -115,6 +154,7 @@ const GRID_COLUMNS = 12;
 const DEFAULT_STYLE_DIRECTION = 'client-delivery';
 const STYLE_KEYS = new Set(STATIC_PAGE_STYLE_DIRECTIONS.map((item) => item.key));
 const VISUALIZATION_TYPES = new Set(STATIC_PAGE_VISUALIZATION_TYPES.map((item) => item.type));
+const DATA_SOURCE_IDS = new Set(STATIC_PAGE_DATA_SOURCE_TYPES.map((item) => item.sourceId));
 const IMAGE_JOB_STATUSES = new Set(['idle', 'queued', 'running', 'preview_ready', 'failed', 'confirmed']);
 const DESIGN_MUTATION_TYPES = new Set([
   'update_module',
@@ -216,7 +256,7 @@ const STATIC_PAGE_RENDER_SPEC = {
   mobileLayout: 'single-column-sortable',
   componentModel: 'dom-text-svg-chart',
   chartRuntime: 'recharts-first-echarts-optional',
-  editableContent: ['title', 'content', 'dataBinding', 'visualization', 'layout'],
+  editableContent: ['title', 'content', 'dataBinding', 'visualization', 'chartOptions', 'layout'],
   generationGuardrails: [
     '效果图必须服从模块网格布局和移动端顺序',
     '正文、指标、图表在最终静态页中必须是真 DOM 或 SVG，不允许只烘焙进图片',
@@ -264,17 +304,22 @@ function designFingerprint(value) {
 
 export function buildStaticPageDataSnapshot(draft) {
   const modules = Array.isArray(draft?.modules) ? draft.modules : [];
+  const dataSourceCandidates = buildStaticPageDataSourceCandidates(draft);
+  const fieldCandidates = buildStaticPageFieldCandidates(draft);
   return {
     version: 1,
     source: 'static-page-draft',
     selectedDatasetId: draft?.datasetId || null,
     selectedSessionId: draft?.sessionId || null,
     evidenceIds: Array.isArray(draft?.source?.evidenceIds) ? [...draft.source.evidenceIds] : [],
+    dataSourceCandidates,
+    fieldCandidates,
     moduleBindings: modules.map((module) => ({
       moduleId: module.id,
       title: module.title,
-      binding: clone(module.dataBinding || {}),
+      binding: normalizeDataBinding(module.dataBinding || {}),
       visualizationType: module.visualization?.type || 'text-insight',
+      chartOptions: normalizeVisualization(module.visualization || {}).chartOptions,
     })),
   };
 }
@@ -342,6 +387,47 @@ function visualizationLabel(type) {
   return STATIC_PAGE_VISUALIZATION_TYPES.find((item) => item.type === type)?.label || type;
 }
 
+function dataSourcePreset(sourceId) {
+  return STATIC_PAGE_DATA_SOURCE_TYPES.find((item) => item.sourceId === sourceId)
+    || STATIC_PAGE_DATA_SOURCE_TYPES[0];
+}
+
+function normalizeChartOptions(visualizationType, chartOptions = {}) {
+  const type = VISUALIZATION_TYPES.has(visualizationType) ? visualizationType : 'text-insight';
+  const options = chartOptions && typeof chartOptions === 'object' && !Array.isArray(chartOptions)
+    ? { ...chartOptions }
+    : {};
+  return {
+    showLegend: !['headline', 'kpi-cards', 'text-insight'].includes(type),
+    showAxis: ['bar-chart', 'line-chart'].includes(type),
+    valueFormat: options.valueFormat || 'auto',
+    ...options,
+  };
+}
+
+function normalizeDataBinding(binding = {}) {
+  const sourceId = DATA_SOURCE_IDS.has(binding.sourceId) ? binding.sourceId : 'model';
+  const preset = dataSourcePreset(sourceId);
+  return {
+    type: binding.type || preset.type,
+    label: binding.label || preset.label,
+    sourceId,
+    fieldPath: binding.fieldPath || binding.field || null,
+    aggregation: binding.aggregation || null,
+    evidenceIds: Array.isArray(binding.evidenceIds) ? [...binding.evidenceIds] : [],
+  };
+}
+
+function normalizeVisualization(visualization = {}) {
+  const type = VISUALIZATION_TYPES.has(visualization.type) ? visualization.type : 'text-insight';
+  return {
+    ...visualization,
+    type,
+    label: visualization.label || visualizationLabel(type),
+    chartOptions: normalizeChartOptions(type, visualization.chartOptions),
+  };
+}
+
 function normalizeLayout(layout = {}) {
   const width = Math.max(1, Math.min(GRID_COLUMNS, Number(layout.w || 1)));
   const x = Math.max(0, Math.min(GRID_COLUMNS - width, Number(layout.x || 0)));
@@ -357,25 +443,179 @@ function mergeModule(module, patch = {}) {
   const next = {
     ...module,
     ...patch,
-    dataBinding: {
-      ...module.dataBinding,
+    dataBinding: normalizeDataBinding({
+      ...(module.dataBinding || {}),
       ...(patch.dataBinding || {}),
-    },
-    visualization: {
-      ...module.visualization,
+    }),
+    visualization: normalizeVisualization({
+      ...(module.visualization || {}),
       ...(patch.visualization || {}),
-    },
+      chartOptions: {
+        ...(module.visualization?.chartOptions || {}),
+        ...(patch.chartOptions || {}),
+        ...(patch.visualization?.chartOptions || {}),
+      },
+    }),
     layout: normalizeLayout({
       ...module.layout,
       ...(patch.layout || {}),
     }),
   };
 
-  if (next.visualization?.type) {
-    next.visualization.label = next.visualization.label || visualizationLabel(next.visualization.type);
+  return next;
+}
+
+export function buildStaticPageDataSourceCandidates(draft = {}) {
+  const bySourceId = new Map(STATIC_PAGE_DATA_SOURCE_TYPES.map((item) => [
+    item.sourceId,
+    {
+      ...item,
+      available: ['model', 'conversation_memory'].includes(item.sourceId),
+    },
+  ]));
+
+  if (draft.datasetId) {
+    bySourceId.set('dataset', {
+      ...dataSourcePreset('dataset'),
+      available: true,
+      datasetId: draft.datasetId,
+    });
+    bySourceId.set('selected_scope', {
+      ...dataSourcePreset('selected_scope'),
+      available: true,
+      datasetId: draft.datasetId,
+    });
+  }
+  if (draft.sessionId) {
+    bySourceId.set('session', {
+      sourceId: 'session',
+      type: 'conversation_summary',
+      label: '当前会话摘要',
+      description: '使用当前报表/静态页会话里已经确认的上下文。',
+      available: true,
+      sessionId: draft.sessionId,
+    });
+  }
+  if (Array.isArray(draft.source?.evidenceIds) && draft.source.evidenceIds.length > 0) {
+    bySourceId.set('evidence', {
+      ...dataSourcePreset('evidence'),
+      available: true,
+      evidenceIds: [...draft.source.evidenceIds],
+    });
   }
 
-  return next;
+  return [...bySourceId.values()];
+}
+
+function normalizeFieldCandidate(candidate = {}) {
+  const sourceId = DATA_SOURCE_IDS.has(candidate.sourceId) ? candidate.sourceId : 'model';
+  const fieldPath = candidate.fieldPath || candidate.field_path || candidate.field || null;
+  return {
+    sourceId,
+    fieldPath,
+    label: candidate.label || fieldPath || dataSourcePreset(sourceId).label,
+    kind: candidate.kind || candidate.type || 'text',
+    recommendedAggregation: candidate.recommendedAggregation
+      || candidate.recommended_aggregation
+      || candidate.aggregation
+      || null,
+    confidence: Number.isFinite(Number(candidate.confidence)) ? Number(candidate.confidence) : null,
+    evidenceIds: Array.isArray(candidate.evidenceIds)
+      ? [...candidate.evidenceIds]
+      : Array.isArray(candidate.evidence_ids)
+        ? [...candidate.evidence_ids]
+        : [],
+  };
+}
+
+function pushFieldCandidate(candidates, seen, candidate) {
+  const normalized = normalizeFieldCandidate(candidate);
+  if (!normalized.fieldPath) return;
+  const key = `${normalized.sourceId}:${normalized.fieldPath}`;
+  if (seen.has(key)) return;
+  seen.add(key);
+  candidates.push(normalized);
+}
+
+export function buildStaticPageFieldCandidates(draft = {}) {
+  const candidates = [];
+  const seen = new Set();
+  const existingCandidates = [
+    ...(Array.isArray(draft?.source?.fieldCandidates) ? draft.source.fieldCandidates : []),
+    ...(Array.isArray(draft?.dataSnapshot?.fieldCandidates) ? draft.dataSnapshot.fieldCandidates : []),
+    ...(Array.isArray(draft?.dataSnapshot?.field_candidates) ? draft.dataSnapshot.field_candidates : []),
+    ...(Array.isArray(draft?.data_snapshot?.field_candidates) ? draft.data_snapshot.field_candidates : []),
+  ];
+
+  existingCandidates.forEach((candidate) => pushFieldCandidate(candidates, seen, candidate));
+
+  if (draft.datasetId) {
+    pushFieldCandidate(candidates, seen, {
+      sourceId: 'dataset',
+      fieldPath: 'dataset.metrics_summary',
+      label: '数据集指标摘要',
+      kind: 'summary',
+      confidence: 0.55,
+    });
+  }
+
+  const evidenceIds = Array.isArray(draft.source?.evidenceIds) ? draft.source.evidenceIds : [];
+  if (evidenceIds.length > 0) {
+    pushFieldCandidate(candidates, seen, {
+      sourceId: 'evidence',
+      fieldPath: 'retrieval.summary',
+      label: '证据摘要',
+      kind: 'text',
+      confidence: 0.72,
+      evidenceIds,
+    });
+    pushFieldCandidate(candidates, seen, {
+      sourceId: 'evidence',
+      fieldPath: 'retrieval.content_excerpt',
+      label: '证据原文片段',
+      kind: 'text',
+      confidence: 0.70,
+      evidenceIds,
+    });
+  }
+
+  return candidates;
+}
+
+export function buildStaticPageModuleUpdateOperation(module, patch = {}) {
+  const visualizationType = patch.visualizationType || patch.visualization?.type || module?.visualization?.type || 'text-insight';
+  const dataBinding = normalizeDataBinding({
+    ...(module?.dataBinding || {}),
+    ...(patch.dataBinding || {}),
+  });
+  const visualization = normalizeVisualization({
+    ...(module?.visualization || {}),
+    ...(patch.visualization || {}),
+    type: visualizationType,
+    chartOptions: {
+      ...(module?.visualization?.chartOptions || {}),
+      ...(patch.chartOptions || {}),
+      ...(patch.visualization?.chartOptions || {}),
+      dataKey: patch.dataBinding?.fieldPath
+        || patch.dataBinding?.field
+        || module?.visualization?.chartOptions?.dataKey
+        || null,
+    },
+  });
+
+  const operationPatch = {
+    dataBinding,
+    visualization,
+    chartOptions: visualization.chartOptions,
+  };
+  if (patch.title !== undefined) operationPatch.title = patch.title;
+  if (patch.content !== undefined) operationPatch.content = patch.content;
+
+  return {
+    type: 'update_module',
+    targetModuleId: module.id,
+    patch: operationPatch,
+  };
 }
 
 function normalizeMobileOrder(modules, order) {
@@ -453,6 +693,7 @@ export function buildInitialStaticPageDraft({
   sessionId = null,
   conversationSummary = '',
   evidenceIds = [],
+  fieldCandidates = [],
 } = {}) {
   const modules = clone(DEFAULT_STATIC_PAGE_MODULES);
   const draft = {
@@ -463,6 +704,7 @@ export function buildInitialStaticPageDraft({
       conversationSummary,
       selectedMessageIds: [],
       evidenceIds: Array.isArray(evidenceIds) ? [...evidenceIds] : [],
+      fieldCandidates: Array.isArray(fieldCandidates) ? [...fieldCandidates] : [],
     },
     status: 'planning',
     objective: '给客户展示当前数据结论，并生成可交付静态页',
@@ -846,7 +1088,9 @@ export function buildStaticPageImagePayload(draft, { oneClick = false } = {}) {
       title: module.title,
       content: module.content,
       dataLabel: module.dataBinding?.label || '',
+      dataBinding: normalizeDataBinding(module.dataBinding || {}),
       visualizationType: module.visualization?.type || 'text-insight',
+      chartOptions: normalizeVisualization(module.visualization || {}).chartOptions,
       layout: normalizeLayout(module.layout),
     })),
   };

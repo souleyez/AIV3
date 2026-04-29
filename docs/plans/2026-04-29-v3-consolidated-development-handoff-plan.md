@@ -18,6 +18,7 @@ Detailed source documents remain valid as references:
 
 - `docs/plans/2026-04-27-static-page-generation-studio-plan.md`: detailed static-page, assistant shell, ingestion, visibility, AssistantRun, and renderer plan/history.
 - `docs/plans/2026-04-29-openclaw-extension-adapter-plan.md`: detailed optional OpenClaw adapter plan.
+- `docs/plans/2026-04-29-v3-react-agent-refinement-plan.md`: detailed ReAct refinement plan comparing the Java reference, the original TS contract, and current V3 AssistantRun implementation.
 - `docs/plans/2026-04-23-v3-development-plan.md`: older high-level V3 phase baseline.
 - `docs/plans/2026-04-25-static-page-visual-workbench-v3-plan.md`: older visual-workbench plan; keep only as Cloudflare image-provider and visual-contract reference. Do not revive the separate popup/workbench direction unless explicitly requested.
 
@@ -35,6 +36,7 @@ Plan files in this consolidation slice:
 docs/plans/2026-04-27-static-page-generation-studio-plan.md
 docs/plans/2026-04-29-openclaw-extension-adapter-plan.md
 docs/plans/2026-04-29-v3-consolidated-development-handoff-plan.md
+docs/plans/2026-04-29-v3-react-agent-refinement-plan.md
 ```
 
 Recent verified capabilities:
@@ -108,11 +110,16 @@ Rules:
 
 - The model may propose actions, but V3 validates and executes them.
 - V3 must apply dataset visibility, local-key matching, tool allowlists, operation schemas, and confirmation gates before any action runs.
+- Planning catalog, startup briefing, visible library lists, and system capability summaries are not evidence. They only help the model choose the next tool.
+- When selected datasets or conversation memory are in scope, `final_answer` requires a prior supply observation or already supplied evidence state. Premature terminal answers should receive a `policy_observation` and continue the loop.
+- Protocol repair is different from fallback: repairable mistakes stay inside the same ReAct loop; fallback is reserved for runtime outage, malformed JSON that cannot be parsed safely, infrastructure failure, or step-limit exhaustion.
 - ReAct observations are persisted as AssistantRun events and concise execution-trail steps.
 - The UI shows brief user-facing steps, not full hidden chain-of-thought.
 - Each run has a bounded step limit, default 3 and max 5 for the first implementation.
-- If the model emits invalid action JSON, V3 records the failure and asks for a corrected action or falls back to a final answer.
+- If the model emits invalid action JSON, V3 records the failure and asks for a corrected action or uses clearly labeled runtime fallback only when safe.
 - OpenClaw can participate as a provider or optional capability bridge, but ReAct state remains V3-owned.
+
+Detailed refinement handoff: use `docs/plans/2026-04-29-v3-react-agent-refinement-plan.md` when continuing AssistantRun/ReAct work. That document is the stricter implementation checklist for moving from the first V3 product-action loop toward the Java-reference-aligned model-tool protocol.
 
 ## Workstreams
 
@@ -203,13 +210,15 @@ Next outcomes:
 
 - Add: `docs/plans/2026-04-29-v3-consolidated-development-handoff-plan.md`
 - Add: `docs/plans/2026-04-29-openclaw-extension-adapter-plan.md`
+- Add: `docs/plans/2026-04-29-v3-react-agent-refinement-plan.md`
 - Modify: `docs/plans/2026-04-27-static-page-generation-studio-plan.md`
 
 **Steps:**
 
 1. Add consolidation notes to old source plans.
-2. Run `git diff --check`.
-3. Commit as `docs: consolidate v3 development handoff plan`.
+2. Add the ReAct refinement sub-plan if AssistantRun/ReAct work is active.
+3. Run `git diff --check`.
+4. Commit as `docs: consolidate v3 development handoff plan`.
 
 **Why first:** the next thread needs one source of truth.
 
@@ -267,6 +276,11 @@ Next outcomes:
 **Status 2026-04-29:** backend first slice implemented in `crates/platform-api/src/lib.rs`.
 AssistantRun create and continue paths now support a config-gated Host-Controlled ReAct loop with strict action JSON parsing, step limits, V3-owned retrieval/visibility checks, static-page module operation sanitization, persisted ReAct events, and concise execution-trail steps. Contracts/storage changes were not required for this phase because existing AssistantRun events, output artifacts, and evidence-state fields were sufficient. Static-page write actions are currently returned as sanitized operations/observations rather than silently applying to drafts; applying them to a selected draft belongs to Slice 4.
 
+**Reference alignment 2026-04-29:** compared with `C:/Users/soulzyn/Desktop/codex/ai-data-platform-java-client/docs/architecture/react-agent-architecture-reference.md`.
+The Java reference confirms the same boundary: model owns intent/next action/final wording, while V3 owns identity, scope, permission checks, whitelisted tool execution, limits, and audit. V3 should keep planning catalogs weak, treat observations/evidence state as the only answerable supply, repair premature terminal answers with `policy_observation`, and reserve fallback for runtime degradation rather than normal protocol steering. The first protocol-repair guard is now implemented for scoped data: if selected datasets or conversation memory require supply and the model emits `final_answer` before any supply observation/evidence state, V3 appends a policy observation and continues.
+
+**Detailed refinement plan 2026-04-29:** `docs/plans/2026-04-29-v3-react-agent-refinement-plan.md` is now the active sub-plan for the next ReAct pass. It keeps current V3 behavior, then extracts a typed contract module, weak planning catalog, tool registry, protocol-repair matrix, report handoff, document-detail reading, redacted trace persistence, frontend progress alignment, and optional OpenClaw bridge actions.
+
 **Files:**
 
 - Modify: `crates/platform-api/src/lib.rs`
@@ -284,8 +298,10 @@ AssistantRun create and continue paths now support a config-gated Host-Controlle
 4. Persist each step as AssistantRun event names such as `assistant_run.react.action_requested`, `assistant_run.react.action_completed`, and `assistant_run.react.final_answer`.
 5. Add concise execution-trail labels for the UI, for example `检索供料证据`, `召回对话记忆`, `更新静态页模块`, `模型生成最终回答`.
 6. Enforce max-step limits with default 3 and max 5.
-7. Keep deterministic fallback: if provider runtime is placeholder or invalid JSON repeats, return the normal single-step answer path.
-8. Add tests for valid retrieval action, invalid action rejection, hidden dataset denial, static-page module update action, final answer, and step-limit stop.
+7. Add protocol repair observations for premature terminal answers, report-choice-before-options, denied IDs, and repairable policy violations.
+8. Keep deterministic fallback only for runtime outage, malformed JSON that cannot be parsed safely, infrastructure failure, explicit ReAct disablement, or step-limit exhaustion.
+9. Add tests for valid retrieval action, invalid action rejection, hidden dataset denial, static-page module update action, final answer, premature final-answer repair, and step-limit stop.
+10. For post-first-slice cleanup, follow the task order in `docs/plans/2026-04-29-v3-react-agent-refinement-plan.md` instead of expanding the monolithic `crates/platform-api/src/lib.rs` implementation further.
 
 **Acceptance:**
 
@@ -293,6 +309,7 @@ AssistantRun create and continue paths now support a config-gated Host-Controlle
 - AssistantRun can continue through multiple model-requested action steps.
 - UI-facing trail contains concise steps without exposing hidden chain-of-thought.
 - Static-page module updates can be requested by the model through the same action contract used by user micro-adjustments.
+- Premature final answers over scoped private/public data are repaired inside the ReAct loop instead of accepted as business answers.
 - Existing ordinary chat still works when ReAct is disabled.
 
 **Verified 2026-04-29:**
@@ -302,6 +319,12 @@ AssistantRun create and continue paths now support a config-gated Host-Controlle
 - `cargo test -p platform-api assistant_run`
 
 ### Slice 4: Static-Page Module Editing And Data Binding
+
+**Status 2026-04-29:** first contract/UI batch implemented.
+The frontend draft model now exposes data-source candidates, stronger module update operations, normalized `dataBinding`, `visualization`, and `chartOptions`, and image/final render payloads carry the same editable contract. The module micro-adjustment UI emits the stronger `update_module` operation while keeping controls tucked inside the existing collapsed editor. `static-page-runtime` now validates the stronger operation schema and provider prompts explicitly tell models to use it. `platform-api` propagates data-source candidates and chart options through draft payload/data snapshots. Remaining Slice 4 work should focus on richer real field discovery from selected evidence and broader UI affordances only where they stay natural-language-first.
+
+**Status 2026-04-29 field discovery batch:** in progress.
+Static-page data snapshots now derive `field_candidates` from selected scope, AssistantRun evidence state, retrieval summaries/excerpts, and retrieval term weights. Frontend draft snapshots preserve backend field suggestions, add safe evidence fallbacks, and expose those fields through a lightweight datalist inside the collapsed module editor. This keeps module data binding model-operable without turning the product into a manual form builder.
 
 **Files:**
 
@@ -330,7 +353,25 @@ AssistantRun create and continue paths now support a config-gated Host-Controlle
 - Model can apply the same operation shape from natural-language prompts.
 - Draft marks preview/final render stale after content or data changes.
 
+**Verified 2026-04-29 first batch:**
+
+- `node --test apps/web/app/lib/static-page-draft.test.mjs`
+- `cargo test -p static-page-runtime`
+- `cargo test -p platform-api static_page_draft_can_be_created_under_assistant_run`
+- `npm run build` in `apps/web`
+
+**Verification target for field discovery batch:**
+
+- `node --test apps/web/app/lib/static-page-draft.test.mjs`
+- `cargo test -p platform-api static_page_data_snapshot_extracts_field_candidates_from_evidence_state`
+- `cargo test -p platform-api static_page_draft_can_be_created_under_assistant_run`
+- `cargo test -p static-page-runtime`
+- `npm run build` in `apps/web`
+
 ### Slice 5: Real Static-Page Data Snapshot Path
+
+**Status 2026-04-29 initial renderer batch:** in progress.
+The backend data snapshot now attaches per-module evidence-derived `sampleData` and `dataQuality` when a module has a recognized `fieldPath`. The renderer now reads module `dataBinding`, snapshot module bindings, and snapshot `sampleData` before drawing charts. If chart data is missing, it renders an explicit "数据待确认" notice instead of fake placeholder numbers.
 
 **Files:**
 
@@ -353,6 +394,13 @@ AssistantRun create and continue paths now support a config-gated Host-Controlle
 - Generated static pages can use real retrieved data when available.
 - Missing or weak data is explicitly labeled instead of faked.
 - Renderer output and image prompt share the same data snapshot.
+
+**Verification target for initial renderer batch:**
+
+- `cargo test -p platform-api static_page_data_snapshot_extracts_field_candidates_from_evidence_state`
+- `cargo test -p static-page-renderer`
+- `cargo test -p platform-api static_page_draft_can_be_created_under_assistant_run`
+- `npm run build` in `apps/web`
 
 ### Slice 6: Final Render Worker And Export Package
 
@@ -496,6 +544,8 @@ AssistantRun create and continue paths now support a config-gated Host-Controlle
 
 Start with Slice 0 if the consolidated plan is not committed.
 
+Current 2026-04-29 transition note: if the current in-progress batch is still uncommitted, first clean/test/commit it as one coherent slice covering static-page module data binding, real-data renderer behavior, premature ReAct final-answer repair, and this ReAct refinement plan. After that commit, do not keep adding logic to the monolithic AssistantRun block; use the detailed ReAct refinement plan to extract the contract/catalog/tool-registry pieces.
+
 If Slice 0 is already committed but Slice 1 and Slice 2 are not yet committed, start with Slice 1:
 
 ```text
@@ -514,7 +564,16 @@ The model may propose actions, but V3 validates, executes, records, and limits e
 Keep ordinary chat and deterministic static-page fallback working when ReAct is disabled.
 ```
 
-If Slice 3 is already committed, start with Slice 4:
+If Slice 3 first backend slice is committed but the detailed ReAct refinement is not complete, start with the ReAct refinement sub-plan:
+
+```text
+Refine Host-Controlled ReAct using docs/plans/2026-04-29-v3-react-agent-refinement-plan.md.
+Begin with Task 1 through Task 3: typed contract module, weak planning catalog, and tool registry.
+Keep current V3 product actions working while extracting structure from crates/platform-api/src/lib.rs.
+Do not add OpenClaw bridge actions until the registry and protocol repair matrix are in place.
+```
+
+If the first ReAct refinement pass is complete, continue Slice 4:
 
 ```text
 Implement static-page module editing and data binding.

@@ -214,6 +214,9 @@ fn render_visualization_html(module: &Value, visualization: &str, data_snapshot:
 
 fn render_kpi_cards(module: &Value, data_snapshot: &Value) -> String {
     let points = chart_points(module, data_snapshot);
+    if points.is_empty() {
+        return render_missing_data_notice(module);
+    }
     let cards = points
         .iter()
         .take(4)
@@ -231,6 +234,9 @@ fn render_kpi_cards(module: &Value, data_snapshot: &Value) -> String {
 
 fn render_bar_chart(module: &Value, data_snapshot: &Value) -> String {
     let points = chart_points(module, data_snapshot);
+    if points.is_empty() {
+        return render_missing_data_notice(module);
+    }
     let max_value = max_chart_value(&points);
     let bars = points
         .iter()
@@ -261,6 +267,9 @@ fn render_bar_chart(module: &Value, data_snapshot: &Value) -> String {
 
 fn render_line_chart(module: &Value, data_snapshot: &Value) -> String {
     let points = chart_points(module, data_snapshot);
+    if points.is_empty() {
+        return render_missing_data_notice(module);
+    }
     let max_value = max_chart_value(&points);
     let coords = points
         .iter()
@@ -309,6 +318,9 @@ fn render_line_chart(module: &Value, data_snapshot: &Value) -> String {
 
 fn render_donut_chart(module: &Value, data_snapshot: &Value) -> String {
     let points = chart_points(module, data_snapshot);
+    if points.is_empty() {
+        return render_missing_data_notice(module);
+    }
     let total = points.iter().map(|point| point.value.max(0.0)).sum::<f64>();
     let first = points
         .first()
@@ -340,6 +352,9 @@ fn render_donut_chart(module: &Value, data_snapshot: &Value) -> String {
 
 fn render_table(module: &Value, data_snapshot: &Value) -> String {
     let points = chart_points(module, data_snapshot);
+    if points.is_empty() {
+        return render_missing_data_notice(module);
+    }
     let rows = points
         .iter()
         .take(4)
@@ -357,6 +372,9 @@ fn render_table(module: &Value, data_snapshot: &Value) -> String {
 
 fn render_timeline(module: &Value, data_snapshot: &Value) -> String {
     let points = chart_points(module, data_snapshot);
+    if points.is_empty() {
+        return render_missing_data_notice(module);
+    }
     let items = points
         .iter()
         .take(4)
@@ -374,6 +392,9 @@ fn render_timeline(module: &Value, data_snapshot: &Value) -> String {
 
 fn render_risk_matrix(module: &Value, data_snapshot: &Value) -> String {
     let points = chart_points(module, data_snapshot);
+    if points.is_empty() {
+        return render_missing_data_notice(module);
+    }
     let chips = points
         .iter()
         .take(4)
@@ -418,6 +439,19 @@ fn render_text_insight_visual(module: &Value) -> String {
     )
 }
 
+fn render_missing_data_notice(module: &Value) -> String {
+    let data_label = module
+        .get("dataBinding")
+        .or_else(|| module.get("data_binding"))
+        .and_then(|binding| binding.get("label"))
+        .and_then(Value::as_str)
+        .unwrap_or("该模块数据");
+    format!(
+        "<div class=\"data-missing\"><b>数据待确认</b><span>{}</span></div>",
+        escape_html(&short_label(data_label, 18))
+    )
+}
+
 #[derive(Clone, Debug)]
 struct ChartPoint {
     label: String,
@@ -433,6 +467,9 @@ fn chart_points(module: &Value, data_snapshot: &Value) -> Vec<ChartPoint> {
         module
             .get("visualization")
             .and_then(|visualization| visualization.get("values")),
+        module
+            .get("dataBinding")
+            .or_else(|| module.get("data_binding")),
         module.get("data"),
         module_id.and_then(|id| data_snapshot_module_binding(data_snapshot, id)),
     ];
@@ -453,7 +490,7 @@ fn chart_points(module: &Value, data_snapshot: &Value) -> Vec<ChartPoint> {
         }
     }
 
-    fallback_chart_points(module)
+    Vec::new()
 }
 
 fn data_snapshot_module_binding<'a>(
@@ -525,32 +562,6 @@ fn chart_point_from_value(index: usize, value: &Value) -> Option<ChartPoint> {
         .find_map(|key| object.get(*key).and_then(Value::as_f64))
         .or_else(|| object.values().find_map(Value::as_f64))?;
     Some(ChartPoint { label, value })
-}
-
-fn fallback_chart_points(module: &Value) -> Vec<ChartPoint> {
-    let title = module
-        .get("title")
-        .and_then(Value::as_str)
-        .unwrap_or("模块");
-    let base = title.chars().count() as f64;
-    vec![
-        ChartPoint {
-            label: "当前".to_string(),
-            value: 48.0 + base,
-        },
-        ChartPoint {
-            label: "对比".to_string(),
-            value: 36.0 + base / 2.0,
-        },
-        ChartPoint {
-            label: "目标".to_string(),
-            value: 62.0 + base / 3.0,
-        },
-        ChartPoint {
-            label: "风险".to_string(),
-            value: 24.0 + base / 4.0,
-        },
-    ]
 }
 
 fn max_chart_value(points: &[ChartPoint]) -> f64 {
@@ -744,7 +755,7 @@ h1{font-size:clamp(32px,6vw,64px);line-height:.95;margin:10px 0 14px}h2{font-siz
 .style-decision-brief p,.style-data-command p,.style-decision-brief small,.style-data-command small{color:#cbd5e1}
 .module{display:grid;gap:14px;align-content:start;overflow:hidden}.chart{min-height:92px;border-radius:18px;display:grid;place-items:center;background:linear-gradient(135deg,rgba(37,99,235,.12),rgba(14,165,233,.08));font-weight:900;color:var(--static-page-chart,#1d4ed8);padding:10px}
 .style-decision-brief .chart,.style-data-command .chart{background:rgba(255,255,255,.1);color:#bfdbfe}
-.chart-svg{width:100%;height:100%;min-height:112px;overflow:visible}.chart-svg rect,.chart-svg .donut-value{fill:var(--static-page-chart,#0ea5e9)}.chart-svg text{font-size:10px;fill:var(--static-page-muted,#475569);font-weight:800}.style-decision-brief .chart-svg text,.style-data-command .chart-svg text{fill:#cbd5e1}.line-path{fill:none;stroke:var(--static-page-chart,#0ea5e9);stroke-width:5;stroke-linecap:round;stroke-linejoin:round}.line-area{fill:var(--static-page-chart,#0ea5e9);opacity:.13}.line-chart circle{fill:var(--static-page-surface,#fff);stroke:var(--static-page-chart,#0ea5e9);stroke-width:3}.donut-base{fill:none;stroke:rgba(100,116,139,.22);stroke-width:18}.donut-value{fill:none;stroke:var(--static-page-chart,#0ea5e9);stroke-width:18;transform:rotate(-90deg);transform-origin:70px 70px;stroke-linecap:round}.donut-number{font-size:24px!important;fill:var(--static-page-text,#101827)!important}.donut-label,.donut-side{font-size:11px!important}.donut-side.muted{opacity:.68}.kpi-grid{width:100%;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.kpi-card{display:grid;gap:2px;padding:12px;border-radius:16px;background:rgba(255,255,255,.42)}.style-decision-brief .kpi-card,.style-data-command .kpi-card{background:rgba(255,255,255,.1)}.kpi-card b{font-size:24px;color:var(--static-page-chart,#0ea5e9)}.kpi-card i{font-style:normal;font-size:11px;color:var(--static-page-muted,#475569)}.evidence-table{width:100%;border-collapse:collapse;font-size:12px}.evidence-table td{padding:9px 10px;border-bottom:1px solid rgba(100,116,139,.2)}.timeline-chart{width:100%;margin:0;padding:0;display:grid;gap:9px;list-style:none}.timeline-chart li{display:flex;gap:10px;align-items:center}.timeline-chart b{min-width:56px;color:var(--static-page-chart,#0ea5e9)}.timeline-chart span{color:var(--static-page-muted,#475569);font-size:12px}.risk-matrix{width:100%;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.risk-chip{display:grid;gap:4px;padding:11px;border-radius:16px;background:rgba(100,116,139,.16)}.risk-chip.high{background:rgba(239,68,68,.18)}.risk-chip.medium{background:rgba(245,158,11,.18)}.risk-chip.low{background:rgba(14,165,233,.16)}.risk-chip i{font-style:normal;font-size:11px;color:var(--static-page-muted,#475569)}.headline-visual{display:grid;gap:6px;text-align:center}.headline-visual b{font-size:28px;color:var(--static-page-text,#101827)}.headline-visual span{font-size:12px;color:var(--static-page-accent,#2563eb)}.insight-quote{margin:0;padding:0 0 0 14px;border-left:4px solid var(--static-page-chart,#0ea5e9);font-size:14px;line-height:1.6;color:var(--static-page-muted,#475569)}
+.chart-svg{width:100%;height:100%;min-height:112px;overflow:visible}.chart-svg rect,.chart-svg .donut-value{fill:var(--static-page-chart,#0ea5e9)}.chart-svg text{font-size:10px;fill:var(--static-page-muted,#475569);font-weight:800}.style-decision-brief .chart-svg text,.style-data-command .chart-svg text{fill:#cbd5e1}.line-path{fill:none;stroke:var(--static-page-chart,#0ea5e9);stroke-width:5;stroke-linecap:round;stroke-linejoin:round}.line-area{fill:var(--static-page-chart,#0ea5e9);opacity:.13}.line-chart circle{fill:var(--static-page-surface,#fff);stroke:var(--static-page-chart,#0ea5e9);stroke-width:3}.donut-base{fill:none;stroke:rgba(100,116,139,.22);stroke-width:18}.donut-value{fill:none;stroke:var(--static-page-chart,#0ea5e9);stroke-width:18;transform:rotate(-90deg);transform-origin:70px 70px;stroke-linecap:round}.donut-number{font-size:24px!important;fill:var(--static-page-text,#101827)!important}.donut-label,.donut-side{font-size:11px!important}.donut-side.muted{opacity:.68}.kpi-grid{width:100%;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.kpi-card{display:grid;gap:2px;padding:12px;border-radius:16px;background:rgba(255,255,255,.42)}.style-decision-brief .kpi-card,.style-data-command .kpi-card{background:rgba(255,255,255,.1)}.kpi-card b{font-size:24px;color:var(--static-page-chart,#0ea5e9)}.kpi-card i{font-style:normal;font-size:11px;color:var(--static-page-muted,#475569)}.data-missing{display:grid;gap:6px;text-align:center;color:var(--static-page-muted,#475569)}.data-missing b{font-size:18px;color:var(--static-page-text,#101827)}.data-missing span{font-size:12px}.evidence-table{width:100%;border-collapse:collapse;font-size:12px}.evidence-table td{padding:9px 10px;border-bottom:1px solid rgba(100,116,139,.2)}.timeline-chart{width:100%;margin:0;padding:0;display:grid;gap:9px;list-style:none}.timeline-chart li{display:flex;gap:10px;align-items:center}.timeline-chart b{min-width:56px;color:var(--static-page-chart,#0ea5e9)}.timeline-chart span{color:var(--static-page-muted,#475569);font-size:12px}.risk-matrix{width:100%;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.risk-chip{display:grid;gap:4px;padding:11px;border-radius:16px;background:rgba(100,116,139,.16)}.risk-chip.high{background:rgba(239,68,68,.18)}.risk-chip.medium{background:rgba(245,158,11,.18)}.risk-chip.low{background:rgba(14,165,233,.16)}.risk-chip i{font-style:normal;font-size:11px;color:var(--static-page-muted,#475569)}.headline-visual{display:grid;gap:6px;text-align:center}.headline-visual b{font-size:28px;color:var(--static-page-text,#101827)}.headline-visual span{font-size:12px;color:var(--static-page-accent,#2563eb)}.insight-quote{margin:0;padding:0 0 0 14px;border-left:4px solid var(--static-page-chart,#0ea5e9);font-size:14px;line-height:1.6;color:var(--static-page-muted,#475569)}
 @media(max-width:720px){body{padding:14px}.module-grid{display:flex;flex-direction:column}.module{grid-column:1/-1!important;grid-row:auto!important;order:var(--mobile-order);min-height:auto!important}.cover,.module{padding:18px;border-radius:20px}h1{font-size:36px}.kpi-grid,.risk-matrix{grid-template-columns:1fr}}
 "#;
 
@@ -828,6 +839,7 @@ mod tests {
         assert!(result.html.contains("--mobile-order:0"));
         assert!(result.html.contains("bar-chart"));
         assert!(result.html.contains("<svg class=\"chart-svg bar-chart\""));
+        assert!(result.html.contains("一月"));
         assert!(result.html.contains("--static-page-accent:#facc15"));
         assert_eq!(result.asset_manifest["module_count"], 2);
     }
@@ -916,5 +928,31 @@ mod tests {
             .contains("&lt;script&gt;alert(1)&lt;/script&gt;"));
         assert!(result.html.contains("&lt;b&gt;危险&lt;/b&gt;"));
         assert!(result.html.contains("&quot;quoted&quot; &amp; raw"));
+    }
+
+    #[test]
+    fn render_static_page_labels_missing_chart_data_without_fake_values() {
+        let result = render_static_page(&StaticPageRenderRequest {
+            draft_id: "draft-missing".to_string(),
+            assistant_run_id: "run-missing".to_string(),
+            title: "缺失数据测试".to_string(),
+            draft_payload: json!({
+                "modules": [{
+                    "id": "trend",
+                    "title": "趋势变化",
+                    "content": "等待检索到趋势数据。",
+                    "dataBinding": { "label": "订单趋势" },
+                    "visualization": { "type": "line-chart" }
+                }]
+            }),
+            selected_scope: Value::Null,
+            visibility_snapshot: Value::Null,
+            preview_asset_key: None,
+            image_job_id: None,
+        });
+
+        assert!(result.html.contains("data-missing"));
+        assert!(result.html.contains("数据待确认"));
+        assert!(!result.html.contains(">当前<"));
     }
 }

@@ -64,7 +64,7 @@ use static_page_runtime::{
     sanitize_static_page_operations, StaticPageIntentOutcome, StaticPageIntentRequest,
 };
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashSet},
     fmt::Display,
 };
 use storage::{
@@ -5520,16 +5520,29 @@ async fn run_assistant_run_react_for_create(
             }),
         });
 
-        let result = execute_assistant_run_react_action(
-            state,
+        let result = if assistant_run_react_should_repair_terminal_action(
             &action,
             selected_scope,
-            &mut evidence_state,
-            request.prompt.trim(),
-            local_thread_id,
-            active_secret_binding_ids,
-        )
-        .await;
+            &evidence_state,
+            &observations,
+        ) {
+            Ok(assistant_run_react_policy_observation(
+                &action,
+                "final_answer requires a supply observation; choose a whitelisted action before answering.",
+                step_index,
+            ))
+        } else {
+            execute_assistant_run_react_action(
+                state,
+                &action,
+                selected_scope,
+                &mut evidence_state,
+                request.prompt.trim(),
+                local_thread_id,
+                active_secret_binding_ids,
+            )
+            .await
+        };
 
         let result = match result {
             Ok(result) => result,
@@ -5693,16 +5706,29 @@ async fn run_assistant_run_react_for_continue(
             }),
         });
 
-        let result = execute_assistant_run_react_action(
-            state,
+        let result = if assistant_run_react_should_repair_terminal_action(
             &action,
             &run.selected_scope,
-            &mut evidence_state,
-            continue_prompt.trim(),
-            run.local_thread_id.as_deref(),
-            active_secret_binding_ids,
-        )
-        .await;
+            &evidence_state,
+            &observations,
+        ) {
+            Ok(assistant_run_react_policy_observation(
+                &action,
+                "final_answer requires a supply observation; choose a whitelisted action before answering.",
+                step_index,
+            ))
+        } else {
+            execute_assistant_run_react_action(
+                state,
+                &action,
+                &run.selected_scope,
+                &mut evidence_state,
+                continue_prompt.trim(),
+                run.local_thread_id.as_deref(),
+                active_secret_binding_ids,
+            )
+            .await
+        };
 
         let result = match result {
             Ok(result) => result,
@@ -5795,6 +5821,8 @@ fn build_assistant_run_react_provider_input(
         "你只能提出下一步动作，不能假装已经执行平台动作。V3 Host 会验证、执行、记录并返回 observation。".to_string(),
         "只返回一个 JSON 对象，禁止 Markdown，禁止解释 JSON 外的文字。".to_string(),
         "JSON Schema: {\"action_type\":\"retrieve_evidence|read_document_detail|recall_conversation_memory|create_static_page_draft|update_static_page_module|submit_static_page_image_preview|render_static_page|create_report_draft|openclaw_memory_recall|openclaw_readonly_execution|final_answer\",\"reason_summary\":\"给用户看的简短原因\",\"arguments\":{},\"requires_confirmation\":false}".to_string(),
+        "目录、候选列表和系统说明只用于规划下一步，不是可引用证据。".to_string(),
+        "选中数据集或对话记忆时，final_answer 必须基于已返回的 observation；否则先选择 retrieve_evidence、read_document_detail 或 recall_conversation_memory。".to_string(),
         "如果已经可以回答，使用 action_type=final_answer，arguments.content 放最终正文。".to_string(),
         format!("当前 ReAct 步骤：{step_index}/{max_steps}"),
     ];
@@ -5825,6 +5853,8 @@ fn build_assistant_run_react_continue_provider_input(
         "你只能提出下一步动作，不能假装已经执行平台动作。V3 Host 会验证、执行、记录并返回 observation。".to_string(),
         "只返回一个 JSON 对象，禁止 Markdown，禁止解释 JSON 外的文字。".to_string(),
         "JSON Schema: {\"action_type\":\"retrieve_evidence|read_document_detail|recall_conversation_memory|create_static_page_draft|update_static_page_module|submit_static_page_image_preview|render_static_page|create_report_draft|openclaw_memory_recall|openclaw_readonly_execution|final_answer\",\"reason_summary\":\"给用户看的简短原因\",\"arguments\":{},\"requires_confirmation\":false}".to_string(),
+        "目录、候选列表和系统说明只用于规划下一步，不是可引用证据。".to_string(),
+        "选中数据集或对话记忆时，final_answer 必须基于已返回的 observation；否则先选择 retrieve_evidence、read_document_detail 或 recall_conversation_memory。".to_string(),
         "如果已经可以回答，使用 action_type=final_answer，arguments.content 放最终正文。".to_string(),
         format!("当前 ReAct 步骤：{step_index}/{max_steps}"),
         format!("运行ID：{}", run.id),
@@ -6120,6 +6150,76 @@ fn assistant_run_react_action_label(action_type: &AssistantRunReactActionType) -
         AssistantRunReactActionType::OpenClawMemoryRecall => "调用 OpenClaw 记忆",
         AssistantRunReactActionType::OpenClawReadonlyExecution => "调用 OpenClaw 只读执行",
         AssistantRunReactActionType::FinalAnswer => "模型生成最终回答",
+    }
+}
+
+fn assistant_run_react_should_repair_terminal_action(
+    action: &AssistantRunNextAction,
+    selected_scope: &Value,
+    evidence_state: &Value,
+    observations: &[Value],
+) -> bool {
+    action.action_type == AssistantRunReactActionType::FinalAnswer
+        && assistant_run_react_scope_requires_supply(selected_scope)
+        && !assistant_run_react_has_supply_observation(evidence_state, observations)
+}
+
+fn assistant_run_react_scope_requires_supply(selected_scope: &Value) -> bool {
+    !selected_dataset_ids_from_scope(selected_scope).is_empty()
+        || selected_scope_requests_conversation_memory(selected_scope)
+}
+
+fn assistant_run_react_has_supply_observation(
+    evidence_state: &Value,
+    observations: &[Value],
+) -> bool {
+    assistant_run_evidence_supplied_count(evidence_state) > 0
+        || observations.iter().any(|observation| {
+            observation
+                .get("status")
+                .and_then(Value::as_str)
+                .is_some_and(|status| status == "completed")
+                && observation
+                    .get("action_type")
+                    .and_then(Value::as_str)
+                    .is_some_and(|action_type| {
+                        matches!(
+                            action_type,
+                            "retrieve_evidence"
+                                | "read_document_detail"
+                                | "recall_conversation_memory"
+                        )
+                    })
+        })
+}
+
+fn assistant_run_react_policy_observation(
+    action: &AssistantRunNextAction,
+    message: &str,
+    step_index: usize,
+) -> AssistantRunReactActionResult {
+    AssistantRunReactActionResult {
+        observation: json!({
+            "status": "denied",
+            "action_type": "policy_observation",
+            "message": message,
+            "denied": [format!("terminal:{}", action.action_type.as_str())],
+            "items": [],
+            "limits": {
+                "requested": 1,
+                "returned": 0,
+                "maxAllowed": 1,
+            },
+        }),
+        trail_step: json!({
+            "status": "denied",
+            "label": "ReAct 协议修复",
+            "react_action": action.action_type.as_str(),
+            "react_step": step_index,
+            "reason": message,
+            "at": Utc::now(),
+        }),
+        final_answer: None,
     }
 }
 
@@ -11867,6 +11967,8 @@ fn build_static_page_source_refs(run: &AssistantRun) -> Value {
         "assistant_run_id": run.id,
         "local_thread_id": run.local_thread_id,
         "output_artifact_count": value_array(run.output_artifacts.clone()).len(),
+        "evidence_status": run.evidence_state.get("status").cloned().unwrap_or(Value::Null),
+        "supplied_evidence_count": assistant_run_evidence_supplied_count(&run.evidence_state),
     })
 }
 
@@ -11883,13 +11985,12 @@ fn build_initial_static_page_draft_payload(run: &AssistantRun, prompt: &str) -> 
     let style_direction = "client-delivery";
     let visual_spec = build_static_page_visual_spec(style_direction);
     let render_spec = build_static_page_render_spec();
-    let data_snapshot = json!({
-        "version": 1,
-        "source": "assistant_run",
-        "selected_scope": run.selected_scope,
-        "evidence_status": run.evidence_state.get("status").cloned().unwrap_or(Value::Null),
-        "module_bindings": [],
-    });
+    let data_snapshot = build_static_page_data_snapshot_with_evidence(
+        &json!({ "modules": [] }),
+        &run.selected_scope,
+        Some(&run.evidence_state),
+        "assistant_run",
+    );
     let preview_contract = build_static_page_preview_contract(
         style_direction,
         &Value::Array(Vec::new()),
@@ -12045,7 +12146,7 @@ fn build_static_page_render_spec() -> Value {
         "mobileLayout": "single-column-sortable",
         "componentModel": "dom-text-svg-chart",
         "chartRuntime": "recharts-first-echarts-optional",
-        "editableContent": ["title", "content", "dataBinding", "visualization", "layout"],
+        "editableContent": ["title", "content", "dataBinding", "visualization", "chartOptions", "layout"],
         "generationGuardrails": [
             "效果图必须服从模块网格布局和移动端顺序",
             "正文、指标、图表在最终静态页中必须是真 DOM 或 SVG，不允许只烘焙进图片",
@@ -12056,12 +12157,41 @@ fn build_static_page_render_spec() -> Value {
 }
 
 fn build_static_page_data_snapshot(payload: &Value, selected_scope: &Value) -> Value {
+    let evidence_state = payload
+        .get("assistant_context")
+        .and_then(|context| context.get("evidence_state"));
+    build_static_page_data_snapshot_with_evidence(
+        payload,
+        selected_scope,
+        evidence_state,
+        "static_page_draft",
+    )
+}
+
+fn build_static_page_data_snapshot_with_evidence(
+    payload: &Value,
+    selected_scope: &Value,
+    evidence_state: Option<&Value>,
+    source: &str,
+) -> Value {
+    let data_source_candidates = build_static_page_data_source_candidates(selected_scope);
+    let field_candidates = build_static_page_field_candidates(selected_scope, evidence_state);
     let module_bindings = static_page_payload_modules(payload)
         .as_array()
         .cloned()
         .unwrap_or_default()
         .into_iter()
         .map(|module| {
+            let sample_data = build_static_page_module_sample_data(&module, evidence_state);
+            let data_quality = if sample_data
+                .as_array()
+                .map(|items| !items.is_empty())
+                .unwrap_or(false)
+            {
+                "evidence_signal"
+            } else {
+                "not_available"
+            };
             json!({
                 "moduleId": module.get("id").cloned().unwrap_or(Value::Null),
                 "title": module.get("title").cloned().unwrap_or(Value::Null),
@@ -12075,15 +12205,484 @@ fn build_static_page_data_snapshot(payload: &Value, selected_scope: &Value) -> V
                     .and_then(|visualization| visualization.get("type"))
                     .cloned()
                     .unwrap_or_else(|| json!("text-insight")),
+                "chartOptions": module
+                    .get("visualization")
+                    .and_then(|visualization| visualization.get("chartOptions"))
+                    .or_else(|| module.get("chartOptions"))
+                    .cloned()
+                    .unwrap_or_else(|| json!({})),
+                "sampleData": sample_data,
+                "dataQuality": data_quality,
             })
         })
         .collect::<Vec<_>>();
     json!({
         "version": 1,
-        "source": "static_page_draft",
+        "source": source,
         "selected_scope": selected_scope,
+        "evidence_status": evidence_state
+            .and_then(|state| state.get("status"))
+            .cloned()
+            .unwrap_or(Value::Null),
+        "data_source_candidates": data_source_candidates,
+        "field_candidates": field_candidates,
         "module_bindings": module_bindings,
     })
+}
+
+fn build_static_page_data_source_candidates(selected_scope: &Value) -> Value {
+    let mut candidates = vec![
+        json!({
+            "sourceId": "model",
+            "type": "model_summary",
+            "label": "模型总结",
+            "available": true,
+        }),
+        json!({
+            "sourceId": "conversation_memory",
+            "type": "conversation_memory",
+            "label": "对话历史",
+            "available": selected_scope_requests_conversation_memory(selected_scope),
+        }),
+    ];
+
+    let selected_dataset_ids = selected_dataset_ids_from_scope(selected_scope);
+    if !selected_dataset_ids.is_empty() {
+        candidates.push(json!({
+            "sourceId": "selected_scope",
+            "type": "selected_scope",
+            "label": "当前选中范围",
+            "available": true,
+            "datasetIds": selected_dataset_ids.iter().map(ToString::to_string).collect::<Vec<_>>(),
+        }));
+        candidates.push(json!({
+            "sourceId": "dataset",
+            "type": "dataset_metrics",
+            "label": "数据集指标摘要",
+            "available": true,
+            "datasetIds": selected_dataset_ids.iter().map(ToString::to_string).collect::<Vec<_>>(),
+        }));
+        candidates.push(json!({
+            "sourceId": "evidence",
+            "type": "retrieval_evidence",
+            "label": "检索证据",
+            "available": true,
+            "datasetIds": selected_dataset_ids.iter().map(ToString::to_string).collect::<Vec<_>>(),
+        }));
+    }
+
+    Value::Array(candidates)
+}
+
+fn build_static_page_field_candidates(
+    selected_scope: &Value,
+    evidence_state: Option<&Value>,
+) -> Value {
+    const FIELD_CANDIDATE_LIMIT: usize = 16;
+
+    let mut candidates = Vec::new();
+    let mut seen = BTreeSet::new();
+    let selected_dataset_ids = selected_dataset_ids_from_scope(selected_scope);
+    if !selected_dataset_ids.is_empty() {
+        push_static_page_field_candidate(
+            &mut candidates,
+            &mut seen,
+            json!({
+                "sourceId": "dataset",
+                "fieldPath": "dataset.metrics_summary",
+                "label": "数据集指标摘要",
+                "kind": "summary",
+                "recommendedAggregation": Value::Null,
+                "confidence": 0.55,
+                "datasetIds": selected_dataset_ids.iter().map(ToString::to_string).collect::<Vec<_>>(),
+            }),
+            FIELD_CANDIDATE_LIMIT,
+        );
+    }
+
+    let Some(evidence_items) = evidence_state
+        .and_then(|state| state.get("supplied_items"))
+        .and_then(Value::as_array)
+    else {
+        return Value::Array(candidates);
+    };
+
+    for item in evidence_items {
+        match item.get("type").and_then(Value::as_str).unwrap_or_default() {
+            "retrieval_evidence" => {
+                let evidence_ref = static_page_evidence_ref(item);
+                let evidence_ids = static_page_evidence_ids(item);
+                push_static_page_field_candidate(
+                    &mut candidates,
+                    &mut seen,
+                    json!({
+                        "sourceId": "evidence",
+                        "fieldPath": "retrieval.summary",
+                        "label": "证据摘要",
+                        "kind": "text",
+                        "recommendedAggregation": Value::Null,
+                        "confidence": 0.72,
+                        "evidenceIds": evidence_ids,
+                        "evidenceRef": evidence_ref,
+                    }),
+                    FIELD_CANDIDATE_LIMIT,
+                );
+                push_static_page_field_candidate(
+                    &mut candidates,
+                    &mut seen,
+                    json!({
+                        "sourceId": "evidence",
+                        "fieldPath": "retrieval.content_excerpt",
+                        "label": "证据原文片段",
+                        "kind": "text",
+                        "recommendedAggregation": Value::Null,
+                        "confidence": 0.70,
+                        "evidenceIds": static_page_evidence_ids(item),
+                        "evidenceRef": static_page_evidence_ref(item),
+                    }),
+                    FIELD_CANDIDATE_LIMIT,
+                );
+
+                let evidence_text = static_page_evidence_text(item).to_lowercase();
+                for (field_path, label, kind, aggregation, keywords, confidence) in [
+                    (
+                        "orders.amount",
+                        "订单金额/收入",
+                        "metric",
+                        Some("sum"),
+                        &[
+                            "order", "orders", "amount", "revenue", "sales", "gmv", "订单", "金额",
+                            "收入",
+                        ][..],
+                        0.84,
+                    ),
+                    (
+                        "orders.count",
+                        "订单数量",
+                        "metric",
+                        Some("count"),
+                        &["order", "orders", "count", "volume", "订单", "数量", "单量"][..],
+                        0.78,
+                    ),
+                    (
+                        "customers.count",
+                        "客户数量",
+                        "metric",
+                        Some("count"),
+                        &["customer", "customers", "client", "客户", "用户"][..],
+                        0.76,
+                    ),
+                    (
+                        "profit.margin",
+                        "利润/毛利",
+                        "metric",
+                        Some("sum"),
+                        &["profit", "margin", "gross", "利润", "毛利"][..],
+                        0.76,
+                    ),
+                    (
+                        "risk.level",
+                        "风险等级",
+                        "dimension",
+                        None,
+                        &["risk", "delay", "warning", "风险", "延期", "预警"][..],
+                        0.80,
+                    ),
+                    (
+                        "time.month",
+                        "月份/时间",
+                        "dimension",
+                        None,
+                        &[
+                            "month", "date", "time", "period", "月份", "日期", "时间", "周期",
+                        ][..],
+                        0.72,
+                    ),
+                    (
+                        "engagement.rate",
+                        "触达/互动",
+                        "metric",
+                        Some("avg"),
+                        &[
+                            "engagement",
+                            "newsletter",
+                            "open",
+                            "click",
+                            "触达",
+                            "互动",
+                            "打开",
+                            "点击",
+                        ][..],
+                        0.70,
+                    ),
+                ] {
+                    if !static_page_text_contains_any(&evidence_text, keywords) {
+                        continue;
+                    }
+                    push_static_page_field_candidate(
+                        &mut candidates,
+                        &mut seen,
+                        json!({
+                            "sourceId": "evidence",
+                            "fieldPath": field_path,
+                            "label": label,
+                            "kind": kind,
+                            "recommendedAggregation": aggregation,
+                            "confidence": confidence,
+                            "evidenceIds": static_page_evidence_ids(item),
+                            "evidenceRef": static_page_evidence_ref(item),
+                        }),
+                        FIELD_CANDIDATE_LIMIT,
+                    );
+                }
+            }
+            "conversation_memory_item" => {
+                push_static_page_field_candidate(
+                    &mut candidates,
+                    &mut seen,
+                    json!({
+                        "sourceId": "conversation_memory",
+                        "fieldPath": "conversation.summary",
+                        "label": "相关历史对话摘要",
+                        "kind": "text",
+                        "recommendedAggregation": Value::Null,
+                        "confidence": 0.66,
+                        "conversationMemoryItemId": item
+                            .get("conversation_memory_item_id")
+                            .cloned()
+                            .unwrap_or(Value::Null),
+                    }),
+                    FIELD_CANDIDATE_LIMIT,
+                );
+            }
+            _ => {}
+        }
+    }
+
+    Value::Array(candidates)
+}
+
+fn build_static_page_module_sample_data(module: &Value, evidence_state: Option<&Value>) -> Value {
+    let field_path = module
+        .get("dataBinding")
+        .or_else(|| module.get("data_binding"))
+        .and_then(|binding| {
+            binding
+                .get("fieldPath")
+                .or_else(|| binding.get("field_path"))
+                .or_else(|| binding.get("field"))
+        })
+        .or_else(|| {
+            module
+                .get("visualization")
+                .and_then(|visualization| visualization.get("chartOptions"))
+                .and_then(|chart_options| chart_options.get("dataKey"))
+        })
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let Some(field_path) = field_path else {
+        return json!([]);
+    };
+    let keywords = static_page_field_keywords(field_path);
+    if keywords.is_empty() {
+        return json!([]);
+    }
+    let Some(evidence_items) = evidence_state
+        .and_then(|state| state.get("supplied_items"))
+        .and_then(Value::as_array)
+    else {
+        return json!([]);
+    };
+
+    let points = evidence_items
+        .iter()
+        .filter(|item| {
+            item.get("type").and_then(Value::as_str).unwrap_or_default() == "retrieval_evidence"
+        })
+        .enumerate()
+        .filter_map(|(index, item)| {
+            let value = static_page_keyword_signal_score(item, &keywords);
+            if value <= 0.0 {
+                return None;
+            }
+            Some(json!({
+                "label": static_page_evidence_point_label(item, index),
+                "value": value,
+                "kind": "evidence_signal",
+                "fieldPath": field_path,
+                "evidenceIds": static_page_evidence_ids(item),
+            }))
+        })
+        .take(6)
+        .collect::<Vec<_>>();
+    Value::Array(points)
+}
+
+fn static_page_field_keywords(field_path: &str) -> Vec<&'static str> {
+    let normalized = field_path.to_ascii_lowercase();
+    if normalized.contains("orders.amount") || normalized.contains("revenue") {
+        return vec![
+            "order", "orders", "amount", "revenue", "sales", "gmv", "订单", "金额", "收入",
+        ];
+    }
+    if normalized.contains("orders.count") || normalized.contains("order_count") {
+        return vec!["order", "orders", "count", "volume", "订单", "数量", "单量"];
+    }
+    if normalized.contains("customer") {
+        return vec!["customer", "customers", "client", "客户", "用户"];
+    }
+    if normalized.contains("profit") || normalized.contains("margin") {
+        return vec!["profit", "margin", "gross", "利润", "毛利"];
+    }
+    if normalized.contains("risk") {
+        return vec!["risk", "delay", "warning", "风险", "延期", "预警"];
+    }
+    if normalized.contains("time") || normalized.contains("month") || normalized.contains("date") {
+        return vec![
+            "month", "date", "time", "period", "月份", "日期", "时间", "周期",
+        ];
+    }
+    if normalized.contains("engagement") {
+        return vec![
+            "engagement",
+            "newsletter",
+            "open",
+            "click",
+            "触达",
+            "互动",
+            "打开",
+            "点击",
+        ];
+    }
+    Vec::new()
+}
+
+fn static_page_keyword_signal_score(item: &Value, keywords: &[&str]) -> f64 {
+    let text = static_page_evidence_text(item).to_lowercase();
+    let mut score = keywords
+        .iter()
+        .filter(|keyword| text.contains(&keyword.to_lowercase()))
+        .count() as f64;
+
+    if let Some(term_weights) = item
+        .get("evidence_manifest")
+        .and_then(|manifest| manifest.pointer("/embedding/term_weights"))
+        .and_then(Value::as_object)
+    {
+        for (term, weight) in term_weights {
+            if keywords
+                .iter()
+                .any(|keyword| keyword.eq_ignore_ascii_case(term))
+            {
+                score += weight.as_f64().unwrap_or(0.0).max(0.0);
+            }
+        }
+    }
+
+    if let Some(score_value) = item.get("score").and_then(Value::as_f64) {
+        score += score_value.clamp(0.0, 1.0);
+    } else if let Some(recall_score) = item.get("recall_score").and_then(Value::as_f64) {
+        score += recall_score.clamp(0.0, 1.0);
+    }
+
+    (score * 10.0).round() / 10.0
+}
+
+fn static_page_evidence_point_label(item: &Value, index: usize) -> String {
+    item.get("source_locator")
+        .and_then(Value::as_str)
+        .map(|value| {
+            value
+                .rsplit('/')
+                .next()
+                .unwrap_or(value)
+                .split('#')
+                .next()
+                .unwrap_or(value)
+                .trim()
+                .to_string()
+        })
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            item.get("summary")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(|value| value.chars().take(18).collect::<String>())
+        })
+        .unwrap_or_else(|| format!("证据{}", index + 1))
+}
+
+fn push_static_page_field_candidate(
+    candidates: &mut Vec<Value>,
+    seen: &mut BTreeSet<String>,
+    candidate: Value,
+    limit: usize,
+) {
+    if candidates.len() >= limit {
+        return;
+    }
+    let key = format!(
+        "{}:{}",
+        candidate
+            .get("sourceId")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown"),
+        candidate
+            .get("fieldPath")
+            .and_then(Value::as_str)
+            .unwrap_or_default(),
+    );
+    if key.ends_with(':') || !seen.insert(key) {
+        return;
+    }
+    candidates.push(candidate);
+}
+
+fn static_page_evidence_ids(item: &Value) -> Vec<Value> {
+    item.get("retrieval_evidence_id")
+        .cloned()
+        .map(|value| vec![value])
+        .unwrap_or_default()
+}
+
+fn static_page_evidence_ref(item: &Value) -> Value {
+    json!({
+        "retrievalEvidenceId": item.get("retrieval_evidence_id").cloned().unwrap_or(Value::Null),
+        "datasetId": item.get("dataset_id").cloned().unwrap_or(Value::Null),
+        "documentId": item.get("document_id").cloned().unwrap_or(Value::Null),
+        "documentChunkId": item.get("document_chunk_id").cloned().unwrap_or(Value::Null),
+        "sourceLocator": item.get("source_locator").cloned().unwrap_or(Value::Null),
+    })
+}
+
+fn static_page_evidence_text(item: &Value) -> String {
+    let mut parts = Vec::new();
+    for key in [
+        "summary",
+        "content_excerpt",
+        "source_locator",
+        "payload_filter_key",
+    ] {
+        if let Some(value) = item.get(key).and_then(Value::as_str) {
+            parts.push(value.to_string());
+        }
+    }
+    if let Some(term_weights) = item
+        .get("evidence_manifest")
+        .and_then(|manifest| manifest.pointer("/embedding/term_weights"))
+        .and_then(Value::as_object)
+    {
+        parts.extend(term_weights.keys().cloned());
+    }
+    parts.join(" ")
+}
+
+fn static_page_text_contains_any(text: &str, keywords: &[&str]) -> bool {
+    keywords
+        .iter()
+        .any(|keyword| text.contains(&keyword.to_lowercase()))
 }
 
 fn build_static_page_preview_contract(
@@ -12476,13 +13075,17 @@ fn apply_static_page_operation_to_payload(payload: &mut Value, operation: &Value
                 static_page_operation_module_id(operation),
                 operation.get("visualizationType").and_then(Value::as_str),
             ) {
+                let mut visualization = json!({
+                    "type": visualization_type,
+                });
+                if let Some(chart_options) = operation.get("chartOptions") {
+                    set_payload_value(&mut visualization, "chartOptions", chart_options.clone());
+                }
                 merge_static_page_module(
                     payload,
                     module_id,
                     &json!({
-                        "visualization": {
-                            "type": visualization_type,
-                        },
+                        "visualization": visualization,
                     }),
                 );
             }
@@ -12949,6 +13552,54 @@ mod tests {
     }
 
     #[test]
+    fn assistant_run_react_repairs_premature_final_answer_for_scoped_data() {
+        let dataset_id = DatasetId::new();
+        let selected_scope = json!({
+            "mode": "selected",
+            "selected": [{"type": "dataset", "id": dataset_id.to_string()}],
+        });
+        let ordinary_scope = json!({"mode": "ordinary_chat"});
+        let final_action = AssistantRunNextAction {
+            action_type: AssistantRunReactActionType::FinalAnswer,
+            reason_summary: "直接回答".to_string(),
+            arguments: json!({"content": "未供料回答"}),
+            requires_confirmation: false,
+        };
+
+        assert!(assistant_run_react_should_repair_terminal_action(
+            &final_action,
+            &selected_scope,
+            &json!({"status": "empty", "supplied_items": []}),
+            &[],
+        ));
+        assert!(!assistant_run_react_should_repair_terminal_action(
+            &final_action,
+            &ordinary_scope,
+            &json!({"status": "not_requested", "supplied_items": []}),
+            &[],
+        ));
+        assert!(!assistant_run_react_should_repair_terminal_action(
+            &final_action,
+            &selected_scope,
+            &json!({"status": "empty", "supplied_items": []}),
+            &[json!({
+                "status": "completed",
+                "action_type": "retrieve_evidence",
+                "supplied_count": 0,
+            })],
+        ));
+        assert!(!assistant_run_react_should_repair_terminal_action(
+            &final_action,
+            &selected_scope,
+            &json!({
+                "status": "supplied",
+                "supplied_items": [{"type": "retrieval_evidence"}],
+            }),
+            &[],
+        ));
+    }
+
+    #[test]
     fn assistant_run_react_retrieve_rejects_dataset_outside_selected_scope() {
         let allowed_dataset_id = DatasetId::new();
         let denied_dataset_id = DatasetId::new();
@@ -12973,7 +13624,7 @@ mod tests {
             "patch": {
                 "title": "收入表现",
                 "content": "突出最近 30 天增长",
-                "visualization": {"type": "kpi"}
+                "visualization": {"type": "kpi-cards"}
             }
         }))
         .expect("module patch should become update operation");
@@ -13705,6 +14356,88 @@ mod tests {
         }));
     }
 
+    #[test]
+    fn static_page_data_snapshot_extracts_field_candidates_from_evidence_state() {
+        let dataset_id = DatasetId::new();
+        let selected_scope = json!({
+            "mode": "user_selected",
+            "datasets": [dataset_id.to_string()],
+        });
+        let payload = json!({
+            "modules": [
+                {
+                    "id": "trend",
+                    "title": "订单趋势",
+                    "dataBinding": {
+                        "sourceId": "evidence",
+                        "fieldPath": "orders.amount"
+                    },
+                    "visualization": {
+                        "type": "line-chart",
+                        "chartOptions": {
+                            "dataKey": "orders.amount"
+                        }
+                    }
+                }
+            ]
+        });
+        let evidence_state = json!({
+            "status": "supplied",
+            "supplied_items": [
+                {
+                    "type": "retrieval_evidence",
+                    "dataset_id": dataset_id.to_string(),
+                    "document_id": Uuid::new_v4().to_string(),
+                    "document_chunk_id": Uuid::new_v4().to_string(),
+                    "retrieval_evidence_id": Uuid::new_v4().to_string(),
+                    "source_locator": "documents/order-risk.md#chunk=0",
+                    "summary": "Order revenue and delay risk evidence",
+                    "content_excerpt": "订单金额 revenue increased last month, but delay risk also rose.",
+                    "payload_filter_key": "dataset/order-risk",
+                    "evidence_manifest": {
+                        "embedding": {
+                            "term_weights": {
+                                "order": 1.0,
+                                "revenue": 0.9,
+                                "risk": 0.8
+                            }
+                        }
+                    }
+                }
+            ]
+        });
+
+        let snapshot = build_static_page_data_snapshot_with_evidence(
+            &payload,
+            &selected_scope,
+            Some(&evidence_state),
+            "assistant_run",
+        );
+
+        assert_eq!(snapshot["source"], json!("assistant_run"));
+        assert!(value_array(snapshot["field_candidates"].clone())
+            .iter()
+            .any(|candidate| candidate["fieldPath"] == json!("orders.amount")
+                && candidate["sourceId"] == json!("evidence")));
+        assert!(value_array(snapshot["field_candidates"].clone())
+            .iter()
+            .any(|candidate| candidate["fieldPath"] == json!("risk.level")));
+        assert_eq!(
+            snapshot["module_bindings"][0]["chartOptions"]["dataKey"],
+            json!("orders.amount")
+        );
+        assert_eq!(
+            snapshot["module_bindings"][0]["dataQuality"],
+            json!("evidence_signal")
+        );
+        assert!(
+            snapshot["module_bindings"][0]["sampleData"][0]["value"]
+                .as_f64()
+                .unwrap_or_default()
+                > 0.0
+        );
+    }
+
     #[tokio::test]
     async fn static_page_draft_can_be_created_under_assistant_run() {
         let _guard = shared_local_postgres_test_lock().lock().await;
@@ -13790,6 +14523,11 @@ mod tests {
             draft_response.draft.draft_payload["modules"][0]["title"],
             json!("核心判断")
         );
+        assert!(value_array(
+            draft_response.draft.draft_payload["dataSnapshot"]["data_source_candidates"].clone()
+        )
+        .iter()
+        .any(|candidate| candidate["sourceId"] == json!("model")));
 
         let Json(local_thread_drafts) = list_static_page_drafts(
             State(state.clone()),
@@ -13860,6 +14598,65 @@ mod tests {
             .operations
             .iter()
             .any(|operation| operation["type"] == json!("change_visualization")));
+
+        let (module_operation_status, Json(module_operation_response)) =
+            append_static_page_draft_operations(
+                State(state.clone()),
+                Path(draft_response.draft.id.to_string()),
+                Json(AppendStaticPageDraftOperationsRequest {
+                    prompt: Some("趋势模块接当前数据源，并改成折线图".to_string()),
+                    summary: None,
+                    operations: vec![json!({
+                        "type": "update_module",
+                        "targetModuleId": "trend",
+                        "patch": {
+                            "title": "订单趋势",
+                            "content": "展示订单金额按月变化。",
+                            "dataBinding": {
+                                "type": "selected_scope",
+                                "label": "订单金额",
+                                "sourceId": "selected_scope",
+                                "fieldPath": "orders.amount"
+                            },
+                            "visualization": {
+                                "type": "line-chart",
+                                "label": "趋势折线图",
+                                "chartOptions": {
+                                    "showLegend": true,
+                                    "showAxis": true,
+                                    "valueFormat": "currency",
+                                    "dataKey": "orders.amount"
+                                }
+                            }
+                        }
+                    })],
+                    draft_payload: None,
+                }),
+            )
+            .await
+            .expect("static page module operation should append");
+        assert_eq!(module_operation_status, StatusCode::CREATED);
+        let trend_module =
+            value_array(module_operation_response.draft.draft_payload["modules"].clone())
+                .into_iter()
+                .find(|module| module["id"] == json!("trend"))
+                .expect("trend module should exist");
+        assert_eq!(trend_module["title"], json!("订单趋势"));
+        assert_eq!(
+            trend_module["dataBinding"]["fieldPath"],
+            json!("orders.amount")
+        );
+        assert_eq!(
+            trend_module["visualization"]["chartOptions"]["dataKey"],
+            json!("orders.amount")
+        );
+        assert!(value_array(
+            module_operation_response.draft.draft_payload["dataSnapshot"]["module_bindings"]
+                .clone()
+        )
+        .iter()
+        .any(|binding| binding["moduleId"] == json!("trend")
+            && binding["chartOptions"]["dataKey"] == json!("orders.amount")));
 
         let (operation_status, Json(operation_response)) = append_static_page_draft_operations(
             State(state.clone()),

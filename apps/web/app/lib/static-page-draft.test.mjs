@@ -5,8 +5,11 @@ import {
   applyStaticPageOperations,
   buildInitialStaticPageDraft,
   buildMockStaticPagePreview,
+  buildStaticPageDataSourceCandidates,
+  buildStaticPageFieldCandidates,
   buildStaticPageFinalRenderPayload,
   buildStaticPageImagePayload,
+  buildStaticPageModuleUpdateOperation,
   buildStaticPagePreviewContract,
   buildStaticPageRenderSpec,
   buildStaticPageVisualSpec,
@@ -32,6 +35,8 @@ test('buildInitialStaticPageDraft creates default modules and mobile order', () 
   assert.equal(draft.renderSpec.componentModel, 'dom-text-svg-chart');
   assert.equal(draft.previewContract.status, 'not_requested');
   assert.equal(draft.dataSnapshot.moduleBindings.length, 5);
+  assert.ok(draft.dataSnapshot.dataSourceCandidates.some((item) => item.sourceId === 'selected_scope'));
+  assert.ok(draft.dataSnapshot.fieldCandidates.some((item) => item.fieldPath === 'retrieval.summary'));
 });
 
 test('applyStaticPageOperation updates module copy without mutating original draft', () => {
@@ -335,6 +340,72 @@ test('module edit patch can update copy data binding and chart as one durable op
   assert.equal(edited.dataSnapshot.moduleBindings.find((item) => item.moduleId === 'trend').binding.label, '客户订单趋势数据');
   assert.equal(edited.previewContract.status, 'stale');
   assert.equal(edited.finalPage, null);
+});
+
+test('module update operation helper emits full editable binding and chart contract', () => {
+  const draft = buildInitialStaticPageDraft({
+    datasetId: 'dataset-1',
+    sessionId: 'session-1',
+    evidenceIds: ['ev-1'],
+  });
+  const trend = draft.modules.find((module) => module.id === 'trend');
+  const operation = buildStaticPageModuleUpdateOperation(trend, {
+    title: '订单趋势',
+    content: '展示订单金额按月变化。',
+    dataBinding: {
+      type: 'selected_scope',
+      sourceId: 'selected_scope',
+      label: '订单金额',
+      fieldPath: 'orders.amount',
+    },
+    visualization: {
+      type: 'line-chart',
+    },
+  });
+  const next = applyStaticPageOperation(draft, operation);
+  const module = next.modules.find((item) => item.id === 'trend');
+
+  assert.equal(operation.type, 'update_module');
+  assert.equal(operation.patch.dataBinding.sourceId, 'selected_scope');
+  assert.equal(operation.patch.dataBinding.fieldPath, 'orders.amount');
+  assert.equal(operation.patch.visualization.chartOptions.dataKey, 'orders.amount');
+  assert.equal(module.dataBinding.sourceId, 'selected_scope');
+  assert.equal(module.visualization.chartOptions.showAxis, true);
+});
+
+test('data source candidates expose selected datasets evidence and session without forcing forms', () => {
+  const draft = buildInitialStaticPageDraft({
+    datasetId: 'dataset-1',
+    sessionId: 'session-1',
+    evidenceIds: ['ev-1'],
+  });
+  const candidates = buildStaticPageDataSourceCandidates(draft);
+
+  assert.equal(candidates.find((item) => item.sourceId === 'dataset').available, true);
+  assert.equal(candidates.find((item) => item.sourceId === 'selected_scope').datasetId, 'dataset-1');
+  assert.equal(candidates.find((item) => item.sourceId === 'evidence').evidenceIds[0], 'ev-1');
+  assert.equal(candidates.find((item) => item.sourceId === 'session').sessionId, 'session-1');
+});
+
+test('field candidates preserve backend suggestions and add evidence fallbacks', () => {
+  const draft = buildInitialStaticPageDraft({
+    datasetId: 'dataset-1',
+    evidenceIds: ['ev-1'],
+    fieldCandidates: [
+      {
+        sourceId: 'evidence',
+        field_path: 'orders.amount',
+        label: '订单金额',
+        kind: 'metric',
+        recommended_aggregation: 'sum',
+      },
+    ],
+  });
+  const candidates = buildStaticPageFieldCandidates(draft);
+
+  assert.equal(candidates.find((item) => item.fieldPath === 'orders.amount').recommendedAggregation, 'sum');
+  assert.ok(candidates.some((item) => item.fieldPath === 'dataset.metrics_summary'));
+  assert.ok(candidates.some((item) => item.fieldPath === 'retrieval.content_excerpt'));
 });
 
 test('static page visual and render spec builders expose renderer-safe constraints', () => {

@@ -18,7 +18,14 @@ import {
 import { CSS } from '@dnd-kit/utilities';
 import StaticPageModuleCard from './StaticPageModuleCard';
 
-function SortableModuleItem({ module, onApplyOperation }) {
+function draftFieldCandidates(draft) {
+  return draft.dataSnapshot?.fieldCandidates
+    || draft.dataSnapshot?.field_candidates
+    || draft.data_snapshot?.field_candidates
+    || [];
+}
+
+function SortableModuleItem({ module, onApplyOperation, fieldCandidates }) {
   const {
     attributes,
     listeners,
@@ -48,7 +55,12 @@ function SortableModuleItem({ module, onApplyOperation }) {
         <span></span>
         <span></span>
       </button>
-      <StaticPageModuleCard compact module={module} onApplyOperation={onApplyOperation} />
+      <StaticPageModuleCard
+        compact
+        module={module}
+        fieldCandidates={fieldCandidates}
+        onApplyOperation={onApplyOperation}
+      />
     </article>
   );
 }
@@ -61,6 +73,7 @@ export default function StaticPageMobileModuleList({ draft, onReorder, onApplyOp
   const moduleMap = new Map(draft.modules.map((module) => [module.id, module]));
   const orderedIds = draft.mobileOrder?.length ? draft.mobileOrder : draft.modules.map((module) => module.id);
   const orderedModules = orderedIds.map((id) => moduleMap.get(id)).filter(Boolean);
+  const fieldCandidates = draftFieldCandidates(draft);
 
   function handleDragEnd(event) {
     const { active, over } = event;
@@ -82,7 +95,12 @@ export default function StaticPageMobileModuleList({ draft, onReorder, onApplyOp
       <SortableContext items={orderedIds} strategy={verticalListSortingStrategy}>
         <div className="static-page-mobile-module-list">
           {orderedModules.map((module) => (
-            <SortableModuleItem key={module.id} module={module} onApplyOperation={onApplyOperation} />
+            <SortableModuleItem
+              key={module.id}
+              module={module}
+              fieldCandidates={fieldCandidates}
+              onApplyOperation={onApplyOperation}
+            />
           ))}
         </div>
       </SortableContext>
