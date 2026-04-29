@@ -80,6 +80,40 @@ Potential conflicts and decisions:
 - OpenClaw model routing vs model config: OpenClaw can route model/agent choices, but runtime manifests must still record provider/model/request id in V3.
 - OpenClaw availability vs production reliability: all OpenClaw lanes must be config-gated and fallback-safe.
 
+## Host-Controlled ReAct Decision
+
+V3 should adopt ReAct as a controlled AssistantRun execution pattern, not as a free-form autonomous agent.
+
+Definition:
+
+```text
+Observation -> Model proposes next_action -> V3 validates action -> V3 executes host tool -> Observation persisted -> Model continues or final_answer
+```
+
+Allowed first-version action types:
+
+- `retrieve_evidence`
+- `read_document_detail`
+- `recall_conversation_memory`
+- `create_static_page_draft`
+- `update_static_page_module`
+- `submit_static_page_image_preview`
+- `render_static_page`
+- `create_report_draft`
+- `openclaw_memory_recall`
+- `openclaw_readonly_execution`
+- `final_answer`
+
+Rules:
+
+- The model may propose actions, but V3 validates and executes them.
+- V3 must apply dataset visibility, local-key matching, tool allowlists, operation schemas, and confirmation gates before any action runs.
+- ReAct observations are persisted as AssistantRun events and concise execution-trail steps.
+- The UI shows brief user-facing steps, not full hidden chain-of-thought.
+- Each run has a bounded step limit, default 3 and max 5 for the first implementation.
+- If the model emits invalid action JSON, V3 records the failure and asks for a corrected action or falls back to a final answer.
+- OpenClaw can participate as a provider or optional capability bridge, but ReAct state remains V3-owned.
+
 ## Workstreams
 
 ### Workstream A: Static-Page Core Product Loop
@@ -108,6 +142,7 @@ Next outcomes:
 - Scope planning can become provider-backed while keeping deterministic fallback.
 - Static-page intent provider prompt gets stricter schema and better examples.
 - Provider failures are visible as runtime facts, not silent UI confusion.
+- Host-Controlled ReAct lets the model request retrieval, draft updates, preview generation, report actions, or final answers through V3-validated action steps instead of one-shot prompting.
 
 ### Workstream C: Optional OpenClaw Extension
 
@@ -227,7 +262,37 @@ Next outcomes:
 - Static-page operations are still V3-sanitized.
 - OpenClaw failure does not break deterministic static-page fallback.
 
-### Slice 3: Static-Page Module Editing And Data Binding
+### Slice 3: Host-Controlled ReAct AssistantRun Loop
+
+**Files:**
+
+- Modify: `crates/platform-api/src/lib.rs`
+- Modify: `crates/contracts/src/lib.rs`
+- Modify: `crates/domain-model/src/lib.rs` only if a typed domain enum is needed
+- Modify: `crates/storage/src/lib.rs` only if existing AssistantRun events/output artifacts are insufficient
+- Modify: `crates/static-page-runtime/src/lib.rs`
+- Test: `crates/platform-api/src/lib.rs`
+
+**Steps:**
+
+1. Define a strict `AssistantRunNextAction` JSON contract with `action_type`, `reason_summary`, `arguments`, and `requires_confirmation`.
+2. Add a parser/sanitizer that rejects unknown action types, unsafe keys, excessive argument size, and write actions outside the allowlist.
+3. Add host action router for first-version actions: `retrieve_evidence`, `recall_conversation_memory`, `update_static_page_module`, and `final_answer`.
+4. Persist each step as AssistantRun event names such as `assistant_run.react.action_requested`, `assistant_run.react.action_completed`, and `assistant_run.react.final_answer`.
+5. Add concise execution-trail labels for the UI, for example `检索供料证据`, `召回对话记忆`, `更新静态页模块`, `模型生成最终回答`.
+6. Enforce max-step limits with default 3 and max 5.
+7. Keep deterministic fallback: if provider runtime is placeholder or invalid JSON repeats, return the normal single-step answer path.
+8. Add tests for valid retrieval action, invalid action rejection, hidden dataset denial, static-page module update action, final answer, and step-limit stop.
+
+**Acceptance:**
+
+- ReAct never bypasses V3 visibility or tool allowlists.
+- AssistantRun can continue through multiple model-requested action steps.
+- UI-facing trail contains concise steps without exposing hidden chain-of-thought.
+- Static-page module updates can be requested by the model through the same action contract used by user micro-adjustments.
+- Existing ordinary chat still works when ReAct is disabled.
+
+### Slice 4: Static-Page Module Editing And Data Binding
 
 **Files:**
 
@@ -256,7 +321,7 @@ Next outcomes:
 - Model can apply the same operation shape from natural-language prompts.
 - Draft marks preview/final render stale after content or data changes.
 
-### Slice 4: Real Static-Page Data Snapshot Path
+### Slice 5: Real Static-Page Data Snapshot Path
 
 **Files:**
 
@@ -280,7 +345,7 @@ Next outcomes:
 - Missing or weak data is explicitly labeled instead of faked.
 - Renderer output and image prompt share the same data snapshot.
 
-### Slice 5: Final Render Worker And Export Package
+### Slice 6: Final Render Worker And Export Package
 
 **Files:**
 
@@ -304,7 +369,7 @@ Next outcomes:
 - User can continue chatting and editing after opening an artifact.
 - Final render is not lost on page refresh.
 
-### Slice 6: OpenClaw Memory Bridge
+### Slice 7: OpenClaw Memory Bridge
 
 **Files:**
 
@@ -327,7 +392,7 @@ Next outcomes:
 - OpenClaw memory never exposes hidden datasets.
 - Runtime evidence explains when OpenClaw memory was supplied.
 
-### Slice 7: OpenClaw Readonly Local Execution Bridge
+### Slice 8: OpenClaw Readonly Local Execution Bridge
 
 **Files:**
 
@@ -349,7 +414,7 @@ Next outcomes:
 - V3 can continue if bridge fails.
 - User sees concise execution steps in the conversation/runtime trail.
 
-### Slice 8: Parser And Media Parity
+### Slice 9: Parser And Media Parity
 
 **Files:**
 
@@ -373,7 +438,7 @@ Next outcomes:
 - Parsed media evidence can be supplied to chat, reports, and static pages.
 - Provider failures are recorded as recoverable parse/enrichment errors.
 
-### Slice 9: Report And Artifact Shelf Integration
+### Slice 10: Report And Artifact Shelf Integration
 
 **Files:**
 
@@ -395,7 +460,7 @@ Next outcomes:
 - No two-choice "chat or report" mode remains.
 - Reports and static pages feel like artifacts created inside the same assistant.
 
-### Slice 10: Security And Operations Hardening
+### Slice 11: Security And Operations Hardening
 
 **Files:**
 
@@ -422,13 +487,22 @@ Next outcomes:
 
 Start with Slice 0 if the consolidated plan is not committed.
 
-If Slice 0 is already committed, start with Slice 1:
+If Slice 0 is already committed but Slice 1 and Slice 2 are not yet committed, start with Slice 1:
 
 ```text
 Implement optional OpenClawProvider in crates/llm-gateway.
 Use docs/plans/2026-04-29-v3-consolidated-development-handoff-plan.md as the active plan.
 Do not change static-page behavior while adding the provider.
 Keep OpenClaw disabled by default and fully fallback-safe.
+```
+
+If Slice 1 and Slice 2 are already committed, start with Slice 3:
+
+```text
+Implement Host-Controlled ReAct inside AssistantRun.
+Use docs/plans/2026-04-29-v3-consolidated-development-handoff-plan.md as the active plan.
+The model may propose actions, but V3 validates, executes, records, and limits every action.
+Keep ordinary chat and deterministic static-page fallback working when ReAct is disabled.
 ```
 
 Reason:
@@ -438,7 +512,7 @@ Reason:
 - It validates the optional-extension boundary before adding memory/local execution.
 - It will not distract from static-page core because no runtime lane changes unless env selects `openclaw`.
 
-After Slice 1 and Slice 2, return to Slice 3 because module editing/data binding is the static-page product core.
+After Slice 1 and Slice 2, implement Slice 3 before deeper static-page work. ReAct is the execution frame that lets natural-language requests safely drive module edits, retrieval, preview generation, and report/static-page actions. Then continue to Slice 4 because module editing/data binding is the static-page product core.
 
 ## Verification Commands
 
