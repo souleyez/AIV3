@@ -382,6 +382,7 @@ pub enum WorkflowKind {
     ReportPlan,
     ReportRender,
     StaticPageImageGeneration,
+    StaticPageRender,
 }
 
 impl WorkflowKind {
@@ -394,6 +395,7 @@ impl WorkflowKind {
             Self::ReportPlan => "report_plan_workflow",
             Self::ReportRender => "report_render_workflow",
             Self::StaticPageImageGeneration => "static_page_image_generation_workflow",
+            Self::StaticPageRender => "static_page_render_workflow",
         }
     }
 
@@ -406,6 +408,7 @@ impl WorkflowKind {
             "report_plan_workflow" => Some(Self::ReportPlan),
             "report_render_workflow" => Some(Self::ReportRender),
             "static_page_image_generation_workflow" => Some(Self::StaticPageImageGeneration),
+            "static_page_render_workflow" => Some(Self::StaticPageRender),
             _ => None,
         }
     }
@@ -696,22 +699,31 @@ pub struct StaticPageImageJob {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum StaticPageRenderOutputStatus {
+    Queued,
+    Rendering,
     Rendered,
     Failed,
+    Cancelled,
 }
 
 impl StaticPageRenderOutputStatus {
     pub fn as_str(&self) -> &'static str {
         match self {
+            Self::Queued => "queued",
+            Self::Rendering => "rendering",
             Self::Rendered => "rendered",
             Self::Failed => "failed",
+            Self::Cancelled => "cancelled",
         }
     }
 
     pub fn from_str(value: &str) -> Option<Self> {
         match value {
+            "queued" => Some(Self::Queued),
+            "rendering" => Some(Self::Rendering),
             "rendered" => Some(Self::Rendered),
             "failed" => Some(Self::Failed),
+            "cancelled" => Some(Self::Cancelled),
             _ => None,
         }
     }

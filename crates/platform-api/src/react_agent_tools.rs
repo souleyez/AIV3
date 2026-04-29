@@ -469,7 +469,10 @@ async fn render_static_page_for_current_draft(
     let response = crate::create_static_page_render(
         State(state.clone()),
         Path(draft_id.to_string()),
-        Json(CreateStaticPageRenderRequest { image_job_id }),
+        Json(CreateStaticPageRenderRequest {
+            image_job_id,
+            background: false,
+        }),
     )
     .await;
     let (_status, Json(response)) = match response {

@@ -1495,20 +1495,28 @@ pub struct ConfirmStaticPageImageJobResponse {
 pub struct CreateStaticPageRenderRequest {
     #[serde(default)]
     pub image_job_id: Option<StaticPageImageJobId>,
+    #[serde(default)]
+    pub background: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum StaticPageRenderOutputStatusView {
+    Queued,
+    Rendering,
     Rendered,
     Failed,
+    Cancelled,
 }
 
 impl StaticPageRenderOutputStatusView {
     pub fn from_domain(value: domain_model::StaticPageRenderOutputStatus) -> Self {
         match value {
+            domain_model::StaticPageRenderOutputStatus::Queued => Self::Queued,
+            domain_model::StaticPageRenderOutputStatus::Rendering => Self::Rendering,
             domain_model::StaticPageRenderOutputStatus::Rendered => Self::Rendered,
             domain_model::StaticPageRenderOutputStatus::Failed => Self::Failed,
+            domain_model::StaticPageRenderOutputStatus::Cancelled => Self::Cancelled,
         }
     }
 }

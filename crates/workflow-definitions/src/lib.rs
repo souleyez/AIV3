@@ -333,6 +333,14 @@ pub fn registry() -> Vec<DynWorkflowDefinition> {
             success_stage: "static_page_image_generated",
             next_step: None,
         }),
+        Arc::new(LinearWorkflowDefinition {
+            kind: WorkflowKind::StaticPageRender,
+            summary: "Render confirmed static-page drafts into durable HTML and asset manifests.",
+            queue: "static_page",
+            task_key: "render_static_page",
+            success_stage: "static_page_render_completed",
+            next_step: None,
+        }),
     ]
 }
 
@@ -361,10 +369,11 @@ mod tests {
         let entries = registry();
         let names: Vec<_> = entries.iter().map(|entry| entry.kind().as_str()).collect();
 
-        assert_eq!(entries.len(), 7);
+        assert_eq!(entries.len(), 8);
         assert!(names.contains(&"chat_session_workflow"));
         assert!(names.contains(&"report_render_workflow"));
         assert!(names.contains(&"static_page_image_generation_workflow"));
+        assert!(names.contains(&"static_page_render_workflow"));
     }
 
     #[test]

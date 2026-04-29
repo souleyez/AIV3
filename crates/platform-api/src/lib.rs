@@ -2795,7 +2795,9 @@ fn infer_model_facing_capability_class(
             contracts::ModelFacingCapabilityClassView::MaterialExplanationAndSynthesis
         }
         WorkflowKind::ReportPlan => contracts::ModelFacingCapabilityClassView::ReportPlanning,
-        WorkflowKind::ReportRender | WorkflowKind::StaticPageImageGeneration => {
+        WorkflowKind::ReportRender
+        | WorkflowKind::StaticPageImageGeneration
+        | WorkflowKind::StaticPageRender => {
             contracts::ModelFacingCapabilityClassView::ReportGenerationAndEditing
         }
         WorkflowKind::UploadIngest => {
@@ -5084,6 +5086,87 @@ async fn create_static_page_render(
     let mut draft = load_static_page_draft_or_404(&state, draft_id).await?;
     let image_job =
         resolve_confirmed_static_page_image_job(&state, &draft, request.image_job_id).await?;
+    if request.background {
+        let mut render_output = state
+            .storage
+            .static_page_render_outputs()
+            .create(
+                state.tenant_id,
+                &NewStaticPageRenderOutput {
+                    draft_id: draft.id,
+                    assistant_run_id: draft.assistant_run_id,
+                    image_job_id: image_job.as_ref().map(|job| job.id),
+                    status: StaticPageRenderOutputStatus::Queued,
+                    html: String::new(),
+                    asset_manifest: build_static_page_render_queue_manifest(
+                        &draft,
+                        image_job.as_ref(),
+                        None,
+                        None,
+                    ),
+                    created_at: Utc::now(),
+                },
+            )
+            .await
+            .map_err(ApiError::from_storage)?;
+        let workflow_execution = build_initial_static_page_render_execution(
+            &state,
+            &draft,
+            &render_output,
+            image_job.as_ref(),
+        )?;
+        let initial_event =
+            build_initial_static_page_render_event(&workflow_execution, &draft, &render_output);
+        state
+            .storage
+            .workflow_executions()
+            .create_with_initial_event(&workflow_execution, &initial_event)
+            .await
+            .map_err(ApiError::from_storage)?;
+        let started = apply_workflow_signal_with_dependencies(
+            &state.storage,
+            &state.workflow_catalog,
+            &state.event_bus,
+            state.tenant_id,
+            workflow_execution.id,
+            WorkflowSignal::Start,
+        )
+        .await?;
+        render_output.asset_manifest = build_static_page_render_queue_manifest(
+            &draft,
+            image_job.as_ref(),
+            Some(&workflow_execution),
+            started.enqueued_tasks.first().map(|task| task.id),
+        );
+        render_output = state
+            .storage
+            .static_page_render_outputs()
+            .update(state.tenant_id, &render_output)
+            .await
+            .map_err(ApiError::from_storage)?;
+        append_static_page_draft_run_event(
+            &state,
+            &draft,
+            "static_page_render.queued",
+            json!({
+                "draft_id": draft.id,
+                "render_output_id": render_output.id,
+                "image_job_id": render_output.image_job_id,
+                "workflow_execution_id": workflow_execution.id,
+                "workflow_task_id": started.enqueued_tasks.first().map(|task| task.id),
+            }),
+        )
+        .await?;
+
+        return Ok((
+            StatusCode::CREATED,
+            Json(CreateStaticPageRenderResponse {
+                render_output: to_static_page_render_output_view(render_output),
+                draft: to_static_page_draft_view(draft),
+            }),
+        ));
+    }
+
     let rendered = render_static_page(&StaticPageRenderRequest {
         draft_id: draft.id.to_string(),
         assistant_run_id: draft.assistant_run_id.to_string(),
@@ -7804,6 +7887,7 @@ async fn start_workflow_execution(
 ) -> std::result::Result<Json<AdvanceWorkflowExecutionResponse>, ApiError> {
     let execution_id = parse_execution_id(&execution_id)?;
     let response = apply_workflow_signal(&state, execution_id, WorkflowSignal::Start).await?;
+    sync_static_page_render_output_for_workflow(&state, execution_id).await?;
 
     Ok(Json(response))
 }
@@ -7827,6 +7911,7 @@ async fn send_workflow_signal(
     let execution_id = parse_execution_id(&execution_id)?;
     let signal = build_workflow_signal(request)?;
     let response = apply_workflow_signal(&state, execution_id, signal).await?;
+    sync_static_page_render_output_for_workflow(&state, execution_id).await?;
 
     Ok(Json(response))
 }
@@ -7851,11 +7936,91 @@ async fn retry_workflow_execution_with_state(
     } else {
         None
     };
+    sync_static_page_render_output_for_workflow(state, execution_id).await?;
 
     Ok(RetryWorkflowExecutionResponse {
         retry_transition,
         restart_transition,
     })
+}
+
+async fn sync_static_page_render_output_for_workflow(
+    state: &AppState,
+    execution_id: WorkflowExecutionId,
+) -> std::result::Result<(), ApiError> {
+    let Some(execution) = state
+        .storage
+        .workflow_executions()
+        .get_by_id(state.tenant_id, execution_id)
+        .await
+        .map_err(ApiError::from_storage)?
+    else {
+        return Ok(());
+    };
+    if execution.kind != WorkflowKind::StaticPageRender {
+        return Ok(());
+    }
+    let Some(output_id) = execution
+        .context
+        .get("static_page_render_output_id")
+        .and_then(Value::as_str)
+        .and_then(|raw| Uuid::parse_str(raw).ok())
+        .map(domain_model::StaticPageRenderOutputId)
+    else {
+        return Ok(());
+    };
+    let Some(mut output) = state
+        .storage
+        .static_page_render_outputs()
+        .get_by_id(state.tenant_id, output_id)
+        .await
+        .map_err(ApiError::from_storage)?
+    else {
+        return Ok(());
+    };
+    let next_status = match execution.status {
+        WorkflowStatus::Pending | WorkflowStatus::Running => StaticPageRenderOutputStatus::Queued,
+        WorkflowStatus::Failed | WorkflowStatus::DeadLettered => {
+            StaticPageRenderOutputStatus::Failed
+        }
+        WorkflowStatus::Cancelled => StaticPageRenderOutputStatus::Cancelled,
+        WorkflowStatus::Succeeded => output.status.clone(),
+    };
+    if output.status == StaticPageRenderOutputStatus::Rendered
+        && !matches!(next_status, StaticPageRenderOutputStatus::Cancelled)
+    {
+        return Ok(());
+    }
+    output.status = next_status;
+    output.asset_manifest =
+        merge_static_page_render_output_workflow_manifest(&output.asset_manifest, &execution);
+    state
+        .storage
+        .static_page_render_outputs()
+        .update(state.tenant_id, &output)
+        .await
+        .map_err(ApiError::from_storage)?;
+    Ok(())
+}
+
+fn merge_static_page_render_output_workflow_manifest(
+    manifest: &Value,
+    execution: &WorkflowExecution,
+) -> Value {
+    let mut object = manifest.as_object().cloned().unwrap_or_default();
+    object.insert(
+        "workflow".to_string(),
+        json!({
+            "status": execution.status.as_str(),
+            "stage": execution.stage,
+            "executionId": execution.id,
+            "updatedAt": execution.updated_at,
+            "lastError": execution.context.get("last_error").cloned().unwrap_or(Value::Null),
+            "retryReason": execution.context.get("retry_reason").cloned().unwrap_or(Value::Null),
+            "cancelReason": execution.context.get("cancel_reason").cloned().unwrap_or(Value::Null),
+        }),
+    );
+    Value::Object(object)
 }
 
 async fn apply_workflow_signal(
@@ -8379,6 +8544,70 @@ fn build_initial_static_page_image_generation_execution(
     })
 }
 
+fn build_initial_static_page_render_execution(
+    state: &AppState,
+    draft: &StaticPageDraft,
+    render_output: &StaticPageRenderOutput,
+    image_job: Option<&StaticPageImageJob>,
+) -> std::result::Result<WorkflowExecution, ApiError> {
+    let definition = state
+        .workflow_catalog
+        .find_definition(WorkflowKind::StaticPageRender)
+        .ok_or_else(|| {
+            ApiError::internal(
+                "workflow_definition_missing",
+                "static_page_render workflow definition is not registered".to_string(),
+            )
+        })?;
+    let now = Utc::now();
+    let execution_id = WorkflowExecutionId::new();
+    let runtime_state = definition.initial_state(execution_id, now);
+    let mut context = runtime_state.context;
+    context.insert(
+        "retries_remaining".to_string(),
+        Value::Number(runtime_state.retries_remaining.into()),
+    );
+    context.insert(
+        "static_page_draft_id".to_string(),
+        Value::String(draft.id.to_string()),
+    );
+    context.insert(
+        "static_page_render_output_id".to_string(),
+        Value::String(render_output.id.to_string()),
+    );
+    context.insert(
+        "assistant_run_id".to_string(),
+        Value::String(draft.assistant_run_id.to_string()),
+    );
+    if let Some(job) = image_job {
+        context.insert(
+            "static_page_image_job_id".to_string(),
+            Value::String(job.id.to_string()),
+        );
+        if let Some(preview_asset_key) = job.preview_asset_key.as_ref() {
+            context.insert(
+                "preview_asset_key".to_string(),
+                Value::String(preview_asset_key.clone()),
+            );
+        }
+    }
+
+    Ok(WorkflowExecution {
+        id: execution_id,
+        tenant_id: state.tenant_id,
+        dataset_id: None,
+        report_plan_id: None,
+        kind: WorkflowKind::StaticPageRender,
+        version: runtime_state.version,
+        stage: runtime_state.stage,
+        status: runtime_state.status,
+        attempt: 0,
+        context: Value::Object(context),
+        created_at: now,
+        updated_at: now,
+    })
+}
+
 fn build_initial_execution_event(
     execution: &WorkflowExecution,
     report_plan_id: domain_model::ReportPlanId,
@@ -8417,6 +8646,30 @@ fn build_initial_static_page_image_generation_event(
             "assistant_run_id": draft.assistant_run_id,
             "static_page_draft_id": draft.id,
             "static_page_image_job_id": job.id,
+        }),
+        created_at: execution.created_at,
+    }
+}
+
+fn build_initial_static_page_render_event(
+    execution: &WorkflowExecution,
+    draft: &StaticPageDraft,
+    render_output: &StaticPageRenderOutput,
+) -> WorkflowEventRecord {
+    WorkflowEventRecord {
+        id: domain_model::WorkflowEventId::new(),
+        execution_id: execution.id,
+        sequence_no: 1,
+        event_name: "workflow.execution_created".to_string(),
+        payload: json!({
+            "kind": execution.kind.as_str(),
+            "version": execution.version,
+            "status": execution.status.as_str(),
+            "stage": execution.stage,
+            "assistant_run_id": draft.assistant_run_id,
+            "static_page_draft_id": draft.id,
+            "static_page_render_output_id": render_output.id,
+            "static_page_image_job_id": render_output.image_job_id,
         }),
         created_at: execution.created_at,
     }
@@ -12259,6 +12512,37 @@ fn build_static_page_image_prompt_payload(draft: &StaticPageDraft, prompt: Optio
     })
 }
 
+fn build_static_page_render_queue_manifest(
+    draft: &StaticPageDraft,
+    image_job: Option<&StaticPageImageJob>,
+    workflow_execution: Option<&WorkflowExecution>,
+    workflow_task_id: Option<domain_model::WorkflowTaskId>,
+) -> Value {
+    let payload = &draft.draft_payload;
+    json!({
+        "draft_id": draft.id,
+        "assistant_run_id": draft.assistant_run_id,
+        "status": "queued",
+        "renderer": "static-page-renderer-v1",
+        "workflow_execution_id": workflow_execution.map(|execution| execution.id),
+        "workflow_task_id": workflow_task_id,
+        "workflow": {
+            "status": "queued",
+            "executionId": workflow_execution.map(|execution| execution.id),
+            "taskId": workflow_task_id,
+        },
+        "image_job_id": image_job.map(|job| job.id),
+        "preview_asset_key": image_job.and_then(|job| job.preview_asset_key.clone()),
+        "visual_spec": static_page_payload_value(payload, &["visualSpec", "visual_spec"])
+            .unwrap_or_else(|| build_static_page_visual_spec("client-delivery")),
+        "render_spec": static_page_payload_value(payload, &["renderSpec", "render_spec"])
+            .unwrap_or_else(build_static_page_render_spec),
+        "data_snapshot": static_page_payload_value(payload, &["dataSnapshot", "data_snapshot"])
+            .unwrap_or_else(|| build_static_page_data_snapshot(payload, &draft.selected_scope)),
+        "queue_copy": "最终静态页正在后台制作，可以继续聊天或修改其他内容。",
+    })
+}
+
 fn build_static_page_visual_spec(style_direction: &str) -> Value {
     match style_direction {
         "decision-brief" => json!({
@@ -15715,7 +15999,10 @@ mod tests {
         let render_before_confirm = create_static_page_render(
             State(state.clone()),
             Path(draft_response.draft.id.to_string()),
-            Json(CreateStaticPageRenderRequest { image_job_id: None }),
+            Json(CreateStaticPageRenderRequest {
+                image_job_id: None,
+                background: false,
+            }),
         )
         .await
         .expect_err("render should require confirmed preview");
@@ -15820,11 +16107,99 @@ mod tests {
             json!("confirmed")
         );
 
+        let (background_render_status, Json(background_render_response)) =
+            create_static_page_render(
+                State(state.clone()),
+                Path(draft_response.draft.id.to_string()),
+                Json(CreateStaticPageRenderRequest {
+                    image_job_id: Some(job_response.image_job.id),
+                    background: true,
+                }),
+            )
+            .await
+            .expect("background static page render should be queued");
+        assert_eq!(background_render_status, StatusCode::CREATED);
+        assert_eq!(
+            background_render_response.render_output.status,
+            contracts::StaticPageRenderOutputStatusView::Queued
+        );
+        assert_eq!(background_render_response.render_output.html, "");
+        assert_eq!(
+            background_render_response.render_output.asset_manifest["status"],
+            json!("queued")
+        );
+        assert_eq!(
+            background_render_response.render_output.asset_manifest["image_job_id"],
+            json!(job_response.image_job.id)
+        );
+        assert_eq!(
+            background_render_response.render_output.asset_manifest["workflow"]["status"],
+            json!("queued")
+        );
+        let render_workflows = state
+            .storage
+            .workflow_executions()
+            .list_by_tenant(state.tenant_id)
+            .await
+            .expect("workflow executions should list after background render");
+        let render_workflow = render_workflows
+            .iter()
+            .find(|execution| execution.kind == WorkflowKind::StaticPageRender)
+            .expect("static page render workflow should be created");
+        assert_eq!(render_workflow.status, WorkflowStatus::Running);
+        assert_eq!(
+            render_workflow.context["static_page_render_output_id"],
+            json!(background_render_response.render_output.id.to_string())
+        );
+        let render_tasks = state
+            .storage
+            .workflow_tasks()
+            .list_by_execution(render_workflow.id)
+            .await
+            .expect("static page render workflow tasks should list");
+        assert_eq!(render_tasks.len(), 1);
+        assert_eq!(render_tasks[0].queue, "static_page");
+        assert_eq!(render_tasks[0].task_key, "render_static_page");
+        let Json(cancel_transition) = send_workflow_signal(
+            State(state.clone()),
+            Path(render_workflow.id.to_string()),
+            Json(contracts::WorkflowSignalRequest {
+                kind: contracts::WorkflowSignalKindView::CancelRequested,
+                task_key: None,
+                output: None,
+                error: None,
+                reason: Some("customer_changed_render_request".to_string()),
+                note: None,
+            }),
+        )
+        .await
+        .expect("background static page render workflow should cancel");
+        assert_eq!(
+            cancel_transition.execution.status,
+            WorkflowStatus::Cancelled
+        );
+        let cancelled_background_output = state
+            .storage
+            .static_page_render_outputs()
+            .get_by_id(state.tenant_id, background_render_response.render_output.id)
+            .await
+            .expect("background render output should load")
+            .expect("background render output should exist");
+        assert_eq!(
+            cancelled_background_output.status,
+            StaticPageRenderOutputStatus::Cancelled
+        );
+        assert_eq!(
+            cancelled_background_output.asset_manifest["workflow"]["status"],
+            json!("cancelled")
+        );
+
         let (render_status, Json(render_response)) = create_static_page_render(
             State(state.clone()),
             Path(draft_response.draft.id.to_string()),
             Json(CreateStaticPageRenderRequest {
                 image_job_id: Some(job_response.image_job.id),
+                background: false,
             }),
         )
         .await
@@ -15858,8 +16233,13 @@ mod tests {
         )
         .await
         .expect("static page render outputs should list");
-        assert_eq!(render_outputs.len(), 1);
-        assert_eq!(render_outputs[0].id, render_response.render_output.id);
+        assert_eq!(render_outputs.len(), 2);
+        assert!(render_outputs
+            .iter()
+            .any(|output| output.id == render_response.render_output.id));
+        assert!(render_outputs
+            .iter()
+            .any(|output| output.id == background_render_response.render_output.id));
 
         let Json(detail) = get_assistant_run(
             State(state),
@@ -15887,6 +16267,10 @@ mod tests {
             .events
             .iter()
             .any(|event| event.event_name == "static_page_image_job.confirmed"));
+        assert!(detail
+            .events
+            .iter()
+            .any(|event| event.event_name == "static_page_render.queued"));
         assert!(detail
             .events
             .iter()

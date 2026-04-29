@@ -2659,6 +2659,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "static-page-renderer",
  "storage",
  "tokio",
  "tracing",

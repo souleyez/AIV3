@@ -453,6 +453,9 @@ Static-page data snapshots now also prefer user/model-edited module data before 
 
 ### Slice 6: Final Render Worker And Export Package
 
+**Status 2026-04-29 background render workflow foundation:** completed locally.
+The domain/workflow contracts now include `static_page_render_workflow` and render output lifecycle states `queued`, `rendering`, `rendered`, `failed`, and `cancelled`. The existing render endpoint remains backward-compatible by default, while `background: true` queues a `render_static_page` workflow task and returns a queued render output. `static-page-worker` can now claim both static-page image and render tasks, render confirmed drafts into durable HTML/manifests, update the draft final page payload, and mark render outputs failed if the worker path errors. Generic workflow cancel/retry/start signals also sync the render output workflow manifest so the web UI can later reflect queued, failed, or cancelled state from the artifact itself.
+
 **Files:**
 
 - Modify: `crates/static-page-worker/src/lib.rs`
@@ -474,6 +477,22 @@ Static-page data snapshots now also prefer user/model-edited module data before 
 - Confirmation preview can lead to a durable final static page artifact.
 - User can continue chatting and editing after opening an artifact.
 - Final render is not lost on page refresh.
+
+**Verified 2026-04-29 background render workflow foundation:**
+
+- `wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo fmt --all --check"`
+- `wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo check -p static-page-worker"`
+- `wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo test -p workflow-definitions"`
+- `wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo test -p platform-api static_page_draft_can_be_created_under_assistant_run"`
+- `wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo test -p platform-api assistant_run_react_static_page"`
+- `wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo test -p static-page-worker"`
+
+**Remaining Slice 6 work:**
+
+- Connect the web UI to background render mode after queued/rendering UX is ready.
+- Add dedicated static-page render retry/cancel controls in the web UI, using the existing workflow signal routes.
+- Add worker-level integration coverage for failed render tasks and cancelled outputs.
+- Package/export rendered HTML and assets into a downloadable artifact.
 
 ### Slice 7: OpenClaw Memory Bridge
 

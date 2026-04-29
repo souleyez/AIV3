@@ -2580,6 +2580,56 @@ impl PgStaticPageRenderOutputRepository {
         map_static_page_render_output_row(&row)
     }
 
+    pub async fn get_by_id(
+        &self,
+        tenant_id: TenantId,
+        output_id: StaticPageRenderOutputId,
+    ) -> Result<Option<StaticPageRenderOutput>> {
+        let row = sqlx::query(
+            r#"
+            select id, tenant_id, draft_id, assistant_run_id, image_job_id, status,
+                   html, asset_manifest, created_at
+            from static_page_render_outputs
+            where tenant_id = $1 and id = $2
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(output_id.0)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        row.as_ref()
+            .map(map_static_page_render_output_row)
+            .transpose()
+    }
+
+    pub async fn update(
+        &self,
+        tenant_id: TenantId,
+        output: &StaticPageRenderOutput,
+    ) -> Result<StaticPageRenderOutput> {
+        let row = sqlx::query(
+            r#"
+            update static_page_render_outputs
+            set status = $3,
+                html = $4,
+                asset_manifest = $5
+            where tenant_id = $1 and id = $2
+            returning id, tenant_id, draft_id, assistant_run_id, image_job_id, status,
+                      html, asset_manifest, created_at
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(output.id.0)
+        .bind(output.status.as_str())
+        .bind(&output.html)
+        .bind(&output.asset_manifest)
+        .fetch_one(&self.pool)
+        .await?;
+
+        map_static_page_render_output_row(&row)
+    }
+
     pub async fn list_by_draft(
         &self,
         tenant_id: TenantId,
