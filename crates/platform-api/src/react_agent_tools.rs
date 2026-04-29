@@ -150,6 +150,7 @@ pub(crate) fn assistant_run_react_action_label(
         AssistantRunReactActionType::SubmitStaticPageImagePreview => "提交效果图生成",
         AssistantRunReactActionType::RenderStaticPage => "制作最终静态页",
         AssistantRunReactActionType::CreateReportDraft => "创建报表草稿",
+        AssistantRunReactActionType::ReportChoice => "选择报表流向",
         AssistantRunReactActionType::OpenClawMemoryRecall => "调用 OpenClaw 记忆",
         AssistantRunReactActionType::OpenClawReadonlyExecution => "调用 OpenClaw 只读执行",
         AssistantRunReactActionType::FinalAnswer => "模型生成最终回答",

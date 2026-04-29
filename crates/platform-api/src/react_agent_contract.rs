@@ -36,6 +36,7 @@ pub(crate) enum AssistantRunReActActionType {
     SubmitStaticPageImagePreview,
     RenderStaticPage,
     CreateReportDraft,
+    ReportChoice,
     OpenClawMemoryRecall,
     OpenClawReadonlyExecution,
     FinalAnswer,
@@ -53,6 +54,7 @@ impl AssistantRunReActActionType {
             "submit_static_page_image_preview" => Some(Self::SubmitStaticPageImagePreview),
             "render_static_page" => Some(Self::RenderStaticPage),
             "create_report_draft" => Some(Self::CreateReportDraft),
+            "report_choice" => Some(Self::ReportChoice),
             "openclaw_memory_recall" => Some(Self::OpenClawMemoryRecall),
             "openclaw_readonly_execution" => Some(Self::OpenClawReadonlyExecution),
             "final_answer" => Some(Self::FinalAnswer),
@@ -71,6 +73,7 @@ impl AssistantRunReActActionType {
             Self::SubmitStaticPageImagePreview => "submit_static_page_image_preview",
             Self::RenderStaticPage => "render_static_page",
             Self::CreateReportDraft => "create_report_draft",
+            Self::ReportChoice => "report_choice",
             Self::OpenClawMemoryRecall => "openclaw_memory_recall",
             Self::OpenClawReadonlyExecution => "openclaw_readonly_execution",
             Self::FinalAnswer => "final_answer",
@@ -211,7 +214,12 @@ fn parse_structured_decision(
             .and_then(Value::as_str)
             .and_then(AssistantRunReActActionType::from_str)
             .unwrap_or(AssistantRunReActActionType::FinalAnswer),
-        AssistantRunReActStatus::Act | AssistantRunReActStatus::ReportChoice => action_object
+        AssistantRunReActStatus::ReportChoice => action_object
+            .and_then(|action| action.get("type"))
+            .and_then(Value::as_str)
+            .and_then(AssistantRunReActActionType::from_str)
+            .unwrap_or(AssistantRunReActActionType::ReportChoice),
+        AssistantRunReActStatus::Act => action_object
             .and_then(|action| action.get("type"))
             .and_then(Value::as_str)
             .and_then(AssistantRunReActActionType::from_str)
@@ -225,10 +233,25 @@ fn parse_structured_decision(
             .unwrap_or(action_type.as_str()),
         action_type.as_str(),
     );
-    let arguments = normalize_arguments(
+    let mut arguments = normalize_arguments(
         action_object.and_then(|action| action.get("arguments")),
         fallback_answer,
     )?;
+    if status == AssistantRunReActStatus::ReportChoice {
+        if let Some(choice) = object
+            .get("choice")
+            .or_else(|| object.get("report_choice"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            if let Some(arguments_object) = arguments.as_object_mut() {
+                arguments_object
+                    .entry("choice".to_string())
+                    .or_insert_with(|| json!(choice));
+            }
+        }
+    }
     let requires_confirmation = object
         .get("requires_confirmation")
         .or_else(|| object.get("requiresConfirmation"))
@@ -299,6 +322,7 @@ fn normalize_reason(raw_reason: &str, fallback: &str) -> String {
 fn status_for_action(action_type: AssistantRunReActActionType) -> AssistantRunReActStatus {
     match action_type {
         AssistantRunReActActionType::FinalAnswer => AssistantRunReActStatus::FinalAnswer,
+        AssistantRunReActActionType::ReportChoice => AssistantRunReActStatus::ReportChoice,
         _ => AssistantRunReActStatus::Act,
     }
 }
@@ -434,6 +458,21 @@ mod tests {
             structured.action_type,
             AssistantRunReActActionType::FinalAnswer
         );
+    }
+
+    #[test]
+    fn parses_report_choice_terminal_without_action_object() {
+        let decision = parse_assistant_run_react_decision(
+            r#"{"status":"report_choice","intent":"report","reason":"用户选择生成报表","choice":"create_report"}"#,
+        )
+        .expect("report choice should parse as terminal status");
+
+        assert_eq!(decision.status, AssistantRunReActStatus::ReportChoice);
+        assert_eq!(
+            decision.action_type,
+            AssistantRunReActActionType::ReportChoice
+        );
+        assert_eq!(decision.arguments["choice"], json!("create_report"));
     }
 
     #[test]

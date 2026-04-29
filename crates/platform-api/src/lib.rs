@@ -86,7 +86,7 @@ mod react_agent_tools;
 use react_agent_catalog::build_assistant_run_react_planning_catalog;
 use react_agent_contract::{
     parse_assistant_run_next_action, AssistantRunReActActionType as AssistantRunReactActionType,
-    AssistantRunReActDecision as AssistantRunNextAction,
+    AssistantRunReActDecision as AssistantRunNextAction, AssistantRunReActStatus,
 };
 use react_agent_tools::{
     assistant_run_react_action_label, assistant_run_react_policy_observation,
@@ -5470,17 +5470,14 @@ async fn run_assistant_run_react_for_create(
             }),
         });
 
-        let result = if assistant_run_react_should_repair_terminal_action(
+        let result = if let Some(repair) = build_react_protocol_repair_at_step(
             &action,
+            &observations,
             selected_scope,
             &evidence_state,
-            &observations,
+            step_index,
         ) {
-            Ok(assistant_run_react_policy_observation(
-                &action,
-                "final_answer requires a supply observation; choose a whitelisted action before answering.",
-                step_index,
-            ))
+            Ok(repair)
         } else {
             execute_assistant_run_react_action(
                 state,
@@ -5656,17 +5653,14 @@ async fn run_assistant_run_react_for_continue(
             }),
         });
 
-        let result = if assistant_run_react_should_repair_terminal_action(
+        let result = if let Some(repair) = build_react_protocol_repair_at_step(
             &action,
+            &observations,
             &run.selected_scope,
             &evidence_state,
-            &observations,
+            step_index,
         ) {
-            Ok(assistant_run_react_policy_observation(
-                &action,
-                "final_answer requires a supply observation; choose a whitelisted action before answering.",
-                step_index,
-            ))
+            Ok(repair)
         } else {
             execute_assistant_run_react_action(
                 state,
@@ -5913,6 +5907,101 @@ fn assistant_run_react_max_steps() -> usize {
         .clamp(1, ASSISTANT_RUN_REACT_MAX_STEPS)
 }
 
+#[allow(dead_code)]
+pub(crate) fn build_react_protocol_repair(
+    decision: &AssistantRunNextAction,
+    observations: &[Value],
+    selected_scope: &Value,
+    evidence_state: &Value,
+) -> Option<AssistantRunReactActionResult> {
+    build_react_protocol_repair_at_step(decision, observations, selected_scope, evidence_state, 0)
+}
+
+fn build_react_protocol_repair_at_step(
+    decision: &AssistantRunNextAction,
+    observations: &[Value],
+    selected_scope: &Value,
+    evidence_state: &Value,
+    step_index: usize,
+) -> Option<AssistantRunReactActionResult> {
+    if assistant_run_react_should_repair_terminal_action(
+        decision,
+        selected_scope,
+        evidence_state,
+        observations,
+    ) {
+        return Some(assistant_run_react_policy_observation(
+            decision,
+            "final_answer requires a supply observation; choose a whitelisted action before answering.",
+            step_index,
+        ));
+    }
+
+    if decision.status == AssistantRunReActStatus::ReportChoice
+        && !assistant_run_react_has_completed_action(observations, "list_report_options")
+    {
+        return Some(assistant_run_react_policy_observation(
+            decision,
+            "report_choice requires list_report_options observation before choosing a report path.",
+            step_index,
+        ));
+    }
+
+    if let Some(denied) = react_requested_scope_denial(decision, selected_scope) {
+        return Some(build_assistant_run_react_policy_repair_result(
+            decision,
+            "requested dataset or document is outside the current selected scope.",
+            step_index,
+            vec![denied],
+            "scope_denied",
+        ));
+    }
+
+    if assistant_run_react_repeats_no_progress_action(decision, observations) {
+        return Some(build_assistant_run_react_policy_repair_result(
+            decision,
+            "same no-progress action repeated; choose a different whitelisted action or cannot_answer.",
+            step_index,
+            vec![format!("repeated:{}", decision.action_type.as_str())],
+            "repeated_no_progress_action",
+        ));
+    }
+
+    None
+}
+
+fn build_assistant_run_react_policy_repair_result(
+    action: &AssistantRunNextAction,
+    message: &str,
+    step_index: usize,
+    denied: Vec<String>,
+    repair_code: &str,
+) -> AssistantRunReactActionResult {
+    AssistantRunReactActionResult {
+        observation: json!({
+            "status": "rejected",
+            "action_type": "policy_observation",
+            "actionType": "policy_observation",
+            "message": message,
+            "denied": denied,
+            "items": [],
+            "limits": {},
+            "repair_required": true,
+            "repair_code": repair_code,
+            "step": step_index,
+        }),
+        trail_step: json!({
+            "status": "rejected",
+            "label": "ReAct 协议修复",
+            "react_action": action.action_type.as_str(),
+            "message": message,
+            "react_step": step_index,
+            "at": Utc::now(),
+        }),
+        final_answer: None,
+    }
+}
+
 fn assistant_run_react_should_repair_terminal_action(
     action: &AssistantRunNextAction,
     selected_scope: &Value,
@@ -5922,6 +6011,83 @@ fn assistant_run_react_should_repair_terminal_action(
     action.action_type == AssistantRunReactActionType::FinalAnswer
         && assistant_run_react_scope_requires_supply(selected_scope)
         && !assistant_run_react_has_supply_observation(evidence_state, observations)
+}
+
+fn assistant_run_react_has_completed_action(observations: &[Value], action_type: &str) -> bool {
+    observations.iter().any(|observation| {
+        observation
+            .get("status")
+            .and_then(Value::as_str)
+            .is_some_and(|status| status == "completed")
+            && observation
+                .get("action_type")
+                .or_else(|| observation.get("actionType"))
+                .and_then(Value::as_str)
+                .is_some_and(|value| value == action_type)
+    })
+}
+
+fn assistant_run_react_repeats_no_progress_action(
+    decision: &AssistantRunNextAction,
+    observations: &[Value],
+) -> bool {
+    let action_type = decision.action_type.as_str();
+    observations
+        .iter()
+        .rev()
+        .take(2)
+        .filter(|observation| {
+            observation
+                .get("status")
+                .and_then(Value::as_str)
+                .is_some_and(|status| matches!(status, "rejected" | "failed" | "denied"))
+                && observation
+                    .get("action_type")
+                    .or_else(|| observation.get("actionType"))
+                    .and_then(Value::as_str)
+                    .is_some_and(|value| value == action_type)
+        })
+        .count()
+        >= 2
+}
+
+fn react_requested_scope_denial(
+    decision: &AssistantRunNextAction,
+    selected_scope: &Value,
+) -> Option<String> {
+    let requested_dataset_id = decision
+        .arguments
+        .get("dataset_id")
+        .or_else(|| decision.arguments.get("datasetId"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if let Some(requested_dataset_id) = requested_dataset_id {
+        let selected_dataset_ids = selected_dataset_ids_from_scope(selected_scope);
+        let requested = Uuid::parse_str(requested_dataset_id).ok().map(DatasetId);
+        if requested.is_none_or(|requested| !selected_dataset_ids.contains(&requested)) {
+            return Some(format!("dataset:{requested_dataset_id}"));
+        }
+    }
+
+    let requested_document_id = decision
+        .arguments
+        .get("document_id")
+        .or_else(|| decision.arguments.get("documentId"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if let Some(requested_document_id) = requested_document_id {
+        let selected_document_ids = selected_document_ids_from_scope(selected_scope);
+        let requested = Uuid::parse_str(requested_document_id).ok().map(DocumentId);
+        if !selected_document_ids.is_empty()
+            && requested.is_none_or(|requested| !selected_document_ids.contains(&requested))
+        {
+            return Some(format!("document:{requested_document_id}"));
+        }
+    }
+
+    None
 }
 
 fn assistant_run_react_scope_requires_supply(selected_scope: &Value) -> bool {
@@ -8253,6 +8419,28 @@ fn selected_dataset_ids_from_scope(scope: &Value) -> Vec<DatasetId> {
     dataset_ids
 }
 
+fn selected_document_ids_from_scope(scope: &Value) -> Vec<DocumentId> {
+    let Some(object) = scope.as_object() else {
+        return Vec::new();
+    };
+
+    let mut document_ids = Vec::new();
+    for key in ["documents", "selected"] {
+        let Some(items) = object.get(key).and_then(Value::as_array) else {
+            continue;
+        };
+        for item in items {
+            let Some(document_id) = document_id_from_scope_item(item) else {
+                continue;
+            };
+            if !document_ids.contains(&document_id) {
+                document_ids.push(document_id);
+            }
+        }
+    }
+    document_ids
+}
+
 fn selected_scope_requests_conversation_memory(scope: &Value) -> bool {
     scope
         .as_object()
@@ -8270,12 +8458,37 @@ fn selected_scope_requests_conversation_memory(scope: &Value) -> bool {
 }
 
 fn dataset_id_from_scope_item(item: &Value) -> Option<DatasetId> {
+    if item
+        .as_object()
+        .and_then(|object| object.get("type"))
+        .and_then(Value::as_str)
+        .is_some_and(|item_type| item_type != "dataset")
+    {
+        return None;
+    }
     let raw = item.as_str().or_else(|| {
         item.as_object()
             .and_then(|object| object.get("id"))
             .and_then(Value::as_str)
     })?;
     Uuid::parse_str(raw).ok().map(DatasetId)
+}
+
+fn document_id_from_scope_item(item: &Value) -> Option<DocumentId> {
+    if item
+        .as_object()
+        .and_then(|object| object.get("type"))
+        .and_then(Value::as_str)
+        .is_some_and(|item_type| item_type != "document")
+    {
+        return None;
+    }
+    let raw = item.as_str().or_else(|| {
+        item.as_object()
+            .and_then(|object| object.get("id"))
+            .and_then(Value::as_str)
+    })?;
+    Uuid::parse_str(raw).ok().map(DocumentId)
 }
 
 fn parse_assistant_run_id(raw: &str) -> std::result::Result<AssistantRunId, ApiError> {
@@ -13219,6 +13432,24 @@ mod tests {
     use tool_registry::{ToolCliContract, ToolCliOutputMode, ToolDefinition, ToolInvocationMode};
     use tower::util::ServiceExt;
 
+    fn react_test_action(
+        status: AssistantRunReActStatus,
+        action_type: AssistantRunReactActionType,
+        arguments: Value,
+    ) -> AssistantRunNextAction {
+        AssistantRunNextAction {
+            status,
+            intent: None,
+            action_type,
+            reason_summary: "测试动作".to_string(),
+            arguments,
+            requires_confirmation: false,
+            answer: None,
+            citations: Vec::new(),
+            conversation_state: json!({}),
+        }
+    }
+
     #[test]
     fn assistant_run_provider_input_includes_briefing_scope_and_history() {
         let input = build_assistant_run_provider_input(&CreateAssistantRunRequest {
@@ -13336,17 +13567,12 @@ mod tests {
             "selected": [{"type": "dataset", "id": dataset_id.to_string()}],
         });
         let ordinary_scope = json!({"mode": "ordinary_chat"});
-        let final_action = AssistantRunNextAction {
-            status: crate::react_agent_contract::AssistantRunReActStatus::FinalAnswer,
-            intent: None,
-            action_type: AssistantRunReactActionType::FinalAnswer,
-            reason_summary: "直接回答".to_string(),
-            arguments: json!({"content": "未供料回答"}),
-            requires_confirmation: false,
-            answer: Some("未供料回答".to_string()),
-            citations: Vec::new(),
-            conversation_state: json!({}),
-        };
+        let mut final_action = react_test_action(
+            AssistantRunReActStatus::FinalAnswer,
+            AssistantRunReactActionType::FinalAnswer,
+            json!({"content": "未供料回答"}),
+        );
+        final_action.answer = Some("未供料回答".to_string());
 
         assert!(assistant_run_react_should_repair_terminal_action(
             &final_action,
@@ -13379,6 +13605,118 @@ mod tests {
             }),
             &[],
         ));
+    }
+
+    #[test]
+    fn assistant_run_react_protocol_repair_matrix_handles_terminal_and_policy_cases() {
+        let dataset_id = DatasetId::new();
+        let denied_dataset_id = DatasetId::new();
+        let document_id = DocumentId::new();
+        let denied_document_id = DocumentId::new();
+        let selected_scope = json!({
+            "mode": "selected",
+            "selected": [
+                {"type": "dataset", "id": dataset_id.to_string()},
+                {"type": "document", "id": document_id.to_string()}
+            ],
+        });
+        let empty_evidence = json!({"status": "empty", "supplied_items": []});
+
+        let final_action = react_test_action(
+            AssistantRunReActStatus::FinalAnswer,
+            AssistantRunReactActionType::FinalAnswer,
+            json!({"content": "过早回答"}),
+        );
+        let final_repair =
+            build_react_protocol_repair(&final_action, &[], &selected_scope, &empty_evidence)
+                .expect("scoped final answer before supply should be repaired");
+        assert_eq!(
+            final_repair.observation["actionType"],
+            json!("policy_observation")
+        );
+        assert!(final_repair.final_answer.is_none());
+
+        assert!(build_react_protocol_repair(
+            &final_action,
+            &[],
+            &json!({"mode": "ordinary_chat"}),
+            &json!({"status": "not_requested", "supplied_items": []}),
+        )
+        .is_none());
+
+        let report_choice = react_test_action(
+            AssistantRunReActStatus::ReportChoice,
+            AssistantRunReactActionType::ReportChoice,
+            json!({"choice": "create_report"}),
+        );
+        let report_repair =
+            build_react_protocol_repair(&report_choice, &[], &selected_scope, &empty_evidence)
+                .expect("report choice before options should be repaired");
+        assert_eq!(report_repair.observation["repair_required"], json!(true));
+        assert!(build_react_protocol_repair(
+            &report_choice,
+            &[json!({
+                "status": "completed",
+                "action_type": "list_report_options",
+            })],
+            &selected_scope,
+            &empty_evidence,
+        )
+        .is_none());
+
+        let denied_dataset_action = react_test_action(
+            AssistantRunReActStatus::Act,
+            AssistantRunReactActionType::RetrieveEvidence,
+            json!({"dataset_id": denied_dataset_id.to_string()}),
+        );
+        let denied_dataset_repair = build_react_protocol_repair(
+            &denied_dataset_action,
+            &[],
+            &selected_scope,
+            &empty_evidence,
+        )
+        .expect("outside-scope dataset should be repaired before tool execution");
+        assert_eq!(
+            denied_dataset_repair.observation["denied"][0],
+            json!(format!("dataset:{denied_dataset_id}"))
+        );
+
+        let denied_document_action = react_test_action(
+            AssistantRunReActStatus::Act,
+            AssistantRunReactActionType::ReadDocumentDetail,
+            json!({"document_id": denied_document_id.to_string()}),
+        );
+        let denied_document_repair = build_react_protocol_repair(
+            &denied_document_action,
+            &[],
+            &selected_scope,
+            &empty_evidence,
+        )
+        .expect("outside-scope document should be repaired before tool execution");
+        assert_eq!(
+            denied_document_repair.observation["denied"][0],
+            json!(format!("document:{denied_document_id}"))
+        );
+
+        let repeated_action = react_test_action(
+            AssistantRunReActStatus::Act,
+            AssistantRunReactActionType::OpenClawReadonlyExecution,
+            json!({}),
+        );
+        let repeated_repair = build_react_protocol_repair(
+            &repeated_action,
+            &[
+                json!({"status": "rejected", "action_type": "openclaw_readonly_execution"}),
+                json!({"status": "rejected", "action_type": "openclaw_readonly_execution"}),
+            ],
+            &selected_scope,
+            &empty_evidence,
+        )
+        .expect("repeating same rejected action should be repaired");
+        assert_eq!(
+            repeated_repair.observation["repair_code"],
+            json!("repeated_no_progress_action")
+        );
     }
 
     #[test]
