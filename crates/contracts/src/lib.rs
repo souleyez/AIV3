@@ -613,6 +613,8 @@ pub struct MemoryDirectoryView {
     pub id: MemoryDirectoryId,
     pub dataset_id: DatasetId,
     pub execution_id: WorkflowExecutionId,
+    pub owner_user_id: Option<UserId>,
+    pub source_document_ids: Vec<DocumentId>,
     pub version_no: i32,
     pub directory_nodes: i32,
     pub refreshed_chunks: i32,

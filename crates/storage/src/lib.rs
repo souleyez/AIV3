@@ -52,10 +52,24 @@ pub const EMAIL_ACCOUNT_AUTH_SCHEMA: Migration = Migration {
     sql: include_str!("../migrations/0004_email_account_auth.sql"),
 };
 
+pub const ACCOUNT_ARTIFACT_HARDENING_SCHEMA: Migration = Migration {
+    version: "0005",
+    description: "account artifact hardening",
+    sql: include_str!("../migrations/0005_account_artifact_hardening.sql"),
+};
+
+pub const MEMORY_DIRECTORY_SCOPE_HARDENING_SCHEMA: Migration = Migration {
+    version: "0006",
+    description: "memory directory scope hardening",
+    sql: include_str!("../migrations/0006_memory_directory_scope_hardening.sql"),
+};
+
 pub const MIGRATIONS: &[Migration] = &[
     INITIAL_SCHEMA,
     WORKFLOW_RUNTIME_RECORDS_SCHEMA,
     EMAIL_ACCOUNT_AUTH_SCHEMA,
+    ACCOUNT_ARTIFACT_HARDENING_SCHEMA,
+    MEMORY_DIRECTORY_SCOPE_HARDENING_SCHEMA,
 ];
 
 pub const TABLES: &[&str] = &[
@@ -233,6 +247,8 @@ pub struct NewPublishedReportVersion {
 pub struct NewMemoryDirectory {
     pub execution_id: WorkflowExecutionId,
     pub dataset_id: DatasetId,
+    pub owner_user_id: Option<UserId>,
+    pub source_document_ids: Vec<DocumentId>,
     pub directory_nodes: i32,
     pub refreshed_chunks: i32,
     pub directory_manifest: Value,
@@ -2100,6 +2116,8 @@ impl PgMemoryDirectoryRepository {
                 tenant_id,
                 dataset_id,
                 execution_id,
+                owner_user_id,
+                source_document_ids,
                 version_no,
                 directory_nodes,
                 refreshed_chunks,
@@ -2111,25 +2129,41 @@ impl PgMemoryDirectoryRepository {
                 $2,
                 $3,
                 $4,
-                next_version.version_no,
                 $5,
                 $6,
+                next_version.version_no,
+                $7,
+                $8,
                 jsonb_set(
-                    jsonb_set($7, '{version_no}', to_jsonb(next_version.version_no), true),
-                    '{root,version_no}',
-                    to_jsonb(next_version.version_no),
+                    jsonb_set(
+                        jsonb_set(
+                            jsonb_set($9, '{version_no}', to_jsonb(next_version.version_no), true),
+                            '{root,version_no}',
+                            to_jsonb(next_version.version_no),
+                            true
+                        ),
+                        '{owner_user_id}',
+                        coalesce(to_jsonb($5::uuid), 'null'::jsonb),
+                        true
+                    ),
+                    '{source_document_ids}',
+                    to_jsonb($6::uuid[]),
                     true
                 ),
-                $8
+                $10
             from next_version
-            returning id, tenant_id, dataset_id, execution_id, version_no, directory_nodes,
-                      refreshed_chunks, directory_manifest, created_at
+            returning id, tenant_id, dataset_id, execution_id, owner_user_id, source_document_ids,
+                      version_no, directory_nodes, refreshed_chunks, directory_manifest, created_at
             "#,
         )
         .bind(MemoryDirectoryId::new().0)
         .bind(tenant_id.0)
         .bind(new_directory.dataset_id.0)
         .bind(new_directory.execution_id.0)
+        .bind(new_directory.owner_user_id.map(|id| id.0))
+        .bind(document_ids_to_uuid_array(
+            &new_directory.source_document_ids,
+        ))
         .bind(new_directory.directory_nodes)
         .bind(new_directory.refreshed_chunks)
         .bind(&new_directory.directory_manifest)
@@ -2147,7 +2181,8 @@ impl PgMemoryDirectoryRepository {
     ) -> Result<Vec<MemoryDirectory>> {
         let rows = sqlx::query(
             r#"
-            select id, tenant_id, dataset_id, execution_id, version_no, directory_nodes, refreshed_chunks, directory_manifest, created_at
+            select id, tenant_id, dataset_id, execution_id, owner_user_id, source_document_ids,
+                   version_no, directory_nodes, refreshed_chunks, directory_manifest, created_at
             from memory_directories
             where tenant_id = $1 and dataset_id = $2
             order by version_no desc, created_at desc
@@ -2168,7 +2203,8 @@ impl PgMemoryDirectoryRepository {
     ) -> Result<Option<MemoryDirectory>> {
         let row = sqlx::query(
             r#"
-            select id, tenant_id, dataset_id, execution_id, version_no, directory_nodes, refreshed_chunks, directory_manifest, created_at
+            select id, tenant_id, dataset_id, execution_id, owner_user_id, source_document_ids,
+                   version_no, directory_nodes, refreshed_chunks, directory_manifest, created_at
             from memory_directories
             where tenant_id = $1 and id = $2
             "#,
@@ -4728,6 +4764,12 @@ fn map_memory_directory_row(row: &sqlx::postgres::PgRow) -> Result<MemoryDirecto
         tenant_id: TenantId(row.get::<Uuid, _>("tenant_id")),
         dataset_id: DatasetId(row.get::<Uuid, _>("dataset_id")),
         execution_id: WorkflowExecutionId(row.get::<Uuid, _>("execution_id")),
+        owner_user_id: row.get::<Option<Uuid>, _>("owner_user_id").map(UserId),
+        source_document_ids: row
+            .get::<Vec<Uuid>, _>("source_document_ids")
+            .into_iter()
+            .map(DocumentId)
+            .collect(),
         version_no: row.get("version_no"),
         directory_nodes: row.get("directory_nodes"),
         refreshed_chunks: row.get("refreshed_chunks"),
@@ -5313,6 +5355,10 @@ fn retrieval_evidence_ids_to_uuid_array(ids: &[RetrievalEvidenceId]) -> Vec<Uuid
     ids.iter().map(|id| id.0).collect()
 }
 
+fn document_ids_to_uuid_array(ids: &[DocumentId]) -> Vec<Uuid> {
+    ids.iter().map(|id| id.0).collect()
+}
+
 #[derive(Clone, Copy, Debug)]
 enum LlmInvocationReplaceTarget {
     DatasetOutput(DatasetOutputId),
@@ -5650,11 +5696,17 @@ mod tests {
                 .iter()
                 .map(|migration| migration.version)
                 .collect::<Vec<_>>(),
-            vec!["0001", "0002", "0004"]
+            vec!["0001", "0002", "0004", "0005", "0006"]
         );
         assert!(MIGRATIONS
             .iter()
             .any(|migration| migration.description == "email account authentication"));
+        assert!(MIGRATIONS
+            .iter()
+            .any(|migration| migration.description == "account artifact hardening"));
+        assert!(MIGRATIONS
+            .iter()
+            .any(|migration| migration.description == "memory directory scope hardening"));
     }
 
     #[test]
@@ -5680,6 +5732,9 @@ mod tests {
         assert!(EMAIL_ACCOUNT_AUTH_SCHEMA
             .sql
             .contains("add column if not exists user_id"));
+        assert!(MEMORY_DIRECTORY_SCOPE_HARDENING_SCHEMA
+            .sql
+            .contains("add column if not exists source_document_ids"));
     }
 
     #[test]

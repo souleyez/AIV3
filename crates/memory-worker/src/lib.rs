@@ -1,4 +1,4 @@
-use domain_model::{DatasetId, DocumentId};
+use domain_model::{DatasetId, DocumentId, UserId};
 use serde_json::{json, Value};
 
 #[derive(Clone, Debug)]
@@ -12,6 +12,7 @@ pub struct MemorySourceDocument {
 #[derive(Clone, Debug)]
 pub struct MemoryRefreshJob {
     pub dataset_id: DatasetId,
+    pub owner_user_id: Option<UserId>,
     pub include_directory: bool,
     pub documents: Vec<MemorySourceDocument>,
 }
@@ -37,6 +38,11 @@ impl MemoryIndexer for PlaceholderMemoryIndexer {
             .iter()
             .map(|document| document.chunk_count)
             .sum();
+        let source_document_ids: Vec<_> = job
+            .documents
+            .iter()
+            .map(|document| document.document_id)
+            .collect();
         let root_children: Vec<_> = job
             .documents
             .iter()
@@ -63,6 +69,8 @@ impl MemoryIndexer for PlaceholderMemoryIndexer {
                 "schema_version": "0.1.0",
                 "generator": "memory-worker",
                 "dataset_id": job.dataset_id,
+                "owner_user_id": job.owner_user_id,
+                "source_document_ids": source_document_ids,
                 "include_directory": job.include_directory,
                 "root": {
                     "kind": "dataset",
@@ -85,6 +93,7 @@ mod tests {
         let indexer = PlaceholderMemoryIndexer;
         let outcome = indexer.refresh(&MemoryRefreshJob {
             dataset_id,
+            owner_user_id: None,
             include_directory: true,
             documents: vec![
                 MemorySourceDocument {
@@ -104,6 +113,12 @@ mod tests {
 
         assert_eq!(outcome.directory_nodes, 3);
         assert_eq!(outcome.refreshed_chunks, 10);
+        assert_eq!(
+            outcome.directory_manifest["source_document_ids"]
+                .as_array()
+                .map(Vec::len),
+            Some(2)
+        );
         assert_eq!(
             outcome.directory_manifest["root"]["scope"],
             json!("dataset")

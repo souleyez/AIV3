@@ -1,6 +1,6 @@
 use anyhow::{anyhow, Result};
 use chrono::Utc;
-use domain_model::DocumentLifecycle;
+use domain_model::{DocumentLifecycle, UserId};
 use event_bus::{workflow_task_enqueued_subject, EventBus, EventSubscription};
 use memory_worker::{
     MemoryIndexer, MemoryRefreshJob, MemorySourceDocument, PlaceholderMemoryIndexer,
@@ -8,6 +8,7 @@ use memory_worker::{
 use serde_json::{json, Value};
 use storage::{NewMemoryDirectory, PgStorage, DEFAULT_LOCAL_DATABASE_URL};
 use tokio::time::Duration;
+use uuid::Uuid;
 use workflow_engine::{WorkflowCatalog, WorkflowSignal};
 
 const DEFAULT_QUEUE: &str = "memory";
@@ -90,6 +91,7 @@ async fn process_task(
         .dataset_id
         .ok_or_else(|| anyhow!("workflow execution {} has no dataset id", execution.id))?;
     let include_directory = context_bool(&execution.context, "include_directory").unwrap_or(true);
+    let owner_user_id = context_uuid(&execution.context, "owner_user_id").map(UserId);
     let documents = storage
         .documents()
         .list_by_dataset(task.tenant_id, dataset_id)
@@ -97,6 +99,9 @@ async fn process_task(
     let indexed_documents: Vec<_> = documents
         .into_iter()
         .filter(|document| document.lifecycle == DocumentLifecycle::Indexed)
+        .filter(|document| {
+            document.owner_user_id.is_none() || document.owner_user_id == owner_user_id
+        })
         .map(|document| MemorySourceDocument {
             document_id: document.id,
             title: document.title,
@@ -104,10 +109,15 @@ async fn process_task(
             chunk_count: chunk_count_from_document(&document.metadata),
         })
         .collect();
+    let source_document_ids = indexed_documents
+        .iter()
+        .map(|document| document.document_id)
+        .collect::<Vec<_>>();
 
     let process_result: Result<()> = async {
         let outcome = indexer.refresh(&MemoryRefreshJob {
             dataset_id,
+            owner_user_id,
             include_directory,
             documents: indexed_documents,
         });
@@ -118,6 +128,8 @@ async fn process_task(
                 &NewMemoryDirectory {
                     execution_id: task.execution_id,
                     dataset_id,
+                    owner_user_id,
+                    source_document_ids,
                     directory_nodes: outcome.directory_nodes as i32,
                     refreshed_chunks: outcome.refreshed_chunks as i32,
                     directory_manifest: outcome.directory_manifest.clone(),
@@ -197,6 +209,16 @@ async fn process_task(
 fn context_bool(value: &Value, key: &str) -> Option<bool> {
     match value {
         Value::Object(map) => map.get(key).and_then(Value::as_bool),
+        _ => None,
+    }
+}
+
+fn context_uuid(value: &Value, key: &str) -> Option<Uuid> {
+    match value {
+        Value::Object(map) => map
+            .get(key)
+            .and_then(Value::as_str)
+            .and_then(|value| Uuid::parse_str(value).ok()),
         _ => None,
     }
 }

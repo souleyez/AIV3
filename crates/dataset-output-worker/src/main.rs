@@ -5,7 +5,8 @@ use dataset_output_worker::{
     PlaceholderDatasetOutputGenerator,
 };
 use domain_model::{
-    ChatSessionId, DocumentId, DocumentLifecycle, MemoryDirectoryId, RetrievalEvidenceId, UserId,
+    ChatSessionId, DocumentId, DocumentLifecycle, MemoryDirectory, MemoryDirectoryId,
+    RetrievalEvidenceId, UserId,
 };
 use event_bus::{workflow_task_enqueued_subject, EventBus, EventSubscription};
 use llm_gateway::{
@@ -158,55 +159,8 @@ async fn process_task(
         .ok_or_else(|| anyhow!("workflow execution {} missing prompt", execution.id))?
         .to_string();
     let context_owner_user_id = context_uuid(&execution.context, "owner_user_id").map(UserId);
-    let visible_document_ids =
-        visible_document_ids_for_owner(storage, task.tenant_id, dataset_id, context_owner_user_id)
-            .await?;
-    let indexed_documents = storage
-        .documents()
-        .list_by_dataset(task.tenant_id, dataset_id)
-        .await?
-        .into_iter()
-        .filter(|document| document.lifecycle == DocumentLifecycle::Indexed)
-        .filter(|document| visible_document_ids.contains(&document.id))
-        .count();
-    let bound_memory_directory_id =
-        context_uuid(&execution.context, "memory_directory_id").map(MemoryDirectoryId);
     let bound_chat_session_id =
         context_uuid(&execution.context, "chat_session_id").map(ChatSessionId);
-    let bound_memory_directory_version_no =
-        context_i32(&execution.context, "memory_directory_version_no");
-    let bound_retrieval_evidence_ids =
-        context_uuid_array(&execution.context, "retrieval_evidence_ids")?
-            .into_iter()
-            .map(RetrievalEvidenceId)
-            .collect::<Vec<_>>();
-    let (retrieval_search_evidence_ids, retrieval_search_tool_call) = run_retrieval_search_tool(
-        storage,
-        task.tenant_id,
-        dataset_id,
-        &prompt,
-        context_owner_user_id,
-    )
-    .await;
-    let selected_retrieval_evidence_ids = if bound_retrieval_evidence_ids.is_empty() {
-        retrieval_search_evidence_ids
-    } else {
-        bound_retrieval_evidence_ids
-    };
-    let bound_memory_directory = match bound_memory_directory_id {
-        Some(memory_directory_id) => {
-            storage
-                .memory_directories()
-                .get_by_id(task.tenant_id, memory_directory_id)
-                .await?
-        }
-        None => storage
-            .memory_directories()
-            .list_by_dataset(task.tenant_id, dataset_id)
-            .await?
-            .into_iter()
-            .next(),
-    };
     let bound_chat_session = match bound_chat_session_id {
         Some(chat_session_id) => {
             let session = storage
@@ -236,6 +190,70 @@ async fn process_task(
         .as_ref()
         .and_then(|session| session.user_id)
         .or(context_owner_user_id);
+    let visible_document_ids =
+        visible_document_ids_for_owner(storage, task.tenant_id, dataset_id, owner_user_id).await?;
+    let indexed_documents = storage
+        .documents()
+        .list_by_dataset(task.tenant_id, dataset_id)
+        .await?
+        .into_iter()
+        .filter(|document| document.lifecycle == DocumentLifecycle::Indexed)
+        .filter(|document| visible_document_ids.contains(&document.id))
+        .count();
+    let bound_memory_directory_id =
+        context_uuid(&execution.context, "memory_directory_id").map(MemoryDirectoryId);
+    let bound_memory_directory_version_no =
+        context_i32(&execution.context, "memory_directory_version_no");
+    let bound_retrieval_evidence_ids =
+        context_uuid_array(&execution.context, "retrieval_evidence_ids")?
+            .into_iter()
+            .map(RetrievalEvidenceId)
+            .collect::<Vec<_>>();
+    let (retrieval_search_evidence_ids, retrieval_search_tool_call) =
+        run_retrieval_search_tool(storage, task.tenant_id, dataset_id, &prompt, owner_user_id)
+            .await;
+    let selected_retrieval_evidence_ids = if bound_retrieval_evidence_ids.is_empty() {
+        retrieval_search_evidence_ids
+    } else {
+        bound_retrieval_evidence_ids
+    };
+    let bound_memory_directory = match bound_memory_directory_id {
+        Some(memory_directory_id) => match storage
+            .memory_directories()
+            .get_by_id(task.tenant_id, memory_directory_id)
+            .await?
+        {
+            Some(directory)
+                if memory_directory_matches_owner_scope(
+                    &directory,
+                    &visible_document_ids,
+                    owner_user_id,
+                ) =>
+            {
+                Some(directory)
+            }
+            Some(_) => {
+                return Err(anyhow!(
+                    "memory directory {} is not visible for workflow execution {}",
+                    memory_directory_id,
+                    execution.id
+                ));
+            }
+            None => None,
+        },
+        None => storage
+            .memory_directories()
+            .list_by_dataset(task.tenant_id, dataset_id)
+            .await?
+            .into_iter()
+            .find(|directory| {
+                memory_directory_matches_owner_scope(
+                    directory,
+                    &visible_document_ids,
+                    owner_user_id,
+                )
+            }),
+    };
     let retrieval_evidences = if selected_retrieval_evidence_ids.is_empty() {
         Vec::new()
     } else {
@@ -451,6 +469,71 @@ async fn visible_document_ids_for_owner(
         })
         .map(|document| document.id)
         .collect())
+}
+
+fn memory_directory_matches_owner_scope(
+    directory: &MemoryDirectory,
+    visible_document_ids: &HashSet<DocumentId>,
+    current_user_id: Option<UserId>,
+) -> bool {
+    (directory.owner_user_id.is_none() || directory.owner_user_id == current_user_id)
+        && memory_directory_source_document_ids(directory)
+            .into_iter()
+            .all(|document_id| visible_document_ids.contains(&document_id))
+}
+
+fn memory_directory_source_document_ids(directory: &MemoryDirectory) -> Vec<DocumentId> {
+    if !directory.source_document_ids.is_empty() {
+        return directory.source_document_ids.clone();
+    }
+
+    let mut ids = Vec::new();
+    collect_memory_manifest_document_ids(&directory.directory_manifest, &mut ids);
+    ids
+}
+
+fn collect_memory_manifest_document_ids(value: &serde_json::Value, ids: &mut Vec<DocumentId>) {
+    match value {
+        serde_json::Value::Object(object) => {
+            if let Some(document_id) = object
+                .get("document_id")
+                .and_then(serde_json::Value::as_str)
+                .and_then(|value| Uuid::parse_str(value).ok())
+                .map(DocumentId)
+            {
+                push_unique_document_id(ids, document_id);
+            }
+            if let Some(source_ids) = object
+                .get("source_document_ids")
+                .and_then(serde_json::Value::as_array)
+            {
+                for source_id in source_ids {
+                    if let Some(document_id) = source_id
+                        .as_str()
+                        .and_then(|value| Uuid::parse_str(value).ok())
+                        .map(DocumentId)
+                    {
+                        push_unique_document_id(ids, document_id);
+                    }
+                }
+            }
+            for child in object.values() {
+                collect_memory_manifest_document_ids(child, ids);
+            }
+        }
+        serde_json::Value::Array(entries) => {
+            for entry in entries {
+                collect_memory_manifest_document_ids(entry, ids);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn push_unique_document_id(ids: &mut Vec<DocumentId>, document_id: DocumentId) {
+    if !ids.iter().any(|existing| *existing == document_id) {
+        ids.push(document_id);
+    }
 }
 
 async fn run_retrieval_search_tool(

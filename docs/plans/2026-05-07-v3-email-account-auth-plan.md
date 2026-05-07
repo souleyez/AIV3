@@ -28,8 +28,10 @@
 - Assistant run and conversation-memory hardening second pass completed: assistant run read/event/continue/static-page-draft entrypoints now require matching `assistant_runs.user_id`; conversation memory list and assistant-run recall candidates filter by `conversation_memory_items.user_id`; ReAct tools pass the active user into retrieval and document-read operations.
 - Workflow hardening second pass completed: workflow execution list/read/events/tasks/runtime-inspect/LLM calls/tool calls/start/retry/signal routes now resolve the linked dataset output, chat session, report plan, static-page draft, assistant run, and dataset before exposing or mutating workflow state. Invisible linked objects are returned as not found.
 - Dataset-output worker hardening second pass completed: generated outputs inherit the workflow/chat owner; retrieval search and selected evidence are filtered to documents visible to that owner so public datasets cannot accidentally feed another user's private uploaded document into a generated output.
-- Current validation: `cargo check -p platform-api -p dataset-output-worker`, `cargo test -p platform-api -p dataset-output-worker --no-run`, targeted platform-api owner/memory tests, and dataset-output-worker unit tests pass. Full `cargo test -p platform-api --lib` still exceeds the 5-minute local window because several integration-style tests touch local PostgreSQL/runtime flows; use targeted tests or a longer CI window for full execution.
-- Remaining hardening: historical memory-directory aggregates do not yet carry owner/document-scope metadata; sharing grants/team membership are not implemented; robot ownership is still future work; published static-page/report sharing policy remains owner-only plus legacy unowned compatibility; stronger recovery challenge policy, external audit viewer/admin policy, and true encryption recovery semantics remain later tasks.
+- Memory-directory scope hardening second pass completed: new memory-directory refresh workflows carry `owner_user_id`; `memory_directories` now persist `owner_user_id` and `source_document_ids`; memory worker filters source documents to the active owner scope; API list/hydration and dataset-output/chat workers only bind memory directories whose owner and source-document set are visible to the current user. Legacy directories are filtered by document IDs parsed from their manifest where possible.
+- Account artifact schema hardening now uses `0005_account_artifact_hardening.sql` and `0006_memory_directory_scope_hardening.sql`; both are registered in the ordered migration list, instead of relying on a mutated already-applied auth migration.
+- Current validation: `cargo check --workspace`, `cargo test --workspace --no-run`, `cargo test -p storage --lib`, `cargo test -p memory-worker --lib`, `cargo test -p dataset-output-worker --lib`, `cargo test -p chat-session-worker --lib`, and `cargo test -p platform-api --lib to_memory_directory_view_exposes_counts` pass. Full `cargo test -p platform-api --lib` still exceeds the 5-minute local window because several integration-style tests touch local PostgreSQL/runtime flows; use targeted tests or a longer CI window for full execution.
+- Remaining hardening: sharing grants/team membership are not implemented; robot ownership is still future work; published static-page/report sharing policy remains owner-only plus legacy unowned compatibility; stronger recovery challenge policy, external audit viewer/admin policy, and true encryption recovery semantics remain later tasks.
 
 ---
 
@@ -182,6 +184,8 @@ First pass:
 
 - `datasets.owner_user_id`
 - `documents.owner_user_id`
+- `memory_directories.owner_user_id`
+- `memory_directories.source_document_ids`
 - `dataset_outputs.owner_user_id`
 - `assistant_runs.user_id`
 - `chat_sessions.user_id`
@@ -205,6 +209,12 @@ Report route rules:
 - Owned report plans are visible and mutable only when the active session user matches `owner_user_id`.
 - Report AST versions, continue, render, publish, render-output list, and plan-level published-report detail all gate through the report plan.
 - Published report list/detail inherits report-plan visibility; first pass does not add a separate owner column to `published_reports`.
+- Memory-directory route rules:
+  - New refresh executions carry the active user into the memory worker.
+  - Public/unowned documents can appear in public memory directories.
+  - User-owned documents can appear only in memory directories owned by that same user.
+  - Dataset-output and chat workers ignore or reject bound memory directories that include documents outside the current user's visible document set.
+  - Legacy memory directories without `source_document_ids` are filtered by parsing document IDs from the manifest before being exposed or reused.
 
 Later:
 

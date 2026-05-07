@@ -4220,6 +4220,120 @@ async fn filter_retrieval_evidences_for_visible_documents(
         .collect())
 }
 
+fn memory_directory_source_document_ids(directory: &MemoryDirectory) -> Vec<DocumentId> {
+    if !directory.source_document_ids.is_empty() {
+        return directory.source_document_ids.clone();
+    }
+
+    let mut ids = Vec::new();
+    collect_memory_manifest_document_ids(&directory.directory_manifest, &mut ids);
+    ids
+}
+
+fn collect_memory_manifest_document_ids(value: &Value, ids: &mut Vec<DocumentId>) {
+    match value {
+        Value::Object(object) => {
+            if let Some(document_id) = object
+                .get("document_id")
+                .and_then(Value::as_str)
+                .and_then(|value| Uuid::parse_str(value).ok())
+                .map(DocumentId)
+            {
+                push_unique_document_id(ids, document_id);
+            }
+            if let Some(source_ids) = object.get("source_document_ids").and_then(Value::as_array) {
+                for source_id in source_ids {
+                    if let Some(document_id) = source_id
+                        .as_str()
+                        .and_then(|value| Uuid::parse_str(value).ok())
+                        .map(DocumentId)
+                    {
+                        push_unique_document_id(ids, document_id);
+                    }
+                }
+            }
+            for child in object.values() {
+                collect_memory_manifest_document_ids(child, ids);
+            }
+        }
+        Value::Array(entries) => {
+            for entry in entries {
+                collect_memory_manifest_document_ids(entry, ids);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn push_unique_document_id(ids: &mut Vec<DocumentId>, document_id: DocumentId) {
+    if !ids.iter().any(|existing| *existing == document_id) {
+        ids.push(document_id);
+    }
+}
+
+fn memory_directory_matches_visible_scope(
+    directory: &MemoryDirectory,
+    visible_document_ids: &HashSet<DocumentId>,
+    current_user_id: Option<UserId>,
+) -> bool {
+    owner_user_id_is_visible(directory.owner_user_id, current_user_id)
+        && memory_directory_source_document_ids(directory)
+            .into_iter()
+            .all(|document_id| visible_document_ids.contains(&document_id))
+}
+
+async fn filter_visible_memory_directories_for_user(
+    state: &AppState,
+    dataset_id: DatasetId,
+    directories: Vec<MemoryDirectory>,
+    current_user_id: Option<UserId>,
+) -> std::result::Result<Vec<MemoryDirectory>, ApiError> {
+    let visible_document_ids =
+        visible_document_ids_for_dataset(state, dataset_id, current_user_id).await?;
+    Ok(directories
+        .into_iter()
+        .filter(|directory| {
+            memory_directory_matches_visible_scope(
+                directory,
+                &visible_document_ids,
+                current_user_id,
+            )
+        })
+        .collect())
+}
+
+async fn visible_memory_directory_for_user(
+    state: &AppState,
+    directory: MemoryDirectory,
+    current_user_id: Option<UserId>,
+) -> std::result::Result<Option<MemoryDirectory>, ApiError> {
+    let visible_document_ids =
+        visible_document_ids_for_dataset(state, directory.dataset_id, current_user_id).await?;
+    Ok(
+        memory_directory_matches_visible_scope(&directory, &visible_document_ids, current_user_id)
+            .then_some(directory),
+    )
+}
+
+async fn latest_visible_memory_directory_for_user(
+    state: &AppState,
+    dataset_id: DatasetId,
+    current_user_id: Option<UserId>,
+) -> std::result::Result<Option<MemoryDirectory>, ApiError> {
+    let directories = state
+        .storage
+        .memory_directories()
+        .list_by_dataset(state.tenant_id, dataset_id)
+        .await
+        .map_err(ApiError::from_storage)?;
+    Ok(
+        filter_visible_memory_directories_for_user(state, dataset_id, directories, current_user_id)
+            .await?
+            .into_iter()
+            .next(),
+    )
+}
+
 fn dataset_output_not_found_error(output_id: DatasetOutputId) -> ApiError {
     ApiError::not_found(
         "dataset_output_not_found",
@@ -4767,6 +4881,13 @@ async fn list_memory_directories(
         .list_by_dataset(state.tenant_id, dataset_id)
         .await
         .map_err(ApiError::from_storage)?;
+    let directories = filter_visible_memory_directories_for_user(
+        &state,
+        dataset_id,
+        directories,
+        current_user_id,
+    )
+    .await?;
 
     Ok(Json(
         directories
@@ -4890,7 +5011,7 @@ async fn create_memory_directory_refresh_response(
     )
     .await?;
 
-    let execution = build_initial_memory_directory_execution(&state, dataset.id)?;
+    let execution = build_initial_memory_directory_execution(&state, dataset.id, current_user_id)?;
     let initial_event = build_initial_memory_directory_event(&execution);
     state
         .storage
@@ -4978,14 +5099,8 @@ async fn create_dataset_output(
         }
         None => None,
     };
-    let latest_memory_directory = state
-        .storage
-        .memory_directories()
-        .list_by_dataset(state.tenant_id, dataset.id)
-        .await
-        .map_err(ApiError::from_storage)?
-        .into_iter()
-        .next();
+    let latest_memory_directory =
+        latest_visible_memory_directory_for_user(&state, dataset.id, current_user_id).await?;
     let bound_retrieval_evidences = state
         .storage
         .retrieval_evidences()
@@ -5128,14 +5243,8 @@ async fn create_chat_session(
         current_user_id,
     )
     .await?;
-    let latest_memory_directory = state
-        .storage
-        .memory_directories()
-        .list_by_dataset(state.tenant_id, dataset.id)
-        .await
-        .map_err(ApiError::from_storage)?
-        .into_iter()
-        .next();
+    let latest_memory_directory =
+        latest_visible_memory_directory_for_user(&state, dataset.id, current_user_id).await?;
     let latest_dataset_output = state
         .storage
         .dataset_outputs()
@@ -5277,14 +5386,9 @@ async fn append_chat_session_turn(
         ));
     }
 
-    let latest_memory_directory = state
-        .storage
-        .memory_directories()
-        .list_by_dataset(state.tenant_id, session.dataset_id)
-        .await
-        .map_err(ApiError::from_storage)?
-        .into_iter()
-        .next();
+    let latest_memory_directory =
+        latest_visible_memory_directory_for_user(&state, session.dataset_id, current_user_id)
+            .await?;
     let latest_dataset_output = state
         .storage
         .dataset_outputs()
@@ -9924,6 +10028,7 @@ fn build_initial_report_plan_execution(
 fn build_initial_memory_directory_execution(
     state: &AppState,
     dataset_id: DatasetId,
+    owner_user_id: Option<UserId>,
 ) -> std::result::Result<WorkflowExecution, ApiError> {
     let definition = state
         .workflow_catalog
@@ -9943,6 +10048,12 @@ fn build_initial_memory_directory_execution(
         Value::Number(runtime_state.retries_remaining.into()),
     );
     context.insert("include_directory".to_string(), Value::Bool(true));
+    if let Some(owner_user_id) = owner_user_id {
+        context.insert(
+            "owner_user_id".to_string(),
+            Value::String(owner_user_id.to_string()),
+        );
+    }
 
     Ok(WorkflowExecution {
         id: execution_id,
@@ -11277,6 +11388,8 @@ fn to_memory_directory_view(directory: MemoryDirectory) -> MemoryDirectoryView {
         id: directory.id,
         dataset_id: directory.dataset_id,
         execution_id: directory.execution_id,
+        owner_user_id: directory.owner_user_id,
+        source_document_ids: directory.source_document_ids,
         version_no: directory.version_no,
         directory_nodes: directory.directory_nodes,
         refreshed_chunks: directory.refreshed_chunks,
@@ -13179,13 +13292,20 @@ async fn hydrate_dataset_output_view(
         .map(to_tool_execution_view)
         .collect();
     let memory_directory = match output.memory_directory_id {
-        Some(directory_id) => state
+        Some(directory_id) => match state
             .storage
             .memory_directories()
             .get_by_id(state.tenant_id, directory_id)
             .await
             .map_err(ApiError::from_storage)?
-            .map(to_memory_directory_view),
+        {
+            Some(directory) => {
+                visible_memory_directory_for_user(state, directory, output.owner_user_id)
+                    .await?
+                    .map(to_memory_directory_view)
+            }
+            None => None,
+        },
         None => None,
     };
     let retrieval_evidences = state
@@ -13249,13 +13369,18 @@ async fn hydrate_chat_session_view_with_latest_assistant_message(
     latest_assistant_message: Option<ChatMessageView>,
 ) -> std::result::Result<ChatSessionView, ApiError> {
     let latest_memory_directory = match session.latest_memory_directory_id {
-        Some(directory_id) => state
+        Some(directory_id) => match state
             .storage
             .memory_directories()
             .get_by_id(state.tenant_id, directory_id)
             .await
             .map_err(ApiError::from_storage)?
-            .map(to_memory_directory_view),
+        {
+            Some(directory) => visible_memory_directory_for_user(state, directory, session.user_id)
+                .await?
+                .map(to_memory_directory_view),
+            None => None,
+        },
         None => None,
     };
     let latest_dataset_output = match session.latest_dataset_output_id {
@@ -22690,7 +22815,7 @@ mod tests {
             tenant.id,
             EventBus::Disabled,
         );
-        let execution = build_initial_memory_directory_execution(&state, dataset.id)
+        let execution = build_initial_memory_directory_execution(&state, dataset.id, None)
             .expect("initial memory directory execution should build");
         storage
             .workflow_executions()
@@ -22940,6 +23065,8 @@ mod tests {
             tenant_id: TenantId::new(),
             dataset_id,
             execution_id: WorkflowExecutionId::new(),
+            owner_user_id: None,
+            source_document_ids: vec![document_id],
             version_no: 3,
             directory_nodes: 3,
             refreshed_chunks: 12,
@@ -23606,6 +23733,8 @@ mod tests {
             id: MemoryDirectoryId::new(),
             dataset_id,
             execution_id: WorkflowExecutionId::new(),
+            owner_user_id: None,
+            source_document_ids: Vec::new(),
             version_no: 2,
             directory_nodes: 3,
             refreshed_chunks: 8,
@@ -24212,6 +24341,8 @@ mod tests {
             id: MemoryDirectoryId::new(),
             dataset_id,
             execution_id: WorkflowExecutionId::new(),
+            owner_user_id: None,
+            source_document_ids: Vec::new(),
             version_no: 1,
             directory_nodes: 2,
             refreshed_chunks: 4,
