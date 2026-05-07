@@ -1350,6 +1350,10 @@ fn parse_runtime_manifest_value(runtime: &serde_json::Value) -> Result<LlmRuntim
         .and_then(serde_json::Value::as_str)
         .ok_or_else(|| anyhow!("assistant message runtime missing model"))?
         .to_string();
+    let lane = runtime
+        .get("lane")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
     let finish_reason = runtime
         .get("finish_reason")
         .and_then(serde_json::Value::as_str)
@@ -1385,6 +1389,7 @@ fn parse_runtime_manifest_value(runtime: &serde_json::Value) -> Result<LlmRuntim
         mode,
         provider,
         model,
+        lane,
         request_id: runtime
             .get("request_id")
             .and_then(serde_json::Value::as_str)
@@ -1613,6 +1618,7 @@ mod tests {
             mode: LlmRuntimeMode::Provider,
             provider: "openai".to_string(),
             model: "gpt-5.4".to_string(),
+            lane: Some(llm_gateway::MODEL_LANE_CHAT_SESSION.to_string()),
             request_id: None,
             finish_reason: Some(LlmFinishReason::Error),
             provider_failure: Some(llm_gateway::LlmProviderFailure {
@@ -1927,6 +1933,7 @@ mod tests {
             mode: LlmRuntimeMode::Provider,
             provider: "openai".to_string(),
             model: "gpt-test".to_string(),
+            lane: Some(llm_gateway::MODEL_LANE_CHAT_SESSION.to_string()),
             request_id: Some(request_id.to_string()),
             finish_reason: Some(LlmFinishReason::ToolCalls),
             provider_failure: None,

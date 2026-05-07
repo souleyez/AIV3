@@ -383,6 +383,7 @@ pub enum WorkflowKind {
     ReportRender,
     StaticPageImageGeneration,
     StaticPageRender,
+    CodexHostTask,
 }
 
 impl WorkflowKind {
@@ -396,6 +397,7 @@ impl WorkflowKind {
             Self::ReportRender => "report_render_workflow",
             Self::StaticPageImageGeneration => "static_page_image_generation_workflow",
             Self::StaticPageRender => "static_page_render_workflow",
+            Self::CodexHostTask => "codex_host_task_workflow",
         }
     }
 
@@ -409,6 +411,7 @@ impl WorkflowKind {
             "report_render_workflow" => Some(Self::ReportRender),
             "static_page_image_generation_workflow" => Some(Self::StaticPageImageGeneration),
             "static_page_render_workflow" => Some(Self::StaticPageRender),
+            "codex_host_task_workflow" => Some(Self::CodexHostTask),
             _ => None,
         }
     }

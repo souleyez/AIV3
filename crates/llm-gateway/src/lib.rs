@@ -137,6 +137,7 @@ impl LlmFinishReason {
 #[derive(Clone, Debug)]
 pub struct LlmRequest {
     pub model: String,
+    pub lane: Option<String>,
     pub system_prompt_key: Option<String>,
     pub input: String,
 }
@@ -170,6 +171,7 @@ pub struct LlmRuntimeMetadata {
     pub mode: LlmRuntimeMode,
     pub provider: String,
     pub model: String,
+    pub lane: Option<String>,
     pub request_id: Option<String>,
     pub finish_reason: Option<LlmFinishReason>,
     pub provider_failure: Option<LlmProviderFailure>,
@@ -185,6 +187,14 @@ pub struct LlmResponse {
     pub output_text: String,
     pub runtime: LlmRuntimeMetadata,
     pub tool_calls: Vec<LlmToolCall>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LlmRuntimeSelection {
+    pub mode: String,
+    pub provider: String,
+    pub model: String,
+    pub lane: String,
 }
 
 #[derive(Clone, Debug)]
@@ -205,16 +215,423 @@ pub struct OpenClawLlmProviderConfig {
     pub timeout_ms: u64,
 }
 
+pub const MODEL_LANE_ASSISTANT_CHAT: &str = "assistant_chat";
+pub const MODEL_LANE_ASSISTANT_REACT_JSON: &str = "assistant_react_json";
+pub const MODEL_LANE_STATIC_PAGE_INTENT: &str = "static_page_intent";
+pub const MODEL_LANE_STATIC_PAGE_IMAGE_PROMPT: &str = "static_page_image_prompt";
+pub const MODEL_LANE_CHAT_SESSION: &str = "chat_session";
+pub const MODEL_LANE_DATASET_OUTPUT: &str = "dataset_output";
+pub const MODEL_LANE_DOCUMENT_VLM: &str = "document_vlm";
+pub const MODEL_LANE_AUDIO_TRANSCRIPT: &str = "audio_transcript";
+pub const MODEL_LANE_VIDEO_SCENE_SUMMARY: &str = "video_scene_summary";
+pub const MODEL_LANE_REPORT_PLANNING: &str = "report_planning";
+pub const MODEL_LANE_CODEX_TASK_SUMMARY: &str = "codex_task_summary";
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ModelRoute {
+    pub lane: String,
+    pub provider: String,
+    pub model: String,
+    pub capability_class: Vec<String>,
+    pub priority: i32,
+    pub fallback_route: Option<String>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct ModelRouteRegistry {
+    routes: Vec<ModelRoute>,
+}
+
+impl ModelRouteRegistry {
+    pub fn empty() -> Self {
+        Self { routes: Vec::new() }
+    }
+
+    pub fn from_routes(routes: Vec<ModelRoute>) -> Self {
+        Self { routes }
+    }
+
+    pub fn from_env_with_defaults(default_lane: &str) -> Self {
+        let mut registry = Self::from_routes(default_model_routes());
+        registry.apply_env_overrides(default_lane);
+        registry
+    }
+
+    pub fn select(&self, lane: &str) -> Option<ModelRoute> {
+        self.routes
+            .iter()
+            .filter(|route| route.lane == lane)
+            .max_by_key(|route| route.priority)
+            .cloned()
+    }
+
+    pub fn routes(&self) -> &[ModelRoute] {
+        &self.routes
+    }
+
+    fn apply_env_overrides(&mut self, default_lane: &str) {
+        let mut lanes: Vec<String> = self.routes.iter().map(|route| route.lane.clone()).collect();
+        if !default_lane.trim().is_empty() && !lanes.iter().any(|lane| lane == default_lane) {
+            lanes.push(default_lane.trim().to_string());
+        }
+
+        for lane in lanes {
+            if let Some(route) = model_route_from_env(&lane) {
+                self.routes.retain(|existing| existing.lane != lane);
+                self.routes.push(route);
+            }
+        }
+    }
+}
+
+pub fn resolve_runtime_selection_from_env(
+    env_prefix: &str,
+    lane: &str,
+    default_model: &str,
+) -> LlmRuntimeSelection {
+    let mut mode = std::env::var(format!("{env_prefix}_RUNTIME_MODE"))
+        .unwrap_or_else(|_| "placeholder".to_string());
+    let mut provider =
+        std::env::var(format!("{env_prefix}_RUNTIME_PROVIDER")).unwrap_or_else(|_| mode.clone());
+    let mut model = std::env::var(format!("{env_prefix}_RUNTIME_MODEL"))
+        .unwrap_or_else(|_| default_model.to_string());
+
+    let registry = ModelRouteRegistry::from_env_with_defaults(lane);
+    if let Some(route) = registry.select(lane).filter(|route| route.priority > 0) {
+        provider = route.provider;
+        model = route.model;
+        mode = if provider == "placeholder" {
+            "placeholder".to_string()
+        } else {
+            "provider".to_string()
+        };
+    }
+
+    LlmRuntimeSelection {
+        mode,
+        provider,
+        model,
+        lane: lane.to_string(),
+    }
+}
+
+fn default_model_routes() -> Vec<ModelRoute> {
+    vec![
+        default_model_route(
+            MODEL_LANE_ASSISTANT_CHAT,
+            "placeholder",
+            "assistant-chat-placeholder",
+            &["text", "conversation"],
+        ),
+        default_model_route(
+            MODEL_LANE_ASSISTANT_REACT_JSON,
+            "placeholder",
+            "assistant-react-json-placeholder",
+            &["text", "json", "tool_control"],
+        ),
+        default_model_route(
+            MODEL_LANE_STATIC_PAGE_INTENT,
+            "placeholder",
+            "static-page-intent-placeholder",
+            &["text", "json", "static_page"],
+        ),
+        default_model_route(
+            MODEL_LANE_STATIC_PAGE_IMAGE_PROMPT,
+            "placeholder",
+            "static-page-image-prompt-placeholder",
+            &["text", "visual_prompt"],
+        ),
+        default_model_route(
+            MODEL_LANE_CHAT_SESSION,
+            "placeholder",
+            "chat-session-placeholder",
+            &["text", "conversation", "rag"],
+        ),
+        default_model_route(
+            MODEL_LANE_DATASET_OUTPUT,
+            "placeholder",
+            "dataset-output-placeholder",
+            &["text", "dataset_output"],
+        ),
+        default_model_route(
+            MODEL_LANE_DOCUMENT_VLM,
+            "placeholder",
+            "document-vlm-placeholder",
+            &["vision", "document"],
+        ),
+        default_model_route(
+            MODEL_LANE_AUDIO_TRANSCRIPT,
+            "placeholder",
+            "audio-transcript-placeholder",
+            &["audio", "transcript"],
+        ),
+        default_model_route(
+            MODEL_LANE_VIDEO_SCENE_SUMMARY,
+            "placeholder",
+            "video-scene-summary-placeholder",
+            &["video", "vision", "summary"],
+        ),
+        default_model_route(
+            MODEL_LANE_REPORT_PLANNING,
+            "placeholder",
+            "report-planning-placeholder",
+            &["text", "json", "report"],
+        ),
+        default_model_route(
+            MODEL_LANE_CODEX_TASK_SUMMARY,
+            "placeholder",
+            "codex-task-summary-placeholder",
+            &["text", "codex_task"],
+        ),
+    ]
+}
+
+fn default_model_route(
+    lane: &str,
+    provider: &str,
+    model: &str,
+    capability_class: &[&str],
+) -> ModelRoute {
+    ModelRoute {
+        lane: lane.to_string(),
+        provider: provider.to_string(),
+        model: model.to_string(),
+        capability_class: capability_class
+            .iter()
+            .map(|capability| capability.to_string())
+            .collect(),
+        priority: 0,
+        fallback_route: None,
+    }
+}
+
+fn model_route_from_env(lane: &str) -> Option<ModelRoute> {
+    let env_prefix = model_route_env_prefix(lane);
+    let provider = std::env::var(format!("{env_prefix}_PROVIDER")).ok()?;
+    let model = std::env::var(format!("{env_prefix}_MODEL"))
+        .unwrap_or_else(|_| format!("{}-default", provider.trim()));
+    let capability_class = std::env::var(format!("{env_prefix}_CAPABILITIES"))
+        .ok()
+        .map(|value| split_csv_env(&value))
+        .unwrap_or_default();
+    let priority = std::env::var(format!("{env_prefix}_PRIORITY"))
+        .ok()
+        .and_then(|value| value.parse::<i32>().ok())
+        .unwrap_or(100);
+    let fallback_route = std::env::var(format!("{env_prefix}_FALLBACK"))
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+
+    Some(ModelRoute {
+        lane: lane.to_string(),
+        provider: provider.trim().to_string(),
+        model: model.trim().to_string(),
+        capability_class,
+        priority,
+        fallback_route,
+    })
+}
+
+fn model_route_env_prefix(lane: &str) -> String {
+    let normalized_lane: String = lane
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() {
+                ch.to_ascii_uppercase()
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    format!("LLM_GATEWAY_ROUTE_{normalized_lane}")
+}
+
+fn split_csv_env(value: &str) -> Vec<String> {
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+        .collect()
+}
+
 const OPENCLAW_CORRECTIVE_RETRY_INSTRUCTIONS: [&str; 2] = [
     "直接回答用户当前问题。不要自我介绍，不要谈内部状态，不要说自己刚启动、没有名字、没有记忆，也不要让用户给你起名。",
     "只输出最终答案。不要泄露工具调用、函数参数、JSON 工具轨迹或内部执行文本。",
 ];
+const PROVIDER_ERROR_MAX_CHARS: usize = 900;
+const REDACTED_VALUE: &str = "[redacted]";
+const REDACTED_PATH: &str = "[redacted-path]";
+
+pub fn redact_provider_error(message: &str) -> String {
+    let redacted = redact_bearer_tokens(message);
+    let redacted = [
+        "authorization",
+        "api_key",
+        "api-key",
+        "apikey",
+        "x-api-key",
+        "access_token",
+        "refresh_token",
+        "id_token",
+        "cookie",
+        "set-cookie",
+        "secret",
+        "password",
+    ]
+    .iter()
+    .fold(redacted, |current, key| {
+        redact_sensitive_key_values(&current, key)
+    });
+    let redacted = redact_secret_paths(&redacted);
+    truncate_provider_error(&redacted)
+}
+
+fn redact_bearer_tokens(input: &str) -> String {
+    let lower = input.to_ascii_lowercase();
+    let mut output = String::new();
+    let mut cursor = 0;
+    let mut search_from = 0;
+
+    while let Some(relative_index) = lower[search_from..].find("bearer") {
+        let bearer_start = search_from + relative_index;
+        let mut value_start = bearer_start + "bearer".len();
+        let bytes = input.as_bytes();
+        while value_start < bytes.len() && bytes[value_start].is_ascii_whitespace() {
+            value_start += 1;
+        }
+        if value_start >= bytes.len() {
+            break;
+        }
+        let mut value_end = value_start;
+        while value_end < bytes.len() && !is_secret_value_delimiter(bytes[value_end]) {
+            value_end += 1;
+        }
+        if value_end > value_start {
+            output.push_str(&input[cursor..value_start]);
+            output.push_str(REDACTED_VALUE);
+            cursor = value_end;
+        }
+        search_from = value_end.max(bearer_start + "bearer".len());
+    }
+
+    output.push_str(&input[cursor..]);
+    output
+}
+
+fn redact_sensitive_key_values(input: &str, key: &str) -> String {
+    let lower = input.to_ascii_lowercase();
+    let key = key.to_ascii_lowercase();
+    let bytes = input.as_bytes();
+    let mut output = String::new();
+    let mut cursor = 0;
+    let mut search_from = 0;
+
+    while let Some(relative_index) = lower[search_from..].find(&key) {
+        let key_start = search_from + relative_index;
+        let mut separator_index = key_start + key.len();
+        while separator_index < bytes.len()
+            && matches!(bytes[separator_index], b' ' | b'\t' | b'\'' | b'"')
+        {
+            separator_index += 1;
+        }
+        if separator_index >= bytes.len() || !matches!(bytes[separator_index], b':' | b'=') {
+            search_from = key_start + key.len();
+            continue;
+        }
+
+        let mut value_start = separator_index + 1;
+        while value_start < bytes.len() && bytes[value_start].is_ascii_whitespace() {
+            value_start += 1;
+        }
+        let quote = if value_start < bytes.len() && matches!(bytes[value_start], b'\'' | b'"') {
+            let quote = bytes[value_start];
+            value_start += 1;
+            Some(quote)
+        } else {
+            None
+        };
+        let mut value_end = value_start;
+        while value_end < bytes.len() {
+            let byte = bytes[value_end];
+            if quote.is_some_and(|quote| byte == quote)
+                || (quote.is_none() && is_secret_value_delimiter(byte))
+            {
+                break;
+            }
+            value_end += 1;
+        }
+
+        if value_end > value_start {
+            output.push_str(&input[cursor..value_start]);
+            output.push_str(REDACTED_VALUE);
+            cursor = value_end;
+        }
+        search_from = value_end.max(key_start + key.len());
+    }
+
+    output.push_str(&input[cursor..]);
+    output
+}
+
+fn redact_secret_paths(input: &str) -> String {
+    [r"C:\Users\", "/Users/", "/home/"]
+        .iter()
+        .fold(input.to_string(), |current, prefix| {
+            redact_value_with_prefix(&current, prefix, REDACTED_PATH)
+        })
+}
+
+fn redact_value_with_prefix(input: &str, prefix: &str, replacement: &str) -> String {
+    let mut output = String::new();
+    let mut cursor = 0;
+    let mut search_from = 0;
+
+    while let Some(relative_index) = input[search_from..].find(prefix) {
+        let value_start = search_from + relative_index;
+        let bytes = input.as_bytes();
+        let mut value_end = value_start;
+        while value_end < bytes.len() && !is_secret_path_delimiter(bytes[value_end]) {
+            value_end += 1;
+        }
+        output.push_str(&input[cursor..value_start]);
+        output.push_str(replacement);
+        cursor = value_end;
+        search_from = value_end;
+    }
+
+    output.push_str(&input[cursor..]);
+    output
+}
+
+fn is_secret_value_delimiter(byte: u8) -> bool {
+    byte.is_ascii_whitespace() || matches!(byte, b',' | b';' | b'}' | b']' | b'&')
+}
+
+fn is_secret_path_delimiter(byte: u8) -> bool {
+    byte.is_ascii_whitespace() || matches!(byte, b',' | b';' | b'}' | b']' | b'"' | b'\'')
+}
+
+fn truncate_provider_error(input: &str) -> String {
+    if input.chars().count() <= PROVIDER_ERROR_MAX_CHARS {
+        return input.to_string();
+    }
+
+    let mut truncated = input
+        .chars()
+        .take(PROVIDER_ERROR_MAX_CHARS)
+        .collect::<String>();
+    truncated.push_str("... [truncated]");
+    truncated
+}
 
 pub fn render_runtime_manifest(runtime: &LlmRuntimeMetadata) -> Value {
     json!({
         "mode": runtime.mode.as_str(),
         "provider": runtime.provider.as_str(),
         "model": runtime.model.as_str(),
+        "lane": runtime.lane.as_deref(),
         "request_id": runtime.request_id.as_deref(),
         "finish_reason": runtime.finish_reason.as_ref().map(LlmFinishReason::as_str),
         "provider_failure": runtime.provider_failure.as_ref().map(|failure| json!({
@@ -328,6 +745,7 @@ impl LlmProvider for PlaceholderLlmProvider {
             mode: LlmRuntimeMode::Placeholder,
             provider: self.provider_name.clone(),
             model: request.model.clone(),
+            lane: request.lane.clone(),
             request_id: Some(Uuid::new_v4().to_string()),
             finish_reason: Some(LlmFinishReason::Stop),
             provider_failure: None,
@@ -427,6 +845,7 @@ impl LlmProvider for ScriptedLlmProvider {
             mode: LlmRuntimeMode::Provider,
             provider: self.provider_name.clone(),
             model: request.model.clone(),
+            lane: request.lane.clone(),
             request_id: Some(
                 self.request_id
                     .clone()
@@ -613,6 +1032,7 @@ impl LlmProvider for OpenAiCompatibleLlmProvider {
                 )
                 .into());
         };
+        let output_text = normalize_provider_output_text(&output_text);
         let tool_calls = match extract_chat_completion_tool_calls(choice) {
             Ok(tool_calls) => tool_calls,
             Err(error) => {
@@ -638,6 +1058,7 @@ impl LlmProvider for OpenAiCompatibleLlmProvider {
             mode: LlmRuntimeMode::Provider,
             provider: self.provider_name.clone(),
             model: request.model.clone(),
+            lane: request.lane.clone(),
             request_id: value.get("id").and_then(Value::as_str).map(str::to_string),
             finish_reason: finish_reason.clone(),
             provider_failure: provider_failure_for_finish_reason(
@@ -667,10 +1088,12 @@ impl OpenAiCompatibleLlmProvider {
         message: String,
         started_at: Instant,
     ) -> LlmProviderError {
+        let message = redact_provider_error(&message);
         let runtime = LlmRuntimeMetadata {
             mode: LlmRuntimeMode::Provider,
             provider: self.provider_name.clone(),
             model: request.model.clone(),
+            lane: request.lane.clone(),
             request_id: None,
             finish_reason: Some(LlmFinishReason::Error),
             provider_failure: Some(LlmProviderFailure {
@@ -758,10 +1181,12 @@ impl OpenClawLlmProvider {
                 )
                 .into());
         };
+        let output_text = normalize_provider_output_text(&output_text);
         let runtime = LlmRuntimeMetadata {
             mode: LlmRuntimeMode::Provider,
             provider: self.provider_name.clone(),
             model,
+            lane: request.lane.clone(),
             request_id: value.get("id").and_then(Value::as_str).map(str::to_string),
             finish_reason: Some(LlmFinishReason::Stop),
             provider_failure: None,
@@ -842,6 +1267,7 @@ impl OpenClawLlmProvider {
                 )
                 .into());
         };
+        let output_text = normalize_provider_output_text(&output_text);
         let tool_calls = extract_chat_completion_tool_calls(choice).map_err(|error| {
             self.provider_error(
                 request,
@@ -861,6 +1287,7 @@ impl OpenClawLlmProvider {
             mode: LlmRuntimeMode::Provider,
             provider: self.provider_name.clone(),
             model,
+            lane: request.lane.clone(),
             request_id: value.get("id").and_then(Value::as_str).map(str::to_string),
             finish_reason: finish_reason.clone(),
             provider_failure: provider_failure_for_finish_reason(
@@ -1023,10 +1450,12 @@ impl OpenClawLlmProvider {
         message: String,
         started_at: Instant,
     ) -> LlmProviderError {
+        let message = redact_provider_error(&message);
         let runtime = LlmRuntimeMetadata {
             mode: LlmRuntimeMode::Provider,
             provider: self.provider_name.clone(),
             model: request.model.clone(),
+            lane: request.lane.clone(),
             request_id: None,
             finish_reason: Some(LlmFinishReason::Error),
             provider_failure: Some(LlmProviderFailure {
@@ -1256,6 +1685,35 @@ fn extract_chat_completion_text(choice: &Value) -> Option<String> {
     }
 }
 
+fn normalize_provider_output_text(value: &str) -> String {
+    strip_leading_reasoning_blocks(value)
+}
+
+fn strip_leading_reasoning_blocks(value: &str) -> String {
+    let mut remaining = value;
+    let mut removed = false;
+
+    loop {
+        let trimmed = remaining.trim_start();
+        let lower = trimmed.to_ascii_lowercase();
+        let Some(after_open_tag) = lower.strip_prefix("<think>").map(|_| "<think>".len()) else {
+            break;
+        };
+        let Some(close_tag_offset) = lower[after_open_tag..].find("</think>") else {
+            break;
+        };
+        let close_tag_end = after_open_tag + close_tag_offset + "</think>".len();
+        remaining = &trimmed[close_tag_end..];
+        removed = true;
+    }
+
+    if removed {
+        remaining.trim_start().to_string()
+    } else {
+        value.to_string()
+    }
+}
+
 fn extract_chat_completion_tool_calls(choice: &Value) -> Result<Vec<LlmToolCall>> {
     let Some(tool_calls) = choice
         .get("message")
@@ -1431,12 +1889,127 @@ mod tests {
     use std::thread;
 
     #[test]
+    fn model_route_registry_selects_lane_default() {
+        let registry = ModelRouteRegistry::from_env_with_defaults(MODEL_LANE_ASSISTANT_CHAT);
+        let route = registry
+            .select(MODEL_LANE_ASSISTANT_CHAT)
+            .expect("assistant chat route");
+
+        assert_eq!(route.lane, MODEL_LANE_ASSISTANT_CHAT);
+        assert!(!route.provider.is_empty());
+        assert!(!route.model.is_empty());
+        assert!(route.capability_class.contains(&"text".to_string()));
+    }
+
+    #[test]
+    fn model_route_registry_rejects_unknown_lane_without_default() {
+        let registry = ModelRouteRegistry::empty();
+
+        assert!(registry.select("missing").is_none());
+    }
+
+    #[test]
+    fn model_route_registry_can_route_lane_to_minimax_from_env() {
+        let _guard = model_route_env_lock().lock().expect("model route env lock");
+        clear_model_route_env(MODEL_LANE_DOCUMENT_VLM);
+        std::env::set_var(
+            "LLM_GATEWAY_ROUTE_DOCUMENT_VLM_PROVIDER",
+            "minimax_openai_compatible",
+        );
+        std::env::set_var("LLM_GATEWAY_ROUTE_DOCUMENT_VLM_MODEL", "abab7.0-chat");
+        std::env::set_var(
+            "LLM_GATEWAY_ROUTE_DOCUMENT_VLM_CAPABILITIES",
+            "vision,document,json",
+        );
+        std::env::set_var("LLM_GATEWAY_ROUTE_DOCUMENT_VLM_PRIORITY", "120");
+
+        let registry = ModelRouteRegistry::from_env_with_defaults(MODEL_LANE_DOCUMENT_VLM);
+        let route = registry
+            .select(MODEL_LANE_DOCUMENT_VLM)
+            .expect("document vlm route");
+
+        clear_model_route_env(MODEL_LANE_DOCUMENT_VLM);
+        assert_eq!(route.provider, "minimax_openai_compatible");
+        assert_eq!(route.model, "abab7.0-chat");
+        assert_eq!(
+            route.capability_class,
+            vec![
+                "vision".to_string(),
+                "document".to_string(),
+                "json".to_string()
+            ]
+        );
+        assert_eq!(route.priority, 120);
+    }
+
+    #[test]
+    fn runtime_selection_prefers_lane_route_over_legacy_runtime_env() {
+        let _guard = model_route_env_lock().lock().expect("model route env lock");
+        clear_model_route_env(MODEL_LANE_ASSISTANT_CHAT);
+        std::env::set_var("TEST_ASSISTANT_RUNTIME_MODE", "placeholder");
+        std::env::set_var("TEST_ASSISTANT_RUNTIME_PROVIDER", "placeholder");
+        std::env::set_var("TEST_ASSISTANT_RUNTIME_MODEL", "legacy-placeholder");
+        std::env::set_var(
+            "LLM_GATEWAY_ROUTE_ASSISTANT_CHAT_PROVIDER",
+            "minimax_openai_compatible",
+        );
+        std::env::set_var("LLM_GATEWAY_ROUTE_ASSISTANT_CHAT_MODEL", "MiniMax-M2.7");
+
+        let selection = resolve_runtime_selection_from_env(
+            "TEST_ASSISTANT",
+            MODEL_LANE_ASSISTANT_CHAT,
+            "default-model",
+        );
+
+        clear_model_route_env(MODEL_LANE_ASSISTANT_CHAT);
+        std::env::remove_var("TEST_ASSISTANT_RUNTIME_MODE");
+        std::env::remove_var("TEST_ASSISTANT_RUNTIME_PROVIDER");
+        std::env::remove_var("TEST_ASSISTANT_RUNTIME_MODEL");
+        assert_eq!(selection.mode, "provider");
+        assert_eq!(selection.provider, "minimax_openai_compatible");
+        assert_eq!(selection.model, "MiniMax-M2.7");
+        assert_eq!(selection.lane, MODEL_LANE_ASSISTANT_CHAT);
+    }
+
+    #[test]
+    fn provider_error_redacts_bearer_tokens() {
+        let redacted =
+            redact_provider_error("Authorization: Bearer secret-token-123 request failed");
+
+        assert!(!redacted.contains("secret-token-123"));
+        assert!(redacted.contains(REDACTED_VALUE));
+    }
+
+    #[test]
+    fn provider_error_redacts_api_keys_cookies_and_user_paths() {
+        let redacted = redact_provider_error(
+            r#"body {"api_key":"sk-minimax-secret","access_token":"access-secret"} Cookie: session=secret; path C:\Users\soulzyn\.codex\secrets.env"#,
+        );
+
+        assert!(!redacted.contains("sk-minimax-secret"));
+        assert!(!redacted.contains("access-secret"));
+        assert!(!redacted.contains("session=secret"));
+        assert!(!redacted.contains(r"C:\Users\soulzyn"));
+        assert!(redacted.contains(REDACTED_VALUE));
+        assert!(redacted.contains(REDACTED_PATH));
+    }
+
+    #[test]
+    fn provider_error_truncates_large_body() {
+        let redacted = redact_provider_error(&"x".repeat(10_000));
+
+        assert!(redacted.len() < 1_000);
+        assert!(redacted.ends_with("... [truncated]"));
+    }
+
+    #[test]
     fn placeholder_provider_echoes_input_and_runtime_metadata() {
         let provider = PlaceholderLlmProvider::new("placeholder")
             .with_prompt_registry(bootstrap_default_prompt_registry());
         let response = provider
             .complete(&LlmRequest {
                 model: "placeholder-model-v1".to_string(),
+                lane: Some(MODEL_LANE_CHAT_SESSION.to_string()),
                 system_prompt_key: Some(CHAT_SESSION_PLACEHOLDER_PROMPT_KEY.to_string()),
                 input: "hello world".to_string(),
             })
@@ -1446,6 +2019,10 @@ mod tests {
         assert_eq!(response.runtime.mode, LlmRuntimeMode::Placeholder);
         assert_eq!(response.runtime.provider, "placeholder");
         assert_eq!(response.runtime.model, "placeholder-model-v1");
+        assert_eq!(
+            response.runtime.lane.as_deref(),
+            Some(MODEL_LANE_CHAT_SESSION)
+        );
         assert!(response
             .runtime
             .request_id
@@ -1492,6 +2069,7 @@ mod tests {
         let response = provider
             .complete(&LlmRequest {
                 model: "gpt-5.4".to_string(),
+                lane: Some(MODEL_LANE_CHAT_SESSION.to_string()),
                 system_prompt_key: Some(CHAT_SESSION_PLACEHOLDER_PROMPT_KEY.to_string()),
                 input: "hello world".to_string(),
             })
@@ -1501,6 +2079,10 @@ mod tests {
         assert_eq!(response.runtime.mode, LlmRuntimeMode::Provider);
         assert_eq!(response.runtime.provider, "openai");
         assert_eq!(response.runtime.model, "gpt-5.4");
+        assert_eq!(
+            response.runtime.lane.as_deref(),
+            Some(MODEL_LANE_CHAT_SESSION)
+        );
         assert_eq!(
             response.runtime.request_id.as_deref(),
             Some("req_provider_123")
@@ -1607,6 +2189,7 @@ mod tests {
         let response = provider
             .complete(&LlmRequest {
                 model: "gpt-5.4-mini".to_string(),
+                lane: Some(MODEL_LANE_CHAT_SESSION.to_string()),
                 system_prompt_key: Some(CHAT_SESSION_PLACEHOLDER_PROMPT_KEY.to_string()),
                 input: "What is the weather?".to_string(),
             })
@@ -1620,6 +2203,10 @@ mod tests {
         assert_eq!(
             response.runtime.request_id.as_deref(),
             Some("chatcmpl_live_123")
+        );
+        assert_eq!(
+            response.runtime.lane.as_deref(),
+            Some(MODEL_LANE_CHAT_SESSION)
         );
         assert_eq!(
             response.runtime.finish_reason,
@@ -1639,6 +2226,128 @@ mod tests {
         assert_eq!(
             response.tool_calls[0].arguments,
             Some(json!({ "city": "Shanghai" }))
+        );
+    }
+
+    #[test]
+    fn openai_compatible_provider_strips_leading_reasoning_blocks() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+        let addr = listener.local_addr().expect("addr");
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let _request = read_http_request(&mut stream);
+            write_http_json_response(
+                &mut stream,
+                200,
+                r#"{
+                    "id": "chatcmpl_minimax_123",
+                    "choices": [{
+                        "finish_reason": "stop",
+                        "message": {
+                            "content": "<think>private reasoning must not enter the user answer</think>\n\nMINIMAX_SMOKE_OK"
+                        }
+                    }],
+                    "usage": {
+                        "prompt_tokens": 4,
+                        "completion_tokens": 9,
+                        "total_tokens": 13
+                    }
+                }"#,
+            );
+        });
+
+        let provider = OpenAiCompatibleLlmProvider::new(
+            "minimax_openai_compatible",
+            OpenAiCompatibleLlmProviderConfig {
+                api_base_url: format!("http://{addr}"),
+                api_path: "/v1/chat/completions".to_string(),
+                api_key: Some("test-key".to_string()),
+            },
+        )
+        .expect("provider");
+        let response = provider
+            .complete(&LlmRequest {
+                model: "MiniMax-M2.7".to_string(),
+                lane: Some(MODEL_LANE_ASSISTANT_CHAT.to_string()),
+                system_prompt_key: None,
+                input: "Reply exactly MINIMAX_SMOKE_OK".to_string(),
+            })
+            .expect("minimax-compatible provider should succeed");
+
+        server.join().expect("server join");
+        assert_eq!(response.output_text, "MINIMAX_SMOKE_OK");
+        assert_eq!(
+            response.runtime.request_id.as_deref(),
+            Some("chatcmpl_minimax_123")
+        );
+    }
+
+    #[test]
+    fn output_normalization_only_strips_leading_reasoning_blocks() {
+        assert_eq!(
+            normalize_provider_output_text("<think>draft</think>\n\nFinal answer"),
+            "Final answer"
+        );
+        assert_eq!(
+            normalize_provider_output_text("Keep inline <think>literal</think> text"),
+            "Keep inline <think>literal</think> text"
+        );
+        assert_eq!(
+            normalize_provider_output_text("<think>first</think>\n<think>second</think>\nAnswer"),
+            "Answer"
+        );
+    }
+
+    #[test]
+    fn openai_compatible_provider_redacts_http_error_body() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+        let addr = listener.local_addr().expect("addr");
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let _request = read_http_request(&mut stream);
+            write_http_json_response(
+                &mut stream,
+                401,
+                r#"{"error":"bad key","api_key":"sk-live-secret","cookie":"sid=secret"}"#,
+            );
+        });
+
+        let provider = OpenAiCompatibleLlmProvider::new(
+            "minimax_openai_compatible",
+            OpenAiCompatibleLlmProviderConfig {
+                api_base_url: format!("http://{addr}"),
+                api_path: "/v1/chat/completions".to_string(),
+                api_key: Some("client-secret-key".to_string()),
+            },
+        )
+        .expect("provider");
+        let error = provider
+            .complete(&LlmRequest {
+                model: "abab7.0-chat".to_string(),
+                lane: Some(MODEL_LANE_DOCUMENT_VLM.to_string()),
+                system_prompt_key: None,
+                input: "Summarize document".to_string(),
+            })
+            .expect_err("HTTP failure should be reported");
+
+        server.join().expect("server join");
+        let message = error.to_string();
+        let provider_error = error
+            .downcast_ref::<LlmProviderError>()
+            .expect("provider error");
+        let failure_message = provider_error
+            .runtime()
+            .provider_failure
+            .as_ref()
+            .map(|failure| failure.message.as_str())
+            .expect("provider failure");
+        assert!(!message.contains("sk-live-secret"));
+        assert!(!message.contains("sid=secret"));
+        assert!(!failure_message.contains("sk-live-secret"));
+        assert!(!failure_message.contains("sid=secret"));
+        assert_eq!(
+            provider_error.runtime().lane.as_deref(),
+            Some(MODEL_LANE_DOCUMENT_VLM)
         );
     }
 
@@ -1760,6 +2469,7 @@ mod tests {
         let response = provider
             .complete(&LlmRequest {
                 model: "openclaw-model".to_string(),
+                lane: Some(MODEL_LANE_ASSISTANT_CHAT.to_string()),
                 system_prompt_key: None,
                 input: "Explain revenue".to_string(),
             })
@@ -1770,6 +2480,10 @@ mod tests {
         assert_eq!(response.runtime.mode, LlmRuntimeMode::Provider);
         assert_eq!(response.runtime.provider, "openclaw");
         assert_eq!(response.runtime.model, "openclaw-model");
+        assert_eq!(
+            response.runtime.lane.as_deref(),
+            Some(MODEL_LANE_ASSISTANT_CHAT)
+        );
         assert_eq!(
             response.runtime.request_id.as_deref(),
             Some("resp_openclaw_1")
@@ -1838,6 +2552,7 @@ mod tests {
         let response = provider
             .complete(&LlmRequest {
                 model: "openclaw-model".to_string(),
+                lane: Some(MODEL_LANE_ASSISTANT_CHAT.to_string()),
                 system_prompt_key: None,
                 input: "Fallback please".to_string(),
             })
@@ -1846,6 +2561,10 @@ mod tests {
         server.join().expect("server join");
         assert_eq!(response.output_text, "Fallback answer");
         assert_eq!(response.runtime.provider, "openclaw");
+        assert_eq!(
+            response.runtime.lane.as_deref(),
+            Some(MODEL_LANE_ASSISTANT_CHAT)
+        );
         assert_eq!(
             response.runtime.request_id.as_deref(),
             Some("chatcmpl_openclaw_1")
@@ -1920,6 +2639,7 @@ mod tests {
         let response = provider
             .complete(&LlmRequest {
                 model: "openclaw-model".to_string(),
+                lane: Some(MODEL_LANE_ASSISTANT_CHAT.to_string()),
                 system_prompt_key: None,
                 input: "回答当前经营问题".to_string(),
             })
@@ -1939,6 +2659,7 @@ mod tests {
             mode: LlmRuntimeMode::Provider,
             provider: "openai".to_string(),
             model: "gpt-5.4".to_string(),
+            lane: Some(MODEL_LANE_ASSISTANT_REACT_JSON.to_string()),
             request_id: Some("req_runtime_manifest".to_string()),
             finish_reason: Some(LlmFinishReason::ToolCalls),
             provider_failure: None,
@@ -1956,6 +2677,7 @@ mod tests {
         assert_eq!(manifest["mode"], json!("provider"));
         assert_eq!(manifest["provider"], json!("openai"));
         assert_eq!(manifest["model"], json!("gpt-5.4"));
+        assert_eq!(manifest["lane"], json!(MODEL_LANE_ASSISTANT_REACT_JSON));
         assert_eq!(manifest["request_id"], json!("req_runtime_manifest"));
         assert_eq!(manifest["finish_reason"], json!("tool_calls"));
         assert!(manifest["provider_failure"].is_null());
@@ -1972,6 +2694,18 @@ mod tests {
     fn openclaw_env_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    fn model_route_env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    fn clear_model_route_env(lane: &str) {
+        let prefix = model_route_env_prefix(lane);
+        for suffix in ["PROVIDER", "MODEL", "CAPABILITIES", "PRIORITY", "FALLBACK"] {
+            std::env::remove_var(format!("{prefix}_{suffix}"));
+        }
     }
 
     fn clear_openclaw_env() {

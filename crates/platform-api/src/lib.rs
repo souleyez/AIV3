@@ -54,7 +54,10 @@ use domain_model::{
 use event_bus::{
     workflow_execution_transition_subject, workflow_task_enqueued_subject, EventBus, EventEnvelope,
 };
-use llm_gateway::{build_provider_from_env, render_runtime_manifest, LlmRequest, LlmResponse};
+use llm_gateway::{
+    build_provider_from_env, render_runtime_manifest, resolve_runtime_selection_from_env,
+    LlmRequest, LlmResponse, MODEL_LANE_ASSISTANT_CHAT, MODEL_LANE_ASSISTANT_REACT_JSON,
+};
 use prompt_registry::bootstrap_default_prompt_registry;
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
@@ -2800,7 +2803,7 @@ fn infer_model_facing_capability_class(
         | WorkflowKind::StaticPageRender => {
             contracts::ModelFacingCapabilityClassView::ReportGenerationAndEditing
         }
-        WorkflowKind::UploadIngest => {
+        WorkflowKind::UploadIngest | WorkflowKind::CodexHostTask => {
             contracts::ModelFacingCapabilityClassView::ControlledPlatformAction
         }
     }
@@ -3995,17 +3998,33 @@ async fn create_assistant_run(
     )
     .await?;
 
-    let runtime_mode =
-        std::env::var("ASSISTANT_RUN_RUNTIME_MODE").unwrap_or_else(|_| "placeholder".to_string());
-    let runtime_provider =
-        std::env::var("ASSISTANT_RUN_RUNTIME_PROVIDER").unwrap_or_else(|_| runtime_mode.clone());
-    let runtime_model = std::env::var("ASSISTANT_RUN_RUNTIME_MODEL")
-        .unwrap_or_else(|_| DEFAULT_ASSISTANT_RUN_RUNTIME_MODEL.to_string());
-    let runtime_mode_for_trail = runtime_mode.clone();
-    let runtime_provider_for_trail = runtime_provider.clone();
-    let runtime_model_for_trail = runtime_model.clone();
+    let chat_runtime = resolve_runtime_selection_from_env(
+        "ASSISTANT_RUN",
+        MODEL_LANE_ASSISTANT_CHAT,
+        DEFAULT_ASSISTANT_RUN_RUNTIME_MODEL,
+    );
+    let react_runtime = resolve_runtime_selection_from_env(
+        "ASSISTANT_RUN",
+        MODEL_LANE_ASSISTANT_REACT_JSON,
+        DEFAULT_ASSISTANT_RUN_RUNTIME_MODEL,
+    );
     let scope_candidates = request.scope_candidates.clone();
-    let react_enabled = assistant_run_react_enabled(&runtime_mode);
+    let react_enabled = assistant_run_react_enabled(&react_runtime.mode);
+    let runtime_mode_for_trail = if react_enabled {
+        react_runtime.mode.clone()
+    } else {
+        chat_runtime.mode.clone()
+    };
+    let runtime_provider_for_trail = if react_enabled {
+        react_runtime.provider.clone()
+    } else {
+        chat_runtime.provider.clone()
+    };
+    let runtime_model_for_trail = if react_enabled {
+        react_runtime.model.clone()
+    } else {
+        chat_runtime.model.clone()
+    };
     let react_outcome = if react_enabled {
         Some(
             run_assistant_run_react_for_create(
@@ -4015,9 +4034,9 @@ async fn create_assistant_run(
                 evidence_state.clone(),
                 local_thread_id.as_deref(),
                 &active_secret_binding_ids,
-                &runtime_mode,
-                &runtime_provider,
-                &runtime_model,
+                &react_runtime.mode,
+                &react_runtime.provider,
+                &react_runtime.model,
             )
             .await?,
         )
@@ -4037,7 +4056,7 @@ async fn create_assistant_run(
                 )
             }
             None => {
-                let provider_input = if runtime_mode == "placeholder" {
+                let provider_input = if chat_runtime.mode == "placeholder" {
                     format!(
                         "普通聊天运行时占位回复：后端 AssistantRun 已接收问题，真实模型接入后会直接返回模型回答。\n\nPrompt: {}\n\n供料状态: {}",
                         request.prompt.trim(),
@@ -4050,9 +4069,10 @@ async fn create_assistant_run(
                     )
                 };
                 let response = complete_assistant_run_provider(
-                    runtime_mode.clone(),
-                    runtime_provider.clone(),
-                    runtime_model.clone(),
+                    MODEL_LANE_ASSISTANT_CHAT,
+                    chat_runtime.mode.clone(),
+                    chat_runtime.provider.clone(),
+                    chat_runtime.model.clone(),
                     provider_input,
                 )
                 .await?;
@@ -4309,17 +4329,33 @@ async fn continue_assistant_run(
         .unwrap_or("继续执行当前 AssistantRun。")
         .to_string();
     let max_steps = normalize_assistant_run_continue_max_steps(request.max_steps);
-    let runtime_mode =
-        std::env::var("ASSISTANT_RUN_RUNTIME_MODE").unwrap_or_else(|_| "placeholder".to_string());
-    let runtime_provider =
-        std::env::var("ASSISTANT_RUN_RUNTIME_PROVIDER").unwrap_or_else(|_| runtime_mode.clone());
-    let runtime_model = std::env::var("ASSISTANT_RUN_RUNTIME_MODEL")
-        .unwrap_or_else(|_| DEFAULT_ASSISTANT_RUN_RUNTIME_MODEL.to_string());
-    let runtime_mode_for_trail = runtime_mode.clone();
-    let runtime_provider_for_trail = runtime_provider.clone();
-    let runtime_model_for_trail = runtime_model.clone();
+    let chat_runtime = resolve_runtime_selection_from_env(
+        "ASSISTANT_RUN",
+        MODEL_LANE_ASSISTANT_CHAT,
+        DEFAULT_ASSISTANT_RUN_RUNTIME_MODEL,
+    );
+    let react_runtime = resolve_runtime_selection_from_env(
+        "ASSISTANT_RUN",
+        MODEL_LANE_ASSISTANT_REACT_JSON,
+        DEFAULT_ASSISTANT_RUN_RUNTIME_MODEL,
+    );
     let mut evidence_state = run.evidence_state.clone();
-    let react_enabled = assistant_run_react_enabled(&runtime_mode);
+    let react_enabled = assistant_run_react_enabled(&react_runtime.mode);
+    let runtime_mode_for_trail = if react_enabled {
+        react_runtime.mode.clone()
+    } else {
+        chat_runtime.mode.clone()
+    };
+    let runtime_provider_for_trail = if react_enabled {
+        react_runtime.provider.clone()
+    } else {
+        chat_runtime.provider.clone()
+    };
+    let runtime_model_for_trail = if react_enabled {
+        react_runtime.model.clone()
+    } else {
+        chat_runtime.model.clone()
+    };
     let react_outcome = if react_enabled {
         Some(
             run_assistant_run_react_for_continue(
@@ -4330,9 +4366,9 @@ async fn continue_assistant_run(
                 max_steps,
                 &mut evidence_state,
                 &active_secret_binding_ids,
-                &runtime_mode,
-                &runtime_provider,
-                &runtime_model,
+                &react_runtime.mode,
+                &react_runtime.provider,
+                &react_runtime.model,
             )
             .await?,
         )
@@ -4352,7 +4388,7 @@ async fn continue_assistant_run(
                 )
             }
             None => {
-                let provider_input = if runtime_mode == "placeholder" {
+                let provider_input = if chat_runtime.mode == "placeholder" {
                     format!(
                         "AssistantRun 继续执行占位回复：后端已接收继续指令，真实模型接入后会基于同一个运行上下文继续回答或请求平台能力。\n\nRun: {}\nContinue prompt: {}\nMax steps: {}\n供料状态: {}",
                         run.id,
@@ -4369,9 +4405,10 @@ async fn continue_assistant_run(
                     )
                 };
                 let response = complete_assistant_run_provider(
-                    runtime_mode.clone(),
-                    runtime_provider.clone(),
-                    runtime_model.clone(),
+                    MODEL_LANE_ASSISTANT_CHAT,
+                    chat_runtime.mode.clone(),
+                    chat_runtime.provider.clone(),
+                    chat_runtime.model.clone(),
                     provider_input,
                 )
                 .await
@@ -5448,6 +5485,7 @@ fn build_assistant_run_continue_provider_input(
 }
 
 async fn complete_assistant_run_provider(
+    model_lane: &'static str,
     runtime_mode: String,
     runtime_provider: String,
     runtime_model: String,
@@ -5462,6 +5500,7 @@ async fn complete_assistant_run_provider(
         )?;
         provider.complete(&LlmRequest {
             model: runtime_model,
+            lane: Some(model_lane.to_string()),
             system_prompt_key: None,
             input: provider_input,
         })
@@ -5515,6 +5554,7 @@ async fn run_assistant_run_react_for_create(
             max_steps,
         );
         let response = complete_assistant_run_provider(
+            MODEL_LANE_ASSISTANT_REACT_JSON,
             runtime_mode.to_string(),
             runtime_provider.to_string(),
             runtime_model.to_string(),
@@ -5723,6 +5763,7 @@ async fn run_assistant_run_react_for_continue(
             max_steps,
         );
         let response = complete_assistant_run_provider(
+            MODEL_LANE_ASSISTANT_REACT_JSON,
             runtime_mode.to_string(),
             runtime_provider.to_string(),
             runtime_model.to_string(),
@@ -5920,12 +5961,12 @@ fn build_assistant_run_react_provider_input(
         "你是智能数据工作台里的 Host-Controlled ReAct 运行时。".to_string(),
         "你只能提出下一步动作，不能假装已经执行平台动作。V3 Host 会验证、执行、记录并返回 observation。".to_string(),
         "只返回一个 JSON 对象，禁止 Markdown，禁止解释 JSON 外的文字。".to_string(),
-        "JSON Schema: {\"action_type\":\"retrieve_evidence|read_document_detail|recall_conversation_memory|list_report_options|report_choice|create_static_page_draft|update_static_page_module|submit_static_page_image_preview|render_static_page|create_report_draft|openclaw_memory_recall|openclaw_readonly_execution|final_answer\",\"reason_summary\":\"给用户看的简短原因\",\"arguments\":{},\"requires_confirmation\":false}".to_string(),
+        "JSON Schema: {\"action_type\":\"retrieve_evidence|read_document_detail|recall_conversation_memory|list_report_options|report_choice|create_static_page_draft|update_static_page_module|submit_static_page_image_preview|render_static_page|create_report_draft|openclaw_memory_recall|openclaw_readonly_execution|codex_host_task|final_answer\",\"reason_summary\":\"给用户看的简短原因\",\"arguments\":{},\"requires_confirmation\":false}".to_string(),
         "目录、候选列表和系统说明只用于规划下一步，不是可引用证据。".to_string(),
         "选中数据集或对话记忆时，final_answer 必须基于已返回的 observation；否则先选择 retrieve_evidence、read_document_detail 或 recall_conversation_memory。".to_string(),
         "工具选择：retrieve_evidence 用于发现候选证据；read_document_detail 用于需要原文措辞、OCR、表格或画像字段等细节时，document_id 必须来自选中范围或已返回 observation；最终引用只能来自 observation。".to_string(),
         "如果当前打开产物是静态页草稿，用户要求修改标题、内容、图表、数据绑定或布局时，优先用 update_static_page_module；Host 只会把操作应用到当前已持久化草稿。".to_string(),
-        "OpenClaw 是可选外挂能力；openclaw_memory_recall 和 openclaw_readonly_execution 可能被 Host 拒绝，不能绕过 V3 选中范围、记忆和只读限制。".to_string(),
+        "OpenClaw 和 Codex Host 都是可选外挂能力；openclaw_memory_recall、openclaw_readonly_execution、codex_host_task 可能被 Host 拒绝，不能绕过 V3 选中范围、记忆、任务隔离和执行 allowlist。".to_string(),
         "如果用户表达报表意图，先用 list_report_options；收到该 observation 后，才能用 report_choice，并只在 arguments.choice 填 continue_qa 或 create_report，不能编写报表正文。".to_string(),
         "如果已经可以回答，使用 action_type=final_answer，arguments.content 放最终正文。".to_string(),
         format!("当前 ReAct 步骤：{step_index}/{max_steps}"),
@@ -5993,12 +6034,12 @@ fn build_assistant_run_react_continue_provider_input(
         "你是智能数据工作台里的 Host-Controlled ReAct 继续执行运行时。".to_string(),
         "你只能提出下一步动作，不能假装已经执行平台动作。V3 Host 会验证、执行、记录并返回 observation。".to_string(),
         "只返回一个 JSON 对象，禁止 Markdown，禁止解释 JSON 外的文字。".to_string(),
-        "JSON Schema: {\"action_type\":\"retrieve_evidence|read_document_detail|recall_conversation_memory|list_report_options|report_choice|create_static_page_draft|update_static_page_module|submit_static_page_image_preview|render_static_page|create_report_draft|openclaw_memory_recall|openclaw_readonly_execution|final_answer\",\"reason_summary\":\"给用户看的简短原因\",\"arguments\":{},\"requires_confirmation\":false}".to_string(),
+        "JSON Schema: {\"action_type\":\"retrieve_evidence|read_document_detail|recall_conversation_memory|list_report_options|report_choice|create_static_page_draft|update_static_page_module|submit_static_page_image_preview|render_static_page|create_report_draft|openclaw_memory_recall|openclaw_readonly_execution|codex_host_task|final_answer\",\"reason_summary\":\"给用户看的简短原因\",\"arguments\":{},\"requires_confirmation\":false}".to_string(),
         "目录、候选列表和系统说明只用于规划下一步，不是可引用证据。".to_string(),
         "选中数据集或对话记忆时，final_answer 必须基于已返回的 observation；否则先选择 retrieve_evidence、read_document_detail 或 recall_conversation_memory。".to_string(),
         "工具选择：retrieve_evidence 用于发现候选证据；read_document_detail 用于需要原文措辞、OCR、表格或画像字段等细节时，document_id 必须来自选中范围或已返回 observation；最终引用只能来自 observation。".to_string(),
         "如果当前打开产物是静态页草稿，用户要求修改标题、内容、图表、数据绑定或布局时，优先用 update_static_page_module；Host 只会把操作应用到当前已持久化草稿。".to_string(),
-        "OpenClaw 是可选外挂能力；openclaw_memory_recall 和 openclaw_readonly_execution 可能被 Host 拒绝，不能绕过 V3 选中范围、记忆和只读限制。".to_string(),
+        "OpenClaw 和 Codex Host 都是可选外挂能力；openclaw_memory_recall、openclaw_readonly_execution、codex_host_task 可能被 Host 拒绝，不能绕过 V3 选中范围、记忆、任务隔离和执行 allowlist。".to_string(),
         "如果用户表达报表意图，先用 list_report_options；收到该 observation 后，才能用 report_choice，并只在 arguments.choice 填 continue_qa 或 create_report，不能编写报表正文。".to_string(),
         "如果已经可以回答，使用 action_type=final_answer，arguments.content 放最终正文。".to_string(),
         format!("当前 ReAct 步骤：{step_index}/{max_steps}"),

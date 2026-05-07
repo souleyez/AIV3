@@ -116,6 +116,11 @@ pub(crate) fn build_assistant_run_react_planning_catalog(
                 "available": false,
                 "actions": ["openclaw_memory_recall", "openclaw_readonly_execution"],
                 "note": "optional config-gated bridge"
+            },
+            "codex_host": {
+                "available": false,
+                "actions": ["codex_host_task"],
+                "note": "disabled-by-default execution-kernel bridge; V3 validates task scope, memory, and allowlist before any external execution"
             }
         }
     })
@@ -246,6 +251,10 @@ mod tests {
         assert_eq!(
             catalog["systemCapabilities"]["retrieval"]["available"],
             json!(true)
+        );
+        assert_eq!(
+            catalog["systemCapabilities"]["codex_host"]["available"],
+            json!(false)
         );
     }
 

@@ -1,6 +1,8 @@
 use anyhow::Result;
 use domain_model::{DatasetId, MemoryDirectoryId, RetrievalEvidenceId};
-use llm_gateway::{LlmProvider, LlmRequest, LlmRuntimeMetadata, LlmToolCall};
+use llm_gateway::{
+    LlmProvider, LlmRequest, LlmRuntimeMetadata, LlmToolCall, MODEL_LANE_DATASET_OUTPUT,
+};
 use prompt_registry::DATASET_OUTPUT_PLACEHOLDER_PROMPT_KEY;
 use serde_json::{json, Value};
 use std::sync::Arc;
@@ -57,6 +59,7 @@ impl DatasetOutputGenerator for PlaceholderDatasetOutputGenerator {
         );
         let response = self.provider.complete(&LlmRequest {
             model: self.model.clone(),
+            lane: Some(MODEL_LANE_DATASET_OUTPUT.to_string()),
             system_prompt_key: Some(DATASET_OUTPUT_PLACEHOLDER_PROMPT_KEY.to_string()),
             input: placeholder_text,
         })?;
@@ -356,6 +359,7 @@ mod tests {
             mode: llm_gateway::LlmRuntimeMode::Provider,
             provider: "openai".to_string(),
             model: "gpt-5.4".to_string(),
+            lane: Some(MODEL_LANE_DATASET_OUTPUT.to_string()),
             request_id: Some("req_dataset_output_error".to_string()),
             finish_reason: Some(llm_gateway::LlmFinishReason::Error),
             provider_failure: None,
@@ -386,6 +390,7 @@ mod tests {
             mode: llm_gateway::LlmRuntimeMode::Provider,
             provider: "openai".to_string(),
             model: "gpt-5.4".to_string(),
+            lane: Some(MODEL_LANE_DATASET_OUTPUT.to_string()),
             request_id: None,
             finish_reason: Some(llm_gateway::LlmFinishReason::Error),
             provider_failure: Some(llm_gateway::LlmProviderFailure {

@@ -3,7 +3,7 @@ use chrono::{DateTime, Utc};
 use domain_model::{ChatMessageId, DatasetId, DatasetOutputId, MemoryDirectoryId};
 use llm_gateway::{
     render_runtime_manifest, LlmFinishReason, LlmProvider, LlmRequest, LlmRuntimeMetadata,
-    LlmToolCall, LlmToolCallStatus,
+    LlmToolCall, LlmToolCallStatus, MODEL_LANE_CHAT_SESSION,
 };
 use prompt_registry::CHAT_SESSION_PLACEHOLDER_PROMPT_KEY;
 use serde_json::{json, Value};
@@ -798,6 +798,7 @@ impl ChatSessionOrchestrator for PlaceholderChatSessionOrchestrator {
         );
         let response = self.provider.complete(&LlmRequest {
             model: self.model.clone(),
+            lane: Some(MODEL_LANE_CHAT_SESSION.to_string()),
             system_prompt_key: Some(CHAT_SESSION_PLACEHOLDER_PROMPT_KEY.to_string()),
             input: placeholder_message,
         })?;
@@ -1399,6 +1400,7 @@ mod tests {
                 mode: llm_gateway::LlmRuntimeMode::Placeholder,
                 provider: "placeholder".to_string(),
                 model: PLACEHOLDER_MODEL.to_string(),
+                lane: Some(MODEL_LANE_CHAT_SESSION.to_string()),
                 request_id: Some("req_handoff".to_string()),
                 finish_reason: Some(LlmFinishReason::Stop),
                 provider_failure: None,
@@ -1475,6 +1477,7 @@ mod tests {
             mode: llm_gateway::LlmRuntimeMode::Placeholder,
             provider: "placeholder".to_string(),
             model: PLACEHOLDER_MODEL.to_string(),
+            lane: Some(MODEL_LANE_CHAT_SESSION.to_string()),
             request_id: Some("req_session_handoff".to_string()),
             finish_reason: Some(LlmFinishReason::Stop),
             provider_failure: None,
@@ -1588,6 +1591,7 @@ mod tests {
             mode: llm_gateway::LlmRuntimeMode::Provider,
             provider: "openai".to_string(),
             model: "gpt-5.4".to_string(),
+            lane: Some(MODEL_LANE_CHAT_SESSION.to_string()),
             request_id: Some("req_response_ready".to_string()),
             finish_reason: Some(LlmFinishReason::ToolCalls),
             provider_failure: None,
@@ -1882,6 +1886,7 @@ mod tests {
             mode: llm_gateway::LlmRuntimeMode::Provider,
             provider: "openai".to_string(),
             model: "gpt-5.4".to_string(),
+            lane: Some(MODEL_LANE_CHAT_SESSION.to_string()),
             request_id: Some("req_failed_runtime".to_string()),
             finish_reason: Some(LlmFinishReason::Error),
             provider_failure: Some(llm_gateway::LlmProviderFailure {
@@ -2023,6 +2028,7 @@ mod tests {
             mode: llm_gateway::LlmRuntimeMode::Provider,
             provider: "openai".to_string(),
             model: "gpt-5.4".to_string(),
+            lane: Some(MODEL_LANE_CHAT_SESSION.to_string()),
             request_id: None,
             finish_reason: Some(LlmFinishReason::Error),
             provider_failure: Some(llm_gateway::LlmProviderFailure {
@@ -2096,6 +2102,7 @@ mod tests {
             mode: llm_gateway::LlmRuntimeMode::Provider,
             provider: "openai".to_string(),
             model: "gpt-5.4".to_string(),
+            lane: Some(MODEL_LANE_CHAT_SESSION.to_string()),
             request_id: Some("req_commit_failed".to_string()),
             finish_reason: Some(LlmFinishReason::Stop),
             provider_failure: None,
@@ -2184,6 +2191,7 @@ mod tests {
             mode: llm_gateway::LlmRuntimeMode::Provider,
             provider: "openai".to_string(),
             model: "gpt-5.4".to_string(),
+            lane: Some(MODEL_LANE_CHAT_SESSION.to_string()),
             request_id: Some("req_runtime_error".to_string()),
             finish_reason: Some(LlmFinishReason::Error),
             provider_failure: None,
@@ -2214,6 +2222,7 @@ mod tests {
             mode: llm_gateway::LlmRuntimeMode::Provider,
             provider: "openai".to_string(),
             model: "gpt-5.4".to_string(),
+            lane: Some(MODEL_LANE_CHAT_SESSION.to_string()),
             request_id: None,
             finish_reason: Some(LlmFinishReason::Error),
             provider_failure: Some(llm_gateway::LlmProviderFailure {

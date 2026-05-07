@@ -335,6 +335,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-host-agent"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "domain-model",
+ "event-bus",
+ "observability",
+ "platform-api",
+ "serde",
+ "serde_json",
+ "storage",
+ "tokio",
+ "tracing",
+ "uuid",
+ "workflow-definitions",
+ "workflow-engine",
+]
+
+[[package]]
 name = "combine"
 version = "4.6.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"

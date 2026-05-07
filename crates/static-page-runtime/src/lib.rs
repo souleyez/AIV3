@@ -1,5 +1,7 @@
 use anyhow::{anyhow, Result};
-use llm_gateway::{render_runtime_manifest, LlmProvider, LlmRequest};
+use llm_gateway::{
+    render_runtime_manifest, LlmProvider, LlmRequest, MODEL_LANE_STATIC_PAGE_INTENT,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use std::collections::BTreeMap;
@@ -76,6 +78,7 @@ pub fn interpret_static_page_intent_with_provider(
         } else {
             model.to_string()
         },
+        lane: Some(MODEL_LANE_STATIC_PAGE_INTENT.to_string()),
         system_prompt_key: None,
         input: build_provider_input(request),
     })?;
@@ -897,6 +900,10 @@ mod tests {
         assert_eq!(outcome.summary, "模型调整了图表。");
         assert_eq!(outcome.operations.len(), 1);
         assert_eq!(outcome.runtime["source"], json!("provider"));
+        assert_eq!(
+            outcome.runtime["llm"]["lane"],
+            json!(MODEL_LANE_STATIC_PAGE_INTENT)
+        );
     }
 
     #[test]
@@ -954,6 +961,10 @@ mod tests {
         assert_eq!(
             outcome.runtime["llm"]["request_id"],
             json!("resp_static_page_openclaw")
+        );
+        assert_eq!(
+            outcome.runtime["llm"]["lane"],
+            json!(MODEL_LANE_STATIC_PAGE_INTENT)
         );
     }
 

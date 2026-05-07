@@ -2,9 +2,9 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Consolidate the V3 assistant, static-page generation, document/media parsing, report outputs, and optional OpenClaw extension into one execution plan that a fresh development thread can continue from without re-reading the whole project history.
+**Goal:** Consolidate the V3 assistant, static-page generation, document/media parsing, report outputs, separated memory, Codex Host execution-kernel direction, and optional OpenClaw extension into one execution plan that a fresh development thread can continue from without re-reading the whole project history.
 
-**Architecture:** V3 remains a host-controlled data platform: PostgreSQL is the source of truth, the assistant supplies model context rather than composing answers locally, and all data visibility, AssistantRun state, draft state, queue state, and output artifacts are owned by V3. Static-page generation is the core product loop; OpenClaw is an optional sidecar extension for model configuration, memory augmentation, and readonly/local execution, and must be removable without changing normal V3 behavior.
+**Architecture:** V3 remains a host-controlled data platform: PostgreSQL is the source of truth, the assistant supplies model context rather than composing answers locally, and all data visibility, AssistantRun state, memory-space policy, draft state, queue state, and output artifacts are owned by V3. Static-page generation remains the core product loop. Codex Mac Host is now the preferred execution-kernel direction behind V3 validation and audit. OpenClaw has completed its first optional provider/stub pass and stays as a removable sidecar, not the main execution route.
 
 **Tech Stack:** Next.js 16 / React 19 in `apps/web`; Rust crates including `platform-api`, `llm-gateway`, `static-page-runtime`, `static-page-worker`, `static-page-renderer`, `ingest-worker`, `retrieval-worker`, `memory-worker`, `document-vlm-runtime`; PostgreSQL 17.9 target; Cloudflare/Codex image queue endpoint; optional OpenClaw Gateway `/v1/responses` and `/v1/chat/completions`; local-first parsers plus configured MiniMax VLM/media capability probes.
 
@@ -19,6 +19,10 @@ Detailed source documents remain valid as references:
 - `docs/plans/2026-04-27-static-page-generation-studio-plan.md`: detailed static-page, assistant shell, ingestion, visibility, AssistantRun, and renderer plan/history.
 - `docs/plans/2026-04-29-openclaw-extension-adapter-plan.md`: detailed optional OpenClaw adapter plan.
 - `docs/plans/2026-04-29-v3-react-agent-refinement-plan.md`: detailed ReAct refinement plan comparing the Java reference, the original TS contract, and current V3 AssistantRun implementation.
+- `docs/plans/2026-05-03-codex-kernel-separated-memory-plan.md`: active plan for Codex Mac Host as future execution kernel and first-class separated memory spaces.
+- `docs/plans/2026-05-03-codex-gateway-model-proxy-plan.md`: detailed boundary plan for Codex host integration versus V3-owned model gateway/proxy.
+- `docs/plans/2026-05-07-v3-codex-host-architecture-alignment-plan.md`: active architecture boundary plan aligning V3's original control/integration/workflow/worker planes with Codex Host and future model proxy.
+- `docs/plans/2026-05-07-v3-email-account-auth-plan.md`: account/email authentication plan that upgrades local-key visibility into email-bound user ownership and verification-code login.
 - `docs/plans/2026-04-23-v3-development-plan.md`: older high-level V3 phase baseline.
 - `docs/plans/2026-04-25-static-page-visual-workbench-v3-plan.md`: older visual-workbench plan; keep only as Cloudflare image-provider and visual-contract reference. Do not revive the separate popup/workbench direction unless explicitly requested.
 
@@ -37,6 +41,10 @@ docs/plans/2026-04-27-static-page-generation-studio-plan.md
 docs/plans/2026-04-29-openclaw-extension-adapter-plan.md
 docs/plans/2026-04-29-v3-consolidated-development-handoff-plan.md
 docs/plans/2026-04-29-v3-react-agent-refinement-plan.md
+docs/plans/2026-05-03-codex-kernel-separated-memory-plan.md
+docs/plans/2026-05-03-codex-gateway-model-proxy-plan.md
+docs/plans/2026-05-07-v3-codex-host-architecture-alignment-plan.md
+docs/plans/2026-05-07-v3-email-account-auth-plan.md
 ```
 
 Recent verified capabilities:
@@ -47,6 +55,8 @@ Recent verified capabilities:
 - Dataset visibility foundation exists with local key binding, public/private dataset filtering, and selected-scope semantics.
 - AssistantRun persistence exists for ordinary chat, hidden conversation memory, deterministic scope planning, evidence supply, continue API, static-page draft creation, and output artifacts.
 - AssistantRun ReAct refinement now includes typed contract parsing, weak planning catalog, extracted tool registry, protocol-repair matrix, report handoff, bounded document-detail reads, redacted trace summaries, frontend safe progress display, and gated OpenClaw memory/readonly bridge stubs.
+- OpenClaw optional provider and gated ReAct stubs have completed their first pass; do not continue OpenClaw as the main execution-kernel route.
+- Codex Host first queue bridge exists: `codex_host_task` is disabled-by-default and allowlisted, `codex_host_task_workflow` enqueues `codex_host/run_codex_host_task`, and `crates/codex-host-agent` can complete that queue in dry-run mode or build a redacted plan-only command summary without launching local Codex.
 - Static-page runtime has deterministic and provider-backed intent interpretation with operation sanitization.
 - Static-page image worker can call the Cloudflare/Codex queue, poll artifact status, normalize artifact URLs, and record failures.
 - Static-page renderer is layout-aware and can render core module types into HTML/SVG with design contract data.
@@ -64,6 +74,63 @@ Recent verified capabilities:
 - Users should mostly talk naturally. UI forms are secondary affordances and should not become the main workflow.
 - Module-level edits are part of the core sell point and must remain first-class.
 - OpenClaw is optional. Its absence must not break startup, upload, chat, static-page deterministic flow, reports, parsing, rendering, or workers.
+- Memory must be separated by explicit scope. Conversation, project, task, dataset, and system memory cannot leak across scopes unless V3 selects and audits that scope.
+- Codex Host tasks must get isolated task memory. Task memory is not recalled into ordinary conversation unless V3 explicitly promotes a safe summary.
+- Email account auth upgrades the current local-key model. Email proves account ownership, local key remains an access factor, and verification-code login can restore account access without ever emailing or storing the raw key.
+- Datasets, robots, conversations, memory spaces, reports, static pages, and artifacts should follow `user_id` ownership while public datasets remain visible to unsigned users.
+
+## 2026-05-03 Direction Update: Codex Kernel And Separated Memory
+
+OpenClaw work has already completed a useful first optional-extension version:
+
+- `llm-gateway` has an optional OpenClaw provider.
+- AssistantRun and static-page runtime can route through OpenClaw provider configuration.
+- ReAct has gated OpenClaw memory/readonly execution stubs.
+
+This is now considered enough for the OpenClaw line unless a specific compatibility bug appears. The main execution-kernel route should move to Codex Mac Host:
+
+```text
+V3 Web/API -> AssistantRun/ReAct -> V3 memory-space policy -> Workflow/task audit -> Codex Mac Host -> artifacts/logs back to V3
+```
+
+The separated memory plan is now the next architecture foundation before any real Codex host daemon:
+
+- Default browser conversations get isolated conversation memory spaces.
+- Project memory is explicit and selected, not inferred silently.
+- Dataset memory remains governed by selected scope and private/public visibility.
+- Codex host tasks get task memory spaces that do not bleed back into conversation memory by default.
+- Runtime inspect must show memory-space decisions and rejected cross-scope access.
+
+Use `docs/plans/2026-05-03-codex-kernel-separated-memory-plan.md` as the active implementation plan for this direction.
+
+Use `docs/plans/2026-05-03-codex-gateway-model-proxy-plan.md` for the separate model gateway/proxy boundary. Codex CLI/app-server/exec-server are execution/runtime surfaces, not the V3 model gateway. V3 must own provider routing, credentials, redaction, model capability policy, and audit through `llm-gateway` or a future internal `model-proxy`.
+
+## 2026-05-07 Architecture Alignment: V3 Planes, Codex Host, And Model Proxy
+
+The rough product split remains useful:
+
+- Model proxy.
+- Codex execution host.
+- V3 permissions, datasets, memory, workflows, and artifacts.
+
+But the implementation must follow V3's original architecture planes, not a new three-service rewrite. Treat the system as six logical modules:
+
+- Experience UI: web shell, main workspace, mobile interaction, and right-side draft/output shelf.
+- V3 Control Plane: `platform-api`, auth/scope, local-key visibility, AssistantRun state, draft/output ownership, and runtime inspect.
+- Integration Plane: `llm-gateway`, future internal `model-proxy`, `tool-registry`, `mcp-gateway`, and `prompt-registry`.
+- Workflow / Worker Plane: explicit workflow definitions, queue claiming, ingest/retrieval/memory/report/static-page/media workers.
+- External Execution Host: `codex-host-agent`, isolated host workspace, Codex execution safety gates, redacted logs, and returned artifacts.
+- Data / Artifact Plane: PostgreSQL, object storage, vector indexes, analytical files, and published artifacts.
+
+Current architecture decisions:
+
+- `llm-gateway` is the model gateway seed. A future `model-proxy` should wrap or extract it, not duplicate provider routing.
+- `codex-host-agent` is an external execution worker. It must not become a browser API, model gateway, permission authority, or memory source of truth.
+- Existing workers remain V3 worker-plane components. Do not move routine parsing, retrieval, static-page rendering, report rendering, or memory refresh into Codex Host.
+- Codex Host tasks should reuse `workflow-definitions`, `workflow-engine`, `event-bus`, PostgreSQL task/artifact state, and runtime inspect.
+- The current crate dependency exceptions are known: `codex-host-agent -> platform-api`, several workers -> `platform-api`, and `tool-registry -> llm-gateway`. Treat these as short-term seams to document and gradually clean, not as a reason to block product work immediately.
+
+Use `docs/plans/2026-05-07-v3-codex-host-architecture-alignment-plan.md` before continuing Codex Host or model-proxy implementation. That plan is the active boundary checklist and dependency cleanup roadmap.
 
 ## Architecture Evaluation
 
@@ -74,12 +141,12 @@ Compatible points:
 - Static-page provider-backed intent already goes through `llm-gateway::LlmProvider`; OpenClaw can slot in as another provider.
 - AssistantRun ordinary chat already builds V3 evidence state before calling a provider; OpenClaw can receive the same already-filtered context.
 - Hidden conversation memory exists in V3; OpenClaw memory can be an additional labeled evidence candidate.
-- Continuous execution exists as AssistantRun continuation; OpenClaw local execution can be a bounded capability bridge recorded in the same trail.
+- Continuous execution exists as AssistantRun continuation; future Codex Host execution should be a bounded V3-owned capability bridge recorded in the same trail.
 
 Potential conflicts and decisions:
 
 - OpenClaw memory vs V3 memory: V3 remains source of truth. OpenClaw memory is only optional evidence.
-- OpenClaw local execution vs V3 host actions: V3 validates, records, and owns actions. OpenClaw may suggest or perform readonly extension tasks only through allowlisted bridge calls.
+- External local execution vs V3 host actions: V3 validates, records, and owns actions. Codex Host may run allowlisted tasks only through V3-issued task contexts. OpenClaw readonly bridge remains optional and lower priority.
 - OpenClaw model routing vs model config: OpenClaw can route model/agent choices, but runtime manifests must still record provider/model/request id in V3.
 - OpenClaw availability vs production reliability: all OpenClaw lanes must be config-gated and fallback-safe.
 
@@ -152,18 +219,36 @@ Next outcomes:
 - Provider failures are visible as runtime facts, not silent UI confusion.
 - Host-Controlled ReAct lets the model request retrieval, draft updates, preview generation, report actions, or final answers through V3-validated action steps instead of one-shot prompting.
 
-### Workstream C: Optional OpenClaw Extension
+### Workstream C: Codex Host Kernel And Separated Memory
 
-Priority: high but isolated.
+Priority: high and foundational.
 
-Goal: attach OpenClaw as optional sidecar for model config, memory augmentation, and readonly/local execution.
+Goal: make V3 safe for Codex-as-execution-kernel by separating memory and routing host tasks through V3-owned ReAct/tool policy.
 
 Next outcomes:
 
-- `llm-gateway` has `OpenClawProvider`.
-- AssistantRun and static-page intent can use `*_RUNTIME_PROVIDER=openclaw`.
-- OpenClaw memory can add labeled evidence only when enabled.
-- OpenClaw local execution starts disabled and readonly/allowlisted.
+- `conversation`, `project`, `task`, `dataset`, and `system` memory spaces exist as first-class V3 concepts.
+- AssistantRun stores the active memory space and never recalls unrelated thread/project memory implicitly.
+- ReAct can select, recall, and write memory only through V3 validation.
+- Codex Host task actions are disabled by default, allowlisted, audited, and routed through a dedicated queue before any real host execution.
+- Runtime inspect shows memory-space decisions, recalled counts, denied counts, and Codex task context summaries.
+
+Current Codex Host status: the V3 queue bridge, dry-run worker, and plan-only command policy are implemented; first-class task memory spaces, shared Codex Host contracts, dependency decoupling from `platform-api`, and real jump-host/Mac-host Codex execution are still pending.
+
+Detailed plans: `docs/plans/2026-05-07-v3-codex-host-architecture-alignment-plan.md`, `docs/plans/2026-05-03-codex-kernel-separated-memory-plan.md`, and `docs/plans/2026-05-03-codex-gateway-model-proxy-plan.md`.
+
+### Workstream C2: Optional OpenClaw Extension
+
+Priority: completed first pass; continue only for concrete compatibility bugs or provider routing needs.
+
+Goal: keep OpenClaw as optional sidecar for model configuration and legacy compatibility without making it the main execution kernel.
+
+Next outcomes:
+
+- Already completed: `llm-gateway` has `OpenClawProvider`.
+- Already completed: AssistantRun and static-page intent can use `*_RUNTIME_PROVIDER=openclaw`.
+- Already completed: gated ReAct stubs exist for OpenClaw memory/readonly bridge.
+- Do not prioritize `crates/openclaw-extension` unless OpenClaw becomes specifically required again.
 
 ### Workstream D: Data Parsing, RAG, And Data Snapshots
 
@@ -194,14 +279,21 @@ Next outcomes:
 
 Priority: continuous.
 
-Goal: keep local-key multi-user semantics, provider secrets, and background services safe.
+Goal: keep email account auth, local-key access factors, provider secrets, and background services safe.
 
 Next outcomes:
 
+- Add account email capture in the existing key panel.
+- Add email + key login and email verification-code login.
+- Add recovery flow that restores account access and lets the user set a new local key, without claiming to recover the old raw key.
+- Use Cloudflare Email Service as the verification-code delivery channel through a dedicated sender address.
+- Attach datasets, robots, memory, conversations, reports, static pages, and artifacts to user ownership.
 - Local key UX and backend visibility enforcement are consistent.
 - Provider keys stay server-side or local-only as intended and never leak through UI/status.
 - PostgreSQL 17.9 remains the target server version for fresh environments.
 - Runtime status endpoints are redacted and useful.
+
+Detailed plan: `docs/plans/2026-05-07-v3-email-account-auth-plan.md`.
 
 ## Recommended Execution Order
 
@@ -494,7 +586,45 @@ The domain/workflow contracts now include `static_page_render_workflow` and rend
 - Add worker-level integration coverage for failed render tasks and cancelled outputs.
 - Package/export rendered HTML and assets into a downloadable artifact.
 
-### Slice 7: OpenClaw Memory Bridge
+### Slice 7: Codex Kernel Separated Memory Foundation
+
+**Status 2026-05-03:** supersedes the old OpenClaw memory bridge as the next architecture slice.
+
+**Plan:** `docs/plans/2026-05-03-codex-kernel-separated-memory-plan.md`
+
+**Files:**
+
+- Create: `docs/plans/2026-05-03-codex-kernel-separated-memory-plan.md`
+- Modify: `crates/domain-model/src/lib.rs`
+- Modify: `crates/contracts/src/lib.rs`
+- Modify: `crates/storage/src/lib.rs`
+- Create: `crates/storage/migrations/0003_memory_spaces.sql`
+- Modify: `crates/platform-api/src/lib.rs`
+- Modify: `crates/platform-api/src/react_agent_contract.rs`
+- Modify: `crates/platform-api/src/react_agent_catalog.rs`
+- Modify: `crates/platform-api/src/react_agent_tools.rs`
+- Modify: `apps/web/app/HomePageClient.js`
+- Create: `apps/web/app/lib/memory-space.js`
+
+**Steps:**
+
+1. Add `memory_spaces` and attach conversation memory to memory spaces.
+2. Ensure each browser `local_thread_id` gets an isolated conversation memory space.
+3. Attach AssistantRun to an active memory space and return memory candidates without raw content.
+4. Add ReAct memory actions for selecting, recalling, writing, and archiving memory through V3 validation.
+5. Add minimal frontend memory status and new-conversation handling.
+6. Add Codex Host disabled-by-default task action and isolated task memory semantics.
+7. Extend runtime inspect with memory-space decisions and denied cross-scope access.
+
+**Acceptance:**
+
+- Conversation memory cannot leak between browser threads.
+- Project memory is explicit, not silently inferred.
+- Codex task memory is isolated from normal conversation memory.
+- Dataset/private visibility remains enforced before memory is supplied.
+- OpenClaw remains optional and does not block this slice.
+
+### Slice 7 Legacy: OpenClaw Memory Bridge
 
 **Files:**
 
@@ -517,7 +647,9 @@ The domain/workflow contracts now include `static_page_render_workflow` and rend
 - OpenClaw memory never exposes hidden datasets.
 - Runtime evidence explains when OpenClaw memory was supplied.
 
-### Slice 8: OpenClaw Readonly Local Execution Bridge
+**Status 2026-05-03:** deprioritized. Keep this only as a future optional sidecar task after Codex Host separated memory is in place.
+
+### Slice 8 Legacy: OpenClaw Readonly Local Execution Bridge
 
 **Files:**
 
@@ -538,6 +670,8 @@ The domain/workflow contracts now include `static_page_render_workflow` and rend
 - OpenClaw execution is useful but not dangerous.
 - V3 can continue if bridge fails.
 - User sees concise execution steps in the conversation/runtime trail.
+
+**Status 2026-05-03:** deprioritized. The first external execution bridge should target Codex Host disabled-by-default task actions, not OpenClaw local execution.
 
 ### Slice 9: Parser And Media Parity
 
@@ -596,19 +730,37 @@ The domain/workflow contracts now include `static_page_render_workflow` and rend
 
 **Steps:**
 
-1. Add redacted OpenClaw status endpoint.
-2. Add provider/runtime status to operator docs.
-3. Improve local key create/switch/revoke UX.
-4. Ensure private/public dataset warnings are clear during upload and dataset creation.
-5. Verify PostgreSQL 17.9 fresh setup path against current migrations.
+1. Implement email account auth from `docs/plans/2026-05-07-v3-email-account-auth-plan.md`.
+2. Add redacted OpenClaw/provider status endpoint where still relevant.
+3. Add provider/runtime/email-auth status to operator docs.
+4. Improve local key create/switch/revoke/recovery UX.
+5. Ensure private/public dataset warnings are clear during upload and dataset creation.
+6. Verify PostgreSQL 17.9 fresh setup path against current migrations.
 
 **Acceptance:**
 
-- Local multi-user model remains simple and understandable.
+- Email account and local-key model remains simple and understandable.
+- Users can log in with email + key or email verification code.
+- Forgot-key recovery restores account access and new-key setup, but never exposes the old raw key.
 - Wrong-key private datasets are invisible and unusable.
 - Provider secrets are never shown to the browser.
 
 ## Immediate Next Thread Instruction
+
+Current 2026-05-07 transition note: OpenClaw provider/stub work has completed its optional first pass, and the main execution-kernel direction is now Codex Mac Host plus separated memory. The Codex Host ReAct action, workflow queue, and dry-run worker exist. A fresh thread continuing Codex Host should first read `docs/plans/2026-05-07-v3-codex-host-architecture-alignment-plan.md`, then continue the shared-contract and dependency-decoupling tasks before real execution. Real Codex execution validation must happen only on `windows-jump` or the later Mac host.
+
+Recommended next prompt:
+
+```text
+Continue AI Data Platform V3 from docs/plans/2026-05-07-v3-codex-host-architecture-alignment-plan.md.
+OpenClaw provider/stubs already completed their optional first pass; do not continue OpenClaw as the main execution kernel.
+Codex Host queue/dry-run/plan-only bridge is implemented; continue by linking the architecture plan, auditing crate boundaries, moving Codex Host payloads into shared contracts, and reducing codex-host-agent -> platform-api coupling before real execution.
+Keep V3 as the control plane, llm-gateway as the model-provider seed, and Codex Host as an external execution worker. Browser/API traffic must still go only through V3.
+Do not run local-machine Codex from the developer workstation.
+Use separated memory rules: conversation/project/task/dataset/system memory must not leak across scopes.
+```
+
+Older 2026-04-29 continuation guidance remains below for historical context and for threads that are specifically continuing static-page implementation.
 
 Start with Slice 0 if the consolidated plan is not committed.
 

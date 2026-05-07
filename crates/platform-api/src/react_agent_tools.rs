@@ -6,7 +6,8 @@ use chrono::Utc;
 use contracts::{CreateStaticPageImageJobRequest, CreateStaticPageRenderRequest};
 use domain_model::{
     AssistantRunId, Document, DocumentChunk, DocumentId, SecretBindingId, StaticPageDraftId,
-    StaticPageImageJobId,
+    StaticPageImageJobId, WorkflowEventId, WorkflowEventRecord, WorkflowExecution,
+    WorkflowExecutionId, WorkflowKind,
 };
 use serde_json::{json, Value};
 use std::{collections::BTreeMap, env};
@@ -20,6 +21,7 @@ use crate::{
     status_from_static_page_operations, status_from_static_page_payload,
     summarize_static_page_operations, ApiError, AppState,
 };
+use workflow_engine::WorkflowSignal;
 
 use crate::react_agent_contract::{
     AssistantRunReActActionType as AssistantRunReactActionType,
@@ -137,6 +139,9 @@ pub(crate) async fn execute_assistant_run_react_action(
         AssistantRunReactActionType::OpenClawReadonlyExecution => {
             Ok(openclaw_readonly_execution_result(action))
         }
+        AssistantRunReactActionType::CodexHostTask => {
+            codex_host_task_result(state, action, active_assistant_run_id, local_thread_id).await
+        }
         AssistantRunReactActionType::UpdateStaticPageModule => {
             let operations = react_static_page_operations_from_arguments(&action.arguments)?;
             if let (Some(draft_id), Some(active_assistant_run_id)) = (
@@ -200,6 +205,7 @@ pub(crate) fn assistant_run_react_action_label(
         AssistantRunReactActionType::ReportChoice => "选择报表流向",
         AssistantRunReactActionType::OpenClawMemoryRecall => "调用 OpenClaw 记忆",
         AssistantRunReactActionType::OpenClawReadonlyExecution => "调用 OpenClaw 只读执行",
+        AssistantRunReactActionType::CodexHostTask => "调用 Codex Host 任务",
         AssistantRunReactActionType::FinalAnswer => "模型生成最终回答",
     }
 }
@@ -789,6 +795,236 @@ fn openclaw_readonly_execution_result(
     )
 }
 
+async fn codex_host_task_result(
+    state: &AppState,
+    action: &AssistantRunNextAction,
+    active_assistant_run_id: Option<AssistantRunId>,
+    local_thread_id: Option<&str>,
+) -> std::result::Result<AssistantRunReactToolResult, ApiError> {
+    if let Some(rejection) = codex_host_task_preflight_rejection(action, active_assistant_run_id) {
+        return Ok(rejection);
+    }
+    let active_assistant_run_id =
+        active_assistant_run_id.expect("preflight requires active assistant run");
+    let capability = codex_host_task_capability(action).expect("preflight requires capability");
+
+    let execution = build_initial_codex_host_task_execution(
+        state,
+        action,
+        active_assistant_run_id,
+        capability,
+        local_thread_id,
+    )?;
+    let initial_event = build_initial_codex_host_task_event(&execution, active_assistant_run_id);
+    state
+        .storage
+        .workflow_executions()
+        .create_with_initial_event(&execution, &initial_event)
+        .await
+        .map_err(ApiError::from_storage)?;
+    let start_response =
+        crate::apply_workflow_signal(state, execution.id, WorkflowSignal::Start).await?;
+    let tasks = start_response.enqueued_tasks;
+    let task_items = tasks
+        .iter()
+        .map(|task| {
+            json!({
+                "type": "workflow_task",
+                "workflow_task_id": task.id.to_string(),
+                "queue": task.queue,
+                "task_key": task.task_key,
+                "status": task.status.as_str(),
+                "available_at": task.available_at,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    Ok(AssistantRunReactToolResult {
+        observation: json!({
+            "status": "completed",
+            "action_type": action.action_type.as_str(),
+            "actionType": action.action_type.as_str(),
+            "message": "Codex Host task queued",
+            "items": [{
+                "type": "codex_host_task",
+                "status": "queued",
+                "capability": truncate_for_openclaw_stub(capability, 96),
+                "workflow_execution_id": execution.id.to_string(),
+                "assistant_run_id": active_assistant_run_id.to_string(),
+            }],
+            "tasks": task_items,
+            "limits": {
+                "mode": "queued",
+                "externalExecution": true,
+                "taskMemoryIsolated": true,
+            },
+            "workflow_execution_id": execution.id.to_string(),
+        }),
+        trail_step: json!({
+            "status": "completed",
+            "label": assistant_run_react_action_label(&action.action_type),
+            "react_action": action.action_type.as_str(),
+            "returned_count": 1,
+            "workflow_execution_id": execution.id.to_string(),
+            "external_execution": true,
+            "at": Utc::now(),
+        }),
+        final_answer: None,
+    })
+}
+
+fn build_initial_codex_host_task_execution(
+    state: &AppState,
+    action: &AssistantRunNextAction,
+    assistant_run_id: AssistantRunId,
+    capability: &str,
+    local_thread_id: Option<&str>,
+) -> std::result::Result<WorkflowExecution, ApiError> {
+    let definition = state
+        .workflow_catalog
+        .find_definition(WorkflowKind::CodexHostTask)
+        .ok_or_else(|| {
+            ApiError::internal(
+                "workflow_definition_missing",
+                "codex_host_task workflow definition is not registered".to_string(),
+            )
+        })?;
+    let now = Utc::now();
+    let execution_id = WorkflowExecutionId::new();
+    let runtime_state = definition.initial_state(execution_id, now);
+    let mut context = runtime_state.context;
+    context.insert(
+        "retries_remaining".to_string(),
+        Value::Number(runtime_state.retries_remaining.into()),
+    );
+    context.insert(
+        "assistant_run_id".to_string(),
+        Value::String(assistant_run_id.to_string()),
+    );
+    context.insert(
+        "capability".to_string(),
+        Value::String(truncate_for_openclaw_stub(capability, 96)),
+    );
+    if let Some(task) = codex_host_task_text_from_arguments(&action.arguments) {
+        context.insert("task".to_string(), Value::String(task));
+    }
+    if let Some(local_thread_id) = local_thread_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        context.insert(
+            "local_thread_id".to_string(),
+            Value::String(local_thread_id.to_string()),
+        );
+    }
+    context.insert(
+        "task_memory_policy".to_string(),
+        json!({
+            "kind": "task",
+            "isolated": true,
+            "promote_summary_to_conversation": false,
+        }),
+    );
+    context.insert(
+        "safety".to_string(),
+        json!({
+            "user_cli_flags_allowed": false,
+            "secrets_in_prompt_allowed": false,
+            "raw_logs_require_redaction": true,
+        }),
+    );
+
+    Ok(WorkflowExecution {
+        id: execution_id,
+        tenant_id: state.tenant_id,
+        dataset_id: None,
+        report_plan_id: None,
+        kind: WorkflowKind::CodexHostTask,
+        version: runtime_state.version,
+        stage: runtime_state.stage,
+        status: runtime_state.status,
+        attempt: 0,
+        context: Value::Object(context),
+        created_at: now,
+        updated_at: now,
+    })
+}
+
+fn build_initial_codex_host_task_event(
+    execution: &WorkflowExecution,
+    assistant_run_id: AssistantRunId,
+) -> WorkflowEventRecord {
+    WorkflowEventRecord {
+        id: WorkflowEventId::new(),
+        execution_id: execution.id,
+        sequence_no: 1,
+        event_name: "codex_host_task.created".to_string(),
+        payload: json!({
+            "kind": execution.kind.as_str(),
+            "version": execution.version,
+            "status": execution.status.as_str(),
+            "stage": execution.stage,
+            "assistant_run_id": assistant_run_id.to_string(),
+            "capability": execution.context.get("capability").cloned().unwrap_or(Value::Null),
+            "task_memory_policy": execution.context.get("task_memory_policy").cloned().unwrap_or(Value::Null),
+        }),
+        created_at: execution.created_at,
+    }
+}
+
+fn codex_host_task_text_from_arguments(arguments: &Value) -> Option<String> {
+    arguments
+        .get("task")
+        .or_else(|| arguments.get("prompt"))
+        .or_else(|| arguments.get("instruction"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| truncate_for_openclaw_stub(value, 1_200))
+}
+
+fn codex_host_task_preflight_rejection(
+    action: &AssistantRunNextAction,
+    active_assistant_run_id: Option<AssistantRunId>,
+) -> Option<AssistantRunReactToolResult> {
+    if !react_env_flag("CODEX_HOST_TASK_ENABLED", false) {
+        return Some(rejected_react_tool_result(
+            action,
+            "codex_host_execution_disabled",
+        ));
+    }
+    if active_assistant_run_id.is_none() {
+        return Some(rejected_react_tool_result(
+            action,
+            "active_assistant_run_required",
+        ));
+    }
+    let Some(capability) = codex_host_task_capability(action) else {
+        return Some(rejected_react_tool_result(
+            action,
+            "codex_host_task_capability_required",
+        ));
+    };
+    if !codex_host_capability_allowed(capability) {
+        return Some(rejected_react_tool_result(
+            action,
+            "codex_host_task_not_allowlisted",
+        ));
+    }
+    None
+}
+
+fn codex_host_task_capability(action: &AssistantRunNextAction) -> Option<&str> {
+    action
+        .arguments
+        .get("capability")
+        .or_else(|| action.arguments.get("task_type"))
+        .or_else(|| action.arguments.get("taskType"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
 fn ok_openclaw_stub_result(
     action: &AssistantRunNextAction,
     message: &str,
@@ -829,6 +1065,18 @@ fn react_env_flag(key: &str, default_value: bool) -> bool {
 
 fn openclaw_readonly_capability_allowed(capability: &str) -> bool {
     env::var("OPENCLAW_READONLY_EXECUTION_ALLOWLIST")
+        .ok()
+        .map(|raw| {
+            raw.split(',')
+                .map(str::trim)
+                .filter(|item| !item.is_empty())
+                .any(|item| item == capability)
+        })
+        .unwrap_or(false)
+}
+
+fn codex_host_capability_allowed(capability: &str) -> bool {
+    env::var("CODEX_HOST_TASK_ALLOWLIST")
         .ok()
         .map(|raw| {
             raw.split(',')
@@ -1130,6 +1378,8 @@ mod tests {
             "OPENCLAW_MEMORY_ENABLED",
             "OPENCLAW_READONLY_EXECUTION_ENABLED",
             "OPENCLAW_READONLY_EXECUTION_ALLOWLIST",
+            "CODEX_HOST_TASK_ENABLED",
+            "CODEX_HOST_TASK_ALLOWLIST",
         ] {
             env::remove_var(key);
         }
@@ -1247,6 +1497,59 @@ mod tests {
             allowed.observation["limits"]["externalExecution"],
             json!(false)
         );
+    }
+
+    #[test]
+    fn codex_host_task_is_disabled_by_default() {
+        let _guard = openclaw_env_test_lock().lock().expect("openclaw env lock");
+        clear_openclaw_tool_env();
+        let mut action = test_action(AssistantRunReactActionType::CodexHostTask);
+        action.arguments = json!({"capability": "inspect_project"});
+
+        let result = codex_host_task_preflight_rejection(&action, None)
+            .expect("disabled Codex Host task should be rejected");
+
+        assert_eq!(result.observation["status"], json!("rejected"));
+        assert_eq!(
+            result.observation["message"],
+            json!("codex_host_execution_disabled")
+        );
+        assert_eq!(result.observation["actionType"], json!("codex_host_task"));
+        assert!(result.final_answer.is_none());
+    }
+
+    #[test]
+    fn codex_host_task_rejects_unallowlisted_capability() {
+        let _guard = openclaw_env_test_lock().lock().expect("openclaw env lock");
+        clear_openclaw_tool_env();
+        env::set_var("CODEX_HOST_TASK_ENABLED", "true");
+        let mut action = test_action(AssistantRunReactActionType::CodexHostTask);
+        action.arguments = json!({"capability": "write_outside_workspace"});
+
+        let result = codex_host_task_preflight_rejection(&action, Some(AssistantRunId::new()))
+            .expect("unallowlisted Codex Host task should be rejected");
+        clear_openclaw_tool_env();
+
+        assert_eq!(result.observation["status"], json!("rejected"));
+        assert_eq!(
+            result.observation["message"],
+            json!("codex_host_task_not_allowlisted")
+        );
+    }
+
+    #[test]
+    fn codex_host_task_preflight_allows_enabled_allowlisted_capability() {
+        let _guard = openclaw_env_test_lock().lock().expect("openclaw env lock");
+        clear_openclaw_tool_env();
+        env::set_var("CODEX_HOST_TASK_ENABLED", "true");
+        env::set_var("CODEX_HOST_TASK_ALLOWLIST", "inspect_project");
+        let mut action = test_action(AssistantRunReactActionType::CodexHostTask);
+        action.arguments = json!({"capability": "inspect_project"});
+
+        let result = codex_host_task_preflight_rejection(&action, Some(AssistantRunId::new()));
+        clear_openclaw_tool_env();
+
+        assert!(result.is_none());
     }
 
     #[test]

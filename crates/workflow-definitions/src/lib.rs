@@ -341,6 +341,14 @@ pub fn registry() -> Vec<DynWorkflowDefinition> {
             success_stage: "static_page_render_completed",
             next_step: None,
         }),
+        Arc::new(LinearWorkflowDefinition {
+            kind: WorkflowKind::CodexHostTask,
+            summary: "Queue a V3-audited Codex Host task for an isolated execution kernel.",
+            queue: "codex_host",
+            task_key: "run_codex_host_task",
+            success_stage: "codex_host_task_completed",
+            next_step: None,
+        }),
     ]
 }
 
@@ -369,11 +377,31 @@ mod tests {
         let entries = registry();
         let names: Vec<_> = entries.iter().map(|entry| entry.kind().as_str()).collect();
 
-        assert_eq!(entries.len(), 8);
+        assert_eq!(entries.len(), 9);
         assert!(names.contains(&"chat_session_workflow"));
         assert!(names.contains(&"report_render_workflow"));
         assert!(names.contains(&"static_page_image_generation_workflow"));
         assert!(names.contains(&"static_page_render_workflow"));
+        assert!(names.contains(&"codex_host_task_workflow"));
+    }
+
+    #[test]
+    fn codex_host_task_starts_on_dedicated_queue() {
+        let definition = registry()
+            .into_iter()
+            .find(|entry| entry.kind() == WorkflowKind::CodexHostTask)
+            .expect("codex host workflow exists");
+        let now = Utc::now();
+        let pending = definition.initial_state(WorkflowExecutionId::new(), now);
+        let running = definition
+            .transition(&pending, WorkflowSignal::Start, now)
+            .expect("start");
+
+        assert_eq!(running.next_state.status, WorkflowStatus::Running);
+        assert_eq!(running.next_state.stage, "run_codex_host_task");
+        assert_eq!(running.enqueued_tasks.len(), 1);
+        assert_eq!(running.enqueued_tasks[0].queue, "codex_host");
+        assert_eq!(running.enqueued_tasks[0].task_key, "run_codex_host_task");
     }
 
     #[test]

@@ -722,6 +722,7 @@ mod tests {
             mode: llm_gateway::LlmRuntimeMode::Provider,
             provider: "openai".to_string(),
             model: "gpt-5.4".to_string(),
+            lane: Some(llm_gateway::MODEL_LANE_DATASET_OUTPUT.to_string()),
             request_id: Some("req_failed".to_string()),
             finish_reason: Some(llm_gateway::LlmFinishReason::Error),
             provider_failure: Some(llm_gateway::LlmProviderFailure {

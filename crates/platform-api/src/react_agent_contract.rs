@@ -39,6 +39,7 @@ pub(crate) enum AssistantRunReActActionType {
     ReportChoice,
     OpenClawMemoryRecall,
     OpenClawReadonlyExecution,
+    CodexHostTask,
     FinalAnswer,
 }
 
@@ -57,6 +58,7 @@ impl AssistantRunReActActionType {
             "report_choice" => Some(Self::ReportChoice),
             "openclaw_memory_recall" => Some(Self::OpenClawMemoryRecall),
             "openclaw_readonly_execution" => Some(Self::OpenClawReadonlyExecution),
+            "codex_host_task" => Some(Self::CodexHostTask),
             "final_answer" => Some(Self::FinalAnswer),
             _ => None,
         }
@@ -76,6 +78,7 @@ impl AssistantRunReActActionType {
             Self::ReportChoice => "report_choice",
             Self::OpenClawMemoryRecall => "openclaw_memory_recall",
             Self::OpenClawReadonlyExecution => "openclaw_readonly_execution",
+            Self::CodexHostTask => "codex_host_task",
             Self::FinalAnswer => "final_answer",
         }
     }
@@ -488,6 +491,21 @@ mod tests {
         )
         .expect_err("unknown action should fail");
         assert!(action_error.to_string().contains("action"));
+    }
+
+    #[test]
+    fn parses_codex_host_task_action() {
+        let decision = parse_assistant_run_react_decision(
+            r#"{"status":"act","intent":"task","reason":"需要宿主执行","action":{"type":"codex_host_task","arguments":{"capability":"inspect_project"}}}"#,
+        )
+        .expect("codex host task should parse");
+
+        assert_eq!(decision.status, AssistantRunReActStatus::Act);
+        assert_eq!(
+            decision.action_type,
+            AssistantRunReActActionType::CodexHostTask
+        );
+        assert_eq!(decision.arguments["capability"], json!("inspect_project"));
     }
 
     #[test]

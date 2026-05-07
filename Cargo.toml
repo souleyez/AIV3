@@ -16,6 +16,7 @@ members = [
     "crates/memory-worker",
     "crates/dataset-output-worker",
     "crates/chat-session-worker",
+    "crates/codex-host-agent",
     "crates/report-planner-worker",
     "crates/report-render-worker",
     "crates/report-runtime",
