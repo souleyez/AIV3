@@ -747,6 +747,32 @@ impl PgDatasetRepository {
 
         map_dataset_row(&row)
     }
+
+    pub async fn update_owner_user_id(
+        &self,
+        tenant_id: TenantId,
+        dataset_id: DatasetId,
+        owner_user_id: UserId,
+    ) -> Result<Option<Dataset>> {
+        let row = sqlx::query(
+            r#"
+            update datasets
+            set owner_user_id = $3,
+                updated_at = now()
+            where tenant_id = $1
+              and id = $2
+              and (owner_user_id is null or owner_user_id = $3)
+            returning id, tenant_id, owner_user_id, key, title, description, lifecycle, metadata, created_at, updated_at
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(dataset_id.0)
+        .bind(owner_user_id.0)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        row.as_ref().map(map_dataset_row).transpose()
+    }
 }
 
 #[derive(Clone)]

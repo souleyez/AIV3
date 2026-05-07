@@ -7,8 +7,10 @@ import HomeWorkspaceToolbar from './components/HomeWorkspaceToolbar';
 import InsightPanel from './components/InsightPanel';
 import Sidebar from './components/Sidebar';
 import {
+  buildClaimLocalDataPayload,
   buildDeviceFingerprint,
   buildKeyLoginPayload,
+  buildRotateLocalKeyPayload,
   buildStartEmailAuthPayload,
   buildVerifyEmailAuthPayload,
   normalizeAccountEmail,
@@ -375,6 +377,7 @@ export default function HomePageClient() {
   const [activeSecretCount, setActiveSecretCount] = useState(0);
   const [accountEmailDraft, setAccountEmailDraft] = useState('');
   const [accountCodeDraft, setAccountCodeDraft] = useState('');
+  const [accountNewKeyDraft, setAccountNewKeyDraft] = useState('');
   const [authSession, setAuthSession] = useState({ user: null, session: null });
   const [authChallenge, setAuthChallenge] = useState(null);
   const [authBusy, setAuthBusy] = useState(false);
@@ -1081,6 +1084,90 @@ export default function HomePageClient() {
       ]);
     } catch (authError) {
       setError(authError instanceof Error ? authError.message : '邮箱密钥登录失败');
+    } finally {
+      setAuthBusy(false);
+      setResolvingSecret(false);
+    }
+  }
+
+  async function handleClaimLocalData() {
+    const localKey = String(localSecretDraft || readLocalSecretValue()).trim();
+    if (!authSession.user?.email) {
+      setError('请先登录邮箱账号，再认领本地密钥数据。');
+      return;
+    }
+    if (!localKey) {
+      setError('请在本地密钥框输入要认领的旧密钥。');
+      return;
+    }
+
+    setAuthBusy(true);
+    setResolvingSecret(true);
+    setError('');
+    try {
+      const fingerprint = await fingerprintLocalSecret(localKey);
+      const response = await fetchJson('/api/v3/auth/claim-local-data', {
+        method: 'POST',
+        body: buildClaimLocalDataPayload(fingerprint),
+      });
+      const bindingIds = response.active_secret_binding_ids || [];
+      writeLocalSecretState(localKey, bindingIds);
+      setActiveSecretCount(bindingIds.length);
+      setLocalSecretDraft('');
+      const claimedCount = response.claimed_datasets?.length || 0;
+      const skippedCount = response.skipped_owned_dataset_count || 0;
+      setAuthMessage(
+        claimedCount
+          ? `已认领 ${claimedCount} 个本地密钥数据集${skippedCount ? `，跳过 ${skippedCount} 个已有归属的数据集` : ''}。`
+          : '没有找到可认领的旧本地密钥数据集。',
+      );
+      await refreshCatalog({
+        preferredDatasetId: response.claimed_datasets?.[0]?.id || selectedDatasetId,
+        silent: true,
+      });
+    } catch (authError) {
+      setError(authError instanceof Error ? authError.message : '认领本地数据失败');
+    } finally {
+      setAuthBusy(false);
+      setResolvingSecret(false);
+    }
+  }
+
+  async function handleRotateLocalKey() {
+    const newLocalKey = String(accountNewKeyDraft || '').trim();
+    if (!authSession.user?.email) {
+      setError('请先登录邮箱账号，再设置新本地密钥。');
+      return;
+    }
+    if (!newLocalKey) {
+      setError('请输入新的本地密钥。');
+      return;
+    }
+
+    setAuthBusy(true);
+    setResolvingSecret(true);
+    setError('');
+    try {
+      const response = await fetchJson('/api/v3/auth/key/rotate', {
+        method: 'POST',
+        body: buildRotateLocalKeyPayload(newLocalKey, buildDeviceFingerprint()),
+      });
+      const bindingIds = response.active_secret_binding_ids || [];
+      writeLocalSecretState(newLocalKey, bindingIds);
+      setActiveSecretCount(bindingIds.length);
+      setLocalSecretDraft('');
+      setAccountNewKeyDraft('');
+      if (response.user) {
+        setAuthSession((current) => ({ ...current, user: response.user }));
+      }
+      setAuthMessage(
+        bindingIds.length
+          ? `已设置新本地密钥，并启用 ${bindingIds.length} 个匹配绑定。`
+          : '已设置新本地密钥。旧密钥数据不会自动迁移，需要用旧密钥执行认领。',
+      );
+      await refreshCatalog({ preferredDatasetId: selectedDatasetId, silent: true });
+    } catch (authError) {
+      setError(authError instanceof Error ? authError.message : '设置新本地密钥失败');
     } finally {
       setAuthBusy(false);
       setResolvingSecret(false);
@@ -2369,6 +2456,7 @@ export default function HomePageClient() {
     accountAuth: {
       emailDraft: accountEmailDraft,
       codeDraft: accountCodeDraft,
+      newKeyDraft: accountNewKeyDraft,
       statusSummary: accountStatusSummary,
       busy: authBusy,
       message: authMessage,
@@ -2377,9 +2465,12 @@ export default function HomePageClient() {
         setAuthMessage('');
       },
       onCodeDraftChange: (value) => setAccountCodeDraft(normalizeVerificationCode(value)),
+      onNewKeyDraftChange: (value) => setAccountNewKeyDraft(value),
       onSendEmailCode: handleSendEmailCode,
       onVerifyEmailCode: handleVerifyEmailCode,
       onLoginWithKey: handleLoginWithLocalKey,
+      onClaimLocalData: handleClaimLocalData,
+      onRotateLocalKey: handleRotateLocalKey,
       onLogout: handleLogoutAccount,
     },
   };

@@ -52,6 +52,19 @@ export function buildKeyLoginPayload(email, localKey, deviceFingerprint = '') {
   };
 }
 
+export function buildRotateLocalKeyPayload(newLocalKey, deviceFingerprint = '') {
+  return {
+    new_local_key: String(newLocalKey || '').trim(),
+    ...(deviceFingerprint ? { device_fingerprint: deviceFingerprint } : {}),
+  };
+}
+
+export function buildClaimLocalDataPayload(fingerprint) {
+  return {
+    fingerprint: String(fingerprint || '').trim(),
+  };
+}
+
 export function summarizeAccountState({ user, session, activeSecretCount = 0 } = {}) {
   if (user?.email && session?.auth_method === 'email_key') {
     return {

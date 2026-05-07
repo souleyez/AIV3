@@ -1,7 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  buildClaimLocalDataPayload,
   buildKeyLoginPayload,
+  buildRotateLocalKeyPayload,
   buildStartEmailAuthPayload,
   buildVerifyEmailAuthPayload,
   normalizeAccountEmail,
@@ -34,6 +36,13 @@ test('account auth builds backend payloads with snake case fields', () => {
     email: 'user@example.com',
     local_key: 'secret-key',
     device_fingerprint: 'device-2',
+  });
+  assert.deepEqual(buildClaimLocalDataPayload('  fingerprint-1  '), {
+    fingerprint: 'fingerprint-1',
+  });
+  assert.deepEqual(buildRotateLocalKeyPayload('  next-secret  ', 'device-3'), {
+    new_local_key: 'next-secret',
+    device_fingerprint: 'device-3',
   });
 });
 

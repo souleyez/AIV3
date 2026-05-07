@@ -59,6 +59,7 @@ function AccountPanel({ accountAuth }) {
   const busy = Boolean(accountAuth?.busy);
   const emailDraft = accountAuth?.emailDraft || '';
   const codeDraft = accountAuth?.codeDraft || '';
+  const newKeyDraft = accountAuth?.newKeyDraft || '';
 
   return (
     <section className="side-card side-form account-card">
@@ -108,6 +109,39 @@ function AccountPanel({ accountAuth }) {
           邮箱密钥登录
         </button>
       </div>
+      {status.signedIn ? (
+        <>
+          <label className="side-form-field account-code-field">
+            <span>新本地密钥</span>
+            <div className="account-code-row">
+              <input
+                value={newKeyDraft}
+                onChange={(event) => accountAuth?.onNewKeyDraftChange?.(event.target.value)}
+                placeholder="设置未来使用的新密钥"
+                disabled={busy}
+                type="password"
+                autoComplete="new-password"
+              />
+              <button
+                className="ghost-btn"
+                type="button"
+                onClick={accountAuth?.onRotateLocalKey}
+                disabled={busy || !newKeyDraft.trim()}
+              >
+                设置
+              </button>
+            </div>
+          </label>
+          <button
+            className="ghost-btn side-form-submit"
+            type="button"
+            onClick={accountAuth?.onClaimLocalData}
+            disabled={busy}
+          >
+            认领本地密钥数据
+          </button>
+        </>
+      ) : null}
       <label className="side-form-field account-code-field">
         <span>验证码</span>
         <div className="account-code-row">

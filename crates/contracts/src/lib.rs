@@ -321,6 +321,19 @@ pub struct BindEmailResponse {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ClaimLocalDataRequest {
+    pub fingerprint: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ClaimLocalDataResponse {
+    pub user: AuthUserView,
+    pub claimed_datasets: Vec<DatasetSummary>,
+    pub active_secret_binding_ids: Vec<SecretBindingId>,
+    pub skipped_owned_dataset_count: usize,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct LogoutResponse {
     pub revoked: bool,
 }
@@ -1979,5 +1992,19 @@ mod tests {
         let encoded = serde_json::to_value(&session).expect("session view should serialize");
 
         assert_eq!(encoded["auth_method"], "email_code");
+
+        let claim: ClaimLocalDataRequest = serde_json::from_value(json!({
+            "fingerprint": "local-secret-fingerprint"
+        }))
+        .expect("claim local data request should deserialize");
+        assert_eq!(claim.fingerprint, "local-secret-fingerprint");
+
+        let rotate: KeyRotateRequest = serde_json::from_value(json!({
+            "new_local_key": "next-local-key",
+            "device_fingerprint": "browser-device"
+        }))
+        .expect("rotate key request should deserialize");
+        assert_eq!(rotate.new_local_key, "next-local-key");
+        assert_eq!(rotate.device_fingerprint.as_deref(), Some("browser-device"));
     }
 }

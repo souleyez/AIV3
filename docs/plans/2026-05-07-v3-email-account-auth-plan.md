@@ -16,7 +16,9 @@
 - Task 5 completed in first pass: ownership fields flow through datasets, documents, assistant runs, conversation memory, report plans, static-page drafts, and render outputs.
 - Task 6 completed in compact first pass: existing sidebar key panel now supports email code login, email plus local-key login, current account status, logout, browser-local email cache, and API cookie pass-through.
 - Task 7 completed in first pass: platform-api can use Cloudflare Email Service REST API when configured, otherwise it falls back to local logging sender; setup notes live in `docs/operations/cloudflare-email-auth-setup.md`.
-- Remaining hardening: explicit key rotation/recovery UX, local-data claim flow, grants/team membership, robot ownership, audit expansion, and true encryption recovery semantics if required later.
+- Task 8 completed in first pass: logged-in users can claim old local-key datasets through `POST /v1/auth/claim-local-data` using the browser-computed secret fingerprint; only unowned datasets are claimed, and owned datasets are not reassigned.
+- Key rotation UX completed in compact first pass: logged-in users can set a new local key from the existing account/key panel through `POST /v1/auth/key/rotate`; the new key is cached in the current browser, and old local-key data is not automatically migrated.
+- Remaining hardening: document/report/static artifact owner backfill beyond dataset ownership, grants/team membership, robot ownership, audit expansion, stronger recovery challenge policy, and true encryption recovery semantics if required later.
 
 ---
 
@@ -266,6 +268,12 @@ Copy rules:
 - "忘记密钥" should say "通过邮箱验证码恢复账号访问，并设置新密钥".
 - Do not say "找回原密钥".
 - If future true encryption is enabled, tell users old encrypted data requires recovery code or old key.
+
+First-pass implemented behavior:
+
+- The signed-in account panel exposes "新本地密钥" and a compact "设置" action.
+- Setting a new local key updates the server-side `primary_secret_fingerprint` and caches the new key in the current browser.
+- It does not claim old data or imply old-key recovery; old local-key data still requires the old key plus `POST /v1/auth/claim-local-data`.
 
 ## Task 0: Link This Plan From Consolidated Handoff
 
@@ -755,6 +763,14 @@ Requires:
 - logged-in user;
 - current local key fingerprint;
 - matching visible secret bindings.
+
+First-pass implementation:
+
+- Request body contains `fingerprint`, not the raw local key.
+- Matching `secret_bindings` locate candidate datasets.
+- Only datasets with `owner_user_id is null` are assigned to the current session user.
+- Datasets already owned by another user are counted as skipped and never reassigned.
+- Frontend exposes this as "认领本地密钥数据" in the existing account/key panel.
 
 **Step 4: Verify**
 

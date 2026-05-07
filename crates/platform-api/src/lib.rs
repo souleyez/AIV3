@@ -15,8 +15,8 @@ use contracts::{
     ApplyStaticPageDraftIntentRequest, ApplyStaticPageDraftIntentResponse, AssistantRunDetailView,
     AssistantRunEventView, AssistantRunMessageView, AssistantRunView, AuthSessionResponse,
     AuthSessionView, AuthUserView, BindEmailRequest, BindEmailResponse, ChatMessageView,
-    ChatSessionView, CompareDocumentsRequest, CompareDocumentsView,
-    ConfirmStaticPageImageJobRequest, ConfirmStaticPageImageJobResponse,
+    ChatSessionView, ClaimLocalDataRequest, ClaimLocalDataResponse, CompareDocumentsRequest,
+    CompareDocumentsView, ConfirmStaticPageImageJobRequest, ConfirmStaticPageImageJobResponse,
     ContinueAssistantRunRequest, ContinueAssistantRunResponse, ConversationMemoryItemView,
     CreateAssistantRunRequest, CreateAssistantRunResponse, CreateChatSessionRequest,
     CreateChatSessionResponse, CreateConversationMemoryItemRequest, CreateDatasetOutputRequest,
@@ -245,6 +245,10 @@ pub fn router(
         .route("/v1/auth/logout", axum::routing::post(logout_auth_session))
         .route("/v1/auth/key/rotate", axum::routing::post(rotate_local_key))
         .route("/v1/auth/email/bind", axum::routing::post(bind_auth_email))
+        .route(
+            "/v1/auth/claim-local-data",
+            axum::routing::post(claim_local_data),
+        )
         .route("/v1/datasets", get(list_datasets).post(create_dataset))
         .route(
             "/v1/dataset-secret-bindings",
@@ -3368,6 +3372,83 @@ async fn bind_auth_email(
             expires_at: challenge.expires_at,
         }),
     ))
+}
+
+async fn claim_local_data(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<ClaimLocalDataRequest>,
+) -> std::result::Result<Json<ClaimLocalDataResponse>, ApiError> {
+    validate_required("fingerprint", &request.fingerprint)?;
+    let Some((user, _session)) = current_auth_session(&state, &headers).await? else {
+        return Err(ApiError::unauthorized(
+            "auth_session_required",
+            "请先登录账号后再认领本地密钥数据".to_string(),
+        ));
+    };
+    let fingerprint = request.fingerprint.trim();
+    let bindings = state
+        .storage
+        .secret_bindings()
+        .list_by_fingerprint(state.tenant_id, fingerprint)
+        .await
+        .map_err(ApiError::from_storage)?;
+    let active_secret_binding_ids = bindings
+        .iter()
+        .map(|binding| binding.id)
+        .collect::<Vec<_>>();
+    let mut claimed_datasets = Vec::new();
+    let mut skipped_owned_dataset_count = 0usize;
+    let mut seen_dataset_ids = HashSet::new();
+
+    for binding in bindings {
+        if !seen_dataset_ids.insert(binding.dataset_id) {
+            continue;
+        }
+        let Some(dataset) = state
+            .storage
+            .datasets()
+            .get_by_id(state.tenant_id, binding.dataset_id)
+            .await
+            .map_err(ApiError::from_storage)?
+        else {
+            continue;
+        };
+        match dataset.owner_user_id {
+            None => {
+                if let Some(updated) = state
+                    .storage
+                    .datasets()
+                    .update_owner_user_id(state.tenant_id, dataset.id, user.id)
+                    .await
+                    .map_err(ApiError::from_storage)?
+                {
+                    claimed_datasets.push(dataset_summary(updated, None));
+                }
+            }
+            Some(owner_user_id) if owner_user_id == user.id => {
+                claimed_datasets.push(dataset_summary(dataset, None));
+            }
+            Some(_) => {
+                skipped_owned_dataset_count += 1;
+            }
+        }
+    }
+    if !active_secret_binding_ids.is_empty() {
+        state
+            .storage
+            .users()
+            .update_primary_secret_fingerprint(state.tenant_id, user.id, fingerprint, Utc::now())
+            .await
+            .map_err(ApiError::from_storage)?;
+    }
+
+    Ok(Json(ClaimLocalDataResponse {
+        user: to_auth_user_view(&user, true),
+        claimed_datasets,
+        active_secret_binding_ids,
+        skipped_owned_dataset_count,
+    }))
 }
 
 fn active_secret_binding_ids_from_headers(
@@ -18699,6 +18780,65 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn auth_key_rotate_updates_primary_secret_and_returns_matching_bindings() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let Some(harness) = build_auth_api_test_harness().await else {
+            return;
+        };
+        let cookie = issue_email_session_cookie(&harness, "rotate@example.com").await;
+        let dataset = harness
+            .storage
+            .datasets()
+            .create(
+                harness.tenant_id,
+                NewDataset {
+                    key: format!("rotate-key-dataset-{}", Uuid::new_v4()),
+                    title: "Rotate Key Dataset".to_string(),
+                    description: None,
+                    owner_user_id: None,
+                },
+            )
+            .await
+            .expect("dataset should be created");
+        let fingerprint = local_key_fingerprint("next-secret");
+        let binding = harness
+            .storage
+            .secret_bindings()
+            .create(
+                harness.tenant_id,
+                NewSecretBinding {
+                    dataset_id: dataset.id,
+                    document_id: None,
+                    scope_level: SecretScopeLevel::Dataset,
+                    provider_key: "next-key".to_string(),
+                    cipher_text: "local-only".to_string(),
+                    fingerprint: fingerprint.clone(),
+                },
+            )
+            .await
+            .expect("secret binding should be created");
+
+        let response = post_json_request(
+            harness.app,
+            "/v1/auth/key/rotate",
+            &KeyRotateRequest {
+                new_local_key: "next-secret".to_string(),
+                current_local_key: None,
+                email_verification_code: None,
+                device_fingerprint: Some("browser-d".to_string()),
+            },
+            Some(&cookie),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload: KeyRotateResponse = read_json_response(response).await;
+        assert_eq!(payload.user.email, "rotate@example.com");
+        assert_eq!(payload.primary_secret_fingerprint, fingerprint);
+        assert_eq!(payload.active_secret_binding_ids, vec![binding.id]);
+    }
+
+    #[tokio::test]
     async fn auth_session_endpoint_returns_current_user() {
         let _guard = shared_local_postgres_test_lock().lock().await;
         let Some(harness) = build_auth_api_test_harness().await else {
@@ -18761,6 +18901,69 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let owner_datasets: Vec<DatasetSummary> = read_json_response(response).await;
         assert!(owner_datasets
+            .iter()
+            .any(|dataset| dataset.id == created.id));
+    }
+
+    #[tokio::test]
+    async fn claim_local_data_assigns_unowned_private_dataset_to_session_user() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let Some(harness) = build_auth_api_test_harness().await else {
+            return;
+        };
+        let fingerprint = "claim-local-fingerprint";
+        let response = post_json_request(
+            harness.app.clone(),
+            "/v1/datasets",
+            &CreateDatasetRequest {
+                key: format!("claim-local-{}", Uuid::new_v4()),
+                title: "Claim Local Dataset".to_string(),
+                description: None,
+                visibility: None,
+                secret_binding_ids: Vec::new(),
+                secret_fingerprint: Some(fingerprint.to_string()),
+                secret_label: Some("local-test".to_string()),
+            },
+            None,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let created: DatasetSummary = read_json_response(response).await;
+        assert_eq!(created.visibility, DatasetVisibility::Private);
+
+        let response = get_request(harness.app.clone(), "/v1/datasets", None).await;
+        let anonymous_datasets: Vec<DatasetSummary> = read_json_response(response).await;
+        assert!(!anonymous_datasets
+            .iter()
+            .any(|dataset| dataset.id == created.id));
+
+        let owner_cookie = issue_email_session_cookie(&harness, "claim-owner@example.com").await;
+        let response = post_json_request(
+            harness.app.clone(),
+            "/v1/auth/claim-local-data",
+            &ClaimLocalDataRequest {
+                fingerprint: fingerprint.to_string(),
+            },
+            Some(&owner_cookie),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let claim: ClaimLocalDataResponse = read_json_response(response).await;
+        assert_eq!(claim.claimed_datasets.len(), 1);
+        assert_eq!(claim.claimed_datasets[0].id, created.id);
+        assert_eq!(claim.active_secret_binding_ids, created.secret_binding_ids);
+        assert_eq!(claim.skipped_owned_dataset_count, 0);
+
+        let response = get_request(harness.app.clone(), "/v1/datasets", Some(&owner_cookie)).await;
+        let owner_datasets: Vec<DatasetSummary> = read_json_response(response).await;
+        assert!(owner_datasets
+            .iter()
+            .any(|dataset| dataset.id == created.id));
+
+        let other_cookie = issue_email_session_cookie(&harness, "claim-other@example.com").await;
+        let response = get_request(harness.app.clone(), "/v1/datasets", Some(&other_cookie)).await;
+        let other_datasets: Vec<DatasetSummary> = read_json_response(response).await;
+        assert!(!other_datasets
             .iter()
             .any(|dataset| dataset.id == created.id));
     }
