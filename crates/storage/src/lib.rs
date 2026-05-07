@@ -243,6 +243,7 @@ pub struct NewMemoryDirectory {
 pub struct NewDatasetOutput {
     pub execution_id: WorkflowExecutionId,
     pub dataset_id: DatasetId,
+    pub owner_user_id: Option<UserId>,
     pub prompt: String,
     pub output_text: String,
     pub memory_directory_id: Option<MemoryDirectoryId>,
@@ -348,6 +349,7 @@ pub struct NewChatSession {
     pub id: ChatSessionId,
     pub execution_id: WorkflowExecutionId,
     pub dataset_id: DatasetId,
+    pub user_id: Option<UserId>,
     pub title: String,
     pub latest_memory_directory_id: Option<MemoryDirectoryId>,
     pub latest_dataset_output_id: Option<DatasetOutputId>,
@@ -2359,6 +2361,7 @@ impl PgDatasetOutputRepository {
                 tenant_id,
                 execution_id,
                 dataset_id,
+                owner_user_id,
                 prompt,
                 output_text,
                 memory_directory_id,
@@ -2366,8 +2369,8 @@ impl PgDatasetOutputRepository {
                 output_manifest,
                 created_at
             )
-            values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-            returning id, tenant_id, execution_id, dataset_id, prompt, output_text,
+            values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            returning id, tenant_id, execution_id, dataset_id, owner_user_id, prompt, output_text,
                       memory_directory_id, retrieval_evidence_ids, output_manifest, created_at
             "#,
         )
@@ -2375,6 +2378,7 @@ impl PgDatasetOutputRepository {
         .bind(tenant_id.0)
         .bind(new_output.execution_id.0)
         .bind(new_output.dataset_id.0)
+        .bind(new_output.owner_user_id.map(|id| id.0))
         .bind(&new_output.prompt)
         .bind(&new_output.output_text)
         .bind(new_output.memory_directory_id.map(|value| value.0))
@@ -2397,7 +2401,7 @@ impl PgDatasetOutputRepository {
         let rows = sqlx::query(
             r#"
             select id, tenant_id, execution_id, dataset_id, prompt, output_text,
-                   memory_directory_id, retrieval_evidence_ids, output_manifest, created_at
+                   owner_user_id, memory_directory_id, retrieval_evidence_ids, output_manifest, created_at
             from dataset_outputs
             where tenant_id = $1 and dataset_id = $2
             order by created_at desc
@@ -2419,7 +2423,7 @@ impl PgDatasetOutputRepository {
         let row = sqlx::query(
             r#"
             select id, tenant_id, execution_id, dataset_id, prompt, output_text,
-                   memory_directory_id, retrieval_evidence_ids, output_manifest, created_at
+                   owner_user_id, memory_directory_id, retrieval_evidence_ids, output_manifest, created_at
             from dataset_outputs
             where tenant_id = $1 and id = $2
             "#,
@@ -2440,7 +2444,7 @@ impl PgDatasetOutputRepository {
         let row = sqlx::query(
             r#"
             select id, tenant_id, execution_id, dataset_id, prompt, output_text,
-                   memory_directory_id, retrieval_evidence_ids, output_manifest, created_at
+                   owner_user_id, memory_directory_id, retrieval_evidence_ids, output_manifest, created_at
             from dataset_outputs
             where tenant_id = $1 and execution_id = $2
             "#,
@@ -3185,6 +3189,7 @@ impl PgChatSessionRepository {
                 id,
                 tenant_id,
                 dataset_id,
+                user_id,
                 execution_id,
                 title,
                 latest_memory_directory_id,
@@ -3193,14 +3198,15 @@ impl PgChatSessionRepository {
                 created_at,
                 updated_at
             )
-            values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9)
-            returning id, tenant_id, dataset_id, execution_id, title, latest_memory_directory_id,
+            values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10)
+            returning id, tenant_id, dataset_id, user_id, execution_id, title, latest_memory_directory_id,
                       latest_dataset_output_id, session_manifest, created_at, updated_at
             "#,
         )
         .bind(new_session.id.0)
         .bind(tenant_id.0)
         .bind(new_session.dataset_id.0)
+        .bind(new_session.user_id.map(|id| id.0))
         .bind(new_session.execution_id.0)
         .bind(&new_session.title)
         .bind(new_session.latest_memory_directory_id.map(|value| value.0))
@@ -3220,7 +3226,7 @@ impl PgChatSessionRepository {
     ) -> Result<Vec<ChatSession>> {
         let rows = sqlx::query(
             r#"
-            select id, tenant_id, dataset_id, execution_id, title, latest_memory_directory_id,
+            select id, tenant_id, dataset_id, user_id, execution_id, title, latest_memory_directory_id,
                    latest_dataset_output_id, session_manifest, created_at, updated_at
             from chat_sessions
             where tenant_id = $1 and dataset_id = $2
@@ -3242,7 +3248,7 @@ impl PgChatSessionRepository {
     ) -> Result<Option<ChatSession>> {
         let row = sqlx::query(
             r#"
-            select id, tenant_id, dataset_id, execution_id, title, latest_memory_directory_id,
+            select id, tenant_id, dataset_id, user_id, execution_id, title, latest_memory_directory_id,
                    latest_dataset_output_id, session_manifest, created_at, updated_at
             from chat_sessions
             where tenant_id = $1 and id = $2
@@ -3263,7 +3269,7 @@ impl PgChatSessionRepository {
     ) -> Result<Option<ChatSession>> {
         let row = sqlx::query(
             r#"
-            select id, tenant_id, dataset_id, execution_id, title, latest_memory_directory_id,
+            select id, tenant_id, dataset_id, user_id, execution_id, title, latest_memory_directory_id,
                    latest_dataset_output_id, session_manifest, created_at, updated_at
             from chat_sessions
             where tenant_id = $1 and execution_id = $2
@@ -3294,7 +3300,7 @@ impl PgChatSessionRepository {
                 session_manifest = $5,
                 updated_at = $6
             where tenant_id = $1 and id = $2
-            returning id, tenant_id, dataset_id, execution_id, title, latest_memory_directory_id,
+            returning id, tenant_id, dataset_id, user_id, execution_id, title, latest_memory_directory_id,
                       latest_dataset_output_id, session_manifest, created_at, updated_at
             "#,
         )
@@ -4756,6 +4762,7 @@ fn map_dataset_output_row(row: &sqlx::postgres::PgRow) -> Result<DatasetOutput> 
         tenant_id: TenantId(row.get::<Uuid, _>("tenant_id")),
         execution_id: WorkflowExecutionId(row.get::<Uuid, _>("execution_id")),
         dataset_id: DatasetId(row.get::<Uuid, _>("dataset_id")),
+        owner_user_id: row.get::<Option<Uuid>, _>("owner_user_id").map(UserId),
         prompt: row.get("prompt"),
         output_text: row.get("output_text"),
         memory_directory_id: row
@@ -4887,6 +4894,7 @@ fn map_chat_session_row(row: &sqlx::postgres::PgRow) -> Result<ChatSession> {
         id: ChatSessionId(row.get::<Uuid, _>("id")),
         tenant_id: TenantId(row.get::<Uuid, _>("tenant_id")),
         dataset_id: DatasetId(row.get::<Uuid, _>("dataset_id")),
+        user_id: row.get::<Option<Uuid>, _>("user_id").map(UserId),
         execution_id: WorkflowExecutionId(row.get::<Uuid, _>("execution_id")),
         title: row.get("title"),
         latest_memory_directory_id: row

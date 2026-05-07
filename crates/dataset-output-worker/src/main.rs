@@ -4,12 +4,15 @@ use dataset_output_worker::{
     dataset_runtime_error_message, DatasetOutputGenerator, DatasetOutputJob,
     PlaceholderDatasetOutputGenerator,
 };
-use domain_model::{ChatSessionId, DocumentLifecycle, MemoryDirectoryId, RetrievalEvidenceId};
+use domain_model::{
+    ChatSessionId, DocumentId, DocumentLifecycle, MemoryDirectoryId, RetrievalEvidenceId, UserId,
+};
 use event_bus::{workflow_task_enqueued_subject, EventBus, EventSubscription};
 use llm_gateway::{
     build_provider_from_env, LlmProviderError, LlmRuntimeMetadata, LlmToolCall, LlmToolCallStatus,
 };
 use prompt_registry::bootstrap_default_prompt_registry;
+use std::collections::HashSet;
 use storage::{
     LlmInvocationRecordInput, NewDatasetOutput, PgStorage, ToolExecutionRecordInput,
     DEFAULT_LOCAL_DATABASE_URL,
@@ -154,12 +157,17 @@ async fn process_task(
         .filter(|value| !value.is_empty())
         .ok_or_else(|| anyhow!("workflow execution {} missing prompt", execution.id))?
         .to_string();
+    let context_owner_user_id = context_uuid(&execution.context, "owner_user_id").map(UserId);
+    let visible_document_ids =
+        visible_document_ids_for_owner(storage, task.tenant_id, dataset_id, context_owner_user_id)
+            .await?;
     let indexed_documents = storage
         .documents()
         .list_by_dataset(task.tenant_id, dataset_id)
         .await?
         .into_iter()
         .filter(|document| document.lifecycle == DocumentLifecycle::Indexed)
+        .filter(|document| visible_document_ids.contains(&document.id))
         .count();
     let bound_memory_directory_id =
         context_uuid(&execution.context, "memory_directory_id").map(MemoryDirectoryId);
@@ -172,8 +180,14 @@ async fn process_task(
             .into_iter()
             .map(RetrievalEvidenceId)
             .collect::<Vec<_>>();
-    let (retrieval_search_evidence_ids, retrieval_search_tool_call) =
-        run_retrieval_search_tool(storage, task.tenant_id, dataset_id, &prompt).await;
+    let (retrieval_search_evidence_ids, retrieval_search_tool_call) = run_retrieval_search_tool(
+        storage,
+        task.tenant_id,
+        dataset_id,
+        &prompt,
+        context_owner_user_id,
+    )
+    .await;
     let selected_retrieval_evidence_ids = if bound_retrieval_evidence_ids.is_empty() {
         retrieval_search_evidence_ids
     } else {
@@ -218,6 +232,10 @@ async fn process_task(
         }
         None => None,
     };
+    let owner_user_id = bound_chat_session
+        .as_ref()
+        .and_then(|session| session.user_id)
+        .or(context_owner_user_id);
     let retrieval_evidences = if selected_retrieval_evidence_ids.is_empty() {
         Vec::new()
     } else {
@@ -225,6 +243,9 @@ async fn process_task(
             .retrieval_evidences()
             .list_by_ids(task.tenant_id, &selected_retrieval_evidence_ids)
             .await?
+            .into_iter()
+            .filter(|evidence| visible_document_ids.contains(&evidence.document_id))
+            .collect()
     };
 
     let process_result: std::result::Result<(), DatasetOutputTaskError> = async {
@@ -269,6 +290,7 @@ async fn process_task(
                 &NewDatasetOutput {
                     execution_id: task.execution_id,
                     dataset_id,
+                    owner_user_id,
                     prompt: prompt.clone(),
                     output_text: outcome.output_text.clone(),
                     memory_directory_id: bound_memory_directory
@@ -413,23 +435,43 @@ async fn process_task(
     Ok(())
 }
 
+async fn visible_document_ids_for_owner(
+    storage: &PgStorage,
+    tenant_id: domain_model::TenantId,
+    dataset_id: domain_model::DatasetId,
+    current_user_id: Option<UserId>,
+) -> Result<HashSet<DocumentId>> {
+    Ok(storage
+        .documents()
+        .list_by_dataset(tenant_id, dataset_id)
+        .await?
+        .into_iter()
+        .filter(|document| {
+            document.owner_user_id.is_none() || document.owner_user_id == current_user_id
+        })
+        .map(|document| document.id)
+        .collect())
+}
+
 async fn run_retrieval_search_tool(
     storage: &PgStorage,
     tenant_id: domain_model::TenantId,
     dataset_id: domain_model::DatasetId,
     prompt: &str,
+    current_user_id: Option<UserId>,
 ) -> (Vec<RetrievalEvidenceId>, LlmToolCall) {
     let arguments = serde_json::json!({
         "dataset_id": dataset_id,
         "query": prompt,
         "limit": RETRIEVAL_SEARCH_LIMIT,
     });
-    match platform_api::search_dataset_retrieval(
+    match platform_api::search_dataset_retrieval_for_user(
         storage.clone(),
         tenant_id,
         dataset_id,
         prompt.to_string(),
         Some(RETRIEVAL_SEARCH_LIMIT),
+        current_user_id,
     )
     .await
     {

@@ -3,7 +3,7 @@ use chrono::Utc;
 use contracts::{CreateStaticPageImageJobRequest, CreateStaticPageRenderRequest};
 use domain_model::{
     AssistantRunId, Document, DocumentChunk, DocumentId, SecretBindingId, StaticPageDraftId,
-    StaticPageImageJobId, WorkflowEventId, WorkflowEventRecord, WorkflowExecution,
+    StaticPageImageJobId, UserId, WorkflowEventId, WorkflowEventRecord, WorkflowExecution,
     WorkflowExecutionId, WorkflowKind,
 };
 use serde_json::{json, Value};
@@ -14,7 +14,7 @@ use crate::{
     append_static_page_draft_run_event, append_static_page_operations_metadata,
     apply_static_page_operations_to_payload, build_assistant_run_evidence_state,
     ensure_react_requested_dataset_is_selected, ensure_scope_requests_conversation_memory,
-    load_visible_document, react_static_page_operations_from_arguments,
+    load_visible_document_for_user, react_static_page_operations_from_arguments,
     status_from_static_page_operations, status_from_static_page_payload,
     summarize_static_page_operations, ApiError, AppState,
 };
@@ -42,12 +42,19 @@ pub(crate) async fn execute_assistant_run_react_action(
     prompt: &str,
     local_thread_id: Option<&str>,
     active_secret_binding_ids: &[SecretBindingId],
+    current_user_id: Option<UserId>,
 ) -> std::result::Result<AssistantRunReactToolResult, ApiError> {
     match action.action_type {
         AssistantRunReactActionType::FinalAnswer => Ok(final_answer_result(action)),
         AssistantRunReactActionType::ReadDocumentDetail => {
-            read_document_detail_result(state, action, selected_scope, active_secret_binding_ids)
-                .await
+            read_document_detail_result(
+                state,
+                action,
+                selected_scope,
+                active_secret_binding_ids,
+                current_user_id,
+            )
+            .await
         }
         AssistantRunReactActionType::RetrieveEvidence => {
             ensure_react_requested_dataset_is_selected(&action.arguments, selected_scope)?;
@@ -64,6 +71,7 @@ pub(crate) async fn execute_assistant_run_react_action(
                 query,
                 local_thread_id,
                 active_secret_binding_ids,
+                current_user_id,
             )
             .await?;
             let supplied_count = crate::assistant_run_evidence_supplied_count(&refreshed);
@@ -97,6 +105,7 @@ pub(crate) async fn execute_assistant_run_react_action(
                 prompt,
                 local_thread_id,
                 active_secret_binding_ids,
+                current_user_id,
             )
             .await?;
             let memory_count = refreshed
@@ -1107,6 +1116,7 @@ async fn read_document_detail_result(
     action: &AssistantRunNextAction,
     selected_scope: &Value,
     active_secret_binding_ids: &[SecretBindingId],
+    current_user_id: Option<UserId>,
 ) -> std::result::Result<AssistantRunReactToolResult, ApiError> {
     let requested_document_ids = requested_document_ids_from_action(action, selected_scope);
     if requested_document_ids.is_empty() {
@@ -1123,14 +1133,20 @@ async fn read_document_detail_result(
         .into_iter()
         .take(REACT_READ_DOCUMENT_MAX_DOCUMENTS)
     {
-        let document =
-            match load_visible_document(state, document_id, active_secret_binding_ids).await {
-                Ok(document) => document,
-                Err(_) => {
-                    denied.push(format!("document:{document_id}"));
-                    continue;
-                }
-            };
+        let document = match load_visible_document_for_user(
+            state,
+            document_id,
+            active_secret_binding_ids,
+            current_user_id,
+        )
+        .await
+        {
+            Ok(document) => document,
+            Err(_) => {
+                denied.push(format!("document:{document_id}"));
+                continue;
+            }
+        };
 
         if !document_allowed_by_selected_scope(
             &document,

@@ -22,7 +22,14 @@
 - OTP rate-limit first pass completed: email challenge creation is window-limited by normalized email plus purpose and by device fingerprint plus purpose; limited requests return `429` before creating a challenge or sending email, and write a failed audit event with whitelisted metadata.
 - Static-page access hardening first pass completed: draft list/read/update/intent endpoints, image preview jobs, preview confirmation, and final render output listing now enforce draft owner visibility. Unowned legacy drafts remain visible for local-dev compatibility; owned drafts require the matching session user; image jobs and render outputs inherit the draft scope. ReAct internal tools keep the current-run/current-draft guard and call lower-level helpers after that guard.
 - Report access hardening first pass completed: report plan list/read/subresource routes now enforce `report_plans.owner_user_id` in addition to dataset visibility. Published report list/detail routes inherit visibility from the owning report plan, so public datasets no longer expose another user's owned report plan or published report through the shelf/detail APIs.
-- Remaining hardening: document/published artifact owner backfill beyond dataset/report-plan ownership, sharing grants/team membership, robot ownership, stronger recovery challenge policy, external audit viewer/admin policy, and true encryption recovery semantics if required later.
+- Account artifact hardening second pass completed: `dataset_outputs.owner_user_id` and `chat_sessions.user_id` are now persisted, selected in storage repositories, carried through API views, and used to filter dataset-output lists, output evidence, chat session lists, message reads, follow-up turns, report-entry handoff, and workflow-linked runtime details.
+- Account artifact schema hardening uses a new `0005_account_artifact_hardening.sql` migration instead of mutating already-applied `0004`, so existing databases can pick up the new dataset-output/chat-session ownership columns.
+- Document/RAG hardening second pass completed: document list/detail/chunk/evidence/ingest/compare routes now enforce `documents.owner_user_id` in addition to dataset visibility; dataset-level retrieval evidence, retrieval search, assistant-run evidence supply, ReAct document reads, and dataset-output hydration filter evidence through the visible document set.
+- Assistant run and conversation-memory hardening second pass completed: assistant run read/event/continue/static-page-draft entrypoints now require matching `assistant_runs.user_id`; conversation memory list and assistant-run recall candidates filter by `conversation_memory_items.user_id`; ReAct tools pass the active user into retrieval and document-read operations.
+- Workflow hardening second pass completed: workflow execution list/read/events/tasks/runtime-inspect/LLM calls/tool calls/start/retry/signal routes now resolve the linked dataset output, chat session, report plan, static-page draft, assistant run, and dataset before exposing or mutating workflow state. Invisible linked objects are returned as not found.
+- Dataset-output worker hardening second pass completed: generated outputs inherit the workflow/chat owner; retrieval search and selected evidence are filtered to documents visible to that owner so public datasets cannot accidentally feed another user's private uploaded document into a generated output.
+- Current validation: `cargo check -p platform-api -p dataset-output-worker`, `cargo test -p platform-api -p dataset-output-worker --no-run`, targeted platform-api owner/memory tests, and dataset-output-worker unit tests pass. Full `cargo test -p platform-api --lib` still exceeds the 5-minute local window because several integration-style tests touch local PostgreSQL/runtime flows; use targeted tests or a longer CI window for full execution.
+- Remaining hardening: historical memory-directory aggregates do not yet carry owner/document-scope metadata; sharing grants/team membership are not implemented; robot ownership is still future work; published static-page/report sharing policy remains owner-only plus legacy unowned compatibility; stronger recovery challenge policy, external audit viewer/admin policy, and true encryption recovery semantics remain later tasks.
 
 ---
 
@@ -175,7 +182,9 @@ First pass:
 
 - `datasets.owner_user_id`
 - `documents.owner_user_id`
+- `dataset_outputs.owner_user_id`
 - `assistant_runs.user_id`
+- `chat_sessions.user_id`
 - `conversation_memory_items.user_id`
 - `report_plans.owner_user_id`
 - `static_page_drafts.owner_user_id`

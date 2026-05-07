@@ -487,7 +487,7 @@ pub async fn apply_chat_session_report_entry_update(
         tenant_id,
         EventBus::Disabled,
     );
-    apply_chat_session_report_entry_update_with_state(&state, session_id, request).await
+    apply_chat_session_report_entry_update_with_state(&state, session_id, None, request).await
 }
 
 pub async fn request_report_render(
@@ -502,7 +502,7 @@ pub async fn request_report_render(
         tenant_id,
         EventBus::Disabled,
     );
-    create_report_render_response(&state, plan_id, request, &[]).await
+    create_report_render_response(&state, plan_id, request, &[], None).await
 }
 
 pub async fn request_memory_directory_refresh(
@@ -516,7 +516,7 @@ pub async fn request_memory_directory_refresh(
         tenant_id,
         EventBus::Disabled,
     );
-    create_memory_directory_refresh_response(&state, dataset_id, &[]).await
+    create_memory_directory_refresh_response(&state, dataset_id, &[], None).await
 }
 
 pub async fn load_document_detail(
@@ -530,7 +530,7 @@ pub async fn load_document_detail(
         tenant_id,
         EventBus::Disabled,
     );
-    load_document_detail_with_state(&state, document_id, &[]).await
+    load_document_detail_with_state(&state, document_id, &[], None).await
 }
 
 pub async fn compare_documents(
@@ -544,7 +544,7 @@ pub async fn compare_documents(
         tenant_id,
         EventBus::Disabled,
     );
-    compare_documents_with_state(&state, request, &[]).await
+    compare_documents_with_state(&state, request, &[], None).await
 }
 
 pub async fn search_dataset_retrieval(
@@ -554,13 +554,25 @@ pub async fn search_dataset_retrieval(
     query: String,
     limit: Option<usize>,
 ) -> std::result::Result<RetrievalSearchResponse, ApiError> {
+    search_dataset_retrieval_for_user(storage, tenant_id, dataset_id, query, limit, None).await
+}
+
+pub async fn search_dataset_retrieval_for_user(
+    storage: PgStorage,
+    tenant_id: TenantId,
+    dataset_id: DatasetId,
+    query: String,
+    limit: Option<usize>,
+    current_user_id: Option<UserId>,
+) -> std::result::Result<RetrievalSearchResponse, ApiError> {
     let state = AppState::new(
         storage,
         workflow_definitions::catalog(),
         tenant_id,
         EventBus::Disabled,
     );
-    search_dataset_retrieval_with_state(&state, dataset_id, &query, limit, &[]).await
+    search_dataset_retrieval_with_state(&state, dataset_id, &query, limit, &[], current_user_id)
+        .await
 }
 
 pub async fn request_workflow_retry(
@@ -589,7 +601,7 @@ pub async fn request_report_plan_continue(
         tenant_id,
         EventBus::Disabled,
     );
-    continue_report_plan_response(&state, plan_id, &[]).await
+    continue_report_plan_response(&state, plan_id, &[], None).await
 }
 
 pub async fn request_report_publish(
@@ -604,7 +616,7 @@ pub async fn request_report_publish(
         tenant_id,
         EventBus::Disabled,
     );
-    publish_report_response(&state, plan_id, request, &[]).await
+    publish_report_response(&state, plan_id, request, &[], None).await
 }
 
 pub async fn load_published_report(
@@ -4099,6 +4111,13 @@ fn filter_visible_datasets(
         .collect()
 }
 
+fn owner_user_id_is_visible(
+    owner_user_id: Option<UserId>,
+    current_user_id: Option<UserId>,
+) -> bool {
+    owner_user_id.is_none() || owner_user_id == current_user_id
+}
+
 fn dataset_not_found_error(dataset_id: DatasetId) -> ApiError {
     ApiError::not_found(
         "dataset_not_found",
@@ -4136,14 +4155,6 @@ async fn load_visible_dataset_for_user(
     Ok(dataset)
 }
 
-async fn load_visible_document(
-    state: &AppState,
-    document_id: DocumentId,
-    active_secret_binding_ids: &[SecretBindingId],
-) -> std::result::Result<Document, ApiError> {
-    load_visible_document_for_user(state, document_id, active_secret_binding_ids, None).await
-}
-
 async fn load_visible_document_for_user(
     state: &AppState,
     document_id: DocumentId,
@@ -4169,7 +4180,258 @@ async fn load_visible_document_for_user(
         current_user_id,
     )
     .await?;
+    if !owner_user_id_is_visible(document.owner_user_id, current_user_id) {
+        return Err(ApiError::not_found(
+            "document_not_found",
+            format!("document {} was not found", document_id),
+        ));
+    }
     Ok(document)
+}
+
+async fn visible_document_ids_for_dataset(
+    state: &AppState,
+    dataset_id: DatasetId,
+    current_user_id: Option<UserId>,
+) -> std::result::Result<HashSet<DocumentId>, ApiError> {
+    Ok(state
+        .storage
+        .documents()
+        .list_by_dataset(state.tenant_id, dataset_id)
+        .await
+        .map_err(ApiError::from_storage)?
+        .into_iter()
+        .filter(|document| owner_user_id_is_visible(document.owner_user_id, current_user_id))
+        .map(|document| document.id)
+        .collect())
+}
+
+async fn filter_retrieval_evidences_for_visible_documents(
+    state: &AppState,
+    dataset_id: DatasetId,
+    evidences: Vec<RetrievalEvidence>,
+    current_user_id: Option<UserId>,
+) -> std::result::Result<Vec<RetrievalEvidence>, ApiError> {
+    let visible_document_ids =
+        visible_document_ids_for_dataset(state, dataset_id, current_user_id).await?;
+    Ok(evidences
+        .into_iter()
+        .filter(|evidence| visible_document_ids.contains(&evidence.document_id))
+        .collect())
+}
+
+fn dataset_output_not_found_error(output_id: DatasetOutputId) -> ApiError {
+    ApiError::not_found(
+        "dataset_output_not_found",
+        format!("dataset output {} was not found", output_id),
+    )
+}
+
+async fn load_visible_dataset_output_for_user(
+    state: &AppState,
+    output_id: DatasetOutputId,
+    active_secret_binding_ids: &[SecretBindingId],
+    current_user_id: Option<UserId>,
+) -> std::result::Result<DatasetOutput, ApiError> {
+    let output = state
+        .storage
+        .dataset_outputs()
+        .get_by_id(state.tenant_id, output_id)
+        .await
+        .map_err(ApiError::from_storage)?
+        .ok_or_else(|| dataset_output_not_found_error(output_id))?;
+    load_visible_dataset_for_user(
+        state,
+        output.dataset_id,
+        active_secret_binding_ids,
+        current_user_id,
+    )
+    .await?;
+    if !owner_user_id_is_visible(output.owner_user_id, current_user_id) {
+        return Err(dataset_output_not_found_error(output_id));
+    }
+    Ok(output)
+}
+
+fn chat_session_not_found_error(session_id: ChatSessionId) -> ApiError {
+    ApiError::not_found(
+        "chat_session_not_found",
+        format!("chat session {} was not found", session_id),
+    )
+}
+
+async fn load_visible_chat_session_for_user(
+    state: &AppState,
+    session_id: ChatSessionId,
+    active_secret_binding_ids: &[SecretBindingId],
+    current_user_id: Option<UserId>,
+) -> std::result::Result<ChatSession, ApiError> {
+    let session = state
+        .storage
+        .chat_sessions()
+        .get_by_id(state.tenant_id, session_id)
+        .await
+        .map_err(ApiError::from_storage)?
+        .ok_or_else(|| chat_session_not_found_error(session_id))?;
+    load_visible_dataset_for_user(
+        state,
+        session.dataset_id,
+        active_secret_binding_ids,
+        current_user_id,
+    )
+    .await?;
+    if !owner_user_id_is_visible(session.user_id, current_user_id) {
+        return Err(chat_session_not_found_error(session_id));
+    }
+    Ok(session)
+}
+
+fn assistant_run_not_found_error(run_id: AssistantRunId) -> ApiError {
+    ApiError::not_found(
+        "assistant_run_not_found",
+        format!("assistant run {} was not found", run_id),
+    )
+}
+
+async fn load_visible_assistant_run_for_user(
+    state: &AppState,
+    run_id: AssistantRunId,
+    current_user_id: Option<UserId>,
+) -> std::result::Result<AssistantRun, ApiError> {
+    let run = state
+        .storage
+        .assistant_runs()
+        .get_by_id(state.tenant_id, run_id)
+        .await
+        .map_err(ApiError::from_storage)?
+        .ok_or_else(|| assistant_run_not_found_error(run_id))?;
+    if !owner_user_id_is_visible(run.user_id, current_user_id) {
+        return Err(assistant_run_not_found_error(run_id));
+    }
+    Ok(run)
+}
+
+fn workflow_execution_not_found_error(execution_id: WorkflowExecutionId) -> ApiError {
+    ApiError::not_found(
+        "workflow_execution_not_found",
+        format!("workflow execution {} was not found", execution_id),
+    )
+}
+
+fn workflow_context_uuid(context: &Value, key: &str) -> Option<Uuid> {
+    context
+        .get(key)
+        .and_then(Value::as_str)
+        .and_then(|raw| Uuid::parse_str(raw).ok())
+}
+
+async fn ensure_workflow_execution_visible_for_user(
+    state: &AppState,
+    execution: &WorkflowExecution,
+    active_secret_binding_ids: &[SecretBindingId],
+    current_user_id: Option<UserId>,
+) -> std::result::Result<(), ApiError> {
+    if let Some(output) = state
+        .storage
+        .dataset_outputs()
+        .get_by_execution_id(state.tenant_id, execution.id)
+        .await
+        .map_err(ApiError::from_storage)?
+    {
+        load_visible_dataset_output_for_user(
+            state,
+            output.id,
+            active_secret_binding_ids,
+            current_user_id,
+        )
+        .await?;
+    }
+
+    if let Some(session) = state
+        .storage
+        .chat_sessions()
+        .get_by_execution_id(state.tenant_id, execution.id)
+        .await
+        .map_err(ApiError::from_storage)?
+    {
+        load_visible_chat_session_for_user(
+            state,
+            session.id,
+            active_secret_binding_ids,
+            current_user_id,
+        )
+        .await?;
+    }
+
+    if let Some(plan_id) = execution.report_plan_id {
+        load_visible_report_plan_for_user(
+            state,
+            plan_id,
+            active_secret_binding_ids,
+            current_user_id,
+        )
+        .await?;
+    }
+
+    if let Some(raw_id) = workflow_context_uuid(&execution.context, "static_page_draft_id") {
+        load_visible_static_page_draft(state, StaticPageDraftId(raw_id), current_user_id).await?;
+    }
+
+    if let Some(raw_id) = workflow_context_uuid(&execution.context, "assistant_run_id") {
+        load_visible_assistant_run_for_user(state, AssistantRunId(raw_id), current_user_id).await?;
+    }
+
+    if let Some(raw_id) = workflow_context_uuid(&execution.context, "chat_session_id") {
+        load_visible_chat_session_for_user(
+            state,
+            ChatSessionId(raw_id),
+            active_secret_binding_ids,
+            current_user_id,
+        )
+        .await?;
+    }
+
+    if let Some(dataset_id) = execution.dataset_id {
+        load_visible_dataset_for_user(
+            state,
+            dataset_id,
+            active_secret_binding_ids,
+            current_user_id,
+        )
+        .await?;
+    }
+
+    Ok(())
+}
+
+async fn load_visible_workflow_execution_for_user(
+    state: &AppState,
+    execution_id: WorkflowExecutionId,
+    active_secret_binding_ids: &[SecretBindingId],
+    current_user_id: Option<UserId>,
+) -> std::result::Result<WorkflowExecution, ApiError> {
+    let execution = state
+        .storage
+        .workflow_executions()
+        .get_by_id(state.tenant_id, execution_id)
+        .await
+        .map_err(ApiError::from_storage)?
+        .ok_or_else(|| workflow_execution_not_found_error(execution_id))?;
+    ensure_workflow_execution_visible_for_user(
+        state,
+        &execution,
+        active_secret_binding_ids,
+        current_user_id,
+    )
+    .await
+    .map_err(|error| {
+        if error.status == StatusCode::NOT_FOUND {
+            workflow_execution_not_found_error(execution_id)
+        } else {
+            error
+        }
+    })?;
+    Ok(execution)
 }
 
 async fn load_visible_report_plan(
@@ -4224,7 +4486,7 @@ async fn load_report_plan_with_visible_dataset_for_user(
 }
 
 fn report_owner_is_visible(owner_user_id: Option<UserId>, current_user_id: Option<UserId>) -> bool {
-    owner_user_id.is_none() || owner_user_id == current_user_id
+    owner_user_id_is_visible(owner_user_id, current_user_id)
 }
 
 fn report_plan_not_found_error(plan_id: ReportPlanId) -> ApiError {
@@ -4490,7 +4752,14 @@ async fn list_memory_directories(
 ) -> std::result::Result<Json<Vec<MemoryDirectoryView>>, ApiError> {
     let dataset_id = parse_dataset_id(&dataset_id)?;
     let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
-    load_visible_dataset(&state, dataset_id, &active_secret_binding_ids).await?;
+    let current_user_id = current_auth_user_id(&state, &headers).await?;
+    load_visible_dataset_for_user(
+        &state,
+        dataset_id,
+        &active_secret_binding_ids,
+        current_user_id,
+    )
+    .await?;
 
     let directories = state
         .storage
@@ -4514,7 +4783,14 @@ async fn list_dataset_retrieval_evidences(
 ) -> std::result::Result<Json<Vec<RetrievalEvidenceView>>, ApiError> {
     let dataset_id = parse_dataset_id(&dataset_id)?;
     let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
-    load_visible_dataset(&state, dataset_id, &active_secret_binding_ids).await?;
+    let current_user_id = current_auth_user_id(&state, &headers).await?;
+    load_visible_dataset_for_user(
+        &state,
+        dataset_id,
+        &active_secret_binding_ids,
+        current_user_id,
+    )
+    .await?;
 
     let mut evidences = state
         .storage
@@ -4522,6 +4798,13 @@ async fn list_dataset_retrieval_evidences(
         .list_latest_by_dataset(state.tenant_id, dataset_id, 100)
         .await
         .map_err(ApiError::from_storage)?;
+    evidences = filter_retrieval_evidences_for_visible_documents(
+        &state,
+        dataset_id,
+        evidences,
+        current_user_id,
+    )
+    .await?;
     sort_retrieval_evidences_by_relevance(&mut evidences);
 
     Ok(Json(
@@ -4538,10 +4821,17 @@ async fn search_dataset_retrieval_with_state(
     query: &str,
     limit: Option<usize>,
     active_secret_binding_ids: &[SecretBindingId],
+    current_user_id: Option<UserId>,
 ) -> std::result::Result<RetrievalSearchResponse, ApiError> {
     validate_required("query", query)?;
 
-    load_visible_dataset(state, dataset_id, active_secret_binding_ids).await?;
+    load_visible_dataset_for_user(
+        state,
+        dataset_id,
+        active_secret_binding_ids,
+        current_user_id,
+    )
+    .await?;
 
     let limit = normalize_retrieval_search_limit(limit);
     let evidences = state
@@ -4554,6 +4844,13 @@ async fn search_dataset_retrieval_with_state(
         )
         .await
         .map_err(ApiError::from_storage)?;
+    let evidences = filter_retrieval_evidences_for_visible_documents(
+        state,
+        dataset_id,
+        evidences,
+        current_user_id,
+    )
+    .await?;
 
     Ok(RetrievalSearchResponse {
         hits: search_retrieval_hits(&evidences, query, limit),
@@ -4567,9 +4864,14 @@ async fn create_memory_directory_refresh(
 ) -> std::result::Result<(StatusCode, Json<CreateMemoryDirectoryRefreshResponse>), ApiError> {
     let dataset_id = parse_dataset_id(&dataset_id)?;
     let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
-    let response =
-        create_memory_directory_refresh_response(&state, dataset_id, &active_secret_binding_ids)
-            .await?;
+    let current_user_id = current_auth_user_id(&state, &headers).await?;
+    let response = create_memory_directory_refresh_response(
+        &state,
+        dataset_id,
+        &active_secret_binding_ids,
+        current_user_id,
+    )
+    .await?;
 
     Ok((StatusCode::CREATED, Json(response)))
 }
@@ -4578,8 +4880,15 @@ async fn create_memory_directory_refresh_response(
     state: &AppState,
     dataset_id: DatasetId,
     active_secret_binding_ids: &[SecretBindingId],
+    current_user_id: Option<UserId>,
 ) -> std::result::Result<CreateMemoryDirectoryRefreshResponse, ApiError> {
-    let dataset = load_visible_dataset(state, dataset_id, active_secret_binding_ids).await?;
+    let dataset = load_visible_dataset_for_user(
+        state,
+        dataset_id,
+        active_secret_binding_ids,
+        current_user_id,
+    )
+    .await?;
 
     let execution = build_initial_memory_directory_execution(&state, dataset.id)?;
     let initial_event = build_initial_memory_directory_event(&execution);
@@ -4602,7 +4911,14 @@ async fn list_dataset_outputs(
 ) -> std::result::Result<Json<Vec<DatasetOutputView>>, ApiError> {
     let dataset_id = parse_dataset_id(&dataset_id)?;
     let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
-    load_visible_dataset(&state, dataset_id, &active_secret_binding_ids).await?;
+    let current_user_id = current_auth_user_id(&state, &headers).await?;
+    load_visible_dataset_for_user(
+        &state,
+        dataset_id,
+        &active_secret_binding_ids,
+        current_user_id,
+    )
+    .await?;
 
     let outputs = state
         .storage
@@ -4613,6 +4929,9 @@ async fn list_dataset_outputs(
 
     let mut views = Vec::with_capacity(outputs.len());
     for output in outputs {
+        if !owner_user_id_is_visible(output.owner_user_id, current_user_id) {
+            continue;
+        }
         views.push(hydrate_dataset_output_view(&state, output).await?);
     }
 
@@ -4629,21 +4948,23 @@ async fn create_dataset_output(
     validate_required("prompt", &request.prompt)?;
 
     let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
-    let dataset = load_visible_dataset(&state, dataset_id, &active_secret_binding_ids).await?;
+    let current_user_id = current_auth_user_id(&state, &headers).await?;
+    let dataset = load_visible_dataset_for_user(
+        &state,
+        dataset_id,
+        &active_secret_binding_ids,
+        current_user_id,
+    )
+    .await?;
     let bound_chat_session = match request.chat_session_id {
         Some(chat_session_id) => {
-            let session = state
-                .storage
-                .chat_sessions()
-                .get_by_id(state.tenant_id, chat_session_id)
-                .await
-                .map_err(ApiError::from_storage)?
-                .ok_or_else(|| {
-                    ApiError::not_found(
-                        "chat_session_not_found",
-                        format!("chat session {} was not found", chat_session_id),
-                    )
-                })?;
+            let session = load_visible_chat_session_for_user(
+                &state,
+                chat_session_id,
+                &active_secret_binding_ids,
+                current_user_id,
+            )
+            .await?;
             if session.dataset_id != dataset.id {
                 return Err(ApiError::bad_request(
                     "chat_session_dataset_mismatch",
@@ -4675,6 +4996,13 @@ async fn create_dataset_output(
         )
         .await
         .map_err(ApiError::from_storage)?;
+    let bound_retrieval_evidences = filter_retrieval_evidences_for_visible_documents(
+        &state,
+        dataset.id,
+        bound_retrieval_evidences,
+        current_user_id,
+    )
+    .await?;
     let bound_retrieval_evidence_ids = select_retrieval_evidence_ids_for_prompt(
         &bound_retrieval_evidences,
         request.prompt.trim(),
@@ -4686,6 +5014,7 @@ async fn create_dataset_output(
         dataset.id,
         &request.prompt,
         bound_chat_session.as_ref().map(|session| session.id),
+        current_user_id,
         latest_memory_directory.as_ref(),
         &bound_retrieval_evidence_ids,
     )?;
@@ -4711,21 +5040,19 @@ async fn create_dataset_output(
 
 async fn list_dataset_output_retrieval_evidences(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(output_id): Path<String>,
 ) -> std::result::Result<Json<Vec<RetrievalEvidenceView>>, ApiError> {
     let output_id = parse_dataset_output_id(&output_id)?;
-    let output = state
-        .storage
-        .dataset_outputs()
-        .get_by_id(state.tenant_id, output_id)
-        .await
-        .map_err(ApiError::from_storage)?;
-    let Some(output) = output else {
-        return Err(ApiError::not_found(
-            "dataset_output_not_found",
-            format!("dataset output {} was not found", output_id),
-        ));
-    };
+    let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
+    let current_user_id = current_auth_user_id(&state, &headers).await?;
+    let output = load_visible_dataset_output_for_user(
+        &state,
+        output_id,
+        &active_secret_binding_ids,
+        current_user_id,
+    )
+    .await?;
 
     let evidences = state
         .storage
@@ -4733,6 +5060,13 @@ async fn list_dataset_output_retrieval_evidences(
         .list_by_ids(state.tenant_id, &output.retrieval_evidence_ids)
         .await
         .map_err(ApiError::from_storage)?;
+    let evidences = filter_retrieval_evidences_for_visible_documents(
+        &state,
+        output.dataset_id,
+        evidences,
+        current_user_id,
+    )
+    .await?;
 
     Ok(Json(
         evidences
@@ -4749,7 +5083,14 @@ async fn list_chat_sessions(
 ) -> std::result::Result<Json<Vec<ChatSessionView>>, ApiError> {
     let dataset_id = parse_dataset_id(&dataset_id)?;
     let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
-    load_visible_dataset(&state, dataset_id, &active_secret_binding_ids).await?;
+    let current_user_id = current_auth_user_id(&state, &headers).await?;
+    load_visible_dataset_for_user(
+        &state,
+        dataset_id,
+        &active_secret_binding_ids,
+        current_user_id,
+    )
+    .await?;
 
     let sessions = state
         .storage
@@ -4760,6 +5101,9 @@ async fn list_chat_sessions(
 
     let mut views = Vec::with_capacity(sessions.len());
     for session in sessions {
+        if !owner_user_id_is_visible(session.user_id, current_user_id) {
+            continue;
+        }
         views.push(hydrate_chat_session_view(&state, session).await?);
     }
 
@@ -4776,7 +5120,14 @@ async fn create_chat_session(
     validate_required("prompt", &request.prompt)?;
 
     let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
-    let dataset = load_visible_dataset(&state, dataset_id, &active_secret_binding_ids).await?;
+    let current_user_id = current_auth_user_id(&state, &headers).await?;
+    let dataset = load_visible_dataset_for_user(
+        &state,
+        dataset_id,
+        &active_secret_binding_ids,
+        current_user_id,
+    )
+    .await?;
     let latest_memory_directory = state
         .storage
         .memory_directories()
@@ -4792,6 +5143,7 @@ async fn create_chat_session(
         .await
         .map_err(ApiError::from_storage)?
         .into_iter()
+        .filter(|entry| owner_user_id_is_visible(entry.owner_user_id, current_user_id))
         .next();
     let chat_session_id = ChatSessionId::new();
     let execution = build_initial_chat_session_execution(
@@ -4799,6 +5151,7 @@ async fn create_chat_session(
         dataset.id,
         chat_session_id,
         &request.prompt,
+        current_user_id,
         latest_memory_directory.as_ref(),
         latest_dataset_output.as_ref().map(|entry| entry.id),
     )?;
@@ -4832,6 +5185,7 @@ async fn create_chat_session(
                 id: chat_session_id,
                 execution_id: execution.id,
                 dataset_id: dataset.id,
+                user_id: current_user_id,
                 title: derive_chat_session_title(&request.prompt),
                 latest_memory_directory_id: latest_memory_directory.as_ref().map(|entry| entry.id),
                 latest_dataset_output_id: latest_dataset_output.as_ref().map(|entry| entry.id),
@@ -4900,24 +5254,22 @@ async fn create_chat_session(
 
 async fn append_chat_session_turn(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(session_id): Path<String>,
     Json(request): Json<AppendChatSessionTurnRequest>,
 ) -> std::result::Result<(StatusCode, Json<AppendChatSessionTurnResponse>), ApiError> {
     let session_id = parse_chat_session_id(&session_id)?;
     validate_required("prompt", &request.prompt)?;
 
-    let session = state
-        .storage
-        .chat_sessions()
-        .get_by_id(state.tenant_id, session_id)
-        .await
-        .map_err(ApiError::from_storage)?
-        .ok_or_else(|| {
-            ApiError::not_found(
-                "chat_session_not_found",
-                format!("chat session {} was not found", session_id),
-            )
-        })?;
+    let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
+    let current_user_id = current_auth_user_id(&state, &headers).await?;
+    let session = load_visible_chat_session_for_user(
+        &state,
+        session_id,
+        &active_secret_binding_ids,
+        current_user_id,
+    )
+    .await?;
     if chat_session_has_in_progress_turn(&session.session_manifest) {
         return Err(ApiError::bad_request(
             "chat_session_turn_in_progress",
@@ -4940,6 +5292,7 @@ async fn append_chat_session_turn(
         .await
         .map_err(ApiError::from_storage)?
         .into_iter()
+        .filter(|entry| owner_user_id_is_visible(entry.owner_user_id, current_user_id))
         .next();
     let existing_messages = state
         .storage
@@ -4957,6 +5310,7 @@ async fn append_chat_session_turn(
         session.dataset_id,
         session.id,
         &request.prompt,
+        current_user_id,
         latest_memory_directory.as_ref(),
         latest_dataset_output.as_ref().map(|entry| entry.id),
     )?;
@@ -5061,13 +5415,14 @@ async fn create_assistant_run(
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty());
     let conversation_memory_available = if let Some(local_thread_id) = local_thread_id.as_ref() {
-        !state
+        state
             .storage
             .conversation_memory_items()
             .list_by_local_thread(state.tenant_id, local_thread_id, None, 1)
             .await
             .map_err(ApiError::from_storage)?
-            .is_empty()
+            .into_iter()
+            .any(|item| owner_user_id_is_visible(item.user_id, current_user_id))
     } else {
         false
     };
@@ -5086,6 +5441,7 @@ async fn create_assistant_run(
         &request.prompt,
         local_thread_id.as_deref(),
         &active_secret_binding_ids,
+        current_user_id,
     )
     .await?;
 
@@ -5125,6 +5481,7 @@ async fn create_assistant_run(
                 evidence_state.clone(),
                 local_thread_id.as_deref(),
                 &active_secret_binding_ids,
+                current_user_id,
                 &react_runtime.mode,
                 &react_runtime.provider,
                 &react_runtime.model,
@@ -5318,21 +5675,12 @@ async fn create_assistant_run(
 
 async fn get_assistant_run(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(run_id): Path<String>,
 ) -> std::result::Result<Json<AssistantRunDetailView>, ApiError> {
     let run_id = parse_assistant_run_id(&run_id)?;
-    let run = state
-        .storage
-        .assistant_runs()
-        .get_by_id(state.tenant_id, run_id)
-        .await
-        .map_err(ApiError::from_storage)?
-        .ok_or_else(|| {
-            ApiError::not_found(
-                "assistant_run_not_found",
-                format!("assistant run {} was not found", run_id),
-            )
-        })?;
+    let current_user_id = current_auth_user_id(&state, &headers).await?;
+    let run = load_visible_assistant_run_for_user(&state, run_id, current_user_id).await?;
     let events = state
         .storage
         .assistant_runs()
@@ -5351,23 +5699,14 @@ async fn get_assistant_run(
 
 async fn append_assistant_run_event(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(run_id): Path<String>,
     Json(request): Json<AppendAssistantRunEventRequest>,
 ) -> std::result::Result<(StatusCode, Json<AppendAssistantRunEventResponse>), ApiError> {
     let run_id = parse_assistant_run_id(&run_id)?;
     validate_required("event_name", &request.event_name)?;
-    let run = state
-        .storage
-        .assistant_runs()
-        .get_by_id(state.tenant_id, run_id)
-        .await
-        .map_err(ApiError::from_storage)?
-        .ok_or_else(|| {
-            ApiError::not_found(
-                "assistant_run_not_found",
-                format!("assistant run {} was not found", run_id),
-            )
-        })?;
+    let current_user_id = current_auth_user_id(&state, &headers).await?;
+    let run = load_visible_assistant_run_for_user(&state, run_id, current_user_id).await?;
     let event = state
         .storage
         .assistant_runs()
@@ -5400,18 +5739,8 @@ async fn continue_assistant_run(
 ) -> std::result::Result<(StatusCode, Json<ContinueAssistantRunResponse>), ApiError> {
     let run_id = parse_assistant_run_id(&run_id)?;
     let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
-    let run = state
-        .storage
-        .assistant_runs()
-        .get_by_id(state.tenant_id, run_id)
-        .await
-        .map_err(ApiError::from_storage)?
-        .ok_or_else(|| {
-            ApiError::not_found(
-                "assistant_run_not_found",
-                format!("assistant run {} was not found", run_id),
-            )
-        })?;
+    let current_user_id = current_auth_user_id(&state, &headers).await?;
+    let run = load_visible_assistant_run_for_user(&state, run_id, current_user_id).await?;
 
     let continue_prompt = request
         .prompt
@@ -5458,6 +5787,7 @@ async fn continue_assistant_run(
                 max_steps,
                 &mut evidence_state,
                 &active_secret_binding_ids,
+                current_user_id,
                 &react_runtime.mode,
                 &react_runtime.provider,
                 &react_runtime.model,
@@ -5676,25 +6006,8 @@ async fn create_static_page_draft_for_assistant_run(
     Json(request): Json<CreateStaticPageDraftRequest>,
 ) -> std::result::Result<(StatusCode, Json<CreateStaticPageDraftResponse>), ApiError> {
     let run_id = parse_assistant_run_id(&run_id)?;
-    let run = state
-        .storage
-        .assistant_runs()
-        .get_by_id(state.tenant_id, run_id)
-        .await
-        .map_err(ApiError::from_storage)?
-        .ok_or_else(|| {
-            ApiError::not_found(
-                "assistant_run_not_found",
-                format!("assistant run {} was not found", run_id),
-            )
-        })?;
     let current_user_id = current_auth_user_id(&state, &headers).await?;
-    if run.user_id.is_some() && run.user_id != current_user_id {
-        return Err(ApiError::not_found(
-            "assistant_run_not_found",
-            format!("assistant run {} was not found", run_id),
-        ));
-    }
+    let run = load_visible_assistant_run_for_user(&state, run_id, current_user_id).await?;
     let owner_user_id = run.user_id.or(current_user_id);
     let prompt = request
         .prompt
@@ -6451,8 +6764,10 @@ async fn list_static_page_render_outputs(
 
 async fn list_conversation_memory_items(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Query(query): Query<ConversationMemoryQuery>,
 ) -> std::result::Result<Json<Vec<ConversationMemoryItemView>>, ApiError> {
+    let current_user_id = current_auth_user_id(&state, &headers).await?;
     let local_thread_id = required_field("local_thread_id", query.local_thread_id)?;
     validate_required("local_thread_id", &local_thread_id)?;
     let items = state
@@ -6470,6 +6785,7 @@ async fn list_conversation_memory_items(
     Ok(Json(
         items
             .into_iter()
+            .filter(|item| owner_user_id_is_visible(item.user_id, current_user_id))
             .map(to_conversation_memory_item_view)
             .collect(),
     ))
@@ -6477,22 +6793,13 @@ async fn list_conversation_memory_items(
 
 async fn list_assistant_run_conversation_memory_candidates(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(run_id): Path<String>,
     Query(query): Query<ConversationMemoryQuery>,
 ) -> std::result::Result<Json<Vec<ConversationMemoryItemView>>, ApiError> {
     let run_id = parse_assistant_run_id(&run_id)?;
-    let run = state
-        .storage
-        .assistant_runs()
-        .get_by_id(state.tenant_id, run_id)
-        .await
-        .map_err(ApiError::from_storage)?
-        .ok_or_else(|| {
-            ApiError::not_found(
-                "assistant_run_not_found",
-                format!("assistant run {} was not found", run_id),
-            )
-        })?;
+    let current_user_id = current_auth_user_id(&state, &headers).await?;
+    let run = load_visible_assistant_run_for_user(&state, run_id, current_user_id).await?;
     let local_thread_id = run.local_thread_id.ok_or_else(|| {
         ApiError::bad_request(
             "assistant_run_local_thread_missing",
@@ -6514,6 +6821,7 @@ async fn list_assistant_run_conversation_memory_candidates(
     Ok(Json(
         items
             .into_iter()
+            .filter(|item| owner_user_id_is_visible(item.user_id, current_user_id))
             .map(to_conversation_memory_item_view)
             .collect(),
     ))
@@ -6671,6 +6979,7 @@ async fn run_assistant_run_react_for_create(
     initial_evidence_state: Value,
     local_thread_id: Option<&str>,
     active_secret_binding_ids: &[SecretBindingId],
+    current_user_id: Option<UserId>,
     runtime_mode: &str,
     runtime_provider: &str,
     runtime_model: &str,
@@ -6774,6 +7083,7 @@ async fn run_assistant_run_react_for_create(
                 request.prompt.trim(),
                 local_thread_id,
                 active_secret_binding_ids,
+                current_user_id,
             )
             .await
         };
@@ -6877,6 +7187,7 @@ async fn run_assistant_run_react_for_continue(
     max_steps: usize,
     initial_evidence_state: &mut Value,
     active_secret_binding_ids: &[SecretBindingId],
+    current_user_id: Option<UserId>,
     runtime_mode: &str,
     runtime_provider: &str,
     runtime_model: &str,
@@ -6985,6 +7296,7 @@ async fn run_assistant_run_react_for_continue(
                 continue_prompt.trim(),
                 run.local_thread_id.as_deref(),
                 active_secret_binding_ids,
+                current_user_id,
             )
             .await
         };
@@ -7742,6 +8054,7 @@ async fn build_assistant_run_evidence_state(
     prompt: &str,
     local_thread_id: Option<&str>,
     active_secret_binding_ids: &[SecretBindingId],
+    current_user_id: Option<UserId>,
 ) -> std::result::Result<Value, ApiError> {
     let dataset_ids = selected_dataset_ids_from_scope(selected_scope);
     let conversation_memory_requested = selected_scope_requests_conversation_memory(selected_scope);
@@ -7762,7 +8075,13 @@ async fn build_assistant_run_evidence_state(
         .into_iter()
         .take(ASSISTANT_RUN_EVIDENCE_DATASET_LIMIT)
     {
-        let dataset = load_visible_dataset(state, dataset_id, active_secret_binding_ids).await?;
+        let dataset = load_visible_dataset_for_user(
+            state,
+            dataset_id,
+            active_secret_binding_ids,
+            current_user_id,
+        )
+        .await?;
         supplied_datasets.push(json!({
             "id": dataset.id,
             "key": dataset.key.clone(),
@@ -7780,6 +8099,13 @@ async fn build_assistant_run_evidence_state(
             )
             .await
             .map_err(ApiError::from_storage)?;
+        let evidences = filter_retrieval_evidences_for_visible_documents(
+            state,
+            dataset.id,
+            evidences,
+            current_user_id,
+        )
+        .await?;
 
         for ranked in rank_retrieval_evidences_for_prompt(&evidences, prompt, limit) {
             supplied_items.push(json!({
@@ -7820,6 +8146,7 @@ async fn build_assistant_run_evidence_state(
 
             for item in items
                 .into_iter()
+                .filter(|item| owner_user_id_is_visible(item.user_id, current_user_id))
                 .filter(assistant_run_memory_item_is_supply_eligible)
             {
                 let supplied_item = json!({
@@ -7907,21 +8234,19 @@ fn assistant_run_evidence_status_label(evidence_state: &Value) -> String {
 
 async fn list_chat_messages(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(session_id): Path<String>,
 ) -> std::result::Result<Json<Vec<ChatMessageView>>, ApiError> {
     let session_id = parse_chat_session_id(&session_id)?;
-    let session = state
-        .storage
-        .chat_sessions()
-        .get_by_id(state.tenant_id, session_id)
-        .await
-        .map_err(ApiError::from_storage)?;
-    if session.is_none() {
-        return Err(ApiError::not_found(
-            "chat_session_not_found",
-            format!("chat session {} was not found", session_id),
-        ));
-    }
+    let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
+    let current_user_id = current_auth_user_id(&state, &headers).await?;
+    load_visible_chat_session_for_user(
+        &state,
+        session_id,
+        &active_secret_binding_ids,
+        current_user_id,
+    )
+    .await?;
 
     let messages = state
         .storage
@@ -7940,12 +8265,27 @@ async fn list_chat_messages(
 
 async fn update_chat_session_report_entry_route(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(session_id): Path<String>,
     Json(request): Json<UpdateChatSessionReportEntryRequest>,
 ) -> std::result::Result<(StatusCode, Json<UpdateChatSessionReportEntryResponse>), ApiError> {
     let session_id = parse_chat_session_id(&session_id)?;
-    let response =
-        apply_chat_session_report_entry_update_with_state(&state, session_id, request).await?;
+    let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
+    let current_user_id = current_auth_user_id(&state, &headers).await?;
+    load_visible_chat_session_for_user(
+        &state,
+        session_id,
+        &active_secret_binding_ids,
+        current_user_id,
+    )
+    .await?;
+    let response = apply_chat_session_report_entry_update_with_state(
+        &state,
+        session_id,
+        current_user_id,
+        request,
+    )
+    .await?;
 
     Ok((StatusCode::OK, Json(response)))
 }
@@ -7953,6 +8293,7 @@ async fn update_chat_session_report_entry_route(
 async fn apply_chat_session_report_entry_update_with_state(
     state: &AppState,
     session_id: ChatSessionId,
+    current_user_id: Option<UserId>,
     request: UpdateChatSessionReportEntryRequest,
 ) -> std::result::Result<UpdateChatSessionReportEntryResponse, ApiError> {
     let session = state
@@ -8047,7 +8388,7 @@ async fn apply_chat_session_report_entry_update_with_state(
                 session.dataset_id,
                 &entry.title,
                 &entry.objective,
-                None,
+                session.user_id.or(current_user_id),
                 Some(report_service_handoff),
             )
             .await?;
@@ -8115,7 +8456,10 @@ async fn list_documents(
     Ok(Json(
         documents
             .into_iter()
-            .filter(|document| visible_dataset_ids.contains(&document.dataset_id))
+            .filter(|document| {
+                visible_dataset_ids.contains(&document.dataset_id)
+                    && owner_user_id_is_visible(document.owner_user_id, current_user_id)
+            })
             .map(to_document_summary)
             .collect(),
     ))
@@ -8128,8 +8472,14 @@ async fn get_document_detail(
 ) -> std::result::Result<Json<DocumentDetailView>, ApiError> {
     let document_id = parse_document_id(&document_id)?;
     let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
-    let detail =
-        load_document_detail_with_state(&state, document_id, &active_secret_binding_ids).await?;
+    let current_user_id = current_auth_user_id(&state, &headers).await?;
+    let detail = load_document_detail_with_state(
+        &state,
+        document_id,
+        &active_secret_binding_ids,
+        current_user_id,
+    )
+    .await?;
     Ok(Json(detail))
 }
 
@@ -8139,8 +8489,10 @@ async fn compare_documents_route(
     Json(request): Json<CompareDocumentsRequest>,
 ) -> std::result::Result<Json<CompareDocumentsView>, ApiError> {
     let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
+    let current_user_id = current_auth_user_id(&state, &headers).await?;
     let comparison =
-        compare_documents_with_state(&state, request, &active_secret_binding_ids).await?;
+        compare_documents_with_state(&state, request, &active_secret_binding_ids, current_user_id)
+            .await?;
     Ok(Json(comparison))
 }
 
@@ -8151,7 +8503,14 @@ async fn list_document_chunks(
 ) -> std::result::Result<Json<Vec<DocumentChunkView>>, ApiError> {
     let document_id = parse_document_id(&document_id)?;
     let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
-    load_visible_document(&state, document_id, &active_secret_binding_ids).await?;
+    let current_user_id = current_auth_user_id(&state, &headers).await?;
+    load_visible_document_for_user(
+        &state,
+        document_id,
+        &active_secret_binding_ids,
+        current_user_id,
+    )
+    .await?;
 
     let chunks = state
         .storage
@@ -8172,7 +8531,14 @@ async fn list_document_retrieval_evidences(
 ) -> std::result::Result<Json<Vec<RetrievalEvidenceView>>, ApiError> {
     let document_id = parse_document_id(&document_id)?;
     let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
-    load_visible_document(&state, document_id, &active_secret_binding_ids).await?;
+    let current_user_id = current_auth_user_id(&state, &headers).await?;
+    load_visible_document_for_user(
+        &state,
+        document_id,
+        &active_secret_binding_ids,
+        current_user_id,
+    )
+    .await?;
 
     let mut evidences = state
         .storage
@@ -8194,8 +8560,15 @@ async fn load_document_detail_with_state(
     state: &AppState,
     document_id: DocumentId,
     active_secret_binding_ids: &[SecretBindingId],
+    current_user_id: Option<UserId>,
 ) -> std::result::Result<DocumentDetailView, ApiError> {
-    let document = load_visible_document(state, document_id, active_secret_binding_ids).await?;
+    let document = load_visible_document_for_user(
+        state,
+        document_id,
+        active_secret_binding_ids,
+        current_user_id,
+    )
+    .await?;
     let chunks = state
         .storage
         .document_chunks()
@@ -8221,6 +8594,7 @@ async fn compare_documents_with_state(
     state: &AppState,
     request: CompareDocumentsRequest,
     active_secret_binding_ids: &[SecretBindingId],
+    current_user_id: Option<UserId>,
 ) -> std::result::Result<CompareDocumentsView, ApiError> {
     let mut unique_document_ids = Vec::new();
     for document_id in request.document_ids {
@@ -8241,8 +8615,13 @@ async fn compare_documents_with_state(
 
     let mut expected_dataset: Option<(DocumentId, DatasetId)> = None;
     for document_id in &unique_document_ids {
-        let document =
-            load_visible_document(state, *document_id, active_secret_binding_ids).await?;
+        let document = load_visible_document_for_user(
+            state,
+            *document_id,
+            active_secret_binding_ids,
+            current_user_id,
+        )
+        .await?;
 
         if let Some((expected_document_id, expected_dataset_id)) = expected_dataset {
             if document.dataset_id != expected_dataset_id {
@@ -8262,7 +8641,13 @@ async fn compare_documents_with_state(
     let mut documents = Vec::with_capacity(unique_document_ids.len());
     for document_id in unique_document_ids {
         documents.push(
-            load_document_detail_with_state(state, document_id, active_secret_binding_ids).await?,
+            load_document_detail_with_state(
+                state,
+                document_id,
+                active_secret_binding_ids,
+                current_user_id,
+            )
+            .await?,
         );
     }
 
@@ -8324,7 +8709,14 @@ async fn create_document_ingest(
 ) -> std::result::Result<(StatusCode, Json<CreateDocumentIngestResponse>), ApiError> {
     let document_id = parse_document_id(&document_id)?;
     let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
-    let document = load_visible_document(&state, document_id, &active_secret_binding_ids).await?;
+    let current_user_id = current_auth_user_id(&state, &headers).await?;
+    let document = load_visible_document_for_user(
+        &state,
+        document_id,
+        &active_secret_binding_ids,
+        current_user_id,
+    )
+    .await?;
 
     let execution = build_initial_upload_ingest_execution(&state, &document)?;
     let initial_event = build_initial_upload_ingest_event(&execution, &document);
@@ -8461,7 +8853,8 @@ async fn continue_report_plan(
     load_visible_report_plan_for_user(&state, plan_id, &active_secret_binding_ids, current_user_id)
         .await?;
     let response =
-        continue_report_plan_response(&state, plan_id, &active_secret_binding_ids).await?;
+        continue_report_plan_response(&state, plan_id, &active_secret_binding_ids, current_user_id)
+            .await?;
     Ok(Json(response))
 }
 
@@ -8509,8 +8902,15 @@ async fn continue_report_plan_response(
     state: &AppState,
     plan_id: ReportPlanId,
     active_secret_binding_ids: &[SecretBindingId],
+    current_user_id: Option<UserId>,
 ) -> std::result::Result<CreateReportPlanResponse, ApiError> {
-    let plan = load_visible_report_plan(state, plan_id, active_secret_binding_ids).await?;
+    let plan = load_visible_report_plan_for_user(
+        state,
+        plan_id,
+        active_secret_binding_ids,
+        current_user_id,
+    )
+    .await?;
     if plan.status != domain_model::ReportPlanStatus::Draft || plan.current_ast_version_id.is_some()
     {
         return Err(ApiError::bad_request(
@@ -8567,8 +8967,14 @@ async fn publish_report(
     let current_user_id = current_auth_user_id(&state, &headers).await?;
     load_visible_report_plan_for_user(&state, plan_id, &active_secret_binding_ids, current_user_id)
         .await?;
-    let response =
-        publish_report_response(&state, plan_id, request, &active_secret_binding_ids).await?;
+    let response = publish_report_response(
+        &state,
+        plan_id,
+        request,
+        &active_secret_binding_ids,
+        current_user_id,
+    )
+    .await?;
 
     Ok((StatusCode::CREATED, Json(response)))
 }
@@ -8578,8 +8984,15 @@ async fn publish_report_response(
     plan_id: ReportPlanId,
     request: PublishReportRequest,
     active_secret_binding_ids: &[SecretBindingId],
+    current_user_id: Option<UserId>,
 ) -> std::result::Result<PublishReportResponse, ApiError> {
-    let plan = load_visible_report_plan(state, plan_id, active_secret_binding_ids).await?;
+    let plan = load_visible_report_plan_for_user(
+        state,
+        plan_id,
+        active_secret_binding_ids,
+        current_user_id,
+    )
+    .await?;
     let render_output = state
         .storage
         .report_render_outputs()
@@ -8682,8 +9095,14 @@ async fn create_report_render(
     let current_user_id = current_auth_user_id(&state, &headers).await?;
     load_visible_report_plan_for_user(&state, plan_id, &active_secret_binding_ids, current_user_id)
         .await?;
-    let response =
-        create_report_render_response(&state, plan_id, request, &active_secret_binding_ids).await?;
+    let response = create_report_render_response(
+        &state,
+        plan_id,
+        request,
+        &active_secret_binding_ids,
+        current_user_id,
+    )
+    .await?;
 
     Ok((StatusCode::CREATED, Json(response)))
 }
@@ -8693,9 +9112,16 @@ async fn create_report_render_response(
     plan_id: ReportPlanId,
     request: CreateReportRenderRequest,
     active_secret_binding_ids: &[SecretBindingId],
+    current_user_id: Option<UserId>,
 ) -> std::result::Result<CreateReportRenderResponse, ApiError> {
     let surface = request.surface;
-    let plan = load_visible_report_plan(state, plan_id, active_secret_binding_ids).await?;
+    let plan = load_visible_report_plan_for_user(
+        state,
+        plan_id,
+        active_secret_binding_ids,
+        current_user_id,
+    )
+    .await?;
     let ast_version_id = plan.current_ast_version_id.ok_or_else(|| {
         ApiError::bad_request(
             "report_plan_not_planned",
@@ -8841,7 +9267,10 @@ async fn get_published_report(
 
 async fn list_workflow_executions(
     State(state): State<AppState>,
+    headers: HeaderMap,
 ) -> std::result::Result<Json<Vec<WorkflowExecutionView>>, ApiError> {
+    let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
+    let current_user_id = current_auth_user_id(&state, &headers).await?;
     let executions = state
         .storage
         .workflow_executions()
@@ -8849,53 +9278,59 @@ async fn list_workflow_executions(
         .await
         .map_err(ApiError::from_storage)?;
 
-    Ok(Json(
-        executions
-            .into_iter()
-            .map(to_workflow_execution_view)
-            .collect(),
-    ))
+    let mut visible = Vec::with_capacity(executions.len());
+    for execution in executions {
+        match ensure_workflow_execution_visible_for_user(
+            &state,
+            &execution,
+            &active_secret_binding_ids,
+            current_user_id,
+        )
+        .await
+        {
+            Ok(()) => visible.push(to_workflow_execution_view(execution)),
+            Err(error) if error.status == StatusCode::NOT_FOUND => {}
+            Err(error) => return Err(error),
+        }
+    }
+
+    Ok(Json(visible))
 }
 
 async fn get_workflow_execution(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(execution_id): Path<String>,
 ) -> std::result::Result<Json<WorkflowExecutionView>, ApiError> {
     let execution_id = parse_execution_id(&execution_id)?;
-    let execution = state
-        .storage
-        .workflow_executions()
-        .get_by_id(state.tenant_id, execution_id)
-        .await
-        .map_err(ApiError::from_storage)?;
-
-    let execution = execution.ok_or_else(|| {
-        ApiError::not_found(
-            "workflow_execution_not_found",
-            format!("workflow execution {} was not found", execution_id),
-        )
-    })?;
+    let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
+    let current_user_id = current_auth_user_id(&state, &headers).await?;
+    let execution = load_visible_workflow_execution_for_user(
+        &state,
+        execution_id,
+        &active_secret_binding_ids,
+        current_user_id,
+    )
+    .await?;
 
     Ok(Json(to_workflow_execution_view(execution)))
 }
 
 async fn list_workflow_events(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(execution_id): Path<String>,
 ) -> std::result::Result<Json<Vec<WorkflowEventView>>, ApiError> {
     let execution_id = parse_execution_id(&execution_id)?;
-    let execution_exists = state
-        .storage
-        .workflow_executions()
-        .get_by_id(state.tenant_id, execution_id)
-        .await
-        .map_err(ApiError::from_storage)?;
-    if execution_exists.is_none() {
-        return Err(ApiError::not_found(
-            "workflow_execution_not_found",
-            format!("workflow execution {} was not found", execution_id),
-        ));
-    }
+    let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
+    let current_user_id = current_auth_user_id(&state, &headers).await?;
+    load_visible_workflow_execution_for_user(
+        &state,
+        execution_id,
+        &active_secret_binding_ids,
+        current_user_id,
+    )
+    .await?;
 
     let events = state
         .storage
@@ -8920,21 +9355,19 @@ async fn list_workflow_events(
 
 async fn list_workflow_tasks(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(execution_id): Path<String>,
 ) -> std::result::Result<Json<Vec<WorkflowTaskView>>, ApiError> {
     let execution_id = parse_execution_id(&execution_id)?;
-    let execution_exists = state
-        .storage
-        .workflow_executions()
-        .get_by_id(state.tenant_id, execution_id)
-        .await
-        .map_err(ApiError::from_storage)?;
-    if execution_exists.is_none() {
-        return Err(ApiError::not_found(
-            "workflow_execution_not_found",
-            format!("workflow execution {} was not found", execution_id),
-        ));
-    }
+    let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
+    let current_user_id = current_auth_user_id(&state, &headers).await?;
+    load_visible_workflow_execution_for_user(
+        &state,
+        execution_id,
+        &active_secret_binding_ids,
+        current_user_id,
+    )
+    .await?;
 
     let tasks = state
         .storage
@@ -8948,9 +9381,19 @@ async fn list_workflow_tasks(
 
 async fn get_workflow_runtime_inspect(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(execution_id): Path<String>,
 ) -> std::result::Result<Json<WorkflowRuntimeInspectView>, ApiError> {
     let execution_id = parse_execution_id(&execution_id)?;
+    let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
+    let current_user_id = current_auth_user_id(&state, &headers).await?;
+    load_visible_workflow_execution_for_user(
+        &state,
+        execution_id,
+        &active_secret_binding_ids,
+        current_user_id,
+    )
+    .await?;
     let view = load_workflow_runtime_inspect_view(&state, execution_id).await?;
 
     Ok(Json(view))
@@ -9068,21 +9511,19 @@ async fn load_workflow_runtime_inspect_view(
 
 async fn list_llm_invocations(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(execution_id): Path<String>,
 ) -> std::result::Result<Json<Vec<LlmInvocationView>>, ApiError> {
     let execution_id = parse_execution_id(&execution_id)?;
-    let execution_exists = state
-        .storage
-        .workflow_executions()
-        .get_by_id(state.tenant_id, execution_id)
-        .await
-        .map_err(ApiError::from_storage)?;
-    if execution_exists.is_none() {
-        return Err(ApiError::not_found(
-            "workflow_execution_not_found",
-            format!("workflow execution {} was not found", execution_id),
-        ));
-    }
+    let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
+    let current_user_id = current_auth_user_id(&state, &headers).await?;
+    load_visible_workflow_execution_for_user(
+        &state,
+        execution_id,
+        &active_secret_binding_ids,
+        current_user_id,
+    )
+    .await?;
 
     let llm_invocations = state
         .storage
@@ -9101,21 +9542,19 @@ async fn list_llm_invocations(
 
 async fn list_tool_executions(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(execution_id): Path<String>,
 ) -> std::result::Result<Json<Vec<ToolExecutionView>>, ApiError> {
     let execution_id = parse_execution_id(&execution_id)?;
-    let execution_exists = state
-        .storage
-        .workflow_executions()
-        .get_by_id(state.tenant_id, execution_id)
-        .await
-        .map_err(ApiError::from_storage)?;
-    if execution_exists.is_none() {
-        return Err(ApiError::not_found(
-            "workflow_execution_not_found",
-            format!("workflow execution {} was not found", execution_id),
-        ));
-    }
+    let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
+    let current_user_id = current_auth_user_id(&state, &headers).await?;
+    load_visible_workflow_execution_for_user(
+        &state,
+        execution_id,
+        &active_secret_binding_ids,
+        current_user_id,
+    )
+    .await?;
 
     let tool_executions = state
         .storage
@@ -9134,9 +9573,19 @@ async fn list_tool_executions(
 
 async fn start_workflow_execution(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(execution_id): Path<String>,
 ) -> std::result::Result<Json<AdvanceWorkflowExecutionResponse>, ApiError> {
     let execution_id = parse_execution_id(&execution_id)?;
+    let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
+    let current_user_id = current_auth_user_id(&state, &headers).await?;
+    load_visible_workflow_execution_for_user(
+        &state,
+        execution_id,
+        &active_secret_binding_ids,
+        current_user_id,
+    )
+    .await?;
     let response = apply_workflow_signal(&state, execution_id, WorkflowSignal::Start).await?;
     sync_static_page_render_output_for_workflow(&state, execution_id).await?;
 
@@ -9145,10 +9594,20 @@ async fn start_workflow_execution(
 
 async fn retry_workflow_execution_route(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(execution_id): Path<String>,
     Json(request): Json<RetryWorkflowExecutionRequest>,
 ) -> std::result::Result<Json<RetryWorkflowExecutionResponse>, ApiError> {
     let execution_id = parse_execution_id(&execution_id)?;
+    let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
+    let current_user_id = current_auth_user_id(&state, &headers).await?;
+    load_visible_workflow_execution_for_user(
+        &state,
+        execution_id,
+        &active_secret_binding_ids,
+        current_user_id,
+    )
+    .await?;
     let response = retry_workflow_execution_with_state(&state, execution_id, request).await?;
 
     Ok(Json(response))
@@ -9156,10 +9615,20 @@ async fn retry_workflow_execution_route(
 
 async fn send_workflow_signal(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(execution_id): Path<String>,
     Json(request): Json<WorkflowSignalRequest>,
 ) -> std::result::Result<Json<AdvanceWorkflowExecutionResponse>, ApiError> {
     let execution_id = parse_execution_id(&execution_id)?;
+    let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
+    let current_user_id = current_auth_user_id(&state, &headers).await?;
+    load_visible_workflow_execution_for_user(
+        &state,
+        execution_id,
+        &active_secret_binding_ids,
+        current_user_id,
+    )
+    .await?;
     let signal = build_workflow_signal(request)?;
     let response = apply_workflow_signal(&state, execution_id, signal).await?;
     sync_static_page_render_output_for_workflow(&state, execution_id).await?;
@@ -9496,6 +9965,7 @@ fn build_initial_dataset_output_execution(
     dataset_id: DatasetId,
     prompt: &str,
     chat_session_id: Option<ChatSessionId>,
+    owner_user_id: Option<UserId>,
     memory_directory: Option<&MemoryDirectory>,
     retrieval_evidence_ids: &[domain_model::RetrievalEvidenceId],
 ) -> std::result::Result<WorkflowExecution, ApiError> {
@@ -9524,6 +9994,12 @@ fn build_initial_dataset_output_execution(
         context.insert(
             "chat_session_id".to_string(),
             Value::String(chat_session_id.to_string()),
+        );
+    }
+    if let Some(owner_user_id) = owner_user_id {
+        context.insert(
+            "owner_user_id".to_string(),
+            Value::String(owner_user_id.to_string()),
         );
     }
     if let Some(memory_directory) = memory_directory {
@@ -9569,6 +10045,7 @@ fn build_initial_chat_session_execution(
     dataset_id: DatasetId,
     chat_session_id: ChatSessionId,
     prompt: &str,
+    user_id: Option<UserId>,
     memory_directory: Option<&MemoryDirectory>,
     dataset_output_id: Option<domain_model::DatasetOutputId>,
 ) -> std::result::Result<WorkflowExecution, ApiError> {
@@ -9593,6 +10070,9 @@ fn build_initial_chat_session_execution(
         "chat_session_id".to_string(),
         Value::String(chat_session_id.to_string()),
     );
+    if let Some(user_id) = user_id {
+        context.insert("user_id".to_string(), Value::String(user_id.to_string()));
+    }
     context.insert(
         "chat_turn_id".to_string(),
         Value::String(Uuid::new_v4().to_string()),
@@ -12713,10 +13193,17 @@ async fn hydrate_dataset_output_view(
         .retrieval_evidences()
         .list_by_ids(state.tenant_id, &output.retrieval_evidence_ids)
         .await
-        .map_err(ApiError::from_storage)?
-        .into_iter()
-        .map(to_retrieval_evidence_view)
-        .collect();
+        .map_err(ApiError::from_storage)?;
+    let retrieval_evidences = filter_retrieval_evidences_for_visible_documents(
+        state,
+        output.dataset_id,
+        retrieval_evidences,
+        output.owner_user_id,
+    )
+    .await?
+    .into_iter()
+    .map(to_retrieval_evidence_view)
+    .collect();
 
     let mut view = to_dataset_output_view(
         output,
@@ -12780,7 +13267,10 @@ async fn hydrate_chat_session_view_with_latest_assistant_message(
                 .await
                 .map_err(ApiError::from_storage)?;
             match output {
-                Some(output) => Some(hydrate_dataset_output_view(state, output).await?),
+                Some(output) if owner_user_id_is_visible(output.owner_user_id, session.user_id) => {
+                    Some(hydrate_dataset_output_view(state, output).await?)
+                }
+                Some(_) => None,
                 None => None,
             }
         }
@@ -14956,7 +15446,7 @@ fn static_page_owner_is_visible(
     owner_user_id: Option<UserId>,
     current_user_id: Option<UserId>,
 ) -> bool {
-    owner_user_id.is_none() || owner_user_id == current_user_id
+    owner_user_id_is_visible(owner_user_id, current_user_id)
 }
 
 fn static_page_draft_not_found_error(draft_id: StaticPageDraftId) -> ApiError {
@@ -16294,10 +16784,13 @@ mod tests {
                 && step.get("duration_ms").is_some()
         }));
 
-        let Json(detail) =
-            get_assistant_run(State(state), Path(response.assistant_run_id.to_string()))
-                .await
-                .expect("assistant run detail should load");
+        let Json(detail) = get_assistant_run(
+            State(state),
+            HeaderMap::new(),
+            Path(response.assistant_run_id.to_string()),
+        )
+        .await
+        .expect("assistant run detail should load");
         let event_names = detail
             .events
             .iter()
@@ -16405,10 +16898,13 @@ mod tests {
             .iter()
             .any(|step| step.get("label") == Some(&json!("达到连续执行上限"))));
 
-        let Json(detail) =
-            get_assistant_run(State(state), Path(response.assistant_run_id.to_string()))
-                .await
-                .expect("assistant run detail should load");
+        let Json(detail) = get_assistant_run(
+            State(state),
+            HeaderMap::new(),
+            Path(response.assistant_run_id.to_string()),
+        )
+        .await
+        .expect("assistant run detail should load");
         assert!(detail
             .events
             .iter()
@@ -16530,6 +17026,7 @@ mod tests {
 
         let Json(detail) = get_assistant_run(
             State(state),
+            HeaderMap::new(),
             Path(run_response.assistant_run_id.to_string()),
         )
         .await
@@ -16735,6 +17232,7 @@ mod tests {
 
         let Json(detail) = get_assistant_run(
             State(state.clone()),
+            HeaderMap::new(),
             Path(response.assistant_run_id.to_string()),
         )
         .await
@@ -16750,6 +17248,7 @@ mod tests {
 
         let (event_status, Json(event_response)) = append_assistant_run_event(
             State(state),
+            HeaderMap::new(),
             Path(response.assistant_run_id.to_string()),
             Json(AppendAssistantRunEventRequest {
                 event_name: "assistant_run.note".to_string(),
@@ -16845,6 +17344,7 @@ mod tests {
 
         let Json(detail) = get_assistant_run(
             State(state),
+            HeaderMap::new(),
             Path(run_response.assistant_run_id.to_string()),
         )
         .await
@@ -17544,6 +18044,7 @@ mod tests {
         assert_eq!(render_tasks[0].task_key, "render_static_page");
         let Json(cancel_transition) = send_workflow_signal(
             State(state.clone()),
+            HeaderMap::new(),
             Path(render_workflow.id.to_string()),
             Json(contracts::WorkflowSignalRequest {
                 kind: contracts::WorkflowSignalKindView::CancelRequested,
@@ -17627,6 +18128,7 @@ mod tests {
 
         let Json(detail) = get_assistant_run(
             State(state),
+            HeaderMap::new(),
             Path(run_response.assistant_run_id.to_string()),
         )
         .await
@@ -17773,6 +18275,7 @@ mod tests {
             "把趋势模块接订单金额并改成折线图",
             Some("react-static-page-apply-thread"),
             &[],
+            None,
         )
         .await
         .expect("react static page update should apply");
@@ -17813,6 +18316,7 @@ mod tests {
 
         let Json(detail) = get_assistant_run(
             State(state),
+            HeaderMap::new(),
             Path(run_response.assistant_run_id.to_string()),
         )
         .await
@@ -17911,6 +18415,7 @@ mod tests {
             "直接制作最终静态页",
             Some("react-static-page-render-thread"),
             &[],
+            None,
         )
         .await
         .expect("react render before confirmation should be handled");
@@ -17934,6 +18439,7 @@ mod tests {
             "生成经营分析效果图",
             Some("react-static-page-render-thread"),
             &[],
+            None,
         )
         .await
         .expect("react image preview should queue");
@@ -17989,6 +18495,7 @@ mod tests {
             "按确认效果制作最终静态页",
             Some("react-static-page-render-thread"),
             &[],
+            None,
         )
         .await
         .expect("react render should create final output");
@@ -18013,6 +18520,7 @@ mod tests {
 
         let Json(detail) = get_assistant_run(
             State(state),
+            HeaderMap::new(),
             Path(run_response.assistant_run_id.to_string()),
         )
         .await
@@ -18105,6 +18613,7 @@ mod tests {
 
         let Json(candidates) = list_assistant_run_conversation_memory_candidates(
             State(state.clone()),
+            HeaderMap::new(),
             Path(run_response.assistant_run_id.to_string()),
             Query(ConversationMemoryQuery {
                 local_thread_id: None,
@@ -18119,6 +18628,7 @@ mod tests {
 
         let Json(thread_items) = list_conversation_memory_items(
             State(state),
+            HeaderMap::new(),
             Query(ConversationMemoryQuery {
                 local_thread_id: Some("browser-thread-memory".to_string()),
                 query: None,
@@ -18424,10 +18934,13 @@ mod tests {
                 && step.get("supplied_count") == Some(&json!(2))
         }));
 
-        let Json(detail) =
-            get_assistant_run(State(state), Path(response.assistant_run_id.to_string()))
-                .await
-                .expect("assistant run detail should load");
+        let Json(detail) = get_assistant_run(
+            State(state),
+            HeaderMap::new(),
+            Path(response.assistant_run_id.to_string()),
+        )
+        .await
+        .expect("assistant run detail should load");
         assert_eq!(detail.run.evidence_state["status"], json!("supplied"));
         assert_eq!(
             detail.run.evidence_state["supplied_items"][0]["summary"],
@@ -18713,6 +19226,7 @@ mod tests {
             id: ChatSessionId::new(),
             tenant_id: TenantId::new(),
             dataset_id: DatasetId::new(),
+            user_id: None,
             execution_id: WorkflowExecutionId::new(),
             title: title.to_string(),
             latest_memory_directory_id: None,
@@ -18820,6 +19334,7 @@ mod tests {
                     id: ChatSessionId::new(),
                     execution_id: execution.id,
                     dataset_id: dataset.id,
+                    user_id: None,
                     title: "Route test chat session".to_string(),
                     latest_memory_directory_id: None,
                     latest_dataset_output_id: None,
@@ -18908,6 +19423,7 @@ mod tests {
                     id: ChatSessionId::new(),
                     execution_id: base_execution.id,
                     dataset_id: dataset.id,
+                    user_id: None,
                     title: "Append turn session".to_string(),
                     latest_memory_directory_id: None,
                     latest_dataset_output_id: None,
@@ -23153,6 +23669,7 @@ mod tests {
             tenant_id: TenantId::new(),
             execution_id: WorkflowExecutionId::new(),
             dataset_id,
+            owner_user_id: None,
             prompt: "Summarize".to_string(),
             output_text: "Placeholder output".to_string(),
             memory_directory_id: Some(memory_directory.id),
@@ -23398,6 +23915,7 @@ mod tests {
             tenant_id: TenantId::new(),
             execution_id,
             dataset_id,
+            owner_user_id: None,
             prompt: "Summarize".to_string(),
             output_text: "Fresh output".to_string(),
             memory_directory_id: None,
@@ -23537,6 +24055,7 @@ mod tests {
             tenant_id: TenantId::new(),
             execution_id: WorkflowExecutionId::new(),
             dataset_id: DatasetId::new(),
+            owner_user_id: None,
             prompt: "Summarize".to_string(),
             output_text: "Fresh output".to_string(),
             memory_directory_id: None,
@@ -23845,6 +24364,7 @@ mod tests {
             id: ChatSessionId::new(),
             tenant_id: TenantId::new(),
             dataset_id: DatasetId::new(),
+            user_id: None,
             execution_id: WorkflowExecutionId::new(),
             title: "Demo chat".to_string(),
             latest_memory_directory_id: Some(latest_memory_directory.id),
@@ -24019,6 +24539,7 @@ mod tests {
             id: ChatSessionId::new(),
             tenant_id: TenantId::new(),
             dataset_id: DatasetId::new(),
+            user_id: None,
             execution_id: WorkflowExecutionId::new(),
             title: "Pending response-ready chat".to_string(),
             latest_memory_directory_id: None,
@@ -24188,6 +24709,7 @@ mod tests {
             id: ChatSessionId::new(),
             tenant_id: TenantId::new(),
             dataset_id: DatasetId::new(),
+            user_id: None,
             execution_id: WorkflowExecutionId::new(),
             title: "Failed chat".to_string(),
             latest_memory_directory_id: None,
@@ -24315,6 +24837,7 @@ mod tests {
             id: ChatSessionId::new(),
             tenant_id: TenantId::new(),
             dataset_id: DatasetId::new(),
+            user_id: None,
             execution_id: WorkflowExecutionId::new(),
             title: "Pending report entry".to_string(),
             latest_memory_directory_id: None,
@@ -24388,6 +24911,7 @@ mod tests {
             id: ChatSessionId::new(),
             tenant_id: TenantId::new(),
             dataset_id: DatasetId::new(),
+            user_id: None,
             execution_id: WorkflowExecutionId::new(),
             title: "Confirmed report entry".to_string(),
             latest_memory_directory_id: None,
@@ -24462,6 +24986,7 @@ mod tests {
             id: ChatSessionId::new(),
             tenant_id: TenantId::new(),
             dataset_id: DatasetId::new(),
+            user_id: None,
             execution_id: WorkflowExecutionId::new(),
             title: "Declined report entry".to_string(),
             latest_memory_directory_id: None,
@@ -24527,6 +25052,7 @@ mod tests {
             id: ChatSessionId::new(),
             tenant_id: TenantId::new(),
             dataset_id: DatasetId::new(),
+            user_id: None,
             execution_id: WorkflowExecutionId::new(),
             title: "Failed chat after provider response".to_string(),
             latest_memory_directory_id: None,
@@ -24614,6 +25140,7 @@ mod tests {
             id: ChatSessionId::new(),
             tenant_id: TenantId::new(),
             dataset_id: DatasetId::new(),
+            user_id: None,
             execution_id: WorkflowExecutionId::new(),
             title: "Failed chat before assistant create".to_string(),
             latest_memory_directory_id: None,
@@ -24672,6 +25199,7 @@ mod tests {
             id: ChatSessionId::new(),
             tenant_id: TenantId::new(),
             dataset_id: DatasetId::new(),
+            user_id: None,
             execution_id: WorkflowExecutionId::new(),
             title: "Failed chat before response ready session update".to_string(),
             latest_memory_directory_id: None,
@@ -24730,6 +25258,7 @@ mod tests {
             id: session_id,
             tenant_id: TenantId::new(),
             dataset_id: DatasetId::new(),
+            user_id: None,
             execution_id: WorkflowExecutionId::new(),
             title: "Completed chat".to_string(),
             latest_memory_directory_id: None,
@@ -24866,6 +25395,7 @@ mod tests {
             id: session_id,
             tenant_id: TenantId::new(),
             dataset_id: DatasetId::new(),
+            user_id: None,
             execution_id: WorkflowExecutionId::new(),
             title: "Completed chat".to_string(),
             latest_memory_directory_id: None,
@@ -25066,6 +25596,7 @@ mod tests {
             id: session_id,
             tenant_id: TenantId::new(),
             dataset_id: DatasetId::new(),
+            user_id: None,
             execution_id,
             title: "Completed chat".to_string(),
             latest_memory_directory_id: None,
