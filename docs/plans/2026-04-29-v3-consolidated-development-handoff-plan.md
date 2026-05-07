@@ -55,6 +55,8 @@ Recent verified capabilities:
 - Dataset visibility foundation exists with local key binding, public/private dataset filtering, and selected-scope semantics.
 - AssistantRun persistence exists for ordinary chat, hidden conversation memory, deterministic scope planning, evidence supply, continue API, static-page draft creation, and output artifacts.
 - Account hardening now scopes dataset outputs, chat sessions, workflow-linked runtime details, document/RAG evidence, AssistantRun reads/events/continue, conversation-memory recall, report/static-page artifacts, and memory-directory aggregates by the active user and visible document set.
+- Personal auth audit API exists for signed-in users and returns only current-user events with response-time metadata whitelisting.
+- Email verification purpose handling now prevents bind-email or rotate-key challenges from being replayed as login/session-creation credentials.
 - AssistantRun ReAct refinement now includes typed contract parsing, weak planning catalog, extracted tool registry, protocol-repair matrix, report handoff, bounded document-detail reads, redacted trace summaries, frontend safe progress display, and gated OpenClaw memory/readonly bridge stubs.
 - OpenClaw optional provider and gated ReAct stubs have completed their first pass; do not continue OpenClaw as the main execution-kernel route.
 - Codex Host first queue bridge exists: `codex_host_task` is disabled-by-default and allowlisted, `codex_host_task_workflow` enqueues `codex_host/run_codex_host_task`, and `crates/codex-host-agent` can complete that queue in dry-run mode or build a redacted plan-only command summary without launching local Codex.

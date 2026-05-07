@@ -30,8 +30,10 @@
 - Dataset-output worker hardening second pass completed: generated outputs inherit the workflow/chat owner; retrieval search and selected evidence are filtered to documents visible to that owner so public datasets cannot accidentally feed another user's private uploaded document into a generated output.
 - Memory-directory scope hardening second pass completed: new memory-directory refresh workflows carry `owner_user_id`; `memory_directories` now persist `owner_user_id` and `source_document_ids`; memory worker filters source documents to the active owner scope; API list/hydration and dataset-output/chat workers only bind memory directories whose owner and source-document set are visible to the current user. Legacy directories are filtered by document IDs parsed from their manifest where possible.
 - Account artifact schema hardening now uses `0005_account_artifact_hardening.sql` and `0006_memory_directory_scope_hardening.sql`; both are registered in the ordered migration list, instead of relying on a mutated already-applied auth migration.
-- Current validation: `cargo check --workspace`, `cargo test --workspace --no-run`, `cargo test -p storage --lib`, `cargo test -p memory-worker --lib`, `cargo test -p dataset-output-worker --lib`, `cargo test -p chat-session-worker --lib`, and `cargo test -p platform-api --lib to_memory_directory_view_exposes_counts` pass. Full `cargo test -p platform-api --lib` still exceeds the 5-minute local window because several integration-style tests touch local PostgreSQL/runtime flows; use targeted tests or a longer CI window for full execution.
-- Remaining hardening: sharing grants/team membership are not implemented; robot ownership is still future work; published static-page/report sharing policy remains owner-only plus legacy unowned compatibility; stronger recovery challenge policy, external audit viewer/admin policy, and true encryption recovery semantics remain later tasks.
+- Personal auth audit viewer API completed: `GET /v1/auth/audit-events` requires the current account session, returns only the active user's audit events, marks current-session events, and exposes only whitelisted metadata details instead of raw audit payloads.
+- Email verification purpose hardening first pass completed: `/v1/auth/email/verify` now creates login/recovery sessions only for `account_create`, `login`, and `recover_key` purposes. `bind_email` and `rotate_key` challenges can no longer be replayed against the session-creation endpoint, and rejected attempts are audited without consuming the challenge.
+- Current validation: `cargo check --workspace`, `cargo test --workspace --no-run`, `cargo test -p storage --lib`, `cargo test -p memory-worker --lib`, `cargo test -p dataset-output-worker --lib`, `cargo test -p chat-session-worker --lib`, `cargo test -p contracts --lib auth`, `cargo test -p platform-api --lib to_memory_directory_view_exposes_counts`, `cargo test -p platform-api --lib auth_audit_events_endpoint_returns_current_user_redacted_events`, and `cargo test -p platform-api --lib email_auth_verify_rejects_non_login_purpose_for_session_creation` pass. Full `cargo test -p platform-api --lib` still exceeds the 5-minute local window because several integration-style tests touch local PostgreSQL/runtime flows; use targeted tests or a longer CI window for full execution.
+- Remaining hardening: sharing grants/team membership are not implemented; robot ownership is still future work; published static-page/report sharing policy remains owner-only plus legacy unowned compatibility; stronger key-rotation/recovery challenge policy, admin-wide audit policy/viewer, and true encryption recovery semantics remain later tasks.
 
 ---
 
@@ -138,9 +140,15 @@ bind_email
 rotate_key
 ```
 
+Session-creation rule:
+
+- `POST /v1/auth/email/verify` accepts only `account_create`, `login`, and `recover_key` for creating an auth session.
+- `bind_email` and `rotate_key` challenges must be handled by purpose-specific flows. They are not interchangeable login credentials.
+- Unsupported-purpose verification attempts are audited and do not consume or increment the challenge.
+
 ### Auth Audit Events
 
-First-pass audit is internal-only. It gives the system enough traceability for account/key support without exposing an end-user audit UI yet.
+First-pass audit storage gives the system enough traceability for account/key support. The personal read-only API is now exposed to signed-in users; admin-wide audit policy and admin viewer remain future work.
 
 ```text
 auth_audit_events
@@ -164,6 +172,7 @@ Rules:
 - Never store raw local keys, OTP codes, session tokens, cookies, Cloudflare tokens, or provider keys.
 - Successful events should include user/session when available.
 - Failed pre-user events can be queried by normalized email internally, but should not be exposed to ordinary users until an admin policy exists.
+- `GET /v1/auth/audit-events` returns only `list_recent_for_user(current_user_id)` and re-whitelists metadata fields for the response. It does not expose raw metadata, session tokens, OTP material, challenge internals, or all-email audit queries.
 
 ### OTP Rate Limits
 

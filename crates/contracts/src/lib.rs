@@ -1,13 +1,14 @@
 use chrono::{DateTime, Utc};
 use domain_model::{
-    AssistantRunEventId, AssistantRunId, AuthChallengePurpose, AuthSessionMethod, ChatMessageId,
-    ChatMessageRole, ChatSessionId, ConversationMemoryItemId, DatasetId, DatasetLifecycle,
-    DatasetOutputId, DatasetVisibility, DocumentChunkId, DocumentId, EmailVerificationChallengeId,
-    LlmInvocationId, MemoryDirectoryId, PublishedReportId, PublishedReportVersionId,
-    PublishedSurface, ReportPlanAstVersionId, ReportPlanId, ReportRenderOutputId,
-    RetrievalEvidenceId, SecretBindingId, StaticPageDraftId, StaticPageImageJobId,
-    StaticPageRenderOutputId, ToolExecutionId, UserId, UserSessionId, WorkflowEventId,
-    WorkflowExecutionId, WorkflowKind, WorkflowStatus, WorkflowTaskId, WorkflowTaskStatus,
+    AssistantRunEventId, AssistantRunId, AuthAuditEventId, AuthAuditOutcome, AuthChallengePurpose,
+    AuthSessionMethod, ChatMessageId, ChatMessageRole, ChatSessionId, ConversationMemoryItemId,
+    DatasetId, DatasetLifecycle, DatasetOutputId, DatasetVisibility, DocumentChunkId, DocumentId,
+    EmailVerificationChallengeId, LlmInvocationId, MemoryDirectoryId, PublishedReportId,
+    PublishedReportVersionId, PublishedSurface, ReportPlanAstVersionId, ReportPlanId,
+    ReportRenderOutputId, RetrievalEvidenceId, SecretBindingId, StaticPageDraftId,
+    StaticPageImageJobId, StaticPageRenderOutputId, ToolExecutionId, UserId, UserSessionId,
+    WorkflowEventId, WorkflowExecutionId, WorkflowKind, WorkflowStatus, WorkflowTaskId,
+    WorkflowTaskStatus,
 };
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
@@ -234,6 +235,20 @@ pub struct AuthSessionResponse {
     pub user: Option<AuthUserView>,
     #[serde(default)]
     pub session: Option<AuthSessionView>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AuthAuditEventView {
+    pub id: AuthAuditEventId,
+    pub event_name: String,
+    pub outcome: AuthAuditOutcome,
+    #[serde(default)]
+    pub email: Option<String>,
+    #[serde(default)]
+    pub device_fingerprint: Option<String>,
+    pub current_session: bool,
+    pub details: Value,
+    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

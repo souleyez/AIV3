@@ -13,25 +13,25 @@ use contracts::{
     AppendAssistantRunEventResponse, AppendChatSessionTurnRequest, AppendChatSessionTurnResponse,
     AppendStaticPageDraftOperationsRequest, AppendStaticPageDraftOperationsResponse,
     ApplyStaticPageDraftIntentRequest, ApplyStaticPageDraftIntentResponse, AssistantRunDetailView,
-    AssistantRunEventView, AssistantRunMessageView, AssistantRunView, AuthSessionResponse,
-    AuthSessionView, AuthUserView, BindEmailRequest, BindEmailResponse, ChatMessageView,
-    ChatSessionView, ClaimLocalDataRequest, ClaimLocalDataResponse, CompareDocumentsRequest,
-    CompareDocumentsView, ConfirmStaticPageImageJobRequest, ConfirmStaticPageImageJobResponse,
-    ContinueAssistantRunRequest, ContinueAssistantRunResponse, ConversationMemoryItemView,
-    CreateAssistantRunRequest, CreateAssistantRunResponse, CreateChatSessionRequest,
-    CreateChatSessionResponse, CreateConversationMemoryItemRequest, CreateDatasetOutputRequest,
-    CreateDatasetOutputResponse, CreateDatasetRequest, CreateDatasetSecretBindingRequest,
-    CreateDatasetSecretBindingResponse, CreateDocumentIngestResponse,
-    CreateMemoryDirectoryRefreshResponse, CreateReportPlanResponse, CreateReportRenderRequest,
-    CreateReportRenderResponse, CreateStaticPageDraftRequest, CreateStaticPageDraftResponse,
-    CreateStaticPageImageJobRequest, CreateStaticPageImageJobResponse,
-    CreateStaticPageRenderRequest, CreateStaticPageRenderResponse, DatasetOutputView,
-    DatasetSummary, DocumentChunkView, DocumentDetailView, DocumentSummary, HealthResponse,
-    KeyLoginRequest, KeyLoginResponse, KeyRotateRequest, KeyRotateResponse, LlmInvocationView,
-    LogoutResponse, MemoryDirectoryView, PlanReportRequest, PublishReportRequest,
-    PublishReportResponse, PublishedReportDetailView, PublishedReportVersionView,
-    PublishedReportView, RegisterDocumentRequest, RegisterDocumentResponse,
-    ReportPlanAstVersionView, ReportPlanSummary, ReportRenderOutputView,
+    AssistantRunEventView, AssistantRunMessageView, AssistantRunView, AuthAuditEventView,
+    AuthSessionResponse, AuthSessionView, AuthUserView, BindEmailRequest, BindEmailResponse,
+    ChatMessageView, ChatSessionView, ClaimLocalDataRequest, ClaimLocalDataResponse,
+    CompareDocumentsRequest, CompareDocumentsView, ConfirmStaticPageImageJobRequest,
+    ConfirmStaticPageImageJobResponse, ContinueAssistantRunRequest, ContinueAssistantRunResponse,
+    ConversationMemoryItemView, CreateAssistantRunRequest, CreateAssistantRunResponse,
+    CreateChatSessionRequest, CreateChatSessionResponse, CreateConversationMemoryItemRequest,
+    CreateDatasetOutputRequest, CreateDatasetOutputResponse, CreateDatasetRequest,
+    CreateDatasetSecretBindingRequest, CreateDatasetSecretBindingResponse,
+    CreateDocumentIngestResponse, CreateMemoryDirectoryRefreshResponse, CreateReportPlanResponse,
+    CreateReportRenderRequest, CreateReportRenderResponse, CreateStaticPageDraftRequest,
+    CreateStaticPageDraftResponse, CreateStaticPageImageJobRequest,
+    CreateStaticPageImageJobResponse, CreateStaticPageRenderRequest,
+    CreateStaticPageRenderResponse, DatasetOutputView, DatasetSummary, DocumentChunkView,
+    DocumentDetailView, DocumentSummary, HealthResponse, KeyLoginRequest, KeyLoginResponse,
+    KeyRotateRequest, KeyRotateResponse, LlmInvocationView, LogoutResponse, MemoryDirectoryView,
+    PlanReportRequest, PublishReportRequest, PublishReportResponse, PublishedReportDetailView,
+    PublishedReportVersionView, PublishedReportView, RegisterDocumentRequest,
+    RegisterDocumentResponse, ReportPlanAstVersionView, ReportPlanSummary, ReportRenderOutputView,
     ResolveDatasetSecretBindingsRequest, ResolveDatasetSecretBindingsResponse,
     RetrievalEvidenceView, RetrievalSearchHitView, RetrievalSearchResponse,
     RetryWorkflowExecutionRequest, RetryWorkflowExecutionResponse, StartEmailAuthRequest,
@@ -43,19 +43,19 @@ use contracts::{
     WorkflowRuntimeInspectView, WorkflowSignalRequest, WorkflowTaskView,
 };
 use domain_model::{
-    AssistantRun, AssistantRunEvent, AssistantRunId, AuthAuditOutcome, AuthChallengePurpose,
-    AuthSessionMethod, ChatMessage, ChatMessageId, ChatMessageRole, ChatSession, ChatSessionId,
-    ConversationMemoryItem, Dataset, DatasetId, DatasetOutput, DatasetOutputId, DatasetVisibility,
-    Document, DocumentChunk, DocumentChunkId, DocumentId, EmailVerificationChallenge,
-    LlmInvocation, LlmInvocationFinishReason, LlmInvocationMode, LlmInvocationSourceKind,
-    MemoryDirectory, MemoryDirectoryId, PublishedReport, PublishedReportId, PublishedReportVersion,
-    PublishedSurface, ReportPlan, ReportPlanAstVersion, ReportPlanId, ReportRenderOutput,
-    RetrievalEvidence, RetrievalEvidenceId, SecretBindingId, SecretScopeLevel, StaticPageDraft,
-    StaticPageDraftId, StaticPageDraftStatus, StaticPageImageJob, StaticPageImageJobId,
-    StaticPageImageJobStatus, StaticPageRenderOutput, StaticPageRenderOutputStatus, TenantId,
-    ToolExecution, ToolExecutionSourceKind, ToolExecutionStatus, User, UserId, UserSession,
-    UserSessionId, WorkflowEventRecord, WorkflowExecution, WorkflowExecutionId, WorkflowKind,
-    WorkflowStatus, WorkflowTask,
+    AssistantRun, AssistantRunEvent, AssistantRunId, AuthAuditEvent, AuthAuditOutcome,
+    AuthChallengePurpose, AuthSessionMethod, ChatMessage, ChatMessageId, ChatMessageRole,
+    ChatSession, ChatSessionId, ConversationMemoryItem, Dataset, DatasetId, DatasetOutput,
+    DatasetOutputId, DatasetVisibility, Document, DocumentChunk, DocumentChunkId, DocumentId,
+    EmailVerificationChallenge, LlmInvocation, LlmInvocationFinishReason, LlmInvocationMode,
+    LlmInvocationSourceKind, MemoryDirectory, MemoryDirectoryId, PublishedReport,
+    PublishedReportId, PublishedReportVersion, PublishedSurface, ReportPlan, ReportPlanAstVersion,
+    ReportPlanId, ReportRenderOutput, RetrievalEvidence, RetrievalEvidenceId, SecretBindingId,
+    SecretScopeLevel, StaticPageDraft, StaticPageDraftId, StaticPageDraftStatus,
+    StaticPageImageJob, StaticPageImageJobId, StaticPageImageJobStatus, StaticPageRenderOutput,
+    StaticPageRenderOutputStatus, TenantId, ToolExecution, ToolExecutionSourceKind,
+    ToolExecutionStatus, User, UserId, UserSession, UserSessionId, WorkflowEventRecord,
+    WorkflowExecution, WorkflowExecutionId, WorkflowKind, WorkflowStatus, WorkflowTask,
 };
 use event_bus::{
     workflow_execution_transition_subject, workflow_task_enqueued_subject, EventBus, EventEnvelope,
@@ -148,6 +148,8 @@ const AUTH_EMAIL_RESEND_AFTER_SECONDS: i64 = 60;
 const AUTH_EMAIL_RATE_LIMIT_WINDOW_MINUTES: i64 = 15;
 const AUTH_EMAIL_RATE_LIMIT_MAX_PER_EMAIL: i64 = 5;
 const AUTH_EMAIL_RATE_LIMIT_MAX_PER_DEVICE: i64 = 10;
+const AUTH_AUDIT_EVENTS_DEFAULT_LIMIT: i64 = 50;
+const AUTH_AUDIT_EVENTS_MAX_LIMIT: i64 = 100;
 const DEFAULT_AUTH_EMAIL_OTP_PEPPER: &str = "local-dev-email-otp-pepper";
 const DEFAULT_AUTH_SESSION_PEPPER: &str = "local-dev-session-pepper";
 const AUTH_AUDIT_EMAIL_START: &str = "auth.email_start";
@@ -171,6 +173,11 @@ const DEFAULT_PUBLIC_DATASETS: &[(&str, &str, &str)] = &[
 struct ConversationMemoryQuery {
     local_thread_id: Option<String>,
     query: Option<String>,
+    limit: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AuthAuditEventsQuery {
     limit: Option<i64>,
 }
 
@@ -240,6 +247,7 @@ pub fn router(
         .route("/healthz", get(healthz))
         .route("/readyz", get(readyz))
         .route("/v1/auth/session", get(get_auth_session))
+        .route("/v1/auth/audit-events", get(list_auth_audit_events))
         .route(
             "/v1/auth/email/start",
             axum::routing::post(start_email_auth),
@@ -3177,6 +3185,26 @@ async fn verify_email_auth(
     validate_required("code", &request.code)?;
     let now = Utc::now();
     let device_fingerprint = request.device_fingerprint.clone();
+    if !email_auth_verify_creates_session_for_purpose(&request.purpose) {
+        record_auth_audit_event(
+            &state,
+            AUTH_AUDIT_EMAIL_VERIFY,
+            AuthAuditOutcome::Failed,
+            None,
+            None,
+            Some(email),
+            device_fingerprint,
+            json!({
+                "purpose": request.purpose.as_str(),
+                "reason": "verification_purpose_not_login_capable"
+            }),
+        )
+        .await;
+        return Err(ApiError::bad_request(
+            "verification_purpose_not_login_capable",
+            "该验证码用途不能用于登录，请重新获取登录验证码".to_string(),
+        ));
+    }
     let Some(challenge) = state
         .storage
         .email_verification_challenges()
@@ -3446,6 +3474,36 @@ async fn get_auth_session(
         user: Some(to_auth_user_view(&user, true)),
         session: Some(to_auth_session_view(&session, &user.email)),
     }))
+}
+
+async fn list_auth_audit_events(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<AuthAuditEventsQuery>,
+) -> std::result::Result<Json<Vec<AuthAuditEventView>>, ApiError> {
+    let Some((user, session)) = current_auth_session(&state, &headers).await? else {
+        return Err(ApiError::unauthorized(
+            "auth_session_required",
+            "请先登录账号后再查看安全记录".to_string(),
+        ));
+    };
+    let limit = query
+        .limit
+        .unwrap_or(AUTH_AUDIT_EVENTS_DEFAULT_LIMIT)
+        .clamp(1, AUTH_AUDIT_EVENTS_MAX_LIMIT);
+    let events = state
+        .storage
+        .auth_audit_events()
+        .list_recent_for_user(state.tenant_id, user.id, limit)
+        .await
+        .map_err(ApiError::from_storage)?;
+
+    Ok(Json(
+        events
+            .into_iter()
+            .map(|event| to_auth_audit_event_view(event, session.id))
+            .collect(),
+    ))
 }
 
 async fn logout_auth_session(
@@ -3788,6 +3846,15 @@ fn validate_auth_email(email: &str) -> std::result::Result<String, ApiError> {
     Ok(normalized)
 }
 
+fn email_auth_verify_creates_session_for_purpose(purpose: &AuthChallengePurpose) -> bool {
+    matches!(
+        purpose,
+        AuthChallengePurpose::AccountCreate
+            | AuthChallengePurpose::Login
+            | AuthChallengePurpose::RecoverKey
+    )
+}
+
 fn email_otp_service() -> std::result::Result<EmailOtpService, ApiError> {
     EmailOtpService::new(auth_env(
         "AUTH_EMAIL_OTP_PEPPER",
@@ -4069,6 +4136,46 @@ fn to_auth_session_view(session: &UserSession, email: &str) -> AuthSessionView {
         created_at: session.created_at,
         expires_at: session.expires_at,
     }
+}
+
+fn to_auth_audit_event_view(
+    event: AuthAuditEvent,
+    current_session_id: UserSessionId,
+) -> AuthAuditEventView {
+    AuthAuditEventView {
+        id: event.id,
+        event_name: event.event_name,
+        outcome: event.outcome,
+        email: event.email_normalized,
+        device_fingerprint: event.device_fingerprint,
+        current_session: event.session_id == Some(current_session_id),
+        details: safe_auth_audit_details(&event.metadata),
+        created_at: event.created_at,
+    }
+}
+
+fn safe_auth_audit_details(metadata: &Value) -> Value {
+    let Some(object) = metadata.as_object() else {
+        return json!({});
+    };
+
+    let mut details = Map::new();
+    for key in [
+        "purpose",
+        "reason",
+        "auth_method",
+        "reused",
+        "revoked",
+        "matched_binding_count",
+        "claimed_dataset_count",
+        "skipped_owned_dataset_count",
+        "attempt_count_before",
+    ] {
+        if let Some(value) = object.get(key) {
+            details.insert(key.to_string(), value.clone());
+        }
+    }
+    Value::Object(details)
 }
 
 fn merge_secret_binding_ids(
@@ -20124,6 +20231,63 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn email_auth_verify_rejects_non_login_purpose_for_session_creation() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let Some(harness) = build_auth_api_test_harness().await else {
+            return;
+        };
+        let prepared = auth_otp_service_for_test().prepare_challenge(
+            "bind-purpose@example.com",
+            AuthChallengePurpose::BindEmail,
+            Utc::now(),
+        );
+        let challenge = harness
+            .storage
+            .email_verification_challenges()
+            .create(harness.tenant_id, prepared.challenge)
+            .await
+            .expect("bind challenge should persist");
+
+        let response = post_json_request(
+            harness.app,
+            "/v1/auth/email/verify",
+            &VerifyEmailAuthRequest {
+                email: "bind-purpose@example.com".to_string(),
+                code: prepared.email.code,
+                purpose: AuthChallengePurpose::BindEmail,
+                device_fingerprint: Some("purpose-browser".to_string()),
+            },
+            None,
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let payload: ApiErrorResponse = read_json_response(response).await;
+        assert_eq!(payload.code, "verification_purpose_not_login_capable");
+        let challenge = harness
+            .storage
+            .email_verification_challenges()
+            .get_by_id(harness.tenant_id, challenge.id)
+            .await
+            .expect("challenge lookup should succeed")
+            .expect("challenge should remain");
+        assert!(challenge.consumed_at.is_none());
+        assert_eq!(challenge.attempt_count, 0);
+        let audit_events = harness
+            .storage
+            .auth_audit_events()
+            .list_recent_by_email(harness.tenant_id, "bind-purpose@example.com", 10)
+            .await
+            .expect("audit events should load");
+        assert!(audit_events.iter().any(|event| {
+            event.event_name == AUTH_AUDIT_EMAIL_VERIFY
+                && event.outcome == AuthAuditOutcome::Failed
+                && event.metadata.get("reason").and_then(Value::as_str)
+                    == Some("verification_purpose_not_login_capable")
+        }));
+    }
+
+    #[tokio::test]
     async fn auth_key_login_resolves_user_and_session() {
         let _guard = shared_local_postgres_test_lock().lock().await;
         let Some(harness) = build_auth_api_test_harness().await else {
@@ -20380,6 +20544,48 @@ mod tests {
         assert!(serialized_event.contains("verification_code_invalid"));
         assert!(!serialized_event.contains("wrong-code"));
         assert!(!serialized_event.contains(&prepared.email.code));
+    }
+
+    #[tokio::test]
+    async fn auth_audit_events_endpoint_returns_current_user_redacted_events() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let Some(harness) = build_auth_api_test_harness().await else {
+            return;
+        };
+
+        let anonymous_response =
+            get_request(harness.app.clone(), "/v1/auth/audit-events", None).await;
+        assert_eq!(anonymous_response.status(), StatusCode::UNAUTHORIZED);
+        let anonymous_error: ApiErrorResponse = read_json_response(anonymous_response).await;
+        assert_eq!(anonymous_error.code, "auth_session_required");
+
+        let cookie = issue_email_session_cookie(&harness, "audit-view@example.com").await;
+        let response =
+            get_request(harness.app, "/v1/auth/audit-events?limit=10", Some(&cookie)).await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let events: Vec<AuthAuditEventView> = read_json_response(response).await;
+        let verify_event = events
+            .iter()
+            .find(|event| {
+                event.event_name == AUTH_AUDIT_EMAIL_VERIFY
+                    && event.outcome == AuthAuditOutcome::Succeeded
+            })
+            .expect("current user's successful verify event should be returned");
+        assert_eq!(
+            verify_event.email.as_deref(),
+            Some("audit-view@example.com")
+        );
+        assert!(verify_event.current_session);
+        assert_eq!(
+            verify_event.details.get("purpose").and_then(Value::as_str),
+            Some(AuthChallengePurpose::Login.as_str())
+        );
+        assert!(verify_event.details.get("challenge_id").is_none());
+        let serialized_events =
+            serde_json::to_string(&events).expect("audit views should serialize");
+        assert!(!serialized_events.contains("aidp_v3_session"));
+        assert!(!serialized_events.contains("code_hash"));
     }
 
     #[tokio::test]
