@@ -1,18 +1,20 @@
 use assistant_runtime::{candidates_to_values, plan_scope, ScopePlannerInput};
+use auth_email::{send_verification_email, EmailOtpService, OtpVerificationStatus};
 use axum::{
     extract::{Path, Query, State},
-    http::{HeaderMap, StatusCode},
+    http::{header, HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
     routing::get,
     Json, Router,
 };
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use contracts::{
     AdvanceWorkflowExecutionResponse, ApiErrorResponse, AppendAssistantRunEventRequest,
     AppendAssistantRunEventResponse, AppendChatSessionTurnRequest, AppendChatSessionTurnResponse,
     AppendStaticPageDraftOperationsRequest, AppendStaticPageDraftOperationsResponse,
     ApplyStaticPageDraftIntentRequest, ApplyStaticPageDraftIntentResponse, AssistantRunDetailView,
-    AssistantRunEventView, AssistantRunMessageView, AssistantRunView, ChatMessageView,
+    AssistantRunEventView, AssistantRunMessageView, AssistantRunView, AuthSessionResponse,
+    AuthSessionView, AuthUserView, BindEmailRequest, BindEmailResponse, ChatMessageView,
     ChatSessionView, CompareDocumentsRequest, CompareDocumentsView,
     ConfirmStaticPageImageJobRequest, ConfirmStaticPageImageJobResponse,
     ContinueAssistantRunRequest, ContinueAssistantRunResponse, ConversationMemoryItemView,
@@ -25,31 +27,35 @@ use contracts::{
     CreateStaticPageImageJobRequest, CreateStaticPageImageJobResponse,
     CreateStaticPageRenderRequest, CreateStaticPageRenderResponse, DatasetOutputView,
     DatasetSummary, DocumentChunkView, DocumentDetailView, DocumentSummary, HealthResponse,
-    LlmInvocationView, MemoryDirectoryView, PlanReportRequest, PublishReportRequest,
+    KeyLoginRequest, KeyLoginResponse, KeyRotateRequest, KeyRotateResponse, LlmInvocationView,
+    LogoutResponse, MemoryDirectoryView, PlanReportRequest, PublishReportRequest,
     PublishReportResponse, PublishedReportDetailView, PublishedReportVersionView,
     PublishedReportView, RegisterDocumentRequest, RegisterDocumentResponse,
     ReportPlanAstVersionView, ReportPlanSummary, ReportRenderOutputView,
     ResolveDatasetSecretBindingsRequest, ResolveDatasetSecretBindingsResponse,
     RetrievalEvidenceView, RetrievalSearchHitView, RetrievalSearchResponse,
-    RetryWorkflowExecutionRequest, RetryWorkflowExecutionResponse, StaticPageDraftView,
-    StaticPageImageJobView, StaticPageRenderOutputView, ToolDefinitionView, ToolExecutionView,
+    RetryWorkflowExecutionRequest, RetryWorkflowExecutionResponse, StartEmailAuthRequest,
+    StartEmailAuthResponse, StaticPageDraftView, StaticPageImageJobView,
+    StaticPageRenderOutputView, ToolDefinitionView, ToolExecutionView,
     UpdateChatSessionReportEntryRequest, UpdateChatSessionReportEntryResponse,
-    UpdateStaticPageDraftRequest, UpdateStaticPageDraftResponse, WorkflowDefinitionView,
-    WorkflowEventView, WorkflowExecutionView, WorkflowRuntimeInspectView, WorkflowSignalRequest,
-    WorkflowTaskView,
+    UpdateStaticPageDraftRequest, UpdateStaticPageDraftResponse, VerifyEmailAuthRequest,
+    VerifyEmailAuthResponse, WorkflowDefinitionView, WorkflowEventView, WorkflowExecutionView,
+    WorkflowRuntimeInspectView, WorkflowSignalRequest, WorkflowTaskView,
 };
 use domain_model::{
-    AssistantRun, AssistantRunEvent, AssistantRunId, ChatMessage, ChatMessageId, ChatMessageRole,
-    ChatSession, ChatSessionId, ConversationMemoryItem, Dataset, DatasetId, DatasetOutput,
-    DatasetOutputId, DatasetVisibility, Document, DocumentChunk, DocumentChunkId, DocumentId,
+    AssistantRun, AssistantRunEvent, AssistantRunId, AuthChallengePurpose, AuthSessionMethod,
+    ChatMessage, ChatMessageId, ChatMessageRole, ChatSession, ChatSessionId,
+    ConversationMemoryItem, Dataset, DatasetId, DatasetOutput, DatasetOutputId, DatasetVisibility,
+    Document, DocumentChunk, DocumentChunkId, DocumentId, EmailVerificationChallenge,
     LlmInvocation, LlmInvocationFinishReason, LlmInvocationMode, LlmInvocationSourceKind,
     MemoryDirectory, MemoryDirectoryId, PublishedReport, PublishedReportId, PublishedReportVersion,
     PublishedSurface, ReportPlan, ReportPlanAstVersion, ReportPlanId, ReportRenderOutput,
     RetrievalEvidence, RetrievalEvidenceId, SecretBindingId, SecretScopeLevel, StaticPageDraft,
     StaticPageDraftId, StaticPageDraftStatus, StaticPageImageJob, StaticPageImageJobId,
     StaticPageImageJobStatus, StaticPageRenderOutput, StaticPageRenderOutputStatus, TenantId,
-    ToolExecution, ToolExecutionSourceKind, ToolExecutionStatus, WorkflowEventRecord,
-    WorkflowExecution, WorkflowExecutionId, WorkflowKind, WorkflowStatus, WorkflowTask,
+    ToolExecution, ToolExecutionSourceKind, ToolExecutionStatus, User, UserId, UserSession,
+    WorkflowEventRecord, WorkflowExecution, WorkflowExecutionId, WorkflowKind, WorkflowStatus,
+    WorkflowTask,
 };
 use event_bus::{
     workflow_execution_transition_subject, workflow_task_enqueued_subject, EventBus, EventEnvelope,
@@ -61,6 +67,7 @@ use llm_gateway::{
 use prompt_registry::bootstrap_default_prompt_registry;
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
+use sha2::{Digest, Sha256};
 use static_page_renderer::{render_static_page, StaticPageRenderRequest};
 use static_page_runtime::{
     interpret_static_page_intent_deterministic, interpret_static_page_intent_with_provider,
@@ -75,7 +82,7 @@ use storage::{
     NewAssistantRun, NewAssistantRunEvent, NewChatMessage, NewChatSession,
     NewConversationMemoryItem, NewDataset, NewDocument, NewPublishedReport,
     NewPublishedReportVersion, NewReportPlan, NewSecretBinding, NewStaticPageDraft,
-    NewStaticPageImageJob, NewStaticPageRenderOutput, NewWorkflowTask, PgStorage,
+    NewStaticPageImageJob, NewStaticPageRenderOutput, NewUserSession, NewWorkflowTask, PgStorage,
 };
 use tool_registry::{
     bootstrap_default_tool_registry, ToolCliOutputMode, ToolDefinition, ToolInvocationMode,
@@ -83,6 +90,7 @@ use tool_registry::{
 use uuid::Uuid;
 use workflow_engine::{WorkflowCatalog, WorkflowRuntimeState, WorkflowSignal};
 
+pub mod auth_email;
 mod react_agent_catalog;
 mod react_agent_contract;
 mod react_agent_tools;
@@ -134,6 +142,11 @@ struct AssistantRunReactEvent {
 const STATIC_PAGE_DRAFT_LIST_DEFAULT_LIMIT: i64 = 12;
 const STATIC_PAGE_DRAFT_LIST_MAX_LIMIT: i64 = 50;
 const ACTIVE_SECRET_BINDING_IDS_HEADER: &str = "x-ai-data-platform-secret-binding-ids";
+const AUTH_SESSION_COOKIE_NAME: &str = "aidp_v3_session";
+const AUTH_SESSION_TTL_DAYS: i64 = 30;
+const AUTH_EMAIL_RESEND_AFTER_SECONDS: i64 = 60;
+const DEFAULT_AUTH_EMAIL_OTP_PEPPER: &str = "local-dev-email-otp-pepper";
+const DEFAULT_AUTH_SESSION_PEPPER: &str = "local-dev-session-pepper";
 const PUBLIC_DATASET_WARNING: &str = "该数据集是公开数据集，所有用户可见";
 
 const DEFAULT_PUBLIC_DATASETS: &[(&str, &str, &str)] = &[
@@ -216,6 +229,22 @@ pub fn router(
     Router::new()
         .route("/healthz", get(healthz))
         .route("/readyz", get(readyz))
+        .route("/v1/auth/session", get(get_auth_session))
+        .route(
+            "/v1/auth/email/start",
+            axum::routing::post(start_email_auth),
+        )
+        .route(
+            "/v1/auth/email/verify",
+            axum::routing::post(verify_email_auth),
+        )
+        .route(
+            "/v1/auth/key/login",
+            axum::routing::post(login_with_local_key),
+        )
+        .route("/v1/auth/logout", axum::routing::post(logout_auth_session))
+        .route("/v1/auth/key/rotate", axum::routing::post(rotate_local_key))
+        .route("/v1/auth/email/bind", axum::routing::post(bind_auth_email))
         .route("/v1/datasets", get(list_datasets).post(create_dataset))
         .route(
             "/v1/dataset-secret-bindings",
@@ -3026,6 +3055,321 @@ async fn list_tools(State(state): State<AppState>) -> Json<Vec<ToolDefinitionVie
     Json(state.tools)
 }
 
+async fn start_email_auth(
+    State(state): State<AppState>,
+    Json(request): Json<StartEmailAuthRequest>,
+) -> std::result::Result<(StatusCode, Json<StartEmailAuthResponse>), ApiError> {
+    let email = validate_auth_email(&request.email)?;
+    let service = email_otp_service()?;
+    let now = Utc::now();
+    if let Some(existing) =
+        reusable_email_challenge(&state, &email, request.purpose.clone(), now).await?
+    {
+        return Ok((
+            StatusCode::OK,
+            Json(StartEmailAuthResponse {
+                challenge_id: existing.id,
+                email: existing.email_normalized,
+                purpose: existing.purpose,
+                expires_at: existing.expires_at,
+                resend_after_seconds: resend_after_seconds(existing.created_at, now),
+            }),
+        ));
+    }
+    let prepared = service.prepare_challenge(&email, request.purpose.clone(), now);
+    send_verification_email(&prepared.email).map_err(|error| {
+        tracing::error!(%error, "verification code email send failed");
+        ApiError::internal(
+            "email_send_failed",
+            "验证码发送失败，请稍后再试".to_string(),
+        )
+    })?;
+    let challenge = state
+        .storage
+        .email_verification_challenges()
+        .create(state.tenant_id, prepared.challenge)
+        .await
+        .map_err(ApiError::from_storage)?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(StartEmailAuthResponse {
+            challenge_id: challenge.id,
+            email: challenge.email_normalized,
+            purpose: challenge.purpose,
+            expires_at: challenge.expires_at,
+            resend_after_seconds: Some(60),
+        }),
+    ))
+}
+
+async fn verify_email_auth(
+    State(state): State<AppState>,
+    Json(request): Json<VerifyEmailAuthRequest>,
+) -> std::result::Result<(StatusCode, HeaderMap, Json<VerifyEmailAuthResponse>), ApiError> {
+    let email = validate_auth_email(&request.email)?;
+    validate_required("code", &request.code)?;
+    let now = Utc::now();
+    let challenge = state
+        .storage
+        .email_verification_challenges()
+        .latest_active_by_email_and_purpose(state.tenant_id, &email, request.purpose.clone())
+        .await
+        .map_err(ApiError::from_storage)?
+        .ok_or_else(|| {
+            ApiError::bad_request(
+                "verification_challenge_not_found",
+                "没有找到可用验证码，请重新获取".to_string(),
+            )
+        })?;
+    match email_otp_service()?.verify_challenge(&challenge, &request.code, now) {
+        OtpVerificationStatus::Valid => {
+            state
+                .storage
+                .email_verification_challenges()
+                .mark_consumed(state.tenant_id, challenge.id, now)
+                .await
+                .map_err(ApiError::from_storage)?;
+        }
+        OtpVerificationStatus::Invalid => {
+            state
+                .storage
+                .email_verification_challenges()
+                .increment_attempt_count(state.tenant_id, challenge.id)
+                .await
+                .map_err(ApiError::from_storage)?;
+            return Err(ApiError::bad_request(
+                "verification_code_invalid",
+                "验证码不正确".to_string(),
+            ));
+        }
+        OtpVerificationStatus::Expired => {
+            return Err(ApiError::bad_request(
+                "verification_code_expired",
+                "验证码已过期，请重新获取".to_string(),
+            ));
+        }
+        OtpVerificationStatus::Consumed => {
+            return Err(ApiError::bad_request(
+                "verification_code_consumed",
+                "验证码已使用，请重新获取".to_string(),
+            ));
+        }
+        OtpVerificationStatus::AttemptsExceeded => {
+            return Err(ApiError::bad_request(
+                "verification_code_attempts_exceeded",
+                "验证码尝试次数过多，请重新获取".to_string(),
+            ));
+        }
+    }
+
+    let user = state
+        .storage
+        .users()
+        .ensure_by_email(state.tenant_id, &email, Some(&email))
+        .await
+        .map_err(ApiError::from_storage)?;
+    let (session, session_token) = create_auth_session(
+        &state,
+        &user,
+        AuthSessionMethod::EmailCode,
+        request.device_fingerprint,
+    )
+    .await?;
+
+    Ok((
+        StatusCode::CREATED,
+        set_session_cookie_headers(&session_token)?,
+        Json(VerifyEmailAuthResponse {
+            user: to_auth_user_view(&user, true),
+            session: to_auth_session_view(&session, &user.email),
+            active_secret_binding_ids: Vec::new(),
+        }),
+    ))
+}
+
+async fn login_with_local_key(
+    State(state): State<AppState>,
+    Json(request): Json<KeyLoginRequest>,
+) -> std::result::Result<(StatusCode, HeaderMap, Json<KeyLoginResponse>), ApiError> {
+    let email = validate_auth_email(&request.email)?;
+    validate_required("local_key", &request.local_key)?;
+    let fingerprint = local_key_fingerprint(&request.local_key);
+    let bindings = state
+        .storage
+        .secret_bindings()
+        .list_by_fingerprint(state.tenant_id, &fingerprint)
+        .await
+        .map_err(ApiError::from_storage)?;
+    if bindings.is_empty() {
+        return Err(ApiError::unauthorized(
+            "invalid_local_key",
+            "邮箱或密钥不匹配".to_string(),
+        ));
+    }
+    let active_secret_binding_ids = bindings
+        .iter()
+        .map(|binding| binding.id)
+        .collect::<Vec<_>>();
+    let user = state
+        .storage
+        .users()
+        .ensure_by_email(state.tenant_id, &email, Some(&email))
+        .await
+        .map_err(ApiError::from_storage)?;
+    let user = state
+        .storage
+        .users()
+        .update_primary_secret_fingerprint(state.tenant_id, user.id, &fingerprint, Utc::now())
+        .await
+        .map_err(ApiError::from_storage)?
+        .unwrap_or(user);
+    let (session, session_token) = create_auth_session(
+        &state,
+        &user,
+        AuthSessionMethod::EmailKey,
+        request.device_fingerprint,
+    )
+    .await?;
+
+    Ok((
+        StatusCode::CREATED,
+        set_session_cookie_headers(&session_token)?,
+        Json(KeyLoginResponse {
+            user: to_auth_user_view(&user, true),
+            session: to_auth_session_view(&session, &user.email),
+            active_secret_binding_ids,
+        }),
+    ))
+}
+
+async fn get_auth_session(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> std::result::Result<Json<AuthSessionResponse>, ApiError> {
+    let Some((user, session)) = current_auth_session(&state, &headers).await? else {
+        return Ok(Json(AuthSessionResponse {
+            user: None,
+            session: None,
+        }));
+    };
+
+    Ok(Json(AuthSessionResponse {
+        user: Some(to_auth_user_view(&user, true)),
+        session: Some(to_auth_session_view(&session, &user.email)),
+    }))
+}
+
+async fn logout_auth_session(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> std::result::Result<(HeaderMap, Json<LogoutResponse>), ApiError> {
+    let mut revoked = false;
+    if let Some(session_token) = auth_session_token_from_headers(&headers) {
+        if let Some(session) = state
+            .storage
+            .user_sessions()
+            .get_by_token_hash(state.tenant_id, &auth_session_token_hash(&session_token))
+            .await
+            .map_err(ApiError::from_storage)?
+        {
+            state
+                .storage
+                .user_sessions()
+                .revoke(state.tenant_id, session.id, Utc::now())
+                .await
+                .map_err(ApiError::from_storage)?;
+            revoked = true;
+        }
+    }
+
+    Ok((
+        clear_session_cookie_headers()?,
+        Json(LogoutResponse { revoked }),
+    ))
+}
+
+async fn rotate_local_key(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<KeyRotateRequest>,
+) -> std::result::Result<Json<KeyRotateResponse>, ApiError> {
+    validate_required("new_local_key", &request.new_local_key)?;
+    let Some((user, _session)) = current_auth_session(&state, &headers).await? else {
+        return Err(ApiError::unauthorized(
+            "auth_session_required",
+            "请先登录后再更换密钥".to_string(),
+        ));
+    };
+    let fingerprint = local_key_fingerprint(&request.new_local_key);
+    let user = state
+        .storage
+        .users()
+        .update_primary_secret_fingerprint(state.tenant_id, user.id, &fingerprint, Utc::now())
+        .await
+        .map_err(ApiError::from_storage)?
+        .unwrap_or(user);
+    let active_secret_binding_ids = state
+        .storage
+        .secret_bindings()
+        .list_by_fingerprint(state.tenant_id, &fingerprint)
+        .await
+        .map_err(ApiError::from_storage)?
+        .into_iter()
+        .map(|binding| binding.id)
+        .collect();
+
+    Ok(Json(KeyRotateResponse {
+        user: to_auth_user_view(&user, true),
+        primary_secret_fingerprint: fingerprint,
+        active_secret_binding_ids,
+    }))
+}
+
+async fn bind_auth_email(
+    State(state): State<AppState>,
+    Json(request): Json<BindEmailRequest>,
+) -> std::result::Result<(StatusCode, Json<BindEmailResponse>), ApiError> {
+    let email = validate_auth_email(&request.email)?;
+    let now = Utc::now();
+    if let Some(existing) =
+        reusable_email_challenge(&state, &email, AuthChallengePurpose::BindEmail, now).await?
+    {
+        return Ok((
+            StatusCode::OK,
+            Json(BindEmailResponse {
+                challenge_id: existing.id,
+                email: existing.email_normalized,
+                expires_at: existing.expires_at,
+            }),
+        ));
+    }
+    let prepared =
+        email_otp_service()?.prepare_challenge(&email, AuthChallengePurpose::BindEmail, now);
+    send_verification_email(&prepared.email).map_err(|error| {
+        tracing::error!(%error, "bind-email verification email send failed");
+        ApiError::internal(
+            "email_send_failed",
+            "验证码发送失败，请稍后再试".to_string(),
+        )
+    })?;
+    let challenge = state
+        .storage
+        .email_verification_challenges()
+        .create(state.tenant_id, prepared.challenge)
+        .await
+        .map_err(ApiError::from_storage)?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(BindEmailResponse {
+            challenge_id: challenge.id,
+            email: challenge.email_normalized,
+            expires_at: challenge.expires_at,
+        }),
+    ))
+}
+
 fn active_secret_binding_ids_from_headers(
     headers: &HeaderMap,
 ) -> std::result::Result<Vec<SecretBindingId>, ApiError> {
@@ -3054,6 +3398,207 @@ fn active_secret_binding_ids_from_headers(
         .collect()
 }
 
+fn validate_auth_email(email: &str) -> std::result::Result<String, ApiError> {
+    validate_required("email", email)?;
+    let normalized = auth_email::normalize_email(email);
+    let has_one_at = normalized.matches('@').count() == 1;
+    if !has_one_at || normalized.starts_with('@') || normalized.ends_with('@') {
+        return Err(ApiError::bad_request(
+            "invalid_email",
+            "email must be a valid address".to_string(),
+        ));
+    }
+    Ok(normalized)
+}
+
+fn email_otp_service() -> std::result::Result<EmailOtpService, ApiError> {
+    EmailOtpService::new(auth_env(
+        "AUTH_EMAIL_OTP_PEPPER",
+        DEFAULT_AUTH_EMAIL_OTP_PEPPER,
+    ))
+    .map_err(|error| ApiError::internal("auth_config_invalid", error.to_string()))
+}
+
+async fn reusable_email_challenge(
+    state: &AppState,
+    email_normalized: &str,
+    purpose: AuthChallengePurpose,
+    now: DateTime<Utc>,
+) -> std::result::Result<Option<EmailVerificationChallenge>, ApiError> {
+    let challenge = state
+        .storage
+        .email_verification_challenges()
+        .latest_active_by_email_and_purpose(state.tenant_id, email_normalized, purpose)
+        .await
+        .map_err(ApiError::from_storage)?;
+    Ok(challenge.filter(|challenge| {
+        challenge.expires_at > now
+            && (challenge.created_at + Duration::seconds(AUTH_EMAIL_RESEND_AFTER_SECONDS)) > now
+    }))
+}
+
+fn resend_after_seconds(created_at: DateTime<Utc>, now: DateTime<Utc>) -> Option<u32> {
+    let resend_at = created_at + Duration::seconds(AUTH_EMAIL_RESEND_AFTER_SECONDS);
+    let remaining = (resend_at - now).num_seconds();
+    (remaining > 0).then_some(remaining as u32)
+}
+
+fn auth_env(key: &str, fallback: &str) -> String {
+    std::env::var(key)
+        .ok()
+        .and_then(|value| {
+            let value = value.trim().to_string();
+            (!value.is_empty()).then_some(value)
+        })
+        .unwrap_or_else(|| fallback.to_string())
+}
+
+fn local_key_fingerprint(local_key: &str) -> String {
+    sha256_hex([local_key.trim().as_bytes()])
+}
+
+fn auth_session_token_hash(session_token: &str) -> String {
+    let pepper = auth_env("AUTH_SESSION_PEPPER", DEFAULT_AUTH_SESSION_PEPPER);
+    sha256_hex([pepper.as_bytes(), b":", session_token.as_bytes()])
+}
+
+fn sha256_hex<const N: usize>(parts: [&[u8]; N]) -> String {
+    let mut hasher = Sha256::new();
+    for part in parts {
+        hasher.update(part);
+    }
+    format!("{:x}", hasher.finalize())
+}
+
+fn new_auth_session_token() -> String {
+    format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple())
+}
+
+fn normalize_device_fingerprint(device_fingerprint: Option<String>) -> String {
+    trim_optional(device_fingerprint).unwrap_or_else(|| "unknown-device".to_string())
+}
+
+async fn create_auth_session(
+    state: &AppState,
+    user: &User,
+    auth_method: AuthSessionMethod,
+    device_fingerprint: Option<String>,
+) -> std::result::Result<(UserSession, String), ApiError> {
+    let now = Utc::now();
+    let session_token = new_auth_session_token();
+    let session = state
+        .storage
+        .user_sessions()
+        .create(
+            state.tenant_id,
+            NewUserSession {
+                user_id: user.id,
+                device_fingerprint: normalize_device_fingerprint(device_fingerprint),
+                session_token_hash: auth_session_token_hash(&session_token),
+                auth_method,
+                expires_at: now + Duration::days(AUTH_SESSION_TTL_DAYS),
+                created_at: now,
+            },
+        )
+        .await
+        .map_err(ApiError::from_storage)?;
+    Ok((session, session_token))
+}
+
+async fn current_auth_session(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> std::result::Result<Option<(User, UserSession)>, ApiError> {
+    let Some(session_token) = auth_session_token_from_headers(headers) else {
+        return Ok(None);
+    };
+    let Some(session) = state
+        .storage
+        .user_sessions()
+        .get_by_token_hash(state.tenant_id, &auth_session_token_hash(&session_token))
+        .await
+        .map_err(ApiError::from_storage)?
+    else {
+        return Ok(None);
+    };
+    let now = Utc::now();
+    if session.revoked_at.is_some() || session.expires_at <= now {
+        return Ok(None);
+    }
+    let Some(user) = state
+        .storage
+        .users()
+        .get_by_id(state.tenant_id, session.user_id)
+        .await
+        .map_err(ApiError::from_storage)?
+    else {
+        return Ok(None);
+    };
+    Ok(Some((user, session)))
+}
+
+async fn current_auth_user_id(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> std::result::Result<Option<UserId>, ApiError> {
+    Ok(current_auth_session(state, headers)
+        .await?
+        .map(|(user, _session)| user.id))
+}
+
+fn auth_session_token_from_headers(headers: &HeaderMap) -> Option<String> {
+    let raw = headers.get(header::COOKIE)?.to_str().ok()?;
+    raw.split(';').find_map(|entry| {
+        let (name, value) = entry.trim().split_once('=')?;
+        (name == AUTH_SESSION_COOKIE_NAME && !value.is_empty()).then(|| value.to_string())
+    })
+}
+
+fn set_session_cookie_headers(session_token: &str) -> std::result::Result<HeaderMap, ApiError> {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::SET_COOKIE,
+        HeaderValue::from_str(&format!(
+            "{AUTH_SESSION_COOKIE_NAME}={session_token}; Path=/; HttpOnly; SameSite=Lax; Max-Age={}",
+            AUTH_SESSION_TTL_DAYS * 24 * 60 * 60
+        ))
+        .map_err(|error| ApiError::internal("auth_cookie_invalid", error.to_string()))?,
+    );
+    Ok(headers)
+}
+
+fn clear_session_cookie_headers() -> std::result::Result<HeaderMap, ApiError> {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::SET_COOKIE,
+        HeaderValue::from_str(&format!(
+            "{AUTH_SESSION_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0"
+        ))
+        .map_err(|error| ApiError::internal("auth_cookie_invalid", error.to_string()))?,
+    );
+    Ok(headers)
+}
+
+fn to_auth_user_view(user: &User, email_verified: bool) -> AuthUserView {
+    AuthUserView {
+        id: user.id,
+        email: user.email.clone(),
+        display_name: user.display_name.clone(),
+        email_verified,
+    }
+}
+
+fn to_auth_session_view(session: &UserSession, email: &str) -> AuthSessionView {
+    AuthSessionView {
+        id: session.id,
+        user_id: session.user_id,
+        email: email.to_string(),
+        auth_method: session.auth_method.clone(),
+        created_at: session.created_at,
+        expires_at: session.expires_at,
+    }
+}
+
 fn merge_secret_binding_ids(
     left: &[SecretBindingId],
     right: &[SecretBindingId],
@@ -3067,8 +3612,15 @@ fn merge_secret_binding_ids(
     merged
 }
 
-fn dataset_is_visible(dataset: &Dataset, active_secret_binding_ids: &[SecretBindingId]) -> bool {
+fn dataset_is_visible(
+    dataset: &Dataset,
+    active_secret_binding_ids: &[SecretBindingId],
+    current_user_id: Option<UserId>,
+) -> bool {
     dataset.visibility == DatasetVisibility::Public
+        || dataset
+            .owner_user_id
+            .is_some_and(|owner_user_id| Some(owner_user_id) == current_user_id)
         || dataset.default_secret_binding_ids.iter().any(|secret_id| {
             active_secret_binding_ids
                 .iter()
@@ -3079,10 +3631,11 @@ fn dataset_is_visible(dataset: &Dataset, active_secret_binding_ids: &[SecretBind
 fn filter_visible_datasets(
     datasets: Vec<Dataset>,
     active_secret_binding_ids: &[SecretBindingId],
+    current_user_id: Option<UserId>,
 ) -> Vec<Dataset> {
     datasets
         .into_iter()
-        .filter(|dataset| dataset_is_visible(dataset, active_secret_binding_ids))
+        .filter(|dataset| dataset_is_visible(dataset, active_secret_binding_ids, current_user_id))
         .collect()
 }
 
@@ -3101,6 +3654,15 @@ async fn load_visible_dataset(
     dataset_id: DatasetId,
     active_secret_binding_ids: &[SecretBindingId],
 ) -> std::result::Result<Dataset, ApiError> {
+    load_visible_dataset_for_user(state, dataset_id, active_secret_binding_ids, None).await
+}
+
+async fn load_visible_dataset_for_user(
+    state: &AppState,
+    dataset_id: DatasetId,
+    active_secret_binding_ids: &[SecretBindingId],
+    current_user_id: Option<UserId>,
+) -> std::result::Result<Dataset, ApiError> {
     let dataset = state
         .storage
         .datasets()
@@ -3108,7 +3670,7 @@ async fn load_visible_dataset(
         .await
         .map_err(ApiError::from_storage)?
         .ok_or_else(|| dataset_not_found_error(dataset_id))?;
-    if !dataset_is_visible(&dataset, active_secret_binding_ids) {
+    if !dataset_is_visible(&dataset, active_secret_binding_ids, current_user_id) {
         return Err(dataset_not_found_error(dataset_id));
     }
     Ok(dataset)
@@ -3118,6 +3680,15 @@ async fn load_visible_document(
     state: &AppState,
     document_id: DocumentId,
     active_secret_binding_ids: &[SecretBindingId],
+) -> std::result::Result<Document, ApiError> {
+    load_visible_document_for_user(state, document_id, active_secret_binding_ids, None).await
+}
+
+async fn load_visible_document_for_user(
+    state: &AppState,
+    document_id: DocumentId,
+    active_secret_binding_ids: &[SecretBindingId],
+    current_user_id: Option<UserId>,
 ) -> std::result::Result<Document, ApiError> {
     let document = state
         .storage
@@ -3131,7 +3702,13 @@ async fn load_visible_document(
                 format!("document {} was not found", document_id),
             )
         })?;
-    load_visible_dataset(state, document.dataset_id, active_secret_binding_ids).await?;
+    load_visible_dataset_for_user(
+        state,
+        document.dataset_id,
+        active_secret_binding_ids,
+        current_user_id,
+    )
+    .await?;
     Ok(document)
 }
 
@@ -3139,6 +3716,15 @@ async fn load_visible_report_plan(
     state: &AppState,
     plan_id: ReportPlanId,
     active_secret_binding_ids: &[SecretBindingId],
+) -> std::result::Result<ReportPlan, ApiError> {
+    load_visible_report_plan_for_user(state, plan_id, active_secret_binding_ids, None).await
+}
+
+async fn load_visible_report_plan_for_user(
+    state: &AppState,
+    plan_id: ReportPlanId,
+    active_secret_binding_ids: &[SecretBindingId],
+    current_user_id: Option<UserId>,
 ) -> std::result::Result<ReportPlan, ApiError> {
     let plan = state
         .storage
@@ -3152,7 +3738,13 @@ async fn load_visible_report_plan(
                 format!("report plan {} was not found", plan_id),
             )
         })?;
-    load_visible_dataset(state, plan.dataset_id, active_secret_binding_ids).await?;
+    load_visible_dataset_for_user(
+        state,
+        plan.dataset_id,
+        active_secret_binding_ids,
+        current_user_id,
+    )
+    .await?;
     Ok(plan)
 }
 
@@ -3177,6 +3769,7 @@ async fn ensure_default_public_datasets(state: &AppState) -> std::result::Result
                     key: (*key).to_string(),
                     title: (*title).to_string(),
                     description: Some((*description).to_string()),
+                    owner_user_id: None,
                 },
                 json!({
                     "visibility": DatasetVisibility::Public.as_str(),
@@ -3209,8 +3802,14 @@ async fn create_dataset_secret_binding(
 ) -> std::result::Result<(StatusCode, Json<CreateDatasetSecretBindingResponse>), ApiError> {
     validate_required("fingerprint", &request.fingerprint)?;
     let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
-    let dataset =
-        load_visible_dataset(&state, request.dataset_id, &active_secret_binding_ids).await?;
+    let current_user_id = current_auth_user_id(&state, &headers).await?;
+    let dataset = load_visible_dataset_for_user(
+        &state,
+        request.dataset_id,
+        &active_secret_binding_ids,
+        current_user_id,
+    )
+    .await?;
     let label = trim_optional(request.label).unwrap_or_else(|| "local-browser-key".to_string());
     let binding = state
         .storage
@@ -3300,6 +3899,7 @@ async fn list_datasets(
 ) -> std::result::Result<Json<Vec<DatasetSummary>>, ApiError> {
     ensure_default_public_datasets(&state).await?;
     let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
+    let current_user_id = current_auth_user_id(&state, &headers).await?;
     let datasets = state
         .storage
         .datasets()
@@ -3308,7 +3908,7 @@ async fn list_datasets(
         .map_err(ApiError::from_storage)?;
 
     Ok(Json(
-        filter_visible_datasets(datasets, &active_secret_binding_ids)
+        filter_visible_datasets(datasets, &active_secret_binding_ids, current_user_id)
             .into_iter()
             .map(|dataset| dataset_summary(dataset, None))
             .collect(),
@@ -3317,6 +3917,7 @@ async fn list_datasets(
 
 async fn create_dataset(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(request): Json<CreateDatasetRequest>,
 ) -> std::result::Result<(StatusCode, Json<DatasetSummary>), ApiError> {
     validate_required("key", &request.key)?;
@@ -3331,6 +3932,7 @@ async fn create_dataset(
     };
     let access_warning =
         (visibility == DatasetVisibility::Public).then(|| PUBLIC_DATASET_WARNING.to_string());
+    let current_user_id = current_auth_user_id(&state, &headers).await?;
 
     let dataset = state
         .storage
@@ -3341,6 +3943,7 @@ async fn create_dataset(
                 key: request.key.trim().to_string(),
                 title: request.title.trim().to_string(),
                 description: trim_optional(request.description),
+                owner_user_id: current_user_id,
             },
             json!({
                 "visibility": visibility.as_str(),
@@ -3950,6 +4553,7 @@ async fn create_assistant_run(
 ) -> std::result::Result<(StatusCode, Json<CreateAssistantRunResponse>), ApiError> {
     validate_required("prompt", &request.prompt)?;
     let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
+    let current_user_id = current_auth_user_id(&state, &headers).await?;
     ensure_default_public_datasets(&state).await?;
     let visible_datasets = filter_visible_datasets(
         state
@@ -3959,6 +4563,7 @@ async fn create_assistant_run(
             .await
             .map_err(ApiError::from_storage)?,
         &active_secret_binding_ids,
+        current_user_id,
     );
     let selected_dataset_id = request
         .selected_scope
@@ -4147,6 +4752,7 @@ async fn create_assistant_run(
         .create(
             state.tenant_id,
             &NewAssistantRun {
+                user_id: current_user_id,
                 local_thread_id,
                 user_prompt: request.prompt.trim().to_string(),
                 startup_briefing: request
@@ -4544,17 +5150,20 @@ async fn continue_assistant_run(
 
 async fn create_conversation_memory_item(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(request): Json<CreateConversationMemoryItemRequest>,
 ) -> std::result::Result<(StatusCode, Json<ConversationMemoryItemView>), ApiError> {
     validate_required("local_thread_id", &request.local_thread_id)?;
     validate_required("item_kind", &request.item_kind)?;
     validate_required("summary", &request.summary)?;
+    let current_user_id = current_auth_user_id(&state, &headers).await?;
     let item = state
         .storage
         .conversation_memory_items()
         .create(
             state.tenant_id,
             &NewConversationMemoryItem {
+                user_id: current_user_id,
                 local_thread_id: request.local_thread_id.trim().to_string(),
                 role: request.role,
                 item_kind: request.item_kind.trim().to_string(),
@@ -4576,6 +5185,7 @@ async fn create_conversation_memory_item(
 
 async fn create_static_page_draft_for_assistant_run(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(run_id): Path<String>,
     Json(request): Json<CreateStaticPageDraftRequest>,
 ) -> std::result::Result<(StatusCode, Json<CreateStaticPageDraftResponse>), ApiError> {
@@ -4592,6 +5202,14 @@ async fn create_static_page_draft_for_assistant_run(
                 format!("assistant run {} was not found", run_id),
             )
         })?;
+    let current_user_id = current_auth_user_id(&state, &headers).await?;
+    if run.user_id.is_some() && run.user_id != current_user_id {
+        return Err(ApiError::not_found(
+            "assistant_run_not_found",
+            format!("assistant run {} was not found", run_id),
+        ));
+    }
+    let owner_user_id = run.user_id.or(current_user_id);
     let prompt = request
         .prompt
         .as_deref()
@@ -4633,6 +5251,7 @@ async fn create_static_page_draft_for_assistant_run(
             state.tenant_id,
             &NewStaticPageDraft {
                 assistant_run_id: run.id,
+                owner_user_id,
                 title,
                 status,
                 selected_scope,
@@ -4673,9 +5292,11 @@ async fn create_static_page_draft_for_assistant_run(
 
 async fn list_static_page_drafts(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Query(query): Query<StaticPageDraftListQuery>,
 ) -> std::result::Result<Json<Vec<StaticPageDraftView>>, ApiError> {
     let limit = normalize_static_page_draft_list_limit(query.limit);
+    let current_user_id = current_auth_user_id(&state, &headers).await?;
     let drafts = if let Some(run_id) = query
         .assistant_run_id
         .as_deref()
@@ -4704,7 +5325,16 @@ async fn list_static_page_drafts(
     };
 
     Ok(Json(
-        drafts.into_iter().map(to_static_page_draft_view).collect(),
+        drafts
+            .into_iter()
+            .filter(|draft| {
+                draft.owner_user_id.is_none()
+                    || draft
+                        .owner_user_id
+                        .is_some_and(|owner| Some(owner) == current_user_id)
+            })
+            .map(to_static_page_draft_view)
+            .collect(),
     ))
 }
 
@@ -5132,6 +5762,7 @@ async fn create_static_page_render(
                 &NewStaticPageRenderOutput {
                     draft_id: draft.id,
                     assistant_run_id: draft.assistant_run_id,
+                    owner_user_id: draft.owner_user_id,
                     image_job_id: image_job.as_ref().map(|job| job.id),
                     status: StaticPageRenderOutputStatus::Queued,
                     html: String::new(),
@@ -5224,6 +5855,7 @@ async fn create_static_page_render(
             &NewStaticPageRenderOutput {
                 draft_id: draft.id,
                 assistant_run_id: draft.assistant_run_id,
+                owner_user_id: draft.owner_user_id,
                 image_job_id: image_job.as_ref().map(|job| job.id),
                 status: StaticPageRenderOutputStatus::Rendered,
                 html: rendered.html,
@@ -6898,6 +7530,7 @@ async fn apply_chat_session_report_entry_update_with_state(
                 session.dataset_id,
                 &entry.title,
                 &entry.objective,
+                None,
                 Some(report_service_handoff),
             )
             .await?;
@@ -6941,6 +7574,7 @@ async fn list_documents(
     headers: HeaderMap,
 ) -> std::result::Result<Json<Vec<DocumentSummary>>, ApiError> {
     let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
+    let current_user_id = current_auth_user_id(&state, &headers).await?;
     let visible_dataset_ids: HashSet<DatasetId> = filter_visible_datasets(
         state
             .storage
@@ -6949,6 +7583,7 @@ async fn list_documents(
             .await
             .map_err(ApiError::from_storage)?,
         &active_secret_binding_ids,
+        current_user_id,
     )
     .into_iter()
     .map(|dataset| dataset.id)
@@ -7130,7 +7765,14 @@ async fn register_document(
         &active_secret_binding_ids_from_headers(&headers)?,
         &request.secret_binding_ids,
     );
-    load_visible_dataset(&state, request.dataset_id, &active_secret_binding_ids).await?;
+    let current_user_id = current_auth_user_id(&state, &headers).await?;
+    load_visible_dataset_for_user(
+        &state,
+        request.dataset_id,
+        &active_secret_binding_ids,
+        current_user_id,
+    )
+    .await?;
 
     let document = state
         .storage
@@ -7143,6 +7785,7 @@ async fn register_document(
                 object_key: request.object_key.trim().to_string(),
                 content_type: request.content_type.trim().to_string(),
                 secret_binding_ids: request.secret_binding_ids,
+                owner_user_id: current_user_id,
                 metadata: request.metadata,
             },
         )
@@ -7193,13 +7836,21 @@ async fn create_report_plan(
     validate_required("objective", &request.objective)?;
 
     let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
-    load_visible_dataset(&state, request.dataset_id, &active_secret_binding_ids).await?;
+    let current_user_id = current_auth_user_id(&state, &headers).await?;
+    load_visible_dataset_for_user(
+        &state,
+        request.dataset_id,
+        &active_secret_binding_ids,
+        current_user_id,
+    )
+    .await?;
 
     let (plan, execution) = create_report_plan_and_execution(
         &state,
         request.dataset_id,
         request.title.trim(),
         request.objective.trim(),
+        current_user_id,
         None,
     )
     .await?;
@@ -7221,6 +7872,7 @@ async fn list_report_plans(
     headers: HeaderMap,
 ) -> std::result::Result<Json<Vec<ReportPlanSummary>>, ApiError> {
     let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
+    let current_user_id = current_auth_user_id(&state, &headers).await?;
     let visible_dataset_ids: HashSet<DatasetId> = filter_visible_datasets(
         state
             .storage
@@ -7229,6 +7881,7 @@ async fn list_report_plans(
             .await
             .map_err(ApiError::from_storage)?,
         &active_secret_binding_ids,
+        current_user_id,
     )
     .into_iter()
     .map(|dataset| dataset.id)
@@ -7292,6 +7945,7 @@ async fn create_report_plan_and_execution(
     dataset_id: DatasetId,
     title: &str,
     objective: &str,
+    owner_user_id: Option<UserId>,
     service_handoff: Option<contracts::ManifestServiceHandoffView>,
 ) -> std::result::Result<(ReportPlan, WorkflowExecution), ApiError> {
     let plan = state
@@ -7304,6 +7958,7 @@ async fn create_report_plan_and_execution(
                 title: title.trim().to_string(),
                 objective: objective.trim().to_string(),
                 theme_key: "default-local".to_string(),
+                owner_user_id,
             },
         )
         .await
@@ -7588,6 +8243,7 @@ async fn list_published_reports(
     headers: HeaderMap,
 ) -> std::result::Result<Json<Vec<PublishedReportView>>, ApiError> {
     let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
+    let current_user_id = current_auth_user_id(&state, &headers).await?;
     let visible_dataset_ids: HashSet<DatasetId> = filter_visible_datasets(
         state
             .storage
@@ -7596,6 +8252,7 @@ async fn list_published_reports(
             .await
             .map_err(ApiError::from_storage)?,
         &active_secret_binding_ids,
+        current_user_id,
     )
     .into_iter()
     .map(|dataset| dataset.id)
@@ -14309,6 +14966,16 @@ impl ApiError {
         }
     }
 
+    fn unauthorized(code: &str, message: String) -> Self {
+        Self {
+            status: StatusCode::UNAUTHORIZED,
+            payload: ApiErrorResponse {
+                code: code.to_string(),
+                message,
+            },
+        }
+    }
+
     fn internal(code: &str, message: String) -> Self {
         Self {
             status: StatusCode::INTERNAL_SERVER_ERROR,
@@ -14888,6 +15555,7 @@ mod tests {
                     key: format!("react-visible-{}", Uuid::new_v4()),
                     title: "ReAct 可见测试库".to_string(),
                     description: Some("visible dataset".to_string()),
+                    owner_user_id: None,
                 },
                 json!({
                     "visibility": DatasetVisibility::Public.as_str(),
@@ -14904,6 +15572,7 @@ mod tests {
                     key: format!("react-hidden-{}", Uuid::new_v4()),
                     title: "ReAct 不可见测试库".to_string(),
                     description: Some("hidden dataset".to_string()),
+                    owner_user_id: None,
                 },
                 json!({
                     "visibility": DatasetVisibility::Private.as_str(),
@@ -15279,6 +15948,7 @@ mod tests {
                     key: format!("openclaw-visible-{}", Uuid::new_v4()),
                     title: "OpenClaw 可见测试库".to_string(),
                     description: Some("visible dataset".to_string()),
+                    owner_user_id: None,
                 },
                 json!({
                     "visibility": DatasetVisibility::Public.as_str(),
@@ -15295,6 +15965,7 @@ mod tests {
                     key: format!("openclaw-hidden-{}", Uuid::new_v4()),
                     title: "OpenClaw 不可见测试库".to_string(),
                     description: Some("hidden dataset".to_string()),
+                    owner_user_id: None,
                 },
                 json!({
                     "visibility": DatasetVisibility::Private.as_str(),
@@ -15740,6 +16411,7 @@ mod tests {
         let draft = StaticPageDraft {
             id: StaticPageDraftId::new(),
             tenant_id: TenantId::new(),
+            owner_user_id: None,
             assistant_run_id: AssistantRunId::new(),
             title: "经营分析静态页".to_string(),
             status: StaticPageDraftStatus::Queued,
@@ -15819,6 +16491,7 @@ mod tests {
 
         let (draft_status, Json(draft_response)) = create_static_page_draft_for_assistant_run(
             State(state.clone()),
+            HeaderMap::new(),
             Path(run_response.assistant_run_id.to_string()),
             Json(CreateStaticPageDraftRequest {
                 title: Some("经营分析静态页".to_string()),
@@ -15866,6 +16539,7 @@ mod tests {
 
         let Json(local_thread_drafts) = list_static_page_drafts(
             State(state.clone()),
+            HeaderMap::new(),
             Query(StaticPageDraftListQuery {
                 local_thread_id: Some("static-page-draft-thread".to_string()),
                 assistant_run_id: None,
@@ -15879,6 +16553,7 @@ mod tests {
 
         let Json(run_drafts) = list_static_page_drafts(
             State(state.clone()),
+            HeaderMap::new(),
             Query(StaticPageDraftListQuery {
                 local_thread_id: None,
                 assistant_run_id: Some(run_response.assistant_run_id.to_string()),
@@ -16365,6 +17040,7 @@ mod tests {
 
         let (_, Json(draft_response)) = create_static_page_draft_for_assistant_run(
             State(state.clone()),
+            HeaderMap::new(),
             Path(run_response.assistant_run_id.to_string()),
             Json(CreateStaticPageDraftRequest {
                 title: Some("经营分析静态页".to_string()),
@@ -16525,6 +17201,7 @@ mod tests {
 
         let (_, Json(draft_response)) = create_static_page_draft_for_assistant_run(
             State(state.clone()),
+            HeaderMap::new(),
             Path(run_response.assistant_run_id.to_string()),
             Json(CreateStaticPageDraftRequest {
                 title: Some("经营分析静态页".to_string()),
@@ -16707,6 +17384,7 @@ mod tests {
 
         let (memory_status, Json(memory_item)) = create_conversation_memory_item(
             State(state.clone()),
+            HeaderMap::new(),
             Json(CreateConversationMemoryItemRequest {
                 local_thread_id: "browser-thread-memory".to_string(),
                 role: ChatMessageRole::User,
@@ -16817,6 +17495,7 @@ mod tests {
                     key: format!("private-orders-{}", Uuid::new_v4()),
                     title: "私密订单".to_string(),
                     description: Some("只能由匹配本地密钥看到的订单数据集。".to_string()),
+                    owner_user_id: None,
                 },
                 json!({
                     "visibility": DatasetVisibility::Private.as_str(),
@@ -16916,6 +17595,7 @@ mod tests {
                     key: format!("orders-evidence-{}", Uuid::new_v4()),
                     title: "订单风险".to_string(),
                     description: Some("订单履约和延期风险资料。".to_string()),
+                    owner_user_id: None,
                 },
             )
             .await
@@ -16931,6 +17611,7 @@ mod tests {
                     object_key: "documents/order-risk-notes.md".to_string(),
                     content_type: "text/markdown".to_string(),
                     secret_binding_ids: Vec::new(),
+                    owner_user_id: None,
                     metadata: json!({}),
                 },
             )
@@ -17089,6 +17770,7 @@ mod tests {
         Dataset {
             id: DatasetId::new(),
             tenant_id: TenantId::new(),
+            owner_user_id: None,
             key: format!("dataset-{}", Uuid::new_v4()),
             title: "Dataset Visibility Test".to_string(),
             description: None,
@@ -17105,7 +17787,7 @@ mod tests {
     fn dataset_visibility_allows_public_without_secret() {
         let dataset = test_dataset(DatasetVisibility::Public, Vec::new());
 
-        assert!(dataset_is_visible(&dataset, &[]));
+        assert!(dataset_is_visible(&dataset, &[], None));
     }
 
     #[test]
@@ -17113,9 +17795,24 @@ mod tests {
         let secret_binding_id = SecretBindingId::new();
         let dataset = test_dataset(DatasetVisibility::Private, vec![secret_binding_id]);
 
-        assert!(!dataset_is_visible(&dataset, &[]));
-        assert!(!dataset_is_visible(&dataset, &[SecretBindingId::new()]));
-        assert!(dataset_is_visible(&dataset, &[secret_binding_id]));
+        assert!(!dataset_is_visible(&dataset, &[], None));
+        assert!(!dataset_is_visible(
+            &dataset,
+            &[SecretBindingId::new()],
+            None
+        ));
+        assert!(dataset_is_visible(&dataset, &[secret_binding_id], None));
+    }
+
+    #[test]
+    fn dataset_visibility_allows_private_owner_without_secret() {
+        let owner_user_id = UserId::new();
+        let mut dataset = test_dataset(DatasetVisibility::Private, Vec::new());
+        dataset.owner_user_id = Some(owner_user_id);
+
+        assert!(dataset_is_visible(&dataset, &[], Some(owner_user_id)));
+        assert!(!dataset_is_visible(&dataset, &[], Some(UserId::new())));
+        assert!(!dataset_is_visible(&dataset, &[], None));
     }
 
     #[tokio::test]
@@ -17145,6 +17842,7 @@ mod tests {
                     key: format!("private-{}", Uuid::new_v4()),
                     title: "Private Dataset".to_string(),
                     description: None,
+                    owner_user_id: None,
                 },
             )
             .await
@@ -17224,6 +17922,7 @@ mod tests {
 
         let (status, Json(dataset)) = create_dataset(
             State(state),
+            HeaderMap::new(),
             Json(CreateDatasetRequest {
                 key: format!("secret-create-{}", Uuid::new_v4()),
                 title: "Secret Created Dataset".to_string(),
@@ -17270,6 +17969,7 @@ mod tests {
         );
         let (_, Json(dataset)) = create_dataset(
             State(state.clone()),
+            HeaderMap::new(),
             Json(CreateDatasetRequest {
                 key: format!("resolve-secret-{}", Uuid::new_v4()),
                 title: "Resolvable Private Dataset".to_string(),
@@ -17361,6 +18061,7 @@ mod tests {
                     key: format!("dataset-{}", Uuid::new_v4()),
                     title: "Report Entry Dataset".to_string(),
                     description: Some("Dataset used for platform-api route tests.".to_string()),
+                    owner_user_id: None,
                 },
             )
             .await
@@ -17465,6 +18166,7 @@ mod tests {
                     key: format!("dataset-{}", Uuid::new_v4()),
                     title: "Append Turn Dataset".to_string(),
                     description: Some("Dataset used for append turn tests.".to_string()),
+                    owner_user_id: None,
                 },
             )
             .await
@@ -17734,6 +18436,367 @@ mod tests {
             .await
             .expect("response body should load");
         serde_json::from_slice(&body).expect("response body should deserialize")
+    }
+
+    struct AuthApiTestHarness {
+        app: Router,
+        storage: PgStorage,
+        tenant_id: TenantId,
+    }
+
+    async fn build_auth_api_test_harness() -> Option<AuthApiTestHarness> {
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping auth route test: {reason}");
+                return None;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("platform-api-auth-test-{}", Uuid::new_v4()),
+                "Platform API Auth Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let app = router(
+            storage.clone(),
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+
+        Some(AuthApiTestHarness {
+            app,
+            storage,
+            tenant_id: tenant.id,
+        })
+    }
+
+    async fn post_json_request<T: serde::Serialize>(
+        app: Router,
+        uri: &str,
+        payload: &T,
+        cookie: Option<&str>,
+    ) -> axum::response::Response {
+        let mut builder = axum::http::Request::builder()
+            .method("POST")
+            .uri(uri)
+            .header(axum::http::header::CONTENT_TYPE, "application/json");
+        if let Some(cookie) = cookie {
+            builder = builder.header(axum::http::header::COOKIE, cookie);
+        }
+        let request = builder
+            .body(axum::body::Body::from(
+                serde_json::to_vec(payload).expect("request should serialize"),
+            ))
+            .expect("request should build");
+
+        app.oneshot(request)
+            .await
+            .expect("request should return a response")
+    }
+
+    async fn get_request(app: Router, uri: &str, cookie: Option<&str>) -> axum::response::Response {
+        let mut builder = axum::http::Request::builder().method("GET").uri(uri);
+        if let Some(cookie) = cookie {
+            builder = builder.header(axum::http::header::COOKIE, cookie);
+        }
+        let request = builder
+            .body(axum::body::Body::empty())
+            .expect("request should build");
+
+        app.oneshot(request)
+            .await
+            .expect("request should return a response")
+    }
+
+    fn cookie_pair_from_set_cookie(response: &axum::response::Response) -> String {
+        response
+            .headers()
+            .get(axum::http::header::SET_COOKIE)
+            .expect("set-cookie should be present")
+            .to_str()
+            .expect("set-cookie should be utf-8")
+            .split(';')
+            .next()
+            .expect("set-cookie should contain pair")
+            .to_string()
+    }
+
+    fn auth_otp_service_for_test() -> EmailOtpService {
+        EmailOtpService::new(auth_env(
+            "AUTH_EMAIL_OTP_PEPPER",
+            DEFAULT_AUTH_EMAIL_OTP_PEPPER,
+        ))
+        .expect("test otp service should build")
+    }
+
+    async fn issue_email_session_cookie(harness: &AuthApiTestHarness, email: &str) -> String {
+        let prepared = auth_otp_service_for_test().prepare_challenge(
+            email,
+            AuthChallengePurpose::Login,
+            Utc::now(),
+        );
+        harness
+            .storage
+            .email_verification_challenges()
+            .create(harness.tenant_id, prepared.challenge)
+            .await
+            .expect("verification challenge should persist");
+
+        let response = post_json_request(
+            harness.app.clone(),
+            "/v1/auth/email/verify",
+            &VerifyEmailAuthRequest {
+                email: email.to_string(),
+                code: prepared.email.code,
+                purpose: AuthChallengePurpose::Login,
+                device_fingerprint: Some("test-browser".to_string()),
+            },
+            None,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CREATED);
+        cookie_pair_from_set_cookie(&response)
+    }
+
+    #[tokio::test]
+    async fn email_auth_start_creates_challenge_and_sends_email() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let Some(harness) = build_auth_api_test_harness().await else {
+            return;
+        };
+
+        let response = post_json_request(
+            harness.app,
+            "/v1/auth/email/start",
+            &StartEmailAuthRequest {
+                email: " User@Example.COM ".to_string(),
+                purpose: AuthChallengePurpose::Login,
+                device_fingerprint: Some("browser-a".to_string()),
+            },
+            None,
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let payload: StartEmailAuthResponse = read_json_response(response).await;
+        assert_eq!(payload.email, "user@example.com");
+        assert_eq!(payload.purpose, AuthChallengePurpose::Login);
+        let challenge = harness
+            .storage
+            .email_verification_challenges()
+            .get_by_id(harness.tenant_id, payload.challenge_id)
+            .await
+            .expect("challenge lookup should succeed")
+            .expect("challenge should exist");
+        assert_eq!(challenge.email_normalized, "user@example.com");
+        assert_eq!(challenge.purpose, AuthChallengePurpose::Login);
+        assert!(!challenge.code_hash.is_empty());
+    }
+
+    #[tokio::test]
+    async fn email_auth_verify_creates_session() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let Some(harness) = build_auth_api_test_harness().await else {
+            return;
+        };
+        let prepared = auth_otp_service_for_test().prepare_challenge(
+            "verify@example.com",
+            AuthChallengePurpose::Login,
+            Utc::now(),
+        );
+        harness
+            .storage
+            .email_verification_challenges()
+            .create(harness.tenant_id, prepared.challenge)
+            .await
+            .expect("verification challenge should persist");
+
+        let response = post_json_request(
+            harness.app.clone(),
+            "/v1/auth/email/verify",
+            &VerifyEmailAuthRequest {
+                email: "VERIFY@example.com".to_string(),
+                code: prepared.email.code,
+                purpose: AuthChallengePurpose::Login,
+                device_fingerprint: Some("browser-b".to_string()),
+            },
+            None,
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let cookie = cookie_pair_from_set_cookie(&response);
+        assert!(cookie.starts_with(AUTH_SESSION_COOKIE_NAME));
+        let payload: VerifyEmailAuthResponse = read_json_response(response).await;
+        assert_eq!(payload.user.email, "verify@example.com");
+        assert_eq!(payload.session.auth_method, AuthSessionMethod::EmailCode);
+        assert!(payload.user.email_verified);
+    }
+
+    #[tokio::test]
+    async fn auth_key_login_resolves_user_and_session() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let Some(harness) = build_auth_api_test_harness().await else {
+            return;
+        };
+        let dataset = harness
+            .storage
+            .datasets()
+            .create(
+                harness.tenant_id,
+                NewDataset {
+                    key: format!("auth-key-dataset-{}", Uuid::new_v4()),
+                    title: "Auth Key Dataset".to_string(),
+                    description: None,
+                    owner_user_id: None,
+                },
+            )
+            .await
+            .expect("dataset should be created");
+        let fingerprint = local_key_fingerprint("local-secret");
+        let binding = harness
+            .storage
+            .secret_bindings()
+            .create(
+                harness.tenant_id,
+                NewSecretBinding {
+                    dataset_id: dataset.id,
+                    document_id: None,
+                    scope_level: SecretScopeLevel::Dataset,
+                    provider_key: "test-key".to_string(),
+                    cipher_text: "local-only".to_string(),
+                    fingerprint,
+                },
+            )
+            .await
+            .expect("secret binding should be created");
+
+        let response = post_json_request(
+            harness.app,
+            "/v1/auth/key/login",
+            &KeyLoginRequest {
+                email: "key-login@example.com".to_string(),
+                local_key: "local-secret".to_string(),
+                device_fingerprint: Some("browser-c".to_string()),
+            },
+            None,
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::CREATED);
+        assert!(response
+            .headers()
+            .contains_key(axum::http::header::SET_COOKIE));
+        let payload: KeyLoginResponse = read_json_response(response).await;
+        assert_eq!(payload.user.email, "key-login@example.com");
+        assert_eq!(payload.session.auth_method, AuthSessionMethod::EmailKey);
+        assert_eq!(payload.active_secret_binding_ids, vec![binding.id]);
+    }
+
+    #[tokio::test]
+    async fn auth_session_endpoint_returns_current_user() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let Some(harness) = build_auth_api_test_harness().await else {
+            return;
+        };
+        let cookie = issue_email_session_cookie(&harness, "session@example.com").await;
+
+        let response = get_request(harness.app, "/v1/auth/session", Some(&cookie)).await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload: AuthSessionResponse = read_json_response(response).await;
+        assert_eq!(
+            payload.user.expect("user should be returned").email,
+            "session@example.com"
+        );
+        assert_eq!(
+            payload
+                .session
+                .expect("session should be returned")
+                .auth_method,
+            AuthSessionMethod::EmailCode
+        );
+    }
+
+    #[tokio::test]
+    async fn dataset_list_includes_private_dataset_for_owner_session_only() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let Some(harness) = build_auth_api_test_harness().await else {
+            return;
+        };
+        let cookie = issue_email_session_cookie(&harness, "owner@example.com").await;
+
+        let response = post_json_request(
+            harness.app.clone(),
+            "/v1/datasets",
+            &CreateDatasetRequest {
+                key: format!("owned-private-{}", Uuid::new_v4()),
+                title: "Owner Private Dataset".to_string(),
+                description: None,
+                visibility: Some(DatasetVisibility::Private),
+                secret_binding_ids: Vec::new(),
+                secret_fingerprint: Some("owner-private-fingerprint".to_string()),
+                secret_label: Some("owner-key".to_string()),
+            },
+            Some(&cookie),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let created: DatasetSummary = read_json_response(response).await;
+        assert_eq!(created.visibility, DatasetVisibility::Private);
+
+        let response = get_request(harness.app.clone(), "/v1/datasets", None).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let anonymous_datasets: Vec<DatasetSummary> = read_json_response(response).await;
+        assert!(!anonymous_datasets
+            .iter()
+            .any(|dataset| dataset.id == created.id));
+
+        let response = get_request(harness.app.clone(), "/v1/datasets", Some(&cookie)).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let owner_datasets: Vec<DatasetSummary> = read_json_response(response).await;
+        assert!(owner_datasets
+            .iter()
+            .any(|dataset| dataset.id == created.id));
+    }
+
+    #[tokio::test]
+    async fn auth_logout_revokes_session() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let Some(harness) = build_auth_api_test_harness().await else {
+            return;
+        };
+        let cookie = issue_email_session_cookie(&harness, "logout@example.com").await;
+
+        let response = post_json_request(
+            harness.app.clone(),
+            "/v1/auth/logout",
+            &json!({}),
+            Some(&cookie),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let clear_cookie = response
+            .headers()
+            .get(axum::http::header::SET_COOKIE)
+            .expect("clear-cookie should be present")
+            .to_str()
+            .expect("clear-cookie should be utf-8")
+            .to_string();
+        assert!(clear_cookie.contains("Max-Age=0"));
+        let payload: LogoutResponse = read_json_response(response).await;
+        assert!(payload.revoked);
+
+        let session_response = get_request(harness.app, "/v1/auth/session", Some(&cookie)).await;
+        let session_payload: AuthSessionResponse = read_json_response(session_response).await;
+        assert!(session_payload.user.is_none());
+        assert!(session_payload.session.is_none());
     }
 
     #[test]
@@ -18615,6 +19678,7 @@ mod tests {
                     description: Some(
                         "Dataset used for report render host-surface tests.".to_string(),
                     ),
+                    owner_user_id: None,
                 },
             )
             .await
@@ -18628,6 +19692,7 @@ mod tests {
                     title: "Quarterly Report".to_string(),
                     objective: "Summarize the current dataset".to_string(),
                     theme_key: "default-local".to_string(),
+                    owner_user_id: None,
                 },
             )
             .await
@@ -18724,6 +19789,7 @@ mod tests {
                     description: Some(
                         "Dataset used for report plan continue host-surface tests.".to_string(),
                     ),
+                    owner_user_id: None,
                 },
             )
             .await
@@ -18737,6 +19803,7 @@ mod tests {
                     title: "Draft Report".to_string(),
                     objective: "Turn the dataset into a report plan".to_string(),
                     theme_key: "default-local".to_string(),
+                    owner_user_id: None,
                 },
             )
             .await
@@ -18798,6 +19865,7 @@ mod tests {
                     description: Some(
                         "Dataset used for report publish host-surface tests.".to_string(),
                     ),
+                    owner_user_id: None,
                 },
             )
             .await
@@ -18811,6 +19879,7 @@ mod tests {
                     title: "Quarterly Report".to_string(),
                     objective: "Summarize the current dataset".to_string(),
                     theme_key: "default-local".to_string(),
+                    owner_user_id: None,
                 },
             )
             .await
@@ -18990,6 +20059,7 @@ mod tests {
                     description: Some(
                         "Dataset used for published report read host-surface tests.".to_string(),
                     ),
+                    owner_user_id: None,
                 },
             )
             .await
@@ -19003,6 +20073,7 @@ mod tests {
                     title: "Executive Brief".to_string(),
                     objective: "Summarize the current dataset".to_string(),
                     theme_key: "default-local".to_string(),
+                    owner_user_id: None,
                 },
             )
             .await
@@ -19153,6 +20224,7 @@ mod tests {
                     description: Some(
                         "Dataset used for memory directory host-surface tests.".to_string(),
                     ),
+                    owner_user_id: None,
                 },
             )
             .await
@@ -19208,6 +20280,7 @@ mod tests {
                     description: Some(
                         "Dataset used for document detail host-surface tests.".to_string(),
                     ),
+                    owner_user_id: None,
                 },
             )
             .await
@@ -19222,6 +20295,7 @@ mod tests {
                     object_key: "documents/q1-notes.md".to_string(),
                     content_type: "text/markdown".to_string(),
                     secret_binding_ids: Vec::new(),
+                    owner_user_id: None,
                     metadata: json!({}),
                 },
             )
@@ -19334,6 +20408,7 @@ mod tests {
                     description: Some(
                         "Dataset used for document compare host-surface tests.".to_string(),
                     ),
+                    owner_user_id: None,
                 },
             )
             .await
@@ -19348,6 +20423,7 @@ mod tests {
                     object_key: "documents/contract-a.md".to_string(),
                     content_type: "text/markdown".to_string(),
                     secret_binding_ids: Vec::new(),
+                    owner_user_id: None,
                     metadata: json!({}),
                 },
             )
@@ -19363,6 +20439,7 @@ mod tests {
                     object_key: "documents/contract-b.md".to_string(),
                     content_type: "text/markdown".to_string(),
                     secret_binding_ids: Vec::new(),
+                    owner_user_id: None,
                     metadata: json!({}),
                 },
             )
@@ -19528,6 +20605,7 @@ mod tests {
                         "Dataset used to verify prompt-ranked retrieval evidence binding."
                             .to_string(),
                     ),
+                    owner_user_id: None,
                 },
             )
             .await
@@ -19542,6 +20620,7 @@ mod tests {
                     object_key: "documents/revenue.md".to_string(),
                     content_type: "text/markdown".to_string(),
                     secret_binding_ids: Vec::new(),
+                    owner_user_id: None,
                     metadata: json!({}),
                 },
             )
@@ -19557,6 +20636,7 @@ mod tests {
                     object_key: "documents/roadmap.md".to_string(),
                     content_type: "text/markdown".to_string(),
                     secret_binding_ids: Vec::new(),
+                    owner_user_id: None,
                     metadata: json!({}),
                 },
             )
@@ -19761,6 +20841,7 @@ mod tests {
                     description: Some(
                         "Dataset used to verify retrieval.search host surface.".to_string(),
                     ),
+                    owner_user_id: None,
                 },
             )
             .await
@@ -19775,6 +20856,7 @@ mod tests {
                     object_key: "documents/revenue-memo.md".to_string(),
                     content_type: "text/markdown".to_string(),
                     secret_binding_ids: Vec::new(),
+                    owner_user_id: None,
                     metadata: json!({}),
                 },
             )
@@ -19790,6 +20872,7 @@ mod tests {
                     object_key: "documents/roadmap-memo.md".to_string(),
                     content_type: "text/markdown".to_string(),
                     secret_binding_ids: Vec::new(),
+                    owner_user_id: None,
                     metadata: json!({}),
                 },
             )
@@ -19974,6 +21057,7 @@ mod tests {
                     description: Some(
                         "Dataset used for workflow retry host-surface tests.".to_string(),
                     ),
+                    owner_user_id: None,
                 },
             )
             .await
@@ -20189,6 +21273,7 @@ mod tests {
             id: DocumentId::new(),
             tenant_id: TenantId::new(),
             dataset_id: DatasetId::new(),
+            owner_user_id: None,
             title: "Quarterly Source".to_string(),
             object_key: "documents/q1.pdf".to_string(),
             content_type: "application/pdf".to_string(),
@@ -20346,6 +21431,7 @@ mod tests {
             id: ReportPlanId::new(),
             tenant_id: TenantId::new(),
             dataset_id: DatasetId::new(),
+            owner_user_id: None,
             title: "Quarterly Report".to_string(),
             objective: "Summarize product and market signals".to_string(),
             status: ReportPlanStatus::Planned,

@@ -1,11 +1,12 @@
 use chrono::{DateTime, Utc};
 use domain_model::{
-    AssistantRunEventId, AssistantRunId, ChatMessageId, ChatMessageRole, ChatSessionId,
-    ConversationMemoryItemId, DatasetId, DatasetLifecycle, DatasetOutputId, DatasetVisibility,
-    DocumentChunkId, DocumentId, LlmInvocationId, MemoryDirectoryId, PublishedReportId,
-    PublishedReportVersionId, PublishedSurface, ReportPlanAstVersionId, ReportPlanId,
-    ReportRenderOutputId, RetrievalEvidenceId, SecretBindingId, StaticPageDraftId,
-    StaticPageImageJobId, StaticPageRenderOutputId, ToolExecutionId, WorkflowEventId,
+    AssistantRunEventId, AssistantRunId, AuthChallengePurpose, AuthSessionMethod, ChatMessageId,
+    ChatMessageRole, ChatSessionId, ConversationMemoryItemId, DatasetId, DatasetLifecycle,
+    DatasetOutputId, DatasetVisibility, DocumentChunkId, DocumentId, EmailVerificationChallengeId,
+    LlmInvocationId, MemoryDirectoryId, PublishedReportId, PublishedReportVersionId,
+    PublishedSurface, ReportPlanAstVersionId, ReportPlanId, ReportRenderOutputId,
+    RetrievalEvidenceId, SecretBindingId, StaticPageDraftId, StaticPageImageJobId,
+    StaticPageRenderOutputId, ToolExecutionId, UserId, UserSessionId, WorkflowEventId,
     WorkflowExecutionId, WorkflowKind, WorkflowStatus, WorkflowTaskId, WorkflowTaskStatus,
 };
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -207,6 +208,121 @@ impl<'de> Deserialize<'de> for WorkflowSignalKindView {
             _ => Self::Other(value),
         })
     }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AuthUserView {
+    pub id: UserId,
+    pub email: String,
+    pub display_name: String,
+    pub email_verified: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AuthSessionView {
+    pub id: UserSessionId,
+    pub user_id: UserId,
+    pub email: String,
+    pub auth_method: AuthSessionMethod,
+    pub created_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AuthSessionResponse {
+    #[serde(default)]
+    pub user: Option<AuthUserView>,
+    #[serde(default)]
+    pub session: Option<AuthSessionView>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StartEmailAuthRequest {
+    pub email: String,
+    pub purpose: AuthChallengePurpose,
+    #[serde(default)]
+    pub device_fingerprint: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StartEmailAuthResponse {
+    pub challenge_id: EmailVerificationChallengeId,
+    pub email: String,
+    pub purpose: AuthChallengePurpose,
+    pub expires_at: DateTime<Utc>,
+    #[serde(default)]
+    pub resend_after_seconds: Option<u32>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct VerifyEmailAuthRequest {
+    pub email: String,
+    pub code: String,
+    pub purpose: AuthChallengePurpose,
+    #[serde(default)]
+    pub device_fingerprint: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct VerifyEmailAuthResponse {
+    pub user: AuthUserView,
+    pub session: AuthSessionView,
+    #[serde(default)]
+    pub active_secret_binding_ids: Vec<SecretBindingId>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct KeyLoginRequest {
+    pub email: String,
+    pub local_key: String,
+    #[serde(default)]
+    pub device_fingerprint: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct KeyLoginResponse {
+    pub user: AuthUserView,
+    pub session: AuthSessionView,
+    #[serde(default)]
+    pub active_secret_binding_ids: Vec<SecretBindingId>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct KeyRotateRequest {
+    pub new_local_key: String,
+    #[serde(default)]
+    pub current_local_key: Option<String>,
+    #[serde(default)]
+    pub email_verification_code: Option<String>,
+    #[serde(default)]
+    pub device_fingerprint: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct KeyRotateResponse {
+    pub user: AuthUserView,
+    pub primary_secret_fingerprint: String,
+    #[serde(default)]
+    pub active_secret_binding_ids: Vec<SecretBindingId>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BindEmailRequest {
+    pub email: String,
+    #[serde(default)]
+    pub device_fingerprint: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BindEmailResponse {
+    pub challenge_id: EmailVerificationChallengeId,
+    pub email: String,
+    pub expires_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LogoutResponse {
+    pub revoked: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1838,5 +1954,30 @@ mod tests {
         .expect("missing pretty_summaries should deserialize");
 
         assert!(view.pretty_summaries.is_empty());
+    }
+
+    #[test]
+    fn auth_requests_use_snake_case_wire_values() {
+        let start: StartEmailAuthRequest = serde_json::from_value(json!({
+            "email": "user@example.com",
+            "purpose": "recover_key",
+            "device_fingerprint": "browser-device"
+        }))
+        .expect("start email auth request should deserialize");
+
+        assert_eq!(start.purpose, AuthChallengePurpose::RecoverKey);
+        assert_eq!(start.device_fingerprint.as_deref(), Some("browser-device"));
+
+        let session = AuthSessionView {
+            id: UserSessionId::new(),
+            user_id: UserId::new(),
+            email: "user@example.com".to_string(),
+            auth_method: AuthSessionMethod::EmailCode,
+            created_at: Utc::now(),
+            expires_at: Utc::now(),
+        };
+        let encoded = serde_json::to_value(&session).expect("session view should serialize");
+
+        assert_eq!(encoded["auth_method"], "email_code");
     }
 }

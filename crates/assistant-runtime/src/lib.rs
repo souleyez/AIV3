@@ -284,6 +284,7 @@ mod tests {
         Dataset {
             id: DatasetId::new(),
             tenant_id: TenantId::new(),
+            owner_user_id: None,
             key: key.to_string(),
             title: title.to_string(),
             description: Some(format!("{title} 默认公开数据集。")),

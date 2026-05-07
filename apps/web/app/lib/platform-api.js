@@ -22,6 +22,10 @@ export async function proxyPlatformApiRequest(request, pathSegments) {
 
     if (contentType) headers.set('content-type', contentType);
     if (accept) headers.set('accept', accept);
+    const cookie = request.headers.get('cookie');
+    if (cookie) {
+      headers.set('cookie', cookie);
+    }
     const secretBindingIds = request.headers.get('x-ai-data-platform-secret-binding-ids');
     if (secretBindingIds) {
       headers.set('x-ai-data-platform-secret-binding-ids', secretBindingIds);
@@ -40,6 +44,10 @@ export async function proxyPlatformApiRequest(request, pathSegments) {
       const value = response.headers.get(name);
       if (value) forwardedHeaders.set(name, value);
     });
+    const setCookies = typeof response.headers.getSetCookie === 'function'
+      ? response.headers.getSetCookie()
+      : [response.headers.get('set-cookie')].filter(Boolean);
+    setCookies.forEach((value) => forwardedHeaders.append('set-cookie', value));
 
     if (!forwardedHeaders.has('content-type')) {
       forwardedHeaders.set('content-type', 'application/json; charset=utf-8');

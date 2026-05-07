@@ -49,6 +49,8 @@ id_type!(DocumentId);
 id_type!(DocumentChunkId);
 id_type!(SecretBindingId);
 id_type!(SecretGrantId);
+id_type!(EmailVerificationChallengeId);
+id_type!(UserSessionId);
 id_type!(WorkflowExecutionId);
 id_type!(WorkflowEventId);
 id_type!(WorkflowTaskId);
@@ -202,6 +204,66 @@ pub enum SecretGrantState {
     Locked,
     Unlocked,
     Revoked,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AuthChallengePurpose {
+    AccountCreate,
+    Login,
+    RecoverKey,
+    BindEmail,
+    RotateKey,
+}
+
+impl AuthChallengePurpose {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::AccountCreate => "account_create",
+            Self::Login => "login",
+            Self::RecoverKey => "recover_key",
+            Self::BindEmail => "bind_email",
+            Self::RotateKey => "rotate_key",
+        }
+    }
+
+    pub fn from_str(value: &str) -> Option<Self> {
+        match value {
+            "account_create" => Some(Self::AccountCreate),
+            "login" => Some(Self::Login),
+            "recover_key" => Some(Self::RecoverKey),
+            "bind_email" => Some(Self::BindEmail),
+            "rotate_key" => Some(Self::RotateKey),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AuthSessionMethod {
+    EmailCode,
+    EmailKey,
+    LocalKey,
+}
+
+impl AuthSessionMethod {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::EmailCode => "email_code",
+            Self::EmailKey => "email_key",
+            Self::LocalKey => "local_key",
+        }
+    }
+
+    pub fn from_str(value: &str) -> Option<Self> {
+        match value {
+            "email_code" => Some(Self::EmailCode),
+            "email_key" => Some(Self::EmailKey),
+            "local_key" => Some(Self::LocalKey),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -555,6 +617,7 @@ impl PublishedSurface {
 pub struct AssistantRun {
     pub id: AssistantRunId,
     pub tenant_id: TenantId,
+    pub user_id: Option<UserId>,
     pub local_thread_id: Option<String>,
     pub user_prompt: String,
     pub startup_briefing: Value,
@@ -585,6 +648,7 @@ pub struct AssistantRunEvent {
 pub struct ConversationMemoryItem {
     pub id: ConversationMemoryItemId,
     pub tenant_id: TenantId,
+    pub user_id: Option<UserId>,
     pub local_thread_id: String,
     pub role: ChatMessageRole,
     pub item_kind: String,
@@ -640,6 +704,7 @@ pub struct StaticPageDraft {
     pub id: StaticPageDraftId,
     pub tenant_id: TenantId,
     pub assistant_run_id: AssistantRunId,
+    pub owner_user_id: Option<UserId>,
     pub title: String,
     pub status: StaticPageDraftStatus,
     pub selected_scope: Value,
@@ -738,6 +803,7 @@ pub struct StaticPageRenderOutput {
     pub tenant_id: TenantId,
     pub draft_id: StaticPageDraftId,
     pub assistant_run_id: AssistantRunId,
+    pub owner_user_id: Option<UserId>,
     pub image_job_id: Option<StaticPageImageJobId>,
     pub status: StaticPageRenderOutputStatus,
     pub html: String,
@@ -748,8 +814,8 @@ pub struct StaticPageRenderOutput {
 #[cfg(test)]
 mod tests {
     use super::{
-        DocumentLifecycle, LlmInvocationFinishReason, LlmInvocationMode, LlmInvocationSourceKind,
-        PublishedSurface, ToolExecutionSourceKind,
+        AuthChallengePurpose, AuthSessionMethod, DocumentLifecycle, LlmInvocationFinishReason,
+        LlmInvocationMode, LlmInvocationSourceKind, PublishedSurface, ToolExecutionSourceKind,
     };
 
     #[test]
@@ -829,6 +895,30 @@ mod tests {
             LlmInvocationFinishReason::Other("custom_reason".to_string())
         );
     }
+
+    #[test]
+    fn auth_account_enums_roundtrip_through_snake_case_wire_values() {
+        assert_eq!(AuthChallengePurpose::RecoverKey.as_str(), "recover_key");
+        assert_eq!(
+            AuthChallengePurpose::from_str("recover_key"),
+            Some(AuthChallengePurpose::RecoverKey)
+        );
+        assert_eq!(
+            serde_json::to_string(&AuthChallengePurpose::BindEmail)
+                .expect("auth challenge purpose serializes"),
+            "\"bind_email\""
+        );
+        assert_eq!(AuthSessionMethod::EmailCode.as_str(), "email_code");
+        assert_eq!(
+            AuthSessionMethod::from_str("local_key"),
+            Some(AuthSessionMethod::LocalKey)
+        );
+        assert_eq!(
+            serde_json::from_str::<AuthSessionMethod>("\"email_key\"")
+                .expect("auth session method deserializes"),
+            AuthSessionMethod::EmailKey
+        );
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -876,6 +966,7 @@ pub struct User {
 pub struct Dataset {
     pub id: DatasetId,
     pub tenant_id: TenantId,
+    pub owner_user_id: Option<UserId>,
     pub key: String,
     pub title: String,
     pub description: Option<String>,
@@ -892,6 +983,7 @@ pub struct Document {
     pub id: DocumentId,
     pub tenant_id: TenantId,
     pub dataset_id: DatasetId,
+    pub owner_user_id: Option<UserId>,
     pub title: String,
     pub object_key: String,
     pub content_type: String,
@@ -940,6 +1032,35 @@ pub struct SecretGrant {
     pub state: SecretGrantState,
     pub granted_at: DateTime<Utc>,
     pub expires_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct EmailVerificationChallenge {
+    pub id: EmailVerificationChallengeId,
+    pub tenant_id: TenantId,
+    pub email_normalized: String,
+    pub purpose: AuthChallengePurpose,
+    pub code_hash: String,
+    pub attempt_count: i32,
+    pub max_attempts: i32,
+    pub expires_at: DateTime<Utc>,
+    pub consumed_at: Option<DateTime<Utc>>,
+    pub metadata: Value,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct UserSession {
+    pub id: UserSessionId,
+    pub tenant_id: TenantId,
+    pub user_id: UserId,
+    pub device_fingerprint: String,
+    pub session_token_hash: String,
+    pub auth_method: AuthSessionMethod,
+    pub created_at: DateTime<Utc>,
+    pub last_seen_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+    pub revoked_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1000,6 +1121,7 @@ pub struct ReportPlan {
     pub id: ReportPlanId,
     pub tenant_id: TenantId,
     pub dataset_id: DatasetId,
+    pub owner_user_id: Option<UserId>,
     pub title: String,
     pub objective: String,
     pub status: ReportPlanStatus,

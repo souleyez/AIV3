@@ -50,6 +50,90 @@ function DatasetCreateForm({
   );
 }
 
+function AccountPanel({ accountAuth }) {
+  const status = accountAuth?.statusSummary || {
+    label: '未登录',
+    detail: '可普通聊天；私密数据集需要邮箱或本地密钥',
+    signedIn: false,
+  };
+  const busy = Boolean(accountAuth?.busy);
+  const emailDraft = accountAuth?.emailDraft || '';
+  const codeDraft = accountAuth?.codeDraft || '';
+
+  return (
+    <section className="side-card side-form account-card">
+      <div className="account-status-row">
+        <div>
+          <div className="card-title account-card-title">账号 / 密钥</div>
+          <strong>{status.label}</strong>
+          <p>{status.detail}</p>
+        </div>
+        {status.signedIn ? (
+          <button
+            className="ghost-btn compact-action-btn"
+            type="button"
+            onClick={accountAuth?.onLogout}
+            disabled={busy}
+          >
+            退出
+          </button>
+        ) : null}
+      </div>
+      <label className="side-form-field">
+        <span>邮箱</span>
+        <input
+          value={emailDraft}
+          onChange={(event) => accountAuth?.onEmailDraftChange?.(event.target.value)}
+          placeholder="用于找回密钥和区分私密数据"
+          disabled={busy}
+          type="email"
+          autoComplete="email"
+        />
+      </label>
+      <div className="account-action-grid">
+        <button
+          className="ghost-btn"
+          type="button"
+          onClick={accountAuth?.onSendEmailCode}
+          disabled={busy || !emailDraft.trim()}
+        >
+          发验证码
+        </button>
+        <button
+          className="primary-btn"
+          type="button"
+          onClick={accountAuth?.onLoginWithKey}
+          disabled={busy || !emailDraft.trim()}
+        >
+          邮箱密钥登录
+        </button>
+      </div>
+      <label className="side-form-field account-code-field">
+        <span>验证码</span>
+        <div className="account-code-row">
+          <input
+            value={codeDraft}
+            onChange={(event) => accountAuth?.onCodeDraftChange?.(event.target.value)}
+            placeholder="6 位数字"
+            disabled={busy}
+            inputMode="numeric"
+            autoComplete="one-time-code"
+          />
+          <button
+            className="ghost-btn"
+            type="button"
+            onClick={accountAuth?.onVerifyEmailCode}
+            disabled={busy || !codeDraft.trim()}
+          >
+            验证登录
+          </button>
+        </div>
+      </label>
+      {accountAuth?.message ? <p className="side-form-hint account-message">{accountAuth.message}</p> : null}
+    </section>
+  );
+}
+
 function LocalSecretPanel({
   secretDraft,
   selectedDataset,
@@ -128,6 +212,7 @@ export default function Sidebar({
   mobileOpen = false,
   onClose,
   scopePlan,
+  accountAuth,
 }) {
   const scopeCandidateIds = new Set(
     (scopePlan?.candidates || [])
@@ -151,6 +236,8 @@ export default function Sidebar({
           <p>V3 数据集工作台</p>
         </div>
       </div>
+
+      <AccountPanel accountAuth={accountAuth} />
 
       <section className="nav-section">
         <div className="nav-title">工作区</div>

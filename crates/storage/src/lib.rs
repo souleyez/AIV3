@@ -1,11 +1,12 @@
 use anyhow::{anyhow, Result};
 use chrono::{DateTime, Utc};
 use domain_model::{
-    AssistantRun, AssistantRunEvent, AssistantRunEventId, AssistantRunId, ChatMessage,
-    ChatMessageId, ChatMessageRole, ChatSession, ChatSessionId, ConversationMemoryItem,
-    ConversationMemoryItemId, Dataset, DatasetId, DatasetLifecycle, DatasetOutput, DatasetOutputId,
-    DatasetVisibility, Document, DocumentChunk, DocumentChunkId, DocumentChunkState, DocumentId,
-    DocumentLifecycle, LlmInvocation, LlmInvocationFinishReason, LlmInvocationId,
+    AssistantRun, AssistantRunEvent, AssistantRunEventId, AssistantRunId, AuthChallengePurpose,
+    AuthSessionMethod, ChatMessage, ChatMessageId, ChatMessageRole, ChatSession, ChatSessionId,
+    ConversationMemoryItem, ConversationMemoryItemId, Dataset, DatasetId, DatasetLifecycle,
+    DatasetOutput, DatasetOutputId, DatasetVisibility, Document, DocumentChunk, DocumentChunkId,
+    DocumentChunkState, DocumentId, DocumentLifecycle, EmailVerificationChallenge,
+    EmailVerificationChallengeId, LlmInvocation, LlmInvocationFinishReason, LlmInvocationId,
     LlmInvocationMode, LlmInvocationSourceKind, LlmTokenUsage, MemoryDirectory, MemoryDirectoryId,
     PublishedReport, PublishedReportId, PublishedReportVersion, PublishedReportVersionId,
     ReportPlan, ReportPlanAstVersion, ReportPlanAstVersionId, ReportPlanId, ReportPlanStatus,
@@ -14,9 +15,9 @@ use domain_model::{
     StaticPageDraftId, StaticPageDraftStatus, StaticPageImageJob, StaticPageImageJobId,
     StaticPageImageJobStatus, StaticPageRenderOutput, StaticPageRenderOutputId,
     StaticPageRenderOutputStatus, Tenant, TenantId, ToolExecution, ToolExecutionId,
-    ToolExecutionSourceKind, ToolExecutionStatus, WorkflowEventId, WorkflowEventRecord,
-    WorkflowExecution, WorkflowExecutionId, WorkflowKind, WorkflowStatus, WorkflowTask,
-    WorkflowTaskId, WorkflowTaskStatus,
+    ToolExecutionSourceKind, ToolExecutionStatus, User, UserId, UserSession, UserSessionId,
+    WorkflowEventId, WorkflowEventRecord, WorkflowExecution, WorkflowExecutionId, WorkflowKind,
+    WorkflowStatus, WorkflowTask, WorkflowTaskId, WorkflowTaskStatus,
 };
 use serde_json::{Map, Value};
 use sqlx::{postgres::PgPoolOptions, Executor, PgPool, Row};
@@ -25,6 +26,7 @@ use std::time::Duration;
 use uuid::Uuid;
 use workflow_engine::WorkflowDefinitionSummary;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Migration {
     pub version: &'static str,
     pub description: &'static str,
@@ -37,9 +39,29 @@ pub const INITIAL_SCHEMA: Migration = Migration {
     sql: include_str!("../migrations/0001_initial_schema.sql"),
 };
 
+pub const WORKFLOW_RUNTIME_RECORDS_SCHEMA: Migration = Migration {
+    version: "0002",
+    description: "workflow execution runtime records",
+    sql: include_str!("../migrations/0002_workflow_execution_runtime_records.sql"),
+};
+
+pub const EMAIL_ACCOUNT_AUTH_SCHEMA: Migration = Migration {
+    version: "0004",
+    description: "email account authentication",
+    sql: include_str!("../migrations/0004_email_account_auth.sql"),
+};
+
+pub const MIGRATIONS: &[Migration] = &[
+    INITIAL_SCHEMA,
+    WORKFLOW_RUNTIME_RECORDS_SCHEMA,
+    EMAIL_ACCOUNT_AUTH_SCHEMA,
+];
+
 pub const TABLES: &[&str] = &[
     "tenants",
     "users",
+    "user_sessions",
+    "email_verification_challenges",
     "datasets",
     "documents",
     "document_chunks",
@@ -84,6 +106,7 @@ pub struct NewDataset {
     pub key: String,
     pub title: String,
     pub description: Option<String>,
+    pub owner_user_id: Option<UserId>,
 }
 
 #[derive(Clone, Debug)]
@@ -93,6 +116,7 @@ pub struct NewDocument {
     pub object_key: String,
     pub content_type: String,
     pub secret_binding_ids: Vec<SecretBindingId>,
+    pub owner_user_id: Option<UserId>,
     pub metadata: Value,
 }
 
@@ -104,6 +128,27 @@ pub struct NewSecretBinding {
     pub provider_key: String,
     pub cipher_text: String,
     pub fingerprint: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct NewEmailVerificationChallenge {
+    pub email_normalized: String,
+    pub purpose: AuthChallengePurpose,
+    pub code_hash: String,
+    pub max_attempts: i32,
+    pub expires_at: DateTime<Utc>,
+    pub metadata: Value,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug)]
+pub struct NewUserSession {
+    pub user_id: UserId,
+    pub device_fingerprint: String,
+    pub session_token_hash: String,
+    pub auth_method: AuthSessionMethod,
+    pub expires_at: DateTime<Utc>,
+    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Clone, Debug)]
@@ -123,6 +168,7 @@ pub struct NewReportPlan {
     pub title: String,
     pub objective: String,
     pub theme_key: String,
+    pub owner_user_id: Option<UserId>,
 }
 
 #[derive(Clone, Debug)]
@@ -192,6 +238,7 @@ pub struct NewDatasetOutput {
 
 #[derive(Clone, Debug)]
 pub struct NewAssistantRun {
+    pub user_id: Option<UserId>,
     pub local_thread_id: Option<String>,
     pub user_prompt: String,
     pub startup_briefing: Value,
@@ -215,6 +262,7 @@ pub struct NewAssistantRunEvent {
 
 #[derive(Clone, Debug)]
 pub struct NewConversationMemoryItem {
+    pub user_id: Option<UserId>,
     pub local_thread_id: String,
     pub role: ChatMessageRole,
     pub item_kind: String,
@@ -228,6 +276,7 @@ pub struct NewConversationMemoryItem {
 #[derive(Clone, Debug)]
 pub struct NewStaticPageDraft {
     pub assistant_run_id: AssistantRunId,
+    pub owner_user_id: Option<UserId>,
     pub title: String,
     pub status: StaticPageDraftStatus,
     pub selected_scope: Value,
@@ -254,6 +303,7 @@ pub struct NewStaticPageImageJob {
 pub struct NewStaticPageRenderOutput {
     pub draft_id: StaticPageDraftId,
     pub assistant_run_id: AssistantRunId,
+    pub owner_user_id: Option<UserId>,
     pub image_job_id: Option<StaticPageImageJobId>,
     pub status: StaticPageRenderOutputStatus,
     pub html: String,
@@ -365,9 +415,9 @@ impl PgStorage {
     }
 
     pub async fn migrate(&self) -> Result<()> {
-        sqlx::raw_sql(INITIAL_SCHEMA.sql)
-            .execute(&self.pool)
-            .await?;
+        for migration in MIGRATIONS {
+            sqlx::raw_sql(migration.sql).execute(&self.pool).await?;
+        }
         Ok(())
     }
 
@@ -447,6 +497,24 @@ impl PgStorage {
 
     pub fn secret_bindings(&self) -> PgSecretBindingRepository {
         PgSecretBindingRepository {
+            pool: self.pool.clone(),
+        }
+    }
+
+    pub fn users(&self) -> PgUserRepository {
+        PgUserRepository {
+            pool: self.pool.clone(),
+        }
+    }
+
+    pub fn user_sessions(&self) -> PgUserSessionRepository {
+        PgUserSessionRepository {
+            pool: self.pool.clone(),
+        }
+    }
+
+    pub fn email_verification_challenges(&self) -> PgEmailVerificationChallengeRepository {
+        PgEmailVerificationChallengeRepository {
             pool: self.pool.clone(),
         }
     }
@@ -597,12 +665,13 @@ impl PgDatasetRepository {
     ) -> Result<Dataset> {
         let row = sqlx::query(
             r#"
-            insert into datasets (tenant_id, key, title, description, lifecycle, metadata)
-            values ($1, $2, $3, $4, $5, $6)
-            returning id, tenant_id, key, title, description, lifecycle, metadata, created_at, updated_at
+            insert into datasets (tenant_id, owner_user_id, key, title, description, lifecycle, metadata)
+            values ($1, $2, $3, $4, $5, $6, $7)
+            returning id, tenant_id, owner_user_id, key, title, description, lifecycle, metadata, created_at, updated_at
             "#,
         )
         .bind(tenant_id.0)
+        .bind(new_dataset.owner_user_id.map(|id| id.0))
         .bind(new_dataset.key)
         .bind(new_dataset.title)
         .bind(new_dataset.description)
@@ -617,7 +686,7 @@ impl PgDatasetRepository {
     pub async fn list_by_tenant(&self, tenant_id: TenantId) -> Result<Vec<Dataset>> {
         let rows = sqlx::query(
             r#"
-            select id, tenant_id, key, title, description, lifecycle, metadata, created_at, updated_at
+            select id, tenant_id, owner_user_id, key, title, description, lifecycle, metadata, created_at, updated_at
             from datasets
             where tenant_id = $1
             order by created_at desc, key asc
@@ -637,7 +706,7 @@ impl PgDatasetRepository {
     ) -> Result<Option<Dataset>> {
         let row = sqlx::query(
             r#"
-            select id, tenant_id, key, title, description, lifecycle, metadata, created_at, updated_at
+            select id, tenant_id, owner_user_id, key, title, description, lifecycle, metadata, created_at, updated_at
             from datasets
             where tenant_id = $1 and id = $2
             "#,
@@ -667,7 +736,7 @@ impl PgDatasetRepository {
             set metadata = $3,
                 updated_at = now()
             where tenant_id = $1 and id = $2
-            returning id, tenant_id, key, title, description, lifecycle, metadata, created_at, updated_at
+            returning id, tenant_id, owner_user_id, key, title, description, lifecycle, metadata, created_at, updated_at
             "#,
         )
         .bind(tenant_id.0)
@@ -687,6 +756,21 @@ pub struct PgDocumentRepository {
 
 #[derive(Clone)]
 pub struct PgSecretBindingRepository {
+    pool: PgPool,
+}
+
+#[derive(Clone)]
+pub struct PgUserRepository {
+    pool: PgPool,
+}
+
+#[derive(Clone)]
+pub struct PgUserSessionRepository {
+    pool: PgPool,
+}
+
+#[derive(Clone)]
+pub struct PgEmailVerificationChallengeRepository {
     pool: PgPool,
 }
 
@@ -746,6 +830,320 @@ impl PgSecretBindingRepository {
     }
 }
 
+impl PgUserRepository {
+    pub async fn ensure_by_email(
+        &self,
+        tenant_id: TenantId,
+        email: &str,
+        display_name: Option<&str>,
+    ) -> Result<User> {
+        let email_normalized = normalize_email(email);
+        let display_name = display_name
+            .filter(|value| !value.trim().is_empty())
+            .map(str::trim)
+            .unwrap_or(&email_normalized);
+        let row = sqlx::query(
+            r#"
+            insert into users (tenant_id, email, email_normalized, display_name, roles)
+            values ($1, $2, $2, $3, '[]'::jsonb)
+            on conflict (tenant_id, email_normalized) where email_normalized is not null do update
+            set email_normalized = excluded.email_normalized,
+                display_name = excluded.display_name
+            returning id, tenant_id, email, display_name, roles, created_at
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(&email_normalized)
+        .bind(display_name)
+        .fetch_one(&self.pool)
+        .await?;
+
+        map_user_row(&row)
+    }
+
+    pub async fn get_by_email(&self, tenant_id: TenantId, email: &str) -> Result<Option<User>> {
+        let email_normalized = normalize_email(email);
+        let row = sqlx::query(
+            r#"
+            select id, tenant_id, email, display_name, roles, created_at
+            from users
+            where tenant_id = $1 and email_normalized = $2
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(email_normalized)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        row.as_ref().map(map_user_row).transpose()
+    }
+
+    pub async fn get_by_id(&self, tenant_id: TenantId, user_id: UserId) -> Result<Option<User>> {
+        let row = sqlx::query(
+            r#"
+            select id, tenant_id, email, display_name, roles, created_at
+            from users
+            where tenant_id = $1 and id = $2
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(user_id.0)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        row.as_ref().map(map_user_row).transpose()
+    }
+
+    pub async fn update_primary_secret_fingerprint(
+        &self,
+        tenant_id: TenantId,
+        user_id: UserId,
+        fingerprint: &str,
+        logged_in_at: DateTime<Utc>,
+    ) -> Result<Option<User>> {
+        let row = sqlx::query(
+            r#"
+            update users
+            set primary_secret_fingerprint = $3,
+                last_login_at = $4
+            where tenant_id = $1 and id = $2
+            returning id, tenant_id, email, display_name, roles, created_at
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(user_id.0)
+        .bind(fingerprint)
+        .bind(logged_in_at)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        row.as_ref().map(map_user_row).transpose()
+    }
+}
+
+impl PgUserSessionRepository {
+    pub async fn create(
+        &self,
+        tenant_id: TenantId,
+        new_session: NewUserSession,
+    ) -> Result<UserSession> {
+        let row = sqlx::query(
+            r#"
+            insert into user_sessions (
+                tenant_id,
+                user_id,
+                device_fingerprint,
+                session_token_hash,
+                auth_method,
+                created_at,
+                last_seen_at,
+                expires_at
+            )
+            values ($1, $2, $3, $4, $5, $6, $6, $7)
+            returning id, tenant_id, user_id, device_fingerprint, session_token_hash, auth_method,
+                      created_at, last_seen_at, expires_at, revoked_at
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(new_session.user_id.0)
+        .bind(new_session.device_fingerprint)
+        .bind(new_session.session_token_hash)
+        .bind(new_session.auth_method.as_str())
+        .bind(new_session.created_at)
+        .bind(new_session.expires_at)
+        .fetch_one(&self.pool)
+        .await?;
+
+        map_user_session_row(&row)
+    }
+
+    pub async fn get_by_token_hash(
+        &self,
+        tenant_id: TenantId,
+        token_hash: &str,
+    ) -> Result<Option<UserSession>> {
+        let row = sqlx::query(
+            r#"
+            select id, tenant_id, user_id, device_fingerprint, session_token_hash, auth_method,
+                   created_at, last_seen_at, expires_at, revoked_at
+            from user_sessions
+            where tenant_id = $1 and session_token_hash = $2
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(token_hash)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        row.as_ref().map(map_user_session_row).transpose()
+    }
+
+    pub async fn revoke(
+        &self,
+        tenant_id: TenantId,
+        session_id: UserSessionId,
+        revoked_at: DateTime<Utc>,
+    ) -> Result<Option<UserSession>> {
+        let row = sqlx::query(
+            r#"
+            update user_sessions
+            set revoked_at = $3
+            where tenant_id = $1 and id = $2
+            returning id, tenant_id, user_id, device_fingerprint, session_token_hash, auth_method,
+                      created_at, last_seen_at, expires_at, revoked_at
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(session_id.0)
+        .bind(revoked_at)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        row.as_ref().map(map_user_session_row).transpose()
+    }
+}
+
+impl PgEmailVerificationChallengeRepository {
+    pub async fn create(
+        &self,
+        tenant_id: TenantId,
+        new_challenge: NewEmailVerificationChallenge,
+    ) -> Result<EmailVerificationChallenge> {
+        let row = sqlx::query(
+            r#"
+            insert into email_verification_challenges (
+                tenant_id,
+                email_normalized,
+                purpose,
+                code_hash,
+                max_attempts,
+                expires_at,
+                metadata,
+                created_at
+            )
+            values ($1, $2, $3, $4, $5, $6, $7, $8)
+            returning id, tenant_id, email_normalized, purpose, code_hash, attempt_count,
+                      max_attempts, expires_at, consumed_at, metadata, created_at
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(new_challenge.email_normalized)
+        .bind(new_challenge.purpose.as_str())
+        .bind(new_challenge.code_hash)
+        .bind(new_challenge.max_attempts)
+        .bind(new_challenge.expires_at)
+        .bind(new_challenge.metadata)
+        .bind(new_challenge.created_at)
+        .fetch_one(&self.pool)
+        .await?;
+
+        map_email_verification_challenge_row(&row)
+    }
+
+    pub async fn get_by_id(
+        &self,
+        tenant_id: TenantId,
+        challenge_id: EmailVerificationChallengeId,
+    ) -> Result<Option<EmailVerificationChallenge>> {
+        let row = sqlx::query(
+            r#"
+            select id, tenant_id, email_normalized, purpose, code_hash, attempt_count,
+                   max_attempts, expires_at, consumed_at, metadata, created_at
+            from email_verification_challenges
+            where tenant_id = $1 and id = $2
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(challenge_id.0)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        row.as_ref()
+            .map(map_email_verification_challenge_row)
+            .transpose()
+    }
+
+    pub async fn latest_active_by_email_and_purpose(
+        &self,
+        tenant_id: TenantId,
+        email_normalized: &str,
+        purpose: AuthChallengePurpose,
+    ) -> Result<Option<EmailVerificationChallenge>> {
+        let row = sqlx::query(
+            r#"
+            select id, tenant_id, email_normalized, purpose, code_hash, attempt_count,
+                   max_attempts, expires_at, consumed_at, metadata, created_at
+            from email_verification_challenges
+            where tenant_id = $1
+              and email_normalized = $2
+              and purpose = $3
+              and consumed_at is null
+            order by created_at desc
+            limit 1
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(email_normalized)
+        .bind(purpose.as_str())
+        .fetch_optional(&self.pool)
+        .await?;
+
+        row.as_ref()
+            .map(map_email_verification_challenge_row)
+            .transpose()
+    }
+
+    pub async fn increment_attempt_count(
+        &self,
+        tenant_id: TenantId,
+        challenge_id: EmailVerificationChallengeId,
+    ) -> Result<Option<EmailVerificationChallenge>> {
+        let row = sqlx::query(
+            r#"
+            update email_verification_challenges
+            set attempt_count = attempt_count + 1
+            where tenant_id = $1 and id = $2
+            returning id, tenant_id, email_normalized, purpose, code_hash, attempt_count,
+                      max_attempts, expires_at, consumed_at, metadata, created_at
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(challenge_id.0)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        row.as_ref()
+            .map(map_email_verification_challenge_row)
+            .transpose()
+    }
+
+    pub async fn mark_consumed(
+        &self,
+        tenant_id: TenantId,
+        challenge_id: EmailVerificationChallengeId,
+        consumed_at: DateTime<Utc>,
+    ) -> Result<Option<EmailVerificationChallenge>> {
+        let row = sqlx::query(
+            r#"
+            update email_verification_challenges
+            set consumed_at = $3
+            where tenant_id = $1 and id = $2
+            returning id, tenant_id, email_normalized, purpose, code_hash, attempt_count,
+                      max_attempts, expires_at, consumed_at, metadata, created_at
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(challenge_id.0)
+        .bind(consumed_at)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        row.as_ref()
+            .map(map_email_verification_challenge_row)
+            .transpose()
+    }
+}
+
 impl PgDocumentRepository {
     pub async fn create(&self, tenant_id: TenantId, new_document: NewDocument) -> Result<Document> {
         let row = sqlx::query(
@@ -753,18 +1151,20 @@ impl PgDocumentRepository {
             insert into documents (
                 tenant_id,
                 dataset_id,
+                owner_user_id,
                 title,
                 object_key,
                 content_type,
                 lifecycle,
                 metadata
             )
-            values ($1, $2, $3, $4, $5, $6, $7)
-            returning id, tenant_id, dataset_id, title, object_key, content_type, lifecycle, metadata, created_at, updated_at
+            values ($1, $2, $3, $4, $5, $6, $7, $8)
+            returning id, tenant_id, dataset_id, owner_user_id, title, object_key, content_type, lifecycle, metadata, created_at, updated_at
             "#,
         )
         .bind(tenant_id.0)
         .bind(new_document.dataset_id.0)
+        .bind(new_document.owner_user_id.map(|id| id.0))
         .bind(new_document.title)
         .bind(new_document.object_key)
         .bind(new_document.content_type)
@@ -782,7 +1182,7 @@ impl PgDocumentRepository {
     pub async fn list_by_tenant(&self, tenant_id: TenantId) -> Result<Vec<Document>> {
         let rows = sqlx::query(
             r#"
-            select id, tenant_id, dataset_id, title, object_key, content_type, lifecycle, metadata, created_at, updated_at
+            select id, tenant_id, dataset_id, owner_user_id, title, object_key, content_type, lifecycle, metadata, created_at, updated_at
             from documents
             where tenant_id = $1
             order by created_at desc, title asc
@@ -802,7 +1202,7 @@ impl PgDocumentRepository {
     ) -> Result<Vec<Document>> {
         let rows = sqlx::query(
             r#"
-            select id, tenant_id, dataset_id, title, object_key, content_type, lifecycle, metadata, created_at, updated_at
+            select id, tenant_id, dataset_id, owner_user_id, title, object_key, content_type, lifecycle, metadata, created_at, updated_at
             from documents
             where tenant_id = $1 and dataset_id = $2
             order by created_at desc, title asc
@@ -823,7 +1223,7 @@ impl PgDocumentRepository {
     ) -> Result<Option<Document>> {
         let row = sqlx::query(
             r#"
-            select id, tenant_id, dataset_id, title, object_key, content_type, lifecycle, metadata, created_at, updated_at
+            select id, tenant_id, dataset_id, owner_user_id, title, object_key, content_type, lifecycle, metadata, created_at, updated_at
             from documents
             where tenant_id = $1 and id = $2
             "#,
@@ -860,7 +1260,7 @@ impl PgDocumentRepository {
                 metadata = $5,
                 updated_at = $6
             where tenant_id = $1 and id = $2
-            returning id, tenant_id, dataset_id, title, object_key, content_type, lifecycle, metadata, created_at, updated_at
+            returning id, tenant_id, dataset_id, owner_user_id, title, object_key, content_type, lifecycle, metadata, created_at, updated_at
             "#,
         )
         .bind(tenant_id.0)
@@ -1010,13 +1410,14 @@ impl PgReportPlanRepository {
     pub async fn create(&self, tenant_id: TenantId, new_plan: NewReportPlan) -> Result<ReportPlan> {
         let row = sqlx::query(
             r#"
-            insert into report_plans (tenant_id, dataset_id, title, objective, status, theme_key, ast)
-            values ($1, $2, $3, $4, $5, $6, '{}'::jsonb)
-            returning id, tenant_id, dataset_id, title, objective, status, theme_key, current_ast_version_id, created_at, updated_at
+            insert into report_plans (tenant_id, dataset_id, owner_user_id, title, objective, status, theme_key, ast)
+            values ($1, $2, $3, $4, $5, $6, $7, '{}'::jsonb)
+            returning id, tenant_id, dataset_id, owner_user_id, title, objective, status, theme_key, current_ast_version_id, created_at, updated_at
             "#,
         )
         .bind(tenant_id.0)
         .bind(new_plan.dataset_id.0)
+        .bind(new_plan.owner_user_id.map(|id| id.0))
         .bind(new_plan.title)
         .bind(new_plan.objective)
         .bind(ReportPlanStatus::Draft.as_str())
@@ -1034,7 +1435,7 @@ impl PgReportPlanRepository {
     ) -> Result<Option<ReportPlan>> {
         let row = sqlx::query(
             r#"
-            select id, tenant_id, dataset_id, title, objective, status, theme_key, current_ast_version_id, created_at, updated_at
+            select id, tenant_id, dataset_id, owner_user_id, title, objective, status, theme_key, current_ast_version_id, created_at, updated_at
             from report_plans
             where tenant_id = $1 and id = $2
             "#,
@@ -1050,7 +1451,7 @@ impl PgReportPlanRepository {
     pub async fn list_by_tenant(&self, tenant_id: TenantId) -> Result<Vec<ReportPlan>> {
         let rows = sqlx::query(
             r#"
-            select id, tenant_id, dataset_id, title, objective, status, theme_key, current_ast_version_id, created_at, updated_at
+            select id, tenant_id, dataset_id, owner_user_id, title, objective, status, theme_key, current_ast_version_id, created_at, updated_at
             from report_plans
             where tenant_id = $1
             order by created_at desc, title asc
@@ -1079,7 +1480,7 @@ impl PgReportPlanRepository {
                 ast = $5,
                 updated_at = $6
             where tenant_id = $1 and id = $2
-            returning id, tenant_id, dataset_id, title, objective, status, theme_key, current_ast_version_id, created_at, updated_at
+            returning id, tenant_id, dataset_id, owner_user_id, title, objective, status, theme_key, current_ast_version_id, created_at, updated_at
             "#,
         )
         .bind(tenant_id.0)
@@ -1106,7 +1507,7 @@ impl PgReportPlanRepository {
             set status = $3,
                 updated_at = $4
             where tenant_id = $1 and id = $2
-            returning id, tenant_id, dataset_id, title, objective, status, theme_key, current_ast_version_id, created_at, updated_at
+            returning id, tenant_id, dataset_id, owner_user_id, title, objective, status, theme_key, current_ast_version_id, created_at, updated_at
             "#,
         )
         .bind(tenant_id.0)
@@ -1962,6 +2363,7 @@ impl PgAssistantRunRepository {
             r#"
             insert into assistant_runs (
                 tenant_id,
+                user_id,
                 local_thread_id,
                 user_prompt,
                 startup_briefing,
@@ -1976,14 +2378,15 @@ impl PgAssistantRunRepository {
                 created_at,
                 updated_at
             )
-            values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $13)
-            returning id, tenant_id, local_thread_id, user_prompt, startup_briefing,
+            values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $14)
+            returning id, tenant_id, user_id, local_thread_id, user_prompt, startup_briefing,
                       selected_scope, scope_candidates, context_policy, evidence_state,
                       service_lane, execution_trail, output_artifacts, runtime_manifest,
                       created_at, updated_at
             "#,
         )
         .bind(tenant_id.0)
+        .bind(new_run.user_id.map(|id| id.0))
         .bind(new_run.local_thread_id.as_deref())
         .bind(&new_run.user_prompt)
         .bind(&new_run.startup_briefing)
@@ -2009,7 +2412,7 @@ impl PgAssistantRunRepository {
     ) -> Result<Option<AssistantRun>> {
         let row = sqlx::query(
             r#"
-            select id, tenant_id, local_thread_id, user_prompt, startup_briefing,
+            select id, tenant_id, user_id, local_thread_id, user_prompt, startup_briefing,
                    selected_scope, scope_candidates, context_policy, evidence_state,
                    service_lane, execution_trail, output_artifacts, runtime_manifest,
                    created_at, updated_at
@@ -2145,7 +2548,7 @@ impl PgAssistantRunRepository {
             set {field_name} = $3,
                 updated_at = now()
             where tenant_id = $1 and id = $2
-            returning id, tenant_id, local_thread_id, user_prompt, startup_briefing,
+            returning id, tenant_id, user_id, local_thread_id, user_prompt, startup_briefing,
                       selected_scope, scope_candidates, context_policy, evidence_state,
                       service_lane, execution_trail, output_artifacts, runtime_manifest,
                       created_at, updated_at
@@ -2177,6 +2580,7 @@ impl PgConversationMemoryItemRepository {
             r#"
             insert into conversation_memory_items (
                 tenant_id,
+                user_id,
                 local_thread_id,
                 role,
                 item_kind,
@@ -2187,12 +2591,13 @@ impl PgConversationMemoryItemRepository {
                 created_at,
                 updated_at
             )
-            values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9)
-            returning id, tenant_id, local_thread_id, role, item_kind, summary,
+            values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10)
+            returning id, tenant_id, user_id, local_thread_id, role, item_kind, summary,
                       source_message_refs, artifact_refs, metadata, created_at, updated_at
             "#,
         )
         .bind(tenant_id.0)
+        .bind(new_item.user_id.map(|id| id.0))
         .bind(&new_item.local_thread_id)
         .bind(new_item.role.as_str())
         .bind(&new_item.item_kind)
@@ -2218,7 +2623,7 @@ impl PgConversationMemoryItemRepository {
         let rows = if let Some(query) = query.map(str::trim).filter(|value| !value.is_empty()) {
             sqlx::query(
                 r#"
-                select id, tenant_id, local_thread_id, role, item_kind, summary,
+                select id, tenant_id, user_id, local_thread_id, role, item_kind, summary,
                        source_message_refs, artifact_refs, metadata, created_at, updated_at
                 from conversation_memory_items
                 where tenant_id = $1
@@ -2237,7 +2642,7 @@ impl PgConversationMemoryItemRepository {
         } else {
             sqlx::query(
                 r#"
-                select id, tenant_id, local_thread_id, role, item_kind, summary,
+                select id, tenant_id, user_id, local_thread_id, role, item_kind, summary,
                        source_message_refs, artifact_refs, metadata, created_at, updated_at
                 from conversation_memory_items
                 where tenant_id = $1 and local_thread_id = $2
@@ -2271,6 +2676,7 @@ impl PgStaticPageDraftRepository {
             r#"
             insert into static_page_drafts (
                 tenant_id,
+                owner_user_id,
                 assistant_run_id,
                 title,
                 status,
@@ -2281,12 +2687,13 @@ impl PgStaticPageDraftRepository {
                 created_at,
                 updated_at
             )
-            values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9)
-            returning id, tenant_id, assistant_run_id, title, status, selected_scope,
+            values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10)
+            returning id, tenant_id, owner_user_id, assistant_run_id, title, status, selected_scope,
                       visibility_snapshot, source_refs, draft_payload, created_at, updated_at
             "#,
         )
         .bind(tenant_id.0)
+        .bind(new_draft.owner_user_id.map(|id| id.0))
         .bind(new_draft.assistant_run_id.0)
         .bind(&new_draft.title)
         .bind(new_draft.status.as_str())
@@ -2308,7 +2715,7 @@ impl PgStaticPageDraftRepository {
     ) -> Result<Option<StaticPageDraft>> {
         let row = sqlx::query(
             r#"
-            select id, tenant_id, assistant_run_id, title, status, selected_scope,
+            select id, tenant_id, owner_user_id, assistant_run_id, title, status, selected_scope,
                    visibility_snapshot, source_refs, draft_payload, created_at, updated_at
             from static_page_drafts
             where tenant_id = $1 and id = $2
@@ -2329,7 +2736,7 @@ impl PgStaticPageDraftRepository {
     ) -> Result<Vec<StaticPageDraft>> {
         let rows = sqlx::query(
             r#"
-            select id, tenant_id, assistant_run_id, title, status, selected_scope,
+            select id, tenant_id, owner_user_id, assistant_run_id, title, status, selected_scope,
                    visibility_snapshot, source_refs, draft_payload, created_at, updated_at
             from static_page_drafts
             where tenant_id = $1 and assistant_run_id = $2
@@ -2352,7 +2759,7 @@ impl PgStaticPageDraftRepository {
     ) -> Result<Vec<StaticPageDraft>> {
         let rows = sqlx::query(
             r#"
-            select d.id, d.tenant_id, d.assistant_run_id, d.title, d.status,
+            select d.id, d.tenant_id, d.owner_user_id, d.assistant_run_id, d.title, d.status,
                    d.selected_scope, d.visibility_snapshot, d.source_refs,
                    d.draft_payload, d.created_at, d.updated_at
             from static_page_drafts d
@@ -2390,7 +2797,7 @@ impl PgStaticPageDraftRepository {
                 draft_payload = $8,
                 updated_at = now()
             where tenant_id = $1 and id = $2
-            returning id, tenant_id, assistant_run_id, title, status, selected_scope,
+            returning id, tenant_id, owner_user_id, assistant_run_id, title, status, selected_scope,
                       visibility_snapshot, source_refs, draft_payload, created_at, updated_at
             "#,
         )
@@ -2553,6 +2960,7 @@ impl PgStaticPageRenderOutputRepository {
             r#"
             insert into static_page_render_outputs (
                 tenant_id,
+                owner_user_id,
                 draft_id,
                 assistant_run_id,
                 image_job_id,
@@ -2561,12 +2969,13 @@ impl PgStaticPageRenderOutputRepository {
                 asset_manifest,
                 created_at
             )
-            values ($1, $2, $3, $4, $5, $6, $7, $8)
-            returning id, tenant_id, draft_id, assistant_run_id, image_job_id, status,
+            values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            returning id, tenant_id, owner_user_id, draft_id, assistant_run_id, image_job_id, status,
                       html, asset_manifest, created_at
             "#,
         )
         .bind(tenant_id.0)
+        .bind(new_output.owner_user_id.map(|id| id.0))
         .bind(new_output.draft_id.0)
         .bind(new_output.assistant_run_id.0)
         .bind(new_output.image_job_id.map(|id| id.0))
@@ -2587,7 +2996,7 @@ impl PgStaticPageRenderOutputRepository {
     ) -> Result<Option<StaticPageRenderOutput>> {
         let row = sqlx::query(
             r#"
-            select id, tenant_id, draft_id, assistant_run_id, image_job_id, status,
+            select id, tenant_id, owner_user_id, draft_id, assistant_run_id, image_job_id, status,
                    html, asset_manifest, created_at
             from static_page_render_outputs
             where tenant_id = $1 and id = $2
@@ -2615,7 +3024,7 @@ impl PgStaticPageRenderOutputRepository {
                 html = $4,
                 asset_manifest = $5
             where tenant_id = $1 and id = $2
-            returning id, tenant_id, draft_id, assistant_run_id, image_job_id, status,
+            returning id, tenant_id, owner_user_id, draft_id, assistant_run_id, image_job_id, status,
                       html, asset_manifest, created_at
             "#,
         )
@@ -2637,7 +3046,7 @@ impl PgStaticPageRenderOutputRepository {
     ) -> Result<Vec<StaticPageRenderOutput>> {
         let rows = sqlx::query(
             r#"
-            select id, tenant_id, draft_id, assistant_run_id, image_job_id, status,
+            select id, tenant_id, owner_user_id, draft_id, assistant_run_id, image_job_id, status,
                    html, asset_manifest, created_at
             from static_page_render_outputs
             where tenant_id = $1 and draft_id = $2
@@ -3885,6 +4294,7 @@ fn map_dataset_row(row: &sqlx::postgres::PgRow) -> Result<Dataset> {
     Ok(Dataset {
         id: DatasetId(row.get::<Uuid, _>("id")),
         tenant_id: TenantId(row.get::<Uuid, _>("tenant_id")),
+        owner_user_id: row.get::<Option<Uuid>, _>("owner_user_id").map(UserId),
         key: row.get("key"),
         title: row.get("title"),
         description: row.get("description"),
@@ -3906,6 +4316,7 @@ fn map_document_row(row: &sqlx::postgres::PgRow) -> Result<Document> {
         id: DocumentId(row.get::<Uuid, _>("id")),
         tenant_id: TenantId(row.get::<Uuid, _>("tenant_id")),
         dataset_id: DatasetId(row.get::<Uuid, _>("dataset_id")),
+        owner_user_id: row.get::<Option<Uuid>, _>("owner_user_id").map(UserId),
         title: row.get("title"),
         object_key: row.get("object_key"),
         content_type: row.get("content_type"),
@@ -3931,6 +4342,58 @@ fn map_secret_binding_row(row: &sqlx::postgres::PgRow) -> Result<SecretBinding> 
         provider_key: row.get("provider_key"),
         cipher_text: row.get("cipher_text"),
         fingerprint: row.get("fingerprint"),
+        created_at: row.get("created_at"),
+    })
+}
+
+fn map_user_row(row: &sqlx::postgres::PgRow) -> Result<User> {
+    let roles = row.get::<Value, _>("roles");
+
+    Ok(User {
+        id: UserId(row.get::<Uuid, _>("id")),
+        tenant_id: TenantId(row.get::<Uuid, _>("tenant_id")),
+        email: row.get("email"),
+        display_name: row.get("display_name"),
+        roles: serde_json::from_value(roles)?,
+        created_at: row.get("created_at"),
+    })
+}
+
+fn map_user_session_row(row: &sqlx::postgres::PgRow) -> Result<UserSession> {
+    let auth_method = row.get::<String, _>("auth_method");
+
+    Ok(UserSession {
+        id: UserSessionId(row.get::<Uuid, _>("id")),
+        tenant_id: TenantId(row.get::<Uuid, _>("tenant_id")),
+        user_id: UserId(row.get::<Uuid, _>("user_id")),
+        device_fingerprint: row.get("device_fingerprint"),
+        session_token_hash: row.get("session_token_hash"),
+        auth_method: AuthSessionMethod::from_str(&auth_method)
+            .ok_or_else(|| anyhow!("unknown auth session method: {auth_method}"))?,
+        created_at: row.get("created_at"),
+        last_seen_at: row.get("last_seen_at"),
+        expires_at: row.get("expires_at"),
+        revoked_at: row.get("revoked_at"),
+    })
+}
+
+fn map_email_verification_challenge_row(
+    row: &sqlx::postgres::PgRow,
+) -> Result<EmailVerificationChallenge> {
+    let purpose = row.get::<String, _>("purpose");
+
+    Ok(EmailVerificationChallenge {
+        id: EmailVerificationChallengeId(row.get::<Uuid, _>("id")),
+        tenant_id: TenantId(row.get::<Uuid, _>("tenant_id")),
+        email_normalized: row.get("email_normalized"),
+        purpose: AuthChallengePurpose::from_str(&purpose)
+            .ok_or_else(|| anyhow!("unknown auth challenge purpose: {purpose}"))?,
+        code_hash: row.get("code_hash"),
+        attempt_count: row.get("attempt_count"),
+        max_attempts: row.get("max_attempts"),
+        expires_at: row.get("expires_at"),
+        consumed_at: row.get("consumed_at"),
+        metadata: row.get("metadata"),
         created_at: row.get("created_at"),
     })
 }
@@ -3962,6 +4425,7 @@ fn map_report_plan_row(row: &sqlx::postgres::PgRow) -> Result<ReportPlan> {
         id: ReportPlanId(row.get::<Uuid, _>("id")),
         tenant_id: TenantId(row.get::<Uuid, _>("tenant_id")),
         dataset_id: DatasetId(row.get::<Uuid, _>("dataset_id")),
+        owner_user_id: row.get::<Option<Uuid>, _>("owner_user_id").map(UserId),
         title: row.get("title"),
         objective: row.get("objective"),
         status: ReportPlanStatus::from_str(&status)
@@ -4094,6 +4558,7 @@ fn map_assistant_run_row(row: &sqlx::postgres::PgRow) -> Result<AssistantRun> {
     Ok(AssistantRun {
         id: AssistantRunId(row.get::<Uuid, _>("id")),
         tenant_id: TenantId(row.get::<Uuid, _>("tenant_id")),
+        user_id: row.get::<Option<Uuid>, _>("user_id").map(UserId),
         local_thread_id: row.get("local_thread_id"),
         user_prompt: row.get("user_prompt"),
         startup_briefing: row.get("startup_briefing"),
@@ -4127,6 +4592,7 @@ fn map_conversation_memory_item_row(row: &sqlx::postgres::PgRow) -> Result<Conve
     Ok(ConversationMemoryItem {
         id: ConversationMemoryItemId(row.get::<Uuid, _>("id")),
         tenant_id: TenantId(row.get::<Uuid, _>("tenant_id")),
+        user_id: row.get::<Option<Uuid>, _>("user_id").map(UserId),
         local_thread_id: row.get("local_thread_id"),
         role: ChatMessageRole::from_str(&role)
             .ok_or_else(|| anyhow!("unknown conversation memory role: {role}"))?,
@@ -4145,6 +4611,7 @@ fn map_static_page_draft_row(row: &sqlx::postgres::PgRow) -> Result<StaticPageDr
     Ok(StaticPageDraft {
         id: StaticPageDraftId(row.get::<Uuid, _>("id")),
         tenant_id: TenantId(row.get::<Uuid, _>("tenant_id")),
+        owner_user_id: row.get::<Option<Uuid>, _>("owner_user_id").map(UserId),
         assistant_run_id: AssistantRunId(row.get::<Uuid, _>("assistant_run_id")),
         title: row.get("title"),
         status: StaticPageDraftStatus::from_str(&status)
@@ -4184,6 +4651,7 @@ fn map_static_page_render_output_row(
     Ok(StaticPageRenderOutput {
         id: StaticPageRenderOutputId(row.get::<Uuid, _>("id")),
         tenant_id: TenantId(row.get::<Uuid, _>("tenant_id")),
+        owner_user_id: row.get::<Option<Uuid>, _>("owner_user_id").map(UserId),
         draft_id: StaticPageDraftId(row.get::<Uuid, _>("draft_id")),
         assistant_run_id: AssistantRunId(row.get::<Uuid, _>("assistant_run_id")),
         image_job_id: row
@@ -4506,6 +4974,10 @@ fn json_object_to_btree_map(value: Value) -> Result<BTreeMap<String, Value>> {
         Value::Null => Ok(BTreeMap::new()),
         other => Err(anyhow!("expected JSON object, got {other}")),
     }
+}
+
+fn normalize_email(email: &str) -> String {
+    email.trim().to_ascii_lowercase()
 }
 
 fn dataset_initial_metadata(metadata: &Value) -> Result<Value> {
@@ -4944,6 +5416,43 @@ mod tests {
         assert!(INITIAL_SCHEMA
             .sql
             .contains("create table if not exists workflow_tasks"));
+    }
+
+    #[test]
+    fn auth_migrations_are_registered_in_order() {
+        assert_eq!(
+            MIGRATIONS
+                .iter()
+                .map(|migration| migration.version)
+                .collect::<Vec<_>>(),
+            vec!["0001", "0002", "0004"]
+        );
+        assert!(MIGRATIONS
+            .iter()
+            .any(|migration| migration.description == "email account authentication"));
+    }
+
+    #[test]
+    fn email_account_auth_schema_mentions_account_tables_and_owners() {
+        assert!(TABLES.contains(&"user_sessions"));
+        assert!(TABLES.contains(&"email_verification_challenges"));
+        assert!(EMAIL_ACCOUNT_AUTH_SCHEMA
+            .sql
+            .contains("create table if not exists user_sessions"));
+        assert!(EMAIL_ACCOUNT_AUTH_SCHEMA
+            .sql
+            .contains("create table if not exists email_verification_challenges"));
+        assert!(EMAIL_ACCOUNT_AUTH_SCHEMA
+            .sql
+            .contains("add column if not exists owner_user_id"));
+        assert!(EMAIL_ACCOUNT_AUTH_SCHEMA
+            .sql
+            .contains("add column if not exists user_id"));
+    }
+
+    #[test]
+    fn auth_email_normalization_is_stable() {
+        assert_eq!(normalize_email(" User@Example.COM "), "user@example.com");
     }
 
     #[test]

@@ -178,6 +178,55 @@ button {
   color: #fff;
 }
 
+.account-card {
+  gap: 10px;
+  background: linear-gradient(145deg, rgba(96, 165, 250, 0.13), rgba(15, 23, 42, 0.42));
+}
+
+.account-card-title {
+  margin-bottom: 6px;
+}
+
+.account-status-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+.account-status-row strong {
+  display: block;
+  color: #f8fafc;
+  font-size: 13px;
+}
+
+.account-status-row p {
+  margin: 4px 0 0;
+  color: #b7c3d6;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.account-action-grid {
+  display: grid;
+  grid-template-columns: 1fr 1.25fr;
+  gap: 8px;
+}
+
+.account-code-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.account-code-field {
+  gap: 6px;
+}
+
+.account-message {
+  color: #bfdbfe;
+}
+
 .dataset-list {
   display: grid;
   gap: 10px;

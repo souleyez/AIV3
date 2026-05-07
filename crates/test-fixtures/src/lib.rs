@@ -15,6 +15,7 @@ pub fn sample_dataset() -> Dataset {
     Dataset {
         id: DatasetId::new(),
         tenant_id: TenantId::new(),
+        owner_user_id: None,
         key: "sample-dataset".to_string(),
         title: "Sample Dataset".to_string(),
         description: Some("Fixture dataset used for early workflow testing.".to_string()),
@@ -34,6 +35,7 @@ pub fn sample_report_plan() -> ReportPlan {
         id: plan_id,
         tenant_id: TenantId::new(),
         dataset_id: DatasetId::new(),
+        owner_user_id: None,
         title: "Executive Snapshot".to_string(),
         objective: "Validate report planning, binding, and publishing skeletons.".to_string(),
         status: ReportPlanStatus::Draft,

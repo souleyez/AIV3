@@ -6,6 +6,16 @@ import HomeMobileShell from './components/HomeMobileShell';
 import HomeWorkspaceToolbar from './components/HomeWorkspaceToolbar';
 import InsightPanel from './components/InsightPanel';
 import Sidebar from './components/Sidebar';
+import {
+  buildDeviceFingerprint,
+  buildKeyLoginPayload,
+  buildStartEmailAuthPayload,
+  buildVerifyEmailAuthPayload,
+  normalizeAccountEmail,
+  normalizeVerificationCode,
+  summarizeAccountState,
+  validateAccountEmail,
+} from './lib/account-auth';
 import { buildAssistantStartupBriefing, formatStartupBriefingForModel } from './lib/assistant-startup-briefing';
 import { planAssistantScope, selectPlannerDatasetId } from './lib/scope-planner';
 import {
@@ -37,6 +47,7 @@ const LOCAL_THREAD_ID_STORAGE_KEY = 'aidp-v3-local-thread-id';
 const LOCAL_ASSISTANT_RUN_ID_STORAGE_KEY = 'aidp-v3-local-assistant-run-id';
 const LOCAL_SECRET_BINDING_IDS_STORAGE_KEY = 'aidp-v3-secret-binding-ids';
 const LOCAL_SECRET_VALUE_STORAGE_KEY = 'aidp-v3-local-secret-value';
+const LOCAL_ACCOUNT_EMAIL_STORAGE_KEY = 'aidp-v3-account-email';
 const STATIC_PAGE_QUEUE_MESSAGE = '资源正在排队，可以联系商务开通高级用户跳过等待。';
 const ASSISTANT_RUN_PROGRESS_LIMIT = 8;
 const ASSISTANT_RUN_TRACE_LIMIT = 6;
@@ -175,6 +186,44 @@ function clearLocalSecretState() {
   window.localStorage.removeItem(LOCAL_SECRET_VALUE_STORAGE_KEY);
 }
 
+function readLocalSecretValue() {
+  if (typeof window === 'undefined') {
+    return '';
+  }
+  try {
+    return window.localStorage.getItem(LOCAL_SECRET_VALUE_STORAGE_KEY) || '';
+  } catch {
+    return '';
+  }
+}
+
+function readLocalAccountEmail() {
+  if (typeof window === 'undefined') {
+    return '';
+  }
+  try {
+    return window.localStorage.getItem(LOCAL_ACCOUNT_EMAIL_STORAGE_KEY) || '';
+  } catch {
+    return '';
+  }
+}
+
+function writeLocalAccountEmail(email) {
+  if (typeof window === 'undefined') {
+    return;
+  }
+  try {
+    const normalized = normalizeAccountEmail(email);
+    if (normalized) {
+      window.localStorage.setItem(LOCAL_ACCOUNT_EMAIL_STORAGE_KEY, normalized);
+    } else {
+      window.localStorage.removeItem(LOCAL_ACCOUNT_EMAIL_STORAGE_KEY);
+    }
+  } catch {
+    // Account email is a convenience cache; auth is still cookie based.
+  }
+}
+
 async function fingerprintLocalSecret(secretValue) {
   const normalized = String(secretValue || '').trim();
   if (!normalized) {
@@ -195,6 +244,7 @@ async function fetchJson(url, options = {}) {
   const secretBindingIds = readLocalSecretBindingIdsHeader();
   const response = await fetch(url, {
     cache: 'no-store',
+    credentials: 'include',
     ...options,
     headers: {
       Accept: 'application/json',
@@ -323,6 +373,12 @@ export default function HomePageClient() {
   const [datasetDraft, setDatasetDraft] = useState({ key: '', title: '', secret: '' });
   const [localSecretDraft, setLocalSecretDraft] = useState('');
   const [activeSecretCount, setActiveSecretCount] = useState(0);
+  const [accountEmailDraft, setAccountEmailDraft] = useState('');
+  const [accountCodeDraft, setAccountCodeDraft] = useState('');
+  const [authSession, setAuthSession] = useState({ user: null, session: null });
+  const [authChallenge, setAuthChallenge] = useState(null);
+  const [authBusy, setAuthBusy] = useState(false);
+  const [authMessage, setAuthMessage] = useState('');
   const [reportSurface, setReportSurface] = useState('pc');
   const [publishNote, setPublishNote] = useState('');
   const [mobileViewport, setMobileViewport] = useState(false);
@@ -398,6 +454,14 @@ export default function HomePageClient() {
   const toolbarSourceItems = useMemo(
     () => (selectedDataset ? [{ name: selectedDataset.title, status: 'healthy' }] : []),
     [selectedDataset],
+  );
+  const accountStatusSummary = useMemo(
+    () => summarizeAccountState({
+      user: authSession.user,
+      session: authSession.session,
+      activeSecretCount,
+    }),
+    [activeSecretCount, authSession],
   );
 
   function promptRequestsStaticPage(prompt) {
@@ -886,6 +950,165 @@ export default function HomePageClient() {
     return fetchJson(`/api/v3/workflow-executions/${executionId}/start`, {
       method: 'POST',
     });
+  }
+
+  async function refreshAuthSession(options = {}) {
+    const { silent = false } = options;
+    try {
+      const response = await fetchJson('/api/v3/auth/session');
+      const nextSession = {
+        user: response?.user || null,
+        session: response?.session || null,
+      };
+      setAuthSession(nextSession);
+      if (nextSession.user?.email) {
+        setAccountEmailDraft(nextSession.user.email);
+        writeLocalAccountEmail(nextSession.user.email);
+      }
+      if (!silent) {
+        setAuthMessage(nextSession.user?.email ? '已恢复当前账号会话。' : '当前未登录账号。');
+      }
+      return nextSession;
+    } catch (sessionError) {
+      if (!silent) {
+        setAuthMessage(sessionError instanceof Error ? sessionError.message : '账号状态读取失败');
+      }
+      return { user: null, session: null };
+    }
+  }
+
+  async function handleSendEmailCode() {
+    const { email, valid } = validateAccountEmail(accountEmailDraft);
+    if (!valid) {
+      setError('请输入有效邮箱。');
+      return;
+    }
+
+    setAuthBusy(true);
+    setError('');
+    try {
+      const response = await fetchJson('/api/v3/auth/email/start', {
+        method: 'POST',
+        body: buildStartEmailAuthPayload(email, 'login', buildDeviceFingerprint()),
+      });
+      writeLocalAccountEmail(response.email || email);
+      setAccountEmailDraft(response.email || email);
+      setAuthChallenge(response);
+      setAuthMessage(
+        response.resend_after_seconds
+          ? `验证码已发送；${response.resend_after_seconds} 秒内会复用本次验证码。`
+          : '验证码已发送，请在邮箱里查看。',
+      );
+    } catch (authError) {
+      setError(authError instanceof Error ? authError.message : '发送验证码失败');
+    } finally {
+      setAuthBusy(false);
+    }
+  }
+
+  async function handleVerifyEmailCode() {
+    const { email, valid } = validateAccountEmail(accountEmailDraft);
+    const code = normalizeVerificationCode(accountCodeDraft);
+    if (!valid) {
+      setError('请输入有效邮箱。');
+      return;
+    }
+    if (!code) {
+      setError('请输入验证码。');
+      return;
+    }
+
+    setAuthBusy(true);
+    setError('');
+    try {
+      const response = await fetchJson('/api/v3/auth/email/verify', {
+        method: 'POST',
+        body: buildVerifyEmailAuthPayload(
+          email,
+          code,
+          authChallenge?.purpose || 'login',
+          buildDeviceFingerprint(),
+        ),
+      });
+      setAuthSession({ user: response.user, session: response.session });
+      writeLocalAccountEmail(response.user?.email || email);
+      setAccountEmailDraft(response.user?.email || email);
+      setAccountCodeDraft('');
+      setAuthChallenge(null);
+      setAuthMessage('邮箱已登录；后续数据集、机器人和产物会跟随当前账号。');
+      await Promise.all([
+        refreshCatalog({ preferredDatasetId: selectedDatasetId, silent: true }),
+        refreshStaticPageDraftShelf({ silent: true }),
+      ]);
+    } catch (authError) {
+      setError(authError instanceof Error ? authError.message : '验证码登录失败');
+    } finally {
+      setAuthBusy(false);
+    }
+  }
+
+  async function handleLoginWithLocalKey() {
+    const { email, valid } = validateAccountEmail(accountEmailDraft);
+    const localKey = String(localSecretDraft || readLocalSecretValue()).trim();
+    if (!valid) {
+      setError('请输入有效邮箱。');
+      return;
+    }
+    if (!localKey) {
+      setError('请在本地密钥框输入密钥。');
+      return;
+    }
+
+    setAuthBusy(true);
+    setResolvingSecret(true);
+    setError('');
+    try {
+      const response = await fetchJson('/api/v3/auth/key/login', {
+        method: 'POST',
+        body: buildKeyLoginPayload(email, localKey, buildDeviceFingerprint()),
+      });
+      const bindingIds = response.active_secret_binding_ids || [];
+      writeLocalSecretState(localKey, bindingIds);
+      setActiveSecretCount(bindingIds.length);
+      setLocalSecretDraft('');
+      setAuthSession({ user: response.user, session: response.session });
+      writeLocalAccountEmail(response.user?.email || email);
+      setAccountEmailDraft(response.user?.email || email);
+      setAuthMessage(`邮箱密钥已登录，已启用 ${bindingIds.length} 个本地绑定。`);
+      await Promise.all([
+        refreshCatalog({ preferredDatasetId: selectedDatasetId, silent: true }),
+        refreshStaticPageDraftShelf({ silent: true }),
+      ]);
+    } catch (authError) {
+      setError(authError instanceof Error ? authError.message : '邮箱密钥登录失败');
+    } finally {
+      setAuthBusy(false);
+      setResolvingSecret(false);
+    }
+  }
+
+  async function handleLogoutAccount() {
+    setAuthBusy(true);
+    setError('');
+    try {
+      await fetchJson('/api/v3/auth/logout', {
+        method: 'POST',
+      });
+      clearLocalSecretState();
+      setActiveSecretCount(0);
+      setLocalSecretDraft('');
+      setAuthSession({ user: null, session: null });
+      setSelectedDatasetId(null);
+      setAuthMessage('已退出账号，并清除当前浏览器的本地私密绑定。');
+      await Promise.all([
+        refreshCatalog({ silent: true }),
+        refreshStaticPageDraftShelf({ silent: true }),
+      ]);
+    } catch (authError) {
+      setError(authError instanceof Error ? authError.message : '退出账号失败');
+    } finally {
+      setAuthBusy(false);
+    }
   }
 
   async function refreshCatalog(options = {}) {
@@ -1893,6 +2116,14 @@ export default function HomePageClient() {
   }, []);
 
   useEffect(() => {
+    const cachedEmail = readLocalAccountEmail();
+    if (cachedEmail) {
+      setAccountEmailDraft(cachedEmail);
+    }
+    refreshAuthSession({ silent: true });
+  }, []);
+
+  useEffect(() => {
     refreshStaticPageDraftShelf({ silent: true });
   }, []);
 
@@ -2135,6 +2366,22 @@ export default function HomePageClient() {
     mobileOpen: mobileSidebarOpen,
     onClose: () => setMobileSidebarOpen(false),
     scopePlan,
+    accountAuth: {
+      emailDraft: accountEmailDraft,
+      codeDraft: accountCodeDraft,
+      statusSummary: accountStatusSummary,
+      busy: authBusy,
+      message: authMessage,
+      onEmailDraftChange: (value) => {
+        setAccountEmailDraft(value);
+        setAuthMessage('');
+      },
+      onCodeDraftChange: (value) => setAccountCodeDraft(normalizeVerificationCode(value)),
+      onSendEmailCode: handleSendEmailCode,
+      onVerifyEmailCode: handleVerifyEmailCode,
+      onLoginWithKey: handleLoginWithLocalKey,
+      onLogout: handleLogoutAccount,
+    },
   };
   const chatPanelProps = {
     dataset: selectedDataset,

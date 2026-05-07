@@ -10,6 +10,16 @@
 
 ---
 
+## Implementation Status
+
+- Task 1-4 completed in first pass: auth domain/contracts, storage migration/repositories, OTP service, session cookie routes.
+- Task 5 completed in first pass: ownership fields flow through datasets, documents, assistant runs, conversation memory, report plans, static-page drafts, and render outputs.
+- Task 6 completed in compact first pass: existing sidebar key panel now supports email code login, email plus local-key login, current account status, logout, browser-local email cache, and API cookie pass-through.
+- Task 7 completed in first pass: platform-api can use Cloudflare Email Service REST API when configured, otherwise it falls back to local logging sender; setup notes live in `docs/operations/cloudflare-email-auth-setup.md`.
+- Remaining hardening: explicit key rotation/recovery UX, local-data claim flow, grants/team membership, robot ownership, audit expansion, and true encryption recovery semantics if required later.
+
+---
+
 ## Source References
 
 - Cloudflare Email Service overview: `https://developers.cloudflare.com/email-service/`
@@ -654,10 +664,12 @@ Expected: pass.
 Run:
 
 ```powershell
-pnpm --filter @ai-data-platform-v3/web build
+npm run build
 ```
 
 Expected: pass.
+
+Note: run the build from `apps/web` because the repository root currently has no npm workspace definition.
 
 ## Task 7: Cloudflare Email Sender Setup
 
@@ -754,7 +766,7 @@ wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo
 wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo test -p platform-api auth"
 wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo test -p platform-api dataset_visibility"
 node --test apps/web/app/lib/account-auth.test.mjs
-pnpm --filter @ai-data-platform-v3/web build
+Push-Location apps/web; npm run build; Pop-Location
 ```
 
 Expected: pass.
