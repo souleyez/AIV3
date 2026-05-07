@@ -51,6 +51,7 @@ id_type!(SecretBindingId);
 id_type!(SecretGrantId);
 id_type!(EmailVerificationChallengeId);
 id_type!(UserSessionId);
+id_type!(AuthAuditEventId);
 id_type!(WorkflowExecutionId);
 id_type!(WorkflowEventId);
 id_type!(WorkflowTaskId);
@@ -261,6 +262,30 @@ impl AuthSessionMethod {
             "email_code" => Some(Self::EmailCode),
             "email_key" => Some(Self::EmailKey),
             "local_key" => Some(Self::LocalKey),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AuthAuditOutcome {
+    Succeeded,
+    Failed,
+}
+
+impl AuthAuditOutcome {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Succeeded => "succeeded",
+            Self::Failed => "failed",
+        }
+    }
+
+    pub fn from_str(value: &str) -> Option<Self> {
+        match value {
+            "succeeded" => Some(Self::Succeeded),
+            "failed" => Some(Self::Failed),
             _ => None,
         }
     }
@@ -814,8 +839,9 @@ pub struct StaticPageRenderOutput {
 #[cfg(test)]
 mod tests {
     use super::{
-        AuthChallengePurpose, AuthSessionMethod, DocumentLifecycle, LlmInvocationFinishReason,
-        LlmInvocationMode, LlmInvocationSourceKind, PublishedSurface, ToolExecutionSourceKind,
+        AuthAuditOutcome, AuthChallengePurpose, AuthSessionMethod, DocumentLifecycle,
+        LlmInvocationFinishReason, LlmInvocationMode, LlmInvocationSourceKind, PublishedSurface,
+        ToolExecutionSourceKind,
     };
 
     #[test]
@@ -917,6 +943,16 @@ mod tests {
             serde_json::from_str::<AuthSessionMethod>("\"email_key\"")
                 .expect("auth session method deserializes"),
             AuthSessionMethod::EmailKey
+        );
+        assert_eq!(AuthAuditOutcome::Succeeded.as_str(), "succeeded");
+        assert_eq!(
+            AuthAuditOutcome::from_str("failed"),
+            Some(AuthAuditOutcome::Failed)
+        );
+        assert_eq!(
+            serde_json::to_string(&AuthAuditOutcome::Failed)
+                .expect("auth audit outcome serializes"),
+            "\"failed\""
         );
     }
 }
@@ -1061,6 +1097,21 @@ pub struct UserSession {
     pub last_seen_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
     pub revoked_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AuthAuditEvent {
+    pub id: AuthAuditEventId,
+    pub tenant_id: TenantId,
+    pub user_id: Option<UserId>,
+    pub session_id: Option<UserSessionId>,
+    pub email_normalized: Option<String>,
+    pub event_name: String,
+    pub outcome: AuthAuditOutcome,
+    pub ip_hash: Option<String>,
+    pub device_fingerprint: Option<String>,
+    pub metadata: Value,
+    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

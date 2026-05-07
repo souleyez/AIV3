@@ -1,23 +1,24 @@
 use anyhow::{anyhow, Result};
 use chrono::{DateTime, Utc};
 use domain_model::{
-    AssistantRun, AssistantRunEvent, AssistantRunEventId, AssistantRunId, AuthChallengePurpose,
-    AuthSessionMethod, ChatMessage, ChatMessageId, ChatMessageRole, ChatSession, ChatSessionId,
-    ConversationMemoryItem, ConversationMemoryItemId, Dataset, DatasetId, DatasetLifecycle,
-    DatasetOutput, DatasetOutputId, DatasetVisibility, Document, DocumentChunk, DocumentChunkId,
-    DocumentChunkState, DocumentId, DocumentLifecycle, EmailVerificationChallenge,
-    EmailVerificationChallengeId, LlmInvocation, LlmInvocationFinishReason, LlmInvocationId,
-    LlmInvocationMode, LlmInvocationSourceKind, LlmTokenUsage, MemoryDirectory, MemoryDirectoryId,
-    PublishedReport, PublishedReportId, PublishedReportVersion, PublishedReportVersionId,
-    ReportPlan, ReportPlanAstVersion, ReportPlanAstVersionId, ReportPlanId, ReportPlanStatus,
-    ReportRenderOutput, ReportRenderOutputId, ReportRenderOutputStatus, RetrievalEvidence,
-    RetrievalEvidenceId, SecretBinding, SecretBindingId, SecretScopeLevel, StaticPageDraft,
-    StaticPageDraftId, StaticPageDraftStatus, StaticPageImageJob, StaticPageImageJobId,
-    StaticPageImageJobStatus, StaticPageRenderOutput, StaticPageRenderOutputId,
-    StaticPageRenderOutputStatus, Tenant, TenantId, ToolExecution, ToolExecutionId,
-    ToolExecutionSourceKind, ToolExecutionStatus, User, UserId, UserSession, UserSessionId,
-    WorkflowEventId, WorkflowEventRecord, WorkflowExecution, WorkflowExecutionId, WorkflowKind,
-    WorkflowStatus, WorkflowTask, WorkflowTaskId, WorkflowTaskStatus,
+    AssistantRun, AssistantRunEvent, AssistantRunEventId, AssistantRunId, AuthAuditEvent,
+    AuthAuditEventId, AuthAuditOutcome, AuthChallengePurpose, AuthSessionMethod, ChatMessage,
+    ChatMessageId, ChatMessageRole, ChatSession, ChatSessionId, ConversationMemoryItem,
+    ConversationMemoryItemId, Dataset, DatasetId, DatasetLifecycle, DatasetOutput, DatasetOutputId,
+    DatasetVisibility, Document, DocumentChunk, DocumentChunkId, DocumentChunkState, DocumentId,
+    DocumentLifecycle, EmailVerificationChallenge, EmailVerificationChallengeId, LlmInvocation,
+    LlmInvocationFinishReason, LlmInvocationId, LlmInvocationMode, LlmInvocationSourceKind,
+    LlmTokenUsage, MemoryDirectory, MemoryDirectoryId, PublishedReport, PublishedReportId,
+    PublishedReportVersion, PublishedReportVersionId, ReportPlan, ReportPlanAstVersion,
+    ReportPlanAstVersionId, ReportPlanId, ReportPlanStatus, ReportRenderOutput,
+    ReportRenderOutputId, ReportRenderOutputStatus, RetrievalEvidence, RetrievalEvidenceId,
+    SecretBinding, SecretBindingId, SecretScopeLevel, StaticPageDraft, StaticPageDraftId,
+    StaticPageDraftStatus, StaticPageImageJob, StaticPageImageJobId, StaticPageImageJobStatus,
+    StaticPageRenderOutput, StaticPageRenderOutputId, StaticPageRenderOutputStatus, Tenant,
+    TenantId, ToolExecution, ToolExecutionId, ToolExecutionSourceKind, ToolExecutionStatus, User,
+    UserId, UserSession, UserSessionId, WorkflowEventId, WorkflowEventRecord, WorkflowExecution,
+    WorkflowExecutionId, WorkflowKind, WorkflowStatus, WorkflowTask, WorkflowTaskId,
+    WorkflowTaskStatus,
 };
 use serde_json::{Map, Value};
 use sqlx::{postgres::PgPoolOptions, Executor, PgPool, Row};
@@ -62,6 +63,7 @@ pub const TABLES: &[&str] = &[
     "users",
     "user_sessions",
     "email_verification_challenges",
+    "auth_audit_events",
     "datasets",
     "documents",
     "document_chunks",
@@ -148,6 +150,19 @@ pub struct NewUserSession {
     pub session_token_hash: String,
     pub auth_method: AuthSessionMethod,
     pub expires_at: DateTime<Utc>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug)]
+pub struct NewAuthAuditEvent {
+    pub user_id: Option<UserId>,
+    pub session_id: Option<UserSessionId>,
+    pub email_normalized: Option<String>,
+    pub event_name: String,
+    pub outcome: AuthAuditOutcome,
+    pub ip_hash: Option<String>,
+    pub device_fingerprint: Option<String>,
+    pub metadata: Value,
     pub created_at: DateTime<Utc>,
 }
 
@@ -519,6 +534,12 @@ impl PgStorage {
         }
     }
 
+    pub fn auth_audit_events(&self) -> PgAuthAuditEventRepository {
+        PgAuthAuditEventRepository {
+            pool: self.pool.clone(),
+        }
+    }
+
     pub fn document_chunks(&self) -> PgDocumentChunkRepository {
         PgDocumentChunkRepository {
             pool: self.pool.clone(),
@@ -797,6 +818,11 @@ pub struct PgUserSessionRepository {
 
 #[derive(Clone)]
 pub struct PgEmailVerificationChallengeRepository {
+    pool: PgPool,
+}
+
+#[derive(Clone)]
+pub struct PgAuthAuditEventRepository {
     pool: PgPool,
 }
 
@@ -1117,6 +1143,60 @@ impl PgEmailVerificationChallengeRepository {
         row.as_ref()
             .map(map_email_verification_challenge_row)
             .transpose()
+    }
+
+    pub async fn count_created_since_by_email_and_purpose(
+        &self,
+        tenant_id: TenantId,
+        email_normalized: &str,
+        purpose: AuthChallengePurpose,
+        since: DateTime<Utc>,
+    ) -> Result<i64> {
+        let row = sqlx::query(
+            r#"
+            select count(*) as challenge_count
+            from email_verification_challenges
+            where tenant_id = $1
+              and email_normalized = $2
+              and purpose = $3
+              and created_at >= $4
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(email_normalized)
+        .bind(purpose.as_str())
+        .bind(since)
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(row.get::<i64, _>("challenge_count"))
+    }
+
+    pub async fn count_created_since_by_device_and_purpose(
+        &self,
+        tenant_id: TenantId,
+        device_fingerprint: &str,
+        purpose: AuthChallengePurpose,
+        since: DateTime<Utc>,
+    ) -> Result<i64> {
+        let row = sqlx::query(
+            r#"
+            select count(*) as challenge_count
+            from email_verification_challenges
+            where tenant_id = $1
+              and metadata ->> 'device_fingerprint' = $2
+              and purpose = $3
+              and created_at >= $4
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(device_fingerprint)
+        .bind(purpose.as_str())
+        .bind(since)
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(row.get::<i64, _>("challenge_count"))
     }
 
     pub async fn increment_attempt_count(
@@ -4310,6 +4390,117 @@ impl PgWorkflowTaskRepository {
     }
 }
 
+impl PgAuthAuditEventRepository {
+    pub async fn create(
+        &self,
+        tenant_id: TenantId,
+        new_event: NewAuthAuditEvent,
+    ) -> Result<AuthAuditEvent> {
+        let row = sqlx::query(
+            r#"
+            insert into auth_audit_events (
+                tenant_id,
+                user_id,
+                session_id,
+                email_normalized,
+                event_name,
+                outcome,
+                ip_hash,
+                device_fingerprint,
+                metadata,
+                created_at
+            )
+            values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            returning id, tenant_id, user_id, session_id, email_normalized, event_name,
+                      outcome, ip_hash, device_fingerprint, metadata, created_at
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(new_event.user_id.map(|id| id.0))
+        .bind(new_event.session_id.map(|id| id.0))
+        .bind(new_event.email_normalized)
+        .bind(new_event.event_name)
+        .bind(new_event.outcome.as_str())
+        .bind(new_event.ip_hash)
+        .bind(new_event.device_fingerprint)
+        .bind(new_event.metadata)
+        .bind(new_event.created_at)
+        .fetch_one(&self.pool)
+        .await?;
+
+        map_auth_audit_event_row(&row)
+    }
+
+    pub async fn list_recent_for_user(
+        &self,
+        tenant_id: TenantId,
+        user_id: UserId,
+        limit: i64,
+    ) -> Result<Vec<AuthAuditEvent>> {
+        let rows = sqlx::query(
+            r#"
+            select id, tenant_id, user_id, session_id, email_normalized, event_name,
+                   outcome, ip_hash, device_fingerprint, metadata, created_at
+            from auth_audit_events
+            where tenant_id = $1 and user_id = $2
+            order by created_at desc
+            limit $3
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(user_id.0)
+        .bind(limit.clamp(1, 100))
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.iter().map(map_auth_audit_event_row).collect()
+    }
+
+    pub async fn list_recent_by_email(
+        &self,
+        tenant_id: TenantId,
+        email_normalized: &str,
+        limit: i64,
+    ) -> Result<Vec<AuthAuditEvent>> {
+        let rows = sqlx::query(
+            r#"
+            select id, tenant_id, user_id, session_id, email_normalized, event_name,
+                   outcome, ip_hash, device_fingerprint, metadata, created_at
+            from auth_audit_events
+            where tenant_id = $1 and email_normalized = $2
+            order by created_at desc
+            limit $3
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(email_normalized)
+        .bind(limit.clamp(1, 100))
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.iter().map(map_auth_audit_event_row).collect()
+    }
+}
+
+fn map_auth_audit_event_row(row: &sqlx::postgres::PgRow) -> Result<AuthAuditEvent> {
+    let outcome = row.get::<String, _>("outcome");
+
+    Ok(AuthAuditEvent {
+        id: AuthAuditEventId(row.get::<Uuid, _>("id")),
+        tenant_id: TenantId(row.get::<Uuid, _>("tenant_id")),
+        user_id: row.get::<Option<Uuid>, _>("user_id").map(UserId),
+        session_id: row.get::<Option<Uuid>, _>("session_id").map(UserSessionId),
+        email_normalized: row.get("email_normalized"),
+        event_name: row.get("event_name"),
+        outcome: AuthAuditOutcome::from_str(&outcome)
+            .ok_or_else(|| anyhow!("unknown auth audit outcome: {outcome}"))?,
+        ip_hash: row.get("ip_hash"),
+        device_fingerprint: row.get("device_fingerprint"),
+        metadata: row.get("metadata"),
+        created_at: row.get("created_at"),
+    })
+}
+
 fn map_dataset_row(row: &sqlx::postgres::PgRow) -> Result<Dataset> {
     let lifecycle = row.get::<String, _>("lifecycle");
     let metadata = row.get::<Value, _>("metadata");
@@ -5462,12 +5653,19 @@ mod tests {
     fn email_account_auth_schema_mentions_account_tables_and_owners() {
         assert!(TABLES.contains(&"user_sessions"));
         assert!(TABLES.contains(&"email_verification_challenges"));
+        assert!(TABLES.contains(&"auth_audit_events"));
         assert!(EMAIL_ACCOUNT_AUTH_SCHEMA
             .sql
             .contains("create table if not exists user_sessions"));
         assert!(EMAIL_ACCOUNT_AUTH_SCHEMA
             .sql
             .contains("create table if not exists email_verification_challenges"));
+        assert!(EMAIL_ACCOUNT_AUTH_SCHEMA
+            .sql
+            .contains("create table if not exists auth_audit_events"));
+        assert!(EMAIL_ACCOUNT_AUTH_SCHEMA
+            .sql
+            .contains("auth_audit_events_user_created_idx"));
         assert!(EMAIL_ACCOUNT_AUTH_SCHEMA
             .sql
             .contains("add column if not exists owner_user_id"));

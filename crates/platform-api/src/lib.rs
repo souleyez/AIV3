@@ -43,8 +43,8 @@ use contracts::{
     WorkflowRuntimeInspectView, WorkflowSignalRequest, WorkflowTaskView,
 };
 use domain_model::{
-    AssistantRun, AssistantRunEvent, AssistantRunId, AuthChallengePurpose, AuthSessionMethod,
-    ChatMessage, ChatMessageId, ChatMessageRole, ChatSession, ChatSessionId,
+    AssistantRun, AssistantRunEvent, AssistantRunId, AuthAuditOutcome, AuthChallengePurpose,
+    AuthSessionMethod, ChatMessage, ChatMessageId, ChatMessageRole, ChatSession, ChatSessionId,
     ConversationMemoryItem, Dataset, DatasetId, DatasetOutput, DatasetOutputId, DatasetVisibility,
     Document, DocumentChunk, DocumentChunkId, DocumentId, EmailVerificationChallenge,
     LlmInvocation, LlmInvocationFinishReason, LlmInvocationMode, LlmInvocationSourceKind,
@@ -54,8 +54,8 @@ use domain_model::{
     StaticPageDraftId, StaticPageDraftStatus, StaticPageImageJob, StaticPageImageJobId,
     StaticPageImageJobStatus, StaticPageRenderOutput, StaticPageRenderOutputStatus, TenantId,
     ToolExecution, ToolExecutionSourceKind, ToolExecutionStatus, User, UserId, UserSession,
-    WorkflowEventRecord, WorkflowExecution, WorkflowExecutionId, WorkflowKind, WorkflowStatus,
-    WorkflowTask,
+    UserSessionId, WorkflowEventRecord, WorkflowExecution, WorkflowExecutionId, WorkflowKind,
+    WorkflowStatus, WorkflowTask,
 };
 use event_bus::{
     workflow_execution_transition_subject, workflow_task_enqueued_subject, EventBus, EventEnvelope,
@@ -79,7 +79,7 @@ use std::{
     time::Instant,
 };
 use storage::{
-    NewAssistantRun, NewAssistantRunEvent, NewChatMessage, NewChatSession,
+    NewAssistantRun, NewAssistantRunEvent, NewAuthAuditEvent, NewChatMessage, NewChatSession,
     NewConversationMemoryItem, NewDataset, NewDocument, NewPublishedReport,
     NewPublishedReportVersion, NewReportPlan, NewSecretBinding, NewStaticPageDraft,
     NewStaticPageImageJob, NewStaticPageRenderOutput, NewUserSession, NewWorkflowTask, PgStorage,
@@ -145,8 +145,18 @@ const ACTIVE_SECRET_BINDING_IDS_HEADER: &str = "x-ai-data-platform-secret-bindin
 const AUTH_SESSION_COOKIE_NAME: &str = "aidp_v3_session";
 const AUTH_SESSION_TTL_DAYS: i64 = 30;
 const AUTH_EMAIL_RESEND_AFTER_SECONDS: i64 = 60;
+const AUTH_EMAIL_RATE_LIMIT_WINDOW_MINUTES: i64 = 15;
+const AUTH_EMAIL_RATE_LIMIT_MAX_PER_EMAIL: i64 = 5;
+const AUTH_EMAIL_RATE_LIMIT_MAX_PER_DEVICE: i64 = 10;
 const DEFAULT_AUTH_EMAIL_OTP_PEPPER: &str = "local-dev-email-otp-pepper";
 const DEFAULT_AUTH_SESSION_PEPPER: &str = "local-dev-session-pepper";
+const AUTH_AUDIT_EMAIL_START: &str = "auth.email_start";
+const AUTH_AUDIT_EMAIL_VERIFY: &str = "auth.email_verify";
+const AUTH_AUDIT_KEY_LOGIN: &str = "auth.key_login";
+const AUTH_AUDIT_LOGOUT: &str = "auth.logout";
+const AUTH_AUDIT_KEY_ROTATE: &str = "auth.key_rotate";
+const AUTH_AUDIT_EMAIL_BIND_START: &str = "auth.email_bind_start";
+const AUTH_AUDIT_LOCAL_DATA_CLAIM: &str = "auth.local_data_claim";
 const PUBLIC_DATASET_WARNING: &str = "该数据集是公开数据集，所有用户可见";
 
 const DEFAULT_PUBLIC_DATASETS: &[(&str, &str, &str)] = &[
@@ -3069,6 +3079,21 @@ async fn start_email_auth(
     if let Some(existing) =
         reusable_email_challenge(&state, &email, request.purpose.clone(), now).await?
     {
+        record_auth_audit_event(
+            &state,
+            AUTH_AUDIT_EMAIL_START,
+            AuthAuditOutcome::Succeeded,
+            None,
+            None,
+            Some(existing.email_normalized.clone()),
+            request.device_fingerprint.clone(),
+            json!({
+                "purpose": existing.purpose.as_str(),
+                "challenge_id": existing.id.to_string(),
+                "reused": true
+            }),
+        )
+        .await;
         return Ok((
             StatusCode::OK,
             Json(StartEmailAuthResponse {
@@ -3080,7 +3105,17 @@ async fn start_email_auth(
             }),
         ));
     }
-    let prepared = service.prepare_challenge(&email, request.purpose.clone(), now);
+    enforce_email_challenge_rate_limit(
+        &state,
+        &email,
+        request.purpose.clone(),
+        request.device_fingerprint.clone(),
+        now,
+        AUTH_AUDIT_EMAIL_START,
+    )
+    .await?;
+    let mut prepared = service.prepare_challenge(&email, request.purpose.clone(), now);
+    prepared.challenge.metadata = auth_challenge_metadata(request.device_fingerprint.as_deref());
     send_verification_email(&prepared.email).map_err(|error| {
         tracing::error!(%error, "verification code email send failed");
         ApiError::internal(
@@ -3094,6 +3129,21 @@ async fn start_email_auth(
         .create(state.tenant_id, prepared.challenge)
         .await
         .map_err(ApiError::from_storage)?;
+    record_auth_audit_event(
+        &state,
+        AUTH_AUDIT_EMAIL_START,
+        AuthAuditOutcome::Succeeded,
+        None,
+        None,
+        Some(challenge.email_normalized.clone()),
+        request.device_fingerprint,
+        json!({
+            "purpose": challenge.purpose.as_str(),
+            "challenge_id": challenge.id.to_string(),
+            "reused": false
+        }),
+    )
+    .await;
 
     Ok((
         StatusCode::CREATED,
@@ -3114,18 +3164,33 @@ async fn verify_email_auth(
     let email = validate_auth_email(&request.email)?;
     validate_required("code", &request.code)?;
     let now = Utc::now();
-    let challenge = state
+    let device_fingerprint = request.device_fingerprint.clone();
+    let Some(challenge) = state
         .storage
         .email_verification_challenges()
         .latest_active_by_email_and_purpose(state.tenant_id, &email, request.purpose.clone())
         .await
         .map_err(ApiError::from_storage)?
-        .ok_or_else(|| {
-            ApiError::bad_request(
-                "verification_challenge_not_found",
-                "没有找到可用验证码，请重新获取".to_string(),
-            )
-        })?;
+    else {
+        record_auth_audit_event(
+            &state,
+            AUTH_AUDIT_EMAIL_VERIFY,
+            AuthAuditOutcome::Failed,
+            None,
+            None,
+            Some(email),
+            device_fingerprint,
+            json!({
+                "purpose": request.purpose.as_str(),
+                "reason": "verification_challenge_not_found"
+            }),
+        )
+        .await;
+        return Err(ApiError::bad_request(
+            "verification_challenge_not_found",
+            "没有找到可用验证码，请重新获取".to_string(),
+        ));
+    };
     match email_otp_service()?.verify_challenge(&challenge, &request.code, now) {
         OtpVerificationStatus::Valid => {
             state
@@ -3142,24 +3207,86 @@ async fn verify_email_auth(
                 .increment_attempt_count(state.tenant_id, challenge.id)
                 .await
                 .map_err(ApiError::from_storage)?;
+            record_auth_audit_event(
+                &state,
+                AUTH_AUDIT_EMAIL_VERIFY,
+                AuthAuditOutcome::Failed,
+                None,
+                None,
+                Some(email),
+                device_fingerprint,
+                json!({
+                    "purpose": request.purpose.as_str(),
+                    "challenge_id": challenge.id.to_string(),
+                    "reason": "verification_code_invalid",
+                    "attempt_count_before": challenge.attempt_count
+                }),
+            )
+            .await;
             return Err(ApiError::bad_request(
                 "verification_code_invalid",
                 "验证码不正确".to_string(),
             ));
         }
         OtpVerificationStatus::Expired => {
+            record_auth_audit_event(
+                &state,
+                AUTH_AUDIT_EMAIL_VERIFY,
+                AuthAuditOutcome::Failed,
+                None,
+                None,
+                Some(email),
+                device_fingerprint,
+                json!({
+                    "purpose": request.purpose.as_str(),
+                    "challenge_id": challenge.id.to_string(),
+                    "reason": "verification_code_expired"
+                }),
+            )
+            .await;
             return Err(ApiError::bad_request(
                 "verification_code_expired",
                 "验证码已过期，请重新获取".to_string(),
             ));
         }
         OtpVerificationStatus::Consumed => {
+            record_auth_audit_event(
+                &state,
+                AUTH_AUDIT_EMAIL_VERIFY,
+                AuthAuditOutcome::Failed,
+                None,
+                None,
+                Some(email),
+                device_fingerprint,
+                json!({
+                    "purpose": request.purpose.as_str(),
+                    "challenge_id": challenge.id.to_string(),
+                    "reason": "verification_code_consumed"
+                }),
+            )
+            .await;
             return Err(ApiError::bad_request(
                 "verification_code_consumed",
                 "验证码已使用，请重新获取".to_string(),
             ));
         }
         OtpVerificationStatus::AttemptsExceeded => {
+            record_auth_audit_event(
+                &state,
+                AUTH_AUDIT_EMAIL_VERIFY,
+                AuthAuditOutcome::Failed,
+                None,
+                None,
+                Some(email),
+                device_fingerprint,
+                json!({
+                    "purpose": request.purpose.as_str(),
+                    "challenge_id": challenge.id.to_string(),
+                    "reason": "verification_code_attempts_exceeded",
+                    "attempt_count_before": challenge.attempt_count
+                }),
+            )
+            .await;
             return Err(ApiError::bad_request(
                 "verification_code_attempts_exceeded",
                 "验证码尝试次数过多，请重新获取".to_string(),
@@ -3180,6 +3307,21 @@ async fn verify_email_auth(
         request.device_fingerprint,
     )
     .await?;
+    record_auth_audit_event(
+        &state,
+        AUTH_AUDIT_EMAIL_VERIFY,
+        AuthAuditOutcome::Succeeded,
+        Some(user.id),
+        Some(session.id),
+        Some(user.email.clone()),
+        Some(session.device_fingerprint.clone()),
+        json!({
+            "purpose": request.purpose.as_str(),
+            "challenge_id": challenge.id.to_string(),
+            "auth_method": session.auth_method.as_str()
+        }),
+    )
+    .await;
 
     Ok((
         StatusCode::CREATED,
@@ -3199,6 +3341,7 @@ async fn login_with_local_key(
     let email = validate_auth_email(&request.email)?;
     validate_required("local_key", &request.local_key)?;
     let fingerprint = local_key_fingerprint(&request.local_key);
+    let device_fingerprint = request.device_fingerprint.clone();
     let bindings = state
         .storage
         .secret_bindings()
@@ -3206,11 +3349,26 @@ async fn login_with_local_key(
         .await
         .map_err(ApiError::from_storage)?;
     if bindings.is_empty() {
+        record_auth_audit_event(
+            &state,
+            AUTH_AUDIT_KEY_LOGIN,
+            AuthAuditOutcome::Failed,
+            None,
+            None,
+            Some(email),
+            device_fingerprint,
+            json!({
+                "reason": "invalid_local_key",
+                "matched_binding_count": 0
+            }),
+        )
+        .await;
         return Err(ApiError::unauthorized(
             "invalid_local_key",
             "邮箱或密钥不匹配".to_string(),
         ));
     }
+    let matched_binding_count = bindings.len();
     let active_secret_binding_ids = bindings
         .iter()
         .map(|binding| binding.id)
@@ -3235,6 +3393,20 @@ async fn login_with_local_key(
         request.device_fingerprint,
     )
     .await?;
+    record_auth_audit_event(
+        &state,
+        AUTH_AUDIT_KEY_LOGIN,
+        AuthAuditOutcome::Succeeded,
+        Some(user.id),
+        Some(session.id),
+        Some(user.email.clone()),
+        Some(session.device_fingerprint.clone()),
+        json!({
+            "auth_method": session.auth_method.as_str(),
+            "matched_binding_count": matched_binding_count
+        }),
+    )
+    .await;
 
     Ok((
         StatusCode::CREATED,
@@ -3283,6 +3455,17 @@ async fn logout_auth_session(
                 .revoke(state.tenant_id, session.id, Utc::now())
                 .await
                 .map_err(ApiError::from_storage)?;
+            record_auth_audit_event(
+                &state,
+                AUTH_AUDIT_LOGOUT,
+                AuthAuditOutcome::Succeeded,
+                Some(session.user_id),
+                Some(session.id),
+                None,
+                Some(session.device_fingerprint),
+                json!({ "revoked": true }),
+            )
+            .await;
             revoked = true;
         }
     }
@@ -3299,7 +3482,7 @@ async fn rotate_local_key(
     Json(request): Json<KeyRotateRequest>,
 ) -> std::result::Result<Json<KeyRotateResponse>, ApiError> {
     validate_required("new_local_key", &request.new_local_key)?;
-    let Some((user, _session)) = current_auth_session(&state, &headers).await? else {
+    let Some((user, session)) = current_auth_session(&state, &headers).await? else {
         return Err(ApiError::unauthorized(
             "auth_session_required",
             "请先登录后再更换密钥".to_string(),
@@ -3321,7 +3504,22 @@ async fn rotate_local_key(
         .map_err(ApiError::from_storage)?
         .into_iter()
         .map(|binding| binding.id)
-        .collect();
+        .collect::<Vec<_>>();
+    record_auth_audit_event(
+        &state,
+        AUTH_AUDIT_KEY_ROTATE,
+        AuthAuditOutcome::Succeeded,
+        Some(user.id),
+        Some(session.id),
+        Some(user.email.clone()),
+        request
+            .device_fingerprint
+            .or_else(|| Some(session.device_fingerprint.clone())),
+        json!({
+            "matched_binding_count": active_secret_binding_ids.len()
+        }),
+    )
+    .await;
 
     Ok(Json(KeyRotateResponse {
         user: to_auth_user_view(&user, true),
@@ -3339,6 +3537,20 @@ async fn bind_auth_email(
     if let Some(existing) =
         reusable_email_challenge(&state, &email, AuthChallengePurpose::BindEmail, now).await?
     {
+        record_auth_audit_event(
+            &state,
+            AUTH_AUDIT_EMAIL_BIND_START,
+            AuthAuditOutcome::Succeeded,
+            None,
+            None,
+            Some(existing.email_normalized.clone()),
+            request.device_fingerprint.clone(),
+            json!({
+                "challenge_id": existing.id.to_string(),
+                "reused": true
+            }),
+        )
+        .await;
         return Ok((
             StatusCode::OK,
             Json(BindEmailResponse {
@@ -3348,8 +3560,18 @@ async fn bind_auth_email(
             }),
         ));
     }
-    let prepared =
+    enforce_email_challenge_rate_limit(
+        &state,
+        &email,
+        AuthChallengePurpose::BindEmail,
+        request.device_fingerprint.clone(),
+        now,
+        AUTH_AUDIT_EMAIL_BIND_START,
+    )
+    .await?;
+    let mut prepared =
         email_otp_service()?.prepare_challenge(&email, AuthChallengePurpose::BindEmail, now);
+    prepared.challenge.metadata = auth_challenge_metadata(request.device_fingerprint.as_deref());
     send_verification_email(&prepared.email).map_err(|error| {
         tracing::error!(%error, "bind-email verification email send failed");
         ApiError::internal(
@@ -3363,6 +3585,20 @@ async fn bind_auth_email(
         .create(state.tenant_id, prepared.challenge)
         .await
         .map_err(ApiError::from_storage)?;
+    record_auth_audit_event(
+        &state,
+        AUTH_AUDIT_EMAIL_BIND_START,
+        AuthAuditOutcome::Succeeded,
+        None,
+        None,
+        Some(challenge.email_normalized.clone()),
+        request.device_fingerprint,
+        json!({
+            "challenge_id": challenge.id.to_string(),
+            "reused": false
+        }),
+    )
+    .await;
 
     Ok((
         StatusCode::CREATED,
@@ -3380,7 +3616,7 @@ async fn claim_local_data(
     Json(request): Json<ClaimLocalDataRequest>,
 ) -> std::result::Result<Json<ClaimLocalDataResponse>, ApiError> {
     validate_required("fingerprint", &request.fingerprint)?;
-    let Some((user, _session)) = current_auth_session(&state, &headers).await? else {
+    let Some((user, session)) = current_auth_session(&state, &headers).await? else {
         return Err(ApiError::unauthorized(
             "auth_session_required",
             "请先登录账号后再认领本地密钥数据".to_string(),
@@ -3442,6 +3678,21 @@ async fn claim_local_data(
             .await
             .map_err(ApiError::from_storage)?;
     }
+    record_auth_audit_event(
+        &state,
+        AUTH_AUDIT_LOCAL_DATA_CLAIM,
+        AuthAuditOutcome::Succeeded,
+        Some(user.id),
+        Some(session.id),
+        Some(user.email.clone()),
+        Some(session.device_fingerprint),
+        json!({
+            "matched_binding_count": active_secret_binding_ids.len(),
+            "claimed_dataset_count": claimed_datasets.len(),
+            "skipped_owned_dataset_count": skipped_owned_dataset_count
+        }),
+    )
+    .await;
 
     Ok(Json(ClaimLocalDataResponse {
         user: to_auth_user_view(&user, true),
@@ -3449,6 +3700,39 @@ async fn claim_local_data(
         active_secret_binding_ids,
         skipped_owned_dataset_count,
     }))
+}
+
+async fn record_auth_audit_event(
+    state: &AppState,
+    event_name: &'static str,
+    outcome: AuthAuditOutcome,
+    user_id: Option<UserId>,
+    session_id: Option<UserSessionId>,
+    email_normalized: Option<String>,
+    device_fingerprint: Option<String>,
+    metadata: Value,
+) {
+    if let Err(error) = state
+        .storage
+        .auth_audit_events()
+        .create(
+            state.tenant_id,
+            NewAuthAuditEvent {
+                user_id,
+                session_id,
+                email_normalized,
+                event_name: event_name.to_string(),
+                outcome,
+                ip_hash: None,
+                device_fingerprint: trim_optional(device_fingerprint),
+                metadata,
+                created_at: Utc::now(),
+            },
+        )
+        .await
+    {
+        tracing::warn!(%error, %event_name, "auth audit event persistence failed");
+    }
 }
 
 fn active_secret_binding_ids_from_headers(
@@ -3516,6 +3800,101 @@ async fn reusable_email_challenge(
         challenge.expires_at > now
             && (challenge.created_at + Duration::seconds(AUTH_EMAIL_RESEND_AFTER_SECONDS)) > now
     }))
+}
+
+async fn enforce_email_challenge_rate_limit(
+    state: &AppState,
+    email_normalized: &str,
+    purpose: AuthChallengePurpose,
+    device_fingerprint: Option<String>,
+    now: DateTime<Utc>,
+    audit_event_name: &'static str,
+) -> std::result::Result<(), ApiError> {
+    let since = now - Duration::minutes(AUTH_EMAIL_RATE_LIMIT_WINDOW_MINUTES);
+    let email_count = state
+        .storage
+        .email_verification_challenges()
+        .count_created_since_by_email_and_purpose(
+            state.tenant_id,
+            email_normalized,
+            purpose.clone(),
+            since,
+        )
+        .await
+        .map_err(ApiError::from_storage)?;
+    if email_count >= AUTH_EMAIL_RATE_LIMIT_MAX_PER_EMAIL {
+        record_auth_audit_event(
+            state,
+            audit_event_name,
+            AuthAuditOutcome::Failed,
+            None,
+            None,
+            Some(email_normalized.to_string()),
+            device_fingerprint,
+            json!({
+                "purpose": purpose.as_str(),
+                "reason": "email_challenge_rate_limited",
+                "window_minutes": AUTH_EMAIL_RATE_LIMIT_WINDOW_MINUTES,
+                "observed_count": email_count,
+                "limit": AUTH_EMAIL_RATE_LIMIT_MAX_PER_EMAIL
+            }),
+        )
+        .await;
+        return Err(ApiError::too_many_requests(
+            "email_challenge_rate_limited",
+            "验证码请求过于频繁，请稍后再试".to_string(),
+        ));
+    }
+
+    if let Some(device) = trim_optional(device_fingerprint.clone()) {
+        let device_count = state
+            .storage
+            .email_verification_challenges()
+            .count_created_since_by_device_and_purpose(
+                state.tenant_id,
+                &device,
+                purpose.clone(),
+                since,
+            )
+            .await
+            .map_err(ApiError::from_storage)?;
+        if device_count >= AUTH_EMAIL_RATE_LIMIT_MAX_PER_DEVICE {
+            record_auth_audit_event(
+                state,
+                audit_event_name,
+                AuthAuditOutcome::Failed,
+                None,
+                None,
+                Some(email_normalized.to_string()),
+                Some(device),
+                json!({
+                    "purpose": purpose.as_str(),
+                    "reason": "device_challenge_rate_limited",
+                    "window_minutes": AUTH_EMAIL_RATE_LIMIT_WINDOW_MINUTES,
+                    "observed_count": device_count,
+                    "limit": AUTH_EMAIL_RATE_LIMIT_MAX_PER_DEVICE
+                }),
+            )
+            .await;
+            return Err(ApiError::too_many_requests(
+                "email_challenge_rate_limited",
+                "验证码请求过于频繁，请稍后再试".to_string(),
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn auth_challenge_metadata(device_fingerprint: Option<&str>) -> Value {
+    let mut metadata = Map::new();
+    if let Some(device) = device_fingerprint.and_then(|value| {
+        let value = value.trim();
+        (!value.is_empty()).then(|| value.to_string())
+    }) {
+        metadata.insert("device_fingerprint".to_string(), json!(device));
+    }
+    Value::Object(metadata)
 }
 
 fn resend_after_seconds(created_at: DateTime<Utc>, now: DateTime<Utc>) -> Option<u32> {
@@ -3798,10 +4177,30 @@ async fn load_visible_report_plan(
     plan_id: ReportPlanId,
     active_secret_binding_ids: &[SecretBindingId],
 ) -> std::result::Result<ReportPlan, ApiError> {
-    load_visible_report_plan_for_user(state, plan_id, active_secret_binding_ids, None).await
+    load_report_plan_with_visible_dataset_for_user(state, plan_id, active_secret_binding_ids, None)
+        .await
 }
 
 async fn load_visible_report_plan_for_user(
+    state: &AppState,
+    plan_id: ReportPlanId,
+    active_secret_binding_ids: &[SecretBindingId],
+    current_user_id: Option<UserId>,
+) -> std::result::Result<ReportPlan, ApiError> {
+    let plan = load_report_plan_with_visible_dataset_for_user(
+        state,
+        plan_id,
+        active_secret_binding_ids,
+        current_user_id,
+    )
+    .await?;
+    if report_owner_is_visible(plan.owner_user_id, current_user_id) {
+        return Ok(plan);
+    }
+    Err(report_plan_not_found_error(plan_id))
+}
+
+async fn load_report_plan_with_visible_dataset_for_user(
     state: &AppState,
     plan_id: ReportPlanId,
     active_secret_binding_ids: &[SecretBindingId],
@@ -3813,12 +4212,7 @@ async fn load_visible_report_plan_for_user(
         .get_by_id(state.tenant_id, plan_id)
         .await
         .map_err(ApiError::from_storage)?
-        .ok_or_else(|| {
-            ApiError::not_found(
-                "report_plan_not_found",
-                format!("report plan {} was not found", plan_id),
-            )
-        })?;
+        .ok_or_else(|| report_plan_not_found_error(plan_id))?;
     load_visible_dataset_for_user(
         state,
         plan.dataset_id,
@@ -3827,6 +4221,17 @@ async fn load_visible_report_plan_for_user(
     )
     .await?;
     Ok(plan)
+}
+
+fn report_owner_is_visible(owner_user_id: Option<UserId>, current_user_id: Option<UserId>) -> bool {
+    owner_user_id.is_none() || owner_user_id == current_user_id
+}
+
+fn report_plan_not_found_error(plan_id: ReportPlanId) -> ApiError {
+    ApiError::not_found(
+        "report_plan_not_found",
+        format!("report plan {} was not found", plan_id),
+    )
 }
 
 async fn ensure_default_public_datasets(state: &AppState) -> std::result::Result<(), ApiError> {
@@ -5408,12 +5813,7 @@ async fn list_static_page_drafts(
     Ok(Json(
         drafts
             .into_iter()
-            .filter(|draft| {
-                draft.owner_user_id.is_none()
-                    || draft
-                        .owner_user_id
-                        .is_some_and(|owner| Some(owner) == current_user_id)
-            })
+            .filter(|draft| static_page_owner_is_visible(draft.owner_user_id, current_user_id))
             .map(to_static_page_draft_view)
             .collect(),
     ))
@@ -5421,21 +5821,25 @@ async fn list_static_page_drafts(
 
 async fn get_static_page_draft(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(draft_id): Path<String>,
 ) -> std::result::Result<Json<StaticPageDraftView>, ApiError> {
     let draft_id = parse_static_page_draft_id(&draft_id)?;
-    let draft = load_static_page_draft_or_404(&state, draft_id).await?;
+    let current_user_id = current_auth_user_id(&state, &headers).await?;
+    let draft = load_visible_static_page_draft(&state, draft_id, current_user_id).await?;
 
     Ok(Json(to_static_page_draft_view(draft)))
 }
 
 async fn update_static_page_draft(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(draft_id): Path<String>,
     Json(request): Json<UpdateStaticPageDraftRequest>,
 ) -> std::result::Result<Json<UpdateStaticPageDraftResponse>, ApiError> {
     let draft_id = parse_static_page_draft_id(&draft_id)?;
-    let mut draft = load_static_page_draft_or_404(&state, draft_id).await?;
+    let current_user_id = current_auth_user_id(&state, &headers).await?;
+    let mut draft = load_visible_static_page_draft(&state, draft_id, current_user_id).await?;
 
     if let Some(title) = request.title {
         validate_required("title", &title)?;
@@ -5483,11 +5887,13 @@ async fn update_static_page_draft(
 
 async fn append_static_page_draft_operations(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(draft_id): Path<String>,
     Json(request): Json<AppendStaticPageDraftOperationsRequest>,
 ) -> std::result::Result<(StatusCode, Json<AppendStaticPageDraftOperationsResponse>), ApiError> {
     let draft_id = parse_static_page_draft_id(&draft_id)?;
-    let mut draft = load_static_page_draft_or_404(&state, draft_id).await?;
+    let current_user_id = current_auth_user_id(&state, &headers).await?;
+    let mut draft = load_visible_static_page_draft(&state, draft_id, current_user_id).await?;
     let operations = validate_static_page_operations(request.operations)?;
     if operations.is_empty() && request.draft_payload.is_none() {
         return Err(ApiError::bad_request(
@@ -5552,12 +5958,14 @@ async fn append_static_page_draft_operations(
 
 async fn apply_static_page_draft_intent(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(draft_id): Path<String>,
     Json(request): Json<ApplyStaticPageDraftIntentRequest>,
 ) -> std::result::Result<(StatusCode, Json<ApplyStaticPageDraftIntentResponse>), ApiError> {
     let draft_id = parse_static_page_draft_id(&draft_id)?;
     validate_required("prompt", &request.prompt)?;
-    let mut draft = load_static_page_draft_or_404(&state, draft_id).await?;
+    let current_user_id = current_auth_user_id(&state, &headers).await?;
+    let mut draft = load_visible_static_page_draft(&state, draft_id, current_user_id).await?;
     let prompt = request.prompt.trim().to_string();
     let message_count = request.messages.len();
     let messages = request.messages;
@@ -5621,10 +6029,12 @@ async fn apply_static_page_draft_intent(
 
 async fn list_static_page_image_jobs(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(draft_id): Path<String>,
 ) -> std::result::Result<Json<Vec<StaticPageImageJobView>>, ApiError> {
     let draft_id = parse_static_page_draft_id(&draft_id)?;
-    let draft = load_static_page_draft_or_404(&state, draft_id).await?;
+    let current_user_id = current_auth_user_id(&state, &headers).await?;
+    let draft = load_visible_static_page_draft(&state, draft_id, current_user_id).await?;
     let jobs = state
         .storage
         .static_page_image_jobs()
@@ -5640,11 +6050,21 @@ async fn list_static_page_image_jobs(
 
 async fn create_static_page_image_job(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(draft_id): Path<String>,
     Json(request): Json<CreateStaticPageImageJobRequest>,
 ) -> std::result::Result<(StatusCode, Json<CreateStaticPageImageJobResponse>), ApiError> {
     let draft_id = parse_static_page_draft_id(&draft_id)?;
-    let mut draft = load_static_page_draft_or_404(&state, draft_id).await?;
+    let current_user_id = current_auth_user_id(&state, &headers).await?;
+    let draft = load_visible_static_page_draft(&state, draft_id, current_user_id).await?;
+    create_static_page_image_job_for_draft(&state, draft, request).await
+}
+
+async fn create_static_page_image_job_for_draft(
+    state: &AppState,
+    mut draft: StaticPageDraft,
+    request: CreateStaticPageImageJobRequest,
+) -> std::result::Result<(StatusCode, Json<CreateStaticPageImageJobResponse>), ApiError> {
     let image_prompt_payload = if request.image_prompt_payload.is_null() {
         build_static_page_image_prompt_payload(&draft, request.prompt.as_deref())
     } else {
@@ -5670,7 +6090,7 @@ async fn create_static_page_image_job(
         .await
         .map_err(ApiError::from_storage)?;
     let workflow_execution = build_initial_static_page_image_generation_execution(
-        &state,
+        state,
         &draft,
         &job,
         request.prompt.as_deref(),
@@ -5717,7 +6137,7 @@ async fn create_static_page_image_job(
         .await
         .map_err(ApiError::from_storage)?;
     append_static_page_draft_run_event(
-        &state,
+        state,
         &draft,
         "static_page_image_job.created",
         json!({
@@ -5741,20 +6161,24 @@ async fn create_static_page_image_job(
 
 async fn get_static_page_image_job(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(job_id): Path<String>,
 ) -> std::result::Result<Json<StaticPageImageJobView>, ApiError> {
     let job_id = parse_static_page_image_job_id(&job_id)?;
-    let job = load_static_page_image_job_or_404(&state, job_id).await?;
+    let current_user_id = current_auth_user_id(&state, &headers).await?;
+    let job = load_visible_static_page_image_job(&state, job_id, current_user_id).await?;
     Ok(Json(to_static_page_image_job_view(job)))
 }
 
 async fn confirm_static_page_image_job(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(job_id): Path<String>,
     Json(request): Json<ConfirmStaticPageImageJobRequest>,
 ) -> std::result::Result<Json<ConfirmStaticPageImageJobResponse>, ApiError> {
     let job_id = parse_static_page_image_job_id(&job_id)?;
-    let mut job = load_static_page_image_job_or_404(&state, job_id).await?;
+    let current_user_id = current_auth_user_id(&state, &headers).await?;
+    let mut job = load_visible_static_page_image_job(&state, job_id, current_user_id).await?;
     if matches!(job.status, StaticPageImageJobStatus::Failed) {
         return Err(ApiError::bad_request(
             "static_page_image_job_failed",
@@ -5780,7 +6204,7 @@ async fn confirm_static_page_image_job(
         .update(state.tenant_id, &job)
         .await
         .map_err(ApiError::from_storage)?;
-    let mut draft = load_static_page_draft_or_404(&state, job.draft_id).await?;
+    let mut draft = load_visible_static_page_draft(&state, job.draft_id, current_user_id).await?;
     let operations = vec![json!({
         "type": "confirm_preview",
         "previewImage": {
@@ -5827,13 +6251,23 @@ async fn confirm_static_page_image_job(
 
 async fn create_static_page_render(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(draft_id): Path<String>,
     Json(request): Json<CreateStaticPageRenderRequest>,
 ) -> std::result::Result<(StatusCode, Json<CreateStaticPageRenderResponse>), ApiError> {
     let draft_id = parse_static_page_draft_id(&draft_id)?;
-    let mut draft = load_static_page_draft_or_404(&state, draft_id).await?;
+    let current_user_id = current_auth_user_id(&state, &headers).await?;
+    let draft = load_visible_static_page_draft(&state, draft_id, current_user_id).await?;
+    create_static_page_render_for_draft(&state, draft, request).await
+}
+
+async fn create_static_page_render_for_draft(
+    state: &AppState,
+    mut draft: StaticPageDraft,
+    request: CreateStaticPageRenderRequest,
+) -> std::result::Result<(StatusCode, Json<CreateStaticPageRenderResponse>), ApiError> {
     let image_job =
-        resolve_confirmed_static_page_image_job(&state, &draft, request.image_job_id).await?;
+        resolve_confirmed_static_page_image_job(state, &draft, request.image_job_id).await?;
     if request.background {
         let mut render_output = state
             .storage
@@ -5859,7 +6293,7 @@ async fn create_static_page_render(
             .await
             .map_err(ApiError::from_storage)?;
         let workflow_execution = build_initial_static_page_render_execution(
-            &state,
+            state,
             &draft,
             &render_output,
             image_job.as_ref(),
@@ -5894,7 +6328,7 @@ async fn create_static_page_render(
             .await
             .map_err(ApiError::from_storage)?;
         append_static_page_draft_run_event(
-            &state,
+            state,
             &draft,
             "static_page_render.queued",
             json!({
@@ -5973,7 +6407,7 @@ async fn create_static_page_render(
         .await
         .map_err(ApiError::from_storage)?;
     append_static_page_draft_run_event(
-        &state,
+        state,
         &draft,
         "static_page_render.created",
         json!({
@@ -5995,10 +6429,12 @@ async fn create_static_page_render(
 
 async fn list_static_page_render_outputs(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(draft_id): Path<String>,
 ) -> std::result::Result<Json<Vec<StaticPageRenderOutputView>>, ApiError> {
     let draft_id = parse_static_page_draft_id(&draft_id)?;
-    let draft = load_static_page_draft_or_404(&state, draft_id).await?;
+    let current_user_id = current_auth_user_id(&state, &headers).await?;
+    let draft = load_visible_static_page_draft(&state, draft_id, current_user_id).await?;
     let outputs = state
         .storage
         .static_page_render_outputs()
@@ -7979,6 +8415,9 @@ async fn list_report_plans(
         if !visible_dataset_ids.contains(&plan.dataset_id) {
             continue;
         }
+        if !report_owner_is_visible(plan.owner_user_id, current_user_id) {
+            continue;
+        }
         views.push(hydrate_report_plan_summary(&state, plan).await?);
     }
 
@@ -7992,7 +8431,9 @@ async fn list_report_plan_ast_versions(
 ) -> std::result::Result<Json<Vec<ReportPlanAstVersionView>>, ApiError> {
     let plan_id = parse_plan_id(&plan_id)?;
     let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
-    load_visible_report_plan(&state, plan_id, &active_secret_binding_ids).await?;
+    let current_user_id = current_auth_user_id(&state, &headers).await?;
+    load_visible_report_plan_for_user(&state, plan_id, &active_secret_binding_ids, current_user_id)
+        .await?;
 
     let versions = state
         .storage
@@ -8016,6 +8457,9 @@ async fn continue_report_plan(
 ) -> std::result::Result<Json<CreateReportPlanResponse>, ApiError> {
     let plan_id = parse_plan_id(&plan_id)?;
     let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
+    let current_user_id = current_auth_user_id(&state, &headers).await?;
+    load_visible_report_plan_for_user(&state, plan_id, &active_secret_binding_ids, current_user_id)
+        .await?;
     let response =
         continue_report_plan_response(&state, plan_id, &active_secret_binding_ids).await?;
     Ok(Json(response))
@@ -8120,6 +8564,9 @@ async fn publish_report(
 ) -> std::result::Result<(StatusCode, Json<PublishReportResponse>), ApiError> {
     let plan_id = parse_plan_id(&plan_id)?;
     let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
+    let current_user_id = current_auth_user_id(&state, &headers).await?;
+    load_visible_report_plan_for_user(&state, plan_id, &active_secret_binding_ids, current_user_id)
+        .await?;
     let response =
         publish_report_response(&state, plan_id, request, &active_secret_binding_ids).await?;
 
@@ -8232,6 +8679,9 @@ async fn create_report_render(
 ) -> std::result::Result<(StatusCode, Json<CreateReportRenderResponse>), ApiError> {
     let plan_id = parse_plan_id(&plan_id)?;
     let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
+    let current_user_id = current_auth_user_id(&state, &headers).await?;
+    load_visible_report_plan_for_user(&state, plan_id, &active_secret_binding_ids, current_user_id)
+        .await?;
     let response =
         create_report_render_response(&state, plan_id, request, &active_secret_binding_ids).await?;
 
@@ -8286,7 +8736,9 @@ async fn list_report_render_outputs(
 ) -> std::result::Result<Json<Vec<ReportRenderOutputView>>, ApiError> {
     let plan_id = parse_plan_id(&plan_id)?;
     let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
-    load_visible_report_plan(&state, plan_id, &active_secret_binding_ids).await?;
+    let current_user_id = current_auth_user_id(&state, &headers).await?;
+    load_visible_report_plan_for_user(&state, plan_id, &active_secret_binding_ids, current_user_id)
+        .await?;
 
     let outputs = state
         .storage
@@ -8310,10 +8762,12 @@ async fn get_report_plan_published_report(
 ) -> std::result::Result<Json<PublishedReportDetailView>, ApiError> {
     let plan_id = parse_plan_id(&plan_id)?;
     let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
-    let detail = load_published_report_detail_by_plan_with_state(
+    let current_user_id = current_auth_user_id(&state, &headers).await?;
+    let detail = load_published_report_detail_by_plan_with_state_for_user(
         &state,
         plan_id,
         &active_secret_binding_ids,
+        current_user_id,
     )
     .await?;
     Ok(Json(detail))
@@ -8345,13 +8799,26 @@ async fn list_published_reports(
         .await
         .map_err(ApiError::from_storage)?;
 
-    Ok(Json(
-        reports
-            .into_iter()
-            .filter(|report| visible_dataset_ids.contains(&report.dataset_id))
-            .map(to_published_report_view)
-            .collect(),
-    ))
+    let mut views = Vec::with_capacity(reports.len());
+    for report in reports {
+        if !visible_dataset_ids.contains(&report.dataset_id) {
+            continue;
+        }
+        match load_visible_report_plan_for_user(
+            &state,
+            report.plan_id,
+            &active_secret_binding_ids,
+            current_user_id,
+        )
+        .await
+        {
+            Ok(_) => views.push(to_published_report_view(report)),
+            Err(error) if error.status == StatusCode::NOT_FOUND => continue,
+            Err(error) => return Err(error),
+        }
+    }
+
+    Ok(Json(views))
 }
 
 async fn get_published_report(
@@ -8361,9 +8828,14 @@ async fn get_published_report(
 ) -> std::result::Result<Json<PublishedReportDetailView>, ApiError> {
     let report_id = parse_published_report_id(&report_id)?;
     let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
-    let detail =
-        load_published_report_detail_with_state(&state, report_id, &active_secret_binding_ids)
-            .await?;
+    let current_user_id = current_auth_user_id(&state, &headers).await?;
+    let detail = load_published_report_detail_with_state_for_user(
+        &state,
+        report_id,
+        &active_secret_binding_ids,
+        current_user_id,
+    )
+    .await?;
     Ok(Json(detail))
 }
 
@@ -12551,12 +13023,68 @@ async fn load_published_report_detail_with_state(
     hydrate_published_report_detail_view(state, report).await
 }
 
+async fn load_published_report_detail_with_state_for_user(
+    state: &AppState,
+    report_id: PublishedReportId,
+    active_secret_binding_ids: &[SecretBindingId],
+    current_user_id: Option<UserId>,
+) -> std::result::Result<PublishedReportDetailView, ApiError> {
+    let report = state
+        .storage
+        .published_reports()
+        .get_by_id(state.tenant_id, report_id)
+        .await
+        .map_err(ApiError::from_storage)?
+        .ok_or_else(|| {
+            ApiError::not_found(
+                "published_report_not_found",
+                format!("published report {} was not found", report_id),
+            )
+        })?;
+    load_visible_report_plan_for_user(
+        state,
+        report.plan_id,
+        active_secret_binding_ids,
+        current_user_id,
+    )
+    .await?;
+    hydrate_published_report_detail_view(state, report).await
+}
+
 async fn load_published_report_detail_by_plan_with_state(
     state: &AppState,
     plan_id: ReportPlanId,
     active_secret_binding_ids: &[SecretBindingId],
 ) -> std::result::Result<PublishedReportDetailView, ApiError> {
     let plan = load_visible_report_plan(state, plan_id, active_secret_binding_ids).await?;
+    let report = state
+        .storage
+        .published_reports()
+        .get_by_plan(state.tenant_id, plan.id)
+        .await
+        .map_err(ApiError::from_storage)?
+        .ok_or_else(|| {
+            ApiError::not_found(
+                "published_report_not_found",
+                format!("report plan {} does not have a published report", plan_id),
+            )
+        })?;
+    hydrate_published_report_detail_view(state, report).await
+}
+
+async fn load_published_report_detail_by_plan_with_state_for_user(
+    state: &AppState,
+    plan_id: ReportPlanId,
+    active_secret_binding_ids: &[SecretBindingId],
+    current_user_id: Option<UserId>,
+) -> std::result::Result<PublishedReportDetailView, ApiError> {
+    let plan = load_visible_report_plan_for_user(
+        state,
+        plan_id,
+        active_secret_binding_ids,
+        current_user_id,
+    )
+    .await?;
     let report = state
         .storage
         .published_reports()
@@ -14412,6 +14940,32 @@ async fn load_static_page_draft_or_404(
         })
 }
 
+async fn load_visible_static_page_draft(
+    state: &AppState,
+    draft_id: StaticPageDraftId,
+    current_user_id: Option<UserId>,
+) -> std::result::Result<StaticPageDraft, ApiError> {
+    let draft = load_static_page_draft_or_404(state, draft_id).await?;
+    if static_page_owner_is_visible(draft.owner_user_id, current_user_id) {
+        return Ok(draft);
+    }
+    Err(static_page_draft_not_found_error(draft_id))
+}
+
+fn static_page_owner_is_visible(
+    owner_user_id: Option<UserId>,
+    current_user_id: Option<UserId>,
+) -> bool {
+    owner_user_id.is_none() || owner_user_id == current_user_id
+}
+
+fn static_page_draft_not_found_error(draft_id: StaticPageDraftId) -> ApiError {
+    ApiError::not_found(
+        "static_page_draft_not_found",
+        format!("static page draft {} was not found", draft_id),
+    )
+}
+
 async fn load_static_page_image_job_or_404(
     state: &AppState,
     job_id: StaticPageImageJobId,
@@ -14428,6 +14982,16 @@ async fn load_static_page_image_job_or_404(
                 format!("static page image job {} was not found", job_id),
             )
         })
+}
+
+async fn load_visible_static_page_image_job(
+    state: &AppState,
+    job_id: StaticPageImageJobId,
+    current_user_id: Option<UserId>,
+) -> std::result::Result<StaticPageImageJob, ApiError> {
+    let job = load_static_page_image_job_or_404(state, job_id).await?;
+    load_visible_static_page_draft(state, job.draft_id, current_user_id).await?;
+    Ok(job)
 }
 
 async fn resolve_confirmed_static_page_image_job(
@@ -15050,6 +15614,16 @@ impl ApiError {
     fn unauthorized(code: &str, message: String) -> Self {
         Self {
             status: StatusCode::UNAUTHORIZED,
+            payload: ApiErrorResponse {
+                code: code.to_string(),
+                message,
+            },
+        }
+    }
+
+    fn too_many_requests(code: &str, message: String) -> Self {
+        Self {
+            status: StatusCode::TOO_MANY_REQUESTS,
             payload: ApiErrorResponse {
                 code: code.to_string(),
                 message,
@@ -16651,6 +17225,7 @@ mod tests {
 
         let Json(loaded) = get_static_page_draft(
             State(state.clone()),
+            HeaderMap::new(),
             Path(draft_response.draft.id.to_string()),
         )
         .await
@@ -16663,6 +17238,7 @@ mod tests {
 
         let (intent_status, Json(intent_response)) = apply_static_page_draft_intent(
             State(state.clone()),
+            HeaderMap::new(),
             Path(draft_response.draft.id.to_string()),
             Json(ApplyStaticPageDraftIntentRequest {
                 prompt: "给老板看，突出风险，趋势换成柱状图".to_string(),
@@ -16693,6 +17269,7 @@ mod tests {
         let (module_operation_status, Json(module_operation_response)) =
             append_static_page_draft_operations(
                 State(state.clone()),
+                HeaderMap::new(),
                 Path(draft_response.draft.id.to_string()),
                 Json(AppendStaticPageDraftOperationsRequest {
                     prompt: Some("趋势模块接当前数据源，并改成折线图".to_string()),
@@ -16751,6 +17328,7 @@ mod tests {
 
         let (operation_status, Json(operation_response)) = append_static_page_draft_operations(
             State(state.clone()),
+            HeaderMap::new(),
             Path(draft_response.draft.id.to_string()),
             Json(AppendStaticPageDraftOperationsRequest {
                 prompt: Some("直接排队出效果图".to_string()),
@@ -16776,6 +17354,7 @@ mod tests {
 
         let invalid_operation = append_static_page_draft_operations(
             State(state.clone()),
+            HeaderMap::new(),
             Path(draft_response.draft.id.to_string()),
             Json(AppendStaticPageDraftOperationsRequest {
                 prompt: Some("执行未知操作".to_string()),
@@ -16795,6 +17374,7 @@ mod tests {
 
         let render_before_confirm = create_static_page_render(
             State(state.clone()),
+            HeaderMap::new(),
             Path(draft_response.draft.id.to_string()),
             Json(CreateStaticPageRenderRequest {
                 image_job_id: None,
@@ -16810,6 +17390,7 @@ mod tests {
 
         let (job_status, Json(job_response)) = create_static_page_image_job(
             State(state.clone()),
+            HeaderMap::new(),
             Path(draft_response.draft.id.to_string()),
             Json(CreateStaticPageImageJobRequest {
                 prompt: Some("生成一张经营分析效果图".to_string()),
@@ -16863,6 +17444,7 @@ mod tests {
 
         let Json(loaded_job) = get_static_page_image_job(
             State(state.clone()),
+            HeaderMap::new(),
             Path(job_response.image_job.id.to_string()),
         )
         .await
@@ -16871,6 +17453,7 @@ mod tests {
 
         let Json(image_jobs) = list_static_page_image_jobs(
             State(state.clone()),
+            HeaderMap::new(),
             Path(draft_response.draft.id.to_string()),
         )
         .await
@@ -16880,6 +17463,7 @@ mod tests {
 
         let Json(confirmed) = confirm_static_page_image_job(
             State(state.clone()),
+            HeaderMap::new(),
             Path(job_response.image_job.id.to_string()),
             Json(ConfirmStaticPageImageJobRequest {
                 preview_asset_key: Some("previews/static-page-1.png".to_string()),
@@ -16907,6 +17491,7 @@ mod tests {
         let (background_render_status, Json(background_render_response)) =
             create_static_page_render(
                 State(state.clone()),
+                HeaderMap::new(),
                 Path(draft_response.draft.id.to_string()),
                 Json(CreateStaticPageRenderRequest {
                     image_job_id: Some(job_response.image_job.id),
@@ -16993,6 +17578,7 @@ mod tests {
 
         let (render_status, Json(render_response)) = create_static_page_render(
             State(state.clone()),
+            HeaderMap::new(),
             Path(draft_response.draft.id.to_string()),
             Json(CreateStaticPageRenderRequest {
                 image_job_id: Some(job_response.image_job.id),
@@ -17026,6 +17612,7 @@ mod tests {
 
         let Json(render_outputs) = list_static_page_render_outputs(
             State(state.clone()),
+            HeaderMap::new(),
             Path(draft_response.draft.id.to_string()),
         )
         .await
@@ -17199,6 +17786,7 @@ mod tests {
 
         let Json(updated) = get_static_page_draft(
             State(state.clone()),
+            HeaderMap::new(),
             Path(draft_response.draft.id.to_string()),
         )
         .await
@@ -17362,6 +17950,7 @@ mod tests {
 
         let Json(queued_draft) = get_static_page_draft(
             State(state.clone()),
+            HeaderMap::new(),
             Path(draft_response.draft.id.to_string()),
         )
         .await
@@ -17373,6 +17962,7 @@ mod tests {
 
         let Json(confirmed) = confirm_static_page_image_job(
             State(state.clone()),
+            HeaderMap::new(),
             Path(image_job_id.clone()),
             Json(ConfirmStaticPageImageJobRequest {
                 preview_asset_key: Some("previews/react-static-page.png".to_string()),
@@ -17410,6 +18000,7 @@ mod tests {
 
         let Json(render_outputs) = list_static_page_render_outputs(
             State(state.clone()),
+            HeaderMap::new(),
             Path(draft_response.draft.id.to_string()),
         )
         .await
@@ -17894,6 +18485,40 @@ mod tests {
         assert!(dataset_is_visible(&dataset, &[], Some(owner_user_id)));
         assert!(!dataset_is_visible(&dataset, &[], Some(UserId::new())));
         assert!(!dataset_is_visible(&dataset, &[], None));
+    }
+
+    #[test]
+    fn static_page_owner_visibility_requires_matching_user() {
+        let owner_user_id = UserId::new();
+
+        assert!(static_page_owner_is_visible(None, None));
+        assert!(static_page_owner_is_visible(None, Some(owner_user_id)));
+        assert!(static_page_owner_is_visible(
+            Some(owner_user_id),
+            Some(owner_user_id)
+        ));
+        assert!(!static_page_owner_is_visible(Some(owner_user_id), None));
+        assert!(!static_page_owner_is_visible(
+            Some(owner_user_id),
+            Some(UserId::new())
+        ));
+    }
+
+    #[test]
+    fn report_owner_visibility_requires_matching_user() {
+        let owner_user_id = UserId::new();
+
+        assert!(report_owner_is_visible(None, None));
+        assert!(report_owner_is_visible(None, Some(owner_user_id)));
+        assert!(report_owner_is_visible(
+            Some(owner_user_id),
+            Some(owner_user_id)
+        ));
+        assert!(!report_owner_is_visible(Some(owner_user_id), None));
+        assert!(!report_owner_is_visible(
+            Some(owner_user_id),
+            Some(UserId::new())
+        ));
     }
 
     #[tokio::test]
@@ -18645,6 +19270,79 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn report_plan_routes_hide_owned_public_dataset_plan_from_other_users() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let Some(harness) = build_auth_api_test_harness().await else {
+            return;
+        };
+        let dataset = harness
+            .storage
+            .datasets()
+            .create_with_metadata(
+                harness.tenant_id,
+                NewDataset {
+                    key: format!("report-owner-public-dataset-{}", Uuid::new_v4()),
+                    title: "Report Owner Public Dataset".to_string(),
+                    description: None,
+                    owner_user_id: None,
+                },
+                json!({
+                    "visibility": DatasetVisibility::Public.as_str(),
+                    "default_secret_binding_ids": [],
+                }),
+            )
+            .await
+            .expect("public dataset should be created");
+        let owner_cookie = issue_email_session_cookie(&harness, "report-owner@example.com").await;
+        let other_cookie = issue_email_session_cookie(&harness, "report-other@example.com").await;
+
+        let create_response = post_json_request(
+            harness.app.clone(),
+            "/v1/report-plans",
+            &PlanReportRequest {
+                dataset_id: dataset.id,
+                title: "Owner Only Report".to_string(),
+                objective: "Only the owner should see this report plan.".to_string(),
+            },
+            Some(&owner_cookie),
+        )
+        .await;
+        assert_eq!(create_response.status(), StatusCode::CREATED);
+        let created: CreateReportPlanResponse = read_json_response(create_response).await;
+
+        let owner_list_response =
+            get_request(harness.app.clone(), "/v1/report-plans", Some(&owner_cookie)).await;
+        assert_eq!(owner_list_response.status(), StatusCode::OK);
+        let owner_plans: Vec<ReportPlanSummary> = read_json_response(owner_list_response).await;
+        assert!(owner_plans.iter().any(|plan| plan.id == created.plan.id));
+
+        let other_list_response =
+            get_request(harness.app.clone(), "/v1/report-plans", Some(&other_cookie)).await;
+        assert_eq!(other_list_response.status(), StatusCode::OK);
+        let other_plans: Vec<ReportPlanSummary> = read_json_response(other_list_response).await;
+        assert!(!other_plans.iter().any(|plan| plan.id == created.plan.id));
+
+        let anonymous_list_response =
+            get_request(harness.app.clone(), "/v1/report-plans", None).await;
+        assert_eq!(anonymous_list_response.status(), StatusCode::OK);
+        let anonymous_plans: Vec<ReportPlanSummary> =
+            read_json_response(anonymous_list_response).await;
+        assert!(!anonymous_plans
+            .iter()
+            .any(|plan| plan.id == created.plan.id));
+
+        let other_ast_response = get_request(
+            harness.app,
+            &format!("/v1/report-plans/{}/ast-versions", created.plan.id),
+            Some(&other_cookie),
+        )
+        .await;
+        assert_eq!(other_ast_response.status(), StatusCode::NOT_FOUND);
+        let error: ApiErrorResponse = read_json_response(other_ast_response).await;
+        assert_eq!(error.code, "report_plan_not_found");
+    }
+
+    #[tokio::test]
     async fn email_auth_start_creates_challenge_and_sends_email() {
         let _guard = shared_local_postgres_test_lock().lock().await;
         let Some(harness) = build_auth_api_test_harness().await else {
@@ -18677,6 +19375,71 @@ mod tests {
         assert_eq!(challenge.email_normalized, "user@example.com");
         assert_eq!(challenge.purpose, AuthChallengePurpose::Login);
         assert!(!challenge.code_hash.is_empty());
+    }
+
+    #[tokio::test]
+    async fn email_auth_start_rate_limits_recent_challenges_and_audits_failure() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let Some(harness) = build_auth_api_test_harness().await else {
+            return;
+        };
+        let now = Utc::now();
+        let service = auth_otp_service_for_test();
+        for _ in 0..AUTH_EMAIL_RATE_LIMIT_MAX_PER_EMAIL {
+            let mut prepared = service.prepare_challenge(
+                "limited@example.com",
+                AuthChallengePurpose::Login,
+                now - Duration::minutes(2),
+            );
+            prepared.challenge.expires_at = now + Duration::minutes(8);
+            prepared.challenge.metadata = auth_challenge_metadata(Some("rate-browser"));
+            harness
+                .storage
+                .email_verification_challenges()
+                .create(harness.tenant_id, prepared.challenge)
+                .await
+                .expect("seeded challenge should persist");
+        }
+
+        let response = post_json_request(
+            harness.app,
+            "/v1/auth/email/start",
+            &StartEmailAuthRequest {
+                email: "limited@example.com".to_string(),
+                purpose: AuthChallengePurpose::Login,
+                device_fingerprint: Some("rate-browser".to_string()),
+            },
+            None,
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        let payload: ApiErrorResponse = read_json_response(response).await;
+        assert_eq!(payload.code, "email_challenge_rate_limited");
+        let challenge_count = harness
+            .storage
+            .email_verification_challenges()
+            .count_created_since_by_email_and_purpose(
+                harness.tenant_id,
+                "limited@example.com",
+                AuthChallengePurpose::Login,
+                now - Duration::minutes(AUTH_EMAIL_RATE_LIMIT_WINDOW_MINUTES),
+            )
+            .await
+            .expect("challenge count should load");
+        assert_eq!(challenge_count, AUTH_EMAIL_RATE_LIMIT_MAX_PER_EMAIL);
+        let audit_events = harness
+            .storage
+            .auth_audit_events()
+            .list_recent_by_email(harness.tenant_id, "limited@example.com", 10)
+            .await
+            .expect("audit events should load");
+        assert!(audit_events.iter().any(|event| {
+            event.event_name == AUTH_AUDIT_EMAIL_START
+                && event.outcome == AuthAuditOutcome::Failed
+                && event.metadata.get("reason").and_then(Value::as_str)
+                    == Some("email_challenge_rate_limited")
+        }));
     }
 
     #[tokio::test]
@@ -18836,6 +19599,146 @@ mod tests {
         assert_eq!(payload.user.email, "rotate@example.com");
         assert_eq!(payload.primary_secret_fingerprint, fingerprint);
         assert_eq!(payload.active_secret_binding_ids, vec![binding.id]);
+    }
+
+    #[tokio::test]
+    async fn auth_audit_records_login_and_rotation_without_secret_material() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let Some(harness) = build_auth_api_test_harness().await else {
+            return;
+        };
+        let dataset = harness
+            .storage
+            .datasets()
+            .create(
+                harness.tenant_id,
+                NewDataset {
+                    key: format!("audit-key-dataset-{}", Uuid::new_v4()),
+                    title: "Audit Key Dataset".to_string(),
+                    description: None,
+                    owner_user_id: None,
+                },
+            )
+            .await
+            .expect("dataset should be created");
+        let fingerprint = local_key_fingerprint("audit-local-secret");
+        harness
+            .storage
+            .secret_bindings()
+            .create(
+                harness.tenant_id,
+                NewSecretBinding {
+                    dataset_id: dataset.id,
+                    document_id: None,
+                    scope_level: SecretScopeLevel::Dataset,
+                    provider_key: "audit-key".to_string(),
+                    cipher_text: "local-only".to_string(),
+                    fingerprint,
+                },
+            )
+            .await
+            .expect("secret binding should be created");
+
+        let login_response = post_json_request(
+            harness.app.clone(),
+            "/v1/auth/key/login",
+            &KeyLoginRequest {
+                email: "audit@example.com".to_string(),
+                local_key: "audit-local-secret".to_string(),
+                device_fingerprint: Some("audit-browser".to_string()),
+            },
+            None,
+        )
+        .await;
+        assert_eq!(login_response.status(), StatusCode::CREATED);
+        let cookie = cookie_pair_from_set_cookie(&login_response);
+        let login_payload: KeyLoginResponse = read_json_response(login_response).await;
+
+        let rotate_response = post_json_request(
+            harness.app,
+            "/v1/auth/key/rotate",
+            &KeyRotateRequest {
+                new_local_key: "audit-next-secret".to_string(),
+                current_local_key: None,
+                email_verification_code: None,
+                device_fingerprint: Some("audit-browser".to_string()),
+            },
+            Some(&cookie),
+        )
+        .await;
+        assert_eq!(rotate_response.status(), StatusCode::OK);
+
+        let events = harness
+            .storage
+            .auth_audit_events()
+            .list_recent_for_user(harness.tenant_id, login_payload.user.id, 10)
+            .await
+            .expect("audit events should load");
+        assert!(events.iter().any(|event| {
+            event.event_name == AUTH_AUDIT_KEY_LOGIN
+                && event.outcome == AuthAuditOutcome::Succeeded
+                && event.session_id == Some(login_payload.session.id)
+        }));
+        assert!(events.iter().any(|event| {
+            event.event_name == AUTH_AUDIT_KEY_ROTATE
+                && event.outcome == AuthAuditOutcome::Succeeded
+        }));
+        let serialized_events =
+            serde_json::to_string(&events).expect("events should serialize for assertion");
+        assert!(!serialized_events.contains("audit-local-secret"));
+        assert!(!serialized_events.contains("audit-next-secret"));
+    }
+
+    #[tokio::test]
+    async fn auth_audit_records_failed_email_verify_without_plain_code() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let Some(harness) = build_auth_api_test_harness().await else {
+            return;
+        };
+        let prepared = auth_otp_service_for_test().prepare_challenge(
+            "failed-audit@example.com",
+            AuthChallengePurpose::Login,
+            Utc::now(),
+        );
+        harness
+            .storage
+            .email_verification_challenges()
+            .create(harness.tenant_id, prepared.challenge)
+            .await
+            .expect("verification challenge should persist");
+
+        let response = post_json_request(
+            harness.app,
+            "/v1/auth/email/verify",
+            &VerifyEmailAuthRequest {
+                email: "failed-audit@example.com".to_string(),
+                code: "wrong-code".to_string(),
+                purpose: AuthChallengePurpose::Login,
+                device_fingerprint: Some("audit-browser".to_string()),
+            },
+            None,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let events = harness
+            .storage
+            .auth_audit_events()
+            .list_recent_by_email(harness.tenant_id, "failed-audit@example.com", 10)
+            .await
+            .expect("audit events should load");
+        let failed_event = events
+            .iter()
+            .find(|event| {
+                event.event_name == AUTH_AUDIT_EMAIL_VERIFY
+                    && event.outcome == AuthAuditOutcome::Failed
+            })
+            .expect("failed verify event should be audited");
+        let serialized_event =
+            serde_json::to_string(failed_event).expect("event should serialize for assertion");
+        assert!(serialized_event.contains("verification_code_invalid"));
+        assert!(!serialized_event.contains("wrong-code"));
+        assert!(!serialized_event.contains(&prepared.email.code));
     }
 
     #[tokio::test]

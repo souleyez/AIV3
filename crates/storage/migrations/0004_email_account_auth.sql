@@ -52,6 +52,31 @@ create index if not exists email_verification_challenges_active_idx
 create index if not exists email_verification_challenges_expires_idx
     on email_verification_challenges (expires_at);
 
+create table if not exists auth_audit_events (
+    id uuid primary key default gen_random_uuid(),
+    tenant_id uuid not null references tenants (id) on delete cascade,
+    user_id uuid references users (id) on delete set null,
+    session_id uuid references user_sessions (id) on delete set null,
+    email_normalized text,
+    event_name text not null,
+    outcome text not null,
+    ip_hash text,
+    device_fingerprint text,
+    metadata jsonb not null default '{}'::jsonb,
+    created_at timestamptz not null default now()
+);
+
+create index if not exists auth_audit_events_user_created_idx
+    on auth_audit_events (tenant_id, user_id, created_at desc)
+    where user_id is not null;
+
+create index if not exists auth_audit_events_email_created_idx
+    on auth_audit_events (tenant_id, email_normalized, created_at desc)
+    where email_normalized is not null;
+
+create index if not exists auth_audit_events_event_created_idx
+    on auth_audit_events (tenant_id, event_name, created_at desc);
+
 alter table datasets
     add column if not exists owner_user_id uuid references users (id) on delete set null;
 

@@ -18,7 +18,11 @@
 - Task 7 completed in first pass: platform-api can use Cloudflare Email Service REST API when configured, otherwise it falls back to local logging sender; setup notes live in `docs/operations/cloudflare-email-auth-setup.md`.
 - Task 8 completed in first pass: logged-in users can claim old local-key datasets through `POST /v1/auth/claim-local-data` using the browser-computed secret fingerprint; only unowned datasets are claimed, and owned datasets are not reassigned.
 - Key rotation UX completed in compact first pass: logged-in users can set a new local key from the existing account/key panel through `POST /v1/auth/key/rotate`; the new key is cached in the current browser, and old local-key data is not automatically migrated.
-- Remaining hardening: document/report/static artifact owner backfill beyond dataset ownership, grants/team membership, robot ownership, audit expansion, stronger recovery challenge policy, and true encryption recovery semantics if required later.
+- Auth audit first pass completed: `auth_audit_events` now records email challenge starts, email verification outcomes, email+key login, logout, key rotation, email-bind challenge starts, and local-data claim events with user/session/email/device context plus whitelisted metadata only. Raw local keys, OTP codes, session tokens, and cookie values are not stored.
+- OTP rate-limit first pass completed: email challenge creation is window-limited by normalized email plus purpose and by device fingerprint plus purpose; limited requests return `429` before creating a challenge or sending email, and write a failed audit event with whitelisted metadata.
+- Static-page access hardening first pass completed: draft list/read/update/intent endpoints, image preview jobs, preview confirmation, and final render output listing now enforce draft owner visibility. Unowned legacy drafts remain visible for local-dev compatibility; owned drafts require the matching session user; image jobs and render outputs inherit the draft scope. ReAct internal tools keep the current-run/current-draft guard and call lower-level helpers after that guard.
+- Report access hardening first pass completed: report plan list/read/subresource routes now enforce `report_plans.owner_user_id` in addition to dataset visibility. Published report list/detail routes inherit visibility from the owning report plan, so public datasets no longer expose another user's owned report plan or published report through the shelf/detail APIs.
+- Remaining hardening: document/published artifact owner backfill beyond dataset/report-plan ownership, sharing grants/team membership, robot ownership, stronger recovery challenge policy, external audit viewer/admin policy, and true encryption recovery semantics if required later.
 
 ---
 
@@ -125,6 +129,44 @@ bind_email
 rotate_key
 ```
 
+### Auth Audit Events
+
+First-pass audit is internal-only. It gives the system enough traceability for account/key support without exposing an end-user audit UI yet.
+
+```text
+auth_audit_events
+  id
+  tenant_id
+  user_id
+  session_id
+  email_normalized
+  event_name
+  outcome
+  ip_hash
+  device_fingerprint
+  metadata
+  created_at
+```
+
+Rules:
+
+- Store event names and outcomes, not request payload dumps.
+- Metadata must be whitelisted per event.
+- Never store raw local keys, OTP codes, session tokens, cookies, Cloudflare tokens, or provider keys.
+- Successful events should include user/session when available.
+- Failed pre-user events can be queried by normalized email internally, but should not be exposed to ordinary users until an admin policy exists.
+
+### OTP Rate Limits
+
+First pass:
+
+- Window: 15 minutes.
+- Per normalized email + purpose: 5 newly created challenges.
+- Per device fingerprint + purpose: 10 newly created challenges.
+- Requests that hit the limit return `429 email_challenge_rate_limited`.
+- Rate-limited requests do not create `email_verification_challenges` rows and do not send email.
+- Rate-limited requests are audited with `auth.email_start` or `auth.email_bind_start` and `outcome = failed`.
+
 ### Ownership
 
 Add user ownership to first-class product records.
@@ -138,6 +180,22 @@ First pass:
 - `report_plans.owner_user_id`
 - `static_page_drafts.owner_user_id`
 - `static_page_render_outputs.owner_user_id`
+
+Static-page route rules:
+
+- Unowned legacy drafts stay visible so current local-dev and old data are not broken.
+- Owned drafts are visible and mutable only when the active session user matches `owner_user_id`.
+- Static-page image jobs are resolved through their draft, so preview read/confirm cannot cross users.
+- Static-page render outputs are listed through the draft, so final/static artifacts inherit draft visibility.
+- ReAct tools may operate on a static-page draft only after the assistant run/current artifact guard has selected the current backend draft.
+
+Report route rules:
+
+- Dataset visibility is necessary but not sufficient for report access.
+- Unowned legacy report plans stay visible for current local-dev compatibility.
+- Owned report plans are visible and mutable only when the active session user matches `owner_user_id`.
+- Report AST versions, continue, render, publish, render-output list, and plan-level published-report detail all gate through the report plan.
+- Published report list/detail inherits report-plan visibility; first pass does not add a separate owner column to `published_reports`.
 
 Later:
 
@@ -598,6 +656,9 @@ Rules:
 
 - Drafts and artifacts belong to user.
 - Right shelf filters by user plus public/shared artifacts.
+- Current static-page API pass completed: draft list/read/update/intent, image preview queue/read/confirm, and render queue/list are owner-filtered through the draft.
+- Current report API pass completed: report plan list/read/subresources and published report shelf/detail are owner-filtered through the report plan.
+- Remaining report/static-page work is published artifact sharing and grant semantics, not raw owner fields on drafts/plans.
 
 **Step 5: Tests**
 

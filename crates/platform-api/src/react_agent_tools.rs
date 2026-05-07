@@ -1,7 +1,4 @@
-use axum::{
-    extract::{Path, State},
-    Json,
-};
+use axum::Json;
 use chrono::Utc;
 use contracts::{CreateStaticPageImageJobRequest, CreateStaticPageRenderRequest};
 use domain_model::{
@@ -400,13 +397,14 @@ async fn submit_static_page_image_preview_for_current_draft(
         .filter(|value| !value.is_empty())
         .unwrap_or(prompt)
         .to_string();
-    let (_status, Json(response)) = crate::create_static_page_image_job(
-        State(state.clone()),
-        Path(draft_id.to_string()),
-        Json(CreateStaticPageImageJobRequest {
+    let draft = crate::load_static_page_draft_or_404(state, draft_id).await?;
+    let (_status, Json(response)) = crate::create_static_page_image_job_for_draft(
+        state,
+        draft,
+        CreateStaticPageImageJobRequest {
             prompt: Some(image_prompt),
             image_prompt_payload,
-        }),
+        },
     )
     .await?;
     let image_job_status =
@@ -472,13 +470,14 @@ async fn render_static_page_for_current_draft(
         Ok(value) => value,
         Err(message) => return Ok(rejected_react_tool_result(action, message)),
     };
-    let response = crate::create_static_page_render(
-        State(state.clone()),
-        Path(draft_id.to_string()),
-        Json(CreateStaticPageRenderRequest {
+    let draft = crate::load_static_page_draft_or_404(state, draft_id).await?;
+    let response = crate::create_static_page_render_for_draft(
+        state,
+        draft,
+        CreateStaticPageRenderRequest {
             image_job_id,
             background: false,
-        }),
+        },
     )
     .await;
     let (_status, Json(response)) = match response {
