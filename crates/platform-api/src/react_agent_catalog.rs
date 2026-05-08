@@ -152,6 +152,9 @@ fn summarize_evidence_state(evidence_state: &Value) -> Value {
                     copy_allowed_field(item, &mut summary, "retrieval_evidence_id");
                     copy_allowed_field(item, &mut summary, "retrievalEvidenceId");
                     copy_allowed_field(item, &mut summary, "status");
+                    if let Some(media_summary) = summarize_media_context(item) {
+                        summary.insert("media".to_string(), media_summary);
+                    }
                     Value::Object(summary)
                 })
                 .collect::<Vec<_>>()
@@ -166,6 +169,55 @@ fn summarize_evidence_state(evidence_state: &Value) -> Value {
         "suppliedCount": supplied_items.len(),
         "items": supplied_items,
     })
+}
+
+fn summarize_media_context(item: &Value) -> Option<Value> {
+    let context = item
+        .get("media_context")
+        .filter(|value| value.is_object())?;
+    let media_kind = context
+        .get("media_kind")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let parse_status = context
+        .get("parse_status")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let transcript_window_count = array_len(context, "transcript_windows");
+    let scene_window_count = array_len(context, "scene_windows");
+    let keyframe_ocr_snippet_count = array_len(context, "keyframe_ocr_snippets");
+    let provider_evidence_count = array_len(context, "provider_evidence");
+
+    if media_kind == "unknown"
+        && parse_status == "unknown"
+        && transcript_window_count == 0
+        && scene_window_count == 0
+        && keyframe_ocr_snippet_count == 0
+        && provider_evidence_count == 0
+    {
+        return None;
+    }
+
+    Some(json!({
+        "media_kind": media_kind,
+        "parse_status": parse_status,
+        "has_timestamped_evidence": context
+            .get("has_timestamped_evidence")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        "transcriptWindowCount": transcript_window_count,
+        "sceneWindowCount": scene_window_count,
+        "keyframeOcrSnippetCount": keyframe_ocr_snippet_count,
+        "providerEvidenceCount": provider_evidence_count,
+    }))
+}
+
+fn array_len(value: &Value, key: &str) -> usize {
+    value
+        .get(key)
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or_default()
 }
 
 fn summarize_weak_value(value: &Value) -> Value {
@@ -329,5 +381,56 @@ mod tests {
         assert!(!serialized.contains("长摘要"));
         assert!(!serialized.contains("证据原文"));
         assert!(!serialized.contains("profileValues"));
+    }
+
+    #[test]
+    fn planning_catalog_exposes_media_availability_without_media_content() {
+        let catalog = build_assistant_run_react_planning_catalog(
+            &json!({}),
+            &[],
+            &json!({"mode": "selected", "selected": [{"type": "dataset", "id": "ds-1"}]}),
+            &json!({
+                "status": "supplied",
+                "supplied_items": [{
+                    "type": "retrieval_evidence",
+                    "dataset_id": "ds-1",
+                    "document_id": "doc-media",
+                    "retrieval_evidence_id": "ev-1",
+                    "media_context": {
+                        "media_kind": "audio",
+                        "parse_status": "completed",
+                        "has_timestamped_evidence": true,
+                        "transcript_windows": [{
+                            "start_seconds": 12.0,
+                            "end_seconds": 28.5,
+                            "text": "客户真实转写不应进入规划目录"
+                        }],
+                        "scene_windows": [],
+                        "keyframe_ocr_snippets": [{
+                            "timestamp_seconds": 18.0,
+                            "text": "屏幕文字也不应进入规划目录"
+                        }],
+                        "provider_evidence": [{
+                            "provider": "minimax",
+                            "detail": "供应商细节也不应进入规划目录"
+                        }]
+                    }
+                }]
+            }),
+        );
+
+        let media = &catalog["evidenceState"]["items"][0]["media"];
+        assert_eq!(media["media_kind"], json!("audio"));
+        assert_eq!(media["parse_status"], json!("completed"));
+        assert_eq!(media["has_timestamped_evidence"], json!(true));
+        assert_eq!(media["transcriptWindowCount"], json!(1));
+        assert_eq!(media["sceneWindowCount"], json!(0));
+        assert_eq!(media["keyframeOcrSnippetCount"], json!(1));
+        assert_eq!(media["providerEvidenceCount"], json!(1));
+
+        let serialized = serde_json::to_string(&catalog).expect("catalog should serialize");
+        assert!(!serialized.contains("客户真实转写"));
+        assert!(!serialized.contains("屏幕文字"));
+        assert!(!serialized.contains("供应商细节"));
     }
 }
