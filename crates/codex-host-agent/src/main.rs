@@ -1,9 +1,10 @@
 use anyhow::{anyhow, Result};
 use chrono::Utc;
 use codex_host_agent::{
-    safe_log_excerpt, CodexCommandPlan, CodexHostAgentPolicy, CodexHostExecutionMode,
-    CodexHostTaskContext, CodexProcessOutput,
+    safe_log_excerpt, CodexCommandPlan, CodexHostAgentPolicy, CodexHostExecutionDecision,
+    CodexHostExecutionMode, CodexHostTaskContext, CodexProcessOutput,
 };
+use contracts::CodexHostTaskOutputView;
 use domain_model::{AssistantRunId, WorkflowKind};
 use event_bus::{
     workflow_execution_transition_subject, workflow_task_enqueued_subject, EventBus, EventEnvelope,
@@ -119,9 +120,10 @@ async fn process_task(
                     .command_plan
                     .as_ref()
                     .ok_or_else(|| anyhow!("codex_exec mode missing command plan"))?;
-                run_codex_exec(command_plan, &task_context)?
+                run_codex_exec(command_plan, &task_context, &decision)?
             }
         };
+        let event_name = codex_host_task_event_name(&output);
         apply_workflow_signal_with_dependencies(
             storage,
             workflow_catalog,
@@ -138,7 +140,7 @@ async fn process_task(
             storage,
             task.tenant_id,
             task_context.assistant_run_id,
-            "codex_host_task.dry_run_completed",
+            event_name,
             output,
         )
         .await?;
@@ -214,6 +216,7 @@ async fn append_assistant_event(
 fn run_codex_exec(
     command_plan: &CodexCommandPlan,
     task_context: &CodexHostTaskContext,
+    decision: &CodexHostExecutionDecision,
 ) -> Result<serde_json::Value> {
     let output = Command::new(&command_plan.program)
         .args(command_plan.process_args())
@@ -234,19 +237,47 @@ fn run_codex_exec(
         ));
     }
 
-    Ok(json!({
-        "mode": "codex_exec",
-        "codex_invoked": true,
-        "status": "completed",
-        "assistant_run_id": task_context.assistant_run_id.to_string(),
-        "capability": task_context.capability,
-        "command_plan": command_plan.safe_summary(),
-        "process": process_output.safe_summary(),
-        "task_chars": task_context.task.as_ref().map(|task| task.chars().count()).unwrap_or(0),
-        "local_thread_id": task_context.local_thread_id,
-        "task_memory_isolated": task_context.task_memory_isolated,
-        "task_memory_space_id": task_context.task_memory_space_id,
-    }))
+    Ok(codex_exec_output(
+        command_plan,
+        task_context,
+        decision,
+        process_output,
+    ))
+}
+
+fn codex_exec_output(
+    command_plan: &CodexCommandPlan,
+    task_context: &CodexHostTaskContext,
+    decision: &CodexHostExecutionDecision,
+    process_output: CodexProcessOutput,
+) -> serde_json::Value {
+    json!(CodexHostTaskOutputView {
+        mode: "codex_exec".to_string(),
+        codex_invoked: true,
+        status: "completed".to_string(),
+        assistant_run_id: task_context.assistant_run_id.to_string(),
+        capability: task_context.capability.clone(),
+        profile: Some(decision.profile.safe_summary()),
+        command_plan: Some(command_plan.safe_summary()),
+        process: Some(process_output.safe_summary()),
+        task_chars: task_context
+            .task
+            .as_ref()
+            .map(|task| task.chars().count())
+            .unwrap_or(0),
+        local_thread_id: task_context.local_thread_id.clone(),
+        task_memory_isolated: task_context.task_memory_isolated,
+        task_memory_space_id: task_context.task_memory_space_id.clone(),
+    })
+}
+
+fn codex_host_task_event_name(output: &serde_json::Value) -> &'static str {
+    match output.get("mode").and_then(Value::as_str) {
+        Some("dry_run") => "codex_host_task.dry_run_completed",
+        Some("plan_only") => "codex_host_task.plan_only_completed",
+        Some("codex_exec") => "codex_host_task.exec_completed",
+        _ => "codex_host_task.completed",
+    }
 }
 
 async fn apply_workflow_signal_with_dependencies(
@@ -426,5 +457,79 @@ async fn wait_for_next_task_signal(task_waker: &mut EventSubscription, poll_inte
         .await
     {
         tracing::debug!(subject = %event.subject, "codex host agent received task wake signal");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn codex_exec_output_uses_shared_contract_shape() {
+        let task_context = CodexHostTaskContext {
+            assistant_run_id: AssistantRunId::new(),
+            capability: "inspect_project".to_string(),
+            task: Some("Inspect the repository safely".to_string()),
+            local_thread_id: Some("thread-a".to_string()),
+            task_memory_isolated: true,
+            task_memory_space_id: Some("codex-host-task:test".to_string()),
+        };
+        let command_plan = CodexCommandPlan {
+            program: "codex".to_string(),
+            args_without_prompt: vec!["exec".to_string(), "--ephemeral".to_string()],
+            prompt: "Inspect the repository safely".to_string(),
+            sandbox: "read-only".to_string(),
+        };
+        let decision = CodexHostExecutionDecision {
+            mode: CodexHostExecutionMode::CodexExec,
+            profile: codex_host_agent::CodexHostProfile {
+                id: "readonly".to_string(),
+                kind: "codex-native".to_string(),
+                model: Some("gpt-5.3-codex".to_string()),
+                provider_id: None,
+                base_url: None,
+                env_key: None,
+                wire_api: None,
+                allowed_capabilities: vec!["inspect_project".to_string()],
+            },
+            command_plan: Some(command_plan.clone()),
+        };
+        let process_output = CodexProcessOutput {
+            exit_code: Some(0),
+            stdout_excerpt: "ok".to_string(),
+            stderr_excerpt: String::new(),
+        };
+
+        let output = codex_exec_output(&command_plan, &task_context, &decision, process_output);
+
+        assert_eq!(output["mode"], json!("codex_exec"));
+        assert_eq!(output["codex_invoked"], json!(true));
+        assert_eq!(output["profile"]["kind"], json!("codex-native"));
+        assert_eq!(output["command_plan"]["prompt_redacted"], json!(true));
+        assert_eq!(output["process"]["stdout_excerpt"], json!("ok"));
+        assert_eq!(
+            output["task_memory_space_id"],
+            json!("codex-host-task:test")
+        );
+    }
+
+    #[test]
+    fn codex_host_task_event_name_follows_output_mode() {
+        assert_eq!(
+            codex_host_task_event_name(&json!({"mode": "dry_run"})),
+            "codex_host_task.dry_run_completed"
+        );
+        assert_eq!(
+            codex_host_task_event_name(&json!({"mode": "plan_only"})),
+            "codex_host_task.plan_only_completed"
+        );
+        assert_eq!(
+            codex_host_task_event_name(&json!({"mode": "codex_exec"})),
+            "codex_host_task.exec_completed"
+        );
+        assert_eq!(
+            codex_host_task_event_name(&json!({"mode": "unexpected"})),
+            "codex_host_task.completed"
+        );
     }
 }

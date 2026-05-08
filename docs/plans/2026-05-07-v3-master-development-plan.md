@@ -389,6 +389,8 @@ The next development thread should continue with static-page final-render/chart/
 
 ### Task 8: Codex Host Contract Cleanup
 
+**Status:** Completed in current baseline. Shared request/result contracts live in `contracts`, `codex-host-agent` no longer depends on `platform-api`, dry-run/plan-only remain safe defaults, `codex_exec` is still host/profile gated, task memory space ids are first-class in the queue context, and successful worker outputs now serialize through `CodexHostTaskOutputView` with mode-specific AssistantRun events.
+
 **Files:**
 
 - Modify: `crates/contracts/src/lib.rs`
@@ -451,6 +453,7 @@ Codex Host:
 ```powershell
 cargo test -p platform-api codex_host
 cargo test -p workflow-definitions codex_host
+cargo test -p codex-host-agent
 cargo check -p codex-host-agent
 ```
 
@@ -473,5 +476,5 @@ Treat that file as the active master plan; older plans are source references onl
 Product mainline is static-page generation: module editing, data snapshots, ECharts advanced runtime, Cloudflare/Codex preview, and durable final render/export.
 Do not resume account expansion unless fixing a security/access regression.
 Do not run real Codex execution on the local developer workstation; Codex Host real validation is only for the jump host or later Mac host.
-Start with Task 1 unless Task 0 has not been committed.
+Continue with the next static-page final-render/chart/data-quality slice unless a Codex Host validation blocker is explicitly requested.
 ```

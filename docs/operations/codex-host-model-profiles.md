@@ -80,6 +80,8 @@ task context includes a V3-created assistant_run_id and task_memory_space_id
 `codex_exec` output policy:
 
 ```text
+output is serialized as CodexHostTaskOutputView
+AssistantRun event is codex_host_task.exec_completed
 stdout/stderr excerpts are truncated
 secret-looking log lines are replaced with [redacted-log-line]
 the full task prompt is never included in command_plan summaries

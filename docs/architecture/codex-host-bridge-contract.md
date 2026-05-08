@@ -26,8 +26,8 @@ The first V3-side implementation is intentionally only a queue bridge plus dry-r
 - `plan_only` mode can build a redacted Codex command plan without launching Codex.
 - Shared request/result wire shapes live in `crates/contracts`, not in `platform-api`.
 - `crates/codex-host-agent` advances workflow state through storage, workflow definitions, and event bus dependencies. It must not depend on the browser-facing API crate.
-- `dry_run` records an AssistantRun event named `codex_host_task.dry_run_completed`.
-- No local Codex process is launched by the current implementation.
+- AssistantRun events are mode-specific: `codex_host_task.dry_run_completed`, `codex_host_task.plan_only_completed`, or `codex_host_task.exec_completed`.
+- No local Codex process is launched unless the worker is explicitly switched to `codex_exec` and passes the host/profile safety preflight.
 
 This lets us verify V3 audit, task isolation, queue wakeup, and workflow completion before adding real host execution.
 
@@ -57,6 +57,8 @@ The output contract owns these fields:
 - optional `local_thread_id`
 - `task_memory_isolated`
 - optional `task_memory_space_id`
+
+All worker modes must serialize their successful output through `CodexHostTaskOutputView`. This includes `codex_exec`; real process output is represented only by safe profile, command-plan, and process summaries.
 
 `task_memory_space_id` is intentionally duplicated at the top level and inside `task_memory_policy.memory_space_id` so queue workers, UI observations, and future memory storage do not need to parse nested policy JSON just to route task-local recall.
 
@@ -148,6 +150,7 @@ Supported safe modes right now:
 
 - `dry_run`: complete the workflow and record an event without building a Codex command.
 - `plan_only`: validate the profile and capability, then record a redacted command plan with `prompt_redacted=true`.
+- `codex_exec`: launch `codex exec` only after host/profile/allowlist safety preflight, then record a shared-contract output with redacted stdout/stderr excerpts.
 
 `codex_exec` can launch `codex exec` only after the safety preflight passes. It requires `CODEX_HOST_AGENT_ALLOW_REAL_CODEX_EXEC=true`, an approved host kind (`windows_jump` or `mac_host`), and an execution-capable profile kind. The returned process output is truncated and redacted before it enters workflow output or AssistantRun events.
 
