@@ -6,6 +6,7 @@ use std::{fs, path::Path, time::Duration};
 
 const DEFAULT_MINIMAX_BASE_URL: &str = "https://api.minimaxi.com/v1";
 const DEFAULT_MINIMAX_MODEL: &str = "MiniMax-M2.5-highspeed";
+const DEFAULT_MINIMAX_MEDIA_MODEL: &str = "MiniMax-M2.5-highspeed";
 const DEFAULT_MAX_IMAGE_BYTES: u64 = 20_000_000;
 const DEFAULT_TIMEOUT_SECS: u64 = 60;
 
@@ -62,6 +63,188 @@ impl DocumentImageVlmConfig {
                 .api_key
                 .as_deref()
                 .is_some_and(|value| !value.trim().is_empty())
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MiniMaxMediaCapabilityConfig {
+    pub provider: String,
+    pub prefer_minimax: bool,
+    pub api_key: Option<String>,
+    pub base_url: String,
+    pub media_model: String,
+    pub audio_transcript_endpoint: Option<String>,
+    pub video_understanding_endpoint: Option<String>,
+    pub audio_probe_verified: bool,
+    pub video_probe_verified: bool,
+    pub image_vlm_available: bool,
+}
+
+impl MiniMaxMediaCapabilityConfig {
+    pub fn from_env() -> Self {
+        let image_vlm_config = DocumentImageVlmConfig::from_env();
+        Self {
+            provider: env("MEDIA_PARSE_PROVIDER").unwrap_or_else(|| "local".to_string()),
+            prefer_minimax: parse_bool_env("MEDIA_PARSE_PREFER_MINIMAX"),
+            api_key: env("MINIMAX_API_KEY").or_else(|| env("MINIMAX_CN_API_KEY")),
+            base_url: env("MINIMAX_BASE_URL")
+                .or_else(|| env("MINIMAX_CN_BASE_URL"))
+                .unwrap_or_else(|| DEFAULT_MINIMAX_BASE_URL.to_string()),
+            media_model: env("MINIMAX_MEDIA_MODEL")
+                .or_else(|| env("MINIMAX_AUDIO_MODEL"))
+                .or_else(|| env("MINIMAX_VIDEO_MODEL"))
+                .unwrap_or_else(|| DEFAULT_MINIMAX_MEDIA_MODEL.to_string()),
+            audio_transcript_endpoint: env("MINIMAX_MEDIA_TRANSCRIBE_ENDPOINT")
+                .or_else(|| env("MINIMAX_AUDIO_TRANSCRIBE_ENDPOINT")),
+            video_understanding_endpoint: env("MINIMAX_MEDIA_VIDEO_ENDPOINT")
+                .or_else(|| env("MINIMAX_VIDEO_UNDERSTANDING_ENDPOINT")),
+            audio_probe_verified: parse_bool_env("MINIMAX_MEDIA_AUDIO_PROBE_VERIFIED")
+                || parse_bool_env("MINIMAX_AUDIO_TRANSCRIBE_PROBE_VERIFIED"),
+            video_probe_verified: parse_bool_env("MINIMAX_MEDIA_VIDEO_PROBE_VERIFIED")
+                || parse_bool_env("MINIMAX_VIDEO_UNDERSTANDING_PROBE_VERIFIED"),
+            image_vlm_available: image_vlm_config.available(),
+        }
+    }
+
+    fn minimax_requested(&self) -> bool {
+        self.prefer_minimax || self.provider.trim().eq_ignore_ascii_case("minimax")
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub struct MiniMaxMediaCapability {
+    pub capability: String,
+    pub provider: String,
+    pub model: String,
+    pub status: String,
+    pub supported: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub endpoint: Option<String>,
+    pub detail: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub struct MiniMaxMediaCapabilityMatrix {
+    pub provider: String,
+    pub audio_transcript: MiniMaxMediaCapability,
+    pub native_video_understanding: MiniMaxMediaCapability,
+    pub keyframe_image_vlm: MiniMaxMediaCapability,
+}
+
+pub fn probe_minimax_media_capabilities_from_env() -> MiniMaxMediaCapabilityMatrix {
+    probe_minimax_media_capabilities(&MiniMaxMediaCapabilityConfig::from_env())
+}
+
+pub fn probe_minimax_media_capabilities(
+    config: &MiniMaxMediaCapabilityConfig,
+) -> MiniMaxMediaCapabilityMatrix {
+    MiniMaxMediaCapabilityMatrix {
+        provider: "minimax".to_string(),
+        audio_transcript: media_endpoint_capability(
+            "audio_transcript",
+            config,
+            config.audio_transcript_endpoint.clone(),
+            config.audio_probe_verified,
+        ),
+        native_video_understanding: media_endpoint_capability(
+            "native_video_understanding",
+            config,
+            config.video_understanding_endpoint.clone(),
+            config.video_probe_verified,
+        ),
+        keyframe_image_vlm: if config.image_vlm_available {
+            MiniMaxMediaCapability {
+                capability: "keyframe_image_vlm".to_string(),
+                provider: "minimax".to_string(),
+                model: config.media_model.clone(),
+                status: "available_via_document_image_vlm".to_string(),
+                supported: true,
+                endpoint: Some(format!(
+                    "{}/chat/completions",
+                    config.base_url.trim_end_matches('/')
+                )),
+                detail: "Document image VLM is configured; video keyframes may reuse it after local frame extraction.".to_string(),
+            }
+        } else {
+            MiniMaxMediaCapability {
+                capability: "keyframe_image_vlm".to_string(),
+                provider: "minimax".to_string(),
+                model: config.media_model.clone(),
+                status: "not_configured".to_string(),
+                supported: false,
+                endpoint: None,
+                detail: "Document image VLM is not configured, so keyframe VLM is unavailable."
+                    .to_string(),
+            }
+        },
+    }
+}
+
+fn media_endpoint_capability(
+    capability: &str,
+    config: &MiniMaxMediaCapabilityConfig,
+    endpoint: Option<String>,
+    probe_verified: bool,
+) -> MiniMaxMediaCapability {
+    if !config.minimax_requested() {
+        return MiniMaxMediaCapability {
+            capability: capability.to_string(),
+            provider: "minimax".to_string(),
+            model: config.media_model.clone(),
+            status: "disabled".to_string(),
+            supported: false,
+            endpoint,
+            detail: "MiniMax media provider was not requested for media parsing.".to_string(),
+        };
+    }
+    if config
+        .api_key
+        .as_deref()
+        .is_none_or(|value| value.trim().is_empty())
+    {
+        return MiniMaxMediaCapability {
+            capability: capability.to_string(),
+            provider: "minimax".to_string(),
+            model: config.media_model.clone(),
+            status: "missing_api_key".to_string(),
+            supported: false,
+            endpoint,
+            detail: "MiniMax media capability cannot be used without an API key.".to_string(),
+        };
+    }
+    let Some(endpoint) = endpoint.filter(|value| !value.trim().is_empty()) else {
+        return MiniMaxMediaCapability {
+            capability: capability.to_string(),
+            provider: "minimax".to_string(),
+            model: config.media_model.clone(),
+            status: "not_configured".to_string(),
+            supported: false,
+            endpoint: None,
+            detail: "No exact MiniMax media endpoint was configured for this capability."
+                .to_string(),
+        };
+    };
+    if !probe_verified {
+        return MiniMaxMediaCapability {
+            capability: capability.to_string(),
+            provider: "minimax".to_string(),
+            model: config.media_model.clone(),
+            status: "configured_unverified".to_string(),
+            supported: false,
+            endpoint: Some(endpoint),
+            detail: "Endpoint is configured, but no successful capability probe has been recorded; do not use it for production parsing.".to_string(),
+        };
+    }
+    MiniMaxMediaCapability {
+        capability: capability.to_string(),
+        provider: "minimax".to_string(),
+        model: config.media_model.clone(),
+        status: "verified".to_string(),
+        supported: true,
+        endpoint: Some(endpoint),
+        detail: "Capability probe is marked verified for this MiniMax media endpoint.".to_string(),
     }
 }
 
@@ -394,6 +577,17 @@ fn env(name: &str) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+fn parse_bool_env(name: &str) -> bool {
+    env(name)
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on" | "verified"
+            )
+        })
+        .unwrap_or(false)
+}
+
 fn extract_fenced_json(text: &str) -> Option<&str> {
     let start_marker = text.find("```")?;
     let after_start = &text[start_marker + 3..];
@@ -495,5 +689,54 @@ mod tests {
             timeout_secs: DEFAULT_TIMEOUT_SECS,
         };
         assert!(!config.available());
+    }
+
+    #[test]
+    fn minimax_media_capability_does_not_mark_key_only_audio_as_supported() {
+        let config = MiniMaxMediaCapabilityConfig {
+            provider: "minimax".to_string(),
+            prefer_minimax: true,
+            api_key: Some("secret".to_string()),
+            base_url: DEFAULT_MINIMAX_BASE_URL.to_string(),
+            media_model: DEFAULT_MINIMAX_MEDIA_MODEL.to_string(),
+            audio_transcript_endpoint: Some("/v1/audio/transcriptions".to_string()),
+            video_understanding_endpoint: None,
+            audio_probe_verified: false,
+            video_probe_verified: false,
+            image_vlm_available: false,
+        };
+
+        let matrix = probe_minimax_media_capabilities(&config);
+
+        assert_eq!(matrix.audio_transcript.status, "configured_unverified");
+        assert!(!matrix.audio_transcript.supported);
+        assert_eq!(matrix.native_video_understanding.status, "not_configured");
+    }
+
+    #[test]
+    fn minimax_media_capability_marks_only_verified_endpoint_as_supported() {
+        let config = MiniMaxMediaCapabilityConfig {
+            provider: "minimax".to_string(),
+            prefer_minimax: true,
+            api_key: Some("secret".to_string()),
+            base_url: DEFAULT_MINIMAX_BASE_URL.to_string(),
+            media_model: DEFAULT_MINIMAX_MEDIA_MODEL.to_string(),
+            audio_transcript_endpoint: Some("/v1/audio/transcriptions".to_string()),
+            video_understanding_endpoint: Some("/v1/video/understanding".to_string()),
+            audio_probe_verified: true,
+            video_probe_verified: false,
+            image_vlm_available: true,
+        };
+
+        let matrix = probe_minimax_media_capabilities(&config);
+
+        assert!(matrix.audio_transcript.supported);
+        assert_eq!(matrix.audio_transcript.status, "verified");
+        assert!(!matrix.native_video_understanding.supported);
+        assert_eq!(
+            matrix.keyframe_image_vlm.status,
+            "available_via_document_image_vlm"
+        );
+        assert!(matrix.keyframe_image_vlm.supported);
     }
 }

@@ -1190,6 +1190,7 @@ dependencies = [
  "event-bus",
  "observability",
  "platform-api",
+ "serde",
  "serde_json",
  "storage",
  "tokio",

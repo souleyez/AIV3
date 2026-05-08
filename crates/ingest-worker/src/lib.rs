@@ -1,8 +1,10 @@
 use document_vlm_runtime::{
-    build_enriched_image_text, run_document_image_vlm_from_env, DocumentImageVlmConfig,
-    DocumentImageVlmPayload,
+    build_enriched_image_text, probe_minimax_media_capabilities_from_env,
+    run_document_image_vlm_from_env, DocumentImageVlmConfig, DocumentImageVlmPayload,
+    MiniMaxMediaCapabilityMatrix,
 };
 use domain_model::{DatasetId, DocumentId};
+use serde::Serialize;
 use serde_json::{json, Value};
 use std::{
     fs,
@@ -831,6 +833,33 @@ fn build_image_vlm_metadata(model: String, payload: DocumentImageVlmPayload) -> 
 struct MediaTranscript {
     text: String,
     source: String,
+    segments: Vec<MediaTranscriptSegment>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct MediaTranscriptSegment {
+    start_seconds: Option<f64>,
+    end_seconds: Option<f64>,
+    text: String,
+    source: String,
+    language: Option<String>,
+    confidence: Option<f64>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct MediaScene {
+    start_seconds: Option<f64>,
+    end_seconds: Option<f64>,
+    representative_seconds: Option<f64>,
+    summary: String,
+    source: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct MediaOcrSnippet {
+    timestamp_seconds: Option<f64>,
+    text: String,
+    source: String,
 }
 
 fn extract_media_document_text(path: &Path, media_kind: &str) -> ExtractedDocumentText {
@@ -841,9 +870,26 @@ fn extract_media_document_text(path: &Path, media_kind: &str) -> ExtractedDocume
     let probe = probe_media_metadata(path);
     let transcript = extract_media_transcript(path);
     let transcript_text = transcript.as_ref().map(|item| item.text.as_str());
+    let transcript_segments = transcript
+        .as_ref()
+        .map(|item| item.segments.clone())
+        .unwrap_or_default();
+    let scenes = if media_kind == "video" {
+        extract_media_scenes(path)
+    } else {
+        Vec::new()
+    };
+    let keyframe_ocr_snippets = if media_kind == "video" {
+        extract_keyframe_ocr_snippets(path)
+    } else {
+        Vec::new()
+    };
+    let minimax_capabilities = probe_minimax_media_capabilities_from_env();
     let metadata_summary = summarize_media_probe(probe.as_ref());
     let parse_status = if transcript_text.is_some_and(|text| !text.trim().is_empty()) {
         "transcribed"
+    } else if !scenes.is_empty() || !keyframe_ocr_snippets.is_empty() {
+        "enriched_partial"
     } else {
         "partial"
     };
@@ -855,10 +901,34 @@ fn extract_media_document_text(path: &Path, media_kind: &str) -> ExtractedDocume
             .unwrap_or_default(),
         transcript_text
             .filter(|text| !text.trim().is_empty())
-            .map(|text| format!("Transcript:\n{text}"))
+            .map(|text| {
+                if transcript_segments.is_empty() {
+                    format!("Transcript:\n{text}")
+                } else {
+                    format!(
+                        "Transcript segments:\n{}",
+                        format_transcript_segments_for_text(&transcript_segments)
+                    )
+                }
+            })
             .unwrap_or_else(|| {
                 "Transcript was not extracted because no configured media transcription command produced text.".to_string()
             }),
+        (!scenes.is_empty())
+            .then(|| format!("Video scenes:\n{}", format_scenes_for_text(&scenes)))
+            .unwrap_or_default(),
+        (!keyframe_ocr_snippets.is_empty())
+            .then(|| {
+                format!(
+                    "Keyframe OCR snippets:\n{}",
+                    format_keyframe_ocr_for_text(&keyframe_ocr_snippets)
+                )
+            })
+            .unwrap_or_default(),
+        format!(
+            "MiniMax media capability status:\n{}",
+            summarize_minimax_media_capabilities(&minimax_capabilities)
+        ),
     ]
     .into_iter()
     .filter(|part| !part.trim().is_empty())
@@ -878,7 +948,12 @@ fn extract_media_document_text(path: &Path, media_kind: &str) -> ExtractedDocume
                 "parse_status": parse_status,
                 "probe": probe,
                 "transcript_extracted": parse_status == "transcribed",
-                "transcript_source": transcript.map(|item| item.source),
+                "transcript_source": transcript.as_ref().map(|item| item.source.clone()),
+                "transcript_segments": transcript_segments,
+                "scenes": scenes,
+                "keyframe_ocr_snippets": keyframe_ocr_snippets,
+                "provider_capabilities": minimax_capabilities,
+                "provider_evidence": build_minimax_provider_evidence(&minimax_capabilities),
             }
         }),
     }
@@ -942,16 +1017,401 @@ fn extract_media_transcript(path: &Path) -> Option<MediaTranscript> {
         let command = command.trim();
         if !command.is_empty() {
             if let Some(output) = run_text_command(command, &[path_arg.as_str()]) {
-                if let Some(text) = normalize_extracted_text(&output) {
-                    return Some(MediaTranscript {
-                        text,
-                        source: "MEDIA_TRANSCRIBE_BIN".to_string(),
-                    });
+                if let Some(transcript) =
+                    parse_media_transcript_output(&output, "MEDIA_TRANSCRIBE_BIN")
+                {
+                    return Some(transcript);
                 }
             }
         }
     }
     None
+}
+
+fn extract_media_scenes(path: &Path) -> Vec<MediaScene> {
+    let path_arg = path.to_string_lossy().to_string();
+    if let Ok(command) = std::env::var("MEDIA_SCENE_BIN") {
+        let command = command.trim();
+        if !command.is_empty() {
+            if let Some(output) = run_text_command(command, &[path_arg.as_str()]) {
+                return parse_media_scenes_output(&output, "MEDIA_SCENE_BIN");
+            }
+        }
+    }
+    Vec::new()
+}
+
+fn extract_keyframe_ocr_snippets(path: &Path) -> Vec<MediaOcrSnippet> {
+    let path_arg = path.to_string_lossy().to_string();
+    if let Ok(command) = std::env::var("MEDIA_KEYFRAME_OCR_BIN") {
+        let command = command.trim();
+        if !command.is_empty() {
+            if let Some(output) = run_text_command(command, &[path_arg.as_str()]) {
+                return parse_keyframe_ocr_output(&output, "MEDIA_KEYFRAME_OCR_BIN");
+            }
+        }
+    }
+    Vec::new()
+}
+
+fn parse_media_transcript_output(output: &str, source: &str) -> Option<MediaTranscript> {
+    if let Ok(value) = serde_json::from_str::<Value>(output) {
+        let segments = value
+            .get("segments")
+            .or_else(|| value.get("transcript_segments"))
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| media_transcript_segment_from_value(item, source))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let text = value
+            .get("text")
+            .or_else(|| value.get("transcript"))
+            .and_then(Value::as_str)
+            .and_then(normalize_extracted_text)
+            .or_else(|| join_segment_text(&segments));
+        if let Some(text) = text {
+            return Some(MediaTranscript {
+                text,
+                source: source.to_string(),
+                segments: ensure_transcript_segments(segments, source),
+            });
+        }
+    }
+
+    let srt_segments = parse_srt_or_vtt_segments(output, source);
+    if let Some(text) = join_segment_text(&srt_segments) {
+        return Some(MediaTranscript {
+            text,
+            source: source.to_string(),
+            segments: srt_segments,
+        });
+    }
+
+    normalize_extracted_text(output).map(|text| MediaTranscript {
+        segments: vec![MediaTranscriptSegment {
+            start_seconds: None,
+            end_seconds: None,
+            text: text.clone(),
+            source: source.to_string(),
+            language: None,
+            confidence: None,
+        }],
+        text,
+        source: source.to_string(),
+    })
+}
+
+fn media_transcript_segment_from_value(
+    value: &Value,
+    default_source: &str,
+) -> Option<MediaTranscriptSegment> {
+    let text = value
+        .get("text")
+        .or_else(|| value.get("content"))
+        .and_then(Value::as_str)
+        .and_then(normalize_extracted_text)?;
+    Some(MediaTranscriptSegment {
+        start_seconds: numeric_field(value, &["start_seconds", "start", "from"]),
+        end_seconds: numeric_field(value, &["end_seconds", "end", "to"]),
+        text,
+        source: value
+            .get("source")
+            .and_then(Value::as_str)
+            .unwrap_or(default_source)
+            .to_string(),
+        language: value
+            .get("language")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        confidence: numeric_field(value, &["confidence", "score"]),
+    })
+}
+
+fn ensure_transcript_segments(
+    segments: Vec<MediaTranscriptSegment>,
+    source: &str,
+) -> Vec<MediaTranscriptSegment> {
+    if !segments.is_empty() {
+        return segments;
+    }
+    Vec::from([MediaTranscriptSegment {
+        start_seconds: None,
+        end_seconds: None,
+        text: String::new(),
+        source: source.to_string(),
+        language: None,
+        confidence: None,
+    }])
+    .into_iter()
+    .filter(|segment| !segment.text.trim().is_empty())
+    .collect()
+}
+
+fn join_segment_text(segments: &[MediaTranscriptSegment]) -> Option<String> {
+    let text = segments
+        .iter()
+        .map(|segment| segment.text.trim())
+        .filter(|text| !text.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+    (!text.trim().is_empty()).then_some(text)
+}
+
+fn parse_srt_or_vtt_segments(output: &str, source: &str) -> Vec<MediaTranscriptSegment> {
+    let normalized = output.replace("\r\n", "\n").replace('\r', "\n");
+    let mut segments = Vec::new();
+    let mut lines = normalized.lines().peekable();
+    while let Some(line) = lines.next() {
+        if !line.contains("-->") {
+            continue;
+        }
+        let (start_seconds, end_seconds) = parse_timestamp_range(line);
+        let mut text_lines = Vec::new();
+        while let Some(next) = lines.peek().copied() {
+            if next.trim().is_empty() {
+                lines.next();
+                break;
+            }
+            if next.contains("-->") {
+                break;
+            }
+            text_lines.push(next.trim());
+            lines.next();
+        }
+        let text = text_lines.join(" ");
+        if let Some(text) = normalize_extracted_text(&text) {
+            segments.push(MediaTranscriptSegment {
+                start_seconds,
+                end_seconds,
+                text,
+                source: source.to_string(),
+                language: None,
+                confidence: None,
+            });
+        }
+    }
+    segments
+}
+
+fn parse_timestamp_range(line: &str) -> (Option<f64>, Option<f64>) {
+    let mut parts = line.split("-->");
+    let start = parts.next().and_then(parse_media_timestamp);
+    let end = parts
+        .next()
+        .map(|value| value.split_whitespace().next().unwrap_or(value))
+        .and_then(parse_media_timestamp);
+    (start, end)
+}
+
+fn parse_media_timestamp(value: &str) -> Option<f64> {
+    let normalized = value.trim().replace(',', ".");
+    let parts = normalized.split(':').collect::<Vec<_>>();
+    match parts.as_slice() {
+        [hours, minutes, seconds] => Some(
+            hours.parse::<f64>().ok()? * 3600.0
+                + minutes.parse::<f64>().ok()? * 60.0
+                + seconds.parse::<f64>().ok()?,
+        ),
+        [minutes, seconds] => {
+            Some(minutes.parse::<f64>().ok()? * 60.0 + seconds.parse::<f64>().ok()?)
+        }
+        [seconds] => seconds.parse::<f64>().ok(),
+        _ => None,
+    }
+}
+
+fn parse_media_scenes_output(output: &str, source: &str) -> Vec<MediaScene> {
+    let Ok(value) = serde_json::from_str::<Value>(output) else {
+        return Vec::new();
+    };
+    value
+        .get("scenes")
+        .or_else(|| value.get("scene_windows"))
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    let summary = item
+                        .get("summary")
+                        .or_else(|| item.get("label"))
+                        .and_then(Value::as_str)
+                        .and_then(normalize_extracted_text)
+                        .unwrap_or_else(|| "Scene".to_string());
+                    Some(MediaScene {
+                        start_seconds: numeric_field(item, &["start_seconds", "start"]),
+                        end_seconds: numeric_field(item, &["end_seconds", "end"]),
+                        representative_seconds: numeric_field(
+                            item,
+                            &["representative_seconds", "timestamp_seconds", "timestamp"],
+                        ),
+                        summary,
+                        source: item
+                            .get("source")
+                            .and_then(Value::as_str)
+                            .unwrap_or(source)
+                            .to_string(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn parse_keyframe_ocr_output(output: &str, source: &str) -> Vec<MediaOcrSnippet> {
+    let Ok(value) = serde_json::from_str::<Value>(output) else {
+        return normalize_extracted_text(output)
+            .map(|text| {
+                vec![MediaOcrSnippet {
+                    timestamp_seconds: None,
+                    text,
+                    source: source.to_string(),
+                }]
+            })
+            .unwrap_or_default();
+    };
+    value
+        .get("snippets")
+        .or_else(|| value.get("ocr_snippets"))
+        .or_else(|| value.get("keyframe_ocr_snippets"))
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    let text = item
+                        .get("text")
+                        .or_else(|| item.get("content"))
+                        .and_then(Value::as_str)
+                        .and_then(normalize_extracted_text)?;
+                    Some(MediaOcrSnippet {
+                        timestamp_seconds: numeric_field(
+                            item,
+                            &["timestamp_seconds", "timestamp", "time"],
+                        ),
+                        text,
+                        source: item
+                            .get("source")
+                            .and_then(Value::as_str)
+                            .unwrap_or(source)
+                            .to_string(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn numeric_field(value: &Value, keys: &[&str]) -> Option<f64> {
+    keys.iter().find_map(|key| {
+        value.get(*key).and_then(|item| {
+            item.as_f64()
+                .or_else(|| item.as_str().and_then(|text| text.parse::<f64>().ok()))
+        })
+    })
+}
+
+fn format_transcript_segments_for_text(segments: &[MediaTranscriptSegment]) -> String {
+    segments
+        .iter()
+        .filter(|segment| !segment.text.trim().is_empty())
+        .map(|segment| {
+            format!(
+                "- {} {}",
+                format_media_time_window(segment.start_seconds, segment.end_seconds),
+                segment.text
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn format_scenes_for_text(scenes: &[MediaScene]) -> String {
+    scenes
+        .iter()
+        .map(|scene| {
+            format!(
+                "- {} {}",
+                format_media_time_window(scene.start_seconds, scene.end_seconds),
+                scene.summary
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn format_keyframe_ocr_for_text(snippets: &[MediaOcrSnippet]) -> String {
+    snippets
+        .iter()
+        .map(|snippet| {
+            format!(
+                "- {} {}",
+                snippet
+                    .timestamp_seconds
+                    .map(|seconds| format!("[{}]", format_media_timestamp(seconds)))
+                    .unwrap_or_else(|| "[time unknown]".to_string()),
+                snippet.text
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn format_media_time_window(start_seconds: Option<f64>, end_seconds: Option<f64>) -> String {
+    match (start_seconds, end_seconds) {
+        (Some(start), Some(end)) => {
+            format!(
+                "[{} - {}]",
+                format_media_timestamp(start),
+                format_media_timestamp(end)
+            )
+        }
+        (Some(start), None) => format!("[{}]", format_media_timestamp(start)),
+        _ => "[time unknown]".to_string(),
+    }
+}
+
+fn format_media_timestamp(seconds: f64) -> String {
+    let safe_seconds = seconds.max(0.0);
+    let total = safe_seconds.floor() as u64;
+    let millis = ((safe_seconds - total as f64) * 1000.0).round() as u64;
+    let hours = total / 3600;
+    let minutes = (total % 3600) / 60;
+    let secs = total % 60;
+    if hours > 0 {
+        format!("{hours:02}:{minutes:02}:{secs:02}.{millis:03}")
+    } else {
+        format!("{minutes:02}:{secs:02}.{millis:03}")
+    }
+}
+
+fn summarize_minimax_media_capabilities(matrix: &MiniMaxMediaCapabilityMatrix) -> String {
+    [
+        &matrix.audio_transcript,
+        &matrix.native_video_understanding,
+        &matrix.keyframe_image_vlm,
+    ]
+    .into_iter()
+    .map(|capability| {
+        format!(
+            "- {}: status={}, supported={}",
+            capability.capability, capability.status, capability.supported
+        )
+    })
+    .collect::<Vec<_>>()
+    .join("\n")
+}
+
+fn build_minimax_provider_evidence(matrix: &MiniMaxMediaCapabilityMatrix) -> Value {
+    json!([
+        matrix.audio_transcript,
+        matrix.native_video_understanding,
+        matrix.keyframe_image_vlm,
+    ])
 }
 
 fn extract_image_text_with_tesseract(path: &Path) -> Option<String> {
@@ -1529,6 +1989,58 @@ trailer << /Root 1 0 R >>
             );
             let _ = fs::remove_file(file_path);
         });
+    }
+
+    #[test]
+    fn media_transcript_parser_keeps_json_segments_with_timestamps() {
+        let transcript = parse_media_transcript_output(
+            r#"{
+                "segments": [
+                    {"start": 1.5, "end": 3.25, "text": "客户询问订单状态", "language": "zh", "confidence": 0.91},
+                    {"start": 4, "end": 5.5, "text": "客服承诺当天反馈"}
+                ]
+            }"#,
+            "fake-transcriber",
+        )
+        .expect("json transcript should parse");
+
+        assert_eq!(transcript.segments.len(), 2);
+        assert_eq!(transcript.segments[0].start_seconds, Some(1.5));
+        assert_eq!(transcript.segments[0].end_seconds, Some(3.25));
+        assert!(transcript.text.contains("客户询问订单状态"));
+        assert!(format_transcript_segments_for_text(&transcript.segments).contains("00:01.500"));
+    }
+
+    #[test]
+    fn media_transcript_parser_accepts_srt_windows() {
+        let transcript = parse_media_transcript_output(
+            "1\n00:00:01,000 --> 00:00:02,500\n第一句话\n\n2\n00:00:03,000 --> 00:00:04,000\n第二句话",
+            "fake-srt",
+        )
+        .expect("srt transcript should parse");
+
+        assert_eq!(transcript.segments.len(), 2);
+        assert_eq!(transcript.segments[0].start_seconds, Some(1.0));
+        assert_eq!(transcript.segments[0].end_seconds, Some(2.5));
+        assert!(transcript.text.contains("第二句话"));
+    }
+
+    #[test]
+    fn media_scene_and_keyframe_ocr_parsers_keep_timestamp_metadata() {
+        let scenes = parse_media_scenes_output(
+            r#"{"scenes":[{"start_seconds":0,"end_seconds":12.4,"representative_seconds":6,"summary":"门店入口画面"}]}"#,
+            "fake-scenes",
+        );
+        let snippets = parse_keyframe_ocr_output(
+            r#"{"snippets":[{"timestamp_seconds":6,"text":"今日客流 2180","source":"fake-ocr"}]}"#,
+            "fake-ocr",
+        );
+
+        assert_eq!(scenes.len(), 1);
+        assert_eq!(scenes[0].representative_seconds, Some(6.0));
+        assert_eq!(snippets.len(), 1);
+        assert_eq!(snippets[0].timestamp_seconds, Some(6.0));
+        assert_eq!(snippets[0].text, "今日客流 2180");
     }
 
     #[test]

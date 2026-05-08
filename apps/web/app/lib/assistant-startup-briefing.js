@@ -37,6 +37,7 @@ export function buildAssistantStartupBriefing({
       'scope_plan',
       'retrieve',
       'read_detail',
+      'media_detail',
       'compare',
       'upload_classify',
       'report_plan',
@@ -48,6 +49,7 @@ export function buildAssistantStartupBriefing({
       staticPage: '可以在主对话区发起静态页规划、效果图排队、模块编辑、最终静态页渲染和导出。',
       report: '可以让模型主动发起报表/看板创建，但必须先通过工具列出选项并由宿主执行。',
       retrieval: '选中或预选数据集时，宿主会尽量检索相关证据；静态页/报表意图优先深度供料。',
+      media: '音视频上传按后台任务解析；有本地转写、场景或关键帧 OCR 时会以可引用证据供料，缺失时保持 partial 而不编造。',
       memory: '本轮对话历史是隐藏数据集，只有用户语义需要上下文时才进入供料。',
     },
   };
@@ -61,7 +63,7 @@ export function formatStartupBriefingForModel(briefing) {
     `报表草稿 ${Number(source.reportPlanCount || 0)} 个，已发布 ${Number(source.publishedReportCount || 0)} 个。`,
     source.selectedScopeLabel ? `当前供料范围：${source.selectedScopeLabel}` : '当前未选数据集，可按普通模型聊天回答。',
     source.operatingPrinciple,
-    '系统能力：可普通聊天、资料检索、读取文档细节、创建报表、规划/渲染静态页；缺证据时必须说明缺失，不能编造数据。',
+    '系统能力：可普通聊天、资料检索、读取文档细节、读取音视频转写/场景等媒体细节、创建报表、规划/渲染静态页；缺证据时必须说明缺失，不能编造数据。',
     `最近状态：${source.latestActivity || '暂无。'}`,
     `解析状态：${source.parseStateSummary || '暂无解析状态。'}`,
     source.datasetBriefs?.length

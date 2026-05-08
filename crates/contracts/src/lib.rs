@@ -542,6 +542,57 @@ pub struct DocumentDetailView {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct MediaTranscriptSegmentView {
+    pub start_seconds: Option<f64>,
+    pub end_seconds: Option<f64>,
+    pub text: String,
+    pub source: String,
+    pub language: Option<String>,
+    pub confidence: Option<f64>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct MediaSceneView {
+    pub start_seconds: Option<f64>,
+    pub end_seconds: Option<f64>,
+    pub representative_seconds: Option<f64>,
+    pub summary: String,
+    pub source: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct MediaOcrSnippetView {
+    pub timestamp_seconds: Option<f64>,
+    pub text: String,
+    pub source: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct MediaProviderEvidenceView {
+    pub provider: String,
+    pub capability: String,
+    pub status: String,
+    pub supported: bool,
+    pub detail: String,
+    pub endpoint: Option<String>,
+    pub model: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DocumentMediaDetailView {
+    pub document: DocumentSummary,
+    pub media_kind: String,
+    pub parse_status: String,
+    pub transcript_segments: Vec<MediaTranscriptSegmentView>,
+    pub scenes: Vec<MediaSceneView>,
+    pub keyframe_ocr_snippets: Vec<MediaOcrSnippetView>,
+    pub provider_evidence: Vec<MediaProviderEvidenceView>,
+    pub raw_media_metadata: Value,
+    #[serde(default)]
+    pub model_facing: Option<WorkflowModelFacingSummaryView>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CompareDocumentsRequest {
     pub document_ids: Vec<DocumentId>,
 }

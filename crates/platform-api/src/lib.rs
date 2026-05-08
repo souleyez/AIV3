@@ -27,15 +27,15 @@ use contracts::{
     CreateStaticPageDraftResponse, CreateStaticPageImageJobRequest,
     CreateStaticPageImageJobResponse, CreateStaticPageRenderRequest,
     CreateStaticPageRenderResponse, DatasetOutputView, DatasetSummary, DocumentChunkView,
-    DocumentDetailView, DocumentSummary, HealthResponse, KeyLoginRequest, KeyLoginResponse,
-    KeyRotateRequest, KeyRotateResponse, LlmInvocationView, LogoutResponse, MemoryDirectoryView,
-    PlanReportRequest, PublishReportRequest, PublishReportResponse, PublishedReportDetailView,
-    PublishedReportVersionView, PublishedReportView, RegisterDocumentRequest,
-    RegisterDocumentResponse, ReportPlanAstVersionView, ReportPlanSummary, ReportRenderOutputView,
-    ResolveDatasetSecretBindingsRequest, ResolveDatasetSecretBindingsResponse,
-    RetrievalEvidenceView, RetrievalSearchHitView, RetrievalSearchResponse,
-    RetryWorkflowExecutionRequest, RetryWorkflowExecutionResponse, StartEmailAuthRequest,
-    StartEmailAuthResponse, StaticPageDraftView, StaticPageImageJobView,
+    DocumentDetailView, DocumentMediaDetailView, DocumentSummary, HealthResponse, KeyLoginRequest,
+    KeyLoginResponse, KeyRotateRequest, KeyRotateResponse, LlmInvocationView, LogoutResponse,
+    MemoryDirectoryView, PlanReportRequest, PublishReportRequest, PublishReportResponse,
+    PublishedReportDetailView, PublishedReportVersionView, PublishedReportView,
+    RegisterDocumentRequest, RegisterDocumentResponse, ReportPlanAstVersionView, ReportPlanSummary,
+    ReportRenderOutputView, ResolveDatasetSecretBindingsRequest,
+    ResolveDatasetSecretBindingsResponse, RetrievalEvidenceView, RetrievalSearchHitView,
+    RetrievalSearchResponse, RetryWorkflowExecutionRequest, RetryWorkflowExecutionResponse,
+    StartEmailAuthRequest, StartEmailAuthResponse, StaticPageDraftView, StaticPageImageJobView,
     StaticPageRenderOutputView, ToolDefinitionView, ToolExecutionView,
     UpdateChatSessionReportEntryRequest, UpdateChatSessionReportEntryResponse,
     UpdateStaticPageDraftRequest, UpdateStaticPageDraftResponse, VerifyEmailAuthRequest,
@@ -378,6 +378,10 @@ pub fn router(
         .route(
             "/v1/documents/{document_id}/detail",
             get(get_document_detail),
+        )
+        .route(
+            "/v1/documents/{document_id}/media-detail",
+            get(get_document_media_detail),
         )
         .route(
             "/v1/documents/{document_id}/retrieval-evidences",
@@ -2361,6 +2365,64 @@ fn document_detail_failed_retrieval_evidence_count(detail: &DocumentDetailView) 
         .iter()
         .filter(|evidence| retrieval_evidence_has_failed_state(evidence))
         .count()
+}
+
+fn derive_document_media_detail_model_facing_summary(
+    detail: &DocumentMediaDetailView,
+) -> contracts::WorkflowModelFacingSummaryView {
+    let evidence_state = if detail.parse_status == "failed" {
+        contracts::ModelFacingEvidenceStateView::Degraded
+    } else if !detail.transcript_segments.is_empty()
+        || !detail.scenes.is_empty()
+        || !detail.keyframe_ocr_snippets.is_empty()
+    {
+        contracts::ModelFacingEvidenceStateView::LiveDetail
+    } else if detail.parse_status == "partial" || detail.parse_status == "unknown" {
+        contracts::ModelFacingEvidenceStateView::CatalogMemory
+    } else {
+        contracts::ModelFacingEvidenceStateView::SupplyOnly
+    };
+    let signals = collect_document_media_detail_model_facing_signals(detail);
+    if evidence_state == contracts::ModelFacingEvidenceStateView::Degraded {
+        return degraded_model_facing_summary(
+            contracts::ModelFacingCapabilityClassView::MaterialExplanationAndSynthesis,
+            signals,
+        );
+    }
+    build_model_facing_summary(
+        contracts::ModelFacingCapabilityClassView::MaterialExplanationAndSynthesis,
+        evidence_state,
+        vec![contracts::ModelFacingNextActionView::AnswerDirectly],
+        signals,
+    )
+}
+
+fn collect_document_media_detail_model_facing_signals(
+    detail: &DocumentMediaDetailView,
+) -> Vec<String> {
+    vec![
+        "workflow_kind=document_media_detail".to_string(),
+        "document_focus=single_document".to_string(),
+        format!("media_kind={}", detail.media_kind),
+        format!("parse_status={}", detail.parse_status),
+        format!(
+            "transcript_segment_count={}",
+            detail.transcript_segments.len()
+        ),
+        format!("scene_count={}", detail.scenes.len()),
+        format!(
+            "keyframe_ocr_snippet_count={}",
+            detail.keyframe_ocr_snippets.len()
+        ),
+        format!(
+            "supported_provider_capability_count={}",
+            detail
+                .provider_evidence
+                .iter()
+                .filter(|evidence| evidence.supported)
+                .count()
+        ),
+    ]
 }
 
 fn derive_compare_documents_model_facing_summary(
@@ -7049,7 +7111,7 @@ fn build_assistant_run_provider_input_with_evidence(
         "你是智能数据工作台里的普通聊天运行时。".to_string(),
         "原则：不替用户编排答案；只根据用户问题、启动简报、范围候选和必要历史直接回答。"
             .to_string(),
-        "系统能力：可普通聊天、检索供料、读取文档细节、创建报表、规划/渲染静态页；缺数据时必须说明缺失，不能编造指标。"
+        "系统能力：可普通聊天、检索供料、读取文档细节、读取音视频转写/场景等媒体细节、创建报表、规划/渲染静态页；缺数据时必须说明缺失，不能编造指标。"
             .to_string(),
     ];
 
@@ -7671,7 +7733,7 @@ fn build_assistant_run_react_provider_input(
         "JSON Schema: {\"action_type\":\"retrieve_evidence|read_document_detail|recall_conversation_memory|list_report_options|report_choice|create_static_page_draft|update_static_page_module|submit_static_page_image_preview|render_static_page|create_report_draft|openclaw_memory_recall|openclaw_readonly_execution|codex_host_task|final_answer\",\"reason_summary\":\"给用户看的简短原因\",\"arguments\":{},\"requires_confirmation\":false}".to_string(),
         "目录、候选列表和系统说明只用于规划下一步，不是可引用证据。".to_string(),
         "选中数据集或对话记忆时，final_answer 必须基于已返回的 observation；否则先选择 retrieve_evidence、read_document_detail 或 recall_conversation_memory。".to_string(),
-        "工具选择：retrieve_evidence 用于发现候选证据；read_document_detail 用于需要原文措辞、OCR、表格或画像字段等细节时，document_id 必须来自选中范围或已返回 observation；最终引用只能来自 observation。".to_string(),
+        "工具选择：retrieve_evidence 用于发现候选证据；read_document_detail 用于需要原文措辞、OCR、表格、音视频转写/场景或画像字段等细节时，document_id 必须来自选中范围或已返回 observation；最终引用只能来自 observation。".to_string(),
         "静态页或报表意图且存在数据集时，优先 retrieve_evidence；若需要模块数据、字段、表格/OCR 或原文措辞，继续 read_document_detail，再创建静态页/报表动作。".to_string(),
         "如果当前打开产物是静态页草稿，用户要求修改标题、内容、图表、数据绑定或布局时，优先用 update_static_page_module；Host 只会把操作应用到当前已持久化草稿。".to_string(),
         "OpenClaw 和 Codex Host 都是可选外挂能力；openclaw_memory_recall、openclaw_readonly_execution、codex_host_task 可能被 Host 拒绝，不能绕过 V3 选中范围、记忆、任务隔离和执行 allowlist。".to_string(),
@@ -7745,7 +7807,7 @@ fn build_assistant_run_react_continue_provider_input(
         "JSON Schema: {\"action_type\":\"retrieve_evidence|read_document_detail|recall_conversation_memory|list_report_options|report_choice|create_static_page_draft|update_static_page_module|submit_static_page_image_preview|render_static_page|create_report_draft|openclaw_memory_recall|openclaw_readonly_execution|codex_host_task|final_answer\",\"reason_summary\":\"给用户看的简短原因\",\"arguments\":{},\"requires_confirmation\":false}".to_string(),
         "目录、候选列表和系统说明只用于规划下一步，不是可引用证据。".to_string(),
         "选中数据集或对话记忆时，final_answer 必须基于已返回的 observation；否则先选择 retrieve_evidence、read_document_detail 或 recall_conversation_memory。".to_string(),
-        "工具选择：retrieve_evidence 用于发现候选证据；read_document_detail 用于需要原文措辞、OCR、表格或画像字段等细节时，document_id 必须来自选中范围或已返回 observation；最终引用只能来自 observation。".to_string(),
+        "工具选择：retrieve_evidence 用于发现候选证据；read_document_detail 用于需要原文措辞、OCR、表格、音视频转写/场景或画像字段等细节时，document_id 必须来自选中范围或已返回 observation；最终引用只能来自 observation。".to_string(),
         "静态页或报表意图且存在数据集时，优先 retrieve_evidence；若需要模块数据、字段、表格/OCR 或原文措辞，继续 read_document_detail，再创建静态页/报表动作。".to_string(),
         "如果当前打开产物是静态页草稿，用户要求修改标题、内容、图表、数据绑定或布局时，优先用 update_static_page_module；Host 只会把操作应用到当前已持久化草稿。".to_string(),
         "OpenClaw 和 Codex Host 都是可选外挂能力；openclaw_memory_recall、openclaw_readonly_execution、codex_host_task 可能被 Host 拒绝，不能绕过 V3 选中范围、记忆、任务隔离和执行 allowlist。".to_string(),
@@ -8766,6 +8828,31 @@ async fn get_document_detail(
     )
     .await?;
     Ok(Json(detail))
+}
+
+async fn get_document_media_detail(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(document_id): Path<String>,
+) -> std::result::Result<Json<DocumentMediaDetailView>, ApiError> {
+    let document_id = parse_document_id(&document_id)?;
+    let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
+    let current_user_id = current_auth_user_id(&state, &headers).await?;
+    let document = load_visible_document_for_user(
+        &state,
+        document_id,
+        &active_secret_binding_ids,
+        current_user_id,
+    )
+    .await?;
+    let chunks = state
+        .storage
+        .document_chunks()
+        .list_by_document(state.tenant_id, document_id)
+        .await
+        .map_err(ApiError::from_storage)?;
+
+    Ok(Json(to_document_media_detail_view(document, chunks)))
 }
 
 async fn compare_documents_route(
@@ -11304,6 +11391,46 @@ fn to_document_detail_view(
     view
 }
 
+fn to_document_media_detail_view(
+    document: Document,
+    chunks: Vec<DocumentChunk>,
+) -> DocumentMediaDetailView {
+    let document = to_document_summary(document);
+    let raw_media_metadata = extract_media_metadata_from_chunks(&chunks).unwrap_or_else(|| {
+        json!({
+            "kind": infer_media_kind_from_content_type(&document.content_type),
+            "parse_status": "unknown",
+            "transcript_segments": [],
+            "scenes": [],
+            "keyframe_ocr_snippets": [],
+            "provider_evidence": []
+        })
+    });
+
+    let mut view = DocumentMediaDetailView {
+        media_kind: raw_media_metadata
+            .get("kind")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| infer_media_kind_from_content_type(&document.content_type))
+            .to_string(),
+        parse_status: raw_media_metadata
+            .get("parse_status")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown")
+            .to_string(),
+        transcript_segments: collect_media_transcript_segments(&raw_media_metadata),
+        scenes: collect_media_scenes(&raw_media_metadata),
+        keyframe_ocr_snippets: collect_media_ocr_snippets(&raw_media_metadata),
+        provider_evidence: collect_media_provider_evidence(&raw_media_metadata),
+        raw_media_metadata,
+        document,
+        model_facing: None,
+    };
+    view.model_facing = Some(derive_document_media_detail_model_facing_summary(&view));
+    view
+}
+
 fn to_compare_documents_view(documents: Vec<DocumentDetailView>) -> CompareDocumentsView {
     let mut view = CompareDocumentsView {
         documents,
@@ -11325,6 +11452,176 @@ fn to_document_chunk_view(chunk: DocumentChunk) -> DocumentChunkView {
         created_at: chunk.created_at,
         updated_at: chunk.updated_at,
     }
+}
+
+fn extract_media_metadata_from_chunks(chunks: &[DocumentChunk]) -> Option<Value> {
+    chunks.iter().find_map(|chunk| {
+        let metadata = Value::Object(Map::from_iter(chunk.metadata.clone()));
+        metadata
+            .pointer("/parse_metadata/media")
+            .or_else(|| metadata.get("media"))
+            .cloned()
+    })
+}
+
+fn infer_media_kind_from_content_type(content_type: &str) -> &'static str {
+    let lower = content_type.trim().to_ascii_lowercase();
+    if lower.starts_with("audio/") {
+        "audio"
+    } else if lower.starts_with("video/") {
+        "video"
+    } else {
+        "unknown"
+    }
+}
+
+fn collect_media_transcript_segments(
+    raw_media_metadata: &Value,
+) -> Vec<contracts::MediaTranscriptSegmentView> {
+    raw_media_metadata
+        .get("transcript_segments")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    let text = item
+                        .get("text")
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .filter(|text| !text.is_empty())?
+                        .to_string();
+                    Some(contracts::MediaTranscriptSegmentView {
+                        start_seconds: media_numeric_field(item, &["start_seconds", "start"]),
+                        end_seconds: media_numeric_field(item, &["end_seconds", "end"]),
+                        text,
+                        source: media_string_field(item, &["source"])
+                            .unwrap_or_else(|| "unknown".to_string()),
+                        language: media_string_field(item, &["language"]),
+                        confidence: media_numeric_field(item, &["confidence", "score"]),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn collect_media_scenes(raw_media_metadata: &Value) -> Vec<contracts::MediaSceneView> {
+    raw_media_metadata
+        .get("scenes")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    let summary = media_string_field(item, &["summary", "label"])
+                        .unwrap_or_else(|| "Scene".to_string());
+                    Some(contracts::MediaSceneView {
+                        start_seconds: media_numeric_field(item, &["start_seconds", "start"]),
+                        end_seconds: media_numeric_field(item, &["end_seconds", "end"]),
+                        representative_seconds: media_numeric_field(
+                            item,
+                            &["representative_seconds", "timestamp_seconds", "timestamp"],
+                        ),
+                        summary,
+                        source: media_string_field(item, &["source"])
+                            .unwrap_or_else(|| "unknown".to_string()),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn collect_media_ocr_snippets(raw_media_metadata: &Value) -> Vec<contracts::MediaOcrSnippetView> {
+    raw_media_metadata
+        .get("keyframe_ocr_snippets")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    let text = media_string_field(item, &["text", "content"])?;
+                    Some(contracts::MediaOcrSnippetView {
+                        timestamp_seconds: media_numeric_field(
+                            item,
+                            &["timestamp_seconds", "timestamp", "time"],
+                        ),
+                        text,
+                        source: media_string_field(item, &["source"])
+                            .unwrap_or_else(|| "unknown".to_string()),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn collect_media_provider_evidence(
+    raw_media_metadata: &Value,
+) -> Vec<contracts::MediaProviderEvidenceView> {
+    if let Some(items) = raw_media_metadata
+        .get("provider_evidence")
+        .and_then(Value::as_array)
+    {
+        return items
+            .iter()
+            .filter_map(media_provider_evidence_from_value)
+            .collect();
+    }
+
+    raw_media_metadata
+        .get("provider_capabilities")
+        .and_then(Value::as_object)
+        .map(|object| {
+            [
+                "audio_transcript",
+                "native_video_understanding",
+                "keyframe_image_vlm",
+            ]
+            .into_iter()
+            .filter_map(|key| object.get(key))
+            .filter_map(media_provider_evidence_from_value)
+            .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn media_provider_evidence_from_value(
+    value: &Value,
+) -> Option<contracts::MediaProviderEvidenceView> {
+    Some(contracts::MediaProviderEvidenceView {
+        provider: media_string_field(value, &["provider"]).unwrap_or_else(|| "unknown".to_string()),
+        capability: media_string_field(value, &["capability"])?,
+        status: media_string_field(value, &["status"]).unwrap_or_else(|| "unknown".to_string()),
+        supported: value
+            .get("supported")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        detail: media_string_field(value, &["detail"]).unwrap_or_default(),
+        endpoint: media_string_field(value, &["endpoint"]),
+        model: media_string_field(value, &["model"]).unwrap_or_default(),
+    })
+}
+
+fn media_string_field(value: &Value, keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|key| {
+        value
+            .get(*key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .map(str::to_string)
+    })
+}
+
+fn media_numeric_field(value: &Value, keys: &[&str]) -> Option<f64> {
+    keys.iter().find_map(|key| {
+        value.get(*key).and_then(|item| {
+            item.as_f64()
+                .or_else(|| item.as_str().and_then(|text| text.parse::<f64>().ok()))
+        })
+    })
 }
 
 fn to_retrieval_evidence_view(evidence: RetrievalEvidence) -> RetrievalEvidenceView {
@@ -28158,6 +28455,101 @@ mod tests {
             .signals
             .iter()
             .any(|signal| signal == "failed_retrieval_evidence_count=1"));
+    }
+
+    #[test]
+    fn document_media_detail_view_exposes_transcript_scene_and_provider_evidence() {
+        let now = Utc::now();
+        let tenant_id = TenantId::new();
+        let dataset_id = DatasetId::new();
+        let document_id = DocumentId::new();
+        let document = domain_model::Document {
+            id: document_id,
+            tenant_id,
+            dataset_id,
+            owner_user_id: None,
+            title: "巡店视频.mov".to_string(),
+            object_key: "uploads/store-tour.mov".to_string(),
+            content_type: "video/quicktime".to_string(),
+            lifecycle: domain_model::DocumentLifecycle::Extracted,
+            secret_binding_ids: Vec::new(),
+            metadata: BTreeMap::new(),
+            created_at: now,
+            updated_at: now,
+        };
+        let chunk = DocumentChunk {
+            id: DocumentChunkId::new(),
+            tenant_id,
+            dataset_id,
+            document_id,
+            chunk_index: 0,
+            content: "Transcript segments:\n[00:01.000 - 00:02.500] 今日客流 2180".to_string(),
+            token_count: 18,
+            state: DocumentChunkState::Extracted,
+            metadata: BTreeMap::from_iter([(
+                "parse_metadata".to_string(),
+                json!({
+                    "media": {
+                        "kind": "video",
+                        "parse_status": "enriched_partial",
+                        "transcript_segments": [{
+                            "start_seconds": 1.0,
+                            "end_seconds": 2.5,
+                            "text": "今日客流 2180",
+                            "source": "fake-transcriber"
+                        }],
+                        "scenes": [{
+                            "start_seconds": 0,
+                            "end_seconds": 12,
+                            "representative_seconds": 6,
+                            "summary": "门店入口画面",
+                            "source": "fake-scenes"
+                        }],
+                        "keyframe_ocr_snippets": [{
+                            "timestamp_seconds": 6,
+                            "text": "今日客流 2180",
+                            "source": "fake-ocr"
+                        }],
+                        "provider_evidence": [{
+                            "provider": "minimax",
+                            "capability": "native_video_understanding",
+                            "status": "configured_unverified",
+                            "supported": false,
+                            "detail": "probe missing",
+                            "endpoint": "/video",
+                            "model": "MiniMax-M2.5-highspeed"
+                        }]
+                    }
+                }),
+            )]),
+            created_at: now,
+            updated_at: now,
+        };
+
+        let detail = to_document_media_detail_view(document, vec![chunk]);
+
+        assert_eq!(detail.media_kind, "video");
+        assert_eq!(detail.parse_status, "enriched_partial");
+        assert_eq!(detail.transcript_segments.len(), 1);
+        assert_eq!(detail.transcript_segments[0].start_seconds, Some(1.0));
+        assert_eq!(detail.scenes.len(), 1);
+        assert_eq!(detail.keyframe_ocr_snippets.len(), 1);
+        assert_eq!(detail.provider_evidence.len(), 1);
+        assert!(!detail.provider_evidence[0].supported);
+        assert_eq!(
+            detail
+                .model_facing
+                .as_ref()
+                .map(|summary| summary.evidence_state.clone()),
+            Some(contracts::ModelFacingEvidenceStateView::LiveDetail)
+        );
+        assert!(detail
+            .model_facing
+            .as_ref()
+            .expect("model facing summary")
+            .signals
+            .iter()
+            .any(|signal| signal == "transcript_segment_count=1"));
     }
 
     #[test]

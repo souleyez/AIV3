@@ -37,7 +37,9 @@ test('startup briefing summarizes visible datasets and system capability', () =>
   assert.equal(briefing.selectedScopeLabel, '订单数据');
   assert.equal(briefing.briefingVersion, 2);
   assert.equal(briefing.datasetBriefs.length, 2);
+  assert.ok(briefing.capabilities.includes('media_detail'));
   assert.match(briefing.productCapabilities.staticPage, /静态页规划/);
+  assert.match(briefing.productCapabilities.media, /partial/);
   assert.match(briefing.latestActivity, /订单数据/);
   assert.match(briefing.productTruth, /智能数据工作台/);
 });
@@ -49,6 +51,7 @@ test('formatted briefing tells model when no dataset is selected', () => {
   assert.match(formatted, /当前未选数据集/);
   assert.match(formatted, /普通模型聊天/);
   assert.match(formatted, /创建报表/);
+  assert.match(formatted, /媒体细节/);
   assert.match(formatted, /规划\/渲染静态页/);
   assert.match(formatted, /不能编造数据/);
   assert.match(formatted, /当前可见库为空/);
