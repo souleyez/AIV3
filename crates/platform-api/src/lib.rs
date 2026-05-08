@@ -118,6 +118,7 @@ const ASSISTANT_RUN_EVIDENCE_DATASET_LIMIT: usize = 2;
 const ASSISTANT_RUN_DETAIL_TARGET_LIMIT: usize = 3;
 const ASSISTANT_RUN_CONVERSATION_MEMORY_DEFAULT_LIMIT: i64 = 4;
 const ASSISTANT_RUN_CONVERSATION_MEMORY_MAX_LIMIT: i64 = 8;
+const ASSISTANT_RUN_SCOPE_SUMMARY_DOC_LIMIT: usize = 24;
 const ASSISTANT_RUN_CONTINUE_DEFAULT_MAX_STEPS: usize = 3;
 const ASSISTANT_RUN_CONTINUE_MAX_STEPS: usize = 5;
 const ASSISTANT_RUN_REACT_DEFAULT_MAX_STEPS: usize = 3;
@@ -4281,6 +4282,225 @@ fn filter_visible_datasets(
         .collect()
 }
 
+async fn enrich_visible_datasets_for_scope_planning(
+    state: &AppState,
+    datasets: Vec<Dataset>,
+    current_user_id: Option<UserId>,
+) -> std::result::Result<Vec<Dataset>, ApiError> {
+    let mut enriched = Vec::with_capacity(datasets.len());
+    for mut dataset in datasets {
+        let documents = state
+            .storage
+            .documents()
+            .list_by_dataset(state.tenant_id, dataset.id)
+            .await
+            .map_err(ApiError::from_storage)?
+            .into_iter()
+            .filter(|document| owner_user_id_is_visible(document.owner_user_id, current_user_id))
+            .collect::<Vec<_>>();
+        if documents.is_empty() {
+            enriched.push(dataset);
+            continue;
+        }
+
+        let mut estimated_word_count = 0usize;
+        let mut parse_status_counts = BTreeMap::<String, usize>::new();
+        let mut content_type_counts = BTreeMap::<String, usize>::new();
+        let mut material_hints = BTreeSet::<String>::new();
+
+        for hint in dataset
+            .metadata
+            .get("material_hints")
+            .or_else(|| dataset.metadata.get("materialHints"))
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            material_hints.insert(hint.to_string());
+        }
+
+        for (index, document) in documents.iter().enumerate() {
+            let chunks = if index < ASSISTANT_RUN_SCOPE_SUMMARY_DOC_LIMIT {
+                state
+                    .storage
+                    .document_chunks()
+                    .list_by_document(state.tenant_id, document.id)
+                    .await
+                    .map_err(ApiError::from_storage)?
+            } else {
+                Vec::new()
+            };
+            estimated_word_count += assistant_scope_document_word_count(document, &chunks);
+            *parse_status_counts
+                .entry(assistant_scope_document_parse_status(document, &chunks))
+                .or_insert(0) += 1;
+            *content_type_counts
+                .entry(assistant_scope_content_kind(&document.content_type).to_string())
+                .or_insert(0) += 1;
+            assistant_scope_collect_material_hints(document, &chunks, &mut material_hints);
+        }
+
+        let document_count = documents.len();
+        let latest_activity = documents
+            .iter()
+            .map(|document| document.updated_at)
+            .max()
+            .unwrap_or(dataset.updated_at);
+
+        dataset
+            .metadata
+            .insert("document_count".to_string(), json!(document_count));
+        dataset
+            .metadata
+            .insert("documents_count".to_string(), json!(document_count));
+        if estimated_word_count > 0 {
+            dataset.metadata.insert(
+                "estimated_word_count".to_string(),
+                json!(estimated_word_count),
+            );
+        }
+        dataset.metadata.insert(
+            "parse_status_summary".to_string(),
+            json!(assistant_scope_count_summary(&parse_status_counts)),
+        );
+        dataset.metadata.insert(
+            "content_type_summary".to_string(),
+            json!(assistant_scope_count_summary(&content_type_counts)),
+        );
+        dataset.metadata.insert(
+            "latest_upload".to_string(),
+            json!(latest_activity.to_rfc3339()),
+        );
+        if !material_hints.is_empty() {
+            dataset.metadata.insert(
+                "material_hints".to_string(),
+                json!(material_hints.into_iter().take(8).collect::<Vec<_>>()),
+            );
+        }
+        enriched.push(dataset);
+    }
+    Ok(enriched)
+}
+
+fn assistant_scope_document_word_count(document: &Document, chunks: &[DocumentChunk]) -> usize {
+    let chunk_tokens = chunks
+        .iter()
+        .map(|chunk| chunk.token_count.max(0) as usize)
+        .sum::<usize>();
+    if chunk_tokens > 0 {
+        return chunk_tokens;
+    }
+    for key in [
+        "estimated_word_count",
+        "estimatedWordCount",
+        "word_count",
+        "wordCount",
+    ] {
+        if let Some(value) = document.metadata.get(key).and_then(|value| {
+            value
+                .as_u64()
+                .or_else(|| value.as_str()?.parse::<u64>().ok())
+        }) {
+            return value as usize;
+        }
+    }
+    0
+}
+
+fn assistant_scope_document_parse_status(document: &Document, chunks: &[DocumentChunk]) -> String {
+    for key in ["parse_status", "parseStatus", "status"] {
+        if let Some(value) = document
+            .metadata
+            .get(key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            return value.to_string();
+        }
+    }
+    if let Some(parse_status) = extract_media_metadata_from_chunks(chunks).and_then(|metadata| {
+        metadata
+            .get("parse_status")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string)
+    }) {
+        return parse_status;
+    }
+    document.lifecycle.as_str().to_string()
+}
+
+fn assistant_scope_content_kind(content_type: &str) -> &'static str {
+    let lower = content_type.trim().to_ascii_lowercase();
+    if lower.starts_with("audio/") {
+        "audio"
+    } else if lower.starts_with("video/") {
+        "video"
+    } else if lower.starts_with("image/") {
+        "image"
+    } else if lower.contains("pdf") {
+        "pdf"
+    } else if lower.contains("spreadsheet") || lower.contains("excel") || lower.contains("csv") {
+        "spreadsheet"
+    } else if lower.contains("presentation") || lower.contains("powerpoint") {
+        "presentation"
+    } else if lower.starts_with("text/") || lower.contains("document") || lower.contains("word") {
+        "text"
+    } else {
+        "other"
+    }
+}
+
+fn assistant_scope_collect_material_hints(
+    document: &Document,
+    chunks: &[DocumentChunk],
+    material_hints: &mut BTreeSet<String>,
+) {
+    match infer_media_kind_from_content_type(&document.content_type) {
+        "audio" | "video" => {
+            material_hints.insert("audio_video".to_string());
+        }
+        _ => {}
+    }
+    if let Some(media_metadata) = extract_media_metadata_from_chunks(chunks) {
+        material_hints.insert("audio_video".to_string());
+        if media_metadata
+            .get("transcript_segments")
+            .and_then(Value::as_array)
+            .is_some_and(|items| !items.is_empty())
+        {
+            material_hints.insert("transcript_possible".to_string());
+        }
+        if media_metadata
+            .get("scenes")
+            .and_then(Value::as_array)
+            .is_some_and(|items| !items.is_empty())
+        {
+            material_hints.insert("scene_possible".to_string());
+        }
+        if media_metadata
+            .get("keyframe_ocr_snippets")
+            .and_then(Value::as_array)
+            .is_some_and(|items| !items.is_empty())
+        {
+            material_hints.insert("keyframe_ocr_possible".to_string());
+        }
+    }
+}
+
+fn assistant_scope_count_summary(counts: &BTreeMap<String, usize>) -> String {
+    counts
+        .iter()
+        .map(|(key, count)| format!("{key}:{count}"))
+        .collect::<Vec<_>>()
+        .join("，")
+}
+
 fn owner_user_id_is_visible(
     owner_user_id: Option<UserId>,
     current_user_id: Option<UserId>,
@@ -5680,6 +5900,9 @@ async fn create_assistant_run(
         &active_secret_binding_ids,
         current_user_id,
     );
+    let visible_datasets =
+        enrich_visible_datasets_for_scope_planning(&state, visible_datasets, current_user_id)
+            .await?;
     let selected_dataset_id = request
         .selected_scope
         .as_ref()
@@ -20665,6 +20888,129 @@ mod tests {
             .scope_candidates
             .iter()
             .any(|candidate| candidate.get("id") == Some(&json!(private_dataset.id))));
+    }
+
+    #[tokio::test]
+    async fn assistant_run_scope_planner_enriches_dataset_summaries_from_documents() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_MODE", "placeholder");
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping assistant scope enrichment test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("assistant-scope-enrichment-test-{}", Uuid::new_v4()),
+                "Assistant Scope Enrichment Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage,
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        let dataset = state
+            .storage
+            .datasets()
+            .create(
+                state.tenant_id,
+                NewDataset {
+                    key: format!("default-media-{}", Uuid::new_v4()),
+                    title: "默认公开库".to_string(),
+                    description: Some("自动上传资料。".to_string()),
+                    owner_user_id: None,
+                },
+            )
+            .await
+            .expect("dataset should be created");
+        let document = state
+            .storage
+            .documents()
+            .create(
+                state.tenant_id,
+                NewDocument {
+                    dataset_id: dataset.id,
+                    title: "Customer interview audio".to_string(),
+                    object_key: "uploads/customer-interview.mp3".to_string(),
+                    content_type: "audio/mpeg".to_string(),
+                    secret_binding_ids: Vec::new(),
+                    owner_user_id: None,
+                    metadata: json!({}),
+                },
+            )
+            .await
+            .expect("document should be created");
+        state
+            .storage
+            .document_chunks()
+            .replace_for_document(
+                state.tenant_id,
+                document.id,
+                &[storage::NewDocumentChunk {
+                    dataset_id: dataset.id,
+                    document_id: document.id,
+                    chunk_index: 0,
+                    content: "Customer asked about order delay compensation.".to_string(),
+                    token_count: 9,
+                    metadata: json!({
+                        "parse_metadata": {
+                            "media": {
+                                "kind": "audio",
+                                "parse_status": "transcribed",
+                                "transcript_segments": [{
+                                    "start_seconds": 0,
+                                    "end_seconds": 4,
+                                    "text": "客户询问订单延迟赔付。"
+                                }]
+                            }
+                        }
+                    }),
+                    created_at: Utc::now(),
+                }],
+            )
+            .await
+            .expect("document chunks should be created");
+
+        let (_, Json(response)) = create_assistant_run(
+            State(state),
+            HeaderMap::new(),
+            Json(CreateAssistantRunRequest {
+                prompt: "这段录音讲了什么，帮我做一页静态页".to_string(),
+                local_thread_id: Some("scope-enrichment-thread".to_string()),
+                startup_briefing: Some(json!({})),
+                selected_scope: None,
+                scope_candidates: Vec::new(),
+                context_policy_hint: None,
+                current_artifact: None,
+                messages: Vec::new(),
+            }),
+        )
+        .await
+        .expect("assistant run should be created");
+
+        assert_eq!(response.selected_scope["mode"], json!("preselected"));
+        let candidate = response
+            .scope_candidates
+            .iter()
+            .find(|candidate| candidate.get("id") == Some(&json!(dataset.id)))
+            .expect("dataset candidate should be present");
+        assert_eq!(candidate["document_count"], json!(1));
+        assert_eq!(candidate["estimated_word_count"], json!(9));
+        assert_eq!(candidate["parse_status_summary"], json!("transcribed:1"));
+        assert_eq!(candidate["material_hints"][0], json!("audio_video"));
+        assert!(
+            response.evidence_state["fallback_supply_count"]
+                .as_u64()
+                .unwrap_or_default()
+                >= 1
+        );
     }
 
     #[tokio::test]

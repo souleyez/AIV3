@@ -437,23 +437,73 @@ fn is_zero(value: &usize) -> bool {
 }
 
 fn dataset_haystack(dataset: &Dataset) -> String {
+    let material_hints =
+        dataset_metadata_string_list(dataset, &["material_hints", "materialHints"])
+            .into_iter()
+            .flat_map(|hint| {
+                let mut values = vec![hint.clone()];
+                values.extend(
+                    dataset_material_hint_labels(&hint)
+                        .into_iter()
+                        .map(str::to_string),
+                );
+                values
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
     format!(
-        "{} {} {}",
+        "{} {} {} {} {} {} {}",
         dataset.title,
         dataset.key,
-        dataset.description.clone().unwrap_or_default()
+        dataset.description.clone().unwrap_or_default(),
+        dataset_metadata_string(dataset, &["category", "default_category"]),
+        dataset_metadata_string(dataset, &["content_type_summary", "contentTypeSummary"]),
+        dataset_metadata_string(dataset, &["parse_status_summary", "parseStatusSummary"]),
+        material_hints
     )
 }
 
 fn dataset_material_hints(dataset: &Dataset) -> Vec<String> {
     let haystack = dataset_haystack(dataset);
-    let mut hints = Vec::new();
+    let mut hints = dataset_metadata_string_list(dataset, &["material_hints", "materialHints"]);
     if MEDIA_HINTS.iter().any(|hint| haystack.contains(hint)) {
         hints.push("audio_video".to_string());
         hints.push("transcript_possible".to_string());
         hints.push("keyframe_ocr_possible".to_string());
     }
+    let mut seen = HashSet::new();
     hints
+        .into_iter()
+        .filter(|hint| !hint.trim().is_empty())
+        .filter(|hint| seen.insert(hint.clone()))
+        .take(8)
+        .collect()
+}
+
+fn dataset_material_hint_labels(hint: &str) -> Vec<&'static str> {
+    match hint {
+        "audio_video" => vec!["音视频", "音频", "视频", "录音", "会议"],
+        "transcript_possible" => vec!["转写", "字幕"],
+        "keyframe_ocr_possible" => vec!["关键帧", "OCR"],
+        "scene_possible" => vec!["场景"],
+        _ => Vec::new(),
+    }
+}
+
+fn dataset_metadata_string_list(dataset: &Dataset, keys: &[&str]) -> Vec<String> {
+    keys.iter()
+        .find_map(|key| dataset.metadata.get(*key))
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToString::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn text_matches(prompt: &str, text: &str) -> bool {
@@ -738,6 +788,36 @@ mod tests {
         assert!(plan.hint.contains("订单(12文档)"));
         assert_eq!(plan.selected_scope["mode"], json!("preselected"));
         assert_eq!(plan.intent, "data_question");
+    }
+
+    #[test]
+    fn dataset_metadata_summary_can_drive_scope_matching() {
+        let mut dataset = dataset("默认公开库", "default-public");
+        dataset
+            .metadata
+            .insert("category".to_string(), json!("订单"));
+        dataset
+            .metadata
+            .insert("content_type_summary".to_string(), json!("spreadsheet:2"));
+        dataset.metadata.insert(
+            "material_hints".to_string(),
+            json!(["audio_video", "transcript_possible"]),
+        );
+
+        let plan = plan_scope(ScopePlannerInput {
+            prompt: "总结销售趋势，顺便看看录音有没有风险",
+            visible_datasets: &[dataset.clone()],
+            selected_dataset_id: None,
+            conversation_memory_available: false,
+        });
+
+        assert_eq!(plan.candidates.len(), 1);
+        assert_eq!(plan.candidates[0].id, dataset.id.to_string());
+        assert_eq!(plan.candidates[0].category, "订单");
+        assert!(plan.candidates[0]
+            .material_hints
+            .contains(&"audio_video".to_string()));
+        assert_eq!(plan.selected_scope["mode"], json!("preselected"));
     }
 
     #[test]
