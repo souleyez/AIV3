@@ -1,6 +1,9 @@
 use axum::Json;
 use chrono::Utc;
-use contracts::{CreateStaticPageImageJobRequest, CreateStaticPageRenderRequest};
+use contracts::{
+    CodexHostTaskMemoryPolicyView, CodexHostTaskRequestView, CodexHostTaskSafetyPolicyView,
+    CreateStaticPageImageJobRequest, CreateStaticPageRenderRequest,
+};
 use domain_model::{
     AssistantRunId, Document, DocumentChunk, DocumentId, SecretBindingId, StaticPageDraftId,
     StaticPageImageJobId, UserId, WorkflowEventId, WorkflowEventRecord, WorkflowExecution,
@@ -859,12 +862,14 @@ async fn codex_host_task_result(
                 "capability": truncate_for_openclaw_stub(capability, 96),
                 "workflow_execution_id": execution.id.to_string(),
                 "assistant_run_id": active_assistant_run_id.to_string(),
+                "task_memory_space_id": execution.context.get("task_memory_space_id").cloned().unwrap_or(Value::Null),
             }],
             "tasks": task_items,
             "limits": {
                 "mode": "queued",
                 "externalExecution": true,
                 "taskMemoryIsolated": true,
+                "taskMemorySpaceId": execution.context.get("task_memory_space_id").cloned().unwrap_or(Value::Null),
             },
             "workflow_execution_id": execution.id.to_string(),
         }),
@@ -900,46 +905,26 @@ fn build_initial_codex_host_task_execution(
     let now = Utc::now();
     let execution_id = WorkflowExecutionId::new();
     let runtime_state = definition.initial_state(execution_id, now);
-    let mut context = runtime_state.context;
+    let task_memory_policy =
+        CodexHostTaskMemoryPolicyView::task_scoped(assistant_run_id, execution_id);
+    let request = CodexHostTaskRequestView {
+        assistant_run_id,
+        capability: truncate_for_openclaw_stub(capability, 96),
+        task: codex_host_task_text_from_arguments(&action.arguments),
+        local_thread_id: local_thread_id
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string),
+        task_memory_policy,
+        safety: CodexHostTaskSafetyPolicyView::default(),
+    };
+    let mut context = match request.to_workflow_context() {
+        Value::Object(map) => map,
+        _ => runtime_state.context,
+    };
     context.insert(
         "retries_remaining".to_string(),
         Value::Number(runtime_state.retries_remaining.into()),
-    );
-    context.insert(
-        "assistant_run_id".to_string(),
-        Value::String(assistant_run_id.to_string()),
-    );
-    context.insert(
-        "capability".to_string(),
-        Value::String(truncate_for_openclaw_stub(capability, 96)),
-    );
-    if let Some(task) = codex_host_task_text_from_arguments(&action.arguments) {
-        context.insert("task".to_string(), Value::String(task));
-    }
-    if let Some(local_thread_id) = local_thread_id
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        context.insert(
-            "local_thread_id".to_string(),
-            Value::String(local_thread_id.to_string()),
-        );
-    }
-    context.insert(
-        "task_memory_policy".to_string(),
-        json!({
-            "kind": "task",
-            "isolated": true,
-            "promote_summary_to_conversation": false,
-        }),
-    );
-    context.insert(
-        "safety".to_string(),
-        json!({
-            "user_cli_flags_allowed": false,
-            "secrets_in_prompt_allowed": false,
-            "raw_logs_require_redaction": true,
-        }),
     );
 
     Ok(WorkflowExecution {
@@ -975,6 +960,7 @@ fn build_initial_codex_host_task_event(
             "assistant_run_id": assistant_run_id.to_string(),
             "capability": execution.context.get("capability").cloned().unwrap_or(Value::Null),
             "task_memory_policy": execution.context.get("task_memory_policy").cloned().unwrap_or(Value::Null),
+            "task_memory_space_id": execution.context.get("task_memory_space_id").cloned().unwrap_or(Value::Null),
         }),
         created_at: execution.created_at,
     }

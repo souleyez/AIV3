@@ -340,10 +340,10 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "contracts",
  "domain-model",
  "event-bus",
  "observability",
- "platform-api",
  "serde",
  "serde_json",
  "storage",

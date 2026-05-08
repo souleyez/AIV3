@@ -343,7 +343,7 @@ pub fn registry() -> Vec<DynWorkflowDefinition> {
         }),
         Arc::new(LinearWorkflowDefinition {
             kind: WorkflowKind::CodexHostTask,
-            summary: "Queue a V3-audited Codex Host task for an isolated execution kernel.",
+            summary: "Queue a V3-audited external Codex Host task with isolated task memory.",
             queue: "codex_host",
             task_key: "run_codex_host_task",
             success_stage: "codex_host_task_completed",
@@ -397,6 +397,10 @@ mod tests {
             .transition(&pending, WorkflowSignal::Start, now)
             .expect("start");
 
+        assert_eq!(
+            definition.summary(),
+            "Queue a V3-audited external Codex Host task with isolated task memory."
+        );
         assert_eq!(running.next_state.status, WorkflowStatus::Running);
         assert_eq!(running.next_state.stage, "run_codex_host_task");
         assert_eq!(running.enqueued_tasks.len(), 1);

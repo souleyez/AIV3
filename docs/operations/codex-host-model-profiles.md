@@ -12,6 +12,8 @@ Codex Host model selection is a V3 policy decision, not a free-form user prompt 
 - Runtime events record profile id, provider family, model label, and capability class.
 - Real execution profiles stay disabled until tested on `windows-jump` or the later Mac host.
 - The local developer workstation must not be used for Codex execution tests.
+- Task prompts must not include provider keys, browser-local keys, or raw secrets.
+- Each host task runs under a V3-created `task_memory_space_id`; the host can return summaries, but V3 decides whether anything is promoted into conversation or project memory.
 
 ## Initial Profiles
 
@@ -72,6 +74,7 @@ CODEX_HOST_AGENT_ALLOW_REAL_CODEX_EXEC=true
 CODEX_HOST_AGENT_HOST_KIND=windows_jump|mac_host
 CODEX_HOST_AGENT_PROFILE_KIND=codex-native|codex-compatible-shim
 profile capability allowlist contains the requested capability
+task context includes a V3-created assistant_run_id and task_memory_space_id
 ```
 
 `codex_exec` output policy:
@@ -113,3 +116,17 @@ To make MiniMax valid for Codex Host, one of these must be true:
 - Codex task uses V3 tools that call `llm-gateway`, while Codex itself keeps its native model.
 
 The first production path should prefer V3-owned `llm-gateway` for MiniMax and keep Codex Host focused on execution.
+
+## Contract Boundary
+
+The worker consumes workflow context generated from `CodexHostTaskRequestView` and records workflow output shaped as `CodexHostTaskOutputView`. These shared contracts live in `crates/contracts` so `codex-host-agent` can stay independent of `platform-api`.
+
+The worker dependency direction should stay narrow:
+
+```text
+codex-host-agent -> contracts + workflow-definitions + workflow-engine + storage + event-bus
+codex-host-agent -X-> platform-api
+browser -X-> codex-host-agent
+```
+
+This keeps browser authentication, dataset visibility, report/static-page APIs, and user-facing orchestration inside V3 while allowing Codex Host to remain an optional execution extension.

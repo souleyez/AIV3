@@ -11,7 +11,7 @@ use domain_model::{
     WorkflowTaskStatus,
 };
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use serde_json::Value;
+use serde_json::{json, Value};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HealthResponse {
@@ -104,6 +104,118 @@ pub struct WorkflowTaskView {
     pub attempt: u32,
     pub available_at: DateTime<Utc>,
     pub payload: Value,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CodexHostTaskMemoryPolicyView {
+    pub kind: String,
+    pub isolated: bool,
+    pub promote_summary_to_conversation: bool,
+    pub memory_space_id: Option<String>,
+}
+
+impl CodexHostTaskMemoryPolicyView {
+    pub fn task_scoped(
+        assistant_run_id: AssistantRunId,
+        execution_id: WorkflowExecutionId,
+    ) -> Self {
+        Self {
+            kind: "task".to_string(),
+            isolated: true,
+            promote_summary_to_conversation: false,
+            memory_space_id: Some(format!(
+                "codex-host-task:{}:{}",
+                assistant_run_id, execution_id
+            )),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CodexHostTaskSafetyPolicyView {
+    pub user_cli_flags_allowed: bool,
+    pub secrets_in_prompt_allowed: bool,
+    pub raw_logs_require_redaction: bool,
+    pub real_codex_exec_requires_host_allowlist: bool,
+}
+
+impl Default for CodexHostTaskSafetyPolicyView {
+    fn default() -> Self {
+        Self {
+            user_cli_flags_allowed: false,
+            secrets_in_prompt_allowed: false,
+            raw_logs_require_redaction: true,
+            real_codex_exec_requires_host_allowlist: true,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CodexHostTaskRequestView {
+    pub assistant_run_id: AssistantRunId,
+    pub capability: String,
+    pub task: Option<String>,
+    pub local_thread_id: Option<String>,
+    pub task_memory_policy: CodexHostTaskMemoryPolicyView,
+    pub safety: CodexHostTaskSafetyPolicyView,
+}
+
+impl CodexHostTaskRequestView {
+    pub fn to_workflow_context(&self) -> Value {
+        json!({
+            "assistant_run_id": self.assistant_run_id.to_string(),
+            "capability": self.capability.clone(),
+            "task": self.task.clone(),
+            "local_thread_id": self.local_thread_id.clone(),
+            "task_memory_policy": self.task_memory_policy.clone(),
+            "task_memory_space_id": self.task_memory_policy.memory_space_id.clone(),
+            "safety": self.safety.clone(),
+        })
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CodexHostTaskProfileSummaryView {
+    pub id: String,
+    pub kind: String,
+    pub model: Option<String>,
+    pub provider_id: Option<String>,
+    pub base_url_configured: bool,
+    pub env_key: Option<String>,
+    pub wire_api: Option<String>,
+    pub allowed_capabilities: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CodexHostCommandPlanSummaryView {
+    pub program: String,
+    pub args_without_prompt: Vec<String>,
+    pub prompt_chars: usize,
+    pub sandbox: String,
+    pub prompt_redacted: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CodexHostProcessOutputSummaryView {
+    pub exit_code: Option<i32>,
+    pub stdout_excerpt: String,
+    pub stderr_excerpt: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CodexHostTaskOutputView {
+    pub mode: String,
+    pub codex_invoked: bool,
+    pub status: String,
+    pub assistant_run_id: String,
+    pub capability: String,
+    pub profile: Option<CodexHostTaskProfileSummaryView>,
+    pub command_plan: Option<CodexHostCommandPlanSummaryView>,
+    pub process: Option<CodexHostProcessOutputSummaryView>,
+    pub task_chars: usize,
+    pub local_thread_id: Option<String>,
+    pub task_memory_isolated: bool,
+    pub task_memory_space_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -2054,6 +2166,51 @@ mod tests {
         .expect("missing pretty_summaries should deserialize");
 
         assert!(view.pretty_summaries.is_empty());
+    }
+
+    #[test]
+    fn codex_host_task_request_context_uses_isolated_memory_space() {
+        let assistant_run_id = AssistantRunId::new();
+        let execution_id = WorkflowExecutionId::new();
+        let memory_policy =
+            CodexHostTaskMemoryPolicyView::task_scoped(assistant_run_id, execution_id);
+        let expected_memory_space_id = format!("codex-host-task:{assistant_run_id}:{execution_id}");
+        let request = CodexHostTaskRequestView {
+            assistant_run_id,
+            capability: "inspect_project".to_string(),
+            task: Some("Summarize repository shape".to_string()),
+            local_thread_id: Some("thread-a".to_string()),
+            task_memory_policy: memory_policy,
+            safety: CodexHostTaskSafetyPolicyView::default(),
+        };
+
+        let context = request.to_workflow_context();
+
+        assert_eq!(
+            context["assistant_run_id"],
+            json!(assistant_run_id.to_string())
+        );
+        assert_eq!(context["capability"], json!("inspect_project"));
+        assert_eq!(context["task_memory_policy"]["isolated"], json!(true));
+        assert_eq!(
+            context["task_memory_policy"]["promote_summary_to_conversation"],
+            json!(false)
+        );
+        assert_eq!(
+            context["task_memory_policy"]["memory_space_id"],
+            json!(expected_memory_space_id)
+        );
+        assert_eq!(
+            context["task_memory_space_id"],
+            context["task_memory_policy"]["memory_space_id"]
+        );
+        assert_eq!(context["safety"]["user_cli_flags_allowed"], json!(false));
+        assert_eq!(context["safety"]["secrets_in_prompt_allowed"], json!(false));
+        assert_eq!(context["safety"]["raw_logs_require_redaction"], json!(true));
+        assert_eq!(
+            context["safety"]["real_codex_exec_requires_host_allowlist"],
+            json!(true)
+        );
     }
 
     #[test]

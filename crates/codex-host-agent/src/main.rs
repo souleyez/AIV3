@@ -5,12 +5,15 @@ use codex_host_agent::{
     CodexHostTaskContext, CodexProcessOutput,
 };
 use domain_model::{AssistantRunId, WorkflowKind};
-use event_bus::{workflow_task_enqueued_subject, EventBus, EventSubscription};
-use serde_json::json;
+use event_bus::{
+    workflow_execution_transition_subject, workflow_task_enqueued_subject, EventBus, EventEnvelope,
+    EventSubscription,
+};
+use serde_json::{json, Map, Value};
 use std::process::Command;
-use storage::{NewAssistantRunEvent, PgStorage, DEFAULT_LOCAL_DATABASE_URL};
+use storage::{NewAssistantRunEvent, NewWorkflowTask, PgStorage, DEFAULT_LOCAL_DATABASE_URL};
 use tokio::time::Duration;
-use workflow_engine::{WorkflowCatalog, WorkflowSignal};
+use workflow_engine::{WorkflowCatalog, WorkflowRuntimeState, WorkflowSignal};
 
 const DEFAULT_QUEUE: &str = "codex_host";
 const DEFAULT_TASK_KEY: &str = "run_codex_host_task";
@@ -119,7 +122,7 @@ async fn process_task(
                 run_codex_exec(command_plan, &task_context)?
             }
         };
-        platform_api::apply_workflow_signal_with_dependencies(
+        apply_workflow_signal_with_dependencies(
             storage,
             workflow_catalog,
             event_bus,
@@ -149,7 +152,7 @@ async fn process_task(
 
     if let Err(error) = process_result {
         let error_message = error.to_string();
-        if let Err(signal_error) = platform_api::apply_workflow_signal_with_dependencies(
+        if let Err(signal_error) = apply_workflow_signal_with_dependencies(
             storage,
             workflow_catalog,
             event_bus,
@@ -242,7 +245,179 @@ fn run_codex_exec(
         "task_chars": task_context.task.as_ref().map(|task| task.chars().count()).unwrap_or(0),
         "local_thread_id": task_context.local_thread_id,
         "task_memory_isolated": task_context.task_memory_isolated,
+        "task_memory_space_id": task_context.task_memory_space_id,
     }))
+}
+
+async fn apply_workflow_signal_with_dependencies(
+    storage: &PgStorage,
+    workflow_catalog: &WorkflowCatalog,
+    event_bus: &EventBus,
+    tenant_id: domain_model::TenantId,
+    execution_id: domain_model::WorkflowExecutionId,
+    signal: WorkflowSignal,
+) -> Result<()> {
+    let execution = storage
+        .workflow_executions()
+        .get_by_id(tenant_id, execution_id)
+        .await?
+        .ok_or_else(|| anyhow!("workflow execution {} not found", execution_id))?;
+    let definition = workflow_catalog
+        .find_definition(execution.kind.clone())
+        .ok_or_else(|| {
+            anyhow!(
+                "workflow definition {} is not registered",
+                execution.kind.as_str()
+            )
+        })?;
+    let now = Utc::now();
+    let runtime_state = workflow_runtime_state_from_execution(&execution)?;
+    let transition = definition.transition(&runtime_state, signal, now)?;
+    let workflow_engine::WorkflowTransition {
+        next_state,
+        persisted_event,
+        enqueued_tasks,
+    } = transition;
+    let next_execution = workflow_execution_from_transition(&execution, next_state);
+    let pending_tasks = enqueued_tasks
+        .into_iter()
+        .map(|task| NewWorkflowTask {
+            queue: task.queue,
+            task_key: task.task_key,
+            payload: task.payload,
+            available_at: persisted_event.occurred_at,
+            max_attempts: 3,
+        })
+        .collect::<Vec<_>>();
+    let (persisted_event, persisted_tasks) = storage
+        .workflow_executions()
+        .advance_with_tasks(
+            &next_execution,
+            &persisted_event.name,
+            &persisted_event.detail,
+            persisted_event.occurred_at,
+            &pending_tasks,
+        )
+        .await?;
+    publish_workflow_transition_events(
+        event_bus,
+        &next_execution,
+        &persisted_event,
+        &persisted_tasks,
+    )
+    .await;
+    Ok(())
+}
+
+fn workflow_runtime_state_from_execution(
+    execution: &domain_model::WorkflowExecution,
+) -> Result<WorkflowRuntimeState> {
+    let mut context = extract_context_object(&execution.context)?;
+    let retries_remaining = context
+        .remove("retries_remaining")
+        .and_then(|value| value.as_u64())
+        .unwrap_or(3) as u32;
+
+    Ok(WorkflowRuntimeState {
+        execution_id: execution.id,
+        kind: execution.kind.clone(),
+        version: execution.version.clone(),
+        stage: execution.stage.clone(),
+        status: execution.status.clone(),
+        retries_remaining,
+        context,
+        updated_at: execution.updated_at,
+    })
+}
+
+fn workflow_execution_from_transition(
+    previous: &domain_model::WorkflowExecution,
+    next_state: WorkflowRuntimeState,
+) -> domain_model::WorkflowExecution {
+    let next_attempt = if previous.status == domain_model::WorkflowStatus::Pending
+        && next_state.status == domain_model::WorkflowStatus::Running
+    {
+        previous.attempt + 1
+    } else {
+        previous.attempt
+    };
+    let WorkflowRuntimeState {
+        kind,
+        version,
+        stage,
+        status,
+        retries_remaining,
+        mut context,
+        updated_at,
+        ..
+    } = next_state;
+    context.insert(
+        "retries_remaining".to_string(),
+        Value::Number(retries_remaining.into()),
+    );
+    domain_model::WorkflowExecution {
+        id: previous.id,
+        tenant_id: previous.tenant_id,
+        dataset_id: previous.dataset_id,
+        report_plan_id: previous.report_plan_id,
+        kind,
+        version,
+        stage,
+        status,
+        attempt: next_attempt,
+        context: Value::Object(context),
+        created_at: previous.created_at,
+        updated_at,
+    }
+}
+
+fn extract_context_object(value: &Value) -> Result<Map<String, Value>> {
+    match value {
+        Value::Object(map) => Ok(map.clone()),
+        Value::Null => Ok(Map::new()),
+        _ => Err(anyhow!("workflow execution context must be a JSON object")),
+    }
+}
+
+async fn publish_workflow_transition_events(
+    event_bus: &EventBus,
+    execution: &domain_model::WorkflowExecution,
+    persisted_event: &domain_model::WorkflowEventRecord,
+    persisted_tasks: &[domain_model::WorkflowTask],
+) {
+    event_bus
+        .publish(EventEnvelope {
+            subject: workflow_execution_transition_subject(execution.kind.as_str()),
+            payload: json!({
+                "execution_id": execution.id,
+                "tenant_id": execution.tenant_id,
+                "kind": execution.kind.as_str(),
+                "status": execution.status.as_str(),
+                "stage": execution.stage,
+                "event_name": persisted_event.event_name,
+                "event_sequence_no": persisted_event.sequence_no,
+            }),
+            published_at: persisted_event.created_at,
+        })
+        .await;
+
+    for task in persisted_tasks {
+        event_bus
+            .publish(EventEnvelope {
+                subject: workflow_task_enqueued_subject(&task.queue, &task.task_key),
+                payload: json!({
+                    "task_id": task.id,
+                    "tenant_id": task.tenant_id,
+                    "execution_id": task.execution_id,
+                    "queue": task.queue,
+                    "task_key": task.task_key,
+                    "status": task.status.as_str(),
+                    "available_at": task.available_at,
+                }),
+                published_at: task.created_at,
+            })
+            .await;
+    }
 }
 
 async fn wait_for_next_task_signal(task_waker: &mut EventSubscription, poll_interval_ms: u64) {

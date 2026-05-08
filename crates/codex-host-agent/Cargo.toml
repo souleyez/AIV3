@@ -8,10 +8,10 @@ authors.workspace = true
 [dependencies]
 anyhow.workspace = true
 chrono.workspace = true
+contracts = { path = "../contracts" }
 domain-model = { path = "../domain-model" }
 event-bus = { path = "../event-bus" }
 observability = { path = "../observability" }
-platform-api = { path = "../platform-api" }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 storage = { path = "../storage" }

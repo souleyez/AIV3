@@ -1,4 +1,8 @@
 use anyhow::{anyhow, Result};
+use contracts::{
+    CodexHostCommandPlanSummaryView, CodexHostProcessOutputSummaryView, CodexHostTaskOutputView,
+    CodexHostTaskProfileSummaryView,
+};
 use domain_model::{AssistantRunId, WorkflowExecution, WorkflowKind};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -18,6 +22,7 @@ pub struct CodexHostTaskContext {
     pub task: Option<String>,
     pub local_thread_id: Option<String>,
     pub task_memory_isolated: bool,
+    pub task_memory_space_id: Option<String>,
 }
 
 impl CodexHostTaskContext {
@@ -48,6 +53,17 @@ impl CodexHostTaskContext {
             .and_then(|policy| policy.get("isolated"))
             .and_then(Value::as_bool)
             .unwrap_or(false);
+        let task_memory_space_id = context_string(&execution.context, "task_memory_space_id")?
+            .or_else(|| {
+                execution
+                    .context
+                    .get("task_memory_policy")
+                    .and_then(|policy| policy.get("memory_space_id"))
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_string)
+            });
 
         Ok(Self {
             assistant_run_id,
@@ -55,34 +71,52 @@ impl CodexHostTaskContext {
             task,
             local_thread_id,
             task_memory_isolated,
+            task_memory_space_id,
         })
     }
 
     pub fn dry_run_output(&self) -> Value {
-        json!({
-            "mode": "dry_run",
-            "codex_invoked": false,
-            "status": "completed",
-            "assistant_run_id": self.assistant_run_id.to_string(),
-            "capability": self.capability,
-            "task_chars": self.task.as_ref().map(|task| task.chars().count()).unwrap_or(0),
-            "local_thread_id": self.local_thread_id,
-            "task_memory_isolated": self.task_memory_isolated,
+        json!(CodexHostTaskOutputView {
+            mode: "dry_run".to_string(),
+            codex_invoked: false,
+            status: "completed".to_string(),
+            assistant_run_id: self.assistant_run_id.to_string(),
+            capability: self.capability.clone(),
+            profile: None,
+            command_plan: None,
+            process: None,
+            task_chars: self
+                .task
+                .as_ref()
+                .map(|task| task.chars().count())
+                .unwrap_or(0),
+            local_thread_id: self.local_thread_id.clone(),
+            task_memory_isolated: self.task_memory_isolated,
+            task_memory_space_id: self.task_memory_space_id.clone(),
         })
     }
 
     pub fn planned_output(&self, decision: &CodexHostExecutionDecision) -> Value {
-        json!({
-            "mode": decision.mode.as_str(),
-            "codex_invoked": false,
-            "status": "planned",
-            "assistant_run_id": self.assistant_run_id.to_string(),
-            "capability": self.capability,
-            "profile": decision.profile.safe_summary(),
-            "command_plan": decision.command_plan.as_ref().map(CodexCommandPlan::safe_summary),
-            "task_chars": self.task.as_ref().map(|task| task.chars().count()).unwrap_or(0),
-            "local_thread_id": self.local_thread_id,
-            "task_memory_isolated": self.task_memory_isolated,
+        json!(CodexHostTaskOutputView {
+            mode: decision.mode.as_str().to_string(),
+            codex_invoked: false,
+            status: "planned".to_string(),
+            assistant_run_id: self.assistant_run_id.to_string(),
+            capability: self.capability.clone(),
+            profile: Some(decision.profile.safe_summary()),
+            command_plan: decision
+                .command_plan
+                .as_ref()
+                .map(CodexCommandPlan::safe_summary),
+            process: None,
+            task_chars: self
+                .task
+                .as_ref()
+                .map(|task| task.chars().count())
+                .unwrap_or(0),
+            local_thread_id: self.local_thread_id.clone(),
+            task_memory_isolated: self.task_memory_isolated,
+            task_memory_space_id: self.task_memory_space_id.clone(),
         })
     }
 }
@@ -137,17 +171,17 @@ impl CodexHostProfile {
             .any(|allowed| allowed == capability)
     }
 
-    pub fn safe_summary(&self) -> Value {
-        json!({
-            "id": self.id,
-            "kind": self.kind,
-            "model": self.model,
-            "provider_id": self.provider_id,
-            "base_url_configured": self.base_url.is_some(),
-            "env_key": self.env_key,
-            "wire_api": self.wire_api,
-            "allowed_capabilities": self.allowed_capabilities,
-        })
+    pub fn safe_summary(&self) -> CodexHostTaskProfileSummaryView {
+        CodexHostTaskProfileSummaryView {
+            id: self.id.clone(),
+            kind: self.kind.clone(),
+            model: self.model.clone(),
+            provider_id: self.provider_id.clone(),
+            base_url_configured: self.base_url.is_some(),
+            env_key: self.env_key.clone(),
+            wire_api: self.wire_api.clone(),
+            allowed_capabilities: self.allowed_capabilities.clone(),
+        }
     }
 }
 
@@ -166,14 +200,14 @@ impl CodexCommandPlan {
         args
     }
 
-    pub fn safe_summary(&self) -> Value {
-        json!({
-            "program": self.program,
-            "args_without_prompt": self.args_without_prompt,
-            "prompt_chars": self.prompt.chars().count(),
-            "sandbox": self.sandbox,
-            "prompt_redacted": true,
-        })
+    pub fn safe_summary(&self) -> CodexHostCommandPlanSummaryView {
+        CodexHostCommandPlanSummaryView {
+            program: self.program.clone(),
+            args_without_prompt: self.args_without_prompt.clone(),
+            prompt_chars: self.prompt.chars().count(),
+            sandbox: self.sandbox.clone(),
+            prompt_redacted: true,
+        }
     }
 }
 
@@ -185,12 +219,12 @@ pub struct CodexProcessOutput {
 }
 
 impl CodexProcessOutput {
-    pub fn safe_summary(&self) -> Value {
-        json!({
-            "exit_code": self.exit_code,
-            "stdout_excerpt": self.stdout_excerpt,
-            "stderr_excerpt": self.stderr_excerpt,
-        })
+    pub fn safe_summary(&self) -> CodexHostProcessOutputSummaryView {
+        CodexHostProcessOutputSummaryView {
+            exit_code: self.exit_code,
+            stdout_excerpt: self.stdout_excerpt.clone(),
+            stderr_excerpt: self.stderr_excerpt.clone(),
+        }
     }
 }
 
@@ -493,7 +527,12 @@ mod tests {
                 "capability": "inspect_project",
                 "task": "Summarize repository shape",
                 "local_thread_id": "thread-a",
-                "task_memory_policy": {"kind": "task", "isolated": true}
+                "task_memory_policy": {
+                    "kind": "task",
+                    "isolated": true,
+                    "memory_space_id": "codex-host-task:run-a"
+                },
+                "task_memory_space_id": "codex-host-task:run-a"
             }),
             created_at: Utc::now(),
             updated_at: Utc::now(),
@@ -504,7 +543,15 @@ mod tests {
         assert_eq!(context.capability, "inspect_project");
         assert_eq!(context.task.as_deref(), Some("Summarize repository shape"));
         assert!(context.task_memory_isolated);
+        assert_eq!(
+            context.task_memory_space_id.as_deref(),
+            Some("codex-host-task:run-a")
+        );
         assert_eq!(context.dry_run_output()["codex_invoked"], json!(false));
+        assert_eq!(
+            context.dry_run_output()["task_memory_space_id"],
+            json!("codex-host-task:run-a")
+        );
     }
 
     #[test]
@@ -555,10 +602,10 @@ mod tests {
         let plan = decision.command_plan.expect("command plan");
         let summary = plan.safe_summary();
 
-        assert_eq!(summary["program"], json!("codex"));
-        assert_eq!(summary["sandbox"], json!("read-only"));
-        assert_eq!(summary["prompt_redacted"], json!(true));
-        assert!(!summary.to_string().contains("Read the repo"));
+        assert_eq!(summary.program, "codex");
+        assert_eq!(summary.sandbox, "read-only");
+        assert!(summary.prompt_redacted);
+        assert_eq!(summary.prompt_chars, "Read the repo and summarize it".len());
         assert_eq!(plan.args_without_prompt.last().unwrap(), "gpt-5.3-codex");
         assert!(plan.args_without_prompt.contains(&"-a".to_string()));
         assert!(plan
@@ -698,6 +745,7 @@ mod tests {
             task: task.map(ToOwned::to_owned),
             local_thread_id: Some("thread-a".to_string()),
             task_memory_isolated: true,
+            task_memory_space_id: Some("codex-host-task:test".to_string()),
         }
     }
 }
