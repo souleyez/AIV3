@@ -1,12 +1,14 @@
 # AI Data Platform V3 Consolidated Development Handoff Plan
 
+> **2026-05-07 master-plan note:** Use `docs/plans/2026-05-07-v3-master-development-plan.md` as the active master plan. This file is now a historical consolidated handoff and detailed status reference.
+
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** Consolidate the V3 assistant, static-page generation, document/media parsing, report outputs, separated memory, Codex Host execution-kernel direction, and optional OpenClaw extension into one execution plan that a fresh development thread can continue from without re-reading the whole project history.
 
 **Architecture:** V3 remains a host-controlled data platform: PostgreSQL is the source of truth, the assistant supplies model context rather than composing answers locally, and all data visibility, AssistantRun state, memory-space policy, draft state, queue state, and output artifacts are owned by V3. Static-page generation remains the core product loop. Codex Mac Host is now the preferred execution-kernel direction behind V3 validation and audit. OpenClaw has completed its first optional provider/stub pass and stays as a removable sidecar, not the main execution route.
 
-**Tech Stack:** Next.js 16 / React 19 in `apps/web`; Rust crates including `platform-api`, `llm-gateway`, `static-page-runtime`, `static-page-worker`, `static-page-renderer`, `ingest-worker`, `retrieval-worker`, `memory-worker`, `document-vlm-runtime`; PostgreSQL 17.9 target; Cloudflare/Codex image queue endpoint; optional OpenClaw Gateway `/v1/responses` and `/v1/chat/completions`; local-first parsers plus configured MiniMax VLM/media capability probes.
+**Tech Stack:** Next.js 16 / React 19 in `apps/web`; `react-grid-layout` plus `@dnd-kit` for static-page module layout/reordering; Apache ECharts as the planned advanced chart runtime while deterministic HTML/SVG rendering remains the export-safe fallback; Rust crates including `platform-api`, `llm-gateway`, `static-page-runtime`, `static-page-worker`, `static-page-renderer`, `ingest-worker`, `retrieval-worker`, `memory-worker`, `document-vlm-runtime`; PostgreSQL 17.9 target; Cloudflare/Codex image queue endpoint; optional OpenClaw Gateway `/v1/responses` and `/v1/chat/completions`; local-first parsers plus configured MiniMax VLM/media capability probes.
 
 ---
 
@@ -64,6 +66,7 @@ Recent verified capabilities:
 - Static-page image worker can call the Cloudflare/Codex queue, poll artifact status, normalize artifact URLs, and record failures.
 - Static-page renderer is layout-aware and can render core module types into HTML/SVG with design contract data.
 - Frontend supports static-page draft planning, image preview display, final render display, durable right shelf, and per-module micro-adjustment editors.
+- Java 8 static-page parity audit completed: the Java/Vue refactor used `gridstack` for draggable/resizable module layout and `echarts` for chart rendering. V3 intentionally keeps `react-grid-layout` instead of reintroducing GridStack, because the React layout data already matches `StaticPageDraft.modules[].layout`. ECharts is not yet wired in V3 and is now tracked as the advanced chart runtime for complex dashboards, with the existing renderer kept as deterministic export fallback.
 
 ## Locked Product Decisions
 
@@ -545,6 +548,14 @@ Static-page data snapshots now also prefer user/model-edited module data before 
 - `wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo fmt --all --check"`
 - `wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo test -p platform-api static_page_data_snapshot"`
 - `wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo test -p static-page-renderer"`
+
+**Java 8 parity follow-up 2026-05-07:**
+
+- The Java/Vue refactor used Apache ECharts for static-page charts. V3 has not ported that chart runtime yet.
+- Keep current Rust HTML/SVG rendering for core chart/export determinism, but add ECharts as the explicit advanced runtime when a module needs complex dashboard charts, richer composition, large datasets, or Java 8 visual parity.
+- Runtime selection should be module-level, for example basic charts use the deterministic renderer while modules with `visualization.runtime = "echarts"` or advanced `chartOptions` use the ECharts adapter.
+- ECharts output must degrade cleanly to static HTML/SVG/manifest data for final export and must not invent data when snapshots are missing.
+- Add regression coverage for runtime selection, module data snapshot handoff, no-fake-data fallback, and final-render manifest compatibility before treating ECharts as customer-ready.
 
 ### Slice 6: Final Render Worker And Export Package
 

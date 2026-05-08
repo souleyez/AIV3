@@ -2,13 +2,13 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**2026-04-29 consolidation note:** Use `docs/plans/2026-04-29-v3-consolidated-development-handoff-plan.md` as the active next-thread execution entry. This document remains the detailed source record for static-page, assistant shell, parsing, visibility, AssistantRun, and renderer decisions.
+**2026-05-07 master-plan note:** Use `docs/plans/2026-05-07-v3-master-development-plan.md` as the active next-thread execution entry. This document remains the detailed source record for static-page, assistant shell, parsing, visibility, AssistantRun, and renderer decisions.
 
 **Goal:** Build static page generation, report creation, and knowledge-augmented chat inside the V3 intelligent assistant, matching the original assistant UI 1:1 on desktop and mobile, while allowing users to drive planning, layout, data binding, style choice, image preview, final page generation, and report outputs mainly through natural language.
 
 **Architecture:** The assistant is chat-first and dataset-enhanced. If no dataset is selected, chat behaves like normal model chat with a concise platform/database briefing. A lightweight scope planner can preselect relevant visible datasets and conversation memory as supply candidates, then the host retrieves evidence/detail and feeds the model without locally composing the final answer. Static page and report work is embedded in the same assistant page: the main chat area becomes the active report/static-page workspace, while the right panel always remains the finished-output and draft shelf. Draft state is schema-first, model-operated, and later persisted through V3 Rust APIs and queued image/static-page workers.
 
-**Tech Stack:** Next.js 16 / React 19 in `apps/web`, existing `/api/v3/*` proxy, Rust `platform-api`, `contracts`, `domain-model`, `storage`, PostgreSQL 17.9 as the target server version for fresh/production-like environments, future static-page runtime/worker/renderer crates, future media parse worker using authorization-free OSS tools plus configured MiniMax capability probes where verified, original MiniMax VLM document fallback for image/PDF/presentation visual parsing, `react-grid-layout` for desktop planning canvas, `@dnd-kit/core` and `@dnd-kit/sortable` for mobile vertical ordering, `@puckeditor/core` as a future component-render adapter, `recharts` for first static charts, optional Apache ECharts for advanced charts, Cloudflare/Codex image queue integration.
+**Tech Stack:** Next.js 16 / React 19 in `apps/web`, existing `/api/v3/*` proxy, Rust `platform-api`, `contracts`, `domain-model`, `storage`, PostgreSQL 17.9 as the target server version for fresh/production-like environments, future static-page runtime/worker/renderer crates, future media parse worker using authorization-free OSS tools plus configured MiniMax capability probes where verified, original MiniMax VLM document fallback for image/PDF/presentation visual parsing, `react-grid-layout` for desktop planning canvas, `@dnd-kit/core` and `@dnd-kit/sortable` for mobile vertical ordering, `@puckeditor/core` as a future component-render adapter, deterministic HTML/SVG renderer for export-safe first charts, Apache ECharts for advanced chart/runtime parity, Cloudflare/Codex image queue integration.
 
 ---
 
@@ -22,6 +22,7 @@ Finding:
 - Its timestamp was `2026-04-27 14:06:04`, after the first draft work.
 - The content was not the latest intended direction: it still said `Isolated Popup Studio Route`, `Hard-Coded Style Presets`, and `clean single-purpose generation studio`.
 - It did not include the latest decisions: original assistant UI 1:1, mobile parity, model-operated global editing, `react-grid-layout`, `dnd-kit`, Puck capability, commercial-risk notes, and replacing hard-coded styles with three business style directions.
+- Java 8 static-page parity was checked again on 2026-05-07: the Java/Vue refactor used `gridstack` for module layout and `echarts` for chart rendering. V3 should keep `react-grid-layout` as the React-native layout equivalent, but must add ECharts as an explicit advanced chart runtime instead of leaving it as a vague later option.
 
 Conclusion:
 
@@ -930,15 +931,17 @@ First version:
 
 Chart layer:
 
-- Use `recharts` for first version because it is React-native, SVG-based, and enough for KPI/bar/line/donut.
-- Add Apache ECharts later only for complex dashboards, rich interactions, large-data charts, or advanced composition.
+- Keep deterministic HTML/SVG rendering as the export-safe baseline for KPI/bar/line/donut/table/timeline modules.
+- Add Apache ECharts as the advanced runtime because the Java 8 refactor already used it and it covers complex dashboards, rich interactions, large-data charts, and advanced composition.
+- Choose chart runtime per module. Basic modules can stay on deterministic render output; advanced modules can declare `visualization.runtime = "echarts"` or carry sanitized ECharts-compatible `chartOptions`.
+- Final export must not depend on a live browser-only chart instance. ECharts modules need a static snapshot/fallback path in the render manifest before customer-facing final generation is considered complete.
 
 ## Open Source Capability Decisions
 
 Dependencies to add in the first implementation slice:
 
 ```powershell
-pnpm --filter @ai-data-platform-v3/web add react-grid-layout @dnd-kit/core @dnd-kit/sortable @puckeditor/core recharts
+pnpm --filter @ai-data-platform-v3/web add react-grid-layout @dnd-kit/core @dnd-kit/sortable @puckeditor/core echarts
 ```
 
 Commercial and license notes:
@@ -946,8 +949,8 @@ Commercial and license notes:
 - `react-grid-layout`: MIT license. Good direct fit because layout data is `{ x, y, w, h }`, matching `StaticPageDraft.modules[].layout`. No paid requirement for current use.
 - `@dnd-kit/core` and `@dnd-kit/sortable`: MIT license. Use for mobile vertical module reordering and accessible drag behavior. No paid requirement.
 - `@puckeditor/core`: MIT license. Use carefully as a future page-component config/render adapter. Do not depend on paid Puck AI or hosted services for first version.
-- `recharts`: MIT license. Good first chart layer. No paid requirement.
-- `echarts`: Apache-2.0 license. Optional later. No paid requirement, but configuration and bundle complexity are higher.
+- `echarts`: Apache-2.0 license. Required for advanced chart/runtime parity with the Java 8 refactor. No paid requirement, but configuration, bundle size, and server-side/static snapshot complexity are higher.
+- `recharts`: MIT license. Keep as an optional lightweight React chart candidate only if it remains useful; do not add it just because older plan text mentioned it if deterministic renderer plus ECharts covers the actual need.
 
 Media parsing commercial and license notes:
 
@@ -1384,12 +1387,13 @@ Puck positioning:
 **Steps:**
 
 1. Render a final static page mock from confirmed modules in the main workspace.
-2. Use `recharts` for first real chart rendering where data exists.
-3. Use placeholders only when data binding has no numeric data yet.
-4. Keep final render visually close to the selected style direction.
-5. Show clear status that backend renderer is not connected yet.
-6. Run `pnpm --filter @ai-data-platform-v3/web build`.
-7. Commit message: `feat(web): add static page final render mock`.
+2. Use the deterministic renderer for baseline chart output where data exists.
+3. Add the ECharts adapter for modules that request advanced chart runtime or Java 8 parity behavior.
+4. Use placeholders only when data binding has no numeric data yet.
+5. Keep final render visually close to the selected style direction.
+6. Show clear status that backend renderer is not connected yet.
+7. Run `pnpm --filter @ai-data-platform-v3/web build`.
+8. Commit message: `feat(web): add static page final render mock`.
 
 ### Superseded Backend Tasks 10-15
 
