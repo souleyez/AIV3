@@ -162,6 +162,27 @@ fn summarize_evidence_state(evidence_state: &Value) -> Value {
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
+    let detail_targets = evidence_state
+        .get("detail_targets")
+        .and_then(Value::as_array)
+        .map(|targets| {
+            targets
+                .iter()
+                .map(summarize_detail_target)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let recommended_actions = evidence_state
+        .get("recommended_actions")
+        .and_then(Value::as_array)
+        .map(|actions| {
+            actions
+                .iter()
+                .filter(|action| is_safe_scalar(action))
+                .cloned()
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
 
     json!({
         "status": evidence_state
@@ -169,8 +190,33 @@ fn summarize_evidence_state(evidence_state: &Value) -> Value {
             .and_then(Value::as_str)
             .unwrap_or("unknown"),
         "suppliedCount": supplied_items.len(),
+        "recommendedActions": recommended_actions,
+        "detailTargets": detail_targets,
         "items": supplied_items,
     })
+}
+
+fn summarize_detail_target(target: &Value) -> Value {
+    let mut summary = Map::new();
+    for key in [
+        "type",
+        "dataset_id",
+        "datasetId",
+        "document_id",
+        "documentId",
+        "retrieval_evidence_id",
+        "retrievalEvidenceId",
+        "chunk_index",
+        "chunkIndex",
+        "reason",
+        "has_media_context",
+        "hasMediaContext",
+        "has_timestamped_evidence",
+        "hasTimestampedEvidence",
+    ] {
+        copy_allowed_field(target, &mut summary, key);
+    }
+    Value::Object(summary)
 }
 
 fn summarize_media_context(item: &Value) -> Option<Value> {
@@ -398,6 +444,18 @@ mod tests {
             &json!({"mode": "selected", "selected": [{"type": "dataset", "id": "ds-1"}]}),
             &json!({
                 "status": "supplied",
+                "recommended_actions": ["retrieve_evidence", "read_document_detail"],
+                "detail_targets": [{
+                    "type": "document_detail_target",
+                    "dataset_id": "ds-1",
+                    "document_id": "doc-media",
+                    "retrieval_evidence_id": "ev-1",
+                    "chunk_index": 2,
+                    "source_locator": "00:12-00:28",
+                    "reason": "timestamped_media_detail_available",
+                    "has_media_context": true,
+                    "has_timestamped_evidence": true
+                }],
                 "supplied_items": [{
                     "type": "retrieval_evidence",
                     "dataset_id": "ds-1",
@@ -426,6 +484,22 @@ mod tests {
             }),
         );
 
+        assert_eq!(
+            catalog["evidenceState"]["recommendedActions"],
+            json!(["retrieve_evidence", "read_document_detail"])
+        );
+        assert_eq!(
+            catalog["evidenceState"]["detailTargets"][0]["document_id"],
+            json!("doc-media")
+        );
+        assert_eq!(
+            catalog["evidenceState"]["detailTargets"][0]["reason"],
+            json!("timestamped_media_detail_available")
+        );
+        assert_eq!(
+            catalog["evidenceState"]["detailTargets"][0]["has_timestamped_evidence"],
+            json!(true)
+        );
         let media = &catalog["evidenceState"]["items"][0]["media"];
         assert_eq!(media["media_kind"], json!("audio"));
         assert_eq!(media["parse_status"], json!("completed"));
@@ -439,5 +513,6 @@ mod tests {
         assert!(!serialized.contains("客户真实转写"));
         assert!(!serialized.contains("屏幕文字"));
         assert!(!serialized.contains("供应商细节"));
+        assert!(!serialized.contains("00:12-00:28"));
     }
 }

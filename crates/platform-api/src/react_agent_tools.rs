@@ -78,6 +78,7 @@ pub(crate) async fn execute_assistant_run_react_action(
             )
             .await?;
             let supplied_count = crate::assistant_run_evidence_supplied_count(&refreshed);
+            let detail_target_count = crate::assistant_run_detail_target_count(&refreshed);
             *evidence_state = refreshed.clone();
             Ok(AssistantRunReactToolResult {
                 observation: json!({
@@ -88,6 +89,7 @@ pub(crate) async fn execute_assistant_run_react_action(
                     "items": [],
                     "limits": {},
                     "supplied_count": supplied_count,
+                    "detail_target_count": detail_target_count,
                     "evidence_status": refreshed.get("status").and_then(Value::as_str).unwrap_or("unknown"),
                 }),
                 trail_step: json!({
@@ -95,6 +97,7 @@ pub(crate) async fn execute_assistant_run_react_action(
                     "label": "检索供料证据",
                     "react_action": action.action_type.as_str(),
                     "supplied_count": supplied_count,
+                    "detail_target_count": detail_target_count,
                     "at": Utc::now(),
                 }),
                 final_answer: None,

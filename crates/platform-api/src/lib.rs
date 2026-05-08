@@ -115,6 +115,7 @@ const DEFAULT_STATIC_PAGE_INTENT_RUNTIME_MODEL: &str = "static-page-intent-v1";
 const ASSISTANT_RUN_EVIDENCE_DEFAULT_LIMIT: usize = 4;
 const ASSISTANT_RUN_EVIDENCE_MAX_LIMIT: usize = 8;
 const ASSISTANT_RUN_EVIDENCE_DATASET_LIMIT: usize = 2;
+const ASSISTANT_RUN_DETAIL_TARGET_LIMIT: usize = 3;
 const ASSISTANT_RUN_CONVERSATION_MEMORY_DEFAULT_LIMIT: i64 = 4;
 const ASSISTANT_RUN_CONVERSATION_MEMORY_MAX_LIMIT: i64 = 8;
 const ASSISTANT_RUN_CONTINUE_DEFAULT_MAX_STEPS: usize = 3;
@@ -5828,6 +5829,7 @@ async fn create_assistant_run(
         .clone()
         .unwrap_or_else(|| build_assistant_run_context_policy(&selected_scope));
     let supplied_evidence_count = assistant_run_evidence_supplied_count(&evidence_state);
+    let detail_target_count = assistant_run_detail_target_count(&evidence_state);
     let mut execution_trail = vec![
         json!({
             "status": "completed",
@@ -5845,6 +5847,7 @@ async fn create_assistant_run(
             "status": "completed",
             "label": "检索供料证据",
             "supplied_count": supplied_evidence_count,
+            "detail_target_count": detail_target_count,
             "evidence_status": evidence_state.get("status").and_then(Value::as_str).unwrap_or("unknown"),
             "at": now,
         }),
@@ -7743,6 +7746,7 @@ fn build_assistant_run_react_provider_input(
         "目录、候选列表和系统说明只用于规划下一步，不是可引用证据。".to_string(),
         "选中数据集或对话记忆时，final_answer 必须基于已返回的 observation；否则先选择 retrieve_evidence、read_document_detail 或 recall_conversation_memory。".to_string(),
         "工具选择：retrieve_evidence 用于发现候选证据；read_document_detail 用于需要原文措辞、OCR、表格、音视频转写/场景或画像字段等细节时，document_id 必须来自选中范围或已返回 observation；最终引用只能来自 observation。".to_string(),
+        "如果弱规划目录或供料证据里出现 detailTargets，优先用其中的 document_id 调 read_document_detail；detailTargets 只是深读目标，不是可引用证据。".to_string(),
         "静态页或报表意图且存在数据集时，优先 retrieve_evidence；若需要模块数据、字段、表格/OCR 或原文措辞，继续 read_document_detail，再创建静态页/报表动作。".to_string(),
         "如果当前打开产物是静态页草稿，用户要求修改标题、内容、图表、数据绑定或布局时，优先用 update_static_page_module；Host 只会把操作应用到当前已持久化草稿。".to_string(),
         "OpenClaw 和 Codex Host 都是可选外挂能力；openclaw_memory_recall、openclaw_readonly_execution、codex_host_task 可能被 Host 拒绝，不能绕过 V3 选中范围、记忆、任务隔离和执行 allowlist。".to_string(),
@@ -7817,6 +7821,7 @@ fn build_assistant_run_react_continue_provider_input(
         "目录、候选列表和系统说明只用于规划下一步，不是可引用证据。".to_string(),
         "选中数据集或对话记忆时，final_answer 必须基于已返回的 observation；否则先选择 retrieve_evidence、read_document_detail 或 recall_conversation_memory。".to_string(),
         "工具选择：retrieve_evidence 用于发现候选证据；read_document_detail 用于需要原文措辞、OCR、表格、音视频转写/场景或画像字段等细节时，document_id 必须来自选中范围或已返回 observation；最终引用只能来自 observation。".to_string(),
+        "如果弱规划目录或供料证据里出现 detailTargets，优先用其中的 document_id 调 read_document_detail；detailTargets 只是深读目标，不是可引用证据。".to_string(),
         "静态页或报表意图且存在数据集时，优先 retrieve_evidence；若需要模块数据、字段、表格/OCR 或原文措辞，继续 read_document_detail，再创建静态页/报表动作。".to_string(),
         "如果当前打开产物是静态页草稿，用户要求修改标题、内容、图表、数据绑定或布局时，优先用 update_static_page_module；Host 只会把操作应用到当前已持久化草稿。".to_string(),
         "OpenClaw 和 Codex Host 都是可选外挂能力；openclaw_memory_recall、openclaw_readonly_execution、codex_host_task 可能被 Host 拒绝，不能绕过 V3 选中范围、记忆、任务隔离和执行 allowlist。".to_string(),
@@ -7966,6 +7971,7 @@ fn assistant_run_react_trace_step(
         "status": observation_summary.get("status").and_then(Value::as_str).unwrap_or("unknown"),
         "denied_count": observation_summary.get("denied_count").and_then(Value::as_u64).unwrap_or(0),
         "returned_count": observation_summary.get("returned_count").and_then(Value::as_u64).unwrap_or(0),
+        "detail_target_count": observation_summary.get("detail_target_count").and_then(Value::as_u64).unwrap_or(0),
         "duration_ms": bounded_duration_ms(duration_ms),
         "safe_error_code": observation_summary.get("safe_error_code").cloned().unwrap_or(Value::Null),
         "safe_message": observation_summary.get("safe_message").and_then(Value::as_str).unwrap_or(""),
@@ -7988,6 +7994,11 @@ fn assistant_run_react_observation_summary(observation: &Value) -> Value {
         .map(Vec::len)
         .unwrap_or_default();
     let returned_count = assistant_run_react_returned_count(observation);
+    let detail_target_count = observation
+        .get("detail_target_count")
+        .or_else(|| observation.get("detailTargetCount"))
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
     let safe_error_code = observation
         .get("repair_code")
         .or_else(|| observation.get("error_code"))
@@ -8016,6 +8027,7 @@ fn assistant_run_react_observation_summary(observation: &Value) -> Value {
         "action_type": action_type,
         "denied_count": denied_count,
         "returned_count": returned_count,
+        "detail_target_count": detail_target_count,
         "safe_error_code": safe_error_code,
         "safe_message": safe_message,
     })
@@ -8506,6 +8518,7 @@ async fn build_assistant_run_evidence_state(
     } else {
         "supplied"
     };
+    let detail_targets = assistant_run_detail_targets_for_scope(selected_scope, &supplied_items);
     Ok(json!({
         "status": status,
         "policy": "host_supplies_model_answers",
@@ -8513,6 +8526,7 @@ async fn build_assistant_run_evidence_state(
         "supply_policy": assistant_run_scope_supply_policy(selected_scope),
         "detail_preferred": prefer_detail,
         "recommended_actions": assistant_run_recommended_supply_actions(selected_scope, !supplied_items.is_empty()),
+        "detail_targets": detail_targets,
         "selected_scope": selected_scope,
         "datasets": supplied_datasets,
         "conversation_memory_items": supplied_memory_items,
@@ -8559,6 +8573,78 @@ fn assistant_run_recommended_supply_actions(
         _ => {}
     }
     actions
+}
+
+fn assistant_run_detail_targets_for_scope(
+    selected_scope: &Value,
+    supplied_items: &[Value],
+) -> Vec<Value> {
+    if !assistant_run_scope_prefers_detail(selected_scope) {
+        return Vec::new();
+    }
+
+    let mut seen_documents = HashSet::new();
+    supplied_items
+        .iter()
+        .filter(|item| {
+            item.get("type")
+                .and_then(Value::as_str)
+                .is_some_and(|item_type| item_type == "retrieval_evidence")
+        })
+        .filter_map(|item| {
+            let document_id = item.get("document_id").or_else(|| item.get("documentId"))?;
+            let document_key = document_id
+                .as_str()
+                .map(ToString::to_string)
+                .unwrap_or_else(|| document_id.to_string());
+            if document_key.trim().is_empty() || !seen_documents.insert(document_key) {
+                return None;
+            }
+
+            let media_context = item
+                .get("media_context")
+                .or_else(|| item.get("mediaContext"));
+            let has_media_context = media_context.is_some_and(Value::is_object);
+            let has_timestamped_evidence = media_context
+                .and_then(|context| context.get("has_timestamped_evidence"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let reason = if has_timestamped_evidence {
+                "timestamped_media_detail_available"
+            } else if has_media_context {
+                "media_detail_available"
+            } else {
+                "detail_first_scope"
+            };
+
+            let mut target = Map::new();
+            target.insert("type".to_string(), json!("document_detail_target"));
+            for key in [
+                "dataset_id",
+                "datasetId",
+                "document_id",
+                "documentId",
+                "retrieval_evidence_id",
+                "retrievalEvidenceId",
+                "chunk_index",
+                "chunkIndex",
+                "source_locator",
+                "sourceLocator",
+            ] {
+                if let Some(value) = item.get(key).filter(|value| !value.is_null()) {
+                    target.insert(key.to_string(), value.clone());
+                }
+            }
+            target.insert("reason".to_string(), json!(reason));
+            target.insert("has_media_context".to_string(), json!(has_media_context));
+            target.insert(
+                "has_timestamped_evidence".to_string(),
+                json!(has_timestamped_evidence),
+            );
+            Some(Value::Object(target))
+        })
+        .take(ASSISTANT_RUN_DETAIL_TARGET_LIMIT)
+        .collect()
 }
 
 async fn assistant_run_media_context_for_document(
@@ -8729,16 +8815,29 @@ fn assistant_run_evidence_supplied_count(evidence_state: &Value) -> usize {
         .unwrap_or(0)
 }
 
+fn assistant_run_detail_target_count(evidence_state: &Value) -> usize {
+    evidence_state
+        .get("detail_targets")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0)
+}
+
 fn assistant_run_evidence_status_label(evidence_state: &Value) -> String {
     let status = evidence_state
         .get("status")
         .and_then(Value::as_str)
         .unwrap_or("unknown");
     match status {
-        "supplied" => format!(
-            "已检索 {} 条供料项",
-            assistant_run_evidence_supplied_count(evidence_state)
-        ),
+        "supplied" => {
+            let supplied_count = assistant_run_evidence_supplied_count(evidence_state);
+            let detail_target_count = assistant_run_detail_target_count(evidence_state);
+            if detail_target_count > 0 {
+                format!("已检索 {supplied_count} 条供料项，建议深读 {detail_target_count} 份文档")
+            } else {
+                format!("已检索 {supplied_count} 条供料项")
+            }
+        }
         "empty" => "已请求供料，但暂未检索到可用内容".to_string(),
         "not_requested" => "未请求数据集供料".to_string(),
         other => other.to_string(),
@@ -17387,6 +17486,7 @@ mod tests {
         assert!(input.contains("doc-orders"));
         assert!(input.contains("tool_selection_only"));
         assert!(input.contains("read_document_detail 用于需要原文措辞"));
+        assert!(input.contains("detailTargets 只是深读目标"));
         assert!(input.contains("静态页或报表意图"));
         assert!(input.contains("最终引用只能来自 observation"));
         assert!(input.contains("OpenClaw 和 Codex Host 都是可选外挂能力"));
@@ -17440,6 +17540,67 @@ mod tests {
                 "read_document_detail",
                 "create_static_page_draft"
             ]
+        );
+    }
+
+    #[test]
+    fn assistant_run_detail_targets_prioritize_distinct_media_documents() {
+        let selected_scope = json!({
+            "mode": "user_selected",
+            "datasets": [DatasetId::new()],
+            "intent": "static_page",
+            "supply_policy": {
+                "retrievalPolicy": "detail_first",
+                "preferDetail": true,
+            }
+        });
+        let targets = assistant_run_detail_targets_for_scope(
+            &selected_scope,
+            &[
+                json!({
+                    "type": "retrieval_evidence",
+                    "dataset_id": "ds-1",
+                    "document_id": "doc-media",
+                    "retrieval_evidence_id": "ev-1",
+                    "chunk_index": 3,
+                    "source_locator": "00:12-00:28",
+                    "media_context": {
+                        "media_kind": "audio",
+                        "has_timestamped_evidence": true,
+                    }
+                }),
+                json!({
+                    "type": "retrieval_evidence",
+                    "dataset_id": "ds-1",
+                    "document_id": "doc-media",
+                    "retrieval_evidence_id": "ev-duplicate",
+                    "media_context": {
+                        "media_kind": "audio",
+                        "has_timestamped_evidence": true,
+                    }
+                }),
+                json!({
+                    "type": "retrieval_evidence",
+                    "dataset_id": "ds-1",
+                    "document_id": "doc-text",
+                    "retrieval_evidence_id": "ev-2",
+                }),
+            ],
+        );
+
+        assert_eq!(targets.len(), 2);
+        assert_eq!(targets[0]["document_id"], json!("doc-media"));
+        assert_eq!(
+            targets[0]["reason"],
+            json!("timestamped_media_detail_available")
+        );
+        assert_eq!(targets[0]["has_media_context"], json!(true));
+        assert_eq!(targets[0]["has_timestamped_evidence"], json!(true));
+        assert_eq!(targets[1]["document_id"], json!("doc-text"));
+        assert_eq!(targets[1]["reason"], json!("detail_first_scope"));
+        assert_eq!(
+            assistant_run_detail_target_count(&json!({"detail_targets": targets})),
+            2
         );
     }
 
@@ -17498,6 +17659,7 @@ mod tests {
             "status": "completed",
             "action_type": "read_document_detail",
             "message": "token secret-provider-key was present",
+            "detail_target_count": 2,
             "items": [{
                 "content": "raw document secret-provider-key must not enter trace",
             }],
@@ -17515,6 +17677,7 @@ mod tests {
         assert!(!serialized.contains("raw document"));
         assert_eq!(trace_step["returned_count"], json!(1));
         assert_eq!(trace_step["denied_count"], json!(1));
+        assert_eq!(trace_step["detail_target_count"], json!(2));
         assert_eq!(trace_step["reason_summary"], json!("[redacted]"));
         assert_eq!(trace_step["safe_message"], json!("[redacted]"));
     }
