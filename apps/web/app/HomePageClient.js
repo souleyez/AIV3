@@ -43,6 +43,7 @@ const CATALOG_POLL_INTERVAL_MS = 12000;
 const REPORT_DETAIL_POLL_INTERVAL_MS = 6000;
 const STATIC_PAGE_SHELF_POLL_INTERVAL_MS = 12000;
 const STATIC_PAGE_ACTIVE_JOB_POLL_INTERVAL_MS = 4000;
+const STATIC_PAGE_ACTIVE_RENDER_POLL_INTERVAL_MS = 4000;
 const LOCAL_CHAT_STORAGE_KEY = 'aidp-v3-local-chat-messages';
 const LOCAL_ACTIVITY_STORAGE_KEY = 'aidp-v3-local-activity-events';
 const LOCAL_THREAD_ID_STORAGE_KEY = 'aidp-v3-local-thread-id';
@@ -2466,6 +2467,21 @@ export default function HomePageClient() {
 
     return () => window.clearInterval(timer);
   }, [activeStaticPageDraft?.backendDraftId, activeStaticPageDraft?.imageJob?.status]);
+
+  useEffect(() => {
+    const backendDraftId = activeStaticPageDraft?.backendDraftId;
+    const renderStatus = activeStaticPageDraft?.finalPage?.status;
+    if (!backendDraftId || !['queued', 'rendering'].includes(renderStatus)) {
+      return undefined;
+    }
+
+    refreshBackendStaticPageDraft(backendDraftId, { silent: true });
+    const timer = window.setInterval(() => {
+      refreshBackendStaticPageDraft(backendDraftId, { silent: true });
+    }, STATIC_PAGE_ACTIVE_RENDER_POLL_INTERVAL_MS);
+
+    return () => window.clearInterval(timer);
+  }, [activeStaticPageDraft?.backendDraftId, activeStaticPageDraft?.finalPage?.status]);
 
   useEffect(() => {
     if (!selectedReportPlanId) {

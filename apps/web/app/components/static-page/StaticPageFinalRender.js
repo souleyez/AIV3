@@ -1,6 +1,13 @@
 'use client';
 
 import { buildStaticPageFinalRenderPayload } from '../../lib/static-page-draft';
+import {
+  buildStaticPageExportPackage,
+  buildStaticPageStandaloneHtml,
+  downloadTextArtifact,
+  staticPageExportFilename,
+  staticPageHtmlFilename,
+} from '../../lib/static-page-export-package';
 import StaticPageChartPreview from './StaticPageChartPreview';
 
 const STYLE_LABELS = {
@@ -65,70 +72,28 @@ function workflowExecutionIdFromManifest(manifest) {
     || '';
 }
 
-function buildStaticPageExportPackage(draft, payload, backendHtml) {
-  const manifest = finalPageManifest(draft);
-  const packageManifest = manifest.export_package || {
-    kind: 'static-page-export-package',
-    version: 1,
-    status: draft.finalPage?.status || draft.status || 'unknown',
-    files: [
-      { path: 'index.html', role: 'rendered_static_page', mime: 'text/html' },
-      { path: 'asset-manifest.json', role: 'renderer_manifest', mime: 'application/json' },
-      { path: 'data-snapshot.json', role: 'render_data_snapshot', mime: 'application/json' },
-      { path: 'modules.json', role: 'editable_module_plan', mime: 'application/json' },
-    ],
-  };
-  return {
-    kind: 'static-page-export-package',
-    version: 1,
-    draftId: draft.id,
-    backendDraftId: draft.backendDraftId || null,
-    renderOutputId: draft.finalPage?.renderOutputId || null,
-    imageJobId: draft.finalPage?.imageJobId || draft.imageJob?.id || null,
-    createdAt: new Date().toISOString(),
-    packageManifest,
-    files: [
-      {
-        path: 'index.html',
-        mime: 'text/html',
-        content: backendHtml || '<!-- static page html is not available yet -->',
-      },
-      {
-        path: 'asset-manifest.json',
-        mime: 'application/json',
-        content: JSON.stringify(manifest, null, 2),
-      },
-      {
-        path: 'data-snapshot.json',
-        mime: 'application/json',
-        content: JSON.stringify(payload.dataSnapshot || manifest.data_snapshot || {}, null, 2),
-      },
-      {
-        path: 'modules.json',
-        mime: 'application/json',
-        content: JSON.stringify(payload.modules || draft.modules || [], null, 2),
-      },
-    ],
-    assets: packageManifest.assets || [],
-  };
-}
-
 function downloadStaticPageExportPackage(draft, payload, backendHtml) {
-  if (typeof window === 'undefined' || !draft || !payload) {
+  if (!draft || !payload) {
     return;
   }
   const artifact = buildStaticPageExportPackage(draft, payload, backendHtml);
-  const blob = new Blob([JSON.stringify(artifact, null, 2)], {
-    type: 'application/json;charset=utf-8',
+  downloadTextArtifact({
+    content: JSON.stringify(artifact, null, 2),
+    filename: staticPageExportFilename(draft),
+    mime: 'application/json;charset=utf-8',
   });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = `static-page-${draft.backendDraftId || draft.id}-package.json`;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  window.setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+function downloadStaticPageHtml(draft, backendHtml) {
+  const html = buildStaticPageStandaloneHtml(draft, backendHtml);
+  if (!html) {
+    return;
+  }
+  downloadTextArtifact({
+    content: html,
+    filename: staticPageHtmlFilename(draft),
+    mime: 'text/html;charset=utf-8',
+  });
 }
 
 function FinalRenderStatusCard({
@@ -211,7 +176,8 @@ export default function StaticPageFinalRender({
   const backendHtml = typeof draft?.finalPage?.html === 'string' ? draft.finalPage.html : '';
   const payload = draft ? buildStaticPageFinalRenderPayload(draft) : null;
   const canShowRenderedPage = finalStatus === 'rendered' || finalStatus === 'mock_ready';
-  const canDownloadPackage = finalStatus === 'rendered' && Boolean(backendHtml);
+  const canDownloadHtml = finalStatus === 'rendered' && Boolean(backendHtml);
+  const canDownloadPackage = finalStatus === 'rendered';
 
   if (!draft) return null;
 
@@ -286,6 +252,15 @@ export default function StaticPageFinalRender({
 
           {canDownloadPackage ? (
             <div className="static-page-final-actions">
+              {canDownloadHtml ? (
+                <button
+                  type="button"
+                  className="ghost-btn compact-action-btn"
+                  onClick={() => downloadStaticPageHtml(draft, backendHtml)}
+                >
+                  下载 index.html
+                </button>
+              ) : null}
               <button
                 type="button"
                 className="ghost-btn compact-action-btn"

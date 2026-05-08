@@ -1,6 +1,14 @@
 'use client';
 
 import { formatDateTime, formatRelativeTime, formatSnakeCaseLabel, truncateText } from '../lib/formatters';
+import { buildStaticPageFinalRenderPayload } from '../lib/static-page-draft';
+import {
+  buildStaticPageExportPackage,
+  buildStaticPageStandaloneHtml,
+  downloadTextArtifact,
+  staticPageExportFilename,
+  staticPageHtmlFilename,
+} from '../lib/static-page-export-package';
 
 const SURFACE_LABELS = {
   pc: 'PC',
@@ -95,6 +103,31 @@ function staticPageRenderAction(draft) {
     return { label: '取消', kind: 'cancel', executionId };
   }
   return null;
+}
+
+function staticPageIsRendered(draft) {
+  return draft?.finalPage?.status === 'rendered' || draft?.status === 'rendered';
+}
+
+function downloadStaticPageHtmlFromShelf(draft) {
+  const html = buildStaticPageStandaloneHtml(draft, draft?.finalPage?.html || '');
+  if (!html) return;
+  downloadTextArtifact({
+    content: html,
+    filename: staticPageHtmlFilename(draft),
+    mime: 'text/html;charset=utf-8',
+  });
+}
+
+function downloadStaticPagePackageFromShelf(draft) {
+  const payload = buildStaticPageFinalRenderPayload(draft);
+  const html = buildStaticPageStandaloneHtml(draft, draft?.finalPage?.html || '');
+  const artifact = buildStaticPageExportPackage(draft, payload, html);
+  downloadTextArtifact({
+    content: JSON.stringify(artifact, null, 2),
+    filename: staticPageExportFilename(draft),
+    mime: 'application/json;charset=utf-8',
+  });
 }
 
 function buildReportControlNotice({
@@ -437,6 +470,8 @@ export default function InsightPanel({
             staticPageDrafts.map((draft) => {
               const active = staticPageDraft?.id === draft.id;
               const action = staticPageRenderAction(draft);
+              const rendered = staticPageIsRendered(draft);
+              const hasHtml = Boolean(buildStaticPageStandaloneHtml(draft, draft?.finalPage?.html || ''));
               return (
                 <div
                   key={draft.id}
@@ -460,21 +495,41 @@ export default function InsightPanel({
                       ) : null}
                     </div>
                   </button>
-                  {action ? (
+                  {action || rendered ? (
                     <div className="insight-item-actions">
-                      <button
-                        type="button"
-                        className="ghost-btn compact-action-btn"
-                        onClick={() => {
-                          if (action.kind === 'retry') {
-                            onRetryWorkflowExecution?.(action.executionId);
-                          } else {
-                            onCancelWorkflowExecution?.(action.executionId);
-                          }
-                        }}
-                      >
-                        {action.label}后台生成
-                      </button>
+                      {action ? (
+                        <button
+                          type="button"
+                          className="ghost-btn compact-action-btn"
+                          onClick={() => {
+                            if (action.kind === 'retry') {
+                              onRetryWorkflowExecution?.(action.executionId);
+                            } else {
+                              onCancelWorkflowExecution?.(action.executionId);
+                            }
+                          }}
+                        >
+                          {action.label}后台生成
+                        </button>
+                      ) : null}
+                      {rendered && hasHtml ? (
+                        <button
+                          type="button"
+                          className="ghost-btn compact-action-btn"
+                          onClick={() => downloadStaticPageHtmlFromShelf(draft)}
+                        >
+                          下载 HTML
+                        </button>
+                      ) : null}
+                      {rendered ? (
+                        <button
+                          type="button"
+                          className="ghost-btn compact-action-btn"
+                          onClick={() => downloadStaticPagePackageFromShelf(draft)}
+                        >
+                          交付包
+                        </button>
+                      ) : null}
                     </div>
                   ) : null}
                 </div>
