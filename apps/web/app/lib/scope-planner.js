@@ -99,7 +99,7 @@ export function planAssistantScope({
     hint: buildScopeHint(candidates, intent),
     intent,
     intentLabel: INTENT_LABELS[intent] || INTENT_LABELS.ordinary_chat,
-    supplyStrategy: buildSupplyStrategy(intent, candidates),
+    supplyStrategy: buildSupplyStrategy(intent, candidates, normalizedPrompt),
   };
 }
 
@@ -163,10 +163,10 @@ function inferAssistantIntent(prompt, options = {}) {
   return 'ordinary_chat';
 }
 
-function buildSupplyStrategy(intent, candidates) {
+function buildSupplyStrategy(intent, candidates, prompt = '') {
   const hasDataset = candidates.some((candidate) => candidate.type === 'dataset');
   const hasStaticPageDraft = candidates.some((candidate) => candidate.type === 'static_page_draft');
-  const needsDetail = hasDataset && ['static_page', 'report'].includes(intent);
+  const needsDetail = hasDataset && (['static_page', 'report'].includes(intent) || MEDIA_DATASET_PATTERN.test(prompt));
   return {
     intent,
     answerPolicy: 'model_authored_host_supplied',

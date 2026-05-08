@@ -57,7 +57,8 @@ test('scope planner preselects media dataset for audio and video prompts', () =>
 
   assert.equal(selectPlannerDatasetId(plan), 'dataset-media');
   assert.equal(plan.intent, 'data_question');
-  assert.equal(plan.supplyStrategy.retrievalPolicy, 'standard');
+  assert.equal(plan.supplyStrategy.retrievalPolicy, 'detail_first');
+  assert.equal(plan.supplyStrategy.preferDetail, true);
   assert.match(plan.hint, /会议录音/);
 });
 

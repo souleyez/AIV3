@@ -236,7 +236,7 @@ pub fn plan_scope(input: ScopePlannerInput<'_>) -> ScopePlan {
         .into_iter()
         .take(4)
         .collect::<Vec<_>>();
-    let selected_scope = selected_scope_from_candidates(&candidates, intent);
+    let selected_scope = selected_scope_from_candidates(&candidates, intent, prompt);
     let hint = build_scope_hint(&candidates, intent);
 
     ScopePlan {
@@ -254,12 +254,17 @@ pub fn candidates_to_values(candidates: &[ScopeCandidate]) -> Vec<Value> {
         .collect()
 }
 
-fn selected_scope_from_candidates(candidates: &[ScopeCandidate], intent: &str) -> Value {
+fn selected_scope_from_candidates(
+    candidates: &[ScopeCandidate],
+    intent: &str,
+    prompt: &str,
+) -> Value {
     let conversation_memory = conversation_memory_scope_from_candidates(candidates);
     let has_memory = conversation_memory
         .as_array()
         .map(|items| !items.is_empty())
         .unwrap_or(false);
+    let detail_prompt = prompt_has_media_detail(prompt);
 
     if let Some(dataset) = candidates.iter().find(|candidate| {
         candidate.candidate_type == ScopeCandidateType::Dataset
@@ -270,7 +275,7 @@ fn selected_scope_from_candidates(candidates: &[ScopeCandidate], intent: &str) -
             "datasets": [dataset.id],
             "conversation_memory": conversation_memory,
             "intent": intent,
-            "supply_policy": supply_policy_for_scope(intent, true, has_memory),
+            "supply_policy": supply_policy_for_scope(intent, true, has_memory, detail_prompt),
         });
     }
 
@@ -287,7 +292,7 @@ fn selected_scope_from_candidates(candidates: &[ScopeCandidate], intent: &str) -
             "conversation_memory": conversation_memory,
             "reason": dataset.reason,
             "intent": intent,
-            "supply_policy": supply_policy_for_scope(intent, true, has_memory),
+            "supply_policy": supply_policy_for_scope(intent, true, has_memory, detail_prompt),
         });
     }
 
@@ -296,7 +301,7 @@ fn selected_scope_from_candidates(candidates: &[ScopeCandidate], intent: &str) -
         "datasets": [],
         "conversation_memory": conversation_memory,
         "intent": intent,
-        "supply_policy": supply_policy_for_scope(intent, false, has_memory),
+        "supply_policy": supply_policy_for_scope(intent, false, has_memory, detail_prompt),
     })
 }
 
@@ -388,6 +393,11 @@ fn prompt_has_any(prompt: &str, lower_prompt: &str, hints: &[&str]) -> bool {
     })
 }
 
+fn prompt_has_media_detail(prompt: &str) -> bool {
+    let lower_prompt = prompt.to_ascii_lowercase();
+    prompt_has_any(prompt, &lower_prompt, MEDIA_HINTS)
+}
+
 fn intent_label(intent: &str) -> Option<&'static str> {
     match intent {
         "static_page" => Some("静态页规划"),
@@ -397,8 +407,14 @@ fn intent_label(intent: &str) -> Option<&'static str> {
     }
 }
 
-fn supply_policy_for_scope(intent: &str, has_dataset: bool, has_memory: bool) -> Value {
-    let prefer_detail = has_dataset && matches!(intent, "static_page" | "report");
+fn supply_policy_for_scope(
+    intent: &str,
+    has_dataset: bool,
+    has_memory: bool,
+    detail_prompt: bool,
+) -> Value {
+    let prefer_detail =
+        has_dataset && (matches!(intent, "static_page" | "report") || detail_prompt);
     json!({
         "intent": intent,
         "answerPolicy": "model_authored_host_supplied",
@@ -455,6 +471,10 @@ mod tests {
         assert_eq!(
             plan.selected_scope["supply_policy"]["retrievalPolicy"],
             json!("standard")
+        );
+        assert_eq!(
+            plan.selected_scope["supply_policy"]["preferDetail"],
+            json!(false)
         );
     }
 
@@ -516,7 +536,11 @@ mod tests {
         assert_eq!(plan.intent, "data_question");
         assert_eq!(
             plan.selected_scope["supply_policy"]["retrievalPolicy"],
-            json!("standard")
+            json!("detail_first")
+        );
+        assert_eq!(
+            plan.selected_scope["supply_policy"]["preferDetail"],
+            json!(true)
         );
     }
 
