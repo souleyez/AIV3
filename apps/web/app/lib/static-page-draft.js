@@ -1,3 +1,8 @@
+import {
+  normalizeChartRuntimeFromVisualization,
+  sanitizeStaticPageChartOptions,
+} from './static-page-chart-runtime.js';
+
 export const STATIC_PAGE_STYLE_DIRECTIONS = [
   {
     key: 'decision-brief',
@@ -255,7 +260,7 @@ const STATIC_PAGE_RENDER_SPEC = {
   desktopGrid: { columns: GRID_COLUMNS, rowHeight: 96 },
   mobileLayout: 'single-column-sortable',
   componentModel: 'dom-text-svg-chart',
-  chartRuntime: 'recharts-first-echarts-optional',
+  chartRuntime: 'deterministic-with-echarts-advanced',
   editableContent: ['title', 'content', 'dataBinding', 'visualization', 'chartOptions', 'layout'],
   generationGuardrails: [
     '效果图必须服从模块网格布局和移动端顺序',
@@ -319,6 +324,7 @@ export function buildStaticPageDataSnapshot(draft) {
       title: module.title,
       binding: normalizeDataBinding(module.dataBinding || {}),
       visualizationType: module.visualization?.type || 'text-insight',
+      chartRuntime: normalizeVisualization(module.visualization || {}).chartRuntime,
       chartOptions: normalizeVisualization(module.visualization || {}).chartOptions,
     })),
   };
@@ -363,6 +369,10 @@ export function buildStaticPagePreviewContract(draft, patch = {}) {
 }
 
 function refreshStaticPageDesignSpec(draft, { markPreviewStale = false } = {}) {
+  draft.modules = Array.isArray(draft.modules)
+    ? draft.modules.map((module) => mergeModule(module))
+    : [];
+  draft.mobileOrder = normalizeMobileOrder(draft.modules, draft.mobileOrder || []);
   draft.visualSpec = buildStaticPageVisualSpec(draft.styleDirection || DEFAULT_STYLE_DIRECTION);
   draft.renderSpec = draft.renderSpec || buildStaticPageRenderSpec();
   draft.dataSnapshot = buildStaticPageDataSnapshot(draft);
@@ -392,16 +402,20 @@ function dataSourcePreset(sourceId) {
     || STATIC_PAGE_DATA_SOURCE_TYPES[0];
 }
 
-function normalizeChartOptions(visualizationType, chartOptions = {}) {
+function normalizeChartOptions(visualizationType, chartOptions = {}, chartRuntime = 'deterministic') {
   const type = VISUALIZATION_TYPES.has(visualizationType) ? visualizationType : 'text-insight';
   const options = chartOptions && typeof chartOptions === 'object' && !Array.isArray(chartOptions)
     ? { ...chartOptions }
     : {};
+  if (chartRuntime === 'echarts') {
+    return sanitizeStaticPageChartOptions(options, { runtime: chartRuntime });
+  }
+  const sanitizedOptions = sanitizeStaticPageChartOptions(options, { runtime: 'deterministic' });
   return {
     showLegend: !['headline', 'kpi-cards', 'text-insight'].includes(type),
     showAxis: ['bar-chart', 'line-chart'].includes(type),
-    valueFormat: options.valueFormat || 'auto',
-    ...options,
+    valueFormat: 'auto',
+    ...sanitizedOptions,
   };
 }
 
@@ -420,11 +434,15 @@ function normalizeDataBinding(binding = {}) {
 
 function normalizeVisualization(visualization = {}) {
   const type = VISUALIZATION_TYPES.has(visualization.type) ? visualization.type : 'text-insight';
+  const chartOptions = visualization.chartOptions && typeof visualization.chartOptions === 'object' && !Array.isArray(visualization.chartOptions)
+    ? visualization.chartOptions
+    : {};
+  const chartRuntime = normalizeChartRuntimeFromVisualization(visualization, chartOptions);
   return {
-    ...visualization,
     type,
     label: visualization.label || visualizationLabel(type),
-    chartOptions: normalizeChartOptions(type, visualization.chartOptions),
+    chartRuntime,
+    chartOptions: normalizeChartOptions(type, chartOptions, chartRuntime),
   };
 }
 
@@ -1090,6 +1108,7 @@ export function buildStaticPageImagePayload(draft, { oneClick = false } = {}) {
       dataLabel: module.dataBinding?.label || '',
       dataBinding: normalizeDataBinding(module.dataBinding || {}),
       visualizationType: module.visualization?.type || 'text-insight',
+      chartRuntime: normalizeVisualization(module.visualization || {}).chartRuntime,
       chartOptions: normalizeVisualization(module.visualization || {}).chartOptions,
       layout: normalizeLayout(module.layout),
     })),

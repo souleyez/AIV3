@@ -342,6 +342,118 @@ test('module edit patch can update copy data binding and chart as one durable op
   assert.equal(edited.finalPage, null);
 });
 
+test('chart runtime defaults to deterministic and appears in snapshots and payloads', () => {
+  const draft = buildInitialStaticPageDraft({ datasetId: 'dataset-1' });
+  const trend = draft.modules.find((module) => module.id === 'trend');
+  const binding = draft.dataSnapshot.moduleBindings.find((item) => item.moduleId === 'trend');
+  const imagePayload = buildStaticPageImagePayload(draft);
+
+  assert.equal(trend.visualization.chartRuntime, 'deterministic');
+  assert.equal(binding.chartRuntime, 'deterministic');
+  assert.equal(imagePayload.modules.find((module) => module.id === 'trend').chartRuntime, 'deterministic');
+  assert.equal(draft.renderSpec.chartRuntime, 'deterministic-with-echarts-advanced');
+});
+
+test('module edit can request sanitized ECharts runtime for advanced charts', () => {
+  const draft = buildInitialStaticPageDraft();
+  const next = applyStaticPageOperation(draft, {
+    type: 'update_module',
+    targetModuleId: 'trend',
+    patch: {
+      visualization: {
+        type: 'bar-chart',
+        chartRuntime: 'echarts',
+        chartOptions: {
+          color: ['#2563eb', '#14b8a6'],
+          xAxis: { type: 'category', data: ['一月', '二月'] },
+          yAxis: { type: 'value' },
+          tooltip: { trigger: 'axis' },
+          series: [
+            { type: 'bar', name: '订单', data: [12, 18] },
+          ],
+        },
+      },
+    },
+  });
+  const module = next.modules.find((item) => item.id === 'trend');
+
+  assert.equal(module.visualization.chartRuntime, 'echarts');
+  assert.equal(module.visualization.chartOptions.series[0].type, 'bar');
+  assert.deepEqual(module.visualization.chartOptions.series[0].data, [12, 18]);
+  assert.equal(next.dataSnapshot.moduleBindings.find((item) => item.moduleId === 'trend').chartRuntime, 'echarts');
+});
+
+test('unknown chart runtime falls back to deterministic runtime', () => {
+  const draft = buildInitialStaticPageDraft();
+  const next = applyStaticPageOperation(draft, {
+    type: 'update_module',
+    targetModuleId: 'trend',
+    patch: {
+      visualization: {
+        type: 'line-chart',
+        chartRuntime: 'plotly',
+        chartOptions: {
+          series: [{ type: 'line', data: [1, 2] }],
+          dataKey: 'orders.amount',
+        },
+      },
+    },
+  });
+  const module = next.modules.find((item) => item.id === 'trend');
+
+  assert.equal(module.visualization.chartRuntime, 'deterministic');
+  assert.equal(module.visualization.chartOptions.dataKey, 'orders.amount');
+  assert.equal(module.visualization.chartOptions.series, undefined);
+});
+
+test('unsafe chart options are stripped before reaching module contracts', () => {
+  const draft = buildInitialStaticPageDraft();
+  const next = applyStaticPageOperation(draft, {
+    type: 'update_module',
+    targetModuleId: 'trend',
+    patch: {
+      visualization: {
+        type: 'bar-chart',
+        chartRuntime: 'echarts',
+        chartOptions: {
+          tooltip: { formatter: 'javascript:alert(1)' },
+          title: { text: '<img src=x onerror=alert(1)>' },
+          link: 'https://example.com/evil.js',
+          onClick: 'steal()',
+          constructor: { prototype: 'pollute' },
+          series: [
+            {
+              type: 'bar',
+              data: [1, 2, 3],
+              label: { formatter: () => 'unsafe' },
+              itemStyle: { color: 'javascript:alert(1)' },
+            },
+            {
+              type: 'custom',
+              data: [4],
+              renderItem: 'alert(1)',
+            },
+          ],
+        },
+      },
+    },
+  });
+  const options = next.modules.find((item) => item.id === 'trend').visualization.chartOptions;
+  const serialized = JSON.stringify(options);
+
+  assert.equal(options.series.length, 1);
+  assert.equal(options.series[0].type, 'bar');
+  assert.equal(options.series[0].label.formatter, undefined);
+  assert.equal(options.series[0].itemStyle.color, undefined);
+  assert.equal(options.tooltip.formatter, undefined);
+  assert.equal(options.title.text, undefined);
+  assert.equal(options.link, undefined);
+  assert.equal(options.onClick, undefined);
+  assert.equal(serialized.includes('javascript:'), false);
+  assert.equal(serialized.includes('https://'), false);
+  assert.equal(serialized.includes('<img'), false);
+});
+
 test('module update operation helper emits full editable binding and chart contract', () => {
   const draft = buildInitialStaticPageDraft({
     datasetId: 'dataset-1',
@@ -414,5 +526,6 @@ test('static page visual and render spec builders expose renderer-safe constrain
 
   assert.equal(visualSpec.styleDirection, 'data-command');
   assert.equal(renderSpec.layoutEngine, 'css-grid-12');
+  assert.equal(renderSpec.chartRuntime, 'deterministic-with-echarts-advanced');
   assert.ok(renderSpec.generationGuardrails.some((rule) => rule.includes('DOM')));
 });
