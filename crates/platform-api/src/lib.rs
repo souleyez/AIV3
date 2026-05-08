@@ -8450,7 +8450,22 @@ async fn build_assistant_run_evidence_state(
         )
         .await?;
 
-        for ranked in rank_retrieval_evidences_for_prompt(&evidences, prompt, limit) {
+        let ranked_evidences = rank_retrieval_evidences_for_prompt(&evidences, prompt, limit);
+        if ranked_evidences.is_empty() {
+            let fallback_items = build_assistant_run_chunk_fallback_supply(
+                state,
+                &dataset,
+                prompt,
+                limit,
+                current_user_id,
+                &mut media_context_by_document,
+            )
+            .await?;
+            supplied_items.extend(fallback_items);
+            continue;
+        }
+
+        for ranked in ranked_evidences {
             let media_context = assistant_run_media_context_for_document(
                 state,
                 ranked.evidence.document_id,
@@ -8529,6 +8544,7 @@ async fn build_assistant_run_evidence_state(
         "supplied"
     };
     let detail_targets = assistant_run_detail_targets_for_scope(selected_scope, &supplied_items);
+    let fallback_supply_count = assistant_run_fallback_supply_count(&supplied_items);
     Ok(json!({
         "status": status,
         "policy": "host_supplies_model_answers",
@@ -8545,8 +8561,91 @@ async fn build_assistant_run_evidence_state(
         "datasets": supplied_datasets,
         "conversation_memory_items": supplied_memory_items,
         "supplied_items": supplied_items,
+        "fallback_supply_count": fallback_supply_count,
+        "fallback_supply_policy": if fallback_supply_count > 0 { "visible_document_chunks_when_retrieval_evidence_missing" } else { "not_used" },
         "limit": limit,
     }))
+}
+
+async fn build_assistant_run_chunk_fallback_supply(
+    state: &AppState,
+    dataset: &Dataset,
+    prompt: &str,
+    limit: usize,
+    current_user_id: Option<UserId>,
+    media_context_by_document: &mut HashMap<DocumentId, Option<Value>>,
+) -> std::result::Result<Vec<Value>, ApiError> {
+    if limit == 0 {
+        return Ok(Vec::new());
+    }
+
+    let documents = state
+        .storage
+        .documents()
+        .list_by_dataset(state.tenant_id, dataset.id)
+        .await
+        .map_err(ApiError::from_storage)?
+        .into_iter()
+        .filter(|document| owner_user_id_is_visible(document.owner_user_id, current_user_id))
+        .collect::<Vec<_>>();
+    let mut sources = Vec::new();
+    for document in documents {
+        let chunks = state
+            .storage
+            .document_chunks()
+            .list_by_document(state.tenant_id, document.id)
+            .await
+            .map_err(ApiError::from_storage)?;
+        for chunk in chunks
+            .into_iter()
+            .filter(|chunk| !chunk.content.trim().is_empty())
+        {
+            sources.push((document.clone(), chunk));
+        }
+    }
+
+    let ranked = rank_document_chunks_for_prompt(sources, prompt, limit);
+    let mut items = Vec::with_capacity(ranked.len());
+    for ranked in ranked {
+        let media_context = assistant_run_media_context_for_document(
+            state,
+            ranked.chunk.document_id,
+            media_context_by_document,
+        )
+        .await?;
+        let mut supplied_item = json!({
+            "type": "retrieval_evidence",
+            "source": "document_chunk_fallback",
+            "fallback_reason": "retrieval_evidence_unavailable",
+            "dataset_id": ranked.chunk.dataset_id,
+            "document_id": ranked.chunk.document_id,
+            "document_chunk_id": ranked.chunk.id,
+            "chunk_index": ranked.chunk.chunk_index,
+            "source_locator": document_chunk_fallback_source_locator(&ranked.document, &ranked.chunk),
+            "summary": document_chunk_fallback_summary(&ranked.document, &ranked.chunk),
+            "content_excerpt": truncate_assistant_supply_text(&ranked.chunk.content, 900),
+            "payload_filter_key": format!("dataset/{}/document/{}", dataset.key, ranked.document.object_key),
+            "score": ranked.score,
+            "lexical_score": ranked.lexical_score,
+            "recall_score": 0.0,
+            "evidence_manifest": {
+                "fallback": {
+                    "source": "document_chunk",
+                    "reason": "retrieval_evidence_unavailable"
+                },
+                "embedding": {
+                    "term_weights": limited_lexical_term_weights(&ranked.search_text, 40)
+                }
+            },
+        });
+        if let Some(media_context) = media_context {
+            if let Some(object) = supplied_item.as_object_mut() {
+                object.insert("media_context".to_string(), media_context);
+            }
+        }
+        items.push(supplied_item);
+    }
+    Ok(items)
 }
 
 fn assistant_run_evidence_limit_for_scope(selected_scope: &Value) -> usize {
@@ -8587,6 +8686,51 @@ fn assistant_run_recommended_supply_actions(
         _ => {}
     }
     actions
+}
+
+fn assistant_run_fallback_supply_count(supplied_items: &[Value]) -> usize {
+    supplied_items
+        .iter()
+        .filter(|item| {
+            item.get("source")
+                .and_then(Value::as_str)
+                .is_some_and(|source| source == "document_chunk_fallback")
+        })
+        .count()
+}
+
+fn document_chunk_fallback_source_locator(document: &Document, chunk: &DocumentChunk) -> String {
+    let base = if document.object_key.trim().is_empty() {
+        document.title.trim()
+    } else {
+        document.object_key.trim()
+    };
+    format!("{}#chunk={}", base, chunk.chunk_index)
+}
+
+fn document_chunk_fallback_summary(document: &Document, chunk: &DocumentChunk) -> String {
+    let title = if document.title.trim().is_empty() {
+        document.object_key.trim()
+    } else {
+        document.title.trim()
+    };
+    let excerpt = truncate_assistant_supply_text(&chunk.content, 180);
+    if excerpt.is_empty() {
+        format!("{title} chunk {}", chunk.chunk_index)
+    } else {
+        format!("{title} chunk {}: {excerpt}", chunk.chunk_index)
+    }
+}
+
+fn truncate_assistant_supply_text(value: &str, max_chars: usize) -> String {
+    value
+        .trim()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(max_chars)
+        .collect()
 }
 
 fn assistant_run_detail_targets_for_scope(
@@ -8846,6 +8990,20 @@ fn assistant_run_evidence_status_label(evidence_state: &Value) -> String {
         "supplied" => {
             let supplied_count = assistant_run_evidence_supplied_count(evidence_state);
             let detail_target_count = assistant_run_detail_target_count(evidence_state);
+            let fallback_supply_count = evidence_state
+                .get("fallback_supply_count")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            if fallback_supply_count > 0 {
+                if detail_target_count > 0 {
+                    return format!(
+                        "已供料 {supplied_count} 条，其中 {fallback_supply_count} 条来自可见文档切片兜底，建议深读 {detail_target_count} 份文档"
+                    );
+                }
+                return format!(
+                    "已供料 {supplied_count} 条，其中 {fallback_supply_count} 条来自可见文档切片兜底"
+                );
+            }
             if detail_target_count > 0 {
                 format!("已检索 {supplied_count} 条供料项，建议深读 {detail_target_count} 份文档")
             } else {
@@ -12022,6 +12180,14 @@ struct RankedRetrievalEvidence<'a> {
     rank_hint: usize,
 }
 
+struct RankedDocumentChunk {
+    document: Document,
+    chunk: DocumentChunk,
+    search_text: String,
+    score: f64,
+    lexical_score: f64,
+}
+
 fn rank_retrieval_evidences_for_prompt<'a>(
     evidences: &'a [RetrievalEvidence],
     prompt: &str,
@@ -12071,6 +12237,49 @@ fn rank_retrieval_evidences_for_prompt<'a>(
             .then_with(|| left.rank_hint.cmp(&right.rank_hint))
             .then_with(|| right.evidence.created_at.cmp(&left.evidence.created_at))
             .then_with(|| left.evidence.chunk_index.cmp(&right.evidence.chunk_index))
+    });
+    ranked.into_iter().take(limit).collect()
+}
+
+fn rank_document_chunks_for_prompt(
+    sources: Vec<(Document, DocumentChunk)>,
+    prompt: &str,
+    limit: usize,
+) -> Vec<RankedDocumentChunk> {
+    if sources.is_empty() || limit == 0 {
+        return Vec::new();
+    }
+
+    let query_weights = lexical_query_term_weights(prompt);
+    let query_norm = vector_norm(&query_weights);
+    let mut ranked = sources
+        .into_iter()
+        .map(|(document, chunk)| {
+            let search_text = format!(
+                "{} {} {}",
+                document.title.trim(),
+                document.object_key.trim(),
+                chunk.content.trim()
+            );
+            let lexical_score = lexical_text_score(&search_text, &query_weights, query_norm);
+            RankedDocumentChunk {
+                document,
+                chunk,
+                search_text,
+                score: lexical_score,
+                lexical_score,
+            }
+        })
+        .collect::<Vec<_>>();
+
+    ranked.sort_by(|left, right| {
+        right
+            .lexical_score
+            .partial_cmp(&left.lexical_score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| right.chunk.updated_at.cmp(&left.chunk.updated_at))
+            .then_with(|| left.chunk.chunk_index.cmp(&right.chunk.chunk_index))
+            .then_with(|| left.document.title.cmp(&right.document.title))
     });
     ranked.into_iter().take(limit).collect()
 }
@@ -12168,6 +12377,50 @@ fn lexical_query_score(
     }
 
     (dot_product / (query_norm * evidence_norm) * 10_000.0).round() / 10_000.0
+}
+
+fn lexical_text_score(
+    content: &str,
+    query_weights: &BTreeMap<String, f64>,
+    query_norm: f64,
+) -> f64 {
+    if query_weights.is_empty() || query_norm <= 0.0 {
+        return 0.0;
+    }
+
+    let content_weights = lexical_query_term_weights(content);
+    let content_norm = vector_norm(&content_weights);
+    if content_weights.is_empty() || content_norm <= 0.0 {
+        return 0.0;
+    }
+
+    let dot_product = query_weights
+        .iter()
+        .filter_map(|(term, query_weight)| {
+            content_weights
+                .get(term)
+                .map(|content_weight| query_weight * content_weight)
+        })
+        .sum::<f64>();
+    if dot_product <= 0.0 {
+        return 0.0;
+    }
+
+    (dot_product / (query_norm * content_norm) * 10_000.0).round() / 10_000.0
+}
+
+fn limited_lexical_term_weights(content: &str, limit: usize) -> BTreeMap<String, f64> {
+    let mut weights = lexical_query_term_weights(content)
+        .into_iter()
+        .collect::<Vec<_>>();
+    weights.sort_by(|left, right| {
+        right
+            .1
+            .partial_cmp(&left.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| left.0.cmp(&right.0))
+    });
+    weights.into_iter().take(limit).collect()
 }
 
 fn evidence_term_weights_from_manifest(evidence: &RetrievalEvidence) -> BTreeMap<String, f64> {
@@ -20619,6 +20872,143 @@ mod tests {
             detail.run.evidence_state["supplied_items"][0]["summary"],
             json!("Order delay risk evidence")
         );
+    }
+
+    #[tokio::test]
+    async fn assistant_run_falls_back_to_visible_document_chunks_without_retrieval_evidence() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_MODE", "placeholder");
+        std::env::remove_var("ASSISTANT_RUN_EVIDENCE_LIMIT");
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping assistant run chunk fallback test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("assistant-chunk-fallback-test-{}", Uuid::new_v4()),
+                "Assistant Chunk Fallback Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage,
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        let dataset = state
+            .storage
+            .datasets()
+            .create(
+                state.tenant_id,
+                NewDataset {
+                    key: format!("orders-chunk-fallback-{}", Uuid::new_v4()),
+                    title: "订单风险".to_string(),
+                    description: Some("订单取消和延期风险资料。".to_string()),
+                    owner_user_id: None,
+                },
+            )
+            .await
+            .expect("dataset should be created");
+        let document = state
+            .storage
+            .documents()
+            .create(
+                state.tenant_id,
+                NewDocument {
+                    dataset_id: dataset.id,
+                    title: "Order Risk Raw Notes".to_string(),
+                    object_key: "documents/order-risk-raw.md".to_string(),
+                    content_type: "text/markdown".to_string(),
+                    secret_binding_ids: Vec::new(),
+                    owner_user_id: None,
+                    metadata: json!({}),
+                },
+            )
+            .await
+            .expect("document should be created");
+        let now = Utc::now();
+        let chunks = state
+            .storage
+            .document_chunks()
+            .replace_for_document(
+                state.tenant_id,
+                document.id,
+                &[
+                    storage::NewDocumentChunk {
+                        dataset_id: dataset.id,
+                        document_id: document.id,
+                        chunk_index: 0,
+                        content: "Customer newsletter engagement improved last month."
+                            .to_string(),
+                        token_count: 8,
+                        metadata: json!({"section": "newsletter"}),
+                        created_at: now,
+                    },
+                    storage::NewDocumentChunk {
+                        dataset_id: dataset.id,
+                        document_id: document.id,
+                        chunk_index: 1,
+                        content:
+                            "Order cancellation risk rises when delayed fulfillment exceeds two days."
+                                .to_string(),
+                        token_count: 12,
+                        metadata: json!({"section": "risk"}),
+                        created_at: now,
+                    },
+                ],
+            )
+            .await
+            .expect("document chunks should be created");
+
+        let (status, Json(response)) = create_assistant_run(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(CreateAssistantRunRequest {
+                prompt: "基于订单做一页静态页，重点看 order cancellation risk".to_string(),
+                local_thread_id: Some("assistant-chunk-fallback-thread".to_string()),
+                startup_briefing: Some(json!({"visibleDatasetCount": 1})),
+                selected_scope: Some(json!({
+                    "mode": "user_selected",
+                    "datasets": [dataset.id],
+                })),
+                scope_candidates: Vec::new(),
+                context_policy_hint: None,
+                current_artifact: None,
+                messages: Vec::new(),
+            }),
+        )
+        .await
+        .expect("assistant run should be created");
+
+        assert_eq!(status, StatusCode::CREATED);
+        assert_eq!(response.evidence_state["status"], json!("supplied"));
+        assert_eq!(response.evidence_state["fallback_supply_count"], json!(2));
+        let first_item = &response.evidence_state["supplied_items"][0];
+        assert_eq!(first_item["source"], json!("document_chunk_fallback"));
+        assert_eq!(
+            first_item["fallback_reason"],
+            json!("retrieval_evidence_unavailable")
+        );
+        assert_eq!(first_item["document_chunk_id"], json!(chunks[1].id));
+        assert!(first_item.get("retrieval_evidence_id").is_none());
+        assert!(first_item["content_excerpt"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("Order cancellation risk"));
+        assert_eq!(
+            response.evidence_state["detail_targets"][0]["document_chunk_id"],
+            json!(chunks[1].id)
+        );
+        assert!(response
+            .assistant_message
+            .content
+            .contains("供料状态: 已供料 2 条，其中 2 条来自可见文档切片兜底"));
     }
 
     fn test_dataset(
