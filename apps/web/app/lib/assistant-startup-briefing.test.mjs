@@ -34,11 +34,13 @@ test('startup briefing summarizes visible datasets and system capability', () =>
   assert.equal(briefing.estimatedWordCount, 2000);
   assert.equal(briefing.reportPlanCount, 1);
   assert.equal(briefing.publishedReportCount, 1);
+  assert.equal(briefing.staticPageDraftCount, 0);
   assert.equal(briefing.selectedScopeLabel, '订单数据');
   assert.equal(briefing.briefingVersion, 2);
   assert.equal(briefing.datasetBriefs.length, 2);
   assert.ok(briefing.capabilities.includes('media_detail'));
   assert.match(briefing.productCapabilities.staticPage, /静态页规划/);
+  assert.match(briefing.productCapabilities.staticPage, /index\.html/);
   assert.match(briefing.productCapabilities.media, /partial/);
   assert.match(briefing.latestActivity, /订单数据/);
   assert.match(briefing.productTruth, /智能数据工作台/);
@@ -53,6 +55,7 @@ test('formatted briefing tells model when no dataset is selected', () => {
   assert.match(formatted, /创建报表/);
   assert.match(formatted, /媒体细节/);
   assert.match(formatted, /规划\/渲染静态页/);
+  assert.match(formatted, /静态页草稿\/成品 0 个/);
   assert.match(formatted, /不能编造数据/);
   assert.match(formatted, /当前可见库为空/);
 });
@@ -77,4 +80,50 @@ test('startup briefing prefers recent upload or classification activity', () => 
   });
 
   assert.match(briefing.latestActivity, /客服投诉明细/);
+});
+
+test('startup briefing includes compact static page workspace context', () => {
+  const briefing = buildAssistantStartupBriefing({
+    activeStaticPageDraft: {
+      id: 'local-draft-1',
+      backendDraftId: 'draft-backend-1',
+      objective: '客户经营分析静态页',
+      status: 'rendered',
+      styleDirection: 'data-command',
+      previewContract: { status: 'confirmed' },
+      finalPage: { status: 'rendered' },
+      modules: [
+        {
+          id: 'trend',
+          title: '趋势',
+          content: '不应该完整依赖 content 进入工作区摘要',
+          visualization: { chartRuntime: 'echarts' },
+        },
+        {
+          id: 'risk',
+          title: '风险',
+          visualization: { chartRuntime: 'deterministic' },
+        },
+      ],
+    },
+    staticPageDrafts: [
+      {
+        id: 'local-draft-1',
+        objective: '客户经营分析静态页',
+        status: 'rendered',
+        modules: [{ id: 'trend' }],
+      },
+    ],
+  });
+  const formatted = formatStartupBriefingForModel(briefing);
+
+  assert.equal(briefing.staticPageDraftCount, 1);
+  assert.equal(briefing.staticPageWorkspace.activeDraftId, 'draft-backend-1');
+  assert.equal(briefing.staticPageWorkspace.activeModuleCount, 2);
+  assert.equal(briefing.staticPageWorkspace.activeEchartsModuleCount, 1);
+  assert.equal(briefing.staticPageWorkspace.canExportFinal, true);
+  assert.match(formatted, /当前静态页：客户经营分析静态页/);
+  assert.match(formatted, /ECharts 1 个/);
+  assert.match(formatted, /已可导出 index\.html/);
+  assert.doesNotMatch(formatted, /不应该完整依赖 content/);
 });

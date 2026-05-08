@@ -7,6 +7,7 @@ const DATASET_HINTS = [
 
 const CONVERSATION_HINT = /刚才|上面|之前|继续|按你说的|这个|那版|草稿|修改|调整|确认|不要|改成|换成/;
 const STATIC_PAGE_HINT = /静态页|静态页面|页面规划|一页|生成页面|落地页|模块|效果图|出图/;
+const STATIC_PAGE_EDIT_HINT = /标题|文案|内容|数据|图表|布局|模块|调整|修改|改成|换成|突出|减少|增加|放大|缩小|移动|排序|风格|确认|效果图|导出/;
 const REPORT_HINT = /报表|报告|周报|月报|经营分析|汇报|可视化|看板|dashboard/i;
 const DATA_QUESTION_HINT = /分析|总结|趋势|原因|风险|机会|对比|明细|指标|数据|检索|查找|引用/;
 
@@ -22,11 +23,19 @@ export function planAssistantScope({
   datasets = [],
   selectedDatasetId = '',
   conversationMemory = [],
+  activeStaticPageDraft = null,
 } = {}) {
   const normalizedPrompt = String(prompt || '').trim();
   const visibleDatasets = Array.isArray(datasets) ? datasets : [];
   const candidates = [];
-  const intent = inferAssistantIntent(normalizedPrompt);
+  const staticDraftReference = buildStaticDraftReference(activeStaticPageDraft);
+  const promptTouchesActiveStaticDraft = Boolean(
+    staticDraftReference && (STATIC_PAGE_HINT.test(normalizedPrompt) || STATIC_PAGE_EDIT_HINT.test(normalizedPrompt)),
+  );
+  const intent = inferAssistantIntent(normalizedPrompt, {
+    hasActiveStaticPageDraft: Boolean(staticDraftReference),
+    promptTouchesActiveStaticDraft,
+  });
 
   const selectedDataset = visibleDatasets.find((dataset) => dataset.id === selectedDatasetId);
   if (selectedDataset) {
@@ -68,6 +77,17 @@ export function planAssistantScope({
     });
   }
 
+  if (staticDraftReference && (intent === 'static_page' || promptTouchesActiveStaticDraft)) {
+    candidates.push({
+      type: 'static_page_draft',
+      id: staticDraftReference.id,
+      label: staticDraftReference.label,
+      confidence: promptTouchesActiveStaticDraft ? 'high' : 'medium',
+      reason: promptTouchesActiveStaticDraft ? '用户正在调整当前打开的静态页草稿' : '当前主区域打开了静态页草稿',
+      source: 'active_artifact',
+    });
+  }
+
   return {
     candidates: dedupeCandidates(candidates).slice(0, 4),
     hint: buildScopeHint(candidates, intent),
@@ -100,6 +120,17 @@ function dedupeCandidates(candidates) {
   });
 }
 
+function buildStaticDraftReference(draft) {
+  if (!draft || typeof draft !== 'object') return null;
+  const id = draft.backendDraftId || draft.backendId || draft.id || '';
+  if (!id) return null;
+  const objective = String(draft.objective || draft.title || '').trim();
+  return {
+    id,
+    label: objective ? `当前静态页：${objective}` : '当前静态页草稿',
+  };
+}
+
 function buildScopeHint(candidates, intent = 'ordinary_chat') {
   const visible = dedupeCandidates(candidates)
     .map((candidate) => candidate.label)
@@ -116,9 +147,10 @@ function buildScopeHint(candidates, intent = 'ordinary_chat') {
   return parts.join('；');
 }
 
-function inferAssistantIntent(prompt) {
+function inferAssistantIntent(prompt, options = {}) {
   if (STATIC_PAGE_HINT.test(prompt)) return 'static_page';
   if (REPORT_HINT.test(prompt)) return 'report';
+  if (options.hasActiveStaticPageDraft && options.promptTouchesActiveStaticDraft) return 'static_page';
   if (DATA_QUESTION_HINT.test(prompt) || DATASET_HINTS.some((hint) => hint.pattern.test(prompt))) {
     return 'data_question';
   }
@@ -127,10 +159,12 @@ function inferAssistantIntent(prompt) {
 
 function buildSupplyStrategy(intent, candidates) {
   const hasDataset = candidates.some((candidate) => candidate.type === 'dataset');
+  const hasStaticPageDraft = candidates.some((candidate) => candidate.type === 'static_page_draft');
   const needsDetail = hasDataset && ['static_page', 'report'].includes(intent);
   return {
     intent,
     answerPolicy: 'model_authored_host_supplied',
+    currentArtifactPolicy: hasStaticPageDraft ? 'active_static_page_draft' : 'none',
     historyPolicy: candidates.some((candidate) => candidate.type === 'conversation_memory')
       ? 'intent_gated_selected'
       : 'intent_gated',

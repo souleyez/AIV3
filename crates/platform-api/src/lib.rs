@@ -5665,6 +5665,7 @@ async fn create_assistant_run(
     Json(mut request): Json<CreateAssistantRunRequest>,
 ) -> std::result::Result<(StatusCode, Json<CreateAssistantRunResponse>), ApiError> {
     validate_required("prompt", &request.prompt)?;
+    let client_scope_candidates = request.scope_candidates.clone();
     let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
     let current_user_id = current_auth_user_id(&state, &headers).await?;
     ensure_default_public_datasets(&state).await?;
@@ -5705,7 +5706,15 @@ async fn create_assistant_run(
         selected_dataset_id,
         conversation_memory_available,
     });
-    request.scope_candidates = candidates_to_values(&scope_plan.candidates);
+    let mut scope_candidates = candidates_to_values(&scope_plan.candidates);
+    scope_candidates.extend(assistant_run_artifact_scope_candidates(
+        &client_scope_candidates,
+        request.current_artifact.as_ref(),
+    ));
+    request.scope_candidates = dedupe_assistant_run_scope_candidate_values(scope_candidates)
+        .into_iter()
+        .take(5)
+        .collect();
     request.selected_scope = Some(scope_plan.selected_scope.clone());
     let selected_scope = scope_plan.selected_scope.clone();
     let mut evidence_state = build_assistant_run_evidence_state(
@@ -8537,6 +8546,82 @@ fn assistant_run_recommended_supply_actions(
         _ => {}
     }
     actions
+}
+
+fn assistant_run_artifact_scope_candidates(
+    client_candidates: &[Value],
+    current_artifact: Option<&Value>,
+) -> Vec<Value> {
+    let Some(current_artifact) = current_artifact else {
+        return Vec::new();
+    };
+    let Some(artifact_id) = static_page_artifact_id(current_artifact) else {
+        return Vec::new();
+    };
+    let client_static_page_candidate = client_candidates.iter().find(|candidate| {
+        candidate.get("type").and_then(Value::as_str) == Some("static_page_draft")
+            && candidate.get("id").and_then(Value::as_str) == Some(artifact_id.as_str())
+    });
+    let label = static_page_artifact_label(current_artifact)
+        .or_else(|| {
+            client_static_page_candidate
+                .and_then(|candidate| candidate.get("label"))
+                .and_then(Value::as_str)
+                .map(truncate_scope_candidate_text)
+        })
+        .unwrap_or_else(|| "当前静态页草稿".to_string());
+
+    vec![json!({
+        "type": "static_page_draft",
+        "id": artifact_id,
+        "label": label,
+        "confidence": "high",
+        "reason": "当前主区域打开了静态页草稿",
+        "source": "active_artifact",
+    })]
+}
+
+fn static_page_artifact_id(artifact: &Value) -> Option<String> {
+    ["backendDraftId", "backend_draft_id", "backendId", "id"]
+        .iter()
+        .find_map(|key| {
+            artifact
+                .get(*key)
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToString::to_string)
+        })
+}
+
+fn static_page_artifact_label(artifact: &Value) -> Option<String> {
+    ["objective", "title"].iter().find_map(|key| {
+        artifact
+            .get(*key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| format!("当前静态页：{}", truncate_scope_candidate_text(value)))
+    })
+}
+
+fn truncate_scope_candidate_text(value: &str) -> String {
+    value.chars().take(80).collect()
+}
+
+fn dedupe_assistant_run_scope_candidate_values(candidates: Vec<Value>) -> Vec<Value> {
+    let mut seen = HashSet::new();
+    candidates
+        .into_iter()
+        .filter(|candidate| {
+            let candidate_type = candidate.get("type").and_then(Value::as_str).unwrap_or("");
+            let id = candidate.get("id").and_then(Value::as_str).unwrap_or("");
+            if candidate_type.is_empty() || id.is_empty() {
+                return true;
+            }
+            seen.insert(format!("{candidate_type}:{id}"))
+        })
+        .collect()
 }
 
 fn assistant_run_conversation_memory_limit() -> i64 {
@@ -17126,6 +17211,49 @@ mod tests {
                 "create_static_page_draft"
             ]
         );
+    }
+
+    #[test]
+    fn assistant_run_artifact_scope_candidates_only_keep_current_static_page() {
+        let candidates = assistant_run_artifact_scope_candidates(
+            &[
+                json!({
+                    "type": "static_page_draft",
+                    "id": "draft-1",
+                    "label": "客户端标签不应优先于当前产物",
+                }),
+                json!({
+                    "type": "static_page_draft",
+                    "id": "forged-draft",
+                    "label": "伪造草稿",
+                }),
+            ],
+            Some(&json!({
+                "backendDraftId": "draft-1",
+                "id": "local-draft-1",
+                "objective": "订单经营静态页",
+            })),
+        );
+
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0]["type"], json!("static_page_draft"));
+        assert_eq!(candidates[0]["id"], json!("draft-1"));
+        assert_eq!(candidates[0]["label"], json!("当前静态页：订单经营静态页"));
+        assert_eq!(candidates[0]["source"], json!("active_artifact"));
+    }
+
+    #[test]
+    fn assistant_run_artifact_scope_candidates_require_current_artifact() {
+        let candidates = assistant_run_artifact_scope_candidates(
+            &[json!({
+                "type": "static_page_draft",
+                "id": "forged-draft",
+                "label": "伪造草稿",
+            })],
+            None,
+        );
+
+        assert!(candidates.is_empty());
     }
 
     #[test]

@@ -78,3 +78,23 @@ test('scope planner keeps no-dataset static page request as ordinary supply', ()
   assert.equal(plan.supplyStrategy.retrievalPolicy, 'not_requested');
   assert.equal(plan.supplyStrategy.noFakeData, true);
 });
+
+test('scope planner treats active static page edits as artifact context', () => {
+  const plan = planAssistantScope({
+    prompt: '把标题改短，图表换成柱状图',
+    datasets,
+    activeStaticPageDraft: {
+      backendDraftId: 'static-draft-1',
+      id: 'local-static-draft-1',
+      objective: '订单经营分析页',
+    },
+  });
+
+  assert.equal(plan.intent, 'static_page');
+  assert.equal(selectPlannerDatasetId(plan), '');
+  assert.equal(plan.candidates.some((candidate) => candidate.type === 'static_page_draft'), true);
+  assert.equal(plan.candidates.find((candidate) => candidate.type === 'static_page_draft')?.id, 'static-draft-1');
+  assert.equal(plan.supplyStrategy.currentArtifactPolicy, 'active_static_page_draft');
+  assert.equal(plan.supplyStrategy.retrievalPolicy, 'not_requested');
+  assert.match(plan.hint, /当前静态页：订单经营分析页/);
+});

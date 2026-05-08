@@ -452,8 +452,10 @@ export default function HomePageClient() {
       latestMessages: visibleMessages,
       activityEvents,
       selectedDataset,
+      activeStaticPageDraft,
+      staticPageDrafts: staticPageDraftItems,
     }),
-    [activityEvents, datasets, publishedReports, reportPlans, selectedDataset, visibleMessages],
+    [activityEvents, activeStaticPageDraft, datasets, publishedReports, reportPlans, selectedDataset, staticPageDraftItems, visibleMessages],
   );
   const toolbarSourceItems = useMemo(
     () => (selectedDataset ? [{ name: selectedDataset.title, status: 'healthy' }] : []),
@@ -1787,6 +1789,7 @@ export default function HomePageClient() {
       datasets,
       selectedDatasetId,
       conversationMemory: visibleMessages,
+      activeStaticPageDraft,
     });
     setScopePlan(nextScopePlan);
     const plannedDatasetId = selectedDatasetId || selectPlannerDatasetId(nextScopePlan);
@@ -1826,6 +1829,8 @@ export default function HomePageClient() {
           latestMessages: [...localMessages, userMessage],
           activityEvents,
           selectedDataset: effectiveDataset,
+          activeStaticPageDraft: pendingStaticPageDraft || activeStaticPageDraft,
+          staticPageDrafts: staticPageDraftItems,
         });
         let assistantContent = '';
         let usedBackendAssistantRun = false;
