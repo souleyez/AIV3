@@ -341,7 +341,7 @@ The next development thread should continue with static-page final-render/chart/
 
 ### Task 6: Improve Assistant Context Supply For Static Pages
 
-**Status:** In progress. Frontend startup briefing and scope planner now expose static-page/report/media capabilities, controlled continuous-action policy, recommended tool actions, selected/inferred visible-scope rules, quality-first context budget, and compact UI intent/action chips. Backend AssistantRun/RAG depth still needs follow-up validation.
+**Status:** In progress. Frontend startup briefing and scope planner expose static-page/report/media capabilities, controlled continuous-action policy, recommended tool actions, selected/inferred visible-scope rules, quality-first context budget, and compact UI intent/action chips. Backend AssistantRun scope planning now emits the same supply-policy contract, carries recommended tool actions into context/evidence state, preserves ReAct protocol action names separately, and expands detail-first evidence limits for static-page/report/media scopes. Deeper RAG/detail-worker quality still needs follow-up validation.
 
 **Files:**
 

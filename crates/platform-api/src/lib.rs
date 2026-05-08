@@ -7123,7 +7123,7 @@ fn build_assistant_run_provider_input_with_evidence(
         "你是智能数据工作台里的普通聊天运行时。".to_string(),
         "原则：不替用户编排答案；只根据用户问题、启动简报、范围候选和必要历史直接回答。"
             .to_string(),
-        "系统能力：可普通聊天、检索供料、读取文档细节、读取音视频转写/场景等媒体细节、创建报表、规划/渲染静态页；缺数据时必须说明缺失，不能编造指标。"
+        "系统能力：可普通聊天、检索供料、读取文档细节、读取音视频转写/场景等媒体细节、创建报表、规划/渲染/修改静态页、导出静态页 ZIP 交付包；缺数据时必须说明缺失，不能编造指标。"
             .to_string(),
     ];
 
@@ -7256,6 +7256,10 @@ fn build_assistant_run_context_policy(selected_scope: &Value) -> Value {
         },
         "supply_policy": "host_supplies_model_answers",
         "retrieval_policy": retrieval_policy,
+        "action_policy": assistant_run_scope_action_policy(selected_scope),
+        "context_budget_policy": assistant_run_scope_context_budget_policy(selected_scope),
+        "candidate_policy": assistant_run_scope_candidate_policy(selected_scope),
+        "recommended_tool_actions": assistant_run_scope_recommended_tool_actions(selected_scope),
         "assistant_intent": assistant_run_scope_intent(selected_scope),
         "scope_supply_policy": supply_policy,
     })
@@ -8393,6 +8397,12 @@ async fn build_assistant_run_evidence_state(
         return Ok(json!({
             "status": "not_requested",
             "policy": "host_supplies_model_answers",
+            "intent": assistant_run_scope_intent(selected_scope),
+            "supply_policy": assistant_run_scope_supply_policy(selected_scope),
+            "action_policy": assistant_run_scope_action_policy(selected_scope),
+            "context_budget_policy": assistant_run_scope_context_budget_policy(selected_scope),
+            "candidate_policy": assistant_run_scope_candidate_policy(selected_scope),
+            "recommended_tool_actions": assistant_run_scope_recommended_tool_actions(selected_scope),
             "supplied_items": [],
         }));
     }
@@ -8524,7 +8534,11 @@ async fn build_assistant_run_evidence_state(
         "policy": "host_supplies_model_answers",
         "intent": assistant_run_scope_intent(selected_scope),
         "supply_policy": assistant_run_scope_supply_policy(selected_scope),
+        "action_policy": assistant_run_scope_action_policy(selected_scope),
+        "context_budget_policy": assistant_run_scope_context_budget_policy(selected_scope),
+        "candidate_policy": assistant_run_scope_candidate_policy(selected_scope),
         "detail_preferred": prefer_detail,
+        "recommended_tool_actions": assistant_run_scope_recommended_tool_actions(selected_scope),
         "recommended_actions": assistant_run_recommended_supply_actions(selected_scope, !supplied_items.is_empty()),
         "detail_targets": detail_targets,
         "selected_scope": selected_scope,
@@ -11361,6 +11375,95 @@ fn assistant_run_scope_supply_policy(scope: &Value) -> Value {
         .or_else(|| scope.get("supplyPolicy"))
         .cloned()
         .unwrap_or_else(|| json!({}))
+}
+
+fn assistant_run_scope_policy_string(
+    scope: &Value,
+    field_names: &[&str],
+    default_value: &str,
+) -> String {
+    let policy = assistant_run_scope_supply_policy(scope);
+    field_names
+        .iter()
+        .find_map(|field_name| policy.get(*field_name).and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(default_value)
+        .to_string()
+}
+
+fn assistant_run_scope_action_policy(scope: &Value) -> String {
+    assistant_run_scope_policy_string(
+        scope,
+        &["actionPolicy", "action_policy"],
+        "model_may_request_controlled_actions_host_validates",
+    )
+}
+
+fn assistant_run_scope_context_budget_policy(scope: &Value) -> String {
+    let default_value = if assistant_run_scope_prefers_detail(scope)
+        || selected_scope_requests_conversation_memory(scope)
+    {
+        "quality_first_token_tolerant"
+    } else {
+        "compact_until_retrieval_needed"
+    };
+    assistant_run_scope_policy_string(
+        scope,
+        &["contextBudgetPolicy", "context_budget_policy"],
+        default_value,
+    )
+}
+
+fn assistant_run_scope_candidate_policy(scope: &Value) -> String {
+    let default_value = if selected_dataset_ids_from_scope(scope).is_empty() {
+        "ordinary_chat_without_forced_dataset"
+    } else {
+        "selected_or_inferred_visible_datasets_only"
+    };
+    assistant_run_scope_policy_string(
+        scope,
+        &["candidatePolicy", "candidate_policy"],
+        default_value,
+    )
+}
+
+fn assistant_run_scope_recommended_tool_actions(scope: &Value) -> Vec<String> {
+    let policy = assistant_run_scope_supply_policy(scope);
+    for field_name in ["recommendedActions", "recommended_actions"] {
+        if let Some(actions) = policy.get(field_name).and_then(Value::as_array) {
+            let values = actions
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToString::to_string)
+                .take(5)
+                .collect::<Vec<_>>();
+            if !values.is_empty() {
+                return values;
+            }
+        }
+    }
+
+    let mut actions = Vec::new();
+    let has_dataset = !selected_dataset_ids_from_scope(scope).is_empty();
+    if has_dataset {
+        actions.push("retrieval.search".to_string());
+    }
+    if assistant_run_scope_prefers_detail(scope) {
+        actions.push("retrieval.read_detail".to_string());
+    }
+    match assistant_run_scope_intent(scope) {
+        "static_page" => actions.push("static_page.plan".to_string()),
+        "report" => actions.push("report.plan".to_string()),
+        _ => {}
+    }
+    if actions.is_empty() {
+        actions.push("ordinary_chat.answer".to_string());
+    }
+    actions.truncate(5);
+    actions
 }
 
 fn assistant_run_scope_prefers_detail(scope: &Value) -> bool {
@@ -17492,7 +17595,7 @@ mod tests {
         });
 
         assert!(input.contains("智能数据工作台"));
-        assert!(input.contains("规划/渲染静态页"));
+        assert!(input.contains("规划/渲染/修改静态页"));
         assert!(input.contains("范围候选"));
         assert!(input.contains("当前选中范围"));
         assert!(input.contains("assistant: 已预选订单数据集"));
@@ -17561,7 +17664,8 @@ mod tests {
             "supply_policy": {
                 "retrievalPolicy": "detail_first",
                 "preferDetail": true,
-                "noFakeData": true
+                "noFakeData": true,
+                "recommendedActions": ["retrieval.search", "retrieval.read_detail", "static_page.plan"]
             }
         });
         let policy = build_assistant_run_context_policy(&selected_scope);
@@ -17569,6 +17673,26 @@ mod tests {
         assert_eq!(policy["assistant_intent"], json!("static_page"));
         assert_eq!(policy["history_policy"], json!("intent_gated_selected"));
         assert_eq!(policy["retrieval_policy"], json!("detail_first"));
+        assert_eq!(
+            policy["action_policy"],
+            json!("model_may_request_controlled_actions_host_validates")
+        );
+        assert_eq!(
+            policy["context_budget_policy"],
+            json!("quality_first_token_tolerant")
+        );
+        assert_eq!(
+            policy["candidate_policy"],
+            json!("selected_or_inferred_visible_datasets_only")
+        );
+        assert_eq!(
+            policy["recommended_tool_actions"],
+            json!([
+                "retrieval.search",
+                "retrieval.read_detail",
+                "static_page.plan"
+            ])
+        );
         assert_eq!(policy["scope_supply_policy"]["preferDetail"], json!(true));
     }
 
@@ -17595,6 +17719,14 @@ mod tests {
                 "retrieve_evidence",
                 "read_document_detail",
                 "create_static_page_draft"
+            ]
+        );
+        assert_eq!(
+            assistant_run_scope_recommended_tool_actions(&selected_scope),
+            vec![
+                "retrieval.search".to_string(),
+                "retrieval.read_detail".to_string(),
+                "static_page.plan".to_string()
             ]
         );
     }

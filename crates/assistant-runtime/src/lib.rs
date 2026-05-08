@@ -567,6 +567,17 @@ fn supply_policy_for_scope(
     json!({
         "intent": intent,
         "answerPolicy": "model_authored_host_supplied",
+        "actionPolicy": "model_may_request_controlled_actions_host_validates",
+        "contextBudgetPolicy": if prefer_detail || has_memory {
+            "quality_first_token_tolerant"
+        } else {
+            "compact_until_retrieval_needed"
+        },
+        "candidatePolicy": if has_dataset {
+            "selected_or_inferred_visible_datasets_only"
+        } else {
+            "ordinary_chat_without_forced_dataset"
+        },
         "historyPolicy": if has_memory { "intent_gated_selected" } else { "intent_gated" },
         "retrievalPolicy": if has_dataset {
             if prefer_detail { "detail_first" } else { "standard" }
@@ -574,8 +585,36 @@ fn supply_policy_for_scope(
             "not_requested"
         },
         "preferDetail": prefer_detail,
+        "recommendedActions": recommended_tool_actions_for_scope(intent, has_dataset, prefer_detail, detail_prompt),
         "noFakeData": true,
     })
+}
+
+fn recommended_tool_actions_for_scope(
+    intent: &str,
+    has_dataset: bool,
+    prefer_detail: bool,
+    detail_prompt: bool,
+) -> Vec<&'static str> {
+    let mut actions = Vec::new();
+    if has_dataset {
+        actions.push("retrieval.search");
+    }
+    if prefer_detail {
+        actions.push("retrieval.read_detail");
+    }
+    if detail_prompt {
+        actions.push("media.detail");
+    }
+    match intent {
+        "static_page" => actions.push("static_page.plan"),
+        "report" => actions.push("report.plan"),
+        _ => {}
+    }
+    if actions.is_empty() {
+        actions.push("ordinary_chat.answer");
+    }
+    actions
 }
 
 #[cfg(test)]
@@ -625,6 +664,14 @@ mod tests {
             plan.selected_scope["supply_policy"]["preferDetail"],
             json!(false)
         );
+        assert_eq!(
+            plan.selected_scope["supply_policy"]["candidatePolicy"],
+            json!("selected_or_inferred_visible_datasets_only")
+        );
+        assert_eq!(
+            plan.selected_scope["supply_policy"]["recommendedActions"],
+            json!(["retrieval.search"])
+        );
     }
 
     #[test]
@@ -650,6 +697,10 @@ mod tests {
         assert_eq!(
             plan.selected_scope["supply_policy"]["historyPolicy"],
             json!("intent_gated_selected")
+        );
+        assert_eq!(
+            plan.selected_scope["supply_policy"]["contextBudgetPolicy"],
+            json!("quality_first_token_tolerant")
         );
     }
 
@@ -720,6 +771,10 @@ mod tests {
             plan.selected_scope["supply_policy"]["preferDetail"],
             json!(true)
         );
+        assert_eq!(
+            plan.selected_scope["supply_policy"]["recommendedActions"],
+            json!(["retrieval.search", "retrieval.read_detail", "media.detail"])
+        );
     }
 
     #[test]
@@ -758,6 +813,14 @@ mod tests {
             plan.selected_scope["supply_policy"]["retrievalPolicy"],
             json!("not_requested")
         );
+        assert_eq!(
+            plan.selected_scope["supply_policy"]["candidatePolicy"],
+            json!("ordinary_chat_without_forced_dataset")
+        );
+        assert_eq!(
+            plan.selected_scope["supply_policy"]["recommendedActions"],
+            json!(["ordinary_chat.answer"])
+        );
     }
 
     #[test]
@@ -780,6 +843,14 @@ mod tests {
             plan.selected_scope["supply_policy"]["preferDetail"],
             json!(true)
         );
+        assert_eq!(
+            plan.selected_scope["supply_policy"]["recommendedActions"],
+            json!([
+                "retrieval.search",
+                "retrieval.read_detail",
+                "static_page.plan"
+            ])
+        );
         assert!(plan.hint.contains("意图：静态页规划"));
     }
 
@@ -797,6 +868,10 @@ mod tests {
         assert_eq!(
             plan.selected_scope["supply_policy"]["retrievalPolicy"],
             json!("not_requested")
+        );
+        assert_eq!(
+            plan.selected_scope["supply_policy"]["recommendedActions"],
+            json!(["static_page.plan"])
         );
     }
 }
