@@ -261,11 +261,18 @@ const STATIC_PAGE_RENDER_SPEC = {
   mobileLayout: 'single-column-sortable',
   componentModel: 'dom-text-svg-chart',
   chartRuntime: 'deterministic-with-echarts-advanced',
-  editableContent: ['title', 'content', 'dataBinding', 'visualization', 'chartOptions', 'layout'],
+  chartRuntimePolicy: {
+    default: 'deterministic',
+    advanced: 'echarts',
+    allowedRuntimes: ['deterministic', 'echarts'],
+    advancedOptions: 'plain-json-echarts-option-only',
+  },
+  editableContent: ['title', 'content', 'dataBinding', 'visualization', 'chartRuntime', 'chartOptions', 'layout'],
   generationGuardrails: [
     '效果图必须服从模块网格布局和移动端顺序',
     '正文、指标、图表在最终静态页中必须是真 DOM 或 SVG，不允许只烘焙进图片',
     '复杂背景、纹理、装饰可以作为图片资产，核心数据表达必须可重新渲染',
+    'ECharts 只允许纯 JSON 配置，不允许函数、HTML、远程 URL 或事件处理器字段',
     '避免 3D 透视、真实摄影 UI、不可复刻字体效果和过度复杂玻璃反射',
   ],
 };
@@ -319,14 +326,20 @@ export function buildStaticPageDataSnapshot(draft) {
     evidenceIds: Array.isArray(draft?.source?.evidenceIds) ? [...draft.source.evidenceIds] : [],
     dataSourceCandidates,
     fieldCandidates,
-    moduleBindings: modules.map((module) => ({
-      moduleId: module.id,
-      title: module.title,
-      binding: normalizeDataBinding(module.dataBinding || {}),
-      visualizationType: module.visualization?.type || 'text-insight',
-      chartRuntime: normalizeVisualization(module.visualization || {}).chartRuntime,
-      chartOptions: normalizeVisualization(module.visualization || {}).chartOptions,
-    })),
+    moduleBindings: modules.map((module) => {
+      const visualization = normalizeVisualization(module.visualization || {});
+      const sampleData = chartDataRowsFromVisualization(visualization);
+      return {
+        moduleId: module.id,
+        title: module.title,
+        binding: normalizeDataBinding(module.dataBinding || {}),
+        visualizationType: visualization.type,
+        chartRuntime: visualization.chartRuntime,
+        chartOptions: visualization.chartOptions,
+        sampleData,
+        dataQuality: sampleData.length ? 'module_data' : 'binding_only',
+      };
+    }),
   };
 }
 
@@ -419,6 +432,93 @@ function normalizeChartOptions(visualizationType, chartOptions = {}, chartRuntim
   };
 }
 
+function chartRowLabel(row, index) {
+  if (row && typeof row === 'object') {
+    return row.label || row.name || row.month || row.date || row.period || row.category || row.title || row.x || `项${index + 1}`;
+  }
+  return `项${index + 1}`;
+}
+
+function chartRowValue(row) {
+  if (typeof row === 'number' && Number.isFinite(row)) return row;
+  if (!row || typeof row !== 'object') return null;
+  const candidates = [
+    row.value,
+    row.amount,
+    row.count,
+    row.score,
+    row.rate,
+    row.total,
+    row.y,
+    row['订单金额'],
+    row['金额'],
+    row['收入'],
+    row['数量'],
+  ];
+  const matched = candidates.find((value) => value !== undefined && value !== null && value !== '');
+  const numeric = Number(String(matched ?? '').replace(/[%,$，,]/g, '').trim());
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+function normalizeChartDataRows(rows = []) {
+  const items = Array.isArray(rows) ? rows : [];
+  return items
+    .slice(0, 24)
+    .map((row, index) => {
+      const value = chartRowValue(row);
+      if (value === null) return null;
+      return {
+        label: String(chartRowLabel(row, index)).trim() || `项${index + 1}`,
+        value,
+      };
+    })
+    .filter(Boolean);
+}
+
+function chartDataRowsFromVisualization(visualization = {}) {
+  return normalizeChartDataRows(
+    visualization.data
+      || visualization.values
+      || visualization.sampleData
+      || visualization.sample_data
+      || visualization.rows
+      || visualization.items
+      || [],
+  );
+}
+
+function echartsSeriesType(visualizationType) {
+  if (visualizationType === 'line-chart') return 'line';
+  if (visualizationType === 'donut-chart') return 'pie';
+  if (visualizationType === 'risk-matrix') return 'scatter';
+  return 'bar';
+}
+
+function buildDefaultEchartsOptions(visualizationType, rows = []) {
+  if (!rows.length) return {};
+  const seriesType = echartsSeriesType(visualizationType);
+  if (seriesType === 'pie') {
+    return {
+      tooltip: { trigger: 'item' },
+      series: [{
+        type: 'pie',
+        radius: ['46%', '72%'],
+        data: rows.map((row) => ({ name: row.label, value: row.value })),
+      }],
+    };
+  }
+  return {
+    tooltip: { trigger: 'axis' },
+    xAxis: { type: 'category', data: rows.map((row) => row.label) },
+    yAxis: { type: 'value' },
+    series: [{
+      type: seriesType,
+      name: visualizationLabel(visualizationType),
+      data: rows.map((row) => row.value),
+    }],
+  };
+}
+
 function normalizeDataBinding(binding = {}) {
   const sourceId = DATA_SOURCE_IDS.has(binding.sourceId) ? binding.sourceId : 'model';
   const preset = dataSourcePreset(sourceId);
@@ -438,12 +538,15 @@ function normalizeVisualization(visualization = {}) {
     ? visualization.chartOptions
     : {};
   const chartRuntime = normalizeChartRuntimeFromVisualization(visualization, chartOptions);
-  return {
+  const data = chartDataRowsFromVisualization(visualization);
+  const next = {
     type,
     label: visualization.label || visualizationLabel(type),
     chartRuntime,
     chartOptions: normalizeChartOptions(type, chartOptions, chartRuntime),
   };
+  if (data.length) next.data = data;
+  return next;
 }
 
 function normalizeLayout(layout = {}) {
@@ -606,12 +709,24 @@ export function buildStaticPageModuleUpdateOperation(module, patch = {}) {
     ...(module?.dataBinding || {}),
     ...(patch.dataBinding || {}),
   });
-  const visualization = normalizeVisualization({
+  const requestedVisualization = {
     ...(module?.visualization || {}),
     ...(patch.visualization || {}),
+  };
+  const requestedRows = chartDataRowsFromVisualization(requestedVisualization);
+  const requestedRuntime = requestedVisualization.chartRuntime
+    || requestedVisualization.runtime
+    || module?.visualization?.chartRuntime
+    || 'deterministic';
+  const defaultEchartsOptions = requestedRuntime === 'echarts'
+    ? buildDefaultEchartsOptions(visualizationType, requestedRows)
+    : {};
+  const visualization = normalizeVisualization({
+    ...requestedVisualization,
     type: visualizationType,
     chartOptions: {
       ...(module?.visualization?.chartOptions || {}),
+      ...defaultEchartsOptions,
       ...(patch.chartOptions || {}),
       ...(patch.visualization?.chartOptions || {}),
       dataKey: patch.dataBinding?.fieldPath
@@ -809,6 +924,8 @@ export function applyStaticPageOperation(draft, operation = {}) {
       visualization: {
         type: operation.visualizationType,
         label: visualizationLabel(operation.visualizationType),
+        chartRuntime: operation.chartRuntime || next.modules[moduleIndex]?.visualization?.chartRuntime,
+        chartOptions: operation.chartOptions || next.modules[moduleIndex]?.visualization?.chartOptions || {},
       },
     });
   }
@@ -1101,17 +1218,21 @@ export function buildStaticPageImagePayload(draft, { oneClick = false } = {}) {
       guardrails: renderSpec.generationGuardrails,
     },
     modelSummary: draft.modelSummary,
-    modules: draft.modules.map((module) => ({
-      id: module.id,
-      title: module.title,
-      content: module.content,
-      dataLabel: module.dataBinding?.label || '',
-      dataBinding: normalizeDataBinding(module.dataBinding || {}),
-      visualizationType: module.visualization?.type || 'text-insight',
-      chartRuntime: normalizeVisualization(module.visualization || {}).chartRuntime,
-      chartOptions: normalizeVisualization(module.visualization || {}).chartOptions,
-      layout: normalizeLayout(module.layout),
-    })),
+    modules: draft.modules.map((module) => {
+      const visualization = normalizeVisualization(module.visualization || {});
+      return {
+        id: module.id,
+        title: module.title,
+        content: module.content,
+        dataLabel: module.dataBinding?.label || '',
+        dataBinding: normalizeDataBinding(module.dataBinding || {}),
+        visualizationType: visualization.type,
+        chartRuntime: visualization.chartRuntime,
+        chartOptions: visualization.chartOptions,
+        sampleData: chartDataRowsFromVisualization(visualization),
+        layout: normalizeLayout(module.layout),
+      };
+    }),
   };
 }
 

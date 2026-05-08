@@ -1200,6 +1200,7 @@ textarea {
 .static-page-effect-head em,
 .static-page-queue-card span,
 .static-page-failure-card span,
+.static-page-stale-card span,
 .static-page-preview-card span {
   color: var(--subtle);
   font-size: 12px;
@@ -1210,6 +1211,7 @@ textarea {
 .static-page-effect-head strong,
 .static-page-queue-card strong,
 .static-page-failure-card strong,
+.static-page-stale-card strong,
 .static-page-preview-card strong,
 .static-page-preview-placeholder strong {
   color: var(--text);
@@ -1217,6 +1219,7 @@ textarea {
 
 .static-page-queue-card,
 .static-page-failure-card,
+.static-page-stale-card,
 .static-page-preview-card,
 .static-page-preview-image-card,
 .static-page-preview-placeholder {
@@ -1231,6 +1234,11 @@ textarea {
 .static-page-failure-card {
   border-color: rgba(239, 68, 68, 0.2);
   background: rgba(239, 68, 68, 0.08);
+}
+
+.static-page-stale-card {
+  border-color: rgba(245, 158, 11, 0.22);
+  background: rgba(245, 158, 11, 0.09);
 }
 
 .static-page-preview-image-card {
@@ -3144,6 +3152,7 @@ body {
 
 .static-page-effect-preview.compact .static-page-queue-card,
 .static-page-effect-preview.compact .static-page-failure-card,
+.static-page-effect-preview.compact .static-page-stale-card,
 .static-page-effect-preview.compact .static-page-preview-card,
 .static-page-effect-preview.compact .static-page-preview-image-card,
 .static-page-effect-preview.compact .static-page-preview-placeholder {

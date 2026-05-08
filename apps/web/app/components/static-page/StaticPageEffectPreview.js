@@ -44,6 +44,7 @@ export default function StaticPageEffectPreview({
   const failureMessage = jobStatus === 'failed'
     ? (imageJob.queueMessage || '效果图生成失败，可以重新生成。')
     : '';
+  const previewStale = draft?.previewContract?.status === 'stale';
 
   function queuePreview() {
     onApplyOperation?.({
@@ -82,6 +83,13 @@ export default function StaticPageEffectPreview({
         <div className="static-page-failure-card">
           <strong>效果图生成失败</strong>
           <span>{failureMessage}</span>
+        </div>
+      ) : null}
+
+      {previewStale ? (
+        <div className="static-page-stale-card">
+          <strong>规划已经改过</strong>
+          <span>上一张效果图和最终静态页已失效，需要重新生成后再确认。</span>
         </div>
       ) : null}
 

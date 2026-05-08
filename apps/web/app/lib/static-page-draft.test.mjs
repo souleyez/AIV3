@@ -311,6 +311,34 @@ test('editing after preview confirmation marks the visual contract stale', () =>
   assert.equal(edited.imageJob.status, 'idle');
 });
 
+test('editing after final render clears stale final page output', () => {
+  const confirmed = applyStaticPageOperation(buildInitialStaticPageDraft(), {
+    type: 'confirm_preview',
+    previewImage: { assetKey: 'preview-1.png' },
+  });
+  const rendered = applyStaticPageOperation(confirmed, {
+    type: 'request_final_render',
+    finalPage: {
+      status: 'rendered',
+      renderer: 'platform-api-static-page-renderer',
+      html: '<main>旧页面</main>',
+    },
+  });
+  const edited = applyStaticPageOperation(rendered, {
+    type: 'update_module',
+    targetModuleId: 'trend',
+    patch: {
+      visualization: {
+        data: [{ label: '三月', value: 1510 }],
+      },
+    },
+  });
+
+  assert.equal(edited.previewContract.status, 'stale');
+  assert.equal(edited.finalPage, null);
+  assert.equal(edited.previewImage, null);
+});
+
 test('module edit patch can update copy data binding and chart as one durable operation', () => {
   const confirmed = applyStaticPageOperation(buildInitialStaticPageDraft(), {
     type: 'confirm_preview',
@@ -381,6 +409,54 @@ test('module edit can request sanitized ECharts runtime for advanced charts', ()
   assert.equal(module.visualization.chartOptions.series[0].type, 'bar');
   assert.deepEqual(module.visualization.chartOptions.series[0].data, [12, 18]);
   assert.equal(next.dataSnapshot.moduleBindings.find((item) => item.moduleId === 'trend').chartRuntime, 'echarts');
+});
+
+test('module edit can update chart data rows and feed snapshot and image payload', () => {
+  const draft = buildInitialStaticPageDraft();
+  const next = applyStaticPageOperation(draft, {
+    type: 'update_module',
+    targetModuleId: 'trend',
+    patch: {
+      visualization: {
+        type: 'line-chart',
+        data: [
+          { label: '一月', value: 1200 },
+          { label: '二月', value: 1380 },
+        ],
+      },
+    },
+  });
+  const module = next.modules.find((item) => item.id === 'trend');
+  const binding = next.dataSnapshot.moduleBindings.find((item) => item.moduleId === 'trend');
+  const imagePayload = buildStaticPageImagePayload(next);
+
+  assert.deepEqual(module.visualization.data, [
+    { label: '一月', value: 1200 },
+    { label: '二月', value: 1380 },
+  ]);
+  assert.equal(binding.dataQuality, 'module_data');
+  assert.equal(binding.sampleData[0].value, 1200);
+  assert.equal(imagePayload.modules.find((item) => item.id === 'trend').sampleData[1].label, '二月');
+});
+
+test('change visualization operation can switch chart runtime without losing safe options', () => {
+  const draft = buildInitialStaticPageDraft();
+  const next = applyStaticPageOperation(draft, {
+    type: 'change_visualization',
+    targetModuleId: 'trend',
+    visualizationType: 'bar-chart',
+    chartRuntime: 'echarts',
+    chartOptions: {
+      xAxis: { type: 'category', data: ['一月'] },
+      yAxis: { type: 'value' },
+      series: [{ type: 'bar', data: [1200] }],
+    },
+  });
+  const module = next.modules.find((item) => item.id === 'trend');
+
+  assert.equal(module.visualization.type, 'bar-chart');
+  assert.equal(module.visualization.chartRuntime, 'echarts');
+  assert.equal(module.visualization.chartOptions.series[0].type, 'bar');
 });
 
 test('unknown chart runtime falls back to deterministic runtime', () => {

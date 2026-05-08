@@ -372,7 +372,16 @@ fn validate_visualization_patch(value: &Value) -> Result<()> {
     for key in object.keys() {
         if !matches!(
             key.as_str(),
-            "type" | "label" | "chartRuntime" | "chartOptions"
+            "type"
+                | "label"
+                | "chartRuntime"
+                | "chartOptions"
+                | "data"
+                | "values"
+                | "rows"
+                | "items"
+                | "sampleData"
+                | "sample_data"
         ) {
             return Err(anyhow!("unsupported visualization field: {key}"));
         }
@@ -395,6 +404,18 @@ fn validate_visualization_patch(value: &Value) -> Result<()> {
         .unwrap_or(DEFAULT_CHART_RUNTIME);
     if let Some(chart_options) = object.get("chartOptions") {
         validate_chart_options(chart_options, chart_runtime)?;
+    }
+    for key in [
+        "data",
+        "values",
+        "rows",
+        "items",
+        "sampleData",
+        "sample_data",
+    ] {
+        if let Some(rows) = object.get(key) {
+            validate_chart_json_value(rows, 0)?;
+        }
     }
     Ok(())
 }
@@ -454,6 +475,18 @@ fn validate_module_contract(value: &Value) -> Result<()> {
         .unwrap_or(DEFAULT_CHART_RUNTIME);
     if let Some(chart_options) = object.get("chartOptions") {
         validate_chart_options(chart_options, chart_runtime)?;
+    }
+    for key in [
+        "data",
+        "values",
+        "rows",
+        "items",
+        "sampleData",
+        "sample_data",
+    ] {
+        if let Some(rows) = object.get(key) {
+            validate_chart_json_value(rows, 0)?;
+        }
     }
     Ok(())
 }
@@ -1180,7 +1213,11 @@ mod tests {
                             "name": "订单金额",
                             "data": [1200, 1380, 1510]
                         }]
-                    }
+                    },
+                    "data": [
+                        {"label": "一月", "value": 1200},
+                        {"label": "二月", "value": 1380}
+                    ]
                 }
             }
         })])
@@ -1193,6 +1230,10 @@ mod tests {
         assert_eq!(
             operations[0]["patch"]["visualization"]["chartOptions"]["series"][0]["type"],
             json!("bar")
+        );
+        assert_eq!(
+            operations[0]["patch"]["visualization"]["data"][0]["value"],
+            json!(1200)
         );
 
         let executable_option = sanitize_static_page_operations(vec![json!({
