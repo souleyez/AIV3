@@ -80,6 +80,9 @@ export default function HomeMobileShell({
               type: 'change_style_direction',
               styleDirection,
             })}
+            onRetryWorkflow={chatPanelProps.onRetryWorkflowExecution}
+            onCancelWorkflow={chatPanelProps.onCancelWorkflowExecution}
+            onRefreshDraft={chatPanelProps.onRefreshStaticPageDraft}
             onOneClick={() => handleStartStaticPageDraft({ oneClick: true })}
             onBackToChat={() => setSurface('chat')}
           />

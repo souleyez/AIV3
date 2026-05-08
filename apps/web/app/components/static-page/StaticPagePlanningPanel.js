@@ -15,6 +15,9 @@ export default function StaticPagePlanningPanel({
   draft,
   onStartDraft,
   onApplyOperation,
+  onRetryWorkflow,
+  onCancelWorkflow,
+  onRefreshDraft,
 }) {
   if (!draft) {
     return (
@@ -66,7 +69,13 @@ export default function StaticPagePlanningPanel({
 
       <StaticPageEffectPreview draft={draft} onApplyOperation={onApplyOperation} />
 
-      <StaticPageFinalRender draft={draft} onApplyOperation={onApplyOperation} />
+      <StaticPageFinalRender
+        draft={draft}
+        onApplyOperation={onApplyOperation}
+        onRetryWorkflow={onRetryWorkflow}
+        onCancelWorkflow={onCancelWorkflow}
+        onRefreshDraft={onRefreshDraft}
+      />
 
       <StaticPagePlanningCanvas draft={draft} onApplyOperation={onApplyOperation} />
 

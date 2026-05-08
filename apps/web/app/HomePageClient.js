@@ -568,12 +568,18 @@ export default function HomePageClient() {
     if (!draft || !renderOutput) {
       return draft;
     }
+    const renderStatus = renderOutput.status || draft.finalPage?.status || 'rendered';
+    const nextStatus = renderStatus === 'rendered'
+      ? 'rendered'
+      : ['queued', 'rendering'].includes(renderStatus)
+        ? 'rendering'
+        : draft.status;
     return {
       ...draft,
-      status: renderOutput.status === 'rendered' ? 'rendered' : draft.status,
+      status: nextStatus,
       finalPage: {
         ...(draft.finalPage || {}),
-        status: renderOutput.status || draft.finalPage?.status || 'rendered',
+        status: renderStatus,
         renderer: 'platform-api-static-page-renderer',
         renderOutputId: renderOutput.id,
         imageJobId: renderOutput.image_job_id || draft.finalPage?.imageJobId || null,
@@ -747,7 +753,7 @@ export default function HomePageClient() {
   async function hydrateBackendStaticPageDraft(backendDraft) {
     let draft = normalizeBackendStaticPageDraft(backendDraft);
     const shouldLoadJobs = draft?.backendDraftId && (draft.imageJob?.id || ['queued', 'preview_ready', 'effect_confirmed'].includes(draft.status));
-    const shouldLoadRenders = draft?.backendDraftId && (draft.finalPage?.renderOutputId || draft.status === 'rendered' || draft.backendStatus === 'rendered');
+    const shouldLoadRenders = Boolean(draft?.backendDraftId);
 
     const [imageJobs, renderOutputs] = await Promise.all([
       shouldLoadJobs
@@ -908,13 +914,15 @@ export default function HomePageClient() {
       method: 'POST',
       body: {
         image_job_id: imageJobId || null,
+        background: true,
       },
     });
     const renderOutput = response?.render_output;
+    const renderStatus = renderOutput?.status || 'queued';
     const rendered = applyStaticPageOperation(draft, {
       type: 'request_final_render',
       finalPage: {
-        status: 'rendered',
+        status: renderStatus,
         renderer: 'platform-api-static-page-renderer',
         renderOutputId: renderOutput?.id || '',
         imageJobId: renderOutput?.image_job_id || imageJobId || null,
@@ -925,11 +933,18 @@ export default function HomePageClient() {
     const merged = mergeBackendStaticPageDraft(rendered, response?.draft);
     const finalDraft = {
       ...merged,
-      status: 'rendered',
+      status: renderStatus === 'rendered' ? 'rendered' : 'rendering',
       finalPage: rendered.finalPage,
     };
     replaceStaticPageDraft(baseDraft.id, finalDraft);
-    setBanner('最终静态页已按确认效果图生成。');
+    setBanner(renderStatus === 'rendered'
+      ? '最终静态页已按确认效果图生成。'
+      : '最终静态页已进入后台制作队列，可以继续聊天；完成后会保存在右侧成品栏。');
+    if (typeof window !== 'undefined') {
+      window.setTimeout(() => {
+        refreshBackendStaticPageDraft(finalDraft.backendDraftId, { silent: true });
+      }, 2400);
+    }
     return { renderOutput, draft: finalDraft };
   }
 
@@ -2009,6 +2024,26 @@ export default function HomePageClient() {
       return null;
     }
 
+    if (operation.type === 'request_final_render' && activeStaticPageDraft.backendDraftId) {
+      const optimisticDraft = replaceDraftWithOperation(activeStaticPageDraft, {
+        ...operation,
+        finalPage: operation.finalPage || {
+          status: 'queued',
+          renderer: 'platform-api-static-page-renderer',
+          renderOutputId: '',
+          imageJobId: activeStaticPageDraft.imageJob?.id || null,
+          assetManifest: {
+            status: 'queued',
+            queue_copy: '最终静态页正在后台制作，可以继续聊天或修改其他内容。',
+          },
+        },
+      });
+      createBackendStaticPageRender(optimisticDraft, operation).catch((syncError) => {
+        setBanner(`静态页已先进入本地后台状态；后端渲染暂不可用：${syncError instanceof Error ? syncError.message : '请求失败'}。`);
+      });
+      return optimisticDraft;
+    }
+
     const draft = replaceDraftWithOperation(activeStaticPageDraft, operation);
 
     if (operation.type === 'queue_image_job') {
@@ -2024,15 +2059,6 @@ export default function HomePageClient() {
       if (draft.backendDraftId) {
         confirmBackendStaticPagePreview(draft, operation).catch((syncError) => {
           setBanner(`效果图已先在本地确认；后端确认暂不可用：${syncError instanceof Error ? syncError.message : '请求失败'}。`);
-        });
-      }
-      return draft;
-    }
-
-    if (operation.type === 'request_final_render') {
-      if (draft.backendDraftId) {
-        createBackendStaticPageRender(draft, operation).catch((syncError) => {
-          setBanner(`静态页已先在本地生成模拟版；后端渲染暂不可用：${syncError instanceof Error ? syncError.message : '请求失败'}。`);
         });
       }
       return draft;
@@ -2178,9 +2204,44 @@ export default function HomePageClient() {
       await Promise.all([
         refreshCatalog({ preferredDatasetId: selectedDatasetId, silent: true }),
         selectedReportPlanId ? refreshReportDetail(selectedReportPlanId, { silent: true }) : Promise.resolve(),
+        refreshStaticPageDraftShelf({ silent: true }),
+        activeStaticPageDraft?.backendDraftId
+          ? refreshBackendStaticPageDraft(activeStaticPageDraft.backendDraftId, { silent: true })
+          : Promise.resolve(),
       ]);
     } catch (retryError) {
       setError(retryError instanceof Error ? retryError.message : '重试 workflow 失败');
+    } finally {
+      setReportActionBusy('');
+    }
+  }
+
+  async function handleCancelWorkflowExecution(executionId) {
+    if (!executionId) {
+      return;
+    }
+
+    setReportActionBusy(`cancel:${executionId}`);
+    setError('');
+    try {
+      const transition = await fetchJson(`/api/v3/workflow-executions/${executionId}/signals`, {
+        method: 'POST',
+        body: {
+          kind: 'cancel_requested',
+          reason: 'web_static_page_render_cancel',
+        },
+      });
+      setBanner(`已请求取消 workflow ${transition.execution?.id || executionId}。`);
+      await Promise.all([
+        refreshCatalog({ preferredDatasetId: selectedDatasetId, silent: true }),
+        selectedReportPlanId ? refreshReportDetail(selectedReportPlanId, { silent: true }) : Promise.resolve(),
+        refreshStaticPageDraftShelf({ silent: true }),
+        activeStaticPageDraft?.backendDraftId
+          ? refreshBackendStaticPageDraft(activeStaticPageDraft.backendDraftId, { silent: true })
+          : Promise.resolve(),
+      ]);
+    } catch (cancelError) {
+      setError(cancelError instanceof Error ? cancelError.message : '取消 workflow 失败');
     } finally {
       setReportActionBusy('');
     }
@@ -2491,6 +2552,9 @@ export default function HomePageClient() {
     staticPageDraft: activeStaticPageDraft,
     onStartStaticPageDraft: handleStartStaticPageDraft,
     onApplyStaticPageOperation: handleApplyStaticPageOperation,
+    onRetryWorkflowExecution: handleRetryWorkflowExecution,
+    onCancelWorkflowExecution: handleCancelWorkflowExecution,
+    onRefreshStaticPageDraft: (backendDraftId) => refreshBackendStaticPageDraft(backendDraftId, { silent: false }),
     onOpenStaticPageBuilder: () => setMobilePanel('insights'),
     onCloseStaticPageDraft: handleCloseStaticPageDraft,
     startupBriefing: assistantStartupBriefing,
@@ -2525,6 +2589,7 @@ export default function HomePageClient() {
     onRequestReportRender: handleRequestReportRender,
     onPublishReport: handlePublishReport,
     onRetryWorkflowExecution: handleRetryWorkflowExecution,
+    onCancelWorkflowExecution: handleCancelWorkflowExecution,
     onRefreshReportDetail: () => {
       if (selectedReportPlanId) {
         refreshReportDetail(selectedReportPlanId);

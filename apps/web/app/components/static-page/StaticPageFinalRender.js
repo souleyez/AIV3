@@ -9,6 +9,17 @@ const STYLE_LABELS = {
   'data-command': '数据运营看板',
 };
 
+const FINAL_STATUS_LABELS = {
+  queued: '后台排队',
+  rendering: '后台生成中',
+  rendered: '后端已生成',
+  failed: '生成失败',
+  cancelled: '已取消',
+  mock_ready: '本地模拟',
+};
+
+const PENDING_FINAL_STATUSES = new Set(['queued', 'rendering']);
+
 function orderedModules(draft, compact) {
   if (!compact) {
     return [...draft.modules].sort((left, right) => {
@@ -26,18 +37,181 @@ function visualizationLabel(module) {
   return module.visualization?.label || module.visualization?.type || '图表占位';
 }
 
+function finalPageStatus(draft) {
+  if (draft?.finalPage?.status) {
+    return draft.finalPage.status;
+  }
+  if (draft?.status === 'rendering') {
+    return 'rendering';
+  }
+  if (draft?.status === 'rendered') {
+    return 'rendered';
+  }
+  return '';
+}
+
+function finalPageManifest(draft) {
+  return draft?.finalPage?.assetManifest && typeof draft.finalPage.assetManifest === 'object'
+    ? draft.finalPage.assetManifest
+    : {};
+}
+
+function workflowExecutionIdFromManifest(manifest) {
+  return manifest?.workflow?.executionId
+    || manifest?.workflow?.execution_id
+    || manifest?.workflow?.workflowExecutionId
+    || manifest?.workflow_execution_id
+    || manifest?.workflowExecutionId
+    || '';
+}
+
+function buildStaticPageExportPackage(draft, payload, backendHtml) {
+  const manifest = finalPageManifest(draft);
+  const packageManifest = manifest.export_package || {
+    kind: 'static-page-export-package',
+    version: 1,
+    status: draft.finalPage?.status || draft.status || 'unknown',
+    files: [
+      { path: 'index.html', role: 'rendered_static_page', mime: 'text/html' },
+      { path: 'asset-manifest.json', role: 'renderer_manifest', mime: 'application/json' },
+      { path: 'data-snapshot.json', role: 'render_data_snapshot', mime: 'application/json' },
+      { path: 'modules.json', role: 'editable_module_plan', mime: 'application/json' },
+    ],
+  };
+  return {
+    kind: 'static-page-export-package',
+    version: 1,
+    draftId: draft.id,
+    backendDraftId: draft.backendDraftId || null,
+    renderOutputId: draft.finalPage?.renderOutputId || null,
+    imageJobId: draft.finalPage?.imageJobId || draft.imageJob?.id || null,
+    createdAt: new Date().toISOString(),
+    packageManifest,
+    files: [
+      {
+        path: 'index.html',
+        mime: 'text/html',
+        content: backendHtml || '<!-- static page html is not available yet -->',
+      },
+      {
+        path: 'asset-manifest.json',
+        mime: 'application/json',
+        content: JSON.stringify(manifest, null, 2),
+      },
+      {
+        path: 'data-snapshot.json',
+        mime: 'application/json',
+        content: JSON.stringify(payload.dataSnapshot || manifest.data_snapshot || {}, null, 2),
+      },
+      {
+        path: 'modules.json',
+        mime: 'application/json',
+        content: JSON.stringify(payload.modules || draft.modules || [], null, 2),
+      },
+    ],
+    assets: packageManifest.assets || [],
+  };
+}
+
+function downloadStaticPageExportPackage(draft, payload, backendHtml) {
+  if (typeof window === 'undefined' || !draft || !payload) {
+    return;
+  }
+  const artifact = buildStaticPageExportPackage(draft, payload, backendHtml);
+  const blob = new Blob([JSON.stringify(artifact, null, 2)], {
+    type: 'application/json;charset=utf-8',
+  });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `static-page-${draft.backendDraftId || draft.id}-package.json`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+function FinalRenderStatusCard({
+  draft,
+  finalStatus,
+  workflowExecutionId,
+  onApplyOperation,
+  onRetryWorkflow,
+  onCancelWorkflow,
+  onRefreshDraft,
+}) {
+  const manifest = finalPageManifest(draft);
+  const pending = PENDING_FINAL_STATUSES.has(finalStatus);
+  const failed = finalStatus === 'failed';
+  const cancelled = finalStatus === 'cancelled';
+  if (!pending && !failed && !cancelled) {
+    return null;
+  }
+
+  const title = pending
+    ? '资源正在排队制作'
+    : failed
+      ? '后台生成失败'
+      : '已取消本次后台生成';
+  const detail = pending
+    ? manifest.queue_copy || '最终静态页正在后台制作，可以继续聊天。资源排队时可联系商务开通高级用户跳过等待。'
+    : failed
+      ? manifest.workflow?.lastError?.message || manifest.workflow?.lastError || '可以直接重试，或调整模块后重新生成。'
+      : manifest.workflow?.cancelReason || '可以按当前确认效果重新发起最终静态页生成。';
+
+  return (
+    <div className={`static-page-final-status-card ${failed ? 'failed' : cancelled ? 'cancelled' : 'pending'}`}>
+      <div>
+        <strong>{title}</strong>
+        <p>{String(detail)}</p>
+      </div>
+      <div className="static-page-final-status-meta">
+        <span>{FINAL_STATUS_LABELS[finalStatus] || finalStatus}</span>
+        {workflowExecutionId ? <code>workflow {workflowExecutionId.slice(0, 8)}</code> : null}
+      </div>
+      <div className="static-page-final-actions">
+        {pending && workflowExecutionId ? (
+          <button type="button" className="ghost-btn compact-action-btn" onClick={() => onCancelWorkflow?.(workflowExecutionId)}>
+            取消生成
+          </button>
+        ) : null}
+        {failed && workflowExecutionId ? (
+          <button type="button" className="ghost-btn compact-action-btn" onClick={() => onRetryWorkflow?.(workflowExecutionId)}>
+            重试 workflow
+          </button>
+        ) : null}
+        {cancelled || failed ? (
+          <button type="button" className="primary-btn compact-action-btn" onClick={() => onApplyOperation?.({ type: 'request_final_render' })}>
+            重新生成
+          </button>
+        ) : null}
+        <button type="button" className="ghost-btn compact-action-btn" onClick={() => onRefreshDraft?.(draft.backendDraftId)}>
+          刷新状态
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export default function StaticPageFinalRender({
   draft,
   onApplyOperation,
+  onRetryWorkflow,
+  onCancelWorkflow,
+  onRefreshDraft,
   compact = false,
 }) {
   const canRequestRender = draft?.status === 'effect_confirmed';
-  const finalStatus = draft?.finalPage?.status || '';
-  const hasFinalPage = ['mock_ready', 'rendered'].includes(finalStatus)
+  const finalStatus = finalPageStatus(draft);
+  const hasFinalPage = ['mock_ready', 'rendered', 'queued', 'rendering', 'failed', 'cancelled'].includes(finalStatus)
     || draft?.status === 'rendering'
     || draft?.status === 'rendered';
+  const manifest = finalPageManifest(draft);
+  const workflowExecutionId = workflowExecutionIdFromManifest(manifest);
   const backendHtml = typeof draft?.finalPage?.html === 'string' ? draft.finalPage.html : '';
   const payload = draft ? buildStaticPageFinalRenderPayload(draft) : null;
+  const canShowRenderedPage = finalStatus === 'rendered' || finalStatus === 'mock_ready';
+  const canDownloadPackage = finalStatus === 'rendered' && Boolean(backendHtml);
 
   if (!draft) return null;
 
@@ -57,7 +231,7 @@ export default function StaticPageFinalRender({
     <section className={`static-page-final-render${compact ? ' compact' : ''}`}>
       <div className="static-page-final-head">
         <span>最终静态页</span>
-        <strong>{finalStatus === 'rendered' ? '后端已生成' : hasFinalPage ? '本地模拟已生成' : '可生成'}</strong>
+        <strong>{FINAL_STATUS_LABELS[finalStatus] || (hasFinalPage ? '已提交' : '可生成')}</strong>
       </div>
 
       {!hasFinalPage ? (
@@ -72,14 +246,24 @@ export default function StaticPageFinalRender({
 
       {hasFinalPage ? (
         <>
-          {backendHtml ? (
+          <FinalRenderStatusCard
+            draft={draft}
+            finalStatus={finalStatus}
+            workflowExecutionId={workflowExecutionId}
+            onApplyOperation={onApplyOperation}
+            onRetryWorkflow={onRetryWorkflow}
+            onCancelWorkflow={onCancelWorkflow}
+            onRefreshDraft={onRefreshDraft}
+          />
+
+          {canShowRenderedPage && backendHtml ? (
             <iframe
               className="static-page-final-frame"
               title="后端生成的静态页预览"
               srcDoc={backendHtml}
               sandbox=""
             />
-          ) : (
+          ) : canShowRenderedPage ? (
             <div className={`static-page-final-sheet ${payload.styleDirection}`}>
               <div className="static-page-final-cover">
                 <span>{STYLE_LABELS[payload.styleDirection] || payload.styleDirection}</span>
@@ -98,11 +282,28 @@ export default function StaticPageFinalRender({
                 ))}
               </div>
             </div>
-          )}
+          ) : null}
+
+          {canDownloadPackage ? (
+            <div className="static-page-final-actions">
+              <button
+                type="button"
+                className="ghost-btn compact-action-btn"
+                onClick={() => downloadStaticPageExportPackage(draft, payload, backendHtml)}
+              >
+                下载交付包 JSON
+              </button>
+            </div>
+          ) : null}
+
           <p className="static-page-final-note">
             {finalStatus === 'rendered'
               ? '后端 renderer 已按确认效果图和模块规划生成静态页。'
-              : '后端 renderer 尚未接入，当前结果来自前端 mock；真实数据图表会在数据绑定完成后渲染。'}
+              : PENDING_FINAL_STATUSES.has(finalStatus)
+                ? '后台生成不会阻塞当前对话；完成后会在右侧成品栏保留。'
+                : finalStatus === 'mock_ready'
+                  ? '当前结果来自前端 mock；真实数据图表会在后端渲染完成后替换。'
+                  : '可刷新状态、重试 workflow，或按当前规划重新发起最终生成。'}
           </p>
         </>
       ) : null}

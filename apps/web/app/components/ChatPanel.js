@@ -329,6 +329,9 @@ export default function ChatPanel({
   staticPageDraft = null,
   onStartStaticPageDraft,
   onApplyStaticPageOperation,
+  onRetryWorkflowExecution,
+  onCancelWorkflowExecution,
+  onRefreshStaticPageDraft,
   onOpenStaticPageBuilder,
   onCloseStaticPageDraft,
   showStaticPageWorkspace = true,
@@ -427,6 +430,9 @@ export default function ChatPanel({
             draft={staticPageDraft}
             onStartDraft={onStartStaticPageDraft}
             onApplyOperation={onApplyStaticPageOperation}
+            onRetryWorkflow={onRetryWorkflowExecution}
+            onCancelWorkflow={onCancelWorkflowExecution}
+            onRefreshDraft={onRefreshStaticPageDraft}
           />
         </div>
       ) : (

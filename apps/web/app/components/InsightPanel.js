@@ -13,6 +13,8 @@ const STATIC_PAGE_STATUS_LABELS = {
   preview_ready: '待确认效果图',
   effect_confirmed: '效果图已确认',
   rendering: '生成中',
+  failed: '生成失败',
+  cancelled: '已取消',
   rendered: '已生成',
   draft: '草稿',
   planned: '已规划',
@@ -59,13 +61,40 @@ function canRenderPlan(plan) {
 }
 
 function staticPageStatusLabel(draft) {
-  return STATIC_PAGE_STATUS_LABELS[draft?.status]
+  const renderStatus = draft?.finalPage?.status;
+  return STATIC_PAGE_STATUS_LABELS[renderStatus]
+    || STATIC_PAGE_STATUS_LABELS[draft?.status]
     || STATIC_PAGE_STATUS_LABELS[draft?.backendStatus]
-    || formatSnakeCaseLabel(draft?.status || draft?.backendStatus || 'draft');
+    || formatSnakeCaseLabel(renderStatus || draft?.status || draft?.backendStatus || 'draft');
 }
 
 function staticPageUpdatedAt(draft) {
   return draft?.backendUpdatedAt || draft?.updated_at || draft?.updatedAt || draft?.created_at || '';
+}
+
+function staticPageWorkflowExecutionId(draft) {
+  const manifest = draft?.finalPage?.assetManifest || {};
+  return manifest?.workflow?.executionId
+    || manifest?.workflow?.execution_id
+    || manifest?.workflow?.workflowExecutionId
+    || manifest?.workflow_execution_id
+    || manifest?.workflowExecutionId
+    || '';
+}
+
+function staticPageRenderAction(draft) {
+  const status = draft?.finalPage?.status || '';
+  const executionId = staticPageWorkflowExecutionId(draft);
+  if (!executionId) {
+    return null;
+  }
+  if (status === 'failed') {
+    return { label: '重试', kind: 'retry', executionId };
+  }
+  if (status === 'queued' || status === 'rendering') {
+    return { label: '取消', kind: 'cancel', executionId };
+  }
+  return null;
 }
 
 function buildReportControlNotice({
@@ -354,6 +383,7 @@ export default function InsightPanel({
   onRequestReportRender,
   onPublishReport,
   onRetryWorkflowExecution,
+  onCancelWorkflowExecution,
   onRefreshReportDetail,
   staticPageDraft,
   staticPageDrafts = [],
@@ -406,23 +436,48 @@ export default function InsightPanel({
           {staticPageDrafts.length ? (
             staticPageDrafts.map((draft) => {
               const active = staticPageDraft?.id === draft.id;
+              const action = staticPageRenderAction(draft);
               return (
-                <button
+                <div
                   key={draft.id}
-                  type="button"
                   className={`insight-item ${active ? 'active' : ''}`}
-                  onClick={() => onSelectStaticPageDraft?.(draft.id)}
                 >
-                  <div className="insight-item-head">
-                    <strong>{truncateText(draft.objective || draft.title || '静态页草稿', 30)}</strong>
-                    <span>{formatRelativeTime(staticPageUpdatedAt(draft))}</span>
-                  </div>
-                  <p>{truncateText(draft.modelSummary || draft.finalPage?.notice || '点击后在当前页面继续规划或查看生成结果。', 96)}</p>
-                  <div className="insight-meta-row">
-                    <span>{staticPageStatusLabel(draft)}</span>
-                    <span>{draft.modules?.length || 0} 个模块</span>
-                  </div>
-                </button>
+                  <button
+                    type="button"
+                    className="insight-item-main"
+                    onClick={() => onSelectStaticPageDraft?.(draft.id)}
+                  >
+                    <div className="insight-item-head">
+                      <strong>{truncateText(draft.objective || draft.title || '静态页草稿', 30)}</strong>
+                      <span>{formatRelativeTime(staticPageUpdatedAt(draft))}</span>
+                    </div>
+                    <p>{truncateText(draft.modelSummary || draft.finalPage?.notice || '点击后在当前页面继续规划或查看生成结果。', 96)}</p>
+                    <div className="insight-meta-row">
+                      <span>{staticPageStatusLabel(draft)}</span>
+                      <span>{draft.modules?.length || 0} 个模块</span>
+                      {staticPageWorkflowExecutionId(draft) ? (
+                        <span>workflow {truncateText(staticPageWorkflowExecutionId(draft), 12)}</span>
+                      ) : null}
+                    </div>
+                  </button>
+                  {action ? (
+                    <div className="insight-item-actions">
+                      <button
+                        type="button"
+                        className="ghost-btn compact-action-btn"
+                        onClick={() => {
+                          if (action.kind === 'retry') {
+                            onRetryWorkflowExecution?.(action.executionId);
+                          } else {
+                            onCancelWorkflowExecution?.(action.executionId);
+                          }
+                        }}
+                      >
+                        {action.label}后台生成
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
               );
             })
           ) : (

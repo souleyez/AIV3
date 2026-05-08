@@ -1356,6 +1356,48 @@ textarea {
   box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.08);
 }
 
+.static-page-final-status-card {
+  display: grid;
+  gap: 10px;
+  padding: 13px;
+  border-radius: 18px;
+  background: rgba(219, 234, 254, 0.62);
+}
+
+.static-page-final-status-card.failed {
+  background: rgba(254, 226, 226, 0.72);
+}
+
+.static-page-final-status-card.cancelled {
+  background: rgba(226, 232, 240, 0.82);
+}
+
+.static-page-final-status-card p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.static-page-final-status-meta,
+.static-page-final-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.static-page-final-status-meta {
+  color: var(--subtle);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.static-page-final-status-meta code {
+  padding: 4px 7px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.06);
+}
+
 .static-page-final-sheet.decision-brief {
   background: linear-gradient(135deg, rgba(15, 23, 42, 0.95), rgba(30, 41, 59, 0.94));
 }
@@ -1733,6 +1775,25 @@ textarea {
 .insight-item.active {
   border-color: rgba(96, 165, 250, 0.72);
   background: #eff6ff;
+}
+
+.insight-item-main {
+  width: 100%;
+  display: grid;
+  gap: 8px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.insight-item-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .insight-item.static {

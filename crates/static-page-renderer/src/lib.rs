@@ -85,6 +85,13 @@ pub fn render_static_page(request: &StaticPageRenderRequest) -> StaticPageRender
         ),
         module_html,
     );
+    let export_package = build_export_package_manifest(
+        &request.draft_id,
+        &modules,
+        &data_snapshot,
+        &chart_runtime_manifest,
+        request.preview_asset_key.as_deref(),
+    );
     let asset_manifest = json!({
         "draft_id": request.draft_id,
         "assistant_run_id": request.assistant_run_id,
@@ -100,6 +107,7 @@ pub fn render_static_page(request: &StaticPageRenderRequest) -> StaticPageRender
         "render_spec": render_spec,
         "data_snapshot": data_snapshot,
         "chart_runtime": chart_runtime_manifest,
+        "export_package": export_package,
         "preview_contract": preview_contract,
         "module_count": modules.as_array().map(Vec::len).unwrap_or(0),
         "modules": modules,
@@ -112,6 +120,80 @@ pub fn render_static_page(request: &StaticPageRenderRequest) -> StaticPageRender
         html,
         asset_manifest,
     }
+}
+
+fn build_export_package_manifest(
+    draft_id: &str,
+    modules: &Value,
+    data_snapshot: &Value,
+    chart_runtime_manifest: &Value,
+    preview_asset_key: Option<&str>,
+) -> Value {
+    let module_count = modules.as_array().map(Vec::len).unwrap_or(0);
+    let missing_or_partial_modules = chart_runtime_manifest
+        .get("modules")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter(|module| {
+                    module
+                        .get("dataQuality")
+                        .and_then(Value::as_str)
+                        .map(|quality| quality != "complete")
+                        .unwrap_or(true)
+                })
+                .count()
+        })
+        .unwrap_or(module_count);
+    let assets = preview_asset_key
+        .map(|asset_key| {
+            json!([{
+                "path": asset_key,
+                "role": "confirmed_effect_preview"
+            }])
+        })
+        .unwrap_or_else(|| json!([]));
+    let data_snapshot_source = data_snapshot
+        .get("source")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    json!({
+        "kind": "static-page-export-package",
+        "version": 1,
+        "status": "rendered",
+        "draft_id": draft_id,
+        "files": [
+            {
+                "path": "index.html",
+                "role": "rendered_static_page",
+                "mime": "text/html"
+            },
+            {
+                "path": "asset-manifest.json",
+                "role": "renderer_manifest",
+                "mime": "application/json"
+            },
+            {
+                "path": "data-snapshot.json",
+                "role": "render_data_snapshot",
+                "mime": "application/json"
+            },
+            {
+                "path": "modules.json",
+                "role": "editable_module_plan",
+                "mime": "application/json"
+            }
+        ],
+        "assets": assets,
+        "debug": {
+            "renderer": STATIC_PAGE_RENDERER_ID,
+            "module_count": module_count,
+            "missing_or_partial_modules": missing_or_partial_modules,
+            "chart_runtime": chart_runtime_manifest,
+            "data_snapshot_source": data_snapshot_source
+        }
+    })
 }
 
 fn render_module_html(
@@ -1012,6 +1094,18 @@ mod tests {
             2
         );
         assert_eq!(result.asset_manifest["chart_runtime"]["fallbackModules"], 0);
+        assert_eq!(
+            result.asset_manifest["export_package"]["kind"],
+            "static-page-export-package"
+        );
+        assert_eq!(
+            result.asset_manifest["export_package"]["files"][0]["path"],
+            "index.html"
+        );
+        assert_eq!(
+            result.asset_manifest["export_package"]["debug"]["module_count"],
+            2
+        );
     }
 
     #[test]

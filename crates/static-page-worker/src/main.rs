@@ -374,6 +374,8 @@ async fn process_static_page_render_task(
             &rendered.asset_manifest,
             json!({
                 "status": "rendered",
+                "executionId": execution.id,
+                "taskId": task.id,
                 "workflowExecutionId": execution.id,
                 "workflowTaskId": task.id,
                 "renderedAt": Utc::now(),
@@ -625,6 +627,7 @@ async fn mark_render_output_rendering(
         &output.asset_manifest,
         json!({
             "status": "rendering",
+            "executionId": execution.id,
             "workflowExecutionId": execution.id,
             "updatedAt": Utc::now(),
         }),
@@ -647,6 +650,7 @@ async fn mark_render_output_failed(
         &output.asset_manifest,
         json!({
             "status": "failed",
+            "executionId": execution.id,
             "workflowExecutionId": execution.id,
             "error": error_message,
             "updatedAt": Utc::now(),
@@ -691,6 +695,9 @@ fn mark_draft_final_rendered_payload(payload: &Value, output: &StaticPageRenderO
 
 fn merge_render_state(manifest: &Value, state: Value) -> Value {
     let mut object = manifest.as_object().cloned().unwrap_or_default();
+    if let Some(status) = state.get("status").and_then(Value::as_str) {
+        object.insert("status".to_string(), Value::String(status.to_string()));
+    }
     object.insert("workflow".to_string(), state);
     Value::Object(object)
 }

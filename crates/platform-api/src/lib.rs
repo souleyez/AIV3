@@ -9939,6 +9939,14 @@ fn merge_static_page_render_output_workflow_manifest(
     execution: &WorkflowExecution,
 ) -> Value {
     let mut object = manifest.as_object().cloned().unwrap_or_default();
+    let manifest_status = match execution.status {
+        WorkflowStatus::Pending => "queued",
+        WorkflowStatus::Running => "rendering",
+        WorkflowStatus::Succeeded => "rendered",
+        WorkflowStatus::Failed | WorkflowStatus::DeadLettered => "failed",
+        WorkflowStatus::Cancelled => "cancelled",
+    };
+    object.insert("status".to_string(), json!(manifest_status));
     object.insert(
         "workflow".to_string(),
         json!({
@@ -14548,6 +14556,11 @@ fn build_static_page_render_queue_manifest(
     workflow_task_id: Option<domain_model::WorkflowTaskId>,
 ) -> Value {
     let payload = &draft.draft_payload;
+    let data_snapshot = static_page_payload_value(payload, &["dataSnapshot", "data_snapshot"])
+        .unwrap_or_else(|| build_static_page_data_snapshot(payload, &draft.selected_scope));
+    let modules = static_page_payload_modules(payload);
+    let export_package =
+        build_static_page_queued_export_package_manifest(draft, &modules, &data_snapshot);
     json!({
         "draft_id": draft.id,
         "assistant_run_id": draft.assistant_run_id,
@@ -14566,9 +14579,62 @@ fn build_static_page_render_queue_manifest(
             .unwrap_or_else(|| build_static_page_visual_spec("client-delivery")),
         "render_spec": static_page_payload_value(payload, &["renderSpec", "render_spec"])
             .unwrap_or_else(build_static_page_render_spec),
-        "data_snapshot": static_page_payload_value(payload, &["dataSnapshot", "data_snapshot"])
-            .unwrap_or_else(|| build_static_page_data_snapshot(payload, &draft.selected_scope)),
+        "data_snapshot": data_snapshot,
+        "export_package": export_package,
         "queue_copy": "最终静态页正在后台制作，可以继续聊天或修改其他内容。",
+    })
+}
+
+fn build_static_page_queued_export_package_manifest(
+    draft: &StaticPageDraft,
+    modules: &Value,
+    data_snapshot: &Value,
+) -> Value {
+    let module_count = modules.as_array().map(Vec::len).unwrap_or(0);
+    let echarts_requested_modules = modules
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .filter(|module| static_page_module_chart_runtime(module) == "echarts")
+                .count()
+        })
+        .unwrap_or(0);
+    json!({
+        "kind": "static-page-export-package",
+        "version": 1,
+        "status": "queued",
+        "draft_id": draft.id,
+        "files": [
+            {
+                "path": "index.html",
+                "role": "rendered_static_page",
+                "mime": "text/html"
+            },
+            {
+                "path": "asset-manifest.json",
+                "role": "renderer_manifest",
+                "mime": "application/json"
+            },
+            {
+                "path": "data-snapshot.json",
+                "role": "render_data_snapshot",
+                "mime": "application/json"
+            },
+            {
+                "path": "modules.json",
+                "role": "editable_module_plan",
+                "mime": "application/json"
+            }
+        ],
+        "debug": {
+            "renderer": "static-page-renderer-v1",
+            "module_count": module_count,
+            "echarts_requested_modules": echarts_requested_modules,
+            "data_snapshot_source": data_snapshot.get("source")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown")
+        }
     })
 }
 
@@ -18321,6 +18387,15 @@ mod tests {
         assert_eq!(
             background_render_response.render_output.asset_manifest["workflow"]["status"],
             json!("queued")
+        );
+        assert_eq!(
+            background_render_response.render_output.asset_manifest["export_package"]["kind"],
+            json!("static-page-export-package")
+        );
+        assert_eq!(
+            background_render_response.render_output.asset_manifest["export_package"]["files"][0]
+                ["path"],
+            json!("index.html")
         );
         let render_workflows = state
             .storage

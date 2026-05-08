@@ -19,6 +19,9 @@ export default function StaticPageMobileBuilder({
   onApplyOperation,
   onReorderModules,
   onChangeStyleDirection,
+  onRetryWorkflow,
+  onCancelWorkflow,
+  onRefreshDraft,
   onOneClick,
   onBackToChat,
 }) {
@@ -74,7 +77,14 @@ export default function StaticPageMobileBuilder({
 
       <StaticPageEffectPreview compact draft={draft} onApplyOperation={onApplyOperation} />
 
-      <StaticPageFinalRender compact draft={draft} onApplyOperation={onApplyOperation} />
+      <StaticPageFinalRender
+        compact
+        draft={draft}
+        onApplyOperation={onApplyOperation}
+        onRetryWorkflow={onRetryWorkflow}
+        onCancelWorkflow={onCancelWorkflow}
+        onRefreshDraft={onRefreshDraft}
+      />
 
       <div className="static-page-mobile-intent">
         <label htmlFor="static-page-mobile-intent">告诉模型怎么改</label>
