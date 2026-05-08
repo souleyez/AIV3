@@ -57,7 +57,16 @@ async fn main() -> Result<()> {
             Some(&format!("static_page_worker.{queue}.{wake_task_key}")),
         )
         .await;
-    let orchestrator_config = CodexOrchestratorConfig::from_env()?;
+    let orchestrator_config = match CodexOrchestratorConfig::from_env() {
+        Ok(config) => Some(config),
+        Err(error) => {
+            tracing::warn!(
+                error = ?error,
+                "static-page image generation is disabled until Codex orchestrator config is provided"
+            );
+            None
+        }
+    };
     let http_client = Client::builder().build()?;
 
     tracing::info!(
@@ -68,8 +77,9 @@ async fn main() -> Result<()> {
         poll_interval_ms = poll_interval,
         orchestrator_poll_interval_ms = orchestrator_poll_interval,
         orchestrator_max_polls,
-        orchestrator_base_url = %orchestrator_config.base_url,
-        orchestrator_runtime_target = %orchestrator_config.runtime_target_id,
+        orchestrator_configured = orchestrator_config.is_some(),
+        orchestrator_base_url = orchestrator_config.as_ref().map(|config| config.base_url.as_str()).unwrap_or("not-configured"),
+        orchestrator_runtime_target = orchestrator_config.as_ref().map(|config| config.runtime_target_id.as_str()).unwrap_or("not-configured"),
         "static-page-worker polling started"
     );
 
@@ -85,7 +95,7 @@ async fn main() -> Result<()> {
                     &workflow_catalog,
                     &event_bus,
                     &http_client,
-                    &orchestrator_config,
+                    orchestrator_config.as_ref(),
                     orchestrator_poll_interval,
                     orchestrator_max_polls,
                     task,
@@ -111,7 +121,7 @@ async fn process_task(
     workflow_catalog: &WorkflowCatalog,
     event_bus: &EventBus,
     http_client: &Client,
-    orchestrator_config: &CodexOrchestratorConfig,
+    orchestrator_config: Option<&CodexOrchestratorConfig>,
     orchestrator_poll_interval_ms: u64,
     orchestrator_max_polls: u32,
     task: domain_model::WorkflowTask,
@@ -123,6 +133,11 @@ async fn process_task(
         .ok_or_else(|| anyhow!("workflow execution {} not found", task.execution_id))?;
     match &execution.kind {
         WorkflowKind::StaticPageImageGeneration => {
+            let orchestrator_config = orchestrator_config.ok_or_else(|| {
+                anyhow!(
+                    "CODEX_ORCHESTRATOR_ACCESS_KEY is required for static page image generation"
+                )
+            })?;
             process_static_page_image_task(
                 storage,
                 workflow_catalog,
