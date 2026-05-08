@@ -74,7 +74,7 @@ use static_page_runtime::{
     sanitize_static_page_operations, StaticPageIntentOutcome, StaticPageIntentRequest,
 };
 use std::{
-    collections::{BTreeMap, BTreeSet, HashSet},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     fmt::Display,
     time::Instant,
 };
@@ -8390,6 +8390,7 @@ async fn build_assistant_run_evidence_state(
     let mut supplied_items = Vec::new();
     let mut supplied_datasets = Vec::new();
     let mut supplied_memory_items = Vec::new();
+    let mut media_context_by_document: HashMap<DocumentId, Option<Value>> = HashMap::new();
 
     for dataset_id in dataset_ids
         .into_iter()
@@ -8428,7 +8429,13 @@ async fn build_assistant_run_evidence_state(
         .await?;
 
         for ranked in rank_retrieval_evidences_for_prompt(&evidences, prompt, limit) {
-            supplied_items.push(json!({
+            let media_context = assistant_run_media_context_for_document(
+                state,
+                ranked.evidence.document_id,
+                &mut media_context_by_document,
+            )
+            .await?;
+            let mut supplied_item = json!({
                 "type": "retrieval_evidence",
                 "dataset_id": ranked.evidence.dataset_id,
                 "document_id": ranked.evidence.document_id,
@@ -8443,7 +8450,13 @@ async fn build_assistant_run_evidence_state(
                 "lexical_score": ranked.lexical_score,
                 "recall_score": ranked.recall_score,
                 "evidence_manifest": ranked.evidence.evidence_manifest.clone(),
-            }));
+            });
+            if let Some(media_context) = media_context {
+                if let Some(object) = supplied_item.as_object_mut() {
+                    object.insert("media_context".to_string(), media_context);
+                }
+            }
+            supplied_items.push(supplied_item);
         }
     }
 
@@ -8546,6 +8559,74 @@ fn assistant_run_recommended_supply_actions(
         _ => {}
     }
     actions
+}
+
+async fn assistant_run_media_context_for_document(
+    state: &AppState,
+    document_id: DocumentId,
+    cache: &mut HashMap<DocumentId, Option<Value>>,
+) -> std::result::Result<Option<Value>, ApiError> {
+    if let Some(cached) = cache.get(&document_id) {
+        return Ok(cached.clone());
+    }
+
+    let chunks = state
+        .storage
+        .document_chunks()
+        .list_by_document(state.tenant_id, document_id)
+        .await
+        .map_err(ApiError::from_storage)?;
+    let context = extract_media_metadata_from_chunks(&chunks)
+        .as_ref()
+        .and_then(build_assistant_run_media_supply_context);
+    cache.insert(document_id, context.clone());
+    Ok(context)
+}
+
+fn build_assistant_run_media_supply_context(raw_media_metadata: &Value) -> Option<Value> {
+    let media_kind = raw_media_metadata
+        .get("kind")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let parse_status = raw_media_metadata
+        .get("parse_status")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let transcript_windows = collect_media_transcript_segments(raw_media_metadata)
+        .into_iter()
+        .take(3)
+        .collect::<Vec<_>>();
+    let scene_windows = collect_media_scenes(raw_media_metadata)
+        .into_iter()
+        .take(3)
+        .collect::<Vec<_>>();
+    let keyframe_ocr_snippets = collect_media_ocr_snippets(raw_media_metadata)
+        .into_iter()
+        .take(3)
+        .collect::<Vec<_>>();
+    let provider_evidence = collect_media_provider_evidence(raw_media_metadata)
+        .into_iter()
+        .take(3)
+        .collect::<Vec<_>>();
+    let has_timestamped_evidence = !transcript_windows.is_empty()
+        || !scene_windows.is_empty()
+        || !keyframe_ocr_snippets.is_empty();
+    let has_context = has_timestamped_evidence
+        || !provider_evidence.is_empty()
+        || !matches!(media_kind, "unknown" | "");
+    if !has_context {
+        return None;
+    }
+
+    Some(json!({
+        "media_kind": media_kind,
+        "parse_status": parse_status,
+        "has_timestamped_evidence": has_timestamped_evidence,
+        "transcript_windows": transcript_windows,
+        "scene_windows": scene_windows,
+        "keyframe_ocr_snippets": keyframe_ocr_snippets,
+        "provider_evidence": provider_evidence,
+    }))
 }
 
 fn assistant_run_artifact_scope_candidates(
@@ -15420,6 +15501,18 @@ fn build_static_page_field_candidates(
                     FIELD_CANDIDATE_LIMIT,
                 );
 
+                if let Some(media_context) =
+                    item.get("media_context").filter(|value| value.is_object())
+                {
+                    push_static_page_media_field_candidates(
+                        &mut candidates,
+                        &mut seen,
+                        media_context,
+                        item,
+                        FIELD_CANDIDATE_LIMIT,
+                    );
+                }
+
                 let evidence_text = static_page_evidence_text(item).to_lowercase();
                 for (field_path, label, kind, aggregation, keywords, confidence) in [
                     (
@@ -15539,6 +15632,66 @@ fn build_static_page_field_candidates(
     Value::Array(candidates)
 }
 
+fn push_static_page_media_field_candidates(
+    candidates: &mut Vec<Value>,
+    seen: &mut BTreeSet<String>,
+    media_context: &Value,
+    item: &Value,
+    limit: usize,
+) {
+    for (key, field_path, label, confidence) in [
+        (
+            "transcript_windows",
+            "media.transcript_windows",
+            "媒体转写时间窗",
+            0.82,
+        ),
+        (
+            "scene_windows",
+            "media.scene_windows",
+            "视频场景时间窗",
+            0.78,
+        ),
+        (
+            "keyframe_ocr_snippets",
+            "media.keyframe_ocr_snippets",
+            "关键帧 OCR 片段",
+            0.76,
+        ),
+    ] {
+        let has_items = media_context
+            .get(key)
+            .and_then(Value::as_array)
+            .is_some_and(|items| !items.is_empty());
+        if !has_items {
+            continue;
+        }
+        push_static_page_field_candidate(
+            candidates,
+            seen,
+            json!({
+                "sourceId": "evidence",
+                "fieldPath": field_path,
+                "label": label,
+                "kind": "media",
+                "recommendedAggregation": Value::Null,
+                "confidence": confidence,
+                "evidenceIds": static_page_evidence_ids(item),
+                "evidenceRef": static_page_evidence_ref(item),
+                "mediaKind": media_context
+                    .get("media_kind")
+                    .cloned()
+                    .unwrap_or_else(|| json!("unknown")),
+                "timestamped": media_context
+                    .get("has_timestamped_evidence")
+                    .cloned()
+                    .unwrap_or_else(|| json!(false)),
+            }),
+            limit,
+        );
+    }
+}
+
 fn build_static_page_module_sample_data(module: &Value, evidence_state: Option<&Value>) -> Value {
     let field_path = static_page_module_field_path(module);
     let explicit_points = build_static_page_module_explicit_points(module, field_path);
@@ -15548,16 +15701,23 @@ fn build_static_page_module_sample_data(module: &Value, evidence_state: Option<&
     let Some(field_path) = field_path else {
         return json!([]);
     };
-    let keywords = static_page_field_keywords(field_path);
-    if keywords.is_empty() {
-        return json!([]);
-    }
     let Some(evidence_items) = evidence_state
         .and_then(|state| state.get("supplied_items"))
         .and_then(Value::as_array)
     else {
         return json!([]);
     };
+    if field_path.starts_with("media.") {
+        let media_points = build_static_page_media_sample_points(evidence_items, field_path);
+        if !media_points.is_empty() {
+            return Value::Array(media_points);
+        }
+    }
+
+    let keywords = static_page_field_keywords(field_path);
+    if keywords.is_empty() {
+        return json!([]);
+    }
 
     let explicit_points =
         build_static_page_explicit_metric_points(evidence_items, field_path, &keywords);
@@ -15613,6 +15773,76 @@ fn static_page_module_field_path(module: &Value) -> Option<&str> {
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
+}
+
+fn build_static_page_media_sample_points(evidence_items: &[Value], field_path: &str) -> Vec<Value> {
+    let Some(array_key) = static_page_media_sample_array_key(field_path) else {
+        return Vec::new();
+    };
+    evidence_items
+        .iter()
+        .filter(|item| {
+            item.get("type").and_then(Value::as_str).unwrap_or_default() == "retrieval_evidence"
+        })
+        .flat_map(|item| {
+            item.get("media_context")
+                .and_then(|context| context.get(array_key))
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(move |window| {
+                    let text = static_page_media_sample_text(window, array_key)?;
+                    Some(json!({
+                        "label": static_page_media_sample_label(window, array_key),
+                        "value": 1.0,
+                        "kind": "media_window",
+                        "fieldPath": field_path,
+                        "text": text,
+                        "startSeconds": media_numeric_field(window, &["start_seconds", "start", "timestamp_seconds", "timestamp"]),
+                        "endSeconds": media_numeric_field(window, &["end_seconds", "end"]),
+                        "source": media_string_field(window, &["source"]).unwrap_or_else(|| "media".to_string()),
+                        "evidenceIds": static_page_evidence_ids(item),
+                    }))
+                })
+                .collect::<Vec<_>>()
+        })
+        .take(6)
+        .collect()
+}
+
+fn static_page_media_sample_array_key(field_path: &str) -> Option<&'static str> {
+    let normalized = field_path.to_ascii_lowercase();
+    if normalized.contains("media.transcript") {
+        Some("transcript_windows")
+    } else if normalized.contains("media.scene") {
+        Some("scene_windows")
+    } else if normalized.contains("media.keyframe") || normalized.contains("media.ocr") {
+        Some("keyframe_ocr_snippets")
+    } else {
+        None
+    }
+}
+
+fn static_page_media_sample_text(window: &Value, array_key: &str) -> Option<String> {
+    match array_key {
+        "scene_windows" => media_string_field(window, &["summary", "label"]),
+        _ => media_string_field(window, &["text", "content", "summary"]),
+    }
+}
+
+fn static_page_media_sample_label(window: &Value, array_key: &str) -> String {
+    let timestamp = media_numeric_field(
+        window,
+        &["start_seconds", "start", "timestamp_seconds", "timestamp"],
+    );
+    let prefix = match array_key {
+        "scene_windows" => "场景",
+        "keyframe_ocr_snippets" => "关键帧",
+        _ => "转写",
+    };
+    timestamp
+        .map(|seconds| format!("{prefix} {:.1}s", seconds))
+        .unwrap_or_else(|| prefix.to_string())
 }
 
 fn static_page_module_chart_runtime(module: &Value) -> &'static str {
@@ -18382,6 +18612,107 @@ mod tests {
                 .as_f64()
                 .unwrap_or_default()
                 > 0.0
+        );
+    }
+
+    #[test]
+    fn assistant_run_media_supply_context_keeps_timestamped_windows() {
+        let context = build_assistant_run_media_supply_context(&json!({
+            "kind": "video",
+            "parse_status": "enriched_partial",
+            "transcript_segments": [
+                {"start_seconds": 1.0, "end_seconds": 2.0, "text": "客户询问订单状态", "source": "local-transcribe"},
+                {"start_seconds": 3.0, "end_seconds": 4.0, "text": "客服承诺当天反馈", "source": "local-transcribe"}
+            ],
+            "scenes": [
+                {"start_seconds": 0.0, "end_seconds": 6.0, "summary": "门店入口画面", "source": "scene-detector"}
+            ],
+            "keyframe_ocr_snippets": [
+                {"timestamp_seconds": 5.5, "text": "今日客流 2180", "source": "keyframe-ocr"}
+            ],
+            "provider_evidence": [
+                {
+                    "provider": "minimax",
+                    "capability": "native_video_understanding",
+                    "status": "configured_unverified",
+                    "supported": false,
+                    "detail": "probe missing",
+                    "model": "MiniMax-M2.5-highspeed"
+                }
+            ]
+        }))
+        .expect("media context should be built");
+
+        assert_eq!(context["media_kind"], json!("video"));
+        assert_eq!(context["has_timestamped_evidence"], json!(true));
+        assert_eq!(value_array(context["transcript_windows"].clone()).len(), 2);
+        assert_eq!(value_array(context["scene_windows"].clone()).len(), 1);
+        assert_eq!(context["provider_evidence"][0]["supported"], json!(false));
+    }
+
+    #[test]
+    fn static_page_data_snapshot_exposes_media_field_candidates() {
+        let dataset_id = DatasetId::new();
+        let selected_scope = json!({
+            "mode": "user_selected",
+            "datasets": [dataset_id.to_string()],
+        });
+        let payload = json!({
+            "modules": [{
+                "id": "media",
+                "title": "录音重点",
+                "dataBinding": {
+                    "sourceId": "evidence",
+                    "fieldPath": "media.transcript_windows"
+                },
+                "visualization": {"type": "timeline"}
+            }]
+        });
+        let evidence_state = json!({
+            "status": "supplied",
+            "supplied_items": [{
+                "type": "retrieval_evidence",
+                "dataset_id": dataset_id.to_string(),
+                "document_id": Uuid::new_v4().to_string(),
+                "document_chunk_id": Uuid::new_v4().to_string(),
+                "retrieval_evidence_id": Uuid::new_v4().to_string(),
+                "source_locator": "documents/call.mp3#chunk=0",
+                "summary": "客服录音转写",
+                "content_excerpt": "00:01 客户询问订单状态",
+                "payload_filter_key": "dataset/media",
+                "media_context": {
+                    "media_kind": "audio",
+                    "parse_status": "transcribed",
+                    "has_timestamped_evidence": true,
+                    "transcript_windows": [{
+                        "start_seconds": 1.0,
+                        "end_seconds": 2.0,
+                        "text": "客户询问订单状态",
+                        "source": "local-transcribe"
+                    }],
+                    "scene_windows": [],
+                    "keyframe_ocr_snippets": [],
+                    "provider_evidence": []
+                }
+            }]
+        });
+
+        let snapshot = build_static_page_data_snapshot_with_evidence(
+            &payload,
+            &selected_scope,
+            Some(&evidence_state),
+            "assistant_run",
+        );
+        let candidates = value_array(snapshot["field_candidates"].clone());
+
+        assert!(candidates.iter().any(|candidate| {
+            candidate["fieldPath"] == json!("media.transcript_windows")
+                && candidate["kind"] == json!("media")
+                && candidate["timestamped"] == json!(true)
+        }));
+        assert_eq!(
+            snapshot["module_bindings"][0]["dataQuality"],
+            json!("evidence_signal")
         );
     }
 
