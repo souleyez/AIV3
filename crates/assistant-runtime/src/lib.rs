@@ -147,6 +147,22 @@ pub struct ScopeCandidate {
     pub candidate_type: ScopeCandidateType,
     pub id: String,
     pub label: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub key: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub visibility: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub category: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub lifecycle: String,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub document_count: usize,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub estimated_word_count: usize,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub parse_status_summary: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub latest_activity: String,
     pub confidence: ScopeConfidence,
     pub reason: String,
     pub source: String,
@@ -181,15 +197,12 @@ pub fn plan_scope(input: ScopePlannerInput<'_>) -> ScopePlan {
             .iter()
             .find(|dataset| dataset.id == selected_dataset_id)
         {
-            candidates.push(ScopeCandidate {
-                candidate_type: ScopeCandidateType::Dataset,
-                id: dataset.id.to_string(),
-                label: dataset_label(dataset),
-                confidence: ScopeConfidence::High,
-                reason: "用户当前已选中该供料范围".to_string(),
-                source: "user_selected".to_string(),
-                material_hints: dataset_material_hints(dataset),
-            });
+            candidates.push(dataset_scope_candidate(
+                dataset,
+                ScopeConfidence::High,
+                "用户当前已选中该供料范围",
+                "user_selected",
+            ));
         }
     }
 
@@ -203,23 +216,20 @@ pub fn plan_scope(input: ScopePlannerInput<'_>) -> ScopePlan {
             haystack.contains(label) && hints.iter().any(|hint| prompt.contains(hint))
         });
         if matched_by_name || matched_by_hint {
-            candidates.push(ScopeCandidate {
-                candidate_type: ScopeCandidateType::Dataset,
-                id: dataset.id.to_string(),
-                label: dataset_label(dataset),
-                confidence: if matched_by_name {
+            candidates.push(dataset_scope_candidate(
+                dataset,
+                if matched_by_name {
                     ScopeConfidence::High
                 } else {
                     ScopeConfidence::Medium
                 },
-                reason: if matched_by_name {
-                    "用户提到数据集名称或关键字".to_string()
+                if matched_by_name {
+                    "用户提到数据集名称或关键字"
                 } else {
-                    "用户问题命中常用业务主题".to_string()
+                    "用户问题命中常用业务主题"
                 },
-                source: "scope_planner".to_string(),
-                material_hints: dataset_material_hints(dataset),
-            });
+                "scope_planner",
+            ));
         }
     }
 
@@ -230,6 +240,14 @@ pub fn plan_scope(input: ScopePlannerInput<'_>) -> ScopePlan {
             candidate_type: ScopeCandidateType::ConversationMemory,
             id: "local-thread".to_string(),
             label: "本轮对话历史".to_string(),
+            key: String::new(),
+            visibility: String::new(),
+            category: String::new(),
+            lifecycle: String::new(),
+            document_count: 0,
+            estimated_word_count: 0,
+            parse_status_summary: String::new(),
+            latest_activity: String::new(),
             confidence: ScopeConfidence::Medium,
             reason: "用户引用了刚才或已有草稿内容".to_string(),
             source: "scope_planner".to_string(),
@@ -328,6 +346,96 @@ fn dataset_label(dataset: &Dataset) -> String {
     }
 }
 
+fn dataset_scope_candidate(
+    dataset: &Dataset,
+    confidence: ScopeConfidence,
+    reason: &str,
+    source: &str,
+) -> ScopeCandidate {
+    let mut latest_activity = dataset_metadata_string(
+        dataset,
+        &["latestUpload", "latest_upload", "latestActivity"],
+    );
+    if latest_activity.trim().is_empty() {
+        latest_activity = dataset.updated_at.to_rfc3339();
+    }
+
+    ScopeCandidate {
+        candidate_type: ScopeCandidateType::Dataset,
+        id: dataset.id.to_string(),
+        label: dataset_label(dataset),
+        key: dataset.key.clone(),
+        visibility: dataset.visibility.as_str().to_string(),
+        category: dataset_metadata_string(dataset, &["category", "default_category"]),
+        lifecycle: dataset.lifecycle.as_str().to_string(),
+        document_count: dataset_metadata_usize(
+            dataset,
+            &[
+                "document_count",
+                "documentCount",
+                "documents_count",
+                "documentsCount",
+            ],
+        ),
+        estimated_word_count: dataset_metadata_usize(
+            dataset,
+            &[
+                "estimated_word_count",
+                "estimatedWordCount",
+                "word_count",
+                "wordCount",
+            ],
+        ),
+        parse_status_summary: dataset_metadata_string(
+            dataset,
+            &[
+                "parse_status_summary",
+                "parseStatusSummary",
+                "parse_status",
+                "parseStatus",
+            ],
+        )
+        .chars()
+        .take(80)
+        .collect(),
+        latest_activity: latest_activity.chars().take(80).collect(),
+        confidence,
+        reason: reason.to_string(),
+        source: source.to_string(),
+        material_hints: dataset_material_hints(dataset),
+    }
+}
+
+fn dataset_metadata_usize(dataset: &Dataset, keys: &[&str]) -> usize {
+    keys.iter()
+        .find_map(|key| {
+            dataset.metadata.get(*key).and_then(|value| {
+                value
+                    .as_u64()
+                    .or_else(|| value.as_str()?.parse::<u64>().ok())
+            })
+        })
+        .map(|value| value as usize)
+        .unwrap_or(0)
+}
+
+fn dataset_metadata_string(dataset: &Dataset, keys: &[&str]) -> String {
+    keys.iter()
+        .find_map(|key| {
+            dataset
+                .metadata
+                .get(*key)
+                .and_then(|value| value.as_str().map(str::trim))
+                .filter(|value| !value.is_empty())
+        })
+        .unwrap_or("")
+        .to_string()
+}
+
+fn is_zero(value: &usize) -> bool {
+    *value == 0
+}
+
 fn dataset_haystack(dataset: &Dataset) -> String {
     format!(
         "{} {} {}",
@@ -366,7 +474,7 @@ fn dedupe_candidates(candidates: Vec<ScopeCandidate>) -> Vec<ScopeCandidate> {
 fn build_scope_hint(candidates: &[ScopeCandidate], intent: &str) -> String {
     let labels = candidates
         .iter()
-        .map(|candidate| candidate.label.as_str())
+        .map(format_candidate_hint)
         .filter(|label| !label.is_empty())
         .take(3)
         .collect::<Vec<_>>();
@@ -378,6 +486,31 @@ fn build_scope_hint(candidates: &[ScopeCandidate], intent: &str) -> String {
         parts.push(format!("意图：{label}"));
     }
     parts.join("；")
+}
+
+fn format_candidate_hint(candidate: &ScopeCandidate) -> String {
+    if candidate.label.is_empty() {
+        return String::new();
+    }
+    if candidate.candidate_type != ScopeCandidateType::Dataset {
+        return candidate.label.clone();
+    }
+    let mut details = Vec::new();
+    if candidate.document_count > 0 {
+        details.push(format!("{}文档", candidate.document_count));
+    }
+    if candidate
+        .material_hints
+        .iter()
+        .any(|hint| hint == "audio_video")
+    {
+        details.push("媒体".to_string());
+    }
+    if details.is_empty() {
+        candidate.label.clone()
+    } else {
+        format!("{}({})", candidate.label, details.join("/"))
+    }
 }
 
 fn infer_assistant_intent(prompt: &str) -> &'static str {
@@ -522,7 +655,19 @@ mod tests {
 
     #[test]
     fn common_business_hint_preselects_dataset() {
-        let orders = dataset("订单", "orders");
+        let mut orders = dataset("订单", "orders");
+        orders
+            .metadata
+            .insert("document_count".to_string(), json!(12));
+        orders
+            .metadata
+            .insert("estimated_word_count".to_string(), json!(3600));
+        orders
+            .metadata
+            .insert("parse_status_summary".to_string(), json!("completed:12"));
+        orders
+            .metadata
+            .insert("category".to_string(), json!("订单"));
         let plan = plan_scope(ScopePlannerInput {
             prompt: "总结一下销售和复购情况",
             visible_datasets: &[orders.clone()],
@@ -532,6 +677,14 @@ mod tests {
 
         assert_eq!(plan.candidates.len(), 1);
         assert_eq!(plan.candidates[0].id, orders.id.to_string());
+        assert_eq!(plan.candidates[0].key, "orders");
+        assert_eq!(plan.candidates[0].visibility, "public");
+        assert_eq!(plan.candidates[0].category, "订单");
+        assert_eq!(plan.candidates[0].lifecycle, "draft");
+        assert_eq!(plan.candidates[0].document_count, 12);
+        assert_eq!(plan.candidates[0].estimated_word_count, 3600);
+        assert_eq!(plan.candidates[0].parse_status_summary, "completed:12");
+        assert!(plan.hint.contains("订单(12文档)"));
         assert_eq!(plan.selected_scope["mode"], json!("preselected"));
         assert_eq!(plan.intent, "data_question");
     }
@@ -548,6 +701,7 @@ mod tests {
 
         assert_eq!(plan.candidates.len(), 1);
         assert_eq!(plan.candidates[0].id, media.id.to_string());
+        assert!(plan.hint.contains("会议录音(媒体)"));
         assert_eq!(
             plan.candidates[0].material_hints,
             vec![
@@ -599,6 +753,7 @@ mod tests {
 
         assert!(plan.candidates.is_empty());
         assert_eq!(plan.selected_scope["mode"], json!("ordinary_chat"));
+        assert_eq!(plan.selected_scope["conversation_memory"], json!([]));
         assert_eq!(
             plan.selected_scope["supply_policy"]["retrievalPolicy"],
             json!("not_requested")

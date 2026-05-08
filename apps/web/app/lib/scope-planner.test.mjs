@@ -56,6 +56,7 @@ test('scope planner keeps unrelated no-dataset chat as ordinary model chat', () 
   const plan = planAssistantScope({
     prompt: '帮我写一句开场白',
     datasets,
+    conversationMemory: [{ role: 'user', content: '刚才讨论了订单风险' }],
   });
 
   assert.equal(plan.intent, 'ordinary_chat');
@@ -63,6 +64,7 @@ test('scope planner keeps unrelated no-dataset chat as ordinary model chat', () 
   assert.equal(plan.candidates.length, 0);
   assert.equal(plan.supplyStrategy.retrievalPolicy, 'not_requested');
   assert.equal(plan.supplyStrategy.preferDetail, false);
+  assert.equal(plan.supplyStrategy.historyPolicy, 'intent_gated');
 });
 
 test('scope planner preselects media dataset for audio and video prompts', () => {

@@ -262,12 +262,15 @@ function AssistantContextStrip({ dataset, startupBriefing, scopePlan }) {
       </div>
       <div className="assistant-context-chips" aria-label="模型范围判断">
         {intentLabel ? <span className="message-chip neutral">意图 {intentLabel}</span> : null}
-        {datasetCandidates.map((candidate) => (
-          <span className="message-chip blue" key={`${candidate.type}-${candidate.id}`}>
-            预选 {candidate.label}
-            {candidate.documentCount ? ` · ${candidate.documentCount}文档` : ''}
-          </span>
-        ))}
+        {datasetCandidates.map((candidate) => {
+          const candidateDocumentCount = candidate.documentCount || candidate.document_count;
+          return (
+            <span className="message-chip blue" key={`${candidate.type}-${candidate.id}`}>
+              预选 {candidate.label}
+              {candidateDocumentCount ? ` · ${candidateDocumentCount}文档` : ''}
+            </span>
+          );
+        })}
         {mediaCandidate ? <span className="message-chip green">媒体资料</span> : null}
         {preferDetail ? <span className="message-chip green">深度供料</span> : null}
         {memoryCandidate ? <span className="message-chip neutral">参考本轮对话</span> : null}
