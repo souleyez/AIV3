@@ -133,22 +133,12 @@ fn build_export_package_manifest(
     preview_asset_key: Option<&str>,
 ) -> Value {
     let module_count = modules.as_array().map(Vec::len).unwrap_or(0);
-    let missing_or_partial_modules = chart_runtime_manifest
-        .get("modules")
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter(|module| {
-                    module
-                        .get("dataQuality")
-                        .and_then(Value::as_str)
-                        .map(|quality| quality != "complete")
-                        .unwrap_or(true)
-                })
-                .count()
-        })
-        .unwrap_or(module_count);
+    let data_quality_summary = chart_runtime_manifest
+        .get("dataQualitySummary")
+        .cloned()
+        .unwrap_or_else(|| fallback_data_quality_summary(module_count));
+    let missing_or_partial_modules =
+        data_quality_attention_count(&data_quality_summary).unwrap_or(module_count);
     let assets = preview_asset_key
         .map(|asset_key| {
             json!([{
@@ -191,6 +181,16 @@ fn build_export_package_manifest(
                 "path": "runtime-requirements.json",
                 "role": "optional_runtime_requirements",
                 "mime": "application/json"
+            },
+            {
+                "path": "render-spec.json",
+                "role": "render_contract",
+                "mime": "application/json"
+            },
+            {
+                "path": "README.md",
+                "role": "human_handoff_note",
+                "mime": "text/markdown"
             }
         ],
         "assets": assets,
@@ -207,6 +207,7 @@ fn build_export_package_manifest(
             "module_count": module_count,
             "missing_or_partial_modules": missing_or_partial_modules,
             "chart_runtime": chart_runtime_manifest,
+            "data_quality_summary": data_quality_summary,
             "data_snapshot_source": data_snapshot_source
         }
     })
@@ -300,7 +301,11 @@ fn build_chart_runtime_manifest(modules: &Value, data_snapshot: &Value) -> Value
     let mut echarts_requested_count = 0;
     let mut echarts_hydratable_count = 0;
     let mut fallback_count = 0;
+    let mut confirmed_data_modules = 0;
+    let mut partial_data_modules = 0;
+    let mut missing_data_modules = 0;
     let mut data_quality_counts = BTreeMap::<String, usize>::new();
+    let mut data_quality_status_counts = BTreeMap::<String, usize>::new();
     let module_manifests = modules
         .as_array()
         .cloned()
@@ -320,7 +325,16 @@ fn build_chart_runtime_manifest(modules: &Value, data_snapshot: &Value) -> Value
                 .to_string();
             let chart_runtime = module_chart_runtime(&module).to_string();
             let data_quality = module_data_quality(&module, data_snapshot);
+            let data_quality_status = module_data_quality_status(&data_quality).to_string();
             *data_quality_counts.entry(data_quality.clone()).or_insert(0) += 1;
+            *data_quality_status_counts
+                .entry(data_quality_status.clone())
+                .or_insert(0) += 1;
+            match data_quality_status.as_str() {
+                "confirmed" => confirmed_data_modules += 1,
+                "missing" => missing_data_modules += 1,
+                _ => partial_data_modules += 1,
+            }
             let echarts_option =
                 echarts_option_for_module(&module, &visualization_type, data_snapshot);
             if chart_runtime == "echarts" {
@@ -344,6 +358,7 @@ fn build_chart_runtime_manifest(modules: &Value, data_snapshot: &Value) -> Value
                 "visualizationType": visualization_type,
                 "chartRuntime": chart_runtime,
                 "dataQuality": data_quality,
+                "dataQualityStatus": data_quality_status,
                 "finalRendererRuntime": final_renderer_runtime,
                 "fallback": fallback,
                 "fallbackRuntime": fallback_runtime,
@@ -362,6 +377,13 @@ fn build_chart_runtime_manifest(modules: &Value, data_snapshot: &Value) -> Value
         "echartsHydratableModules": echarts_hydratable_count,
         "fallbackModules": fallback_count,
         "dataQualityCounts": data_quality_counts,
+        "dataQualityStatusCounts": data_quality_status_counts,
+        "dataQualitySummary": {
+            "confirmedModules": confirmed_data_modules,
+            "partialModules": partial_data_modules,
+            "missingModules": missing_data_modules,
+            "attentionModules": partial_data_modules + missing_data_modules
+        },
         "modules": module_manifests,
     })
 }
@@ -418,6 +440,43 @@ fn module_data_quality(module: &Value, data_snapshot: &Value) -> String {
             }
         });
     data_quality.to_string()
+}
+
+fn module_data_quality_status(data_quality: &str) -> &'static str {
+    match data_quality.trim() {
+        "complete" | "module_data" | "evidence_value" | "user_confirmed" => "confirmed",
+        "missing" | "" => "missing",
+        "evidence_signal" | "binding_only" | "partial" | "inferred" | "fallback" => "partial",
+        _ => "partial",
+    }
+}
+
+fn fallback_data_quality_summary(module_count: usize) -> Value {
+    json!({
+        "confirmedModules": 0,
+        "partialModules": 0,
+        "missingModules": module_count,
+        "attentionModules": module_count
+    })
+}
+
+fn data_quality_attention_count(summary: &Value) -> Option<usize> {
+    let attention = summary
+        .get("attentionModules")
+        .and_then(Value::as_u64)
+        .map(|value| value as usize);
+    attention.or_else(|| {
+        let partial = summary
+            .get("partialModules")
+            .and_then(Value::as_u64)
+            .map(|value| value as usize)?;
+        let missing = summary
+            .get("missingModules")
+            .and_then(Value::as_u64)
+            .map(|value| value as usize)
+            .unwrap_or(0);
+        Some(partial + missing)
+    })
 }
 
 fn module_chart_runtime_fallback(chart_runtime: &str) -> &'static str {
@@ -1435,9 +1494,27 @@ mod tests {
             .unwrap()
             .iter()
             .any(|file| file["path"] == json!("runtime-requirements.json")));
+        assert!(result.asset_manifest["export_package"]["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|file| file["path"] == json!("render-spec.json")));
+        assert!(result.asset_manifest["export_package"]["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|file| file["path"] == json!("README.md")));
         assert_eq!(
             result.asset_manifest["export_package"]["debug"]["module_count"],
             2
+        );
+        assert_eq!(
+            result.asset_manifest["chart_runtime"]["dataQualitySummary"]["attentionModules"],
+            1
+        );
+        assert_eq!(
+            result.asset_manifest["export_package"]["debug"]["missing_or_partial_modules"],
+            1
         );
         assert_eq!(
             result.asset_manifest["export_package"]["runtime_requirements"][0]["license"],
@@ -1510,6 +1587,22 @@ mod tests {
         assert_eq!(
             result.asset_manifest["chart_runtime"]["modules"][0]["dataQuality"],
             "module_data"
+        );
+        assert_eq!(
+            result.asset_manifest["chart_runtime"]["modules"][0]["dataQualityStatus"],
+            "confirmed"
+        );
+        assert_eq!(
+            result.asset_manifest["chart_runtime"]["dataQualitySummary"]["confirmedModules"],
+            1
+        );
+        assert_eq!(
+            result.asset_manifest["chart_runtime"]["dataQualitySummary"]["attentionModules"],
+            0
+        );
+        assert_eq!(
+            result.asset_manifest["export_package"]["debug"]["missing_or_partial_modules"],
+            0
         );
         assert_eq!(
             result.asset_manifest["chart_runtime"]["modules"][0]["echartsHydratable"],
@@ -1684,6 +1777,14 @@ mod tests {
         assert!(result.html.contains("data-missing"));
         assert!(result.html.contains("数据待确认"));
         assert!(!result.html.contains(">当前<"));
+        assert_eq!(
+            result.asset_manifest["chart_runtime"]["dataQualitySummary"]["missingModules"],
+            1
+        );
+        assert_eq!(
+            result.asset_manifest["export_package"]["debug"]["missing_or_partial_modules"],
+            1
+        );
     }
 
     #[test]

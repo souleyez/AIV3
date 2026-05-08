@@ -121,6 +121,7 @@ const ASSISTANT_RUN_CONVERSATION_MEMORY_MAX_LIMIT: i64 = 8;
 const ASSISTANT_RUN_SCOPE_SUMMARY_DOC_LIMIT: usize = 24;
 const ASSISTANT_RUN_MODEL_SUPPLY_BRIEF_ITEM_LIMIT: usize = 4;
 const ASSISTANT_RUN_MODEL_SUPPLY_BRIEF_TEXT_LIMIT: usize = 220;
+const ASSISTANT_RUN_LEXICAL_CJK_NGRAM_MAX: usize = 3;
 const ASSISTANT_RUN_CONTINUE_DEFAULT_MAX_STEPS: usize = 3;
 const ASSISTANT_RUN_CONTINUE_MAX_STEPS: usize = 5;
 const ASSISTANT_RUN_REACT_DEFAULT_MAX_STEPS: usize = 3;
@@ -12896,18 +12897,23 @@ fn vector_norm(weights: &BTreeMap<String, f64>) -> f64 {
 fn lexical_query_tokens(content: &str) -> Vec<String> {
     let mut tokens = Vec::new();
     let mut ascii_token = String::new();
+    let mut cjk_chars = Vec::new();
 
     for value in content.chars() {
         if value.is_ascii_alphanumeric() {
+            flush_lexical_cjk_terms(&mut tokens, &mut cjk_chars);
             ascii_token.push(value.to_ascii_lowercase());
             continue;
         }
         flush_lexical_ascii_token(&mut tokens, &mut ascii_token);
         if is_cjk_query_token_char(value) {
-            tokens.push(value.to_string());
+            cjk_chars.push(value);
+        } else {
+            flush_lexical_cjk_terms(&mut tokens, &mut cjk_chars);
         }
     }
     flush_lexical_ascii_token(&mut tokens, &mut ascii_token);
+    flush_lexical_cjk_terms(&mut tokens, &mut cjk_chars);
     tokens
 }
 
@@ -12916,6 +12922,22 @@ fn flush_lexical_ascii_token(tokens: &mut Vec<String>, ascii_token: &mut String)
         tokens.push(token);
     }
     ascii_token.clear();
+}
+
+fn flush_lexical_cjk_terms(tokens: &mut Vec<String>, cjk_chars: &mut Vec<char>) {
+    if cjk_chars.is_empty() {
+        return;
+    }
+
+    for value in cjk_chars.iter() {
+        tokens.push(value.to_string());
+    }
+    for ngram_size in 2..=ASSISTANT_RUN_LEXICAL_CJK_NGRAM_MAX.min(cjk_chars.len()) {
+        for window in cjk_chars.windows(ngram_size) {
+            tokens.push(window.iter().collect::<String>());
+        }
+    }
+    cjk_chars.clear();
 }
 
 fn is_cjk_query_token_char(value: char) -> bool {
@@ -26288,6 +26310,88 @@ mod tests {
         let selected = select_retrieval_evidence_ids_for_prompt(&evidences, "订单延期风险", 2);
 
         assert_eq!(selected, vec![order_id, support_id]);
+    }
+
+    #[test]
+    fn lexical_query_term_weights_include_cjk_phrase_ngrams() {
+        let weights = lexical_query_term_weights("订单AI延期 风险");
+
+        for expected in ["订", "单", "订单", "ai", "延", "期", "延期", "风险"] {
+            assert!(
+                weights.contains_key(expected),
+                "missing expected lexical term {expected}"
+            );
+        }
+        assert!(!weights.contains_key("单延"));
+        assert!(!weights.contains_key("期风"));
+    }
+
+    #[test]
+    fn select_retrieval_evidence_ids_for_prompt_prefers_cjk_phrase_overlap() {
+        let now = Utc::now();
+        let phrase_id = RetrievalEvidenceId::new();
+        let broad_id = RetrievalEvidenceId::new();
+        let evidences = vec![
+            RetrievalEvidence {
+                id: broad_id,
+                tenant_id: TenantId::new(),
+                dataset_id: DatasetId::new(),
+                execution_id: WorkflowExecutionId::new(),
+                document_id: DocumentId::new(),
+                document_chunk_id: DocumentChunkId::new(),
+                chunk_index: 0,
+                source_locator: "documents/support.md#chunk=0".to_string(),
+                content_excerpt: "订单和风险分别出现在客服记录中。".to_string(),
+                summary: "宽泛订单风险记录".to_string(),
+                payload_filter_key: "dataset/support".to_string(),
+                embedding_model: "local-lexical-v1".to_string(),
+                recall_score: 0.99,
+                evidence_manifest: json!({
+                    "embedding": {
+                        "term_weights": {
+                            "订": 1.0,
+                            "单": 1.0,
+                            "风": 1.0,
+                            "险": 1.0
+                        }
+                    },
+                    "recall": { "rank_hint": 1 }
+                }),
+                created_at: now,
+            },
+            RetrievalEvidence {
+                id: phrase_id,
+                tenant_id: TenantId::new(),
+                dataset_id: DatasetId::new(),
+                execution_id: WorkflowExecutionId::new(),
+                document_id: DocumentId::new(),
+                document_chunk_id: DocumentChunkId::new(),
+                chunk_index: 1,
+                source_locator: "documents/orders.md#chunk=1".to_string(),
+                content_excerpt: "订单延期风险集中在仓库交接。".to_string(),
+                summary: "订单延期风险".to_string(),
+                payload_filter_key: "dataset/orders".to_string(),
+                embedding_model: "local-lexical-v1".to_string(),
+                recall_score: 0.40,
+                evidence_manifest: json!({
+                    "embedding": {
+                        "term_weights": {
+                            "订单": 2.0,
+                            "延期": 2.0,
+                            "风险": 2.0,
+                            "订单延": 1.4,
+                            "延期风": 1.4
+                        }
+                    },
+                    "recall": { "rank_hint": 2 }
+                }),
+                created_at: now,
+            },
+        ];
+
+        let selected = select_retrieval_evidence_ids_for_prompt(&evidences, "订单延期风险", 2);
+
+        assert_eq!(selected, vec![phrase_id, broad_id]);
     }
 
     #[test]

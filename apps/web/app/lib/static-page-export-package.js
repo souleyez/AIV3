@@ -19,6 +19,27 @@ function fallbackRuntimeRequirements() {
   }];
 }
 
+function numberOrZero(value) {
+  return Number.isFinite(Number(value)) ? Number(value) : 0;
+}
+
+function dataQualitySummaryFromManifest(manifest) {
+  const summary = manifest.export_package?.debug?.data_quality_summary
+    || manifest.chart_runtime?.dataQualitySummary
+    || manifest.data_quality_summary
+    || {};
+  return {
+    confirmedModules: numberOrZero(summary.confirmedModules),
+    partialModules: numberOrZero(summary.partialModules),
+    missingModules: numberOrZero(summary.missingModules),
+    attentionModules: numberOrZero(summary.attentionModules),
+  };
+}
+
+function hasDataQualitySummary(summary) {
+  return Object.values(summary).some((value) => value > 0);
+}
+
 function fallbackPackageManifest(draft) {
   return {
     kind: 'static-page-export-package',
@@ -66,6 +87,7 @@ function normalizePackageManifest(draft, manifest) {
 
 function buildReadme({ draft, manifest, backendHtml, warnings }) {
   const chartRuntime = manifest.chart_runtime || {};
+  const dataQualitySummary = dataQualitySummaryFromManifest(manifest);
   const runtimeRequirements = Array.isArray(manifest.export_package?.runtime_requirements)
     ? manifest.export_package.runtime_requirements
     : Array.isArray(manifest.runtime_requirements)
@@ -81,6 +103,11 @@ function buildReadme({ draft, manifest, backendHtml, warnings }) {
     `- 图表运行时：基础 ${chartRuntime.deterministicModules ?? 0} / ECharts ${chartRuntime.echartsRequestedModules ?? 0}`,
     `- 后端 HTML：${backendHtml ? '已包含' : '未返回，需重新刷新或等待 worker 写回'}`,
   ];
+  if (hasDataQualitySummary(dataQualitySummary)) {
+    lines.push(
+      `- 数据质量：已确认 ${dataQualitySummary.confirmedModules} / 部分 ${dataQualitySummary.partialModules} / 缺失 ${dataQualitySummary.missingModules}`,
+    );
+  }
   if (runtimeRequirements.length) {
     lines.push(
       `- 可选运行时：${runtimeRequirements.map((item) => `${item.name || item.package || 'runtime'}${item.required ? '' : '（可选）'}`).join('、')}`,
@@ -102,6 +129,8 @@ function contentForPath(path, { draft, payload, manifest, backendHtml, warnings 
       backendDraftId: draft?.backendDraftId || null,
       renderOutputId: draft?.finalPage?.renderOutputId || null,
       imageJobId: draft?.finalPage?.imageJobId || draft?.imageJob?.id || null,
+      chart_runtime: manifest.chart_runtime || null,
+      data_quality_summary: dataQualitySummaryFromManifest(manifest),
       runtime_requirements: contextRuntimeRequirements({ manifest }),
       files: Array.isArray(manifest.export_package?.files) ? manifest.export_package.files : fallbackPackageManifest(draft).files,
     });

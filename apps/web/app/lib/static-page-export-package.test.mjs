@@ -39,6 +39,12 @@ function testDraft(overrides = {}) {
         chart_runtime: {
           deterministicModules: 1,
           echartsRequestedModules: 1,
+          dataQualitySummary: {
+            confirmedModules: 1,
+            partialModules: 0,
+            missingModules: 0,
+            attentionModules: 0,
+          },
         },
         export_package: {
           kind: 'static-page-export-package',
@@ -86,7 +92,9 @@ test('static page export package includes html manifest data modules and readme'
   assert.match(files.get('render-spec.json').content, /dom-text-svg-chart/);
   assert.match(files.get('runtime-requirements.json').content, /Apache-2.0/);
   assert.match(files.get('README.md').content, /ECharts 1/);
+  assert.match(files.get('README.md').content, /数据质量：已确认 1 \/ 部分 0 \/ 缺失 0/);
   assert.match(files.get('README.md').content, /Apache ECharts（可选）/);
+  assert.match(files.get('export-package.json').content, /"confirmedModules": 1/);
   assert.ok(artifact.packageManifest.files.some((file) => file.path === 'README.md'));
   assert.ok(artifact.packageManifest.files.some((file) => file.path === 'export-package.json'));
   assert.ok(artifact.packageManifest.files.some((file) => file.path === 'render-spec.json'));
