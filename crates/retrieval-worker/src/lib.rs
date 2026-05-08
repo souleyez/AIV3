@@ -3,6 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 const SIGNATURE_TERM_LIMIT: usize = 8;
 const TERM_WEIGHT_LIMIT: usize = 12;
+const CJK_NGRAM_MAX: usize = 3;
 
 #[derive(Clone, Debug)]
 pub struct RetrievalChunkInput {
@@ -208,18 +209,23 @@ fn term_frequencies(content: &str) -> BTreeMap<String, usize> {
 fn tokenize(content: &str) -> Vec<String> {
     let mut tokens = Vec::new();
     let mut ascii_token = String::new();
+    let mut cjk_chars = Vec::new();
 
     for value in content.chars() {
         if value.is_ascii_alphanumeric() {
+            flush_cjk_terms(&mut tokens, &mut cjk_chars);
             ascii_token.push(value.to_ascii_lowercase());
             continue;
         }
         flush_ascii_token(&mut tokens, &mut ascii_token);
         if is_cjk_token_char(value) {
-            tokens.push(value.to_string());
+            cjk_chars.push(value);
+        } else {
+            flush_cjk_terms(&mut tokens, &mut cjk_chars);
         }
     }
     flush_ascii_token(&mut tokens, &mut ascii_token);
+    flush_cjk_terms(&mut tokens, &mut cjk_chars);
     tokens
 }
 
@@ -228,6 +234,22 @@ fn flush_ascii_token(tokens: &mut Vec<String>, ascii_token: &mut String) {
         tokens.push(token);
     }
     ascii_token.clear();
+}
+
+fn flush_cjk_terms(tokens: &mut Vec<String>, cjk_chars: &mut Vec<char>) {
+    if cjk_chars.is_empty() {
+        return;
+    }
+
+    for value in cjk_chars.iter() {
+        tokens.push(value.to_string());
+    }
+    for ngram_size in 2..=CJK_NGRAM_MAX.min(cjk_chars.len()) {
+        for window in cjk_chars.windows(ngram_size) {
+            tokens.push(window.iter().collect::<String>());
+        }
+    }
+    cjk_chars.clear();
 }
 
 fn is_cjk_token_char(value: char) -> bool {
@@ -347,6 +369,21 @@ mod tests {
         assert!(tokens.contains(&"单".to_string()));
         assert!(tokens.contains(&"金".to_string()));
         assert!(tokens.contains(&"额".to_string()));
+        assert!(tokens.contains(&"订单".to_string()));
+        assert!(tokens.contains(&"金额".to_string()));
+        assert!(tokens.contains(&"增长".to_string()));
+        assert!(tokens.contains(&"订单金".to_string()));
+        assert!(tokens.contains(&"金额增".to_string()));
         assert!(tokens.contains(&"revenue".to_string()));
+    }
+
+    #[test]
+    fn tokenize_keeps_cjk_ngrams_separate_across_ascii_boundaries() {
+        let tokens = tokenize("订单risk取消");
+
+        assert!(tokens.contains(&"订单".to_string()));
+        assert!(tokens.contains(&"risk".to_string()));
+        assert!(tokens.contains(&"取消".to_string()));
+        assert!(!tokens.contains(&"单取".to_string()));
     }
 }
