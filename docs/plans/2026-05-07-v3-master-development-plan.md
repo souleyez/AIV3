@@ -66,6 +66,7 @@ Completed and preserved:
 - Cloudflare/Codex image queue integration exists for static-page preview jobs.
 - Static-page renderer can render layout-aware core module types into HTML/SVG and preserve safe ECharts JSON hydration islands with deterministic offline fallback.
 - Frontend supports draft planning, image preview, final render display, durable right shelf, mobile builder, per-module micro-adjustment editors, and inline chart previews for editable module data.
+- Final static-page handoff can download a real ZIP package with HTML, renderer manifest, data snapshot, module plan, runtime requirements, and README.
 - Java 8 parity audit is complete: Java/Vue used `gridstack` plus `echarts`; V3 keeps `react-grid-layout` and adds ECharts as advanced chart runtime.
 - Model gateway seed exists in `llm-gateway` with model lanes, provider error redaction, and MiniMax reasoning block cleanup.
 - Codex Host safe bridge exists in dry-run/plan-only form. Real execution is still blocked by default.
@@ -324,7 +325,7 @@ The next development thread should continue with static-page final-render/chart/
 1. Use background render mode from the web UI.
 2. Show queued/rendering/completed/failed/cancelled states in main workspace and right shelf.
 3. Add retry/cancel controls using existing workflow signal routes.
-4. Package rendered HTML, manifest, and assets into a downloadable artifact.
+4. Package rendered HTML, manifest, data snapshot, runtime notes, and assets into a downloadable ZIP artifact.
 5. Preserve draft/output owner checks.
 6. Run `cargo test -p static-page-worker`.
 7. Run `cargo test -p workflow-definitions`.
@@ -335,6 +336,7 @@ The next development thread should continue with static-page final-render/chart/
 - Final static page is durable after refresh.
 - User can continue chatting after opening a draft or output.
 - Exported package includes enough manifest data to debug chart/data/runtime decisions.
+- Downloaded package is an actual ZIP, not only a JSON descriptor.
 
 ### Task 6: Improve Assistant Context Supply For Static Pages
 

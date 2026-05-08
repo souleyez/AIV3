@@ -2,9 +2,11 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   buildStaticPageExportPackage,
+  buildStaticPageExportZipBlob,
   buildStaticPageStandaloneHtml,
   staticPageExportFilename,
   staticPageHtmlFilename,
+  staticPageZipFilename,
 } from './static-page-export-package.js';
 
 function testDraft(overrides = {}) {
@@ -76,6 +78,7 @@ test('static page export package includes html manifest data modules and readme'
 
   assert.equal(artifact.kind, 'static-page-export-package');
   assert.equal(artifact.renderOutputId, 'render-output-1');
+  assert.match(files.get('export-package.json').content, /render-output-1/);
   assert.equal(files.get('index.html').content, '<main>最终静态页</main>');
   assert.match(files.get('asset-manifest.json').content, /static-page-renderer-v1/);
   assert.match(files.get('data-snapshot.json').content, /payload_snapshot/);
@@ -85,10 +88,37 @@ test('static page export package includes html manifest data modules and readme'
   assert.match(files.get('README.md').content, /ECharts 1/);
   assert.match(files.get('README.md').content, /Apache ECharts（可选）/);
   assert.ok(artifact.packageManifest.files.some((file) => file.path === 'README.md'));
+  assert.ok(artifact.packageManifest.files.some((file) => file.path === 'export-package.json'));
   assert.ok(artifact.packageManifest.files.some((file) => file.path === 'render-spec.json'));
   assert.ok(artifact.packageManifest.files.some((file) => file.path === 'runtime-requirements.json'));
   assert.equal(artifact.packageManifest.runtime_requirements[0].required, false);
   assert.deepEqual(artifact.warnings, []);
+});
+
+test('static page export package can be written as a real zip file', async () => {
+  const draft = testDraft();
+  const artifact = buildStaticPageExportPackage(draft, {
+    dataSnapshot: {
+      moduleBindings: [{ moduleId: 'trend', sampleData: [{ label: '一月', value: 12 }] }],
+    },
+    modules: draft.modules,
+    renderSpec: draft.renderSpec,
+  }, draft.finalPage.html);
+
+  const blob = buildStaticPageExportZipBlob(artifact, {
+    now: new Date('2026-05-08T08:00:00Z'),
+  });
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  const text = new TextDecoder('utf-8').decode(bytes);
+
+  assert.equal(blob.type, 'application/zip');
+  assert.equal(bytes[0], 0x50);
+  assert.equal(bytes[1], 0x4b);
+  assert.match(text, /index\.html/);
+  assert.match(text, /asset-manifest\.json/);
+  assert.match(text, /runtime-requirements\.json/);
+  assert.match(text, /export-package\.json/);
+  assert.match(text, /最终静态页/);
 });
 
 test('static page export package records missing backend html as a warning', () => {
@@ -112,6 +142,7 @@ test('static page export helpers sanitize filenames and prefer backend html', ()
   const draft = testDraft({ backendDraftId: 'draft:id/with spaces' });
 
   assert.equal(staticPageExportFilename(draft), 'static-page-draft-id-with-spaces-package.json');
+  assert.equal(staticPageZipFilename(draft), 'static-page-draft-id-with-spaces-package.zip');
   assert.equal(staticPageHtmlFilename(draft), 'static-page-draft-id-with-spaces-index.html');
   assert.equal(buildStaticPageStandaloneHtml(draft, '<main>fresh</main>'), '<main>fresh</main>');
 });

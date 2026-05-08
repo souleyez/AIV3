@@ -3,10 +3,9 @@
 import { formatDateTime, formatRelativeTime, formatSnakeCaseLabel, truncateText } from '../lib/formatters';
 import { buildStaticPageFinalRenderPayload } from '../lib/static-page-draft';
 import {
-  buildStaticPageExportPackage,
   buildStaticPageStandaloneHtml,
+  downloadStaticPageExportZip,
   downloadTextArtifact,
-  staticPageExportFilename,
   staticPageHtmlFilename,
 } from '../lib/static-page-export-package';
 
@@ -122,12 +121,7 @@ function downloadStaticPageHtmlFromShelf(draft) {
 function downloadStaticPagePackageFromShelf(draft) {
   const payload = buildStaticPageFinalRenderPayload(draft);
   const html = buildStaticPageStandaloneHtml(draft, draft?.finalPage?.html || '');
-  const artifact = buildStaticPageExportPackage(draft, payload, html);
-  downloadTextArtifact({
-    content: JSON.stringify(artifact, null, 2),
-    filename: staticPageExportFilename(draft),
-    mime: 'application/json;charset=utf-8',
-  });
+  downloadStaticPageExportZip(draft, payload, html);
 }
 
 function buildReportControlNotice({

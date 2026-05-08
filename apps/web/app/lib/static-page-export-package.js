@@ -25,6 +25,7 @@ function fallbackPackageManifest(draft) {
     version: 1,
     status: draft?.finalPage?.status || draft?.status || 'unknown',
     files: [
+      { path: 'export-package.json', role: 'export_package_manifest', mime: 'application/json' },
       { path: 'index.html', role: 'rendered_static_page', mime: 'text/html' },
       { path: 'asset-manifest.json', role: 'renderer_manifest', mime: 'application/json' },
       { path: 'data-snapshot.json', role: 'render_data_snapshot', mime: 'application/json' },
@@ -42,6 +43,7 @@ function normalizePackageManifest(draft, manifest) {
     : fallbackPackageManifest(draft);
   const files = Array.isArray(packageManifest.files) ? [...packageManifest.files] : [];
   const requiredFiles = [
+    { path: 'export-package.json', role: 'export_package_manifest', mime: 'application/json' },
     { path: 'README.md', role: 'human_handoff_note', mime: 'text/markdown' },
     { path: 'render-spec.json', role: 'render_contract', mime: 'application/json' },
     { path: 'runtime-requirements.json', role: 'optional_runtime_requirements', mime: 'application/json' },
@@ -92,6 +94,18 @@ function buildReadme({ draft, manifest, backendHtml, warnings }) {
 }
 
 function contentForPath(path, { draft, payload, manifest, backendHtml, warnings }) {
+  if (path === 'export-package.json') {
+    return safeJson({
+      kind: 'static-page-export-package',
+      version: 1,
+      draftId: draft?.id || null,
+      backendDraftId: draft?.backendDraftId || null,
+      renderOutputId: draft?.finalPage?.renderOutputId || null,
+      imageJobId: draft?.finalPage?.imageJobId || draft?.imageJob?.id || null,
+      runtime_requirements: contextRuntimeRequirements({ manifest }),
+      files: Array.isArray(manifest.export_package?.files) ? manifest.export_package.files : fallbackPackageManifest(draft).files,
+    });
+  }
   if (path === 'index.html') {
     return backendHtml || '<!-- static page html is not available yet; refresh after worker completion -->';
   }
@@ -131,7 +145,7 @@ function normalizeFiles(packageManifest, context) {
   const files = [];
   const sourceFiles = Array.isArray(packageManifest.files) ? packageManifest.files : [];
   sourceFiles.forEach((file) => {
-    const path = typeof file?.path === 'string' ? file.path.trim() : '';
+    const path = safePackagePath(file?.path);
     if (!path || knownPaths.has(path)) return;
     knownPaths.add(path);
     files.push({
@@ -142,6 +156,18 @@ function normalizeFiles(packageManifest, context) {
     });
   });
   return files;
+}
+
+function safePackagePath(path) {
+  const normalized = String(path || '')
+    .replace(/\\/g, '/')
+    .trim()
+    .replace(/^\/+/, '');
+  const segments = normalized.split('/').filter(Boolean);
+  if (!segments.length || segments.some((segment) => segment === '.' || segment === '..')) {
+    return '';
+  }
+  return segments.join('/');
 }
 
 function staticPageSafeId(draft) {
@@ -160,6 +186,10 @@ export function staticPageExportFilename(draft, extension = 'json') {
 
 export function staticPageHtmlFilename(draft) {
   return `static-page-${staticPageSafeId(draft)}-index.html`;
+}
+
+export function staticPageZipFilename(draft) {
+  return staticPageExportFilename(draft, 'zip');
 }
 
 export function buildStaticPageStandaloneHtml(draft, backendHtml) {
@@ -194,6 +224,189 @@ export function buildStaticPageExportPackage(draft, payload = {}, backendHtml = 
     files,
     assets: packageManifest.assets || [],
   };
+}
+
+const CRC32_TABLE = (() => {
+  const table = new Uint32Array(256);
+  for (let index = 0; index < 256; index += 1) {
+    let value = index;
+    for (let bit = 0; bit < 8; bit += 1) {
+      value = value & 1 ? 0xedb88320 ^ (value >>> 1) : value >>> 1;
+    }
+    table[index] = value >>> 0;
+  }
+  return table;
+})();
+
+function crc32(bytes) {
+  let crc = 0xffffffff;
+  bytes.forEach((byte) => {
+    crc = CRC32_TABLE[(crc ^ byte) & 0xff] ^ (crc >>> 8);
+  });
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function littleEndian16(value) {
+  const bytes = new Uint8Array(2);
+  new DataView(bytes.buffer).setUint16(0, value & 0xffff, true);
+  return bytes;
+}
+
+function littleEndian32(value) {
+  const bytes = new Uint8Array(4);
+  new DataView(bytes.buffer).setUint32(0, value >>> 0, true);
+  return bytes;
+}
+
+function concatBytes(chunks) {
+  const size = chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0);
+  const output = new Uint8Array(size);
+  let offset = 0;
+  chunks.forEach((chunk) => {
+    output.set(chunk, offset);
+    offset += chunk.byteLength;
+  });
+  return output;
+}
+
+function dosDateTime(now) {
+  const source = now instanceof Date && !Number.isNaN(now.getTime()) ? now : new Date();
+  const year = Math.max(1980, Math.min(2107, source.getFullYear()));
+  const month = Math.max(1, Math.min(12, source.getMonth() + 1));
+  const day = Math.max(1, Math.min(31, source.getDate()));
+  const dosTime = (source.getHours() << 11) | (source.getMinutes() << 5) | Math.floor(source.getSeconds() / 2);
+  const dosDate = ((year - 1980) << 9) | (month << 5) | day;
+  return { dosDate, dosTime };
+}
+
+function localFileHeader({ nameBytes, contentBytes, crc, dosDate, dosTime }) {
+  return concatBytes([
+    littleEndian32(0x04034b50),
+    littleEndian16(20),
+    littleEndian16(0x0800),
+    littleEndian16(0),
+    littleEndian16(dosTime),
+    littleEndian16(dosDate),
+    littleEndian32(crc),
+    littleEndian32(contentBytes.byteLength),
+    littleEndian32(contentBytes.byteLength),
+    littleEndian16(nameBytes.byteLength),
+    littleEndian16(0),
+    nameBytes,
+  ]);
+}
+
+function centralDirectoryHeader({ nameBytes, contentBytes, crc, dosDate, dosTime, localHeaderOffset }) {
+  return concatBytes([
+    littleEndian32(0x02014b50),
+    littleEndian16(20),
+    littleEndian16(20),
+    littleEndian16(0x0800),
+    littleEndian16(0),
+    littleEndian16(dosTime),
+    littleEndian16(dosDate),
+    littleEndian32(crc),
+    littleEndian32(contentBytes.byteLength),
+    littleEndian32(contentBytes.byteLength),
+    littleEndian16(nameBytes.byteLength),
+    littleEndian16(0),
+    littleEndian16(0),
+    littleEndian16(0),
+    littleEndian16(0),
+    littleEndian32(0),
+    littleEndian32(localHeaderOffset),
+    nameBytes,
+  ]);
+}
+
+function endOfCentralDirectory({ entryCount, centralDirectorySize, centralDirectoryOffset }) {
+  return concatBytes([
+    littleEndian32(0x06054b50),
+    littleEndian16(0),
+    littleEndian16(0),
+    littleEndian16(entryCount),
+    littleEndian16(entryCount),
+    littleEndian32(centralDirectorySize),
+    littleEndian32(centralDirectoryOffset),
+    littleEndian16(0),
+  ]);
+}
+
+export function buildStaticPageExportZipBlob(artifact, options = {}) {
+  const encoder = new TextEncoder();
+  const { dosDate, dosTime } = dosDateTime(options.now);
+  const entries = (Array.isArray(artifact?.files) ? artifact.files : [])
+    .map((file) => ({
+      path: safePackagePath(file?.path),
+      content: file?.content instanceof Uint8Array ? file.content : encoder.encode(String(file?.content ?? '')),
+    }))
+    .filter((file) => file.path);
+
+  const localChunks = [];
+  const centralChunks = [];
+  let offset = 0;
+
+  entries.forEach((entry) => {
+    const nameBytes = encoder.encode(entry.path);
+    const contentBytes = entry.content;
+    const contentCrc = crc32(contentBytes);
+    const localHeader = localFileHeader({
+      nameBytes,
+      contentBytes,
+      crc: contentCrc,
+      dosDate,
+      dosTime,
+    });
+    localChunks.push(localHeader, contentBytes);
+    centralChunks.push(centralDirectoryHeader({
+      nameBytes,
+      contentBytes,
+      crc: contentCrc,
+      dosDate,
+      dosTime,
+      localHeaderOffset: offset,
+    }));
+    offset += localHeader.byteLength + contentBytes.byteLength;
+  });
+
+  const centralDirectoryOffset = offset;
+  const centralDirectory = concatBytes(centralChunks);
+  const zipBytes = concatBytes([
+    ...localChunks,
+    centralDirectory,
+    endOfCentralDirectory({
+      entryCount: entries.length,
+      centralDirectorySize: centralDirectory.byteLength,
+      centralDirectoryOffset,
+    }),
+  ]);
+
+  return new Blob([zipBytes], {
+    type: 'application/zip',
+  });
+}
+
+export function downloadBlobArtifact({ blob, filename }) {
+  if (typeof window === 'undefined' || typeof document === 'undefined') {
+    return false;
+  }
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 0);
+  return true;
+}
+
+export function downloadStaticPageExportZip(draft, payload = {}, backendHtml = '') {
+  const artifact = buildStaticPageExportPackage(draft, payload, backendHtml);
+  return downloadBlobArtifact({
+    blob: buildStaticPageExportZipBlob(artifact),
+    filename: staticPageZipFilename(draft),
+  });
 }
 
 export function downloadTextArtifact({ content, filename, mime }) {

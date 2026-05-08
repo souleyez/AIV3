@@ -2,10 +2,9 @@
 
 import { buildStaticPageFinalRenderPayload } from '../../lib/static-page-draft';
 import {
-  buildStaticPageExportPackage,
   buildStaticPageStandaloneHtml,
+  downloadStaticPageExportZip,
   downloadTextArtifact,
-  staticPageExportFilename,
   staticPageHtmlFilename,
 } from '../../lib/static-page-export-package';
 import StaticPageChartPreview from './StaticPageChartPreview';
@@ -76,12 +75,7 @@ function downloadStaticPageExportPackage(draft, payload, backendHtml) {
   if (!draft || !payload) {
     return;
   }
-  const artifact = buildStaticPageExportPackage(draft, payload, backendHtml);
-  downloadTextArtifact({
-    content: JSON.stringify(artifact, null, 2),
-    filename: staticPageExportFilename(draft),
-    mime: 'application/json;charset=utf-8',
-  });
+  downloadStaticPageExportZip(draft, payload, backendHtml);
 }
 
 function downloadStaticPageHtml(draft, backendHtml) {
@@ -266,7 +260,7 @@ export default function StaticPageFinalRender({
                 className="ghost-btn compact-action-btn"
                 onClick={() => downloadStaticPageExportPackage(draft, payload, backendHtml)}
               >
-                下载交付包 JSON
+                下载交付包 ZIP
               </button>
             </div>
           ) : null}
