@@ -64,8 +64,8 @@ Completed and preserved:
 - Account/email auth first pass and second-round access hardening exist across datasets, documents, AssistantRun, memory, workflows, reports, static pages, outputs, and audit.
 - Static-page runtime supports deterministic and provider-backed intent interpretation with sanitized operations.
 - Cloudflare/Codex image queue integration exists for static-page preview jobs.
-- Static-page renderer can render layout-aware core module types into HTML/SVG.
-- Frontend supports draft planning, image preview, final render display, durable right shelf, mobile builder, and per-module micro-adjustment editors.
+- Static-page renderer can render layout-aware core module types into HTML/SVG and preserve safe ECharts JSON hydration islands with deterministic offline fallback.
+- Frontend supports draft planning, image preview, final render display, durable right shelf, mobile builder, per-module micro-adjustment editors, and inline chart previews for editable module data.
 - Java 8 parity audit is complete: Java/Vue used `gridstack` plus `echarts`; V3 keeps `react-grid-layout` and adds ECharts as advanced chart runtime.
 - Model gateway seed exists in `llm-gateway` with model lanes, provider error redaction, and MiniMax reasoning block cleanup.
 - Codex Host safe bridge exists in dry-run/plan-only form. Real execution is still blocked by default.

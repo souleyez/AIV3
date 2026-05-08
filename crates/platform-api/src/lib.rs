@@ -15407,7 +15407,8 @@ fn build_static_page_render_spec() -> Value {
             "advanced": "echarts",
             "allowedRuntimes": ["deterministic", "echarts"],
             "advancedOptions": "plain-json-echarts-option-only",
-            "finalRendererFallback": "ECharts modules must still have dataSnapshot sampleData so the final renderer can fall back to deterministic DOM/SVG output."
+            "finalRendererFallback": "ECharts modules must still have dataSnapshot sampleData so the final renderer can fall back to deterministic DOM/SVG output.",
+            "advancedHydration": "Final HTML preserves safe ECharts JSON option islands; if an approved ECharts bundle is present, the page can hydrate charts without losing deterministic fallback."
         },
         "editableContent": ["title", "content", "dataBinding", "visualization", "chartRuntime", "chartOptions", "layout"],
         "generationGuardrails": [
@@ -19117,6 +19118,11 @@ mod tests {
             rendered.asset_manifest["chart_runtime"]["fallbackModules"],
             json!(1)
         );
+        assert_eq!(
+            rendered.asset_manifest["chart_runtime"]["echartsHydratableModules"],
+            json!(1)
+        );
+        assert!(rendered.html.contains("static-page-echarts-option"));
         assert!(rendered.html.contains("1月: 1200"));
         assert!(rendered.html.contains("2月: 1380"));
         assert!(!rendered.html.contains("数据待确认"));

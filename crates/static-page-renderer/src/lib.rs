@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 use std::collections::BTreeMap;
 
 pub const STATIC_PAGE_RENDERER_ID: &str = "static-page-renderer-v1";
@@ -62,6 +62,7 @@ pub fn render_static_page(request: &StaticPageRenderRequest) -> StaticPageRender
         .collect::<Vec<_>>()
         .join("\n");
     let chart_runtime_manifest = build_chart_runtime_manifest(&modules, &data_snapshot);
+    let echarts_hydration_script = render_echarts_hydration_script(&modules, &data_snapshot);
     let html = format!(
         concat!(
             "<!doctype html><html><head><meta charset=\"utf-8\">",
@@ -69,7 +70,7 @@ pub fn render_static_page(request: &StaticPageRenderRequest) -> StaticPageRender
             "<title>{}</title><style>{}</style></head>",
             "<body class=\"static-page style-{}\" data-preview=\"{}\" style=\"{}\">",
             "<main><header class=\"cover\"><span>{}</span><h1>{}</h1><p>{}</p></header>",
-            "<section class=\"module-grid\" aria-label=\"静态页模块\">{}</section></main>",
+            "<section class=\"module-grid\" aria-label=\"静态页模块\">{}</section></main>{}",
             "</body></html>"
         ),
         escape_html(&request.title),
@@ -84,6 +85,7 @@ pub fn render_static_page(request: &StaticPageRenderRequest) -> StaticPageRender
                 .unwrap_or_else(|| "按确认效果图和模块规划生成静态页。".to_string()),
         ),
         module_html,
+        echarts_hydration_script,
     );
     let export_package = build_export_package_manifest(
         &request.draft_id,
@@ -102,6 +104,7 @@ pub fn render_static_page(request: &StaticPageRenderRequest) -> StaticPageRender
             "source": "StaticPageDraft",
             "preview_role": "visual_contract",
             "final_role": "html_css_svg_renderer",
+            "advanced_chart_role": "echarts_json_hydration",
         },
         "visual_spec": visual_spec,
         "render_spec": render_spec,
@@ -186,6 +189,14 @@ fn build_export_package_manifest(
             }
         ],
         "assets": assets,
+        "runtime_requirements": [{
+            "name": "Apache ECharts",
+            "package": "echarts",
+            "license": "Apache-2.0",
+            "required": false,
+            "role": "optional_advanced_chart_hydration",
+            "note": "index.html keeps deterministic DOM/SVG chart fallback and does not inject remote scripts; approved hosts can provide ECharts to hydrate safe JSON option islands."
+        }],
         "debug": {
             "renderer": STATIC_PAGE_RENDERER_ID,
             "module_count": module_count,
@@ -232,6 +243,8 @@ fn render_module_html(
     let module_id = module.get("id").and_then(Value::as_str).unwrap_or("module");
     let layout_style = module_layout_style(&module, module_id, index, mobile_order);
     let chart_html = render_visualization_html(&module, visualization, data_snapshot);
+    let chart_body =
+        render_chart_body(&module, module_id, visualization, data_snapshot, chart_html);
     format!(
         concat!(
             "<section class=\"module\" data-chart=\"{}\" data-chart-runtime=\"{}\" data-data-quality=\"{}\" data-render-fallback=\"{}\" data-module-id=\"{}\" style=\"{}\">",
@@ -249,13 +262,38 @@ fn render_module_html(
         escape_html(title),
         escape_html(content),
         escape_html(data_label),
-        chart_html,
+        chart_body,
+    )
+}
+
+fn render_chart_body(
+    module: &Value,
+    module_id: &str,
+    visualization: &str,
+    data_snapshot: &Value,
+    fallback_html: String,
+) -> String {
+    let Some(option) = echarts_option_for_module(module, visualization, data_snapshot) else {
+        return fallback_html;
+    };
+    let option_json = escape_json_script(&option.to_string());
+    format!(
+        concat!(
+            "<div class=\"echarts-hydration-target\" data-echarts-module-id=\"{}\" hidden></div>",
+            "<div class=\"chart-fallback\">{}</div>",
+            "<script type=\"application/json\" class=\"static-page-echarts-option\" data-module-id=\"{}\">{}</script>"
+        ),
+        escape_html(module_id),
+        fallback_html,
+        escape_html(module_id),
+        option_json,
     )
 }
 
 fn build_chart_runtime_manifest(modules: &Value, data_snapshot: &Value) -> Value {
     let mut deterministic_count = 0;
     let mut echarts_requested_count = 0;
+    let mut echarts_hydratable_count = 0;
     let mut fallback_count = 0;
     let mut data_quality_counts = BTreeMap::<String, usize>::new();
     let module_manifests = modules
@@ -278,22 +316,33 @@ fn build_chart_runtime_manifest(modules: &Value, data_snapshot: &Value) -> Value
             let chart_runtime = module_chart_runtime(&module).to_string();
             let data_quality = module_data_quality(&module, data_snapshot);
             *data_quality_counts.entry(data_quality.clone()).or_insert(0) += 1;
+            let echarts_option =
+                echarts_option_for_module(&module, &visualization_type, data_snapshot);
             if chart_runtime == "echarts" {
                 echarts_requested_count += 1;
+                if echarts_option.is_some() {
+                    echarts_hydratable_count += 1;
+                }
                 fallback_count += 1;
             } else {
                 deterministic_count += 1;
             }
             let fallback = chart_runtime == "echarts";
             let fallback_runtime = module_chart_runtime_fallback(&chart_runtime);
+            let final_renderer_runtime = if chart_runtime == "echarts" {
+                "deterministic-svg-html+echarts-json-hydration"
+            } else {
+                "deterministic-svg-html"
+            };
             json!({
                 "moduleId": module_id,
                 "visualizationType": visualization_type,
                 "chartRuntime": chart_runtime,
                 "dataQuality": data_quality,
-                "finalRendererRuntime": "deterministic-svg-html",
+                "finalRendererRuntime": final_renderer_runtime,
                 "fallback": fallback,
                 "fallbackRuntime": fallback_runtime,
+                "echartsHydratable": echarts_option.is_some(),
             })
         })
         .collect::<Vec<_>>();
@@ -301,10 +350,11 @@ fn build_chart_runtime_manifest(modules: &Value, data_snapshot: &Value) -> Value
     json!({
         "defaultRuntime": "deterministic",
         "supportedRuntimes": ["deterministic", "echarts"],
-        "finalRendererRuntime": "deterministic-svg-html",
+        "finalRendererRuntime": "deterministic-svg-html+optional-echarts-json-hydration",
         "deterministicModules": deterministic_count,
         "echartsRequestedModules": echarts_requested_count,
         "echartsRenderedModules": 0,
+        "echartsHydratableModules": echarts_hydratable_count,
         "fallbackModules": fallback_count,
         "dataQualityCounts": data_quality_counts,
         "modules": module_manifests,
@@ -370,6 +420,268 @@ fn module_chart_runtime_fallback(chart_runtime: &str) -> &'static str {
         "deterministic-svg-html"
     } else {
         "none"
+    }
+}
+
+fn render_echarts_hydration_script(modules: &Value, data_snapshot: &Value) -> String {
+    let has_echarts_module = modules
+        .as_array()
+        .map(|items| {
+            items.iter().any(|module| {
+                let visualization = module
+                    .get("visualization")
+                    .and_then(|visualization| visualization.get("type"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("text-insight");
+                echarts_option_for_module(module, visualization, data_snapshot).is_some()
+            })
+        })
+        .unwrap_or(false);
+    if !has_echarts_module {
+        return String::new();
+    }
+    concat!(
+        "<script>(function(){",
+        "function hydrate(){if(!window.echarts)return;",
+        "document.querySelectorAll('.static-page-echarts-option').forEach(function(node){",
+        "var parent=node.parentElement;var target=parent&&parent.querySelector('.echarts-hydration-target');if(!target)return;",
+        "try{var option=JSON.parse(node.textContent||'{}');var chart=window.echarts.init(target,null,{renderer:'canvas'});",
+        "chart.setOption(option,true);target.hidden=false;target.setAttribute('aria-hidden','false');",
+        "var fallback=parent.querySelector('.chart-fallback');if(fallback)fallback.hidden=true;",
+        "window.addEventListener('resize',function(){chart.resize();});}catch(error){target.hidden=true;}",
+        "});}",
+        "window.__staticPageHydrateEcharts=hydrate;",
+        "if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',hydrate);}else{hydrate();}",
+        "})();</script>"
+    )
+    .to_string()
+}
+
+fn echarts_option_for_module(
+    module: &Value,
+    visualization: &str,
+    data_snapshot: &Value,
+) -> Option<Value> {
+    if module_chart_runtime(module) != "echarts" {
+        return None;
+    }
+    let points = chart_points(module, data_snapshot);
+    let fallback = default_echarts_option(visualization, &points);
+    let sanitized = module_chart_options(module)
+        .map(sanitize_echarts_options)
+        .unwrap_or_else(|| Value::Object(Map::new()));
+    let mut option = fallback.unwrap_or_else(|| json!({"animation": false}));
+    if echarts_option_has_data(&sanitized) {
+        merge_object_values(&mut option, sanitized);
+    }
+    if echarts_option_has_data(&option) {
+        Some(option)
+    } else {
+        None
+    }
+}
+
+fn module_chart_options(module: &Value) -> Option<&Value> {
+    module
+        .get("visualization")
+        .and_then(|visualization| {
+            visualization
+                .get("chartOptions")
+                .or_else(|| visualization.get("chart_options"))
+        })
+        .or_else(|| module.get("chartOptions"))
+        .or_else(|| module.get("chart_options"))
+}
+
+fn default_echarts_option(visualization: &str, points: &[ChartPoint]) -> Option<Value> {
+    if points.is_empty() {
+        return None;
+    }
+    let labels = points
+        .iter()
+        .map(|point| Value::String(point.label.clone()))
+        .collect::<Vec<_>>();
+    let values = points
+        .iter()
+        .map(|point| json!(point.value))
+        .collect::<Vec<_>>();
+    match visualization {
+        "donut-chart" => Some(json!({
+            "animation": false,
+            "tooltip": { "trigger": "item" },
+            "series": [{
+                "type": "pie",
+                "radius": ["46%", "72%"],
+                "data": points.iter().map(|point| json!({
+                    "name": point.label,
+                    "value": point.value
+                })).collect::<Vec<_>>()
+            }]
+        })),
+        "line-chart" => Some(json!({
+            "animation": false,
+            "tooltip": { "trigger": "axis" },
+            "grid": { "left": 28, "right": 16, "top": 22, "bottom": 28, "containLabel": true },
+            "xAxis": { "type": "category", "data": labels },
+            "yAxis": { "type": "value" },
+            "series": [{ "type": "line", "data": values }]
+        })),
+        "bar-chart" | "risk-matrix" | "kpi-cards" | "table" | "timeline" => Some(json!({
+            "animation": false,
+            "tooltip": { "trigger": "axis" },
+            "grid": { "left": 28, "right": 16, "top": 22, "bottom": 28, "containLabel": true },
+            "xAxis": { "type": "category", "data": labels },
+            "yAxis": { "type": "value" },
+            "series": [{ "type": "bar", "data": values }]
+        })),
+        _ => None,
+    }
+}
+
+fn sanitize_echarts_options(value: &Value) -> Value {
+    let Some(object) = value.as_object() else {
+        return Value::Object(Map::new());
+    };
+    let mut output = Map::new();
+    for (key, item) in object {
+        if !is_allowed_echarts_top_level_key(key) {
+            continue;
+        }
+        if key == "series" {
+            let series = sanitize_echarts_series(item);
+            if !series.is_empty() {
+                output.insert(key.clone(), Value::Array(series));
+            }
+            continue;
+        }
+        if let Some(sanitized) = sanitize_chart_json_value(item) {
+            output.insert(key.clone(), sanitized);
+        }
+    }
+    Value::Object(output)
+}
+
+fn sanitize_echarts_series(value: &Value) -> Vec<Value> {
+    let items = value
+        .as_array()
+        .cloned()
+        .unwrap_or_else(|| vec![value.clone()]);
+    items
+        .into_iter()
+        .filter_map(|item| {
+            let object = item.as_object()?;
+            let series_type = object.get("type").and_then(Value::as_str)?;
+            if !is_allowed_echarts_series_type(series_type) {
+                return None;
+            }
+            sanitize_chart_json_value(&Value::Object(object.clone()))
+        })
+        .collect()
+}
+
+fn sanitize_chart_json_value(value: &Value) -> Option<Value> {
+    match value {
+        Value::Null | Value::Bool(_) | Value::Number(_) => Some(value.clone()),
+        Value::String(text) => is_safe_chart_string(text).then(|| Value::String(text.clone())),
+        Value::Array(items) => Some(Value::Array(
+            items
+                .iter()
+                .filter_map(sanitize_chart_json_value)
+                .collect::<Vec<_>>(),
+        )),
+        Value::Object(object) => {
+            let mut output = Map::new();
+            for (key, item) in object {
+                if is_dangerous_chart_key(key) {
+                    continue;
+                }
+                if let Some(sanitized) = sanitize_chart_json_value(item) {
+                    output.insert(key.clone(), sanitized);
+                }
+            }
+            (!output.is_empty()).then(|| Value::Object(output))
+        }
+    }
+}
+
+fn is_allowed_echarts_top_level_key(key: &str) -> bool {
+    matches!(
+        key,
+        "animation"
+            | "aria"
+            | "backgroundColor"
+            | "color"
+            | "dataset"
+            | "grid"
+            | "legend"
+            | "series"
+            | "title"
+            | "tooltip"
+            | "xAxis"
+            | "yAxis"
+            | "radiusAxis"
+            | "angleAxis"
+            | "polar"
+            | "radar"
+            | "visualMap"
+    )
+}
+
+fn is_allowed_echarts_series_type(series_type: &str) -> bool {
+    matches!(
+        series_type,
+        "bar" | "line" | "pie" | "scatter" | "gauge" | "radar" | "heatmap" | "treemap"
+    )
+}
+
+fn is_dangerous_chart_key(key: &str) -> bool {
+    key == "__proto__"
+        || key == "prototype"
+        || key == "constructor"
+        || key == "renderItem"
+        || key.to_ascii_lowercase().starts_with("on")
+}
+
+fn is_safe_chart_string(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    !(lower.contains('<')
+        || lower.contains('>')
+        || lower.contains("javascript:")
+        || lower.contains("data:text/html")
+        || lower.contains("http://")
+        || lower.contains("https://")
+        || lower.contains("@import")
+        || lower.contains("expression("))
+}
+
+fn echarts_option_has_data(option: &Value) -> bool {
+    option
+        .get("dataset")
+        .and_then(|dataset| dataset.get("source"))
+        .and_then(Value::as_array)
+        .map(|source| !source.is_empty())
+        .unwrap_or(false)
+        || option
+            .get("series")
+            .and_then(Value::as_array)
+            .map(|series| {
+                series.iter().any(|item| {
+                    item.get("data")
+                        .and_then(Value::as_array)
+                        .map(|data| !data.is_empty())
+                        .unwrap_or(false)
+                })
+            })
+            .unwrap_or(false)
+}
+
+fn merge_object_values(target: &mut Value, overlay: Value) {
+    let (Some(target_object), Some(overlay_object)) = (target.as_object_mut(), overlay.as_object())
+    else {
+        return;
+    };
+    for (key, value) in overlay_object {
+        target_object.insert(key.clone(), value.clone());
     }
 }
 
@@ -923,7 +1235,8 @@ fn fallback_render_spec() -> Value {
         "chartRuntimePolicy": {
             "default": "deterministic",
             "advanced": "echarts",
-            "finalRendererFallback": "deterministic-svg-html"
+            "finalRendererFallback": "deterministic-svg-html",
+            "advancedHydration": "safe-echarts-json-option-island"
         },
     })
 }
@@ -989,6 +1302,15 @@ fn escape_html(value: &str) -> String {
         .replace('\'', "&#39;")
 }
 
+fn escape_json_script(value: &str) -> String {
+    value
+        .replace('&', "\\u0026")
+        .replace('<', "\\u003c")
+        .replace('>', "\\u003e")
+        .replace('\u{2028}', "\\u2028")
+        .replace('\u{2029}', "\\u2029")
+}
+
 const STATIC_PAGE_RENDER_CSS: &str = r#"
 :root{color-scheme:light;font-family:Aptos,ui-sans-serif,system-ui,sans-serif;background:#f7f8fb;color:#101827}
 *{box-sizing:border-box}body{margin:0;padding:28px;background:var(--static-page-bg,linear-gradient(135deg,#f7fbff,#fff7ed));color:var(--static-page-text,#101827)}
@@ -1002,6 +1324,7 @@ h1{font-size:clamp(32px,6vw,64px);line-height:.95;margin:10px 0 14px}h2{font-siz
 .style-decision-brief p,.style-data-command p,.style-decision-brief small,.style-data-command small{color:#cbd5e1}
 .module{display:grid;gap:14px;align-content:start;overflow:hidden}.chart{min-height:92px;border-radius:18px;display:grid;place-items:center;background:linear-gradient(135deg,rgba(37,99,235,.12),rgba(14,165,233,.08));font-weight:900;color:var(--static-page-chart,#1d4ed8);padding:10px}
 .style-decision-brief .chart,.style-data-command .chart{background:rgba(255,255,255,.1);color:#bfdbfe}
+.echarts-hydration-target{width:100%;min-height:190px}.chart-fallback{width:100%;display:grid;place-items:center}.static-page-echarts-option{display:none!important}
 .chart-svg{width:100%;height:100%;min-height:112px;overflow:visible}.chart-svg rect,.chart-svg .donut-value{fill:var(--static-page-chart,#0ea5e9)}.chart-svg text{font-size:10px;fill:var(--static-page-muted,#475569);font-weight:800}.style-decision-brief .chart-svg text,.style-data-command .chart-svg text{fill:#cbd5e1}.line-path{fill:none;stroke:var(--static-page-chart,#0ea5e9);stroke-width:5;stroke-linecap:round;stroke-linejoin:round}.line-area{fill:var(--static-page-chart,#0ea5e9);opacity:.13}.line-chart circle{fill:var(--static-page-surface,#fff);stroke:var(--static-page-chart,#0ea5e9);stroke-width:3}.donut-base{fill:none;stroke:rgba(100,116,139,.22);stroke-width:18}.donut-value{fill:none;stroke:var(--static-page-chart,#0ea5e9);stroke-width:18;transform:rotate(-90deg);transform-origin:70px 70px;stroke-linecap:round}.donut-number{font-size:24px!important;fill:var(--static-page-text,#101827)!important}.donut-label,.donut-side{font-size:11px!important}.donut-side.muted{opacity:.68}.kpi-grid{width:100%;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.kpi-card{display:grid;gap:2px;padding:12px;border-radius:16px;background:rgba(255,255,255,.42)}.style-decision-brief .kpi-card,.style-data-command .kpi-card{background:rgba(255,255,255,.1)}.kpi-card b{font-size:24px;color:var(--static-page-chart,#0ea5e9)}.kpi-card i{font-style:normal;font-size:11px;color:var(--static-page-muted,#475569)}.data-missing{display:grid;gap:6px;text-align:center;color:var(--static-page-muted,#475569)}.data-missing b{font-size:18px;color:var(--static-page-text,#101827)}.data-missing span{font-size:12px}.evidence-table{width:100%;border-collapse:collapse;font-size:12px}.evidence-table td{padding:9px 10px;border-bottom:1px solid rgba(100,116,139,.2)}.timeline-chart{width:100%;margin:0;padding:0;display:grid;gap:9px;list-style:none}.timeline-chart li{display:flex;gap:10px;align-items:center}.timeline-chart b{min-width:56px;color:var(--static-page-chart,#0ea5e9)}.timeline-chart span{color:var(--static-page-muted,#475569);font-size:12px}.risk-matrix{width:100%;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.risk-chip{display:grid;gap:4px;padding:11px;border-radius:16px;background:rgba(100,116,139,.16)}.risk-chip.high{background:rgba(239,68,68,.18)}.risk-chip.medium{background:rgba(245,158,11,.18)}.risk-chip.low{background:rgba(14,165,233,.16)}.risk-chip i{font-style:normal;font-size:11px;color:var(--static-page-muted,#475569)}.headline-visual{display:grid;gap:6px;text-align:center}.headline-visual b{font-size:28px;color:var(--static-page-text,#101827)}.headline-visual span{font-size:12px;color:var(--static-page-accent,#2563eb)}.insight-quote{margin:0;padding:0 0 0 14px;border-left:4px solid var(--static-page-chart,#0ea5e9);font-size:14px;line-height:1.6;color:var(--static-page-muted,#475569)}
 @media(max-width:720px){body{padding:14px}.module-grid{display:flex;flex-direction:column}.module{grid-column:1/-1!important;grid-row:auto!important;order:var(--mobile-order);min-height:auto!important}.cover,.module{padding:18px;border-radius:20px}h1{font-size:36px}.kpi-grid,.risk-matrix{grid-template-columns:1fr}}
 "#;
@@ -1106,6 +1429,14 @@ mod tests {
             result.asset_manifest["export_package"]["debug"]["module_count"],
             2
         );
+        assert_eq!(
+            result.asset_manifest["export_package"]["runtime_requirements"][0]["license"],
+            "Apache-2.0"
+        );
+        assert_eq!(
+            result.asset_manifest["export_package"]["runtime_requirements"][0]["required"],
+            false
+        );
     }
 
     #[test]
@@ -1123,6 +1454,7 @@ mod tests {
                         "type": "bar-chart",
                         "chartRuntime": "echarts",
                         "chartOptions": {
+                            "title": { "text": "订单趋势" },
                             "series": [{
                                 "type": "bar",
                                 "data": [1200, 1380]
@@ -1151,8 +1483,17 @@ mod tests {
         assert!(result
             .html
             .contains("data-render-fallback=\"deterministic-svg-html\""));
+        assert!(result.html.contains("static-page-echarts-option"));
+        assert!(result.html.contains("echarts-hydration-target"));
+        assert!(result.html.contains("window.echarts"));
+        assert!(result.html.contains("__staticPageHydrateEcharts"));
+        assert!(result.html.contains("\"title\":{\"text\":\"订单趋势\"}"));
         assert_eq!(
             result.asset_manifest["chart_runtime"]["echartsRequestedModules"],
+            1
+        );
+        assert_eq!(
+            result.asset_manifest["chart_runtime"]["echartsHydratableModules"],
             1
         );
         assert_eq!(result.asset_manifest["chart_runtime"]["fallbackModules"], 1);
@@ -1160,11 +1501,67 @@ mod tests {
             result.asset_manifest["chart_runtime"]["modules"][0]["dataQuality"],
             "module_data"
         );
+        assert_eq!(
+            result.asset_manifest["chart_runtime"]["modules"][0]["echartsHydratable"],
+            true
+        );
+        assert_eq!(
+            result.asset_manifest["chart_runtime"]["modules"][0]["finalRendererRuntime"],
+            "deterministic-svg-html+echarts-json-hydration"
+        );
         assert!(result.html.contains("1月"));
         assert_eq!(
             result.asset_manifest["data_snapshot"]["module_bindings"][0]["sampleData"][0]["value"],
             json!(1200)
         );
+    }
+
+    #[test]
+    fn render_static_page_sanitizes_echarts_json_islands() {
+        let result = render_static_page(&StaticPageRenderRequest {
+            draft_id: "draft-echarts-unsafe".to_string(),
+            assistant_run_id: "run-echarts-unsafe".to_string(),
+            title: "高级图表安全测试".to_string(),
+            draft_payload: json!({
+                "modules": [{
+                    "id": "trend",
+                    "title": "订单趋势",
+                    "content": "安全保留 ECharts JSON。",
+                    "visualization": {
+                        "type": "bar-chart",
+                        "chartRuntime": "echarts",
+                        "chartOptions": {
+                            "title": { "text": "<img src=x onerror=alert(1)>" },
+                            "tooltip": { "formatter": "javascript:alert(1)" },
+                            "series": [{
+                                "type": "bar",
+                                "data": [1200, 1380],
+                                "itemStyle": { "color": "https://example.com/evil.js" },
+                                "renderItem": "alert(1)"
+                            }, {
+                                "type": "custom",
+                                "data": [1]
+                            }]
+                        }
+                    }
+                }]
+            }),
+            selected_scope: Value::Null,
+            visibility_snapshot: Value::Null,
+            preview_asset_key: None,
+            image_job_id: None,
+        });
+
+        assert!(result.html.contains("static-page-echarts-option"));
+        assert!(result.html.contains("\"series\":[{"));
+        assert!(result.html.contains("\"type\":\"bar\""));
+        assert!(result.html.contains("\"data\":[1200,1380]"));
+        assert!(!result.html.contains("javascript:"));
+        assert!(!result.html.contains("https://example.com"));
+        assert!(!result.html.contains("<img"));
+        assert!(!result.html.contains("itemStyle"));
+        assert!(!result.html.contains("renderItem"));
+        assert!(!result.html.contains("\"custom\""));
     }
 
     #[test]
