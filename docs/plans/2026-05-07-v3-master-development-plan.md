@@ -58,6 +58,7 @@ Completed and preserved:
 - Original-assistant-style web shell with left dataset rail, main workspace, right output shelf, mobile support, upload entry, and one visible static-page/report action.
 - Upload saves real local files, classifies them, registers documents, and starts ingest workflows.
 - Ingest supports local text, OOXML, PDF, OCR fallback, MiniMax document VLM slice, and first audio/video metadata/transcript slice.
+- Retrieval and static-page data snapshots preserve media timestamp windows, source locators, and evidence refs for transcript/scene/keyframe citations.
 - Dataset visibility foundation, local-key binding, public/private filtering, and selected-scope semantics exist.
 - AssistantRun persistence exists for ordinary chat, hidden conversation memory, scope planning, evidence supply, continuation, static-page drafts, and artifacts.
 - Account/email auth first pass and second-round access hardening exist across datasets, documents, AssistantRun, memory, workflows, reports, static pages, outputs, and audit.
@@ -362,6 +363,8 @@ The next development thread should continue with static-page final-render/chart/
 
 ### Task 7: Media And MiniMax Follow-Up
 
+**Status:** Completed in current baseline. MiniMax media support is probe-gated, media parse metadata exposes transcript/scene/keyframe evidence, media detail APIs exist, and retrieval/static-page evidence now preserves timestamp citations without assuming missing transcripts.
+
 **Files:**
 
 - Modify: `crates/ingest-worker/src/lib.rs`
@@ -472,4 +475,3 @@ Do not resume account expansion unless fixing a security/access regression.
 Do not run real Codex execution on the local developer workstation; Codex Host real validation is only for the jump host or later Mac host.
 Start with Task 1 unless Task 0 has not been committed.
 ```
-

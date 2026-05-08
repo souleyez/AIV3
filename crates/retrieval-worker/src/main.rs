@@ -1,11 +1,11 @@
 use anyhow::{anyhow, Result};
 use chrono::Utc;
-use domain_model::DocumentLifecycle;
+use domain_model::{DocumentChunk, DocumentLifecycle};
 use event_bus::{workflow_task_enqueued_subject, EventBus, EventSubscription};
 use retrieval_worker::{
     LocalLexicalRetrievalIndexer, RetrievalChunkInput, RetrievalIndexJob, RetrievalIndexer,
 };
-use serde_json::json;
+use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use storage::{NewRetrievalEvidence, PgStorage, DEFAULT_LOCAL_DATABASE_URL};
 use tokio::time::Duration;
@@ -148,13 +148,47 @@ async fn process_task(
                     chunk.chunk_index
                 )
             })?;
+            let source_locator = retrieval_source_locator(document_id, chunk);
+            let mut evidence_manifest = json!({
+                "schema_version": "0.4.0",
+                "generator": "retrieval-worker",
+                "dataset_id": dataset_id,
+                "document_id": document_id,
+                "document_chunk_id": chunk.id,
+                "chunk_index": chunk.chunk_index,
+                "indexed_at": indexed_at,
+                "embedding": {
+                    "status": "indexed",
+                    "model": &embedding_model,
+                    "token_count": profile.token_count,
+                    "strategy": "local_lexical_v1",
+                    "signature_terms": profile.signature_terms,
+                    "term_weights": profile.term_weights,
+                    "vector_norm": profile.vector_norm,
+                },
+                "recall": {
+                    "status": "ready",
+                    "score": profile.recall_score,
+                    "rank_hint": profile.rank_hint,
+                },
+                "evidence": {
+                    "document_chunk_id": chunk.id,
+                    "payload_filter_key": &payload_filter_key,
+                    "source_locator": source_locator.clone(),
+                },
+            });
+            if let Some(media_manifest) = retrieval_media_manifest(chunk) {
+                if let Some(object) = evidence_manifest.as_object_mut() {
+                    object.insert("media".to_string(), media_manifest);
+                }
+            }
             new_retrieval_evidences.push(NewRetrievalEvidence {
                 execution_id: task.execution_id,
                 dataset_id,
                 document_id,
                 document_chunk_id: chunk.id,
                 chunk_index: chunk.chunk_index,
-                source_locator: format!("document://{document_id}/chunks/{}", chunk.chunk_index),
+                source_locator,
                 content_excerpt: excerpt(&chunk.content, 240),
                 summary: format!(
                     "{} chunk {} indexed for lexical retrieval recall.",
@@ -163,37 +197,7 @@ async fn process_task(
                 payload_filter_key: payload_filter_key.clone(),
                 embedding_model: embedding_model.clone(),
                 recall_score: profile.recall_score,
-                evidence_manifest: json!({
-                    "schema_version": "0.4.0",
-                    "generator": "retrieval-worker",
-                    "dataset_id": dataset_id,
-                    "document_id": document_id,
-                    "document_chunk_id": chunk.id,
-                    "chunk_index": chunk.chunk_index,
-                    "indexed_at": indexed_at,
-                    "embedding": {
-                        "status": "indexed",
-                        "model": &embedding_model,
-                        "token_count": profile.token_count,
-                        "strategy": "local_lexical_v1",
-                        "signature_terms": profile.signature_terms,
-                        "term_weights": profile.term_weights,
-                        "vector_norm": profile.vector_norm,
-                    },
-                    "recall": {
-                        "status": "ready",
-                        "score": profile.recall_score,
-                        "rank_hint": profile.rank_hint,
-                    },
-                    "evidence": {
-                        "document_chunk_id": chunk.id,
-                        "payload_filter_key": &payload_filter_key,
-                        "source_locator": format!(
-                            "document://{document_id}/chunks/{}",
-                            chunk.chunk_index
-                        ),
-                    },
-                }),
+                evidence_manifest,
                 created_at: indexed_at,
             });
         }
@@ -339,11 +343,207 @@ fn excerpt(content: &str, max_chars: usize) -> String {
     value
 }
 
+fn retrieval_source_locator(
+    document_id: domain_model::DocumentId,
+    chunk: &DocumentChunk,
+) -> String {
+    let base = format!("document://{document_id}/chunks/{}", chunk.chunk_index);
+    chunk_media_metadata(chunk)
+        .and_then(media_first_timestamp_window)
+        .and_then(|window| media_locator_suffix(window.start_seconds, window.end_seconds))
+        .map(|suffix| format!("{base}{suffix}"))
+        .unwrap_or(base)
+}
+
+#[derive(Clone, Copy, Debug)]
+struct MediaTimestampWindow {
+    kind: &'static str,
+    start_seconds: Option<f64>,
+    end_seconds: Option<f64>,
+}
+
+fn retrieval_media_manifest(chunk: &DocumentChunk) -> Option<Value> {
+    let media = chunk_media_metadata(chunk)?;
+    let first_window = media_first_timestamp_window(media);
+    let timestamp_window = first_window.map(|window| {
+        json!({
+            "kind": window.kind,
+            "start_seconds": window.start_seconds,
+            "end_seconds": window.end_seconds,
+        })
+    });
+    Some(json!({
+        "kind": media
+            .get("kind")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown"),
+        "parse_status": media
+            .get("parse_status")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown"),
+        "has_timestamped_evidence": first_window.is_some(),
+        "timestamp_window": timestamp_window,
+        "transcript_segment_count": media_array_len(media, "transcript_segments"),
+        "scene_count": media_array_len(media, "scenes"),
+        "keyframe_ocr_snippet_count": media_array_len(media, "keyframe_ocr_snippets"),
+        "provider_evidence_count": media_array_len(media, "provider_evidence"),
+    }))
+}
+
+fn chunk_media_metadata(chunk: &DocumentChunk) -> Option<&Value> {
+    chunk
+        .metadata
+        .get("parse_metadata")
+        .and_then(|metadata| metadata.pointer("/media"))
+        .or_else(|| chunk.metadata.get("media"))
+        .filter(|value| value.is_object())
+}
+
+fn media_array_len(media: &Value, key: &str) -> usize {
+    media
+        .get(key)
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0)
+}
+
+fn media_first_timestamp_window(media: &Value) -> Option<MediaTimestampWindow> {
+    for (key, kind) in [
+        ("transcript_segments", "transcript"),
+        ("scenes", "scene"),
+        ("keyframe_ocr_snippets", "keyframe_ocr"),
+    ] {
+        let Some(items) = media.get(key).and_then(Value::as_array) else {
+            continue;
+        };
+        for item in items {
+            let start_seconds = media_numeric_field(
+                item,
+                &[
+                    "start_seconds",
+                    "start",
+                    "timestamp_seconds",
+                    "timestamp",
+                    "representative_seconds",
+                ],
+            );
+            let end_seconds = media_numeric_field(item, &["end_seconds", "end"]);
+            if start_seconds.is_some() || end_seconds.is_some() {
+                return Some(MediaTimestampWindow {
+                    kind,
+                    start_seconds,
+                    end_seconds,
+                });
+            }
+        }
+    }
+    None
+}
+
+fn media_numeric_field(value: &Value, keys: &[&str]) -> Option<f64> {
+    keys.iter().find_map(|key| {
+        value.get(*key).and_then(|item| {
+            item.as_f64()
+                .or_else(|| item.as_str().and_then(|text| text.parse::<f64>().ok()))
+        })
+    })
+}
+
+fn media_locator_suffix(start_seconds: Option<f64>, end_seconds: Option<f64>) -> Option<String> {
+    let start_seconds = start_seconds?.max(0.0);
+    let suffix = match end_seconds {
+        Some(end_seconds) => format!("#t={start_seconds:.3}-{:.3}", end_seconds.max(0.0)),
+        None => format!("#t={start_seconds:.3}"),
+    };
+    Some(suffix)
+}
+
 async fn wait_for_next_task_signal(task_waker: &mut EventSubscription, poll_interval_ms: u64) {
     if let Some(event) = task_waker
         .wait_for_event(Duration::from_millis(poll_interval_ms))
         .await
     {
         tracing::debug!(subject = %event.subject, "retrieval worker received task wake signal");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+    use domain_model::{DatasetId, DocumentChunkId, DocumentChunkState, DocumentId, TenantId};
+
+    fn media_chunk(metadata: Value) -> DocumentChunk {
+        let now = Utc::now();
+        DocumentChunk {
+            id: DocumentChunkId::new(),
+            tenant_id: TenantId::new(),
+            dataset_id: DatasetId::new(),
+            document_id: DocumentId::new(),
+            chunk_index: 0,
+            content: "Transcript segments:\n[00:01.500 - 00:02.750] 客户询问订单状态".to_string(),
+            token_count: 18,
+            state: DocumentChunkState::Extracted,
+            metadata: BTreeMap::from_iter([("parse_metadata".to_string(), metadata)]),
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    #[test]
+    fn retrieval_source_locator_adds_first_media_timestamp_window() {
+        let document_id = DocumentId::new();
+        let chunk = media_chunk(json!({
+            "media": {
+                "kind": "audio",
+                "parse_status": "transcribed",
+                "transcript_segments": [{
+                    "start_seconds": 1.5,
+                    "end_seconds": 2.75,
+                    "text": "客户询问订单状态"
+                }]
+            }
+        }));
+
+        let locator = retrieval_source_locator(document_id, &chunk);
+
+        assert_eq!(
+            locator,
+            format!("document://{document_id}/chunks/0#t=1.500-2.750")
+        );
+    }
+
+    #[test]
+    fn retrieval_media_manifest_summarizes_timestamped_evidence() {
+        let chunk = media_chunk(json!({
+            "media": {
+                "kind": "video",
+                "parse_status": "enriched_partial",
+                "transcript_segments": [],
+                "scenes": [{
+                    "start_seconds": 0,
+                    "end_seconds": 12,
+                    "summary": "门店入口画面"
+                }],
+                "keyframe_ocr_snippets": [{
+                    "timestamp_seconds": 6,
+                    "text": "今日客流 2180"
+                }],
+                "provider_evidence": [{
+                    "provider": "minimax",
+                    "capability": "native_video_understanding",
+                    "supported": false
+                }]
+            }
+        }));
+
+        let manifest = retrieval_media_manifest(&chunk).expect("media manifest should exist");
+
+        assert_eq!(manifest["kind"], json!("video"));
+        assert_eq!(manifest["has_timestamped_evidence"], json!(true));
+        assert_eq!(manifest["timestamp_window"]["kind"], json!("scene"));
+        assert_eq!(manifest["scene_count"], json!(1));
+        assert_eq!(manifest["keyframe_ocr_snippet_count"], json!(1));
+        assert_eq!(manifest["provider_evidence_count"], json!(1));
     }
 }

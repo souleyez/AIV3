@@ -646,6 +646,9 @@ function normalizeFieldCandidate(candidate = {}) {
       : Array.isArray(candidate.evidence_ids)
         ? [...candidate.evidence_ids]
         : [],
+    evidenceRef: candidate.evidenceRef || candidate.evidence_ref || null,
+    mediaKind: candidate.mediaKind || candidate.media_kind || null,
+    timestamped: Boolean(candidate.timestamped || candidate.has_timestamped_evidence),
   };
 }
 

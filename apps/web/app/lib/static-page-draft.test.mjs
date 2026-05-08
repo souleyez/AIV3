@@ -587,11 +587,26 @@ test('field candidates preserve backend suggestions and add evidence fallbacks',
         kind: 'metric',
         recommended_aggregation: 'sum',
       },
+      {
+        sourceId: 'evidence',
+        fieldPath: 'media.transcript_windows',
+        label: '媒体转写时间窗',
+        kind: 'media',
+        mediaKind: 'audio',
+        timestamped: true,
+        evidenceIds: ['ev-media'],
+        evidenceRef: {
+          sourceLocator: 'documents/call.mp3#chunk=0',
+        },
+      },
     ],
   });
   const candidates = buildStaticPageFieldCandidates(draft);
 
   assert.equal(candidates.find((item) => item.fieldPath === 'orders.amount').recommendedAggregation, 'sum');
+  assert.equal(candidates.find((item) => item.fieldPath === 'media.transcript_windows').timestamped, true);
+  assert.equal(candidates.find((item) => item.fieldPath === 'media.transcript_windows').mediaKind, 'audio');
+  assert.equal(candidates.find((item) => item.fieldPath === 'media.transcript_windows').evidenceRef.sourceLocator, 'documents/call.mp3#chunk=0');
   assert.ok(candidates.some((item) => item.fieldPath === 'dataset.metrics_summary'));
   assert.ok(candidates.some((item) => item.fieldPath === 'retrieval.content_excerpt'));
 });

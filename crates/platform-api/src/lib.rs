@@ -15891,16 +15891,29 @@ fn build_static_page_media_sample_points(evidence_items: &[Value], field_path: &
                 .flatten()
                 .filter_map(move |window| {
                     let text = static_page_media_sample_text(window, array_key)?;
+                    let start_seconds = media_numeric_field(
+                        window,
+                        &["start_seconds", "start", "timestamp_seconds", "timestamp"],
+                    );
+                    let end_seconds = media_numeric_field(window, &["end_seconds", "end"]);
+                    let timestamp_label =
+                        static_page_media_timestamp_label(start_seconds, end_seconds);
+                    let citation_label =
+                        static_page_media_citation_label(item, timestamp_label.as_deref());
                     Some(json!({
                         "label": static_page_media_sample_label(window, array_key),
                         "value": 1.0,
                         "kind": "media_window",
                         "fieldPath": field_path,
                         "text": text,
-                        "startSeconds": media_numeric_field(window, &["start_seconds", "start", "timestamp_seconds", "timestamp"]),
-                        "endSeconds": media_numeric_field(window, &["end_seconds", "end"]),
+                        "startSeconds": start_seconds,
+                        "endSeconds": end_seconds,
+                        "timestampLabel": timestamp_label,
+                        "citationLabel": citation_label,
                         "source": media_string_field(window, &["source"]).unwrap_or_else(|| "media".to_string()),
+                        "sourceLocator": item.get("source_locator").cloned().unwrap_or(Value::Null),
                         "evidenceIds": static_page_evidence_ids(item),
+                        "evidenceRef": static_page_evidence_ref(item),
                     }))
                 })
                 .collect::<Vec<_>>()
@@ -15942,6 +15955,48 @@ fn static_page_media_sample_label(window: &Value, array_key: &str) -> String {
     timestamp
         .map(|seconds| format!("{prefix} {:.1}s", seconds))
         .unwrap_or_else(|| prefix.to_string())
+}
+
+fn static_page_media_timestamp_label(
+    start_seconds: Option<f64>,
+    end_seconds: Option<f64>,
+) -> Option<String> {
+    match (start_seconds, end_seconds) {
+        (Some(start), Some(end)) => Some(format!(
+            "{} - {}",
+            static_page_format_media_timestamp(start),
+            static_page_format_media_timestamp(end)
+        )),
+        (Some(start), None) => Some(static_page_format_media_timestamp(start)),
+        (None, Some(end)) => Some(static_page_format_media_timestamp(end)),
+        (None, None) => None,
+    }
+}
+
+fn static_page_media_citation_label(item: &Value, timestamp_label: Option<&str>) -> String {
+    let source = item
+        .get("source_locator")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("media");
+    timestamp_label
+        .map(|label| format!("{source} @ {label}"))
+        .unwrap_or_else(|| source.to_string())
+}
+
+fn static_page_format_media_timestamp(seconds: f64) -> String {
+    let safe_seconds = seconds.max(0.0);
+    let total = safe_seconds.floor() as u64;
+    let millis = ((safe_seconds - total as f64) * 1000.0).round() as u64;
+    let hours = total / 3600;
+    let minutes = (total % 3600) / 60;
+    let secs = total % 60;
+    if hours > 0 {
+        format!("{hours:02}:{minutes:02}:{secs:02}.{millis:03}")
+    } else {
+        format!("{minutes:02}:{secs:02}.{millis:03}")
+    }
 }
 
 fn static_page_module_chart_runtime(module: &Value) -> &'static str {
@@ -18876,6 +18931,18 @@ mod tests {
         assert_eq!(
             snapshot["module_bindings"][0]["dataQuality"],
             json!("evidence_signal")
+        );
+        assert_eq!(
+            snapshot["module_bindings"][0]["sampleData"][0]["timestampLabel"],
+            json!("00:01.000 - 00:02.000")
+        );
+        assert_eq!(
+            snapshot["module_bindings"][0]["sampleData"][0]["sourceLocator"],
+            json!("documents/call.mp3#chunk=0")
+        );
+        assert_eq!(
+            snapshot["module_bindings"][0]["sampleData"][0]["evidenceRef"]["sourceLocator"],
+            json!("documents/call.mp3#chunk=0")
         );
     }
 
