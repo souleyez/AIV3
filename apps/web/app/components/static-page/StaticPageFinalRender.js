@@ -1,6 +1,7 @@
 'use client';
 
 import { buildStaticPageFinalRenderPayload } from '../../lib/static-page-draft';
+import StaticPageChartPreview from './StaticPageChartPreview';
 
 const STYLE_LABELS = {
   'decision-brief': '高层决策简报',
@@ -92,6 +93,7 @@ export default function StaticPageFinalRender({
                     <strong>{module.title}</strong>
                     <p>{module.content}</p>
                     <em>{module.dataBinding?.label || '数据待绑定'}</em>
+                    <StaticPageChartPreview module={module} compact={compact} />
                   </article>
                 ))}
               </div>

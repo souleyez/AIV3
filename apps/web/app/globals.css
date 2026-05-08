@@ -1079,7 +1079,7 @@ textarea {
 
 .static-page-planning-summary {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: 10px;
 }
 
@@ -1430,6 +1430,55 @@ textarea {
   line-height: 1.5;
 }
 
+.static-page-chart-preview {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 14px;
+  background: rgba(15, 23, 42, 0.045);
+}
+
+.static-page-chart-preview.empty {
+  background: rgba(245, 158, 11, 0.09);
+}
+
+.static-page-chart-preview-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.static-page-chart-preview-head span,
+.static-page-chart-preview.empty span {
+  color: var(--subtle);
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.static-page-chart-preview-head strong,
+.static-page-chart-preview.empty strong {
+  color: var(--text);
+  font-size: 12px;
+}
+
+.static-page-chart-preview.empty p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.static-page-chart-preview-canvas {
+  width: 100%;
+  min-height: 180px;
+}
+
+.static-page-chart-preview.compact .static-page-chart-preview-canvas {
+  min-height: 150px;
+}
+
 .static-page-canvas-shell {
   min-width: 0;
   padding: 12px;
@@ -1529,6 +1578,20 @@ textarea {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.static-page-module-meta .static-page-runtime-chip {
+  justify-self: start;
+  max-width: 100%;
+  padding: 4px 7px;
+  border-radius: 999px;
+  color: #0f766e;
+  background: rgba(20, 184, 166, 0.1);
+}
+
+.static-page-module-meta .static-page-runtime-chip.echarts {
+  color: #7c3aed;
+  background: rgba(124, 58, 237, 0.1);
 }
 
 .static-page-module-layout {
@@ -2300,7 +2363,8 @@ body {
 .assistant-shell .static-page-effect-preview,
 .assistant-shell .static-page-final-render,
 .assistant-shell .static-page-planning-hint,
-.assistant-shell .static-page-canvas-shell {
+.assistant-shell .static-page-canvas-shell,
+.assistant-shell .static-page-chart-preview {
   background: rgba(255, 255, 255, 0.045);
   border-color: rgba(255, 255, 255, 0.08);
 }
@@ -2317,7 +2381,9 @@ body {
 .assistant-shell .static-page-preview-card strong,
 .assistant-shell .static-page-preview-image-card strong,
 .assistant-shell .static-page-preview-placeholder strong,
-.assistant-shell .static-page-final-head strong {
+.assistant-shell .static-page-final-head strong,
+.assistant-shell .static-page-chart-preview-head strong,
+.assistant-shell .static-page-chart-preview.empty strong {
   color: #f8fbff;
 }
 
@@ -2334,7 +2400,9 @@ body {
 .assistant-shell .static-page-failure-card span,
 .assistant-shell .static-page-preview-card span,
 .assistant-shell .static-page-preview-image-card span,
-.assistant-shell .static-page-final-head span {
+.assistant-shell .static-page-final-head span,
+.assistant-shell .static-page-chart-preview-head span,
+.assistant-shell .static-page-chart-preview.empty span {
   color: #9aa7b9;
 }
 
@@ -2395,8 +2463,19 @@ body {
 }
 
 .assistant-shell .static-page-module-card p,
-.assistant-shell .static-page-module-meta span {
+.assistant-shell .static-page-module-meta span,
+.assistant-shell .static-page-chart-preview.empty p {
   color: #9aa7b9;
+}
+
+.assistant-shell .static-page-module-meta .static-page-runtime-chip {
+  color: #5eead4;
+  background: rgba(20, 184, 166, 0.13);
+}
+
+.assistant-shell .static-page-module-meta .static-page-runtime-chip.echarts {
+  color: #c4b5fd;
+  background: rgba(124, 58, 237, 0.18);
 }
 
 .assistant-shell .static-page-module-editor summary {

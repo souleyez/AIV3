@@ -28,6 +28,11 @@ export default function StaticPagePlanningPanel({
     );
   }
 
+  const echartsModuleCount = (draft.modules || [])
+    .filter((module) => module.visualization?.chartRuntime === 'echarts')
+    .length;
+  const deterministicModuleCount = Math.max(0, (draft.modules || []).length - echartsModuleCount);
+
   return (
     <div className="static-page-planning-panel">
       <div className="static-page-planning-summary">
@@ -42,6 +47,10 @@ export default function StaticPagePlanningPanel({
         <div>
           <span>状态</span>
           <strong>{draft.status}</strong>
+        </div>
+        <div>
+          <span>图表运行</span>
+          <strong>基础 {deterministicModuleCount} · ECharts {echartsModuleCount}</strong>
         </div>
       </div>
 

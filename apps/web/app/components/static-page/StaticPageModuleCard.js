@@ -15,6 +15,10 @@ function visualizationLabel(type) {
   return STATIC_PAGE_VISUALIZATION_TYPES.find((item) => item.type === type)?.label || type;
 }
 
+function chartRuntimeLabel(runtime) {
+  return runtime === 'echarts' ? 'ECharts 高级' : '基础静态';
+}
+
 function candidateFieldPath(candidate) {
   return candidate?.fieldPath || candidate?.field_path || candidate?.field || '';
 }
@@ -30,6 +34,7 @@ export default function StaticPageModuleCard({
   fieldCandidates = [],
 }) {
   const fieldListId = `static-page-field-candidates-${module.id}`;
+  const chartRuntime = module.visualization?.chartRuntime || 'deterministic';
   const [draft, setDraft] = useState({
     title: module.title || '',
     content: module.content || '',
@@ -97,6 +102,7 @@ export default function StaticPageModuleCard({
       <div className="static-page-module-meta">
         <span>数据：{module.dataBinding?.label || '未绑定'}</span>
         <span>图表：{module.visualization?.label || module.visualization?.type || '未选择'}</span>
+        <span className={`static-page-runtime-chip ${chartRuntime}`}>运行：{chartRuntimeLabel(chartRuntime)}</span>
       </div>
       <div className="static-page-module-layout">
         x{module.layout?.x ?? 0} y{module.layout?.y ?? 0} · {module.layout?.w ?? 1}x{module.layout?.h ?? 1}
