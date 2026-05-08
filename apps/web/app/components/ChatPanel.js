@@ -245,6 +245,9 @@ function AssistantContextStrip({ dataset, startupBriefing, scopePlan }) {
   const memoryCandidate = candidates.find((candidate) => candidate.type === 'conversation_memory');
   const intentLabel = scopePlan?.intentLabel || '';
   const preferDetail = Boolean(scopePlan?.supplyStrategy?.preferDetail);
+  const mediaCandidate = datasetCandidates.find((candidate) => (
+    candidate.materialHints || candidate.material_hints || []
+  ).some((hint) => ['audio_video', 'transcript_possible', 'keyframe_ocr_possible'].includes(hint)));
 
   return (
     <div className="assistant-context-strip">
@@ -264,6 +267,7 @@ function AssistantContextStrip({ dataset, startupBriefing, scopePlan }) {
             预选 {candidate.label}
           </span>
         ))}
+        {mediaCandidate ? <span className="message-chip green">媒体资料</span> : null}
         {preferDetail ? <span className="message-chip green">深度供料</span> : null}
         {memoryCandidate ? <span className="message-chip neutral">参考本轮对话</span> : null}
         {!datasetCandidates.length && !memoryCandidate ? <span className="message-chip neutral">不强行检索</span> : null}

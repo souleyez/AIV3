@@ -52,6 +52,7 @@ export function planAssistantScope({
       confidence: 'high',
       reason: '用户当前已选中该供料范围',
       source: 'user_selected',
+      materialHints: datasetMaterialHints(selectedDataset),
     });
   }
 
@@ -68,6 +69,7 @@ export function planAssistantScope({
         confidence: matchedByDatasetName ? 'high' : 'medium',
         reason: matchedByDatasetName ? '用户提到数据集名称或关键字' : '用户问题命中常用业务主题',
         source: 'scope_planner',
+        materialHints: datasetMaterialHints(dataset),
       });
     }
   }
@@ -114,6 +116,23 @@ function textMatches(prompt, text) {
     .map((token) => token.trim())
     .filter((token) => token.length >= 2);
   return tokens.some((token) => prompt.includes(token));
+}
+
+function datasetMaterialHints(dataset = {}) {
+  const haystack = `${dataset.title || ''} ${dataset.key || ''} ${dataset.description || ''} ${dataset.category || ''}`;
+  const hints = new Set(
+    Array.isArray(dataset.materialHints)
+      ? dataset.materialHints
+      : Array.isArray(dataset.material_hints)
+        ? dataset.material_hints
+        : [],
+  );
+  if (MEDIA_DATASET_PATTERN.test(haystack)) {
+    hints.add('audio_video');
+    hints.add('transcript_possible');
+    hints.add('keyframe_ocr_possible');
+  }
+  return [...hints].filter((hint) => typeof hint === 'string' && hint.trim()).slice(0, 6);
 }
 
 function dedupeCandidates(candidates) {

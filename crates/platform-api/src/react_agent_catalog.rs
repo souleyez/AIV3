@@ -47,6 +47,8 @@ const WEAK_ARRAY_KEYS: &[&str] = &[
     "datasets",
     "documents",
     "items",
+    "material_hints",
+    "materialHints",
     "selected",
     "scope_candidates",
     "scopeCandidates",
@@ -295,6 +297,7 @@ mod tests {
                 "vectorStatus": "completed",
                 "profileStatus": "ready",
                 "updatedAt": "2026-04-29T10:00:00Z",
+                "material_hints": ["audio_video", "transcript_possible"],
                 "content": "不要把文档正文放进目录"
             }]
         })];
@@ -320,6 +323,10 @@ mod tests {
         assert_eq!(
             catalog["scopeCandidates"][0]["documents"][0]["parseStatus"],
             json!("completed")
+        );
+        assert_eq!(
+            catalog["scopeCandidates"][0]["documents"][0]["material_hints"],
+            json!(["audio_video", "transcript_possible"])
         );
         assert_eq!(
             catalog["systemCapabilities"]["retrieval"]["available"],

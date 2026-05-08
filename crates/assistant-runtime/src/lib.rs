@@ -150,6 +150,8 @@ pub struct ScopeCandidate {
     pub confidence: ScopeConfidence,
     pub reason: String,
     pub source: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub material_hints: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -186,6 +188,7 @@ pub fn plan_scope(input: ScopePlannerInput<'_>) -> ScopePlan {
                 confidence: ScopeConfidence::High,
                 reason: "用户当前已选中该供料范围".to_string(),
                 source: "user_selected".to_string(),
+                material_hints: dataset_material_hints(dataset),
             });
         }
     }
@@ -215,6 +218,7 @@ pub fn plan_scope(input: ScopePlannerInput<'_>) -> ScopePlan {
                     "用户问题命中常用业务主题".to_string()
                 },
                 source: "scope_planner".to_string(),
+                material_hints: dataset_material_hints(dataset),
             });
         }
     }
@@ -229,6 +233,7 @@ pub fn plan_scope(input: ScopePlannerInput<'_>) -> ScopePlan {
             confidence: ScopeConfidence::Medium,
             reason: "用户引用了刚才或已有草稿内容".to_string(),
             source: "scope_planner".to_string(),
+            material_hints: Vec::new(),
         });
     }
 
@@ -330,6 +335,17 @@ fn dataset_haystack(dataset: &Dataset) -> String {
         dataset.key,
         dataset.description.clone().unwrap_or_default()
     )
+}
+
+fn dataset_material_hints(dataset: &Dataset) -> Vec<String> {
+    let haystack = dataset_haystack(dataset);
+    let mut hints = Vec::new();
+    if MEDIA_HINTS.iter().any(|hint| haystack.contains(hint)) {
+        hints.push("audio_video".to_string());
+        hints.push("transcript_possible".to_string());
+        hints.push("keyframe_ocr_possible".to_string());
+    }
+    hints
 }
 
 fn text_matches(prompt: &str, text: &str) -> bool {
@@ -532,6 +548,14 @@ mod tests {
 
         assert_eq!(plan.candidates.len(), 1);
         assert_eq!(plan.candidates[0].id, media.id.to_string());
+        assert_eq!(
+            plan.candidates[0].material_hints,
+            vec![
+                "audio_video".to_string(),
+                "transcript_possible".to_string(),
+                "keyframe_ocr_possible".to_string()
+            ]
+        );
         assert_eq!(plan.selected_scope["mode"], json!("preselected"));
         assert_eq!(plan.intent, "data_question");
         assert_eq!(
