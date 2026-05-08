@@ -43,9 +43,12 @@ test('startup briefing summarizes visible datasets and system capability', () =>
   assert.equal(briefing.datasetBriefs[0].parseStatusSummary, 'completed:3');
   assert.deepEqual(briefing.datasetBriefs[0].materialHints, ['tabular']);
   assert.ok(briefing.capabilities.includes('media_detail'));
+  assert.ok(briefing.capabilities.includes('continuous_execution'));
   assert.match(briefing.productCapabilities.staticPage, /静态页规划/);
   assert.match(briefing.productCapabilities.staticPage, /index\.html/);
+  assert.match(briefing.productCapabilities.staticPage, /ZIP 交付包/);
   assert.match(briefing.productCapabilities.media, /partial/);
+  assert.match(briefing.productCapabilities.continuousExecution, /受控动作/);
   assert.match(briefing.latestActivity, /订单数据/);
   assert.match(briefing.productTruth, /智能数据工作台/);
 });
@@ -58,7 +61,9 @@ test('formatted briefing tells model when no dataset is selected', () => {
   assert.match(formatted, /普通模型聊天/);
   assert.match(formatted, /创建报表/);
   assert.match(formatted, /媒体细节/);
-  assert.match(formatted, /规划\/渲染静态页/);
+  assert.match(formatted, /规划\/渲染\/修改静态页/);
+  assert.match(formatted, /导出静态页 ZIP 交付包/);
+  assert.match(formatted, /连续提出检索/);
   assert.match(formatted, /静态页草稿\/成品 0 个/);
   assert.match(formatted, /不能编造数据/);
   assert.match(formatted, /当前可见库为空/);

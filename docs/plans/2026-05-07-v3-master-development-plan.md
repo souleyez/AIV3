@@ -67,6 +67,7 @@ Completed and preserved:
 - Static-page renderer can render layout-aware core module types into HTML/SVG and preserve safe ECharts JSON hydration islands with deterministic offline fallback.
 - Frontend supports draft planning, image preview, final render display, durable right shelf, mobile builder, per-module micro-adjustment editors, and inline chart previews for editable module data.
 - Final static-page handoff can download a real ZIP package with HTML, renderer manifest, data snapshot, module plan, runtime requirements, and README.
+- Assistant startup briefing and scope planning expose product capability, controlled action policy, quality-first context budget, recommended tool actions, and minimal UI intent chips.
 - Java 8 parity audit is complete: Java/Vue used `gridstack` plus `echarts`; V3 keeps `react-grid-layout` and adds ECharts as advanced chart runtime.
 - Model gateway seed exists in `llm-gateway` with model lanes, provider error redaction, and MiniMax reasoning block cleanup.
 - Codex Host safe bridge exists in dry-run/plan-only form. Real execution is still blocked by default.
@@ -339,6 +340,8 @@ The next development thread should continue with static-page final-render/chart/
 - Downloaded package is an actual ZIP, not only a JSON descriptor.
 
 ### Task 6: Improve Assistant Context Supply For Static Pages
+
+**Status:** In progress. Frontend startup briefing and scope planner now expose static-page/report/media capabilities, controlled continuous-action policy, recommended tool actions, selected/inferred visible-scope rules, quality-first context budget, and compact UI intent/action chips. Backend AssistantRun/RAG depth still needs follow-up validation.
 
 **Files:**
 

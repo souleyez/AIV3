@@ -240,16 +240,52 @@ function inferAssistantIntent(prompt, options = {}) {
 function buildSupplyStrategy(intent, candidates, prompt = '') {
   const hasDataset = candidates.some((candidate) => candidate.type === 'dataset');
   const hasStaticPageDraft = candidates.some((candidate) => candidate.type === 'static_page_draft');
+  const hasConversationMemory = candidates.some((candidate) => candidate.type === 'conversation_memory');
   const needsDetail = hasDataset && (['static_page', 'report'].includes(intent) || MEDIA_DATASET_PATTERN.test(prompt));
   return {
     intent,
     answerPolicy: 'model_authored_host_supplied',
     currentArtifactPolicy: hasStaticPageDraft ? 'active_static_page_draft' : 'none',
-    historyPolicy: candidates.some((candidate) => candidate.type === 'conversation_memory')
+    actionPolicy: 'model_may_request_controlled_actions_host_validates',
+    contextBudgetPolicy: needsDetail || hasConversationMemory
+      ? 'quality_first_token_tolerant'
+      : 'compact_until_retrieval_needed',
+    candidatePolicy: hasDataset
+      ? 'selected_or_inferred_visible_datasets_only'
+      : 'ordinary_chat_without_forced_dataset',
+    historyPolicy: hasConversationMemory
       ? 'intent_gated_selected'
       : 'intent_gated',
     retrievalPolicy: hasDataset ? (needsDetail ? 'detail_first' : 'standard') : 'not_requested',
     preferDetail: needsDetail,
+    recommendedActions: buildRecommendedActions(intent, {
+      hasDataset,
+      hasStaticPageDraft,
+      prompt,
+    }),
     noFakeData: true,
   };
+}
+
+function buildRecommendedActions(intent, { hasDataset, hasStaticPageDraft, prompt }) {
+  const actions = [];
+  if (hasDataset) {
+    actions.push('retrieval.search');
+  }
+  if (hasDataset && (intent === 'static_page' || intent === 'report' || MEDIA_DATASET_PATTERN.test(prompt))) {
+    actions.push('retrieval.read_detail');
+  }
+  if (MEDIA_DATASET_PATTERN.test(prompt)) {
+    actions.push('media.detail');
+  }
+  if (intent === 'static_page') {
+    actions.push(hasStaticPageDraft ? 'static_page.update_draft' : 'static_page.plan');
+  }
+  if (intent === 'report') {
+    actions.push('report.plan');
+  }
+  if (!actions.length) {
+    actions.push('ordinary_chat.answer');
+  }
+  return actions.slice(0, 5);
 }

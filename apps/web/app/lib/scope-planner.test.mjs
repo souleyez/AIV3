@@ -47,6 +47,8 @@ test('scope planner preselects matching visible dataset when none is selected', 
   assert.match(plan.hint, /12文档/);
   assert.equal(plan.intent, 'data_question');
   assert.equal(plan.supplyStrategy.retrievalPolicy, 'standard');
+  assert.equal(plan.supplyStrategy.candidatePolicy, 'selected_or_inferred_visible_datasets_only');
+  assert.deepEqual(plan.supplyStrategy.recommendedActions, ['retrieval.search']);
   assert.equal(plan.candidates[0].documentCount, 12);
   assert.equal(plan.candidates[0].estimatedWordCount, 3600);
   assert.equal(plan.candidates[0].parseStatusSummary, 'completed:12');
@@ -65,6 +67,7 @@ test('scope planner keeps unrelated no-dataset chat as ordinary model chat', () 
   assert.equal(plan.supplyStrategy.retrievalPolicy, 'not_requested');
   assert.equal(plan.supplyStrategy.preferDetail, false);
   assert.equal(plan.supplyStrategy.historyPolicy, 'intent_gated');
+  assert.deepEqual(plan.supplyStrategy.recommendedActions, ['ordinary_chat.answer']);
 });
 
 test('scope planner preselects media dataset for audio and video prompts', () => {
@@ -85,6 +88,8 @@ test('scope planner preselects media dataset for audio and video prompts', () =>
   assert.equal(plan.intent, 'data_question');
   assert.equal(plan.supplyStrategy.retrievalPolicy, 'detail_first');
   assert.equal(plan.supplyStrategy.preferDetail, true);
+  assert.equal(plan.supplyStrategy.contextBudgetPolicy, 'quality_first_token_tolerant');
+  assert.deepEqual(plan.supplyStrategy.recommendedActions, ['retrieval.search', 'retrieval.read_detail', 'media.detail']);
   assert.deepEqual(
     plan.candidates.find((candidate) => candidate.id === 'dataset-media')?.materialHints,
     ['audio_video', 'transcript_possible', 'keyframe_ocr_possible'],
@@ -102,6 +107,7 @@ test('scope planner can include conversation memory without forcing dataset retr
   assert.equal(plan.candidates.some((candidate) => candidate.type === 'conversation_memory'), true);
   assert.equal(selectPlannerDatasetId(plan), '');
   assert.equal(plan.supplyStrategy.historyPolicy, 'intent_gated_selected');
+  assert.equal(plan.supplyStrategy.contextBudgetPolicy, 'quality_first_token_tolerant');
 });
 
 test('scope planner marks static page intent as detail-first when data is available', () => {
@@ -115,6 +121,7 @@ test('scope planner marks static page intent as detail-first when data is availa
   assert.equal(selectPlannerDatasetId(plan), 'dataset-orders');
   assert.equal(plan.supplyStrategy.retrievalPolicy, 'detail_first');
   assert.equal(plan.supplyStrategy.preferDetail, true);
+  assert.deepEqual(plan.supplyStrategy.recommendedActions, ['retrieval.search', 'retrieval.read_detail', 'static_page.plan']);
   assert.match(plan.hint, /意图：静态页规划/);
 });
 
@@ -127,6 +134,7 @@ test('scope planner keeps no-dataset static page request as ordinary supply', ()
   assert.equal(plan.intent, 'static_page');
   assert.equal(selectPlannerDatasetId(plan), '');
   assert.equal(plan.supplyStrategy.retrievalPolicy, 'not_requested');
+  assert.deepEqual(plan.supplyStrategy.recommendedActions, ['static_page.plan']);
   assert.equal(plan.supplyStrategy.noFakeData, true);
 });
 
@@ -147,5 +155,6 @@ test('scope planner treats active static page edits as artifact context', () => 
   assert.equal(plan.candidates.find((candidate) => candidate.type === 'static_page_draft')?.id, 'static-draft-1');
   assert.equal(plan.supplyStrategy.currentArtifactPolicy, 'active_static_page_draft');
   assert.equal(plan.supplyStrategy.retrievalPolicy, 'not_requested');
+  assert.deepEqual(plan.supplyStrategy.recommendedActions, ['static_page.update_draft']);
   assert.match(plan.hint, /当前静态页：订单经营分析页/);
 });

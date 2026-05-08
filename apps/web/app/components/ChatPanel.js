@@ -245,6 +245,9 @@ function AssistantContextStrip({ dataset, startupBriefing, scopePlan }) {
   const memoryCandidate = candidates.find((candidate) => candidate.type === 'conversation_memory');
   const intentLabel = scopePlan?.intentLabel || '';
   const preferDetail = Boolean(scopePlan?.supplyStrategy?.preferDetail);
+  const recommendedActions = Array.isArray(scopePlan?.supplyStrategy?.recommendedActions)
+    ? scopePlan.supplyStrategy.recommendedActions
+    : [];
   const mediaCandidate = datasetCandidates.find((candidate) => (
     candidate.materialHints || candidate.material_hints || []
   ).some((hint) => ['audio_video', 'transcript_possible', 'keyframe_ocr_possible'].includes(hint)));
@@ -274,10 +277,28 @@ function AssistantContextStrip({ dataset, startupBriefing, scopePlan }) {
         {mediaCandidate ? <span className="message-chip green">媒体资料</span> : null}
         {preferDetail ? <span className="message-chip green">深度供料</span> : null}
         {memoryCandidate ? <span className="message-chip neutral">参考本轮对话</span> : null}
+        {recommendedActions.slice(0, 2).map((action) => (
+          <span className="message-chip neutral" key={action}>
+            可用 {formatRecommendedActionLabel(action)}
+          </span>
+        ))}
         {!datasetCandidates.length && !memoryCandidate ? <span className="message-chip neutral">不强行检索</span> : null}
       </div>
     </div>
   );
+}
+
+function formatRecommendedActionLabel(action) {
+  const labels = {
+    'retrieval.search': '资料检索',
+    'retrieval.read_detail': '全文细读',
+    'media.detail': '媒体细节',
+    'static_page.plan': '静态页规划',
+    'static_page.update_draft': '修改静态页',
+    'report.plan': '报表规划',
+    'ordinary_chat.answer': '普通回答',
+  };
+  return labels[action] || action;
 }
 
 function AssistantRunProgressPanel({ progress }) {
