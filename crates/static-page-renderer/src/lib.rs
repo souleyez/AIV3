@@ -186,6 +186,11 @@ fn build_export_package_manifest(
                 "path": "modules.json",
                 "role": "editable_module_plan",
                 "mime": "application/json"
+            },
+            {
+                "path": "runtime-requirements.json",
+                "role": "optional_runtime_requirements",
+                "mime": "application/json"
             }
         ],
         "assets": assets,
@@ -1425,6 +1430,11 @@ mod tests {
             result.asset_manifest["export_package"]["files"][0]["path"],
             "index.html"
         );
+        assert!(result.asset_manifest["export_package"]["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|file| file["path"] == json!("runtime-requirements.json")));
         assert_eq!(
             result.asset_manifest["export_package"]["debug"]["module_count"],
             2

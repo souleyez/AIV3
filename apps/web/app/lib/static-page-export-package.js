@@ -8,6 +8,17 @@ function safeJson(value) {
   return JSON.stringify(value ?? {}, null, 2);
 }
 
+function fallbackRuntimeRequirements() {
+  return [{
+    name: 'Apache ECharts',
+    package: 'echarts',
+    license: 'Apache-2.0',
+    required: false,
+    role: 'optional_advanced_chart_hydration',
+    note: 'index.html 保留 deterministic DOM/SVG 图表回退，不会主动注入远程脚本；受信任宿主可提供 ECharts 来增强安全 JSON 图表配置。',
+  }];
+}
+
 function fallbackPackageManifest(draft) {
   return {
     kind: 'static-page-export-package',
@@ -18,8 +29,10 @@ function fallbackPackageManifest(draft) {
       { path: 'asset-manifest.json', role: 'renderer_manifest', mime: 'application/json' },
       { path: 'data-snapshot.json', role: 'render_data_snapshot', mime: 'application/json' },
       { path: 'modules.json', role: 'editable_module_plan', mime: 'application/json' },
+      { path: 'runtime-requirements.json', role: 'optional_runtime_requirements', mime: 'application/json' },
       { path: 'README.md', role: 'human_handoff_note', mime: 'text/markdown' },
     ],
+    runtime_requirements: fallbackRuntimeRequirements(),
   };
 }
 
@@ -31,6 +44,7 @@ function normalizePackageManifest(draft, manifest) {
   const requiredFiles = [
     { path: 'README.md', role: 'human_handoff_note', mime: 'text/markdown' },
     { path: 'render-spec.json', role: 'render_contract', mime: 'application/json' },
+    { path: 'runtime-requirements.json', role: 'optional_runtime_requirements', mime: 'application/json' },
   ];
   requiredFiles.forEach((requiredFile) => {
     if (!files.some((file) => file?.path === requiredFile.path)) {
@@ -39,12 +53,22 @@ function normalizePackageManifest(draft, manifest) {
   });
   return {
     ...packageManifest,
+    runtime_requirements: Array.isArray(packageManifest.runtime_requirements)
+      ? packageManifest.runtime_requirements
+      : Array.isArray(manifest.runtime_requirements)
+        ? manifest.runtime_requirements
+        : fallbackRuntimeRequirements(),
     files,
   };
 }
 
 function buildReadme({ draft, manifest, backendHtml, warnings }) {
   const chartRuntime = manifest.chart_runtime || {};
+  const runtimeRequirements = Array.isArray(manifest.export_package?.runtime_requirements)
+    ? manifest.export_package.runtime_requirements
+    : Array.isArray(manifest.runtime_requirements)
+      ? manifest.runtime_requirements
+      : fallbackRuntimeRequirements();
   const lines = [
     `# ${draft?.objective || draft?.title || '静态页交付包'}`,
     '',
@@ -55,6 +79,11 @@ function buildReadme({ draft, manifest, backendHtml, warnings }) {
     `- 图表运行时：基础 ${chartRuntime.deterministicModules ?? 0} / ECharts ${chartRuntime.echartsRequestedModules ?? 0}`,
     `- 后端 HTML：${backendHtml ? '已包含' : '未返回，需重新刷新或等待 worker 写回'}`,
   ];
+  if (runtimeRequirements.length) {
+    lines.push(
+      `- 可选运行时：${runtimeRequirements.map((item) => `${item.name || item.package || 'runtime'}${item.required ? '' : '（可选）'}`).join('、')}`,
+    );
+  }
   if (warnings.length) {
     lines.push('', '## 注意');
     warnings.forEach((warning) => lines.push(`- ${warning}`));
@@ -78,10 +107,23 @@ function contentForPath(path, { draft, payload, manifest, backendHtml, warnings 
   if (path === 'render-spec.json') {
     return safeJson(payload?.renderSpec || draft?.renderSpec || manifest.render_spec || {});
   }
+  if (path === 'runtime-requirements.json') {
+    return safeJson(
+      contextRuntimeRequirements({ manifest }),
+    );
+  }
   if (path === 'README.md') {
     return buildReadme({ draft, manifest, backendHtml, warnings });
   }
   return '';
+}
+
+function contextRuntimeRequirements({ manifest }) {
+  return Array.isArray(manifest.export_package?.runtime_requirements)
+    ? manifest.export_package.runtime_requirements
+    : Array.isArray(manifest.runtime_requirements)
+      ? manifest.runtime_requirements
+      : fallbackRuntimeRequirements();
 }
 
 function normalizeFiles(packageManifest, context) {

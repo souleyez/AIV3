@@ -47,6 +47,12 @@ function testDraft(overrides = {}) {
             { path: 'data-snapshot.json', role: 'render_data_snapshot', mime: 'application/json' },
             { path: 'modules.json', role: 'editable_module_plan', mime: 'application/json' },
           ],
+          runtime_requirements: [{
+            name: 'Apache ECharts',
+            package: 'echarts',
+            license: 'Apache-2.0',
+            required: false,
+          }],
         },
       },
     },
@@ -75,9 +81,13 @@ test('static page export package includes html manifest data modules and readme'
   assert.match(files.get('data-snapshot.json').content, /payload_snapshot/);
   assert.match(files.get('modules.json').content, /核心结论/);
   assert.match(files.get('render-spec.json').content, /dom-text-svg-chart/);
+  assert.match(files.get('runtime-requirements.json').content, /Apache-2.0/);
   assert.match(files.get('README.md').content, /ECharts 1/);
+  assert.match(files.get('README.md').content, /Apache ECharts（可选）/);
   assert.ok(artifact.packageManifest.files.some((file) => file.path === 'README.md'));
   assert.ok(artifact.packageManifest.files.some((file) => file.path === 'render-spec.json'));
+  assert.ok(artifact.packageManifest.files.some((file) => file.path === 'runtime-requirements.json'));
+  assert.equal(artifact.packageManifest.runtime_requirements[0].required, false);
   assert.deepEqual(artifact.warnings, []);
 });
 
