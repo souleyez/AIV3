@@ -206,21 +206,35 @@ fn term_frequencies(content: &str) -> BTreeMap<String, usize> {
 }
 
 fn tokenize(content: &str) -> Vec<String> {
-    let normalized = content
-        .chars()
-        .map(|value| {
-            if value.is_ascii_alphanumeric() {
-                value.to_ascii_lowercase()
-            } else {
-                ' '
-            }
-        })
-        .collect::<String>();
+    let mut tokens = Vec::new();
+    let mut ascii_token = String::new();
 
-    normalized
-        .split_whitespace()
-        .filter_map(normalize_token)
-        .collect()
+    for value in content.chars() {
+        if value.is_ascii_alphanumeric() {
+            ascii_token.push(value.to_ascii_lowercase());
+            continue;
+        }
+        flush_ascii_token(&mut tokens, &mut ascii_token);
+        if is_cjk_token_char(value) {
+            tokens.push(value.to_string());
+        }
+    }
+    flush_ascii_token(&mut tokens, &mut ascii_token);
+    tokens
+}
+
+fn flush_ascii_token(tokens: &mut Vec<String>, ascii_token: &mut String) {
+    if let Some(token) = normalize_token(ascii_token) {
+        tokens.push(token);
+    }
+    ascii_token.clear();
+}
+
+fn is_cjk_token_char(value: char) -> bool {
+    matches!(
+        value as u32,
+        0x4E00..=0x9FFF | 0x3400..=0x4DBF | 0xF900..=0xFAFF
+    )
 }
 
 fn normalize_token(token: &str) -> Option<String> {
@@ -323,5 +337,16 @@ mod tests {
                 "plan".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn tokenize_keeps_cjk_terms_for_chinese_materials() {
+        let tokens = tokenize("订单金额增长 revenue");
+
+        assert!(tokens.contains(&"订".to_string()));
+        assert!(tokens.contains(&"单".to_string()));
+        assert!(tokens.contains(&"金".to_string()));
+        assert!(tokens.contains(&"额".to_string()));
+        assert!(tokens.contains(&"revenue".to_string()));
     }
 }

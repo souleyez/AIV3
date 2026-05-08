@@ -6,6 +6,16 @@ const DATASET_HINTS = [
 ];
 
 const CONVERSATION_HINT = /刚才|上面|之前|继续|按你说的|这个|那版|草稿|修改|调整|确认|不要|改成|换成/;
+const STATIC_PAGE_HINT = /静态页|静态页面|页面规划|一页|生成页面|落地页|模块|效果图|出图/;
+const REPORT_HINT = /报表|报告|周报|月报|经营分析|汇报|可视化|看板|dashboard/i;
+const DATA_QUESTION_HINT = /分析|总结|趋势|原因|风险|机会|对比|明细|指标|数据|检索|查找|引用/;
+
+const INTENT_LABELS = {
+  static_page: '静态页规划',
+  report: '报表/看板',
+  data_question: '资料问答',
+  ordinary_chat: '普通聊天',
+};
 
 export function planAssistantScope({
   prompt = '',
@@ -16,6 +26,7 @@ export function planAssistantScope({
   const normalizedPrompt = String(prompt || '').trim();
   const visibleDatasets = Array.isArray(datasets) ? datasets : [];
   const candidates = [];
+  const intent = inferAssistantIntent(normalizedPrompt);
 
   const selectedDataset = visibleDatasets.find((dataset) => dataset.id === selectedDatasetId);
   if (selectedDataset) {
@@ -59,7 +70,10 @@ export function planAssistantScope({
 
   return {
     candidates: dedupeCandidates(candidates).slice(0, 4),
-    hint: buildScopeHint(candidates),
+    hint: buildScopeHint(candidates, intent),
+    intent,
+    intentLabel: INTENT_LABELS[intent] || INTENT_LABELS.ordinary_chat,
+    supplyStrategy: buildSupplyStrategy(intent, candidates),
   };
 }
 
@@ -86,10 +100,42 @@ function dedupeCandidates(candidates) {
   });
 }
 
-function buildScopeHint(candidates) {
+function buildScopeHint(candidates, intent = 'ordinary_chat') {
   const visible = dedupeCandidates(candidates)
     .map((candidate) => candidate.label)
     .filter(Boolean)
     .slice(0, 3);
-  return visible.length ? `可能相关：${visible.join('、')}` : '';
+  const parts = [];
+  if (visible.length) {
+    parts.push(`可能相关：${visible.join('、')}`);
+  }
+  const intentLabel = INTENT_LABELS[intent] || '';
+  if (intentLabel && intent !== 'ordinary_chat') {
+    parts.push(`意图：${intentLabel}`);
+  }
+  return parts.join('；');
+}
+
+function inferAssistantIntent(prompt) {
+  if (STATIC_PAGE_HINT.test(prompt)) return 'static_page';
+  if (REPORT_HINT.test(prompt)) return 'report';
+  if (DATA_QUESTION_HINT.test(prompt) || DATASET_HINTS.some((hint) => hint.pattern.test(prompt))) {
+    return 'data_question';
+  }
+  return 'ordinary_chat';
+}
+
+function buildSupplyStrategy(intent, candidates) {
+  const hasDataset = candidates.some((candidate) => candidate.type === 'dataset');
+  const needsDetail = hasDataset && ['static_page', 'report'].includes(intent);
+  return {
+    intent,
+    answerPolicy: 'model_authored_host_supplied',
+    historyPolicy: candidates.some((candidate) => candidate.type === 'conversation_memory')
+      ? 'intent_gated_selected'
+      : 'intent_gated',
+    retrievalPolicy: hasDataset ? (needsDetail ? 'detail_first' : 'standard') : 'not_requested',
+    preferDetail: needsDetail,
+    noFakeData: true,
+  };
 }

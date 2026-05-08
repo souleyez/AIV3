@@ -5752,12 +5752,10 @@ async fn create_assistant_run(
     let now = Utc::now();
     let planned_candidate_count = scope_candidates.len();
     let scope_candidates = Value::Array(scope_candidates.clone());
-    let context_policy = request.context_policy_hint.clone().unwrap_or_else(|| {
-        json!({
-            "history_policy": "intent_gated",
-            "supply_policy": "host_supplies_model_answers",
-        })
-    });
+    let context_policy = request
+        .context_policy_hint
+        .clone()
+        .unwrap_or_else(|| build_assistant_run_context_policy(&selected_scope));
     let supplied_evidence_count = assistant_run_evidence_supplied_count(&evidence_state);
     let mut execution_trail = vec![
         json!({
@@ -7051,6 +7049,8 @@ fn build_assistant_run_provider_input_with_evidence(
         "你是智能数据工作台里的普通聊天运行时。".to_string(),
         "原则：不替用户编排答案；只根据用户问题、启动简报、范围候选和必要历史直接回答。"
             .to_string(),
+        "系统能力：可普通聊天、检索供料、读取文档细节、创建报表、规划/渲染静态页；缺数据时必须说明缺失，不能编造指标。"
+            .to_string(),
     ];
 
     if let Some(briefing) = request.startup_briefing.as_ref() {
@@ -7150,6 +7150,41 @@ fn build_assistant_run_continue_provider_input(
     }
 
     sections.join("\n\n")
+}
+
+fn build_assistant_run_context_policy(selected_scope: &Value) -> Value {
+    let supply_policy = selected_scope
+        .get("supply_policy")
+        .or_else(|| selected_scope.get("supplyPolicy"))
+        .cloned()
+        .unwrap_or_else(|| {
+            json!({
+                "intent": assistant_run_scope_intent(selected_scope),
+                "retrievalPolicy": if selected_dataset_ids_from_scope(selected_scope).is_empty() {
+                    "not_requested"
+                } else {
+                    "standard"
+                },
+                "preferDetail": false,
+                "noFakeData": true,
+            })
+        });
+    let retrieval_policy = supply_policy
+        .get("retrievalPolicy")
+        .or_else(|| supply_policy.get("retrieval_policy"))
+        .cloned()
+        .unwrap_or_else(|| json!("standard"));
+    json!({
+        "history_policy": if selected_scope_requests_conversation_memory(selected_scope) {
+            "intent_gated_selected"
+        } else {
+            "intent_gated"
+        },
+        "supply_policy": "host_supplies_model_answers",
+        "retrieval_policy": retrieval_policy,
+        "assistant_intent": assistant_run_scope_intent(selected_scope),
+        "scope_supply_policy": supply_policy,
+    })
 }
 
 async fn complete_assistant_run_provider(
@@ -7637,6 +7672,7 @@ fn build_assistant_run_react_provider_input(
         "目录、候选列表和系统说明只用于规划下一步，不是可引用证据。".to_string(),
         "选中数据集或对话记忆时，final_answer 必须基于已返回的 observation；否则先选择 retrieve_evidence、read_document_detail 或 recall_conversation_memory。".to_string(),
         "工具选择：retrieve_evidence 用于发现候选证据；read_document_detail 用于需要原文措辞、OCR、表格或画像字段等细节时，document_id 必须来自选中范围或已返回 observation；最终引用只能来自 observation。".to_string(),
+        "静态页或报表意图且存在数据集时，优先 retrieve_evidence；若需要模块数据、字段、表格/OCR 或原文措辞，继续 read_document_detail，再创建静态页/报表动作。".to_string(),
         "如果当前打开产物是静态页草稿，用户要求修改标题、内容、图表、数据绑定或布局时，优先用 update_static_page_module；Host 只会把操作应用到当前已持久化草稿。".to_string(),
         "OpenClaw 和 Codex Host 都是可选外挂能力；openclaw_memory_recall、openclaw_readonly_execution、codex_host_task 可能被 Host 拒绝，不能绕过 V3 选中范围、记忆、任务隔离和执行 allowlist。".to_string(),
         "如果用户表达报表意图，先用 list_report_options；收到该 observation 后，才能用 report_choice，并只在 arguments.choice 填 continue_qa 或 create_report，不能编写报表正文。".to_string(),
@@ -7710,6 +7746,7 @@ fn build_assistant_run_react_continue_provider_input(
         "目录、候选列表和系统说明只用于规划下一步，不是可引用证据。".to_string(),
         "选中数据集或对话记忆时，final_answer 必须基于已返回的 observation；否则先选择 retrieve_evidence、read_document_detail 或 recall_conversation_memory。".to_string(),
         "工具选择：retrieve_evidence 用于发现候选证据；read_document_detail 用于需要原文措辞、OCR、表格或画像字段等细节时，document_id 必须来自选中范围或已返回 observation；最终引用只能来自 observation。".to_string(),
+        "静态页或报表意图且存在数据集时，优先 retrieve_evidence；若需要模块数据、字段、表格/OCR 或原文措辞，继续 read_document_detail，再创建静态页/报表动作。".to_string(),
         "如果当前打开产物是静态页草稿，用户要求修改标题、内容、图表、数据绑定或布局时，优先用 update_static_page_module；Host 只会把操作应用到当前已持久化草稿。".to_string(),
         "OpenClaw 和 Codex Host 都是可选外挂能力；openclaw_memory_recall、openclaw_readonly_execution、codex_host_task 可能被 Host 拒绝，不能绕过 V3 选中范围、记忆、任务隔离和执行 allowlist。".to_string(),
         "如果用户表达报表意图，先用 list_report_options；收到该 observation 后，才能用 report_choice，并只在 arguments.choice 填 continue_qa 或 create_report，不能编写报表正文。".to_string(),
@@ -8277,7 +8314,8 @@ async fn build_assistant_run_evidence_state(
         }));
     }
 
-    let limit = assistant_run_evidence_limit();
+    let prefer_detail = assistant_run_scope_prefers_detail(selected_scope);
+    let limit = assistant_run_evidence_limit_for_scope(selected_scope);
     let mut supplied_items = Vec::new();
     let mut supplied_datasets = Vec::new();
     let mut supplied_memory_items = Vec::new();
@@ -8387,6 +8425,10 @@ async fn build_assistant_run_evidence_state(
     Ok(json!({
         "status": status,
         "policy": "host_supplies_model_answers",
+        "intent": assistant_run_scope_intent(selected_scope),
+        "supply_policy": assistant_run_scope_supply_policy(selected_scope),
+        "detail_preferred": prefer_detail,
+        "recommended_actions": assistant_run_recommended_supply_actions(selected_scope, !supplied_items.is_empty()),
         "selected_scope": selected_scope,
         "datasets": supplied_datasets,
         "conversation_memory_items": supplied_memory_items,
@@ -8395,12 +8437,44 @@ async fn build_assistant_run_evidence_state(
     }))
 }
 
+fn assistant_run_evidence_limit_for_scope(selected_scope: &Value) -> usize {
+    if assistant_run_scope_prefers_detail(selected_scope)
+        && !selected_dataset_ids_from_scope(selected_scope).is_empty()
+    {
+        ASSISTANT_RUN_EVIDENCE_MAX_LIMIT
+    } else {
+        assistant_run_evidence_limit()
+    }
+}
+
 fn assistant_run_evidence_limit() -> usize {
     std::env::var("ASSISTANT_RUN_EVIDENCE_LIMIT")
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(ASSISTANT_RUN_EVIDENCE_DEFAULT_LIMIT)
         .clamp(1, ASSISTANT_RUN_EVIDENCE_MAX_LIMIT)
+}
+
+fn assistant_run_recommended_supply_actions(
+    selected_scope: &Value,
+    has_supplied_items: bool,
+) -> Vec<&'static str> {
+    let mut actions = Vec::new();
+    if !selected_dataset_ids_from_scope(selected_scope).is_empty() {
+        actions.push("retrieve_evidence");
+        if assistant_run_scope_prefers_detail(selected_scope) && has_supplied_items {
+            actions.push("read_document_detail");
+        }
+    }
+    if selected_scope_requests_conversation_memory(selected_scope) {
+        actions.push("recall_conversation_memory");
+    }
+    match assistant_run_scope_intent(selected_scope) {
+        "static_page" => actions.push("create_static_page_draft"),
+        "report" => actions.push("list_report_options"),
+        _ => {}
+    }
+    actions
 }
 
 fn assistant_run_conversation_memory_limit() -> i64 {
@@ -10919,6 +10993,38 @@ fn selected_scope_requests_conversation_memory(scope: &Value) -> bool {
         .unwrap_or(false)
 }
 
+fn assistant_run_scope_intent(scope: &Value) -> &str {
+    scope
+        .get("intent")
+        .or_else(|| scope.get("assistant_intent"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("ordinary_chat")
+}
+
+fn assistant_run_scope_supply_policy(scope: &Value) -> Value {
+    scope
+        .get("supply_policy")
+        .or_else(|| scope.get("supplyPolicy"))
+        .cloned()
+        .unwrap_or_else(|| json!({}))
+}
+
+fn assistant_run_scope_prefers_detail(scope: &Value) -> bool {
+    let policy = assistant_run_scope_supply_policy(scope);
+    policy
+        .get("preferDetail")
+        .or_else(|| policy.get("prefer_detail"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+        || policy
+            .get("retrievalPolicy")
+            .or_else(|| policy.get("retrieval_policy"))
+            .and_then(Value::as_str)
+            .is_some_and(|value| value == "detail_first")
+}
+
 fn dataset_id_from_scope_item(item: &Value) -> Option<DatasetId> {
     if item
         .as_object()
@@ -11444,21 +11550,35 @@ fn vector_norm(weights: &BTreeMap<String, f64>) -> f64 {
 }
 
 fn lexical_query_tokens(content: &str) -> Vec<String> {
-    let normalized = content
-        .chars()
-        .map(|value| {
-            if value.is_ascii_alphanumeric() {
-                value.to_ascii_lowercase()
-            } else {
-                ' '
-            }
-        })
-        .collect::<String>();
+    let mut tokens = Vec::new();
+    let mut ascii_token = String::new();
 
-    normalized
-        .split_whitespace()
-        .filter_map(normalize_lexical_query_token)
-        .collect()
+    for value in content.chars() {
+        if value.is_ascii_alphanumeric() {
+            ascii_token.push(value.to_ascii_lowercase());
+            continue;
+        }
+        flush_lexical_ascii_token(&mut tokens, &mut ascii_token);
+        if is_cjk_query_token_char(value) {
+            tokens.push(value.to_string());
+        }
+    }
+    flush_lexical_ascii_token(&mut tokens, &mut ascii_token);
+    tokens
+}
+
+fn flush_lexical_ascii_token(tokens: &mut Vec<String>, ascii_token: &mut String) {
+    if let Some(token) = normalize_lexical_query_token(ascii_token) {
+        tokens.push(token);
+    }
+    ascii_token.clear();
+}
+
+fn is_cjk_query_token_char(value: char) -> bool {
+    matches!(
+        value as u32,
+        0x4E00..=0x9FFF | 0x3400..=0x4DBF | 0xF900..=0xFAFF
+    )
 }
 
 fn normalize_lexical_query_token(token: &str) -> Option<String> {
@@ -16605,6 +16725,7 @@ mod tests {
         });
 
         assert!(input.contains("智能数据工作台"));
+        assert!(input.contains("规划/渲染静态页"));
         assert!(input.contains("范围候选"));
         assert!(input.contains("当前选中范围"));
         assert!(input.contains("assistant: 已预选订单数据集"));
@@ -16654,11 +16775,60 @@ mod tests {
         assert!(input.contains("doc-orders"));
         assert!(input.contains("tool_selection_only"));
         assert!(input.contains("read_document_detail 用于需要原文措辞"));
+        assert!(input.contains("静态页或报表意图"));
         assert!(input.contains("最终引用只能来自 observation"));
-        assert!(input.contains("OpenClaw 是可选外挂能力"));
+        assert!(input.contains("OpenClaw 和 Codex Host 都是可选外挂能力"));
         assert!(!input.contains("secret-provider-key"));
         assert!(!input.contains("订单正文不该进入规划目录"));
         assert!(!input.contains("订单切片正文不该进入规划目录"));
+    }
+
+    #[test]
+    fn assistant_run_context_policy_reflects_static_page_supply_strategy() {
+        let selected_scope = json!({
+            "mode": "user_selected",
+            "datasets": [DatasetId::new()],
+            "intent": "static_page",
+            "conversation_memory": ["local-thread"],
+            "supply_policy": {
+                "retrievalPolicy": "detail_first",
+                "preferDetail": true,
+                "noFakeData": true
+            }
+        });
+        let policy = build_assistant_run_context_policy(&selected_scope);
+
+        assert_eq!(policy["assistant_intent"], json!("static_page"));
+        assert_eq!(policy["history_policy"], json!("intent_gated_selected"));
+        assert_eq!(policy["retrieval_policy"], json!("detail_first"));
+        assert_eq!(policy["scope_supply_policy"]["preferDetail"], json!(true));
+    }
+
+    #[test]
+    fn assistant_run_static_page_scope_expands_evidence_limit_and_actions() {
+        let selected_scope = json!({
+            "mode": "user_selected",
+            "datasets": [DatasetId::new()],
+            "intent": "static_page",
+            "supply_policy": {
+                "retrievalPolicy": "detail_first",
+                "preferDetail": true,
+                "noFakeData": true
+            }
+        });
+
+        assert_eq!(
+            assistant_run_evidence_limit_for_scope(&selected_scope),
+            ASSISTANT_RUN_EVIDENCE_MAX_LIMIT
+        );
+        assert_eq!(
+            assistant_run_recommended_supply_actions(&selected_scope, true),
+            vec![
+                "retrieve_evidence",
+                "read_document_detail",
+                "create_static_page_draft"
+            ]
+        );
     }
 
     #[test]
@@ -23882,6 +24052,75 @@ mod tests {
         );
 
         assert_eq!(selected, vec![revenue_id, roadmap_id]);
+    }
+
+    #[test]
+    fn select_retrieval_evidence_ids_for_prompt_supports_chinese_terms() {
+        let now = Utc::now();
+        let order_id = RetrievalEvidenceId::new();
+        let support_id = RetrievalEvidenceId::new();
+        let evidences = vec![
+            RetrievalEvidence {
+                id: support_id,
+                tenant_id: TenantId::new(),
+                dataset_id: DatasetId::new(),
+                execution_id: WorkflowExecutionId::new(),
+                document_id: DocumentId::new(),
+                document_chunk_id: DocumentChunkId::new(),
+                chunk_index: 0,
+                source_locator: "documents/support.md#chunk=0".to_string(),
+                content_excerpt: "客服满意度提升。".to_string(),
+                summary: "客服摘要".to_string(),
+                payload_filter_key: "dataset/support".to_string(),
+                embedding_model: "local-lexical-v1".to_string(),
+                recall_score: 0.99,
+                evidence_manifest: json!({
+                    "embedding": {
+                        "term_weights": {
+                            "客": 1.5,
+                            "服": 1.5,
+                            "满": 1.2,
+                            "意": 1.2
+                        }
+                    },
+                    "recall": { "rank_hint": 1 }
+                }),
+                created_at: now,
+            },
+            RetrievalEvidence {
+                id: order_id,
+                tenant_id: TenantId::new(),
+                dataset_id: DatasetId::new(),
+                execution_id: WorkflowExecutionId::new(),
+                document_id: DocumentId::new(),
+                document_chunk_id: DocumentChunkId::new(),
+                chunk_index: 1,
+                source_locator: "documents/orders.md#chunk=1".to_string(),
+                content_excerpt: "订单延期风险集中在仓库交接。".to_string(),
+                summary: "订单延期风险".to_string(),
+                payload_filter_key: "dataset/orders".to_string(),
+                embedding_model: "local-lexical-v1".to_string(),
+                recall_score: 0.40,
+                evidence_manifest: json!({
+                    "embedding": {
+                        "term_weights": {
+                            "订": 1.8,
+                            "单": 1.8,
+                            "延": 1.6,
+                            "期": 1.6,
+                            "风": 1.4,
+                            "险": 1.4
+                        }
+                    },
+                    "recall": { "rank_hint": 2 }
+                }),
+                created_at: now,
+            },
+        ];
+
+        let selected = select_retrieval_evidence_ids_for_prompt(&evidences, "订单延期风险", 2);
+
+        assert_eq!(selected, vec![order_id, support_id]);
     }
 
     #[test]

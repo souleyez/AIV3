@@ -47,6 +47,7 @@ const CONVERSATION_HINTS: &[&str] = &[
     "按你说的",
     "这个",
     "那版",
+    "上一版",
     "草稿",
     "修改",
     "调整",
@@ -54,6 +55,35 @@ const CONVERSATION_HINTS: &[&str] = &[
     "不要",
     "改成",
     "换成",
+];
+
+const STATIC_PAGE_HINTS: &[&str] = &[
+    "静态页",
+    "静态页面",
+    "页面规划",
+    "一页",
+    "生成页面",
+    "落地页",
+    "模块",
+    "效果图",
+    "出图",
+];
+
+const REPORT_HINTS: &[&str] = &[
+    "报表",
+    "报告",
+    "周报",
+    "月报",
+    "经营分析",
+    "汇报",
+    "可视化",
+    "看板",
+    "dashboard",
+];
+
+const DATA_QUESTION_HINTS: &[&str] = &[
+    "分析", "总结", "趋势", "原因", "风险", "机会", "对比", "明细", "指标", "数据", "检索", "查找",
+    "引用",
 ];
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -87,6 +117,7 @@ pub struct ScopePlan {
     pub candidates: Vec<ScopeCandidate>,
     pub selected_scope: Value,
     pub hint: String,
+    pub intent: String,
 }
 
 #[derive(Clone, Debug)]
@@ -100,6 +131,7 @@ pub struct ScopePlannerInput<'a> {
 pub fn plan_scope(input: ScopePlannerInput<'_>) -> ScopePlan {
     let prompt = input.prompt.trim();
     let mut candidates = Vec::new();
+    let intent = infer_assistant_intent(prompt);
 
     if let Some(selected_dataset_id) = input.selected_dataset_id {
         if let Some(dataset) = input
@@ -164,13 +196,14 @@ pub fn plan_scope(input: ScopePlannerInput<'_>) -> ScopePlan {
         .into_iter()
         .take(4)
         .collect::<Vec<_>>();
-    let selected_scope = selected_scope_from_candidates(&candidates);
-    let hint = build_scope_hint(&candidates);
+    let selected_scope = selected_scope_from_candidates(&candidates, intent);
+    let hint = build_scope_hint(&candidates, intent);
 
     ScopePlan {
         candidates,
         selected_scope,
         hint,
+        intent: intent.to_string(),
     }
 }
 
@@ -181,8 +214,12 @@ pub fn candidates_to_values(candidates: &[ScopeCandidate]) -> Vec<Value> {
         .collect()
 }
 
-fn selected_scope_from_candidates(candidates: &[ScopeCandidate]) -> Value {
+fn selected_scope_from_candidates(candidates: &[ScopeCandidate], intent: &str) -> Value {
     let conversation_memory = conversation_memory_scope_from_candidates(candidates);
+    let has_memory = conversation_memory
+        .as_array()
+        .map(|items| !items.is_empty())
+        .unwrap_or(false);
 
     if let Some(dataset) = candidates.iter().find(|candidate| {
         candidate.candidate_type == ScopeCandidateType::Dataset
@@ -192,6 +229,8 @@ fn selected_scope_from_candidates(candidates: &[ScopeCandidate]) -> Value {
             "mode": "user_selected",
             "datasets": [dataset.id],
             "conversation_memory": conversation_memory,
+            "intent": intent,
+            "supply_policy": supply_policy_for_scope(intent, true, has_memory),
         });
     }
 
@@ -207,6 +246,8 @@ fn selected_scope_from_candidates(candidates: &[ScopeCandidate]) -> Value {
             "datasets": [dataset.id],
             "conversation_memory": conversation_memory,
             "reason": dataset.reason,
+            "intent": intent,
+            "supply_policy": supply_policy_for_scope(intent, true, has_memory),
         });
     }
 
@@ -214,6 +255,8 @@ fn selected_scope_from_candidates(candidates: &[ScopeCandidate]) -> Value {
         "mode": "ordinary_chat",
         "datasets": [],
         "conversation_memory": conversation_memory,
+        "intent": intent,
+        "supply_policy": supply_policy_for_scope(intent, false, has_memory),
     })
 }
 
@@ -259,18 +302,75 @@ fn dedupe_candidates(candidates: Vec<ScopeCandidate>) -> Vec<ScopeCandidate> {
         .collect()
 }
 
-fn build_scope_hint(candidates: &[ScopeCandidate]) -> String {
+fn build_scope_hint(candidates: &[ScopeCandidate], intent: &str) -> String {
     let labels = candidates
         .iter()
         .map(|candidate| candidate.label.as_str())
         .filter(|label| !label.is_empty())
         .take(3)
         .collect::<Vec<_>>();
-    if labels.is_empty() {
-        String::new()
-    } else {
-        format!("可能相关：{}", labels.join("、"))
+    let mut parts = Vec::new();
+    if !labels.is_empty() {
+        parts.push(format!("可能相关：{}", labels.join("、")));
     }
+    if let Some(label) = intent_label(intent) {
+        parts.push(format!("意图：{label}"));
+    }
+    parts.join("；")
+}
+
+fn infer_assistant_intent(prompt: &str) -> &'static str {
+    let lower_prompt = prompt.to_ascii_lowercase();
+    if prompt_has_any(prompt, &lower_prompt, STATIC_PAGE_HINTS) {
+        return "static_page";
+    }
+    if prompt_has_any(prompt, &lower_prompt, REPORT_HINTS) {
+        return "report";
+    }
+    if prompt_has_any(prompt, &lower_prompt, DATA_QUESTION_HINTS)
+        || BUSINESS_HINTS
+            .iter()
+            .flat_map(|(_, hints)| hints.iter())
+            .any(|hint| prompt.contains(hint))
+    {
+        return "data_question";
+    }
+    "ordinary_chat"
+}
+
+fn prompt_has_any(prompt: &str, lower_prompt: &str, hints: &[&str]) -> bool {
+    hints.iter().any(|hint| {
+        if hint.is_ascii() {
+            lower_prompt.contains(&hint.to_ascii_lowercase())
+        } else {
+            prompt.contains(hint)
+        }
+    })
+}
+
+fn intent_label(intent: &str) -> Option<&'static str> {
+    match intent {
+        "static_page" => Some("静态页规划"),
+        "report" => Some("报表/看板"),
+        "data_question" => Some("资料问答"),
+        _ => None,
+    }
+}
+
+fn supply_policy_for_scope(intent: &str, has_dataset: bool, has_memory: bool) -> Value {
+    let prefer_detail = has_dataset && matches!(intent, "static_page" | "report");
+    json!({
+        "intent": intent,
+        "answerPolicy": "model_authored_host_supplied",
+        "historyPolicy": if has_memory { "intent_gated_selected" } else { "intent_gated" },
+        "retrievalPolicy": if has_dataset {
+            if prefer_detail { "detail_first" } else { "standard" }
+        } else {
+            "not_requested"
+        },
+        "preferDetail": prefer_detail,
+        "noFakeData": true,
+    })
 }
 
 #[cfg(test)]
@@ -311,6 +411,11 @@ mod tests {
         assert_eq!(plan.candidates[0].id, orders.id.to_string());
         assert_eq!(plan.candidates[0].source, "user_selected");
         assert_eq!(plan.selected_scope["mode"], json!("user_selected"));
+        assert_eq!(plan.intent, "data_question");
+        assert_eq!(
+            plan.selected_scope["supply_policy"]["retrievalPolicy"],
+            json!("standard")
+        );
     }
 
     #[test]
@@ -333,6 +438,10 @@ mod tests {
             plan.selected_scope["conversation_memory"],
             json!(["local-thread"])
         );
+        assert_eq!(
+            plan.selected_scope["supply_policy"]["historyPolicy"],
+            json!("intent_gated_selected")
+        );
     }
 
     #[test]
@@ -348,6 +457,7 @@ mod tests {
         assert_eq!(plan.candidates.len(), 1);
         assert_eq!(plan.candidates[0].id, orders.id.to_string());
         assert_eq!(plan.selected_scope["mode"], json!("preselected"));
+        assert_eq!(plan.intent, "data_question");
     }
 
     #[test]
@@ -381,5 +491,49 @@ mod tests {
 
         assert!(plan.candidates.is_empty());
         assert_eq!(plan.selected_scope["mode"], json!("ordinary_chat"));
+        assert_eq!(
+            plan.selected_scope["supply_policy"]["retrievalPolicy"],
+            json!("not_requested")
+        );
+    }
+
+    #[test]
+    fn static_page_intent_prefers_detail_supply_when_dataset_matches() {
+        let orders = dataset("订单", "orders");
+        let plan = plan_scope(ScopePlannerInput {
+            prompt: "基于订单做一页静态页经营分析",
+            visible_datasets: &[orders],
+            selected_dataset_id: None,
+            conversation_memory_available: false,
+        });
+
+        assert_eq!(plan.intent, "static_page");
+        assert_eq!(plan.selected_scope["mode"], json!("preselected"));
+        assert_eq!(
+            plan.selected_scope["supply_policy"]["retrievalPolicy"],
+            json!("detail_first")
+        );
+        assert_eq!(
+            plan.selected_scope["supply_policy"]["preferDetail"],
+            json!(true)
+        );
+        assert!(plan.hint.contains("意图：静态页规划"));
+    }
+
+    #[test]
+    fn no_dataset_static_page_request_keeps_retrieval_unrequested() {
+        let plan = plan_scope(ScopePlannerInput {
+            prompt: "帮我先规划一页静态页",
+            visible_datasets: &[],
+            selected_dataset_id: None,
+            conversation_memory_available: false,
+        });
+
+        assert_eq!(plan.intent, "static_page");
+        assert_eq!(plan.selected_scope["mode"], json!("ordinary_chat"));
+        assert_eq!(
+            plan.selected_scope["supply_policy"]["retrievalPolicy"],
+            json!("not_requested")
+        );
     }
 }

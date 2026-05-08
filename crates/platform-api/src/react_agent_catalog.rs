@@ -34,6 +34,13 @@ const WEAK_ALLOWED_KEYS: &[&str] = &[
     "visibleDatasetCount",
     "visibleDocumentCount",
     "latestUpload",
+    "intent",
+    "retrievalPolicy",
+    "retrieval_policy",
+    "preferDetail",
+    "prefer_detail",
+    "noFakeData",
+    "no_fake_data",
 ];
 
 const WEAK_ARRAY_KEYS: &[&str] = &[
@@ -44,6 +51,8 @@ const WEAK_ARRAY_KEYS: &[&str] = &[
     "scope_candidates",
     "scopeCandidates",
 ];
+
+const WEAK_OBJECT_KEYS: &[&str] = &["supply_policy", "supplyPolicy"];
 
 const SENSITIVE_OR_CONTENT_KEYS: &[&str] = &[
     "api_key",
@@ -179,6 +188,9 @@ fn summarize_weak_value(value: &Value) -> Value {
                         );
                     }
                 }
+                if WEAK_OBJECT_KEYS.contains(&key.as_str()) && field_value.is_object() {
+                    summary.insert(key.clone(), summarize_weak_value(field_value));
+                }
             }
             Value::Object(summary)
         }
@@ -237,7 +249,16 @@ mod tests {
         let catalog = build_assistant_run_react_planning_catalog(
             &startup,
             &candidates,
-            &json!({"mode": "selected", "selected": [{"type": "dataset", "id": "ds-private"}]}),
+            &json!({
+                "mode": "selected",
+                "intent": "static_page",
+                "selected": [{"type": "dataset", "id": "ds-private"}],
+                "supply_policy": {
+                    "retrievalPolicy": "detail_first",
+                    "preferDetail": true,
+                    "noFakeData": true
+                }
+            }),
             &json!({"status": "not_requested", "supplied_items": []}),
         );
 
@@ -251,6 +272,11 @@ mod tests {
         assert_eq!(
             catalog["systemCapabilities"]["retrieval"]["available"],
             json!(true)
+        );
+        assert_eq!(catalog["selectedScope"]["intent"], json!("static_page"));
+        assert_eq!(
+            catalog["selectedScope"]["supply_policy"]["retrievalPolicy"],
+            json!("detail_first")
         );
         assert_eq!(
             catalog["systemCapabilities"]["codex_host"]["available"],

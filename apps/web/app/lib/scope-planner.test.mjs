@@ -37,6 +37,8 @@ test('scope planner preselects matching visible dataset when none is selected', 
 
   assert.equal(selectPlannerDatasetId(plan), 'dataset-orders');
   assert.match(plan.hint, /订单/);
+  assert.equal(plan.intent, 'data_question');
+  assert.equal(plan.supplyStrategy.retrievalPolicy, 'standard');
 });
 
 test('scope planner can include conversation memory without forcing dataset retrieval', () => {
@@ -48,4 +50,31 @@ test('scope planner can include conversation memory without forcing dataset retr
 
   assert.equal(plan.candidates.some((candidate) => candidate.type === 'conversation_memory'), true);
   assert.equal(selectPlannerDatasetId(plan), '');
+  assert.equal(plan.supplyStrategy.historyPolicy, 'intent_gated_selected');
+});
+
+test('scope planner marks static page intent as detail-first when data is available', () => {
+  const plan = planAssistantScope({
+    prompt: '基于订单做一页静态页经营分析',
+    datasets,
+  });
+
+  assert.equal(plan.intent, 'static_page');
+  assert.equal(plan.intentLabel, '静态页规划');
+  assert.equal(selectPlannerDatasetId(plan), 'dataset-orders');
+  assert.equal(plan.supplyStrategy.retrievalPolicy, 'detail_first');
+  assert.equal(plan.supplyStrategy.preferDetail, true);
+  assert.match(plan.hint, /意图：静态页规划/);
+});
+
+test('scope planner keeps no-dataset static page request as ordinary supply', () => {
+  const plan = planAssistantScope({
+    prompt: '帮我先规划一页静态页',
+    datasets: [],
+  });
+
+  assert.equal(plan.intent, 'static_page');
+  assert.equal(selectPlannerDatasetId(plan), '');
+  assert.equal(plan.supplyStrategy.retrievalPolicy, 'not_requested');
+  assert.equal(plan.supplyStrategy.noFakeData, true);
 });

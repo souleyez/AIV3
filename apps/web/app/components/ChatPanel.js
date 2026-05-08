@@ -243,6 +243,8 @@ function AssistantContextStrip({ dataset, startupBriefing, scopePlan }) {
   const candidates = Array.isArray(scopePlan?.candidates) ? scopePlan.candidates : [];
   const datasetCandidates = candidates.filter((candidate) => candidate.type === 'dataset');
   const memoryCandidate = candidates.find((candidate) => candidate.type === 'conversation_memory');
+  const intentLabel = scopePlan?.intentLabel || '';
+  const preferDetail = Boolean(scopePlan?.supplyStrategy?.preferDetail);
 
   return (
     <div className="assistant-context-strip">
@@ -256,11 +258,13 @@ function AssistantContextStrip({ dataset, startupBriefing, scopePlan }) {
         </p>
       </div>
       <div className="assistant-context-chips" aria-label="模型范围判断">
+        {intentLabel ? <span className="message-chip neutral">意图 {intentLabel}</span> : null}
         {datasetCandidates.map((candidate) => (
           <span className="message-chip blue" key={`${candidate.type}-${candidate.id}`}>
             预选 {candidate.label}
           </span>
         ))}
+        {preferDetail ? <span className="message-chip green">深度供料</span> : null}
         {memoryCandidate ? <span className="message-chip neutral">参考本轮对话</span> : null}
         {!datasetCandidates.length && !memoryCandidate ? <span className="message-chip neutral">不强行检索</span> : null}
       </div>

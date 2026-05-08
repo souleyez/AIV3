@@ -504,12 +504,22 @@ export default function HomePageClient() {
     const conversationMemory = (scopePlan?.candidates || []).some((candidate) => candidate.type === 'conversation_memory')
       ? ['local-thread']
       : [];
+    const intent = scopePlan?.intent || scopePlan?.supplyStrategy?.intent || 'ordinary_chat';
+    const supplyPolicy = scopePlan?.supplyStrategy || {
+      intent,
+      historyPolicy: conversationMemory.length ? 'intent_gated_selected' : 'intent_gated',
+      retrievalPolicy: datasetId ? 'standard' : 'not_requested',
+      preferDetail: false,
+      noFakeData: true,
+    };
     if (datasetId) {
       return {
         mode: 'user_selected',
         datasets: [datasetId],
         selected: [{ type: 'dataset', id: datasetId }],
         conversation_memory: conversationMemory,
+        intent,
+        supply_policy: supplyPolicy,
       };
     }
     return {
@@ -517,6 +527,8 @@ export default function HomePageClient() {
       datasets: [],
       selected: [],
       conversation_memory: conversationMemory,
+      intent,
+      supply_policy: supplyPolicy,
     };
   }
 
