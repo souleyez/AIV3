@@ -119,6 +119,8 @@ const ASSISTANT_RUN_DETAIL_TARGET_LIMIT: usize = 3;
 const ASSISTANT_RUN_CONVERSATION_MEMORY_DEFAULT_LIMIT: i64 = 4;
 const ASSISTANT_RUN_CONVERSATION_MEMORY_MAX_LIMIT: i64 = 8;
 const ASSISTANT_RUN_SCOPE_SUMMARY_DOC_LIMIT: usize = 24;
+const ASSISTANT_RUN_MODEL_SUPPLY_BRIEF_ITEM_LIMIT: usize = 4;
+const ASSISTANT_RUN_MODEL_SUPPLY_BRIEF_TEXT_LIMIT: usize = 220;
 const ASSISTANT_RUN_CONTINUE_DEFAULT_MAX_STEPS: usize = 3;
 const ASSISTANT_RUN_CONTINUE_MAX_STEPS: usize = 5;
 const ASSISTANT_RUN_REACT_DEFAULT_MAX_STEPS: usize = 3;
@@ -7370,6 +7372,9 @@ fn build_assistant_run_provider_input_with_evidence(
     }
     if let Some(evidence_state) = evidence_state {
         if evidence_state.get("status").and_then(Value::as_str) != Some("not_requested") {
+            if let Some(brief) = build_assistant_run_model_supply_brief(evidence_state) {
+                sections.push(format!("供料综合提示：\n{brief}"));
+            }
             sections.push(format!(
                 "供料证据：{}",
                 serde_json::to_string(evidence_state).unwrap_or_else(|_| "{}".to_string())
@@ -7424,6 +7429,9 @@ fn build_assistant_run_continue_provider_input(
             serde_json::to_string(&run.evidence_state).unwrap_or_else(|_| "{}".to_string())
         ),
     ];
+    if let Some(brief) = build_assistant_run_model_supply_brief(&run.evidence_state) {
+        sections.push(format!("供料综合提示：\n{brief}"));
+    }
 
     if let Some(current_artifact) = request.current_artifact.as_ref() {
         sections.push(format!(
@@ -7447,6 +7455,195 @@ fn build_assistant_run_continue_provider_input(
     }
 
     sections.join("\n\n")
+}
+
+fn build_assistant_run_model_supply_brief(evidence_state: &Value) -> Option<String> {
+    let status = evidence_state.get("status").and_then(Value::as_str)?;
+    if status == "not_requested" {
+        return None;
+    }
+
+    let supplied_count = assistant_run_evidence_supplied_count(evidence_state);
+    let detail_target_count = assistant_run_detail_target_count(evidence_state);
+    let fallback_count = evidence_state
+        .get("fallback_supply_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let mut lines = vec![
+        format!(
+            "状态：{status}；可引用供料 {supplied_count} 条；建议细读目标 {detail_target_count} 个；兜底切片 {fallback_count} 条。"
+        ),
+        "边界：正文只能基于 supplied_items 和已完成 observation；detail_targets 只代表建议细读目标，不是引用依据；缺字段、缺数据或 partial 解析必须明说，不能补假数。".to_string(),
+    ];
+
+    if let Some(items) = evidence_state
+        .get("supplied_items")
+        .and_then(Value::as_array)
+    {
+        for (index, item) in items
+            .iter()
+            .filter_map(assistant_run_model_supply_item_brief)
+            .take(ASSISTANT_RUN_MODEL_SUPPLY_BRIEF_ITEM_LIMIT)
+            .enumerate()
+        {
+            lines.push(format!("供料{}：{item}", index + 1));
+        }
+    }
+
+    if let Some(memory) = evidence_state
+        .get("conversation_memory_items")
+        .and_then(Value::as_array)
+    {
+        for (index, item) in memory
+            .iter()
+            .filter_map(assistant_run_model_memory_item_brief)
+            .take(2)
+            .enumerate()
+        {
+            lines.push(format!("历史{}：{item}", index + 1));
+        }
+    }
+
+    if let Some(targets) = evidence_state
+        .get("detail_targets")
+        .and_then(Value::as_array)
+    {
+        let target_briefs = targets
+            .iter()
+            .filter_map(assistant_run_model_detail_target_brief)
+            .take(ASSISTANT_RUN_DETAIL_TARGET_LIMIT)
+            .collect::<Vec<_>>();
+        if !target_briefs.is_empty() {
+            lines.push(format!(
+                "建议细读：{}。需要原文措辞、表格/OCR、音视频时间戳或字段定义时，先调用 read_document_detail。",
+                target_briefs.join("；")
+            ));
+        }
+    }
+
+    Some(lines.join("\n"))
+}
+
+fn assistant_run_model_supply_item_brief(item: &Value) -> Option<String> {
+    let item_type = item.get("type").and_then(Value::as_str).unwrap_or("item");
+    let source = item
+        .get("source")
+        .and_then(Value::as_str)
+        .unwrap_or("retrieval_evidence");
+    let summary = assistant_run_model_text_field(item, &["summary", "content_excerpt"])?;
+    let locator = item
+        .get("source_locator")
+        .or_else(|| item.get("sourceLocator"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let document_id = item
+        .get("document_id")
+        .or_else(|| item.get("documentId"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let mut parts = vec![
+        format!("{item_type}/{source}"),
+        format!(
+            "摘要={}",
+            truncate_assistant_supply_text(&summary, ASSISTANT_RUN_MODEL_SUPPLY_BRIEF_TEXT_LIMIT)
+        ),
+    ];
+    if let Some(locator) = locator {
+        parts.push(format!("来源={locator}"));
+    }
+    if let Some(document_id) = document_id {
+        parts.push(format!("document_id={document_id}"));
+    }
+    if let Some(media) = assistant_run_model_media_brief(item) {
+        parts.push(media);
+    }
+    Some(parts.join("；"))
+}
+
+fn assistant_run_model_memory_item_brief(item: &Value) -> Option<String> {
+    let summary = assistant_run_model_text_field(item, &["summary"])?;
+    Some(truncate_assistant_supply_text(
+        &summary,
+        ASSISTANT_RUN_MODEL_SUPPLY_BRIEF_TEXT_LIMIT,
+    ))
+}
+
+fn assistant_run_model_detail_target_brief(target: &Value) -> Option<String> {
+    let document_id = target
+        .get("document_id")
+        .or_else(|| target.get("documentId"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    let reason = target
+        .get("reason")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("detail_first_scope");
+    let source_locator = target
+        .get("source_locator")
+        .or_else(|| target.get("sourceLocator"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("");
+    if source_locator.is_empty() {
+        Some(format!("document_id={document_id}, reason={reason}"))
+    } else {
+        Some(format!(
+            "document_id={document_id}, reason={reason}, source={source_locator}"
+        ))
+    }
+}
+
+fn assistant_run_model_media_brief(item: &Value) -> Option<String> {
+    let media = item
+        .get("media_context")
+        .or_else(|| item.get("mediaContext"))?;
+    let kind = media
+        .get("media_kind")
+        .or_else(|| media.get("mediaKind"))
+        .and_then(Value::as_str)
+        .unwrap_or("media");
+    let parse_status = media
+        .get("parse_status")
+        .or_else(|| media.get("parseStatus"))
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let transcript_count = media
+        .get("transcript_windows")
+        .or_else(|| media.get("transcriptWindows"))
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0);
+    let scene_count = media
+        .get("scene_windows")
+        .or_else(|| media.get("sceneWindows"))
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0);
+    let ocr_count = media
+        .get("keyframe_ocr_snippets")
+        .or_else(|| media.get("keyframeOcrSnippets"))
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0);
+    Some(format!(
+        "媒体={kind}/{parse_status}/transcript:{transcript_count}/scene:{scene_count}/ocr:{ocr_count}"
+    ))
+}
+
+fn assistant_run_model_text_field(item: &Value, keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|key| {
+        item.get(*key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string)
+    })
 }
 
 fn build_assistant_run_context_policy(selected_scope: &Value) -> Value {
@@ -7987,6 +8184,9 @@ fn build_assistant_run_react_provider_input(
     ));
     if let Some(evidence_state) = evidence_state {
         if evidence_state.get("status").and_then(Value::as_str) != Some("not_requested") {
+            if let Some(brief) = build_assistant_run_model_supply_brief(evidence_state) {
+                sections.push(format!("供料综合提示：\n{brief}"));
+            }
             sections.push(format!(
                 "可回答供料证据：{}",
                 serde_json::to_string(evidence_state).unwrap_or_else(|_| "{}".to_string())
@@ -8065,6 +8265,9 @@ fn build_assistant_run_react_continue_provider_input(
     ];
     if let Some(evidence_state) = evidence_state {
         if evidence_state.get("status").and_then(Value::as_str) != Some("not_requested") {
+            if let Some(brief) = build_assistant_run_model_supply_brief(evidence_state) {
+                sections.push(format!("供料综合提示：\n{brief}"));
+            }
             sections.push(format!(
                 "可回答供料证据：{}",
                 serde_json::to_string(evidence_state).unwrap_or_else(|_| "{}".to_string())
@@ -18079,6 +18282,65 @@ mod tests {
     }
 
     #[test]
+    fn assistant_run_provider_input_adds_model_supply_brief() {
+        let dataset_id = DatasetId::new();
+        let document_id = DocumentId::new();
+        let evidence_state = json!({
+            "status": "supplied",
+            "fallback_supply_count": 1,
+            "supplied_items": [{
+                "type": "retrieval_evidence",
+                "source": "document_chunk_fallback",
+                "dataset_id": dataset_id,
+                "document_id": document_id,
+                "document_chunk_id": DocumentChunkId::new(),
+                "source_locator": "uploads/orders.md#chunk=1",
+                "summary": "订单延迟超过两天时，取消风险显著上升。",
+                "content_excerpt": "Order cancellation risk rises when delayed fulfillment exceeds two days.",
+                "media_context": {
+                    "media_kind": "audio",
+                    "parse_status": "transcribed",
+                    "transcript_windows": [{"text": "客户追问延迟赔付"}],
+                    "scene_windows": [],
+                    "keyframe_ocr_snippets": []
+                }
+            }],
+            "detail_targets": [{
+                "document_id": document_id,
+                "source_locator": "uploads/orders.md#chunk=1",
+                "reason": "detail_first_scope"
+            }]
+        });
+        let input = build_assistant_run_provider_input_with_evidence(
+            &CreateAssistantRunRequest {
+                prompt: "基于订单风险做一页静态页".to_string(),
+                local_thread_id: None,
+                startup_briefing: Some(json!({"productTruth": "智能数据工作台"})),
+                selected_scope: Some(json!({
+                    "mode": "user_selected",
+                    "datasets": [dataset_id],
+                    "intent": "static_page",
+                })),
+                scope_candidates: Vec::new(),
+                context_policy_hint: None,
+                current_artifact: None,
+                messages: Vec::new(),
+            },
+            Some(&evidence_state),
+        );
+
+        assert!(input.contains("供料综合提示"));
+        assert!(input.contains("可引用供料 1 条"));
+        assert!(input.contains("兜底切片 1 条"));
+        assert!(input.contains("正文只能基于 supplied_items 和已完成 observation"));
+        assert!(input.contains("detail_targets 只代表建议细读目标"));
+        assert!(input.contains("document_chunk_fallback"));
+        assert!(input.contains("uploads/orders.md#chunk=1"));
+        assert!(input.contains("媒体=audio/transcribed/transcript:1"));
+        assert!(input.contains("read_document_detail"));
+    }
+
+    #[test]
     fn assistant_run_react_provider_input_uses_weak_planning_catalog() {
         let input = build_assistant_run_react_provider_input(
             &CreateAssistantRunRequest {
@@ -18128,6 +18390,51 @@ mod tests {
         assert!(!input.contains("secret-provider-key"));
         assert!(!input.contains("订单正文不该进入规划目录"));
         assert!(!input.contains("订单切片正文不该进入规划目录"));
+    }
+
+    #[test]
+    fn assistant_run_react_provider_input_adds_supply_brief() {
+        let dataset_id = DatasetId::new();
+        let document_id = DocumentId::new();
+        let input = build_assistant_run_react_provider_input(
+            &CreateAssistantRunRequest {
+                prompt: "继续细化静态页模块数据".to_string(),
+                local_thread_id: Some("browser-thread-1".to_string()),
+                startup_briefing: Some(json!({"visibleDatasetCount": 1})),
+                selected_scope: Some(json!({
+                    "mode": "user_selected",
+                    "datasets": [dataset_id],
+                    "intent": "static_page",
+                })),
+                scope_candidates: Vec::new(),
+                context_policy_hint: None,
+                current_artifact: None,
+                messages: Vec::new(),
+            },
+            Some(&json!({
+                "status": "supplied",
+                "supplied_items": [{
+                    "type": "retrieval_evidence",
+                    "dataset_id": dataset_id,
+                    "document_id": document_id,
+                    "summary": "订单趋势样例",
+                    "content_excerpt": "1月订单 1200，2月订单 1380",
+                    "source_locator": "orders.csv#chunk=0"
+                }],
+                "detail_targets": [{
+                    "document_id": document_id,
+                    "reason": "detail_first_scope"
+                }]
+            })),
+            &[],
+            1,
+            3,
+        );
+
+        assert!(input.contains("供料综合提示"));
+        assert!(input.contains("订单趋势样例"));
+        assert!(input.contains("建议细读"));
+        assert!(input.contains("可回答供料证据"));
     }
 
     #[test]
