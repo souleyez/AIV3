@@ -45,15 +45,11 @@ export function planAssistantScope({
 
   const selectedDataset = visibleDatasets.find((dataset) => dataset.id === selectedDatasetId);
   if (selectedDataset) {
-    candidates.push({
-      type: 'dataset',
-      id: selectedDataset.id,
-      label: selectedDataset.title || selectedDataset.key || '当前数据集',
+    candidates.push(buildDatasetCandidate(selectedDataset, {
       confidence: 'high',
       reason: '用户当前已选中该供料范围',
       source: 'user_selected',
-      materialHints: datasetMaterialHints(selectedDataset),
-    });
+    }));
   }
 
   for (const dataset of visibleDatasets) {
@@ -62,15 +58,11 @@ export function planAssistantScope({
     const matchedByDatasetName = haystack && textMatches(normalizedPrompt, haystack);
     const matchedByCommonHint = DATASET_HINTS.some((hint) => hint.pattern.test(normalizedPrompt) && haystack.includes(hint.label));
     if (matchedByDatasetName || matchedByCommonHint) {
-      candidates.push({
-        type: 'dataset',
-        id: dataset.id,
-        label: dataset.title || dataset.key || '相关数据集',
+      candidates.push(buildDatasetCandidate(dataset, {
         confidence: matchedByDatasetName ? 'high' : 'medium',
         reason: matchedByDatasetName ? '用户提到数据集名称或关键字' : '用户问题命中常用业务主题',
         source: 'scope_planner',
-        materialHints: datasetMaterialHints(dataset),
-      });
+      }));
     }
   }
 
@@ -119,7 +111,7 @@ function textMatches(prompt, text) {
 }
 
 function datasetMaterialHints(dataset = {}) {
-  const haystack = `${dataset.title || ''} ${dataset.key || ''} ${dataset.description || ''} ${dataset.category || ''}`;
+  const haystack = `${dataset.title || ''} ${dataset.key || ''} ${dataset.description || ''} ${dataset.category || ''} ${dataset.default_category || ''}`;
   const hints = new Set(
     Array.isArray(dataset.materialHints)
       ? dataset.materialHints
@@ -133,6 +125,60 @@ function datasetMaterialHints(dataset = {}) {
     hints.add('keyframe_ocr_possible');
   }
   return [...hints].filter((hint) => typeof hint === 'string' && hint.trim()).slice(0, 6);
+}
+
+function buildDatasetCandidate(dataset, { confidence, reason, source }) {
+  return {
+    type: 'dataset',
+    id: dataset.id,
+    label: dataset.title || dataset.key || '相关数据集',
+    key: dataset.key || '',
+    visibility: dataset.visibility || dataset.access || '',
+    category: dataset.category || dataset.default_category || '',
+    lifecycle: dataset.lifecycle || dataset.status || 'unknown',
+    documentCount: datasetDocumentCount(dataset),
+    estimatedWordCount: datasetEstimatedWordCount(dataset),
+    parseStatusSummary: datasetParseStatusSummary(dataset),
+    latestActivity: datasetLatestActivity(dataset),
+    confidence,
+    reason,
+    source,
+    materialHints: datasetMaterialHints(dataset),
+  };
+}
+
+function datasetDocumentCount(dataset = {}) {
+  const raw = dataset.document_count ?? dataset.documentCount ?? dataset.documents_count ?? dataset.documentsCount;
+  if (Number.isFinite(Number(raw))) {
+    return Number(raw);
+  }
+  return Array.isArray(dataset.documents) ? dataset.documents.length : 0;
+}
+
+function datasetEstimatedWordCount(dataset = {}) {
+  const raw = dataset.estimated_word_count ?? dataset.estimatedWordCount ?? dataset.word_count ?? dataset.wordCount;
+  return Number.isFinite(Number(raw)) ? Number(raw) : 0;
+}
+
+function datasetLatestActivity(dataset = {}) {
+  const value = dataset.latestUpload || dataset.latest_upload || dataset.updated_at || dataset.updatedAt || dataset.created_at || dataset.createdAt || '';
+  return typeof value === 'string' ? value.slice(0, 80) : '';
+}
+
+function datasetParseStatusSummary(dataset = {}) {
+  const explicit = dataset.parse_status_summary || dataset.parseStatusSummary || dataset.parse_status || dataset.parseStatus;
+  if (explicit) return String(explicit).slice(0, 80);
+  const documents = Array.isArray(dataset.documents) ? dataset.documents : [];
+  if (!documents.length) return dataset.lifecycle || dataset.status || 'unknown';
+  const counts = documents.reduce((acc, document) => {
+    const key = document?.parseStatus || document?.parse_status || document?.status || 'unknown';
+    acc[key] = (acc[key] || 0) + 1;
+    return acc;
+  }, {});
+  return Object.entries(counts)
+    .map(([key, count]) => `${key}:${count}`)
+    .join('，')
+    .slice(0, 80);
 }
 
 function dedupeCandidates(candidates) {
@@ -158,7 +204,7 @@ function buildStaticDraftReference(draft) {
 
 function buildScopeHint(candidates, intent = 'ordinary_chat') {
   const visible = dedupeCandidates(candidates)
-    .map((candidate) => candidate.label)
+    .map(formatCandidateHint)
     .filter(Boolean)
     .slice(0, 3);
   const parts = [];
@@ -170,6 +216,15 @@ function buildScopeHint(candidates, intent = 'ordinary_chat') {
     parts.push(`意图：${intentLabel}`);
   }
   return parts.join('；');
+}
+
+function formatCandidateHint(candidate) {
+  if (!candidate?.label) return '';
+  if (candidate.type !== 'dataset') return candidate.label;
+  const details = [];
+  if (candidate.documentCount) details.push(`${candidate.documentCount}文档`);
+  if (candidate.materialHints?.includes('audio_video')) details.push('媒体');
+  return details.length ? `${candidate.label}(${details.join('/')})` : candidate.label;
 }
 
 function inferAssistantIntent(prompt, options = {}) {

@@ -265,6 +265,7 @@ function AssistantContextStrip({ dataset, startupBriefing, scopePlan }) {
         {datasetCandidates.map((candidate) => (
           <span className="message-chip blue" key={`${candidate.type}-${candidate.id}`}>
             预选 {candidate.label}
+            {candidate.documentCount ? ` · ${candidate.documentCount}文档` : ''}
           </span>
         ))}
         {mediaCandidate ? <span className="message-chip green">媒体资料</span> : null}
@@ -299,6 +300,7 @@ function AssistantRunProgressPanel({ progress }) {
               <span>
                 {step.message || formatSnakeCaseLabel(step.status)}
                 {step.suppliedCount !== null ? ` · 供料 ${step.suppliedCount}` : ''}
+                {step.detailTargetCount ? ` · 建议深读 ${step.detailTargetCount}` : ''}
                 {step.returnedCount !== null ? ` · 返回 ${step.returnedCount}` : ''}
                 {step.deniedCount ? ` · 拒绝 ${step.deniedCount}` : ''}
               </span>
@@ -312,6 +314,7 @@ function AssistantRunProgressPanel({ progress }) {
             <span className={`message-chip ${runtimeTone(step.status)}`} key={`${step.actionType}-${index}`}>
               {formatSnakeCaseLabel(step.actionType)}
               {step.returnedCount ? ` · ${step.returnedCount}` : ''}
+              {step.detailTargetCount ? ` · 深读 ${step.detailTargetCount}` : ''}
               {step.durationMs !== null ? ` · ${step.durationMs}ms` : ''}
             </span>
           ))}

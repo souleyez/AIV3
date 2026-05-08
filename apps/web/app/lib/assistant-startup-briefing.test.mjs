@@ -12,6 +12,8 @@ test('startup briefing summarizes visible datasets and system capability', () =>
         lifecycle: 'active',
         document_count: 3,
         estimated_word_count: 1200,
+        parse_status_summary: 'completed:3',
+        materialHints: ['tabular'],
         updated_at: '2026-04-26T10:00:00.000Z',
       },
       {
@@ -38,6 +40,8 @@ test('startup briefing summarizes visible datasets and system capability', () =>
   assert.equal(briefing.selectedScopeLabel, '订单数据');
   assert.equal(briefing.briefingVersion, 2);
   assert.equal(briefing.datasetBriefs.length, 2);
+  assert.equal(briefing.datasetBriefs[0].parseStatusSummary, 'completed:3');
+  assert.deepEqual(briefing.datasetBriefs[0].materialHints, ['tabular']);
   assert.ok(briefing.capabilities.includes('media_detail'));
   assert.match(briefing.productCapabilities.staticPage, /静态页规划/);
   assert.match(briefing.productCapabilities.staticPage, /index\.html/);
@@ -58,6 +62,31 @@ test('formatted briefing tells model when no dataset is selected', () => {
   assert.match(formatted, /静态页草稿\/成品 0 个/);
   assert.match(formatted, /不能编造数据/);
   assert.match(formatted, /当前可见库为空/);
+});
+
+test('formatted briefing includes compact dataset material metadata without content', () => {
+  const briefing = buildAssistantStartupBriefing({
+    datasets: [{
+      id: 'dataset-media',
+      key: 'media',
+      title: '会议录音',
+      lifecycle: 'active',
+      documents: [
+        { id: 'doc-1', parseStatus: 'completed', content: '正文不能进入简报' },
+        { id: 'doc-2', parseStatus: 'partial', content: '转写原文也不能进入简报' },
+      ],
+      description: '音频、视频、转写和关键帧 OCR',
+    }],
+  });
+  const formatted = formatStartupBriefingForModel(briefing);
+
+  assert.equal(briefing.visibleDocumentCount, 2);
+  assert.equal(briefing.datasetBriefs[0].documentCount, 2);
+  assert.equal(briefing.datasetBriefs[0].parseStatusSummary, 'completed:1，partial:1');
+  assert.ok(briefing.datasetBriefs[0].materialHints.includes('audio_video'));
+  assert.match(formatted, /会议录音\(2文档\/active\/解析:completed:1，partial:1\/audio_video/);
+  assert.doesNotMatch(formatted, /正文不能进入简报/);
+  assert.doesNotMatch(formatted, /转写原文/);
 });
 
 test('startup briefing prefers recent upload or classification activity', () => {

@@ -8,12 +8,19 @@ const datasets = [
     key: 'orders',
     title: '订单',
     description: '销售、营收、发货和复购数据',
+    lifecycle: 'active',
+    document_count: 12,
+    estimated_word_count: 3600,
+    parse_status_summary: 'completed:12',
   },
   {
     id: 'dataset-support',
     key: 'support',
     title: '客服',
     description: '客服、工单、投诉和满意度记录',
+    lifecycle: 'ingesting',
+    documentCount: 4,
+    wordCount: 900,
   },
 ];
 
@@ -37,8 +44,25 @@ test('scope planner preselects matching visible dataset when none is selected', 
 
   assert.equal(selectPlannerDatasetId(plan), 'dataset-orders');
   assert.match(plan.hint, /订单/);
+  assert.match(plan.hint, /12文档/);
   assert.equal(plan.intent, 'data_question');
   assert.equal(plan.supplyStrategy.retrievalPolicy, 'standard');
+  assert.equal(plan.candidates[0].documentCount, 12);
+  assert.equal(plan.candidates[0].estimatedWordCount, 3600);
+  assert.equal(plan.candidates[0].parseStatusSummary, 'completed:12');
+});
+
+test('scope planner keeps unrelated no-dataset chat as ordinary model chat', () => {
+  const plan = planAssistantScope({
+    prompt: '帮我写一句开场白',
+    datasets,
+  });
+
+  assert.equal(plan.intent, 'ordinary_chat');
+  assert.equal(selectPlannerDatasetId(plan), '');
+  assert.equal(plan.candidates.length, 0);
+  assert.equal(plan.supplyStrategy.retrievalPolicy, 'not_requested');
+  assert.equal(plan.supplyStrategy.preferDetail, false);
 });
 
 test('scope planner preselects media dataset for audio and video prompts', () => {

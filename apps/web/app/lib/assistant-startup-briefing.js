@@ -74,7 +74,7 @@ export function formatStartupBriefingForModel(briefing) {
     `解析状态：${source.parseStateSummary || '暂无解析状态。'}`,
     formatStaticPageWorkspaceForModel(source.staticPageWorkspace),
     source.datasetBriefs?.length
-      ? `可见数据集摘要：${source.datasetBriefs.map((item) => `${item.title}(${item.documentCount}文档/${item.lifecycle})`).join('；')}`
+      ? `可见数据集摘要：${source.datasetBriefs.map(formatDatasetBriefForModel).join('；')}`
       : '',
   ];
   return parts.filter(Boolean).join('\n');
@@ -83,10 +83,16 @@ export function formatStartupBriefingForModel(briefing) {
 function sumNumericField(items, fieldNames) {
   return items.reduce((total, item) => {
     const value = fieldNames
-      .map((fieldName) => Number(item?.[fieldName]))
+      .map((fieldName) => numericFieldValue(item?.[fieldName]))
       .find((candidate) => Number.isFinite(candidate) && candidate > 0);
     return total + (value || 0);
   }, 0);
+}
+
+function numericFieldValue(value) {
+  if (Array.isArray(value)) return value.length;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : 0;
 }
 
 function latestDatasetActivity(datasets) {
@@ -139,11 +145,74 @@ function summarizeDatasets(datasets) {
     key: dataset?.key || '',
     title: dataset?.title || dataset?.key || '未命名数据集',
     description: String(dataset?.description || '').slice(0, 80),
+    visibility: dataset?.visibility || dataset?.access || '',
+    category: dataset?.category || dataset?.default_category || '',
     lifecycle: dataset?.lifecycle || dataset?.status || 'unknown',
-    documentCount: Number(dataset?.document_count || dataset?.documentCount || dataset?.documents || 0),
-    estimatedWordCount: Number(dataset?.estimated_word_count || dataset?.estimatedWordCount || dataset?.word_count || 0),
+    parseStatusSummary: datasetParseStatusSummary(dataset),
+    materialHints: datasetMaterialHints(dataset),
+    documentCount: datasetDocumentCount(dataset),
+    estimatedWordCount: datasetEstimatedWordCount(dataset),
     updatedAt: dataset?.updated_at || dataset?.updatedAt || '',
+    latestActivity: dataset?.latestUpload || dataset?.latest_upload || dataset?.updated_at || dataset?.updatedAt || '',
   }));
+}
+
+function datasetDocumentCount(dataset = {}) {
+  return numericFieldValue(dataset.document_count)
+    || numericFieldValue(dataset.documentCount)
+    || numericFieldValue(dataset.documents_count)
+    || numericFieldValue(dataset.documentsCount)
+    || numericFieldValue(dataset.documents);
+}
+
+function datasetEstimatedWordCount(dataset = {}) {
+  return numericFieldValue(dataset.estimated_word_count)
+    || numericFieldValue(dataset.estimatedWordCount)
+    || numericFieldValue(dataset.word_count)
+    || numericFieldValue(dataset.wordCount);
+}
+
+function datasetMaterialHints(dataset = {}) {
+  const haystack = `${dataset.title || ''} ${dataset.key || ''} ${dataset.description || ''} ${dataset.category || ''} ${dataset.default_category || ''}`;
+  const hints = new Set(
+    Array.isArray(dataset.materialHints)
+      ? dataset.materialHints
+      : Array.isArray(dataset.material_hints)
+        ? dataset.material_hints
+        : [],
+  );
+  if (/音视频|音频|视频|录音|转写|字幕|会议|访谈|关键帧|ocr/i.test(haystack)) {
+    hints.add('audio_video');
+    hints.add('transcript_possible');
+    hints.add('keyframe_ocr_possible');
+  }
+  return [...hints].filter((hint) => typeof hint === 'string' && hint.trim()).slice(0, 6);
+}
+
+function datasetParseStatusSummary(dataset = {}) {
+  const explicit = dataset.parse_status_summary || dataset.parseStatusSummary || dataset.parse_status || dataset.parseStatus;
+  if (explicit) return String(explicit).slice(0, 80);
+  const documents = Array.isArray(dataset.documents) ? dataset.documents : [];
+  if (!documents.length) return dataset.lifecycle || dataset.status || 'unknown';
+  const counts = documents.reduce((acc, document) => {
+    const key = document?.parseStatus || document?.parse_status || document?.status || 'unknown';
+    acc[key] = (acc[key] || 0) + 1;
+    return acc;
+  }, {});
+  return Object.entries(counts)
+    .map(([key, count]) => `${key}:${count}`)
+    .join('，')
+    .slice(0, 80);
+}
+
+function formatDatasetBriefForModel(item) {
+  const hints = Array.isArray(item.materialHints) && item.materialHints.length
+    ? `/${item.materialHints.join('+')}`
+    : '';
+  const parse = item.parseStatusSummary && item.parseStatusSummary !== item.lifecycle
+    ? `/解析:${item.parseStatusSummary}`
+    : '';
+  return `${item.title}(${item.documentCount}文档/${item.lifecycle}${parse}${hints})`;
 }
 
 function summarizeStaticPageWorkspace(activeDraft, drafts) {

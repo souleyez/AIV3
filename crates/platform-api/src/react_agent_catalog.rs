@@ -6,15 +6,20 @@ const WEAK_ALLOWED_KEYS: &[&str] = &[
     "datasetId",
     "document_id",
     "documentId",
+    "key",
     "title",
     "label",
     "name",
     "type",
     "kind",
+    "category",
     "visibility",
+    "lifecycle",
     "status",
     "parse_status",
     "parseStatus",
+    "parse_status_summary",
+    "parseStatusSummary",
     "vector_status",
     "vectorStatus",
     "profile_status",
@@ -27,6 +32,8 @@ const WEAK_ALLOWED_KEYS: &[&str] = &[
     "documentCount",
     "documents_count",
     "documentsCount",
+    "estimated_word_count",
+    "estimatedWordCount",
     "word_count",
     "wordCount",
     "chunk_count",
@@ -34,6 +41,10 @@ const WEAK_ALLOWED_KEYS: &[&str] = &[
     "visibleDatasetCount",
     "visibleDocumentCount",
     "latestUpload",
+    "latestActivity",
+    "reportPlanCount",
+    "publishedReportCount",
+    "staticPageDraftCount",
     "intent",
     "retrievalPolicy",
     "retrieval_policy",
@@ -45,6 +56,7 @@ const WEAK_ALLOWED_KEYS: &[&str] = &[
 
 const WEAK_ARRAY_KEYS: &[&str] = &[
     "datasets",
+    "datasetBriefs",
     "documents",
     "items",
     "material_hints",
@@ -325,17 +337,27 @@ mod tests {
             "providerKey": "secret-provider-key",
             "datasets": [{
                 "id": "ds-public",
+                "key": "orders",
                 "title": "公开订单",
                 "visibility": "public",
+                "lifecycle": "active",
                 "documentCount": 3,
+                "estimatedWordCount": 1200,
+                "parseStatusSummary": "completed:3",
+                "category": "订单",
                 "body": "不能进入规划目录的正文"
             }]
         });
         let candidates = vec![json!({
             "type": "dataset",
             "id": "ds-private",
+            "key": "support",
             "title": "私密客服",
             "visibility": "private",
+            "lifecycle": "active",
+            "documentCount": 2,
+            "estimatedWordCount": 900,
+            "parseStatusSummary": "completed:2",
             "documents": [{
                 "id": "doc-1",
                 "title": "客服 FAQ",
@@ -365,7 +387,25 @@ mod tests {
 
         assert_eq!(catalog["startup"]["visibleDatasetCount"], json!(2));
         assert_eq!(catalog["startup"]["datasets"][0]["id"], json!("ds-public"));
+        assert_eq!(catalog["startup"]["datasets"][0]["key"], json!("orders"));
+        assert_eq!(
+            catalog["startup"]["datasets"][0]["lifecycle"],
+            json!("active")
+        );
+        assert_eq!(
+            catalog["startup"]["datasets"][0]["estimatedWordCount"],
+            json!(1200)
+        );
+        assert_eq!(
+            catalog["startup"]["datasets"][0]["parseStatusSummary"],
+            json!("completed:3")
+        );
         assert_eq!(catalog["scopeCandidates"][0]["id"], json!("ds-private"));
+        assert_eq!(catalog["scopeCandidates"][0]["documentCount"], json!(2));
+        assert_eq!(
+            catalog["scopeCandidates"][0]["parseStatusSummary"],
+            json!("completed:2")
+        );
         assert_eq!(
             catalog["scopeCandidates"][0]["documents"][0]["parseStatus"],
             json!("completed")

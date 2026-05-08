@@ -76,6 +76,7 @@ function sanitizeAssistantRunTrailStep(step) {
     status: limitAssistantRunText(step.status || 'completed', 24),
     message: limitAssistantRunText(step.safe_message || step.message || step.hint || '', 72),
     suppliedCount: Number.isFinite(Number(step.supplied_count)) ? Number(step.supplied_count) : null,
+    detailTargetCount: Number.isFinite(Number(step.detail_target_count)) ? Number(step.detail_target_count) : null,
     returnedCount: Number.isFinite(Number(step.returned_count ?? step.item_count)) ? Number(step.returned_count ?? step.item_count) : null,
     deniedCount: Number.isFinite(Number(step.denied_count)) ? Number(step.denied_count) : null,
     stepCount: Number.isFinite(Number(step.step_count)) ? Number(step.step_count) : null,
@@ -97,6 +98,7 @@ function sanitizeAssistantRunTraceStep(step) {
     message: limitAssistantRunText(step.safe_message || '', 72),
     deniedCount: Number.isFinite(Number(step.denied_count)) ? Number(step.denied_count) : 0,
     returnedCount: Number.isFinite(Number(step.returned_count)) ? Number(step.returned_count) : 0,
+    detailTargetCount: Number.isFinite(Number(step.detail_target_count)) ? Number(step.detail_target_count) : 0,
     durationMs: Number.isFinite(Number(step.duration_ms)) ? Number(step.duration_ms) : null,
   };
 }
