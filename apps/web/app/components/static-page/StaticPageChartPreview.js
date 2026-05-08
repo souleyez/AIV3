@@ -1,24 +1,114 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
-import { sanitizeStaticPageChartOptions } from '../../lib/static-page-chart-runtime';
+import {
+  buildStaticPageEchartsPreviewOption,
+  hasRenderableEchartsData,
+  staticPageChartRowsFromModule,
+} from '../../lib/static-page-chart-runtime';
 
-function hasSeriesData(option) {
-  if (Array.isArray(option?.dataset?.source) && option.dataset.source.length > 0) return true;
-  const series = Array.isArray(option?.series) ? option.series : [];
-  return series.some((item) => Array.isArray(item?.data) && item.data.length > 0);
+const PREVIEWABLE_STATIC_TYPES = new Set([
+  'kpi-cards',
+  'bar-chart',
+  'line-chart',
+  'donut-chart',
+  'table',
+  'timeline',
+  'risk-matrix',
+]);
+
+function formatValue(value) {
+  return Number.isInteger(value) ? value.toLocaleString('zh-CN') : Number(value).toLocaleString('zh-CN', {
+    maximumFractionDigits: 2,
+  });
 }
 
-function buildPreviewOption(module) {
-  const chartOptions = sanitizeStaticPageChartOptions(module?.visualization?.chartOptions || {}, {
-    runtime: 'echarts',
-  });
-  return {
-    animation: false,
-    tooltip: { trigger: module?.visualization?.type === 'donut-chart' ? 'item' : 'axis' },
-    grid: { left: 28, right: 16, top: 22, bottom: 28, containLabel: true },
-    ...chartOptions,
-  };
+function rowMax(rows) {
+  return Math.max(1, ...rows.map((row) => Math.abs(Number(row.value) || 0)));
+}
+
+function linePoints(rows) {
+  const values = rows.map((row) => Number(row.value) || 0);
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const span = max - min || 1;
+  return rows.map((row, index) => {
+    const x = rows.length > 1 ? 6 + (index / (rows.length - 1)) * 88 : 50;
+    const y = 88 - (((Number(row.value) || 0) - min) / span) * 68;
+    return `${x.toFixed(2)},${y.toFixed(2)}`;
+  }).join(' ');
+}
+
+function DeterministicChartPreview({ module, rows, compact }) {
+  const type = module?.visualization?.type || 'text-insight';
+  if (!PREVIEWABLE_STATIC_TYPES.has(type) || rows.length === 0) return null;
+  const max = rowMax(rows);
+  const previewRows = rows.slice(0, compact ? 4 : 6);
+
+  if (type === 'kpi-cards') {
+    return (
+      <div className={`static-page-chart-preview deterministic kpi${compact ? ' compact' : ''}`}>
+        {previewRows.slice(0, 4).map((row) => (
+          <div key={row.label} className="static-page-mini-kpi">
+            <strong>{formatValue(row.value)}</strong>
+            <span>{row.label}</span>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  if (type === 'table') {
+    return (
+      <div className={`static-page-chart-preview deterministic table${compact ? ' compact' : ''}`}>
+        {previewRows.map((row) => (
+          <div key={row.label} className="static-page-mini-row">
+            <span>{row.label}</span>
+            <strong>{formatValue(row.value)}</strong>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  if (type === 'timeline') {
+    return (
+      <ol className={`static-page-chart-preview deterministic timeline${compact ? ' compact' : ''}`}>
+        {previewRows.map((row) => (
+          <li key={row.label}>
+            <span>{row.label}</span>
+            <strong>{formatValue(row.value)}</strong>
+          </li>
+        ))}
+      </ol>
+    );
+  }
+
+  if (type === 'line-chart') {
+    return (
+      <div className={`static-page-chart-preview deterministic${compact ? ' compact' : ''}`}>
+        <svg className="static-page-mini-svg" viewBox="0 0 100 100" role="img" aria-label="基础折线图预览">
+          <polyline className="static-page-mini-line" points={linePoints(rows)} />
+          {previewRows.map((row, index) => {
+            const [x, y] = linePoints(rows).split(' ')[index].split(',');
+            return <circle key={row.label} cx={x} cy={y} r="2.8" />;
+          })}
+        </svg>
+      </div>
+    );
+  }
+
+  return (
+    <div className={`static-page-chart-preview deterministic bars${compact ? ' compact' : ''}`}>
+      {previewRows.map((row) => (
+        <div key={row.label} className="static-page-mini-bar">
+          <span>{row.label}</span>
+          <i style={{ '--bar-width': `${Math.max(4, (Math.abs(row.value) / max) * 100)}%` }} />
+          <strong>{formatValue(row.value)}</strong>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 export default function StaticPageChartPreview({
@@ -27,9 +117,10 @@ export default function StaticPageChartPreview({
 }) {
   const chartRef = useRef(null);
   const chartRuntime = module?.visualization?.chartRuntime || 'deterministic';
-  const option = buildPreviewOption(module);
+  const option = buildStaticPageEchartsPreviewOption(module);
   const optionText = JSON.stringify(option);
-  const canRender = chartRuntime === 'echarts' && hasSeriesData(option);
+  const canRender = chartRuntime === 'echarts' && hasRenderableEchartsData(option);
+  const rows = staticPageChartRowsFromModule(module);
 
   useEffect(() => {
     if (!canRender || !chartRef.current) return undefined;
@@ -54,7 +145,9 @@ export default function StaticPageChartPreview({
     };
   }, [canRender, optionText]);
 
-  if (chartRuntime !== 'echarts') return null;
+  if (chartRuntime !== 'echarts') {
+    return <DeterministicChartPreview module={module} rows={rows} compact={compact} />;
+  }
 
   if (!canRender) {
     return (
@@ -76,4 +169,3 @@ export default function StaticPageChartPreview({
     </div>
   );
 }
-

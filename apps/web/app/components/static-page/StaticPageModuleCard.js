@@ -6,6 +6,7 @@ import {
   STATIC_PAGE_VISUALIZATION_TYPES,
   buildStaticPageModuleUpdateOperation,
 } from '../../lib/static-page-draft';
+import StaticPageChartPreview from './StaticPageChartPreview';
 
 function stopControlPropagation(event) {
   event.stopPropagation();
@@ -181,6 +182,7 @@ export default function StaticPageModuleCard({
       <div className="static-page-module-layout">
         x{module.layout?.x ?? 0} y{module.layout?.y ?? 0} · {module.layout?.w ?? 1}x{module.layout?.h ?? 1}
       </div>
+      <StaticPageChartPreview module={module} compact />
       {onApplyOperation ? (
         <details className="static-page-module-editor" onPointerDown={stopControlPropagation}>
           <summary>微调模块</summary>

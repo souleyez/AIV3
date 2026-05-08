@@ -44,6 +44,7 @@ const ECHARTS_SERIES_TYPES = new Set([
 ]);
 const UNSAFE_STRING_PATTERN = /<\s*\/?\s*[a-z][^>]*>|javascript\s*:|data\s*:\s*text\/html|https?:\/\/|@import|expression\s*\(|\bon[a-z]+\s*=/i;
 const DANGEROUS_KEYS = new Set(['__proto__', 'prototype', 'constructor', 'renderItem']);
+const CHART_DATA_KEYS = ['data', 'values', 'rows', 'sampleData', 'sample_data', 'items'];
 
 function isPlainObject(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
@@ -119,6 +120,74 @@ function sanitizeEChartsOptions(chartOptions) {
   return output;
 }
 
+function firstArrayCandidate(value) {
+  if (Array.isArray(value)) return value;
+  if (!isPlainObject(value)) return [];
+  for (const key of CHART_DATA_KEYS) {
+    if (Array.isArray(value[key])) return value[key];
+  }
+  return [];
+}
+
+function chartRowLabel(row, index) {
+  if (isPlainObject(row)) {
+    return row.label || row.name || row.month || row.date || row.period || row.category || row.title || row.x || row['月份'] || row['日期'] || row['分类'] || `项${index + 1}`;
+  }
+  return `项${index + 1}`;
+}
+
+function chartRowValue(row) {
+  if (typeof row === 'number' && Number.isFinite(row)) return row;
+  if (!isPlainObject(row)) return null;
+  const candidates = [
+    row.value,
+    row.amount,
+    row.count,
+    row.score,
+    row.rate,
+    row.total,
+    row.y,
+    row['订单金额'],
+    row['金额'],
+    row['收入'],
+    row['数量'],
+  ];
+  const matched = candidates.find((value) => value !== undefined && value !== null && value !== '');
+  const numeric = Number(String(matched ?? '').replace(/[%,$，,]/g, '').trim());
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+function echartsSeriesType(visualizationType) {
+  if (visualizationType === 'line-chart') return 'line';
+  if (visualizationType === 'donut-chart') return 'pie';
+  if (visualizationType === 'risk-matrix') return 'scatter';
+  return 'bar';
+}
+
+function defaultEchartsOption(visualizationType, rows) {
+  if (!rows.length) return {};
+  const seriesType = echartsSeriesType(visualizationType);
+  if (seriesType === 'pie') {
+    return {
+      tooltip: { trigger: 'item' },
+      series: [{
+        type: 'pie',
+        radius: ['46%', '72%'],
+        data: rows.map((row) => ({ name: row.label, value: row.value })),
+      }],
+    };
+  }
+  return {
+    tooltip: { trigger: 'axis' },
+    xAxis: { type: 'category', data: rows.map((row) => row.label) },
+    yAxis: { type: 'value' },
+    series: [{
+      type: seriesType,
+      data: rows.map((row) => row.value),
+    }],
+  };
+}
+
 export function normalizeChartRuntime(value) {
   return RUNTIME_SET.has(value) ? value : DEFAULT_CHART_RUNTIME;
 }
@@ -149,3 +218,57 @@ export function normalizeStaticPageChartRuntimeConfig(visualization = {}, chartO
   };
 }
 
+export function normalizeStaticPageChartRows(source = []) {
+  return firstArrayCandidate(source)
+    .slice(0, 24)
+    .map((row, index) => {
+      const value = chartRowValue(row);
+      if (value === null) return null;
+      return {
+        label: String(chartRowLabel(row, index)).trim() || `项${index + 1}`,
+        value,
+      };
+    })
+    .filter(Boolean);
+}
+
+export function staticPageChartRowsFromModule(module = {}) {
+  const visualization = module?.visualization || {};
+  const candidates = [
+    visualization.data,
+    visualization.values,
+    visualization.sampleData,
+    visualization.sample_data,
+    visualization.rows,
+    visualization.items,
+    module?.dataBinding,
+    module?.data,
+  ];
+  for (const candidate of candidates) {
+    const rows = normalizeStaticPageChartRows(candidate);
+    if (rows.length) return rows;
+  }
+  return [];
+}
+
+export function hasRenderableEchartsData(option = {}) {
+  if (Array.isArray(option?.dataset?.source) && option.dataset.source.length > 0) return true;
+  const series = Array.isArray(option?.series) ? option.series : [];
+  return series.some((item) => Array.isArray(item?.data) && item.data.length > 0);
+}
+
+export function buildStaticPageEchartsPreviewOption(module = {}) {
+  const visualization = module?.visualization || {};
+  const rows = staticPageChartRowsFromModule(module);
+  const fallbackOption = defaultEchartsOption(visualization.type, rows);
+  const chartOptions = sanitizeStaticPageChartOptions(visualization.chartOptions || {}, {
+    runtime: 'echarts',
+  });
+  return {
+    animation: false,
+    tooltip: { trigger: visualization.type === 'donut-chart' ? 'item' : 'axis' },
+    grid: { left: 28, right: 16, top: 22, bottom: 28, containLabel: true },
+    ...fallbackOption,
+    ...chartOptions,
+  };
+}

@@ -1529,6 +1529,100 @@ textarea {
   min-height: 150px;
 }
 
+.static-page-chart-preview.deterministic {
+  gap: 7px;
+  padding: 9px;
+  background: linear-gradient(135deg, rgba(37, 99, 235, 0.08), rgba(20, 184, 166, 0.06));
+}
+
+.static-page-chart-preview.deterministic.kpi {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.static-page-mini-kpi,
+.static-page-mini-row {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+  padding: 8px 9px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.58);
+}
+
+.static-page-mini-kpi strong,
+.static-page-mini-row strong,
+.static-page-mini-bar strong,
+.static-page-chart-preview.timeline strong {
+  color: var(--text);
+  font-size: 12px;
+}
+
+.static-page-mini-kpi span,
+.static-page-mini-row span,
+.static-page-mini-bar span,
+.static-page-chart-preview.timeline span {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.static-page-mini-row,
+.static-page-mini-bar,
+.static-page-chart-preview.timeline li {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.static-page-mini-bar {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(42px, 0.55fr) minmax(52px, 1fr) auto;
+  gap: 7px;
+  align-items: center;
+}
+
+.static-page-mini-bar i {
+  width: var(--bar-width, 10%);
+  min-width: 4px;
+  height: 8px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent), rgba(20, 184, 166, 0.82));
+}
+
+.static-page-mini-svg {
+  width: 100%;
+  min-height: 86px;
+  overflow: visible;
+}
+
+.static-page-mini-line {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.static-page-mini-svg circle {
+  fill: var(--surface);
+  stroke: var(--accent);
+  stroke-width: 2;
+}
+
+.static-page-chart-preview.timeline {
+  margin: 0;
+  padding-left: 24px;
+}
+
+.static-page-chart-preview.timeline li {
+  display: grid;
+  gap: 7px;
+  padding: 2px 0;
+}
+
 .static-page-canvas-shell {
   min-width: 0;
   padding: 12px;

@@ -17,6 +17,12 @@ import {
   validateMobileOrder,
   validateStaticPageLayout,
 } from './static-page-draft.js';
+import {
+  buildStaticPageEchartsPreviewOption,
+  hasRenderableEchartsData,
+  normalizeStaticPageChartRows,
+  staticPageChartRowsFromModule,
+} from './static-page-chart-runtime.js';
 
 test('buildInitialStaticPageDraft creates default modules and mobile order', () => {
   const draft = buildInitialStaticPageDraft({
@@ -480,6 +486,31 @@ test('unknown chart runtime falls back to deterministic runtime', () => {
   assert.equal(module.visualization.chartRuntime, 'deterministic');
   assert.equal(module.visualization.chartOptions.dataKey, 'orders.amount');
   assert.equal(module.visualization.chartOptions.series, undefined);
+});
+
+test('chart runtime helpers normalize module rows and synthesize ECharts preview options', () => {
+  const rows = normalizeStaticPageChartRows([
+    { 月份: '一月', 订单金额: '1,200' },
+    { label: '二月', value: 1380 },
+    { label: '无效', value: 'not-a-number' },
+  ]);
+  const module = {
+    visualization: {
+      type: 'line-chart',
+      chartRuntime: 'echarts',
+      data: rows,
+    },
+  };
+  const option = buildStaticPageEchartsPreviewOption(module);
+
+  assert.deepEqual(rows, [
+    { label: '一月', value: 1200 },
+    { label: '二月', value: 1380 },
+  ]);
+  assert.deepEqual(staticPageChartRowsFromModule(module), rows);
+  assert.equal(option.series[0].type, 'line');
+  assert.deepEqual(option.xAxis.data, ['一月', '二月']);
+  assert.equal(hasRenderableEchartsData(option), true);
 });
 
 test('unsafe chart options are stripped before reaching module contracts', () => {
