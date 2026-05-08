@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
 
 pub const STATIC_PAGE_RENDERER_ID: &str = "static-page-renderer-v1";
 
@@ -60,6 +61,7 @@ pub fn render_static_page(request: &StaticPageRenderRequest) -> StaticPageRender
         .map(|(index, module)| render_module_html(module, index, &mobile_order, &data_snapshot))
         .collect::<Vec<_>>()
         .join("\n");
+    let chart_runtime_manifest = build_chart_runtime_manifest(&modules, &data_snapshot);
     let html = format!(
         concat!(
             "<!doctype html><html><head><meta charset=\"utf-8\">",
@@ -97,6 +99,7 @@ pub fn render_static_page(request: &StaticPageRenderRequest) -> StaticPageRender
         "visual_spec": visual_spec,
         "render_spec": render_spec,
         "data_snapshot": data_snapshot,
+        "chart_runtime": chart_runtime_manifest,
         "preview_contract": preview_contract,
         "module_count": modules.as_array().map(Vec::len).unwrap_or(0),
         "modules": modules,
@@ -141,17 +144,23 @@ fn render_module_html(
         .and_then(|visualization| visualization.get("label"))
         .and_then(Value::as_str)
         .unwrap_or(visualization);
+    let chart_runtime = module_chart_runtime(&module);
+    let data_quality = module_data_quality(&module, data_snapshot);
+    let render_fallback = module_chart_runtime_fallback(chart_runtime);
     let module_id = module.get("id").and_then(Value::as_str).unwrap_or("module");
     let layout_style = module_layout_style(&module, module_id, index, mobile_order);
     let chart_html = render_visualization_html(&module, visualization, data_snapshot);
     format!(
         concat!(
-            "<section class=\"module\" data-chart=\"{}\" data-module-id=\"{}\" style=\"{}\">",
+            "<section class=\"module\" data-chart=\"{}\" data-chart-runtime=\"{}\" data-data-quality=\"{}\" data-render-fallback=\"{}\" data-module-id=\"{}\" style=\"{}\">",
             "<div><span>{}</span><h2>{}</h2></div>",
             "<p>{}</p><small>{}</small>",
             "<div class=\"chart\">{}</div></section>"
         ),
         escape_html(visualization),
+        escape_html(chart_runtime),
+        escape_html(&data_quality),
+        escape_html(render_fallback),
         escape_html(module_id),
         escape_html(&layout_style),
         escape_html(visualization_label),
@@ -160,6 +169,126 @@ fn render_module_html(
         escape_html(data_label),
         chart_html,
     )
+}
+
+fn build_chart_runtime_manifest(modules: &Value, data_snapshot: &Value) -> Value {
+    let mut deterministic_count = 0;
+    let mut echarts_requested_count = 0;
+    let mut fallback_count = 0;
+    let mut data_quality_counts = BTreeMap::<String, usize>::new();
+    let module_manifests = modules
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|module| {
+            let module_id = module
+                .get("id")
+                .and_then(Value::as_str)
+                .unwrap_or("module")
+                .to_string();
+            let visualization_type = module
+                .get("visualization")
+                .and_then(|visualization| visualization.get("type"))
+                .and_then(Value::as_str)
+                .unwrap_or("text-insight")
+                .to_string();
+            let chart_runtime = module_chart_runtime(&module).to_string();
+            let data_quality = module_data_quality(&module, data_snapshot);
+            *data_quality_counts.entry(data_quality.clone()).or_insert(0) += 1;
+            if chart_runtime == "echarts" {
+                echarts_requested_count += 1;
+                fallback_count += 1;
+            } else {
+                deterministic_count += 1;
+            }
+            let fallback = chart_runtime == "echarts";
+            let fallback_runtime = module_chart_runtime_fallback(&chart_runtime);
+            json!({
+                "moduleId": module_id,
+                "visualizationType": visualization_type,
+                "chartRuntime": chart_runtime,
+                "dataQuality": data_quality,
+                "finalRendererRuntime": "deterministic-svg-html",
+                "fallback": fallback,
+                "fallbackRuntime": fallback_runtime,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    json!({
+        "defaultRuntime": "deterministic",
+        "supportedRuntimes": ["deterministic", "echarts"],
+        "finalRendererRuntime": "deterministic-svg-html",
+        "deterministicModules": deterministic_count,
+        "echartsRequestedModules": echarts_requested_count,
+        "echartsRenderedModules": 0,
+        "fallbackModules": fallback_count,
+        "dataQualityCounts": data_quality_counts,
+        "modules": module_manifests,
+    })
+}
+
+fn module_chart_runtime(module: &Value) -> &'static str {
+    let runtime = module
+        .get("visualization")
+        .and_then(|visualization| {
+            visualization
+                .get("chartRuntime")
+                .or_else(|| visualization.get("runtime"))
+                .or_else(|| {
+                    visualization
+                        .get("chartOptions")
+                        .and_then(|chart_options| chart_options.get("chartRuntime"))
+                })
+                .or_else(|| {
+                    visualization
+                        .get("chartOptions")
+                        .and_then(|chart_options| chart_options.get("runtime"))
+                })
+        })
+        .or_else(|| module.get("chartRuntime"))
+        .or_else(|| {
+            module
+                .get("chartOptions")
+                .and_then(|chart_options| chart_options.get("chartRuntime"))
+        })
+        .and_then(Value::as_str)
+        .map(str::trim);
+    match runtime {
+        Some("echarts") => "echarts",
+        _ => "deterministic",
+    }
+}
+
+fn module_data_quality(module: &Value, data_snapshot: &Value) -> String {
+    let module_id = module.get("id").and_then(Value::as_str);
+    let data_quality = module_id
+        .and_then(|id| data_snapshot_module_binding(data_snapshot, id))
+        .and_then(|binding| {
+            binding
+                .get("dataQuality")
+                .or_else(|| binding.get("data_quality"))
+        })
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| {
+            if chart_points(module, data_snapshot).is_empty() {
+                "missing"
+            } else {
+                "module_data"
+            }
+        });
+    data_quality.to_string()
+}
+
+fn module_chart_runtime_fallback(chart_runtime: &str) -> &'static str {
+    if chart_runtime == "echarts" {
+        "deterministic-svg-html"
+    } else {
+        "none"
+    }
 }
 
 fn module_layout_style(
@@ -708,6 +837,12 @@ fn fallback_render_spec() -> Value {
         "renderer": STATIC_PAGE_RENDERER_ID,
         "layoutEngine": "css-grid-12",
         "componentModel": "dom-text-svg-chart",
+        "chartRuntime": "deterministic-with-echarts-advanced",
+        "chartRuntimePolicy": {
+            "default": "deterministic",
+            "advanced": "echarts",
+            "finalRendererFallback": "deterministic-svg-html"
+        },
     })
 }
 
@@ -872,6 +1007,70 @@ mod tests {
         assert!(result.html.contains("一月"));
         assert!(result.html.contains("--static-page-accent:#facc15"));
         assert_eq!(result.asset_manifest["module_count"], 2);
+        assert_eq!(
+            result.asset_manifest["chart_runtime"]["deterministicModules"],
+            2
+        );
+        assert_eq!(result.asset_manifest["chart_runtime"]["fallbackModules"], 0);
+    }
+
+    #[test]
+    fn render_static_page_records_echarts_fallback_manifest() {
+        let result = render_static_page(&StaticPageRenderRequest {
+            draft_id: "draft-echarts".to_string(),
+            assistant_run_id: "run-echarts".to_string(),
+            title: "高级图表测试".to_string(),
+            draft_payload: json!({
+                "modules": [{
+                    "id": "trend",
+                    "title": "订单趋势",
+                    "content": "ECharts 预览确认后，最终渲染仍保留静态回退。",
+                    "visualization": {
+                        "type": "bar-chart",
+                        "chartRuntime": "echarts",
+                        "chartOptions": {
+                            "series": [{
+                                "type": "bar",
+                                "data": [1200, 1380]
+                            }]
+                        }
+                    }
+                }],
+                "dataSnapshot": {
+                    "module_bindings": [{
+                        "moduleId": "trend",
+                        "sampleData": [
+                            { "label": "1月", "value": 1200, "kind": "module_data" },
+                            { "label": "2月", "value": 1380, "kind": "module_data" }
+                        ],
+                        "dataQuality": "module_data"
+                    }]
+                }
+            }),
+            selected_scope: Value::Null,
+            visibility_snapshot: Value::Null,
+            preview_asset_key: None,
+            image_job_id: None,
+        });
+
+        assert!(result.html.contains("data-chart-runtime=\"echarts\""));
+        assert!(result
+            .html
+            .contains("data-render-fallback=\"deterministic-svg-html\""));
+        assert_eq!(
+            result.asset_manifest["chart_runtime"]["echartsRequestedModules"],
+            1
+        );
+        assert_eq!(result.asset_manifest["chart_runtime"]["fallbackModules"], 1);
+        assert_eq!(
+            result.asset_manifest["chart_runtime"]["modules"][0]["dataQuality"],
+            "module_data"
+        );
+        assert!(result.html.contains("1月"));
+        assert_eq!(
+            result.asset_manifest["data_snapshot"]["module_bindings"][0]["sampleData"][0]["value"],
+            json!(1200)
+        );
     }
 
     #[test]

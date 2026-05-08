@@ -14531,7 +14531,7 @@ fn build_static_page_image_prompt_payload(draft: &StaticPageDraft, prompt: Optio
             "contract_source": "StaticPageDraft",
             "visual_source": "effect image is a preview contract, not final source code",
             "final_source": "draft_payload visual_spec/render_spec/modules/data_snapshot",
-            "editable_core": "DOM text + SVG/chart components",
+            "editable_core": "DOM text + SVG/chart components + safe ECharts JSON options",
         },
         "selected_scope": draft.selected_scope,
         "visibility_snapshot": draft.visibility_snapshot,
@@ -14653,12 +14653,20 @@ fn build_static_page_render_spec() -> Value {
         },
         "mobileLayout": "single-column-sortable",
         "componentModel": "dom-text-svg-chart",
-        "chartRuntime": "recharts-first-echarts-optional",
-        "editableContent": ["title", "content", "dataBinding", "visualization", "chartOptions", "layout"],
+        "chartRuntime": "deterministic-with-echarts-advanced",
+        "chartRuntimePolicy": {
+            "default": "deterministic",
+            "advanced": "echarts",
+            "allowedRuntimes": ["deterministic", "echarts"],
+            "advancedOptions": "plain-json-echarts-option-only",
+            "finalRendererFallback": "ECharts modules must still have dataSnapshot sampleData so the final renderer can fall back to deterministic DOM/SVG output."
+        },
+        "editableContent": ["title", "content", "dataBinding", "visualization", "chartRuntime", "chartOptions", "layout"],
         "generationGuardrails": [
             "效果图必须服从模块网格布局和移动端顺序",
             "正文、指标、图表在最终静态页中必须是真 DOM 或 SVG，不允许只烘焙进图片",
             "复杂背景、纹理、装饰可以作为图片资产，核心数据表达必须可重新渲染",
+            "ECharts 只允许纯 JSON 配置，不允许函数、HTML、远程 URL 或事件处理器字段",
             "避免 3D 透视、真实摄影 UI、不可复刻字体效果和过度复杂玻璃反射"
         ]
     })
@@ -14705,6 +14713,7 @@ fn build_static_page_data_snapshot_with_evidence(
                     .and_then(|visualization| visualization.get("type"))
                     .cloned()
                     .unwrap_or_else(|| json!("text-insight")),
+                "chartRuntime": static_page_module_chart_runtime(&module),
                 "chartOptions": module
                     .get("visualization")
                     .and_then(|visualization| visualization.get("chartOptions"))
@@ -15028,9 +15037,46 @@ fn static_page_module_field_path(module: &Value) -> Option<&str> {
                 .and_then(|visualization| visualization.get("chartOptions"))
                 .and_then(|chart_options| chart_options.get("dataKey"))
         })
+        .or_else(|| {
+            module
+                .get("chartOptions")
+                .and_then(|chart_options| chart_options.get("dataKey"))
+        })
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
+}
+
+fn static_page_module_chart_runtime(module: &Value) -> &'static str {
+    let runtime = module
+        .get("visualization")
+        .and_then(|visualization| {
+            visualization
+                .get("chartRuntime")
+                .or_else(|| visualization.get("runtime"))
+                .or_else(|| {
+                    visualization
+                        .get("chartOptions")
+                        .and_then(|chart_options| chart_options.get("chartRuntime"))
+                })
+                .or_else(|| {
+                    visualization
+                        .get("chartOptions")
+                        .and_then(|chart_options| chart_options.get("runtime"))
+                })
+        })
+        .or_else(|| module.get("chartRuntime"))
+        .or_else(|| {
+            module
+                .get("chartOptions")
+                .and_then(|chart_options| chart_options.get("chartRuntime"))
+        })
+        .and_then(Value::as_str)
+        .map(str::trim);
+    match runtime {
+        Some("echarts") => "echarts",
+        _ => "deterministic",
+    }
 }
 
 fn build_static_page_module_explicit_points(
@@ -16008,6 +16054,9 @@ fn apply_static_page_operation_to_payload(payload: &mut Value, operation: &Value
                 let mut visualization = json!({
                     "type": visualization_type,
                 });
+                if let Some(chart_runtime) = operation.get("chartRuntime") {
+                    set_payload_value(&mut visualization, "chartRuntime", chart_runtime.clone());
+                }
                 if let Some(chart_options) = operation.get("chartOptions") {
                     set_payload_value(&mut visualization, "chartOptions", chart_options.clone());
                 }
@@ -17660,6 +17709,10 @@ mod tests {
             json!("orders.amount")
         );
         assert_eq!(
+            snapshot["module_bindings"][0]["chartRuntime"],
+            json!("deterministic")
+        );
+        assert_eq!(
             snapshot["module_bindings"][0]["dataQuality"],
             json!("evidence_signal")
         );
@@ -17760,6 +17813,13 @@ mod tests {
                     },
                     "visualization": {
                         "type": "line-chart",
+                        "chartRuntime": "echarts",
+                        "chartOptions": {
+                            "series": [{
+                                "type": "line",
+                                "data": [1200, 1380]
+                            }]
+                        },
                         "data": [
                             { "month": "1月", "amount": 1200 },
                             { "month": "2月", "amount": 1380 }
@@ -17788,6 +17848,10 @@ mod tests {
         assert_eq!(
             data_snapshot["module_bindings"][0]["dataQuality"],
             json!("module_data")
+        );
+        assert_eq!(
+            data_snapshot["module_bindings"][0]["chartRuntime"],
+            json!("echarts")
         );
         assert_eq!(sample_data[0]["label"], json!("1月"));
         assert_eq!(sample_data[0]["value"], json!(1200.0));
@@ -17827,6 +17891,10 @@ mod tests {
             image_job_id: Some(StaticPageImageJobId::new().to_string()),
         });
         assert_eq!(rendered.asset_manifest["data_snapshot"], data_snapshot);
+        assert_eq!(
+            rendered.asset_manifest["chart_runtime"]["fallbackModules"],
+            json!(1)
+        );
         assert!(rendered.html.contains("1月: 1200"));
         assert!(rendered.html.contains("2月: 1380"));
         assert!(!rendered.html.contains("数据待确认"));
@@ -18143,11 +18211,15 @@ mod tests {
         );
         assert_eq!(
             job_response.image_job.image_prompt_payload["design_contract"]["editable_core"],
-            json!("DOM text + SVG/chart components")
+            json!("DOM text + SVG/chart components + safe ECharts JSON options")
         );
         assert_eq!(
             job_response.image_job.image_prompt_payload["render_spec"]["componentModel"],
             json!("dom-text-svg-chart")
+        );
+        assert_eq!(
+            job_response.image_job.image_prompt_payload["render_spec"]["chartRuntime"],
+            json!("deterministic-with-echarts-advanced")
         );
         let image_workflows = state
             .storage

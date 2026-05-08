@@ -1462,6 +1462,25 @@ pub struct CreateStaticPageDraftRequest {
     pub draft_payload: Value,
 }
 
+pub const STATIC_PAGE_DEFAULT_CHART_RUNTIME: &str = "deterministic";
+pub const STATIC_PAGE_ADVANCED_CHART_RUNTIME: &str = "echarts";
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum StaticPageChartRuntimeView {
+    Deterministic,
+    Echarts,
+}
+
+impl StaticPageChartRuntimeView {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Deterministic => STATIC_PAGE_DEFAULT_CHART_RUNTIME,
+            Self::Echarts => STATIC_PAGE_ADVANCED_CHART_RUNTIME,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum StaticPageDraftStatusView {

@@ -8,6 +8,9 @@ use std::collections::BTreeMap;
 
 const MAX_OPERATION_COUNT: usize = 24;
 const DEFAULT_MODEL: &str = "static-page-intent-v1";
+const DEFAULT_CHART_RUNTIME: &str = "deterministic";
+const ADVANCED_CHART_RUNTIME: &str = "echarts";
+const MAX_CHART_OPTIONS_DEPTH: usize = 8;
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct StaticPageIntentRequest {
@@ -167,14 +170,21 @@ fn sanitize_static_page_operation(mut operation: Value) -> Result<Value> {
                     "unsupported static page visualization type: {visualization}"
                 ));
             }
+            let chart_runtime = operation
+                .get("chartRuntime")
+                .map(|value| validate_chart_runtime(value, "chartRuntime"))
+                .transpose()?
+                .flatten()
+                .unwrap_or(DEFAULT_CHART_RUNTIME);
             if let Some(chart_options) = operation.get("chartOptions") {
-                validate_chart_options(chart_options)?;
+                validate_chart_options(chart_options, chart_runtime)?;
             }
         }
         "add_module" => {
-            if operation.get("module").is_none() {
+            let Some(module) = operation.get("module") else {
                 return Err(anyhow!("add_module must include module"));
-            }
+            };
+            validate_module_contract(module)?;
         }
         "reorder_modules" => {
             if !operation.get("order").is_some_and(Value::is_array) {
@@ -203,6 +213,8 @@ fn normalize_static_page_operation(operation: &mut Value) {
     rename_key(object, "visualization_type", "visualizationType");
     rename_key(object, "data_binding", "dataBinding");
     rename_key(object, "chart_options", "chartOptions");
+    rename_key(object, "chart_runtime", "chartRuntime");
+    rename_key(object, "runtime", "chartRuntime");
     rename_key(object, "model_summary", "modelSummary");
     rename_key(object, "queue_position", "queuePosition");
     rename_key(object, "queue_message", "queueMessage");
@@ -212,6 +224,8 @@ fn normalize_static_page_operation(operation: &mut Value) {
         rename_key(patch, "data_label", "dataLabel");
         rename_key(patch, "data_binding", "dataBinding");
         rename_key(patch, "chart_options", "chartOptions");
+        rename_key(patch, "chart_runtime", "chartRuntime");
+        rename_key(patch, "runtime", "chartRuntime");
         if let Some(data_binding) = patch.get_mut("dataBinding").and_then(Value::as_object_mut) {
             normalize_data_binding_object(data_binding);
         }
@@ -220,10 +234,30 @@ fn normalize_static_page_operation(operation: &mut Value) {
             .and_then(Value::as_object_mut)
         {
             rename_key(visualization, "chart_options", "chartOptions");
+            rename_key(visualization, "chart_runtime", "chartRuntime");
+            rename_key(visualization, "runtime", "chartRuntime");
         }
     }
     if let Some(data_binding) = object.get_mut("dataBinding").and_then(Value::as_object_mut) {
         normalize_data_binding_object(data_binding);
+    }
+    if let Some(module) = object.get_mut("module").and_then(Value::as_object_mut) {
+        rename_key(module, "data_label", "dataLabel");
+        rename_key(module, "data_binding", "dataBinding");
+        rename_key(module, "chart_options", "chartOptions");
+        rename_key(module, "chart_runtime", "chartRuntime");
+        rename_key(module, "runtime", "chartRuntime");
+        if let Some(data_binding) = module.get_mut("dataBinding").and_then(Value::as_object_mut) {
+            normalize_data_binding_object(data_binding);
+        }
+        if let Some(visualization) = module
+            .get_mut("visualization")
+            .and_then(Value::as_object_mut)
+        {
+            rename_key(visualization, "chart_options", "chartOptions");
+            rename_key(visualization, "chart_runtime", "chartRuntime");
+            rename_key(visualization, "runtime", "chartRuntime");
+        }
     }
 }
 
@@ -250,6 +284,7 @@ fn validate_update_module_patch(operation: &Value) -> Result<()> {
                 | "dataBinding"
                 | "visualization"
                 | "chartOptions"
+                | "chartRuntime"
                 | "layout"
         ) {
             return Err(anyhow!("unsupported update_module patch field: {key}"));
@@ -271,8 +306,20 @@ fn validate_update_module_patch(operation: &Value) -> Result<()> {
     if let Some(visualization) = object.get("visualization") {
         validate_visualization_patch(visualization)?;
     }
+    let chart_runtime = object
+        .get("chartRuntime")
+        .map(|value| validate_chart_runtime(value, "patch.chartRuntime"))
+        .transpose()?
+        .flatten()
+        .or_else(|| {
+            object
+                .get("visualization")
+                .and_then(|visualization| visualization.get("chartRuntime"))
+                .and_then(Value::as_str)
+        })
+        .unwrap_or(DEFAULT_CHART_RUNTIME);
     if let Some(chart_options) = object.get("chartOptions") {
-        validate_chart_options(chart_options)?;
+        validate_chart_options(chart_options, chart_runtime)?;
     }
 
     Ok(())
@@ -323,7 +370,10 @@ fn validate_visualization_patch(value: &Value) -> Result<()> {
         return Err(anyhow!("visualization must be an object"));
     };
     for key in object.keys() {
-        if !matches!(key.as_str(), "type" | "label" | "chartOptions") {
+        if !matches!(
+            key.as_str(),
+            "type" | "label" | "chartRuntime" | "chartOptions"
+        ) {
             return Err(anyhow!("unsupported visualization field: {key}"));
         }
     }
@@ -337,25 +387,255 @@ fn validate_visualization_patch(value: &Value) -> Result<()> {
     if let Some(label) = object.get("label") {
         validate_optional_string(label, "visualization.label")?;
     }
+    let chart_runtime = object
+        .get("chartRuntime")
+        .map(|value| validate_chart_runtime(value, "visualization.chartRuntime"))
+        .transpose()?
+        .flatten()
+        .unwrap_or(DEFAULT_CHART_RUNTIME);
     if let Some(chart_options) = object.get("chartOptions") {
-        validate_chart_options(chart_options)?;
+        validate_chart_options(chart_options, chart_runtime)?;
     }
     Ok(())
 }
 
-fn validate_chart_options(value: &Value) -> Result<()> {
+fn validate_module_contract(value: &Value) -> Result<()> {
     let Some(object) = value.as_object() else {
-        return Err(anyhow!("chartOptions must be an object"));
+        return Err(anyhow!("module must be an object"));
     };
     for key in object.keys() {
         if !matches!(
             key.as_str(),
-            "showLegend" | "showAxis" | "valueFormat" | "dataKey" | "categoryKey" | "seriesKey"
+            "id" | "role"
+                | "title"
+                | "content"
+                | "dataLabel"
+                | "dataBinding"
+                | "data_binding"
+                | "visualization"
+                | "chartOptions"
+                | "chartRuntime"
+                | "layout"
+                | "data"
+                | "values"
+                | "rows"
+                | "items"
+                | "sampleData"
+                | "sample_data"
+        ) {
+            return Err(anyhow!("unsupported module field: {key}"));
+        }
+    }
+    for key in ["id", "role", "title", "content", "dataLabel"] {
+        if let Some(value) = object.get(key) {
+            validate_optional_string(value, &format!("module.{key}"))?;
+        }
+    }
+    if let Some(data_binding) = object
+        .get("dataBinding")
+        .or_else(|| object.get("data_binding"))
+    {
+        validate_data_binding(data_binding)?;
+    }
+    if let Some(visualization) = object.get("visualization") {
+        validate_visualization_patch(visualization)?;
+    }
+    let chart_runtime = object
+        .get("chartRuntime")
+        .map(|value| validate_chart_runtime(value, "module.chartRuntime"))
+        .transpose()?
+        .flatten()
+        .or_else(|| {
+            object
+                .get("visualization")
+                .and_then(|visualization| visualization.get("chartRuntime"))
+                .and_then(Value::as_str)
+        })
+        .unwrap_or(DEFAULT_CHART_RUNTIME);
+    if let Some(chart_options) = object.get("chartOptions") {
+        validate_chart_options(chart_options, chart_runtime)?;
+    }
+    Ok(())
+}
+
+fn validate_chart_runtime<'a>(value: &'a Value, field_name: &str) -> Result<Option<&'a str>> {
+    if value.is_null() {
+        return Ok(None);
+    }
+    let Some(runtime) = value
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Err(anyhow!("{field_name} must be a supported chart runtime"));
+    };
+    if is_supported_chart_runtime(runtime) {
+        Ok(Some(runtime))
+    } else {
+        Err(anyhow!("unsupported static page chart runtime: {runtime}"))
+    }
+}
+
+fn validate_chart_options(value: &Value, chart_runtime: &str) -> Result<()> {
+    let Some(object) = value.as_object() else {
+        return Err(anyhow!("chartOptions must be an object"));
+    };
+    validate_chart_json_value(value, 0)?;
+    if chart_runtime == ADVANCED_CHART_RUNTIME {
+        return validate_echarts_options(object);
+    }
+    for key in object.keys() {
+        if !matches!(
+            key.as_str(),
+            "showLegend"
+                | "showAxis"
+                | "valueFormat"
+                | "dataKey"
+                | "categoryKey"
+                | "labelKey"
+                | "valueKey"
+                | "seriesKey"
+                | "chartType"
         ) {
             return Err(anyhow!("unsupported chartOptions field: {key}"));
         }
     }
     Ok(())
+}
+
+fn validate_echarts_options(object: &Map<String, Value>) -> Result<()> {
+    for (key, value) in object {
+        if !matches!(
+            key.as_str(),
+            "animation"
+                | "aria"
+                | "backgroundColor"
+                | "color"
+                | "dataset"
+                | "grid"
+                | "legend"
+                | "series"
+                | "title"
+                | "tooltip"
+                | "xAxis"
+                | "yAxis"
+                | "radiusAxis"
+                | "angleAxis"
+                | "polar"
+                | "radar"
+                | "visualMap"
+        ) {
+            return Err(anyhow!("unsupported ECharts chartOptions field: {key}"));
+        }
+        if key == "series" {
+            validate_echarts_series(value)?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_echarts_series(value: &Value) -> Result<()> {
+    let series = match value {
+        Value::Array(items) => items.as_slice(),
+        Value::Object(_) => std::slice::from_ref(value),
+        _ => {
+            return Err(anyhow!(
+                "ECharts chartOptions.series must be an object or array"
+            ))
+        }
+    };
+    for item in series {
+        let Some(object) = item.as_object() else {
+            return Err(anyhow!("ECharts chartOptions.series items must be objects"));
+        };
+        let Some(series_type) = object.get("type").and_then(Value::as_str) else {
+            return Err(anyhow!("ECharts series.type is required"));
+        };
+        if !matches!(
+            series_type,
+            "bar" | "line" | "pie" | "scatter" | "gauge" | "radar" | "heatmap" | "treemap"
+        ) {
+            return Err(anyhow!("unsupported ECharts series type: {series_type}"));
+        }
+    }
+    Ok(())
+}
+
+fn validate_chart_json_value(value: &Value, depth: usize) -> Result<()> {
+    if depth > MAX_CHART_OPTIONS_DEPTH {
+        return Err(anyhow!("chartOptions nesting is too deep"));
+    }
+    match value {
+        Value::String(text) => {
+            if chart_string_is_unsafe(text) {
+                return Err(anyhow!("chartOptions contains unsafe string value"));
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                validate_chart_json_value(item, depth + 1)?;
+            }
+        }
+        Value::Object(object) => {
+            for (key, item) in object {
+                if chart_option_key_is_unsafe(key) {
+                    return Err(anyhow!("chartOptions contains unsafe key: {key}"));
+                }
+                validate_chart_json_value(item, depth + 1)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn chart_option_key_is_unsafe(key: &str) -> bool {
+    let lower = key.to_ascii_lowercase();
+    matches!(
+        lower.as_str(),
+        "__proto__" | "prototype" | "constructor" | "renderitem"
+    ) || lower.starts_with("on")
+}
+
+fn chart_string_is_unsafe(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    lower.contains("javascript:")
+        || lower.contains("data:text/html")
+        || lower.contains("http://")
+        || lower.contains("https://")
+        || lower.contains("@import")
+        || lower.contains("expression(")
+        || lower.contains("onerror=")
+        || lower.contains("onclick=")
+        || lower.contains("onload=")
+        || contains_html_like_tag(&lower)
+}
+
+fn contains_html_like_tag(value: &str) -> bool {
+    let chars = value.chars().collect::<Vec<_>>();
+    let mut index = 0;
+    while index < chars.len() {
+        if chars[index] == '<' {
+            let mut next = index + 1;
+            while next < chars.len() && chars[next].is_whitespace() {
+                next += 1;
+            }
+            if next < chars.len() && chars[next] == '/' {
+                next += 1;
+            }
+            while next < chars.len() && chars[next].is_whitespace() {
+                next += 1;
+            }
+            if next < chars.len()
+                && chars[next].is_ascii_alphabetic()
+                && chars[next..].iter().any(|candidate| *candidate == '>')
+            {
+                return true;
+            }
+        }
+        index += 1;
+    }
+    false
 }
 
 fn rename_key(object: &mut Map<String, Value>, from: &str, to: &str) {
@@ -422,6 +702,13 @@ fn is_supported_visualization_type(visualization_type: &str) -> bool {
     )
 }
 
+fn is_supported_chart_runtime(chart_runtime: &str) -> bool {
+    matches!(
+        chart_runtime,
+        DEFAULT_CHART_RUNTIME | ADVANCED_CHART_RUNTIME
+    )
+}
+
 fn contains_unsafe_key(value: &Value) -> bool {
     match value {
         Value::Object(object) => object.iter().any(|(key, value)| {
@@ -441,8 +728,9 @@ fn build_provider_input(request: &StaticPageIntentRequest) -> String {
             "Schema: {\"summary\":\"short Chinese summary\",\"operations\":[StaticPageDraftOperation...]}",
             "Do not answer the user directly. Do not include markdown fences.",
             "Allowed operation types: update_module, add_module, remove_module, move_module, resize_module, change_visualization, change_data_binding, reorder_modules, change_style_direction, refresh_summary, queue_image_job, update_image_job_status, mark_preview_ready, confirm_preview, reset_image_job, request_final_render.",
-            "For module edits prefer update_module.patch with title, content, dataBinding, visualization, chartOptions, and layout.",
-            "For data binding use dataBinding={type,label,sourceId,fieldPath,aggregation,evidenceIds}. For charts use visualization={type,label,chartOptions}.",
+            "For module edits prefer update_module.patch with title, content, dataBinding, visualization, chartRuntime, chartOptions, and layout.",
+            "For data binding use dataBinding={type,label,sourceId,fieldPath,aggregation,evidenceIds}. For charts use visualization={type,label,chartRuntime,chartOptions}.",
+            "chartRuntime must be deterministic or echarts. Use echarts only for advanced plain-JSON ECharts options; never output functions, HTML, URLs, javascript:, renderItem, or event handler keys.",
             "Prefer fieldPath values from draft_payload.dataSnapshot.field_candidates or draft_payload.data_snapshot.field_candidates when they exist.",
             "Use only visible selected_scope and supplied evidence. Never invent private data."
         ],
@@ -872,6 +1160,72 @@ mod tests {
 
         assert!(unknown_patch_field.is_err());
         assert!(invalid_chart.is_err());
+    }
+
+    #[test]
+    fn operation_sanitizer_accepts_safe_echarts_runtime_and_rejects_executable_options() {
+        let operations = sanitize_static_page_operations(vec![json!({
+            "type": "update_module",
+            "targetModuleId": "trend",
+            "patch": {
+                "visualization": {
+                    "type": "bar-chart",
+                    "chartRuntime": "echarts",
+                    "chartOptions": {
+                        "tooltip": { "trigger": "axis" },
+                        "xAxis": { "type": "category" },
+                        "yAxis": { "type": "value" },
+                        "series": [{
+                            "type": "bar",
+                            "name": "订单金额",
+                            "data": [1200, 1380, 1510]
+                        }]
+                    }
+                }
+            }
+        })])
+        .expect("safe ECharts config should sanitize");
+
+        assert_eq!(
+            operations[0]["patch"]["visualization"]["chartRuntime"],
+            json!("echarts")
+        );
+        assert_eq!(
+            operations[0]["patch"]["visualization"]["chartOptions"]["series"][0]["type"],
+            json!("bar")
+        );
+
+        let executable_option = sanitize_static_page_operations(vec![json!({
+            "type": "update_module",
+            "targetModuleId": "trend",
+            "patch": {
+                "visualization": {
+                    "type": "bar-chart",
+                    "chartRuntime": "echarts",
+                    "chartOptions": {
+                        "series": [{
+                            "type": "custom",
+                            "renderItem": "function () { return {}; }"
+                        }]
+                    }
+                }
+            }
+        })]);
+        let unsafe_url = sanitize_static_page_operations(vec![json!({
+            "type": "change_visualization",
+            "targetModuleId": "trend",
+            "visualizationType": "bar-chart",
+            "chartRuntime": "echarts",
+            "chartOptions": {
+                "series": [{
+                    "type": "bar",
+                    "data": ["https://example.com/track"]
+                }]
+            }
+        })]);
+
+        assert!(executable_option.is_err());
+        assert!(unsafe_url.is_err());
     }
 
     #[test]
