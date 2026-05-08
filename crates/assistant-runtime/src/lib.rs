@@ -3,6 +3,20 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashSet;
 
+const MEDIA_HINTS: &[&str] = &[
+    "音视频",
+    "音频",
+    "视频",
+    "录音",
+    "转写",
+    "字幕",
+    "会议",
+    "访谈",
+    "关键帧",
+    "ocr",
+    "OCR",
+];
+
 const BUSINESS_HINTS: &[(&str, &[&str])] = &[
     (
         "订单",
@@ -37,6 +51,10 @@ const BUSINESS_HINTS: &[(&str, &[&str])] = &[
             "网页", "采集", "官网", "竞品", "新闻", "页面", "站点", "爬取", "抓取",
         ],
     ),
+    ("音视频", MEDIA_HINTS),
+    ("录音", MEDIA_HINTS),
+    ("视频", MEDIA_HINTS),
+    ("会议", MEDIA_HINTS),
 ];
 
 const CONVERSATION_HINTS: &[&str] = &[
@@ -82,8 +100,30 @@ const REPORT_HINTS: &[&str] = &[
 ];
 
 const DATA_QUESTION_HINTS: &[&str] = &[
-    "分析", "总结", "趋势", "原因", "风险", "机会", "对比", "明细", "指标", "数据", "检索", "查找",
+    "分析",
+    "总结",
+    "趋势",
+    "原因",
+    "风险",
+    "机会",
+    "对比",
+    "明细",
+    "指标",
+    "数据",
+    "检索",
+    "查找",
     "引用",
+    "音视频",
+    "音频",
+    "视频",
+    "录音",
+    "转写",
+    "字幕",
+    "会议",
+    "访谈",
+    "关键帧",
+    "ocr",
+    "OCR",
 ];
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -458,6 +498,26 @@ mod tests {
         assert_eq!(plan.candidates[0].id, orders.id.to_string());
         assert_eq!(plan.selected_scope["mode"], json!("preselected"));
         assert_eq!(plan.intent, "data_question");
+    }
+
+    #[test]
+    fn media_prompt_preselects_media_dataset() {
+        let media = dataset("会议录音", "meeting-media");
+        let plan = plan_scope(ScopePlannerInput {
+            prompt: "这段录音讲了什么，帮我提炼重点",
+            visible_datasets: &[dataset("订单", "orders"), media.clone()],
+            selected_dataset_id: None,
+            conversation_memory_available: false,
+        });
+
+        assert_eq!(plan.candidates.len(), 1);
+        assert_eq!(plan.candidates[0].id, media.id.to_string());
+        assert_eq!(plan.selected_scope["mode"], json!("preselected"));
+        assert_eq!(plan.intent, "data_question");
+        assert_eq!(
+            plan.selected_scope["supply_policy"]["retrievalPolicy"],
+            json!("standard")
+        );
     }
 
     #[test]

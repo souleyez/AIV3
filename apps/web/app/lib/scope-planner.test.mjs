@@ -41,6 +41,26 @@ test('scope planner preselects matching visible dataset when none is selected', 
   assert.equal(plan.supplyStrategy.retrievalPolicy, 'standard');
 });
 
+test('scope planner preselects media dataset for audio and video prompts', () => {
+  const plan = planAssistantScope({
+    prompt: '这段录音讲了什么，帮我提炼重点',
+    datasets: [
+      ...datasets,
+      {
+        id: 'dataset-media',
+        key: 'meeting-media',
+        title: '会议录音',
+        description: '上传的音频、视频、转写和关键帧 OCR 资料',
+      },
+    ],
+  });
+
+  assert.equal(selectPlannerDatasetId(plan), 'dataset-media');
+  assert.equal(plan.intent, 'data_question');
+  assert.equal(plan.supplyStrategy.retrievalPolicy, 'standard');
+  assert.match(plan.hint, /会议录音/);
+});
+
 test('scope planner can include conversation memory without forcing dataset retrieval', () => {
   const plan = planAssistantScope({
     prompt: '继续按刚才那版改一下',
