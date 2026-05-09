@@ -6,7 +6,7 @@
 
 **Architecture:** V3 remains the control plane and source of truth: PostgreSQL owns identity, dataset visibility, AssistantRun state, memory scope, workflow state, and artifacts. The assistant supplies model context, evidence, tools, and state but does not locally compose final answers. Static-page generation, reports, parsing, retrieval, and media understanding stay as V3 product capabilities; Codex Host is an external audited worker, not a replacement for V3's API, data plane, model gateway, or worker plane.
 
-**Tech Stack:** Next.js 16 / React 19 in `apps/web`; `react-grid-layout` for desktop module layout; `@dnd-kit` for mobile vertical ordering; Apache ECharts for advanced chart/runtime parity; deterministic HTML/SVG rendering for export-safe fallback; Rust crates `platform-api`, `assistant-runtime`, `llm-gateway`, `static-page-runtime`, `static-page-worker`, `static-page-renderer`, `ingest-worker`, `retrieval-worker`, `memory-worker`, `document-vlm-runtime`, `codex-host-agent`; PostgreSQL 17.9 target; Cloudflare/Codex image queue; MiniMax VLM/media capability probes; OpenClaw only as optional legacy sidecar.
+**Tech Stack:** Next.js 16 / React 19 in `apps/web`; `react-grid-layout` for desktop module layout; `@dnd-kit` for mobile vertical ordering; Apache ECharts for advanced chart/runtime parity; deterministic HTML/SVG rendering for export-safe fallback; sandboxed HTML artifact renderer for task reports/planning handoffs/lightweight editors; Rust crates `platform-api`, `assistant-runtime`, `llm-gateway`, `static-page-runtime`, `static-page-worker`, `static-page-renderer`, `ingest-worker`, `retrieval-worker`, `memory-worker`, `document-vlm-runtime`, `codex-host-agent`; PostgreSQL 17.9 target; Cloudflare/Codex image queue; MiniMax VLM/media capability probes; OpenClaw only as optional legacy sidecar.
 
 ---
 
@@ -34,6 +34,7 @@ V3 is not a generic file manager and not a standalone page builder. It is a data
 - Let the model choose retrieval/tool actions through V3 validation.
 - Generate static-page/report artifacts inside the main assistant workspace.
 - Let users adjust modules by natural language and lightweight direct manipulation.
+- Open safe HTML artifacts for planning handoff, execution reports, code review summaries, and lightweight JSON-patch editors.
 - Preserve finished outputs and drafts in the right shelf.
 - Keep permissions, memory, and artifacts scoped to user/account/local-key visibility.
 
@@ -47,6 +48,7 @@ V3 is not a generic file manager and not a standalone page builder. It is a data
 - Static-page planning lives in the main workspace, not a separate popup.
 - The right panel remains drafts and finished outputs.
 - Module-level editability is a core feature, not a nice-to-have.
+- HTML artifacts must be sandboxed V3-owned render templates. Do not display raw provider/model HTML with scripts, remote assets, secrets, queue credentials, or direct database actions.
 - Account/auth work must never store raw local keys, OTP codes, provider tokens, or session cookie values.
 - Codex Host must not run on this developer workstation for real execution. Real execution validation is only for the jump host or later Mac host.
 - OpenClaw is optional and should not distract from the product mainline unless a concrete bug appears.
@@ -82,7 +84,9 @@ Use these six modules for all future design and implementation decisions.
 
 Owns assistant shell, main workspace, dataset display, mobile interactions, module editing UI, static-page/report views, and right shelf.
 
-Does not own model routing, dataset visibility decisions, direct queue access, database access, or Codex Host flags.
+Also owns safe artifact viewers for static-page handoff previews, Codex execution reports, code review/project inventory summaries, and lightweight HTML editors that emit JSON patch requests back to V3.
+
+Does not own model routing, dataset visibility decisions, direct queue access, database access, Codex Host flags, or execution of arbitrary HTML/JavaScript from providers.
 
 ### 2. V3 Control Plane
 
@@ -111,6 +115,8 @@ It is not a browser API, model gateway, memory authority, permission authority, 
 ### 6. Data / Artifact Plane
 
 Owns PostgreSQL, object storage assets, vector indexes, analytical files, published static-page/report artifacts, migrations, and backup/restore discipline.
+
+Also owns durable HTML artifact records, manifests, provenance, versioning, and export packages. HTML artifacts are products of trusted V3 templates plus sanitized data, not arbitrary browser documents.
 
 Fresh production-like environments target PostgreSQL 17.9.
 
@@ -144,7 +150,26 @@ Continue improving supply quality, not UI form complexity:
 - Media detail API for transcript windows, scenes, keyframes, OCR snippets, and provider evidence.
 - No foreground parsing beyond save/preclassify/register/enqueue.
 
-### Priority 3: Account/Auth Maintenance Only
+### Priority 3: Safe HTML Artifact Layer
+
+This is a shared product surface, not a replacement for the static-page renderer.
+
+Use the idea behind [HTML Effectiveness](https://thariqs.github.io/html-effectiveness/#code-review) as a pattern reference: self-contained HTML can be an excellent review/report medium when it is generated from trusted templates, sandboxed, and paired with structured data.
+
+V3 should use this layer for:
+
+- Codex Host execution reports and step summaries.
+- Static-page planning handoff pages that show module layout, evidence, missing-data warnings, and next actions.
+- Code review/project inventory pages for internal development workflows.
+- Lightweight temporary editors that collect edits and send JSON patch operations back to V3.
+
+Do not use this layer for:
+
+- Raw model-generated browser apps.
+- Remote scripts, remote CSS, tracking pixels, provider tokens, or direct database/queue operations.
+- Customer-facing final static-page delivery when the deterministic static-page renderer is the correct product artifact.
+
+### Priority 4: Account/Auth Maintenance Only
 
 Account work is currently paused after second-round hardening.
 
@@ -157,7 +182,7 @@ Only fix:
 
 Do not start team sharing, robot ownership, admin audit UI, or deep encryption recovery until product mainline is stable.
 
-### Priority 4: Codex Host / Model Proxy
+### Priority 5: Codex Host / Model Proxy
 
 Continue as a sidecar execution-kernel track, not as the product mainline.
 
@@ -176,11 +201,30 @@ Next only after product mainline slices are not blocked:
 - Jump-host/Mac-host real execution validation.
 - Internal model-proxy facade only when `llm-gateway` extraction is justified.
 
-### Priority 5: OpenClaw Frozen
+### Priority 6: OpenClaw Frozen
 
 OpenClaw optional provider/stubs completed their first useful pass.
 
 Do not continue OpenClaw as a main execution-kernel route.
+
+## Overall Architecture Review
+
+The project should stay split into two tracks:
+
+- Product track: assistant context supply, dataset/RAG/media quality, static-page planning/editing, preview image, final render, export package, and right-shelf artifact lifecycle.
+- Execution extension track: Codex Host, model proxy, task memory spaces, and HTML execution reports.
+
+The product track must remain shippable without Codex Host. Codex Host can improve execution depth and local automation later, but V3 must still answer, retrieve, generate reports/static pages, and manage artifacts through its own API/worker/data planes.
+
+The next highest leverage order is:
+
+1. Finish static-page module editability and final-render/export quality.
+2. Finish AssistantRun context supply so the model understands selected/inferred datasets, current draft state, and available report/static-page actions.
+3. Add the safe HTML artifact viewer as a common review/report surface, starting with Codex Host reports and static-page planning handoffs.
+4. Validate real Codex Host execution only on the jump host or later Mac host.
+5. Resume account expansion only when product workflows need it.
+
+The main architectural risk is letting three "builders" compete: static-page renderer, HTML artifact renderer, and Codex Host. The boundary is strict: static-page renderer produces customer report pages, HTML artifact renderer displays review/control artifacts, and Codex Host executes external tasks but does not own V3 product state.
 
 ## Immediate Execution Track
 
@@ -325,9 +369,9 @@ The next development thread should continue with static-page final-render/chart/
 - Modify: `apps/web/app/components/static-page/StaticPageFinalRender.js`
 - Modify: `apps/web/app/components/InsightPanel.js`
 
-**Current implementation note:** Web UI background render submission, main-workspace status card, right-shelf cancel/retry actions, ZIP handoff, data-quality chips, workflow queued/rendering state synchronization, worker manifest failure diagnostics, worker-side cancellation race protection, PostgreSQL-backed worker completion/cancel tests, static-page render retry/dead-letter workflow regression coverage, and API retry/dead-letter output-state coverage are implemented.
+**Current implementation note:** Web UI background render submission, main-workspace status card, right-shelf cancel/retry actions, ZIP handoff, data-quality chips, workflow queued/rendering state synchronization, worker manifest failure diagnostics, worker-side cancellation race protection, PostgreSQL-backed worker completion/cancel tests, static-page render retry/dead-letter workflow regression coverage, and API retry/dead-letter output-state coverage are implemented. Final render manifests and ZIP handoff now also include module-level data quality/runtime diagnostics via `data-quality-report.json`, so handoff reviewers can see each module's title, data binding, sample row count, quality status, fallback mode, and recommended action. The final-render panel shows a compact module-level quality list with localized status/runtime labels, and the right-side static-page shelf surfaces the first problem/fallback modules directly on each draft card.
 
-**Follow-up hardening note:** Frontend draft reset now clears stale preview/final-render artifacts instead of leaving a previously rendered page attached after effect-preview reset. The backend final-render route now rejects confirmed image jobs whose preview contract fingerprint no longer matches the current draft, so stale effect images cannot be reused to produce a new final page. The web final-render panel and action dispatcher now use the same current-confirmed-preview gate before showing or accepting request/retry actions, while still allowing failed/cancelled final renders to restart when the confirmed preview is current. The right-shelf output list surfaces stale drafts as "规划已变更", hides obsolete download/retry actions, and explains that the user must regenerate and reconfirm the effect image.
+**Follow-up hardening note:** Frontend draft reset now clears stale preview/final-render artifacts instead of leaving a previously rendered page attached after effect-preview reset. The backend final-render route now rejects confirmed image jobs whose preview contract fingerprint no longer matches the current draft, so stale effect images cannot be reused to produce a new final page. The web final-render panel and action dispatcher now use the same current-confirmed-preview gate before showing or accepting request/retry actions, while still allowing failed/cancelled final renders to restart when the confirmed preview is current. The right-shelf output list surfaces stale drafts as "规划已变更", hides obsolete download/retry actions, and explains that the user must regenerate and reconfirm the effect image. ReAct first-run and continue-run prompts now warn the model not to call `render_static_page` when `previewStale=true` or `previewStatus=stale`, and stale render attempts return a structured rejected observation that points the model to `submit_static_page_image_preview` instead of repeatedly trying final render.
 
 **Steps:**
 
@@ -349,7 +393,7 @@ The next development thread should continue with static-page final-render/chart/
 
 ### Task 6: Improve Assistant Context Supply For Static Pages
 
-**Status:** In progress. Frontend startup briefing and scope planner expose static-page/report/media capabilities, controlled continuous-action policy, recommended tool actions, selected/inferred visible-scope rules, quality-first context budget, stale static-page preview/export blockers, and compact UI intent/action chips. Backend AssistantRun scope planning now emits the same supply-policy contract, enriches visible dataset candidates from real visible documents/chunks, carries recommended tool actions into context/evidence state, preserves ReAct protocol action names separately, exposes current static-page artifact status/module count/preview stale/final-render state in the weak ReAct planning catalog without leaking module body content, expands detail-first evidence limits for static-page/report/media scopes, falls back to visible document chunks when selected-scope retrieval evidence has not been generated yet, adds model-facing supply briefs so provider prompts distinguish citable supplied items from detail targets, improves local lexical retrieval tokenization with CJK phrase n-grams, aligns AssistantRun query scoring with those CJK phrase tokens, keeps a larger CJK term-weight window for common 6-character business phrases, has regression coverage for CJK phrase weighting plus fallback chunk ranking, and guards ordinary chat so visible datasets do not force supply. Retrieval-worker ranking quality still needs deeper validation on real corpora.
+**Status:** In progress. Frontend startup briefing and scope planner expose static-page/report/media capabilities, controlled continuous-action policy, recommended tool actions, selected/inferred visible-scope rules, quality-first context budget, stale static-page preview/export blockers, and compact UI intent/action chips. Backend AssistantRun scope planning now emits the same supply-policy contract, enriches visible dataset candidates from real visible documents/chunks, carries recommended tool actions into context/evidence state, preserves ReAct protocol action names separately, exposes current static-page artifact status/module count/preview stale/final-render state in the weak ReAct planning catalog without leaking module body content, summarizes the currently opened static-page artifact in provider prompts as an operable skeleton of draft id/module ids/titles/layout/data-binding/chart type instead of raw module body/data rows, promotes vague follow-up prompts such as "继续刚才那版改一下" to active static-page draft context when a draft is open while leaving unrelated ordinary chat alone, lets ReAct explicitly recall hidden local-thread conversation memory even when the original ordinary-chat scope had an empty `conversation_memory` array, expands detail-first evidence limits for static-page/report/media scopes, falls back to visible document chunks when selected-scope retrieval evidence has not been generated yet, adds model-facing supply briefs so provider prompts distinguish citable supplied items from detail targets, aligns retrieval-worker indexing and AssistantRun query scoring on boosted CJK phrase n-grams up to 6 characters so business phrases such as "订单延期风险" and "客户满意度" survive lexical signatures, keeps regression coverage for CJK phrase weighting plus fallback chunk ranking, and guards ordinary chat so visible datasets do not force supply. Retrieval quality still needs deeper validation on larger real customer corpora, but the local lexical baseline is now covered by realistic order/support/FAQ phrase fixtures.
 
 **Files:**
 
@@ -402,7 +446,7 @@ The next development thread should continue with static-page final-render/chart/
 
 ### Task 8: Codex Host Contract Cleanup
 
-**Status:** Completed in current baseline. Shared request/result contracts live in `contracts`, `codex-host-agent` no longer depends on `platform-api`, dry-run/plan-only remain safe defaults, `codex_exec` is still host/profile gated, task memory space ids are first-class in the queue context, and successful worker outputs now serialize through `CodexHostTaskOutputView` with mode-specific AssistantRun events.
+**Status:** Completed in current baseline. Shared request/result contracts live in `contracts`, `codex-host-agent` no longer depends on `platform-api`, dry-run/plan-only remain safe defaults, `codex_exec` is still host/profile gated, task memory space ids are first-class in the queue context, and successful worker outputs now serialize through `CodexHostTaskOutputView` with mode-specific AssistantRun events. Real `codex_exec` now additionally requires `CODEX_HOST_AGENT_TASK_WORKSPACE_ROOT`; the agent creates a task-scoped workspace label from `task_memory_space_id` and runs Codex from that directory instead of the host agent's current working directory.
 
 **Files:**
 
@@ -428,12 +472,49 @@ The next development thread should continue with static-page final-render/chart/
 - Browser traffic still goes only through V3 APIs.
 - No local workstation Codex execution is triggered.
 
+### Task 9: Add Safe HTML Artifact Renderer
+
+**Status:** Planned. This task incorporates the useful pattern from HTML Effectiveness: HTML is valuable as a compact interactive review medium, but V3 must own the templates, manifests, sandbox policy, and JSON-patch bridge.
+
+**Files:**
+
+- Create: `apps/web/app/components/artifacts/HtmlArtifactViewer.js`
+- Create: `apps/web/app/lib/html-artifact-manifest.js`
+- Create: `apps/web/app/lib/html-artifact-manifest.test.mjs`
+- Modify: `apps/web/app/components/InsightPanel.js`
+- Modify: `crates/contracts/src/lib.rs`
+- Modify: `crates/platform-api/src/lib.rs`
+- Modify: `crates/codex-host-agent/src/lib.rs`
+- Modify: `docs/architecture/codex-host-bridge-contract.md`
+
+**Steps:**
+
+1. Define an `html_artifact` manifest with artifact id, owner scope, source type, template id, data refs, provenance, created time, and allowed interaction mode.
+2. Add a web manifest sanitizer that rejects inline scripts, remote URLs, event handlers, form posts, provider tokens, queue secrets, and unknown template ids.
+3. Render artifacts in a sandboxed iframe with no same-origin privilege by default.
+4. Add first templates for `codex_execution_report`, `static_page_planning_handoff`, and `code_review_summary`.
+5. Allow interactive templates to emit only structured JSON patch or action-intent events back to V3.
+6. Add right-shelf open/view support without replacing the main static-page final renderer.
+7. Add Codex Host plan-only/dry-run report output that can attach an HTML artifact manifest.
+8. Run `node --test apps/web/app/lib/html-artifact-manifest.test.mjs`.
+9. Run `Push-Location apps/web; npm run build; Pop-Location`.
+10. Run `cargo test -p contracts html_artifact`.
+11. Run `cargo test -p platform-api html_artifact`.
+
+**Acceptance:**
+
+- HTML artifacts are useful for review/report workflows without becoming arbitrary browser apps.
+- Static-page final delivery still uses the deterministic static-page renderer/export package.
+- Codex Host can return a readable execution report without exposing secrets or needing local workstation execution.
+- Any user edit from an HTML artifact is converted into V3-validated JSON patch/action intent, never direct DOM/database mutation.
+
 ## Verification Commands
 
 Frontend:
 
 ```powershell
 node --test apps/web/app/lib/static-page-draft.test.mjs apps/web/app/lib/assistant-startup-briefing.test.mjs apps/web/app/lib/scope-planner.test.mjs apps/web/app/lib/upload-classifier.test.mjs
+node --test apps/web/app/lib/html-artifact-manifest.test.mjs
 Push-Location apps/web
 npm run build
 Pop-Location
@@ -451,6 +532,8 @@ cargo test -p workflow-definitions
 cargo test -p platform-api static_page_data_snapshot
 cargo test -p platform-api assistant_run_react_static_page
 cargo test -p platform-api assistant_run
+cargo test -p contracts html_artifact
+cargo test -p platform-api html_artifact
 ```
 
 Account/security maintenance:
@@ -476,6 +559,7 @@ cargo check -p codex-host-agent
 - Commit plan-only changes separately.
 - Commit static-page ECharts dependency separately from renderer/export work.
 - Commit frontend module editing separately from backend contract work when possible.
+- Commit safe HTML artifact renderer separately from static-page final-render delivery.
 - Commit Codex Host contract cleanup separately from real host validation.
 - Never commit `.storage`, generated keys, provider tokens, local env files, queue credentials, or smoke-test artifacts.
 - Run `git diff --check` before each commit.
@@ -488,6 +572,7 @@ Use this prompt for the next development thread:
 Continue AI Data Platform V3 from docs/plans/2026-05-07-v3-master-development-plan.md.
 Treat that file as the active master plan; older plans are source references only.
 Product mainline is static-page generation: module editing, data snapshots, ECharts advanced runtime, Cloudflare/Codex preview, and durable final render/export.
+Safe HTML artifacts are a shared review/control surface for Codex reports, planning handoffs, and lightweight JSON-patch editors; do not confuse them with final customer static-page delivery.
 Do not resume account expansion unless fixing a security/access regression.
 Do not run real Codex execution on the local developer workstation; Codex Host real validation is only for the jump host or later Mac host.
 Continue with the next static-page final-render/chart/data-quality slice unless a Codex Host validation blocker is explicitly requested.

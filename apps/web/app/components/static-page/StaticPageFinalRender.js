@@ -7,6 +7,7 @@ import {
 } from '../../lib/static-page-draft';
 import {
   buildStaticPageStandaloneHtml,
+  dataQualityModulesFromManifest,
   dataQualitySummaryFromManifest,
   downloadStaticPageExportZip,
   downloadTextArtifact,
@@ -75,6 +76,17 @@ function workflowExecutionIdFromManifest(manifest) {
     || manifest?.workflow_execution_id
     || manifest?.workflowExecutionId
     || '';
+}
+
+function qualityStatusLabel(status) {
+  if (status === 'confirmed') return '已确认';
+  if (status === 'partial') return '部分确认';
+  if (status === 'missing') return '缺失';
+  return '待确认';
+}
+
+function chartRuntimeLabel(runtime) {
+  return runtime === 'echarts' ? 'ECharts' : '基础静态';
 }
 
 function downloadStaticPageExportPackage(draft, payload, backendHtml) {
@@ -161,12 +173,18 @@ function FinalRenderStatusCard({
 
 function FinalRenderDataQuality({ manifest }) {
   const summary = dataQualitySummaryFromManifest(manifest);
+  const modules = dataQualityModulesFromManifest(manifest);
   if (!hasDataQualitySummary(summary)) {
     return null;
   }
 
   const attentionCount = summary.attentionModules || summary.partialModules + summary.missingModules;
   const readyLabel = attentionCount > 0 ? '仍有模块需要确认' : '数据已全部确认';
+  const visibleModules = modules
+    .filter((module) => attentionCount > 0
+      ? module?.dataQualityStatus !== 'confirmed'
+      : true)
+    .slice(0, 4);
   return (
     <div className={`static-page-final-quality ${attentionCount > 0 ? 'attention' : 'ready'}`}>
       <div>
@@ -178,6 +196,19 @@ function FinalRenderDataQuality({ manifest }) {
         <span>部分 {summary.partialModules}</span>
         <span>缺失 {summary.missingModules}</span>
       </div>
+      {visibleModules.length ? (
+        <div className="static-page-final-quality-modules">
+          {visibleModules.map((module) => (
+            <span key={module.moduleId || module.title}>
+              <b>{module.title || module.moduleId || '未命名模块'}</b>
+              <em>
+                {qualityStatusLabel(module.dataQualityStatus)} · {chartRuntimeLabel(module.chartRuntime)}
+                {module.fallback ? ' · 静态回退' : ''}
+              </em>
+            </span>
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }

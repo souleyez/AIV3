@@ -332,7 +332,7 @@ function promptRequestsAssistantContinue(prompt) {
 }
 
 function promptRequestsStaticPageEdit(prompt) {
-  return /调整|修改|换成|改成|突出|减少|增加|放大|缩小|移动|排序|风格|老板|高层|风险|柱状图|折线图|环图|看板|精简/.test(String(prompt || ''));
+  return /继续|接着|下一步|刚才|上面|之前|这个|那版|草稿|标题|文案|内容|数据|图表|布局|模块|调整|修改|改|换|突出|减少|增加|放大|缩小|移动|排序|风格|确认|效果图|导出|老板|高层|风险|柱状图|折线图|环图|看板|精简/.test(String(prompt || ''));
 }
 
 function readLocalAssistantRunId() {

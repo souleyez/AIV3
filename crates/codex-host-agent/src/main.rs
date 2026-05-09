@@ -218,8 +218,20 @@ fn run_codex_exec(
     task_context: &CodexHostTaskContext,
     decision: &CodexHostExecutionDecision,
 ) -> Result<serde_json::Value> {
-    let output = Command::new(&command_plan.program)
-        .args(command_plan.process_args())
+    if let Some(workspace_path) = command_plan.workspace_path.as_ref() {
+        std::fs::create_dir_all(workspace_path).map_err(|error| {
+            anyhow!(
+                "failed to prepare Codex Host task workspace {}: {error}",
+                workspace_path.display()
+            )
+        })?;
+    }
+    let mut command = Command::new(&command_plan.program);
+    command.args(command_plan.process_args());
+    if let Some(workspace_path) = command_plan.workspace_path.as_ref() {
+        command.current_dir(workspace_path);
+    }
+    let output = command
         .output()
         .map_err(|error| anyhow!("failed to launch Codex Host command: {error}"))?;
     let process_output = CodexProcessOutput {
@@ -479,6 +491,10 @@ mod tests {
             args_without_prompt: vec!["exec".to_string(), "--ephemeral".to_string()],
             prompt: "Inspect the repository safely".to_string(),
             sandbox: "read-only".to_string(),
+            workspace_path: Some(std::path::PathBuf::from(
+                "D:/codex-host/tasks/codex-host-task-test",
+            )),
+            workspace_label: Some("codex-host-task-test".to_string()),
         };
         let decision = CodexHostExecutionDecision {
             mode: CodexHostExecutionMode::CodexExec,
@@ -506,6 +522,10 @@ mod tests {
         assert_eq!(output["codex_invoked"], json!(true));
         assert_eq!(output["profile"]["kind"], json!("codex-native"));
         assert_eq!(output["command_plan"]["prompt_redacted"], json!(true));
+        assert_eq!(
+            output["command_plan"]["workspace_label"],
+            json!("codex-host-task-test")
+        );
         assert_eq!(output["process"]["stdout_excerpt"], json!("ok"));
         assert_eq!(
             output["task_memory_space_id"],

@@ -192,6 +192,8 @@ pub struct CodexHostCommandPlanSummaryView {
     pub args_without_prompt: Vec<String>,
     pub prompt_chars: usize,
     pub sandbox: String,
+    pub workspace_configured: bool,
+    pub workspace_label: Option<String>,
     pub prompt_redacted: bool,
 }
 

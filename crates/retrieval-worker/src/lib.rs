@@ -1,9 +1,9 @@
 use domain_model::{DatasetId, DocumentId};
 use std::collections::{BTreeMap, BTreeSet};
 
-const SIGNATURE_TERM_LIMIT: usize = 8;
+const SIGNATURE_TERM_LIMIT: usize = 12;
 const TERM_WEIGHT_LIMIT: usize = 16;
-const CJK_NGRAM_MAX: usize = 3;
+const CJK_NGRAM_MAX: usize = 6;
 
 #[derive(Clone, Debug)]
 pub struct RetrievalChunkInput {
@@ -174,7 +174,10 @@ fn weighted_terms_for_chunk(
             let document_frequency = *document_frequencies.get(term).unwrap_or(&1) as f64;
             let inverse_document_frequency =
                 ((chunk_count + 1.0) / (document_frequency + 1.0)).ln() + 1.0;
-            (term.clone(), tf_weight * inverse_document_frequency)
+            (
+                term.clone(),
+                tf_weight * inverse_document_frequency * cjk_phrase_boost(term),
+            )
         })
         .collect::<Vec<_>>();
     weighted_terms.sort_by(|left, right| {
@@ -257,6 +260,22 @@ fn is_cjk_token_char(value: char) -> bool {
         value as u32,
         0x4E00..=0x9FFF | 0x3400..=0x4DBF | 0xF900..=0xFAFF
     )
+}
+
+fn cjk_phrase_boost(term: &str) -> f64 {
+    let mut char_count = 0;
+    let mut cjk_count = 0;
+    for value in term.chars() {
+        char_count += 1;
+        if is_cjk_token_char(value) {
+            cjk_count += 1;
+        }
+    }
+    if char_count >= 2 && char_count == cjk_count {
+        1.0 + ((char_count - 1) as f64 * 0.15).min(0.75)
+    } else {
+        1.0
+    }
 }
 
 fn normalize_token(token: &str) -> Option<String> {
@@ -374,6 +393,7 @@ mod tests {
         assert!(tokens.contains(&"增长".to_string()));
         assert!(tokens.contains(&"订单金".to_string()));
         assert!(tokens.contains(&"金额增".to_string()));
+        assert!(tokens.contains(&"订单金额增长".to_string()));
         assert!(tokens.contains(&"revenue".to_string()));
     }
 
@@ -405,7 +425,59 @@ mod tests {
         assert!(phrase_profile.term_weights.contains_key("订单"));
         assert!(phrase_profile.term_weights.contains_key("延期"));
         assert!(phrase_profile.term_weights.contains_key("风险"));
+        assert!(phrase_profile.term_weights.contains_key("订单延期风险"));
         assert!(phrase_profile.recall_score > 0.0);
+    }
+
+    #[test]
+    fn local_lexical_retrieval_indexer_preserves_realistic_business_phrases() {
+        let outcome = LocalLexicalRetrievalIndexer.index(&RetrievalIndexJob {
+            dataset_id: DatasetId::new(),
+            document_id: DocumentId::new(),
+            chunks: vec![
+                RetrievalChunkInput {
+                    chunk_index: 0,
+                    content: "订单延期风险集中在华东仓库交接，超过两天需要赔付提醒。".to_string(),
+                    token_count: 22,
+                },
+                RetrievalChunkInput {
+                    chunk_index: 1,
+                    content: "客户满意度下降主要来自客服响应慢，工单需要升级处理。".to_string(),
+                    token_count: 23,
+                },
+                RetrievalChunkInput {
+                    chunk_index: 2,
+                    content: "企业问答手册记录了员工报销流程和审批制度。".to_string(),
+                    token_count: 18,
+                },
+            ],
+        });
+
+        let order_profile = outcome
+            .chunk_profiles
+            .iter()
+            .find(|profile| profile.chunk_index == 0)
+            .expect("order profile should exist");
+        let support_profile = outcome
+            .chunk_profiles
+            .iter()
+            .find(|profile| profile.chunk_index == 1)
+            .expect("support profile should exist");
+
+        assert!(order_profile.term_weights.contains_key("订单延期风险"));
+        assert!(order_profile
+            .signature_terms
+            .contains(&"订单延期风险".to_string()));
+        assert!(support_profile
+            .term_weights
+            .keys()
+            .any(|term| term.contains("客户满意度")));
+        assert!(support_profile
+            .signature_terms
+            .iter()
+            .any(|term| term.contains("客户满意度")));
+        assert!(order_profile.vector_norm > 0.0);
+        assert!(support_profile.vector_norm > 0.0);
     }
 
     #[test]

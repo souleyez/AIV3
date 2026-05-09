@@ -167,3 +167,24 @@ test('scope planner treats active static page edits as artifact context', () => 
   assert.deepEqual(plan.supplyStrategy.recommendedActions, ['static_page.update_draft']);
   assert.match(plan.hint, /当前静态页：订单经营分析页\(规划已变更\)/);
 });
+
+test('scope planner treats vague follow-up as static page edit when draft is active', () => {
+  const plan = planAssistantScope({
+    prompt: '继续刚才那版改一下',
+    datasets,
+    activeStaticPageDraft: {
+      backendDraftId: 'static-draft-1',
+      objective: '订单经营分析页',
+      status: 'planning',
+      modules: [{ id: 'hero' }],
+    },
+  });
+
+  const draftCandidate = plan.candidates.find((candidate) => candidate.type === 'static_page_draft');
+  assert.equal(plan.intent, 'static_page');
+  assert.equal(selectPlannerDatasetId(plan), '');
+  assert.equal(draftCandidate?.id, 'static-draft-1');
+  assert.equal(draftCandidate?.confidence, 'high');
+  assert.equal(plan.supplyStrategy.currentArtifactPolicy, 'active_static_page_draft');
+  assert.deepEqual(plan.supplyStrategy.recommendedActions, ['static_page.update_draft']);
+});

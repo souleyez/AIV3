@@ -7,6 +7,7 @@ import {
 } from '../lib/static-page-draft';
 import {
   buildStaticPageStandaloneHtml,
+  dataQualityModulesFromManifest,
   dataQualitySummaryFromManifest,
   downloadStaticPageExportZip,
   downloadTextArtifact,
@@ -100,6 +101,21 @@ function staticPageWorkflowExecutionId(draft) {
 
 function staticPageDataQualitySummary(draft) {
   return dataQualitySummaryFromManifest(draft?.finalPage?.assetManifest || {});
+}
+
+function staticPageDataQualityModules(draft) {
+  return dataQualityModulesFromManifest(draft?.finalPage?.assetManifest || {});
+}
+
+function staticPageQualityStatusLabel(status) {
+  if (status === 'confirmed') return '已确认';
+  if (status === 'partial') return '部分';
+  if (status === 'missing') return '缺失';
+  return '待确认';
+}
+
+function staticPageChartRuntimeLabel(runtime) {
+  return runtime === 'echarts' ? 'ECharts' : '静态';
 }
 
 function staticPageRenderAction(draft) {
@@ -494,6 +510,9 @@ export default function InsightPanel({
               const needsDataAttention = dataQuality.attentionModules > 0
                 || dataQuality.partialModules > 0
                 || dataQuality.missingModules > 0;
+              const qualityHighlights = staticPageDataQualityModules(draft)
+                .filter((module) => module?.dataQualityStatus !== 'confirmed' || module?.fallback)
+                .slice(0, 2);
               return (
                 <div
                   key={draft.id}
@@ -521,6 +540,20 @@ export default function InsightPanel({
                         </span>
                       ) : null}
                     </div>
+                    {qualityHighlights.length ? (
+                      <div className="insight-quality-detail">
+                        {qualityHighlights.map((module) => (
+                          <span key={module.moduleId || module.title}>
+                            {truncateText(module.title || module.moduleId || '未命名模块', 14)}
+                            {' · '}
+                            {staticPageQualityStatusLabel(module.dataQualityStatus)}
+                            {' · '}
+                            {staticPageChartRuntimeLabel(module.chartRuntime)}
+                            {module.fallback ? '回退' : ''}
+                          </span>
+                        ))}
+                      </div>
+                    ) : null}
                   </button>
                   {action || rendered ? (
                     <div className="insight-item-actions">

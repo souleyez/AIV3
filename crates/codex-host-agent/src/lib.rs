@@ -6,6 +6,7 @@ use contracts::{
 use domain_model::{AssistantRunId, WorkflowExecution, WorkflowKind};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
 const DEFAULT_PROFILE_ID: &str = "default-dry-run";
@@ -191,6 +192,8 @@ pub struct CodexCommandPlan {
     pub args_without_prompt: Vec<String>,
     pub prompt: String,
     pub sandbox: String,
+    pub workspace_path: Option<PathBuf>,
+    pub workspace_label: Option<String>,
 }
 
 impl CodexCommandPlan {
@@ -206,6 +209,8 @@ impl CodexCommandPlan {
             args_without_prompt: self.args_without_prompt.clone(),
             prompt_chars: self.prompt.chars().count(),
             sandbox: self.sandbox.clone(),
+            workspace_configured: self.workspace_path.is_some(),
+            workspace_label: self.workspace_label.clone(),
             prompt_redacted: true,
         }
     }
@@ -234,6 +239,7 @@ pub struct CodexHostAgentPolicy {
     pub profile: CodexHostProfile,
     pub host_kind: String,
     pub allow_real_codex_exec: bool,
+    pub task_workspace_root: Option<PathBuf>,
 }
 
 impl CodexHostAgentPolicy {
@@ -272,6 +278,11 @@ impl CodexHostAgentPolicy {
             profile,
             host_kind: env_or_default("CODEX_HOST_AGENT_HOST_KIND", DEFAULT_HOST_KIND),
             allow_real_codex_exec: env_bool("CODEX_HOST_AGENT_ALLOW_REAL_CODEX_EXEC", false),
+            task_workspace_root: std::env::var("CODEX_HOST_AGENT_TASK_WORKSPACE_ROOT")
+                .ok()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+                .map(PathBuf::from),
         })
     }
 
@@ -286,11 +297,15 @@ impl CodexHostAgentPolicy {
         let command_plan = match self.mode {
             CodexHostExecutionMode::DryRun => None,
             CodexHostExecutionMode::PlanOnly | CodexHostExecutionMode::CodexExec => {
-                Some(build_codex_command_plan(context, &self.profile)?)
+                Some(build_codex_command_plan(
+                    context,
+                    &self.profile,
+                    self.task_workspace_root.as_deref(),
+                )?)
             }
         };
         if self.mode == CodexHostExecutionMode::CodexExec {
-            self.validate_real_exec_guard()?;
+            self.validate_real_exec_guard(command_plan.as_ref())?;
         }
 
         Ok(CodexHostExecutionDecision {
@@ -300,7 +315,7 @@ impl CodexHostAgentPolicy {
         })
     }
 
-    fn validate_real_exec_guard(&self) -> Result<()> {
+    fn validate_real_exec_guard(&self, command_plan: Option<&CodexCommandPlan>) -> Result<()> {
         if !self.allow_real_codex_exec {
             return Err(anyhow!(
                 "CODEX_HOST_AGENT_ALLOW_REAL_CODEX_EXEC must be true before codex_exec mode can launch Codex"
@@ -315,11 +330,20 @@ impl CodexHostAgentPolicy {
             }
         }
         match self.profile.kind.as_str() {
-            "codex-native" | "codex-compatible-shim" => Ok(()),
+            "codex-native" | "codex-compatible-shim" => {}
             other => Err(anyhow!(
                 "profile kind {other} cannot be used for real Codex execution"
-            )),
+            ))?,
         }
+        let workspace_configured = command_plan
+            .and_then(|plan| plan.workspace_path.as_ref())
+            .is_some();
+        if !workspace_configured {
+            return Err(anyhow!(
+                "codex_exec mode requires CODEX_HOST_AGENT_TASK_WORKSPACE_ROOT for an isolated task workspace"
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -343,6 +367,7 @@ fn context_string(value: &Value, key: &str) -> Result<Option<String>> {
 fn build_codex_command_plan(
     context: &CodexHostTaskContext,
     profile: &CodexHostProfile,
+    task_workspace_root: Option<&Path>,
 ) -> Result<CodexCommandPlan> {
     let prompt = context
         .task
@@ -376,12 +401,44 @@ fn build_codex_command_plan(
         args_without_prompt.push("--model".to_string());
         args_without_prompt.push(model.to_string());
     }
+    let workspace_label = task_workspace_label(context);
+    let workspace_path = task_workspace_root.map(|root| root.join(&workspace_label));
     Ok(CodexCommandPlan {
         program: "codex".to_string(),
         args_without_prompt,
         prompt,
         sandbox,
+        workspace_path,
+        workspace_label: Some(workspace_label),
     })
+}
+
+fn task_workspace_label(context: &CodexHostTaskContext) -> String {
+    let source = context
+        .task_memory_space_id
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("codex-host-task-{}", context.assistant_run_id));
+    let safe = source
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        .trim_matches('-')
+        .chars()
+        .take(96)
+        .collect::<String>();
+    if safe.is_empty() {
+        "codex-host-task".to_string()
+    } else {
+        safe
+    }
 }
 
 fn append_provider_config_args(args: &mut Vec<String>, profile: &CodexHostProfile) -> Result<()> {
@@ -571,6 +628,7 @@ mod tests {
             },
             host_kind: "developer_workstation".to_string(),
             allow_real_codex_exec: false,
+            task_workspace_root: None,
         };
 
         let decision = policy.prepare(&context).expect("decision");
@@ -596,6 +654,7 @@ mod tests {
             },
             host_kind: "developer_workstation".to_string(),
             allow_real_codex_exec: false,
+            task_workspace_root: Some(PathBuf::from("D:/codex-host/tasks")),
         };
 
         let decision = policy.prepare(&context).expect("decision");
@@ -604,6 +663,15 @@ mod tests {
 
         assert_eq!(summary.program, "codex");
         assert_eq!(summary.sandbox, "read-only");
+        assert!(summary.workspace_configured);
+        assert_eq!(
+            summary.workspace_label.as_deref(),
+            Some("codex-host-task-test")
+        );
+        assert_eq!(
+            plan.workspace_path.as_deref(),
+            Some(Path::new("D:/codex-host/tasks/codex-host-task-test"))
+        );
         assert!(summary.prompt_redacted);
         assert_eq!(summary.prompt_chars, "Read the repo and summarize it".len());
         assert_eq!(plan.args_without_prompt.last().unwrap(), "gpt-5.3-codex");
@@ -637,6 +705,7 @@ mod tests {
             },
             host_kind: "developer_workstation".to_string(),
             allow_real_codex_exec: false,
+            task_workspace_root: None,
         };
 
         let error = policy.prepare(&context).expect_err("should reject");
@@ -661,6 +730,7 @@ mod tests {
             },
             host_kind: "developer_workstation".to_string(),
             allow_real_codex_exec: true,
+            task_workspace_root: Some(PathBuf::from("D:/codex-host/tasks")),
         };
 
         let error = policy
@@ -671,7 +741,7 @@ mod tests {
     }
 
     #[test]
-    fn codex_exec_guard_allows_jump_host_profile() {
+    fn codex_exec_requires_task_workspace_root() {
         let context = test_context("inspect_project", Some("Read the repo"));
         let policy = CodexHostAgentPolicy {
             mode: CodexHostExecutionMode::CodexExec,
@@ -687,12 +757,44 @@ mod tests {
             },
             host_kind: "windows_jump".to_string(),
             allow_real_codex_exec: true,
+            task_workspace_root: None,
+        };
+
+        let error = policy
+            .prepare(&context)
+            .expect_err("should require task workspace root");
+
+        assert!(error.to_string().contains("TASK_WORKSPACE_ROOT"));
+    }
+
+    #[test]
+    fn codex_exec_guard_allows_jump_host_profile_with_task_workspace() {
+        let context = test_context("inspect_project", Some("Read the repo"));
+        let policy = CodexHostAgentPolicy {
+            mode: CodexHostExecutionMode::CodexExec,
+            profile: CodexHostProfile {
+                id: "readonly".to_string(),
+                kind: "codex-native".to_string(),
+                model: None,
+                provider_id: None,
+                base_url: None,
+                env_key: None,
+                wire_api: None,
+                allowed_capabilities: vec!["inspect_project".to_string()],
+            },
+            host_kind: "windows_jump".to_string(),
+            allow_real_codex_exec: true,
+            task_workspace_root: Some(PathBuf::from("D:/codex-host/tasks")),
         };
 
         let decision = policy.prepare(&context).expect("decision");
 
         assert_eq!(decision.mode, CodexHostExecutionMode::CodexExec);
-        assert!(decision.command_plan.is_some());
+        let plan = decision.command_plan.expect("command plan");
+        assert_eq!(
+            plan.workspace_path.as_deref(),
+            Some(Path::new("D:/codex-host/tasks/codex-host-task-test"))
+        );
     }
 
     #[test]
@@ -712,6 +814,7 @@ mod tests {
             },
             host_kind: "windows_jump".to_string(),
             allow_real_codex_exec: false,
+            task_workspace_root: None,
         };
 
         let decision = policy.prepare(&context).expect("decision");

@@ -121,7 +121,7 @@ const ASSISTANT_RUN_CONVERSATION_MEMORY_MAX_LIMIT: i64 = 8;
 const ASSISTANT_RUN_SCOPE_SUMMARY_DOC_LIMIT: usize = 24;
 const ASSISTANT_RUN_MODEL_SUPPLY_BRIEF_ITEM_LIMIT: usize = 4;
 const ASSISTANT_RUN_MODEL_SUPPLY_BRIEF_TEXT_LIMIT: usize = 220;
-const ASSISTANT_RUN_LEXICAL_CJK_NGRAM_MAX: usize = 3;
+const ASSISTANT_RUN_LEXICAL_CJK_NGRAM_MAX: usize = 6;
 const ASSISTANT_RUN_CONTINUE_DEFAULT_MAX_STEPS: usize = 3;
 const ASSISTANT_RUN_CONTINUE_MAX_STEPS: usize = 5;
 const ASSISTANT_RUN_REACT_DEFAULT_MAX_STEPS: usize = 3;
@@ -5942,8 +5942,12 @@ async fn create_assistant_run(
         .into_iter()
         .take(5)
         .collect();
-    request.selected_scope = Some(scope_plan.selected_scope.clone());
-    let selected_scope = scope_plan.selected_scope.clone();
+    let selected_scope = assistant_run_scope_with_current_artifact_context(
+        scope_plan.selected_scope.clone(),
+        request.current_artifact.as_ref(),
+        &request.prompt,
+    );
+    request.selected_scope = Some(selected_scope.clone());
     let mut evidence_state = build_assistant_run_evidence_state(
         &state,
         &selected_scope,
@@ -6270,7 +6274,24 @@ async fn continue_assistant_run(
         MODEL_LANE_ASSISTANT_REACT_JSON,
         DEFAULT_ASSISTANT_RUN_RUNTIME_MODEL,
     );
-    let mut evidence_state = run.evidence_state.clone();
+    let selected_scope = assistant_run_scope_with_current_artifact_context(
+        run.selected_scope.clone(),
+        request.current_artifact.as_ref(),
+        &continue_prompt,
+    );
+    let mut evidence_state = if selected_scope == run.selected_scope {
+        run.evidence_state.clone()
+    } else {
+        build_assistant_run_evidence_state(
+            &state,
+            &selected_scope,
+            &continue_prompt,
+            run.local_thread_id.as_deref(),
+            &active_secret_binding_ids,
+            current_user_id,
+        )
+        .await?
+    };
     let react_enabled = assistant_run_react_enabled(&react_runtime.mode);
     let runtime_mode_for_trail = if react_enabled {
         react_runtime.mode.clone()
@@ -6294,6 +6315,7 @@ async fn continue_assistant_run(
                 &run,
                 &request,
                 &continue_prompt,
+                &selected_scope,
                 max_steps,
                 &mut evidence_state,
                 &active_secret_binding_ids,
@@ -6326,13 +6348,15 @@ async fn continue_assistant_run(
                         run.id,
                         continue_prompt,
                         max_steps,
-                        assistant_run_evidence_status_label(&run.evidence_state)
+                        assistant_run_evidence_status_label(&evidence_state)
                     )
                 } else {
                     build_assistant_run_continue_provider_input(
                         &run,
                         &request,
                         &continue_prompt,
+                        &selected_scope,
+                        &evidence_state,
                         max_steps,
                     )
                 };
@@ -6385,6 +6409,14 @@ async fn continue_assistant_run(
         artifact
     }));
 
+    if selected_scope != run.selected_scope {
+        state
+            .storage
+            .assistant_runs()
+            .update_selected_scope(state.tenant_id, run_id, &selected_scope)
+            .await
+            .map_err(ApiError::from_storage)?;
+    }
     state
         .storage
         .assistant_runs()
@@ -7405,9 +7437,10 @@ fn build_assistant_run_provider_input_with_evidence(
         }
     }
     if let Some(current_artifact) = request.current_artifact.as_ref() {
+        let current_artifact_brief = assistant_run_current_artifact_brief(current_artifact);
         sections.push(format!(
             "当前打开产物：{}",
-            serde_json::to_string(current_artifact).unwrap_or_else(|_| "{}".to_string())
+            serde_json::to_string(&current_artifact_brief).unwrap_or_else(|_| "{}".to_string())
         ));
     }
 
@@ -7433,6 +7466,8 @@ fn build_assistant_run_continue_provider_input(
     run: &AssistantRun,
     request: &ContinueAssistantRunRequest,
     continue_prompt: &str,
+    selected_scope: &Value,
+    evidence_state: &Value,
     max_steps: usize,
 ) -> String {
     let mut sections = vec![
@@ -7445,21 +7480,22 @@ fn build_assistant_run_continue_provider_input(
         format!("本次最多连续动作数：{}", max_steps),
         format!(
             "当前选中范围：{}",
-            serde_json::to_string(&run.selected_scope).unwrap_or_else(|_| "{}".to_string())
+            serde_json::to_string(selected_scope).unwrap_or_else(|_| "{}".to_string())
         ),
         format!(
             "供料状态：{}",
-            serde_json::to_string(&run.evidence_state).unwrap_or_else(|_| "{}".to_string())
+            serde_json::to_string(evidence_state).unwrap_or_else(|_| "{}".to_string())
         ),
     ];
-    if let Some(brief) = build_assistant_run_model_supply_brief(&run.evidence_state) {
+    if let Some(brief) = build_assistant_run_model_supply_brief(evidence_state) {
         sections.push(format!("供料综合提示：\n{brief}"));
     }
 
     if let Some(current_artifact) = request.current_artifact.as_ref() {
+        let current_artifact_brief = assistant_run_current_artifact_brief(current_artifact);
         sections.push(format!(
             "当前打开产物：{}",
-            serde_json::to_string(current_artifact).unwrap_or_else(|_| "{}".to_string())
+            serde_json::to_string(&current_artifact_brief).unwrap_or_else(|_| "{}".to_string())
         ));
     }
 
@@ -7951,6 +7987,7 @@ async fn run_assistant_run_react_for_continue(
     run: &AssistantRun,
     request: &ContinueAssistantRunRequest,
     continue_prompt: &str,
+    selected_scope: &Value,
     max_steps: usize,
     initial_evidence_state: &mut Value,
     active_secret_binding_ids: &[SecretBindingId],
@@ -7984,6 +8021,7 @@ async fn run_assistant_run_react_for_continue(
             run,
             request,
             continue_prompt,
+            selected_scope,
             Some(&evidence_state),
             &observations,
             step_index,
@@ -8047,7 +8085,7 @@ async fn run_assistant_run_react_for_continue(
         let result = if let Some(repair) = build_react_protocol_repair_at_step(
             &action,
             &observations,
-            &run.selected_scope,
+            selected_scope,
             &evidence_state,
             step_index,
         ) {
@@ -8056,7 +8094,7 @@ async fn run_assistant_run_react_for_continue(
             execute_assistant_run_react_action(
                 state,
                 &action,
-                &run.selected_scope,
+                selected_scope,
                 &mut evidence_state,
                 request.current_artifact.as_ref(),
                 Some(run.id),
@@ -8196,6 +8234,7 @@ fn build_assistant_run_react_provider_input(
         "如果弱规划目录或供料证据里出现 detailTargets，优先用其中的 document_id 调 read_document_detail；detailTargets 只是深读目标，不是可引用证据。".to_string(),
         "静态页或报表意图且存在数据集时，优先 retrieve_evidence；若需要模块数据、字段、表格/OCR 或原文措辞，继续 read_document_detail，再创建静态页/报表动作。".to_string(),
         "如果当前打开产物是静态页草稿，用户要求修改标题、内容、图表、数据绑定或布局时，优先用 update_static_page_module；Host 只会把操作应用到当前已持久化草稿。".to_string(),
+        "如果弱规划目录或当前打开产物显示静态页 previewStale=true 或 previewStatus=stale，禁止直接 render_static_page；应先 submit_static_page_image_preview，等用户确认新的效果图后再渲染最终页。".to_string(),
         "OpenClaw 和 Codex Host 都是可选外挂能力；openclaw_memory_recall、openclaw_readonly_execution、codex_host_task 可能被 Host 拒绝，不能绕过 V3 选中范围、记忆、任务隔离和执行 allowlist。".to_string(),
         "如果用户表达报表意图，先用 list_report_options；收到该 observation 后，才能用 report_choice，并只在 arguments.choice 填 continue_qa 或 create_report，不能编写报表正文。".to_string(),
         "如果已经可以回答，使用 action_type=final_answer，arguments.content 放最终正文。".to_string(),
@@ -8217,9 +8256,10 @@ fn build_assistant_run_react_provider_input(
         }
     }
     if let Some(current_artifact) = request.current_artifact.as_ref() {
+        let current_artifact_brief = assistant_run_current_artifact_brief(current_artifact);
         sections.push(format!(
             "当前打开产物：{}",
-            serde_json::to_string(current_artifact).unwrap_or_else(|_| "{}".to_string())
+            serde_json::to_string(&current_artifact_brief).unwrap_or_else(|_| "{}".to_string())
         ));
     }
     let history = request
@@ -8249,6 +8289,7 @@ fn build_assistant_run_react_continue_provider_input(
     run: &AssistantRun,
     request: &ContinueAssistantRunRequest,
     continue_prompt: &str,
+    selected_scope: &Value,
     evidence_state: Option<&Value>,
     observations: &[Value],
     step_index: usize,
@@ -8260,7 +8301,7 @@ fn build_assistant_run_react_continue_provider_input(
     let planning_catalog = build_assistant_run_react_planning_catalog(
         &run.startup_briefing,
         &scope_candidates,
-        &run.selected_scope,
+        selected_scope,
         evidence_for_catalog,
     );
     let mut sections = vec![
@@ -8274,6 +8315,7 @@ fn build_assistant_run_react_continue_provider_input(
         "如果弱规划目录或供料证据里出现 detailTargets，优先用其中的 document_id 调 read_document_detail；detailTargets 只是深读目标，不是可引用证据。".to_string(),
         "静态页或报表意图且存在数据集时，优先 retrieve_evidence；若需要模块数据、字段、表格/OCR 或原文措辞，继续 read_document_detail，再创建静态页/报表动作。".to_string(),
         "如果当前打开产物是静态页草稿，用户要求修改标题、内容、图表、数据绑定或布局时，优先用 update_static_page_module；Host 只会把操作应用到当前已持久化草稿。".to_string(),
+        "如果弱规划目录或当前打开产物显示静态页 previewStale=true 或 previewStatus=stale，禁止直接 render_static_page；应先 submit_static_page_image_preview，等用户确认新的效果图后再渲染最终页。".to_string(),
         "OpenClaw 和 Codex Host 都是可选外挂能力；openclaw_memory_recall、openclaw_readonly_execution、codex_host_task 可能被 Host 拒绝，不能绕过 V3 选中范围、记忆、任务隔离和执行 allowlist。".to_string(),
         "如果用户表达报表意图，先用 list_report_options；收到该 observation 后，才能用 report_choice，并只在 arguments.choice 填 continue_qa 或 create_report，不能编写报表正文。".to_string(),
         "如果已经可以回答，使用 action_type=final_answer，arguments.content 放最终正文。".to_string(),
@@ -8299,9 +8341,10 @@ fn build_assistant_run_react_continue_provider_input(
     }
 
     if let Some(current_artifact) = request.current_artifact.as_ref() {
+        let current_artifact_brief = assistant_run_current_artifact_brief(current_artifact);
         sections.push(format!(
             "当前打开产物：{}",
-            serde_json::to_string(current_artifact).unwrap_or_else(|_| "{}".to_string())
+            serde_json::to_string(&current_artifact_brief).unwrap_or_else(|_| "{}".to_string())
         ));
     }
 
@@ -8773,9 +8816,21 @@ fn ensure_react_requested_dataset_is_selected(
 fn ensure_scope_requests_conversation_memory(mut selected_scope: Value) -> Value {
     ensure_json_object(&mut selected_scope);
     if let Some(object) = selected_scope.as_object_mut() {
-        object
-            .entry("conversation_memory".to_string())
-            .or_insert_with(|| json!(["current_thread"]));
+        let should_insert_default = object
+            .get("conversation_memory")
+            .and_then(Value::as_array)
+            .map(|items| {
+                !items.iter().any(|item| {
+                    item.as_str()
+                        .map(str::trim)
+                        .map(|value| !value.is_empty())
+                        .unwrap_or(false)
+                })
+            })
+            .unwrap_or(true);
+        if should_insert_default {
+            object.insert("conversation_memory".to_string(), json!(["current_thread"]));
+        }
     }
     selected_scope
 }
@@ -9359,6 +9414,341 @@ fn assistant_run_artifact_scope_candidates(
         "reason": "当前主区域打开了静态页草稿",
         "source": "active_artifact",
     })]
+}
+
+fn assistant_run_scope_with_current_artifact_context(
+    selected_scope: Value,
+    current_artifact: Option<&Value>,
+    prompt: &str,
+) -> Value {
+    let Some(current_artifact) = current_artifact else {
+        return selected_scope;
+    };
+    if !assistant_run_is_static_page_artifact(current_artifact) {
+        return selected_scope;
+    }
+    let current_intent = assistant_run_scope_intent(&selected_scope);
+    if current_intent != "static_page" && !prompt_touches_current_static_page_artifact(prompt) {
+        return selected_scope;
+    }
+
+    let mut selected_scope = selected_scope;
+    ensure_json_object(&mut selected_scope);
+    let has_dataset = !selected_dataset_ids_from_scope(&selected_scope).is_empty();
+    let has_memory = selected_scope_requests_conversation_memory(&selected_scope);
+    if let Some(object) = selected_scope.as_object_mut() {
+        object.insert("intent".to_string(), json!("static_page"));
+        object.insert(
+            "supply_policy".to_string(),
+            assistant_run_active_static_page_supply_policy(has_dataset, has_memory),
+        );
+    }
+    selected_scope
+}
+
+fn assistant_run_active_static_page_supply_policy(has_dataset: bool, has_memory: bool) -> Value {
+    let mut recommended_actions = Vec::new();
+    if has_dataset {
+        recommended_actions.push("retrieval.search");
+        recommended_actions.push("retrieval.read_detail");
+    }
+    recommended_actions.push("static_page.update_draft");
+
+    json!({
+        "intent": "static_page",
+        "answerPolicy": "model_authored_host_supplied",
+        "currentArtifactPolicy": "active_static_page_draft",
+        "actionPolicy": "model_may_request_controlled_actions_host_validates",
+        "contextBudgetPolicy": if has_dataset || has_memory {
+            "quality_first_token_tolerant"
+        } else {
+            "compact_until_retrieval_needed"
+        },
+        "candidatePolicy": if has_dataset {
+            "selected_or_inferred_visible_datasets_only"
+        } else {
+            "ordinary_chat_without_forced_dataset"
+        },
+        "historyPolicy": if has_memory {
+            "intent_gated_selected"
+        } else {
+            "intent_gated"
+        },
+        "retrievalPolicy": if has_dataset {
+            "detail_first"
+        } else {
+            "not_requested"
+        },
+        "preferDetail": has_dataset,
+        "recommendedActions": recommended_actions,
+        "noFakeData": true,
+    })
+}
+
+fn prompt_touches_current_static_page_artifact(prompt: &str) -> bool {
+    let prompt = prompt.trim();
+    if prompt.is_empty() {
+        return false;
+    }
+    let lower_prompt = prompt.to_ascii_lowercase();
+    [
+        "静态页",
+        "静态页面",
+        "页面规划",
+        "一页",
+        "生成页面",
+        "落地页",
+        "模块",
+        "效果图",
+        "出图",
+        "标题",
+        "文案",
+        "内容",
+        "数据",
+        "图表",
+        "布局",
+        "调整",
+        "修改",
+        "改",
+        "换",
+        "确认",
+        "导出",
+        "继续",
+        "接着",
+        "下一步",
+        "刚才",
+        "上面",
+        "之前",
+        "这个",
+        "那版",
+        "草稿",
+        "柱状图",
+        "折线图",
+        "环图",
+        "看板",
+    ]
+    .iter()
+    .any(|hint| prompt.contains(hint))
+        || ["dashboard", "chart", "kpi", "export"]
+            .iter()
+            .any(|hint| lower_prompt.contains(hint))
+}
+
+fn assistant_run_current_artifact_brief(current_artifact: &Value) -> Value {
+    if assistant_run_is_static_page_artifact(current_artifact) {
+        return assistant_run_static_page_artifact_brief(current_artifact);
+    }
+
+    let mut brief = Map::new();
+    for key in [
+        "type",
+        "kind",
+        "id",
+        "backendId",
+        "backend_id",
+        "status",
+        "title",
+        "label",
+        "name",
+    ] {
+        assistant_run_insert_safe_scalar_field(&mut brief, current_artifact, key, key);
+    }
+
+    if brief.is_empty() {
+        json!({"type": "unknown"})
+    } else {
+        Value::Object(brief)
+    }
+}
+
+fn assistant_run_is_static_page_artifact(current_artifact: &Value) -> bool {
+    matches!(
+        current_artifact
+            .get("type")
+            .or_else(|| current_artifact.get("kind"))
+            .and_then(Value::as_str),
+        Some("static_page_draft" | "static_page")
+    ) || current_artifact.get("backendDraftId").is_some()
+        || current_artifact.get("backend_draft_id").is_some()
+        || current_artifact.get("previewContract").is_some()
+        || current_artifact.get("preview_contract").is_some()
+        || current_artifact.get("finalPage").is_some()
+        || current_artifact.get("final_page").is_some()
+        || current_artifact.get("previewStale").is_some()
+        || current_artifact.get("preview_stale").is_some()
+        || (current_artifact.get("modules").is_some()
+            && (current_artifact.get("styleDirection").is_some()
+                || current_artifact.get("style_direction").is_some()
+                || current_artifact.get("previewStatus").is_some()
+                || current_artifact.get("preview_status").is_some()
+                || current_artifact.get("finalRenderStatus").is_some()
+                || current_artifact.get("final_render_status").is_some()))
+}
+
+fn assistant_run_static_page_artifact_brief(current_artifact: &Value) -> Value {
+    let mut brief = Map::new();
+    brief.insert("type".to_string(), json!("static_page_draft"));
+    if let Some(id) = static_page_artifact_id(current_artifact) {
+        brief.insert("id".to_string(), json!(id));
+    }
+    if let Some(label) = static_page_artifact_label(current_artifact) {
+        brief.insert("label".to_string(), json!(label));
+    }
+    if let Some(status) = static_page_artifact_string(
+        current_artifact,
+        &["status", "backendStatus", "backend_status"],
+    ) {
+        brief.insert("status".to_string(), json!(status));
+    }
+    if let Some(style_direction) =
+        static_page_artifact_string(current_artifact, &["styleDirection", "style_direction"])
+    {
+        brief.insert("styleDirection".to_string(), json!(style_direction));
+    }
+    if let Some(preview_status) = static_page_artifact_preview_status(current_artifact) {
+        brief.insert("previewStatus".to_string(), json!(preview_status));
+    }
+    if let Some(final_status) = static_page_artifact_final_status(current_artifact) {
+        brief.insert("finalRenderStatus".to_string(), json!(final_status));
+    }
+    brief.insert(
+        "moduleCount".to_string(),
+        json!(static_page_artifact_module_count(current_artifact)),
+    );
+    brief.insert(
+        "previewStale".to_string(),
+        json!(static_page_artifact_preview_stale(current_artifact)),
+    );
+
+    let modules = assistant_run_static_page_module_briefs(current_artifact);
+    if !modules.is_empty() {
+        brief.insert("modules".to_string(), Value::Array(modules));
+    }
+
+    Value::Object(brief)
+}
+
+fn assistant_run_static_page_module_briefs(current_artifact: &Value) -> Vec<Value> {
+    let Some(modules) = current_artifact.get("modules").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+
+    modules
+        .iter()
+        .take(24)
+        .enumerate()
+        .filter_map(|(index, module)| {
+            let mut brief = Map::new();
+            brief.insert("index".to_string(), json!(index));
+            for key in [
+                "id",
+                "title",
+                "name",
+                "type",
+                "visualizationType",
+                "visualization_type",
+                "chartType",
+                "chart_type",
+                "chartRuntime",
+                "chart_runtime",
+            ] {
+                assistant_run_insert_safe_scalar_field(&mut brief, module, key, key);
+            }
+
+            if let Some(visualization) = module.get("visualization") {
+                let mut visualization_brief = Map::new();
+                assistant_run_insert_safe_scalar_field(
+                    &mut visualization_brief,
+                    visualization,
+                    "type",
+                    "type",
+                );
+                assistant_run_insert_safe_scalar_field(
+                    &mut visualization_brief,
+                    visualization,
+                    "chartRuntime",
+                    "chartRuntime",
+                );
+                assistant_run_insert_safe_scalar_field(
+                    &mut visualization_brief,
+                    visualization,
+                    "chart_runtime",
+                    "chart_runtime",
+                );
+                if !visualization_brief.is_empty() {
+                    brief.insert(
+                        "visualization".to_string(),
+                        Value::Object(visualization_brief),
+                    );
+                }
+            }
+
+            if let Some(data_binding) = module
+                .get("dataBinding")
+                .or_else(|| module.get("data_binding"))
+            {
+                let mut data_binding_brief = Map::new();
+                for key in [
+                    "type",
+                    "label",
+                    "sourceId",
+                    "source_id",
+                    "fieldPath",
+                    "field_path",
+                    "datasetId",
+                    "dataset_id",
+                ] {
+                    assistant_run_insert_safe_scalar_field(
+                        &mut data_binding_brief,
+                        data_binding,
+                        key,
+                        key,
+                    );
+                }
+                if !data_binding_brief.is_empty() {
+                    brief.insert("dataBinding".to_string(), Value::Object(data_binding_brief));
+                }
+            }
+
+            if let Some(layout) = module.get("layout").and_then(Value::as_object) {
+                let mut layout_brief = Map::new();
+                for key in ["x", "y", "w", "h", "minW", "minH", "maxW", "maxH"] {
+                    if let Some(value) =
+                        layout.get(key).and_then(assistant_run_safe_artifact_scalar)
+                    {
+                        layout_brief.insert(key.to_string(), value);
+                    }
+                }
+                if !layout_brief.is_empty() {
+                    brief.insert("layout".to_string(), Value::Object(layout_brief));
+                }
+            }
+
+            (brief.len() > 1).then_some(Value::Object(brief))
+        })
+        .collect()
+}
+
+fn assistant_run_insert_safe_scalar_field(
+    target: &mut Map<String, Value>,
+    source: &Value,
+    source_key: &str,
+    target_key: &str,
+) {
+    if let Some(value) = source
+        .get(source_key)
+        .and_then(assistant_run_safe_artifact_scalar)
+    {
+        target.insert(target_key.to_string(), value);
+    }
+}
+
+fn assistant_run_safe_artifact_scalar(value: &Value) -> Option<Value> {
+    match value {
+        Value::Bool(_) | Value::Number(_) => Some(value.clone()),
+        Value::String(text) => Some(json!(truncate_scope_candidate_text(text.trim()))),
+        _ => None,
+    }
 }
 
 fn static_page_artifact_string(artifact: &Value, keys: &[&str]) -> Option<String> {
@@ -13032,7 +13422,10 @@ fn lexical_query_term_weights(query: &str) -> BTreeMap<String, f64> {
 
     frequencies
         .into_iter()
-        .map(|(term, count)| (term, 1.0 + count.ln()))
+        .map(|(term, count)| {
+            let boost = lexical_cjk_phrase_boost(&term);
+            (term, (1.0 + count.ln()) * boost)
+        })
         .collect()
 }
 
@@ -13095,6 +13488,22 @@ fn is_cjk_query_token_char(value: char) -> bool {
         value as u32,
         0x4E00..=0x9FFF | 0x3400..=0x4DBF | 0xF900..=0xFAFF
     )
+}
+
+fn lexical_cjk_phrase_boost(term: &str) -> f64 {
+    let mut char_count = 0;
+    let mut cjk_count = 0;
+    for value in term.chars() {
+        char_count += 1;
+        if is_cjk_query_token_char(value) {
+            cjk_count += 1;
+        }
+    }
+    if char_count >= 2 && char_count == cjk_count {
+        1.0 + ((char_count - 1) as f64 * 0.15).min(0.75)
+    } else {
+        1.0
+    }
 }
 
 fn normalize_lexical_query_token(token: &str) -> Option<String> {
@@ -18613,14 +19022,14 @@ impl std::error::Error for ApiError {}
 mod tests {
     use super::*;
     use domain_model::{
-        ChatMessageId, ChatSession, Dataset, DatasetId, DatasetLifecycle, DatasetOutput,
-        DatasetOutputId, DatasetVisibility, DocumentChunk, DocumentChunkId, DocumentChunkState,
-        LlmInvocation, LlmInvocationFinishReason, LlmInvocationId, LlmInvocationMode,
-        LlmInvocationSourceKind, MemoryDirectory, MemoryDirectoryId, PublishedSurface, ReportPlan,
-        ReportPlanAstVersionId, ReportPlanId, ReportPlanStatus, ReportRenderOutput,
-        ReportRenderOutputId, ReportRenderOutputStatus, RetrievalEvidence, RetrievalEvidenceId,
-        SecretBindingId, TenantId, ToolExecution, ToolExecutionId, ToolExecutionSourceKind,
-        ToolExecutionStatus, WorkflowExecutionId, WorkflowStatus,
+        AssistantRun, ChatMessageId, ChatSession, Dataset, DatasetId, DatasetLifecycle,
+        DatasetOutput, DatasetOutputId, DatasetVisibility, DocumentChunk, DocumentChunkId,
+        DocumentChunkState, LlmInvocation, LlmInvocationFinishReason, LlmInvocationId,
+        LlmInvocationMode, LlmInvocationSourceKind, MemoryDirectory, MemoryDirectoryId,
+        PublishedSurface, ReportPlan, ReportPlanAstVersionId, ReportPlanId, ReportPlanStatus,
+        ReportRenderOutput, ReportRenderOutputId, ReportRenderOutputStatus, RetrievalEvidence,
+        RetrievalEvidenceId, SecretBindingId, TenantId, ToolExecution, ToolExecutionId,
+        ToolExecutionSourceKind, ToolExecutionStatus, WorkflowExecutionId, WorkflowStatus,
     };
     use event_bus::{workflow_execution_transition_subject, workflow_task_enqueued_subject};
     use std::io::{Read, Write};
@@ -18841,6 +19250,120 @@ mod tests {
     }
 
     #[test]
+    fn assistant_run_provider_input_summarizes_current_static_page_without_body() {
+        let input = build_assistant_run_provider_input(&CreateAssistantRunRequest {
+            prompt: "把核心判断模块改成更强的 KPI 视觉".to_string(),
+            local_thread_id: Some("browser-thread-1".to_string()),
+            startup_briefing: Some(json!({"productTruth": "智能数据工作台"})),
+            selected_scope: Some(json!({"mode": "ordinary_chat"})),
+            scope_candidates: Vec::new(),
+            context_policy_hint: None,
+            current_artifact: Some(json!({
+                "type": "static_page_draft",
+                "backendDraftId": "draft-1",
+                "objective": "经营分析静态页",
+                "previewStale": true,
+                "modules": [{
+                    "id": "hero",
+                    "title": "核心判断",
+                    "content": "这里是一大段不应该进入模型规划提示的模块正文",
+                    "rows": [{"secret": "raw-row-should-not-leak"}],
+                    "layout": {"x": 0, "y": 0, "w": 6, "h": 2},
+                    "visualization": {
+                        "type": "kpi",
+                        "chartOptions": {"rawOption": "should-not-leak"}
+                    },
+                    "dataBinding": {
+                        "type": "selected_scope",
+                        "label": "订单金额",
+                        "sourceId": "selected_scope",
+                        "fieldPath": "orders.amount"
+                    }
+                }],
+            })),
+            messages: Vec::new(),
+        });
+
+        assert!(input.contains("\"type\":\"static_page_draft\""));
+        assert!(input.contains("\"id\":\"draft-1\""));
+        assert!(input.contains("\"previewStale\":true"));
+        assert!(input.contains("\"id\":\"hero\""));
+        assert!(input.contains("\"title\":\"核心判断\""));
+        assert!(input.contains("\"fieldPath\":\"orders.amount\""));
+        assert!(input.contains("\"x\":0"));
+        assert!(input.contains("\"h\":2"));
+        assert!(!input.contains("一大段不应该进入模型规划提示"));
+        assert!(!input.contains("raw-row-should-not-leak"));
+        assert!(!input.contains("chartOptions"));
+        assert!(!input.contains("should-not-leak"));
+    }
+
+    #[test]
+    fn assistant_run_scope_promotes_active_static_page_followup_intent() {
+        let selected_scope = assistant_run_scope_with_current_artifact_context(
+            json!({
+                "mode": "ordinary_chat",
+                "datasets": [],
+                "conversation_memory": [],
+                "intent": "ordinary_chat",
+                "supply_policy": {
+                    "intent": "ordinary_chat",
+                    "retrievalPolicy": "not_requested"
+                }
+            }),
+            Some(&json!({
+                "type": "static_page_draft",
+                "backendDraftId": "draft-1",
+                "modules": [{"id": "hero", "title": "核心判断"}],
+            })),
+            "继续刚才那版改一下",
+        );
+
+        assert_eq!(selected_scope["intent"], json!("static_page"));
+        assert_eq!(
+            selected_scope["supply_policy"]["currentArtifactPolicy"],
+            json!("active_static_page_draft")
+        );
+        assert_eq!(
+            selected_scope["supply_policy"]["retrievalPolicy"],
+            json!("not_requested")
+        );
+        assert_eq!(
+            selected_scope["supply_policy"]["recommendedActions"],
+            json!(["static_page.update_draft"])
+        );
+    }
+
+    #[test]
+    fn assistant_run_scope_does_not_promote_unrelated_chat_with_active_static_page() {
+        let selected_scope = assistant_run_scope_with_current_artifact_context(
+            json!({
+                "mode": "ordinary_chat",
+                "datasets": [],
+                "conversation_memory": [],
+                "intent": "ordinary_chat",
+                "supply_policy": {
+                    "intent": "ordinary_chat",
+                    "retrievalPolicy": "not_requested"
+                }
+            }),
+            Some(&json!({
+                "type": "static_page_draft",
+                "backendDraftId": "draft-1",
+                "modules": [{"id": "hero", "title": "核心判断"}],
+            })),
+            "帮我写一句温和的欢迎语",
+        );
+
+        assert_eq!(selected_scope["intent"], json!("ordinary_chat"));
+        assert_eq!(
+            selected_scope["supply_policy"]["retrievalPolicy"],
+            json!("not_requested")
+        );
+        assert!(selected_scope["supply_policy"]["currentArtifactPolicy"].is_null());
+    }
+
+    #[test]
     fn assistant_run_provider_input_adds_model_supply_brief() {
         let dataset_id = DatasetId::new();
         let document_id = DocumentId::new();
@@ -18949,6 +19472,118 @@ mod tests {
         assert!(!input.contains("secret-provider-key"));
         assert!(!input.contains("订单正文不该进入规划目录"));
         assert!(!input.contains("订单切片正文不该进入规划目录"));
+    }
+
+    #[test]
+    fn assistant_run_react_provider_input_warns_against_rendering_stale_static_pages() {
+        let input = build_assistant_run_react_provider_input(
+            &CreateAssistantRunRequest {
+                prompt: "继续把这页做成最终静态页".to_string(),
+                local_thread_id: Some("browser-thread-1".to_string()),
+                startup_briefing: Some(json!({"visibleDatasetCount": 0})),
+                selected_scope: Some(json!({"mode": "ordinary_chat"})),
+                scope_candidates: vec![json!({
+                    "type": "static_page_draft",
+                    "id": "draft-1",
+                    "label": "当前静态页：经营简报",
+                    "previewStale": true,
+                    "previewStatus": "stale",
+                    "finalRenderStatus": "rendered",
+                    "content": "模块正文不能进入弱规划目录"
+                })],
+                context_policy_hint: None,
+                current_artifact: Some(json!({
+                    "type": "static_page_draft",
+                    "backendDraftId": "draft-1",
+                    "previewContract": {"status": "stale"},
+                    "modules": [{
+                        "id": "hero",
+                        "title": "核心判断",
+                        "content": "当前打开产物正文不能进入 ReAct 规划提示",
+                        "rows": [{"raw": "current-artifact-row-should-not-leak"}]
+                    }],
+                })),
+                messages: Vec::new(),
+            },
+            Some(&json!({"status": "not_requested", "supplied_items": []})),
+            &[],
+            1,
+            3,
+        );
+
+        assert!(input.contains("previewStale=true"));
+        assert!(input.contains("禁止直接 render_static_page"));
+        assert!(input.contains("submit_static_page_image_preview"));
+        assert!(input.contains("\"previewStale\":true"));
+        assert!(input.contains("\"previewStatus\":\"stale\""));
+        assert!(input.contains("\"id\":\"hero\""));
+        assert!(!input.contains("模块正文不能进入弱规划目录"));
+        assert!(!input.contains("当前打开产物正文不能进入 ReAct 规划提示"));
+        assert!(!input.contains("current-artifact-row-should-not-leak"));
+    }
+
+    #[test]
+    fn assistant_run_react_continue_provider_input_warns_against_stale_static_page_render() {
+        let now = Utc::now();
+        let run = AssistantRun {
+            id: AssistantRunId::new(),
+            tenant_id: TenantId::new(),
+            user_id: None,
+            local_thread_id: Some("browser-thread-1".to_string()),
+            user_prompt: "继续做经营简报静态页".to_string(),
+            startup_briefing: json!({"visibleDatasetCount": 0}),
+            selected_scope: json!({"mode": "ordinary_chat"}),
+            scope_candidates: json!([{
+                "type": "static_page_draft",
+                "id": "draft-1",
+                "label": "当前静态页：经营简报",
+                "previewStale": true,
+                "previewStatus": "stale"
+            }]),
+            context_policy: json!({}),
+            evidence_state: json!({"status": "not_requested"}),
+            service_lane: "assistant_run".to_string(),
+            execution_trail: json!([]),
+            output_artifacts: json!([]),
+            runtime_manifest: json!({}),
+            created_at: now,
+            updated_at: now,
+        };
+        let request = ContinueAssistantRunRequest {
+            prompt: Some("继续生成最终静态页".to_string()),
+            max_steps: Some(2),
+            current_artifact: Some(json!({
+                "type": "static_page_draft",
+                "backendDraftId": "draft-1",
+                "previewContract": {"status": "stale"},
+                "modules": [{
+                    "id": "trend",
+                    "title": "订单趋势",
+                    "content": "继续执行提示不应该携带完整模块正文",
+                    "rows": [{"raw": "continue-current-artifact-row-should-not-leak"}]
+                }]
+            })),
+            messages: Vec::new(),
+        };
+
+        let input = build_assistant_run_react_continue_provider_input(
+            &run,
+            &request,
+            "继续生成最终静态页",
+            &run.selected_scope,
+            Some(&json!({"status": "not_requested"})),
+            &[],
+            1,
+            2,
+        );
+
+        assert!(input.contains("previewStale=true"));
+        assert!(input.contains("禁止直接 render_static_page"));
+        assert!(input.contains("submit_static_page_image_preview"));
+        assert!(input.contains("\"previewStale\":true"));
+        assert!(input.contains("\"id\":\"trend\""));
+        assert!(!input.contains("继续执行提示不应该携带完整模块正文"));
+        assert!(!input.contains("continue-current-artifact-row-should-not-leak"));
     }
 
     #[test]
@@ -19314,6 +19949,31 @@ mod tests {
             }),
             &[],
         ));
+    }
+
+    #[test]
+    fn ensure_scope_requests_conversation_memory_fills_empty_memory_scope() {
+        let memory_scope = ensure_scope_requests_conversation_memory(json!({
+            "mode": "ordinary_chat",
+            "datasets": [],
+            "conversation_memory": [],
+            "intent": "ordinary_chat",
+        }));
+
+        assert_eq!(
+            memory_scope["conversation_memory"],
+            json!(["current_thread"])
+        );
+        assert!(selected_scope_requests_conversation_memory(&memory_scope));
+
+        let existing_scope = ensure_scope_requests_conversation_memory(json!({
+            "mode": "ordinary_chat",
+            "conversation_memory": ["local-thread"],
+        }));
+        assert_eq!(
+            existing_scope["conversation_memory"],
+            json!(["local-thread"])
+        );
     }
 
     #[test]
@@ -22096,6 +22756,94 @@ mod tests {
         .expect("thread conversation memory should list");
         assert_eq!(thread_items.len(), 1);
         assert_eq!(thread_items[0].summary, "用户刚才关注订单风险和客服投诉。");
+    }
+
+    #[tokio::test]
+    async fn react_recall_conversation_memory_supplies_even_when_scope_memory_is_empty() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_MODE", "placeholder");
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping react conversation memory recall test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("react-memory-recall-test-{}", Uuid::new_v4()),
+                "ReAct Memory Recall Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage,
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+
+        let (memory_status, Json(memory_item)) = create_conversation_memory_item(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(CreateConversationMemoryItemRequest {
+                local_thread_id: "react-memory-thread".to_string(),
+                role: ChatMessageRole::User,
+                item_kind: "user_statement".to_string(),
+                summary: "用户刚才要求把经营静态页的趋势模块改成折线图。".to_string(),
+                source_message_refs: json!(["local-message-1"]),
+                artifact_refs: json!([{"type": "static_page_draft", "id": "draft-1"}]),
+                metadata: json!({"source": "browser_summary"}),
+            }),
+        )
+        .await
+        .expect("conversation memory should be created");
+        assert_eq!(memory_status, StatusCode::CREATED);
+        assert_eq!(memory_item.item_kind, "user_statement");
+
+        let action = react_test_action(
+            AssistantRunReActStatus::Act,
+            AssistantRunReactActionType::RecallConversationMemory,
+            json!({}),
+        );
+        let mut evidence_state = json!({"status": "not_requested"});
+        let result = execute_assistant_run_react_action(
+            &state,
+            &action,
+            &json!({
+                "mode": "ordinary_chat",
+                "datasets": [],
+                "conversation_memory": [],
+                "intent": "static_page",
+            }),
+            &mut evidence_state,
+            None,
+            None,
+            "继续刚才那版趋势模块",
+            Some("react-memory-thread"),
+            &[],
+            None,
+        )
+        .await
+        .expect("react memory recall should supply local thread memory");
+
+        assert_eq!(result.observation["status"], json!("completed"));
+        assert_eq!(result.observation["memory_count"], json!(1));
+        assert_eq!(evidence_state["status"], json!("supplied"));
+        assert_eq!(
+            evidence_state["selected_scope"]["conversation_memory"],
+            json!(["current_thread"])
+        );
+        assert_eq!(
+            evidence_state["conversation_memory_items"][0]["summary"],
+            json!("用户刚才要求把经营静态页的趋势模块改成折线图。")
+        );
+        assert_eq!(
+            evidence_state["supplied_items"][0]["type"],
+            json!("conversation_memory_item")
+        );
     }
 
     #[tokio::test]
@@ -27303,6 +28051,13 @@ mod tests {
         }
         assert!(!weights.contains_key("单延"));
         assert!(!weights.contains_key("期风"));
+
+        let phrase_weights = lexical_query_term_weights("订单延期风险");
+        assert!(phrase_weights.contains_key("订单延期风险"));
+        assert!(
+            phrase_weights["订单延期风险"] > phrase_weights["订"],
+            "full business phrase should carry more weight than a single character"
+        );
     }
 
     #[test]

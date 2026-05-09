@@ -509,6 +509,9 @@ async fn render_static_page_for_current_draft(
                 "static_page_image_job_mismatch",
             ));
         }
+        Err(error) if error.payload.code == "static_page_preview_stale" => {
+            return Ok(static_page_preview_stale_react_result(action));
+        }
         Err(error) => return Err(error),
     };
     let render_status =
@@ -736,6 +739,34 @@ fn rejected_react_tool_result(
             "label": assistant_run_react_action_label(&action.action_type),
             "react_action": action.action_type.as_str(),
             "reason": reason,
+            "at": Utc::now(),
+        }),
+        final_answer: None,
+    }
+}
+
+fn static_page_preview_stale_react_result(
+    action: &AssistantRunNextAction,
+) -> AssistantRunReactToolResult {
+    AssistantRunReactToolResult {
+        observation: json!({
+            "status": "rejected",
+            "action_type": action.action_type.as_str(),
+            "actionType": action.action_type.as_str(),
+            "message": "static_page_preview_stale",
+            "denied": [action.action_type.as_str()],
+            "items": [],
+            "limits": {},
+            "reason": "static_page_preview_stale",
+            "recommendedActions": ["submit_static_page_image_preview"],
+            "nextStep": "规划已经改过，旧效果图和最终页不能继续复用。请先重新提交效果图预览，等待用户确认后再制作最终静态页。",
+        }),
+        trail_step: json!({
+            "status": "rejected",
+            "label": "制作最终静态页",
+            "react_action": action.action_type.as_str(),
+            "reason": "static_page_preview_stale",
+            "recommended_action": "submit_static_page_image_preview",
             "at": Utc::now(),
         }),
         final_answer: None,
@@ -1420,6 +1451,31 @@ mod tests {
         );
         assert_eq!(result.observation["items"], json!([]));
         assert_eq!(result.observation["limits"], json!({}));
+        assert!(result.final_answer.is_none());
+    }
+
+    #[test]
+    fn static_page_preview_stale_rejection_points_model_to_preview_regeneration() {
+        let action = test_action(AssistantRunReactActionType::RenderStaticPage);
+        let result = static_page_preview_stale_react_result(&action);
+
+        assert_eq!(result.observation["status"], json!("rejected"));
+        assert_eq!(
+            result.observation["message"],
+            json!("static_page_preview_stale")
+        );
+        assert_eq!(
+            result.observation["recommendedActions"],
+            json!(["submit_static_page_image_preview"])
+        );
+        assert_eq!(
+            result.observation["nextStep"],
+            json!("规划已经改过，旧效果图和最终页不能继续复用。请先重新提交效果图预览，等待用户确认后再制作最终静态页。")
+        );
+        assert_eq!(
+            result.trail_step["recommended_action"],
+            json!("submit_static_page_image_preview")
+        );
         assert!(result.final_answer.is_none());
     }
 

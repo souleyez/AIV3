@@ -28,6 +28,7 @@ The first V3-side implementation is intentionally only a queue bridge plus dry-r
 - `crates/codex-host-agent` advances workflow state through storage, workflow definitions, and event bus dependencies. It must not depend on the browser-facing API crate.
 - AssistantRun events are mode-specific: `codex_host_task.dry_run_completed`, `codex_host_task.plan_only_completed`, or `codex_host_task.exec_completed`.
 - No local Codex process is launched unless the worker is explicitly switched to `codex_exec` and passes the host/profile safety preflight.
+- Real `codex_exec` also requires a configured task workspace root. The agent creates a task-scoped workspace from the V3 `task_memory_space_id` and runs Codex from that directory instead of the agent's current working directory.
 
 This lets us verify V3 audit, task isolation, queue wakeup, and workflow completion before adding real host execution.
 
@@ -53,6 +54,7 @@ The output contract owns these fields:
 - `assistant_run_id`
 - `capability`
 - optional safe `profile`, `command_plan`, and `process` summaries
+- `command_plan.workspace_configured` and a safe `workspace_label`, never the raw task prompt
 - `task_chars`
 - optional `local_thread_id`
 - `task_memory_isolated`
@@ -144,6 +146,7 @@ CODEX_HOST_AGENT_PROFILE_MODEL=
 CODEX_HOST_AGENT_PROFILE_ALLOWED_CAPABILITIES=
 CODEX_HOST_AGENT_HOST_KIND=developer_workstation
 CODEX_HOST_AGENT_ALLOW_REAL_CODEX_EXEC=false
+CODEX_HOST_AGENT_TASK_WORKSPACE_ROOT=
 ```
 
 Supported safe modes right now:
@@ -152,7 +155,7 @@ Supported safe modes right now:
 - `plan_only`: validate the profile and capability, then record a redacted command plan with `prompt_redacted=true`.
 - `codex_exec`: launch `codex exec` only after host/profile/allowlist safety preflight, then record a shared-contract output with redacted stdout/stderr excerpts.
 
-`codex_exec` can launch `codex exec` only after the safety preflight passes. It requires `CODEX_HOST_AGENT_ALLOW_REAL_CODEX_EXEC=true`, an approved host kind (`windows_jump` or `mac_host`), and an execution-capable profile kind. The returned process output is truncated and redacted before it enters workflow output or AssistantRun events.
+`codex_exec` can launch `codex exec` only after the safety preflight passes. It requires `CODEX_HOST_AGENT_ALLOW_REAL_CODEX_EXEC=true`, an approved host kind (`windows_jump` or `mac_host`), an execution-capable profile kind, and `CODEX_HOST_AGENT_TASK_WORKSPACE_ROOT` pointing at a host-local task workspace root. The returned process output is truncated and redacted before it enters workflow output or AssistantRun events.
 
 Browser traffic still goes only through V3 APIs. The host agent is a worker attached to the internal workflow queue; it is not a new browser-visible service surface.
 

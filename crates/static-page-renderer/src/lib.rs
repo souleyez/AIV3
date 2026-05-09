@@ -173,6 +173,11 @@ fn build_export_package_manifest(
                 "mime": "application/json"
             },
             {
+                "path": "data-quality-report.json",
+                "role": "module_data_quality_report",
+                "mime": "application/json"
+            },
+            {
                 "path": "modules.json",
                 "role": "editable_module_plan",
                 "mime": "application/json"
@@ -208,6 +213,10 @@ fn build_export_package_manifest(
             "missing_or_partial_modules": missing_or_partial_modules,
             "chart_runtime": chart_runtime_manifest,
             "data_quality_summary": data_quality_summary,
+            "data_quality_modules": chart_runtime_manifest
+                .get("modules")
+                .cloned()
+                .unwrap_or_else(|| Value::Array(Vec::new())),
             "data_snapshot_source": data_snapshot_source
         }
     })
@@ -326,6 +335,7 @@ fn build_chart_runtime_manifest(modules: &Value, data_snapshot: &Value) -> Value
             let chart_runtime = module_chart_runtime(&module).to_string();
             let data_quality = module_data_quality(&module, data_snapshot);
             let data_quality_status = module_data_quality_status(&data_quality).to_string();
+            let points = chart_points(&module, data_snapshot);
             *data_quality_counts.entry(data_quality.clone()).or_insert(0) += 1;
             *data_quality_status_counts
                 .entry(data_quality_status.clone())
@@ -355,10 +365,18 @@ fn build_chart_runtime_manifest(modules: &Value, data_snapshot: &Value) -> Value
             };
             json!({
                 "moduleId": module_id,
+                "title": module
+                    .get("title")
+                    .and_then(Value::as_str)
+                    .unwrap_or("未命名模块"),
                 "visualizationType": visualization_type,
                 "chartRuntime": chart_runtime,
+                "dataBinding": module_data_binding_summary(&module, data_snapshot),
                 "dataQuality": data_quality,
                 "dataQualityStatus": data_quality_status,
+                "dataQualityReason": module_data_quality_reason(&data_quality_status, points.len()),
+                "recommendedAction": module_data_quality_action(&data_quality_status, points.len()),
+                "sampleDataRows": points.len(),
                 "finalRendererRuntime": final_renderer_runtime,
                 "fallback": fallback,
                 "fallbackRuntime": fallback_runtime,
@@ -449,6 +467,85 @@ fn module_data_quality_status(data_quality: &str) -> &'static str {
         "evidence_signal" | "binding_only" | "partial" | "inferred" | "fallback" => "partial",
         _ => "partial",
     }
+}
+
+fn module_data_quality_reason(status: &str, sample_rows: usize) -> &'static str {
+    match (status, sample_rows) {
+        ("confirmed", 0) => "confirmed_binding_without_rows",
+        ("confirmed", _) => "module_has_renderable_data",
+        ("missing", _) => "missing_module_data",
+        ("partial", 0) => "binding_only_without_rows",
+        _ => "partial_or_inferred_module_data",
+    }
+}
+
+fn module_data_quality_action(status: &str, sample_rows: usize) -> &'static str {
+    match (status, sample_rows) {
+        ("confirmed", _) if sample_rows > 0 => {
+            "可直接交付；如客户要求精确口径，可继续补充字段说明。"
+        }
+        ("confirmed", _) => "已确认绑定但缺少可渲染数据行，建议补充模块数据后重新生成效果图。",
+        ("missing", _) => "补充该模块的数据行或绑定字段后，重新生成并确认效果图。",
+        _ if sample_rows == 0 => "先确认字段来源和样本数据，否则最终页只能显示数据待确认。",
+        _ => "交付前建议确认字段口径、样本数据和图表类型。",
+    }
+}
+
+fn module_data_binding_summary(module: &Value, data_snapshot: &Value) -> Value {
+    let module_id = module.get("id").and_then(Value::as_str);
+    let module_binding = module
+        .get("dataBinding")
+        .or_else(|| module.get("data_binding"));
+    let snapshot_binding = module_id
+        .and_then(|id| data_snapshot_module_binding(data_snapshot, id))
+        .and_then(|binding| {
+            binding
+                .get("binding")
+                .or_else(|| binding.get("dataBinding"))
+                .or_else(|| binding.get("data_binding"))
+        });
+    let binding_candidates = [module_binding, snapshot_binding];
+
+    json!({
+        "label": binding_string_from_candidates(&binding_candidates, &["label"]).unwrap_or_else(|| "数据绑定待确认".to_string()),
+        "type": binding_string_from_candidates(&binding_candidates, &["type"]).unwrap_or_else(|| "unknown".to_string()),
+        "sourceId": binding_string_from_candidates(&binding_candidates, &["sourceId", "source_id"]).unwrap_or_else(|| "unknown".to_string()),
+        "fieldPath": binding_string_from_candidates(&binding_candidates, &["fieldPath", "field_path", "field"]).unwrap_or_default(),
+        "aggregation": binding_string_from_candidates(&binding_candidates, &["aggregation"]).unwrap_or_default(),
+        "evidenceCount": binding_evidence_count(&binding_candidates),
+    })
+}
+
+fn binding_string_from_candidates(values: &[Option<&Value>], keys: &[&str]) -> Option<String> {
+    values
+        .iter()
+        .filter_map(|value| value.as_ref().copied())
+        .find_map(|value| binding_string(value, keys))
+}
+
+fn binding_string(value: &Value, keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|key| {
+        value
+            .get(*key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+    })
+}
+
+fn binding_evidence_count(values: &[Option<&Value>]) -> usize {
+    values
+        .iter()
+        .filter_map(|value| value.as_ref().copied())
+        .find_map(|value| {
+            value
+                .get("evidenceIds")
+                .or_else(|| value.get("evidence_ids"))
+                .and_then(Value::as_array)
+                .map(Vec::len)
+        })
+        .unwrap_or(0)
 }
 
 fn fallback_data_quality_summary(module_count: usize) -> Value {
@@ -1493,6 +1590,11 @@ mod tests {
             .as_array()
             .unwrap()
             .iter()
+            .any(|file| file["path"] == json!("data-quality-report.json")));
+        assert!(result.asset_manifest["export_package"]["files"]
+            .as_array()
+            .unwrap()
+            .iter()
             .any(|file| file["path"] == json!("runtime-requirements.json")));
         assert!(result.asset_manifest["export_package"]["files"]
             .as_array()
@@ -1517,6 +1619,14 @@ mod tests {
             1
         );
         assert_eq!(
+            result.asset_manifest["export_package"]["debug"]["data_quality_modules"][0]["title"],
+            "核心判断"
+        );
+        assert_eq!(
+            result.asset_manifest["chart_runtime"]["modules"][1]["recommendedAction"],
+            "可直接交付；如客户要求精确口径，可继续补充字段说明。"
+        );
+        assert_eq!(
             result.asset_manifest["export_package"]["runtime_requirements"][0]["license"],
             "Apache-2.0"
         );
@@ -1537,6 +1647,9 @@ mod tests {
                     "id": "trend",
                     "title": "订单趋势",
                     "content": "ECharts 预览确认后，最终渲染仍保留静态回退。",
+                    "dataBinding": {
+                        "label": "订单趋势字段"
+                    },
                     "visualization": {
                         "type": "bar-chart",
                         "chartRuntime": "echarts",
@@ -1552,6 +1665,12 @@ mod tests {
                 "dataSnapshot": {
                     "module_bindings": [{
                         "moduleId": "trend",
+                        "binding": {
+                            "type": "dataset_metrics",
+                            "sourceId": "dataset",
+                            "fieldPath": "orders.amount",
+                            "evidenceIds": ["e1", "e2"]
+                        },
                         "sampleData": [
                             { "label": "1月", "value": 1200, "kind": "module_data" },
                             { "label": "2月", "value": 1380, "kind": "module_data" }
@@ -1591,6 +1710,30 @@ mod tests {
         assert_eq!(
             result.asset_manifest["chart_runtime"]["modules"][0]["dataQualityStatus"],
             "confirmed"
+        );
+        assert_eq!(
+            result.asset_manifest["chart_runtime"]["modules"][0]["dataBinding"]["label"],
+            "订单趋势字段"
+        );
+        assert_eq!(
+            result.asset_manifest["chart_runtime"]["modules"][0]["dataBinding"]["sourceId"],
+            "dataset"
+        );
+        assert_eq!(
+            result.asset_manifest["chart_runtime"]["modules"][0]["dataBinding"]["fieldPath"],
+            "orders.amount"
+        );
+        assert_eq!(
+            result.asset_manifest["chart_runtime"]["modules"][0]["dataBinding"]["evidenceCount"],
+            2
+        );
+        assert_eq!(
+            result.asset_manifest["chart_runtime"]["modules"][0]["sampleDataRows"],
+            2
+        );
+        assert_eq!(
+            result.asset_manifest["chart_runtime"]["modules"][0]["dataQualityReason"],
+            "module_has_renderable_data"
         );
         assert_eq!(
             result.asset_manifest["chart_runtime"]["dataQualitySummary"]["confirmedModules"],

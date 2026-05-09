@@ -73,6 +73,7 @@ codex_exec -> launch `codex exec` only after host/profile/allowlist safety prefl
 CODEX_HOST_AGENT_ALLOW_REAL_CODEX_EXEC=true
 CODEX_HOST_AGENT_HOST_KIND=windows_jump|mac_host
 CODEX_HOST_AGENT_PROFILE_KIND=codex-native|codex-compatible-shim
+CODEX_HOST_AGENT_TASK_WORKSPACE_ROOT=<host-local task workspace root>
 profile capability allowlist contains the requested capability
 task context includes a V3-created assistant_run_id and task_memory_space_id
 ```
@@ -85,6 +86,7 @@ AssistantRun event is codex_host_task.exec_completed
 stdout/stderr excerpts are truncated
 secret-looking log lines are replaced with [redacted-log-line]
 the full task prompt is never included in command_plan summaries
+Codex runs from a task-scoped workspace label derived from task_memory_space_id
 non-zero Codex exit marks the workflow step failed
 ```
 

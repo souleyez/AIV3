@@ -4,6 +4,7 @@ import {
   buildStaticPageExportPackage,
   buildStaticPageExportZipBlob,
   buildStaticPageStandaloneHtml,
+  dataQualityModulesFromManifest,
   dataQualitySummaryFromManifest,
   hasDataQualitySummary,
   staticPageExportFilename,
@@ -47,6 +48,19 @@ function testDraft(overrides = {}) {
             missingModules: 0,
             attentionModules: 0,
           },
+          modules: [{
+            moduleId: 'trend',
+            title: '趋势图',
+            visualizationType: 'line-chart',
+            chartRuntime: 'echarts',
+            dataQuality: 'complete',
+            dataQualityStatus: 'confirmed',
+            dataQualityReason: 'module_has_renderable_data',
+            recommendedAction: '可直接交付；如客户要求精确口径，可继续补充字段说明。',
+            sampleDataRows: 1,
+            fallback: true,
+            fallbackRuntime: 'deterministic-svg-html',
+          }],
         },
         export_package: {
           kind: 'static-page-export-package',
@@ -90,15 +104,20 @@ test('static page export package includes html manifest data modules and readme'
   assert.equal(files.get('index.html').content, '<main>最终静态页</main>');
   assert.match(files.get('asset-manifest.json').content, /static-page-renderer-v1/);
   assert.match(files.get('data-snapshot.json').content, /payload_snapshot/);
+  assert.match(files.get('data-quality-report.json').content, /static-page-data-quality-report/);
+  assert.match(files.get('data-quality-report.json').content, /module_has_renderable_data/);
   assert.match(files.get('modules.json').content, /核心结论/);
   assert.match(files.get('render-spec.json').content, /dom-text-svg-chart/);
   assert.match(files.get('runtime-requirements.json').content, /Apache-2.0/);
   assert.match(files.get('README.md').content, /ECharts 1/);
   assert.match(files.get('README.md').content, /数据质量：已确认 1 \/ 部分 0 \/ 缺失 0/);
+  assert.match(files.get('README.md').content, /模块级数据质量报告：data-quality-report\.json/);
   assert.match(files.get('README.md').content, /Apache ECharts（可选）/);
   assert.match(files.get('export-package.json').content, /"confirmedModules": 1/);
+  assert.match(files.get('export-package.json').content, /"data_quality_modules"/);
   assert.ok(artifact.packageManifest.files.some((file) => file.path === 'README.md'));
   assert.ok(artifact.packageManifest.files.some((file) => file.path === 'export-package.json'));
+  assert.ok(artifact.packageManifest.files.some((file) => file.path === 'data-quality-report.json'));
   assert.ok(artifact.packageManifest.files.some((file) => file.path === 'render-spec.json'));
   assert.ok(artifact.packageManifest.files.some((file) => file.path === 'runtime-requirements.json'));
   assert.equal(artifact.packageManifest.runtime_requirements[0].required, false);
@@ -126,6 +145,7 @@ test('static page export package can be written as a real zip file', async () =>
   assert.equal(bytes[1], 0x4b);
   assert.match(text, /index\.html/);
   assert.match(text, /asset-manifest\.json/);
+  assert.match(text, /data-quality-report\.json/);
   assert.match(text, /runtime-requirements\.json/);
   assert.match(text, /export-package\.json/);
   assert.match(text, /最终静态页/);
@@ -167,5 +187,6 @@ test('static page export helpers expose data quality summary for UI surfaces', (
     missingModules: 0,
     attentionModules: 0,
   });
+  assert.equal(dataQualityModulesFromManifest(testDraft().finalPage.assetManifest)[0].moduleId, 'trend');
   assert.equal(hasDataQualitySummary(dataQualitySummaryFromManifest({})), false);
 });

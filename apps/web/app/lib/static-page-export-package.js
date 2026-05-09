@@ -40,6 +40,14 @@ export function hasDataQualitySummary(summary) {
   return Object.values(summary).some((value) => value > 0);
 }
 
+export function dataQualityModulesFromManifest(manifest) {
+  const modules = manifest.export_package?.debug?.data_quality_modules
+    || manifest.chart_runtime?.modules
+    || manifest.data_quality_modules
+    || [];
+  return Array.isArray(modules) ? modules : [];
+}
+
 function fallbackPackageManifest(draft) {
   return {
     kind: 'static-page-export-package',
@@ -50,6 +58,7 @@ function fallbackPackageManifest(draft) {
       { path: 'index.html', role: 'rendered_static_page', mime: 'text/html' },
       { path: 'asset-manifest.json', role: 'renderer_manifest', mime: 'application/json' },
       { path: 'data-snapshot.json', role: 'render_data_snapshot', mime: 'application/json' },
+      { path: 'data-quality-report.json', role: 'module_data_quality_report', mime: 'application/json' },
       { path: 'modules.json', role: 'editable_module_plan', mime: 'application/json' },
       { path: 'runtime-requirements.json', role: 'optional_runtime_requirements', mime: 'application/json' },
       { path: 'README.md', role: 'human_handoff_note', mime: 'text/markdown' },
@@ -66,6 +75,7 @@ function normalizePackageManifest(draft, manifest) {
   const requiredFiles = [
     { path: 'export-package.json', role: 'export_package_manifest', mime: 'application/json' },
     { path: 'README.md', role: 'human_handoff_note', mime: 'text/markdown' },
+    { path: 'data-quality-report.json', role: 'module_data_quality_report', mime: 'application/json' },
     { path: 'render-spec.json', role: 'render_contract', mime: 'application/json' },
     { path: 'runtime-requirements.json', role: 'optional_runtime_requirements', mime: 'application/json' },
   ];
@@ -88,6 +98,7 @@ function normalizePackageManifest(draft, manifest) {
 function buildReadme({ draft, manifest, backendHtml, warnings }) {
   const chartRuntime = manifest.chart_runtime || {};
   const dataQualitySummary = dataQualitySummaryFromManifest(manifest);
+  const dataQualityModules = dataQualityModulesFromManifest(manifest);
   const runtimeRequirements = Array.isArray(manifest.export_package?.runtime_requirements)
     ? manifest.export_package.runtime_requirements
     : Array.isArray(manifest.runtime_requirements)
@@ -107,6 +118,9 @@ function buildReadme({ draft, manifest, backendHtml, warnings }) {
     lines.push(
       `- 数据质量：已确认 ${dataQualitySummary.confirmedModules} / 部分 ${dataQualitySummary.partialModules} / 缺失 ${dataQualitySummary.missingModules}`,
     );
+  }
+  if (dataQualityModules.length) {
+    lines.push(`- 模块级数据质量报告：data-quality-report.json（${dataQualityModules.length} 个模块）`);
   }
   if (runtimeRequirements.length) {
     lines.push(
@@ -131,6 +145,7 @@ function contentForPath(path, { draft, payload, manifest, backendHtml, warnings 
       imageJobId: draft?.finalPage?.imageJobId || draft?.imageJob?.id || null,
       chart_runtime: manifest.chart_runtime || null,
       data_quality_summary: dataQualitySummaryFromManifest(manifest),
+      data_quality_modules: dataQualityModulesFromManifest(manifest),
       runtime_requirements: contextRuntimeRequirements({ manifest }),
       files: Array.isArray(manifest.export_package?.files) ? manifest.export_package.files : fallbackPackageManifest(draft).files,
     });
@@ -143,6 +158,14 @@ function contentForPath(path, { draft, payload, manifest, backendHtml, warnings 
   }
   if (path === 'data-snapshot.json') {
     return safeJson(payload?.dataSnapshot || manifest.data_snapshot || {});
+  }
+  if (path === 'data-quality-report.json') {
+    return safeJson({
+      kind: 'static-page-data-quality-report',
+      version: 1,
+      summary: dataQualitySummaryFromManifest(manifest),
+      modules: dataQualityModulesFromManifest(manifest),
+    });
   }
   if (path === 'modules.json') {
     return safeJson(payload?.modules || draft?.modules || []);

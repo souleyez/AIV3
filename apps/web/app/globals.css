@@ -1482,6 +1482,34 @@ textarea {
   text-align: center;
 }
 
+.static-page-final-quality-modules {
+  display: grid;
+  gap: 7px;
+}
+
+.static-page-final-quality-modules span {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 13px;
+  background: rgba(255, 255, 255, 0.5);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.static-page-final-quality-modules b {
+  color: var(--text);
+  font-size: 12px;
+}
+
+.static-page-final-quality-modules em {
+  color: var(--subtle);
+  font-style: normal;
+  font-size: 11px;
+}
+
 .static-page-final-sheet.decision-brief {
   background: linear-gradient(135deg, rgba(15, 23, 42, 0.95), rgba(30, 41, 59, 0.94));
 }
@@ -2021,6 +2049,22 @@ textarea {
 .insight-quality.attention {
   background: rgba(245, 158, 11, 0.14);
   color: #92400e;
+}
+
+.insight-quality-detail {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.insight-quality-detail span {
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.06);
+  color: var(--subtle);
+  font-size: 11px;
+  font-weight: 800;
 }
 
 .insight-empty {
@@ -2585,6 +2629,11 @@ body {
   color: #dce6f4;
 }
 
+.assistant-shell .insight-quality-detail span {
+  background: rgba(255, 255, 255, 0.06);
+  color: #9aa7b9;
+}
+
 .assistant-shell .chat-empty-state h4 {
   color: #f8fbff;
 }
@@ -2741,6 +2790,18 @@ body {
 
 .assistant-shell .static-page-final-quality-grid span {
   background: rgba(255, 255, 255, 0.06);
+}
+
+.assistant-shell .static-page-final-quality-modules span {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.assistant-shell .static-page-final-quality-modules b {
+  color: #f8fbff;
+}
+
+.assistant-shell .static-page-final-quality-modules em {
+  color: #9aa7b9;
 }
 
 .assistant-shell .static-page-canvas-shell {
