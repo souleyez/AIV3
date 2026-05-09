@@ -502,6 +502,7 @@ export default function ChatPanel({
   const staticPageEntryOnly = shouldOfferStaticPageWorkspaceEntry(staticPageDraft);
   const selectedScope = selectedDatasets.length ? selectedDatasets : dataset ? [dataset] : [];
   const selectedScopeLabel = selectedScope.map((item) => item.title || item.key).filter(Boolean).join('、');
+  const chatMessagesRef = useRef(null);
   const chatEndRef = useRef(null);
   const staticPageNotice = staticPageDraft && !showingHtmlArtifactWorkspace && !showingStaticPageWorkspace ? (
     <StaticPageAssistantNotice
@@ -531,7 +532,10 @@ export default function ChatPanel({
       return undefined;
     }
     const frame = window.requestAnimationFrame(() => {
-      chatEndRef.current?.scrollIntoView({ block: 'end' });
+      if (chatMessagesRef.current) {
+        chatMessagesRef.current.scrollTop = chatMessagesRef.current.scrollHeight;
+      }
+      chatEndRef.current?.scrollIntoView({ block: 'end', inline: 'nearest' });
     });
     return () => window.cancelAnimationFrame(frame);
   }, [
@@ -646,7 +650,7 @@ export default function ChatPanel({
           />
         </div>
       ) : (
-        <div className="chat-messages">
+        <div className="chat-messages" ref={chatMessagesRef}>
           {messageLoading ? (
           <div className="chat-empty-state loading-state">
             <span className="loading-dot"></span>
@@ -705,7 +709,7 @@ export default function ChatPanel({
       <div className="chat-composer-wrap">
         <div className="composer-note">
           {session
-            ? '当前输入会追加到已选会话；如需分开上下文，点顶部“+”后再发送。'
+            ? '当前输入会追加到已选会话；如需分开上下文，可点顶部对话名称切换或新建。'
             : selectedScope.length
               ? '已选数据集只作为供料范围；对话本身保持当前线程，模型可按意图检索和细读。'
               : '未选数据集时先普通聊天；系统只做供料范围判断，不替模型编排答案。'}

@@ -39,10 +39,11 @@ use contracts::{
     StartEmailAuthResponse, StaticPageDraftView, StaticPageImageJobView,
     StaticPageRenderOutputView, SubmitHtmlArtifactEventRequest, SubmitHtmlArtifactEventResponse,
     ToolDefinitionView, ToolExecutionView, UpdateChatSessionReportEntryRequest,
-    UpdateChatSessionReportEntryResponse, UpdateDatasetRequest, UpdateDocumentRequest,
-    UpdateStaticPageDraftRequest, UpdateStaticPageDraftResponse, VerifyEmailAuthRequest,
-    VerifyEmailAuthResponse, WorkflowDefinitionView, WorkflowEventView, WorkflowExecutionView,
-    WorkflowRuntimeInspectView, WorkflowSignalRequest, WorkflowTaskView,
+    UpdateChatSessionReportEntryResponse, UpdateChatSessionRequest, UpdateChatSessionResponse,
+    UpdateDatasetRequest, UpdateDocumentRequest, UpdateStaticPageDraftRequest,
+    UpdateStaticPageDraftResponse, VerifyEmailAuthRequest, VerifyEmailAuthResponse,
+    WorkflowDefinitionView, WorkflowEventView, WorkflowExecutionView, WorkflowRuntimeInspectView,
+    WorkflowSignalRequest, WorkflowTaskView,
 };
 use domain_model::{
     AssistantRun, AssistantRunEvent, AssistantRunId, AuthAuditEvent, AuthAuditOutcome,
@@ -322,6 +323,10 @@ pub fn router(
         .route(
             "/v1/datasets/{dataset_id}/chat-sessions",
             get(list_chat_sessions).post(create_chat_session),
+        )
+        .route(
+            "/v1/chat-sessions/{session_id}",
+            axum::routing::patch(update_chat_session),
         )
         .route("/v1/documents", get(list_documents).post(register_document))
         .route(
@@ -5820,6 +5825,7 @@ async fn create_chat_session(
         current_user_id,
     )
     .await?;
+    let local_thread_id = trim_optional(request.local_thread_id.clone());
     let latest_memory_directory =
         latest_visible_memory_directory_for_user(&state, dataset.id, current_user_id).await?;
     let latest_dataset_output = state
@@ -5872,7 +5878,8 @@ async fn create_chat_session(
                 execution_id: execution.id,
                 dataset_id: dataset.id,
                 user_id: current_user_id,
-                title: derive_chat_session_title(&request.prompt),
+                title: trim_optional(request.title.clone())
+                    .unwrap_or_else(|| derive_chat_session_title(&request.prompt)),
                 latest_memory_directory_id: latest_memory_directory.as_ref().map(|entry| entry.id),
                 latest_dataset_output_id: latest_dataset_output.as_ref().map(|entry| entry.id),
                 session_manifest: json!({
@@ -5880,6 +5887,10 @@ async fn create_chat_session(
                     "schema_version": "0.3.0",
                     "status": "pending_assistant_reply",
                     "initial_prompt": request.prompt.trim(),
+                    "thread_binding": {
+                        "local_thread_id": local_thread_id,
+                        "codex_thread_id": Value::Null,
+                    },
                     "context_binding": "creation_time",
                     "latest_memory_directory_id": latest_memory_directory.as_ref().map(|entry| entry.id),
                     "latest_memory_directory_version_no": latest_memory_directory.as_ref().map(|entry| entry.version_no),
@@ -5936,6 +5947,39 @@ async fn create_chat_session(
             workflow_execution: to_workflow_execution_view(execution),
         }),
     ))
+}
+
+async fn update_chat_session(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(session_id): Path<String>,
+    Json(request): Json<UpdateChatSessionRequest>,
+) -> std::result::Result<Json<UpdateChatSessionResponse>, ApiError> {
+    let session_id = parse_chat_session_id(&session_id)?;
+    let title = trim_optional(request.title)
+        .ok_or_else(|| ApiError::bad_request("chat_session_title_required", "title is required".to_string()))?;
+    validate_required("title", &title)?;
+
+    let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
+    let current_user_id = current_auth_user_id(&state, &headers).await?;
+    load_visible_chat_session_for_user(
+        &state,
+        session_id,
+        &active_secret_binding_ids,
+        current_user_id,
+    )
+    .await?;
+
+    let session = state
+        .storage
+        .chat_sessions()
+        .update_title(state.tenant_id, session_id, &title, Utc::now())
+        .await
+        .map_err(ApiError::from_storage)?;
+
+    Ok(Json(UpdateChatSessionResponse {
+        chat_session: hydrate_chat_session_view(&state, session).await?,
+    }))
 }
 
 async fn append_chat_session_turn(

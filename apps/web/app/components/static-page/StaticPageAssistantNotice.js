@@ -19,7 +19,7 @@ export default function StaticPageAssistantNotice({
       <div className="static-page-assistant-notice static-page-simple-entry" role="note">
         <div className="static-page-simple-copy">
           <strong>已经了解您的意图，初步规划已经完成</strong>
-          <span>点此开始生成静态页即可。</span>
+          <span>点此开始生成静态页 即可。</span>
         </div>
         <button type="button" className="primary-btn compact-action-btn" onClick={onPrimaryAction} disabled={actionDisabled}>
           {actionLabel}

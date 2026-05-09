@@ -1,5 +1,8 @@
 'use client';
 
+import { useState } from 'react';
+import { formatRelativeTime, truncateText } from '../lib/formatters';
+
 const PAGE_LINKS = [
   { key: 'home', label: '首页' },
   { key: 'datasets', label: '数据集' },
@@ -27,12 +30,21 @@ export default function HomeWorkspaceToolbar({
   selectedDataset,
   selectedDatasets = [],
   stats,
+  sessions = [],
+  selectedSession,
+  selectedSessionId,
+  currentConversationTitle = '',
+  composingNewSession = false,
   loading,
   workspaceLoading,
   documents = [],
   accountAuth,
   onStartNewConversation,
+  onSelectSession,
+  onRenameConversation,
 }) {
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [titleDraft, setTitleDraft] = useState('');
   const healthTone = loading || workspaceLoading ? 'warning' : 'healthy';
   const healthText = loading || workspaceLoading ? '同步中' : '正常';
   const accountStatus = accountAuth?.statusSummary || {
@@ -48,6 +60,37 @@ export default function HomeWorkspaceToolbar({
   const selectedScopeLabel = selectedDatasets.length
     ? selectedDatasets.map((dataset) => dataset.title || dataset.key).join('、')
     : selectedDataset?.title || '普通聊天';
+  const activeConversationId = selectedSessionId || 'draft';
+  const activeConversationTitle = currentConversationTitle || selectedSession?.title || '当前对话';
+  const conversationOptions = [
+    {
+      id: 'draft',
+      title: selectedSession ? '开启新对话' : activeConversationTitle,
+      meta: composingNewSession || !selectedSession ? '当前草稿' : '新线程',
+      isDraft: true,
+    },
+    ...sessions.map((session) => ({
+      id: session.id,
+      title: session.title || '未命名对话',
+      meta: session.updated_at ? formatRelativeTime(session.updated_at) : '最近更新',
+      isDraft: false,
+    })),
+  ];
+
+  function beginTitleEdit() {
+    setTitleDraft(activeConversationTitle);
+    setEditingTitle(true);
+  }
+
+  async function submitTitleEdit(event) {
+    event?.preventDefault();
+    const nextTitle = titleDraft.trim();
+    if (!nextTitle) {
+      return;
+    }
+    await onRenameConversation?.(activeConversationId, nextTitle);
+    setEditingTitle(false);
+  }
 
   return (
     <header className="card home-toolbar">
@@ -76,15 +119,60 @@ export default function HomeWorkspaceToolbar({
       </div>
 
       <div className="home-toolbar-right">
-        <button
-          type="button"
-          className="ghost-btn home-toolbar-new-chat"
-          onClick={onStartNewConversation}
-          title="新建对话，保留当前供料范围"
-          aria-label="新建对话"
-        >
-          +
-        </button>
+        <div className="home-toolbar-flyout conversation-flyout">
+          <button type="button" className="ghost-btn home-toolbar-conversation-trigger" title="选择或重命名当前对话">
+            <span>当前对话</span>
+            <strong>{truncateText(activeConversationTitle, 24)}</strong>
+          </button>
+          <div className="home-toolbar-flyout-panel conversation-panel">
+            <div className="home-toolbar-flyout-title">对话</div>
+            {editingTitle ? (
+              <form className="conversation-title-editor" onSubmit={submitTitleEdit}>
+                <input
+                  value={titleDraft}
+                  onChange={(event) => setTitleDraft(event.target.value)}
+                  autoFocus
+                  maxLength={80}
+                  aria-label="修改对话名称"
+                />
+                <div>
+                  <button className="ghost-btn compact-action-btn" type="button" onClick={() => setEditingTitle(false)}>
+                    取消
+                  </button>
+                  <button className="primary-btn compact-action-btn" type="submit" disabled={!titleDraft.trim()}>
+                    保存
+                  </button>
+                </div>
+              </form>
+            ) : (
+              <button type="button" className="conversation-edit-name" onClick={beginTitleEdit}>
+                <span>名称</span>
+                <strong>{activeConversationTitle}</strong>
+                <em>点击修改</em>
+              </button>
+            )}
+            <div className="conversation-list" role="listbox" aria-label="所有对话">
+              {conversationOptions.map((session) => (
+                <button
+                  key={session.id}
+                  type="button"
+                  className={`conversation-option ${session.id === activeConversationId ? 'active' : ''}`.trim()}
+                  onClick={() => onSelectSession?.(session.id)}
+                >
+                  <strong>{truncateText(session.title, 42)}</strong>
+                  <span>{session.meta}</span>
+                </button>
+              ))}
+            </div>
+            <button
+              type="button"
+              className="primary-btn conversation-new-btn"
+              onClick={onStartNewConversation}
+            >
+              新建对话
+            </button>
+          </div>
+        </div>
         <div className="home-toolbar-flyout">
           <button type="button" className="ghost-btn home-toolbar-flyout-trigger">
             系统状态

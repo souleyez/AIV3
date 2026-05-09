@@ -3578,6 +3578,33 @@ impl PgChatSessionRepository {
 
         map_chat_session_row(&row)
     }
+
+    pub async fn update_title(
+        &self,
+        tenant_id: TenantId,
+        session_id: ChatSessionId,
+        title: &str,
+        updated_at: DateTime<Utc>,
+    ) -> Result<ChatSession> {
+        let row = sqlx::query(
+            r#"
+            update chat_sessions
+            set title = $3,
+                updated_at = $4
+            where tenant_id = $1 and id = $2
+            returning id, tenant_id, dataset_id, user_id, execution_id, title, latest_memory_directory_id,
+                      latest_dataset_output_id, session_manifest, created_at, updated_at
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(session_id.0)
+        .bind(title)
+        .bind(updated_at)
+        .fetch_one(&self.pool)
+        .await?;
+
+        map_chat_session_row(&row)
+    }
 }
 
 #[derive(Clone)]

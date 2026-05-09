@@ -1620,12 +1620,27 @@ pub struct CreateDatasetOutputResponse {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CreateChatSessionRequest {
     pub prompt: String,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub local_thread_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CreateChatSessionResponse {
     pub chat_session: ChatSessionView,
     pub workflow_execution: WorkflowExecutionView,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct UpdateChatSessionRequest {
+    #[serde(default)]
+    pub title: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct UpdateChatSessionResponse {
+    pub chat_session: ChatSessionView,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

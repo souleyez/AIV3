@@ -58,6 +58,30 @@ const STATIC_PAGE_QUEUE_MESSAGE = '资源正在排队，可以联系商务开通
 const ASSISTANT_RUN_PROGRESS_LIMIT = 8;
 const ASSISTANT_RUN_TRACE_LIMIT = 6;
 
+function compactConversationSummary(value, maxLength = 28) {
+  const text = String(value || '').replace(/\s+/g, ' ').trim();
+  if (!text) {
+    return '新对话';
+  }
+  return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text;
+}
+
+function formatConversationTitleTime(value = new Date()) {
+  const date = value instanceof Date ? value : new Date(value);
+  const safeDate = Number.isNaN(date.getTime()) ? new Date() : date;
+  return new Intl.DateTimeFormat('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(safeDate).replace(/\//g, '-');
+}
+
+function buildDefaultConversationTitle(prompt, startedAt = new Date()) {
+  return `${formatConversationTitleTime(startedAt)} · ${compactConversationSummary(prompt)}`;
+}
+
 function limitAssistantRunText(value, maxLength = 80) {
   const text = String(value || '').trim();
   if (!text) {
@@ -585,6 +609,8 @@ export default function HomePageClient() {
   const [publishedReportDetail, setPublishedReportDetail] = useState(null);
   const [selectedSessionId, setSelectedSessionId] = useState(null);
   const [composingNewSession, setComposingNewSession] = useState(false);
+  const [draftSessionStartedAt, setDraftSessionStartedAt] = useState(() => new Date().toISOString());
+  const [draftSessionTitle, setDraftSessionTitle] = useState('');
   const [messages, setMessages] = useState([]);
   const [localMessages, setLocalMessages] = useState([]);
   const [input, setInput] = useState('');
@@ -691,6 +717,16 @@ export default function HomePageClient() {
     () => (selectedSessionId ? messages : localMessages),
     [localMessages, messages, selectedSessionId],
   );
+  const currentConversationTitle = useMemo(() => {
+    if (selectedSession) {
+      return selectedSession.title || '当前对话';
+    }
+    if (draftSessionTitle.trim()) {
+      return draftSessionTitle.trim();
+    }
+    const firstUserMessage = visibleMessages.find((message) => message.role === 'user')?.content || '';
+    return buildDefaultConversationTitle(input || firstUserMessage || '新对话', draftSessionStartedAt);
+  }, [draftSessionStartedAt, draftSessionTitle, input, selectedSession, visibleMessages]);
   const assistantStartupBriefing = useMemo(
     () => buildAssistantStartupBriefing({
       datasets,
@@ -2262,6 +2298,9 @@ export default function HomePageClient() {
     if (shouldUseAssistantRun) {
       setSubmitting(true);
       try {
+        if (!selectedSessionId && !draftSessionTitle.trim()) {
+          setDraftSessionTitle(buildDefaultConversationTitle(prompt, draftSessionStartedAt));
+        }
         const userMessage = createLocalMessage('user', prompt);
         const assistantSelectedScope = buildAssistantRunSelectedScope(effectiveDatasetIds, nextScopePlan);
         const briefing = buildAssistantStartupBriefing({
@@ -2375,12 +2414,17 @@ export default function HomePageClient() {
           })
         : await fetchJson(`/api/v3/datasets/${effectiveDatasetId}/chat-sessions`, {
             method: 'POST',
-            body: { prompt },
+            body: {
+              prompt,
+              title: draftSessionTitle.trim() || buildDefaultConversationTitle(prompt, draftSessionStartedAt),
+              local_thread_id: readLocalThreadId(),
+            },
           });
       const started = await startWorkflowExecution(response.workflow_execution?.id);
       const sessionTitle = response.chat_session?.title || '当前会话';
 
       setInput('');
+      setDraftSessionTitle('');
       setComposingNewSession(false);
       setBanner(
         selectedSessionId
@@ -2403,6 +2447,8 @@ export default function HomePageClient() {
 
   function handleStartNewConversation() {
     writeLocalThreadId(createLocalThreadId());
+    setDraftSessionStartedAt(new Date().toISOString());
+    setDraftSessionTitle('');
     setBanner(
       selectedDatasetIds.length
         ? '已新建对话；已选数据集仍作为优先供料范围，不会切换成别的会话。'
@@ -2416,6 +2462,48 @@ export default function HomePageClient() {
     setLastAssistantRunId('');
     setAssistantRunProgress(null);
     setMobilePanel('chat');
+  }
+
+  function handleSelectConversation(sessionId) {
+    if (!sessionId) {
+      return;
+    }
+    if (sessionId === 'draft') {
+      if (selectedSessionId) {
+        handleStartNewConversation();
+      }
+      return;
+    }
+    setComposingNewSession(false);
+    setSelectedSessionId(sessionId);
+    setMobilePanel('chat');
+  }
+
+  async function handleRenameConversation(sessionId, title) {
+    const nextTitle = String(title || '').trim();
+    if (!nextTitle) {
+      return;
+    }
+    if (!sessionId || sessionId === 'draft') {
+      setDraftSessionTitle(nextTitle);
+      return;
+    }
+
+    try {
+      const response = await fetchJson(`/api/v3/chat-sessions/${sessionId}`, {
+        method: 'PATCH',
+        body: { title: nextTitle },
+      });
+      const updatedSession = response?.chat_session;
+      if (updatedSession?.id) {
+        setSessions((current) => current.map((session) => (
+          session.id === updatedSession.id ? updatedSession : session
+        )));
+      }
+      setError('');
+    } catch (renameError) {
+      setError(renameError instanceof Error ? renameError.message : '对话改名失败');
+    }
   }
 
   function handleStartStaticPageDraft(options = {}) {
@@ -3352,11 +3440,7 @@ export default function HomePageClient() {
     reportActionBusy,
     reportSurface,
     publishNote,
-    onSelectSession: (sessionId) => {
-      setComposingNewSession(false);
-      setSelectedSessionId(sessionId);
-      setMobilePanel('chat');
-    },
+    onSelectSession: handleSelectConversation,
     onSelectReportPlan: setSelectedReportPlanId,
     onReportSurfaceChange: setReportSurface,
     onPublishNoteChange: setPublishNote,
@@ -3474,12 +3558,19 @@ export default function HomePageClient() {
           selectedDataset={selectedDataset}
           selectedDatasets={selectedDatasets}
           stats={stats}
+          sessions={sessions}
+          selectedSession={selectedSession}
+          selectedSessionId={selectedSessionId}
+          currentConversationTitle={currentConversationTitle}
+          composingNewSession={composingNewSession}
           loading={bootstrapping}
           workspaceLoading={workspaceLoading}
           documents={documents}
           sourceItems={toolbarSourceItems}
           accountAuth={sidebarProps.accountAuth}
           onStartNewConversation={handleStartNewConversation}
+          onSelectSession={handleSelectConversation}
+          onRenameConversation={handleRenameConversation}
         />
 
         {banner ? <div className="page-banner success-banner">{banner}</div> : null}
