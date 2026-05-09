@@ -323,7 +323,9 @@ The next development thread should continue with static-page final-render/chart/
 - Modify: `apps/web/app/components/static-page/StaticPageFinalRender.js`
 - Modify: `apps/web/app/components/InsightPanel.js`
 
-**Current implementation note:** Web UI background render submission, main-workspace status card, right-shelf cancel/retry actions, ZIP handoff, data-quality chips, and workflow queued/rendering state synchronization are implemented. Continue this task with worker completion/retry hardening and broader worker tests.
+**Current implementation note:** Web UI background render submission, main-workspace status card, right-shelf cancel/retry actions, ZIP handoff, data-quality chips, workflow queued/rendering state synchronization, worker manifest failure diagnostics, worker-side cancellation race protection, PostgreSQL-backed worker completion/cancel tests, static-page render retry/dead-letter workflow regression coverage, and API retry/dead-letter output-state coverage are implemented.
+
+**Follow-up hardening note:** Frontend draft reset now clears stale preview/final-render artifacts instead of leaving a previously rendered page attached after effect-preview reset.
 
 **Steps:**
 
@@ -345,7 +347,7 @@ The next development thread should continue with static-page final-render/chart/
 
 ### Task 6: Improve Assistant Context Supply For Static Pages
 
-**Status:** In progress. Frontend startup briefing and scope planner expose static-page/report/media capabilities, controlled continuous-action policy, recommended tool actions, selected/inferred visible-scope rules, quality-first context budget, and compact UI intent/action chips. Backend AssistantRun scope planning now emits the same supply-policy contract, enriches visible dataset candidates from real visible documents/chunks, carries recommended tool actions into context/evidence state, preserves ReAct protocol action names separately, expands detail-first evidence limits for static-page/report/media scopes, falls back to visible document chunks when selected-scope retrieval evidence has not been generated yet, adds model-facing supply briefs so provider prompts distinguish citable supplied items from detail targets, improves local lexical retrieval tokenization with CJK phrase n-grams, and aligns AssistantRun query scoring with those CJK phrase tokens. Retrieval-worker ranking quality still needs deeper validation on real corpora.
+**Status:** In progress. Frontend startup briefing and scope planner expose static-page/report/media capabilities, controlled continuous-action policy, recommended tool actions, selected/inferred visible-scope rules, quality-first context budget, and compact UI intent/action chips. Backend AssistantRun scope planning now emits the same supply-policy contract, enriches visible dataset candidates from real visible documents/chunks, carries recommended tool actions into context/evidence state, preserves ReAct protocol action names separately, expands detail-first evidence limits for static-page/report/media scopes, falls back to visible document chunks when selected-scope retrieval evidence has not been generated yet, adds model-facing supply briefs so provider prompts distinguish citable supplied items from detail targets, improves local lexical retrieval tokenization with CJK phrase n-grams, aligns AssistantRun query scoring with those CJK phrase tokens, keeps a larger CJK term-weight window for common 6-character business phrases, has regression coverage for CJK phrase weighting plus fallback chunk ranking, and guards ordinary chat so visible datasets do not force supply. Retrieval-worker ranking quality still needs deeper validation on real corpora.
 
 **Files:**
 
@@ -442,6 +444,7 @@ cargo fmt --all --check
 cargo test -p static-page-runtime
 cargo test -p static-page-renderer
 cargo test -p static-page-worker
+cargo test -p retrieval-worker
 cargo test -p workflow-definitions
 cargo test -p platform-api static_page_data_snapshot
 cargo test -p platform-api assistant_run_react_static_page

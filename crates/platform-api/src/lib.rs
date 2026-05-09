@@ -6056,6 +6056,7 @@ async fn create_assistant_run(
         .unwrap_or_else(|| build_assistant_run_context_policy(&selected_scope));
     let supplied_evidence_count = assistant_run_evidence_supplied_count(&evidence_state);
     let detail_target_count = assistant_run_detail_target_count(&evidence_state);
+    let evidence_trail_label = assistant_run_evidence_trail_label(&evidence_state);
     let mut execution_trail = vec![
         json!({
             "status": "completed",
@@ -6071,7 +6072,7 @@ async fn create_assistant_run(
         }),
         json!({
             "status": "completed",
-            "label": "检索供料证据",
+            "label": evidence_trail_label,
             "supplied_count": supplied_evidence_count,
             "detail_target_count": detail_target_count,
             "evidence_status": evidence_state.get("status").and_then(Value::as_str).unwrap_or("unknown"),
@@ -9461,6 +9462,18 @@ fn assistant_run_evidence_status_label(evidence_state: &Value) -> String {
         "empty" => "已请求供料，但暂未检索到可用内容".to_string(),
         "not_requested" => "未请求数据集供料".to_string(),
         other => other.to_string(),
+    }
+}
+
+fn assistant_run_evidence_trail_label(evidence_state: &Value) -> &'static str {
+    match evidence_state
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown")
+    {
+        "not_requested" => "判断无需数据集供料",
+        "empty" => "尝试供料但无结果",
+        _ => "检索供料证据",
     }
 }
 
@@ -18316,6 +18329,156 @@ mod tests {
     }
 
     #[test]
+    fn static_page_workflow_manifest_merge_preserves_task_and_failure_detail() {
+        let now = Utc::now();
+        let execution = WorkflowExecution {
+            id: WorkflowExecutionId::new(),
+            tenant_id: TenantId::new(),
+            dataset_id: None,
+            report_plan_id: None,
+            kind: WorkflowKind::StaticPageRender,
+            version: "0.1.0".to_string(),
+            stage: "render_static_page:failed".to_string(),
+            status: WorkflowStatus::Failed,
+            attempt: 1,
+            context: json!({
+                "last_error": "renderer failed to produce html"
+            }),
+            created_at: now,
+            updated_at: now,
+        };
+
+        let merged = merge_static_page_render_output_workflow_manifest(
+            &json!({
+                "status": "rendering",
+                "workflow": {
+                    "executionId": execution.id,
+                    "taskId": "task-1"
+                }
+            }),
+            &execution,
+        );
+
+        assert_eq!(merged["status"], json!("failed"));
+        assert_eq!(merged["workflow"]["status"], json!("failed"));
+        assert_eq!(merged["workflow"]["taskId"], json!("task-1"));
+        assert_eq!(
+            merged["workflow"]["lastError"],
+            json!("renderer failed to produce html")
+        );
+    }
+
+    #[test]
+    fn static_page_render_output_status_tracks_retry_and_terminal_workflow_states() {
+        assert_eq!(
+            static_page_render_output_status_for_workflow(
+                &WorkflowStatus::Pending,
+                &StaticPageRenderOutputStatus::Failed,
+            ),
+            StaticPageRenderOutputStatus::Queued
+        );
+        assert_eq!(
+            static_page_render_output_status_for_workflow(
+                &WorkflowStatus::Running,
+                &StaticPageRenderOutputStatus::Queued,
+            ),
+            StaticPageRenderOutputStatus::Rendering
+        );
+        assert_eq!(
+            static_page_render_output_status_for_workflow(
+                &WorkflowStatus::DeadLettered,
+                &StaticPageRenderOutputStatus::Rendering,
+            ),
+            StaticPageRenderOutputStatus::Failed
+        );
+        assert_eq!(
+            static_page_render_output_status_for_workflow(
+                &WorkflowStatus::Succeeded,
+                &StaticPageRenderOutputStatus::Rendered,
+            ),
+            StaticPageRenderOutputStatus::Rendered
+        );
+    }
+
+    #[test]
+    fn static_page_workflow_manifest_merge_preserves_retry_and_dead_letter_detail() {
+        let now = Utc::now();
+        let retry_execution = WorkflowExecution {
+            id: WorkflowExecutionId::new(),
+            tenant_id: TenantId::new(),
+            dataset_id: None,
+            report_plan_id: None,
+            kind: WorkflowKind::StaticPageRender,
+            version: "0.1.0".to_string(),
+            stage: "queued".to_string(),
+            status: WorkflowStatus::Pending,
+            attempt: 2,
+            context: json!({
+                "retry_reason": "manual retry after renderer timeout"
+            }),
+            created_at: now,
+            updated_at: now,
+        };
+
+        let retry_manifest = merge_static_page_render_output_workflow_manifest(
+            &json!({
+                "status": "failed",
+                "workflow": {
+                    "executionId": retry_execution.id,
+                    "taskId": "task-1"
+                }
+            }),
+            &retry_execution,
+        );
+
+        assert_eq!(retry_manifest["status"], json!("queued"));
+        assert_eq!(retry_manifest["workflow"]["status"], json!("pending"));
+        assert_eq!(retry_manifest["workflow"]["stage"], json!("queued"));
+        assert_eq!(retry_manifest["workflow"]["taskId"], json!("task-1"));
+        assert_eq!(
+            retry_manifest["workflow"]["retryReason"],
+            json!("manual retry after renderer timeout")
+        );
+
+        let dead_letter_execution = WorkflowExecution {
+            id: retry_execution.id,
+            tenant_id: retry_execution.tenant_id,
+            dataset_id: None,
+            report_plan_id: None,
+            kind: WorkflowKind::StaticPageRender,
+            version: "0.1.0".to_string(),
+            stage: "dead_lettered".to_string(),
+            status: WorkflowStatus::DeadLettered,
+            attempt: 3,
+            context: json!({
+                "last_error": "renderer exhausted retries"
+            }),
+            created_at: now,
+            updated_at: now,
+        };
+
+        let dead_letter_manifest = merge_static_page_render_output_workflow_manifest(
+            &retry_manifest,
+            &dead_letter_execution,
+        );
+
+        assert_eq!(dead_letter_manifest["status"], json!("failed"));
+        assert_eq!(
+            dead_letter_manifest["workflow"]["status"],
+            json!("dead_lettered")
+        );
+        assert_eq!(
+            dead_letter_manifest["workflow"]["stage"],
+            json!("dead_lettered")
+        );
+        assert_eq!(dead_letter_manifest["workflow"]["taskId"], json!("task-1"));
+        assert_eq!(
+            dead_letter_manifest["workflow"]["lastError"],
+            json!("renderer exhausted retries")
+        );
+    }
+
+    #[test]
     fn assistant_run_provider_input_includes_briefing_scope_and_history() {
         let input = build_assistant_run_provider_input(&CreateAssistantRunRequest {
             prompt: "继续总结订单风险".to_string(),
@@ -18551,6 +18714,22 @@ mod tests {
             ])
         );
         assert_eq!(policy["scope_supply_policy"]["preferDetail"], json!(true));
+    }
+
+    #[test]
+    fn assistant_run_evidence_trail_label_matches_supply_status() {
+        assert_eq!(
+            assistant_run_evidence_trail_label(&json!({"status": "not_requested"})),
+            "判断无需数据集供料"
+        );
+        assert_eq!(
+            assistant_run_evidence_trail_label(&json!({"status": "empty"})),
+            "尝试供料但无结果"
+        );
+        assert_eq!(
+            assistant_run_evidence_trail_label(&json!({"status": "supplied"})),
+            "检索供料证据"
+        );
     }
 
     #[test]
@@ -19642,6 +19821,125 @@ mod tests {
         assert_eq!(event_status, StatusCode::CREATED);
         assert_eq!(event_response.event.sequence_no, 2);
         assert_eq!(event_response.event.event_name, "assistant_run.note");
+    }
+
+    #[tokio::test]
+    async fn assistant_run_keeps_unrelated_visible_dataset_chat_without_supply() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_MODE", "placeholder");
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping assistant ordinary chat supply guard test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("assistant-run-ordinary-chat-test-{}", Uuid::new_v4()),
+                "Assistant Run Ordinary Chat Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage,
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        let dataset = state
+            .storage
+            .datasets()
+            .create(
+                state.tenant_id,
+                NewDataset {
+                    key: format!("orders-visible-{}", Uuid::new_v4()),
+                    title: "订单经营资料".to_string(),
+                    description: Some("订单延期风险、赔付和履约资料。".to_string()),
+                    owner_user_id: None,
+                },
+            )
+            .await
+            .expect("visible dataset should be created");
+        let document = state
+            .storage
+            .documents()
+            .create(
+                state.tenant_id,
+                NewDocument {
+                    dataset_id: dataset.id,
+                    title: "订单延期风险".to_string(),
+                    object_key: "documents/order-delay-risk.md".to_string(),
+                    content_type: "text/markdown".to_string(),
+                    secret_binding_ids: Vec::new(),
+                    owner_user_id: None,
+                    metadata: json!({}),
+                },
+            )
+            .await
+            .expect("document should be created");
+        state
+            .storage
+            .document_chunks()
+            .replace_for_document(
+                state.tenant_id,
+                document.id,
+                &[storage::NewDocumentChunk {
+                    dataset_id: dataset.id,
+                    document_id: document.id,
+                    chunk_index: 0,
+                    content: "订单延期风险集中在仓库交接，超过两天需要赔付提醒。".to_string(),
+                    token_count: 16,
+                    metadata: json!({}),
+                    created_at: Utc::now(),
+                }],
+            )
+            .await
+            .expect("document chunk should be created");
+
+        let (status, Json(response)) = create_assistant_run(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(CreateAssistantRunRequest {
+                prompt: "帮我写一句温和的欢迎语".to_string(),
+                local_thread_id: Some("assistant-run-ordinary-chat-thread".to_string()),
+                startup_briefing: Some(json!({"visibleDatasetCount": 1})),
+                selected_scope: None,
+                scope_candidates: Vec::new(),
+                context_policy_hint: None,
+                current_artifact: None,
+                messages: Vec::new(),
+            }),
+        )
+        .await
+        .expect("assistant run should be created");
+
+        assert_eq!(status, StatusCode::CREATED);
+        assert_eq!(response.selected_scope["mode"], json!("ordinary_chat"));
+        assert_eq!(response.selected_scope["datasets"], json!([]));
+        assert!(response.scope_candidates.is_empty());
+        assert_eq!(response.evidence_state["status"], json!("not_requested"));
+        assert_eq!(response.evidence_state["supplied_items"], json!([]));
+        assert!(response
+            .assistant_message
+            .content
+            .contains("供料状态: 未请求数据集供料"));
+        assert!(response.execution_trail.iter().any(|step| {
+            step.get("label") == Some(&json!("判断无需数据集供料"))
+                && step.get("evidence_status") == Some(&json!("not_requested"))
+        }));
+
+        let Json(detail) = get_assistant_run(
+            State(state),
+            HeaderMap::new(),
+            Path(response.assistant_run_id.to_string()),
+        )
+        .await
+        .expect("assistant run detail should load");
+        assert_eq!(detail.run.evidence_state["status"], json!("not_requested"));
+        assert!(detail.run.scope_candidates.is_empty());
     }
 
     #[tokio::test]
@@ -26466,6 +26764,86 @@ mod tests {
         let selected = select_retrieval_evidence_ids_for_prompt(&evidences, "订单延期风险", 2);
 
         assert_eq!(selected, vec![phrase_id, broad_id]);
+    }
+
+    #[test]
+    fn rank_document_chunks_for_prompt_prefers_cjk_phrase_overlap_for_fallback_supply() {
+        let now = Utc::now();
+        let tenant_id = TenantId::new();
+        let dataset_id = DatasetId::new();
+        let broad_document_id = DocumentId::new();
+        let phrase_document_id = DocumentId::new();
+        let broad_chunk_id = DocumentChunkId::new();
+        let phrase_chunk_id = DocumentChunkId::new();
+
+        let broad_document = Document {
+            id: broad_document_id,
+            tenant_id,
+            dataset_id,
+            owner_user_id: None,
+            title: "客服记录".to_string(),
+            object_key: "documents/support.md".to_string(),
+            content_type: "text/markdown".to_string(),
+            lifecycle: domain_model::DocumentLifecycle::Extracted,
+            secret_binding_ids: Vec::new(),
+            metadata: BTreeMap::new(),
+            created_at: now,
+            updated_at: now,
+        };
+        let phrase_document = Document {
+            id: phrase_document_id,
+            tenant_id,
+            dataset_id,
+            owner_user_id: None,
+            title: "订单延期风险".to_string(),
+            object_key: "documents/orders.md".to_string(),
+            content_type: "text/markdown".to_string(),
+            lifecycle: domain_model::DocumentLifecycle::Extracted,
+            secret_binding_ids: Vec::new(),
+            metadata: BTreeMap::new(),
+            created_at: now,
+            updated_at: now,
+        };
+        let broad_chunk = DocumentChunk {
+            id: broad_chunk_id,
+            tenant_id,
+            dataset_id,
+            document_id: broad_document_id,
+            chunk_index: 0,
+            content: "订单和风险分别出现在客服记录中，主要讨论满意度。".to_string(),
+            token_count: 12,
+            state: DocumentChunkState::Extracted,
+            metadata: BTreeMap::new(),
+            created_at: now,
+            updated_at: now,
+        };
+        let phrase_chunk = DocumentChunk {
+            id: phrase_chunk_id,
+            tenant_id,
+            dataset_id,
+            document_id: phrase_document_id,
+            chunk_index: 1,
+            content: "订单延期风险集中在仓库交接，超过两天需要赔付提醒。".to_string(),
+            token_count: 16,
+            state: DocumentChunkState::Extracted,
+            metadata: BTreeMap::new(),
+            created_at: now,
+            updated_at: now,
+        };
+
+        let ranked = rank_document_chunks_for_prompt(
+            vec![
+                (broad_document, broad_chunk),
+                (phrase_document, phrase_chunk),
+            ],
+            "订单延期风险",
+            2,
+        );
+
+        assert_eq!(ranked[0].chunk.id, phrase_chunk_id);
+        assert_eq!(ranked[1].chunk.id, broad_chunk_id);
+        assert!(ranked[0].lexical_score > ranked[1].lexical_score);
+        assert!(ranked[0].search_text.contains("订单延期风险"));
     }
 
     #[test]

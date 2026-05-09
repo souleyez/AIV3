@@ -3,7 +3,7 @@ use chrono::Utc;
 use domain_model::{
     AssistantRunId, StaticPageDraft, StaticPageDraftStatus, StaticPageImageJob,
     StaticPageImageJobStatus, StaticPageRenderOutput, StaticPageRenderOutputId,
-    StaticPageRenderOutputStatus, TenantId, WorkflowKind,
+    StaticPageRenderOutputStatus, TenantId, WorkflowKind, WorkflowStatus,
 };
 use event_bus::{workflow_task_enqueued_subject, EventBus, EventSubscription};
 use reqwest::blocking::Client;
@@ -14,7 +14,10 @@ use static_page_worker::{
     normalize_artifact_asset_key, poll_static_page_visual_task, submit_static_page_visual_task,
     task_failure_message, CodexOrchestratorConfig,
 };
-use storage::{NewAssistantRunEvent, PgStorage, DEFAULT_LOCAL_DATABASE_URL};
+use storage::{
+    NewAssistantRun, NewAssistantRunEvent, NewStaticPageDraft, NewStaticPageRenderOutput,
+    NewWorkflowTask, PgStorage, DEFAULT_LOCAL_DATABASE_URL,
+};
 use tokio::time::Duration;
 use workflow_engine::{WorkflowCatalog, WorkflowSignal};
 
@@ -23,6 +26,21 @@ const DEFAULT_IMAGE_TASK_KEY: &str = "generate_static_page_image";
 const DEFAULT_POLL_INTERVAL_MS: u64 = 1_000;
 const DEFAULT_ORCHESTRATOR_POLL_INTERVAL_MS: u64 = 5_000;
 const DEFAULT_ORCHESTRATOR_MAX_POLLS: u32 = 120;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StaticPageRenderTaskOutcome {
+    Rendered,
+    Cancelled,
+}
+
+impl StaticPageRenderTaskOutcome {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Rendered => "rendered",
+            Self::Cancelled => "cancelled",
+        }
+    }
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -337,13 +355,13 @@ async fn process_static_page_render_task(
         &execution.context,
         "static_page_render_output_id",
     )?);
-    let process_result: Result<()> = async {
+    let process_result: Result<StaticPageRenderTaskOutcome> = async {
         let mut output = storage
             .static_page_render_outputs()
             .get_by_id(task.tenant_id, output_id)
             .await?
             .ok_or_else(|| anyhow!("static page render output {output_id} not found"))?;
-        mark_render_output_rendering(storage, &mut output, execution).await?;
+        mark_render_output_rendering(storage, &mut output, execution, task).await?;
 
         let draft = storage
             .static_page_drafts()
@@ -369,6 +387,17 @@ async fn process_static_page_render_task(
                 "static page preview must be confirmed before final render"
             ));
         }
+        if let Some(cancelled_execution) =
+            load_cancelled_workflow_execution(storage, task.tenant_id, task.execution_id).await?
+        {
+            let reason = workflow_cancel_reason(
+                &cancelled_execution,
+                "workflow was cancelled before static page render",
+            );
+            mark_render_output_cancelled(storage, &mut output, &cancelled_execution, task, &reason)
+                .await?;
+            return Ok(StaticPageRenderTaskOutcome::Cancelled);
+        }
 
         let rendered = render_static_page(&StaticPageRenderRequest {
             draft_id: draft.id.to_string(),
@@ -382,6 +411,17 @@ async fn process_static_page_render_task(
                 .and_then(|job| job.preview_asset_key.clone()),
             image_job_id: image_job.as_ref().map(|job| job.id.to_string()),
         });
+        if let Some(cancelled_execution) =
+            load_cancelled_workflow_execution(storage, task.tenant_id, task.execution_id).await?
+        {
+            let reason = workflow_cancel_reason(
+                &cancelled_execution,
+                "workflow was cancelled before static page render was saved",
+            );
+            mark_render_output_cancelled(storage, &mut output, &cancelled_execution, task, &reason)
+                .await?;
+            return Ok(StaticPageRenderTaskOutcome::Cancelled);
+        }
 
         output.status = StaticPageRenderOutputStatus::Rendered;
         output.html = rendered.html;
@@ -431,58 +471,67 @@ async fn process_static_page_render_task(
         )
         .await?;
 
-        Ok(())
+        Ok(StaticPageRenderTaskOutcome::Rendered)
     }
     .await;
 
-    if let Err(error) = process_result {
-        let error_message = error.to_string();
-        if let Ok(Some(mut output)) = storage
-            .static_page_render_outputs()
-            .get_by_id(task.tenant_id, output_id)
-            .await
-        {
-            let _ =
-                mark_render_output_failed(storage, &mut output, execution, &error_message).await;
-            let _ = append_assistant_event(
+    let outcome = match process_result {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            let error_message = error.to_string();
+            if let Ok(Some(mut output)) = storage
+                .static_page_render_outputs()
+                .get_by_id(task.tenant_id, output_id)
+                .await
+            {
+                let _ = mark_render_output_failed(
+                    storage,
+                    &mut output,
+                    execution,
+                    task,
+                    &error_message,
+                )
+                .await;
+                let _ = append_assistant_event(
+                    storage,
+                    output.tenant_id,
+                    output.assistant_run_id,
+                    "static_page_render.failed",
+                    json!({
+                        "draft_id": output.draft_id,
+                        "render_output_id": output.id,
+                        "error": error_message,
+                        "workflow_execution_id": execution.id,
+                    }),
+                )
+                .await;
+            }
+            if let Err(signal_error) = platform_api::apply_workflow_signal_with_dependencies(
                 storage,
-                output.tenant_id,
-                output.assistant_run_id,
-                "static_page_render.failed",
-                json!({
-                    "draft_id": output.draft_id,
-                    "render_output_id": output.id,
-                    "error": error_message,
-                    "workflow_execution_id": execution.id,
-                }),
+                workflow_catalog,
+                event_bus,
+                task.tenant_id,
+                task.execution_id,
+                WorkflowSignal::StepFailed {
+                    task_key: task.task_key.clone(),
+                    error: error_message.clone(),
+                },
             )
-            .await;
+            .await
+            {
+                tracing::error!(
+                    error = ?signal_error,
+                    task_id = %task.id,
+                    "static page render failed to send workflow step_failed signal"
+                );
+            }
+            storage
+                .workflow_tasks()
+                .mark_failed(task.id, &error_message, Utc::now())
+                .await?;
+            return Err(error);
         }
-        if let Err(signal_error) = platform_api::apply_workflow_signal_with_dependencies(
-            storage,
-            workflow_catalog,
-            event_bus,
-            task.tenant_id,
-            task.execution_id,
-            WorkflowSignal::StepFailed {
-                task_key: task.task_key.clone(),
-                error: error_message.clone(),
-            },
-        )
-        .await
-        {
-            tracing::error!(
-                error = ?signal_error,
-                task_id = %task.id,
-                "static page render failed to send workflow step_failed signal"
-            );
-        }
-        storage
-            .workflow_tasks()
-            .mark_failed(task.id, &error_message, Utc::now())
-            .await?;
-        return Err(error);
-    }
+    };
 
     storage
         .workflow_tasks()
@@ -493,7 +542,8 @@ async fn process_static_page_render_task(
         task_id = %task.id,
         execution_id = %task.execution_id,
         static_page_render_output_id = %output_id,
-        "static page render task completed"
+        outcome = outcome.as_str(),
+        "static page render task settled"
     );
 
     Ok(())
@@ -636,6 +686,7 @@ async fn mark_render_output_rendering(
     storage: &PgStorage,
     output: &mut StaticPageRenderOutput,
     execution: &domain_model::WorkflowExecution,
+    task: &domain_model::WorkflowTask,
 ) -> Result<()> {
     output.status = StaticPageRenderOutputStatus::Rendering;
     output.asset_manifest = merge_render_state(
@@ -643,7 +694,9 @@ async fn mark_render_output_rendering(
         json!({
             "status": "rendering",
             "executionId": execution.id,
+            "taskId": task.id,
             "workflowExecutionId": execution.id,
+            "workflowTaskId": task.id,
             "updatedAt": Utc::now(),
         }),
     );
@@ -658,6 +711,7 @@ async fn mark_render_output_failed(
     storage: &PgStorage,
     output: &mut StaticPageRenderOutput,
     execution: &domain_model::WorkflowExecution,
+    task: &domain_model::WorkflowTask,
     error_message: &str,
 ) -> Result<()> {
     output.status = StaticPageRenderOutputStatus::Failed;
@@ -666,8 +720,13 @@ async fn mark_render_output_failed(
         json!({
             "status": "failed",
             "executionId": execution.id,
+            "taskId": task.id,
             "workflowExecutionId": execution.id,
+            "workflowTaskId": task.id,
             "error": error_message,
+            "lastError": {
+                "message": error_message,
+            },
             "updatedAt": Utc::now(),
         }),
     );
@@ -676,6 +735,56 @@ async fn mark_render_output_failed(
         .update(output.tenant_id, output)
         .await?;
     Ok(())
+}
+
+async fn mark_render_output_cancelled(
+    storage: &PgStorage,
+    output: &mut StaticPageRenderOutput,
+    execution: &domain_model::WorkflowExecution,
+    task: &domain_model::WorkflowTask,
+    reason: &str,
+) -> Result<()> {
+    output.status = StaticPageRenderOutputStatus::Cancelled;
+    output.asset_manifest = merge_render_state(
+        &output.asset_manifest,
+        json!({
+            "status": "cancelled",
+            "executionId": execution.id,
+            "taskId": task.id,
+            "workflowExecutionId": execution.id,
+            "workflowTaskId": task.id,
+            "cancelReason": reason,
+            "updatedAt": Utc::now(),
+        }),
+    );
+    *output = storage
+        .static_page_render_outputs()
+        .update(output.tenant_id, output)
+        .await?;
+    Ok(())
+}
+
+async fn load_cancelled_workflow_execution(
+    storage: &PgStorage,
+    tenant_id: TenantId,
+    execution_id: domain_model::WorkflowExecutionId,
+) -> Result<Option<domain_model::WorkflowExecution>> {
+    let execution = storage
+        .workflow_executions()
+        .get_by_id(tenant_id, execution_id)
+        .await?
+        .ok_or_else(|| anyhow!("workflow execution {execution_id} not found"))?;
+    Ok((execution.status == WorkflowStatus::Cancelled).then_some(execution))
+}
+
+fn workflow_cancel_reason(execution: &domain_model::WorkflowExecution, fallback: &str) -> String {
+    execution
+        .context
+        .get("cancel_reason")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(fallback)
+        .to_string()
 }
 
 async fn mark_draft_final_rendered(
@@ -710,10 +819,31 @@ fn mark_draft_final_rendered_payload(payload: &Value, output: &StaticPageRenderO
 
 fn merge_render_state(manifest: &Value, state: Value) -> Value {
     let mut object = manifest.as_object().cloned().unwrap_or_default();
-    if let Some(status) = state.get("status").and_then(Value::as_str) {
-        object.insert("status".to_string(), Value::String(status.to_string()));
+    let mut workflow = object
+        .get("workflow")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    if let Some(state_object) = state.as_object() {
+        if let Some(status) = state_object.get("status").and_then(Value::as_str) {
+            object.insert("status".to_string(), Value::String(status.to_string()));
+        }
+        for (key, value) in state_object {
+            workflow.insert(key.clone(), value.clone());
+        }
+        if !workflow.contains_key("lastError") {
+            if let Some(error) = state_object.get("error") {
+                workflow.insert(
+                    "lastError".to_string(),
+                    match error.as_str() {
+                        Some(message) => json!({ "message": message }),
+                        None => error.clone(),
+                    },
+                );
+            }
+        }
     }
-    object.insert("workflow".to_string(), state);
+    object.insert("workflow".to_string(), Value::Object(workflow));
     Value::Object(object)
 }
 
@@ -838,4 +968,415 @@ fn optional_env(key: &str) -> Option<String> {
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use domain_model::{WorkflowExecution, WorkflowExecutionId, WorkflowTask, WorkflowTaskStatus};
+    use test_fixtures::{
+        local_postgres_storage, reset_local_postgres_storage, shared_local_postgres_test_lock,
+    };
+
+    #[test]
+    fn merge_render_state_preserves_existing_workflow_fields() {
+        let manifest = json!({
+            "status": "queued",
+            "workflow": {
+                "executionId": "execution-1",
+                "taskId": "task-1",
+                "queuePosition": 2
+            },
+            "export_package": {
+                "kind": "static-page-export-package"
+            }
+        });
+
+        let merged = merge_render_state(
+            &manifest,
+            json!({
+                "status": "rendering",
+                "workflowExecutionId": "execution-1",
+                "updatedAt": "2026-05-09T00:00:00Z"
+            }),
+        );
+
+        assert_eq!(merged["status"], json!("rendering"));
+        assert_eq!(merged["workflow"]["taskId"], json!("task-1"));
+        assert_eq!(merged["workflow"]["queuePosition"], json!(2));
+        assert_eq!(
+            merged["workflow"]["workflowExecutionId"],
+            json!("execution-1")
+        );
+        assert_eq!(
+            merged["export_package"]["kind"],
+            json!("static-page-export-package")
+        );
+    }
+
+    #[test]
+    fn merge_render_state_adds_frontend_readable_last_error() {
+        let merged = merge_render_state(
+            &json!({
+                "status": "rendering",
+                "workflow": {
+                    "executionId": "execution-1",
+                    "taskId": "task-1"
+                }
+            }),
+            json!({
+                "status": "failed",
+                "error": "renderer failed to produce html"
+            }),
+        );
+
+        assert_eq!(merged["status"], json!("failed"));
+        assert_eq!(merged["workflow"]["taskId"], json!("task-1"));
+        assert_eq!(
+            merged["workflow"]["error"],
+            json!("renderer failed to produce html")
+        );
+        assert_eq!(
+            merged["workflow"]["lastError"]["message"],
+            json!("renderer failed to produce html")
+        );
+    }
+
+    #[test]
+    fn merge_render_state_preserves_task_for_cancelled_outputs() {
+        let merged = merge_render_state(
+            &json!({
+                "status": "rendering",
+                "workflow": {
+                    "executionId": "execution-1",
+                    "taskId": "task-1"
+                }
+            }),
+            json!({
+                "status": "cancelled",
+                "cancelReason": "customer changed render request"
+            }),
+        );
+
+        assert_eq!(merged["status"], json!("cancelled"));
+        assert_eq!(merged["workflow"]["taskId"], json!("task-1"));
+        assert_eq!(
+            merged["workflow"]["cancelReason"],
+            json!("customer changed render request")
+        );
+    }
+
+    async fn setup_render_task_fixture(
+        storage: &PgStorage,
+        workflow_status: WorkflowStatus,
+    ) -> (
+        domain_model::TenantId,
+        domain_model::StaticPageDraftId,
+        StaticPageRenderOutputId,
+        WorkflowExecution,
+        WorkflowTask,
+    ) {
+        let now = Utc::now();
+        let tenant = storage
+            .ensure_tenant(
+                &format!("static-page-worker-test-{}", uuid::Uuid::new_v4()),
+                "Static Page Worker Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let run = storage
+            .assistant_runs()
+            .create(
+                tenant.id,
+                &NewAssistantRun {
+                    user_id: None,
+                    local_thread_id: Some("static-page-worker-test-thread".to_string()),
+                    user_prompt: "生成一页经营分析静态页".to_string(),
+                    startup_briefing: json!({}),
+                    selected_scope: json!({"mode": "ordinary_chat"}),
+                    scope_candidates: json!([]),
+                    context_policy: json!({}),
+                    evidence_state: json!({}),
+                    service_lane: "placeholder".to_string(),
+                    execution_trail: json!([]),
+                    output_artifacts: json!([]),
+                    runtime_manifest: json!({}),
+                    created_at: now,
+                },
+            )
+            .await
+            .expect("assistant run should be created");
+        let draft = storage
+            .static_page_drafts()
+            .create(
+                tenant.id,
+                &NewStaticPageDraft {
+                    assistant_run_id: run.id,
+                    owner_user_id: None,
+                    title: "经营分析静态页".to_string(),
+                    status: StaticPageDraftStatus::Confirmed,
+                    selected_scope: json!({"mode": "ordinary_chat"}),
+                    visibility_snapshot: json!({"policy": "test"}),
+                    source_refs: json!([]),
+                    draft_payload: json!({
+                        "version": 1,
+                        "status": "effect_confirmed",
+                        "styleDirection": "decision-brief",
+                        "previewContract": {
+                            "status": "confirmed",
+                            "assetKey": "previews/static-page-test.png"
+                        },
+                        "modelSummary": "核心增长来自高价值客户。",
+                        "mobileOrder": ["trend", "hero"],
+                        "modules": [{
+                            "id": "hero",
+                            "title": "核心判断",
+                            "content": "增长放缓但结构改善。",
+                            "dataBinding": { "label": "订单数据摘要" },
+                            "visualization": { "type": "headline", "label": "关键结论" },
+                            "layout": { "x": 0, "y": 0, "w": 5, "h": 3 }
+                        }, {
+                            "id": "trend",
+                            "title": "趋势变化",
+                            "content": "订单转化率连续三周回升。",
+                            "dataBinding": {
+                                "label": "订单趋势",
+                                "values": [
+                                    { "label": "一月", "value": 42 },
+                                    { "label": "二月", "value": 58 },
+                                    { "label": "三月", "value": 76 }
+                                ]
+                            },
+                            "visualization": { "type": "bar-chart", "label": "分类对比柱状图" },
+                            "layout": { "x": 5, "y": 0, "w": 7, "h": 3 }
+                        }]
+                    }),
+                    created_at: now,
+                },
+            )
+            .await
+            .expect("static page draft should be created");
+        let execution_id = WorkflowExecutionId::new();
+        let output = storage
+            .static_page_render_outputs()
+            .create(
+                tenant.id,
+                &NewStaticPageRenderOutput {
+                    draft_id: draft.id,
+                    assistant_run_id: run.id,
+                    owner_user_id: None,
+                    image_job_id: None,
+                    status: StaticPageRenderOutputStatus::Queued,
+                    html: String::new(),
+                    asset_manifest: json!({
+                        "status": "queued",
+                        "workflow": {
+                            "executionId": execution_id
+                        },
+                        "export_package": {
+                            "kind": "static-page-export-package"
+                        }
+                    }),
+                    created_at: now,
+                },
+            )
+            .await
+            .expect("static page render output should be created");
+        let (stage, context) = if workflow_status == WorkflowStatus::Cancelled {
+            (
+                "cancelled".to_string(),
+                json!({
+                    "queue": DEFAULT_QUEUE,
+                    "task_key": "render_static_page",
+                    "static_page_render_output_id": output.id,
+                    "static_page_draft_id": draft.id,
+                    "cancel_reason": "customer changed render request"
+                }),
+            )
+        } else {
+            (
+                "render_static_page".to_string(),
+                json!({
+                    "queue": DEFAULT_QUEUE,
+                    "task_key": "render_static_page",
+                    "static_page_render_output_id": output.id,
+                    "static_page_draft_id": draft.id
+                }),
+            )
+        };
+        let execution = WorkflowExecution {
+            id: execution_id,
+            tenant_id: tenant.id,
+            dataset_id: None,
+            report_plan_id: None,
+            kind: WorkflowKind::StaticPageRender,
+            version: "0.1.0".to_string(),
+            stage,
+            status: workflow_status,
+            attempt: 1,
+            context,
+            created_at: now,
+            updated_at: now,
+        };
+        storage
+            .workflow_executions()
+            .create(&execution)
+            .await
+            .expect("workflow execution should be created");
+        let task = storage
+            .workflow_tasks()
+            .create(
+                &execution,
+                &NewWorkflowTask {
+                    queue: DEFAULT_QUEUE.to_string(),
+                    task_key: "render_static_page".to_string(),
+                    payload: json!({
+                        "execution_id": execution.id,
+                        "kind": execution.kind.as_str()
+                    }),
+                    available_at: now,
+                    max_attempts: 3,
+                },
+                now,
+            )
+            .await
+            .expect("workflow task should be created");
+        (tenant.id, draft.id, output.id, execution, task)
+    }
+
+    #[tokio::test]
+    async fn render_task_writes_durable_output_and_completes_workflow() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping static page render worker integration test: {reason}");
+                return;
+            }
+        };
+        reset_local_postgres_storage(&storage)
+            .await
+            .expect("storage should reset");
+        let workflow_catalog = workflow_definitions::catalog();
+        storage
+            .sync_workflow_definitions(&workflow_catalog.descriptors())
+            .await
+            .expect("workflow definitions should sync");
+        let (tenant_id, draft_id, output_id, execution, task) =
+            setup_render_task_fixture(&storage, WorkflowStatus::Running).await;
+        let event_bus = EventBus::Disabled;
+
+        process_static_page_render_task(&storage, &workflow_catalog, &event_bus, &execution, &task)
+            .await
+            .expect("render task should complete");
+
+        let output = storage
+            .static_page_render_outputs()
+            .get_by_id(tenant_id, output_id)
+            .await
+            .expect("render output should load")
+            .expect("render output should exist");
+        assert_eq!(output.status, StaticPageRenderOutputStatus::Rendered);
+        assert!(output.html.contains("核心判断"));
+        assert_eq!(output.asset_manifest["status"], json!("rendered"));
+        assert_eq!(output.asset_manifest["workflow"]["taskId"], json!(task.id));
+        assert_eq!(
+            output.asset_manifest["export_package"]["kind"],
+            json!("static-page-export-package")
+        );
+
+        let draft = storage
+            .static_page_drafts()
+            .get_by_id(tenant_id, draft_id)
+            .await
+            .expect("draft should load")
+            .expect("draft should exist");
+        assert_eq!(draft.status, StaticPageDraftStatus::Rendered);
+        assert_eq!(
+            draft.draft_payload["finalPage"]["status"],
+            json!("rendered")
+        );
+
+        let stored_execution = storage
+            .workflow_executions()
+            .get_by_id(tenant_id, execution.id)
+            .await
+            .expect("workflow execution should load")
+            .expect("workflow execution should exist");
+        assert_eq!(stored_execution.status, WorkflowStatus::Succeeded);
+        assert_eq!(
+            stored_execution.context["last_output"]["static_page_render_output_id"],
+            json!(output_id)
+        );
+        let tasks = storage
+            .workflow_tasks()
+            .list_by_execution(execution.id)
+            .await
+            .expect("workflow tasks should load");
+        assert_eq!(tasks[0].status, WorkflowTaskStatus::Succeeded);
+    }
+
+    #[tokio::test]
+    async fn render_task_does_not_overwrite_cancelled_workflow_output() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping static page render cancellation test: {reason}");
+                return;
+            }
+        };
+        reset_local_postgres_storage(&storage)
+            .await
+            .expect("storage should reset");
+        let workflow_catalog = workflow_definitions::catalog();
+        storage
+            .sync_workflow_definitions(&workflow_catalog.descriptors())
+            .await
+            .expect("workflow definitions should sync");
+        let (tenant_id, draft_id, output_id, execution, task) =
+            setup_render_task_fixture(&storage, WorkflowStatus::Cancelled).await;
+        let event_bus = EventBus::Disabled;
+
+        process_static_page_render_task(&storage, &workflow_catalog, &event_bus, &execution, &task)
+            .await
+            .expect("cancelled render task should settle without rendering");
+
+        let output = storage
+            .static_page_render_outputs()
+            .get_by_id(tenant_id, output_id)
+            .await
+            .expect("render output should load")
+            .expect("render output should exist");
+        assert_eq!(output.status, StaticPageRenderOutputStatus::Cancelled);
+        assert_eq!(output.html, "");
+        assert_eq!(output.asset_manifest["status"], json!("cancelled"));
+        assert_eq!(
+            output.asset_manifest["workflow"]["cancelReason"],
+            json!("customer changed render request")
+        );
+
+        let draft = storage
+            .static_page_drafts()
+            .get_by_id(tenant_id, draft_id)
+            .await
+            .expect("draft should load")
+            .expect("draft should exist");
+        assert_eq!(draft.status, StaticPageDraftStatus::Confirmed);
+        assert!(draft.draft_payload.get("finalPage").is_none());
+
+        let stored_execution = storage
+            .workflow_executions()
+            .get_by_id(tenant_id, execution.id)
+            .await
+            .expect("workflow execution should load")
+            .expect("workflow execution should exist");
+        assert_eq!(stored_execution.status, WorkflowStatus::Cancelled);
+        let tasks = storage
+            .workflow_tasks()
+            .list_by_execution(execution.id)
+            .await
+            .expect("workflow tasks should load");
+        assert_eq!(tasks[0].status, WorkflowTaskStatus::Succeeded);
+    }
 }

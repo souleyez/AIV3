@@ -239,6 +239,29 @@ test('requeueing an image job clears stale preview and final render state', () =
   assert.equal(queued.finalPage, null);
 });
 
+test('resetting an image job clears preview and final render state', () => {
+  const confirmed = applyStaticPageOperation(buildInitialStaticPageDraft(), {
+    type: 'confirm_preview',
+    previewImage: { assetKey: 'preview-1.png' },
+  });
+  const rendered = applyStaticPageOperation(confirmed, {
+    type: 'request_final_render',
+    finalPage: {
+      status: 'rendered',
+      renderer: 'platform-api-static-page-renderer',
+      renderOutputId: 'render-1',
+      html: '<main>旧结果</main>',
+    },
+  });
+  const reset = applyStaticPageOperation(rendered, { type: 'reset_image_job' });
+
+  assert.equal(reset.status, 'planning');
+  assert.equal(reset.imageJob.status, 'idle');
+  assert.equal(reset.previewImage, null);
+  assert.equal(reset.finalPage, null);
+  assert.equal(reset.previewContract.status, 'not_requested');
+});
+
 test('failed image job status returns draft to editable planning state', () => {
   const queued = applyStaticPageOperation(buildInitialStaticPageDraft(), {
     type: 'queue_image_job',

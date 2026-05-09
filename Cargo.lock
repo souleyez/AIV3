@@ -2684,6 +2684,7 @@ dependencies = [
  "serde_json",
  "static-page-renderer",
  "storage",
+ "test-fixtures",
  "tokio",
  "tracing",
  "uuid",

@@ -448,4 +448,78 @@ mod tests {
         assert_eq!(finished.next_state.status, WorkflowStatus::Succeeded);
         assert_eq!(finished.next_state.stage, "upload_ingest_completed");
     }
+
+    #[test]
+    fn static_page_render_retry_and_dead_letter_paths_are_explicit() {
+        let definition = registry()
+            .into_iter()
+            .find(|entry| entry.kind() == WorkflowKind::StaticPageRender)
+            .expect("static page render workflow exists");
+        let now = Utc::now();
+        let pending = definition.initial_state(WorkflowExecutionId::new(), now);
+        let running = definition
+            .transition(&pending, WorkflowSignal::Start, now)
+            .expect("static page render starts");
+        let failed = definition
+            .transition(
+                &running.next_state,
+                WorkflowSignal::StepFailed {
+                    task_key: "render_static_page".to_string(),
+                    error: "renderer failed".to_string(),
+                },
+                now,
+            )
+            .expect("render step can fail");
+
+        assert_eq!(running.enqueued_tasks[0].queue, "static_page");
+        assert_eq!(running.enqueued_tasks[0].task_key, "render_static_page");
+        assert_eq!(failed.next_state.status, WorkflowStatus::Failed);
+        assert_eq!(failed.next_state.stage, "render_static_page:failed");
+        assert_eq!(
+            failed.next_state.context["last_error"],
+            json!("renderer failed")
+        );
+
+        let retry = definition
+            .transition(
+                &failed.next_state,
+                WorkflowSignal::RetryRequested {
+                    reason: "user requested retry".to_string(),
+                },
+                now,
+            )
+            .expect("failed render can be retried");
+        assert_eq!(retry.next_state.status, WorkflowStatus::Pending);
+        assert_eq!(retry.next_state.stage, "queued");
+        assert_eq!(retry.next_state.retries_remaining, 2);
+        assert_eq!(
+            retry.next_state.context["retry_reason"],
+            json!("user requested retry")
+        );
+        assert!(retry.enqueued_tasks.is_empty());
+
+        let restarted = definition
+            .transition(&retry.next_state, WorkflowSignal::Start, now)
+            .expect("retried render can restart");
+        assert_eq!(restarted.next_state.status, WorkflowStatus::Running);
+        assert_eq!(restarted.enqueued_tasks[0].queue, "static_page");
+        assert_eq!(restarted.enqueued_tasks[0].task_key, "render_static_page");
+
+        let mut exhausted = failed.next_state;
+        exhausted.retries_remaining = 0;
+        let dead_lettered = definition
+            .transition(
+                &exhausted,
+                WorkflowSignal::RetryRequested {
+                    reason: "no retries left".to_string(),
+                },
+                now,
+            )
+            .expect("exhausted render retry moves to dead letter");
+        assert_eq!(
+            dead_lettered.next_state.status,
+            WorkflowStatus::DeadLettered
+        );
+        assert_eq!(dead_lettered.next_state.stage, "dead_lettered");
+    }
 }

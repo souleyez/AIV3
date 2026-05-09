@@ -2,7 +2,7 @@ use domain_model::{DatasetId, DocumentId};
 use std::collections::{BTreeMap, BTreeSet};
 
 const SIGNATURE_TERM_LIMIT: usize = 8;
-const TERM_WEIGHT_LIMIT: usize = 12;
+const TERM_WEIGHT_LIMIT: usize = 16;
 const CJK_NGRAM_MAX: usize = 3;
 
 #[derive(Clone, Debug)]
@@ -375,6 +375,37 @@ mod tests {
         assert!(tokens.contains(&"订单金".to_string()));
         assert!(tokens.contains(&"金额增".to_string()));
         assert!(tokens.contains(&"revenue".to_string()));
+    }
+
+    #[test]
+    fn local_lexical_retrieval_indexer_profiles_cjk_business_phrases() {
+        let outcome = LocalLexicalRetrievalIndexer.index(&RetrievalIndexJob {
+            dataset_id: DatasetId::new(),
+            document_id: DocumentId::new(),
+            chunks: vec![
+                RetrievalChunkInput {
+                    chunk_index: 0,
+                    content: "订单延期风险 订单延期风险 仓库交接赔付".to_string(),
+                    token_count: 8,
+                },
+                RetrievalChunkInput {
+                    chunk_index: 1,
+                    content: "客服满意度提升 会员复购增长".to_string(),
+                    token_count: 7,
+                },
+            ],
+        });
+
+        let phrase_profile = outcome
+            .chunk_profiles
+            .iter()
+            .find(|profile| profile.chunk_index == 0)
+            .expect("phrase chunk profile should exist");
+
+        assert!(phrase_profile.term_weights.contains_key("订单"));
+        assert!(phrase_profile.term_weights.contains_key("延期"));
+        assert!(phrase_profile.term_weights.contains_key("风险"));
+        assert!(phrase_profile.recall_score > 0.0);
     }
 
     #[test]

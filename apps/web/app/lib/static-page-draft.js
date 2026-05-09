@@ -1040,6 +1040,7 @@ export function applyStaticPageOperation(draft, operation = {}) {
       queueMessage: '',
     };
     next.previewImage = null;
+    next.finalPage = null;
     next.previewContract = buildStaticPagePreviewContract(next);
   }
 
