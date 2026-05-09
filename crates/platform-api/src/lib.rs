@@ -39,25 +39,26 @@ use contracts::{
     StartEmailAuthResponse, StaticPageDraftView, StaticPageImageJobView,
     StaticPageRenderOutputView, SubmitHtmlArtifactEventRequest, SubmitHtmlArtifactEventResponse,
     ToolDefinitionView, ToolExecutionView, UpdateChatSessionReportEntryRequest,
-    UpdateChatSessionReportEntryResponse, UpdateStaticPageDraftRequest,
-    UpdateStaticPageDraftResponse, VerifyEmailAuthRequest, VerifyEmailAuthResponse,
-    WorkflowDefinitionView, WorkflowEventView, WorkflowExecutionView, WorkflowRuntimeInspectView,
-    WorkflowSignalRequest, WorkflowTaskView,
+    UpdateChatSessionReportEntryResponse, UpdateDatasetRequest, UpdateDocumentRequest,
+    UpdateStaticPageDraftRequest, UpdateStaticPageDraftResponse, VerifyEmailAuthRequest,
+    VerifyEmailAuthResponse, WorkflowDefinitionView, WorkflowEventView, WorkflowExecutionView,
+    WorkflowRuntimeInspectView, WorkflowSignalRequest, WorkflowTaskView,
 };
 use domain_model::{
     AssistantRun, AssistantRunEvent, AssistantRunId, AuthAuditEvent, AuthAuditOutcome,
     AuthChallengePurpose, AuthSessionMethod, ChatMessage, ChatMessageId, ChatMessageRole,
-    ChatSession, ChatSessionId, ConversationMemoryItem, Dataset, DatasetId, DatasetOutput,
-    DatasetOutputId, DatasetVisibility, Document, DocumentChunk, DocumentChunkId, DocumentId,
-    EmailVerificationChallenge, HtmlArtifact, LlmInvocation, LlmInvocationFinishReason,
-    LlmInvocationMode, LlmInvocationSourceKind, MemoryDirectory, MemoryDirectoryId,
-    PublishedReport, PublishedReportId, PublishedReportVersion, PublishedSurface, ReportPlan,
-    ReportPlanAstVersion, ReportPlanId, ReportRenderOutput, RetrievalEvidence, RetrievalEvidenceId,
-    SecretBindingId, SecretScopeLevel, StaticPageDraft, StaticPageDraftId, StaticPageDraftStatus,
-    StaticPageImageJob, StaticPageImageJobId, StaticPageImageJobStatus, StaticPageRenderOutput,
-    StaticPageRenderOutputStatus, TenantId, ToolExecution, ToolExecutionSourceKind,
-    ToolExecutionStatus, User, UserId, UserSession, UserSessionId, WorkflowEventRecord,
-    WorkflowExecution, WorkflowExecutionId, WorkflowKind, WorkflowStatus, WorkflowTask,
+    ChatSession, ChatSessionId, ConversationMemoryItem, Dataset, DatasetId, DatasetLifecycle,
+    DatasetOutput, DatasetOutputId, DatasetVisibility, Document, DocumentChunk, DocumentChunkId,
+    DocumentId, DocumentLifecycle, EmailVerificationChallenge, HtmlArtifact, LlmInvocation,
+    LlmInvocationFinishReason, LlmInvocationMode, LlmInvocationSourceKind, MemoryDirectory,
+    MemoryDirectoryId, PublishedReport, PublishedReportId, PublishedReportVersion,
+    PublishedSurface, ReportPlan, ReportPlanAstVersion, ReportPlanId, ReportRenderOutput,
+    RetrievalEvidence, RetrievalEvidenceId, SecretBindingId, SecretScopeLevel, StaticPageDraft,
+    StaticPageDraftId, StaticPageDraftStatus, StaticPageImageJob, StaticPageImageJobId,
+    StaticPageImageJobStatus, StaticPageRenderOutput, StaticPageRenderOutputStatus, TenantId,
+    ToolExecution, ToolExecutionSourceKind, ToolExecutionStatus, User, UserId, UserSession,
+    UserSessionId, WorkflowEventRecord, WorkflowExecution, WorkflowExecutionId, WorkflowKind,
+    WorkflowStatus, WorkflowTask,
 };
 use event_bus::{
     workflow_execution_transition_subject, workflow_task_enqueued_subject, EventBus, EventEnvelope,
@@ -286,6 +287,10 @@ pub fn router(
         )
         .route("/v1/datasets", get(list_datasets).post(create_dataset))
         .route(
+            "/v1/datasets/{dataset_id}",
+            axum::routing::patch(update_dataset),
+        )
+        .route(
             "/v1/dataset-secret-bindings",
             axum::routing::post(create_dataset_secret_binding),
         )
@@ -318,6 +323,10 @@ pub fn router(
             get(list_chat_sessions).post(create_chat_session),
         )
         .route("/v1/documents", get(list_documents).post(register_document))
+        .route(
+            "/v1/documents/{document_id}",
+            axum::routing::patch(update_document),
+        )
         .route(
             "/v1/documents/compare",
             axum::routing::post(compare_documents_route),
@@ -2589,6 +2598,7 @@ fn format_document_lifecycle_view(value: contracts::DocumentLifecycleView) -> &'
         contracts::DocumentLifecycleView::Extracted => "extracted",
         contracts::DocumentLifecycleView::Indexed => "indexed",
         contracts::DocumentLifecycleView::Failed => "failed",
+        contracts::DocumentLifecycleView::Archived => "archived",
     }
 }
 
@@ -4533,6 +4543,53 @@ fn owner_user_id_is_visible(
     owner_user_id.is_none() || owner_user_id == current_user_id
 }
 
+fn ensure_owner_managed_resource(
+    resource_kind: &'static str,
+    resource_id: String,
+    owner_user_id: Option<UserId>,
+    current_user_id: Option<UserId>,
+) -> std::result::Result<(), ApiError> {
+    if owner_user_id.is_some() && owner_user_id != current_user_id {
+        return Err(ApiError::not_found(
+            &format!("{resource_kind}_not_found"),
+            format!("{resource_kind} {resource_id} was not found"),
+        ));
+    }
+    Ok(())
+}
+
+fn parse_dataset_lifecycle_update(
+    lifecycle: Option<String>,
+) -> std::result::Result<Option<DatasetLifecycle>, ApiError> {
+    lifecycle
+        .map(|value| {
+            let normalized = value.trim().to_ascii_lowercase();
+            DatasetLifecycle::from_str(&normalized).ok_or_else(|| {
+                ApiError::bad_request(
+                    "validation_error",
+                    format!("unsupported dataset lifecycle: {value}"),
+                )
+            })
+        })
+        .transpose()
+}
+
+fn parse_document_lifecycle_update(
+    lifecycle: Option<String>,
+) -> std::result::Result<Option<DocumentLifecycle>, ApiError> {
+    lifecycle
+        .map(|value| {
+            let normalized = value.trim().to_ascii_lowercase();
+            DocumentLifecycle::from_str(&normalized).ok_or_else(|| {
+                ApiError::bad_request(
+                    "validation_error",
+                    format!("unsupported document lifecycle: {value}"),
+                )
+            })
+        })
+        .transpose()
+}
+
 fn dataset_not_found_error(dataset_id: DatasetId) -> ApiError {
     ApiError::not_found(
         "dataset_not_found",
@@ -5187,6 +5244,7 @@ async fn list_datasets(
     Ok(Json(
         filter_visible_datasets(datasets, &active_secret_binding_ids, current_user_id)
             .into_iter()
+            .filter(|dataset| dataset.lifecycle != DatasetLifecycle::Archived)
             .map(|dataset| dataset_summary(dataset, None))
             .collect(),
     ))
@@ -5272,6 +5330,58 @@ async fn create_dataset(
         StatusCode::CREATED,
         Json(dataset_summary(dataset, access_warning)),
     ))
+}
+
+async fn update_dataset(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(dataset_id): Path<String>,
+    Json(request): Json<UpdateDatasetRequest>,
+) -> std::result::Result<Json<DatasetSummary>, ApiError> {
+    let dataset_id = parse_dataset_id(&dataset_id)?;
+    let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
+    let current_user_id = current_auth_user_id(&state, &headers).await?;
+    let dataset = load_visible_dataset_for_user(
+        &state,
+        dataset_id,
+        &active_secret_binding_ids,
+        current_user_id,
+    )
+    .await?;
+    ensure_owner_managed_resource(
+        "dataset",
+        dataset.id.to_string(),
+        dataset.owner_user_id,
+        current_user_id,
+    )?;
+
+    let title = trim_optional(request.title);
+    if let Some(title) = title.as_deref() {
+        validate_required("title", title)?;
+    }
+    let description = trim_optional(request.description);
+    let lifecycle = parse_dataset_lifecycle_update(request.lifecycle)?;
+    let metadata_updates = if lifecycle == Some(DatasetLifecycle::Archived) {
+        json!({ "archived_at": Utc::now() })
+    } else {
+        json!({})
+    };
+
+    let updated = state
+        .storage
+        .datasets()
+        .update_state(
+            state.tenant_id,
+            dataset_id,
+            title.as_deref(),
+            description.as_deref(),
+            lifecycle,
+            &metadata_updates,
+        )
+        .await
+        .map_err(ApiError::from_storage)?;
+
+    Ok(Json(dataset_summary(updated, None)))
 }
 
 async fn list_memory_directories(
@@ -10385,10 +10495,65 @@ async fn list_documents(
             .filter(|document| {
                 visible_dataset_ids.contains(&document.dataset_id)
                     && owner_user_id_is_visible(document.owner_user_id, current_user_id)
+                    && document.lifecycle != DocumentLifecycle::Archived
             })
             .map(to_document_summary)
             .collect(),
     ))
+}
+
+async fn update_document(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(document_id): Path<String>,
+    Json(request): Json<UpdateDocumentRequest>,
+) -> std::result::Result<Json<DocumentSummary>, ApiError> {
+    let document_id = parse_document_id(&document_id)?;
+    let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
+    let current_user_id = current_auth_user_id(&state, &headers).await?;
+    let document = load_visible_document_for_user(
+        &state,
+        document_id,
+        &active_secret_binding_ids,
+        current_user_id,
+    )
+    .await?;
+    ensure_owner_managed_resource(
+        "document",
+        document.id.to_string(),
+        document.owner_user_id,
+        current_user_id,
+    )?;
+
+    let title = trim_optional(request.title);
+    if let Some(title) = title.as_deref() {
+        validate_required("title", title)?;
+    }
+    let lifecycle = parse_document_lifecycle_update(request.lifecycle)?;
+    let mut metadata_updates = if request.metadata.is_object() {
+        request.metadata
+    } else {
+        json!({})
+    };
+    if lifecycle == Some(DocumentLifecycle::Archived) {
+        set_payload_value(&mut metadata_updates, "archived_at", json!(Utc::now()));
+    }
+
+    let updated = state
+        .storage
+        .documents()
+        .update_state(
+            state.tenant_id,
+            document_id,
+            lifecycle.unwrap_or(document.lifecycle),
+            title.as_deref(),
+            &metadata_updates,
+            Utc::now(),
+        )
+        .await
+        .map_err(ApiError::from_storage)?;
+
+    Ok(Json(to_document_summary(updated)))
 }
 
 async fn get_document_detail(
@@ -29559,6 +29724,51 @@ mod tests {
         assert_eq!(summary.lifecycle, contracts::DocumentLifecycleView::Indexed);
         assert_eq!(summary.content_type, "application/pdf");
         assert_eq!(summary.secret_binding_ids.len(), 1);
+    }
+
+    #[test]
+    fn document_archived_lifecycle_is_wire_visible() {
+        let now = Utc::now();
+        let document = Document {
+            id: DocumentId::new(),
+            tenant_id: TenantId::new(),
+            dataset_id: DatasetId::new(),
+            owner_user_id: None,
+            title: "Archived Source".to_string(),
+            object_key: "documents/old.md".to_string(),
+            content_type: "text/markdown".to_string(),
+            lifecycle: domain_model::DocumentLifecycle::Archived,
+            secret_binding_ids: vec![],
+            metadata: std::collections::BTreeMap::new(),
+            created_at: now,
+            updated_at: now,
+        };
+
+        let summary = to_document_summary(document);
+
+        assert_eq!(
+            summary.lifecycle,
+            contracts::DocumentLifecycleView::Archived
+        );
+        assert_eq!(
+            format_document_lifecycle_view(summary.lifecycle),
+            "archived"
+        );
+    }
+
+    #[test]
+    fn update_lifecycle_parsers_accept_archive_values() {
+        assert_eq!(
+            parse_dataset_lifecycle_update(Some("archived".to_string()))
+                .expect("dataset lifecycle parses"),
+            Some(DatasetLifecycle::Archived)
+        );
+        assert_eq!(
+            parse_document_lifecycle_update(Some("Archived".to_string()))
+                .expect("document lifecycle parses"),
+            Some(DocumentLifecycle::Archived)
+        );
+        assert!(parse_document_lifecycle_update(Some("deleted".to_string())).is_err());
     }
 
     #[test]

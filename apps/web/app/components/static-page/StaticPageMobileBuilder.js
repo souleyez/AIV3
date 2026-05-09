@@ -1,9 +1,6 @@
 'use client';
 
-import StaticPageEffectPreview from './StaticPageEffectPreview';
-import StaticPageFinalRender from './StaticPageFinalRender';
 import StaticPageMobileModuleList from './StaticPageMobileModuleList';
-import StaticPageStyleDirectionPicker from './StaticPageStyleDirectionPicker';
 
 const STYLE_LABELS = {
   'decision-brief': '高层决策简报',
@@ -13,16 +10,9 @@ const STYLE_LABELS = {
 
 export default function StaticPageMobileBuilder({
   draft,
-  intent,
-  onIntentChange,
-  onSubmitIntent,
   onApplyOperation,
   onReorderModules,
-  onChangeStyleDirection,
-  onRetryWorkflow,
-  onCancelWorkflow,
-  onRefreshDraft,
-  onOneClick,
+  onRequestPreview,
   onBackToChat,
 }) {
   if (!draft) {
@@ -49,8 +39,8 @@ export default function StaticPageMobileBuilder({
           返回对话
         </button>
         <strong>静态页构建</strong>
-        <button type="button" className="primary-btn compact-action-btn" onClick={onOneClick}>
-          一键出图
+        <button type="button" className="primary-btn compact-action-btn" onClick={onRequestPreview}>
+          效果图
         </button>
       </div>
 
@@ -64,44 +54,9 @@ export default function StaticPageMobileBuilder({
         </div>
       </div>
 
-      <div className="static-page-mobile-model-summary">
-        <span>模型理解</span>
-        <p>{draft.modelSummary}</p>
-      </div>
-
-      <StaticPageStyleDirectionPicker
-        compact
-        value={draft.styleDirection}
-        onChange={onChangeStyleDirection}
-      />
-
-      <StaticPageEffectPreview compact draft={draft} onApplyOperation={onApplyOperation} />
-
-      <StaticPageFinalRender
-        compact
-        draft={draft}
-        onApplyOperation={onApplyOperation}
-        onRetryWorkflow={onRetryWorkflow}
-        onCancelWorkflow={onCancelWorkflow}
-        onRefreshDraft={onRefreshDraft}
-      />
-
-      <div className="static-page-mobile-intent">
-        <label htmlFor="static-page-mobile-intent">告诉模型怎么改</label>
-        <textarea
-          id="static-page-mobile-intent"
-          value={intent}
-          onChange={(event) => onIntentChange?.(event.target.value)}
-          placeholder="例如：把风险放到前面，减少文字，整体更像给老板看的"
-        />
-        <button type="button" className="ghost-btn" onClick={onSubmitIntent} disabled={!intent?.trim()}>
-          按意图刷新规划
-        </button>
-      </div>
-
       <div className="static-page-mobile-section-title">
         <strong>模块顺序</strong>
-        <span>手机端支持上下排序，也可展开模块微调标题、内容、数据和图表。</span>
+        <span>手机端支持上下排序，也可展开模块微调标题、内容、数据和图表；整体修改继续在底部对话框输入。</span>
       </div>
 
       <StaticPageMobileModuleList

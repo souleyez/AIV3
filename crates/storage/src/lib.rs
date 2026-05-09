@@ -814,6 +814,50 @@ impl PgDatasetRepository {
         map_dataset_row(&row)
     }
 
+    pub async fn update_state(
+        &self,
+        tenant_id: TenantId,
+        dataset_id: DatasetId,
+        title: Option<&str>,
+        description: Option<&str>,
+        lifecycle: Option<DatasetLifecycle>,
+        metadata_updates: &Value,
+    ) -> Result<Dataset> {
+        let current = self
+            .get_by_id(tenant_id, dataset_id)
+            .await?
+            .ok_or_else(|| anyhow!("dataset {dataset_id} was not found"))?;
+        let merged_metadata = merge_dataset_metadata(&current.metadata, metadata_updates)?;
+        let next_title = title.unwrap_or(&current.title).to_string();
+        let next_description = description
+            .map(ToString::to_string)
+            .or_else(|| current.description.clone());
+        let next_lifecycle = lifecycle.unwrap_or(current.lifecycle);
+
+        let row = sqlx::query(
+            r#"
+            update datasets
+            set title = $3,
+                description = $4,
+                lifecycle = $5,
+                metadata = $6,
+                updated_at = now()
+            where tenant_id = $1 and id = $2
+            returning id, tenant_id, owner_user_id, key, title, description, lifecycle, metadata, created_at, updated_at
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(dataset_id.0)
+        .bind(next_title)
+        .bind(next_description)
+        .bind(next_lifecycle.as_str())
+        .bind(merged_metadata)
+        .fetch_one(&self.pool)
+        .await?;
+
+        map_dataset_row(&row)
+    }
+
     pub async fn update_owner_user_id(
         &self,
         tenant_id: TenantId,

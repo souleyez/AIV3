@@ -583,6 +583,16 @@ pub struct CreateDatasetRequest {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct UpdateDatasetRequest {
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub lifecycle: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DatasetSummary {
     pub id: DatasetId,
     pub key: String,
@@ -825,6 +835,7 @@ pub enum DocumentLifecycleView {
     Extracted,
     Indexed,
     Failed,
+    Archived,
 }
 
 impl DocumentLifecycleView {
@@ -834,6 +845,7 @@ impl DocumentLifecycleView {
             domain_model::DocumentLifecycle::Extracted => Self::Extracted,
             domain_model::DocumentLifecycle::Indexed => Self::Indexed,
             domain_model::DocumentLifecycle::Failed => Self::Failed,
+            domain_model::DocumentLifecycle::Archived => Self::Archived,
         }
     }
 
@@ -843,6 +855,7 @@ impl DocumentLifecycleView {
             "extracted" => Some(Self::Extracted),
             "indexed" => Some(Self::Indexed),
             "failed" => Some(Self::Failed),
+            "archived" => Some(Self::Archived),
             _ => None,
         }
     }
@@ -1558,6 +1571,16 @@ pub struct RegisterDocumentRequest {
     pub object_key: String,
     pub content_type: String,
     pub secret_binding_ids: Vec<SecretBindingId>,
+    #[serde(default)]
+    pub metadata: Value,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct UpdateDocumentRequest {
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub lifecycle: Option<String>,
     #[serde(default)]
     pub metadata: Value,
 }

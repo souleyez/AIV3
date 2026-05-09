@@ -131,6 +131,7 @@ pub enum DocumentLifecycle {
     Extracted,
     Indexed,
     Failed,
+    Archived,
 }
 
 impl DocumentLifecycle {
@@ -140,6 +141,7 @@ impl DocumentLifecycle {
             Self::Extracted => "extracted",
             Self::Indexed => "indexed",
             Self::Failed => "failed",
+            Self::Archived => "archived",
         }
     }
 
@@ -149,6 +151,7 @@ impl DocumentLifecycle {
             "extracted" => Some(Self::Extracted),
             "indexed" => Some(Self::Indexed),
             "failed" => Some(Self::Failed),
+            "archived" => Some(Self::Archived),
             _ => None,
         }
     }
@@ -874,9 +877,14 @@ mod tests {
     #[test]
     fn document_lifecycle_roundtrips_through_stable_strings() {
         assert_eq!(DocumentLifecycle::Indexed.as_str(), "indexed");
+        assert_eq!(DocumentLifecycle::Archived.as_str(), "archived");
         assert_eq!(
             DocumentLifecycle::from_str("received").expect("document lifecycle parses"),
             DocumentLifecycle::Received
+        );
+        assert_eq!(
+            DocumentLifecycle::from_str("archived").expect("document lifecycle parses"),
+            DocumentLifecycle::Archived
         );
     }
 

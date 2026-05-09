@@ -559,10 +559,14 @@ export default function HomePageClient() {
   const [uploadingFiles, setUploadingFiles] = useState(false);
   const [reportEntryBusy, setReportEntryBusy] = useState(false);
   const [reportActionBusy, setReportActionBusy] = useState('');
+  const [datasetActionBusy, setDatasetActionBusy] = useState('');
+  const [documentActionBusy, setDocumentActionBusy] = useState('');
   const [banner, setBanner] = useState('');
   const [error, setError] = useState('');
   const [staticPageDrafts, setStaticPageDrafts] = useState({});
   const [activeStaticPageDraftId, setActiveStaticPageDraftId] = useState(null);
+  const [staticPageEditorOpen, setStaticPageEditorOpen] = useState(false);
+  const [staticPageActionBusy, setStaticPageActionBusy] = useState(false);
   const [backendHtmlArtifacts, setBackendHtmlArtifacts] = useState([]);
   const [activeHtmlArtifactId, setActiveHtmlArtifactId] = useState(null);
   const [scopePlan, setScopePlan] = useState({ candidates: [], hint: '' });
@@ -1509,6 +1513,99 @@ export default function HomePageClient() {
     }
   }
 
+  async function handleUpdateDataset(datasetId, updates) {
+    if (!datasetId) {
+      return;
+    }
+    setDatasetActionBusy(datasetId);
+    try {
+      const payload = {};
+      if (typeof updates.title === 'string') payload.title = updates.title;
+      if (typeof updates.description === 'string') payload.description = updates.description;
+      if (typeof updates.lifecycle === 'string') payload.lifecycle = updates.lifecycle;
+      const updated = await fetchJson(`/api/v3/datasets/${datasetId}`, {
+        method: 'PATCH',
+        body: JSON.stringify(payload),
+      });
+      setBanner(updated.lifecycle === 'archived' || updated.lifecycle === 'Archived'
+        ? '数据集已归档。'
+        : '数据集已更新。');
+      if (payload.lifecycle === 'archived') {
+        setSelectedDatasetId(null);
+        setSelectedSessionId(null);
+      }
+      await refreshCatalog({
+        preferredDatasetId: payload.lifecycle === 'archived' ? null : datasetId,
+        silent: true,
+      });
+      setError('');
+    } catch (updateError) {
+      setError(updateError instanceof Error ? updateError.message : '数据集更新失败');
+    } finally {
+      setDatasetActionBusy('');
+    }
+  }
+
+  async function handleArchiveDataset(datasetId) {
+    await handleUpdateDataset(datasetId, { lifecycle: 'archived' });
+  }
+
+  async function handleUpdateDocument(documentId, updates) {
+    if (!documentId) {
+      return;
+    }
+    setDocumentActionBusy(documentId);
+    try {
+      const payload = {};
+      if (typeof updates.title === 'string') payload.title = updates.title;
+      if (typeof updates.lifecycle === 'string') payload.lifecycle = updates.lifecycle;
+      await fetchJson(`/api/v3/documents/${documentId}`, {
+        method: 'PATCH',
+        body: JSON.stringify(payload),
+      });
+      setBanner(payload.lifecycle === 'archived' ? '文档已归档。' : '文档已更新。');
+      await refreshDocuments({ silent: true });
+      if (payload.lifecycle === 'archived') {
+        setSelectedDocumentId((current) => (current === documentId ? '' : current));
+        setSelectedDocumentDetail((current) => (
+          current?.document?.id === documentId ? null : current
+        ));
+      } else {
+        await refreshDocumentDetail(documentId);
+      }
+      setError('');
+    } catch (updateError) {
+      setError(updateError instanceof Error ? updateError.message : '文档更新失败');
+    } finally {
+      setDocumentActionBusy('');
+    }
+  }
+
+  async function handleArchiveDocuments(documentIds) {
+    const ids = [...new Set((documentIds || []).filter(Boolean))];
+    if (!ids.length) {
+      return;
+    }
+    setDocumentActionBusy('batch');
+    try {
+      await Promise.all(ids.map((documentId) => fetchJson(`/api/v3/documents/${documentId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ lifecycle: 'archived' }),
+      })));
+      setBanner(ids.length === 1 ? '文档已归档。' : `已归档 ${ids.length} 个文档。`);
+      await refreshDocuments({ silent: true });
+      if (ids.includes(selectedDocumentId)) {
+        setSelectedDocumentId('');
+        setSelectedDocumentDetail(null);
+      }
+      setError('');
+    } catch (updateError) {
+      setError(updateError instanceof Error ? updateError.message : '文档批量归档失败');
+    } finally {
+      setDocumentActionBusy('');
+    }
+  }
+
   async function refreshWorkspace(datasetId, options = {}) {
     const { preferredSessionId = null, silent = false, preserveNewSessionDraft = false } = options;
     const loadId = datasetLoadIdRef.current + 1;
@@ -2050,9 +2147,10 @@ export default function HomePageClient() {
     const staticPageEditRequested = Boolean(activeStaticPageDraft && promptRequestsStaticPageEdit(prompt));
     const backendStaticPageEditRequested = Boolean(staticPageEditRequested && activeStaticPageDraft?.backendDraftId && lastAssistantRunId);
     const shouldUseAssistantRun = !effectiveDatasetId || staticPageCreateRequested || backendStaticPageEditRequested;
-    if (promptRequestsStaticPage(prompt)) {
+    if (staticPageCreateRequested) {
       pendingStaticPageDraft = handleStartStaticPageDraft({
         oneClick: /一键|直接|马上|立即|跳过/.test(prompt),
+        openEditor: false,
         prompt,
         datasetId: effectiveDatasetId,
         dataset: effectiveDataset,
@@ -2142,7 +2240,9 @@ export default function HomePageClient() {
         setComposingNewSession(false);
         setBanner(
           usedBackendAssistantRun
-            ? backendStaticPageEditRequested && usedAssistantRunContinue
+            ? staticPageCreateRequested
+              ? '已正常完成本轮对话，并准备好静态页草稿；如果需要编辑，点消息末尾的“进入静态页工作台”。'
+              : backendStaticPageEditRequested && usedAssistantRunContinue
               ? '已让模型在当前静态页草稿上继续执行；记录只缓存在当前浏览器。'
               : usedAssistantRunContinue
                 ? '已在同一个 AssistantRun 上继续执行；记录只缓存在当前浏览器。'
@@ -2213,6 +2313,7 @@ export default function HomePageClient() {
   function handleStartStaticPageDraft(options = {}) {
     const {
       oneClick = false,
+      openEditor = !oneClick,
       prompt = '',
       datasetId = selectedDatasetId,
       dataset = selectedDataset,
@@ -2240,10 +2341,13 @@ export default function HomePageClient() {
       [draft.id]: draft,
     }));
     setActiveStaticPageDraftId(draft.id);
+    setStaticPageEditorOpen(Boolean(openEditor));
     setActiveHtmlArtifactId(null);
-    setBanner(oneClick ? '已按 AI 理解创建静态页草稿，并进入效果图排队。' : '已创建静态页草稿，下一步会展示页面规划。');
+    setBanner(openEditor
+      ? (oneClick ? '已按 AI 理解创建静态页草稿，并进入效果图排队。' : '已创建静态页草稿，下一步会展示页面规划。')
+      : '已准备静态页草稿；当前对话不会中断，需要时点击“进入静态页工作台”。');
     setError('');
-    setMobilePanel('insights');
+    setMobilePanel('chat');
     if (assistantRunId) {
       syncStaticPageDraftCreate(draft, { assistantRunId, prompt });
     }
@@ -2256,18 +2360,20 @@ export default function HomePageClient() {
       return;
     }
     setActiveStaticPageDraftId(draftId);
+    setStaticPageEditorOpen(true);
     setActiveHtmlArtifactId(null);
     setBanner(draft.status === 'rendered' ? '已打开已生成静态页，可继续在对话框提出修改。' : '已打开静态页草稿，可继续规划或生成。');
-    setMobilePanel('insights');
+    setMobilePanel('chat');
   }
 
   function handleCloseStaticPageDraft() {
-    setActiveStaticPageDraftId(null);
+    setStaticPageEditorOpen(false);
     setBanner('已返回聊天记录；右侧静态页成品架可随时重新打开草稿或成品。');
   }
 
   function handleSelectHtmlArtifact(artifactId) {
     setActiveHtmlArtifactId(artifactId);
+    setStaticPageEditorOpen(false);
     setBanner('已打开安全 HTML 产物；内容在沙箱中展示，不会执行任意外部脚本。');
     setMobilePanel('chat');
   }
@@ -2375,6 +2481,103 @@ export default function HomePageClient() {
 
     syncStaticPageDraftOperations(activeStaticPageDraft, draft, [operation]);
     return draft;
+  }
+
+  async function handleStaticPagePrimaryAction() {
+    if (staticPageActionBusy) {
+      return activeStaticPageDraft;
+    }
+
+    if (!activeStaticPageDraft) {
+      const draft = handleStartStaticPageDraft({ oneClick: false });
+      setStaticPageEditorOpen(true);
+      return draft;
+    }
+
+    const draft = activeStaticPageDraft;
+    const previewStale = draft.previewContract?.status === 'stale' || draft.imageJob?.status === 'stale';
+    const jobStatus = previewStale ? 'stale' : (draft.imageJob?.status || draft.previewContract?.status || 'idle');
+    const finalStatus = draft.finalPage?.status || '';
+
+    if (finalStatus === 'rendered' || draft.status === 'rendered') {
+      setStaticPageEditorOpen(false);
+      setBanner('静态页已经生成；如果要重做，先回到模块编辑修改内容，再重新发起效果图。');
+      return draft;
+    }
+
+    if (['queued', 'running'].includes(jobStatus)) {
+      setStaticPageEditorOpen(false);
+      setBanner('效果图正在生成中；资源返回后会停在主聊天区等待确认。');
+      return draft;
+    }
+
+    if (['queued', 'rendering'].includes(finalStatus)) {
+      setStaticPageEditorOpen(false);
+      setBanner('最终静态页正在后台制作；完成后会进入右侧生成结果。');
+      return draft;
+    }
+
+    setStaticPageActionBusy(true);
+    setError('');
+
+    try {
+      const canContinueToRender = jobStatus === 'preview_ready'
+        || draft.status === 'preview_ready'
+        || draft.status === 'effect_confirmed'
+        || draft.previewContract?.status === 'confirmed';
+
+      if (canContinueToRender) {
+        if (draft.previewContract?.status === 'confirmed' && !canRequestStaticPageFinalRender(draft)) {
+          setBanner(staticPageFinalRenderBlockReason(draft) || '效果图确认状态缺少资源，请重新发起效果图。');
+          return draft;
+        }
+
+        if (draft.backendDraftId) {
+          const { draft: renderDraft } = await createBackendStaticPageRender(draft, {
+            previewImage: draft.previewImage || buildMockStaticPagePreview(draft),
+          });
+          setStaticPageEditorOpen(false);
+          setMobilePanel('chat');
+          return renderDraft;
+        }
+
+        const confirmedDraft = draft.previewContract?.status === 'confirmed'
+          ? draft
+          : replaceDraftWithOperation(draft, {
+              type: 'confirm_preview',
+              previewImage: draft.previewImage || buildMockStaticPagePreview(draft),
+            });
+        const renderedDraft = replaceDraftWithOperation(confirmedDraft, { type: 'request_final_render' });
+        setStaticPageEditorOpen(false);
+        setMobilePanel('chat');
+        setBanner('已按确认效果图生成本地静态页模拟结果；接入后端时会进入正式后台渲染。');
+        return renderedDraft;
+      }
+
+      const queueOperation = {
+        type: 'queue_image_job',
+        queueMessage: STATIC_PAGE_QUEUE_MESSAGE,
+      };
+
+      if (draft.backendDraftId) {
+        const { draft: queuedDraft } = await createBackendStaticPageImageJob(draft, queueOperation);
+        setStaticPageEditorOpen(false);
+        setMobilePanel('chat');
+        return queuedDraft;
+      }
+
+      const queuedDraft = replaceDraftWithOperation(draft, queueOperation);
+      const previewDraft = replaceDraftWithOperation(queuedDraft, { type: 'mark_preview_ready' });
+      setStaticPageEditorOpen(false);
+      setMobilePanel('chat');
+      setBanner('当前草稿尚未同步到后端，已生成本地模拟效果图；正式运行会进入 Cloudflare/Codex 生图队列。');
+      return previewDraft;
+    } catch (actionError) {
+      setError(actionError instanceof Error ? actionError.message : '静态页生成动作失败');
+      return draft;
+    } finally {
+      setStaticPageActionBusy(false);
+    }
   }
 
   async function handleResolveReportEntry(action) {
@@ -2784,6 +2987,15 @@ export default function HomePageClient() {
   }, [activeStaticPageDraft?.backendDraftId, activeStaticPageDraft?.imageJob?.status]);
 
   useEffect(() => {
+    if (!staticPageEditorOpen || activeStaticPageDraft?.imageJob?.status !== 'preview_ready') {
+      return;
+    }
+    setStaticPageEditorOpen(false);
+    setMobilePanel('chat');
+    setBanner('效果图已生成，已回到主聊天区。满意就点“效果图——生成页面”；不满意就回到模块编辑。');
+  }, [activeStaticPageDraft?.id, activeStaticPageDraft?.imageJob?.status, staticPageEditorOpen]);
+
+  useEffect(() => {
     const backendDraftId = activeStaticPageDraft?.backendDraftId;
     const renderStatus = activeStaticPageDraft?.finalPage?.status;
     if (!backendDraftId || !['queued', 'rendering'].includes(renderStatus)) {
@@ -2895,12 +3107,21 @@ export default function HomePageClient() {
     staticPageDraft: activeStaticPageDraft,
     onStartStaticPageDraft: handleStartStaticPageDraft,
     onApplyStaticPageOperation: handleApplyStaticPageOperation,
+    onStaticPagePrimaryAction: handleStaticPagePrimaryAction,
+    staticPageActionBusy,
     onApplyStaticPagePrompt: handleApplyStaticPagePrompt,
     onRetryWorkflowExecution: handleRetryWorkflowExecution,
     onCancelWorkflowExecution: handleCancelWorkflowExecution,
     onRefreshStaticPageDraft: (backendDraftId) => refreshBackendStaticPageDraft(backendDraftId, { silent: false }),
-    onOpenStaticPageBuilder: () => setMobilePanel('insights'),
+    onOpenStaticPageBuilder: () => {
+      if (activeStaticPageDraft) {
+        setStaticPageEditorOpen(true);
+        setActiveHtmlArtifactId(null);
+        setMobilePanel('chat');
+      }
+    },
     onCloseStaticPageDraft: handleCloseStaticPageDraft,
+    showStaticPageWorkspace: staticPageEditorOpen,
     startupBriefing: assistantStartupBriefing,
     scopePlan,
     assistantRunProgress,
@@ -2969,6 +3190,12 @@ export default function HomePageClient() {
     selectedDocumentDetail,
     documentDetailLoading,
     onRefreshDocuments: () => refreshDocuments({ silent: false }),
+    onUpdateDataset: handleUpdateDataset,
+    onArchiveDataset: handleArchiveDataset,
+    datasetActionBusy,
+    onUpdateDocument: handleUpdateDocument,
+    onArchiveDocuments: handleArchiveDocuments,
+    documentActionBusy,
     stats,
     accountStatusSummary,
     activityEvents,
@@ -3005,8 +3232,9 @@ export default function HomePageClient() {
           banner={banner}
           error={error}
           staticPageDraft={activeStaticPageDraft}
+          staticPageEditorOpen={staticPageEditorOpen}
+          onStaticPageEditorOpenChange={setStaticPageEditorOpen}
           onApplyStaticPageOperation={handleApplyStaticPageOperation}
-          onApplyStaticPagePrompt={handleApplyStaticPagePrompt}
         />
         {uploadInput}
       </>

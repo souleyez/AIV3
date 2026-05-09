@@ -24,6 +24,8 @@ const REPORT_ENTRY_LABELS = {
   confirmed: '已进入报告服务',
 };
 
+const STATIC_PAGE_PRIMARY_ACTION_LABEL = '效果图——生成页面';
+
 const RUNTIME_PHASES = [
   {
     key: 'provider',
@@ -349,6 +351,111 @@ function AssistantRunProgressPanel({ progress }) {
   );
 }
 
+function staticPageJobStatus(draft) {
+  if (draft?.previewContract?.status === 'stale' || draft?.imageJob?.status === 'stale') {
+    return 'stale';
+  }
+  return draft?.imageJob?.status || draft?.previewContract?.status || 'idle';
+}
+
+function staticPageActionState(draft) {
+  const jobStatus = staticPageJobStatus(draft);
+  const finalStatus = draft?.finalPage?.status || '';
+  const stale = draft?.previewContract?.status === 'stale' || jobStatus === 'stale';
+
+  if (!draft) {
+    return {
+      disabled: false,
+      label: STATIC_PAGE_PRIMARY_ACTION_LABEL,
+      helper: '先创建静态页规划，再进入效果图和页面生成。',
+      workspaceLabel: '效果图',
+    };
+  }
+
+  if (['queued', 'rendering'].includes(finalStatus)) {
+    return {
+      disabled: true,
+      label: STATIC_PAGE_PRIMARY_ACTION_LABEL,
+      helper: '最终静态页正在后台制作，完成后会进入右侧结果区。',
+      workspaceLabel: '生成中',
+    };
+  }
+
+  if (finalStatus === 'rendered' || draft.status === 'rendered') {
+    return {
+      disabled: false,
+      label: STATIC_PAGE_PRIMARY_ACTION_LABEL,
+      helper: '页面已生成；如需调整，回到模块编辑后重新生成效果图。',
+      workspaceLabel: '效果图',
+    };
+  }
+
+  if (['queued', 'running'].includes(jobStatus)) {
+    const queueText = draft.imageJob?.queuePosition
+      ? `当前前方约 ${draft.imageJob.queuePosition} 个任务。`
+      : '正在等待远程生图资源。';
+    return {
+      disabled: true,
+      label: STATIC_PAGE_PRIMARY_ACTION_LABEL,
+      helper: `${draft.imageJob?.queueMessage || '资源正在排队，可以联系商务开通高级用户跳过等待。'} ${queueText}`,
+      workspaceLabel: '排队中',
+    };
+  }
+
+  if (jobStatus === 'preview_ready' || draft.status === 'preview_ready') {
+    return {
+      disabled: false,
+      label: STATIC_PAGE_PRIMARY_ACTION_LABEL,
+      helper: '效果图已回来。满意就继续生成页面；不满意回到模块编辑后再出图。',
+      workspaceLabel: '生成页面',
+    };
+  }
+
+  if (draft.status === 'effect_confirmed' || draft.previewContract?.status === 'confirmed') {
+    return {
+      disabled: false,
+      label: STATIC_PAGE_PRIMARY_ACTION_LABEL,
+      helper: '效果图已确认，下一步按这个视觉合同制作静态页。',
+      workspaceLabel: '生成页面',
+    };
+  }
+
+  if (jobStatus === 'failed') {
+    return {
+      disabled: false,
+      label: STATIC_PAGE_PRIMARY_ACTION_LABEL,
+      helper: draft.imageJob?.queueMessage || '效果图生成失败，可以重新发起。',
+      workspaceLabel: '效果图',
+    };
+  }
+
+  if (stale) {
+    return {
+      disabled: false,
+      label: STATIC_PAGE_PRIMARY_ACTION_LABEL,
+      helper: '模块已经改过，上一张效果图失效，需要重新发起效果图。',
+      workspaceLabel: '效果图',
+    };
+  }
+
+  return {
+    disabled: false,
+    label: STATIC_PAGE_PRIMARY_ACTION_LABEL,
+    helper: '模块编辑完成后，用这一个按钮先出效果图；效果图满意后同一个按钮继续生成页面。',
+    workspaceLabel: '效果图',
+  };
+}
+
+function shouldOfferStaticPageWorkspaceEntry(draft) {
+  if (!draft) return false;
+  const jobStatus = staticPageJobStatus(draft);
+  const finalStatus = draft?.finalPage?.status || '';
+  return !draft.previewImage
+    && !draft.imageJob?.id
+    && !finalStatus
+    && (draft.status === 'planning' || jobStatus === 'idle');
+}
+
 export default function ChatPanel({
   dataset,
   session,
@@ -365,6 +472,8 @@ export default function ChatPanel({
   staticPageDraft = null,
   onStartStaticPageDraft,
   onApplyStaticPageOperation,
+  onStaticPagePrimaryAction,
+  staticPageActionBusy = false,
   onApplyStaticPagePrompt,
   onRetryWorkflowExecution,
   onCancelWorkflowExecution,
@@ -385,6 +494,29 @@ export default function ChatPanel({
   const latestTurn = session?.session_manifest_view?.last_turn || null;
   const showingHtmlArtifactWorkspace = Boolean(htmlArtifact);
   const showingStaticPageWorkspace = showStaticPageWorkspace && Boolean(staticPageDraft);
+  const staticPageAction = staticPageActionState(staticPageDraft);
+  const staticPageEntryOnly = shouldOfferStaticPageWorkspaceEntry(staticPageDraft);
+  const staticPageNotice = staticPageDraft && !showingHtmlArtifactWorkspace && !showingStaticPageWorkspace ? (
+    <StaticPageAssistantNotice
+      draft={staticPageDraft}
+      onOpenBuilder={onOpenStaticPageBuilder}
+      actionLabel={staticPageEntryOnly ? '进入静态页工作台' : staticPageAction.label}
+      actionHelper={
+        staticPageEntryOnly
+          ? '对话保持正常；点击后才会在主聊天区打开模块编辑，不点就继续聊天。'
+          : staticPageAction.helper
+      }
+      actionDisabled={staticPageEntryOnly ? false : (staticPageAction.disabled || staticPageActionBusy)}
+      onPrimaryAction={() => {
+        if (staticPageEntryOnly) {
+          onOpenStaticPageBuilder?.();
+          return;
+        }
+        onStaticPagePrimaryAction?.();
+      }}
+      secondaryLabel={staticPageEntryOnly ? '' : '不满意，回到模块编辑'}
+    />
+  ) : null;
 
   return (
     <section className={`chat-panel card ${panelClassName}`.trim()}>
@@ -440,14 +572,6 @@ export default function ChatPanel({
 
       <SessionRuntimeSummary turn={latestTurn} />
 
-      {!showingHtmlArtifactWorkspace && !showingStaticPageWorkspace ? (
-        <StaticPageAssistantNotice
-          draft={staticPageDraft}
-          onOpenBuilder={onOpenStaticPageBuilder}
-          onOneClick={() => onStartStaticPageDraft?.({ oneClick: true })}
-        />
-      ) : null}
-
       <AssistantContextStrip
         dataset={dataset}
         startupBriefing={startupBriefing}
@@ -479,9 +603,19 @@ export default function ChatPanel({
               <span>当前工作台</span>
               <strong>{staticPageDraft?.status === 'rendered' ? '静态页成品' : '静态页规划'}</strong>
             </div>
-            <button type="button" className="ghost-btn compact-action-btn" onClick={onCloseStaticPageDraft}>
-              返回聊天记录
-            </button>
+            <div className="chat-static-page-head-actions">
+              <button type="button" className="ghost-btn compact-action-btn" onClick={onCloseStaticPageDraft}>
+                返回聊天记录
+              </button>
+              <button
+                type="button"
+                className="primary-btn compact-action-btn"
+                onClick={() => onStaticPagePrimaryAction?.()}
+                disabled={staticPageAction.disabled || staticPageActionBusy}
+              >
+                {staticPageAction.workspaceLabel}
+              </button>
+            </div>
           </div>
           <StaticPagePlanningPanel
             draft={staticPageDraft}
@@ -501,46 +635,51 @@ export default function ChatPanel({
             <span className="loading-dot"></span>
             <span className="loading-dot"></span>
           </div>
-        ) : messages.length ? (
-          messages.map((message) => {
-            const assistant = message.role === 'assistant';
-            const chips = buildMessageChips(message);
-            return (
-              <article className={`message ${assistant ? 'assistant' : 'user'}`} key={message.id}>
-                {assistant ? <div className="avatar">AI</div> : null}
-                <div className={`bubble ${assistant ? '' : 'user-bubble'}`}>
-                  <div className="message-body">{renderParagraphs(message.content)}</div>
-                  {chips.length ? (
-                    <div className="message-chip-row">
-                      {chips.map((chip) => (
-                        <span className={`message-chip ${chip.tone}`} key={`${message.id}-${chip.label}`}>
-                          {chip.label}
-                        </span>
-                      ))}
-                    </div>
-                  ) : null}
-                  {assistant ? renderRuntimePhaseRail(message.message_manifest_view?.turn) : null}
-                  {assistant ? (
-                    <RuntimeProviderFailure failure={message.message_manifest_view?.turn?.provider_failure} />
-                  ) : null}
-                  <div className="message-meta">
-                    {formatDateTime(message.created_at)}
-                  </div>
-                </div>
-                {!assistant ? <div className="avatar user-avatar">U</div> : null}
-              </article>
-            );
-          })
         ) : (
-          <div className="chat-empty-state">
-            <h4>{dataset ? '从当前数据集发起新会话' : '可以直接聊天'}</h4>
-            <p>
-              {dataset
-                ? '输入问题会创建独立 chat_session；选中右侧历史会话后，底部输入会追加到该会话的新一轮。'
-                : '未选数据集时按普通模型聊天处理；如果问题命中资料范围，系统会在左侧预选相关数据集并优先供料。'}
-            </p>
-          </div>
-          )}
+          <>
+            {messages.length ? (
+              messages.map((message) => {
+                const assistant = message.role === 'assistant';
+                const chips = buildMessageChips(message);
+                return (
+                  <article className={`message ${assistant ? 'assistant' : 'user'}`} key={message.id}>
+                    {assistant ? <div className="avatar">AI</div> : null}
+                    <div className={`bubble ${assistant ? '' : 'user-bubble'}`}>
+                      <div className="message-body">{renderParagraphs(message.content)}</div>
+                      {chips.length ? (
+                        <div className="message-chip-row">
+                          {chips.map((chip) => (
+                            <span className={`message-chip ${chip.tone}`} key={`${message.id}-${chip.label}`}>
+                              {chip.label}
+                            </span>
+                          ))}
+                        </div>
+                      ) : null}
+                      {assistant ? renderRuntimePhaseRail(message.message_manifest_view?.turn) : null}
+                      {assistant ? (
+                        <RuntimeProviderFailure failure={message.message_manifest_view?.turn?.provider_failure} />
+                      ) : null}
+                      <div className="message-meta">
+                        {formatDateTime(message.created_at)}
+                      </div>
+                    </div>
+                    {!assistant ? <div className="avatar user-avatar">U</div> : null}
+                  </article>
+                );
+              })
+            ) : (
+              <div className="chat-empty-state">
+                <h4>{dataset ? '从当前数据集发起新会话' : '可以直接聊天'}</h4>
+                <p>
+                  {dataset
+                    ? '输入问题会创建独立 chat_session；选中右侧历史会话后，底部输入会追加到该会话的新一轮。'
+                    : '未选数据集时按普通模型聊天处理；如果问题命中资料范围，系统会在左侧预选相关数据集并优先供料。'}
+                </p>
+              </div>
+            )}
+            {staticPageNotice}
+          </>
+        )}
         </div>
       )}
 
@@ -588,7 +727,7 @@ export default function ChatPanel({
           <button
             className="ghost-btn static-page-one-click-btn"
             type="button"
-            onClick={() => onStartStaticPageDraft?.({ oneClick: true })}
+            onClick={() => onStartStaticPageDraft?.({ oneClick: false, openEditor: true })}
             disabled={submitting}
           >
             页面

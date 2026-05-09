@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import ChatPanel from './ChatPanel';
 import InsightPanel from './InsightPanel';
 import Sidebar from './Sidebar';
@@ -16,27 +16,43 @@ export default function HomeMobileShell({
   banner,
   error,
   staticPageDraft,
+  staticPageEditorOpen,
+  onStaticPageEditorOpenChange,
   onApplyStaticPageOperation,
-  onApplyStaticPagePrompt,
 }) {
   const [datasetOpen, setDatasetOpen] = useState(false);
   const [resultsOpen, setResultsOpen] = useState(false);
   const [surface, setSurface] = useState('chat');
-  const [staticPageIntent, setStaticPageIntent] = useState('');
 
   function handleStartStaticPageDraft(options = {}) {
     const draft = chatPanelProps.onStartStaticPageDraft?.(options);
+    onStaticPageEditorOpenChange?.(true);
     setSurface('static-page');
     return draft;
   }
 
-  function handleSubmitStaticPageIntent() {
-    const prompt = staticPageIntent.trim();
-    if (!prompt) return;
-    onApplyStaticPagePrompt?.(prompt);
-    setStaticPageIntent('');
-    setSurface('static-page');
+  function handleBackToChat() {
+    onStaticPageEditorOpenChange?.(false);
+    setSurface('chat');
   }
+
+  function handleRequestPreviewFromBuilder() {
+    chatPanelProps.onStaticPagePrimaryAction?.();
+    onStaticPageEditorOpenChange?.(false);
+    setSurface('chat');
+  }
+
+  useEffect(() => {
+    if (staticPageEditorOpen && staticPageDraft && surface !== 'static-page') {
+      setSurface('static-page');
+    }
+  }, [staticPageDraft, staticPageEditorOpen, surface]);
+
+  useEffect(() => {
+    if (!staticPageEditorOpen && surface === 'static-page' && staticPageDraft?.imageJob?.status === 'preview_ready') {
+      setSurface('chat');
+    }
+  }, [staticPageDraft?.imageJob?.status, staticPageEditorOpen, surface]);
 
   return (
     <div className="mobile-home-shell">
@@ -71,27 +87,20 @@ export default function HomeMobileShell({
         {surface === 'static-page' ? (
           <StaticPageMobileBuilder
             draft={staticPageDraft}
-            intent={staticPageIntent}
-            onIntentChange={setStaticPageIntent}
-            onSubmitIntent={handleSubmitStaticPageIntent}
             onApplyOperation={onApplyStaticPageOperation}
             onReorderModules={(order) => onApplyStaticPageOperation?.({ type: 'reorder_modules', order })}
-            onChangeStyleDirection={(styleDirection) => onApplyStaticPageOperation?.({
-              type: 'change_style_direction',
-              styleDirection,
-            })}
-            onRetryWorkflow={chatPanelProps.onRetryWorkflowExecution}
-            onCancelWorkflow={chatPanelProps.onCancelWorkflowExecution}
-            onRefreshDraft={chatPanelProps.onRefreshStaticPageDraft}
-            onOneClick={() => handleStartStaticPageDraft({ oneClick: true })}
-            onBackToChat={() => setSurface('chat')}
+            onRequestPreview={handleRequestPreviewFromBuilder}
+            onBackToChat={handleBackToChat}
           />
         ) : (
           <ChatPanel
             {...chatPanelProps}
             panelClassName="chat-panel-mobile-home"
             onStartStaticPageDraft={handleStartStaticPageDraft}
-            onOpenStaticPageBuilder={() => setSurface('static-page')}
+            onOpenStaticPageBuilder={() => {
+              onStaticPageEditorOpenChange?.(true);
+              setSurface('static-page');
+            }}
             showStaticPageWorkspace={false}
           />
         )}
@@ -109,7 +118,10 @@ export default function HomeMobileShell({
         <button
           type="button"
           className={surface === 'static-page' ? 'active' : ''}
-          onClick={() => setSurface('static-page')}
+          onClick={() => {
+            onStaticPageEditorOpenChange?.(true);
+            setSurface('static-page');
+          }}
           disabled={!staticPageDraft}
         >
           <span>静态页</span>

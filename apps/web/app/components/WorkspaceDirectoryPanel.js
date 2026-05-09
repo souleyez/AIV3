@@ -1,5 +1,6 @@
 'use client';
 
+import { useEffect, useState } from 'react';
 import { formatDateTime, formatRelativeTime, formatSnakeCaseLabel, truncateText } from '../lib/formatters';
 
 const PAGE_COPY = {
@@ -112,7 +113,14 @@ function DatasetsPage({
   selectedDocumentDetail,
   documentDetailLoading,
   onRefreshDocuments,
+  onUpdateDataset,
+  onArchiveDataset,
+  datasetActionBusy,
+  onUpdateDocument,
+  onArchiveDocuments,
+  documentActionBusy,
 }) {
+  const selectedDataset = datasets.find((dataset) => dataset.id === selectedDatasetId) || null;
   const filteredDocuments = documents.filter((document) => {
     const inDataset = !selectedDatasetId || document.dataset_id === selectedDatasetId;
     const query = documentSearch.trim().toLowerCase();
@@ -126,6 +134,31 @@ function DatasetsPage({
   const evidences = Array.isArray(selectedDocumentDetail?.retrieval_evidences)
     ? selectedDocumentDetail.retrieval_evidences
     : [];
+  const [selectedDocumentIds, setSelectedDocumentIds] = useState([]);
+  const [datasetTitleDraft, setDatasetTitleDraft] = useState('');
+  const [documentTitleDraft, setDocumentTitleDraft] = useState('');
+
+  useEffect(() => {
+    setDatasetTitleDraft(selectedDataset?.title || '');
+  }, [selectedDataset?.id, selectedDataset?.title]);
+
+  useEffect(() => {
+    setDocumentTitleDraft(selectedDocumentDetail?.document?.title || '');
+  }, [selectedDocumentDetail?.document?.id, selectedDocumentDetail?.document?.title]);
+
+  useEffect(() => {
+    const visibleIds = new Set(filteredDocuments.map((document) => document.id));
+    setSelectedDocumentIds((current) => current.filter((id) => visibleIds.has(id)));
+  }, [filteredDocuments.map((document) => document.id).join('|')]);
+
+  const toggleDocumentSelection = (documentId) => {
+    setSelectedDocumentIds((current) => (
+      current.includes(documentId)
+        ? current.filter((id) => id !== documentId)
+        : [...current, documentId]
+    ));
+  };
+  const selectedDocument = selectedDocumentDetail?.document || null;
 
   return (
     <div className="directory-two-column">
@@ -175,6 +208,36 @@ function DatasetsPage({
             </button>
           ))}
         </div>
+        <form
+          className="directory-edit-box"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (selectedDataset) {
+              onUpdateDataset?.(selectedDataset.id, { title: datasetTitleDraft });
+            }
+          }}
+        >
+          <strong>{selectedDataset ? '当前数据集设置' : '未选择数据集'}</strong>
+          <input
+            value={datasetTitleDraft}
+            onChange={(event) => setDatasetTitleDraft(event.target.value)}
+            placeholder="选择数据集后可改名"
+            disabled={!selectedDataset || Boolean(datasetActionBusy)}
+          />
+          <div className="directory-edit-actions">
+            <button className="primary-btn compact-action-btn" type="submit" disabled={!selectedDataset || Boolean(datasetActionBusy)}>
+              保存
+            </button>
+            <button
+              className="ghost-btn compact-action-btn danger-action"
+              type="button"
+              disabled={!selectedDataset || Boolean(datasetActionBusy)}
+              onClick={() => selectedDataset && onArchiveDataset?.(selectedDataset.id)}
+            >
+              归档
+            </button>
+          </div>
+        </form>
       </section>
 
       <section className="directory-card">
@@ -196,20 +259,36 @@ function DatasetsPage({
         <div className="directory-batch-bar">
           <span>{documentsLoading ? '同步文档中...' : `当前 ${filteredDocuments.length} 个文档`}</span>
           <button type="button" className="ghost-btn compact-action-btn" disabled>批量归类</button>
-          <button type="button" className="ghost-btn compact-action-btn" disabled>删除</button>
+          <button
+            type="button"
+            className="ghost-btn compact-action-btn danger-action"
+            disabled={!selectedDocumentIds.length || Boolean(documentActionBusy)}
+            onClick={async () => {
+              await onArchiveDocuments?.(selectedDocumentIds);
+              setSelectedDocumentIds([]);
+            }}
+          >
+            归档 {selectedDocumentIds.length || ''}
+          </button>
         </div>
         <div className="directory-document-list">
           {filteredDocuments.length ? filteredDocuments.map((document) => (
-            <button
-              type="button"
+            <article
               key={document.id}
               className={`directory-document-item ${document.id === selectedDocumentId ? 'active' : ''}`.trim()}
-              onClick={() => onSelectDocument?.(document.id)}
             >
-              <strong>{document.title}</strong>
-              <span>{datasetTitle(document.dataset_id, datasets)} · {documentKind(document.content_type)} · {formatSnakeCaseLabel(document.lifecycle)}</span>
-              <em>{truncateText(document.object_key, 64)}</em>
-            </button>
+              <input
+                type="checkbox"
+                checked={selectedDocumentIds.includes(document.id)}
+                onChange={() => toggleDocumentSelection(document.id)}
+                aria-label={`选择 ${document.title}`}
+              />
+              <button type="button" className="directory-document-open" onClick={() => onSelectDocument?.(document.id)}>
+                <strong>{document.title}</strong>
+                <span>{datasetTitle(document.dataset_id, datasets)} · {documentKind(document.content_type)} · {formatSnakeCaseLabel(document.lifecycle)}</span>
+                <em>{truncateText(document.object_key, 64)}</em>
+              </button>
+            </article>
           )) : (
             <div className="directory-empty">暂无匹配文档。</div>
           )}
@@ -237,6 +316,36 @@ function DatasetsPage({
               <span>{selectedDocumentDetail.document.content_type}</span>
               <p>{truncateText(selectedDocumentDetail.document.object_key, 160)}</p>
             </div>
+            <form
+              className="directory-edit-box"
+              onSubmit={(event) => {
+                event.preventDefault();
+                if (selectedDocument) {
+                  onUpdateDocument?.(selectedDocument.id, { title: documentTitleDraft });
+                }
+              }}
+            >
+              <strong>文档基础管理</strong>
+              <input
+                value={documentTitleDraft}
+                onChange={(event) => setDocumentTitleDraft(event.target.value)}
+                placeholder="文档标题"
+                disabled={Boolean(documentActionBusy)}
+              />
+              <div className="directory-edit-actions">
+                <button className="primary-btn compact-action-btn" type="submit" disabled={!selectedDocument || Boolean(documentActionBusy)}>
+                  保存标题
+                </button>
+                <button
+                  className="ghost-btn compact-action-btn danger-action"
+                  type="button"
+                  disabled={!selectedDocument || Boolean(documentActionBusy)}
+                  onClick={() => selectedDocument && onArchiveDocuments?.([selectedDocument.id])}
+                >
+                  归档文档
+                </button>
+              </div>
+            </form>
             <div className="directory-detail-list">
               {chunks.slice(0, 5).map((chunk) => (
                 <article key={chunk.id}>
@@ -361,6 +470,12 @@ export default function WorkspaceDirectoryPanel({
   selectedDocumentDetail,
   documentDetailLoading,
   onRefreshDocuments,
+  onUpdateDataset,
+  onArchiveDataset,
+  datasetActionBusy,
+  onUpdateDocument,
+  onArchiveDocuments,
+  documentActionBusy,
   stats,
   accountStatusSummary,
   activityEvents,
@@ -400,6 +515,12 @@ export default function WorkspaceDirectoryPanel({
           selectedDocumentDetail={selectedDocumentDetail}
           documentDetailLoading={documentDetailLoading}
           onRefreshDocuments={onRefreshDocuments}
+          onUpdateDataset={onUpdateDataset}
+          onArchiveDataset={onArchiveDataset}
+          datasetActionBusy={datasetActionBusy}
+          onUpdateDocument={onUpdateDocument}
+          onArchiveDocuments={onArchiveDocuments}
+          documentActionBusy={documentActionBusy}
         />
       ) : null}
       {activePage === 'sources' ? <SourcesPage documents={documents} datasets={datasets} /> : null}

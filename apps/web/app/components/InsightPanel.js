@@ -446,6 +446,33 @@ function ReportPlanDetail({
   );
 }
 
+function staticPageStageRows(draft) {
+  const previewStatus = draft?.previewContract?.status || draft?.imageJob?.status || 'not_requested';
+  const finalStatus = draft?.finalPage?.status || draft?.status || 'draft';
+  return [
+    ['需求理解', draft ? '已建立目标' : '等待用户提出页面需求'],
+    ['模块规划', draft?.modules?.length ? `${draft.modules.length} 个模块` : '等待生成规划'],
+    ['框架编辑', draft ? '主区域拖拽与模块微调' : '未进入'],
+    ['效果图', STATIC_PAGE_STATUS_LABELS[previewStatus] || formatSnakeCaseLabel(previewStatus)],
+    ['静态页生成', STATIC_PAGE_STATUS_LABELS[finalStatus] || formatSnakeCaseLabel(finalStatus)],
+  ];
+}
+
+function ResultTextLink({ title, meta, detail, onClick, active = false }) {
+  const Component = onClick ? 'button' : 'article';
+  return (
+    <Component
+      type={onClick ? 'button' : undefined}
+      className={`result-text-link ${active ? 'active' : ''}`.trim()}
+      onClick={onClick}
+    >
+      <strong>{title}</strong>
+      <span>{meta}</span>
+      {detail ? <p>{detail}</p> : null}
+    </Component>
+  );
+}
+
 export default function InsightPanel({
   dataset,
   sessions,
@@ -480,305 +507,110 @@ export default function InsightPanel({
   activeHtmlArtifactId,
   onSelectHtmlArtifact,
 }) {
+  const activeHtmlSummaryId = activeHtmlArtifactId || '';
+  const resultCount = staticPageDrafts.length + htmlArtifacts.length + reportPlans.length + publishedReports.length;
+
   return (
     <aside className="insight-panel">
-      <section className="card insight-card">
+      <section className="card insight-card right-brief-card">
         <SectionHeader
-          title="会话"
-          subtitle={dataset ? `${dataset.title} 下的最近会话` : '选择数据集后展示'}
+          title="项目任务"
+          subtitle={dataset ? `当前供料：${dataset.title}` : '普通聊天 / 自动判断资料范围'}
         />
-        <div className="insight-list">
-          {sessions.length ? (
-            sessions.map((session) => {
-              const active = session.id === selectedSessionId;
-              const reportEntryState = session.session_manifest_view?.report_entry?.state;
-              return (
-                <button
-                  key={session.id}
-                  type="button"
-                  className={`insight-item ${active ? 'active' : ''}`}
-                  onClick={() => onSelectSession(session.id)}
-                >
-                  <div className="insight-item-head">
-                    <strong>{session.title}</strong>
-                    <span>{formatRelativeTime(session.updated_at)}</span>
-                  </div>
-                  <p>{truncateText(session.latest_assistant_message?.content || session.session_manifest_view?.initial_prompt || '', 88)}</p>
-                  <div className="insight-meta-row">
-                    <span>{reportEntryState || 'not_applicable'}</span>
-                    <span>{session.model_facing?.recommended_tool_key || 'chat_session'}</span>
-                  </div>
-                </button>
-              );
-            })
-          ) : (
-            <EmptySection text="当前数据集还没有会话。" />
-          )}
+        <div className="right-brief-lines">
+          <p>当前任务：问答、资料供料、静态页生成、报告产物都从底部对话输入框发起。</p>
+          <p>可用动作：发送问题、上传资料、进入页面生成；模型负责理解意图，系统只提供工具和状态。</p>
+          <p>页面原则：主区域编辑当前任务，右侧只显示任务阶段和结果索引。</p>
         </div>
+        <div className="right-stage-list">
+          {staticPageStageRows(staticPageDraft).map(([stage, status], index) => (
+            <div className="right-stage-row" key={stage}>
+              <span>{index + 1}. {stage}</span>
+              <strong>{status}</strong>
+            </div>
+          ))}
+        </div>
+        {sessions.length ? (
+          <div className="right-brief-links">
+            <span>最近会话</span>
+            {sessions.slice(0, 3).map((session) => (
+              <button
+                key={session.id}
+                type="button"
+                className={session.id === selectedSessionId ? 'active' : ''}
+                onClick={() => onSelectSession?.(session.id)}
+              >
+                {truncateText(session.title, 28)}
+              </button>
+            ))}
+          </div>
+        ) : null}
       </section>
 
-      <section className="card insight-card">
+      <section className="card insight-card right-results-card">
         <SectionHeader
-          title="HTML 产物"
-          subtitle={htmlArtifacts.length ? `${htmlArtifacts.length} 个安全产物` : '报告/交接/审查/渲染摘要'}
+          title="生成结果"
+          subtitle={resultCount ? `${resultCount} 个可打开结果` : '静态页、HTML 产物、报告会显示在这里'}
         />
-        <div className="insight-list">
-          {htmlArtifacts.length ? (
-            htmlArtifacts.map((artifact) => {
-              const summary = htmlArtifactSummary(artifact);
-              const active = activeHtmlArtifactId === summary.id;
-              return (
-                <button
-                  key={summary.id}
-                  type="button"
-                  className={`insight-item ${active ? 'active' : ''} ${summary.rejected ? 'blocked' : ''}`.trim()}
-                  onClick={() => onSelectHtmlArtifact?.(summary.id)}
-                >
-                  <div className="insight-item-head">
-                    <strong>{truncateText(summary.title, 30)}</strong>
-                    <span>{summary.createdAt ? formatRelativeTime(summary.createdAt) : summary.sourceLabel || 'artifact'}</span>
-                  </div>
-                  <p>{truncateText(summary.subtitle, 96)}</p>
-                  <div className="insight-meta-row">
-                    <span>{summary.rejected ? '已拦截' : summary.sourceLabel}</span>
-                    <span>{summary.meta}</span>
-                  </div>
-                </button>
-              );
-            })
-          ) : (
-            <EmptySection text="Codex 执行报告、静态页规划交接、报告渲染摘要、代码审查摘要会在这里显示。" />
-          )}
-        </div>
-      </section>
+        <div className="right-result-list">
+          {staticPageDrafts.map((draft) => {
+            const active = staticPageDraft?.id === draft.id;
+            const staleReason = staticPageIsPreviewStale(draft)
+              ? staticPageFinalRenderBlockReason(draft)
+              : '';
+            return (
+              <ResultTextLink
+                key={draft.id}
+                active={active}
+                title={truncateText(draft.objective || draft.title || '静态页草稿', 34)}
+                meta={`静态页 · ${staticPageStatusLabel(draft)} · ${draft.modules?.length || 0} 模块`}
+                detail={truncateText(staleReason || draft.finalPage?.notice || draft.modelSummary || '', 80)}
+                onClick={() => onSelectStaticPageDraft?.(draft.id)}
+              />
+            );
+          })}
 
-      <section className="card insight-card">
-        <SectionHeader
-          title="静态页成品"
-          subtitle={staticPageDrafts.length ? `${staticPageDrafts.length} 个草稿/成品` : '当前终端暂无记录'}
-        />
-        <div className="insight-list">
-          {staticPageDrafts.length ? (
-            staticPageDrafts.map((draft) => {
-              const active = staticPageDraft?.id === draft.id;
-              const action = staticPageRenderAction(draft);
-              const rendered = staticPageIsRendered(draft);
-              const hasHtml = Boolean(buildStaticPageStandaloneHtml(draft, draft?.finalPage?.html || ''));
-              const staleReason = staticPageIsPreviewStale(draft)
-                ? staticPageFinalRenderBlockReason(draft)
-                : '';
-              const dataQuality = staticPageDataQualitySummary(draft);
-              const hasDataQuality = hasDataQualitySummary(dataQuality);
-              const needsDataAttention = dataQuality.attentionModules > 0
-                || dataQuality.partialModules > 0
-                || dataQuality.missingModules > 0;
-              const qualityHighlights = staticPageDataQualityModules(draft)
-                .filter((module) => module?.dataQualityStatus !== 'confirmed' || module?.fallback)
-                .slice(0, 2);
-              return (
-                <div
-                  key={draft.id}
-                  className={`insight-item ${active ? 'active' : ''}`}
-                >
-                  <button
-                    type="button"
-                    className="insight-item-main"
-                    onClick={() => onSelectStaticPageDraft?.(draft.id)}
-                  >
-                    <div className="insight-item-head">
-                      <strong>{truncateText(draft.objective || draft.title || '静态页草稿', 30)}</strong>
-                      <span>{formatRelativeTime(staticPageUpdatedAt(draft))}</span>
-                    </div>
-                    <p>{truncateText(staleReason || draft.modelSummary || draft.finalPage?.notice || '点击后在当前页面继续规划或查看生成结果。', 96)}</p>
-                    <div className="insight-meta-row">
-                      <span>{staticPageStatusLabel(draft)}</span>
-                      <span>{draft.modules?.length || 0} 个模块</span>
-                      {staticPageWorkflowExecutionId(draft) ? (
-                        <span>workflow {truncateText(staticPageWorkflowExecutionId(draft), 12)}</span>
-                      ) : null}
-                      {hasDataQuality ? (
-                        <span className={`insight-quality ${needsDataAttention ? 'attention' : 'ready'}`}>
-                          数据 {dataQuality.confirmedModules}/{dataQuality.partialModules}/{dataQuality.missingModules}
-                        </span>
-                      ) : null}
-                    </div>
-                    {qualityHighlights.length ? (
-                      <div className="insight-quality-detail">
-                        {qualityHighlights.map((module) => (
-                          <span key={module.moduleId || module.title}>
-                            {truncateText(module.title || module.moduleId || '未命名模块', 14)}
-                            {' · '}
-                            {staticPageQualityStatusLabel(module.dataQualityStatus)}
-                            {' · '}
-                            {staticPageChartRuntimeLabel(module.chartRuntime)}
-                            {module.fallback ? '回退' : ''}
-                          </span>
-                        ))}
-                      </div>
-                    ) : null}
-                  </button>
-                  {action || rendered ? (
-                    <div className="insight-item-actions">
-                      {action ? (
-                        <button
-                          type="button"
-                          className="ghost-btn compact-action-btn"
-                          onClick={() => {
-                            if (action.kind === 'retry') {
-                              onRetryWorkflowExecution?.(action.executionId);
-                            } else {
-                              onCancelWorkflowExecution?.(action.executionId);
-                            }
-                          }}
-                        >
-                          {action.label}后台生成
-                        </button>
-                      ) : null}
-                      {rendered && hasHtml ? (
-                        <button
-                          type="button"
-                          className="ghost-btn compact-action-btn"
-                          onClick={() => downloadStaticPageHtmlFromShelf(draft)}
-                        >
-                          下载 HTML
-                        </button>
-                      ) : null}
-                      {rendered ? (
-                        <button
-                          type="button"
-                          className="ghost-btn compact-action-btn"
-                          onClick={() => downloadStaticPagePackageFromShelf(draft)}
-                        >
-                          交付包
-                        </button>
-                      ) : null}
-                    </div>
-                  ) : null}
-                </div>
-              );
-            })
-          ) : (
-            <EmptySection text="对话生成静态页后，会保存在这里。" />
-          )}
+          {htmlArtifacts.map((artifact) => {
+            const summary = htmlArtifactSummary(artifact);
+            return (
+              <ResultTextLink
+                key={summary.id}
+                active={activeHtmlSummaryId === summary.id}
+                title={truncateText(summary.title, 34)}
+                meta={`HTML 产物 · ${summary.rejected ? '已拦截' : summary.sourceLabel || summary.meta}`}
+                detail={truncateText(summary.subtitle, 80)}
+                onClick={() => onSelectHtmlArtifact?.(summary.id)}
+              />
+            );
+          })}
+
+          {reportPlans.map((plan) => (
+            <ResultTextLink
+              key={plan.id}
+              active={plan.id === selectedReportPlanId}
+              title={truncateText(plan.title, 34)}
+              meta={`报告计划 · ${formatSnakeCaseLabel(plan.status)}`}
+              detail={truncateText(plan.objective, 80)}
+              onClick={() => onSelectReportPlan?.(plan.id)}
+            />
+          ))}
+
+          {publishedReports.map((report) => (
+            <ResultTextLink
+              key={report.id}
+              active={report.plan_id === selectedReportPlanId}
+              title={truncateText(report.slug, 34)}
+              meta={`已发布 · ${formatDateTime(report.updated_at)}`}
+              detail={`report ${truncateText(report.id, 16)}`}
+              onClick={() => onSelectReportPlan?.(report.plan_id)}
+            />
+          ))}
+
+          {!resultCount ? <EmptySection text="暂时还没有生成结果。通过底部“页面”或对话发起后会出现在这里。" /> : null}
         </div>
         <button type="button" className="ghost-btn compact-action-btn" onClick={onRefreshStaticPageDrafts}>
-          刷新草稿架
+          刷新结果
         </button>
-      </section>
-
-      <section className="card insight-card">
-        <SectionHeader
-          title="资料输出"
-          subtitle="数据集级 material output 回看"
-        />
-        <div className="insight-list">
-          {outputs.length ? (
-            outputs.map((output) => (
-              <article className="insight-item static" key={output.id}>
-                <div className="insight-item-head">
-                  <strong>{truncateText(output.prompt, 28)}</strong>
-                  <span>{formatRelativeTime(output.created_at)}</span>
-                </div>
-                <p>{truncateText(output.output_text, 110) || '等待 worker 写回输出。'}</p>
-                <div className="insight-meta-row">
-                  <span>证据 {output.retrieval_evidence_ids?.length || 0}</span>
-                  <span>工具 {output.tool_executions?.length || 0}</span>
-                </div>
-              </article>
-            ))
-          ) : (
-            <EmptySection text="当前数据集还没有资料输出。" />
-          )}
-        </div>
-      </section>
-
-      <section className="card insight-card">
-        <SectionHeader
-          title="报告计划"
-          subtitle="选择 plan 后可继续规划、渲染和发布"
-        />
-        <div className="insight-list">
-          {reportPlans.length ? (
-            reportPlans.map((plan) => {
-              const active = plan.id === selectedReportPlanId;
-              return (
-                <button
-                  type="button"
-                  className={`insight-item ${active ? 'active' : ''}`}
-                  key={plan.id}
-                  onClick={() => onSelectReportPlan(plan.id)}
-                >
-                  <div className="insight-item-head">
-                    <strong>{plan.title}</strong>
-                    <span>{formatSnakeCaseLabel(plan.status)}</span>
-                  </div>
-                  <p>{truncateText(plan.objective, 110)}</p>
-                  <div className="insight-meta-row">
-                    <span>{plan.model_facing?.recommended_tool_key || 'report.plan'}</span>
-                    <span>{plan.current_ast_version_id ? '已有 AST 版本' : '尚无 AST 版本'}</span>
-                  </div>
-                </button>
-              );
-            })
-          ) : (
-            <EmptySection text="当前数据集下还没有 report plan。" />
-          )}
-        </div>
-      </section>
-
-      <section className="card insight-card report-control-card">
-        <SectionHeader
-          title="报告服务控制台"
-          subtitle={selectedReportPlan ? selectedReportPlan.title : '等待选择 report plan'}
-        />
-        <ReportPlanDetail
-          plan={selectedReportPlan}
-          renderOutputs={reportRenderOutputs}
-          astVersions={reportAstVersions}
-          publishedDetail={publishedReportDetail}
-          loading={reportDetailLoading}
-          actionBusy={reportActionBusy}
-          surface={reportSurface}
-          publishNote={publishNote}
-          onSurfaceChange={onReportSurfaceChange}
-          onPublishNoteChange={onPublishNoteChange}
-          onContinue={onContinueReportPlan}
-          onRender={onRequestReportRender}
-          onPublish={onPublishReport}
-          onRetryWorkflowExecution={onRetryWorkflowExecution}
-          onRefresh={onRefreshReportDetail}
-        />
-      </section>
-
-      <section className="card insight-card">
-        <SectionHeader
-          title="已发布"
-          subtitle="published reports 聚合视图"
-        />
-        <div className="insight-list">
-          {publishedReports.length ? (
-            publishedReports.map((report) => (
-              <button
-                type="button"
-                className={`insight-item ${report.plan_id === selectedReportPlanId ? 'active' : ''}`}
-                key={report.id}
-                onClick={() => onSelectReportPlan(report.plan_id)}
-              >
-                <div className="insight-item-head">
-                  <strong>{report.slug}</strong>
-                  <span>{formatDateTime(report.updated_at)}</span>
-                </div>
-                <p>plan_id: {truncateText(report.plan_id, 24)}</p>
-                <div className="insight-meta-row">
-                  <span>report_id {truncateText(report.id, 12)}</span>
-                  <span>{report.current_version_id ? '有当前版本' : '尚未设当前版本'}</span>
-                </div>
-              </button>
-            ))
-          ) : (
-            <EmptySection text="这个数据集下还没有 published report。" />
-          )}
-        </div>
       </section>
     </aside>
   );
