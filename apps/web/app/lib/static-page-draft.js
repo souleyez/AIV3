@@ -1056,6 +1056,24 @@ export function applyStaticPageOperation(draft, operation = {}) {
     next.previewContract = buildStaticPagePreviewContract(next);
   }
 
+  if (type === 'reset_final_render') {
+    next.status = next.previewContract?.status === 'confirmed' || next.previewImage
+      ? 'effect_confirmed'
+      : 'preview_ready';
+    next.finalPage = null;
+    next.imageJob = {
+      ...next.imageJob,
+      status: next.imageJob?.status || 'preview_ready',
+      queuePosition: null,
+    };
+    next.previewContract = buildStaticPagePreviewContract(next, {
+      ...(next.previewContract || {}),
+      status: next.previewContract?.status === 'confirmed' ? 'confirmed' : 'preview_ready',
+      assetKey: next.previewImage?.assetKey || next.previewContract?.assetKey || null,
+      queuePosition: null,
+    });
+  }
+
   if (type === 'request_final_render') {
     const backendFinalPage = operation.finalPage && typeof operation.finalPage === 'object'
       ? operation.finalPage

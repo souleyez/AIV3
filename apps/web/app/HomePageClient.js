@@ -607,7 +607,10 @@ export default function HomePageClient() {
     [activeStaticPageDraftId, staticPageDrafts],
   );
   const staticPageDraftItems = useMemo(
-    () => sortStaticPageDrafts(Object.values(staticPageDrafts)),
+    () => sortStaticPageDrafts(Object.values(staticPageDrafts).filter((draft) => {
+      const status = String(draft?.status || draft?.backendStatus || '').toLowerCase();
+      return status !== 'archived';
+    })),
     [staticPageDrafts],
   );
   const htmlArtifacts = useMemo(
@@ -2359,6 +2362,13 @@ export default function HomePageClient() {
     if (!draft) {
       return;
     }
+    if (activeStaticPageDraftId === draftId && staticPageEditorOpen) {
+      setStaticPageEditorOpen(false);
+      setActiveHtmlArtifactId(null);
+      setBanner('已退出项目，回到聊天记录。右侧项目卡可再次进入。');
+      setMobilePanel('chat');
+      return;
+    }
     setActiveStaticPageDraftId(draftId);
     setStaticPageEditorOpen(true);
     setActiveHtmlArtifactId(null);
@@ -2369,6 +2379,84 @@ export default function HomePageClient() {
   function handleCloseStaticPageDraft() {
     setStaticPageEditorOpen(false);
     setBanner('已返回聊天记录；右侧静态页成品架可随时重新打开草稿或成品。');
+  }
+
+  function handleRevertStaticPageStage(draftId) {
+    const draft = staticPageDrafts[draftId];
+    if (!draft) {
+      return null;
+    }
+    const finalStatus = draft.finalPage?.status || '';
+    const hasFinalStage = Boolean(finalStatus) || draft.status === 'rendered' || draft.status === 'rendering';
+    const hasEffectStage = Boolean(draft.previewImage)
+      || Boolean(draft.imageJob?.id)
+      || ['queued', 'running', 'preview_ready', 'effect_confirmed'].includes(draft.status)
+      || ['queued', 'running', 'preview_ready', 'confirmed', 'stale'].includes(draft.previewContract?.status || '');
+    const operation = hasFinalStage
+      ? { type: 'reset_final_render' }
+      : hasEffectStage
+        ? { type: 'reset_image_job' }
+        : null;
+    if (!operation) {
+      setActiveStaticPageDraftId(draftId);
+      setStaticPageEditorOpen(true);
+      setActiveHtmlArtifactId(null);
+      setBanner('当前已经在模板规划阶段，可直接继续修改。');
+      return draft;
+    }
+    const nextDraft = applyStaticPageOperation(draft, operation);
+    setStaticPageDrafts((current) => ({
+      ...current,
+      [nextDraft.id]: nextDraft,
+    }));
+    setActiveStaticPageDraftId(nextDraft.id);
+    setStaticPageEditorOpen(true);
+    setActiveHtmlArtifactId(null);
+    syncStaticPageDraftOperations(draft, nextDraft, [operation], {
+      summary: hasFinalStage ? '已退回效果图阶段继续修改。' : '已退回模板规划阶段继续修改。',
+    });
+    setBanner(hasFinalStage ? '已退回效果图阶段，可调整后重新制作静态页。' : '已退回模板规划阶段，可继续修改模板和模块。');
+    setMobilePanel('chat');
+    return nextDraft;
+  }
+
+  async function handleDeleteStaticPageDraft(draftId) {
+    const draft = staticPageDrafts[draftId];
+    if (!draft) {
+      return;
+    }
+    if (typeof window !== 'undefined' && !window.confirm('删除这个生成项目？删除后右侧列表将不再展示。')) {
+      return;
+    }
+    setStaticPageDrafts((current) => {
+      const next = { ...current };
+      delete next[draftId];
+      return next;
+    });
+    if (activeStaticPageDraftId === draftId) {
+      setActiveStaticPageDraftId(null);
+      setStaticPageEditorOpen(false);
+    }
+    setActiveHtmlArtifactId(null);
+    if (draft.backendDraftId) {
+      try {
+        await fetchJson(`/api/v3/static-page-drafts/${draft.backendDraftId}`, {
+          method: 'PATCH',
+          body: JSON.stringify({
+            status: 'archived',
+            draft_payload: {
+              ...draft,
+              status: 'archived',
+              archivedAt: new Date().toISOString(),
+            },
+          }),
+        });
+      } catch (deleteError) {
+        setBanner(`项目已先从本地列表移除；后端归档暂不可用：${deleteError instanceof Error ? deleteError.message : '请求失败'}。`);
+        return;
+      }
+    }
+    setBanner('生成项目已删除。');
   }
 
   function handleSelectHtmlArtifact(artifactId) {
@@ -3166,7 +3254,11 @@ export default function HomePageClient() {
     staticPageDraft: activeStaticPageDraft,
     staticPageDrafts: staticPageDraftItems,
     onSelectStaticPageDraft: handleSelectStaticPageDraft,
+    onDeleteStaticPageDraft: handleDeleteStaticPageDraft,
+    onRevertStaticPageStage: handleRevertStaticPageStage,
     onRefreshStaticPageDrafts: () => refreshStaticPageDraftShelf({ silent: false }),
+    staticPageEditorOpen,
+    assistantRunProgress,
     htmlArtifacts,
     activeHtmlArtifactId,
     onSelectHtmlArtifact: handleSelectHtmlArtifact,

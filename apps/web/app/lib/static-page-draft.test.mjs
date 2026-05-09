@@ -279,6 +279,28 @@ test('resetting an image job clears preview and final render state', () => {
   assert.equal(reset.previewContract.status, 'not_requested');
 });
 
+test('resetting final render keeps confirmed preview for stage rollback', () => {
+  const confirmed = applyStaticPageOperation(buildInitialStaticPageDraft(), {
+    type: 'confirm_preview',
+    previewImage: { assetKey: 'preview-1.png' },
+  });
+  const rendered = applyStaticPageOperation(confirmed, {
+    type: 'request_final_render',
+    finalPage: {
+      status: 'rendered',
+      renderer: 'platform-api-static-page-renderer',
+      renderOutputId: 'render-1',
+      html: '<main>旧结果</main>',
+    },
+  });
+  const reset = applyStaticPageOperation(rendered, { type: 'reset_final_render' });
+
+  assert.equal(reset.status, 'effect_confirmed');
+  assert.equal(reset.finalPage, null);
+  assert.equal(reset.previewImage.assetKey, 'preview-1.png');
+  assert.equal(reset.previewContract.status, 'confirmed');
+});
+
 test('failed image job status returns draft to editable planning state', () => {
   const queued = applyStaticPageOperation(buildInitialStaticPageDraft(), {
     type: 'queue_image_job',

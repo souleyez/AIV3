@@ -716,6 +716,7 @@ fn is_supported_operation_type(operation_type: &str) -> bool {
             | "mark_preview_ready"
             | "confirm_preview"
             | "reset_image_job"
+            | "reset_final_render"
             | "request_final_render"
     )
 }
@@ -760,7 +761,7 @@ fn build_provider_input(request: &StaticPageIntentRequest) -> String {
             "Return strict JSON only.",
             "Schema: {\"summary\":\"short Chinese summary\",\"operations\":[StaticPageDraftOperation...]}",
             "Do not answer the user directly. Do not include markdown fences.",
-            "Allowed operation types: update_module, add_module, remove_module, move_module, resize_module, change_visualization, change_data_binding, reorder_modules, change_style_direction, refresh_summary, queue_image_job, update_image_job_status, mark_preview_ready, confirm_preview, reset_image_job, request_final_render.",
+            "Allowed operation types: update_module, add_module, remove_module, move_module, resize_module, change_visualization, change_data_binding, reorder_modules, change_style_direction, refresh_summary, queue_image_job, update_image_job_status, mark_preview_ready, confirm_preview, reset_image_job, reset_final_render, request_final_render.",
             "For module edits prefer update_module.patch with title, content, dataBinding, visualization, chartRuntime, chartOptions, and layout.",
             "For data binding use dataBinding={type,label,sourceId,fieldPath,aggregation,evidenceIds}. For charts use visualization={type,label,chartRuntime,chartOptions}.",
             "chartRuntime must be deterministic or echarts. Use echarts only for advanced plain-JSON ECharts options; never output functions, HTML, URLs, javascript:, renderItem, or event handler keys.",
@@ -1125,6 +1126,17 @@ mod tests {
 
         assert!(unknown.is_err());
         assert!(unsafe_key.is_err());
+    }
+
+    #[test]
+    fn operation_sanitizer_accepts_stage_rollback_operations() {
+        let operations = sanitize_static_page_operations(vec![
+            json!({"type": "reset_image_job"}),
+            json!({"type": "reset_final_render"}),
+        ])
+        .expect("stage rollback operations should be accepted");
+
+        assert_eq!(operations.len(), 2);
     }
 
     #[test]

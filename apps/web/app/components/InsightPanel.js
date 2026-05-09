@@ -1,5 +1,6 @@
 'use client';
 
+import { useState } from 'react';
 import { formatDateTime, formatRelativeTime, formatSnakeCaseLabel, truncateText } from '../lib/formatters';
 import {
   buildStaticPageFinalRenderPayload,
@@ -447,14 +448,11 @@ function ReportPlanDetail({
 }
 
 function staticPageStageRows(draft) {
-  const previewStatus = draft?.previewContract?.status || draft?.imageJob?.status || 'not_requested';
-  const finalStatus = draft?.finalPage?.status || draft?.status || 'draft';
+  const stage = staticPageProjectStage(draft);
   return [
-    ['需求理解', draft ? '已建立目标' : '等待用户提出页面需求'],
-    ['模块规划', draft?.modules?.length ? `${draft.modules.length} 个模块` : '等待生成规划'],
-    ['框架编辑', draft ? '主区域拖拽与模块微调' : '未进入'],
-    ['效果图', STATIC_PAGE_STATUS_LABELS[previewStatus] || formatSnakeCaseLabel(previewStatus)],
-    ['静态页生成', STATIC_PAGE_STATUS_LABELS[finalStatus] || formatSnakeCaseLabel(finalStatus)],
+    ['模板规划', stage.index >= 0 ? (draft?.modules?.length ? `${draft.modules.length} 个模块` : '已创建') : '等待创建'],
+    ['效果图', stage.index >= 1 ? stage.key === 'effect' ? stage.status : '已确认' : '未开始'],
+    ['静态页', stage.index >= 2 ? stage.status : '未开始'],
   ];
 }
 
@@ -470,6 +468,242 @@ function ResultTextLink({ title, meta, detail, onClick, active = false }) {
       <span>{meta}</span>
       {detail ? <p>{detail}</p> : null}
     </Component>
+  );
+}
+
+function staticPageProjectStage(draft) {
+  if (!draft) {
+    return { key: 'template', index: 0, label: '模板规划', status: '等待创建' };
+  }
+  const finalStatus = draft?.finalPage?.status || '';
+  const previewStatus = draft?.previewContract?.status || draft?.imageJob?.status || '';
+  const hasFinalStage = Boolean(finalStatus)
+    || draft.status === 'rendered'
+    || draft.status === 'rendering';
+  if (hasFinalStage) {
+    return {
+      key: 'static',
+      index: 2,
+      label: '静态页',
+      status: STATIC_PAGE_STATUS_LABELS[finalStatus] || STATIC_PAGE_STATUS_LABELS[draft.status] || formatSnakeCaseLabel(finalStatus || draft.status),
+    };
+  }
+  const hasEffectStage = Boolean(draft.previewImage)
+    || Boolean(draft.imageJob?.id)
+    || ['queued', 'running', 'preview_ready', 'effect_confirmed'].includes(draft.status)
+    || ['queued', 'running', 'preview_ready', 'confirmed', 'stale'].includes(previewStatus);
+  if (hasEffectStage) {
+    return {
+      key: 'effect',
+      index: 1,
+      label: '效果图',
+      status: STATIC_PAGE_STATUS_LABELS[previewStatus] || STATIC_PAGE_STATUS_LABELS[draft.status] || formatSnakeCaseLabel(previewStatus || draft.status),
+    };
+  }
+  return {
+    key: 'template',
+    index: 0,
+    label: '模板规划',
+    status: draft.modules?.length ? `${draft.modules.length} 个模块` : '规划中',
+  };
+}
+
+function staticPageProjectTitle(draft) {
+  return truncateText(draft?.objective || draft?.title || '静态页项目', 38);
+}
+
+function staticPageProjectCanExport(draft) {
+  const finalStatus = draft?.finalPage?.status || '';
+  return finalStatus === 'rendered' || finalStatus === 'mock_ready' || draft?.status === 'rendered';
+}
+
+function safeExportId(draft) {
+  return String(draft?.id || 'static-page')
+    .trim()
+    .replace(/[^a-zA-Z0-9_-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 64) || 'static-page';
+}
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function csvCell(value) {
+  const text = String(value ?? '').replace(/\r?\n/g, ' ');
+  return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+function downloadStaticPageTable(draft) {
+  const rows = [
+    ['阶段', '模块', '标题', '内容', '数据来源', '可视化'],
+    ...(draft?.modules || []).map((module) => [
+      staticPageProjectStage(draft).label,
+      module.id,
+      module.title,
+      module.content,
+      module.dataBinding?.label || module.dataBinding?.type || '',
+      module.visualization?.label || module.visualization?.type || '',
+    ]),
+  ];
+  downloadTextArtifact({
+    content: `\uFEFF${rows.map((row) => row.map(csvCell).join(',')).join('\n')}`,
+    filename: `static-page-${safeExportId(draft)}-modules.csv`,
+    mime: 'text/csv;charset=utf-8',
+  });
+}
+
+function downloadStaticPagePpt(draft) {
+  const modules = draft?.modules || [];
+  const slideSections = modules.map((module, index) => `
+    <section class="slide">
+      <p class="eyebrow">${index + 1} / ${modules.length || 1} · ${escapeHtml(module.visualization?.label || module.role || '模块')}</p>
+      <h2>${escapeHtml(module.title || '未命名模块')}</h2>
+      <p>${escapeHtml(module.content || '')}</p>
+      <footer>${escapeHtml(module.dataBinding?.label || '数据待绑定')}</footer>
+    </section>
+  `).join('');
+  const html = `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>${escapeHtml(staticPageProjectTitle(draft))}</title>
+  <style>
+    body { margin: 0; font-family: Aptos, Calibri, sans-serif; color: #102033; background: #f8fafc; }
+    .slide { width: 960px; min-height: 540px; box-sizing: border-box; padding: 72px 82px; page-break-after: always; background: linear-gradient(135deg, #ffffff, #eef6ff); }
+    .cover { background: linear-gradient(135deg, #0f172a, #2563eb); color: white; }
+    .eyebrow { margin: 0 0 22px; color: #38bdf8; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+    h1, h2 { margin: 0 0 22px; font-size: 44px; line-height: 1.08; }
+    p { font-size: 23px; line-height: 1.52; }
+    footer { margin-top: 42px; color: #64748b; font-size: 18px; }
+  </style>
+</head>
+<body>
+  <section class="slide cover">
+    <p class="eyebrow">AIV3 Static Page Export</p>
+    <h1>${escapeHtml(staticPageProjectTitle(draft))}</h1>
+    <p>${escapeHtml(draft?.modelSummary || '由静态页项目导出的演示稿。')}</p>
+  </section>
+  ${slideSections}
+</body>
+</html>`;
+  downloadTextArtifact({
+    content: html,
+    filename: `static-page-${safeExportId(draft)}.ppt`,
+    mime: 'application/vnd.ms-powerpoint;charset=utf-8',
+  });
+}
+
+function ExecutionObservationCard({ progress }) {
+  const steps = Array.isArray(progress?.steps) ? progress.steps : [];
+  const traceSteps = Array.isArray(progress?.traceSteps) ? progress.traceSteps : [];
+  return (
+    <section className="card insight-card right-observation-card">
+      <SectionHeader
+        title="本次执行观测"
+        subtitle={steps.length || traceSteps.length ? '模型怎样检索、深读、调用工具会收在这里' : '本轮暂时没有执行条目'}
+      />
+      {steps.length ? (
+        <div className="right-observation-steps">
+          {steps.map((step, index) => (
+            <div className="right-observation-step" key={`${step.label}-${index}`}>
+              <strong>{step.label}</strong>
+              <span>
+                {step.message || formatSnakeCaseLabel(step.status)}
+                {step.suppliedCount !== null ? ` · 供料 ${step.suppliedCount}` : ''}
+                {step.detailTargetCount ? ` · 深读 ${step.detailTargetCount}` : ''}
+                {step.returnedCount !== null ? ` · 返回 ${step.returnedCount}` : ''}
+                {step.deniedCount ? ` · 拒绝 ${step.deniedCount}` : ''}
+              </span>
+            </div>
+          ))}
+        </div>
+      ) : <EmptySection text="发送问题后，本轮供料、深读和工具闭环会在这里显示。" />}
+      {traceSteps.length ? (
+        <div className="right-observation-trace">
+          {traceSteps.map((step, index) => (
+            <span className={`message-chip ${step.status === 'failed' ? 'danger' : step.status === 'completed' ? 'green' : 'neutral'}`} key={`${step.actionType}-${index}`}>
+              {formatSnakeCaseLabel(step.actionType)}
+              {step.returnedCount ? ` · ${step.returnedCount}` : ''}
+              {step.durationMs !== null ? ` · ${step.durationMs}ms` : ''}
+            </span>
+          ))}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function ProjectStageRail({ draft }) {
+  const current = staticPageProjectStage(draft);
+  return (
+    <div className="project-stage-rail" aria-label="项目阶段">
+      {staticPageStageRows(draft).map(([label, status], index) => (
+        <div className={`project-stage ${index < current.index ? 'done' : index === current.index ? 'active' : ''}`.trim()} key={label}>
+          <span>{label}</span>
+          <strong>{status}</strong>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function GeneratedProjectCard({
+  draft,
+  active,
+  open,
+  copied,
+  onSelect,
+  onDelete,
+  onRevert,
+  onCopyLink,
+}) {
+  const stage = staticPageProjectStage(draft);
+  const exportable = staticPageProjectCanExport(draft);
+  const staleReason = staticPageIsPreviewStale(draft)
+    ? staticPageFinalRenderBlockReason(draft)
+    : '';
+  return (
+    <article className={`generated-project-card ${active ? 'active' : ''}`.trim()}>
+      <button type="button" className="generated-project-main" onClick={onSelect}>
+        <div className="generated-project-head">
+          <div>
+            <span>最新阶段：{stage.label}</span>
+            <strong>{staticPageProjectTitle(draft)}</strong>
+          </div>
+          <em>{open ? '点击退出' : '点击进入'}</em>
+        </div>
+        <ProjectStageRail draft={draft} />
+        <p>{truncateText(staleReason || draft?.finalPage?.notice || draft?.modelSummary || '模板规划、效果图、静态页会按阶段推进。', 96)}</p>
+      </button>
+      <div className="generated-project-actions">
+        {stage.index > 0 ? (
+          <button type="button" className="ghost-btn compact-action-btn" onClick={onRevert}>
+            退回上阶段
+          </button>
+        ) : null}
+        {stage.key === 'static' ? (
+          <>
+            <button type="button" className="ghost-btn compact-action-btn" disabled={!exportable} onClick={() => downloadStaticPagePpt(draft)}>
+              导出PPT
+            </button>
+            <button type="button" className="ghost-btn compact-action-btn" disabled={!exportable} onClick={() => downloadStaticPageTable(draft)}>
+              表格
+            </button>
+            <button type="button" className="ghost-btn compact-action-btn" onClick={onCopyLink}>
+              {copied ? '已复制' : '复制链接'}
+            </button>
+          </>
+        ) : null}
+        <button type="button" className="ghost-btn compact-action-btn danger-action" onClick={onDelete}>
+          删除
+        </button>
+      </div>
+    </article>
   );
 }
 
@@ -502,114 +736,62 @@ export default function InsightPanel({
   staticPageDraft,
   staticPageDrafts = [],
   onSelectStaticPageDraft,
+  onDeleteStaticPageDraft,
+  onRevertStaticPageStage,
   onRefreshStaticPageDrafts,
+  staticPageEditorOpen = false,
+  assistantRunProgress,
   htmlArtifacts = [],
   activeHtmlArtifactId,
   onSelectHtmlArtifact,
 }) {
-  const activeHtmlSummaryId = activeHtmlArtifactId || '';
-  const resultCount = staticPageDrafts.length + htmlArtifacts.length + reportPlans.length + publishedReports.length;
+  const [copiedProjectId, setCopiedProjectId] = useState('');
+  const resultCount = staticPageDrafts.length;
+
+  async function copyProjectLink(draft) {
+    const link = typeof window === 'undefined'
+      ? `#static-page-${draft.id}`
+      : `${window.location.origin}${window.location.pathname}#static-page-${draft.id}`;
+    try {
+      await navigator.clipboard.writeText(link);
+      setCopiedProjectId(draft.id);
+      window.setTimeout(() => setCopiedProjectId(''), 1600);
+    } catch {
+      setCopiedProjectId('');
+    }
+  }
 
   return (
     <aside className="insight-panel">
-      <section className="card insight-card right-brief-card">
-        <SectionHeader
-          title="项目任务"
-          subtitle={dataset ? `当前供料：${dataset.title}` : '普通聊天 / 自动判断资料范围'}
-        />
-        <div className="right-brief-lines">
-          <p>当前任务：问答、资料供料、静态页生成、报告产物都从底部对话输入框发起。</p>
-          <p>可用动作：发送问题、上传资料、进入页面生成；模型负责理解意图，系统只提供工具和状态。</p>
-          <p>页面原则：主区域编辑当前任务，右侧只显示任务阶段和结果索引。</p>
-        </div>
-        <div className="right-stage-list">
-          {staticPageStageRows(staticPageDraft).map(([stage, status], index) => (
-            <div className="right-stage-row" key={stage}>
-              <span>{index + 1}. {stage}</span>
-              <strong>{status}</strong>
-            </div>
-          ))}
-        </div>
-        {sessions.length ? (
-          <div className="right-brief-links">
-            <span>最近会话</span>
-            {sessions.slice(0, 3).map((session) => (
-              <button
-                key={session.id}
-                type="button"
-                className={session.id === selectedSessionId ? 'active' : ''}
-                onClick={() => onSelectSession?.(session.id)}
-              >
-                {truncateText(session.title, 28)}
-              </button>
-            ))}
-          </div>
-        ) : null}
-      </section>
+      <ExecutionObservationCard progress={assistantRunProgress} />
 
       <section className="card insight-card right-results-card">
         <SectionHeader
-          title="生成结果"
-          subtitle={resultCount ? `${resultCount} 个可打开结果` : '静态页、HTML 产物、报告会显示在这里'}
+          title="生成项目"
+          subtitle={resultCount ? `${resultCount} 个项目，每个项目一张卡` : '从聊天或“页面”按钮创建项目'}
         />
-        <div className="right-result-list">
+        <div className="generated-project-list">
           {staticPageDrafts.map((draft) => {
             const active = staticPageDraft?.id === draft.id;
-            const staleReason = staticPageIsPreviewStale(draft)
-              ? staticPageFinalRenderBlockReason(draft)
-              : '';
             return (
-              <ResultTextLink
+              <GeneratedProjectCard
                 key={draft.id}
                 active={active}
-                title={truncateText(draft.objective || draft.title || '静态页草稿', 34)}
-                meta={`静态页 · ${staticPageStatusLabel(draft)} · ${draft.modules?.length || 0} 模块`}
-                detail={truncateText(staleReason || draft.finalPage?.notice || draft.modelSummary || '', 80)}
+                open={active && staticPageEditorOpen}
+                copied={copiedProjectId === draft.id}
+                draft={draft}
                 onClick={() => onSelectStaticPageDraft?.(draft.id)}
+                onSelect={() => onSelectStaticPageDraft?.(draft.id)}
+                onDelete={() => onDeleteStaticPageDraft?.(draft.id)}
+                onRevert={() => onRevertStaticPageStage?.(draft.id)}
+                onCopyLink={() => copyProjectLink(draft)}
               />
             );
           })}
-
-          {htmlArtifacts.map((artifact) => {
-            const summary = htmlArtifactSummary(artifact);
-            return (
-              <ResultTextLink
-                key={summary.id}
-                active={activeHtmlSummaryId === summary.id}
-                title={truncateText(summary.title, 34)}
-                meta={`HTML 产物 · ${summary.rejected ? '已拦截' : summary.sourceLabel || summary.meta}`}
-                detail={truncateText(summary.subtitle, 80)}
-                onClick={() => onSelectHtmlArtifact?.(summary.id)}
-              />
-            );
-          })}
-
-          {reportPlans.map((plan) => (
-            <ResultTextLink
-              key={plan.id}
-              active={plan.id === selectedReportPlanId}
-              title={truncateText(plan.title, 34)}
-              meta={`报告计划 · ${formatSnakeCaseLabel(plan.status)}`}
-              detail={truncateText(plan.objective, 80)}
-              onClick={() => onSelectReportPlan?.(plan.id)}
-            />
-          ))}
-
-          {publishedReports.map((report) => (
-            <ResultTextLink
-              key={report.id}
-              active={report.plan_id === selectedReportPlanId}
-              title={truncateText(report.slug, 34)}
-              meta={`已发布 · ${formatDateTime(report.updated_at)}`}
-              detail={`report ${truncateText(report.id, 16)}`}
-              onClick={() => onSelectReportPlan?.(report.plan_id)}
-            />
-          ))}
-
-          {!resultCount ? <EmptySection text="暂时还没有生成结果。通过底部“页面”或对话发起后会出现在这里。" /> : null}
+          {!resultCount ? <EmptySection text="暂时还没有生成项目。通过底部“页面”或对话发起后会出现在这里。" /> : null}
         </div>
         <button type="button" className="ghost-btn compact-action-btn" onClick={onRefreshStaticPageDrafts}>
-          刷新结果
+          刷新项目
         </button>
       </section>
     </aside>

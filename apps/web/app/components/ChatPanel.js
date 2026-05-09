@@ -578,8 +578,6 @@ export default function ChatPanel({
         scopePlan={scopePlan}
       />
 
-      <AssistantRunProgressPanel progress={assistantRunProgress} />
-
       {showingHtmlArtifactWorkspace ? (
         <div className="chat-static-page-workspace">
           <div className="chat-static-page-head">

@@ -20354,6 +20354,7 @@ fn status_from_static_page_operations(operations: &[Value]) -> Option<StaticPage
             Some("queue_image_job") => Some(StaticPageDraftStatus::Queued),
             Some("mark_preview_ready") => Some(StaticPageDraftStatus::Previewed),
             Some("confirm_preview") => Some(StaticPageDraftStatus::Confirmed),
+            Some("reset_final_render") => Some(StaticPageDraftStatus::Confirmed),
             Some("request_final_render") => Some(StaticPageDraftStatus::Rendered),
             Some(_) => Some(status.unwrap_or(StaticPageDraftStatus::Planned)),
             None => status,
@@ -20546,6 +20547,50 @@ fn apply_static_page_operation_to_payload(payload: &mut Value, operation: &Value
                     }),
                 );
             }
+        }
+        "reset_image_job" => {
+            set_payload_string(payload, "status", "planning");
+            set_payload_value(
+                payload,
+                "imageJob",
+                json!({
+                    "id": Value::Null,
+                    "status": "idle",
+                    "queuePosition": Value::Null,
+                    "queueMessage": "",
+                }),
+            );
+            set_payload_value(payload, "previewImage", Value::Null);
+            set_payload_value(payload, "finalPage", Value::Null);
+            set_payload_value(
+                payload,
+                "previewContract",
+                json!({
+                    "status": "not_requested",
+                    "imageJobId": Value::Null,
+                    "assetKey": Value::Null,
+                    "queuePosition": Value::Null,
+                    "confirmedAt": Value::Null,
+                }),
+            );
+        }
+        "reset_final_render" => {
+            set_payload_string(payload, "status", "effect_confirmed");
+            set_payload_value(payload, "finalPage", Value::Null);
+            let asset_key = payload
+                .get("previewImage")
+                .and_then(|preview| preview.get("assetKey"))
+                .cloned()
+                .unwrap_or(Value::Null);
+            set_payload_value(
+                payload,
+                "previewContract",
+                json!({
+                    "status": "confirmed",
+                    "assetKey": asset_key,
+                    "queuePosition": Value::Null,
+                }),
+            );
         }
         "request_final_render" => {
             set_payload_string(payload, "status", "rendering");
