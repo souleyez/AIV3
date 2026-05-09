@@ -263,6 +263,12 @@ fn codex_exec_output(
     decision: &CodexHostExecutionDecision,
     process_output: CodexProcessOutput,
 ) -> serde_json::Value {
+    let html_artifacts = vec![task_context.html_report_artifact(
+        "codex_exec",
+        "completed",
+        Some(decision),
+        Some(&process_output),
+    )];
     json!(CodexHostTaskOutputView {
         mode: "codex_exec".to_string(),
         codex_invoked: true,
@@ -280,6 +286,7 @@ fn codex_exec_output(
         local_thread_id: task_context.local_thread_id.clone(),
         task_memory_isolated: task_context.task_memory_isolated,
         task_memory_space_id: task_context.task_memory_space_id.clone(),
+        html_artifacts,
     })
 }
 
@@ -527,6 +534,15 @@ mod tests {
             json!("codex-host-task-test")
         );
         assert_eq!(output["process"]["stdout_excerpt"], json!("ok"));
+        assert_eq!(
+            output["html_artifacts"][0]["template_id"],
+            json!("codex_execution_report")
+        );
+        assert_eq!(
+            output["html_artifacts"][0]["payload"]["process"]["stdoutChars"],
+            json!(2)
+        );
+        assert!(output["html_artifacts"][0]["payload"]["process"]["stdoutExcerpt"].is_null());
         assert_eq!(
             output["task_memory_space_id"],
             json!("codex-host-task:test")

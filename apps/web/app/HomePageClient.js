@@ -301,6 +301,74 @@ function sortStaticPageDrafts(items) {
   });
 }
 
+function buildStaticPagePlanningHtmlArtifact(draft) {
+  if (!draft) return null;
+  const id = draft.backendDraftId || draft.id || 'local-static-page-draft';
+  return {
+    kind: 'html_artifact',
+    version: 1,
+    id: `html-static-page-handoff-${id}`,
+    title: `${draft.objective || draft.title || '静态页规划'} · 交接`,
+    sourceType: 'static_page',
+    templateId: 'static_page_planning_handoff',
+    interactionMode: 'read_only',
+    ownerScope: {
+      type: 'static_page_draft',
+      id,
+    },
+    dataRefs: [
+      draft.datasetId ? { kind: 'dataset', id: draft.datasetId, label: '选中数据集' } : null,
+      draft.sessionId ? { kind: 'chat_session', id: draft.sessionId, label: '关联会话' } : null,
+      draft.backendDraftId ? { kind: 'static_page_draft', id: draft.backendDraftId, label: '后端草稿' } : null,
+    ].filter(Boolean),
+    provenance: {
+      producer: 'v3-static-page-workspace',
+      reason: 'static page planning handoff',
+      sourceRunId: draft.assistantRunId || draft.source?.assistantRunId || '',
+    },
+    createdAt: draft.backendUpdatedAt || draft.updated_at || draft.updatedAt || draft.created_at || new Date(0).toISOString(),
+    payload: {
+      objective: draft.objective || draft.title || '静态页规划',
+      visualBridge: {
+        providerLane: 'gpt-image-2-cloudflare-queue',
+        role: 'effect_preview_reference_only',
+        rule: '效果图只锁定视觉方向和确认指纹；最终 HTML 由 Draft JSON、DataSnapshot、VisualSpec 和 renderer 生成。',
+        status: draft.previewContract?.status || draft.imageJob?.status || 'not_requested',
+        imageJobStatus: draft.imageJob?.status || 'not_requested',
+        imageJobId: draft.imageJob?.id || '',
+        previewAssetKey: draft.previewImage?.assetKey || draft.previewContract?.assetKey || '',
+        draftFingerprint: draft.previewContract?.draftFingerprint || '',
+        styleDirection: draft.styleDirection || '',
+        renderModel: draft.renderSpec?.componentModel || '',
+        finalRenderStatus: draft.finalPage?.status || 'not_requested',
+      },
+      modules: (Array.isArray(draft.modules) ? draft.modules : []).map((module) => ({
+        id: module.id,
+        title: module.title,
+        content: module.content,
+        dataBinding: module.dataBinding?.label || module.dataBinding?.fieldPath || '待绑定',
+        visualizationType: module.visualizationType,
+        layout: module.layout,
+        dataQuality: module.dataQuality || module.dataQualityStatus || '',
+      })),
+    },
+  };
+}
+
+function mergeHtmlArtifacts(...groups) {
+  const artifactMap = new Map();
+  groups.flat().filter(Boolean).forEach((artifact) => {
+    const id = artifact.id || artifact.artifact_id;
+    if (!id || artifactMap.has(id)) return;
+    artifactMap.set(id, artifact);
+  });
+  return Array.from(artifactMap.values()).sort((left, right) => {
+    const leftValue = new Date(left?.createdAt || left?.created_at || 0).getTime();
+    const rightValue = new Date(right?.createdAt || right?.created_at || 0).getTime();
+    return rightValue - leftValue;
+  });
+}
+
 function firstDatasetIdFromScope(scope) {
   const datasets = Array.isArray(scope?.datasets)
     ? scope.datasets
@@ -406,6 +474,8 @@ export default function HomePageClient() {
   const [error, setError] = useState('');
   const [staticPageDrafts, setStaticPageDrafts] = useState({});
   const [activeStaticPageDraftId, setActiveStaticPageDraftId] = useState(null);
+  const [backendHtmlArtifacts, setBackendHtmlArtifacts] = useState([]);
+  const [activeHtmlArtifactId, setActiveHtmlArtifactId] = useState(null);
   const [scopePlan, setScopePlan] = useState({ candidates: [], hint: '' });
   const [activityEvents, setActivityEvents] = useState([]);
   const [lastAssistantRunId, setLastAssistantRunId] = useState('');
@@ -443,6 +513,17 @@ export default function HomePageClient() {
   const staticPageDraftItems = useMemo(
     () => sortStaticPageDrafts(Object.values(staticPageDrafts)),
     [staticPageDrafts],
+  );
+  const htmlArtifacts = useMemo(
+    () => mergeHtmlArtifacts(
+      backendHtmlArtifacts,
+      staticPageDraftItems.map(buildStaticPagePlanningHtmlArtifact).filter(Boolean),
+    ),
+    [backendHtmlArtifacts, staticPageDraftItems],
+  );
+  const activeHtmlArtifact = useMemo(
+    () => htmlArtifacts.find((artifact) => artifact.id === activeHtmlArtifactId) || null,
+    [activeHtmlArtifactId, htmlArtifacts],
   );
   const visibleMessages = useMemo(
     () => (selectedDatasetId || selectedSessionId ? messages : localMessages),
@@ -820,6 +901,25 @@ export default function HomePageClient() {
     }
   }
 
+  async function refreshHtmlArtifacts(options = {}) {
+    const { silent = true } = options;
+    const query = new URLSearchParams({
+      local_thread_id: readLocalThreadId(),
+      limit: '50',
+    });
+    try {
+      const artifacts = await fetchJson(`/api/v3/html-artifacts?${query.toString()}`);
+      setBackendHtmlArtifacts(Array.isArray(artifacts) ? artifacts : []);
+      if (!silent) {
+        setBanner(artifacts?.length ? `已刷新 ${artifacts.length} 个 HTML 产物。` : '当前终端还没有后端 HTML 产物。');
+      }
+    } catch (artifactError) {
+      if (!silent) {
+        setBanner(`HTML 产物暂不可用：${artifactError instanceof Error ? artifactError.message : '请求失败'}。`);
+      }
+    }
+  }
+
   async function refreshBackendStaticPageDraft(backendDraftId, options = {}) {
     const { silent = true } = options;
     if (!backendDraftId) {
@@ -1076,6 +1176,7 @@ export default function HomePageClient() {
       await Promise.all([
         refreshCatalog({ preferredDatasetId: selectedDatasetId, silent: true }),
         refreshStaticPageDraftShelf({ silent: true }),
+        refreshHtmlArtifacts({ silent: true }),
       ]);
     } catch (authError) {
       setError(authError instanceof Error ? authError.message : '验证码登录失败');
@@ -1115,6 +1216,7 @@ export default function HomePageClient() {
       await Promise.all([
         refreshCatalog({ preferredDatasetId: selectedDatasetId, silent: true }),
         refreshStaticPageDraftShelf({ silent: true }),
+        refreshHtmlArtifacts({ silent: true }),
       ]);
     } catch (authError) {
       setError(authError instanceof Error ? authError.message : '邮箱密钥登录失败');
@@ -1224,6 +1326,7 @@ export default function HomePageClient() {
       await Promise.all([
         refreshCatalog({ silent: true }),
         refreshStaticPageDraftShelf({ silent: true }),
+        refreshHtmlArtifacts({ silent: true }),
       ]);
     } catch (authError) {
       setError(authError instanceof Error ? authError.message : '退出账号失败');
@@ -1876,6 +1979,7 @@ export default function HomePageClient() {
           if (activeStaticPageDraft?.backendDraftId) {
             await refreshBackendStaticPageDraft(activeStaticPageDraft.backendDraftId, { silent: true });
           }
+          await refreshHtmlArtifacts({ silent: true });
           usedBackendAssistantRun = Boolean(assistantContent);
         } catch (assistantRunError) {
           setAssistantRunProgress(null);
@@ -1998,6 +2102,7 @@ export default function HomePageClient() {
       [draft.id]: draft,
     }));
     setActiveStaticPageDraftId(draft.id);
+    setActiveHtmlArtifactId(null);
     setBanner(oneClick ? '已按 AI 理解创建静态页草稿，并进入效果图排队。' : '已创建静态页草稿，下一步会展示页面规划。');
     setError('');
     setMobilePanel('insights');
@@ -2013,6 +2118,7 @@ export default function HomePageClient() {
       return;
     }
     setActiveStaticPageDraftId(draftId);
+    setActiveHtmlArtifactId(null);
     setBanner(draft.status === 'rendered' ? '已打开已生成静态页，可继续在对话框提出修改。' : '已打开静态页草稿，可继续规划或生成。');
     setMobilePanel('insights');
   }
@@ -2020,6 +2126,44 @@ export default function HomePageClient() {
   function handleCloseStaticPageDraft() {
     setActiveStaticPageDraftId(null);
     setBanner('已返回聊天记录；右侧静态页成品架可随时重新打开草稿或成品。');
+  }
+
+  function handleSelectHtmlArtifact(artifactId) {
+    setActiveHtmlArtifactId(artifactId);
+    setBanner('已打开安全 HTML 产物；内容在沙箱中展示，不会执行任意外部脚本。');
+    setMobilePanel('chat');
+  }
+
+  function handleCloseHtmlArtifact() {
+    setActiveHtmlArtifactId(null);
+    setBanner('已关闭 HTML 产物预览。');
+  }
+
+  async function handleHtmlArtifactEvent(eventData, manifest) {
+    const artifactId = manifest?.id || eventData?.artifactId || activeHtmlArtifactId;
+    if (!artifactId) {
+      setBanner('HTML 产物动作缺少产物编号，已拦截。');
+      return;
+    }
+    try {
+      await fetchJson(`/api/v3/html-artifacts/${encodeURIComponent(artifactId)}/events`, {
+        method: 'POST',
+        body: {
+          assistant_run_id: manifest?.provenance?.sourceRunId || activeHtmlArtifact?.provenance?.source_run_id || null,
+          local_thread_id: readLocalThreadId(),
+          event_type: eventData?.type || '',
+          payload: eventData?.payload || {},
+        },
+      });
+      await refreshHtmlArtifacts({ silent: true });
+      const ownerScope = manifest?.ownerScope || activeHtmlArtifact?.ownerScope || activeHtmlArtifact?.owner_scope;
+      if (ownerScope?.type === 'static_page_draft' && ownerScope.id) {
+        await refreshBackendStaticPageDraft(ownerScope.id, { silent: true });
+      }
+      setBanner(`HTML 产物动作已提交并同步到 V3：${eventData?.type || 'unknown'}。`);
+    } catch (submitError) {
+      setBanner(`HTML 产物动作已拦截：${submitError instanceof Error ? submitError.message : '提交失败'}。`);
+    }
   }
 
   function handleApplyStaticPagePrompt(prompt) {
@@ -2232,6 +2376,7 @@ export default function HomePageClient() {
         refreshCatalog({ preferredDatasetId: selectedDatasetId, silent: true }),
         selectedReportPlanId ? refreshReportDetail(selectedReportPlanId, { silent: true }) : Promise.resolve(),
         refreshStaticPageDraftShelf({ silent: true }),
+        refreshHtmlArtifacts({ silent: true }),
         activeStaticPageDraft?.backendDraftId
           ? refreshBackendStaticPageDraft(activeStaticPageDraft.backendDraftId, { silent: true })
           : Promise.resolve(),
@@ -2263,6 +2408,7 @@ export default function HomePageClient() {
         refreshCatalog({ preferredDatasetId: selectedDatasetId, silent: true }),
         selectedReportPlanId ? refreshReportDetail(selectedReportPlanId, { silent: true }) : Promise.resolve(),
         refreshStaticPageDraftShelf({ silent: true }),
+        refreshHtmlArtifacts({ silent: true }),
         activeStaticPageDraft?.backendDraftId
           ? refreshBackendStaticPageDraft(activeStaticPageDraft.backendDraftId, { silent: true })
           : Promise.resolve(),
@@ -2300,6 +2446,7 @@ export default function HomePageClient() {
 
   useEffect(() => {
     refreshStaticPageDraftShelf({ silent: true });
+    refreshHtmlArtifacts({ silent: true });
   }, []);
 
   useEffect(() => {
@@ -2462,6 +2609,7 @@ export default function HomePageClient() {
   useEffect(() => {
     const timer = window.setInterval(() => {
       refreshStaticPageDraftShelf({ silent: true });
+      refreshHtmlArtifacts({ silent: true });
     }, STATIC_PAGE_SHELF_POLL_INTERVAL_MS);
 
     return () => window.clearInterval(timer);
@@ -2603,6 +2751,9 @@ export default function HomePageClient() {
     startupBriefing: assistantStartupBriefing,
     scopePlan,
     assistantRunProgress,
+    htmlArtifact: activeHtmlArtifact,
+    onCloseHtmlArtifact: handleCloseHtmlArtifact,
+    onHtmlArtifactEvent: handleHtmlArtifactEvent,
   };
   const insightPanelProps = {
     dataset: selectedDataset,
@@ -2642,6 +2793,9 @@ export default function HomePageClient() {
     staticPageDrafts: staticPageDraftItems,
     onSelectStaticPageDraft: handleSelectStaticPageDraft,
     onRefreshStaticPageDrafts: () => refreshStaticPageDraftShelf({ silent: false }),
+    htmlArtifacts,
+    activeHtmlArtifactId,
+    onSelectHtmlArtifact: handleSelectHtmlArtifact,
   };
   const uploadInput = (
     <input

@@ -670,6 +670,21 @@ pub struct AssistantRunEvent {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct HtmlArtifact {
+    pub id: String,
+    pub tenant_id: TenantId,
+    pub owner_user_id: Option<UserId>,
+    pub assistant_run_id: Option<AssistantRunId>,
+    pub local_thread_id: Option<String>,
+    pub source_type: String,
+    pub template_id: String,
+    pub interaction_mode: String,
+    pub manifest: Value,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct ConversationMemoryItem {
     pub id: ConversationMemoryItemId,
     pub tenant_id: TenantId,

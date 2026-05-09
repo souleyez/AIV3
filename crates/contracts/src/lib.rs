@@ -205,6 +205,102 @@ pub struct CodexHostProcessOutputSummaryView {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum HtmlArtifactSourceTypeView {
+    CodexHost,
+    StaticPage,
+    CodeReview,
+    Manual,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum HtmlArtifactTemplateIdView {
+    CodexExecutionReport,
+    StaticPagePlanningHandoff,
+    StaticPageDataQualityReport,
+    CodeReviewSummary,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum HtmlArtifactInteractionModeView {
+    ReadOnly,
+    JsonPatch,
+    ActionIntent,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HtmlArtifactOwnerScopeView {
+    #[serde(rename = "type")]
+    pub scope_type: String,
+    pub id: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HtmlArtifactDataRefView {
+    pub kind: String,
+    pub id: String,
+    pub label: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HtmlArtifactProvenanceView {
+    pub producer: String,
+    pub reason: String,
+    pub source_run_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HtmlArtifactManifestView {
+    pub kind: String,
+    pub version: u32,
+    pub id: String,
+    pub title: String,
+    pub source_type: HtmlArtifactSourceTypeView,
+    pub template_id: HtmlArtifactTemplateIdView,
+    pub owner_scope: HtmlArtifactOwnerScopeView,
+    #[serde(default)]
+    pub data_refs: Vec<HtmlArtifactDataRefView>,
+    pub provenance: HtmlArtifactProvenanceView,
+    pub interaction_mode: HtmlArtifactInteractionModeView,
+    pub created_at: DateTime<Utc>,
+    #[serde(default)]
+    pub payload: Value,
+}
+
+impl HtmlArtifactManifestView {
+    pub fn codex_execution_report(
+        assistant_run_id: &str,
+        title: impl Into<String>,
+        reason: impl Into<String>,
+        payload: Value,
+    ) -> Self {
+        Self {
+            kind: "html_artifact".to_string(),
+            version: 1,
+            id: format!("html-artifact-codex-{assistant_run_id}"),
+            title: title.into(),
+            source_type: HtmlArtifactSourceTypeView::CodexHost,
+            template_id: HtmlArtifactTemplateIdView::CodexExecutionReport,
+            owner_scope: HtmlArtifactOwnerScopeView {
+                scope_type: "assistant_run".to_string(),
+                id: assistant_run_id.to_string(),
+            },
+            data_refs: Vec::new(),
+            provenance: HtmlArtifactProvenanceView {
+                producer: "codex-host-agent".to_string(),
+                reason: reason.into(),
+                source_run_id: Some(assistant_run_id.to_string()),
+            },
+            interaction_mode: HtmlArtifactInteractionModeView::ReadOnly,
+            created_at: Utc::now(),
+            payload,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CodexHostTaskOutputView {
     pub mode: String,
     pub codex_invoked: bool,
@@ -218,6 +314,8 @@ pub struct CodexHostTaskOutputView {
     pub local_thread_id: Option<String>,
     pub task_memory_isolated: bool,
     pub task_memory_space_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub html_artifacts: Vec<HtmlArtifactManifestView>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -1612,6 +1710,25 @@ pub struct AppendAssistantRunEventResponse {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SubmitHtmlArtifactEventRequest {
+    #[serde(default)]
+    pub assistant_run_id: Option<String>,
+    #[serde(default)]
+    pub local_thread_id: Option<String>,
+    pub event_type: String,
+    #[serde(default)]
+    pub payload: Value,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SubmitHtmlArtifactEventResponse {
+    pub accepted: bool,
+    pub artifact: HtmlArtifactManifestView,
+    pub run: AssistantRunView,
+    pub event: AssistantRunEventView,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CreateStaticPageDraftRequest {
     #[serde(default)]
     pub title: Option<String>,
@@ -2213,6 +2330,58 @@ mod tests {
             context["safety"]["real_codex_exec_requires_host_allowlist"],
             json!(true)
         );
+    }
+
+    #[test]
+    fn html_artifact_manifest_uses_safe_snake_case_contract() {
+        let manifest = HtmlArtifactManifestView::codex_execution_report(
+            "run-1",
+            "Codex Host 执行报告",
+            "plan_only planned",
+            json!({
+                "mode": "plan_only",
+                "status": "planned",
+                "summary": "safe report"
+            }),
+        );
+
+        let encoded = serde_json::to_value(&manifest).expect("manifest should serialize");
+
+        assert_eq!(encoded["kind"], json!("html_artifact"));
+        assert_eq!(encoded["version"], json!(1));
+        assert_eq!(encoded["source_type"], json!("codex_host"));
+        assert_eq!(encoded["template_id"], json!("codex_execution_report"));
+        assert_eq!(encoded["interaction_mode"], json!("read_only"));
+        assert_eq!(encoded["owner_scope"]["type"], json!("assistant_run"));
+        assert_eq!(encoded["owner_scope"]["id"], json!("run-1"));
+        assert_eq!(encoded["provenance"]["producer"], json!("codex-host-agent"));
+        assert_eq!(encoded["payload"]["mode"], json!("plan_only"));
+
+        let decoded: HtmlArtifactManifestView =
+            serde_json::from_value(encoded).expect("manifest should deserialize");
+        assert_eq!(
+            decoded.template_id,
+            HtmlArtifactTemplateIdView::CodexExecutionReport
+        );
+        assert_eq!(decoded.source_type, HtmlArtifactSourceTypeView::CodexHost);
+    }
+
+    #[test]
+    fn html_artifact_event_request_uses_safe_wire_shape() {
+        let request: SubmitHtmlArtifactEventRequest = serde_json::from_value(json!({
+            "assistant_run_id": "run-1",
+            "event_type": "html_artifact.action_intent",
+            "payload": {
+                "action": "submit",
+                "intent": "apply suggested change"
+            }
+        }))
+        .expect("html artifact event request should deserialize");
+
+        assert_eq!(request.assistant_run_id.as_deref(), Some("run-1"));
+        assert_eq!(request.event_type, "html_artifact.action_intent");
+        assert_eq!(request.payload["action"], json!("submit"));
+        assert!(request.local_thread_id.is_none());
     }
 
     #[test]

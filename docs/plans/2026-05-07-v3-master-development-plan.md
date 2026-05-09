@@ -136,6 +136,7 @@ The product must support:
 - Data snapshot handoff from retrieval/user edits to image prompt and final render.
 - Cloudflare/Codex preview image queue.
 - Effect image confirmation.
+- GPT Image 2 or equivalent image providers generate the visual effect preview and visual contract only; they do not produce the final editable/static HTML page.
 - Final static-page render/export with real data and deterministic fallback.
 - ECharts advanced chart runtime for Java 8 parity and complex dashboards.
 
@@ -369,7 +370,7 @@ The next development thread should continue with static-page final-render/chart/
 - Modify: `apps/web/app/components/static-page/StaticPageFinalRender.js`
 - Modify: `apps/web/app/components/InsightPanel.js`
 
-**Current implementation note:** Web UI background render submission, main-workspace status card, right-shelf cancel/retry actions, ZIP handoff, data-quality chips, workflow queued/rendering state synchronization, worker manifest failure diagnostics, worker-side cancellation race protection, PostgreSQL-backed worker completion/cancel tests, static-page render retry/dead-letter workflow regression coverage, and API retry/dead-letter output-state coverage are implemented. Final render manifests and ZIP handoff now also include module-level data quality/runtime diagnostics via `data-quality-report.json`, so handoff reviewers can see each module's title, data binding, sample row count, quality status, fallback mode, and recommended action. The final-render panel shows a compact module-level quality list with localized status/runtime labels, and the right-side static-page shelf surfaces the first problem/fallback modules directly on each draft card.
+**Current implementation note:** Web UI background render submission, main-workspace status card, right-shelf cancel/retry actions, ZIP handoff, data-quality chips, workflow queued/rendering state synchronization, worker manifest failure diagnostics, worker-side cancellation race protection, PostgreSQL-backed worker completion/cancel tests, static-page render retry/dead-letter workflow regression coverage, and API retry/dead-letter output-state coverage are implemented. Final render manifests and ZIP handoff now also include module-level data quality/runtime diagnostics via `data-quality-report.json`, so handoff reviewers can see each module's title, data binding, sample row count, quality status, fallback mode, and recommended action. The final-render panel shows a compact module-level quality list with localized status/runtime labels, the right-side static-page shelf surfaces the first problem/fallback modules directly on each draft card, and the safe HTML artifact layer now synthesizes read-only `static_page_data_quality_report` artifacts from rendered final-page manifests for review in the common artifact shelf.
 
 **Follow-up hardening note:** Frontend draft reset now clears stale preview/final-render artifacts instead of leaving a previously rendered page attached after effect-preview reset. The backend final-render route now rejects confirmed image jobs whose preview contract fingerprint no longer matches the current draft, so stale effect images cannot be reused to produce a new final page. The web final-render panel and action dispatcher now use the same current-confirmed-preview gate before showing or accepting request/retry actions, while still allowing failed/cancelled final renders to restart when the confirmed preview is current. The right-shelf output list surfaces stale drafts as "规划已变更", hides obsolete download/retry actions, and explains that the user must regenerate and reconfirm the effect image. ReAct first-run and continue-run prompts now warn the model not to call `render_static_page` when `previewStale=true` or `previewStatus=stale`, and stale render attempts return a structured rejected observation that points the model to `submit_static_page_image_preview` instead of repeatedly trying final render.
 
@@ -474,7 +475,9 @@ The next development thread should continue with static-page final-render/chart/
 
 ### Task 9: Add Safe HTML Artifact Renderer
 
-**Status:** Planned. This task incorporates the useful pattern from HTML Effectiveness: HTML is valuable as a compact interactive review medium, but V3 must own the templates, manifests, sandbox policy, and JSON-patch bridge.
+**Status:** In progress. Frontend/contract/backend listing, durable manifest storage, and action-submission slices are implemented: web-side manifest normalization rejects unsafe templates, scripts, remote URLs, event handlers, form posts, provider tokens, queue secrets, and secret-like payload strings; the new `HtmlArtifactViewer` renders trusted templates in sandboxed iframes; the right shelf can list/open HTML artifacts; shared Rust contracts now include `HtmlArtifactManifestView`; Codex Host dry-run/plan-only/codex-exec outputs can attach a read-only `codex_execution_report` manifest without embedding raw process logs; storage has a standalone `html_artifacts` table/repository; `/v1/html-artifacts` now prefers persisted artifacts by run id or local thread id and opportunistically backfills older AssistantRun event manifests; backend listing synthesizes interactive `static_page_planning_handoff` artifacts for visible static-page drafts and read-only `static_page_data_quality_report` artifacts from rendered final-page manifests; `/v1/html-artifacts/{artifact_id}/events` accepts only V3-validated `html_artifact.patch` or `html_artifact.action_intent` submissions for non-read-only backend artifacts and records them as AssistantRun events; static-page planning handoff patches with owner scope `static_page_draft` execute through a restricted JSON Patch -> static-page operation translator for module title/content/data binding/visualization/layout, `styleDirection`, and `mobileOrder`; action-intent handoffs now collect a natural-language prompt in the sandbox and apply it through the existing static-page intent interpreter; the frontend refreshes the target static-page draft after a successful artifact event. Non-static-page product objects are still pending.
+
+**GPT Image 2 integration note:** The image queue sits between planning and final render. It receives the same module/data snapshot and visual spec that the final renderer will later use, then returns an effect image for user confirmation. The confirmed image is a visual reference and a fingerprinted contract, not the source of truth. Final HTML still comes from `StaticPageDraft.modules`, `dataSnapshot`, `visualSpec`, `renderSpec`, and renderer manifests. Safe HTML artifacts show this bridge in planning handoffs so reviewers can see whether the effect image is missing, queued, stale, confirmed, or ready to drive final render.
 
 **Files:**
 
@@ -483,9 +486,12 @@ The next development thread should continue with static-page final-render/chart/
 - Create: `apps/web/app/lib/html-artifact-manifest.test.mjs`
 - Modify: `apps/web/app/components/InsightPanel.js`
 - Modify: `crates/contracts/src/lib.rs`
+- Modify: `crates/domain-model/src/lib.rs`
 - Modify: `crates/platform-api/src/lib.rs`
+- Modify: `crates/storage/src/lib.rs`
 - Modify: `crates/codex-host-agent/src/lib.rs`
 - Modify: `docs/architecture/codex-host-bridge-contract.md`
+- Create: `crates/storage/migrations/0007_html_artifacts.sql`
 
 **Steps:**
 
@@ -496,10 +502,14 @@ The next development thread should continue with static-page final-render/chart/
 5. Allow interactive templates to emit only structured JSON patch or action-intent events back to V3.
 6. Add right-shelf open/view support without replacing the main static-page final renderer.
 7. Add Codex Host plan-only/dry-run report output that can attach an HTML artifact manifest.
-8. Run `node --test apps/web/app/lib/html-artifact-manifest.test.mjs`.
-9. Run `Push-Location apps/web; npm run build; Pop-Location`.
-10. Run `cargo test -p contracts html_artifact`.
-11. Run `cargo test -p platform-api html_artifact`.
+8. Persist trusted manifests in `html_artifacts` while keeping AssistantRun events as compatibility/fallback history.
+9. Execute static-page planning handoff JSON patches only through V3 static-page operations, not direct JSON/database mutation.
+10. Synthesize backend static-page planning handoff artifacts and execute natural-language `action_intent` through the static-page intent interpreter.
+11. Synthesize read-only static-page final-render data-quality report artifacts from renderer manifests.
+12. Run `node --test apps/web/app/lib/html-artifact-manifest.test.mjs`.
+13. Run `Push-Location apps/web; npm run build; Pop-Location`.
+14. Run `cargo test -p contracts html_artifact`.
+15. Run `cargo test -p platform-api html_artifact`.
 
 **Acceptance:**
 

@@ -27,31 +27,33 @@ use contracts::{
     CreateStaticPageDraftResponse, CreateStaticPageImageJobRequest,
     CreateStaticPageImageJobResponse, CreateStaticPageRenderRequest,
     CreateStaticPageRenderResponse, DatasetOutputView, DatasetSummary, DocumentChunkView,
-    DocumentDetailView, DocumentMediaDetailView, DocumentSummary, HealthResponse, KeyLoginRequest,
-    KeyLoginResponse, KeyRotateRequest, KeyRotateResponse, LlmInvocationView, LogoutResponse,
-    MemoryDirectoryView, PlanReportRequest, PublishReportRequest, PublishReportResponse,
-    PublishedReportDetailView, PublishedReportVersionView, PublishedReportView,
-    RegisterDocumentRequest, RegisterDocumentResponse, ReportPlanAstVersionView, ReportPlanSummary,
-    ReportRenderOutputView, ResolveDatasetSecretBindingsRequest,
-    ResolveDatasetSecretBindingsResponse, RetrievalEvidenceView, RetrievalSearchHitView,
-    RetrievalSearchResponse, RetryWorkflowExecutionRequest, RetryWorkflowExecutionResponse,
-    StartEmailAuthRequest, StartEmailAuthResponse, StaticPageDraftView, StaticPageImageJobView,
-    StaticPageRenderOutputView, ToolDefinitionView, ToolExecutionView,
-    UpdateChatSessionReportEntryRequest, UpdateChatSessionReportEntryResponse,
-    UpdateStaticPageDraftRequest, UpdateStaticPageDraftResponse, VerifyEmailAuthRequest,
-    VerifyEmailAuthResponse, WorkflowDefinitionView, WorkflowEventView, WorkflowExecutionView,
-    WorkflowRuntimeInspectView, WorkflowSignalRequest, WorkflowTaskView,
+    DocumentDetailView, DocumentMediaDetailView, DocumentSummary, HealthResponse,
+    HtmlArtifactInteractionModeView, HtmlArtifactManifestView, KeyLoginRequest, KeyLoginResponse,
+    KeyRotateRequest, KeyRotateResponse, LlmInvocationView, LogoutResponse, MemoryDirectoryView,
+    PlanReportRequest, PublishReportRequest, PublishReportResponse, PublishedReportDetailView,
+    PublishedReportVersionView, PublishedReportView, RegisterDocumentRequest,
+    RegisterDocumentResponse, ReportPlanAstVersionView, ReportPlanSummary, ReportRenderOutputView,
+    ResolveDatasetSecretBindingsRequest, ResolveDatasetSecretBindingsResponse,
+    RetrievalEvidenceView, RetrievalSearchHitView, RetrievalSearchResponse,
+    RetryWorkflowExecutionRequest, RetryWorkflowExecutionResponse, StartEmailAuthRequest,
+    StartEmailAuthResponse, StaticPageDraftView, StaticPageImageJobView,
+    StaticPageRenderOutputView, SubmitHtmlArtifactEventRequest, SubmitHtmlArtifactEventResponse,
+    ToolDefinitionView, ToolExecutionView, UpdateChatSessionReportEntryRequest,
+    UpdateChatSessionReportEntryResponse, UpdateStaticPageDraftRequest,
+    UpdateStaticPageDraftResponse, VerifyEmailAuthRequest, VerifyEmailAuthResponse,
+    WorkflowDefinitionView, WorkflowEventView, WorkflowExecutionView, WorkflowRuntimeInspectView,
+    WorkflowSignalRequest, WorkflowTaskView,
 };
 use domain_model::{
     AssistantRun, AssistantRunEvent, AssistantRunId, AuthAuditEvent, AuthAuditOutcome,
     AuthChallengePurpose, AuthSessionMethod, ChatMessage, ChatMessageId, ChatMessageRole,
     ChatSession, ChatSessionId, ConversationMemoryItem, Dataset, DatasetId, DatasetOutput,
     DatasetOutputId, DatasetVisibility, Document, DocumentChunk, DocumentChunkId, DocumentId,
-    EmailVerificationChallenge, LlmInvocation, LlmInvocationFinishReason, LlmInvocationMode,
-    LlmInvocationSourceKind, MemoryDirectory, MemoryDirectoryId, PublishedReport,
-    PublishedReportId, PublishedReportVersion, PublishedSurface, ReportPlan, ReportPlanAstVersion,
-    ReportPlanId, ReportRenderOutput, RetrievalEvidence, RetrievalEvidenceId, SecretBindingId,
-    SecretScopeLevel, StaticPageDraft, StaticPageDraftId, StaticPageDraftStatus,
+    EmailVerificationChallenge, HtmlArtifact, LlmInvocation, LlmInvocationFinishReason,
+    LlmInvocationMode, LlmInvocationSourceKind, MemoryDirectory, MemoryDirectoryId,
+    PublishedReport, PublishedReportId, PublishedReportVersion, PublishedSurface, ReportPlan,
+    ReportPlanAstVersion, ReportPlanId, ReportRenderOutput, RetrievalEvidence, RetrievalEvidenceId,
+    SecretBindingId, SecretScopeLevel, StaticPageDraft, StaticPageDraftId, StaticPageDraftStatus,
     StaticPageImageJob, StaticPageImageJobId, StaticPageImageJobStatus, StaticPageRenderOutput,
     StaticPageRenderOutputStatus, TenantId, ToolExecution, ToolExecutionSourceKind,
     ToolExecutionStatus, User, UserId, UserSession, UserSessionId, WorkflowEventRecord,
@@ -65,7 +67,7 @@ use llm_gateway::{
     LlmRequest, LlmResponse, MODEL_LANE_ASSISTANT_CHAT, MODEL_LANE_ASSISTANT_REACT_JSON,
 };
 use prompt_registry::bootstrap_default_prompt_registry;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use static_page_renderer::{render_static_page, StaticPageRenderRequest};
@@ -80,7 +82,7 @@ use std::{
 };
 use storage::{
     NewAssistantRun, NewAssistantRunEvent, NewAuthAuditEvent, NewChatMessage, NewChatSession,
-    NewConversationMemoryItem, NewDataset, NewDocument, NewPublishedReport,
+    NewConversationMemoryItem, NewDataset, NewDocument, NewHtmlArtifact, NewPublishedReport,
     NewPublishedReportVersion, NewReportPlan, NewSecretBinding, NewStaticPageDraft,
     NewStaticPageImageJob, NewStaticPageRenderOutput, NewUserSession, NewWorkflowTask, PgStorage,
 };
@@ -146,6 +148,8 @@ struct AssistantRunReactEvent {
 
 const STATIC_PAGE_DRAFT_LIST_DEFAULT_LIMIT: i64 = 12;
 const STATIC_PAGE_DRAFT_LIST_MAX_LIMIT: i64 = 50;
+const HTML_ARTIFACT_LIST_DEFAULT_LIMIT: i64 = 20;
+const HTML_ARTIFACT_LIST_MAX_LIMIT: i64 = 100;
 const ACTIVE_SECRET_BINDING_IDS_HEADER: &str = "x-ai-data-platform-secret-binding-ids";
 const AUTH_SESSION_COOKIE_NAME: &str = "aidp_v3_session";
 const AUTH_SESSION_TTL_DAYS: i64 = 30;
@@ -188,6 +192,13 @@ struct AuthAuditEventsQuery {
 
 #[derive(Debug, Deserialize)]
 struct StaticPageDraftListQuery {
+    local_thread_id: Option<String>,
+    assistant_run_id: Option<String>,
+    limit: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct HtmlArtifactListQuery {
     local_thread_id: Option<String>,
     assistant_run_id: Option<String>,
     limit: Option<i64>,
@@ -342,6 +353,11 @@ pub fn router(
         .route(
             "/v1/assistant-runs/{run_id}/static-page-drafts",
             axum::routing::post(create_static_page_draft_for_assistant_run),
+        )
+        .route("/v1/html-artifacts", get(list_html_artifacts))
+        .route(
+            "/v1/html-artifacts/{artifact_id}/events",
+            axum::routing::post(submit_html_artifact_event),
         )
         .route("/v1/static-page-drafts", get(list_static_page_drafts))
         .route(
@@ -6538,6 +6554,172 @@ async fn create_conversation_memory_item(
     Ok((
         StatusCode::CREATED,
         Json(to_conversation_memory_item_view(item)),
+    ))
+}
+
+async fn list_html_artifacts(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<HtmlArtifactListQuery>,
+) -> std::result::Result<Json<Vec<HtmlArtifactManifestView>>, ApiError> {
+    let limit = normalize_html_artifact_list_limit(query.limit);
+    let current_user_id = current_auth_user_id(&state, &headers).await?;
+    let mut artifacts = Vec::<HtmlArtifactManifestView>::new();
+
+    if let Some(run_id) = query
+        .assistant_run_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let run_id = parse_assistant_run_id(run_id)?;
+        let run = load_visible_assistant_run_for_user(&state, run_id, current_user_id).await?;
+        let stored_artifacts = state
+            .storage
+            .html_artifacts()
+            .list_by_assistant_run(state.tenant_id, run.id, limit)
+            .await
+            .map_err(ApiError::from_storage)?;
+        collect_html_artifacts_from_records(&stored_artifacts, &mut artifacts, limit as usize);
+        let event_artifacts =
+            load_html_artifacts_from_run_events(&state, run.id, limit as usize).await?;
+        persist_html_artifacts_for_run(&state, &run, &event_artifacts).await?;
+        artifacts.extend(event_artifacts);
+        let draft_artifacts = load_static_page_handoff_artifacts_for_run(
+            &state,
+            run.id,
+            current_user_id,
+            limit as usize,
+        )
+        .await?;
+        persist_html_artifacts_for_run(&state, &run, &draft_artifacts).await?;
+        artifacts.extend(draft_artifacts);
+        let quality_artifacts = load_static_page_data_quality_artifacts_for_run(
+            &state,
+            run.id,
+            current_user_id,
+            limit as usize,
+        )
+        .await?;
+        persist_html_artifacts_for_run(&state, &run, &quality_artifacts).await?;
+        artifacts.extend(quality_artifacts);
+    } else {
+        let local_thread_id = required_field("local_thread_id", query.local_thread_id)?;
+        validate_required("local_thread_id", &local_thread_id)?;
+        let local_thread_id = local_thread_id.trim().to_string();
+        let stored_artifacts = state
+            .storage
+            .html_artifacts()
+            .list_by_local_thread(state.tenant_id, &local_thread_id, limit)
+            .await
+            .map_err(ApiError::from_storage)?;
+        let visible_stored_artifacts = stored_artifacts
+            .into_iter()
+            .filter(|artifact| owner_user_id_is_visible(artifact.owner_user_id, current_user_id))
+            .collect::<Vec<_>>();
+        collect_html_artifacts_from_records(
+            &visible_stored_artifacts,
+            &mut artifacts,
+            limit as usize,
+        );
+        let runs = state
+            .storage
+            .assistant_runs()
+            .list_by_local_thread(state.tenant_id, &local_thread_id, limit)
+            .await
+            .map_err(ApiError::from_storage)?;
+        for run in runs
+            .into_iter()
+            .filter(|run| owner_user_id_is_visible(run.user_id, current_user_id))
+        {
+            let event_artifacts =
+                load_html_artifacts_from_run_events(&state, run.id, limit as usize).await?;
+            persist_html_artifacts_for_run(&state, &run, &event_artifacts).await?;
+            artifacts.extend(event_artifacts);
+            let draft_artifacts = load_static_page_handoff_artifacts_for_run(
+                &state,
+                run.id,
+                current_user_id,
+                limit as usize,
+            )
+            .await?;
+            persist_html_artifacts_for_run(&state, &run, &draft_artifacts).await?;
+            artifacts.extend(draft_artifacts);
+            let quality_artifacts = load_static_page_data_quality_artifacts_for_run(
+                &state,
+                run.id,
+                current_user_id,
+                limit as usize,
+            )
+            .await?;
+            persist_html_artifacts_for_run(&state, &run, &quality_artifacts).await?;
+            artifacts.extend(quality_artifacts);
+            if artifacts.len() >= limit as usize {
+                break;
+            }
+        }
+    }
+
+    sort_and_dedupe_html_artifacts(&mut artifacts);
+    artifacts.truncate(limit as usize);
+    Ok(Json(artifacts))
+}
+
+async fn submit_html_artifact_event(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(artifact_id): Path<String>,
+    Json(request): Json<SubmitHtmlArtifactEventRequest>,
+) -> std::result::Result<(StatusCode, Json<SubmitHtmlArtifactEventResponse>), ApiError> {
+    validate_required("artifact_id", &artifact_id)?;
+    validate_required("event_type", &request.event_type)?;
+    let current_user_id = current_auth_user_id(&state, &headers).await?;
+    let artifact_id = artifact_id.trim();
+    let (run, artifact) =
+        load_visible_html_artifact_for_submit(&state, current_user_id, artifact_id, &request)
+            .await?;
+    validate_html_artifact_event_request(&artifact, &request)?;
+    let product_execution =
+        apply_html_artifact_event_to_product(&state, current_user_id, &run, &artifact, &request)
+            .await?;
+
+    let mut event_payload = json!({
+        "artifact_id": artifact.id.clone(),
+        "artifact_title": artifact.title.clone(),
+        "template_id": artifact.template_id.clone(),
+        "source_type": artifact.source_type.clone(),
+        "interaction_mode": artifact.interaction_mode.clone(),
+        "payload": request.payload.clone(),
+    });
+    if let Some(execution) = product_execution {
+        if let Some(object) = event_payload.as_object_mut() {
+            object.insert("product_execution".to_string(), execution);
+        }
+    }
+
+    let event = state
+        .storage
+        .assistant_runs()
+        .append_event(
+            state.tenant_id,
+            run.id,
+            &NewAssistantRunEvent {
+                event_name: request.event_type.trim().to_string(),
+                payload: event_payload,
+                created_at: Utc::now(),
+            },
+        )
+        .await
+        .map_err(ApiError::from_storage)?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(SubmitHtmlArtifactEventResponse {
+            accepted: true,
+            artifact,
+            run: to_assistant_run_view(run),
+            event: to_assistant_run_event_view(event),
+        }),
     ))
 }
 
@@ -13300,6 +13482,1280 @@ fn normalize_static_page_draft_list_limit(limit: Option<i64>) -> i64 {
         .min(STATIC_PAGE_DRAFT_LIST_MAX_LIMIT)
 }
 
+fn normalize_html_artifact_list_limit(limit: Option<i64>) -> i64 {
+    limit
+        .unwrap_or(HTML_ARTIFACT_LIST_DEFAULT_LIMIT)
+        .max(1)
+        .min(HTML_ARTIFACT_LIST_MAX_LIMIT)
+}
+
+fn collect_html_artifacts_from_events(
+    events: &[AssistantRunEvent],
+    artifacts: &mut Vec<HtmlArtifactManifestView>,
+    limit: usize,
+) {
+    for event in events.iter().rev() {
+        collect_html_artifacts_from_value(&event.payload, artifacts, limit);
+        if artifacts.len() >= limit {
+            break;
+        }
+    }
+}
+
+fn collect_html_artifacts_from_records(
+    records: &[HtmlArtifact],
+    artifacts: &mut Vec<HtmlArtifactManifestView>,
+    limit: usize,
+) {
+    for record in records {
+        if artifacts.len() >= limit {
+            break;
+        }
+        if let Ok(manifest) =
+            serde_json::from_value::<HtmlArtifactManifestView>(record.manifest.clone())
+        {
+            artifacts.push(manifest);
+        }
+    }
+}
+
+fn collect_html_artifacts_from_value(
+    value: &Value,
+    artifacts: &mut Vec<HtmlArtifactManifestView>,
+    limit: usize,
+) {
+    if artifacts.len() >= limit {
+        return;
+    }
+
+    match value {
+        Value::Object(object) => {
+            if let Some(entries) = object.get("html_artifacts").and_then(Value::as_array) {
+                for entry in entries {
+                    if artifacts.len() >= limit {
+                        break;
+                    }
+                    if let Ok(manifest) =
+                        serde_json::from_value::<HtmlArtifactManifestView>(entry.clone())
+                    {
+                        artifacts.push(manifest);
+                    }
+                }
+            }
+
+            for (key, child) in object {
+                if key == "html_artifacts" {
+                    continue;
+                }
+                collect_html_artifacts_from_value(child, artifacts, limit);
+                if artifacts.len() >= limit {
+                    break;
+                }
+            }
+        }
+        Value::Array(entries) => {
+            for entry in entries {
+                collect_html_artifacts_from_value(entry, artifacts, limit);
+                if artifacts.len() >= limit {
+                    break;
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn sort_and_dedupe_html_artifacts(artifacts: &mut Vec<HtmlArtifactManifestView>) {
+    artifacts.sort_by(|left, right| {
+        right
+            .created_at
+            .cmp(&left.created_at)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    let mut seen = HashSet::<String>::new();
+    artifacts.retain(|artifact| seen.insert(artifact.id.clone()));
+}
+
+async fn load_static_page_handoff_artifacts_for_run(
+    state: &AppState,
+    run_id: AssistantRunId,
+    current_user_id: Option<UserId>,
+    limit: usize,
+) -> std::result::Result<Vec<HtmlArtifactManifestView>, ApiError> {
+    let drafts = state
+        .storage
+        .static_page_drafts()
+        .list_by_assistant_run(state.tenant_id, run_id)
+        .await
+        .map_err(ApiError::from_storage)?;
+    Ok(drafts
+        .into_iter()
+        .filter(|draft| static_page_owner_is_visible(draft.owner_user_id, current_user_id))
+        .take(limit)
+        .map(static_page_handoff_artifact_from_draft)
+        .collect())
+}
+
+fn static_page_handoff_artifact_from_draft(draft: StaticPageDraft) -> HtmlArtifactManifestView {
+    let draft_id = draft.id.to_string();
+    let payload = &draft.draft_payload;
+    let modules = static_page_payload_modules(payload)
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|module| {
+            let data_binding = module
+                .get("dataBinding")
+                .or_else(|| module.get("data_binding"))
+                .cloned()
+                .unwrap_or(Value::Null);
+            json!({
+                "id": module.get("id").and_then(Value::as_str).unwrap_or_default(),
+                "title": module.get("title").and_then(Value::as_str).unwrap_or_default(),
+                "content": module.get("content").and_then(Value::as_str).unwrap_or_default(),
+                "dataBinding": data_binding,
+                "dataBindingLabel": data_binding
+                    .get("label")
+                    .or_else(|| data_binding.get("fieldPath"))
+                    .or_else(|| data_binding.get("field"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("待绑定"),
+                "visualizationType": module
+                    .get("visualization")
+                    .and_then(|visualization| visualization.get("type"))
+                    .or_else(|| module.get("visualizationType"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("text"),
+                "layout": module.get("layout").cloned().unwrap_or(Value::Null),
+                "dataQuality": module
+                    .get("dataQuality")
+                    .or_else(|| module.get("dataQualityStatus"))
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+            })
+        })
+        .collect::<Vec<_>>();
+
+    HtmlArtifactManifestView {
+        kind: "html_artifact".to_string(),
+        version: 1,
+        id: format!("html-static-page-handoff-{draft_id}"),
+        title: format!("{} · 交接", draft.title),
+        source_type: contracts::HtmlArtifactSourceTypeView::StaticPage,
+        template_id: contracts::HtmlArtifactTemplateIdView::StaticPagePlanningHandoff,
+        owner_scope: contracts::HtmlArtifactOwnerScopeView {
+            scope_type: "static_page_draft".to_string(),
+            id: draft_id.clone(),
+        },
+        data_refs: Vec::new(),
+        provenance: contracts::HtmlArtifactProvenanceView {
+            producer: "v3-platform-api".to_string(),
+            reason: "static page planning handoff".to_string(),
+            source_run_id: Some(draft.assistant_run_id.to_string()),
+        },
+        interaction_mode: HtmlArtifactInteractionModeView::ActionIntent,
+        created_at: draft.updated_at,
+        payload: json!({
+            "objective": draft.title,
+            "status": draft.status.as_str(),
+            "styleDirection": static_page_payload_string(payload, &["styleDirection", "style_direction"]).unwrap_or_default(),
+            "defaultAction": "apply_static_page_intent",
+            "intentPlaceholder": "例如：把趋势模块标题改成月度增长趋势，风险模块缩小一点，图表改为折线图。",
+            "modules": modules,
+            "visualBridge": {
+                "providerLane": "gpt-image-2-cloudflare-queue",
+                "role": "effect_preview_reference_only",
+                "status": static_page_payload_value(payload, &["previewContract", "preview_contract"])
+                    .and_then(|contract| contract.get("status").cloned())
+                    .unwrap_or_else(|| json!("not_requested")),
+                "finalRenderStatus": static_page_payload_value(payload, &["finalPage", "final_page"])
+                    .and_then(|final_page| final_page.get("status").cloned())
+                    .unwrap_or_else(|| json!("not_requested"))
+            }
+        }),
+    }
+}
+
+async fn load_static_page_data_quality_artifacts_for_run(
+    state: &AppState,
+    run_id: AssistantRunId,
+    current_user_id: Option<UserId>,
+    limit: usize,
+) -> std::result::Result<Vec<HtmlArtifactManifestView>, ApiError> {
+    let drafts = state
+        .storage
+        .static_page_drafts()
+        .list_by_assistant_run(state.tenant_id, run_id)
+        .await
+        .map_err(ApiError::from_storage)?;
+    Ok(drafts
+        .into_iter()
+        .filter(|draft| static_page_owner_is_visible(draft.owner_user_id, current_user_id))
+        .filter_map(static_page_data_quality_artifact_from_draft)
+        .take(limit)
+        .collect())
+}
+
+fn static_page_data_quality_artifact_from_draft(
+    draft: StaticPageDraft,
+) -> Option<HtmlArtifactManifestView> {
+    let final_page = static_page_payload_value(&draft.draft_payload, &["finalPage", "final_page"])?;
+    let asset_manifest = final_page
+        .get("assetManifest")
+        .or_else(|| final_page.get("asset_manifest"))?;
+    let summary = static_page_final_data_quality_summary(asset_manifest)?;
+    let modules = static_page_final_data_quality_modules(asset_manifest);
+    if modules.is_empty()
+        && !summary.as_object().is_some_and(|object| {
+            object
+                .values()
+                .any(|value| value.as_i64().unwrap_or_default() > 0)
+        })
+    {
+        return None;
+    }
+
+    let draft_id = draft.id.to_string();
+    Some(HtmlArtifactManifestView {
+        kind: "html_artifact".to_string(),
+        version: 1,
+        id: format!("html-static-page-quality-{draft_id}"),
+        title: format!("{} · 数据质量报告", draft.title),
+        source_type: contracts::HtmlArtifactSourceTypeView::StaticPage,
+        template_id: contracts::HtmlArtifactTemplateIdView::StaticPageDataQualityReport,
+        owner_scope: contracts::HtmlArtifactOwnerScopeView {
+            scope_type: "static_page_draft".to_string(),
+            id: draft_id.clone(),
+        },
+        data_refs: Vec::new(),
+        provenance: contracts::HtmlArtifactProvenanceView {
+            producer: "v3-static-page-renderer".to_string(),
+            reason: "static page final render data quality report".to_string(),
+            source_run_id: Some(draft.assistant_run_id.to_string()),
+        },
+        interaction_mode: HtmlArtifactInteractionModeView::ReadOnly,
+        created_at: draft.updated_at,
+        payload: json!({
+            "draftId": draft_id,
+            "finalStatus": final_page.get("status").and_then(Value::as_str).unwrap_or("unknown"),
+            "summary": summary,
+            "modules": modules,
+            "note": "最终渲染数据质量报告用于交付前检查模块数据、ECharts 可水合状态和静态回退。"
+        }),
+    })
+}
+
+fn static_page_final_data_quality_summary(asset_manifest: &Value) -> Option<Value> {
+    asset_manifest
+        .get("export_package")
+        .and_then(|package| package.get("debug"))
+        .and_then(|debug| debug.get("data_quality_summary"))
+        .cloned()
+        .or_else(|| {
+            asset_manifest
+                .get("chart_runtime")
+                .and_then(|runtime| runtime.get("dataQualitySummary"))
+                .cloned()
+        })
+        .or_else(|| asset_manifest.get("data_quality_summary").cloned())
+}
+
+fn static_page_final_data_quality_modules(asset_manifest: &Value) -> Vec<Value> {
+    asset_manifest
+        .get("export_package")
+        .and_then(|package| package.get("debug"))
+        .and_then(|debug| debug.get("data_quality_modules"))
+        .or_else(|| {
+            asset_manifest
+                .get("chart_runtime")
+                .and_then(|runtime| runtime.get("modules"))
+        })
+        .or_else(|| asset_manifest.get("data_quality_modules"))
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .map(static_page_data_quality_module_payload)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn static_page_data_quality_module_payload(module: &Value) -> Value {
+    json!({
+        "moduleId": module.get("moduleId").or_else(|| module.get("module_id")).and_then(Value::as_str).unwrap_or_default(),
+        "title": module.get("title").and_then(Value::as_str).unwrap_or("未命名模块"),
+        "dataQuality": module.get("dataQuality").or_else(|| module.get("data_quality")).and_then(Value::as_str).unwrap_or("unknown"),
+        "dataQualityStatus": module.get("dataQualityStatus").or_else(|| module.get("data_quality_status")).and_then(Value::as_str).unwrap_or("unknown"),
+        "dataQualityReason": module.get("dataQualityReason").or_else(|| module.get("data_quality_reason")).and_then(Value::as_str).unwrap_or_default(),
+        "recommendedAction": module.get("recommendedAction").or_else(|| module.get("recommended_action")).and_then(Value::as_str).unwrap_or_default(),
+        "chartRuntime": module.get("chartRuntime").or_else(|| module.get("chart_runtime")).and_then(Value::as_str).unwrap_or("deterministic"),
+        "fallback": module.get("fallback").and_then(Value::as_bool).unwrap_or(false),
+        "sampleDataRows": module.get("sampleDataRows").or_else(|| module.get("sample_data_rows")).and_then(Value::as_i64).unwrap_or(0),
+        "echartsHydratable": module.get("echartsHydratable").or_else(|| module.get("echarts_hydratable")).and_then(Value::as_bool).unwrap_or(false),
+    })
+}
+
+async fn load_html_artifacts_from_run_events(
+    state: &AppState,
+    run_id: AssistantRunId,
+    limit: usize,
+) -> std::result::Result<Vec<HtmlArtifactManifestView>, ApiError> {
+    let events = state
+        .storage
+        .assistant_runs()
+        .list_events(state.tenant_id, run_id)
+        .await
+        .map_err(ApiError::from_storage)?;
+    let mut artifacts = Vec::<HtmlArtifactManifestView>::new();
+    collect_html_artifacts_from_events(&events, &mut artifacts, limit);
+    sort_and_dedupe_html_artifacts(&mut artifacts);
+    artifacts.truncate(limit);
+    Ok(artifacts)
+}
+
+async fn persist_html_artifacts_for_run(
+    state: &AppState,
+    run: &AssistantRun,
+    artifacts: &[HtmlArtifactManifestView],
+) -> std::result::Result<(), ApiError> {
+    for artifact in artifacts {
+        let manifest = serde_json::to_value(artifact).map_err(|error| {
+            ApiError::internal(
+                "html_artifact_serialize_failed",
+                format!("failed to serialize HTML artifact manifest: {error}"),
+            )
+        })?;
+        state
+            .storage
+            .html_artifacts()
+            .upsert(
+                state.tenant_id,
+                &NewHtmlArtifact {
+                    id: artifact.id.clone(),
+                    owner_user_id: run.user_id,
+                    assistant_run_id: Some(run.id),
+                    local_thread_id: run.local_thread_id.clone(),
+                    source_type: html_artifact_serialized_variant(&artifact.source_type),
+                    template_id: html_artifact_serialized_variant(&artifact.template_id),
+                    interaction_mode: html_artifact_serialized_variant(&artifact.interaction_mode),
+                    manifest,
+                    created_at: artifact.created_at,
+                },
+            )
+            .await
+            .map_err(ApiError::from_storage)?;
+    }
+    Ok(())
+}
+
+fn html_artifact_serialized_variant<T: Serialize>(value: &T) -> String {
+    serde_json::to_value(value)
+        .ok()
+        .and_then(|value| value.as_str().map(ToOwned::to_owned))
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+async fn load_html_artifact_from_record_for_run(
+    state: &AppState,
+    run_id: AssistantRunId,
+    artifact_id: &str,
+) -> std::result::Result<Option<HtmlArtifactManifestView>, ApiError> {
+    let Some(record) = state
+        .storage
+        .html_artifacts()
+        .get_by_id(state.tenant_id, artifact_id)
+        .await
+        .map_err(ApiError::from_storage)?
+    else {
+        return Ok(None);
+    };
+    if record.assistant_run_id != Some(run_id) {
+        return Ok(None);
+    }
+    let manifest =
+        serde_json::from_value::<HtmlArtifactManifestView>(record.manifest).map_err(|error| {
+            ApiError::internal(
+                "html_artifact_manifest_invalid",
+                format!("stored HTML artifact manifest is invalid: {error}"),
+            )
+        })?;
+    Ok(Some(manifest))
+}
+
+async fn load_visible_html_artifact_for_submit(
+    state: &AppState,
+    current_user_id: Option<UserId>,
+    artifact_id: &str,
+    request: &SubmitHtmlArtifactEventRequest,
+) -> std::result::Result<(AssistantRun, HtmlArtifactManifestView), ApiError> {
+    if let Some(raw_run_id) = request
+        .assistant_run_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let run_id = parse_assistant_run_id(raw_run_id)?;
+        let run = load_visible_assistant_run_for_user(state, run_id, current_user_id).await?;
+        if let Some(artifact) =
+            load_html_artifact_from_record_for_run(state, run.id, artifact_id).await?
+        {
+            return Ok((run, artifact));
+        }
+        let artifact = load_html_artifact_from_run_events(state, run.id, artifact_id).await?;
+        persist_html_artifacts_for_run(state, &run, std::slice::from_ref(&artifact)).await?;
+        return Ok((run, artifact));
+    }
+
+    if let Some(local_thread_id) = request
+        .local_thread_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let runs = state
+            .storage
+            .assistant_runs()
+            .list_by_local_thread(
+                state.tenant_id,
+                local_thread_id,
+                HTML_ARTIFACT_LIST_MAX_LIMIT,
+            )
+            .await
+            .map_err(ApiError::from_storage)?;
+        for run in runs
+            .into_iter()
+            .filter(|run| owner_user_id_is_visible(run.user_id, current_user_id))
+        {
+            if let Some(artifact) =
+                load_html_artifact_from_record_for_run(state, run.id, artifact_id).await?
+            {
+                return Ok((run, artifact));
+            }
+            match load_html_artifact_from_run_events(state, run.id, artifact_id).await {
+                Ok(artifact) => {
+                    persist_html_artifacts_for_run(state, &run, std::slice::from_ref(&artifact))
+                        .await?;
+                    return Ok((run, artifact));
+                }
+                Err(error) if error.payload.code == "html_artifact_not_found" => continue,
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
+    Err(ApiError::not_found(
+        "html_artifact_not_found",
+        format!("html artifact {artifact_id} was not found"),
+    ))
+}
+
+async fn load_html_artifact_from_run_events(
+    state: &AppState,
+    run_id: AssistantRunId,
+    artifact_id: &str,
+) -> std::result::Result<HtmlArtifactManifestView, ApiError> {
+    load_html_artifacts_from_run_events(state, run_id, HTML_ARTIFACT_LIST_MAX_LIMIT as usize)
+        .await?
+        .into_iter()
+        .find(|artifact| artifact.id == artifact_id)
+        .ok_or_else(|| {
+            ApiError::not_found(
+                "html_artifact_not_found",
+                format!("html artifact {artifact_id} was not found"),
+            )
+        })
+}
+
+fn validate_html_artifact_event_request(
+    artifact: &HtmlArtifactManifestView,
+    request: &SubmitHtmlArtifactEventRequest,
+) -> std::result::Result<(), ApiError> {
+    let event_type = request.event_type.trim();
+    match &artifact.interaction_mode {
+        HtmlArtifactInteractionModeView::ReadOnly => {
+            return Err(ApiError::bad_request(
+                "html_artifact_read_only",
+                "read-only HTML artifacts cannot submit events".to_string(),
+            ));
+        }
+        HtmlArtifactInteractionModeView::JsonPatch if event_type != "html_artifact.patch" => {
+            return Err(ApiError::bad_request(
+                "html_artifact_event_type_mismatch",
+                "json_patch artifacts may only submit html_artifact.patch".to_string(),
+            ));
+        }
+        HtmlArtifactInteractionModeView::ActionIntent
+            if event_type != "html_artifact.action_intent" =>
+        {
+            return Err(ApiError::bad_request(
+                "html_artifact_event_type_mismatch",
+                "action_intent artifacts may only submit html_artifact.action_intent".to_string(),
+            ));
+        }
+        _ => {}
+    }
+
+    validate_html_artifact_event_payload_is_safe(&request.payload, "$")?;
+    if event_type == "html_artifact.patch" {
+        validate_html_artifact_patch_payload(&request.payload)?;
+    } else {
+        validate_html_artifact_action_intent_payload(&request.payload)?;
+    }
+    Ok(())
+}
+
+async fn apply_html_artifact_event_to_product(
+    state: &AppState,
+    current_user_id: Option<UserId>,
+    run: &AssistantRun,
+    artifact: &HtmlArtifactManifestView,
+    request: &SubmitHtmlArtifactEventRequest,
+) -> std::result::Result<Option<Value>, ApiError> {
+    if request.event_type.trim() != "html_artifact.patch" {
+        return apply_html_artifact_action_intent_to_product(
+            state,
+            current_user_id,
+            run,
+            artifact,
+            request,
+        )
+        .await;
+    }
+    if !matches!(
+        artifact.source_type,
+        contracts::HtmlArtifactSourceTypeView::StaticPage
+    ) || !matches!(
+        artifact.template_id,
+        contracts::HtmlArtifactTemplateIdView::StaticPagePlanningHandoff
+    ) {
+        return Ok(None);
+    }
+    if artifact.owner_scope.scope_type != "static_page_draft" {
+        return Ok(None);
+    }
+
+    let draft_id = parse_static_page_draft_id(&artifact.owner_scope.id)?;
+    let mut draft = load_visible_static_page_draft(state, draft_id, current_user_id).await?;
+    if draft.assistant_run_id != run.id {
+        return Err(ApiError::bad_request(
+            "html_artifact_owner_mismatch",
+            "HTML artifact owner scope does not match the assistant run".to_string(),
+        ));
+    }
+
+    let operations =
+        static_page_operations_from_html_artifact_patch(&draft.draft_payload, &request.payload)?;
+    if operations.is_empty() {
+        return Err(ApiError::bad_request(
+            "html_artifact_patch_noop",
+            "HTML artifact patch did not contain supported static page changes".to_string(),
+        ));
+    }
+
+    let summary = format!("已从 HTML 产物应用 {} 个静态页修改。", operations.len());
+    let mut draft_payload = apply_static_page_operations_to_payload(
+        draft.draft_payload.clone(),
+        &operations,
+        Some(&summary),
+    );
+    finalize_static_page_operations_payload(
+        &mut draft_payload,
+        &operations,
+        Some("html_artifact.patch"),
+        &summary,
+    );
+    draft.status = status_from_static_page_payload(&draft_payload)
+        .or_else(|| status_from_static_page_operations(&operations))
+        .unwrap_or(StaticPageDraftStatus::Planned);
+    draft.draft_payload = draft_payload;
+
+    let updated = state
+        .storage
+        .static_page_drafts()
+        .update(state.tenant_id, &draft)
+        .await
+        .map_err(ApiError::from_storage)?;
+    append_static_page_draft_run_event(
+        state,
+        &updated,
+        "static_page_draft.html_artifact_patch_applied",
+        json!({
+            "draft_id": updated.id,
+            "artifact_id": artifact.id,
+            "operation_count": operations.len(),
+            "summary": summary,
+        }),
+    )
+    .await?;
+
+    Ok(Some(json!({
+        "status": "applied",
+        "target_type": "static_page_draft",
+        "draft_id": updated.id,
+        "operation_count": operations.len(),
+        "summary": summary,
+    })))
+}
+
+async fn apply_html_artifact_action_intent_to_product(
+    state: &AppState,
+    current_user_id: Option<UserId>,
+    run: &AssistantRun,
+    artifact: &HtmlArtifactManifestView,
+    request: &SubmitHtmlArtifactEventRequest,
+) -> std::result::Result<Option<Value>, ApiError> {
+    if request.event_type.trim() != "html_artifact.action_intent" {
+        return Ok(None);
+    }
+    if !matches!(
+        artifact.source_type,
+        contracts::HtmlArtifactSourceTypeView::StaticPage
+    ) || !matches!(
+        artifact.template_id,
+        contracts::HtmlArtifactTemplateIdView::StaticPagePlanningHandoff
+    ) {
+        return Ok(None);
+    }
+    if artifact.owner_scope.scope_type != "static_page_draft" {
+        return Ok(None);
+    }
+
+    let prompt = html_artifact_action_intent_prompt(&request.payload)?;
+    let draft_id = parse_static_page_draft_id(&artifact.owner_scope.id)?;
+    let mut draft = load_visible_static_page_draft(state, draft_id, current_user_id).await?;
+    if draft.assistant_run_id != run.id {
+        return Err(ApiError::bad_request(
+            "html_artifact_owner_mismatch",
+            "HTML artifact owner scope does not match the assistant run".to_string(),
+        ));
+    }
+
+    let intent = interpret_static_page_draft_intent_for_api(
+        state,
+        &draft,
+        &prompt,
+        &draft.draft_payload,
+        Vec::new(),
+    )
+    .await?;
+    if intent.operations.is_empty() {
+        return Err(ApiError::bad_request(
+            "html_artifact_action_intent_noop",
+            "HTML artifact action intent did not produce static page changes".to_string(),
+        ));
+    }
+
+    let mut draft_payload = apply_static_page_operations_to_payload(
+        draft.draft_payload.clone(),
+        &intent.operations,
+        Some(&intent.summary),
+    );
+    finalize_static_page_operations_payload(
+        &mut draft_payload,
+        &intent.operations,
+        Some(&prompt),
+        &intent.summary,
+    );
+    draft.status = status_from_static_page_payload(&draft_payload)
+        .or_else(|| status_from_static_page_operations(&intent.operations))
+        .unwrap_or(StaticPageDraftStatus::Planned);
+    draft.draft_payload = draft_payload;
+
+    let updated = state
+        .storage
+        .static_page_drafts()
+        .update(state.tenant_id, &draft)
+        .await
+        .map_err(ApiError::from_storage)?;
+    append_static_page_draft_run_event(
+        state,
+        &updated,
+        "static_page_draft.html_artifact_intent_applied",
+        json!({
+            "draft_id": updated.id,
+            "artifact_id": artifact.id,
+            "prompt": prompt,
+            "operation_count": intent.operations.len(),
+            "summary": intent.summary,
+            "runtime": intent.runtime,
+        }),
+    )
+    .await?;
+
+    Ok(Some(json!({
+        "status": "applied",
+        "target_type": "static_page_draft",
+        "draft_id": updated.id,
+        "operation_count": intent.operations.len(),
+        "summary": intent.summary,
+        "runtime": intent.runtime,
+    })))
+}
+
+fn html_artifact_action_intent_prompt(payload: &Value) -> std::result::Result<String, ApiError> {
+    let object = payload.as_object().ok_or_else(|| {
+        ApiError::bad_request(
+            "html_artifact_invalid_action_intent",
+            "action_intent payload must be an object".to_string(),
+        )
+    })?;
+    for key in ["prompt", "instruction", "message", "text", "note"] {
+        if let Some(prompt) = object
+            .get(key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            if prompt.chars().count() > 2000 {
+                return Err(ApiError::bad_request(
+                    "html_artifact_invalid_action_intent",
+                    "action_intent prompt is too long".to_string(),
+                ));
+            }
+            return Ok(prompt.to_string());
+        }
+    }
+    Err(ApiError::bad_request(
+        "html_artifact_invalid_action_intent",
+        "action_intent payload requires prompt, instruction, message, text, or note".to_string(),
+    ))
+}
+
+fn static_page_operations_from_html_artifact_patch(
+    draft_payload: &Value,
+    payload: &Value,
+) -> std::result::Result<Vec<Value>, ApiError> {
+    let operations = html_artifact_patch_operations(payload)?;
+    let mut translated = Vec::new();
+    for operation in operations {
+        if let Some(translated_operation) =
+            static_page_operation_from_html_patch_operation(draft_payload, operation)?
+        {
+            translated.push(translated_operation);
+        }
+    }
+    validate_static_page_operations(translated)
+}
+
+fn html_artifact_patch_operations(payload: &Value) -> std::result::Result<&[Value], ApiError> {
+    payload
+        .as_object()
+        .and_then(|object| object.get("operations").or_else(|| object.get("patch")))
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .ok_or_else(|| {
+            ApiError::bad_request(
+                "html_artifact_invalid_patch",
+                "patch payload.operations must be an array".to_string(),
+            )
+        })
+}
+
+fn static_page_operation_from_html_patch_operation(
+    draft_payload: &Value,
+    operation: &Value,
+) -> std::result::Result<Option<Value>, ApiError> {
+    let object = operation.as_object().ok_or_else(|| {
+        ApiError::bad_request(
+            "html_artifact_invalid_patch",
+            "each patch operation must be an object".to_string(),
+        )
+    })?;
+    let op = object
+        .get("op")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default();
+    if !matches!(op, "add" | "replace" | "remove") {
+        return Err(ApiError::bad_request(
+            "html_artifact_patch_operation_unsupported",
+            format!("{op} cannot be executed against static page drafts"),
+        ));
+    }
+    let path = object
+        .get("path")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default();
+    let tokens = decode_html_artifact_json_pointer(path)?;
+    let value = if op == "remove" {
+        Value::Null
+    } else {
+        object.get("value").cloned().ok_or_else(|| {
+            ApiError::bad_request(
+                "html_artifact_invalid_patch",
+                "add/replace patch operations require value".to_string(),
+            )
+        })?
+    };
+
+    match tokens.as_slice() {
+        [field] if field == "styleDirection" || field == "style_direction" => {
+            html_patch_string_value(&value, "styleDirection")?;
+            Ok(Some(json!({
+                "type": "change_style_direction",
+                "styleDirection": value,
+            })))
+        }
+        [field] if field == "mobileOrder" || field == "mobile_order" => {
+            if !value.is_array() {
+                return Err(ApiError::bad_request(
+                    "html_artifact_patch_value_invalid",
+                    "mobileOrder must be an array".to_string(),
+                ));
+            }
+            Ok(Some(json!({
+                "type": "reorder_modules",
+                "order": value,
+            })))
+        }
+        [modules, module_selector, field @ ..] if modules == "modules" => {
+            let module_id =
+                static_page_module_id_from_patch_selector(draft_payload, module_selector)?;
+            let operation = static_page_module_operation_from_html_patch(
+                draft_payload,
+                &module_id,
+                field,
+                value,
+            )?;
+            Ok(Some(operation))
+        }
+        _ => Err(ApiError::bad_request(
+            "html_artifact_patch_target_unsupported",
+            format!("{path} is not a supported static page patch path"),
+        )),
+    }
+}
+
+fn decode_html_artifact_json_pointer(path: &str) -> std::result::Result<Vec<String>, ApiError> {
+    if !path.starts_with('/') {
+        return Err(ApiError::bad_request(
+            "html_artifact_invalid_patch",
+            "patch operation path must be a JSON pointer".to_string(),
+        ));
+    }
+    Ok(path
+        .split('/')
+        .skip(1)
+        .map(|token| token.replace("~1", "/").replace("~0", "~"))
+        .collect())
+}
+
+fn static_page_module_id_from_patch_selector(
+    draft_payload: &Value,
+    selector: &str,
+) -> std::result::Result<String, ApiError> {
+    let modules = draft_payload
+        .get("modules")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            ApiError::bad_request(
+                "html_artifact_patch_target_missing",
+                "static page draft has no modules".to_string(),
+            )
+        })?;
+    if let Ok(index) = selector.parse::<usize>() {
+        return modules
+            .get(index)
+            .and_then(|module| module.get("id"))
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned)
+            .ok_or_else(|| {
+                ApiError::bad_request(
+                    "html_artifact_patch_target_missing",
+                    format!("module index {index} was not found"),
+                )
+            });
+    }
+    if modules.iter().any(|module| {
+        module
+            .get("id")
+            .and_then(Value::as_str)
+            .is_some_and(|id| id == selector)
+    }) {
+        return Ok(selector.to_string());
+    }
+    Err(ApiError::bad_request(
+        "html_artifact_patch_target_missing",
+        format!("module {selector} was not found"),
+    ))
+}
+
+fn static_page_module_operation_from_html_patch(
+    draft_payload: &Value,
+    module_id: &str,
+    field: &[String],
+    value: Value,
+) -> std::result::Result<Value, ApiError> {
+    let Some(root) = field.first().map(String::as_str) else {
+        return Err(ApiError::bad_request(
+            "html_artifact_patch_target_unsupported",
+            "module patch path must include a field".to_string(),
+        ));
+    };
+    let patch = match root {
+        "title" | "content" | "dataLabel" if field.len() == 1 => json!({ root: value }),
+        "data_binding" if field.len() == 1 => json!({ "dataBinding": value }),
+        "dataBinding" if field.len() == 1 => json!({ "dataBinding": value }),
+        "dataBinding" | "data_binding" => {
+            if field.len() != 2 {
+                return Err(ApiError::bad_request(
+                    "html_artifact_patch_target_unsupported",
+                    "dataBinding patch paths may only target one field".to_string(),
+                ));
+            }
+            let key = normalize_static_page_nested_patch_key(root, &field[1])?;
+            let object = merge_static_page_current_module_object_field(
+                draft_payload,
+                module_id,
+                "dataBinding",
+                &key,
+                value,
+            );
+            json!({ "dataBinding": object })
+        }
+        "visualizationType" if field.len() == 1 => {
+            html_patch_string_value(&value, "visualizationType")?;
+            json!({ "visualization": { "type": value } })
+        }
+        "visualization" if field.len() == 1 => json!({ "visualization": value }),
+        "visualization" => {
+            if field.len() != 2 {
+                return Err(ApiError::bad_request(
+                    "html_artifact_patch_target_unsupported",
+                    "visualization patch paths may only target one field".to_string(),
+                ));
+            }
+            let key = normalize_static_page_nested_patch_key(root, &field[1])?;
+            let object = merge_static_page_current_module_object_field(
+                draft_payload,
+                module_id,
+                "visualization",
+                &key,
+                value,
+            );
+            json!({ "visualization": object })
+        }
+        "chartRuntime" if field.len() == 1 => json!({ "chartRuntime": value }),
+        "chartOptions" if field.len() == 1 => json!({ "chartOptions": value }),
+        "layout" if field.len() == 1 => {
+            validate_html_artifact_layout_patch(&value)?;
+            json!({ "layout": value })
+        }
+        "layout" => {
+            if field.len() != 2 {
+                return Err(ApiError::bad_request(
+                    "html_artifact_patch_target_unsupported",
+                    "layout patch paths may only target one field".to_string(),
+                ));
+            }
+            let key = field[1].as_str();
+            if !matches!(key, "x" | "y" | "w" | "h") {
+                return Err(ApiError::bad_request(
+                    "html_artifact_patch_target_unsupported",
+                    format!("layout.{key} cannot be patched"),
+                ));
+            }
+            validate_html_artifact_layout_number(&value, key)?;
+            let object = merge_static_page_current_module_object_field(
+                draft_payload,
+                module_id,
+                "layout",
+                key,
+                value,
+            );
+            let layout_value = Value::Object(object);
+            validate_html_artifact_layout_patch(&layout_value)?;
+            json!({ "layout": layout_value })
+        }
+        _ => {
+            return Err(ApiError::bad_request(
+                "html_artifact_patch_target_unsupported",
+                format!("modules/{module_id}/{root} cannot be patched"),
+            ))
+        }
+    };
+    Ok(json!({
+        "type": "update_module",
+        "targetModuleId": module_id,
+        "patch": patch,
+    }))
+}
+
+fn normalize_static_page_nested_patch_key(
+    parent: &str,
+    key: &str,
+) -> std::result::Result<String, ApiError> {
+    let normalized = match (parent, key) {
+        ("data_binding", "source_id") | ("dataBinding", "source_id") => "sourceId",
+        ("data_binding", "field_path") | ("dataBinding", "field_path") => "fieldPath",
+        ("data_binding", "evidence_ids") | ("dataBinding", "evidence_ids") => "evidenceIds",
+        ("visualization", "chart_runtime") => "chartRuntime",
+        ("visualization", "chart_options") => "chartOptions",
+        ("visualization", "sample_data") => "sampleData",
+        _ => key,
+    };
+    Ok(normalized.to_string())
+}
+
+fn merge_static_page_current_module_object_field(
+    draft_payload: &Value,
+    module_id: &str,
+    field: &str,
+    key: &str,
+    value: Value,
+) -> Map<String, Value> {
+    let mut object = draft_payload
+        .get("modules")
+        .and_then(Value::as_array)
+        .and_then(|modules| {
+            modules.iter().find(|module| {
+                module
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .is_some_and(|id| id == module_id)
+            })
+        })
+        .and_then(|module| module.get(field))
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    object.insert(key.to_string(), value);
+    object
+}
+
+fn html_patch_string_value(value: &Value, field_name: &str) -> std::result::Result<(), ApiError> {
+    if value
+        .as_str()
+        .map(str::trim)
+        .is_some_and(|value| !value.is_empty())
+    {
+        return Ok(());
+    }
+    Err(ApiError::bad_request(
+        "html_artifact_patch_value_invalid",
+        format!("{field_name} must be a non-empty string"),
+    ))
+}
+
+fn validate_html_artifact_layout_patch(value: &Value) -> std::result::Result<(), ApiError> {
+    let Some(object) = value.as_object() else {
+        return Err(ApiError::bad_request(
+            "html_artifact_patch_value_invalid",
+            "layout patch must be an object".to_string(),
+        ));
+    };
+    for (key, value) in object {
+        if !matches!(key.as_str(), "x" | "y" | "w" | "h") {
+            return Err(ApiError::bad_request(
+                "html_artifact_patch_target_unsupported",
+                format!("layout.{key} cannot be patched"),
+            ));
+        }
+        validate_html_artifact_layout_number(value, key)?;
+    }
+    Ok(())
+}
+
+fn validate_html_artifact_layout_number(
+    value: &Value,
+    field_name: &str,
+) -> std::result::Result<(), ApiError> {
+    let Some(number) = value.as_f64() else {
+        return Err(ApiError::bad_request(
+            "html_artifact_patch_value_invalid",
+            format!("layout.{field_name} must be a number"),
+        ));
+    };
+    let valid = match field_name {
+        "x" | "y" => (0.0..=100.0).contains(&number),
+        "w" | "h" => (1.0..=100.0).contains(&number),
+        _ => false,
+    };
+    if valid {
+        Ok(())
+    } else {
+        Err(ApiError::bad_request(
+            "html_artifact_patch_value_invalid",
+            format!("layout.{field_name} is outside the supported range"),
+        ))
+    }
+}
+
+fn validate_html_artifact_action_intent_payload(
+    payload: &Value,
+) -> std::result::Result<(), ApiError> {
+    let action = payload
+        .as_object()
+        .and_then(|object| object.get("action"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            ApiError::bad_request(
+                "html_artifact_invalid_action_intent",
+                "action_intent payload.action is required".to_string(),
+            )
+        })?;
+    if action.chars().count() > 120 {
+        return Err(ApiError::bad_request(
+            "html_artifact_invalid_action_intent",
+            "action_intent payload.action is too long".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_html_artifact_patch_payload(payload: &Value) -> std::result::Result<(), ApiError> {
+    let Some(object) = payload.as_object() else {
+        return Err(ApiError::bad_request(
+            "html_artifact_invalid_patch",
+            "patch payload must be an object".to_string(),
+        ));
+    };
+    let operations = object
+        .get("operations")
+        .or_else(|| object.get("patch"))
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            ApiError::bad_request(
+                "html_artifact_invalid_patch",
+                "patch payload.operations must be an array".to_string(),
+            )
+        })?;
+    if operations.is_empty() || operations.len() > 50 {
+        return Err(ApiError::bad_request(
+            "html_artifact_invalid_patch",
+            "patch operations must contain 1-50 operations".to_string(),
+        ));
+    }
+
+    for operation in operations {
+        let Some(operation_object) = operation.as_object() else {
+            return Err(ApiError::bad_request(
+                "html_artifact_invalid_patch",
+                "each patch operation must be an object".to_string(),
+            ));
+        };
+        let op = operation_object
+            .get("op")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or_default();
+        if !matches!(op, "add" | "replace" | "remove" | "move" | "copy" | "test") {
+            return Err(ApiError::bad_request(
+                "html_artifact_invalid_patch",
+                format!("{op} is not an allowed patch operation"),
+            ));
+        }
+        let path = operation_object
+            .get("path")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or_default();
+        if !path.starts_with('/') || path.chars().count() > 240 {
+            return Err(ApiError::bad_request(
+                "html_artifact_invalid_patch",
+                "patch operation path must be a JSON pointer under 240 chars".to_string(),
+            ));
+        }
+        if matches!(op, "move" | "copy") {
+            let from = operation_object
+                .get("from")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .unwrap_or_default();
+            if !from.starts_with('/') || from.chars().count() > 240 {
+                return Err(ApiError::bad_request(
+                    "html_artifact_invalid_patch",
+                    "move/copy patch operation requires a valid from JSON pointer".to_string(),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_html_artifact_event_payload_is_safe(
+    value: &Value,
+    path: &str,
+) -> std::result::Result<(), ApiError> {
+    match value {
+        Value::String(text) => validate_html_artifact_safe_string(text, path),
+        Value::Array(entries) => {
+            if entries.len() > 100 {
+                return Err(ApiError::bad_request(
+                    "html_artifact_payload_too_large",
+                    format!("{path} contains too many entries"),
+                ));
+            }
+            for (index, entry) in entries.iter().enumerate() {
+                validate_html_artifact_event_payload_is_safe(entry, &format!("{path}[{index}]"))?;
+            }
+            Ok(())
+        }
+        Value::Object(object) => {
+            if object.len() > 80 {
+                return Err(ApiError::bad_request(
+                    "html_artifact_payload_too_large",
+                    format!("{path} contains too many fields"),
+                ));
+            }
+            for (key, child) in object {
+                validate_html_artifact_safe_string(key, &format!("{path}.{key}"))?;
+                validate_html_artifact_event_payload_is_safe(child, &format!("{path}.{key}"))?;
+            }
+            Ok(())
+        }
+        _ => Ok(()),
+    }
+}
+
+fn validate_html_artifact_safe_string(text: &str, path: &str) -> std::result::Result<(), ApiError> {
+    if text.chars().count() > 4000 {
+        return Err(ApiError::bad_request(
+            "html_artifact_payload_too_large",
+            format!("{path} is too long"),
+        ));
+    }
+    let lowered = text.to_ascii_lowercase();
+    let unsafe_patterns = [
+        "<script",
+        "<iframe",
+        "<object",
+        "<embed",
+        "<link",
+        "<meta",
+        "<form",
+        "javascript:",
+        "data:text/html",
+        "srcdoc",
+        "http://",
+        "https://",
+        "api_key",
+        "access_token",
+        "authorization",
+        "bearer ",
+        "cookie",
+        "secret",
+        "onerror=",
+        "onclick=",
+        "onload=",
+    ];
+    if let Some(pattern) = unsafe_patterns
+        .iter()
+        .find(|pattern| lowered.contains(**pattern))
+    {
+        return Err(ApiError::bad_request(
+            "html_artifact_unsafe_payload",
+            format!("{path} contains unsafe content: {pattern}"),
+        ));
+    }
+    Ok(())
+}
+
 fn sort_retrieval_evidences_by_relevance(evidences: &mut [RetrievalEvidence]) {
     evidences.sort_by(|left, right| {
         right
@@ -19022,14 +20478,15 @@ impl std::error::Error for ApiError {}
 mod tests {
     use super::*;
     use domain_model::{
-        AssistantRun, ChatMessageId, ChatSession, Dataset, DatasetId, DatasetLifecycle,
-        DatasetOutput, DatasetOutputId, DatasetVisibility, DocumentChunk, DocumentChunkId,
-        DocumentChunkState, LlmInvocation, LlmInvocationFinishReason, LlmInvocationId,
-        LlmInvocationMode, LlmInvocationSourceKind, MemoryDirectory, MemoryDirectoryId,
-        PublishedSurface, ReportPlan, ReportPlanAstVersionId, ReportPlanId, ReportPlanStatus,
-        ReportRenderOutput, ReportRenderOutputId, ReportRenderOutputStatus, RetrievalEvidence,
-        RetrievalEvidenceId, SecretBindingId, TenantId, ToolExecution, ToolExecutionId,
-        ToolExecutionSourceKind, ToolExecutionStatus, WorkflowExecutionId, WorkflowStatus,
+        AssistantRun, AssistantRunEventId, ChatMessageId, ChatSession, Dataset, DatasetId,
+        DatasetLifecycle, DatasetOutput, DatasetOutputId, DatasetVisibility, DocumentChunk,
+        DocumentChunkId, DocumentChunkState, LlmInvocation, LlmInvocationFinishReason,
+        LlmInvocationId, LlmInvocationMode, LlmInvocationSourceKind, MemoryDirectory,
+        MemoryDirectoryId, PublishedSurface, ReportPlan, ReportPlanAstVersionId, ReportPlanId,
+        ReportPlanStatus, ReportRenderOutput, ReportRenderOutputId, ReportRenderOutputStatus,
+        RetrievalEvidence, RetrievalEvidenceId, SecretBindingId, TenantId, ToolExecution,
+        ToolExecutionId, ToolExecutionSourceKind, ToolExecutionStatus, WorkflowExecutionId,
+        WorkflowStatus,
     };
     use event_bus::{workflow_execution_transition_subject, workflow_task_enqueued_subject};
     use std::io::{Read, Write};
@@ -19057,6 +20514,285 @@ mod tests {
             citations: Vec::new(),
             conversation_state: json!({}),
         }
+    }
+
+    #[test]
+    fn html_artifacts_are_collected_from_nested_assistant_run_events() {
+        let tenant_id = TenantId::new();
+        let run_id = AssistantRunId::new();
+        let run_id_string = run_id.to_string();
+        let now = Utc::now();
+        let mut older = HtmlArtifactManifestView::codex_execution_report(
+            &run_id_string,
+            "Codex dry run",
+            "dry_run completed",
+            json!({"mode": "dry_run", "status": "completed"}),
+        );
+        older.id = "html-artifact-old".to_string();
+        older.created_at = now - Duration::seconds(10);
+        let mut newer = HtmlArtifactManifestView::codex_execution_report(
+            &run_id_string,
+            "Codex plan",
+            "plan_only planned",
+            json!({"mode": "plan_only", "status": "planned"}),
+        );
+        newer.id = "html-artifact-new".to_string();
+        newer.created_at = now;
+
+        let events = vec![
+            AssistantRunEvent {
+                id: AssistantRunEventId::new(),
+                tenant_id,
+                run_id,
+                sequence_no: 1,
+                event_name: "codex_host.output".to_string(),
+                payload: json!({
+                    "html_artifacts": [
+                        serde_json::to_value(&older).expect("older manifest serializes"),
+                        {"kind": "not_html_artifact"}
+                    ]
+                }),
+                created_at: now - Duration::seconds(10),
+            },
+            AssistantRunEvent {
+                id: AssistantRunEventId::new(),
+                tenant_id,
+                run_id,
+                sequence_no: 2,
+                event_name: "workflow.task.completed".to_string(),
+                payload: json!({
+                    "output": {
+                        "html_artifacts": [
+                            serde_json::to_value(&newer).expect("newer manifest serializes")
+                        ]
+                    }
+                }),
+                created_at: now,
+            },
+        ];
+
+        let mut artifacts = Vec::new();
+        collect_html_artifacts_from_events(&events, &mut artifacts, 10);
+        sort_and_dedupe_html_artifacts(&mut artifacts);
+
+        assert_eq!(artifacts.len(), 2);
+        assert_eq!(artifacts[0].id, "html-artifact-new");
+        assert_eq!(artifacts[1].id, "html-artifact-old");
+        assert_eq!(artifacts[0].payload["mode"], json!("plan_only"));
+    }
+
+    #[test]
+    fn html_artifact_event_validation_allows_only_safe_interactions() {
+        let mut artifact = HtmlArtifactManifestView::codex_execution_report(
+            "run-1",
+            "Codex report",
+            "action test",
+            json!({}),
+        );
+        let read_only_request = SubmitHtmlArtifactEventRequest {
+            assistant_run_id: Some("run-1".to_string()),
+            local_thread_id: None,
+            event_type: "html_artifact.action_intent".to_string(),
+            payload: json!({"action": "submit"}),
+        };
+        let read_only_error = validate_html_artifact_event_request(&artifact, &read_only_request)
+            .expect_err("read-only artifacts must reject events");
+        assert_eq!(read_only_error.payload.code, "html_artifact_read_only");
+
+        artifact.interaction_mode = HtmlArtifactInteractionModeView::ActionIntent;
+        validate_html_artifact_event_request(&artifact, &read_only_request)
+            .expect("safe action intent should pass");
+
+        let unsafe_request = SubmitHtmlArtifactEventRequest {
+            payload: json!({"action": "submit", "note": "https://example.com/leak"}),
+            ..read_only_request.clone()
+        };
+        let unsafe_error = validate_html_artifact_event_request(&artifact, &unsafe_request)
+            .expect_err("remote URLs must be rejected");
+        assert_eq!(unsafe_error.payload.code, "html_artifact_unsafe_payload");
+
+        artifact.interaction_mode = HtmlArtifactInteractionModeView::JsonPatch;
+        let patch_request = SubmitHtmlArtifactEventRequest {
+            event_type: "html_artifact.patch".to_string(),
+            payload: json!({
+                "operations": [
+                    {"op": "replace", "path": "/modules/0/title", "value": "新标题"}
+                ]
+            }),
+            ..read_only_request
+        };
+        validate_html_artifact_event_request(&artifact, &patch_request)
+            .expect("safe JSON patch should pass");
+    }
+
+    #[test]
+    fn html_artifact_patch_translates_to_static_page_operations() {
+        let payload = json!({
+            "styleDirection": "client-delivery",
+            "modules": [{
+                "id": "hero",
+                "title": "原标题",
+                "content": "原内容",
+                "layout": {"x": 0, "y": 0, "w": 6, "h": 3},
+                "visualization": {"type": "kpi"}
+            }],
+            "mobileOrder": ["hero"]
+        });
+        let patch_payload = json!({
+            "operations": [
+                {"op": "replace", "path": "/modules/0/title", "value": "新标题"},
+                {"op": "replace", "path": "/modules/hero/layout/w", "value": 8},
+                {"op": "replace", "path": "/styleDirection", "value": "data-command"}
+            ]
+        });
+
+        let operations = static_page_operations_from_html_artifact_patch(&payload, &patch_payload)
+            .expect("patch should translate into static page operations");
+        assert_eq!(operations.len(), 3);
+        assert_eq!(operations[0]["type"], json!("update_module"));
+        assert_eq!(operations[0]["targetModuleId"], json!("hero"));
+        assert_eq!(operations[1]["patch"]["layout"]["w"], json!(8));
+        assert_eq!(operations[2]["type"], json!("change_style_direction"));
+
+        let next = apply_static_page_operations_to_payload(payload, &operations, None);
+        assert_eq!(next["modules"][0]["title"], json!("新标题"));
+        assert_eq!(next["modules"][0]["layout"]["w"], json!(8));
+        assert_eq!(next["styleDirection"], json!("data-command"));
+    }
+
+    #[test]
+    fn html_artifact_patch_rejects_unsupported_static_page_paths() {
+        let payload = json!({
+            "modules": [{"id": "hero", "title": "标题"}]
+        });
+        let patch_payload = json!({
+            "operations": [
+                {"op": "replace", "path": "/assistant_context/secret", "value": "x"}
+            ]
+        });
+
+        let error = static_page_operations_from_html_artifact_patch(&payload, &patch_payload)
+            .expect_err("unsupported paths must be rejected");
+        assert_eq!(error.payload.code, "html_artifact_patch_target_unsupported");
+    }
+
+    #[test]
+    fn html_artifact_action_intent_prompt_requires_real_instruction() {
+        let prompt = html_artifact_action_intent_prompt(&json!({
+            "action": "apply_static_page_intent",
+            "prompt": "把趋势模块改成折线图"
+        }))
+        .expect("prompt should be accepted");
+        assert_eq!(prompt, "把趋势模块改成折线图");
+
+        let error = html_artifact_action_intent_prompt(&json!({"action": "submit"}))
+            .expect_err("empty submit actions cannot mutate product state");
+        assert_eq!(error.payload.code, "html_artifact_invalid_action_intent");
+    }
+
+    #[test]
+    fn static_page_draft_builds_interactive_handoff_artifact() {
+        let now = Utc::now();
+        let draft = StaticPageDraft {
+            id: StaticPageDraftId::new(),
+            tenant_id: TenantId::new(),
+            assistant_run_id: AssistantRunId::new(),
+            owner_user_id: None,
+            title: "客户经营页".to_string(),
+            status: StaticPageDraftStatus::Planned,
+            selected_scope: json!({}),
+            visibility_snapshot: json!({}),
+            source_refs: json!({}),
+            draft_payload: json!({
+                "styleDirection": "client-delivery",
+                "modules": [{
+                    "id": "hero",
+                    "title": "核心判断",
+                    "content": "增长稳定",
+                    "dataBinding": {"label": "订单收入"},
+                    "visualization": {"type": "kpi"},
+                    "layout": {"x": 0, "y": 0, "w": 6, "h": 3}
+                }]
+            }),
+            created_at: now,
+            updated_at: now,
+        };
+
+        let artifact = static_page_handoff_artifact_from_draft(draft);
+        assert_eq!(
+            artifact.source_type,
+            contracts::HtmlArtifactSourceTypeView::StaticPage
+        );
+        assert_eq!(
+            artifact.template_id,
+            contracts::HtmlArtifactTemplateIdView::StaticPagePlanningHandoff
+        );
+        assert_eq!(
+            artifact.interaction_mode,
+            HtmlArtifactInteractionModeView::ActionIntent
+        );
+        assert_eq!(artifact.owner_scope.scope_type, "static_page_draft");
+        assert_eq!(artifact.payload["modules"][0]["title"], json!("核心判断"));
+    }
+
+    #[test]
+    fn html_artifact_static_page_draft_builds_data_quality_report_from_final_manifest() {
+        let now = Utc::now();
+        let draft = StaticPageDraft {
+            id: StaticPageDraftId::new(),
+            tenant_id: TenantId::new(),
+            assistant_run_id: AssistantRunId::new(),
+            owner_user_id: None,
+            title: "客户经营页".to_string(),
+            status: StaticPageDraftStatus::Rendered,
+            selected_scope: json!({}),
+            visibility_snapshot: json!({}),
+            source_refs: json!({}),
+            draft_payload: json!({
+                "finalPage": {
+                    "status": "rendered",
+                    "assetManifest": {
+                        "chart_runtime": {
+                            "dataQualitySummary": {
+                                "confirmedModules": 1,
+                                "partialModules": 1,
+                                "missingModules": 0,
+                                "attentionModules": 1
+                            },
+                            "modules": [{
+                                "moduleId": "trend",
+                                "title": "趋势",
+                                "dataQuality": "module_data",
+                                "dataQualityStatus": "partial",
+                                "chartRuntime": "echarts",
+                                "fallback": true,
+                                "sampleDataRows": 3,
+                                "recommendedAction": "补齐完整月份数据"
+                            }]
+                        }
+                    }
+                }
+            }),
+            created_at: now,
+            updated_at: now,
+        };
+
+        let artifact = static_page_data_quality_artifact_from_draft(draft)
+            .expect("rendered final page should create data quality artifact");
+        assert_eq!(
+            artifact.template_id,
+            contracts::HtmlArtifactTemplateIdView::StaticPageDataQualityReport
+        );
+        assert_eq!(
+            artifact.interaction_mode,
+            HtmlArtifactInteractionModeView::ReadOnly
+        );
+        assert_eq!(artifact.payload["summary"]["partialModules"], json!(1));
+        assert_eq!(
+            artifact.payload["modules"][0]["chartRuntime"],
+            json!("echarts")
+        );
+        assert_eq!(artifact.payload["modules"][0]["fallback"], json!(true));
     }
 
     #[test]

@@ -1,6 +1,7 @@
 'use client';
 
 import { formatDateTime, formatRelativeTime, formatSnakeCaseLabel, truncateText } from '../lib/formatters';
+import HtmlArtifactViewer from './artifacts/HtmlArtifactViewer';
 import StaticPageAssistantNotice from './static-page/StaticPageAssistantNotice';
 import StaticPagePlanningPanel from './static-page/StaticPagePlanningPanel';
 
@@ -374,11 +375,15 @@ export default function ChatPanel({
   startupBriefing,
   scopePlan,
   assistantRunProgress,
+  htmlArtifact = null,
+  onCloseHtmlArtifact,
+  onHtmlArtifactEvent,
   onUploadClick,
   uploadingFiles = false,
 }) {
   const reportEntry = session?.session_manifest_view?.report_entry || null;
   const latestTurn = session?.session_manifest_view?.last_turn || null;
+  const showingHtmlArtifactWorkspace = Boolean(htmlArtifact);
   const showingStaticPageWorkspace = showStaticPageWorkspace && Boolean(staticPageDraft);
 
   return (
@@ -435,7 +440,7 @@ export default function ChatPanel({
 
       <SessionRuntimeSummary turn={latestTurn} />
 
-      {!showingStaticPageWorkspace ? (
+      {!showingHtmlArtifactWorkspace && !showingStaticPageWorkspace ? (
         <StaticPageAssistantNotice
           draft={staticPageDraft}
           onOpenBuilder={onOpenStaticPageBuilder}
@@ -451,7 +456,23 @@ export default function ChatPanel({
 
       <AssistantRunProgressPanel progress={assistantRunProgress} />
 
-      {showingStaticPageWorkspace ? (
+      {showingHtmlArtifactWorkspace ? (
+        <div className="chat-static-page-workspace">
+          <div className="chat-static-page-head">
+            <div>
+              <span>当前工作台</span>
+              <strong>HTML 产物预览</strong>
+            </div>
+            <button type="button" className="ghost-btn compact-action-btn" onClick={onCloseHtmlArtifact}>
+              返回聊天记录
+            </button>
+          </div>
+          <HtmlArtifactViewer
+            artifact={htmlArtifact}
+            onArtifactEvent={onHtmlArtifactEvent}
+          />
+        </div>
+      ) : showingStaticPageWorkspace ? (
         <div className="chat-static-page-workspace">
           <div className="chat-static-page-head">
             <div>

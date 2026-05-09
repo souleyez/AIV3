@@ -6,19 +6,19 @@ use domain_model::{
     ChatMessageId, ChatMessageRole, ChatSession, ChatSessionId, ConversationMemoryItem,
     ConversationMemoryItemId, Dataset, DatasetId, DatasetLifecycle, DatasetOutput, DatasetOutputId,
     DatasetVisibility, Document, DocumentChunk, DocumentChunkId, DocumentChunkState, DocumentId,
-    DocumentLifecycle, EmailVerificationChallenge, EmailVerificationChallengeId, LlmInvocation,
-    LlmInvocationFinishReason, LlmInvocationId, LlmInvocationMode, LlmInvocationSourceKind,
-    LlmTokenUsage, MemoryDirectory, MemoryDirectoryId, PublishedReport, PublishedReportId,
-    PublishedReportVersion, PublishedReportVersionId, ReportPlan, ReportPlanAstVersion,
-    ReportPlanAstVersionId, ReportPlanId, ReportPlanStatus, ReportRenderOutput,
-    ReportRenderOutputId, ReportRenderOutputStatus, RetrievalEvidence, RetrievalEvidenceId,
-    SecretBinding, SecretBindingId, SecretScopeLevel, StaticPageDraft, StaticPageDraftId,
-    StaticPageDraftStatus, StaticPageImageJob, StaticPageImageJobId, StaticPageImageJobStatus,
-    StaticPageRenderOutput, StaticPageRenderOutputId, StaticPageRenderOutputStatus, Tenant,
-    TenantId, ToolExecution, ToolExecutionId, ToolExecutionSourceKind, ToolExecutionStatus, User,
-    UserId, UserSession, UserSessionId, WorkflowEventId, WorkflowEventRecord, WorkflowExecution,
-    WorkflowExecutionId, WorkflowKind, WorkflowStatus, WorkflowTask, WorkflowTaskId,
-    WorkflowTaskStatus,
+    DocumentLifecycle, EmailVerificationChallenge, EmailVerificationChallengeId, HtmlArtifact,
+    LlmInvocation, LlmInvocationFinishReason, LlmInvocationId, LlmInvocationMode,
+    LlmInvocationSourceKind, LlmTokenUsage, MemoryDirectory, MemoryDirectoryId, PublishedReport,
+    PublishedReportId, PublishedReportVersion, PublishedReportVersionId, ReportPlan,
+    ReportPlanAstVersion, ReportPlanAstVersionId, ReportPlanId, ReportPlanStatus,
+    ReportRenderOutput, ReportRenderOutputId, ReportRenderOutputStatus, RetrievalEvidence,
+    RetrievalEvidenceId, SecretBinding, SecretBindingId, SecretScopeLevel, StaticPageDraft,
+    StaticPageDraftId, StaticPageDraftStatus, StaticPageImageJob, StaticPageImageJobId,
+    StaticPageImageJobStatus, StaticPageRenderOutput, StaticPageRenderOutputId,
+    StaticPageRenderOutputStatus, Tenant, TenantId, ToolExecution, ToolExecutionId,
+    ToolExecutionSourceKind, ToolExecutionStatus, User, UserId, UserSession, UserSessionId,
+    WorkflowEventId, WorkflowEventRecord, WorkflowExecution, WorkflowExecutionId, WorkflowKind,
+    WorkflowStatus, WorkflowTask, WorkflowTaskId, WorkflowTaskStatus,
 };
 use serde_json::{Map, Value};
 use sqlx::{postgres::PgPoolOptions, Executor, PgPool, Row};
@@ -64,12 +64,19 @@ pub const MEMORY_DIRECTORY_SCOPE_HARDENING_SCHEMA: Migration = Migration {
     sql: include_str!("../migrations/0006_memory_directory_scope_hardening.sql"),
 };
 
+pub const HTML_ARTIFACTS_SCHEMA: Migration = Migration {
+    version: "0007",
+    description: "safe html artifact records",
+    sql: include_str!("../migrations/0007_html_artifacts.sql"),
+};
+
 pub const MIGRATIONS: &[Migration] = &[
     INITIAL_SCHEMA,
     WORKFLOW_RUNTIME_RECORDS_SCHEMA,
     EMAIL_ACCOUNT_AUTH_SCHEMA,
     ACCOUNT_ARTIFACT_HARDENING_SCHEMA,
     MEMORY_DIRECTORY_SCOPE_HARDENING_SCHEMA,
+    HTML_ARTIFACTS_SCHEMA,
 ];
 
 pub const TABLES: &[&str] = &[
@@ -100,6 +107,7 @@ pub const TABLES: &[&str] = &[
     "assistant_run_events",
     "assistant_runs",
     "conversation_memory_items",
+    "html_artifacts",
     "static_page_drafts",
     "static_page_image_jobs",
     "static_page_render_outputs",
@@ -289,6 +297,19 @@ pub struct NewAssistantRun {
 pub struct NewAssistantRunEvent {
     pub event_name: String,
     pub payload: Value,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug)]
+pub struct NewHtmlArtifact {
+    pub id: String,
+    pub owner_user_id: Option<UserId>,
+    pub assistant_run_id: Option<AssistantRunId>,
+    pub local_thread_id: Option<String>,
+    pub source_type: String,
+    pub template_id: String,
+    pub interaction_mode: String,
+    pub manifest: Value,
     pub created_at: DateTime<Utc>,
 }
 
@@ -620,6 +641,12 @@ impl PgStorage {
 
     pub fn conversation_memory_items(&self) -> PgConversationMemoryItemRepository {
         PgConversationMemoryItemRepository {
+            pool: self.pool.clone(),
+        }
+    }
+
+    pub fn html_artifacts(&self) -> PgHtmlArtifactRepository {
+        PgHtmlArtifactRepository {
             pool: self.pool.clone(),
         }
     }
@@ -2574,6 +2601,34 @@ impl PgAssistantRunRepository {
         row.as_ref().map(map_assistant_run_row).transpose()
     }
 
+    pub async fn list_by_local_thread(
+        &self,
+        tenant_id: TenantId,
+        local_thread_id: &str,
+        limit: i64,
+    ) -> Result<Vec<AssistantRun>> {
+        let normalized_limit = limit.clamp(1, 100);
+        let rows = sqlx::query(
+            r#"
+            select id, tenant_id, user_id, local_thread_id, user_prompt, startup_briefing,
+                   selected_scope, scope_candidates, context_policy, evidence_state,
+                   service_lane, execution_trail, output_artifacts, runtime_manifest,
+                   created_at, updated_at
+            from assistant_runs
+            where tenant_id = $1 and local_thread_id = $2
+            order by updated_at desc, created_at desc
+            limit $3
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(local_thread_id)
+        .bind(normalized_limit)
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.iter().map(map_assistant_run_row).collect()
+    }
+
     pub async fn append_event(
         &self,
         tenant_id: TenantId,
@@ -2804,6 +2859,134 @@ impl PgConversationMemoryItemRepository {
         };
 
         rows.iter().map(map_conversation_memory_item_row).collect()
+    }
+}
+
+#[derive(Clone)]
+pub struct PgHtmlArtifactRepository {
+    pool: PgPool,
+}
+
+impl PgHtmlArtifactRepository {
+    pub async fn upsert(
+        &self,
+        tenant_id: TenantId,
+        artifact: &NewHtmlArtifact,
+    ) -> Result<HtmlArtifact> {
+        let row = sqlx::query(
+            r#"
+            insert into html_artifacts (
+                id,
+                tenant_id,
+                owner_user_id,
+                assistant_run_id,
+                local_thread_id,
+                source_type,
+                template_id,
+                interaction_mode,
+                manifest,
+                created_at,
+                updated_at
+            )
+            values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10)
+            on conflict (tenant_id, id) do update
+            set owner_user_id = excluded.owner_user_id,
+                assistant_run_id = excluded.assistant_run_id,
+                local_thread_id = excluded.local_thread_id,
+                source_type = excluded.source_type,
+                template_id = excluded.template_id,
+                interaction_mode = excluded.interaction_mode,
+                manifest = excluded.manifest,
+                updated_at = now()
+            returning id, tenant_id, owner_user_id, assistant_run_id, local_thread_id,
+                      source_type, template_id, interaction_mode, manifest, created_at, updated_at
+            "#,
+        )
+        .bind(&artifact.id)
+        .bind(tenant_id.0)
+        .bind(artifact.owner_user_id.map(|id| id.0))
+        .bind(artifact.assistant_run_id.map(|id| id.0))
+        .bind(&artifact.local_thread_id)
+        .bind(&artifact.source_type)
+        .bind(&artifact.template_id)
+        .bind(&artifact.interaction_mode)
+        .bind(&artifact.manifest)
+        .bind(artifact.created_at)
+        .fetch_one(&self.pool)
+        .await?;
+
+        map_html_artifact_row(&row)
+    }
+
+    pub async fn get_by_id(
+        &self,
+        tenant_id: TenantId,
+        artifact_id: &str,
+    ) -> Result<Option<HtmlArtifact>> {
+        let row = sqlx::query(
+            r#"
+            select id, tenant_id, owner_user_id, assistant_run_id, local_thread_id,
+                   source_type, template_id, interaction_mode, manifest, created_at, updated_at
+            from html_artifacts
+            where tenant_id = $1 and id = $2
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(artifact_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        row.as_ref().map(map_html_artifact_row).transpose()
+    }
+
+    pub async fn list_by_assistant_run(
+        &self,
+        tenant_id: TenantId,
+        assistant_run_id: AssistantRunId,
+        limit: i64,
+    ) -> Result<Vec<HtmlArtifact>> {
+        let rows = sqlx::query(
+            r#"
+            select id, tenant_id, owner_user_id, assistant_run_id, local_thread_id,
+                   source_type, template_id, interaction_mode, manifest, created_at, updated_at
+            from html_artifacts
+            where tenant_id = $1 and assistant_run_id = $2
+            order by updated_at desc, created_at desc
+            limit $3
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(assistant_run_id.0)
+        .bind(limit.max(1))
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.iter().map(map_html_artifact_row).collect()
+    }
+
+    pub async fn list_by_local_thread(
+        &self,
+        tenant_id: TenantId,
+        local_thread_id: &str,
+        limit: i64,
+    ) -> Result<Vec<HtmlArtifact>> {
+        let rows = sqlx::query(
+            r#"
+            select id, tenant_id, owner_user_id, assistant_run_id, local_thread_id,
+                   source_type, template_id, interaction_mode, manifest, created_at, updated_at
+            from html_artifacts
+            where tenant_id = $1 and local_thread_id = $2
+            order by updated_at desc, created_at desc
+            limit $3
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(local_thread_id)
+        .bind(limit.max(1))
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.iter().map(map_html_artifact_row).collect()
     }
 }
 
@@ -4867,6 +5050,24 @@ fn map_conversation_memory_item_row(row: &sqlx::postgres::PgRow) -> Result<Conve
         source_message_refs: row.get("source_message_refs"),
         artifact_refs: row.get("artifact_refs"),
         metadata: row.get("metadata"),
+        created_at: row.get("created_at"),
+        updated_at: row.get("updated_at"),
+    })
+}
+
+fn map_html_artifact_row(row: &sqlx::postgres::PgRow) -> Result<HtmlArtifact> {
+    Ok(HtmlArtifact {
+        id: row.get("id"),
+        tenant_id: TenantId(row.get::<Uuid, _>("tenant_id")),
+        owner_user_id: row.get::<Option<Uuid>, _>("owner_user_id").map(UserId),
+        assistant_run_id: row
+            .get::<Option<Uuid>, _>("assistant_run_id")
+            .map(AssistantRunId),
+        local_thread_id: row.get("local_thread_id"),
+        source_type: row.get("source_type"),
+        template_id: row.get("template_id"),
+        interaction_mode: row.get("interaction_mode"),
+        manifest: row.get("manifest"),
         created_at: row.get("created_at"),
         updated_at: row.get("updated_at"),
     })

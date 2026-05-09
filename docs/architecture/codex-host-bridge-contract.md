@@ -59,8 +59,11 @@ The output contract owns these fields:
 - optional `local_thread_id`
 - `task_memory_isolated`
 - optional `task_memory_space_id`
+- optional `html_artifacts` for safe V3-owned review surfaces such as `codex_execution_report`
 
-All worker modes must serialize their successful output through `CodexHostTaskOutputView`. This includes `codex_exec`; real process output is represented only by safe profile, command-plan, and process summaries.
+All worker modes must serialize their successful output through `CodexHostTaskOutputView`. This includes `codex_exec`; real process output is represented only by safe profile, command-plan, process summaries, and sandboxable HTML artifact manifests.
+
+`html_artifacts` are not raw model HTML. They are V3-owned manifests with a template id, owner scope, provenance, interaction mode, and sanitized payload. The browser renders them through the safe HTML artifact viewer, not as arbitrary app code. Platform API persists trusted manifests into the `html_artifacts` table and still reads AssistantRun event payloads as a compatibility fallback/backfill path. Interactive static-page planning handoffs execute only by translating safe JSON Patch payloads into existing static-page operations or by sending a natural-language action intent through the static-page intent interpreter; they do not mutate arbitrary JSON paths or database rows.
 
 `task_memory_space_id` is intentionally duplicated at the top level and inside `task_memory_policy.memory_space_id` so queue workers, UI observations, and future memory storage do not need to parse nested policy JSON just to route task-local recall.
 

@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Result};
 use contracts::{
     CodexHostCommandPlanSummaryView, CodexHostProcessOutputSummaryView, CodexHostTaskOutputView,
-    CodexHostTaskProfileSummaryView,
+    CodexHostTaskProfileSummaryView, HtmlArtifactManifestView,
 };
 use domain_model::{AssistantRunId, WorkflowExecution, WorkflowKind};
 use serde::{Deserialize, Serialize};
@@ -77,6 +77,7 @@ impl CodexHostTaskContext {
     }
 
     pub fn dry_run_output(&self) -> Value {
+        let html_artifacts = vec![self.html_report_artifact("dry_run", "completed", None, None)];
         json!(CodexHostTaskOutputView {
             mode: "dry_run".to_string(),
             codex_invoked: false,
@@ -94,10 +95,17 @@ impl CodexHostTaskContext {
             local_thread_id: self.local_thread_id.clone(),
             task_memory_isolated: self.task_memory_isolated,
             task_memory_space_id: self.task_memory_space_id.clone(),
+            html_artifacts,
         })
     }
 
     pub fn planned_output(&self, decision: &CodexHostExecutionDecision) -> Value {
+        let html_artifacts = vec![self.html_report_artifact(
+            decision.mode.as_str(),
+            "planned",
+            Some(decision),
+            None,
+        )];
         json!(CodexHostTaskOutputView {
             mode: decision.mode.as_str().to_string(),
             codex_invoked: false,
@@ -118,7 +126,104 @@ impl CodexHostTaskContext {
             local_thread_id: self.local_thread_id.clone(),
             task_memory_isolated: self.task_memory_isolated,
             task_memory_space_id: self.task_memory_space_id.clone(),
+            html_artifacts,
         })
+    }
+
+    pub fn html_report_artifact(
+        &self,
+        mode: &str,
+        status: &str,
+        decision: Option<&CodexHostExecutionDecision>,
+        process_output: Option<&CodexProcessOutput>,
+    ) -> HtmlArtifactManifestView {
+        let command_plan = decision
+            .and_then(|decision| decision.command_plan.as_ref())
+            .map(CodexCommandPlan::safe_summary);
+        let profile = decision.map(|decision| decision.profile.safe_summary());
+        let process = process_output.map(CodexProcessOutput::safe_summary);
+        HtmlArtifactManifestView::codex_execution_report(
+            &self.assistant_run_id.to_string(),
+            "Codex Host 执行报告",
+            format!("{mode} {status}"),
+            json!({
+                "mode": mode,
+                "status": status,
+                "capability": self.capability.clone(),
+                "summary": codex_host_report_summary(mode, status, &self.capability),
+                "workspaceLabel": command_plan
+                    .as_ref()
+                    .and_then(|plan| plan.workspace_label.clone())
+                    .unwrap_or_else(|| "未配置".to_string()),
+                "sandbox": command_plan
+                    .as_ref()
+                    .map(|plan| plan.sandbox.clone())
+                    .unwrap_or_else(|| "dry-run".to_string()),
+                "promptChars": self.task.as_ref().map(|task| task.chars().count()).unwrap_or(0),
+                "profile": profile.as_ref().map(|profile| json!({
+                    "id": profile.id.clone(),
+                    "kind": profile.kind.clone(),
+                    "model": profile.model.clone(),
+                    "providerId": profile.provider_id.clone(),
+                    "baseUrlConfigured": profile.base_url_configured,
+                    "wireApi": profile.wire_api.clone(),
+                    "allowedCapabilities": profile.allowed_capabilities.clone(),
+                })),
+                "process": process.as_ref().map(|process| json!({
+                    "exitCode": process.exit_code,
+                    "stdoutChars": process.stdout_excerpt.chars().count(),
+                    "stderrChars": process.stderr_excerpt.chars().count(),
+                })),
+                "steps": codex_host_report_steps(mode),
+                "risks": codex_host_report_risks(mode),
+            }),
+        )
+    }
+}
+
+fn codex_host_report_summary(mode: &str, status: &str, capability: &str) -> String {
+    match mode {
+        "dry_run" => format!(
+            "Codex Host 已完成 dry-run，没有启动本机 Codex。能力：{capability}，状态：{status}。"
+        ),
+        "plan_only" => format!(
+            "Codex Host 已生成计划摘要，命令和提示词保持脱敏。能力：{capability}，状态：{status}。"
+        ),
+        "codex_exec" => {
+            format!("Codex Host 已在允许的远端主机执行 Codex。能力：{capability}，状态：{status}。")
+        }
+        _ => format!("Codex Host 任务已处理。能力：{capability}，状态：{status}。"),
+    }
+}
+
+fn codex_host_report_steps(mode: &str) -> Vec<Value> {
+    match mode {
+        "dry_run" => vec![
+            json!({"title": "读取任务上下文", "detail": "解析 assistant_run、能力、线程和隔离记忆空间。"}),
+            json!({"title": "保持安全空跑", "detail": "不构造真实命令，不启动本机 Codex。"}),
+        ],
+        "plan_only" => vec![
+            json!({"title": "校验 profile", "detail": "确认能力在 profile allowlist 内。"}),
+            json!({"title": "生成命令计划", "detail": "只返回脱敏命令摘要和任务工作区标签。"}),
+        ],
+        "codex_exec" => vec![
+            json!({"title": "校验远端主机", "detail": "必须满足 host kind、profile kind、allow flag 和任务工作区要求。"}),
+            json!({"title": "执行 Codex", "detail": "在任务隔离工作区启动 Codex，并仅保留脱敏日志摘要。"}),
+        ],
+        _ => vec![json!({"title": "处理任务", "detail": "Codex Host 返回结构化任务结果。"})],
+    }
+}
+
+fn codex_host_report_risks(mode: &str) -> Vec<Value> {
+    match mode {
+        "codex_exec" => vec![json!({
+            "title": "执行输出需复核",
+            "detail": "报告只展示脱敏摘要；代码变更和产物仍需由 V3 工作流或人工复核。"
+        })],
+        _ => vec![json!({
+            "title": "尚未真实执行",
+            "detail": "dry-run/plan-only 只验证任务与命令计划，不代表远端 Codex 已完成实际工作。"
+        })],
     }
 }
 
@@ -604,10 +709,19 @@ mod tests {
             context.task_memory_space_id.as_deref(),
             Some("codex-host-task:run-a")
         );
-        assert_eq!(context.dry_run_output()["codex_invoked"], json!(false));
+        let dry_run_output = context.dry_run_output();
+        assert_eq!(dry_run_output["codex_invoked"], json!(false));
         assert_eq!(
-            context.dry_run_output()["task_memory_space_id"],
+            dry_run_output["task_memory_space_id"],
             json!("codex-host-task:run-a")
+        );
+        assert_eq!(
+            dry_run_output["html_artifacts"][0]["template_id"],
+            json!("codex_execution_report")
+        );
+        assert_eq!(
+            dry_run_output["html_artifacts"][0]["payload"]["mode"],
+            json!("dry_run")
         );
     }
 
@@ -658,9 +772,18 @@ mod tests {
         };
 
         let decision = policy.prepare(&context).expect("decision");
+        let planned_output = context.planned_output(&decision);
         let plan = decision.command_plan.expect("command plan");
         let summary = plan.safe_summary();
 
+        assert_eq!(
+            planned_output["html_artifacts"][0]["payload"]["workspaceLabel"],
+            json!("codex-host-task-test")
+        );
+        assert_eq!(
+            planned_output["html_artifacts"][0]["payload"]["sandbox"],
+            json!("read-only")
+        );
         assert_eq!(summary.program, "codex");
         assert_eq!(summary.sandbox, "read-only");
         assert!(summary.workspace_configured);

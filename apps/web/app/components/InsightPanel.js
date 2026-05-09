@@ -14,6 +14,7 @@ import {
   hasDataQualitySummary,
   staticPageHtmlFilename,
 } from '../lib/static-page-export-package';
+import { normalizeHtmlArtifactManifest } from '../lib/html-artifact-manifest';
 
 const SURFACE_LABELS = {
   pc: 'PC',
@@ -158,6 +159,29 @@ function downloadStaticPagePackageFromShelf(draft) {
   const payload = buildStaticPageFinalRenderPayload(draft);
   const html = buildStaticPageStandaloneHtml(draft, draft?.finalPage?.html || '');
   downloadStaticPageExportZip(draft, payload, html);
+}
+
+function htmlArtifactSummary(artifact) {
+  const result = normalizeHtmlArtifactManifest(artifact);
+  if (result.rejected) {
+    return {
+      id: result.sourceId || artifact?.id || 'rejected-html-artifact',
+      rejected: true,
+      title: artifact?.title || '已拦截 HTML 产物',
+      subtitle: result.reason || 'manifest 未通过安全规则',
+      meta: 'blocked',
+      createdAt: artifact?.createdAt || artifact?.created_at || '',
+    };
+  }
+  return {
+    id: result.manifest.id,
+    rejected: false,
+    title: result.manifest.title,
+    subtitle: result.manifest.provenance.reason || result.manifest.templateLabel,
+    meta: `${result.manifest.templateLabel} · ${result.manifest.interactionMode}`,
+    sourceLabel: result.manifest.sourceLabel,
+    createdAt: result.manifest.createdAt,
+  };
 }
 
 function buildReportControlNotice({
@@ -452,6 +476,9 @@ export default function InsightPanel({
   staticPageDrafts = [],
   onSelectStaticPageDraft,
   onRefreshStaticPageDrafts,
+  htmlArtifacts = [],
+  activeHtmlArtifactId,
+  onSelectHtmlArtifact,
 }) {
   return (
     <aside className="insight-panel">
@@ -486,6 +513,41 @@ export default function InsightPanel({
             })
           ) : (
             <EmptySection text="当前数据集还没有会话。" />
+          )}
+        </div>
+      </section>
+
+      <section className="card insight-card">
+        <SectionHeader
+          title="HTML 产物"
+          subtitle={htmlArtifacts.length ? `${htmlArtifacts.length} 个安全产物` : '报告/交接/审查'}
+        />
+        <div className="insight-list">
+          {htmlArtifacts.length ? (
+            htmlArtifacts.map((artifact) => {
+              const summary = htmlArtifactSummary(artifact);
+              const active = activeHtmlArtifactId === summary.id;
+              return (
+                <button
+                  key={summary.id}
+                  type="button"
+                  className={`insight-item ${active ? 'active' : ''} ${summary.rejected ? 'blocked' : ''}`.trim()}
+                  onClick={() => onSelectHtmlArtifact?.(summary.id)}
+                >
+                  <div className="insight-item-head">
+                    <strong>{truncateText(summary.title, 30)}</strong>
+                    <span>{summary.createdAt ? formatRelativeTime(summary.createdAt) : summary.sourceLabel || 'artifact'}</span>
+                  </div>
+                  <p>{truncateText(summary.subtitle, 96)}</p>
+                  <div className="insight-meta-row">
+                    <span>{summary.rejected ? '已拦截' : summary.sourceLabel}</span>
+                    <span>{summary.meta}</span>
+                  </div>
+                </button>
+              );
+            })
+          ) : (
+            <EmptySection text="Codex 执行报告、静态页规划交接、代码审查摘要会在这里显示。" />
           )}
         </div>
       </section>
