@@ -138,9 +138,12 @@ test('renders static page planning and code review templates', () => {
       objective: '展示客户经营状态。',
       visualBridge: {
         providerLane: 'gpt-image-2-cloudflare-queue',
-        status: 'confirmed',
+        status: 'stale',
         imageJobId: 'image-job-1',
+        queuePosition: 2,
         previewAssetKey: 'static-page-previews/image-job-1.json',
+        staleReason: '规划已变更',
+        draftFingerprint: 'design-abc123',
         finalRenderStatus: 'not_requested',
         renderModel: 'dom-text-svg-chart',
         rule: '效果图只锁定视觉方向；最终 HTML 由 renderer 生成。',
@@ -193,6 +196,8 @@ test('renders static page planning and code review templates', () => {
   assert.match(staticPage.html, /风险模块/);
   assert.match(staticPage.html, /视觉链路/);
   assert.match(staticPage.html, /gpt-image-2-cloudflare-queue/);
+  assert.match(staticPage.html, /规划已变更/);
+  assert.match(staticPage.html, /design-abc123/);
   assert.match(staticPage.html, /效果图只锁定视觉方向/);
   assert.match(staticPage.html, /orders.delay_rate/);
   assert.match(quality.html, /数据质量汇总/);
@@ -200,4 +205,43 @@ test('renders static page planning and code review templates', () => {
   assert.match(quality.html, /最终页使用静态回退/);
   assert.match(review.html, /权限缺口/);
   assert.match(review.html, /src\/api.rs:L42/);
+});
+
+test('renders report render summary template', () => {
+  const report = renderHtmlArtifactDocument(baseManifest({
+    id: 'report-render-summary',
+    sourceType: 'report',
+    templateId: 'report_render_summary',
+    title: '季度经营报告 · 渲染摘要',
+    payload: {
+      reportTitle: '季度经营报告',
+      objective: '汇总订单、客服和风险信号。',
+      surface: 'pc',
+      status: 'rendered',
+      publishable: true,
+      assetKind: 'html',
+      assetPath: 'reports/quarterly/pc.html',
+      reportPlanId: 'plan-1',
+      reportRenderOutputId: 'output-1',
+      workflowExecutionId: 'workflow-1',
+      astVersionId: 'ast-1',
+      modelFacing: {
+        recommendedToolKey: 'report.publish',
+      },
+      serviceHandoff: {
+        reportEntryState: 'confirmed',
+      },
+      warnings: [{
+        title: '发布前检查',
+        detail: '确认报告资产路径可访问。',
+      }],
+    },
+  }));
+
+  assert.equal(report.rejected, false);
+  assert.match(report.html, /报告渲染摘要/);
+  assert.match(report.html, /季度经营报告/);
+  assert.match(report.html, /reports\/quarterly\/pc\.html/);
+  assert.match(report.html, /report\.publish/);
+  assert.match(report.html, /发布前检查/);
 });

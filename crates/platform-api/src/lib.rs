@@ -201,6 +201,7 @@ struct StaticPageDraftListQuery {
 struct HtmlArtifactListQuery {
     local_thread_id: Option<String>,
     assistant_run_id: Option<String>,
+    report_plan_id: Option<String>,
     limit: Option<i64>,
 }
 
@@ -2739,13 +2740,18 @@ fn collect_report_render_output_model_facing_signals(
 }
 
 fn report_render_output_has_asset_path(output: &ReportRenderOutputView) -> bool {
+    report_render_output_asset_path(output).is_some()
+}
+
+fn report_render_output_asset_path(output: &ReportRenderOutputView) -> Option<String> {
     output
         .asset_manifest
         .as_object()
         .and_then(|manifest| manifest.get("path"))
         .and_then(Value::as_str)
-        .map(|value| !value.trim().is_empty())
-        .unwrap_or(false)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 fn report_render_output_asset_kind(output: &ReportRenderOutputView) -> Option<String> {
@@ -6566,7 +6572,25 @@ async fn list_html_artifacts(
     let current_user_id = current_auth_user_id(&state, &headers).await?;
     let mut artifacts = Vec::<HtmlArtifactManifestView>::new();
 
-    if let Some(run_id) = query
+    if let Some(plan_id) = query
+        .report_plan_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let plan_id = parse_plan_id(plan_id)?;
+        let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
+        let (plan, report_artifacts) = load_report_render_summary_artifacts_for_plan(
+            &state,
+            plan_id,
+            &active_secret_binding_ids,
+            current_user_id,
+            limit as usize,
+        )
+        .await?;
+        persist_html_artifacts_for_report_plan(&state, &plan, &report_artifacts).await?;
+        artifacts.extend(report_artifacts);
+    } else if let Some(run_id) = query
         .assistant_run_id
         .as_deref()
         .map(str::trim)
@@ -13576,6 +13600,125 @@ fn sort_and_dedupe_html_artifacts(artifacts: &mut Vec<HtmlArtifactManifestView>)
     artifacts.retain(|artifact| seen.insert(artifact.id.clone()));
 }
 
+async fn load_report_render_summary_artifacts_for_plan(
+    state: &AppState,
+    plan_id: ReportPlanId,
+    active_secret_binding_ids: &[SecretBindingId],
+    current_user_id: Option<UserId>,
+    limit: usize,
+) -> std::result::Result<(ReportPlan, Vec<HtmlArtifactManifestView>), ApiError> {
+    let plan = load_visible_report_plan_for_user(
+        state,
+        plan_id,
+        active_secret_binding_ids,
+        current_user_id,
+    )
+    .await?;
+    let outputs = state
+        .storage
+        .report_render_outputs()
+        .list_by_plan(state.tenant_id, plan.id)
+        .await
+        .map_err(ApiError::from_storage)?;
+    let mut artifacts = Vec::new();
+    for output in outputs.into_iter().take(limit) {
+        let output_view = hydrate_report_render_output_view(state, output).await?;
+        artifacts.push(report_render_summary_artifact_from_view(
+            &plan,
+            &output_view,
+        ));
+    }
+    Ok((plan, artifacts))
+}
+
+fn report_render_summary_artifact_from_view(
+    plan: &ReportPlan,
+    output: &ReportRenderOutputView,
+) -> HtmlArtifactManifestView {
+    let output_id = output.id.to_string();
+    let asset_path = report_render_output_asset_path(output).unwrap_or_default();
+    let asset_kind = report_render_output_asset_kind(output).unwrap_or_default();
+    let publishable = output.status == contracts::ReportRenderOutputStatusView::Rendered
+        && !asset_path.is_empty();
+
+    HtmlArtifactManifestView {
+        kind: "html_artifact".to_string(),
+        version: 1,
+        id: format!("html-report-render-{output_id}"),
+        title: format!("{} · 渲染摘要", plan.title),
+        source_type: contracts::HtmlArtifactSourceTypeView::Report,
+        template_id: contracts::HtmlArtifactTemplateIdView::ReportRenderSummary,
+        owner_scope: contracts::HtmlArtifactOwnerScopeView {
+            scope_type: "report_render_output".to_string(),
+            id: output_id.clone(),
+        },
+        data_refs: vec![
+            contracts::HtmlArtifactDataRefView {
+                kind: "report_plan".to_string(),
+                id: plan.id.to_string(),
+                label: "Report Plan".to_string(),
+            },
+            contracts::HtmlArtifactDataRefView {
+                kind: "report_render_output".to_string(),
+                id: output_id.clone(),
+                label: "Render Output".to_string(),
+            },
+            contracts::HtmlArtifactDataRefView {
+                kind: "workflow_execution".to_string(),
+                id: output.execution_id.to_string(),
+                label: "Workflow".to_string(),
+            },
+        ],
+        provenance: contracts::HtmlArtifactProvenanceView {
+            producer: "v3-report-runtime".to_string(),
+            reason: "report render output summary".to_string(),
+            source_run_id: None,
+        },
+        interaction_mode: HtmlArtifactInteractionModeView::ReadOnly,
+        created_at: output.created_at,
+        payload: json!({
+            "reportTitle": plan.title,
+            "objective": plan.objective,
+            "surface": output.surface.as_str(),
+            "status": html_artifact_serialized_variant(&output.status),
+            "publishable": publishable,
+            "assetPath": asset_path,
+            "assetKind": asset_kind,
+            "reportPlanId": plan.id,
+            "reportRenderOutputId": output.id,
+            "workflowExecutionId": output.execution_id,
+            "astVersionId": output.ast_version_id,
+            "modelFacing": output.model_facing,
+            "serviceHandoff": output.service_handoff,
+            "warnings": report_render_summary_warnings(output, publishable),
+        }),
+    }
+}
+
+fn report_render_summary_warnings(
+    output: &ReportRenderOutputView,
+    publishable: bool,
+) -> Vec<Value> {
+    if publishable {
+        return Vec::new();
+    }
+    let (title, detail) = if output.status == contracts::ReportRenderOutputStatusView::Failed {
+        (
+            "渲染失败",
+            "需要重试渲染或检查 report-render-worker 写回的 asset manifest。",
+        )
+    } else {
+        (
+            "尚不可发布",
+            "报告还没有可发布资产路径，先等待渲染完成或重新发起渲染。",
+        )
+    };
+    vec![json!({
+        "title": title,
+        "detail": detail,
+    })]
+}
+
 async fn load_static_page_handoff_artifacts_for_run(
     state: &AppState,
     run_id: AssistantRunId,
@@ -13663,18 +13806,72 @@ fn static_page_handoff_artifact_from_draft(draft: StaticPageDraft) -> HtmlArtifa
             "defaultAction": "apply_static_page_intent",
             "intentPlaceholder": "例如：把趋势模块标题改成月度增长趋势，风险模块缩小一点，图表改为折线图。",
             "modules": modules,
-            "visualBridge": {
-                "providerLane": "gpt-image-2-cloudflare-queue",
-                "role": "effect_preview_reference_only",
-                "status": static_page_payload_value(payload, &["previewContract", "preview_contract"])
-                    .and_then(|contract| contract.get("status").cloned())
-                    .unwrap_or_else(|| json!("not_requested")),
-                "finalRenderStatus": static_page_payload_value(payload, &["finalPage", "final_page"])
-                    .and_then(|final_page| final_page.get("status").cloned())
-                    .unwrap_or_else(|| json!("not_requested"))
-            }
+            "visualBridge": static_page_visual_bridge_payload(payload)
         }),
     }
+}
+
+fn static_page_visual_bridge_payload(payload: &Value) -> Value {
+    let preview_contract =
+        static_page_payload_value(payload, &["previewContract", "preview_contract"])
+            .unwrap_or(Value::Null);
+    let preview_image = static_page_payload_value(payload, &["previewImage", "preview_image"])
+        .unwrap_or(Value::Null);
+    let image_job =
+        static_page_payload_value(payload, &["imageJob", "image_job"]).unwrap_or(Value::Null);
+    let final_page =
+        static_page_payload_value(payload, &["finalPage", "final_page"]).unwrap_or(Value::Null);
+    let render_spec =
+        static_page_payload_value(payload, &["renderSpec", "render_spec"]).unwrap_or(Value::Null);
+
+    json!({
+        "providerLane": "gpt-image-2-cloudflare-queue",
+        "role": "effect_preview_reference_only",
+        "rule": "效果图只锁定视觉方向和确认指纹；最终 HTML 由 Draft JSON、DataSnapshot、VisualSpec 和 renderer 生成。",
+        "status": static_page_value_string(&preview_contract, &["status"])
+            .or_else(|| static_page_value_string(&image_job, &["status"]))
+            .unwrap_or_else(|| "not_requested".to_string()),
+        "imageJobStatus": static_page_value_string(&image_job, &["status"])
+            .unwrap_or_else(|| "not_requested".to_string()),
+        "imageJobId": static_page_value_string(&image_job, &["id"])
+            .or_else(|| static_page_value_string(&preview_contract, &["imageJobId", "image_job_id"]))
+            .or_else(|| static_page_value_string(&preview_image, &["imageJobId", "image_job_id"]))
+            .unwrap_or_default(),
+        "queuePosition": static_page_value_i64(&image_job, &["queuePosition", "queue_position"]),
+        "queueMessage": static_page_value_string(&image_job, &["queueMessage", "queue_message"])
+            .unwrap_or_default(),
+        "previewAssetKey": static_page_value_string(&preview_image, &["assetKey", "asset_key"])
+            .or_else(|| static_page_value_string(&preview_contract, &["assetKey", "asset_key"]))
+            .or_else(|| static_page_value_string(&image_job, &["previewAssetKey", "preview_asset_key"]))
+            .unwrap_or_default(),
+        "previousAssetKey": static_page_value_string(&preview_contract, &["previousAssetKey", "previous_asset_key"])
+            .unwrap_or_default(),
+        "draftFingerprint": static_page_value_string(&preview_contract, &["draftFingerprint", "draft_fingerprint"])
+            .unwrap_or_default(),
+        "confirmedAt": static_page_value_string(&preview_contract, &["confirmedAt", "confirmed_at"])
+            .unwrap_or_default(),
+        "staleReason": static_page_value_string(&preview_contract, &["staleReason", "stale_reason"])
+            .unwrap_or_default(),
+        "styleDirection": static_page_payload_string(payload, &["styleDirection", "style_direction"])
+            .unwrap_or_default(),
+        "renderModel": static_page_value_string(&render_spec, &["componentModel", "component_model"])
+            .or_else(|| {
+                final_page
+                    .get("assetManifest")
+                    .or_else(|| final_page.get("asset_manifest"))
+                    .and_then(|asset_manifest| {
+                        asset_manifest
+                            .get("render_spec")
+                            .or_else(|| asset_manifest.get("renderSpec"))
+                    })
+                    .and_then(|render_spec| {
+                        static_page_value_string(render_spec, &["componentModel", "component_model"])
+                    })
+            })
+            .unwrap_or_default(),
+        "finalRenderStatus": static_page_value_string(&final_page, &["status"])
+            .unwrap_or_else(|| "not_requested".to_string())
+    })
 }
 
 async fn load_static_page_data_quality_artifacts_for_run(
@@ -13837,6 +14034,41 @@ async fn persist_html_artifacts_for_run(
                     owner_user_id: run.user_id,
                     assistant_run_id: Some(run.id),
                     local_thread_id: run.local_thread_id.clone(),
+                    source_type: html_artifact_serialized_variant(&artifact.source_type),
+                    template_id: html_artifact_serialized_variant(&artifact.template_id),
+                    interaction_mode: html_artifact_serialized_variant(&artifact.interaction_mode),
+                    manifest,
+                    created_at: artifact.created_at,
+                },
+            )
+            .await
+            .map_err(ApiError::from_storage)?;
+    }
+    Ok(())
+}
+
+async fn persist_html_artifacts_for_report_plan(
+    state: &AppState,
+    plan: &ReportPlan,
+    artifacts: &[HtmlArtifactManifestView],
+) -> std::result::Result<(), ApiError> {
+    for artifact in artifacts {
+        let manifest = serde_json::to_value(artifact).map_err(|error| {
+            ApiError::internal(
+                "html_artifact_serialize_failed",
+                format!("failed to serialize HTML artifact manifest: {error}"),
+            )
+        })?;
+        state
+            .storage
+            .html_artifacts()
+            .upsert(
+                state.tenant_id,
+                &NewHtmlArtifact {
+                    id: artifact.id.clone(),
+                    owner_user_id: plan.owner_user_id,
+                    assistant_run_id: None,
+                    local_thread_id: None,
                     source_type: html_artifact_serialized_variant(&artifact.source_type),
                     template_id: html_artifact_serialized_variant(&artifact.template_id),
                     interaction_mode: html_artifact_serialized_variant(&artifact.interaction_mode),
@@ -19556,14 +19788,23 @@ fn static_page_payload_mobile_order(payload: &Value, modules: &Value) -> Value {
 }
 
 fn static_page_payload_string(payload: &Value, keys: &[&str]) -> Option<String> {
+    static_page_value_string(payload, keys)
+}
+
+fn static_page_value_string(value: &Value, keys: &[&str]) -> Option<String> {
     keys.iter().find_map(|key| {
-        payload
+        value
             .get(*key)
             .and_then(Value::as_str)
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(ToOwned::to_owned)
     })
+}
+
+fn static_page_value_i64(value: &Value, keys: &[&str]) -> Option<i64> {
+    keys.iter()
+        .find_map(|key| value.get(*key).and_then(Value::as_i64))
 }
 
 fn static_page_payload_value(payload: &Value, keys: &[&str]) -> Option<Value> {
@@ -20582,6 +20823,64 @@ mod tests {
     }
 
     #[test]
+    fn html_artifact_report_render_summary_from_output_exposes_publishability() {
+        let now = Utc::now();
+        let plan_id = ReportPlanId::new();
+        let output_id = ReportRenderOutputId::new();
+        let plan = ReportPlan {
+            id: plan_id,
+            tenant_id: TenantId::new(),
+            dataset_id: DatasetId::new(),
+            owner_user_id: None,
+            title: "季度经营报告".to_string(),
+            objective: "汇总订单、客服和风险信号。".to_string(),
+            status: ReportPlanStatus::Rendered,
+            theme_key: "default-local".to_string(),
+            current_ast_version_id: Some(ReportPlanAstVersionId::new()),
+            modules: Vec::new(),
+            created_at: now,
+            updated_at: now,
+        };
+        let output = ReportRenderOutputView {
+            id: output_id,
+            execution_id: WorkflowExecutionId::new(),
+            plan_id,
+            dataset_id: plan.dataset_id,
+            ast_version_id: ReportPlanAstVersionId::new(),
+            surface: PublishedSurface::Pc,
+            status: contracts::ReportRenderOutputStatusView::Rendered,
+            asset_manifest: json!({
+                "kind": "html",
+                "path": "reports/quarterly/pc.html"
+            }),
+            service_handoff: None,
+            model_facing: None,
+            created_at: now,
+        };
+
+        let artifact = report_render_summary_artifact_from_view(&plan, &output);
+
+        assert_eq!(
+            artifact.source_type,
+            contracts::HtmlArtifactSourceTypeView::Report
+        );
+        assert_eq!(
+            artifact.template_id,
+            contracts::HtmlArtifactTemplateIdView::ReportRenderSummary
+        );
+        assert_eq!(artifact.owner_scope.scope_type, "report_render_output");
+        assert_eq!(artifact.owner_scope.id, output_id.to_string());
+        assert_eq!(artifact.payload["reportPlanId"], json!(plan_id));
+        assert_eq!(
+            artifact.payload["assetPath"],
+            json!("reports/quarterly/pc.html")
+        );
+        assert_eq!(artifact.payload["assetKind"], json!("html"));
+        assert_eq!(artifact.payload["publishable"], json!(true));
+        assert!(value_array(artifact.payload["warnings"].clone()).is_empty());
+    }
+
+    #[test]
     fn html_artifact_event_validation_allows_only_safe_interactions() {
         let mut artifact = HtmlArtifactManifestView::codex_execution_report(
             "run-1",
@@ -20705,6 +21004,30 @@ mod tests {
             source_refs: json!({}),
             draft_payload: json!({
                 "styleDirection": "client-delivery",
+                "imageJob": {
+                    "id": "image-job-1",
+                    "status": "preview_ready",
+                    "queuePosition": 2,
+                    "queueMessage": "资源排队中"
+                },
+                "previewImage": {
+                    "assetKey": "static-page-previews/image-job-1.json",
+                    "imageJobId": "image-job-1"
+                },
+                "previewContract": {
+                    "status": "stale",
+                    "imageJobId": "image-job-1",
+                    "assetKey": "static-page-previews/image-job-1.json",
+                    "previousAssetKey": "static-page-previews/old.json",
+                    "draftFingerprint": "design-abc123",
+                    "staleReason": "draft design changed after preview confirmation"
+                },
+                "renderSpec": {
+                    "componentModel": "dom-text-svg-chart"
+                },
+                "finalPage": {
+                    "status": "rendered"
+                },
                 "modules": [{
                     "id": "hero",
                     "title": "核心判断",
@@ -20733,6 +21056,31 @@ mod tests {
         );
         assert_eq!(artifact.owner_scope.scope_type, "static_page_draft");
         assert_eq!(artifact.payload["modules"][0]["title"], json!("核心判断"));
+        assert_eq!(artifact.payload["visualBridge"]["status"], json!("stale"));
+        assert_eq!(
+            artifact.payload["visualBridge"]["imageJobId"],
+            json!("image-job-1")
+        );
+        assert_eq!(
+            artifact.payload["visualBridge"]["previewAssetKey"],
+            json!("static-page-previews/image-job-1.json")
+        );
+        assert_eq!(
+            artifact.payload["visualBridge"]["previousAssetKey"],
+            json!("static-page-previews/old.json")
+        );
+        assert_eq!(
+            artifact.payload["visualBridge"]["draftFingerprint"],
+            json!("design-abc123")
+        );
+        assert_eq!(
+            artifact.payload["visualBridge"]["renderModel"],
+            json!("dom-text-svg-chart")
+        );
+        assert_eq!(
+            artifact.payload["visualBridge"]["finalRenderStatus"],
+            json!("rendered")
+        );
     }
 
     #[test]

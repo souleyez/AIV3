@@ -58,6 +58,7 @@ function fallbackPackageManifest(draft) {
       { path: 'index.html', role: 'rendered_static_page', mime: 'text/html' },
       { path: 'asset-manifest.json', role: 'renderer_manifest', mime: 'application/json' },
       { path: 'data-snapshot.json', role: 'render_data_snapshot', mime: 'application/json' },
+      { path: 'visual-bridge.json', role: 'confirmed_visual_contract_bridge', mime: 'application/json' },
       { path: 'data-quality-report.json', role: 'module_data_quality_report', mime: 'application/json' },
       { path: 'modules.json', role: 'editable_module_plan', mime: 'application/json' },
       { path: 'runtime-requirements.json', role: 'optional_runtime_requirements', mime: 'application/json' },
@@ -76,6 +77,7 @@ function normalizePackageManifest(draft, manifest) {
     { path: 'export-package.json', role: 'export_package_manifest', mime: 'application/json' },
     { path: 'README.md', role: 'human_handoff_note', mime: 'text/markdown' },
     { path: 'data-quality-report.json', role: 'module_data_quality_report', mime: 'application/json' },
+    { path: 'visual-bridge.json', role: 'confirmed_visual_contract_bridge', mime: 'application/json' },
     { path: 'render-spec.json', role: 'render_contract', mime: 'application/json' },
     { path: 'runtime-requirements.json', role: 'optional_runtime_requirements', mime: 'application/json' },
   ];
@@ -99,6 +101,7 @@ function buildReadme({ draft, manifest, backendHtml, warnings }) {
   const chartRuntime = manifest.chart_runtime || {};
   const dataQualitySummary = dataQualitySummaryFromManifest(manifest);
   const dataQualityModules = dataQualityModulesFromManifest(manifest);
+  const visualBridge = visualBridgeFromContext(draft, manifest);
   const runtimeRequirements = Array.isArray(manifest.export_package?.runtime_requirements)
     ? manifest.export_package.runtime_requirements
     : Array.isArray(manifest.runtime_requirements)
@@ -113,6 +116,7 @@ function buildReadme({ draft, manifest, backendHtml, warnings }) {
     `- 渲染状态：${draft?.finalPage?.status || draft?.status || 'unknown'}`,
     `- 图表运行时：基础 ${chartRuntime.deterministicModules ?? 0} / ECharts ${chartRuntime.echartsRequestedModules ?? 0}`,
     `- 后端 HTML：${backendHtml ? '已包含' : '未返回，需重新刷新或等待 worker 写回'}`,
+    `- 视觉合同：${visualBridge.status || 'unknown'} / ${visualBridge.previewAssetKey || 'no-preview'}（详见 visual-bridge.json）`,
   ];
   if (hasDataQualitySummary(dataQualitySummary)) {
     lines.push(
@@ -136,6 +140,7 @@ function buildReadme({ draft, manifest, backendHtml, warnings }) {
 
 function contentForPath(path, { draft, payload, manifest, backendHtml, warnings }) {
   if (path === 'export-package.json') {
+    const visualBridge = visualBridgeFromContext(draft, manifest);
     return safeJson({
       kind: 'static-page-export-package',
       version: 1,
@@ -143,6 +148,7 @@ function contentForPath(path, { draft, payload, manifest, backendHtml, warnings 
       backendDraftId: draft?.backendDraftId || null,
       renderOutputId: draft?.finalPage?.renderOutputId || null,
       imageJobId: draft?.finalPage?.imageJobId || draft?.imageJob?.id || null,
+      visual_bridge: visualBridge,
       chart_runtime: manifest.chart_runtime || null,
       data_quality_summary: dataQualitySummaryFromManifest(manifest),
       data_quality_modules: dataQualityModulesFromManifest(manifest),
@@ -158,6 +164,9 @@ function contentForPath(path, { draft, payload, manifest, backendHtml, warnings 
   }
   if (path === 'data-snapshot.json') {
     return safeJson(payload?.dataSnapshot || manifest.data_snapshot || {});
+  }
+  if (path === 'visual-bridge.json') {
+    return safeJson(visualBridgeFromContext(draft, manifest));
   }
   if (path === 'data-quality-report.json') {
     return safeJson({
@@ -182,6 +191,33 @@ function contentForPath(path, { draft, payload, manifest, backendHtml, warnings 
     return buildReadme({ draft, manifest, backendHtml, warnings });
   }
   return '';
+}
+
+function visualBridgeFromContext(draft = {}, manifest = {}) {
+  const previewContract = draft?.previewContract || manifest.preview_contract || manifest.previewContract || {};
+  const previewImage = draft?.previewImage || {};
+  const imageJob = draft?.imageJob || {};
+  return {
+    kind: 'static-page-visual-bridge',
+    version: 1,
+    providerLane: 'gpt-image-2-cloudflare-queue',
+    role: 'effect_preview_reference_only',
+    rule: '效果图只锁定视觉方向和确认指纹；最终 HTML 由 Draft JSON、DataSnapshot、VisualSpec 和 renderer 生成。',
+    status: previewContract.status || imageJob.status || manifest.status || 'unknown',
+    imageJobStatus: imageJob.status || 'unknown',
+    imageJobId: draft?.finalPage?.imageJobId || imageJob.id || manifest.image_job_id || previewContract.imageJobId || '',
+    queuePosition: imageJob.queuePosition ?? null,
+    queueMessage: imageJob.queueMessage || '',
+    previewAssetKey: previewImage.assetKey || previewContract.assetKey || manifest.preview_asset_key || '',
+    previousAssetKey: previewContract.previousAssetKey || '',
+    draftFingerprint: previewContract.draftFingerprint || manifest.preview_contract?.draftFingerprint || '',
+    confirmedAt: previewContract.confirmedAt || '',
+    staleReason: previewContract.staleReason || '',
+    styleDirection: draft?.styleDirection || manifest.style_direction || '',
+    renderModel: draft?.renderSpec?.componentModel || manifest.render_spec?.componentModel || manifest.render_spec?.component_model || '',
+    finalRenderStatus: draft?.finalPage?.status || manifest.status || 'unknown',
+    finalHtmlSource: 'static-page-renderer',
+  };
 }
 
 function contextRuntimeRequirements({ manifest }) {

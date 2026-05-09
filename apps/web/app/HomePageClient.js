@@ -355,6 +355,79 @@ function buildStaticPagePlanningHtmlArtifact(draft) {
   };
 }
 
+function firstReportAssetPath(assetManifest = {}) {
+  if (!assetManifest || typeof assetManifest !== 'object') return '';
+  if (typeof assetManifest.path === 'string' && assetManifest.path.trim()) return assetManifest.path.trim();
+  const assets = Array.isArray(assetManifest.assets) ? assetManifest.assets : [];
+  const firstAsset = assets.find((asset) => asset && typeof asset.path === 'string' && asset.path.trim());
+  return firstAsset?.path?.trim() || '';
+}
+
+function reportAssetKind(assetManifest = {}) {
+  if (!assetManifest || typeof assetManifest !== 'object') return '';
+  if (typeof assetManifest.kind === 'string' && assetManifest.kind.trim()) return assetManifest.kind.trim();
+  const path = firstReportAssetPath(assetManifest).toLowerCase();
+  if (path.endsWith('.html')) return 'html';
+  if (path.endsWith('.pdf')) return 'pdf';
+  if (path.endsWith('.json')) return 'json';
+  return path ? 'asset' : '';
+}
+
+function buildReportRenderHtmlArtifact(output, plan) {
+  if (!output || !plan) return null;
+  const id = output.id || output.report_render_output_id;
+  if (!id) return null;
+  const assetPath = firstReportAssetPath(output.asset_manifest);
+  const publishable = output.status === 'rendered' && Boolean(assetPath);
+  return {
+    kind: 'html_artifact',
+    version: 1,
+    id: `html-report-render-${id}`,
+    title: `${plan.title || '报告'} · 渲染摘要`,
+    sourceType: 'report',
+    templateId: 'report_render_summary',
+    interactionMode: 'read_only',
+    ownerScope: {
+      type: 'report_render_output',
+      id,
+    },
+    dataRefs: [
+      { kind: 'report_plan', id: output.plan_id || plan.id, label: 'Report Plan' },
+      { kind: 'report_render_output', id, label: 'Render Output' },
+      output.execution_id ? { kind: 'workflow_execution', id: output.execution_id, label: 'Workflow' } : null,
+    ].filter(Boolean),
+    provenance: {
+      producer: 'v3-report-runtime',
+      reason: 'report render output summary',
+      sourceRunId: '',
+    },
+    createdAt: output.created_at || new Date(0).toISOString(),
+    payload: {
+      reportTitle: plan.title || '报告',
+      objective: plan.objective || '',
+      surface: output.surface || 'pc',
+      status: output.status || 'unknown',
+      publishable,
+      assetPath,
+      assetKind: reportAssetKind(output.asset_manifest),
+      reportPlanId: output.plan_id || plan.id || '',
+      reportRenderOutputId: id,
+      workflowExecutionId: output.execution_id || '',
+      astVersionId: output.ast_version_id || '',
+      modelFacing: output.model_facing || null,
+      serviceHandoff: output.service_handoff || plan.service_handoff || null,
+      warnings: publishable
+        ? []
+        : [{
+          title: output.status === 'failed' ? '渲染失败' : '尚不可发布',
+          detail: output.status === 'failed'
+            ? '需要重试渲染或检查 report-render-worker 写回的 asset manifest。'
+            : '报告还没有可发布资产路径，先等待渲染完成或重新发起渲染。',
+        }],
+    },
+  };
+}
+
 function mergeHtmlArtifacts(...groups) {
   const artifactMap = new Map();
   groups.flat().filter(Boolean).forEach((artifact) => {
@@ -367,6 +440,17 @@ function mergeHtmlArtifacts(...groups) {
     const rightValue = new Date(right?.createdAt || right?.created_at || 0).getTime();
     return rightValue - leftValue;
   });
+}
+
+function isReportRenderHtmlArtifact(artifact) {
+  return (artifact?.templateId || artifact?.template_id) === 'report_render_summary';
+}
+
+function replaceReportRenderHtmlArtifacts(existingArtifacts, reportArtifacts) {
+  return mergeHtmlArtifacts(
+    (Array.isArray(existingArtifacts) ? existingArtifacts : []).filter((artifact) => !isReportRenderHtmlArtifact(artifact)),
+    Array.isArray(reportArtifacts) ? reportArtifacts : [],
+  );
 }
 
 function firstDatasetIdFromScope(scope) {
@@ -518,8 +602,9 @@ export default function HomePageClient() {
     () => mergeHtmlArtifacts(
       backendHtmlArtifacts,
       staticPageDraftItems.map(buildStaticPagePlanningHtmlArtifact).filter(Boolean),
+      reportRenderOutputs.map((output) => buildReportRenderHtmlArtifact(output, selectedReportPlan)).filter(Boolean),
     ),
-    [backendHtmlArtifacts, staticPageDraftItems],
+    [backendHtmlArtifacts, staticPageDraftItems, reportRenderOutputs, selectedReportPlan],
   );
   const activeHtmlArtifact = useMemo(
     () => htmlArtifacts.find((artifact) => artifact.id === activeHtmlArtifactId) || null,
@@ -1467,10 +1552,14 @@ export default function HomePageClient() {
     }
 
     try {
-      const [renderOutputItems, astVersionItems, publishedDetail] = await Promise.all([
+      const [renderOutputItems, astVersionItems, publishedDetail, reportHtmlArtifacts] = await Promise.all([
         fetchJson(`/api/v3/report-plans/${planId}/render-outputs`),
         fetchJson(`/api/v3/report-plans/${planId}/ast-versions`),
         fetchPlanPublishedReport(planId),
+        fetchJson(`/api/v3/html-artifacts?${new URLSearchParams({
+          report_plan_id: planId,
+          limit: '30',
+        }).toString()}`).catch(() => []),
       ]);
 
       if (reportDetailLoadIdRef.current !== loadId) {
@@ -1481,6 +1570,7 @@ export default function HomePageClient() {
         setReportRenderOutputs(sortByDateDesc(renderOutputItems, 'created_at'));
         setReportAstVersions(sortByDateDesc(astVersionItems, 'created_at'));
         setPublishedReportDetail(publishedDetail);
+        setBackendHtmlArtifacts((current) => replaceReportRenderHtmlArtifacts(current, reportHtmlArtifacts));
       });
       setError('');
     } catch (loadError) {

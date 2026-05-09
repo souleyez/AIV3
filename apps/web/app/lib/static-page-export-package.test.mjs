@@ -27,6 +27,18 @@ function testDraft(overrides = {}) {
     },
     imageJob: {
       id: 'image-job-1',
+      status: 'confirmed',
+      queuePosition: 1,
+      queueMessage: '已跳过排队',
+    },
+    previewImage: {
+      assetKey: 'static-page-previews/image-job-1.json',
+    },
+    previewContract: {
+      status: 'confirmed',
+      assetKey: 'static-page-previews/image-job-1.json',
+      draftFingerprint: 'design-abc123',
+      confirmedAt: '2026-05-08T08:00:00Z',
     },
     finalPage: {
       status: 'rendered',
@@ -104,6 +116,8 @@ test('static page export package includes html manifest data modules and readme'
   assert.equal(files.get('index.html').content, '<main>最终静态页</main>');
   assert.match(files.get('asset-manifest.json').content, /static-page-renderer-v1/);
   assert.match(files.get('data-snapshot.json').content, /payload_snapshot/);
+  assert.match(files.get('visual-bridge.json').content, /static-page-visual-bridge/);
+  assert.match(files.get('visual-bridge.json').content, /design-abc123/);
   assert.match(files.get('data-quality-report.json').content, /static-page-data-quality-report/);
   assert.match(files.get('data-quality-report.json').content, /module_has_renderable_data/);
   assert.match(files.get('modules.json').content, /核心结论/);
@@ -112,12 +126,15 @@ test('static page export package includes html manifest data modules and readme'
   assert.match(files.get('README.md').content, /ECharts 1/);
   assert.match(files.get('README.md').content, /数据质量：已确认 1 \/ 部分 0 \/ 缺失 0/);
   assert.match(files.get('README.md').content, /模块级数据质量报告：data-quality-report\.json/);
+  assert.match(files.get('README.md').content, /视觉合同：confirmed/);
   assert.match(files.get('README.md').content, /Apache ECharts（可选）/);
   assert.match(files.get('export-package.json').content, /"confirmedModules": 1/);
+  assert.match(files.get('export-package.json').content, /"visual_bridge"/);
   assert.match(files.get('export-package.json').content, /"data_quality_modules"/);
   assert.ok(artifact.packageManifest.files.some((file) => file.path === 'README.md'));
   assert.ok(artifact.packageManifest.files.some((file) => file.path === 'export-package.json'));
   assert.ok(artifact.packageManifest.files.some((file) => file.path === 'data-quality-report.json'));
+  assert.ok(artifact.packageManifest.files.some((file) => file.path === 'visual-bridge.json'));
   assert.ok(artifact.packageManifest.files.some((file) => file.path === 'render-spec.json'));
   assert.ok(artifact.packageManifest.files.some((file) => file.path === 'runtime-requirements.json'));
   assert.equal(artifact.packageManifest.runtime_requirements[0].required, false);
@@ -145,6 +162,7 @@ test('static page export package can be written as a real zip file', async () =>
   assert.equal(bytes[1], 0x4b);
   assert.match(text, /index\.html/);
   assert.match(text, /asset-manifest\.json/);
+  assert.match(text, /visual-bridge\.json/);
   assert.match(text, /data-quality-report\.json/);
   assert.match(text, /runtime-requirements\.json/);
   assert.match(text, /export-package\.json/);

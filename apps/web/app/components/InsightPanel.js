@@ -520,7 +520,7 @@ export default function InsightPanel({
       <section className="card insight-card">
         <SectionHeader
           title="HTML 产物"
-          subtitle={htmlArtifacts.length ? `${htmlArtifacts.length} 个安全产物` : '报告/交接/审查'}
+          subtitle={htmlArtifacts.length ? `${htmlArtifacts.length} 个安全产物` : '报告/交接/审查/渲染摘要'}
         />
         <div className="insight-list">
           {htmlArtifacts.length ? (
@@ -547,7 +547,7 @@ export default function InsightPanel({
               );
             })
           ) : (
-            <EmptySection text="Codex 执行报告、静态页规划交接、代码审查摘要会在这里显示。" />
+            <EmptySection text="Codex 执行报告、静态页规划交接、报告渲染摘要、代码审查摘要会在这里显示。" />
           )}
         </div>
       </section>

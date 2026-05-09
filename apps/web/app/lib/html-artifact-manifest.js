@@ -5,12 +5,14 @@ export const HTML_ARTIFACT_TEMPLATE_IDS = Object.freeze([
   'codex_execution_report',
   'static_page_planning_handoff',
   'static_page_data_quality_report',
+  'report_render_summary',
   'code_review_summary',
 ]);
 
 export const HTML_ARTIFACT_SOURCE_TYPES = Object.freeze([
   'codex_host',
   'static_page',
+  'report',
   'code_review',
   'manual',
 ]);
@@ -25,12 +27,14 @@ const TEMPLATE_LABELS = {
   codex_execution_report: 'Codex 执行报告',
   static_page_planning_handoff: '静态页规划交接',
   static_page_data_quality_report: '静态页数据质量报告',
+  report_render_summary: '报告渲染摘要',
   code_review_summary: '代码审查摘要',
 };
 
 const SOURCE_LABELS = {
   codex_host: 'Codex Host',
   static_page: '静态页',
+  report: '报告',
   code_review: '代码审查',
   manual: '手动产物',
 };
@@ -258,8 +262,11 @@ function renderVisualBridge(value = {}) {
       ${renderKeyValueGrid([
         { label: '生图通道', value: value.providerLane || value.provider_lane || 'gpt-image-2-cloudflare-queue' },
         { label: '效果图状态', value: value.status || 'not_requested' },
+        { label: '排队位置', value: value.queuePosition || value.queue_position ? String(value.queuePosition || value.queue_position) : '未排队' },
         { label: '图片任务', value: value.imageJobId || value.image_job_id || '未创建' },
         { label: '预览资产', value: value.previewAssetKey || value.preview_asset_key || '未返回' },
+        { label: '过期原因', value: value.staleReason || value.stale_reason || '未过期' },
+        { label: '确认指纹', value: value.draftFingerprint || value.draft_fingerprint || '未生成' },
         { label: '最终渲染', value: value.finalRenderStatus || value.final_render_status || 'not_requested' },
         { label: '渲染模型', value: value.renderModel || value.render_model || 'renderer manifest' },
       ])}
@@ -351,6 +358,56 @@ function renderStaticPageDataQualityReport(manifest) {
     <section>
       <h2>模块检查</h2>
       ${renderList(modules, '暂无模块数据质量记录。')}
+    </section>
+  `;
+}
+
+function reportRenderStatusLabel(status) {
+  if (status === 'rendered') return '已渲染';
+  if (status === 'failed') return '失败';
+  return status || '未知';
+}
+
+function renderReportRenderSummary(manifest) {
+  const payload = manifest.payload || {};
+  const modelFacing = isPlainObject(payload.modelFacing || payload.model_facing)
+    ? payload.modelFacing || payload.model_facing
+    : {};
+  const handoff = isPlainObject(payload.serviceHandoff || payload.service_handoff)
+    ? payload.serviceHandoff || payload.service_handoff
+    : {};
+  const warnings = arrayOrEmpty(payload.warnings).map((warning, index) => ({
+    title: warning.title || warning.label || `提醒 ${index + 1}`,
+    detail: warning.detail || warning.summary || warning.message || '',
+    meta: warning.meta || '',
+  }));
+  return `
+    ${renderKeyValueGrid([
+      { label: '报告', value: payload.reportTitle || payload.report_title || manifest.title },
+      { label: 'Surface', value: payload.surface || 'pc' },
+      { label: '状态', value: reportRenderStatusLabel(payload.status) },
+      { label: '可发布', value: payload.publishable ? '是' : '否' },
+      { label: '资产类型', value: payload.assetKind || payload.asset_kind || '未识别' },
+      { label: '资产路径', value: payload.assetPath || payload.asset_path || '未生成' },
+    ])}
+    <section>
+      <h2>报告目标</h2>
+      <p>${escapeHtml(payload.objective || '未提供报告目标。')}</p>
+    </section>
+    <section>
+      <h2>运行与发布建议</h2>
+      ${renderKeyValueGrid([
+        { label: 'Plan ID', value: payload.reportPlanId || payload.report_plan_id || '' },
+        { label: 'Output ID', value: payload.reportRenderOutputId || payload.report_render_output_id || '' },
+        { label: 'Workflow', value: payload.workflowExecutionId || payload.workflow_execution_id || '' },
+        { label: 'AST Version', value: payload.astVersionId || payload.ast_version_id || '' },
+        { label: '推荐工具', value: modelFacing.recommendedToolKey || modelFacing.recommended_tool_key || '' },
+        { label: '报告入口', value: handoff.reportEntryState || handoff.report_entry_state || '' },
+      ])}
+    </section>
+    <section>
+      <h2>注意事项</h2>
+      ${renderList(warnings, '暂无注意事项。')}
     </section>
   `;
 }
@@ -447,7 +504,9 @@ export function renderHtmlArtifactDocument(input = {}) {
       ? renderStaticPagePlanningHandoff(manifest)
       : manifest.templateId === 'static_page_data_quality_report'
         ? renderStaticPageDataQualityReport(manifest)
-        : renderCodeReviewSummary(manifest);
+        : manifest.templateId === 'report_render_summary'
+          ? renderReportRenderSummary(manifest)
+          : renderCodeReviewSummary(manifest);
   const allowScripts = manifest.interactionMode !== 'read_only';
   const script = renderInteractionScript(manifest);
   const canSubmit = hasSubmittableArtifactAction(manifest);

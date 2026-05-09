@@ -63,6 +63,8 @@ pub fn render_static_page(request: &StaticPageRenderRequest) -> StaticPageRender
         .join("\n");
     let chart_runtime_manifest = build_chart_runtime_manifest(&modules, &data_snapshot);
     let echarts_hydration_script = render_echarts_hydration_script(&modules, &data_snapshot);
+    let visual_bridge_manifest =
+        build_visual_bridge_manifest(request, &preview_contract, &style, &render_spec);
     let html = format!(
         concat!(
             "<!doctype html><html><head><meta charset=\"utf-8\">",
@@ -92,6 +94,7 @@ pub fn render_static_page(request: &StaticPageRenderRequest) -> StaticPageRender
         &modules,
         &data_snapshot,
         &chart_runtime_manifest,
+        &visual_bridge_manifest,
         request.preview_asset_key.as_deref(),
     );
     let asset_manifest = json!({
@@ -110,6 +113,7 @@ pub fn render_static_page(request: &StaticPageRenderRequest) -> StaticPageRender
         "render_spec": render_spec,
         "data_snapshot": data_snapshot,
         "chart_runtime": chart_runtime_manifest,
+        "visual_bridge": visual_bridge_manifest,
         "export_package": export_package,
         "preview_contract": preview_contract,
         "module_count": modules.as_array().map(Vec::len).unwrap_or(0),
@@ -130,6 +134,7 @@ fn build_export_package_manifest(
     modules: &Value,
     data_snapshot: &Value,
     chart_runtime_manifest: &Value,
+    visual_bridge_manifest: &Value,
     preview_asset_key: Option<&str>,
 ) -> Value {
     let module_count = modules.as_array().map(Vec::len).unwrap_or(0);
@@ -178,6 +183,11 @@ fn build_export_package_manifest(
                 "mime": "application/json"
             },
             {
+                "path": "visual-bridge.json",
+                "role": "confirmed_visual_contract_bridge",
+                "mime": "application/json"
+            },
+            {
                 "path": "modules.json",
                 "role": "editable_module_plan",
                 "mime": "application/json"
@@ -217,8 +227,47 @@ fn build_export_package_manifest(
                 .get("modules")
                 .cloned()
                 .unwrap_or_else(|| Value::Array(Vec::new())),
+            "visual_bridge": visual_bridge_manifest,
             "data_snapshot_source": data_snapshot_source
         }
+    })
+}
+
+fn build_visual_bridge_manifest(
+    request: &StaticPageRenderRequest,
+    preview_contract: &Value,
+    style: &str,
+    render_spec: &Value,
+) -> Value {
+    json!({
+        "kind": "static-page-visual-bridge",
+        "version": 1,
+        "providerLane": "gpt-image-2-cloudflare-queue",
+        "role": "effect_preview_reference_only",
+        "rule": "Effect image locks only visual direction and confirmation fingerprint; final HTML is generated from Draft JSON, DataSnapshot, VisualSpec, and renderer.",
+        "status": static_page_value_string(preview_contract, &["status"])
+            .unwrap_or_else(|| "unknown".to_string()),
+        "imageJobId": request.image_job_id
+            .clone()
+            .or_else(|| static_page_value_string(preview_contract, &["imageJobId", "image_job_id"]))
+            .unwrap_or_default(),
+        "previewAssetKey": request.preview_asset_key
+            .clone()
+            .or_else(|| static_page_value_string(preview_contract, &["assetKey", "asset_key"]))
+            .unwrap_or_default(),
+        "previousAssetKey": static_page_value_string(preview_contract, &["previousAssetKey", "previous_asset_key"])
+            .unwrap_or_default(),
+        "draftFingerprint": static_page_value_string(preview_contract, &["draftFingerprint", "draft_fingerprint"])
+            .unwrap_or_default(),
+        "confirmedAt": static_page_value_string(preview_contract, &["confirmedAt", "confirmed_at"])
+            .unwrap_or_default(),
+        "staleReason": static_page_value_string(preview_contract, &["staleReason", "stale_reason"])
+            .unwrap_or_default(),
+        "styleDirection": style,
+        "renderModel": static_page_value_string(render_spec, &["componentModel", "component_model"])
+            .unwrap_or_else(|| "dom-text-svg-chart".to_string()),
+        "finalRenderStatus": "rendered",
+        "finalHtmlSource": STATIC_PAGE_RENDERER_ID,
     })
 }
 
@@ -1314,8 +1363,12 @@ fn static_page_payload_modules(payload: &Value) -> Value {
 }
 
 fn static_page_payload_string(payload: &Value, keys: &[&str]) -> Option<String> {
+    static_page_value_string(payload, keys)
+}
+
+fn static_page_value_string(value: &Value, keys: &[&str]) -> Option<String> {
     keys.iter().find_map(|key| {
-        payload
+        value
             .get(*key)
             .and_then(Value::as_str)
             .map(str::trim)
@@ -1521,7 +1574,9 @@ mod tests {
                 },
                 "previewContract": {
                     "status": "confirmed",
-                    "assetKey": "previews/static-page-1.png"
+                    "assetKey": "previews/static-page-1.png",
+                    "draftFingerprint": "design-abc123",
+                    "confirmedAt": "2026-05-08T08:00:00Z"
                 },
                 "modelSummary": "核心增长来自高价值客户。",
                 "mobileOrder": ["trend", "hero"],
@@ -1595,6 +1650,11 @@ mod tests {
             .as_array()
             .unwrap()
             .iter()
+            .any(|file| file["path"] == json!("visual-bridge.json")));
+        assert!(result.asset_manifest["export_package"]["files"]
+            .as_array()
+            .unwrap()
+            .iter()
             .any(|file| file["path"] == json!("runtime-requirements.json")));
         assert!(result.asset_manifest["export_package"]["files"]
             .as_array()
@@ -1621,6 +1681,22 @@ mod tests {
         assert_eq!(
             result.asset_manifest["export_package"]["debug"]["data_quality_modules"][0]["title"],
             "核心判断"
+        );
+        assert_eq!(
+            result.asset_manifest["visual_bridge"]["kind"],
+            "static-page-visual-bridge"
+        );
+        assert_eq!(
+            result.asset_manifest["visual_bridge"]["previewAssetKey"],
+            "previews/static-page-1.png"
+        );
+        assert_eq!(
+            result.asset_manifest["visual_bridge"]["draftFingerprint"],
+            "design-abc123"
+        );
+        assert_eq!(
+            result.asset_manifest["export_package"]["debug"]["visual_bridge"]["renderModel"],
+            "dom-text-svg-chart"
         );
         assert_eq!(
             result.asset_manifest["chart_runtime"]["modules"][1]["recommendedAction"],

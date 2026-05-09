@@ -209,6 +209,7 @@ pub struct CodexHostProcessOutputSummaryView {
 pub enum HtmlArtifactSourceTypeView {
     CodexHost,
     StaticPage,
+    Report,
     CodeReview,
     Manual,
 }
@@ -219,6 +220,7 @@ pub enum HtmlArtifactTemplateIdView {
     CodexExecutionReport,
     StaticPagePlanningHandoff,
     StaticPageDataQualityReport,
+    ReportRenderSummary,
     CodeReviewSummary,
 }
 
@@ -2364,6 +2366,56 @@ mod tests {
             HtmlArtifactTemplateIdView::CodexExecutionReport
         );
         assert_eq!(decoded.source_type, HtmlArtifactSourceTypeView::CodexHost);
+    }
+
+    #[test]
+    fn html_artifact_report_render_summary_uses_safe_wire_shape() {
+        let manifest = HtmlArtifactManifestView {
+            kind: "html_artifact".to_string(),
+            version: 1,
+            id: "html-report-render-output-1".to_string(),
+            title: "Quarterly Report · Render Summary".to_string(),
+            source_type: HtmlArtifactSourceTypeView::Report,
+            template_id: HtmlArtifactTemplateIdView::ReportRenderSummary,
+            owner_scope: HtmlArtifactOwnerScopeView {
+                scope_type: "report_render_output".to_string(),
+                id: "output-1".to_string(),
+            },
+            data_refs: vec![HtmlArtifactDataRefView {
+                kind: "report_plan".to_string(),
+                id: "plan-1".to_string(),
+                label: "Report Plan".to_string(),
+            }],
+            provenance: HtmlArtifactProvenanceView {
+                producer: "v3-report-runtime".to_string(),
+                reason: "report render output summary".to_string(),
+                source_run_id: None,
+            },
+            interaction_mode: HtmlArtifactInteractionModeView::ReadOnly,
+            created_at: Utc::now(),
+            payload: json!({
+                "surface": "pc",
+                "status": "rendered",
+                "publishable": true
+            }),
+        };
+
+        let encoded = serde_json::to_value(&manifest).expect("manifest should serialize");
+
+        assert_eq!(encoded["source_type"], json!("report"));
+        assert_eq!(encoded["template_id"], json!("report_render_summary"));
+        assert_eq!(
+            encoded["owner_scope"]["type"],
+            json!("report_render_output")
+        );
+
+        let decoded: HtmlArtifactManifestView =
+            serde_json::from_value(encoded).expect("manifest should deserialize");
+        assert_eq!(
+            decoded.template_id,
+            HtmlArtifactTemplateIdView::ReportRenderSummary
+        );
+        assert_eq!(decoded.source_type, HtmlArtifactSourceTypeView::Report);
     }
 
     #[test]
