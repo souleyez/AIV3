@@ -67,7 +67,8 @@ Completed and preserved:
 - Static-page renderer can render layout-aware core module types into HTML/SVG and preserve safe ECharts JSON hydration islands with deterministic offline fallback.
 - Frontend supports draft planning, image preview, final render display, durable right shelf, mobile builder, per-module micro-adjustment editors, and inline chart previews for editable module data.
 - Final static-page handoff can download a real ZIP package with HTML, renderer manifest, data snapshot, module plan, runtime requirements, and README.
-- Static-page render/export manifests classify module data quality as confirmed, partial, or missing, and the handoff README exposes those counts.
+- Static-page render/export manifests classify module data quality as confirmed, partial, or missing; the handoff README, main workspace, and right shelf expose those counts.
+- Background static-page render now preserves queued/rendering/failed/cancelled workflow state in the output and manifest so the main workspace and right shelf stay consistent.
 - Assistant startup briefing and scope planning expose product capability, controlled action policy, quality-first context budget, recommended tool actions, and minimal UI intent chips.
 - Java 8 parity audit is complete: Java/Vue used `gridstack` plus `echarts`; V3 keeps `react-grid-layout` and adds ECharts as advanced chart runtime.
 - Model gateway seed exists in `llm-gateway` with model lanes, provider error redaction, and MiniMax reasoning block cleanup.
@@ -320,7 +321,9 @@ The next development thread should continue with static-page final-render/chart/
 - Modify: `crates/static-page-renderer/src/lib.rs`
 - Modify: `crates/platform-api/src/lib.rs`
 - Modify: `apps/web/app/components/static-page/StaticPageFinalRender.js`
-- Modify: `apps/web/app/components/OutputShelf.js`
+- Modify: `apps/web/app/components/InsightPanel.js`
+
+**Current implementation note:** Web UI background render submission, main-workspace status card, right-shelf cancel/retry actions, ZIP handoff, data-quality chips, and workflow queued/rendering state synchronization are implemented. Continue this task with worker completion/retry hardening and broader worker tests.
 
 **Steps:**
 

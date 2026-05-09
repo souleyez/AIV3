@@ -3,8 +3,10 @@
 import { buildStaticPageFinalRenderPayload } from '../../lib/static-page-draft';
 import {
   buildStaticPageStandaloneHtml,
+  dataQualitySummaryFromManifest,
   downloadStaticPageExportZip,
   downloadTextArtifact,
+  hasDataQualitySummary,
   staticPageHtmlFilename,
 } from '../../lib/static-page-export-package';
 import StaticPageChartPreview from './StaticPageChartPreview';
@@ -152,6 +154,29 @@ function FinalRenderStatusCard({
   );
 }
 
+function FinalRenderDataQuality({ manifest }) {
+  const summary = dataQualitySummaryFromManifest(manifest);
+  if (!hasDataQualitySummary(summary)) {
+    return null;
+  }
+
+  const attentionCount = summary.attentionModules || summary.partialModules + summary.missingModules;
+  const readyLabel = attentionCount > 0 ? '仍有模块需要确认' : '数据已全部确认';
+  return (
+    <div className={`static-page-final-quality ${attentionCount > 0 ? 'attention' : 'ready'}`}>
+      <div>
+        <span>数据质量</span>
+        <strong>{readyLabel}</strong>
+      </div>
+      <div className="static-page-final-quality-grid">
+        <span>已确认 {summary.confirmedModules}</span>
+        <span>部分 {summary.partialModules}</span>
+        <span>缺失 {summary.missingModules}</span>
+      </div>
+    </div>
+  );
+}
+
 export default function StaticPageFinalRender({
   draft,
   onApplyOperation,
@@ -215,6 +240,7 @@ export default function StaticPageFinalRender({
             onCancelWorkflow={onCancelWorkflow}
             onRefreshDraft={onRefreshDraft}
           />
+          <FinalRenderDataQuality manifest={manifest} />
 
           {canShowRenderedPage && backendHtml ? (
             <iframe

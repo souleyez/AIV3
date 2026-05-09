@@ -7137,12 +7137,33 @@ async fn create_static_page_render_for_draft(
             WorkflowSignal::Start,
         )
         .await?;
-        render_output.asset_manifest = build_static_page_render_queue_manifest(
+        let started_execution = state
+            .storage
+            .workflow_executions()
+            .get_by_id(state.tenant_id, workflow_execution.id)
+            .await
+            .map_err(ApiError::from_storage)?
+            .ok_or_else(|| {
+                ApiError::internal(
+                    "workflow_execution_missing_after_start",
+                    format!(
+                        "workflow execution {} was missing after start",
+                        workflow_execution.id
+                    ),
+                )
+            })?;
+        render_output.status = static_page_render_output_status_for_workflow(
+            &started_execution.status,
+            &render_output.status,
+        );
+        let queue_manifest = build_static_page_render_queue_manifest(
             &draft,
             image_job.as_ref(),
-            Some(&workflow_execution),
+            Some(&started_execution),
             started.enqueued_tasks.first().map(|task| task.id),
         );
+        render_output.asset_manifest =
+            merge_static_page_render_output_workflow_manifest(&queue_manifest, &started_execution);
         render_output = state
             .storage
             .static_page_render_outputs()
@@ -10900,6 +10921,21 @@ async fn retry_workflow_execution_with_state(
     })
 }
 
+fn static_page_render_output_status_for_workflow(
+    workflow_status: &WorkflowStatus,
+    current_status: &StaticPageRenderOutputStatus,
+) -> StaticPageRenderOutputStatus {
+    match workflow_status {
+        WorkflowStatus::Pending => StaticPageRenderOutputStatus::Queued,
+        WorkflowStatus::Running => StaticPageRenderOutputStatus::Rendering,
+        WorkflowStatus::Failed | WorkflowStatus::DeadLettered => {
+            StaticPageRenderOutputStatus::Failed
+        }
+        WorkflowStatus::Cancelled => StaticPageRenderOutputStatus::Cancelled,
+        WorkflowStatus::Succeeded => current_status.clone(),
+    }
+}
+
 async fn sync_static_page_render_output_for_workflow(
     state: &AppState,
     execution_id: WorkflowExecutionId,
@@ -10934,14 +10970,8 @@ async fn sync_static_page_render_output_for_workflow(
     else {
         return Ok(());
     };
-    let next_status = match execution.status {
-        WorkflowStatus::Pending | WorkflowStatus::Running => StaticPageRenderOutputStatus::Queued,
-        WorkflowStatus::Failed | WorkflowStatus::DeadLettered => {
-            StaticPageRenderOutputStatus::Failed
-        }
-        WorkflowStatus::Cancelled => StaticPageRenderOutputStatus::Cancelled,
-        WorkflowStatus::Succeeded => output.status.clone(),
-    };
+    let next_status =
+        static_page_render_output_status_for_workflow(&execution.status, &output.status);
     if output.status == StaticPageRenderOutputStatus::Rendered
         && !matches!(next_status, StaticPageRenderOutputStatus::Cancelled)
     {
@@ -10972,18 +11002,40 @@ fn merge_static_page_render_output_workflow_manifest(
         WorkflowStatus::Cancelled => "cancelled",
     };
     object.insert("status".to_string(), json!(manifest_status));
-    object.insert(
-        "workflow".to_string(),
-        json!({
-            "status": execution.status.as_str(),
-            "stage": execution.stage,
-            "executionId": execution.id,
-            "updatedAt": execution.updated_at,
-            "lastError": execution.context.get("last_error").cloned().unwrap_or(Value::Null),
-            "retryReason": execution.context.get("retry_reason").cloned().unwrap_or(Value::Null),
-            "cancelReason": execution.context.get("cancel_reason").cloned().unwrap_or(Value::Null),
-        }),
+    let mut workflow_object = object
+        .get("workflow")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    workflow_object.insert("status".to_string(), json!(execution.status.as_str()));
+    workflow_object.insert("stage".to_string(), json!(execution.stage));
+    workflow_object.insert("executionId".to_string(), json!(execution.id));
+    workflow_object.insert("updatedAt".to_string(), json!(execution.updated_at));
+    workflow_object.insert(
+        "lastError".to_string(),
+        execution
+            .context
+            .get("last_error")
+            .cloned()
+            .unwrap_or(Value::Null),
     );
+    workflow_object.insert(
+        "retryReason".to_string(),
+        execution
+            .context
+            .get("retry_reason")
+            .cloned()
+            .unwrap_or(Value::Null),
+    );
+    workflow_object.insert(
+        "cancelReason".to_string(),
+        execution
+            .context
+            .get("cancel_reason")
+            .cloned()
+            .unwrap_or(Value::Null),
+    );
+    object.insert("workflow".to_string(), Value::Object(workflow_object));
     Value::Object(object)
 }
 
@@ -20472,12 +20524,12 @@ mod tests {
         assert_eq!(background_render_status, StatusCode::CREATED);
         assert_eq!(
             background_render_response.render_output.status,
-            contracts::StaticPageRenderOutputStatusView::Queued
+            contracts::StaticPageRenderOutputStatusView::Rendering
         );
         assert_eq!(background_render_response.render_output.html, "");
         assert_eq!(
             background_render_response.render_output.asset_manifest["status"],
-            json!("queued")
+            json!("rendering")
         );
         assert_eq!(
             background_render_response.render_output.asset_manifest["image_job_id"],
@@ -20485,7 +20537,7 @@ mod tests {
         );
         assert_eq!(
             background_render_response.render_output.asset_manifest["workflow"]["status"],
-            json!("queued")
+            json!("running")
         );
         assert_eq!(
             background_render_response.render_output.asset_manifest["export_package"]["kind"],
@@ -20511,6 +20563,24 @@ mod tests {
             render_workflow.context["static_page_render_output_id"],
             json!(background_render_response.render_output.id.to_string())
         );
+        sync_static_page_render_output_for_workflow(&state, render_workflow.id)
+            .await
+            .expect("running render workflow should sync output status");
+        let running_background_output = state
+            .storage
+            .static_page_render_outputs()
+            .get_by_id(state.tenant_id, background_render_response.render_output.id)
+            .await
+            .expect("running render output should load")
+            .expect("running render output should exist");
+        assert_eq!(
+            running_background_output.status,
+            StaticPageRenderOutputStatus::Rendering
+        );
+        assert_eq!(
+            running_background_output.asset_manifest["status"],
+            json!("rendering")
+        );
         let render_tasks = state
             .storage
             .workflow_tasks()
@@ -20520,6 +20590,10 @@ mod tests {
         assert_eq!(render_tasks.len(), 1);
         assert_eq!(render_tasks[0].queue, "static_page");
         assert_eq!(render_tasks[0].task_key, "render_static_page");
+        assert_eq!(
+            running_background_output.asset_manifest["workflow"]["taskId"],
+            json!(render_tasks[0].id)
+        );
         let Json(cancel_transition) = send_workflow_signal(
             State(state.clone()),
             HeaderMap::new(),

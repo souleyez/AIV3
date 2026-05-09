@@ -4,6 +4,8 @@ import {
   buildStaticPageExportPackage,
   buildStaticPageExportZipBlob,
   buildStaticPageStandaloneHtml,
+  dataQualitySummaryFromManifest,
+  hasDataQualitySummary,
   staticPageExportFilename,
   staticPageHtmlFilename,
   staticPageZipFilename,
@@ -153,4 +155,17 @@ test('static page export helpers sanitize filenames and prefer backend html', ()
   assert.equal(staticPageZipFilename(draft), 'static-page-draft-id-with-spaces-package.zip');
   assert.equal(staticPageHtmlFilename(draft), 'static-page-draft-id-with-spaces-index.html');
   assert.equal(buildStaticPageStandaloneHtml(draft, '<main>fresh</main>'), '<main>fresh</main>');
+});
+
+test('static page export helpers expose data quality summary for UI surfaces', () => {
+  const summary = dataQualitySummaryFromManifest(testDraft().finalPage.assetManifest);
+
+  assert.equal(hasDataQualitySummary(summary), true);
+  assert.deepEqual(summary, {
+    confirmedModules: 1,
+    partialModules: 0,
+    missingModules: 0,
+    attentionModules: 0,
+  });
+  assert.equal(hasDataQualitySummary(dataQualitySummaryFromManifest({})), false);
 });

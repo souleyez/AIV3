@@ -23,7 +23,7 @@ function numberOrZero(value) {
   return Number.isFinite(Number(value)) ? Number(value) : 0;
 }
 
-function dataQualitySummaryFromManifest(manifest) {
+export function dataQualitySummaryFromManifest(manifest) {
   const summary = manifest.export_package?.debug?.data_quality_summary
     || manifest.chart_runtime?.dataQualitySummary
     || manifest.data_quality_summary
@@ -36,7 +36,7 @@ function dataQualitySummaryFromManifest(manifest) {
   };
 }
 
-function hasDataQualitySummary(summary) {
+export function hasDataQualitySummary(summary) {
   return Object.values(summary).some((value) => value > 0);
 }
 

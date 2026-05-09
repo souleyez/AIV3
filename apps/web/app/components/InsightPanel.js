@@ -4,8 +4,10 @@ import { formatDateTime, formatRelativeTime, formatSnakeCaseLabel, truncateText 
 import { buildStaticPageFinalRenderPayload } from '../lib/static-page-draft';
 import {
   buildStaticPageStandaloneHtml,
+  dataQualitySummaryFromManifest,
   downloadStaticPageExportZip,
   downloadTextArtifact,
+  hasDataQualitySummary,
   staticPageHtmlFilename,
 } from '../lib/static-page-export-package';
 
@@ -87,6 +89,10 @@ function staticPageWorkflowExecutionId(draft) {
     || manifest?.workflow_execution_id
     || manifest?.workflowExecutionId
     || '';
+}
+
+function staticPageDataQualitySummary(draft) {
+  return dataQualitySummaryFromManifest(draft?.finalPage?.assetManifest || {});
 }
 
 function staticPageRenderAction(draft) {
@@ -466,6 +472,11 @@ export default function InsightPanel({
               const action = staticPageRenderAction(draft);
               const rendered = staticPageIsRendered(draft);
               const hasHtml = Boolean(buildStaticPageStandaloneHtml(draft, draft?.finalPage?.html || ''));
+              const dataQuality = staticPageDataQualitySummary(draft);
+              const hasDataQuality = hasDataQualitySummary(dataQuality);
+              const needsDataAttention = dataQuality.attentionModules > 0
+                || dataQuality.partialModules > 0
+                || dataQuality.missingModules > 0;
               return (
                 <div
                   key={draft.id}
@@ -486,6 +497,11 @@ export default function InsightPanel({
                       <span>{draft.modules?.length || 0} 个模块</span>
                       {staticPageWorkflowExecutionId(draft) ? (
                         <span>workflow {truncateText(staticPageWorkflowExecutionId(draft), 12)}</span>
+                      ) : null}
+                      {hasDataQuality ? (
+                        <span className={`insight-quality ${needsDataAttention ? 'attention' : 'ready'}`}>
+                          数据 {dataQuality.confirmedModules}/{dataQuality.partialModules}/{dataQuality.missingModules}
+                        </span>
                       ) : null}
                     </div>
                   </button>

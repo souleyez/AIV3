@@ -1398,6 +1398,48 @@ textarea {
   background: rgba(15, 23, 42, 0.06);
 }
 
+.static-page-final-quality {
+  display: grid;
+  gap: 10px;
+  padding: 12px 13px;
+  border-radius: 18px;
+  background: rgba(236, 253, 245, 0.68);
+}
+
+.static-page-final-quality.attention {
+  background: rgba(254, 243, 199, 0.72);
+}
+
+.static-page-final-quality div:first-child {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.static-page-final-quality span {
+  color: var(--subtle);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.static-page-final-quality strong {
+  color: var(--text);
+}
+
+.static-page-final-quality-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.static-page-final-quality-grid span {
+  padding: 7px 9px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.58);
+  text-align: center;
+}
+
 .static-page-final-sheet.decision-brief {
   background: linear-gradient(135deg, rgba(15, 23, 42, 0.95), rgba(30, 41, 59, 0.94));
 }
@@ -1924,6 +1966,19 @@ textarea {
   flex-wrap: wrap;
   color: var(--subtle);
   font-size: 12px;
+}
+
+.insight-quality {
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: rgba(22, 163, 74, 0.1);
+  color: #166534;
+  font-weight: 800;
+}
+
+.insight-quality.attention {
+  background: rgba(245, 158, 11, 0.14);
+  color: #92400e;
 }
 
 .insight-empty {
@@ -2599,6 +2654,28 @@ body {
 .assistant-shell .static-page-final-render.locked p,
 .assistant-shell .static-page-final-note {
   color: #9aa7b9;
+}
+
+.assistant-shell .static-page-final-quality {
+  background: rgba(34, 197, 94, 0.1);
+  border: 1px solid rgba(74, 222, 128, 0.14);
+}
+
+.assistant-shell .static-page-final-quality.attention {
+  background: rgba(245, 158, 11, 0.12);
+  border-color: rgba(251, 191, 36, 0.18);
+}
+
+.assistant-shell .static-page-final-quality strong {
+  color: #f8fbff;
+}
+
+.assistant-shell .static-page-final-quality span {
+  color: #9aa7b9;
+}
+
+.assistant-shell .static-page-final-quality-grid span {
+  background: rgba(255, 255, 255, 0.06);
 }
 
 .assistant-shell .static-page-canvas-shell {
