@@ -1,17 +1,75 @@
 'use client';
 
-function DatasetCreateButton({ creating, signedIn, onCreate }) {
+import { useState } from 'react';
+
+function DatasetCreateButton({
+  creating,
+  signedIn,
+  draft,
+  onDraftChange,
+  onCreate,
+}) {
+  const [open, setOpen] = useState(false);
+  const title = draft?.title || '';
+
   return (
-    <button
-      className="dataset-create-plus"
-      type="button"
-      onClick={onCreate}
-      disabled={creating}
-      aria-label={signedIn ? '按当前登录用户新建数据集' : '新建本机公开数据集'}
-      title={signedIn ? '按当前登录用户新建数据集' : '未登录时新建本机公开数据集'}
-    >
-      {creating ? '...' : '+'}
-    </button>
+    <div className="dataset-create-control">
+      <button
+        className="dataset-create-plus"
+        type="button"
+        onClick={() => setOpen((current) => !current)}
+        disabled={creating}
+        aria-label={signedIn ? '按当前登录用户新建数据集' : '新建本机公开数据集'}
+        title={signedIn ? '按当前登录用户新建数据集' : '未登录时新建本机公开数据集'}
+      >
+        {creating ? '...' : '+'}
+      </button>
+      {open ? (
+        <form
+          className="dataset-create-popover"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (!title.trim() || creating) {
+              return;
+            }
+            onCreate?.();
+            setOpen(false);
+          }}
+        >
+          <label>
+            <span>数据集名称</span>
+            <input
+              value={title}
+              onChange={(event) => onDraftChange?.('title', event.target.value)}
+              placeholder="例如：客服问答"
+              disabled={creating}
+              autoFocus
+            />
+          </label>
+          <p>{signedIn ? '创建后归属当前账号。' : '未登录创建为本机公开数据集。'}</p>
+          <div className="dataset-create-actions">
+            <button
+              className="ghost-btn compact-action-btn"
+              type="button"
+              onClick={() => {
+                onDraftChange?.('title', '');
+                setOpen(false);
+              }}
+              disabled={creating}
+            >
+              取消
+            </button>
+            <button
+              className="primary-btn compact-action-btn"
+              type="submit"
+              disabled={creating || !title.trim()}
+            >
+              确认
+            </button>
+          </div>
+        </form>
+      ) : null}
+    </div>
   );
 }
 
@@ -192,7 +250,11 @@ function LocalSecretPanel({
 export default function Sidebar({
   datasets,
   selectedDatasetId,
+  selectedDatasetIds = [],
   selectedDataset,
+  selectedDatasets = [],
+  datasetDraft,
+  onDatasetDraftChange,
   onCreateDataset,
   localSecretDraft,
   activeSecretCount,
@@ -216,6 +278,7 @@ export default function Sidebar({
       .filter((candidate) => candidate.type === 'dataset')
       .map((candidate) => candidate.id),
   );
+  const selectedIdSet = new Set(selectedDatasetIds.length ? selectedDatasetIds : selectedDatasetId ? [selectedDatasetId] : []);
 
   return (
     <aside className={`sidebar ${mobileOpen ? 'open' : ''}`}>
@@ -235,6 +298,8 @@ export default function Sidebar({
         <DatasetCreateButton
           creating={creatingDataset}
           signedIn={Boolean(accountAuth?.statusSummary?.signedIn)}
+          draft={datasetDraft}
+          onDraftChange={onDatasetDraftChange}
           onCreate={onCreateDataset}
         />
       </div>
@@ -244,16 +309,16 @@ export default function Sidebar({
         <div className="dataset-list">
           <button
             type="button"
-            className={`dataset-item ordinary-chat-item ${selectedDatasetId ? '' : 'active'}`}
+            className={`dataset-item ordinary-chat-item ${selectedIdSet.size ? '' : 'active'}`}
             onClick={onClearDatasetSelection}
-            disabled={loading && !selectedDatasetId}
+            disabled={loading && !selectedIdSet.size}
           >
             <span className="dataset-item-title">普通聊天</span>
-            <span className="dataset-item-meta">未锁定数据集 · 命中资料意图后预选</span>
+            <span className="dataset-item-meta">清空供料范围 · 命中资料意图后可预选</span>
           </button>
           {datasets.length ? (
             datasets.map((dataset) => {
-              const active = dataset.id === selectedDatasetId;
+              const active = selectedIdSet.has(dataset.id);
               const preselected = !active && scopeCandidateIds.has(dataset.id);
               return (
                 <button
@@ -265,7 +330,7 @@ export default function Sidebar({
                 >
                   <span className="dataset-item-title">
                     {dataset.title}
-                    {preselected ? <small>预选</small> : null}
+                    {active ? <small>已选</small> : preselected ? <small>预选</small> : null}
                   </span>
                   <span className="dataset-item-meta">
                     {dataset.key} · {dataset.visibility === 'private' ? '私密' : '公开'} · {dataset.lifecycle}
@@ -279,6 +344,11 @@ export default function Sidebar({
             </div>
           )}
         </div>
+        {selectedDatasets.length ? (
+          <p className="side-form-hint selected-scope-hint">
+            已选 {selectedDatasets.length} 个供料范围：{selectedDatasets.map((dataset) => dataset.title).join('、')}。
+          </p>
+        ) : null}
       </section>
     </aside>
   );

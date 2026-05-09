@@ -20,7 +20,7 @@ import {
   validateAccountEmail,
 } from './lib/account-auth';
 import { buildAssistantStartupBriefing, formatStartupBriefingForModel } from './lib/assistant-startup-briefing';
-import { planAssistantScope, selectPlannerDatasetId } from './lib/scope-planner';
+import { planAssistantScope, selectPlannerDatasetIds } from './lib/scope-planner';
 import {
   applyStaticPageOperation,
   applyStaticPageOperations,
@@ -144,11 +144,26 @@ function readLocalThreadId() {
     if (existing) {
       return existing;
     }
-    const next = globalThis.crypto?.randomUUID?.() || `thread-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const next = createLocalThreadId();
     window.localStorage.setItem(LOCAL_THREAD_ID_STORAGE_KEY, next);
     return next;
   } catch {
     return 'browser-thread-unavailable';
+  }
+}
+
+function createLocalThreadId() {
+  return globalThis.crypto?.randomUUID?.() || `thread-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function writeLocalThreadId(threadId) {
+  if (typeof window === 'undefined') {
+    return;
+  }
+  try {
+    window.localStorage.setItem(LOCAL_THREAD_ID_STORAGE_KEY, threadId);
+  } catch {
+    // The browser cache is a convenience; AssistantRun can still use the current in-memory thread.
   }
 }
 
@@ -311,6 +326,18 @@ function sortDatasets(items) {
   );
 }
 
+function normalizeDatasetIds(ids) {
+  return [...new Set((Array.isArray(ids) ? ids : [ids])
+    .map((id) => String(id || '').trim())
+    .filter(Boolean))];
+}
+
+function sameDatasetIds(left, right) {
+  const leftIds = normalizeDatasetIds(left);
+  const rightIds = normalizeDatasetIds(right);
+  return leftIds.length === rightIds.length && leftIds.every((id, index) => id === rightIds[index]);
+}
+
 function sortStaticPageDrafts(items) {
   return [...(Array.isArray(items) ? items : [])].sort((left, right) => {
     const leftValue = new Date(left?.backendUpdatedAt || left?.updated_at || left?.updatedAt || left?.created_at || 0).getTime();
@@ -471,13 +498,24 @@ function replaceReportRenderHtmlArtifacts(existingArtifacts, reportArtifacts) {
   );
 }
 
-function firstDatasetIdFromScope(scope) {
+function datasetIdsFromScope(scope) {
   const datasets = Array.isArray(scope?.datasets)
     ? scope.datasets
     : Array.isArray(scope?.selected)
       ? scope.selected
       : [];
-  return datasets.find(Boolean) || '';
+  return normalizeDatasetIds(
+    datasets.map((item) => {
+      if (typeof item === 'string') {
+        return item;
+      }
+      return item?.id || item?.dataset_id || item?.datasetId || '';
+    }),
+  );
+}
+
+function firstDatasetIdFromScope(scope) {
+  return datasetIdsFromScope(scope)[0] || '';
 }
 
 function scopeHintFromCandidates(candidates) {
@@ -538,6 +576,7 @@ export default function HomePageClient() {
   const [reportPlans, setReportPlans] = useState([]);
   const [publishedReports, setPublishedReports] = useState([]);
   const [selectedDatasetId, setSelectedDatasetId] = useState(null);
+  const [selectedDatasetIds, setSelectedDatasetIds] = useState([]);
   const [selectedReportPlanId, setSelectedReportPlanId] = useState(null);
   const [sessions, setSessions] = useState([]);
   const [outputs, setOutputs] = useState([]);
@@ -603,6 +642,12 @@ export default function HomePageClient() {
     () => datasets.find((dataset) => dataset.id === selectedDatasetId) || null,
     [datasets, selectedDatasetId],
   );
+  const selectedDatasets = useMemo(
+    () => selectedDatasetIds
+      .map((datasetId) => datasets.find((dataset) => dataset.id === datasetId))
+      .filter(Boolean),
+    [datasets, selectedDatasetIds],
+  );
   const selectedSession = useMemo(
     () => sessions.find((session) => session.id === selectedSessionId) || null,
     [sessions, selectedSessionId],
@@ -643,8 +688,8 @@ export default function HomePageClient() {
     [activeHtmlArtifactId, htmlArtifacts],
   );
   const visibleMessages = useMemo(
-    () => (selectedDatasetId || selectedSessionId ? messages : localMessages),
-    [localMessages, messages, selectedDatasetId, selectedSessionId],
+    () => (selectedSessionId ? messages : localMessages),
+    [localMessages, messages, selectedSessionId],
   );
   const assistantStartupBriefing = useMemo(
     () => buildAssistantStartupBriefing({
@@ -654,14 +699,15 @@ export default function HomePageClient() {
       latestMessages: visibleMessages,
       activityEvents,
       selectedDataset,
+      selectedDatasets,
       activeStaticPageDraft,
       staticPageDrafts: staticPageDraftItems,
     }),
-    [activityEvents, activeStaticPageDraft, datasets, publishedReports, reportPlans, selectedDataset, staticPageDraftItems, visibleMessages],
+    [activityEvents, activeStaticPageDraft, datasets, publishedReports, reportPlans, selectedDataset, selectedDatasets, staticPageDraftItems, visibleMessages],
   );
   const toolbarSourceItems = useMemo(
-    () => (selectedDataset ? [{ name: selectedDataset.title, status: 'healthy' }] : []),
-    [selectedDataset],
+    () => selectedDatasets.map((dataset) => ({ name: dataset.title, status: 'healthy' })),
+    [selectedDatasets],
   );
   const accountStatusSummary = useMemo(
     () => summarizeAccountState({
@@ -678,12 +724,17 @@ export default function HomePageClient() {
 
   function buildStaticPageConversationSummary(prompt = '', options = {}) {
     const draftDataset = options.dataset || selectedDataset;
+    const draftDatasets = Array.isArray(options.datasets) && options.datasets.length
+      ? options.datasets
+      : selectedDatasets;
     const draftSession = options.session || selectedSession;
     const sourceMessages = options.messages || visibleMessages;
     const latestAssistantMessage = [...sourceMessages].reverse().find((message) => message.role === 'assistant');
     const latestMessage = latestAssistantMessage || sourceMessages[sourceMessages.length - 1];
     const summaryParts = [
-      draftDataset ? `数据集：${draftDataset.title}` : '未选数据集，按普通对话意图规划。',
+      draftDatasets.length
+        ? `数据集：${draftDatasets.map((dataset) => dataset.title || dataset.key).join('、')}`
+        : draftDataset ? `数据集：${draftDataset.title}` : '未选数据集，按普通对话意图规划。',
       draftSession ? `会话：${draftSession.title}` : '',
       latestMessage?.content ? `最近内容：${latestMessage.content}` : '',
       prompt ? `用户要求：${prompt}` : '',
@@ -705,7 +756,8 @@ export default function HomePageClient() {
     };
   }
 
-  function buildAssistantRunSelectedScope(datasetId, scopePlan) {
+  function buildAssistantRunSelectedScope(datasetIds, scopePlan) {
+    const scopeDatasetIds = normalizeDatasetIds(datasetIds);
     const conversationMemory = (scopePlan?.candidates || []).some((candidate) => candidate.type === 'conversation_memory')
       ? ['local-thread']
       : [];
@@ -713,15 +765,15 @@ export default function HomePageClient() {
     const supplyPolicy = scopePlan?.supplyStrategy || {
       intent,
       historyPolicy: conversationMemory.length ? 'intent_gated_selected' : 'intent_gated',
-      retrievalPolicy: datasetId ? 'standard' : 'not_requested',
+      retrievalPolicy: scopeDatasetIds.length ? 'standard' : 'not_requested',
       preferDetail: false,
       noFakeData: true,
     };
-    if (datasetId) {
+    if (scopeDatasetIds.length) {
       return {
         mode: 'user_selected',
-        datasets: [datasetId],
-        selected: [{ type: 'dataset', id: datasetId }],
+        datasets: scopeDatasetIds,
+        selected: scopeDatasetIds.map((datasetId) => ({ type: 'dataset', id: datasetId })),
         conversation_memory: conversationMemory,
         intent,
         supply_policy: supplyPolicy,
@@ -1439,6 +1491,7 @@ export default function HomePageClient() {
       setLocalSecretDraft('');
       setAuthSession({ user: null, session: null });
       setSelectedDatasetId(null);
+      setSelectedDatasetIds([]);
       setAuthMessage('已退出账号，并清除当前浏览器的本地私密绑定。');
       await Promise.all([
         refreshCatalog({ silent: true }),
@@ -1470,12 +1523,20 @@ export default function HomePageClient() {
       const nextReportPlans = Array.isArray(planItems) ? planItems : [];
       const nextPublishedReports = sortByDateDesc(reportItems, 'updated_at');
       const nextDocuments = Array.isArray(documentItems) ? sortByDateDesc(documentItems, 'updated_at') : [];
+      const nextDatasetIdSet = new Set(nextDatasets.map((item) => item.id).filter(Boolean));
 
       startTransition(() => {
         setDatasets(nextDatasets);
         setReportPlans(nextReportPlans);
         setPublishedReports(nextPublishedReports);
         setDocuments(nextDocuments);
+        setSelectedDatasetIds((current) => {
+          const retained = normalizeDatasetIds(current).filter((datasetId) => nextDatasetIdSet.has(datasetId));
+          if (preferredDatasetId && nextDatasetIdSet.has(preferredDatasetId)) {
+            return normalizeDatasetIds([preferredDatasetId, ...retained]);
+          }
+          return retained;
+        });
         setSelectedDatasetId((current) => {
           if (preferredDatasetId && nextDatasets.some((item) => item.id === preferredDatasetId)) {
             return preferredDatasetId;
@@ -1552,7 +1613,7 @@ export default function HomePageClient() {
         : '数据集已更新。');
       if (payload.lifecycle === 'archived') {
         setSelectedDatasetId(null);
-        setSelectedSessionId(null);
+        setSelectedDatasetIds((current) => normalizeDatasetIds(current).filter((item) => item !== datasetId));
       }
       await refreshCatalog({
         preferredDatasetId: payload.lifecycle === 'archived' ? null : datasetId,
@@ -1752,8 +1813,13 @@ export default function HomePageClient() {
 
   async function handleCreateDataset() {
     const autoIdentity = buildAutoDatasetIdentity(datasets.length);
+    const requestedTitle = datasetDraft.title.trim();
+    if (!requestedTitle) {
+      setError('请输入数据集名称后确认创建。');
+      return;
+    }
     const key = (datasetDraft.key.trim() || autoIdentity.key).toLowerCase();
-    const title = datasetDraft.title.trim() || autoIdentity.title;
+    const title = requestedTitle || autoIdentity.title;
     const secret = String(datasetDraft.secret || '').trim();
     const signedIn = Boolean(authSession.user);
 
@@ -1783,6 +1849,10 @@ export default function HomePageClient() {
           ? `已按当前登录用户创建数据集 ${dataset.title}。${secretNote}`
           : `已创建本机公开数据集 ${dataset.title}，仅当前浏览器默认可见。`,
       );
+      if (dataset.id) {
+        setSelectedDatasetIds((current) => normalizeDatasetIds([dataset.id, ...current]));
+        setSelectedDatasetId(dataset.id);
+      }
       await refreshCatalog({ preferredDatasetId: dataset.id, silent: true });
     } catch (createError) {
       setError(createError instanceof Error ? createError.message : '创建数据集失败');
@@ -1868,6 +1938,7 @@ export default function HomePageClient() {
     setActiveSecretCount(0);
     setLocalSecretDraft('');
     setSelectedDatasetId(null);
+    setSelectedDatasetIds([]);
     setBanner('已清除当前浏览器的本地密钥。');
     await refreshCatalog({ silent: true });
   }
@@ -1904,7 +1975,7 @@ export default function HomePageClient() {
     continueRunId = '',
     selectedScope = null,
   }) {
-    const messages = localMessages
+    const messages = visibleMessages
       .slice(-12)
       .map((message) => ({ role: message.role, content: message.content }));
     if (continueRunId && promptRequestsAssistantContinue(prompt)) {
@@ -2066,7 +2137,7 @@ export default function HomePageClient() {
         const classification = classifyUploadTarget({
           file,
           datasets: availableDatasets,
-          selectedDatasetId,
+          selectedDatasetId: selectedDatasetIds[0] || selectedDatasetId,
         });
         const { dataset: targetDataset, created } = await ensureUploadTargetDataset(classification, availableDatasets);
         if (created) {
@@ -2078,8 +2149,8 @@ export default function HomePageClient() {
       }
 
       const firstResult = uploadResults[0];
-      const targetDataset = selectedDataset?.id
-        ? selectedDataset
+      const targetDataset = selectedDatasets[0]?.id
+        ? selectedDatasets[0]
         : firstResult?.targetDataset || null;
       const uniqueTargets = [...new Map(uploadResults.map((result) => [result.targetDataset.id, result.targetDataset])).values()];
       const summary = summarizeUploadClassification({
@@ -2117,8 +2188,10 @@ export default function HomePageClient() {
         })),
         hint: `上传已归类：${uniqueTargets.map((dataset) => dataset.title).join('、')}`,
       });
-      if (targetDataset?.id) {
-        setSelectedDatasetId(targetDataset.id);
+      if (uniqueTargets.length) {
+        const uploadedDatasetIds = uniqueTargets.map((dataset) => dataset.id);
+        setSelectedDatasetIds((current) => normalizeDatasetIds([...current, ...uploadedDatasetIds]));
+        setSelectedDatasetId((current) => current || uploadedDatasetIds[0] || null);
       }
       setBanner(
         [
@@ -2129,7 +2202,7 @@ export default function HomePageClient() {
         ].filter(Boolean).join(' '),
       );
       await refreshCatalog({ preferredDatasetId: targetDataset?.id || selectedDatasetId, silent: true });
-      if (targetDataset?.id || selectedDatasetId) {
+      if (activePage !== 'home' && (targetDataset?.id || selectedDatasetId)) {
         await refreshWorkspace(targetDataset?.id || selectedDatasetId, { silent: true, preserveNewSessionDraft: true });
       }
     } catch (uploadError) {
@@ -2150,23 +2223,29 @@ export default function HomePageClient() {
       prompt,
       datasets,
       selectedDatasetId,
+      selectedDatasetIds,
       conversationMemory: visibleMessages,
       activeStaticPageDraft,
     });
     setScopePlan(nextScopePlan);
-    const plannedDatasetId = selectedDatasetId || selectPlannerDatasetId(nextScopePlan);
-    const effectiveDatasetId = plannedDatasetId || '';
-    const effectiveDataset = datasets.find((dataset) => dataset.id === effectiveDatasetId) || null;
+    const plannedDatasetIds = selectPlannerDatasetIds(nextScopePlan);
+    const effectiveDatasetIds = normalizeDatasetIds([...selectedDatasetIds, ...plannedDatasetIds]);
+    const effectiveDatasets = effectiveDatasetIds
+      .map((datasetId) => datasets.find((dataset) => dataset.id === datasetId))
+      .filter(Boolean);
+    const effectiveDatasetId = effectiveDatasetIds[0] || '';
+    const effectiveDataset = effectiveDatasets[0] || null;
 
-    if (effectiveDatasetId && effectiveDatasetId !== selectedDatasetId) {
-      setSelectedDatasetId(effectiveDatasetId);
+    if (!sameDatasetIds(effectiveDatasetIds, selectedDatasetIds)) {
+      setSelectedDatasetIds(effectiveDatasetIds);
+      setSelectedDatasetId(effectiveDatasetId || null);
     }
 
     let pendingStaticPageDraft = null;
     const staticPageCreateRequested = promptRequestsStaticPage(prompt);
     const staticPageEditRequested = Boolean(activeStaticPageDraft && promptRequestsStaticPageEdit(prompt));
     const backendStaticPageEditRequested = Boolean(staticPageEditRequested && activeStaticPageDraft?.backendDraftId && lastAssistantRunId);
-    const shouldUseAssistantRun = !effectiveDatasetId || staticPageCreateRequested || backendStaticPageEditRequested;
+    const shouldUseAssistantRun = true;
     if (staticPageCreateRequested) {
       pendingStaticPageDraft = handleStartStaticPageDraft({
         oneClick: /一键|直接|马上|立即|跳过/.test(prompt),
@@ -2184,7 +2263,7 @@ export default function HomePageClient() {
       setSubmitting(true);
       try {
         const userMessage = createLocalMessage('user', prompt);
-        const assistantSelectedScope = buildAssistantRunSelectedScope(effectiveDatasetId, nextScopePlan);
+        const assistantSelectedScope = buildAssistantRunSelectedScope(effectiveDatasetIds, nextScopePlan);
         const briefing = buildAssistantStartupBriefing({
           datasets,
           reportPlans,
@@ -2192,6 +2271,7 @@ export default function HomePageClient() {
           latestMessages: [...localMessages, userMessage],
           activityEvents,
           selectedDataset: effectiveDataset,
+          selectedDatasets: effectiveDatasets,
           activeStaticPageDraft: pendingStaticPageDraft || activeStaticPageDraft,
           staticPageDrafts: staticPageDraftItems,
         });
@@ -2228,9 +2308,11 @@ export default function HomePageClient() {
               hint: scopeHintFromCandidates(backendCandidates),
             });
           }
-          const backendDatasetId = firstDatasetIdFromScope(responsePayload?.selected_scope);
-          if (backendDatasetId) {
-            await refreshCatalog({ preferredDatasetId: backendDatasetId, silent: true });
+          const backendDatasetIds = datasetIdsFromScope(responsePayload?.selected_scope);
+          if (backendDatasetIds.length) {
+            setSelectedDatasetIds((current) => normalizeDatasetIds([...current, ...backendDatasetIds]));
+            setSelectedDatasetId((current) => current || backendDatasetIds[0]);
+            await refreshCatalog({ preferredDatasetId: backendDatasetIds[0], silent: true });
           }
           if (activeStaticPageDraft?.backendDraftId) {
             await refreshBackendStaticPageDraft(activeStaticPageDraft.backendDraftId, { silent: true });
@@ -2242,8 +2324,8 @@ export default function HomePageClient() {
           if (backendStaticPageEditRequested) {
             pendingStaticPageDraft = handleApplyStaticPagePrompt(prompt);
           }
-          const scopeDescription = effectiveDataset
-            ? `当前选中数据集：${effectiveDataset.title || effectiveDataset.key || '当前数据集'}，本地兜底会继续优先使用该范围。`
+          const scopeDescription = effectiveDatasets.length
+            ? `当前供料范围：${effectiveDatasets.map((dataset) => dataset.title || dataset.key || '当前数据集').join('、')}，本地兜底会继续优先使用这些范围。`
             : '当前没有锁定数据集，所以不会强行检索资料。';
           assistantContent = [
             `已进入普通聊天模式；${scopeDescription}`,
@@ -2254,7 +2336,14 @@ export default function HomePageClient() {
         }
 
         const assistantMessage = createLocalMessage('assistant', assistantContent);
-        setLocalMessages((current) => [...current, userMessage, assistantMessage].slice(-40));
+        if (selectedSessionId) {
+          setSelectedSessionId(null);
+        }
+        setLocalMessages((current) => [
+          ...(selectedSessionId ? visibleMessages : current),
+          userMessage,
+          assistantMessage,
+        ].slice(-40));
         rememberLocalUserStatement(userMessage, assistantRunId);
         setInput('');
         setComposingNewSession(false);
@@ -2313,20 +2402,19 @@ export default function HomePageClient() {
   }
 
   function handleStartNewConversation() {
+    writeLocalThreadId(createLocalThreadId());
     setBanner(
-      selectedDatasetId
-        ? '已切换为新会话输入；下一次发送会创建独立 chat_session。'
-        : '已开始新的普通聊天；本地缓存只保留当前浏览器的轻量记录。',
+      selectedDatasetIds.length
+        ? '已新建对话；已选数据集仍作为优先供料范围，不会切换成别的会话。'
+        : '已新建普通对话；未选数据集时按普通模型聊天处理。',
     );
     setError('');
     setComposingNewSession(true);
     setSelectedSessionId(null);
     setMessages([]);
+    setLocalMessages([]);
     setLastAssistantRunId('');
     setAssistantRunProgress(null);
-    if (!selectedDatasetId) {
-      setLocalMessages([]);
-    }
     setMobilePanel('chat');
   }
 
@@ -2346,6 +2434,7 @@ export default function HomePageClient() {
       sessionId: selectedSessionId,
       conversationSummary: buildStaticPageConversationSummary(prompt, {
         dataset,
+        datasets: selectedDatasets,
         messages: visibleMessages,
       }),
     });
@@ -2957,6 +3046,9 @@ export default function HomePageClient() {
   }, [activityEvents]);
 
   useEffect(() => {
+    if (activePage === 'home') {
+      return;
+    }
     if (!selectedDatasetId) {
       startTransition(() => {
         setSessions([]);
@@ -2981,7 +3073,7 @@ export default function HomePageClient() {
     });
 
     refreshWorkspace(selectedDatasetId);
-  }, [selectedDatasetId]);
+  }, [activePage, selectedDatasetId]);
 
   useEffect(() => {
     if (!selectedDocumentId) {
@@ -3029,7 +3121,7 @@ export default function HomePageClient() {
   }, [selectedReportPlanId]);
 
   useEffect(() => {
-    if (!selectedDatasetId) {
+    if (!selectedDatasetId || activePage === 'home') {
       return undefined;
     }
 
@@ -3042,7 +3134,7 @@ export default function HomePageClient() {
     }, DATASET_POLL_INTERVAL_MS);
 
     return () => window.clearInterval(timer);
-  }, [selectedDatasetId, selectedSessionId, composingNewSession]);
+  }, [activePage, selectedDatasetId, selectedSessionId, composingNewSession]);
 
   useEffect(() => {
     if (!selectedSessionId) {
@@ -3127,6 +3219,21 @@ export default function HomePageClient() {
     return () => window.clearInterval(timer);
   }, [selectedReportPlanId]);
 
+  function handleToggleDatasetSelection(datasetId) {
+    setBanner('');
+    setError('');
+    setComposingNewSession(false);
+    setAssistantRunProgress(null);
+    const currentIds = normalizeDatasetIds(selectedDatasetIds);
+    const nextIds = currentIds.includes(datasetId)
+      ? currentIds.filter((item) => item !== datasetId)
+      : [...currentIds, datasetId];
+    setSelectedDatasetIds(nextIds);
+    setSelectedDatasetId(nextIds[0] || null);
+    setMobileSidebarOpen(false);
+    setMobilePanel('chat');
+  }
+
   const stats = {
     sessions: sessions.length,
     outputs: outputs.length,
@@ -3136,7 +3243,9 @@ export default function HomePageClient() {
   const sidebarProps = {
     datasets,
     selectedDatasetId,
+    selectedDatasetIds,
     selectedDataset,
+    selectedDatasets,
     datasetDraft,
     onDatasetDraftChange: (field, value) =>
       setDatasetDraft((current) => ({ ...current, [field]: value })),
@@ -3148,21 +3257,13 @@ export default function HomePageClient() {
     onResolveLocalSecret: handleResolveLocalSecret,
     onBindSelectedDatasetSecret: handleBindSelectedDatasetSecret,
     onClearLocalSecret: handleClearLocalSecret,
-    onSelectDataset: (datasetId) => {
-      setBanner('');
-      setError('');
-      setComposingNewSession(false);
-      setAssistantRunProgress(null);
-      setSelectedDatasetId(datasetId);
-      setMobileSidebarOpen(false);
-      setMobilePanel('chat');
-    },
+    onSelectDataset: handleToggleDatasetSelection,
     onClearDatasetSelection: () => {
-      setBanner('已切回普通聊天；没有选中数据集时不会强行检索。');
+      setBanner('已清空供料范围；后续对话会先按普通聊天处理，命中资料意图时再预选。');
       setError('');
       setComposingNewSession(false);
       setSelectedDatasetId(null);
-      setSelectedSessionId(null);
+      setSelectedDatasetIds([]);
       setScopePlan({ candidates: [], hint: '' });
       setAssistantRunProgress(null);
       setMobileSidebarOpen(false);
@@ -3197,6 +3298,7 @@ export default function HomePageClient() {
   };
   const chatPanelProps = {
     dataset: selectedDataset,
+    selectedDatasets,
     session: selectedSession,
     messages: visibleMessages,
     messageLoading,
@@ -3284,6 +3386,7 @@ export default function HomePageClient() {
     activePage,
     datasets,
     selectedDatasetId,
+    selectedDatasetIds,
     onSelectDataset: sidebarProps.onSelectDataset,
     onClearDatasetSelection: sidebarProps.onClearDatasetSelection,
     datasetDraft,
@@ -3336,6 +3439,7 @@ export default function HomePageClient() {
           chatPanelProps={chatPanelProps}
           insightPanelProps={insightPanelProps}
           selectedDataset={selectedDataset}
+          selectedDatasets={selectedDatasets}
           stats={stats}
           loading={bootstrapping || workspaceLoading}
           banner={banner}
@@ -3368,12 +3472,14 @@ export default function HomePageClient() {
           activePage={activePage}
           onPageChange={setActivePage}
           selectedDataset={selectedDataset}
+          selectedDatasets={selectedDatasets}
           stats={stats}
           loading={bootstrapping}
           workspaceLoading={workspaceLoading}
           documents={documents}
           sourceItems={toolbarSourceItems}
           accountAuth={sidebarProps.accountAuth}
+          onStartNewConversation={handleStartNewConversation}
         />
 
         {banner ? <div className="page-banner success-banner">{banner}</div> : null}

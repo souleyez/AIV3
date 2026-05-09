@@ -5,6 +5,7 @@ export function buildAssistantStartupBriefing({
   latestMessages = [],
   activityEvents = [],
   selectedDataset = null,
+  selectedDatasets = [],
   activeStaticPageDraft = null,
   staticPageDrafts = [],
 } = {}) {
@@ -14,6 +15,11 @@ export function buildAssistantStartupBriefing({
   const messages = Array.isArray(latestMessages) ? latestMessages : [];
   const events = Array.isArray(activityEvents) ? activityEvents : [];
   const staticDrafts = Array.isArray(staticPageDrafts) ? staticPageDrafts : [];
+  const selectedScope = Array.isArray(selectedDatasets) && selectedDatasets.length
+    ? selectedDatasets
+    : selectedDataset
+      ? [selectedDataset]
+      : [];
   const staticPageWorkspace = summarizeStaticPageWorkspace(activeStaticPageDraft, staticDrafts);
 
   const latestActivity = [
@@ -32,7 +38,8 @@ export function buildAssistantStartupBriefing({
     reportPlanCount: reports.length,
     publishedReportCount: published.length,
     staticPageDraftCount: staticDrafts.length,
-    selectedScopeLabel: selectedDataset?.title || '',
+    selectedScopeLabel: selectedScope.map((dataset) => dataset?.title || dataset?.key).filter(Boolean).join('、'),
+    selectedScopeCount: selectedScope.length,
     latestActivity,
     parseStateSummary: summarizeParseState(visibleDatasets),
     datasetBriefs: summarizeDatasets(visibleDatasets),

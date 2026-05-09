@@ -28,11 +28,16 @@ export function planAssistantScope({
   prompt = '',
   datasets = [],
   selectedDatasetId = '',
+  selectedDatasetIds = [],
   conversationMemory = [],
   activeStaticPageDraft = null,
 } = {}) {
   const normalizedPrompt = String(prompt || '').trim();
   const visibleDatasets = Array.isArray(datasets) ? datasets : [];
+  const userSelectedDatasetIds = normalizeDatasetIds([
+    ...selectedDatasetIds,
+    selectedDatasetId,
+  ]);
   const candidates = [];
   const staticDraftReference = buildStaticDraftReference(activeStaticPageDraft);
   const promptTouchesActiveStaticDraft = Boolean(
@@ -43,8 +48,10 @@ export function planAssistantScope({
     promptTouchesActiveStaticDraft,
   });
 
-  const selectedDataset = visibleDatasets.find((dataset) => dataset.id === selectedDatasetId);
-  if (selectedDataset) {
+  const selectedDatasets = userSelectedDatasetIds
+    .map((datasetId) => visibleDatasets.find((dataset) => dataset.id === datasetId))
+    .filter(Boolean);
+  for (const selectedDataset of selectedDatasets) {
     candidates.push(buildDatasetCandidate(selectedDataset, {
       confidence: 'high',
       reason: '用户当前已选中该供料范围',
@@ -53,7 +60,7 @@ export function planAssistantScope({
   }
 
   for (const dataset of visibleDatasets) {
-    if (!dataset?.id || dataset.id === selectedDatasetId) continue;
+    if (!dataset?.id || userSelectedDatasetIds.includes(dataset.id)) continue;
     const haystack = `${dataset.title || ''} ${dataset.key || ''} ${dataset.description || ''}`;
     const matchedByDatasetName = haystack && textMatches(normalizedPrompt, haystack);
     const matchedByCommonHint = DATASET_HINTS.some((hint) => hint.pattern.test(normalizedPrompt) && haystack.includes(hint.label));
@@ -104,8 +111,21 @@ export function planAssistantScope({
 }
 
 export function selectPlannerDatasetId(plan) {
-  const datasetCandidate = (plan?.candidates || []).find((candidate) => candidate.type === 'dataset');
-  return datasetCandidate?.id || '';
+  return selectPlannerDatasetIds(plan)[0] || '';
+}
+
+export function selectPlannerDatasetIds(plan) {
+  return normalizeDatasetIds(
+    (plan?.candidates || [])
+      .filter((candidate) => candidate.type === 'dataset')
+      .map((candidate) => candidate.id),
+  );
+}
+
+function normalizeDatasetIds(ids) {
+  return [...new Set((Array.isArray(ids) ? ids : [ids])
+    .map((id) => String(id || '').trim())
+    .filter(Boolean))];
 }
 
 function textMatches(prompt, text) {

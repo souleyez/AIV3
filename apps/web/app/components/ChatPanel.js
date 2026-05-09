@@ -243,7 +243,7 @@ function ReportEntryGate({ reportEntry, busy, onResolve }) {
   );
 }
 
-function AssistantContextStrip({ dataset, startupBriefing, scopePlan }) {
+function AssistantContextStrip({ dataset, selectedDatasets = [], startupBriefing, scopePlan }) {
   const candidates = Array.isArray(scopePlan?.candidates) ? scopePlan.candidates : [];
   const datasetCandidates = candidates.filter((candidate) => candidate.type === 'dataset');
   const memoryCandidate = candidates.find((candidate) => candidate.type === 'conversation_memory');
@@ -255,12 +255,14 @@ function AssistantContextStrip({ dataset, startupBriefing, scopePlan }) {
   const mediaCandidate = datasetCandidates.find((candidate) => (
     candidate.materialHints || candidate.material_hints || []
   ).some((hint) => ['audio_video', 'transcript_possible', 'keyframe_ocr_possible'].includes(hint)));
+  const selectedScope = selectedDatasets.length ? selectedDatasets : dataset ? [dataset] : [];
+  const selectedScopeLabel = selectedScope.map((item) => item.title || item.key).filter(Boolean).join('、');
 
   return (
     <div className="assistant-context-strip">
       <div className="assistant-context-main">
-        <span>{dataset ? '当前供料' : '普通聊天'}</span>
-        <strong>{dataset?.title || '未选数据集'}</strong>
+        <span>{selectedScope.length ? '当前供料' : '普通聊天'}</span>
+        <strong>{selectedScopeLabel || '未选数据集'}</strong>
         <p>
           可见数据集 {startupBriefing?.visibleDatasetCount || 0} 个，
           文档 {startupBriefing?.visibleDocumentCount || 0} 份。
@@ -459,6 +461,7 @@ function shouldOfferStaticPageWorkspaceEntry(draft) {
 
 export default function ChatPanel({
   dataset,
+  selectedDatasets = [],
   session,
   messages,
   messageLoading,
@@ -497,6 +500,8 @@ export default function ChatPanel({
   const showingStaticPageWorkspace = showStaticPageWorkspace && Boolean(staticPageDraft);
   const staticPageAction = staticPageActionState(staticPageDraft);
   const staticPageEntryOnly = shouldOfferStaticPageWorkspaceEntry(staticPageDraft);
+  const selectedScope = selectedDatasets.length ? selectedDatasets : dataset ? [dataset] : [];
+  const selectedScopeLabel = selectedScope.map((item) => item.title || item.key).filter(Boolean).join('、');
   const chatEndRef = useRef(null);
   const staticPageNotice = staticPageDraft && !showingHtmlArtifactWorkspace && !showingStaticPageWorkspace ? (
     <StaticPageAssistantNotice
@@ -543,12 +548,12 @@ export default function ChatPanel({
     <section className={`chat-panel card ${panelClassName}`.trim()}>
       <div className="panel-header chat-header">
         <div>
-          <h3>{session ? session.title : dataset ? `${dataset.title} · 新问答` : '普通聊天 · 未选数据集'}</h3>
+          <h3>{session ? session.title : selectedScope.length ? `普通聊天 · ${selectedScope.length} 个供料范围` : '普通聊天 · 未选数据集'}</h3>
           <p>
             {session
               ? `会话 ${truncateText(session.id, 16)} · 最后更新 ${formatRelativeTime(session.updated_at)}`
-              : dataset
-                ? `当前选择 ${dataset.title}，发送问题会在这个数据集下启动新的 chat_session workflow。`
+              : selectedScope.length
+                ? `已选 ${selectedScopeLabel} 作为优先供料范围；不会切换对话。`
                 : '可以直接提问；系统会先做范围判断，命中资料意图时再预选相关数据集。'}
           </p>
         </div>
@@ -571,7 +576,7 @@ export default function ChatPanel({
               新会话
             </button>
           </div>
-        ) : dataset ? (
+        ) : selectedScope.length ? (
           <div className="header-pill-row">
             <button
               type="button"
@@ -592,12 +597,6 @@ export default function ChatPanel({
       />
 
       <SessionRuntimeSummary turn={latestTurn} />
-
-      <AssistantContextStrip
-        dataset={dataset}
-        startupBriefing={startupBriefing}
-        scopePlan={scopePlan}
-      />
 
       {showingHtmlArtifactWorkspace ? (
         <div className="chat-static-page-workspace">
@@ -688,10 +687,10 @@ export default function ChatPanel({
               })
             ) : (
               <div className="chat-empty-state">
-                <h4>{dataset ? '从当前数据集发起新会话' : '可以直接聊天'}</h4>
+                <h4>{selectedScope.length ? '按当前供料范围继续聊天' : '可以直接聊天'}</h4>
                 <p>
-                  {dataset
-                    ? '输入问题会创建独立 chat_session；选中右侧历史会话后，底部输入会追加到该会话的新一轮。'
+                  {selectedScope.length
+                    ? '输入问题仍在当前对话里进行，系统会优先从已选数据集供料，正文由模型自行回答。'
                     : '未选数据集时按普通模型聊天处理；如果问题命中资料范围，系统会在左侧预选相关数据集并优先供料。'}
                 </p>
               </div>
@@ -706,9 +705,9 @@ export default function ChatPanel({
       <div className="chat-composer-wrap">
         <div className="composer-note">
           {session
-            ? '当前输入会追加到已选会话；如需分开上下文，点右上角“新会话”后再发送。'
-            : dataset
-              ? '当前输入会在所选数据集下创建新会话；右侧可随时切回历史会话继续追问。'
+            ? '当前输入会追加到已选会话；如需分开上下文，点顶部“+”后再发送。'
+            : selectedScope.length
+              ? '已选数据集只作为供料范围；对话本身保持当前线程，模型可按意图检索和细读。'
               : '未选数据集时先普通聊天；系统只做供料范围判断，不替模型编排答案。'}
         </div>
         <div className="chat-input-row">
@@ -716,10 +715,10 @@ export default function ChatPanel({
             value={input}
             onChange={(event) => onInputChange(event.target.value)}
             placeholder={
-              dataset
+              selectedScope.length
                 ? session
                   ? `继续追问 ${session.title}`
-                  : `围绕 ${dataset.title} 提问，系统会在这个数据集下创建一条新会话`
+                  : `围绕 ${selectedScopeLabel} 提问，系统会优先供料`
                 : '直接提问；系统会按意图预选资料范围'
             }
             disabled={submitting}

@@ -11,6 +11,7 @@ export default function HomeMobileShell({
   chatPanelProps,
   insightPanelProps,
   selectedDataset,
+  selectedDatasets = [],
   stats,
   loading,
   banner,
@@ -23,6 +24,8 @@ export default function HomeMobileShell({
   const [datasetOpen, setDatasetOpen] = useState(false);
   const [resultsOpen, setResultsOpen] = useState(false);
   const [surface, setSurface] = useState('chat');
+  const selectedScope = selectedDatasets.length ? selectedDatasets : selectedDataset ? [selectedDataset] : [];
+  const selectedScopeLabel = selectedScope.map((dataset) => dataset.title || dataset.key).filter(Boolean).join('、');
 
   function handleStartStaticPageDraft(options = {}) {
     const draft = chatPanelProps.onStartStaticPageDraft?.(options);
@@ -69,14 +72,14 @@ export default function HomeMobileShell({
           type="button"
           className="mobile-home-topbar-chip"
           onClick={() => setResultsOpen(true)}
-          disabled={!selectedDataset}
+          disabled={!selectedScope.length}
         >
           结果
         </button>
       </header>
 
       <div className="mobile-home-status-strip">
-        <span>{selectedDataset ? selectedDataset.title : '普通聊天 · 未选数据集'}</span>
+        <span>{selectedScopeLabel || '普通聊天 · 未选数据集'}</span>
         <strong>{loading ? '同步中' : `会话 ${stats.sessions} · 报告 ${stats.plans}`}</strong>
       </div>
 
@@ -109,7 +112,7 @@ export default function HomeMobileShell({
       <nav className="mobile-home-bottom-nav" aria-label="移动端工作区">
         <button type="button" onClick={() => setDatasetOpen(true)}>
           <span>数据集</span>
-          <strong>{selectedDataset ? '已选' : '未选'}</strong>
+          <strong>{selectedScope.length ? `已选${selectedScope.length}` : '未选'}</strong>
         </button>
         <button type="button" className={surface === 'chat' ? 'active' : ''} onClick={() => setSurface('chat')}>
           <span>对话</span>
@@ -127,7 +130,7 @@ export default function HomeMobileShell({
           <span>静态页</span>
           <strong>{staticPageDraft ? '构建' : '待生成'}</strong>
         </button>
-        <button type="button" onClick={() => setResultsOpen(true)} disabled={!selectedDataset}>
+        <button type="button" onClick={() => setResultsOpen(true)} disabled={!selectedScope.length}>
           <span>结果</span>
           <strong>{stats.published}</strong>
         </button>
@@ -161,7 +164,7 @@ export default function HomeMobileShell({
             <div className="mobile-home-drawer-head">
               <div>
                 <strong>上下文 / 报告</strong>
-                <span>{selectedDataset ? selectedDataset.title : '暂无数据集'}</span>
+                <span>{selectedScopeLabel || '暂无数据集'}</span>
               </div>
               <button type="button" className="ghost-btn compact-action-btn" onClick={() => setResultsOpen(false)}>
                 收起

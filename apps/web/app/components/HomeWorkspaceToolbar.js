@@ -25,11 +25,13 @@ export default function HomeWorkspaceToolbar({
   activePage = 'home',
   onPageChange,
   selectedDataset,
+  selectedDatasets = [],
   stats,
   loading,
   workspaceLoading,
   documents = [],
   accountAuth,
+  onStartNewConversation,
 }) {
   const healthTone = loading || workspaceLoading ? 'warning' : 'healthy';
   const healthText = loading || workspaceLoading ? '同步中' : '正常';
@@ -43,6 +45,9 @@ export default function HomeWorkspaceToolbar({
   const emailDraft = accountAuth?.emailDraft || '';
   const codeDraft = accountAuth?.codeDraft || '';
   const newKeyDraft = accountAuth?.newKeyDraft || '';
+  const selectedScopeLabel = selectedDatasets.length
+    ? selectedDatasets.map((dataset) => dataset.title || dataset.key).join('、')
+    : selectedDataset?.title || '普通聊天';
 
   return (
     <header className="card home-toolbar">
@@ -71,6 +76,15 @@ export default function HomeWorkspaceToolbar({
       </div>
 
       <div className="home-toolbar-right">
+        <button
+          type="button"
+          className="ghost-btn home-toolbar-new-chat"
+          onClick={onStartNewConversation}
+          title="新建对话，保留当前供料范围"
+          aria-label="新建对话"
+        >
+          +
+        </button>
         <div className="home-toolbar-flyout">
           <button type="button" className="ghost-btn home-toolbar-flyout-trigger">
             系统状态
@@ -79,7 +93,7 @@ export default function HomeWorkspaceToolbar({
           <div className="home-toolbar-flyout-panel">
             <div className="home-toolbar-flyout-title">系统状态</div>
             <ToolbarLine label="工作区" value={loading || workspaceLoading ? '正在同步' : '运行正常'} />
-            <ToolbarLine label="当前供料" value={selectedDataset?.title || '普通聊天'} />
+            <ToolbarLine label="当前供料" value={selectedScopeLabel} />
             <ToolbarLine label="会话" value={stats.sessions} />
             <ToolbarLine label="资料输出" value={stats.outputs} />
             <ToolbarLine label="报告计划" value={stats.plans} />

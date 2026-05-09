@@ -98,6 +98,7 @@ function DirectoryComposer({
 function DatasetsPage({
   datasets,
   selectedDatasetId,
+  selectedDatasetIds = [],
   onSelectDataset,
   onClearDatasetSelection,
   datasetDraft,
@@ -120,9 +121,10 @@ function DatasetsPage({
   onArchiveDocuments,
   documentActionBusy,
 }) {
+  const selectedIdSet = new Set(selectedDatasetIds.length ? selectedDatasetIds : selectedDatasetId ? [selectedDatasetId] : []);
   const selectedDataset = datasets.find((dataset) => dataset.id === selectedDatasetId) || null;
   const filteredDocuments = documents.filter((document) => {
-    const inDataset = !selectedDatasetId || document.dataset_id === selectedDatasetId;
+    const inDataset = !selectedIdSet.size || selectedIdSet.has(document.dataset_id);
     const query = documentSearch.trim().toLowerCase();
     const matches = !query
       || String(document.title || '').toLowerCase().includes(query)
@@ -200,7 +202,7 @@ function DatasetsPage({
             <button
               type="button"
               key={dataset.id}
-              className={`directory-list-item ${dataset.id === selectedDatasetId ? 'active' : ''}`.trim()}
+              className={`directory-list-item ${selectedIdSet.has(dataset.id) ? 'active' : ''}`.trim()}
               onClick={() => onSelectDataset?.(dataset.id)}
             >
               <strong>{dataset.title}</strong>
@@ -397,6 +399,7 @@ function SourcesPage({ documents, datasets }) {
 function MembersPage({ accountStatusSummary }) {
   const cards = [
     ['用户管理', accountStatusSummary?.label || '未登录', '邮箱、密钥和私密数据归属先在顶部登录状态里管理。'],
+    ['对话 / 成员组', '入口已接入', '顶部 + 新建对话；后续在这里下拉选择、重新唤起或归档旧对话。'],
     ['机器人管理', '规划中', '后续把可复用机器人、默认提示和工具权限放在这里。'],
     ['第三方页面管理', '规划中', '外部页面、嵌入入口和公开分享页统一归档。'],
   ];
@@ -455,6 +458,7 @@ export default function WorkspaceDirectoryPanel({
   activePage,
   datasets,
   selectedDatasetId,
+  selectedDatasetIds = [],
   onSelectDataset,
   onClearDatasetSelection,
   datasetDraft,
@@ -500,6 +504,7 @@ export default function WorkspaceDirectoryPanel({
         <DatasetsPage
           datasets={datasets}
           selectedDatasetId={selectedDatasetId}
+          selectedDatasetIds={selectedDatasetIds}
           onSelectDataset={onSelectDataset}
           onClearDatasetSelection={onClearDatasetSelection}
           datasetDraft={datasetDraft}

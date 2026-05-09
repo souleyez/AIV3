@@ -447,15 +447,6 @@ function ReportPlanDetail({
   );
 }
 
-function staticPageStageRows(draft) {
-  const stage = staticPageProjectStage(draft);
-  return [
-    ['模板规划', stage.index >= 0 ? (draft?.modules?.length ? `${draft.modules.length} 个模块` : '已创建') : '等待创建'],
-    ['效果图', stage.index >= 1 ? stage.key === 'effect' ? stage.status : '已确认' : '未开始'],
-    ['静态页', stage.index >= 2 ? stage.status : '未开始'],
-  ];
-}
-
 function ResultTextLink({ title, meta, detail, onClick, active = false }) {
   const Component = onClick ? 'button' : 'article';
   return (
@@ -638,20 +629,6 @@ function ExecutionObservationCard({ progress }) {
   );
 }
 
-function ProjectStageRail({ draft }) {
-  const current = staticPageProjectStage(draft);
-  return (
-    <div className="project-stage-rail" aria-label="项目阶段">
-      {staticPageStageRows(draft).map(([label, status], index) => (
-        <div className={`project-stage ${index < current.index ? 'done' : index === current.index ? 'active' : ''}`.trim()} key={label}>
-          <span>{label}</span>
-          <strong>{status}</strong>
-        </div>
-      ))}
-    </div>
-  );
-}
-
 function GeneratedProjectCard({
   draft,
   active,
@@ -667,42 +644,48 @@ function GeneratedProjectCard({
   const staleReason = staticPageIsPreviewStale(draft)
     ? staticPageFinalRenderBlockReason(draft)
     : '';
+  const updatedAt = staticPageUpdatedAt(draft);
+  const summary = truncateText(
+    staleReason || draft?.finalPage?.notice || draft?.modelSummary || '模板规划、效果图、静态页会按阶段推进。',
+    58,
+  );
   return (
     <article className={`generated-project-card ${active ? 'active' : ''}`.trim()}>
       <button type="button" className="generated-project-main" onClick={onSelect}>
-        <div className="generated-project-head">
-          <div>
-            <span>最新阶段：{stage.label}</span>
-            <strong>{staticPageProjectTitle(draft)}</strong>
-          </div>
-          <em>{open ? '点击退出' : '点击进入'}</em>
+        <div className="generated-project-title-row">
+          <strong>{staticPageProjectTitle(draft)}</strong>
+          <time dateTime={updatedAt || undefined}>{updatedAt ? formatRelativeTime(updatedAt) : '刚刚'}</time>
         </div>
-        <ProjectStageRail draft={draft} />
-        <p>{truncateText(staleReason || draft?.finalPage?.notice || draft?.modelSummary || '模板规划、效果图、静态页会按阶段推进。', 96)}</p>
+        <div className="generated-project-brief-row">
+          <span>{summary}</span>
+          <em>{stage.label} · {stage.status}</em>
+        </div>
       </button>
-      <div className="generated-project-actions">
-        {stage.index > 0 ? (
-          <button type="button" className="ghost-btn compact-action-btn" onClick={onRevert}>
-            退回上阶段
+      {active ? (
+        <div className="generated-project-actions" aria-label={`${open ? '已打开' : '已选中'}项目操作`}>
+          {stage.index > 0 ? (
+            <button type="button" className="ghost-btn compact-action-btn" onClick={onRevert}>
+              退回上阶段
+            </button>
+          ) : null}
+          {stage.key === 'static' ? (
+            <>
+              <button type="button" className="ghost-btn compact-action-btn" disabled={!exportable} onClick={() => downloadStaticPagePpt(draft)}>
+                导出PPT
+              </button>
+              <button type="button" className="ghost-btn compact-action-btn" disabled={!exportable} onClick={() => downloadStaticPageTable(draft)}>
+                表格
+              </button>
+              <button type="button" className="ghost-btn compact-action-btn" onClick={onCopyLink}>
+                {copied ? '已复制' : '复制链接'}
+              </button>
+            </>
+          ) : null}
+          <button type="button" className="ghost-btn compact-action-btn danger-action" onClick={onDelete}>
+            删除
           </button>
-        ) : null}
-        {stage.key === 'static' ? (
-          <>
-            <button type="button" className="ghost-btn compact-action-btn" disabled={!exportable} onClick={() => downloadStaticPagePpt(draft)}>
-              导出PPT
-            </button>
-            <button type="button" className="ghost-btn compact-action-btn" disabled={!exportable} onClick={() => downloadStaticPageTable(draft)}>
-              表格
-            </button>
-            <button type="button" className="ghost-btn compact-action-btn" onClick={onCopyLink}>
-              {copied ? '已复制' : '复制链接'}
-            </button>
-          </>
-        ) : null}
-        <button type="button" className="ghost-btn compact-action-btn danger-action" onClick={onDelete}>
-          删除
-        </button>
-      </div>
+        </div>
+      ) : null}
     </article>
   );
 }
