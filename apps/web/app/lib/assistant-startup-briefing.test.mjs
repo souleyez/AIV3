@@ -161,3 +161,32 @@ test('startup briefing includes compact static page workspace context', () => {
   assert.match(formatted, /已可导出 index\.html/);
   assert.doesNotMatch(formatted, /不应该完整依赖 content/);
 });
+
+test('startup briefing marks stale static page preview as non-exportable', () => {
+  const briefing = buildAssistantStartupBriefing({
+    activeStaticPageDraft: {
+      id: 'local-draft-stale',
+      objective: '已修改的客户静态页',
+      status: 'planning',
+      previewContract: { status: 'stale' },
+      finalPage: { status: 'rendered' },
+      modules: [{ id: 'hero' }],
+    },
+    staticPageDrafts: [
+      {
+        id: 'local-draft-stale',
+        objective: '已修改的客户静态页',
+        previewContract: { status: 'stale' },
+        finalPage: { status: 'rendered' },
+        modules: [{ id: 'hero' }],
+      },
+    ],
+  });
+  const formatted = formatStartupBriefingForModel(briefing);
+
+  assert.equal(briefing.staticPageWorkspace.previewStale, true);
+  assert.equal(briefing.staticPageWorkspace.canExportFinal, false);
+  assert.equal(briefing.staticPageWorkspace.latestDrafts[0].status, 'stale');
+  assert.match(formatted, /旧效果图和最终页不能继续复用/);
+  assert.doesNotMatch(formatted, /已可导出 index\.html/);
+});

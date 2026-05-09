@@ -1085,6 +1085,7 @@ textarea {
 
 .static-page-planning-summary div,
 .static-page-model-summary,
+.static-page-intent-card,
 .static-page-planning-hint {
   display: grid;
   gap: 5px;
@@ -1096,6 +1097,7 @@ textarea {
 
 .static-page-planning-summary span,
 .static-page-model-summary span,
+.static-page-intent-card span,
 .static-page-planning-hint span {
   color: var(--subtle);
   font-size: 12px;
@@ -1113,6 +1115,46 @@ textarea {
   color: var(--text);
   line-height: 1.65;
   overflow-wrap: anywhere;
+}
+
+.static-page-intent-card {
+  gap: 10px;
+  background:
+    radial-gradient(circle at 0% 0%, rgba(14, 165, 233, 0.14), transparent 34%),
+    rgba(248, 251, 255, 0.92);
+}
+
+.static-page-intent-card label {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.static-page-intent-input {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: stretch;
+}
+
+.static-page-intent-input textarea {
+  min-height: 76px;
+  resize: vertical;
+  border: 0;
+  border-radius: 14px;
+  padding: 11px 12px;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.72);
+  box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.18);
+  outline: none;
+}
+
+.static-page-intent-input textarea:focus {
+  box-shadow: inset 0 0 0 1px rgba(37, 99, 235, 0.42), 0 0 0 4px rgba(37, 99, 235, 0.08);
+}
+
+.static-page-intent-input button {
+  min-width: 128px;
 }
 
 .static-page-style-picker {
@@ -2577,6 +2619,7 @@ body {
 .assistant-shell .static-page-planning-empty,
 .assistant-shell .static-page-planning-summary div,
 .assistant-shell .static-page-model-summary,
+.assistant-shell .static-page-intent-card,
 .assistant-shell .static-page-style-picker,
 .assistant-shell .static-page-effect-preview,
 .assistant-shell .static-page-final-render,
@@ -2590,12 +2633,14 @@ body {
 .assistant-shell .static-page-planning-empty strong,
 .assistant-shell .static-page-planning-summary strong,
 .assistant-shell .static-page-planning-hint strong,
+.assistant-shell .static-page-intent-card label,
 .assistant-shell .static-page-model-summary p,
 .assistant-shell .static-page-style-picker-head strong,
 .assistant-shell .static-page-style-option strong,
 .assistant-shell .static-page-effect-head strong,
 .assistant-shell .static-page-queue-card strong,
 .assistant-shell .static-page-failure-card strong,
+.assistant-shell .static-page-stale-card strong,
 .assistant-shell .static-page-preview-card strong,
 .assistant-shell .static-page-preview-image-card strong,
 .assistant-shell .static-page-preview-placeholder strong,
@@ -2609,6 +2654,7 @@ body {
 .assistant-shell .static-page-planning-summary span,
 .assistant-shell .static-page-model-summary span,
 .assistant-shell .static-page-planning-hint span,
+.assistant-shell .static-page-intent-card span,
 .assistant-shell .static-page-style-picker-head span,
 .assistant-shell .static-page-style-option span,
 .assistant-shell .static-page-style-option em,
@@ -2616,6 +2662,7 @@ body {
 .assistant-shell .static-page-effect-head em,
 .assistant-shell .static-page-queue-card span,
 .assistant-shell .static-page-failure-card span,
+.assistant-shell .static-page-stale-card span,
 .assistant-shell .static-page-preview-card span,
 .assistant-shell .static-page-preview-image-card span,
 .assistant-shell .static-page-final-head span,
@@ -2638,13 +2685,31 @@ body {
   color: #9aa7b9;
 }
 
+.assistant-shell .static-page-intent-card {
+  background:
+    radial-gradient(circle at 0% 0%, rgba(96, 165, 250, 0.16), transparent 34%),
+    rgba(255, 255, 255, 0.045);
+}
+
+.assistant-shell .static-page-intent-input textarea {
+  color: #f8fbff;
+  background: rgba(9, 13, 20, 0.72);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.11);
+}
+
 .assistant-shell .static-page-queue-card,
 .assistant-shell .static-page-failure-card,
+.assistant-shell .static-page-stale-card,
 .assistant-shell .static-page-preview-card,
 .assistant-shell .static-page-preview-image-card,
 .assistant-shell .static-page-preview-placeholder {
   background: rgba(255, 255, 255, 0.045);
   border-color: rgba(255, 255, 255, 0.08);
+}
+
+.assistant-shell .static-page-stale-card {
+  background: rgba(245, 158, 11, 0.12);
+  border-color: rgba(251, 191, 36, 0.18);
 }
 
 .assistant-shell .static-page-preview-placeholder p {
@@ -3295,18 +3360,22 @@ body {
   font-size: 15px;
 }
 
-.static-page-mobile-preview,
-.static-page-mobile-model-summary,
-.static-page-mobile-intent,
+  .static-page-mobile-preview,
+  .static-page-mobile-model-summary,
+  .static-page-mobile-intent,
 .static-page-mobile-section-title,
 .static-page-mobile-empty,
 .static-page-mobile-module {
   border: 1px solid rgba(255, 255, 255, 0.08);
   background: rgba(255, 255, 255, 0.055);
   border-radius: 20px;
-}
+  }
 
-.static-page-mobile-preview {
+  .static-page-intent-input {
+    grid-template-columns: 1fr;
+  }
+
+  .static-page-mobile-preview {
   display: grid;
   gap: 8px;
   padding: 16px;

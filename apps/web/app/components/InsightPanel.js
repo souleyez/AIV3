@@ -1,7 +1,10 @@
 'use client';
 
 import { formatDateTime, formatRelativeTime, formatSnakeCaseLabel, truncateText } from '../lib/formatters';
-import { buildStaticPageFinalRenderPayload } from '../lib/static-page-draft';
+import {
+  buildStaticPageFinalRenderPayload,
+  staticPageFinalRenderBlockReason,
+} from '../lib/static-page-draft';
 import {
   buildStaticPageStandaloneHtml,
   dataQualitySummaryFromManifest,
@@ -28,6 +31,7 @@ const STATIC_PAGE_STATUS_LABELS = {
   draft: '草稿',
   planned: '已规划',
   confirmed: '已确认',
+  stale: '规划已变更',
 };
 
 function SectionHeader({ title, subtitle }) {
@@ -70,6 +74,9 @@ function canRenderPlan(plan) {
 }
 
 function staticPageStatusLabel(draft) {
+  if (staticPageIsPreviewStale(draft)) {
+    return STATIC_PAGE_STATUS_LABELS.stale;
+  }
   const renderStatus = draft?.finalPage?.status;
   return STATIC_PAGE_STATUS_LABELS[renderStatus]
     || STATIC_PAGE_STATUS_LABELS[draft?.status]
@@ -96,6 +103,9 @@ function staticPageDataQualitySummary(draft) {
 }
 
 function staticPageRenderAction(draft) {
+  if (staticPageIsPreviewStale(draft)) {
+    return null;
+  }
   const status = draft?.finalPage?.status || '';
   const executionId = staticPageWorkflowExecutionId(draft);
   if (!executionId) {
@@ -111,7 +121,11 @@ function staticPageRenderAction(draft) {
 }
 
 function staticPageIsRendered(draft) {
-  return draft?.finalPage?.status === 'rendered' || draft?.status === 'rendered';
+  return !staticPageIsPreviewStale(draft) && (draft?.finalPage?.status === 'rendered' || draft?.status === 'rendered');
+}
+
+function staticPageIsPreviewStale(draft) {
+  return draft?.previewContract?.status === 'stale' || draft?.imageJob?.status === 'stale';
 }
 
 function downloadStaticPageHtmlFromShelf(draft) {
@@ -472,6 +486,9 @@ export default function InsightPanel({
               const action = staticPageRenderAction(draft);
               const rendered = staticPageIsRendered(draft);
               const hasHtml = Boolean(buildStaticPageStandaloneHtml(draft, draft?.finalPage?.html || ''));
+              const staleReason = staticPageIsPreviewStale(draft)
+                ? staticPageFinalRenderBlockReason(draft)
+                : '';
               const dataQuality = staticPageDataQualitySummary(draft);
               const hasDataQuality = hasDataQualitySummary(dataQuality);
               const needsDataAttention = dataQuality.attentionModules > 0
@@ -491,7 +508,7 @@ export default function InsightPanel({
                       <strong>{truncateText(draft.objective || draft.title || '静态页草稿', 30)}</strong>
                       <span>{formatRelativeTime(staticPageUpdatedAt(draft))}</span>
                     </div>
-                    <p>{truncateText(draft.modelSummary || draft.finalPage?.notice || '点击后在当前页面继续规划或查看生成结果。', 96)}</p>
+                    <p>{truncateText(staleReason || draft.modelSummary || draft.finalPage?.notice || '点击后在当前页面继续规划或查看生成结果。', 96)}</p>
                     <div className="insight-meta-row">
                       <span>{staticPageStatusLabel(draft)}</span>
                       <span>{draft.modules?.length || 0} 个模块</span>

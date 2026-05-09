@@ -227,6 +227,7 @@ function summarizeStaticPageWorkspace(activeDraft, drafts) {
     .length;
   const finalStatus = active?.finalPage?.status || '';
   const previewStatus = active?.previewContract?.status || active?.imageJob?.status || '';
+  const previewStale = previewStatus === 'stale' || active?.imageJob?.status === 'stale';
   return {
     activeDraftId: active?.backendDraftId || active?.id || '',
     activeDraftStatus: active?.status || '',
@@ -236,13 +237,16 @@ function summarizeStaticPageWorkspace(activeDraft, drafts) {
     activeEchartsModuleCount: echartsModules,
     activeDeterministicModuleCount: Math.max(0, activeModules.length - echartsModules),
     previewStatus,
+    previewStale,
     finalRenderStatus: finalStatus,
     canEditModules: Boolean(active && activeModules.length),
-    canExportFinal: finalStatus === 'rendered',
+    canExportFinal: finalStatus === 'rendered' && !previewStale,
     latestDrafts: draftList.slice(0, 5).map((draft) => ({
       id: draft?.backendDraftId || draft?.id || '',
       title: String(draft?.objective || draft?.title || '静态页草稿').slice(0, 80),
-      status: draft?.finalPage?.status || draft?.status || draft?.backendStatus || 'draft',
+      status: draft?.previewContract?.status === 'stale' || draft?.imageJob?.status === 'stale'
+        ? 'stale'
+        : draft?.finalPage?.status || draft?.status || draft?.backendStatus || 'draft',
       moduleCount: Array.isArray(draft?.modules) ? draft.modules.length : 0,
     })),
   };
@@ -262,6 +266,9 @@ function formatStaticPageWorkspaceForModel(workspace) {
     );
     if (workspace.canEditModules) {
       parts.push('用户要求调整静态页时，应优先围绕当前打开草稿做模块级标题、内容、数据、图表、布局或风格变更。');
+    }
+    if (workspace.previewStale) {
+      parts.push('当前规划已变更，旧效果图和最终页不能继续复用，应先重新生成并确认效果图。');
     }
     if (workspace.canExportFinal) {
       parts.push('当前静态页已可导出 index.html 和 ZIP 交付包。');

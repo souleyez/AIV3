@@ -26,7 +26,9 @@ import {
   buildInitialStaticPageDraft,
   buildMockStaticPagePreview,
   buildStaticPageImagePayload,
+  canRequestStaticPageFinalRender,
   interpretStaticPagePrompt,
+  staticPageFinalRenderBlockReason,
 } from './lib/static-page-draft';
 import {
   buildLocalUploadObjectKey,
@@ -2044,6 +2046,11 @@ export default function HomePageClient() {
       return null;
     }
 
+    if (operation.type === 'request_final_render' && !canRequestStaticPageFinalRender(activeStaticPageDraft)) {
+      setBanner(staticPageFinalRenderBlockReason(activeStaticPageDraft) || '需要先确认当前效果图，再制作最终静态页。');
+      return activeStaticPageDraft;
+    }
+
     if (operation.type === 'request_final_render' && activeStaticPageDraft.backendDraftId) {
       const optimisticDraft = replaceDraftWithOperation(activeStaticPageDraft, {
         ...operation,
@@ -2587,6 +2594,7 @@ export default function HomePageClient() {
     staticPageDraft: activeStaticPageDraft,
     onStartStaticPageDraft: handleStartStaticPageDraft,
     onApplyStaticPageOperation: handleApplyStaticPageOperation,
+    onApplyStaticPagePrompt: handleApplyStaticPagePrompt,
     onRetryWorkflowExecution: handleRetryWorkflowExecution,
     onCancelWorkflowExecution: handleCancelWorkflowExecution,
     onRefreshStaticPageDraft: (backendDraftId) => refreshBackendStaticPageDraft(backendDraftId, { silent: false }),

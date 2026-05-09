@@ -13,7 +13,9 @@ import {
   buildStaticPagePreviewContract,
   buildStaticPageRenderSpec,
   buildStaticPageVisualSpec,
+  canRequestStaticPageFinalRender,
   interpretStaticPagePrompt,
+  staticPageFinalRenderBlockReason,
   validateMobileOrder,
   validateStaticPageLayout,
 } from './static-page-draft.js';
@@ -167,6 +169,21 @@ test('prompt interpreter switches a target module chart type', () => {
   assert.equal(next.modules.find((module) => module.id === 'trend').visualization.type, 'bar-chart');
 });
 
+test('prompt-based static page edits invalidate queued preview work', () => {
+  const queued = applyStaticPageOperation(buildInitialStaticPageDraft(), {
+    type: 'queue_image_job',
+    jobId: 'job-prompt-queued',
+    queuePosition: 2,
+  });
+  const interpretation = interpretStaticPagePrompt(queued, '把趋势变化换成柱状图');
+  const next = applyStaticPageOperations(queued, interpretation.operations);
+
+  assert.equal(next.modules.find((module) => module.id === 'trend').visualization.type, 'bar-chart');
+  assert.equal(next.previewContract.status, 'stale');
+  assert.equal(next.imageJob.id, 'job-prompt-queued');
+  assert.equal(next.imageJob.status, 'stale');
+});
+
 test('prompt interpreter reduces copy across modules', () => {
   const draft = buildInitialStaticPageDraft();
   const interpretation = interpretStaticPagePrompt(draft, '减少文字，整体精简一点');
@@ -302,6 +319,45 @@ test('final render request stores local mock renderer payload', () => {
   assert.equal(rendering.finalPage.payload.previewImage.assetKey, 'preview-1.png');
 });
 
+test('final render can only start from current confirmed preview', () => {
+  const confirmed = applyStaticPageOperation(buildInitialStaticPageDraft(), {
+    type: 'confirm_preview',
+    previewImage: { assetKey: 'preview-1.png' },
+  });
+  const stale = applyStaticPageOperation(confirmed, {
+    type: 'update_module',
+    targetModuleId: 'hero',
+    patch: { content: '确认效果图后又改了核心判断。' },
+  });
+  const missingAsset = {
+    ...confirmed,
+    previewImage: null,
+    previewContract: {
+      ...confirmed.previewContract,
+      assetKey: null,
+    },
+  };
+  const failedFinalRender = applyStaticPageOperation(confirmed, {
+    type: 'request_final_render',
+    finalPage: {
+      status: 'failed',
+      renderer: 'platform-api-static-page-renderer',
+      assetManifest: {
+        workflow: { executionId: 'workflow-final-failed' },
+      },
+    },
+  });
+
+  assert.equal(canRequestStaticPageFinalRender(confirmed), true);
+  assert.equal(staticPageFinalRenderBlockReason(confirmed), '');
+  assert.equal(canRequestStaticPageFinalRender(failedFinalRender), true);
+  assert.equal(staticPageFinalRenderBlockReason(failedFinalRender), '');
+  assert.equal(canRequestStaticPageFinalRender(stale), false);
+  assert.match(staticPageFinalRenderBlockReason(stale), /重新生成并确认效果图/);
+  assert.equal(canRequestStaticPageFinalRender(missingAsset), false);
+  assert.match(staticPageFinalRenderBlockReason(missingAsset), /资源缺失/);
+});
+
 test('final render request accepts backend rendered output', () => {
   const confirmed = applyStaticPageOperation(buildInitialStaticPageDraft(), {
     type: 'confirm_preview',
@@ -337,7 +393,29 @@ test('editing after preview confirmation marks the visual contract stale', () =>
   assert.equal(edited.previewContract.status, 'stale');
   assert.equal(edited.previewContract.previousAssetKey, 'preview-1.png');
   assert.equal(edited.previewImage, null);
-  assert.equal(edited.imageJob.status, 'idle');
+  assert.equal(edited.imageJob.status, 'stale');
+  assert.match(edited.imageJob.queueMessage, /重新生成/);
+});
+
+test('editing while image generation is queued marks the queued preview stale', () => {
+  const queued = applyStaticPageOperation(buildInitialStaticPageDraft(), {
+    type: 'queue_image_job',
+    jobId: 'job-queued-1',
+    queuePosition: 4,
+  });
+  const edited = applyStaticPageOperation(queued, {
+    type: 'update_module',
+    targetModuleId: 'hero',
+    patch: { content: '排队过程中用户更新了核心判断。' },
+  });
+
+  assert.equal(edited.previewContract.status, 'stale');
+  assert.equal(edited.previewContract.imageJobId, 'job-queued-1');
+  assert.equal(edited.imageJob.id, 'job-queued-1');
+  assert.equal(edited.imageJob.status, 'stale');
+  assert.equal(edited.imageJob.queuePosition, null);
+  assert.equal(edited.previewImage, null);
+  assert.equal(edited.finalPage, null);
 });
 
 test('editing after final render clears stale final page output', () => {

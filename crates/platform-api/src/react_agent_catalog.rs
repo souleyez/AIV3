@@ -45,6 +45,16 @@ const WEAK_ALLOWED_KEYS: &[&str] = &[
     "reportPlanCount",
     "publishedReportCount",
     "staticPageDraftCount",
+    "styleDirection",
+    "style_direction",
+    "moduleCount",
+    "module_count",
+    "previewStatus",
+    "preview_status",
+    "finalRenderStatus",
+    "final_render_status",
+    "previewStale",
+    "preview_stale",
     "intent",
     "retrievalPolicy",
     "retrieval_policy",
@@ -427,6 +437,42 @@ mod tests {
             catalog["systemCapabilities"]["codex_host"]["available"],
             json!(false)
         );
+    }
+
+    #[test]
+    fn planning_catalog_keeps_static_page_artifact_state_without_module_content() {
+        let catalog = build_assistant_run_react_planning_catalog(
+            &json!({}),
+            &[json!({
+                "type": "static_page_draft",
+                "id": "draft-1",
+                "label": "当前静态页：经营简报",
+                "status": "planning",
+                "styleDirection": "data-command",
+                "moduleCount": 5,
+                "previewStatus": "stale",
+                "finalRenderStatus": "rendered",
+                "previewStale": true,
+                "modules": [{
+                    "id": "hero",
+                    "title": "模块标题可以进弱目录",
+                    "content": "模块正文不能进弱目录"
+                }]
+            })],
+            &json!({"mode": "ordinary_chat"}),
+            &json!({"status": "not_requested"}),
+        );
+
+        let candidate = &catalog["scopeCandidates"][0];
+        assert_eq!(candidate["id"], json!("draft-1"));
+        assert_eq!(candidate["styleDirection"], json!("data-command"));
+        assert_eq!(candidate["moduleCount"], json!(5));
+        assert_eq!(candidate["previewStatus"], json!("stale"));
+        assert_eq!(candidate["finalRenderStatus"], json!("rendered"));
+        assert_eq!(candidate["previewStale"], json!(true));
+
+        let serialized = serde_json::to_string(&catalog).expect("catalog should serialize");
+        assert!(!serialized.contains("模块正文不能进弱目录"));
     }
 
     #[test]

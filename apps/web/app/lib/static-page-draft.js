@@ -160,7 +160,15 @@ const DEFAULT_STYLE_DIRECTION = 'client-delivery';
 const STYLE_KEYS = new Set(STATIC_PAGE_STYLE_DIRECTIONS.map((item) => item.key));
 const VISUALIZATION_TYPES = new Set(STATIC_PAGE_VISUALIZATION_TYPES.map((item) => item.type));
 const DATA_SOURCE_IDS = new Set(STATIC_PAGE_DATA_SOURCE_TYPES.map((item) => item.sourceId));
-const IMAGE_JOB_STATUSES = new Set(['idle', 'queued', 'running', 'preview_ready', 'failed', 'confirmed']);
+const IMAGE_JOB_STATUSES = new Set(['idle', 'queued', 'running', 'preview_ready', 'failed', 'confirmed', 'stale']);
+const STALEABLE_PREVIEW_CONTRACT_STATUSES = new Set([
+  'queued',
+  'running',
+  'preview_ready',
+  'confirmed',
+  'rendering',
+  'rendered',
+]);
 const DESIGN_MUTATION_TYPES = new Set([
   'update_module',
   'add_module',
@@ -391,16 +399,20 @@ function refreshStaticPageDesignSpec(draft, { markPreviewStale = false } = {}) {
   draft.dataSnapshot = buildStaticPageDataSnapshot(draft);
   const previousContract = draft.previewContract || {};
   draft.previewContract = buildStaticPagePreviewContract(draft, previousContract);
-  if (markPreviewStale && previousContract.status && !['not_requested', 'queued', 'running', 'failed'].includes(previousContract.status)) {
+  const fingerprintChanged = Boolean(previousContract.draftFingerprint)
+    && previousContract.draftFingerprint !== draft.previewContract.draftFingerprint;
+  if (markPreviewStale && fingerprintChanged && STALEABLE_PREVIEW_CONTRACT_STATUSES.has(previousContract.status)) {
     draft.previewContract.status = 'stale';
     draft.previewContract.previousAssetKey = previousContract.assetKey || draft.previewImage?.assetKey || null;
+    draft.previewContract.staleReason = 'draft design changed after the preview was requested or confirmed';
+    draft.previewContract.staleAt = new Date().toISOString();
     draft.previewImage = null;
     draft.finalPage = null;
     draft.imageJob = {
-      id: null,
-      status: 'idle',
+      id: draft.imageJob?.id || previousContract.imageJobId || null,
+      status: 'stale',
       queuePosition: null,
-      queueMessage: '',
+      queueMessage: '规划已经改过，上一轮效果图任务已失效，需要重新生成。',
     };
   }
   return draft;
@@ -1074,6 +1086,33 @@ export function applyStaticPageOperation(draft, operation = {}) {
 
 export function applyStaticPageOperations(draft, operations = []) {
   return operations.reduce((current, operation) => applyStaticPageOperation(current, operation), draft);
+}
+
+export function canRequestStaticPageFinalRender(draft = {}) {
+  const finalStatus = draft?.finalPage?.status || '';
+  const retryableFinalStatus = finalStatus === 'failed' || finalStatus === 'cancelled';
+  if (!draft || (draft.status !== 'effect_confirmed' && !retryableFinalStatus)) return false;
+  if (draft.previewContract?.status !== 'confirmed') return false;
+  if (draft.imageJob?.status === 'stale') return false;
+  return Boolean(draft.previewImage?.assetKey || draft.previewContract?.assetKey);
+}
+
+export function staticPageFinalRenderBlockReason(draft = {}) {
+  if (draft?.previewContract?.status === 'stale' || draft?.imageJob?.status === 'stale') {
+    return '规划已经改过，需要重新生成并确认效果图。';
+  }
+  const finalStatus = draft?.finalPage?.status || '';
+  const retryableFinalStatus = finalStatus === 'failed' || finalStatus === 'cancelled';
+  if (draft?.status !== 'effect_confirmed' && !retryableFinalStatus) {
+    return '先确认效果图，再按效果制作可交付静态页。';
+  }
+  if (draft?.previewContract?.status !== 'confirmed') {
+    return '效果图确认状态未同步，请刷新或重新确认效果图。';
+  }
+  if (!draft?.previewImage?.assetKey && !draft?.previewContract?.assetKey) {
+    return '效果图资源缺失，请重新生成效果图。';
+  }
+  return '';
 }
 
 export function interpretStaticPagePrompt(draft, prompt = '') {

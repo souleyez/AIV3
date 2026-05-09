@@ -6732,20 +6732,19 @@ async fn append_static_page_draft_operations(
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| summarize_static_page_operations(&operations));
-    let draft_payload = request.draft_payload.unwrap_or_else(|| {
-        let mut payload = apply_static_page_operations_to_payload(
+    let mut draft_payload = request.draft_payload.unwrap_or_else(|| {
+        apply_static_page_operations_to_payload(
             draft.draft_payload.clone(),
             &operations,
             Some(&summary),
-        );
-        append_static_page_operations_metadata(
-            &mut payload,
-            &operations,
-            request.prompt.as_deref(),
-            &summary,
-        );
-        payload
+        )
     });
+    finalize_static_page_operations_payload(
+        &mut draft_payload,
+        &operations,
+        request.prompt.as_deref(),
+        &summary,
+    );
     draft.status = status_from_static_page_payload(&draft_payload)
         .or_else(|| status_from_static_page_operations(&operations))
         .unwrap_or(draft.status);
@@ -7091,6 +7090,7 @@ async fn create_static_page_render_for_draft(
 ) -> std::result::Result<(StatusCode, Json<CreateStaticPageRenderResponse>), ApiError> {
     let image_job =
         resolve_confirmed_static_page_image_job(state, &draft, request.image_job_id).await?;
+    ensure_static_page_preview_contract_current(&draft, image_job.as_ref())?;
     if request.background {
         let mut render_output = state
             .storage
@@ -9349,10 +9349,27 @@ fn assistant_run_artifact_scope_candidates(
         "type": "static_page_draft",
         "id": artifact_id,
         "label": label,
+        "status": static_page_artifact_string(current_artifact, &["status", "backendStatus", "backend_status"]).unwrap_or_default(),
+        "styleDirection": static_page_artifact_string(current_artifact, &["styleDirection", "style_direction"]).unwrap_or_default(),
+        "moduleCount": static_page_artifact_module_count(current_artifact),
+        "previewStatus": static_page_artifact_preview_status(current_artifact).unwrap_or_default(),
+        "finalRenderStatus": static_page_artifact_final_status(current_artifact).unwrap_or_default(),
+        "previewStale": static_page_artifact_preview_stale(current_artifact),
         "confidence": "high",
         "reason": "当前主区域打开了静态页草稿",
         "source": "active_artifact",
     })]
+}
+
+fn static_page_artifact_string(artifact: &Value, keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|key| {
+        artifact
+            .get(*key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string)
+    })
 }
 
 fn static_page_artifact_id(artifact: &Value) -> Option<String> {
@@ -9366,6 +9383,74 @@ fn static_page_artifact_id(artifact: &Value) -> Option<String> {
                 .filter(|value| !value.is_empty())
                 .map(ToString::to_string)
         })
+}
+
+fn static_page_artifact_module_count(artifact: &Value) -> usize {
+    ["moduleCount", "module_count"]
+        .iter()
+        .find_map(|key| artifact.get(*key).and_then(Value::as_u64))
+        .map(|value| value as usize)
+        .or_else(|| {
+            artifact
+                .get("modules")
+                .and_then(Value::as_array)
+                .map(Vec::len)
+        })
+        .unwrap_or(0)
+}
+
+fn static_page_artifact_preview_status(artifact: &Value) -> Option<String> {
+    static_page_artifact_string(artifact, &["previewStatus", "preview_status"])
+        .or_else(|| {
+            artifact
+                .get("previewContract")
+                .or_else(|| artifact.get("preview_contract"))
+                .and_then(|value| value.get("status"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToString::to_string)
+        })
+        .or_else(|| {
+            artifact
+                .get("imageJob")
+                .or_else(|| artifact.get("image_job"))
+                .and_then(|value| value.get("status"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToString::to_string)
+        })
+}
+
+fn static_page_artifact_final_status(artifact: &Value) -> Option<String> {
+    static_page_artifact_string(artifact, &["finalRenderStatus", "final_render_status"]).or_else(
+        || {
+            artifact
+                .get("finalPage")
+                .or_else(|| artifact.get("final_page"))
+                .and_then(|value| value.get("status"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToString::to_string)
+        },
+    )
+}
+
+fn static_page_artifact_preview_stale(artifact: &Value) -> bool {
+    artifact
+        .get("previewStale")
+        .or_else(|| artifact.get("preview_stale"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+        || static_page_artifact_preview_status(artifact).as_deref() == Some("stale")
+        || artifact
+            .get("imageJob")
+            .or_else(|| artifact.get("image_job"))
+            .and_then(|value| value.get("status"))
+            .and_then(Value::as_str)
+            == Some("stale")
 }
 
 fn static_page_artifact_label(artifact: &Value) -> Option<String> {
@@ -16031,6 +16116,7 @@ fn build_initial_static_page_draft_payload(run: &AssistantRun, prompt: &str) -> 
         style_direction,
         &Value::Array(Vec::new()),
         &render_spec,
+        &Value::Array(Vec::new()),
         None,
     );
     json!({
@@ -16069,12 +16155,19 @@ fn build_static_page_image_prompt_payload(draft: &StaticPageDraft, prompt: Optio
         .unwrap_or_else(|| build_static_page_visual_spec(&style_direction));
     let render_spec = static_page_payload_value(payload, &["renderSpec", "render_spec"])
         .unwrap_or_else(build_static_page_render_spec);
+    let mobile_order = static_page_payload_mobile_order(payload, &modules);
     let data_snapshot = static_page_payload_value(payload, &["dataSnapshot", "data_snapshot"])
         .unwrap_or_else(|| build_static_page_data_snapshot(payload, &draft.selected_scope));
     let preview_contract =
         static_page_payload_value(payload, &["previewContract", "preview_contract"])
             .unwrap_or_else(|| {
-                build_static_page_preview_contract(&style_direction, &modules, &render_spec, None)
+                build_static_page_preview_contract(
+                    &style_direction,
+                    &modules,
+                    &render_spec,
+                    &mobile_order,
+                    None,
+                )
             });
     json!({
         "draft_id": draft.id,
@@ -16095,6 +16188,7 @@ fn build_static_page_image_prompt_payload(draft: &StaticPageDraft, prompt: Optio
         "selected_scope": draft.selected_scope,
         "visibility_snapshot": draft.visibility_snapshot,
         "modules": modules,
+        "mobile_order": mobile_order,
         "data_bindings": payload.get("data_bindings").cloned().unwrap_or_else(|| json!([])),
         "queue_copy": "资源正在排队，可以联系商务开通高级用户跳过等待。",
     })
@@ -17451,18 +17545,24 @@ fn build_static_page_preview_contract(
     style_direction: &str,
     modules: &Value,
     render_spec: &Value,
+    mobile_order: &Value,
     patch: Option<Value>,
 ) -> Value {
     let contract_source = json!({
         "style_direction": style_direction,
         "modules": modules,
         "render_spec": render_spec,
+        "mobile_order": mobile_order,
+    });
+    let next_fingerprint = static_page_design_fingerprint(&contract_source);
+    let should_mark_stale = patch.as_ref().is_some_and(|previous_contract| {
+        static_page_preview_contract_is_stale(previous_contract, &next_fingerprint)
     });
     let mut contract = json!({
         "version": 1,
         "kind": "static-page-preview-contract",
         "status": "not_requested",
-        "draftFingerprint": static_page_design_fingerprint(&contract_source),
+        "draftFingerprint": next_fingerprint,
         "imageJobId": Value::Null,
         "assetKey": Value::Null,
         "confirmedAt": Value::Null,
@@ -17476,7 +17576,55 @@ fn build_static_page_preview_contract(
             &static_page_design_fingerprint(&contract_source),
         );
     }
+    if should_mark_stale {
+        mark_static_page_preview_contract_stale(
+            &mut contract,
+            "draft design changed after the preview was requested or confirmed",
+        );
+    }
     contract
+}
+
+fn static_page_preview_contract_is_stale(
+    previous_contract: &Value,
+    next_fingerprint: &str,
+) -> bool {
+    let Some(previous_fingerprint) = previous_contract
+        .get("draftFingerprint")
+        .or_else(|| previous_contract.get("draft_fingerprint"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return false;
+    };
+    if previous_fingerprint == next_fingerprint {
+        return false;
+    }
+    matches!(
+        previous_contract
+            .get("status")
+            .and_then(Value::as_str)
+            .map(str::trim),
+        Some("queued" | "running" | "preview_ready" | "confirmed" | "rendering" | "rendered")
+    )
+}
+
+fn mark_static_page_preview_contract_stale(contract: &mut Value, reason: &str) {
+    set_payload_string(contract, "status", "stale");
+    set_payload_value(contract, "imageJobId", Value::Null);
+    set_payload_value(contract, "assetKey", Value::Null);
+    set_payload_value(contract, "confirmedAt", Value::Null);
+    set_payload_string(contract, "staleReason", reason);
+    set_payload_string(contract, "staleAt", &Utc::now().to_rfc3339());
+}
+
+fn static_page_preview_contract_status(contract: &Value) -> Option<&str> {
+    contract
+        .get("status")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
 }
 
 fn static_page_design_fingerprint(value: &Value) -> String {
@@ -17495,6 +17643,51 @@ fn static_page_payload_modules(payload: &Value) -> Value {
         .cloned()
         .map(Value::Array)
         .unwrap_or_else(|| Value::Array(Vec::new()))
+}
+
+fn static_page_payload_mobile_order(payload: &Value, modules: &Value) -> Value {
+    let module_ids = modules
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|module| {
+                    module
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .map(ToOwned::to_owned)
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let module_id_set = module_ids.iter().cloned().collect::<BTreeSet<_>>();
+    let mut seen = BTreeSet::<String>::new();
+    let mut ordered = Vec::<Value>::new();
+    if let Some(requested) = static_page_payload_value(payload, &["mobileOrder", "mobile_order"])
+        .and_then(|value| value.as_array().cloned())
+    {
+        for item in requested {
+            let Some(id) = item
+                .as_str()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+            else {
+                continue;
+            };
+            if module_id_set.contains(&id) && seen.insert(id.clone()) {
+                ordered.push(json!(id));
+            }
+        }
+    }
+    for id in module_ids {
+        if seen.insert(id.clone()) {
+            ordered.push(json!(id));
+        }
+    }
+    Value::Array(ordered)
 }
 
 fn static_page_payload_string(payload: &Value, keys: &[&str]) -> Option<String> {
@@ -17620,6 +17813,94 @@ async fn resolve_confirmed_static_page_image_job(
         ));
     }
     Ok(Some(job))
+}
+
+fn static_page_current_design_fingerprint_from_payload(payload: &Value) -> String {
+    let style_direction =
+        static_page_payload_string(payload, &["styleDirection", "style_direction"])
+            .unwrap_or_else(|| "client-delivery".to_string());
+    let modules = static_page_payload_modules(payload);
+    let render_spec = static_page_payload_value(payload, &["renderSpec", "render_spec"])
+        .unwrap_or_else(build_static_page_render_spec);
+    let mobile_order = static_page_payload_mobile_order(payload, &modules);
+    static_page_design_fingerprint(&json!({
+        "style_direction": style_direction,
+        "modules": modules,
+        "render_spec": render_spec,
+        "mobile_order": mobile_order,
+    }))
+}
+
+fn static_page_preview_contract_fingerprint(contract: &Value) -> Option<String> {
+    contract
+        .get("draftFingerprint")
+        .or_else(|| contract.get("draft_fingerprint"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn static_page_image_job_prompt_fingerprint(job: &StaticPageImageJob) -> Option<String> {
+    job.image_prompt_payload
+        .get("preview_contract")
+        .or_else(|| job.image_prompt_payload.get("previewContract"))
+        .and_then(static_page_preview_contract_fingerprint)
+}
+
+fn ensure_static_page_preview_contract_current(
+    draft: &StaticPageDraft,
+    image_job: Option<&StaticPageImageJob>,
+) -> std::result::Result<(), ApiError> {
+    let current_fingerprint =
+        static_page_current_design_fingerprint_from_payload(&draft.draft_payload);
+    let preview_contract = static_page_payload_value(
+        &draft.draft_payload,
+        &["previewContract", "preview_contract"],
+    )
+    .unwrap_or_else(|| {
+        let style_direction = static_page_payload_string(
+            &draft.draft_payload,
+            &["styleDirection", "style_direction"],
+        )
+        .unwrap_or_else(|| "client-delivery".to_string());
+        let modules = static_page_payload_modules(&draft.draft_payload);
+        let render_spec =
+            static_page_payload_value(&draft.draft_payload, &["renderSpec", "render_spec"])
+                .unwrap_or_else(build_static_page_render_spec);
+        let mobile_order = static_page_payload_mobile_order(&draft.draft_payload, &modules);
+        build_static_page_preview_contract(
+            &style_direction,
+            &modules,
+            &render_spec,
+            &mobile_order,
+            None,
+        )
+    });
+    if static_page_preview_contract_status(&preview_contract) != Some("confirmed") {
+        return Err(ApiError::bad_request(
+            "static_page_preview_stale",
+            "current static page draft needs a fresh confirmed effect preview before rendering"
+                .to_string(),
+        ));
+    }
+    if static_page_preview_contract_fingerprint(&preview_contract).as_deref()
+        != Some(current_fingerprint.as_str())
+    {
+        return Err(ApiError::bad_request(
+            "static_page_preview_stale",
+            "confirmed effect preview does not match the current static page draft".to_string(),
+        ));
+    }
+    if let Some(job_fingerprint) = image_job.and_then(static_page_image_job_prompt_fingerprint) {
+        if job_fingerprint != current_fingerprint {
+            return Err(ApiError::bad_request(
+                "static_page_preview_stale",
+                "confirmed effect preview was generated for an older static page draft".to_string(),
+            ));
+        }
+    }
+    Ok(())
 }
 
 async fn append_static_page_draft_run_event(
@@ -17932,6 +18213,7 @@ fn apply_static_page_operation_to_payload(payload: &mut Value, operation: &Value
         "reorder_modules" => {
             if let Some(order) = operation.get("order").and_then(Value::as_array) {
                 set_payload_value(payload, "mobileOrder", Value::Array(order.clone()));
+                set_payload_value(payload, "mobile_order", Value::Array(order.clone()));
             }
         }
         "queue_image_job" => {
@@ -18016,6 +18298,7 @@ fn refresh_static_page_payload_design_contract(payload: &mut Value) {
     let visual_spec = build_static_page_visual_spec(&style_direction);
     let render_spec = static_page_payload_value(payload, &["renderSpec", "render_spec"])
         .unwrap_or_else(build_static_page_render_spec);
+    let mobile_order = static_page_payload_mobile_order(payload, &modules);
     let selected_scope = payload
         .get("assistant_context")
         .and_then(|context| context.get("selected_scope"))
@@ -18029,8 +18312,12 @@ fn refresh_static_page_payload_design_contract(payload: &mut Value) {
         &style_direction,
         &modules,
         &render_spec,
+        &mobile_order,
         previous_contract,
     );
+    if static_page_preview_contract_status(&preview_contract) == Some("stale") {
+        mark_static_page_payload_preview_stale(payload);
+    }
 
     set_payload_string(payload, "styleDirection", &style_direction);
     set_payload_string(payload, "style_direction", &style_direction);
@@ -18038,10 +18325,45 @@ fn refresh_static_page_payload_design_contract(payload: &mut Value) {
     set_payload_value(payload, "visual_spec", visual_spec);
     set_payload_value(payload, "renderSpec", render_spec.clone());
     set_payload_value(payload, "render_spec", render_spec);
+    set_payload_value(payload, "mobileOrder", mobile_order.clone());
+    set_payload_value(payload, "mobile_order", mobile_order);
     set_payload_value(payload, "dataSnapshot", data_snapshot.clone());
     set_payload_value(payload, "data_snapshot", data_snapshot);
     set_payload_value(payload, "previewContract", preview_contract.clone());
     set_payload_value(payload, "preview_contract", preview_contract);
+}
+
+fn mark_static_page_payload_preview_stale(payload: &mut Value) {
+    ensure_json_object(payload);
+    let Some(object) = payload.as_object_mut() else {
+        return;
+    };
+    object.remove("previewImage");
+    object.remove("preview_image");
+    object.remove("finalPage");
+    object.remove("final_page");
+    object.insert("status".to_string(), json!("planning"));
+    if let Some(image_job) = object.get_mut("imageJob").and_then(Value::as_object_mut) {
+        image_job.insert("status".to_string(), json!("stale"));
+    }
+    if let Some(image_job) = object.get_mut("image_job").and_then(Value::as_object_mut) {
+        image_job.insert("status".to_string(), json!("stale"));
+    }
+}
+
+fn finalize_static_page_operations_payload(
+    payload: &mut Value,
+    operations: &[Value],
+    prompt: Option<&str>,
+    summary: &str,
+) {
+    ensure_json_object(payload);
+    if !summary.trim().is_empty() {
+        set_payload_string(payload, "modelSummary", summary);
+        set_payload_string(payload, "model_summary", summary);
+    }
+    refresh_static_page_payload_design_contract(payload);
+    append_static_page_operations_metadata(payload, operations, prompt, summary);
 }
 
 fn append_static_page_operations_metadata(
@@ -18847,6 +19169,14 @@ mod tests {
                 "backendDraftId": "draft-1",
                 "id": "local-draft-1",
                 "objective": "订单经营静态页",
+                "status": "planning",
+                "styleDirection": "data-command",
+                "previewContract": {"status": "stale"},
+                "finalPage": {"status": "rendered"},
+                "modules": [
+                    {"id": "hero", "content": "模块正文不能进候选"},
+                    {"id": "trend"}
+                ],
             })),
         );
 
@@ -18854,7 +19184,16 @@ mod tests {
         assert_eq!(candidates[0]["type"], json!("static_page_draft"));
         assert_eq!(candidates[0]["id"], json!("draft-1"));
         assert_eq!(candidates[0]["label"], json!("当前静态页：订单经营静态页"));
+        assert_eq!(candidates[0]["status"], json!("planning"));
+        assert_eq!(candidates[0]["styleDirection"], json!("data-command"));
+        assert_eq!(candidates[0]["moduleCount"], json!(2));
+        assert_eq!(candidates[0]["previewStatus"], json!("stale"));
+        assert_eq!(candidates[0]["finalRenderStatus"], json!("rendered"));
+        assert_eq!(candidates[0]["previewStale"], json!(true));
         assert_eq!(candidates[0]["source"], json!("active_artifact"));
+        let serialized =
+            serde_json::to_string(&candidates).expect("scope candidates should serialize");
+        assert!(!serialized.contains("模块正文不能进候选"));
     }
 
     #[test]
@@ -20303,6 +20642,274 @@ mod tests {
         assert!(sample_data
             .iter()
             .all(|point| point["kind"] == json!("evidence_value")));
+    }
+
+    #[test]
+    fn static_page_design_edit_marks_confirmed_preview_and_final_render_stale() {
+        let job_id = StaticPageImageJobId::new();
+        let base_payload = json!({
+            "version": 1,
+            "status": "planning",
+            "styleDirection": "client-delivery",
+            "modules": [{
+                "id": "trend",
+                "title": "订单趋势",
+                "content": "展示订单金额按月变化。",
+                "layout": { "x": 0, "y": 0, "w": 6, "h": 3 },
+                "visualization": { "type": "line-chart" }
+            }]
+        });
+        let queued = apply_static_page_operations_to_payload(
+            base_payload,
+            &[json!({
+                "type": "queue_image_job",
+                "jobId": job_id,
+                "queuePosition": 1,
+            })],
+            Some("效果图任务已进入资源队列。"),
+        );
+        let confirmed = apply_static_page_operations_to_payload(
+            queued,
+            &[json!({
+                "type": "confirm_preview",
+                "previewImage": {
+                    "kind": "static-page-effect-preview",
+                    "assetKey": "static-page-previews/confirmed.png",
+                    "imageJobId": job_id,
+                }
+            })],
+            Some("效果图已确认。"),
+        );
+        let confirmed_fingerprint =
+            static_page_preview_contract_fingerprint(&confirmed["previewContract"])
+                .expect("confirmed preview should include fingerprint");
+        let rendered = apply_static_page_operations_to_payload(
+            confirmed,
+            &[json!({
+                "type": "request_final_render",
+                "finalPage": {
+                    "status": "rendered",
+                    "renderOutputId": domain_model::StaticPageRenderOutputId::new(),
+                }
+            })],
+            Some("最终静态页已生成。"),
+        );
+        assert_eq!(rendered["previewContract"]["status"], json!("confirmed"));
+        assert!(rendered.get("previewImage").is_some());
+        assert!(rendered.get("finalPage").is_some());
+
+        let edited = apply_static_page_operations_to_payload(
+            rendered,
+            &[json!({
+                "type": "update_module",
+                "targetModuleId": "trend",
+                "patch": {
+                    "title": "订单趋势复盘",
+                    "content": "展示订单金额和增长原因。"
+                }
+            })],
+            Some("用户调整了趋势模块。"),
+        );
+
+        assert_eq!(edited["status"], json!("planning"));
+        assert_eq!(edited["previewContract"]["status"], json!("stale"));
+        assert_eq!(
+            edited["previewContract"]["staleReason"],
+            json!("draft design changed after the preview was requested or confirmed")
+        );
+        assert!(edited.get("previewImage").is_none());
+        assert!(edited.get("finalPage").is_none());
+        assert_ne!(
+            static_page_preview_contract_fingerprint(&edited["previewContract"])
+                .expect("stale preview should keep current fingerprint"),
+            confirmed_fingerprint
+        );
+    }
+
+    #[test]
+    fn static_page_supplied_operation_payload_refreshes_stale_preview_contract() {
+        let job_id = StaticPageImageJobId::new();
+        let mut supplied_payload = apply_static_page_operations_to_payload(
+            json!({
+                "version": 1,
+                "status": "planning",
+                "styleDirection": "client-delivery",
+                "modules": [{
+                    "id": "hero",
+                    "title": "核心判断",
+                    "content": "当前经营健康。"
+                }]
+            }),
+            &[json!({
+                "type": "confirm_preview",
+                "previewImage": {
+                    "kind": "static-page-effect-preview",
+                    "assetKey": "static-page-previews/hero.png",
+                    "imageJobId": job_id,
+                }
+            })],
+            Some("效果图已确认。"),
+        );
+        supplied_payload["modules"][0]["content"] = json!("当前经营健康，但需要关注回款压力。");
+
+        finalize_static_page_operations_payload(
+            &mut supplied_payload,
+            &[json!({
+                "type": "update_module",
+                "targetModuleId": "hero",
+                "patch": {
+                    "content": "当前经营健康，但需要关注回款压力。"
+                }
+            })],
+            Some("补充回款压力"),
+            "用户调整了核心判断模块。",
+        );
+
+        assert_eq!(supplied_payload["status"], json!("planning"));
+        assert_eq!(
+            supplied_payload["previewContract"]["status"],
+            json!("stale")
+        );
+        assert!(supplied_payload.get("previewImage").is_none());
+        assert_eq!(
+            supplied_payload["operations"][0]["prompt"],
+            json!("补充回款压力")
+        );
+    }
+
+    #[test]
+    fn static_page_mobile_reorder_marks_confirmed_preview_stale() {
+        let job_id = StaticPageImageJobId::new();
+        let confirmed = apply_static_page_operations_to_payload(
+            json!({
+                "version": 1,
+                "status": "planning",
+                "styleDirection": "client-delivery",
+                "mobileOrder": ["hero", "risk"],
+                "modules": [
+                    {
+                        "id": "hero",
+                        "title": "核心判断",
+                        "content": "先给出主结论。"
+                    },
+                    {
+                        "id": "risk",
+                        "title": "风险提示",
+                        "content": "列出优先风险。"
+                    }
+                ]
+            }),
+            &[json!({
+                "type": "confirm_preview",
+                "previewImage": {
+                    "kind": "static-page-effect-preview",
+                    "assetKey": "static-page-previews/mobile-order.png",
+                    "imageJobId": job_id,
+                }
+            })],
+            Some("效果图已确认。"),
+        );
+        let confirmed_fingerprint =
+            static_page_preview_contract_fingerprint(&confirmed["previewContract"])
+                .expect("confirmed preview should include mobile-order fingerprint");
+
+        let reordered = apply_static_page_operations_to_payload(
+            confirmed,
+            &[json!({
+                "type": "reorder_modules",
+                "order": ["risk", "hero"]
+            })],
+            Some("用户调整了手机端模块顺序。"),
+        );
+
+        assert_eq!(reordered["mobileOrder"], json!(["risk", "hero"]));
+        assert_eq!(reordered["mobile_order"], json!(["risk", "hero"]));
+        assert_eq!(reordered["status"], json!("planning"));
+        assert_eq!(reordered["previewContract"]["status"], json!("stale"));
+        assert!(reordered.get("previewImage").is_none());
+        assert_ne!(
+            static_page_preview_contract_fingerprint(&reordered["previewContract"])
+                .expect("stale preview should keep reordered fingerprint"),
+            confirmed_fingerprint
+        );
+    }
+
+    #[test]
+    fn static_page_render_guard_rejects_stale_confirmed_image_job() {
+        let now = Utc::now();
+        let tenant_id = TenantId::new();
+        let draft_id = StaticPageDraftId::new();
+        let assistant_run_id = AssistantRunId::new();
+        let job_id = StaticPageImageJobId::new();
+        let confirmed_payload = apply_static_page_operations_to_payload(
+            json!({
+                "version": 1,
+                "status": "planning",
+                "styleDirection": "client-delivery",
+                "modules": [{
+                    "id": "risk",
+                    "title": "风险提示",
+                    "content": "库存压力可控。"
+                }]
+            }),
+            &[json!({
+                "type": "confirm_preview",
+                "previewImage": {
+                    "kind": "static-page-effect-preview",
+                    "assetKey": "static-page-previews/risk.png",
+                    "imageJobId": job_id,
+                }
+            })],
+            Some("效果图已确认。"),
+        );
+        let mut draft = StaticPageDraft {
+            id: draft_id,
+            tenant_id,
+            owner_user_id: None,
+            assistant_run_id,
+            title: "经营风险静态页".to_string(),
+            status: StaticPageDraftStatus::Confirmed,
+            selected_scope: Value::Null,
+            visibility_snapshot: Value::Null,
+            source_refs: Value::Null,
+            draft_payload: confirmed_payload.clone(),
+            created_at: now,
+            updated_at: now,
+        };
+        let job = StaticPageImageJob {
+            id: job_id,
+            tenant_id,
+            draft_id,
+            assistant_run_id,
+            status: StaticPageImageJobStatus::Confirmed,
+            queue_position: None,
+            image_prompt_payload: json!({
+                "preview_contract": confirmed_payload["previewContract"].clone()
+            }),
+            preview_asset_key: Some("static-page-previews/risk.png".to_string()),
+            failure_reason: None,
+            confirmed_at: Some(now),
+            created_at: now,
+            updated_at: now,
+        };
+
+        ensure_static_page_preview_contract_current(&draft, Some(&job))
+            .expect("confirmed preview should match current draft");
+
+        draft.draft_payload = apply_static_page_operations_to_payload(
+            draft.draft_payload,
+            &[json!({
+                "type": "update_module",
+                "targetModuleId": "risk",
+                "patch": {
+                    "content": "库存压力上升，需要安排清仓动作。"
+                }
+            })],
+            Some("用户调整了风险模块。"),
+        );
+        let error = ensure_static_page_preview_contract_current(&draft, Some(&job))
+            .expect_err("stale preview should be rejected");
+        assert_eq!(error.payload.code, "static_page_preview_stale");
     }
 
     #[test]

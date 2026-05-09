@@ -7,6 +7,7 @@ const JOB_LABELS = {
   preview_ready: '效果图待确认',
   failed: '生成失败',
   confirmed: '效果图已确认',
+  stale: '规划已变更',
 };
 
 const DEFAULT_QUEUE_MESSAGE = '资源正在排队，可以联系商务开通高级用户跳过等待。';
@@ -44,7 +45,7 @@ export default function StaticPageEffectPreview({
   const failureMessage = jobStatus === 'failed'
     ? (imageJob.queueMessage || '效果图生成失败，可以重新生成。')
     : '';
-  const previewStale = draft?.previewContract?.status === 'stale';
+  const previewStale = draft?.previewContract?.status === 'stale' || jobStatus === 'stale';
 
   function queuePreview() {
     onApplyOperation?.({
@@ -121,9 +122,9 @@ export default function StaticPageEffectPreview({
       )}
 
       <div className="static-page-effect-actions">
-        {jobStatus === 'idle' || jobStatus === 'failed' ? (
+        {jobStatus === 'idle' || jobStatus === 'failed' || jobStatus === 'stale' ? (
           <button type="button" className="primary-btn compact-action-btn" onClick={queuePreview}>
-            {jobStatus === 'failed' ? '重新生成效果图' : '生成效果图'}
+            {jobStatus === 'idle' ? '生成效果图' : '重新生成效果图'}
           </button>
         ) : null}
         {(jobStatus === 'queued' || jobStatus === 'running') && !isBackendJob ? (

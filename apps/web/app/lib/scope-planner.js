@@ -82,6 +82,12 @@ export function planAssistantScope({
       type: 'static_page_draft',
       id: staticDraftReference.id,
       label: staticDraftReference.label,
+      status: staticDraftReference.status,
+      styleDirection: staticDraftReference.styleDirection,
+      moduleCount: staticDraftReference.moduleCount,
+      previewStatus: staticDraftReference.previewStatus,
+      finalRenderStatus: staticDraftReference.finalRenderStatus,
+      previewStale: staticDraftReference.previewStale,
       confidence: promptTouchesActiveStaticDraft ? 'high' : 'medium',
       reason: promptTouchesActiveStaticDraft ? '用户正在调整当前打开的静态页草稿' : '当前主区域打开了静态页草稿',
       source: 'active_artifact',
@@ -196,9 +202,17 @@ function buildStaticDraftReference(draft) {
   const id = draft.backendDraftId || draft.backendId || draft.id || '';
   if (!id) return null;
   const objective = String(draft.objective || draft.title || '').trim();
+  const previewStatus = draft.previewContract?.status || draft.imageJob?.status || '';
+  const finalRenderStatus = draft.finalPage?.status || '';
   return {
     id,
     label: objective ? `当前静态页：${objective}` : '当前静态页草稿',
+    status: draft.status || draft.backendStatus || '',
+    styleDirection: draft.styleDirection || '',
+    moduleCount: Array.isArray(draft.modules) ? draft.modules.length : 0,
+    previewStatus,
+    finalRenderStatus,
+    previewStale: previewStatus === 'stale' || draft.imageJob?.status === 'stale',
   };
 }
 
@@ -220,6 +234,12 @@ function buildScopeHint(candidates, intent = 'ordinary_chat') {
 
 function formatCandidateHint(candidate) {
   if (!candidate?.label) return '';
+  if (candidate.type === 'static_page_draft') {
+    const status = candidate.previewStale
+      ? '规划已变更'
+      : candidate.finalRenderStatus || candidate.previewStatus || candidate.status || '';
+    return status ? `${candidate.label}(${status})` : candidate.label;
+  }
   if (candidate.type !== 'dataset') return candidate.label;
   const details = [];
   if (candidate.documentCount) details.push(`${candidate.documentCount}文档`);

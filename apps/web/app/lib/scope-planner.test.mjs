@@ -146,15 +146,24 @@ test('scope planner treats active static page edits as artifact context', () => 
       backendDraftId: 'static-draft-1',
       id: 'local-static-draft-1',
       objective: '订单经营分析页',
+      status: 'planning',
+      styleDirection: 'data-command',
+      previewContract: { status: 'stale' },
+      finalPage: null,
+      modules: [{ id: 'hero' }, { id: 'trend' }],
     },
   });
 
+  const draftCandidate = plan.candidates.find((candidate) => candidate.type === 'static_page_draft');
   assert.equal(plan.intent, 'static_page');
   assert.equal(selectPlannerDatasetId(plan), '');
   assert.equal(plan.candidates.some((candidate) => candidate.type === 'static_page_draft'), true);
-  assert.equal(plan.candidates.find((candidate) => candidate.type === 'static_page_draft')?.id, 'static-draft-1');
+  assert.equal(draftCandidate?.id, 'static-draft-1');
+  assert.equal(draftCandidate?.moduleCount, 2);
+  assert.equal(draftCandidate?.previewStatus, 'stale');
+  assert.equal(draftCandidate?.previewStale, true);
   assert.equal(plan.supplyStrategy.currentArtifactPolicy, 'active_static_page_draft');
   assert.equal(plan.supplyStrategy.retrievalPolicy, 'not_requested');
   assert.deepEqual(plan.supplyStrategy.recommendedActions, ['static_page.update_draft']);
-  assert.match(plan.hint, /当前静态页：订单经营分析页/);
+  assert.match(plan.hint, /当前静态页：订单经营分析页\(规划已变更\)/);
 });

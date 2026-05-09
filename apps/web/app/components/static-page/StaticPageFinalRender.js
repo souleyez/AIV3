@@ -1,6 +1,10 @@
 'use client';
 
-import { buildStaticPageFinalRenderPayload } from '../../lib/static-page-draft';
+import {
+  buildStaticPageFinalRenderPayload,
+  canRequestStaticPageFinalRender,
+  staticPageFinalRenderBlockReason,
+} from '../../lib/static-page-draft';
 import {
   buildStaticPageStandaloneHtml,
   dataQualitySummaryFromManifest,
@@ -96,6 +100,7 @@ function FinalRenderStatusCard({
   draft,
   finalStatus,
   workflowExecutionId,
+  canRequestRender,
   onApplyOperation,
   onRetryWorkflow,
   onCancelWorkflow,
@@ -141,7 +146,7 @@ function FinalRenderStatusCard({
             重试 workflow
           </button>
         ) : null}
-        {cancelled || failed ? (
+        {(cancelled || failed) && canRequestRender ? (
           <button type="button" className="primary-btn compact-action-btn" onClick={() => onApplyOperation?.({ type: 'request_final_render' })}>
             重新生成
           </button>
@@ -185,7 +190,8 @@ export default function StaticPageFinalRender({
   onRefreshDraft,
   compact = false,
 }) {
-  const canRequestRender = draft?.status === 'effect_confirmed';
+  const canRequestRender = canRequestStaticPageFinalRender(draft);
+  const blockReason = staticPageFinalRenderBlockReason(draft);
   const finalStatus = finalPageStatus(draft);
   const hasFinalPage = ['mock_ready', 'rendered', 'queued', 'rendering', 'failed', 'cancelled'].includes(finalStatus)
     || draft?.status === 'rendering'
@@ -207,7 +213,7 @@ export default function StaticPageFinalRender({
           <span>最终静态页</span>
           <strong>等待效果图确认</strong>
         </div>
-        <p>先确认效果图，再按效果制作可交付静态页。</p>
+        <p>{blockReason || '先确认效果图，再按效果制作可交付静态页。'}</p>
       </section>
     );
   }
@@ -235,6 +241,7 @@ export default function StaticPageFinalRender({
             draft={draft}
             finalStatus={finalStatus}
             workflowExecutionId={workflowExecutionId}
+            canRequestRender={canRequestRender}
             onApplyOperation={onApplyOperation}
             onRetryWorkflow={onRetryWorkflow}
             onCancelWorkflow={onCancelWorkflow}
