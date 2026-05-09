@@ -575,6 +575,10 @@ pub struct CreateDatasetRequest {
     #[serde(default)]
     pub visibility: Option<DatasetVisibility>,
     #[serde(default)]
+    pub local_only: bool,
+    #[serde(default)]
+    pub local_thread_id: Option<String>,
+    #[serde(default)]
     pub secret_binding_ids: Vec<SecretBindingId>,
     #[serde(default)]
     pub secret_fingerprint: Option<String>,

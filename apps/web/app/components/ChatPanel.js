@@ -1,5 +1,6 @@
 'use client';
 
+import { useEffect, useRef } from 'react';
 import { formatDateTime, formatRelativeTime, formatSnakeCaseLabel, truncateText } from '../lib/formatters';
 import HtmlArtifactViewer from './artifacts/HtmlArtifactViewer';
 import StaticPageAssistantNotice from './static-page/StaticPageAssistantNotice';
@@ -496,14 +497,16 @@ export default function ChatPanel({
   const showingStaticPageWorkspace = showStaticPageWorkspace && Boolean(staticPageDraft);
   const staticPageAction = staticPageActionState(staticPageDraft);
   const staticPageEntryOnly = shouldOfferStaticPageWorkspaceEntry(staticPageDraft);
+  const chatEndRef = useRef(null);
   const staticPageNotice = staticPageDraft && !showingHtmlArtifactWorkspace && !showingStaticPageWorkspace ? (
     <StaticPageAssistantNotice
       draft={staticPageDraft}
       onOpenBuilder={onOpenStaticPageBuilder}
-      actionLabel={staticPageEntryOnly ? '进入静态页工作台' : staticPageAction.label}
+      simpleEntry={staticPageEntryOnly}
+      actionLabel={staticPageEntryOnly ? '点此开始生成静态页' : staticPageAction.label}
       actionHelper={
         staticPageEntryOnly
-          ? '对话保持正常；点击后才会在主聊天区打开模块编辑，不点就继续聊天。'
+          ? ''
           : staticPageAction.helper
       }
       actionDisabled={staticPageEntryOnly ? false : (staticPageAction.disabled || staticPageActionBusy)}
@@ -517,6 +520,24 @@ export default function ChatPanel({
       secondaryLabel={staticPageEntryOnly ? '' : '不满意，回到模块编辑'}
     />
   ) : null;
+
+  useEffect(() => {
+    if (showingHtmlArtifactWorkspace || showingStaticPageWorkspace) {
+      return undefined;
+    }
+    const frame = window.requestAnimationFrame(() => {
+      chatEndRef.current?.scrollIntoView({ block: 'end' });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [
+    messageLoading,
+    messages.length,
+    staticPageDraft?.id,
+    staticPageDraft?.imageJob?.status,
+    staticPageEntryOnly,
+    showingHtmlArtifactWorkspace,
+    showingStaticPageWorkspace,
+  ]);
 
   return (
     <section className={`chat-panel card ${panelClassName}`.trim()}>
@@ -676,6 +697,7 @@ export default function ChatPanel({
               </div>
             )}
             {staticPageNotice}
+            <div ref={chatEndRef} className="chat-scroll-anchor" aria-hidden="true" />
           </>
         )}
         </div>
@@ -710,26 +732,28 @@ export default function ChatPanel({
               }
             }}
           />
-          <button className="primary-btn send-btn" type="button" onClick={onSubmit} disabled={!input.trim() || submitting}>
-            {submitting ? '发送中...' : '发送'}
-          </button>
-          <button
-            className="ghost-btn upload-btn"
-            type="button"
-            onClick={onUploadClick}
-            disabled={!onUploadClick || submitting}
-            title={onUploadClick ? '上传文件并自动分类' : '上传分类接口待接入'}
-          >
-            {uploadingFiles ? '上传中...' : '上传'}
-          </button>
-          <button
-            className="ghost-btn static-page-one-click-btn"
-            type="button"
-            onClick={() => onStartStaticPageDraft?.({ oneClick: false, openEditor: true })}
-            disabled={submitting}
-          >
-            页面
-          </button>
+          <div className="chat-action-stack" aria-label="对话动作">
+            <button className="primary-btn send-btn" type="button" onClick={onSubmit} disabled={!input.trim() || submitting}>
+              {submitting ? '发送中...' : '发送'}
+            </button>
+            <button
+              className="ghost-btn upload-btn"
+              type="button"
+              onClick={onUploadClick}
+              disabled={!onUploadClick || submitting}
+              title={onUploadClick ? '上传文件并自动分类' : '上传分类接口待接入'}
+            >
+              {uploadingFiles ? '上传中...' : '上传'}
+            </button>
+            <button
+              className="ghost-btn static-page-one-click-btn"
+              type="button"
+              onClick={() => onStartStaticPageDraft?.({ oneClick: false, openEditor: true })}
+              disabled={submitting}
+            >
+              页面
+            </button>
+          </div>
         </div>
       </div>
     </section>

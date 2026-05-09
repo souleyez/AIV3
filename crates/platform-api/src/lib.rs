@@ -152,6 +152,7 @@ const STATIC_PAGE_DRAFT_LIST_MAX_LIMIT: i64 = 50;
 const HTML_ARTIFACT_LIST_DEFAULT_LIMIT: i64 = 20;
 const HTML_ARTIFACT_LIST_MAX_LIMIT: i64 = 100;
 const ACTIVE_SECRET_BINDING_IDS_HEADER: &str = "x-ai-data-platform-secret-binding-ids";
+const LOCAL_THREAD_ID_HEADER: &str = "x-ai-data-platform-local-thread-id";
 const AUTH_SESSION_COOKIE_NAME: &str = "aidp_v3_session";
 const AUTH_SESSION_TTL_DAYS: i64 = 30;
 const AUTH_EMAIL_RESEND_AFTER_SECONDS: i64 = 60;
@@ -3932,6 +3933,15 @@ fn active_secret_binding_ids_from_headers(
         .collect()
 }
 
+fn local_thread_id_from_headers(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get(LOCAL_THREAD_ID_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
 fn validate_auth_email(email: &str) -> std::result::Result<String, ApiError> {
     validate_required("email", email)?;
     let normalized = auth_email::normalize_email(email);
@@ -4295,10 +4305,10 @@ fn dataset_is_visible(
     active_secret_binding_ids: &[SecretBindingId],
     current_user_id: Option<UserId>,
 ) -> bool {
-    dataset.visibility == DatasetVisibility::Public
-        || dataset
-            .owner_user_id
-            .is_some_and(|owner_user_id| Some(owner_user_id) == current_user_id)
+    dataset
+        .owner_user_id
+        .is_some_and(|owner_user_id| Some(owner_user_id) == current_user_id)
+        || (dataset.owner_user_id.is_none() && dataset.visibility == DatasetVisibility::Public)
         || dataset.default_secret_binding_ids.iter().any(|secret_id| {
             active_secret_binding_ids
                 .iter()
@@ -4306,14 +4316,35 @@ fn dataset_is_visible(
         })
 }
 
+fn dataset_local_scope_is_visible(dataset: &Dataset, local_thread_id: Option<&str>) -> bool {
+    let local_only = dataset
+        .metadata
+        .get("local_only")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if !local_only || dataset.owner_user_id.is_some() {
+        return true;
+    }
+    dataset
+        .metadata
+        .get("local_thread_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .is_some_and(|dataset_thread_id| Some(dataset_thread_id) == local_thread_id)
+}
+
 fn filter_visible_datasets(
     datasets: Vec<Dataset>,
     active_secret_binding_ids: &[SecretBindingId],
     current_user_id: Option<UserId>,
+    local_thread_id: Option<&str>,
 ) -> Vec<Dataset> {
     datasets
         .into_iter()
-        .filter(|dataset| dataset_is_visible(dataset, active_secret_binding_ids, current_user_id))
+        .filter(|dataset| {
+            dataset_is_visible(dataset, active_secret_binding_ids, current_user_id)
+                && dataset_local_scope_is_visible(dataset, local_thread_id)
+        })
         .collect()
 }
 
@@ -5234,6 +5265,7 @@ async fn list_datasets(
     ensure_default_public_datasets(&state).await?;
     let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
     let current_user_id = current_auth_user_id(&state, &headers).await?;
+    let local_thread_id = local_thread_id_from_headers(&headers);
     let datasets = state
         .storage
         .datasets()
@@ -5242,11 +5274,16 @@ async fn list_datasets(
         .map_err(ApiError::from_storage)?;
 
     Ok(Json(
-        filter_visible_datasets(datasets, &active_secret_binding_ids, current_user_id)
-            .into_iter()
-            .filter(|dataset| dataset.lifecycle != DatasetLifecycle::Archived)
-            .map(|dataset| dataset_summary(dataset, None))
-            .collect(),
+        filter_visible_datasets(
+            datasets,
+            &active_secret_binding_ids,
+            current_user_id,
+            local_thread_id.as_deref(),
+        )
+        .into_iter()
+        .filter(|dataset| dataset.lifecycle != DatasetLifecycle::Archived)
+        .map(|dataset| dataset_summary(dataset, None))
+        .collect(),
     ))
 }
 
@@ -5260,14 +5297,32 @@ async fn create_dataset(
 
     let secret_fingerprint = trim_optional(request.secret_fingerprint);
     let requested_secret_binding_ids = request.secret_binding_ids.clone();
+    let current_user_id = current_auth_user_id(&state, &headers).await?;
     let visibility = if requested_secret_binding_ids.is_empty() && secret_fingerprint.is_none() {
-        DatasetVisibility::Public
+        request.visibility.unwrap_or(if current_user_id.is_some() {
+            DatasetVisibility::Private
+        } else {
+            DatasetVisibility::Public
+        })
     } else {
         request.visibility.unwrap_or(DatasetVisibility::Private)
     };
-    let access_warning =
-        (visibility == DatasetVisibility::Public).then(|| PUBLIC_DATASET_WARNING.to_string());
-    let current_user_id = current_auth_user_id(&state, &headers).await?;
+    let anonymous_local_only = current_user_id.is_none() && request.local_only;
+    let access_warning = (visibility == DatasetVisibility::Public && !anonymous_local_only)
+        .then(|| PUBLIC_DATASET_WARNING.to_string());
+    let local_thread_id = trim_optional(request.local_thread_id);
+    let mut metadata = Map::new();
+    metadata.insert("visibility".to_string(), json!(visibility.as_str()));
+    metadata.insert(
+        "default_secret_binding_ids".to_string(),
+        json!(requested_secret_binding_ids),
+    );
+    if anonymous_local_only {
+        metadata.insert("local_only".to_string(), json!(true));
+        if let Some(local_thread_id) = local_thread_id.as_deref() {
+            metadata.insert("local_thread_id".to_string(), json!(local_thread_id));
+        }
+    }
 
     let dataset = state
         .storage
@@ -5280,10 +5335,7 @@ async fn create_dataset(
                 description: trim_optional(request.description),
                 owner_user_id: current_user_id,
             },
-            json!({
-                "visibility": visibility.as_str(),
-                "default_secret_binding_ids": requested_secret_binding_ids,
-            }),
+            Value::Object(metadata),
         )
         .await
         .map_err(ApiError::from_storage)?;
@@ -6024,6 +6076,7 @@ async fn create_assistant_run(
     let client_scope_candidates = request.scope_candidates.clone();
     let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
     let current_user_id = current_auth_user_id(&state, &headers).await?;
+    let header_local_thread_id = local_thread_id_from_headers(&headers);
     ensure_default_public_datasets(&state).await?;
     let visible_datasets = filter_visible_datasets(
         state
@@ -6034,6 +6087,7 @@ async fn create_assistant_run(
             .map_err(ApiError::from_storage)?,
         &active_secret_binding_ids,
         current_user_id,
+        header_local_thread_id.as_deref(),
     );
     let visible_datasets =
         enrich_visible_datasets_for_scope_planning(&state, visible_datasets, current_user_id)
@@ -10469,6 +10523,7 @@ async fn list_documents(
 ) -> std::result::Result<Json<Vec<DocumentSummary>>, ApiError> {
     let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
     let current_user_id = current_auth_user_id(&state, &headers).await?;
+    let local_thread_id = local_thread_id_from_headers(&headers);
     let visible_dataset_ids: HashSet<DatasetId> = filter_visible_datasets(
         state
             .storage
@@ -10478,6 +10533,7 @@ async fn list_documents(
             .map_err(ApiError::from_storage)?,
         &active_secret_binding_ids,
         current_user_id,
+        local_thread_id.as_deref(),
     )
     .into_iter()
     .map(|dataset| dataset.id)
@@ -10898,6 +10954,7 @@ async fn list_report_plans(
 ) -> std::result::Result<Json<Vec<ReportPlanSummary>>, ApiError> {
     let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
     let current_user_id = current_auth_user_id(&state, &headers).await?;
+    let local_thread_id = local_thread_id_from_headers(&headers);
     let visible_dataset_ids: HashSet<DatasetId> = filter_visible_datasets(
         state
             .storage
@@ -10907,6 +10964,7 @@ async fn list_report_plans(
             .map_err(ApiError::from_storage)?,
         &active_secret_binding_ids,
         current_user_id,
+        local_thread_id.as_deref(),
     )
     .into_iter()
     .map(|dataset| dataset.id)
@@ -11321,6 +11379,7 @@ async fn list_published_reports(
 ) -> std::result::Result<Json<Vec<PublishedReportView>>, ApiError> {
     let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
     let current_user_id = current_auth_user_id(&state, &headers).await?;
+    let local_thread_id = local_thread_id_from_headers(&headers);
     let visible_dataset_ids: HashSet<DatasetId> = filter_visible_datasets(
         state
             .storage
@@ -11330,6 +11389,7 @@ async fn list_published_reports(
             .map_err(ApiError::from_storage)?,
         &active_secret_binding_ids,
         current_user_id,
+        local_thread_id.as_deref(),
     )
     .into_iter()
     .map(|dataset| dataset.id)
@@ -25735,6 +25795,17 @@ mod tests {
     }
 
     #[test]
+    fn dataset_visibility_restricts_owned_public_dataset_to_owner() {
+        let owner_user_id = UserId::new();
+        let mut dataset = test_dataset(DatasetVisibility::Public, Vec::new());
+        dataset.owner_user_id = Some(owner_user_id);
+
+        assert!(dataset_is_visible(&dataset, &[], Some(owner_user_id)));
+        assert!(!dataset_is_visible(&dataset, &[], Some(UserId::new())));
+        assert!(!dataset_is_visible(&dataset, &[], None));
+    }
+
+    #[test]
     fn dataset_visibility_hides_private_without_matching_secret() {
         let secret_binding_id = SecretBindingId::new();
         let dataset = test_dataset(DatasetVisibility::Private, vec![secret_binding_id]);
@@ -25757,6 +25828,21 @@ mod tests {
         assert!(dataset_is_visible(&dataset, &[], Some(owner_user_id)));
         assert!(!dataset_is_visible(&dataset, &[], Some(UserId::new())));
         assert!(!dataset_is_visible(&dataset, &[], None));
+    }
+
+    #[test]
+    fn dataset_local_scope_requires_matching_browser_thread() {
+        let mut dataset = test_dataset(DatasetVisibility::Public, Vec::new());
+        dataset
+            .metadata
+            .insert("local_only".to_string(), json!(true));
+        dataset
+            .metadata
+            .insert("local_thread_id".to_string(), json!("thread-a"));
+
+        assert!(dataset_local_scope_is_visible(&dataset, Some("thread-a")));
+        assert!(!dataset_local_scope_is_visible(&dataset, Some("thread-b")));
+        assert!(!dataset_local_scope_is_visible(&dataset, None));
     }
 
     #[test]
@@ -25906,6 +25992,8 @@ mod tests {
                 title: "Secret Created Dataset".to_string(),
                 description: None,
                 visibility: None,
+                local_only: false,
+                local_thread_id: None,
                 secret_binding_ids: Vec::new(),
                 secret_fingerprint: Some("create-secret-fingerprint".to_string()),
                 secret_label: Some("local-test".to_string()),
@@ -25953,6 +26041,8 @@ mod tests {
                 title: "Resolvable Private Dataset".to_string(),
                 description: None,
                 visibility: None,
+                local_only: false,
+                local_thread_id: None,
                 secret_binding_ids: Vec::new(),
                 secret_fingerprint: Some("resolve-fingerprint".to_string()),
                 secret_label: Some("resolve-test".to_string()),
@@ -26482,6 +26572,28 @@ mod tests {
 
     async fn get_request(app: Router, uri: &str, cookie: Option<&str>) -> axum::response::Response {
         let mut builder = axum::http::Request::builder().method("GET").uri(uri);
+        if let Some(cookie) = cookie {
+            builder = builder.header(axum::http::header::COOKIE, cookie);
+        }
+        let request = builder
+            .body(axum::body::Body::empty())
+            .expect("request should build");
+
+        app.oneshot(request)
+            .await
+            .expect("request should return a response")
+    }
+
+    async fn get_request_with_local_thread(
+        app: Router,
+        uri: &str,
+        cookie: Option<&str>,
+        local_thread_id: &str,
+    ) -> axum::response::Response {
+        let mut builder = axum::http::Request::builder()
+            .method("GET")
+            .uri(uri)
+            .header(LOCAL_THREAD_ID_HEADER, local_thread_id);
         if let Some(cookie) = cookie {
             builder = builder.header(axum::http::header::COOKIE, cookie);
         }
@@ -27156,6 +27268,8 @@ mod tests {
                 title: "Owner Private Dataset".to_string(),
                 description: None,
                 visibility: Some(DatasetVisibility::Private),
+                local_only: false,
+                local_thread_id: None,
                 secret_binding_ids: Vec::new(),
                 secret_fingerprint: Some("owner-private-fingerprint".to_string()),
                 secret_label: Some("owner-key".to_string()),
@@ -27183,6 +27297,97 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn logged_in_dataset_create_defaults_to_owner_private_without_secret() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let Some(harness) = build_auth_api_test_harness().await else {
+            return;
+        };
+        let cookie = issue_email_session_cookie(&harness, "owner-default@example.com").await;
+
+        let response = post_json_request(
+            harness.app.clone(),
+            "/v1/datasets",
+            &CreateDatasetRequest {
+                key: format!("owned-default-{}", Uuid::new_v4()),
+                title: "Owner Default Dataset".to_string(),
+                description: None,
+                visibility: None,
+                local_only: false,
+                local_thread_id: None,
+                secret_binding_ids: Vec::new(),
+                secret_fingerprint: None,
+                secret_label: None,
+            },
+            Some(&cookie),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let created: DatasetSummary = read_json_response(response).await;
+        assert_eq!(created.visibility, DatasetVisibility::Private);
+
+        let response = get_request(harness.app.clone(), "/v1/datasets", None).await;
+        let anonymous_datasets: Vec<DatasetSummary> = read_json_response(response).await;
+        assert!(!anonymous_datasets
+            .iter()
+            .any(|dataset| dataset.id == created.id));
+
+        let response = get_request(harness.app.clone(), "/v1/datasets", Some(&cookie)).await;
+        let owner_datasets: Vec<DatasetSummary> = read_json_response(response).await;
+        assert!(owner_datasets
+            .iter()
+            .any(|dataset| dataset.id == created.id));
+    }
+
+    #[tokio::test]
+    async fn anonymous_local_only_dataset_lists_only_for_matching_browser_thread() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let Some(harness) = build_auth_api_test_harness().await else {
+            return;
+        };
+        let local_thread_id = "browser-thread-local-only-test";
+
+        let response = post_json_request(
+            harness.app.clone(),
+            "/v1/datasets",
+            &CreateDatasetRequest {
+                key: format!("local-only-{}", Uuid::new_v4()),
+                title: "Local Only Dataset".to_string(),
+                description: None,
+                visibility: None,
+                local_only: true,
+                local_thread_id: Some(local_thread_id.to_string()),
+                secret_binding_ids: Vec::new(),
+                secret_fingerprint: None,
+                secret_label: None,
+            },
+            None,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let created: DatasetSummary = read_json_response(response).await;
+        assert_eq!(created.visibility, DatasetVisibility::Public);
+        assert_eq!(created.access_warning, None);
+
+        let response = get_request(harness.app.clone(), "/v1/datasets", None).await;
+        let anonymous_datasets: Vec<DatasetSummary> = read_json_response(response).await;
+        assert!(!anonymous_datasets
+            .iter()
+            .any(|dataset| dataset.id == created.id));
+
+        let response = get_request_with_local_thread(
+            harness.app.clone(),
+            "/v1/datasets",
+            None,
+            local_thread_id,
+        )
+        .await;
+        let local_datasets: Vec<DatasetSummary> = read_json_response(response).await;
+        assert!(local_datasets
+            .iter()
+            .any(|dataset| dataset.id == created.id));
+    }
+
+    #[tokio::test]
     async fn claim_local_data_assigns_unowned_private_dataset_to_session_user() {
         let _guard = shared_local_postgres_test_lock().lock().await;
         let Some(harness) = build_auth_api_test_harness().await else {
@@ -27197,6 +27402,8 @@ mod tests {
                 title: "Claim Local Dataset".to_string(),
                 description: None,
                 visibility: None,
+                local_only: false,
+                local_thread_id: None,
                 secret_binding_ids: Vec::new(),
                 secret_fingerprint: Some(fingerprint.to_string()),
                 secret_label: Some("local-test".to_string()),

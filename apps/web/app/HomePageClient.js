@@ -152,6 +152,22 @@ function readLocalThreadId() {
   }
 }
 
+function buildAutoDatasetIdentity(existingCount = 0) {
+  const now = new Date();
+  const safeStamp = Number.isFinite(now.getTime()) ? now.getTime().toString(36) : String(Date.now());
+  const randomPart = Math.random().toString(36).slice(2, 7);
+  const titleTime = now.toLocaleString('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+  return {
+    key: `dataset-${safeStamp}-${randomPart}`,
+    title: `新数据集 ${existingCount + 1} · ${titleTime}`,
+  };
+}
+
 function readLocalSecretBindingIdsHeader() {
   if (typeof window === 'undefined') {
     return '';
@@ -258,6 +274,7 @@ async function fetchJson(url, options = {}) {
       Accept: 'application/json',
       ...(options.body && !isFormData ? { 'Content-Type': 'application/json' } : {}),
       ...(secretBindingIds ? { 'X-AI-Data-Platform-Secret-Binding-Ids': secretBindingIds } : {}),
+      'X-AI-Data-Platform-Local-Thread-Id': readLocalThreadId(),
       ...(options.headers || {}),
     },
     body: options.body && !isFormData && typeof options.body !== 'string'
@@ -1734,14 +1751,11 @@ export default function HomePageClient() {
   }
 
   async function handleCreateDataset() {
-    const key = datasetDraft.key.trim();
-    const title = datasetDraft.title.trim();
+    const autoIdentity = buildAutoDatasetIdentity(datasets.length);
+    const key = (datasetDraft.key.trim() || autoIdentity.key).toLowerCase();
+    const title = datasetDraft.title.trim() || autoIdentity.title;
     const secret = String(datasetDraft.secret || '').trim();
-
-    if (!key || !title) {
-      setError('新建数据集至少需要 key 和标题。');
-      return;
-    }
+    const signedIn = Boolean(authSession.user);
 
     setCreatingDataset(true);
     try {
@@ -1751,10 +1765,11 @@ export default function HomePageClient() {
         body: {
           key,
           title,
+          description: signedIn ? '登录用户创建的数据集' : '未登录终端创建的本机公开数据集',
+          ...(!signedIn ? { local_only: true, local_thread_id: readLocalThreadId() } : {}),
           ...(fingerprint ? { secret_fingerprint: fingerprint, secret_label: `local-${key}` } : {}),
         },
       });
-      let nextDataset = dataset;
       let secretNote = '';
       if (secret && dataset.secret_binding_ids?.length) {
         const nextBindingIds = [...readLocalSecretBindingIds(), ...dataset.secret_binding_ids];
@@ -1764,9 +1779,11 @@ export default function HomePageClient() {
       }
       setDatasetDraft({ key: '', title: '', secret: '' });
       setBanner(
-        `已创建数据集 ${nextDataset.title}。${secretNote || (nextDataset.access_warning ? ` ${nextDataset.access_warning}。` : '')}`,
+        signedIn
+          ? `已按当前登录用户创建数据集 ${dataset.title}。${secretNote}`
+          : `已创建本机公开数据集 ${dataset.title}，仅当前浏览器默认可见。`,
       );
-      await refreshCatalog({ preferredDatasetId: nextDataset.id, silent: true });
+      await refreshCatalog({ preferredDatasetId: dataset.id, silent: true });
     } catch (createError) {
       setError(createError instanceof Error ? createError.message : '创建数据集失败');
     } finally {

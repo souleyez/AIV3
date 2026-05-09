@@ -8,9 +8,24 @@ export default function StaticPageAssistantNotice({
   actionHelper = '',
   actionDisabled = false,
   secondaryLabel = '不满意，回到模块编辑',
+  simpleEntry = false,
 }) {
   if (!draft) {
     return null;
+  }
+
+  if (simpleEntry) {
+    return (
+      <div className="static-page-assistant-notice static-page-simple-entry" role="note">
+        <div className="static-page-simple-copy">
+          <strong>已经了解您的意图，初步规划已经完成</strong>
+          <span>点此开始生成静态页即可。</span>
+        </div>
+        <button type="button" className="primary-btn compact-action-btn" onClick={onPrimaryAction} disabled={actionDisabled}>
+          {actionLabel}
+        </button>
+      </div>
+    );
   }
 
   const jobStatus = draft.previewContract?.status === 'stale' || draft.imageJob?.status === 'stale'

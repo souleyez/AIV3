@@ -1,52 +1,17 @@
 'use client';
 
-function DatasetCreateForm({
-  draft,
-  creating,
-  onChange,
-  onSubmit,
-}) {
+function DatasetCreateButton({ creating, signedIn, onCreate }) {
   return (
-    <form
-      className="side-card side-form"
-      onSubmit={(event) => {
-        event.preventDefault();
-        onSubmit();
-      }}
+    <button
+      className="dataset-create-plus"
+      type="button"
+      onClick={onCreate}
+      disabled={creating}
+      aria-label={signedIn ? '按当前登录用户新建数据集' : '新建本机公开数据集'}
+      title={signedIn ? '按当前登录用户新建数据集' : '未登录时新建本机公开数据集'}
     >
-      <div className="card-title">新建数据集</div>
-      <label className="side-form-field">
-        <span>Key</span>
-        <input
-          value={draft.key}
-          onChange={(event) => onChange('key', event.target.value)}
-          placeholder="例如 sales_briefing"
-          disabled={creating}
-        />
-      </label>
-      <label className="side-form-field">
-        <span>标题</span>
-        <input
-          value={draft.title}
-          onChange={(event) => onChange('title', event.target.value)}
-          placeholder="例如 销售简报知识集"
-          disabled={creating}
-        />
-      </label>
-      <label className="side-form-field">
-        <span>本地密钥</span>
-        <input
-          value={draft.secret || ''}
-          onChange={(event) => onChange('secret', event.target.value)}
-          placeholder="可选，填写后创建私密数据集"
-          disabled={creating}
-          type="password"
-        />
-      </label>
-      <button className="primary-btn side-form-submit" type="submit" disabled={creating}>
-        {creating ? '创建中...' : '创建并切换'}
-      </button>
-    </form>
+      {creating ? '...' : '+'}
+    </button>
   );
 }
 
@@ -228,8 +193,6 @@ export default function Sidebar({
   datasets,
   selectedDatasetId,
   selectedDataset,
-  datasetDraft,
-  onDatasetDraftChange,
   onCreateDataset,
   localSecretDraft,
   activeSecretCount,
@@ -269,14 +232,12 @@ export default function Sidebar({
           <h1>数据集</h1>
           <p>左侧只负责供料范围</p>
         </div>
+        <DatasetCreateButton
+          creating={creatingDataset}
+          signedIn={Boolean(accountAuth?.statusSummary?.signedIn)}
+          onCreate={onCreateDataset}
+        />
       </div>
-
-      <DatasetCreateForm
-        draft={datasetDraft}
-        creating={creatingDataset}
-        onChange={onDatasetDraftChange}
-        onSubmit={onCreateDataset}
-      />
 
       <section className="side-card">
         <div className="card-title">可选数据集</div>
