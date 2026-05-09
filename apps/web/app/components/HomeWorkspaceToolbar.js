@@ -95,15 +95,6 @@ export default function HomeWorkspaceToolbar({
   return (
     <header className="card home-toolbar">
       <div className="home-toolbar-left">
-        <button
-          type="button"
-          className="home-toolbar-brand"
-          aria-label="智能助手首页"
-          onClick={() => onPageChange?.('home')}
-        >
-          <span className="home-toolbar-brand-mark">AI</span>
-          <span className="home-toolbar-brand-name">智能助手</span>
-        </button>
         <nav className="home-toolbar-nav" aria-label="主要页面目录">
           {PAGE_LINKS.map((item) => (
             <button

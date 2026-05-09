@@ -67,7 +67,7 @@ export default function HomeMobileShell({
         >
           数据集
         </button>
-        <strong className="mobile-home-topbar-brand">AI智能助手</strong>
+        <strong className="mobile-home-topbar-brand">AI数据智能助手</strong>
         <button
           type="button"
           className="mobile-home-topbar-chip"

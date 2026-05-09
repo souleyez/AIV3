@@ -129,7 +129,8 @@ button {
 .brand h1 {
   margin: 0;
   color: #fff;
-  font-size: 17px;
+  font-size: 16px;
+  white-space: nowrap;
 }
 
 .brand p {
@@ -3554,6 +3555,7 @@ body {
   align-items: center;
   gap: 12px;
   min-width: 0;
+  white-space: nowrap;
 }
 
 .home-toolbar-left {
@@ -3630,11 +3632,14 @@ body {
 }
 
 .home-toolbar-flyout-trigger {
+  display: inline-flex;
+  align-items: center;
   min-height: 36px;
   gap: 8px;
   border-radius: 999px;
   font-size: 13px;
   font-weight: 850;
+  white-space: nowrap;
 }
 
 .home-toolbar-new-chat {
@@ -4818,7 +4823,7 @@ body {
   }
 
   .home-toolbar-right {
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
   }
 
   .conversation-flyout,

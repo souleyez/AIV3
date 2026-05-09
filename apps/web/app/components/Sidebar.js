@@ -292,7 +292,7 @@ export default function Sidebar({
       <div className="brand">
         <div className="brand-logo">AI</div>
         <div>
-          <h1>数据集</h1>
+          <h1>AI数据智能助手</h1>
           <p>左侧只负责供料范围</p>
         </div>
         <DatasetCreateButton
