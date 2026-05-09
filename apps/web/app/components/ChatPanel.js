@@ -553,15 +553,6 @@ export default function ChatPanel({
               : '未选数据集时先普通聊天；系统只做供料范围判断，不替模型编排答案。'}
         </div>
         <div className="chat-input-row">
-          <button
-            className="ghost-btn upload-btn"
-            type="button"
-            onClick={onUploadClick}
-            disabled={!onUploadClick || submitting}
-            title={onUploadClick ? '上传文件并自动分类' : '上传分类接口待接入'}
-          >
-            {uploadingFiles ? '上传中...' : '上传'}
-          </button>
           <textarea
             value={input}
             onChange={(event) => onInputChange(event.target.value)}
@@ -583,7 +574,16 @@ export default function ChatPanel({
             }}
           />
           <button className="primary-btn send-btn" type="button" onClick={onSubmit} disabled={!input.trim() || submitting}>
-            {submitting ? '提交中...' : session ? '追加一轮' : dataset ? '发起会话' : '发送'}
+            {submitting ? '发送中...' : '发送'}
+          </button>
+          <button
+            className="ghost-btn upload-btn"
+            type="button"
+            onClick={onUploadClick}
+            disabled={!onUploadClick || submitting}
+            title={onUploadClick ? '上传文件并自动分类' : '上传分类接口待接入'}
+          >
+            {uploadingFiles ? '上传中...' : '上传'}
           </button>
           <button
             className="ghost-btn static-page-one-click-btn"
@@ -591,7 +591,7 @@ export default function ChatPanel({
             onClick={() => onStartStaticPageDraft?.({ oneClick: true })}
             disabled={submitting}
           >
-            一键生成静态页
+            页面
           </button>
         </div>
       </div>

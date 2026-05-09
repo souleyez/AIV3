@@ -6,6 +6,7 @@ import HomeMobileShell from './components/HomeMobileShell';
 import HomeWorkspaceToolbar from './components/HomeWorkspaceToolbar';
 import InsightPanel from './components/InsightPanel';
 import Sidebar from './components/Sidebar';
+import WorkspaceDirectoryPanel from './components/WorkspaceDirectoryPanel';
 import {
   buildClaimLocalDataPayload,
   buildDeviceFingerprint,
@@ -514,7 +515,9 @@ function writeLocalAssistantRunId(runId) {
 }
 
 export default function HomePageClient() {
+  const [activePage, setActivePage] = useState('home');
   const [datasets, setDatasets] = useState([]);
+  const [documents, setDocuments] = useState([]);
   const [reportPlans, setReportPlans] = useState([]);
   const [publishedReports, setPublishedReports] = useState([]);
   const [selectedDatasetId, setSelectedDatasetId] = useState(null);
@@ -547,6 +550,8 @@ export default function HomePageClient() {
   const [bootstrapping, setBootstrapping] = useState(true);
   const [workspaceLoading, setWorkspaceLoading] = useState(false);
   const [messageLoading, setMessageLoading] = useState(false);
+  const [documentsLoading, setDocumentsLoading] = useState(false);
+  const [documentDetailLoading, setDocumentDetailLoading] = useState(false);
   const [reportDetailLoading, setReportDetailLoading] = useState(false);
   const [creatingDataset, setCreatingDataset] = useState(false);
   const [resolvingSecret, setResolvingSecret] = useState(false);
@@ -564,6 +569,9 @@ export default function HomePageClient() {
   const [activityEvents, setActivityEvents] = useState([]);
   const [lastAssistantRunId, setLastAssistantRunId] = useState('');
   const [assistantRunProgress, setAssistantRunProgress] = useState(null);
+  const [documentSearch, setDocumentSearch] = useState('');
+  const [selectedDocumentId, setSelectedDocumentId] = useState('');
+  const [selectedDocumentDetail, setSelectedDocumentDetail] = useState(null);
 
   const datasetLoadIdRef = useRef(0);
   const messageLoadIdRef = useRef(0);
@@ -1427,20 +1435,23 @@ export default function HomePageClient() {
     }
 
     try {
-      const [datasetItems, planItems, reportItems] = await Promise.all([
+      const [datasetItems, planItems, reportItems, documentItems] = await Promise.all([
         fetchJson('/api/v3/datasets'),
         fetchJson('/api/v3/report-plans'),
         fetchJson('/api/v3/published-reports'),
+        fetchJson('/api/v3/documents'),
       ]);
 
       const nextDatasets = sortDatasets(datasetItems);
       const nextReportPlans = Array.isArray(planItems) ? planItems : [];
       const nextPublishedReports = sortByDateDesc(reportItems, 'updated_at');
+      const nextDocuments = Array.isArray(documentItems) ? sortByDateDesc(documentItems, 'updated_at') : [];
 
       startTransition(() => {
         setDatasets(nextDatasets);
         setReportPlans(nextReportPlans);
         setPublishedReports(nextPublishedReports);
+        setDocuments(nextDocuments);
         setSelectedDatasetId((current) => {
           if (preferredDatasetId && nextDatasets.some((item) => item.id === preferredDatasetId)) {
             return preferredDatasetId;
@@ -1458,6 +1469,43 @@ export default function HomePageClient() {
       if (!silent) {
         setBootstrapping(false);
       }
+    }
+  }
+
+  async function refreshDocuments(options = {}) {
+    const { silent = false } = options;
+    if (!silent) {
+      setDocumentsLoading(true);
+    }
+
+    try {
+      const documentItems = await fetchJson('/api/v3/documents');
+      setDocuments(Array.isArray(documentItems) ? sortByDateDesc(documentItems, 'updated_at') : []);
+      setError('');
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : '文档列表加载失败');
+    } finally {
+      if (!silent) {
+        setDocumentsLoading(false);
+      }
+    }
+  }
+
+  async function refreshDocumentDetail(documentId) {
+    if (!documentId) {
+      setSelectedDocumentDetail(null);
+      return;
+    }
+
+    setDocumentDetailLoading(true);
+    try {
+      const detail = await fetchJson(`/api/v3/documents/${documentId}/detail`);
+      setSelectedDocumentDetail(detail);
+      setError('');
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : '文档解析详情加载失败');
+    } finally {
+      setDocumentDetailLoading(false);
     }
   }
 
@@ -2628,6 +2676,21 @@ export default function HomePageClient() {
   }, [selectedDatasetId]);
 
   useEffect(() => {
+    if (!selectedDocumentId) {
+      setSelectedDocumentDetail(null);
+      return;
+    }
+    refreshDocumentDetail(selectedDocumentId);
+  }, [selectedDocumentId]);
+
+  useEffect(() => {
+    if (!['datasets', 'sources'].includes(activePage)) {
+      return;
+    }
+    refreshDocuments({ silent: true });
+  }, [activePage]);
+
+  useEffect(() => {
     if (!selectedSessionId) {
       setMessages([]);
       return;
@@ -2887,6 +2950,37 @@ export default function HomePageClient() {
     activeHtmlArtifactId,
     onSelectHtmlArtifact: handleSelectHtmlArtifact,
   };
+  const directoryPanelProps = {
+    activePage,
+    datasets,
+    selectedDatasetId,
+    onSelectDataset: sidebarProps.onSelectDataset,
+    onClearDatasetSelection: sidebarProps.onClearDatasetSelection,
+    datasetDraft,
+    onDatasetDraftChange: sidebarProps.onDatasetDraftChange,
+    onCreateDataset: handleCreateDataset,
+    creatingDataset,
+    documents,
+    documentsLoading,
+    documentSearch,
+    onDocumentSearchChange: setDocumentSearch,
+    selectedDocumentId,
+    onSelectDocument: setSelectedDocumentId,
+    selectedDocumentDetail,
+    documentDetailLoading,
+    onRefreshDocuments: () => refreshDocuments({ silent: false }),
+    stats,
+    accountStatusSummary,
+    activityEvents,
+    htmlArtifacts,
+    input,
+    onInputChange: setInput,
+    onSubmit: handleSubmitMessage,
+    onUploadClick: handleUploadButtonClick,
+    onStartStaticPageDraft: handleStartStaticPageDraft,
+    submitting: submitting || uploadingFiles,
+    uploadingFiles,
+  };
   const uploadInput = (
     <input
       ref={fileInputRef}
@@ -2934,19 +3028,31 @@ export default function HomePageClient() {
 
       <main className="main-panel main-panel-home">
         <HomeWorkspaceToolbar
+          activePage={activePage}
+          onPageChange={setActivePage}
           selectedDataset={selectedDataset}
           stats={stats}
           loading={bootstrapping}
           workspaceLoading={workspaceLoading}
+          documents={documents}
           sourceItems={toolbarSourceItems}
+          accountAuth={sidebarProps.accountAuth}
         />
 
         {banner ? <div className="page-banner success-banner">{banner}</div> : null}
         {error ? <div className="page-banner error-banner">{error}</div> : null}
 
-        <section className={`workspace-grid homepage-workspace mobile-panel-${mobilePanel}`}>
-          <ChatPanel {...chatPanelProps} />
-          <InsightPanel {...insightPanelProps} />
+        <section
+          className={`workspace-grid homepage-workspace ${activePage === 'home' ? '' : 'page-directory-workspace'} mobile-panel-${mobilePanel}`.trim()}
+        >
+          {activePage === 'home' ? (
+            <>
+              <ChatPanel {...chatPanelProps} />
+              <InsightPanel {...insightPanelProps} />
+            </>
+          ) : (
+            <WorkspaceDirectoryPanel {...directoryPanelProps} />
+          )}
         </section>
       </main>
     </div>

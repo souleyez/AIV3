@@ -58,6 +58,7 @@ V3 is not a generic file manager and not a standalone page builder. It is a data
 Completed and preserved:
 
 - Original-assistant-style web shell with left dataset rail, main workspace, right output shelf, mobile support, upload entry, and one visible static-page/report action.
+- Desktop information architecture is now fixed for the next UI round: the left rail only selects datasets, the floating top toolbar owns system status/login status/model proxy/page directory, the bottom composer owns send/upload/page actions, and the main workspace switches between assistant home, dataset management, data sources, members, and audit.
 - Upload saves real local files, classifies them, registers documents, and starts ingest workflows.
 - Ingest supports local text, OOXML, PDF, OCR fallback, MiniMax document VLM slice, and first audio/video metadata/transcript slice.
 - Retrieval and static-page data snapshots preserve media timestamp windows, source locators, and evidence refs for transcript/scene/keyframe citations.

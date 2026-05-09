@@ -266,22 +266,10 @@ export default function Sidebar({
       <div className="brand">
         <div className="brand-logo">AI</div>
         <div>
-          <h1>智能助手</h1>
-          <p>V3 数据集工作台</p>
+          <h1>数据集</h1>
+          <p>左侧只负责供料范围</p>
         </div>
       </div>
-
-      <AccountPanel accountAuth={accountAuth} />
-
-      <section className="nav-section">
-        <div className="nav-title">工作区</div>
-        <div className="nav-item nav-item-static active">智能会话</div>
-        <div className="nav-item nav-item-static">数据集</div>
-        <div className="nav-item nav-item-static">采集源</div>
-        <div className="nav-item nav-item-static">静态页</div>
-        <div className="nav-item nav-item-static">成员</div>
-        <div className="nav-item nav-item-static">审计</div>
-      </section>
 
       <DatasetCreateForm
         draft={datasetDraft}
@@ -290,19 +278,8 @@ export default function Sidebar({
         onSubmit={onCreateDataset}
       />
 
-      <LocalSecretPanel
-        secretDraft={localSecretDraft}
-        selectedDataset={selectedDataset}
-        activeSecretCount={activeSecretCount}
-        resolving={resolvingSecret}
-        onSecretDraftChange={onLocalSecretDraftChange}
-        onResolveSecret={onResolveLocalSecret}
-        onBindSelectedDatasetSecret={onBindSelectedDatasetSecret}
-        onClearSecret={onClearLocalSecret}
-      />
-
       <section className="side-card">
-        <div className="card-title">数据集</div>
+        <div className="card-title">可选数据集</div>
         <div className="dataset-list">
           <button
             type="button"
@@ -341,37 +318,6 @@ export default function Sidebar({
             </div>
           )}
         </div>
-      </section>
-
-      <section className="side-card compact">
-        <div className="card-title">当前上下文</div>
-        <div className="side-kv-list">
-          <div className="side-kv-row">
-            <span>数据集</span>
-            <strong>{selectedDataset ? selectedDataset.title : '未选择'}</strong>
-          </div>
-          <div className="side-kv-row">
-            <span>会话</span>
-            <strong>{stats.sessions}</strong>
-          </div>
-          <div className="side-kv-row">
-            <span>资料输出</span>
-            <strong>{stats.outputs}</strong>
-          </div>
-          <div className="side-kv-row">
-            <span>报告计划</span>
-            <strong>{stats.plans}</strong>
-          </div>
-          <div className="side-kv-row">
-            <span>已发布</span>
-            <strong>{stats.published}</strong>
-          </div>
-        </div>
-      </section>
-
-      <section className="side-card compact">
-        <div className="card-title">当前约束</div>
-        <p>未选数据集时按普通聊天；选中或预选数据集后才供料检索。右侧只保留草稿、成品和历史输出回看。</p>
       </section>
     </aside>
   );
