@@ -2,17 +2,17 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Provide the single active development plan for AI Data Platform V3, with static-page generation as the product mainline and Codex Host/model proxy as optional execution extensions behind V3 control.
+**Goal:** Provide the single active development plan for AI Data Platform V3, with static-page generation as the product mainline and the model-gateway/Codex conversation executor as the core assistant execution architecture behind V3 control.
 
-**Architecture:** V3 remains the control plane and source of truth: PostgreSQL owns identity, dataset visibility, AssistantRun state, memory scope, workflow state, and artifacts. The assistant supplies model context, evidence, tools, and state but does not locally compose final answers. Static-page generation, reports, parsing, retrieval, and media understanding stay as V3 product capabilities; Codex Host is an external audited worker, not a replacement for V3's API, data plane, model gateway, or worker plane.
+**Architecture:** V3 remains the control plane and source of truth: PostgreSQL owns identity, dataset visibility, AssistantRun state, memory scope, workflow state, and artifacts. The model gateway owns provider profiles and routing across GPT, MiniMax, and other OpenAI-compatible or adapted model APIs. The Codex conversation executor receives every assistant conversation as a bounded task, uses V3-supplied context/evidence/tool manifests, decides the next reasoning/tool steps, and returns model-authored messages plus validated action requests. Static-page generation, reports, parsing, retrieval, and media understanding stay as V3 product capabilities; Codex is the assistant execution kernel, not a replacement for V3's API, data plane, authorization, or durable workflow plane.
 
-**Tech Stack:** Next.js 16 / React 19 in `apps/web`; `react-grid-layout` for desktop module layout; `@dnd-kit` for mobile vertical ordering; Apache ECharts for advanced chart/runtime parity; deterministic HTML/SVG rendering for export-safe fallback; sandboxed HTML artifact renderer for task reports/planning handoffs/lightweight editors; Rust crates `platform-api`, `assistant-runtime`, `llm-gateway`, `static-page-runtime`, `static-page-worker`, `static-page-renderer`, `ingest-worker`, `retrieval-worker`, `memory-worker`, `document-vlm-runtime`, `codex-host-agent`; PostgreSQL 17.9 target; Cloudflare/Codex image queue; MiniMax VLM/media capability probes; OpenClaw only as optional legacy sidecar.
+**Tech Stack:** Next.js 16 / React 19 in `apps/web`; `react-grid-layout` for desktop module layout; `@dnd-kit` for mobile vertical ordering; Apache ECharts for advanced chart/runtime parity; deterministic HTML/SVG rendering for export-safe fallback; sandboxed HTML artifact renderer for task reports/planning handoffs/lightweight editors; Rust crates `platform-api`, `assistant-runtime`, `llm-gateway`, future `model-proxy` facade when extraction is justified, `static-page-runtime`, `static-page-worker`, `static-page-renderer`, `ingest-worker`, `retrieval-worker`, `memory-worker`, `document-vlm-runtime`, `codex-host-agent`; PostgreSQL 17.9 target; Cloudflare/Codex image queue; MiniMax VLM/media capability probes; OpenAI `openai/codex` OSS as the execution-kernel reference and host binary/SDK surface; Codex CLI/SDK/app-server/MCP server on jump host or later Mac host; OpenClaw only as optional legacy sidecar.
 
 ---
 
 ## Status
 
-This is the current active plan as of 2026-05-07.
+This is the current active plan as of 2026-05-10.
 
 Older plan files are now detailed references, not independent roadmaps:
 
@@ -32,6 +32,7 @@ V3 is not a generic file manager and not a standalone page builder. It is a data
 - Chat normally when no dataset is selected.
 - Understand visible datasets, documents, conversation memory, and artifacts as optional context supply.
 - Let the model choose retrieval/tool actions through V3 validation.
+- Route assistant conversations through a Codex execution kernel once the gateway bridge is ready, with V3 supplying context, evidence, memory, tool contracts, and safety gates.
 - Generate static-page/report artifacts inside the main assistant workspace.
 - Let users adjust modules by natural language and lightweight direct manipulation.
 - Open safe HTML artifacts for planning handoff, execution reports, code review summaries, and lightweight JSON-patch editors.
@@ -42,15 +43,18 @@ V3 is not a generic file manager and not a standalone page builder. It is a data
 
 - No fake data. If evidence is missing, the UI and generated artifact must say data is missing or partial.
 - No local answer composition. V3 supplies context and actions; the model writes the answer.
+- Codex may decide reasoning and action steps, but V3 remains the authority for permissions, visible datasets, memory scope, workflow state, queue submission, and artifact ownership.
+- The model gateway must support multiple provider APIs through explicit profiles, redacted credentials, provider capability manifests, and per-lane fallback policy.
 - Dataset selection is supply preference, not a separate chat mode.
 - Conversation history is a hidden dataset and enters context only through scope policy.
 - Foreground upload work only saves, preclassifies, registers, and enqueues. Heavy parsing is background work.
 - Static-page planning lives in the main workspace, not a separate popup.
 - The right panel remains drafts and finished outputs.
+- The overall UI shell is frozen unless the user explicitly reopens UI redesign. Keep the current home/dataset/data-source/member/audit layout, left dataset rail, top toolbar, right output shelf, and home-only composer. Future work should improve backend parsing quality, planning quality, generation quality, retrieval quality, render quality, and execution reliability rather than reworking the interface.
 - Module-level editability is a core feature, not a nice-to-have.
 - HTML artifacts must be sandboxed V3-owned render templates. Do not display raw provider/model HTML with scripts, remote assets, secrets, queue credentials, or direct database actions.
 - Account/auth work must never store raw local keys, OTP codes, provider tokens, or session cookie values.
-- Codex Host must not run on this developer workstation for real execution. Real execution validation is only for the jump host or later Mac host.
+- Codex real execution must not run on this developer workstation. Real execution validation is only for the jump host or later Mac host.
 - OpenClaw is optional and should not distract from the product mainline unless a concrete bug appears.
 
 ## Current Baseline
@@ -58,7 +62,7 @@ V3 is not a generic file manager and not a standalone page builder. It is a data
 Completed and preserved:
 
 - Original-assistant-style web shell with left dataset rail, main workspace, right output shelf, mobile support, upload entry, and one visible static-page/report action.
-- Desktop information architecture is now fixed for the next UI round: the left rail only selects datasets, the floating top toolbar owns system status/login status/model proxy/page directory, the bottom composer owns send/upload/page actions, and the main workspace switches between assistant home, dataset management, data sources, members, and audit.
+- Desktop information architecture is now fixed: the left rail only selects datasets, the floating top toolbar owns system status/login status/model proxy/page directory, the bottom composer owns send/upload/page actions on the home page, and the main workspace switches between assistant home, dataset management, data sources, members, and audit. Do not keep tuning the overall shell unless a concrete usability bug blocks the product flow.
 - Dataset/document basic management has started behind that shell: backend PATCH routes now support non-destructive dataset/document updates and archive lifecycle, while the dataset page can rename the selected dataset, rename documents, inspect parse details, and batch-archive documents without hard deletion.
 - Home right panel is simplified into a Codex-like text surface: the top explains current project tasks, available actions, and static-page stages; the middle/lower area is a clickable generated-result index. Static-page generation workspace now keeps only the draggable module framework and module editors; natural-language revisions stay in the global bottom chat composer.
 - Static-page generation uses a single main-chat progression button: `效果图——生成页面`. After module editing, the action sends the current draft to the Cloudflare/Codex image queue; once the effect image is ready, the workspace returns to chat for customer confirmation. If the customer is not satisfied, they return to module editing and repeat; if satisfied, the same button confirms the effect image and starts final page rendering.
@@ -77,13 +81,17 @@ Completed and preserved:
 - Static-page render/export manifests classify module data quality as confirmed, partial, or missing; the handoff README, main workspace, and right shelf expose those counts.
 - Background static-page render now preserves queued/rendering/failed/cancelled workflow state in the output and manifest so the main workspace and right shelf stay consistent.
 - Assistant startup briefing and scope planning expose product capability, controlled action policy, quality-first context budget, recommended tool actions, and minimal UI intent chips.
+- Home UI shell is now close to fixed: homepage keeps the conversation composer, directory pages remove the composer, the left rail remains dataset-only, the top toolbar owns page navigation/login/model status, the right shelf owns drafts/results, and members shows an explicit login-required overlay instead of looking broken.
 - Java 8 parity audit is complete: Java/Vue used `gridstack` plus `echarts`; V3 keeps `react-grid-layout` and adds ECharts as advanced chart runtime.
 - Model gateway seed exists in `llm-gateway` with model lanes, provider error redaction, and MiniMax reasoning block cleanup.
 - Codex Host safe bridge exists in dry-run/plan-only form. Real execution is still blocked by default.
+- The next architecture uplift is to connect model-gateway profiles to the Codex conversation executor so normal assistant conversations can be judged/executed by Codex while V3 supplies data and validates actions.
+- `openai/codex` OSS has been checked as the target execution-kernel reference. It is Apache-2.0, Rust-majority, installable by npm/Homebrew/releases, and exposes multiple integration surfaces: `codex exec` non-interactive runs, structured output schemas, SDK thread control, app-server JSON-RPC, and MCP server mode.
+- `CoDeepSeedeX` has been checked as a reference pattern for private Responses-compatible provider shims. It is useful for Codex-to-non-OpenAI provider adaptation, profile wrappers, health/usage/debug endpoints, context-budget diagnostics, tool-call protocol repair, and liveness guards. It is not a V3 dependency or replacement architecture.
 
 ## Architecture Modules
 
-Use these six modules for all future design and implementation decisions.
+Use these seven modules for all future design and implementation decisions.
 
 ### 1. Experience UI
 
@@ -93,31 +101,41 @@ Also owns safe artifact viewers for static-page handoff previews, Codex executio
 
 Does not own model routing, dataset visibility decisions, direct queue access, database access, Codex Host flags, or execution of arbitrary HTML/JavaScript from providers.
 
+The Experience UI should now be treated as product-stable. Only make narrow fixes for blocking usability, mobile breakage, accessibility, or state visibility. New capability work should surface through the existing shell rather than adding new global panels, new chat inputs, or new static-page flow screens.
+
 ### 2. V3 Control Plane
 
 Owns `platform-api`, user/session/local-key semantics, dataset/document visibility, AssistantRun state, draft/output ownership, workflow submission, runtime inspect, and artifact ownership.
 
 Does not own provider-specific HTTP details or local host execution.
 
-### 3. Integration Plane
+### 3. Model Gateway / Integration Plane
 
-Owns `llm-gateway`, future `model-proxy` facade if needed, `tool-registry`, `mcp-gateway`, and prompt policy.
+Owns `llm-gateway`, future `model-proxy` facade if needed, provider profile configuration, model lanes, provider capability manifests, provider fallback policy, credential redaction, `tool-registry`, `mcp-gateway`, and prompt policy.
 
-Do not create a separate model-proxy service until at least two independent processes need the same provider facade.
+The gateway must be able to configure multiple model APIs, including GPT-family providers, MiniMax-compatible providers, and future OpenAI-compatible or adapter-backed providers. Do not create a separate network service until at least two independent processes need the same provider facade; before that, strengthen `llm-gateway` as the shared library/facade.
 
-### 4. Workflow / Worker Plane
+### 4. Codex Conversation Executor
 
-Owns explicit workflow definitions, queue claiming, ingest/retrieval/memory/report/static-page/media workers, retry/cancel/dead-letter/replay semantics, and background task status.
+Owns the bounded conversation-execution loop: receive an AssistantRun context package from V3, call Codex with the configured model profile, let Codex reason over supplied context/tool contracts, emit concise progress steps, request V3-validated actions, and return model-authored assistant messages or artifact/action intents.
 
-Do not move routine parsing, retrieval, rendering, or memory refresh into Codex Host.
+The first integration should use supported `openai/codex` surfaces rather than forking the Codex core: TypeScript SDK/app-server for long-lived conversation threads when stable, `codex exec --output-schema` for non-interactive worker tasks, and `codex mcp-server` only as a later tool boundary if it is operationally cleaner.
 
-### 5. External Execution Host
+Does not own dataset visibility, memory source of truth, provider credentials, direct database reads, direct queue writes, static-page rendering, file parsing, or artifact ownership. It asks V3 for supply/action execution; V3 decides what is visible and what action is allowed.
+
+### 5. Workflow / Worker Plane
+
+Owns explicit workflow definitions, queue claiming, ingest/retrieval/memory/report/static-page/media workers, retry/cancel/dead-letter/replay semantics, background task status, and Codex execution tasks that need durable worker scheduling.
+
+Do not move routine parsing, retrieval, rendering, or memory refresh into the Codex conversation executor.
+
+### 6. External Execution Host
 
 Owns `codex-host-agent`, host profile validation, isolated task workspace, guarded `codex exec`, redacted logs, returned artifacts, and workflow completion.
 
-It is not a browser API, model gateway, memory authority, permission authority, or V3 scheduler.
+It is not a browser API, model gateway, memory authority, permission authority, or V3 scheduler. For normal chat, it should be treated as the host process for the Codex conversation executor; for heavier automation, it is a workflow worker.
 
-### 6. Data / Artifact Plane
+### 7. Data / Artifact Plane
 
 Owns PostgreSQL, object storage assets, vector indexes, analytical files, published static-page/report artifacts, migrations, and backup/restore discipline.
 
@@ -145,7 +163,40 @@ The product must support:
 - Final static-page render/export with real data and deterministic fallback.
 - ECharts advanced chart runtime for Java 8 parity and complex dashboards.
 
-### Priority 2: Assistant/RAG/Ingest Quality
+The visible UI pattern is already selected. Future static-page work should focus on better planning, better module content/data binding, stronger retrieval supply, stronger image-preview prompts, better deterministic final render fidelity, and cleaner export diagnostics. Avoid broad visual redesign of the assistant shell.
+
+### Priority 2: Model Gateway + Codex Conversation Executor
+
+This is now a core architecture track, not a distant sidecar.
+
+The target flow is:
+
+1. Browser sends a conversation turn to V3.
+2. V3 creates or continues an `AssistantRun`.
+3. V3 builds a supply package: system/product briefing, visible datasets, selected/inferred scope, hidden-memory candidates, evidence, current artifact state, tool catalog, and safety policy.
+4. V3 sends the task to the Codex conversation executor.
+5. Codex uses the configured model profile through the model gateway, decides whether to answer, retrieve more, update a draft, request an image preview, render a page, recall memory, or continue execution.
+6. V3 validates every requested action against user/session/dataset/artifact scope.
+7. V3 persists events, supplied evidence, actions, artifacts, and the final model-authored response.
+
+The product must support:
+
+- Gateway-configured model profiles for multiple provider APIs.
+- Per-profile capability manifests: chat, reasoning, vision, audio/video, JSON mode, tool calling, image-prompt support, rate limits, and cost hints.
+- Codex as the normal assistant reasoning/execution kernel once the bridge is stable.
+- A non-fork integration with upstream `openai/codex`: use official binary/SDK/server surfaces first, keep a local checkout only for debugging, Python SDK experiments, or patch evaluation.
+- A V3-owned private Responses-compatible shim pattern for providers Codex cannot call natively, using `CoDeepSeedeX` as a design reference but not as a runtime dependency.
+- Provider-shim observability: local-only health/status, capability, balance/usage, trace, and context-budget diagnostics. Persist product-grade usage/audit into V3 PostgreSQL/runtime inspect rather than relying on shim-local SQLite as source of truth.
+- Context budget governance: diagnose and cap runaway conversation history, tool outputs, retrieval payloads, and media/image payload summaries while preserving recent/high-risk evidence. This is required because the product intentionally favors answer quality over token thrift.
+- Tool-call protocol hardening: repair malformed tool-call/tool-output pairing before provider calls where safe, detect tool-call liveness stalls, and surface retry/continue steps as AssistantRun events.
+- V3-supplied context instead of Codex directly reading databases or local files.
+- ReAct progress surfaced as brief UI steps, not a verbose terminal log.
+- Provider fallback without silently changing safety/capability assumptions.
+- Jump-host/Mac-host validation for real Codex execution; no real local workstation execution.
+
+This track must not disrupt the current static-page user flow. Codex can replace the reasoning/action planner behind a feature gate, but V3 keeps the existing static-page state machine, draft model, preview queue, final renderer, artifact ownership, and current UI progression. `direct` execution remains the fallback until Codex-backed action planning proves equivalent or better in shadow runs.
+
+### Priority 3: Assistant/RAG/Ingest Quality
 
 Continue improving supply quality, not UI form complexity:
 
@@ -156,7 +207,7 @@ Continue improving supply quality, not UI form complexity:
 - Media detail API for transcript windows, scenes, keyframes, OCR snippets, and provider evidence.
 - No foreground parsing beyond save/preclassify/register/enqueue.
 
-### Priority 3: Safe HTML Artifact Layer
+### Priority 4: Safe HTML Artifact Layer
 
 This is a shared product surface, not a replacement for the static-page renderer.
 
@@ -175,7 +226,7 @@ Do not use this layer for:
 - Remote scripts, remote CSS, tracking pixels, provider tokens, or direct database/queue operations.
 - Customer-facing final static-page delivery when the deterministic static-page renderer is the correct product artifact.
 
-### Priority 4: Account/Auth Maintenance Only
+### Priority 5: Account/Auth Maintenance Only
 
 Account work is currently paused after second-round hardening.
 
@@ -188,25 +239,6 @@ Only fix:
 
 Do not start team sharing, robot ownership, admin audit UI, or deep encryption recovery until product mainline is stable.
 
-### Priority 5: Codex Host / Model Proxy
-
-Continue as a sidecar execution-kernel track, not as the product mainline.
-
-Current status:
-
-- `codex_host_task` exists and is disabled by default.
-- Workflow queue and `codex-host-agent` dry-run/plan-only exist.
-- Real execution is not validated and must not run on this workstation.
-- `llm-gateway` has model lanes and MiniMax-compatible routing foundations.
-
-Next only after product mainline slices are not blocked:
-
-- Shared Codex Host contracts outside `platform-api`.
-- Dependency cleanup for `codex-host-agent -> platform-api`.
-- First-class task memory space creation.
-- Jump-host/Mac-host real execution validation.
-- Internal model-proxy facade only when `llm-gateway` extraction is justified.
-
 ### Priority 6: OpenClaw Frozen
 
 OpenClaw optional provider/stubs completed their first useful pass.
@@ -215,26 +247,29 @@ Do not continue OpenClaw as a main execution-kernel route.
 
 ## Overall Architecture Review
 
-The project should stay split into two tracks:
+The project should stay split into three tracks:
 
 - Product track: assistant context supply, dataset/RAG/media quality, static-page planning/editing, preview image, final render, export package, and right-shelf artifact lifecycle.
-- Execution extension track: Codex Host, model proxy, task memory spaces, and HTML execution reports.
+- Conversation-kernel track: model gateway profiles, Codex conversation executor, V3 context supply packages, validated action loop, and concise progress reporting.
+- Execution extension track: heavier Codex Host workflow tasks, task memory spaces, jump-host/Mac-host validation, and HTML execution reports.
 
-The product track must remain shippable without Codex Host. Codex Host can improve execution depth and local automation later, but V3 must still answer, retrieve, generate reports/static pages, and manage artifacts through its own API/worker/data planes.
+The product track must remain safe without real local host execution, but the normal assistant path should move toward Codex as the reasoning/execution kernel. V3 still answers product questions through model-authored output, retrieves evidence, generates reports/static pages, and manages artifacts through its own API/worker/data planes; Codex decides the next step and asks V3 to perform authorized actions.
 
 The next highest leverage order is:
 
-1. Finish static-page module editability and final-render/export quality.
-2. Finish AssistantRun context supply so the model understands selected/inferred datasets, current draft state, and available report/static-page actions.
-3. Add the safe HTML artifact viewer as a common review/report surface, starting with Codex Host reports and static-page planning handoffs.
-4. Validate real Codex Host execution only on the jump host or later Mac host.
-5. Resume account expansion only when product workflows need it.
+1. Preserve the current overall UI and stop broad shell redesign.
+2. Finish static-page module editability, planning quality, final-render fidelity, export diagnostics, and data-quality handling.
+3. Improve parsing, retrieval, hidden conversation memory, media understanding, and AssistantRun context supply so the model sees better evidence and current draft state.
+4. Build the model-gateway profile system and Codex conversation executor bridge behind feature flags and shadow/dry-run comparison, without changing the visible static-page flow.
+5. Add the safe HTML artifact viewer as a common review/report surface, starting with Codex execution reports and static-page planning handoffs.
+6. Validate real Codex execution only on the jump host or later Mac host.
+7. Resume account expansion only when product workflows need it.
 
-The main architectural risk is letting three "builders" compete: static-page renderer, HTML artifact renderer, and Codex Host. The boundary is strict: static-page renderer produces customer report pages, HTML artifact renderer displays review/control artifacts, and Codex Host executes external tasks but does not own V3 product state.
+The main architectural risk is letting four "brains/builders" compete: direct model calls, Codex conversation executor, static-page renderer, and HTML artifact renderer. The boundary is strict: Codex decides conversation/action flow, V3 validates and supplies data, static-page renderer produces customer report pages, HTML artifact renderer displays review/control artifacts, and heavier Codex Host workflow tasks execute external work without owning V3 product state.
 
 ## Immediate Execution Track
 
-The next development thread should continue with static-page final-render/chart/data quality.
+The next development thread should keep the current UI shell stable and continue with backend/static-page quality: parsing quality, retrieval/context supply, planning quality, image-preview prompt quality, chart/data fidelity, final-render fidelity, and export diagnostics. Start the model-gateway/Codex conversation executor foundation behind feature flags and shadow/dry-run comparison only; do not let it alter the visible static-page workflow until it proves stable.
 
 ### Task 0: Make This Master Plan The Entry Point
 
@@ -255,6 +290,76 @@ The next development thread should continue with static-page final-render/chart/
 
 - A fresh thread can find the active plan in under one minute.
 - Older plans are clearly marked as source references.
+
+### Task 0A: Promote Model Gateway And Codex Conversation Executor
+
+**Files:**
+
+- Modify: `crates/llm-gateway/src/lib.rs`
+- Modify: `crates/assistant-runtime/src/lib.rs`
+- Modify: `crates/platform-api/src/lib.rs`
+- Modify: `crates/platform-api/src/react_agent_catalog.rs`
+- Modify: `crates/platform-api/src/react_agent_tools.rs`
+- Modify: `crates/contracts/src/lib.rs`
+- Modify: `crates/codex-host-agent/src/main.rs`
+- Modify: `docs/operations/codex-host-model-profiles.md`
+- Modify: `docs/architecture/codex-host-bridge-contract.md`
+- Create or update tests near the touched crates
+
+**Status:** New priority as of 2026-05-10. The current baseline has `llm-gateway` model lanes, MiniMax-compatible cleanup, ReAct tool contracts, and a dry-run/plan-only Codex Host bridge. It does not yet route normal assistant conversations through Codex as the primary reasoning/execution kernel.
+
+**OpenAI Codex OSS reference checked on 2026-05-10:**
+
+- Repository: `https://github.com/openai/codex`
+- License: Apache-2.0.
+- Current public release observed: `0.130.0` on 2026-05-08.
+- Primary implementation: Rust-heavy repo with `codex-rs`, `codex-cli`, `sdk`, docs, scripts, and tooling.
+- Supported integration surfaces to prefer before forking: `codex exec` for non-interactive work, `--output-schema` for structured final output, `@openai/codex-sdk` for server-side TypeScript thread control, app-server JSON-RPC for richer local control, `codex mcp-server` for MCP tool exposure, and config profiles for model/sandbox/MCP behavior.
+- Commercial risk: Apache-2.0 is compatible with commercial use, but OpenAI service usage, model pricing, and account/data handling still follow the selected authentication path and provider terms.
+
+**CoDeepSeedeX provider-shim reference checked on 2026-05-10:**
+
+- Repository: `https://github.com/Awenforever/CoDeepSeedeX/tree/master`
+- License: MIT.
+- Purpose: local OpenAI Responses-compatible proxy for running Codex with DeepSeek models.
+- Useful references: Codex profile wrappers for stable/thinking modes, `/healthz`, status/balance/usage/debug endpoints, usage ledger, context budget diagnostics, persistent/semantic compaction experiments, tool-output trimming, tool-call protocol repair, liveness recovery, and MCP/tool boundary warnings.
+- Commercial risk: MIT is compatible with commercial use, but provider API terms, key storage, debug trace retention, and any copied code attribution still need review. Prefer borrowing design patterns and tests over vendoring code.
+- Boundary decision: V3 may implement its own private local Responses-compatible shim for MiniMax/DeepSeek-like providers, but the shim only normalizes model API traffic. It must not become the V3 tool executor, permission authority, memory store, queue owner, or product audit source.
+
+**Steps:**
+
+1. Define a first-class model profile contract in `llm-gateway`: provider id, model id, base URL, auth env key name, capability flags, timeout, rate/cost hints, and redaction policy.
+2. Add tests proving GPT-style and MiniMax-style profiles normalize request/response metadata without leaking raw keys.
+3. Define an `AssistantRunCodexContextPackage` contract containing system/product briefing, selected/inferred datasets, evidence state, hidden-memory candidates, current artifact state, available V3 actions, and safety policy.
+4. Add a transport enum for Codex integration: `dry_run`, `plan_only`, `exec_schema`, `sdk_thread`, `app_server`, and future `mcp_server`.
+5. Add a Codex conversation executor adapter in `assistant-runtime` that can run in `dry_run` and `plan_only` first, then `exec_schema` using `codex exec --output-schema`, then `sdk_thread` or `app_server` for multi-turn conversations.
+6. Route normal `POST /v1/assistant-runs` through the adapter behind a feature/env gate such as `ASSISTANT_RUN_EXECUTOR=direct|codex`.
+7. Keep `direct` as the default until jump-host or Mac-host validation proves the Codex path stable.
+8. Ensure Codex can only request V3 action contracts such as retrieval/detail refresh, conversation-memory recall, static-page draft creation, module update, image preview submit, final render request, and HTML artifact event submit.
+9. Persist Codex reasoning/action summaries as concise AssistantRun events; do not store raw verbose terminal logs in chat.
+10. Add UI-readable execution trail entries inside the existing homepage/right-shelf pattern only; do not add a new global execution panel or second chat surface.
+11. Validate real Codex execution only on the jump host or later Mac host. Never enable it on this developer workstation.
+12. Do not fork or vendor `openai/codex` in V3 unless a concrete upstream gap blocks the supported CLI/SDK/server surfaces. If a patch is needed, keep it as a documented upstream-compatible patch set.
+13. Define provider-shim observability contracts inspired by CoDeepSeedeX: health, status, profile/capability snapshot, balance if provider supports it, usage summary, recent usage events, debug trace status, and context-budget report.
+14. Store production usage/audit in V3 tables and runtime inspect events. Shim-local ledgers may exist only as host diagnostics and must not become the source of truth.
+15. Add context-budget diagnostics before enabling aggressive compaction: classify prompt/system, selected datasets, retrieval evidence, hidden conversation memory, artifact state, tool outputs, and media/image payload summaries.
+16. Add conservative tool-output trimming policy for oversized shell/search/file/media outputs in the Codex context package. Trimming must preserve recent outputs, errors, citations/evidence ids, and high-risk failure details.
+17. Add tool-call protocol hardening tests for malformed provider responses, missing tool outputs, duplicate function-call replay, and liveness stalls where Codex intended to call a V3 action but returned an incomplete tool request.
+18. Run a shadow comparison set for static-page conversations: current direct planner action vs Codex suggested action. Codex suggestions must not mutate drafts or queue work during shadow mode.
+
+**Acceptance:**
+
+- The system can switch a conversation between direct model execution and Codex-backed execution by configuration.
+- Codex receives only V3-approved context and tool/action contracts, not unrestricted database/filesystem access.
+- Multi-provider model routing is controlled by gateway profiles, not hard-coded per endpoint.
+- Codex transport choice is explicit and auditable: `exec_schema` for one-shot tasks, `sdk_thread` or `app_server` for continuing conversations, `mcp_server` only if V3 needs to expose Codex as a tool.
+- Non-native model providers can be attached through a private Responses-compatible shim without giving the shim direct V3 database, queue, filesystem, or tool-execution authority.
+- Runtime inspect can show provider usage, context-budget pressure, tool-output trimming, and liveness-retry decisions without exposing provider keys or raw sensitive payloads.
+- The model can still answer ordinary no-dataset chat when no data is selected.
+- Selected/inferred dataset supply still flows through V3 visibility checks before reaching Codex.
+- Static-page actions requested by Codex are validated exactly like current ReAct actions.
+- The existing static-page UI progression is unchanged while Codex runs in `dry_run`, `plan_only`, or shadow comparison.
+- A failed or malformed Codex suggestion falls back to direct execution without losing the current draft, selected datasets, or conversation state.
 
 ### Task 1: Add ECharts Runtime Dependency And Contract
 
@@ -348,6 +453,8 @@ The next development thread should continue with static-page final-render/chart/
 - Modify: `crates/platform-api/src/lib.rs`
 
 **Current implementation note:** Backend draft operations now refresh the design contract even when the client sends a full edited payload. Confirmed/queued/running preview contracts are marked `stale` when the module/layout/render/mobile-order fingerprint changes, stale edits clear `previewImage` and `finalPage`, and ReAct/current-draft operations continue to apply against the persisted current draft before recording operation metadata. The web draft helper now uses the same stale rules, keeps a stale queued job visible as needing regeneration, exposes effect/final status in the planning summary, and styles the stale card correctly inside the dark assistant shell. Desktop and mobile builders now keep only module layout/editing controls; model-led whole-draft changes go through the global bottom chat composer. Static-page creation requests from chat are non-interruptive: the assistant still answers normally, and the draft entry card is appended after the messages with `进入静态页工作台`. The main chat card owns the single `效果图——生成页面` CTA after the user enters/edits the draft; it first queues/refreshes the effect image and then, after customer approval, confirms the visual contract and starts final rendering. The effect-image ready state closes the module editor and returns the user to chat; dissatisfied users reopen module editing from the same card.
+
+**UI freeze note:** Do not redesign the assistant shell while hardening this task. Keep the current module editor, current main-chat entry card, current single CTA, current right shelf, and current mobile pattern. Improvements should target edit correctness, stale-state handling, validation, data binding, chart options, and model-understood operations.
 
 **Steps:**
 
@@ -543,6 +650,8 @@ Rust targeted:
 
 ```powershell
 cargo fmt --all --check
+cargo test -p llm-gateway
+cargo test -p assistant-runtime
 cargo test -p static-page-runtime
 cargo test -p static-page-renderer
 cargo test -p static-page-worker
@@ -567,6 +676,8 @@ cargo test -p platform-api --lib email_auth_verify_rejects_non_login_purpose_for
 Codex Host:
 
 ```powershell
+cargo test -p llm-gateway
+cargo test -p assistant-runtime codex
 cargo test -p platform-api codex_host
 cargo test -p workflow-definitions codex_host
 cargo test -p codex-host-agent
@@ -590,9 +701,12 @@ Use this prompt for the next development thread:
 ```text
 Continue AI Data Platform V3 from docs/plans/2026-05-07-v3-master-development-plan.md.
 Treat that file as the active master plan; older plans are source references only.
-Product mainline is static-page generation: module editing, data snapshots, ECharts advanced runtime, Cloudflare/Codex preview, and durable final render/export.
+Keep the current overall UI shell stable. Do not redesign the left dataset rail, top toolbar, home-only composer, right output shelf, static-page entry card, or single `效果图——生成页面` CTA unless fixing a blocking bug.
+Product mainline is static-page generation quality: module editing correctness, data snapshots, ECharts advanced runtime, Cloudflare/Codex preview, durable final render/export, planning quality, parsing quality, retrieval/context quality, and generation quality.
+The model-gateway/Codex conversation executor is now a core architecture track, not a distant sidecar. Build toward routing normal assistant turns through Codex behind feature flags and shadow/dry-run comparison, with V3 supplying context/evidence/tool contracts and validating every requested action.
+Gateway model profiles must support multiple provider APIs such as GPT-family and MiniMax-compatible providers through explicit capability manifests, redacted credentials, and fallback policy.
 Safe HTML artifacts are a shared review/control surface for Codex reports, planning handoffs, and lightweight JSON-patch editors; do not confuse them with final customer static-page delivery.
 Do not resume account expansion unless fixing a security/access regression.
-Do not run real Codex execution on the local developer workstation; Codex Host real validation is only for the jump host or later Mac host.
-Continue with the next static-page final-render/chart/data-quality slice unless a Codex Host validation blocker is explicitly requested.
+Do not run real Codex execution on the local developer workstation; Codex real validation is only for the jump host or later Mac host.
+Continue with backend/static-page quality work while also starting Task 0A model-gateway/Codex executor foundation without changing the visible static-page workflow.
 ```

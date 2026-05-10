@@ -4,6 +4,44 @@
 
 Codex Host is an external execution kernel controlled by V3. It is not a browser-facing API, not a dataset visibility authority, and not the system memory source of truth.
 
+## OpenAI Codex OSS Alignment
+
+V3 should align with upstream `openai/codex` instead of inventing a parallel execution kernel.
+
+Checked reference on 2026-05-10:
+
+- Repository: `https://github.com/openai/codex`
+- License: Apache-2.0.
+- Current observed release: `0.130.0` on 2026-05-08.
+- Primary implementation is Rust-heavy, with CLI, Rust core, SDKs, docs, scripts, and tooling.
+- Install/runtime surfaces include npm, Homebrew, GitHub release binaries, `codex exec`, app-server, SDKs, and MCP server mode.
+
+Integration decision:
+
+- Do not vendor or fork Codex in V3 first.
+- Use official runtime surfaces as the contract boundary.
+- Keep V3's Rust `codex-host-agent` as the queue/worker wrapper that prepares a task workspace, generates Codex config/profile, launches or controls Codex, and returns redacted structured output.
+- Keep a local checkout of `openai/codex` only for debugging SDK/app-server behavior, building a pinned binary on a host, or evaluating a patch before upstreaming.
+
+## CoDeepSeedeX Alignment
+
+`CoDeepSeedeX` is a useful provider-shim reference for this bridge because it shows how Codex can call a non-OpenAI provider through a local Responses-compatible proxy.
+
+Checked reference on 2026-05-10:
+
+- Repository: `https://github.com/Awenforever/CoDeepSeedeX/tree/master`
+- License: MIT.
+- Shape: local OpenAI Responses-compatible proxy for Codex plus DeepSeek profiles.
+- Useful ideas: provider profile wrappers, local-only health/status/usage/debug endpoints, context-budget diagnostics, tool-output trimming, tool-call protocol repair, liveness recovery, and MCP/tool boundary warnings.
+
+Boundary decision:
+
+- V3 can borrow the provider-shim pattern for MiniMax, DeepSeek, or other non-native providers.
+- V3 should not copy the monolithic proxy architecture wholesale.
+- A provider shim only normalizes model API traffic for Codex. It is not a V3 API, not an execution worker, not a database reader, not a queue owner, and not a tool permission authority.
+- MCP and V3 tool execution remain controlled by Codex/V3 action contracts and allowlists. Do not map arbitrary MCP namespace tools into plain provider function tools as a shortcut.
+- Shim-local debug files and usage ledgers are diagnostics only; V3 PostgreSQL/runtime inspect remains the durable audit source.
+
 ## Boundary
 
 ```text
@@ -31,6 +69,15 @@ The first V3-side implementation is intentionally only a queue bridge plus dry-r
 - Real `codex_exec` also requires a configured task workspace root. The agent creates a task-scoped workspace from the V3 `task_memory_space_id` and runs Codex from that directory instead of the agent's current working directory.
 
 This lets us verify V3 audit, task isolation, queue wakeup, and workflow completion before adding real host execution.
+
+Next implementation should add explicit transports:
+
+- `exec_schema`: one-shot `codex exec` with `--output-schema` so V3 receives stable JSON summaries/action intents.
+- `sdk_thread`: server-side `@openai/codex-sdk` control for continuing Codex threads when a long-lived AssistantRun needs continuity.
+- `app_server`: local app-server JSON-RPC for richer local control where SDK coverage is insufficient.
+- `mcp_server`: only if V3 needs to expose Codex as a tool inside another MCP/agent framework.
+
+Transport choice is a V3 policy field, not user text.
 
 ## Shared Contract Types
 
@@ -128,7 +175,9 @@ Default observation:
 - Every queued Codex Host task gets a task-scoped memory space id. Summaries can be promoted later only through V3 policy, not by the host process.
 - Provider keys and local access keys are never sent to the Codex task prompt.
 - Raw stdout/stderr must be redacted and truncated before being shown in runtime inspect.
-- The first transport should be a V3 task queue plus host agent launching `codex exec`, not a browser-visible app-server.
+- The first transport should be a V3 task queue plus host agent launching `codex exec --output-schema`, not a browser-visible app-server.
+- App-server, SDK, and MCP transports must bind only to host-local/private surfaces and remain hidden behind V3 APIs.
+- Codex config is generated from approved V3 profiles. User text must not set `sandbox_mode`, `approval-policy`, model profile, writable roots, MCP servers, or environment policy.
 
 ## Jump Host Rule
 
@@ -158,6 +207,13 @@ Supported safe modes right now:
 - `plan_only`: validate the profile and capability, then record a redacted command plan with `prompt_redacted=true`.
 - `codex_exec`: launch `codex exec` only after host/profile/allowlist safety preflight, then record a shared-contract output with redacted stdout/stderr excerpts.
 
+Planned transport modes:
+
+- `exec_schema`: launch `codex exec` with a V3-owned output schema and parse only the final JSON response as actionable data.
+- `sdk_thread`: use Codex SDK thread control for continuing runs; persist the Codex thread id only as internal worker metadata.
+- `app_server`: use local app-server JSON-RPC for richer control; never expose app-server to browser traffic.
+- `mcp_server`: use `codex mcp-server` only for controlled framework integration, not as the primary V3 browser API.
+
 `codex_exec` can launch `codex exec` only after the safety preflight passes. It requires `CODEX_HOST_AGENT_ALLOW_REAL_CODEX_EXEC=true`, an approved host kind (`windows_jump` or `mac_host`), an execution-capable profile kind, and `CODEX_HOST_AGENT_TASK_WORKSPACE_ROOT` pointing at a host-local task workspace root. The returned process output is truncated and redacted before it enters workflow output or AssistantRun events.
 
 Browser traffic still goes only through V3 APIs. The host agent is a worker attached to the internal workflow queue; it is not a new browser-visible service surface.
@@ -173,3 +229,30 @@ Codex CLI -> private local Responses-compatible shim -> MiniMax /chat/completion
 ```
 
 The shim must be local/private, must not expose provider keys to browser traffic, and must normalize leading MiniMax `<think>...</think>` blocks before streaming text back to Codex.
+
+## Provider Shim Rule
+
+Any future V3-owned Responses-compatible shim must obey the same bridge boundary:
+
+```text
+Codex CLI/SDK/app-server -> private provider shim -> upstream provider API
+V3 API/workers          -> AssistantRun, datasets, memory, workflows, artifacts, audit
+```
+
+The shim may expose redacted diagnostics to V3:
+
+- health and provider status
+- profile/capability snapshot
+- usage summary and recent usage events
+- context-budget and tool-output budget reports
+- liveness/protocol-repair events
+
+The shim must not expose:
+
+- provider keys
+- raw prompts containing user secrets
+- raw tool outputs beyond bounded/redacted excerpts
+- direct V3 database access
+- direct queue submission
+- direct dataset/file access
+- browser-visible endpoints

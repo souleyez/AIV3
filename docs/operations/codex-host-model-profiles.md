@@ -4,6 +4,37 @@
 
 Codex Host model selection is a V3 policy decision, not a free-form user prompt field. Users can ask for capability and quality, but V3 maps that request to an approved profile.
 
+## Upstream Codex OSS Baseline
+
+Use upstream `openai/codex` as the execution-kernel baseline:
+
+- Repository: `https://github.com/openai/codex`
+- License: Apache-2.0.
+- Current observed release on 2026-05-10: `0.130.0`.
+- Supported operational surfaces to prefer: `codex exec` for non-interactive work, `--output-schema` for structured final JSON, `@openai/codex-sdk` for server-side TypeScript thread control, app-server JSON-RPC for richer local control, and `codex mcp-server` for tool-style integration.
+
+Do not fork Codex into V3 unless a specific upstream gap blocks these surfaces. Treat a fork as a last-resort patch set, not the main integration path.
+
+## CoDeepSeedeX Reference Pattern
+
+`CoDeepSeedeX` is a useful reference for provider adaptation, not a runtime dependency for V3.
+
+- Repository: `https://github.com/Awenforever/CoDeepSeedeX/tree/master`
+- License: MIT.
+- Shape: local OpenAI Responses-compatible proxy that lets Codex use DeepSeek-backed profiles.
+- Valuable pattern: create Codex profiles that point at local-only provider shims, with separate stable/thinking profiles when the upstream provider exposes different reasoning modes.
+- Valuable operations surface: `/healthz`, provider status, balance when available, usage summary/events, debug trace status, and context-budget diagnostics.
+- Valuable hardening surface: context trimming, semantic/persistent compaction experiments, tool-output budget reports, protocol repair for tool calls, and liveness recovery when a model stalls mid-tool loop.
+
+V3 should borrow these ideas into its own model-gateway/Codex profile system:
+
+- Implement V3-owned shims only where Codex cannot call a provider natively.
+- Keep shims bound to local/private interfaces such as `127.0.0.1`.
+- Keep provider keys outside task prompts, browser APIs, user-visible logs, and artifact payloads.
+- Persist product-grade usage/audit in PostgreSQL/runtime inspect. Shim-local SQLite or JSONL files are host diagnostics only.
+- Treat debug traces as sensitive because they can contain request summaries, paths, tool-output summaries, and usage details.
+- Do not let the provider shim execute V3 tools, access datasets, own memory, write queues, or bypass V3 action validation.
+
 ## Profile Rules
 
 - Profiles are server-side config only.
@@ -14,6 +45,7 @@ Codex Host model selection is a V3 policy decision, not a free-form user prompt 
 - The local developer workstation must not be used for Codex execution tests.
 - Task prompts must not include provider keys, browser-local keys, or raw secrets.
 - Each host task runs under a V3-created `task_memory_space_id`; the host can return summaries, but V3 decides whether anything is promoted into conversation or project memory.
+- Codex transport is an explicit profile field. User prompts cannot switch between CLI, SDK, app-server, or MCP.
 
 ## Initial Profiles
 
@@ -27,23 +59,52 @@ allowed_capabilities = ["inspect_project", "summarize_runtime"]
 kind = "codex-native"
 enabled = true
 mode = "plan_only"
+transport = "exec_schema"
 model = "gpt-5.3-codex"
 allowed_capabilities = ["inspect_project", "summarize_runtime", "run_readonly_check"]
 
 [profiles.codex-native-readonly]
 kind = "codex-native"
 enabled = false
+transport = "exec_schema"
 model = "gpt-5.3-codex"
 allowed_capabilities = ["inspect_project", "summarize_runtime", "run_readonly_check"]
 
 [profiles.minimax-private-experiment]
 kind = "codex-compatible-shim"
 enabled = false
+transport = "exec_schema"
 provider = "minimax"
 model = "MiniMax-M2.7"
 wire_api = "responses"
 base_url = "http://127.0.0.1:<private-shim-port>/v1"
 allowed_capabilities = ["inspect_project", "summarize_runtime"]
+
+[profiles.codex-threaded-assistant]
+kind = "codex-native"
+enabled = false
+transport = "sdk_thread"
+model = "gpt-5.3-codex"
+allowed_capabilities = ["assistant_conversation", "static_page_plan", "static_page_edit"]
+
+[profiles.deepseek-private-reference]
+kind = "codex-compatible-shim"
+enabled = false
+transport = "exec_schema"
+provider = "deepseek"
+model = "deepseek-v4-pro"
+wire_api = "responses"
+base_url = "http://127.0.0.1:<private-shim-port>/v1"
+allowed_capabilities = ["inspect_project", "summarize_runtime"]
+```
+
+Allowed transport values:
+
+```text
+exec_schema -> codex exec with a V3-owned output schema for one-shot worker tasks
+sdk_thread  -> @openai/codex-sdk thread control for continuing AssistantRun conversations
+app_server  -> host-local app-server JSON-RPC for richer control
+mcp_server  -> codex mcp-server when Codex should be exposed as a controlled tool
 ```
 
 ## Execution Policy
@@ -65,6 +126,16 @@ Current Worker modes:
 dry_run   -> no Codex command is built
 plan_only -> build a redacted Codex command plan, but do not launch Codex
 codex_exec -> launch `codex exec` only after host/profile/allowlist safety preflight
+```
+
+First production-leaning path:
+
+```text
+assistant chat / static-page action -> V3 AssistantRun context package
+  -> profile transport=exec_schema or sdk_thread
+  -> Codex receives only V3-supplied context/tool contracts
+  -> Codex returns structured response/action intent
+  -> V3 validates and executes requested action
 ```
 
 `codex_exec` must require all of these before it can be wired:
@@ -120,6 +191,26 @@ To make MiniMax valid for Codex Host, one of these must be true:
 - Codex task uses V3 tools that call `llm-gateway`, while Codex itself keeps its native model.
 
 The first production path should prefer V3-owned `llm-gateway` for MiniMax and keep Codex Host focused on execution.
+
+If MiniMax must be used as the Codex model itself, the profile must target a private Responses-compatible shim. Do not configure MiniMax Chat Completions directly as a Codex provider until upstream Codex supports that provider shape.
+
+## Provider-Shim Observability Contract
+
+Every V3-owned Codex-compatible provider shim should expose enough diagnostics for the platform to decide whether a profile is healthy before routing a conversation through it:
+
+```text
+health                  -> process and upstream reachability
+status                  -> profile id, provider family, model, capabilities, rate-limit hints
+usage_summary           -> prompt/completion/total tokens or provider equivalents
+usage_events            -> recent redacted upstream calls for runtime inspect
+balance                 -> optional, only when provider supports safe account balance lookup
+debug_trace_status      -> whether trace capture is enabled and where redacted trace ids live
+context_budget_report   -> request payload budget by system, memory, datasets, evidence, tools, artifacts
+tool_output_budget      -> largest tool outputs and trimming decisions
+liveness_events         -> retry/continue decisions for incomplete tool-call loops
+```
+
+These diagnostics must be redacted, bounded, and linked to V3 `AssistantRun` or workflow ids when possible. They are for operations and quality control; they are not user-facing answer content.
 
 ## Contract Boundary
 
