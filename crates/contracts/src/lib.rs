@@ -754,6 +754,8 @@ pub struct AssistantRunCodexContextPackageView {
     #[serde(default)]
     pub evidence_state: Value,
     #[serde(default)]
+    pub supply_quality: Value,
+    #[serde(default)]
     pub hidden_memory_candidates: Vec<Value>,
     #[serde(default)]
     pub current_artifact: Option<Value>,
@@ -780,6 +782,7 @@ impl AssistantRunCodexContextPackageView {
             selected_scope: Value::Null,
             inferred_scope_candidates: Vec::new(),
             evidence_state: Value::Null,
+            supply_quality: Value::Null,
             hidden_memory_candidates: Vec::new(),
             current_artifact: None,
             available_actions: Vec::new(),
@@ -2880,8 +2883,17 @@ mod tests {
         });
         package.evidence_state = json!({
             "mode": "supplied_by_v3",
-            "items": [{"id": "evidence-1", "source": "chunk"}]
+            "items": [{"id": "evidence-1", "source": "chunk"}],
+            "supply_quality": {
+                "status": "grounded",
+                "citationLocatorCount": 1
+            }
         });
+        package.supply_quality = package.evidence_state["supply_quality"].clone();
+        assert_eq!(
+            AssistantRunCodexContextPackageView::new(assistant_run_id, "默认包").supply_quality,
+            Value::Null
+        );
         package.current_artifact = Some(json!({
             "kind": "static_page_draft",
             "draft_id": "draft-1",
@@ -2987,6 +2999,8 @@ mod tests {
             context["context_budget"]["selected_dataset_count"],
             json!(1)
         );
+        assert_eq!(context["supply_quality"]["status"], json!("grounded"));
+        assert_eq!(context["supply_quality"]["citationLocatorCount"], json!(1));
         assert_eq!(
             context["tool_output_policy"]["preserve_recent_output_count"],
             json!(3)

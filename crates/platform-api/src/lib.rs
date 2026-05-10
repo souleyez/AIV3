@@ -6967,6 +6967,10 @@ async fn list_html_artifacts(
         .await?;
         persist_html_artifacts_for_run(&state, &run, &quality_artifacts).await?;
         artifacts.extend(quality_artifacts);
+        let code_review_artifacts =
+            load_code_review_summary_artifacts_for_run(&state, &run, limit as usize).await?;
+        persist_html_artifacts_for_run(&state, &run, &code_review_artifacts).await?;
+        artifacts.extend(code_review_artifacts);
     } else {
         let local_thread_id = required_field("local_thread_id", query.local_thread_id)?;
         validate_required("local_thread_id", &local_thread_id)?;
@@ -7018,6 +7022,10 @@ async fn list_html_artifacts(
             .await?;
             persist_html_artifacts_for_run(&state, &run, &quality_artifacts).await?;
             artifacts.extend(quality_artifacts);
+            let code_review_artifacts =
+                load_code_review_summary_artifacts_for_run(&state, &run, limit as usize).await?;
+            persist_html_artifacts_for_run(&state, &run, &code_review_artifacts).await?;
+            artifacts.extend(code_review_artifacts);
             if artifacts.len() >= limit as usize {
                 break;
             }
@@ -8103,9 +8111,25 @@ fn build_assistant_run_model_supply_brief(evidence_state: &Value) -> Option<Stri
         .get("fallback_supply_count")
         .and_then(Value::as_u64)
         .unwrap_or(0);
+    let supply_quality = evidence_state.get("supply_quality");
+    let supply_quality_status = supply_quality
+        .and_then(|quality| quality.get("status"))
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let citation_locator_count = supply_quality
+        .and_then(|quality| quality.get("citationLocatorCount"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let media_context_count = supply_quality
+        .and_then(|quality| quality.get("mediaContextCount"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
     let mut lines = vec![
         format!(
             "状态：{status}；可引用供料 {supplied_count} 条；建议细读目标 {detail_target_count} 个；兜底切片 {fallback_count} 条。"
+        ),
+        format!(
+            "供料质量：{supply_quality_status}；来源定位 {citation_locator_count} 个；媒体上下文 {media_context_count} 个。"
         ),
         "供料只作为可引用上下文；最终正文由模型自行组织。涉及供料里的数据、指标、文档事实或产物状态时不要编造；普通常识、解释和建议可以使用模型通用知识，并区分供料事实与通用判断。detail_targets 只代表建议细读目标，不是引用依据。".to_string(),
     ];
@@ -9684,6 +9708,7 @@ fn build_assistant_run_codex_context_package(
     package.selected_scope = selected_scope.clone();
     package.inferred_scope_candidates = scope_candidates.to_vec();
     package.evidence_state = bounded_evidence_state.clone();
+    package.supply_quality = assistant_run_codex_supply_quality(&bounded_evidence_state);
     package.hidden_memory_candidates =
         assistant_run_codex_hidden_memory_candidates(&bounded_evidence_state);
     package.current_artifact = current_artifact.cloned();
@@ -9699,6 +9724,22 @@ fn build_assistant_run_codex_context_package(
         current_artifact,
     );
     package
+}
+
+fn assistant_run_codex_supply_quality(evidence_state: &Value) -> Value {
+    evidence_state
+        .get("supply_quality")
+        .or_else(|| evidence_state.get("supplyQuality"))
+        .cloned()
+        .unwrap_or_else(|| {
+            json!({
+                "status": "unknown",
+                "modelGuidance": [
+                    "supply quality report was not present in this evidence state",
+                    "treat evidence_state.status and supplied_items conservatively"
+                ]
+            })
+        })
 }
 
 fn assistant_run_codex_tool_output_policy() -> AssistantRunCodexToolOutputPolicyView {
@@ -10492,6 +10533,7 @@ async fn build_assistant_run_evidence_state(
     let dataset_ids = selected_dataset_ids_from_scope(selected_scope);
     let conversation_memory_requested = selected_scope_requests_conversation_memory(selected_scope);
     if dataset_ids.is_empty() && !conversation_memory_requested {
+        let empty_items: Vec<Value> = Vec::new();
         return Ok(json!({
             "status": "not_requested",
             "policy": "host_supplies_model_answers",
@@ -10501,6 +10543,16 @@ async fn build_assistant_run_evidence_state(
             "context_budget_policy": assistant_run_scope_context_budget_policy(selected_scope),
             "candidate_policy": assistant_run_scope_candidate_policy(selected_scope),
             "recommended_tool_actions": assistant_run_scope_recommended_tool_actions(selected_scope),
+            "supply_quality": assistant_run_supply_quality_report(
+                selected_scope,
+                false,
+                &empty_items,
+                &empty_items,
+                &empty_items,
+                &empty_items,
+                0,
+                0,
+            ),
             "supplied_items": [],
         }));
     }
@@ -10643,6 +10695,16 @@ async fn build_assistant_run_evidence_state(
     };
     let detail_targets = assistant_run_detail_targets_for_scope(selected_scope, &supplied_items);
     let fallback_supply_count = assistant_run_fallback_supply_count(&supplied_items);
+    let supply_quality = assistant_run_supply_quality_report(
+        selected_scope,
+        true,
+        &supplied_items,
+        &supplied_datasets,
+        &supplied_memory_items,
+        &detail_targets,
+        fallback_supply_count,
+        limit,
+    );
     Ok(json!({
         "status": status,
         "policy": "host_supplies_model_answers",
@@ -10654,6 +10716,7 @@ async fn build_assistant_run_evidence_state(
         "detail_preferred": prefer_detail,
         "recommended_tool_actions": assistant_run_scope_recommended_tool_actions(selected_scope),
         "recommended_actions": assistant_run_recommended_supply_actions(selected_scope, !supplied_items.is_empty()),
+        "supply_quality": supply_quality,
         "detail_targets": detail_targets,
         "selected_scope": selected_scope,
         "datasets": supplied_datasets,
@@ -10744,6 +10807,114 @@ async fn build_assistant_run_chunk_fallback_supply(
         items.push(supplied_item);
     }
     Ok(items)
+}
+
+fn assistant_run_supply_quality_report(
+    selected_scope: &Value,
+    supply_requested: bool,
+    supplied_items: &[Value],
+    supplied_datasets: &[Value],
+    supplied_memory_items: &[Value],
+    detail_targets: &[Value],
+    fallback_supply_count: usize,
+    limit: usize,
+) -> Value {
+    let supplied_item_count = supplied_items.len();
+    let indexed_evidence_count = supplied_items
+        .iter()
+        .filter(|item| {
+            item.get("type").and_then(Value::as_str) == Some("retrieval_evidence")
+                && item
+                    .get("source")
+                    .and_then(Value::as_str)
+                    .map(|source| source != "document_chunk_fallback")
+                    .unwrap_or(true)
+        })
+        .count();
+    let media_context_count = supplied_items
+        .iter()
+        .filter(|item| item.get("media_context").is_some())
+        .count();
+    let citation_locators = assistant_run_supply_citation_locators(supplied_items, 8);
+    let prefer_detail = assistant_run_scope_prefers_detail(selected_scope);
+    let status = if !supply_requested {
+        "not_requested"
+    } else if supplied_item_count == 0 {
+        "missing"
+    } else if fallback_supply_count > 0 || (prefer_detail && !detail_targets.is_empty()) {
+        "partial"
+    } else {
+        "grounded"
+    };
+    let mut notes = Vec::new();
+    if !supply_requested {
+        notes.push("ordinary_chat_without_forced_supply");
+    }
+    if indexed_evidence_count > 0 {
+        notes.push("indexed_retrieval_evidence_available");
+    }
+    if fallback_supply_count > 0 {
+        notes.push("fallback_visible_document_chunks_used");
+    }
+    if !detail_targets.is_empty() {
+        notes.push("detail_read_recommended_before_high_confidence_claims");
+    }
+    if media_context_count > 0 {
+        notes.push("media_context_available_with_timestamps_when_present");
+    }
+    if !supplied_memory_items.is_empty() {
+        notes.push("conversation_memory_supplied_by_intent");
+    }
+    if citation_locators.is_empty() && supply_requested {
+        notes.push("no_source_locator_available");
+    }
+
+    json!({
+        "status": status,
+        "intent": assistant_run_scope_intent(selected_scope),
+        "supplyRequested": supply_requested,
+        "qualityFirst": assistant_run_scope_prefers_detail(selected_scope)
+            || selected_scope_requests_conversation_memory(selected_scope),
+        "selectedDatasetCount": supplied_datasets.len(),
+        "suppliedItemCount": supplied_item_count,
+        "indexedEvidenceCount": indexed_evidence_count,
+        "fallbackChunkCount": fallback_supply_count,
+        "conversationMemoryItemCount": supplied_memory_items.len(),
+        "mediaContextCount": media_context_count,
+        "detailTargetCount": detail_targets.len(),
+        "limit": limit,
+        "citationLocatorCount": citation_locators.len(),
+        "citationLocators": citation_locators,
+        "notes": notes,
+        "modelGuidance": [
+            "treat supplied_items as citable context, not an answer template",
+            "distinguish supplied document facts from general model knowledge",
+            "read detail_targets before asserting exact source wording, tables, OCR, or media timestamps"
+        ],
+    })
+}
+
+fn assistant_run_supply_citation_locators(items: &[Value], limit: usize) -> Vec<String> {
+    let mut locators = Vec::new();
+    let mut seen = BTreeSet::new();
+    for item in items {
+        let Some(locator) = item
+            .get("source_locator")
+            .or_else(|| item.get("sourceLocator"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            continue;
+        };
+        if seen.insert(locator.to_string()) {
+            locators.push(locator.to_string());
+        }
+        if locators.len() >= limit {
+            break;
+        }
+    }
+    locators
 }
 
 fn assistant_run_evidence_limit_for_scope(selected_scope: &Value) -> usize {
@@ -15441,6 +15612,429 @@ fn static_page_data_quality_module_payload(module: &Value) -> Value {
         "sampleDataRows": module.get("sampleDataRows").or_else(|| module.get("sample_data_rows")).and_then(Value::as_i64).unwrap_or(0),
         "echartsHydratable": module.get("echartsHydratable").or_else(|| module.get("echarts_hydratable")).and_then(Value::as_bool).unwrap_or(false),
     })
+}
+
+struct CodeReviewSummaryArtifactCandidate {
+    payload: Value,
+    created_at: DateTime<Utc>,
+    source_kind: &'static str,
+    source_event_name: Option<String>,
+    sequence_no: Option<i32>,
+    source_index: usize,
+}
+
+async fn load_code_review_summary_artifacts_for_run(
+    state: &AppState,
+    run: &AssistantRun,
+    limit: usize,
+) -> std::result::Result<Vec<HtmlArtifactManifestView>, ApiError> {
+    let events = state
+        .storage
+        .assistant_runs()
+        .list_events(state.tenant_id, run.id)
+        .await
+        .map_err(ApiError::from_storage)?;
+    Ok(code_review_summary_artifacts_from_run_values(
+        run, &events, limit,
+    ))
+}
+
+fn code_review_summary_artifacts_from_run_values(
+    run: &AssistantRun,
+    events: &[AssistantRunEvent],
+    limit: usize,
+) -> Vec<HtmlArtifactManifestView> {
+    let mut candidates = Vec::<CodeReviewSummaryArtifactCandidate>::new();
+    for (source_index, artifact) in value_array(run.output_artifacts.clone())
+        .into_iter()
+        .enumerate()
+    {
+        assistant_run_collect_code_review_payloads(
+            &artifact,
+            false,
+            &mut candidates,
+            limit,
+            run.updated_at,
+            "assistant_run_output_artifact",
+            None,
+            None,
+            source_index,
+        );
+        if candidates.len() >= limit {
+            break;
+        }
+    }
+
+    for event in events {
+        if candidates.len() >= limit {
+            break;
+        }
+        let force_marker = assistant_run_code_review_marker_text(&event.event_name);
+        assistant_run_collect_code_review_payloads(
+            &event.payload,
+            force_marker,
+            &mut candidates,
+            limit,
+            event.created_at,
+            "assistant_run_event",
+            Some(event.event_name.clone()),
+            Some(event.sequence_no),
+            event.sequence_no.max(0) as usize,
+        );
+    }
+
+    let mut seen = HashSet::<String>::new();
+    let mut artifacts = Vec::new();
+    for candidate in candidates {
+        if artifacts.len() >= limit {
+            break;
+        }
+        let signature = code_review_summary_payload_signature(&candidate.payload);
+        if !seen.insert(signature.clone()) {
+            continue;
+        }
+        if let Some(artifact) =
+            code_review_summary_artifact_from_candidate(run, candidate, &signature)
+        {
+            artifacts.push(artifact);
+        }
+    }
+    sort_and_dedupe_html_artifacts(&mut artifacts);
+    artifacts.truncate(limit);
+    artifacts
+}
+
+#[allow(clippy::too_many_arguments)]
+fn assistant_run_collect_code_review_payloads(
+    value: &Value,
+    force_marker: bool,
+    candidates: &mut Vec<CodeReviewSummaryArtifactCandidate>,
+    limit: usize,
+    created_at: DateTime<Utc>,
+    source_kind: &'static str,
+    source_event_name: Option<String>,
+    sequence_no: Option<i32>,
+    source_index: usize,
+) {
+    if candidates.len() >= limit {
+        return;
+    }
+
+    match value {
+        Value::Object(object) => {
+            if assistant_run_code_review_payload_candidate(value, force_marker) {
+                candidates.push(CodeReviewSummaryArtifactCandidate {
+                    payload: value.clone(),
+                    created_at,
+                    source_kind,
+                    source_event_name,
+                    sequence_no,
+                    source_index,
+                });
+                return;
+            }
+            for (child_index, (key, child)) in object.iter().enumerate() {
+                if key == "html_artifacts" {
+                    continue;
+                }
+                assistant_run_collect_code_review_payloads(
+                    child,
+                    force_marker,
+                    candidates,
+                    limit,
+                    created_at,
+                    source_kind,
+                    source_event_name.clone(),
+                    sequence_no,
+                    source_index.saturating_mul(100).saturating_add(child_index),
+                );
+                if candidates.len() >= limit {
+                    break;
+                }
+            }
+        }
+        Value::Array(entries) => {
+            for (child_index, entry) in entries.iter().enumerate() {
+                assistant_run_collect_code_review_payloads(
+                    entry,
+                    force_marker,
+                    candidates,
+                    limit,
+                    created_at,
+                    source_kind,
+                    source_event_name.clone(),
+                    sequence_no,
+                    source_index.saturating_mul(100).saturating_add(child_index),
+                );
+                if candidates.len() >= limit {
+                    break;
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn assistant_run_code_review_payload_candidate(value: &Value, force_marker: bool) -> bool {
+    let Some(object) = value.as_object() else {
+        return false;
+    };
+    let marker = [
+        "type",
+        "kind",
+        "category",
+        "artifact_type",
+        "artifactType",
+        "template_id",
+        "templateId",
+        "name",
+    ]
+    .iter()
+    .filter_map(|key| object.get(*key).and_then(Value::as_str))
+    .any(assistant_run_code_review_marker_text);
+    let has_findings = ["findings", "issues", "items"].iter().any(|key| {
+        object
+            .get(*key)
+            .and_then(Value::as_array)
+            .is_some_and(|items| !items.is_empty())
+    });
+    let has_summary = code_review_payload_string(
+        value,
+        &["summary", "message", "description", "body", "conclusion"],
+    )
+    .is_some();
+    marker || (force_marker && (has_findings || has_summary))
+}
+
+fn assistant_run_code_review_marker_text(value: &str) -> bool {
+    let normalized = value
+        .trim()
+        .to_ascii_lowercase()
+        .replace(['-', ' ', '.'], "_");
+    normalized.contains("code_review")
+        || normalized.contains("review_summary")
+        || normalized.contains("code_review_summary")
+}
+
+fn code_review_summary_artifact_from_candidate(
+    run: &AssistantRun,
+    candidate: CodeReviewSummaryArtifactCandidate,
+    signature: &str,
+) -> Option<HtmlArtifactManifestView> {
+    let findings = code_review_summary_findings(&candidate.payload);
+    let summary = code_review_payload_string(
+        &candidate.payload,
+        &["summary", "message", "description", "body", "conclusion"],
+    )
+    .map(|value| html_artifact_safe_summary_text(&value, 900))
+    .filter(|value| !value.is_empty())
+    .unwrap_or_else(|| {
+        if findings.is_empty() {
+            String::new()
+        } else {
+            format!("本次代码审查归纳出 {} 个发现。", findings.len())
+        }
+    });
+    if summary.is_empty() && findings.is_empty() {
+        return None;
+    }
+
+    let title = code_review_payload_string(&candidate.payload, &["title", "name"])
+        .map(|value| html_artifact_safe_summary_text(&value, 120))
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "代码审查摘要".to_string());
+    let signature_digest = sha256_hex([
+        run.id.to_string().as_bytes(),
+        b":",
+        signature.as_bytes(),
+        b":",
+        candidate.source_kind.as_bytes(),
+        b":",
+        candidate.source_index.to_string().as_bytes(),
+    ]);
+    let artifact_id = format!("html-code-review-{}", &signature_digest[..16]);
+    let run_id = run.id.to_string();
+    let finding_count = findings.len();
+
+    Some(HtmlArtifactManifestView {
+        kind: "html_artifact".to_string(),
+        version: 1,
+        id: artifact_id,
+        title,
+        source_type: contracts::HtmlArtifactSourceTypeView::CodeReview,
+        template_id: contracts::HtmlArtifactTemplateIdView::CodeReviewSummary,
+        owner_scope: contracts::HtmlArtifactOwnerScopeView {
+            scope_type: "assistant_run".to_string(),
+            id: run_id.clone(),
+        },
+        data_refs: vec![contracts::HtmlArtifactDataRefView {
+            kind: "assistant_run".to_string(),
+            id: run_id.clone(),
+            label: "Assistant Run".to_string(),
+        }],
+        provenance: contracts::HtmlArtifactProvenanceView {
+            producer: "v3-platform-api".to_string(),
+            reason: "code review summary synthesis".to_string(),
+            source_run_id: Some(run_id),
+        },
+        interaction_mode: HtmlArtifactInteractionModeView::ReadOnly,
+        created_at: candidate.created_at,
+        payload: json!({
+            "summary": summary,
+            "findings": findings,
+            "findingCount": finding_count,
+            "sourceKind": candidate.source_kind,
+            "sourceEventName": candidate
+                .source_event_name
+                .as_deref()
+                .map(|value| html_artifact_safe_summary_text(value, 120))
+                .unwrap_or_default(),
+            "sourceSequenceNo": candidate.sequence_no,
+            "modelGuidance": "这是 V3 从结构化代码审查输出中合成的只读摘要；如需执行修改，应重新进入受控 AssistantRun/Codex action 流程。"
+        }),
+    })
+}
+
+fn code_review_summary_findings(payload: &Value) -> Vec<Value> {
+    ["findings", "issues", "items"]
+        .iter()
+        .find_map(|key| payload.get(*key).and_then(Value::as_array))
+        .map(|items| {
+            items
+                .iter()
+                .take(30)
+                .filter_map(code_review_summary_finding_payload)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn code_review_summary_finding_payload(finding: &Value) -> Option<Value> {
+    if let Some(text) = finding.as_str() {
+        let title = html_artifact_safe_summary_text(text, 180);
+        return (!title.is_empty()).then(|| {
+            json!({
+                "severity": "P?",
+                "title": title,
+                "detail": "",
+                "file": "",
+                "line": Value::Null,
+            })
+        });
+    }
+
+    let object = finding.as_object()?;
+    let severity = code_review_payload_string(finding, &["severity", "priority", "level"])
+        .map(|value| html_artifact_safe_summary_text(&value, 24))
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "P?".to_string());
+    let title = code_review_payload_string(finding, &["title", "message", "summary", "rule"])
+        .map(|value| html_artifact_safe_summary_text(&value, 180))
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| {
+            code_review_payload_string(finding, &["file", "path"])
+                .map(|value| html_artifact_safe_summary_text(&value, 180))
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| "问题".to_string())
+        });
+    let detail = code_review_payload_string(finding, &["detail", "body", "description"])
+        .map(|value| html_artifact_safe_summary_text(&value, 700))
+        .unwrap_or_default();
+    let file = code_review_payload_string(finding, &["file", "path", "filename"])
+        .map(|value| html_artifact_safe_summary_text(&value, 180))
+        .unwrap_or_default();
+    let line = [
+        "line",
+        "startLine",
+        "start_line",
+        "lineNumber",
+        "line_number",
+    ]
+    .iter()
+    .find_map(|key| object.get(*key).and_then(Value::as_u64));
+    if title.is_empty() && detail.is_empty() && file.is_empty() {
+        return None;
+    }
+    Some(json!({
+        "severity": severity,
+        "title": title,
+        "detail": detail,
+        "file": file,
+        "line": line,
+    }))
+}
+
+fn code_review_payload_string(payload: &Value, keys: &[&str]) -> Option<String> {
+    keys.iter()
+        .find_map(|key| {
+            payload.get(*key).and_then(|value| match value {
+                Value::String(text) => Some(text.trim().to_string()),
+                Value::Number(number) => Some(number.to_string()),
+                _ => None,
+            })
+        })
+        .filter(|value| !value.is_empty())
+}
+
+fn code_review_summary_payload_signature(payload: &Value) -> String {
+    let summary = code_review_payload_string(payload, &["summary", "message", "description"])
+        .unwrap_or_default();
+    let first_finding = ["findings", "issues", "items"]
+        .iter()
+        .find_map(|key| payload.get(*key).and_then(Value::as_array))
+        .and_then(|items| items.first())
+        .and_then(|finding| {
+            code_review_payload_string(finding, &["title", "message", "summary", "file", "path"])
+                .or_else(|| finding.as_str().map(ToOwned::to_owned))
+        })
+        .unwrap_or_default();
+    format!("{summary}|{first_finding}")
+}
+
+fn html_artifact_safe_summary_text(value: &str, max_chars: usize) -> String {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    let lowered = trimmed.to_ascii_lowercase();
+    let unsafe_patterns = [
+        "<script",
+        "<iframe",
+        "<object",
+        "<embed",
+        "<link",
+        "<meta",
+        "<form",
+        "javascript:",
+        "data:text/html",
+        "srcdoc",
+        "src=",
+        "href=",
+        "http://",
+        "https://",
+        "api_key",
+        "api-key",
+        "access_token",
+        "access-token",
+        "authorization",
+        "bearer ",
+        "cookie",
+        "secret",
+        "onerror=",
+        "onclick=",
+        "onload=",
+    ];
+    if unsafe_patterns
+        .iter()
+        .any(|pattern| lowered.contains(pattern))
+    {
+        return "[已移除敏感或不安全内容]".to_string();
+    }
+    let mut output = trimmed.chars().take(max_chars).collect::<String>();
+    if trimmed.chars().count() > max_chars {
+        output.push('…');
+    }
+    output
 }
 
 async fn load_html_artifacts_from_run_events(
@@ -22490,6 +23084,11 @@ mod tests {
         });
         let evidence_state = json!({
             "status": "supplied",
+            "supply_quality": {
+                "status": "partial",
+                "citationLocatorCount": 1,
+                "mediaContextCount": 1
+            },
             "supplied_items": [{
                 "type": "retrieval_evidence",
                 "summary": "订单延期风险",
@@ -22535,6 +23134,8 @@ mod tests {
         assert_eq!(package.context_budget.evidence_item_count, 1);
         assert_eq!(package.context_budget.hidden_memory_item_count, 1);
         assert_eq!(package.context_budget.trimmed_item_count, 2);
+        assert_eq!(package.supply_quality["status"], json!("partial"));
+        assert_eq!(package.supply_quality["mediaContextCount"], json!(1));
         assert!(package.context_budget.estimated_prompt_chars > 0);
         assert_eq!(package.context_budget.budget_pressure, "unbounded");
         assert!(package
@@ -22910,6 +23511,120 @@ mod tests {
         assert_eq!(artifacts[0].id, "html-artifact-new");
         assert_eq!(artifacts[1].id, "html-artifact-old");
         assert_eq!(artifacts[0].payload["mode"], json!("plan_only"));
+    }
+
+    #[test]
+    fn html_artifact_code_review_summary_from_output_artifact_uses_safe_template() {
+        let tenant_id = TenantId::new();
+        let run_id = AssistantRunId::new();
+        let now = Utc::now();
+        let run = AssistantRun {
+            id: run_id,
+            tenant_id,
+            user_id: None,
+            local_thread_id: Some("thread-code-review".to_string()),
+            user_prompt: "审查这次改动".to_string(),
+            startup_briefing: json!({}),
+            selected_scope: json!({}),
+            scope_candidates: json!([]),
+            context_policy: json!({}),
+            evidence_state: json!({}),
+            service_lane: "codex_review".to_string(),
+            execution_trail: json!([]),
+            output_artifacts: json!([{
+                "type": "code_review_summary",
+                "title": "平台接口审查",
+                "summary": "发现一个权限边界问题。",
+                "findings": [{
+                    "severity": "P1",
+                    "title": "缺少所有者校验",
+                    "detail": "更新接口在保存前需要校验 owner_user_id。",
+                    "file": "crates/platform-api/src/lib.rs",
+                    "line": 42
+                }]
+            }]),
+            runtime_manifest: json!({}),
+            created_at: now,
+            updated_at: now,
+        };
+
+        let artifacts = code_review_summary_artifacts_from_run_values(&run, &[], 10);
+
+        assert_eq!(artifacts.len(), 1);
+        assert_eq!(
+            artifacts[0].source_type,
+            contracts::HtmlArtifactSourceTypeView::CodeReview
+        );
+        assert_eq!(
+            artifacts[0].template_id,
+            contracts::HtmlArtifactTemplateIdView::CodeReviewSummary
+        );
+        assert_eq!(
+            artifacts[0].interaction_mode,
+            HtmlArtifactInteractionModeView::ReadOnly
+        );
+        assert_eq!(
+            artifacts[0].payload["summary"],
+            json!("发现一个权限边界问题。")
+        );
+        assert_eq!(artifacts[0].payload["findingCount"], json!(1));
+        assert_eq!(
+            artifacts[0].payload["findings"][0]["file"],
+            json!("crates/platform-api/src/lib.rs")
+        );
+        assert_eq!(artifacts[0].payload["findings"][0]["line"], json!(42));
+    }
+
+    #[test]
+    fn html_artifact_code_review_summary_redacts_unsafe_strings() {
+        let tenant_id = TenantId::new();
+        let run_id = AssistantRunId::new();
+        let now = Utc::now();
+        let run = AssistantRun {
+            id: run_id,
+            tenant_id,
+            user_id: None,
+            local_thread_id: Some("thread-code-review-redacted".to_string()),
+            user_prompt: "审查这次改动".to_string(),
+            startup_briefing: json!({}),
+            selected_scope: json!({}),
+            scope_candidates: json!([]),
+            context_policy: json!({}),
+            evidence_state: json!({}),
+            service_lane: "codex_review".to_string(),
+            execution_trail: json!([]),
+            output_artifacts: json!([]),
+            runtime_manifest: json!({}),
+            created_at: now,
+            updated_at: now,
+        };
+        let events = vec![AssistantRunEvent {
+            id: AssistantRunEventId::new(),
+            tenant_id,
+            run_id,
+            sequence_no: 3,
+            event_name: "codex.code_review.completed".to_string(),
+            payload: json!({
+                "summary": "结果见 https://example.invalid/raw-log",
+                "findings": [{
+                    "severity": "P2",
+                    "title": "不要暴露 Authorization header",
+                    "detail": "Bearer raw-token should not be visible",
+                    "file": "src/auth.rs",
+                    "line": 7
+                }]
+            }),
+            created_at: now,
+        }];
+
+        let artifacts = code_review_summary_artifacts_from_run_values(&run, &events, 10);
+        let serialized =
+            serde_json::to_string(&artifacts).expect("code review artifact serializes safely");
+
+        assert_eq!(artifacts.len(), 1);
+        assert!(serialized.contains("已移除敏感或不安全内容"));
+        assert!(!serialized.contains("https://example.invalid"));
+        assert!(!serialized.to_ascii_lowercase().contains("bearer raw-token"));
     }
 
     #[test]
@@ -23584,6 +24299,11 @@ mod tests {
         let evidence_state = json!({
             "status": "supplied",
             "fallback_supply_count": 1,
+            "supply_quality": {
+                "status": "partial",
+                "citationLocatorCount": 1,
+                "mediaContextCount": 1
+            },
             "supplied_items": [{
                 "type": "retrieval_evidence",
                 "source": "document_chunk_fallback",
@@ -23627,6 +24347,8 @@ mod tests {
 
         assert!(input.contains("供料提示（供你参考，不是回答模板）"));
         assert!(input.contains("可引用供料 1 条"));
+        assert!(input.contains("供料质量：partial"));
+        assert!(input.contains("来源定位 1 个"));
         assert!(input.contains("兜底切片 1 条"));
         assert!(input.contains("供料只作为可引用上下文"));
         assert!(input.contains("普通常识、解释和建议可以使用模型通用知识"));
@@ -25256,6 +25978,14 @@ mod tests {
         assert!(response.scope_candidates.is_empty());
         assert_eq!(response.evidence_state["status"], json!("not_requested"));
         assert_eq!(response.evidence_state["supplied_items"], json!([]));
+        assert_eq!(
+            response.evidence_state["supply_quality"]["status"],
+            json!("not_requested")
+        );
+        assert_eq!(
+            response.evidence_state["supply_quality"]["notes"][0],
+            json!("ordinary_chat_without_forced_supply")
+        );
         assert!(response
             .assistant_message
             .content
@@ -27585,6 +28315,18 @@ mod tests {
         assert_eq!(response.selected_scope["mode"], json!("user_selected"));
         assert_eq!(response.evidence_state["status"], json!("supplied"));
         assert_eq!(
+            response.evidence_state["supply_quality"]["status"],
+            json!("grounded")
+        );
+        assert_eq!(
+            response.evidence_state["supply_quality"]["indexedEvidenceCount"],
+            json!(2)
+        );
+        assert_eq!(
+            response.evidence_state["supply_quality"]["citationLocators"][0],
+            json!("documents/order-risk-notes.md#chunk=0")
+        );
+        assert_eq!(
             response.evidence_state["supplied_items"][0]["retrieval_evidence_id"],
             json!(evidences[0].id)
         );
@@ -27726,6 +28468,19 @@ mod tests {
         assert_eq!(status, StatusCode::CREATED);
         assert_eq!(response.evidence_state["status"], json!("supplied"));
         assert_eq!(response.evidence_state["fallback_supply_count"], json!(2));
+        assert_eq!(
+            response.evidence_state["supply_quality"]["status"],
+            json!("partial")
+        );
+        assert_eq!(
+            response.evidence_state["supply_quality"]["fallbackChunkCount"],
+            json!(2)
+        );
+        assert!(response.evidence_state["supply_quality"]["notes"]
+            .as_array()
+            .expect("supply quality notes should be present")
+            .iter()
+            .any(|note| note.as_str() == Some("fallback_visible_document_chunks_used")));
         let first_item = &response.evidence_state["supplied_items"][0];
         assert_eq!(first_item["source"], json!("document_chunk_fallback"));
         assert_eq!(

@@ -241,6 +241,7 @@ pub fn execute_codex_conversation_plan(
                 "kind": "codex_executor.rejected",
                 "reason": reason,
                 "fallback": "direct",
+                "supply_quality": codex_executor_supply_quality_summary(package),
             })],
             context_budget: package.context_budget.clone(),
         };
@@ -258,6 +259,7 @@ pub fn execute_codex_conversation_plan(
             execution_trail: vec![json!({
                 "kind": "codex_executor.direct_passthrough",
                 "message": "direct executor remains active",
+                "supply_quality": codex_executor_supply_quality_summary(package),
             })],
             context_budget: package.context_budget.clone(),
         },
@@ -273,6 +275,7 @@ pub fn execute_codex_conversation_plan(
                 "kind": "codex_executor.shadow_dry_run",
                 "assistant_run_id": package.assistant_run_id.to_string(),
                 "available_action_count": package.available_actions.len(),
+                "supply_quality": codex_executor_supply_quality_summary(package),
                 "message": "Codex executor not invoked; direct flow remains authoritative",
             })],
             context_budget: package.context_budget.clone(),
@@ -300,6 +303,7 @@ pub fn execute_codex_conversation_plan(
                     "trimmed_item_count": package.context_budget.trimmed_item_count,
                     "budget_item_count": package.context_budget.items.len(),
                 },
+                "supply_quality": codex_executor_supply_quality_summary(package),
                 "tool_output_policy": package.tool_output_policy,
             })],
             context_budget: package.context_budget.clone(),
@@ -319,11 +323,55 @@ pub fn execute_codex_conversation_plan(
                 "kind": "codex_executor.unsupported_transport",
                 "transport": package.executor_transport.as_str(),
                 "fallback": "direct",
+                "supply_quality": codex_executor_supply_quality_summary(package),
                 "message": "real Codex execution is not wired in assistant-runtime",
             })],
             context_budget: package.context_budget.clone(),
         },
     }
+}
+
+fn codex_executor_supply_quality_summary(package: &AssistantRunCodexContextPackageView) -> Value {
+    let source = if package.supply_quality.is_null() {
+        package
+            .evidence_state
+            .get("supply_quality")
+            .or_else(|| package.evidence_state.get("supplyQuality"))
+            .unwrap_or(&Value::Null)
+    } else {
+        &package.supply_quality
+    };
+    if source.is_null() {
+        return json!({
+            "status": "unknown",
+            "suppliedItemCount": package.context_budget.evidence_item_count,
+            "selectedDatasetCount": package.context_budget.selected_dataset_count,
+            "hiddenMemoryItemCount": package.context_budget.hidden_memory_item_count,
+        });
+    }
+    json!({
+        "status": source.get("status").and_then(Value::as_str).unwrap_or("unknown"),
+        "suppliedItemCount": source
+            .get("suppliedItemCount")
+            .or_else(|| source.get("supplied_item_count"))
+            .and_then(Value::as_u64)
+            .unwrap_or(package.context_budget.evidence_item_count as u64),
+        "citationLocatorCount": source
+            .get("citationLocatorCount")
+            .or_else(|| source.get("citation_locator_count"))
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+        "fallbackChunkCount": source
+            .get("fallbackChunkCount")
+            .or_else(|| source.get("fallback_chunk_count"))
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+        "mediaContextCount": source
+            .get("mediaContextCount")
+            .or_else(|| source.get("media_context_count"))
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+    })
 }
 
 pub fn plan_scope(input: ScopePlannerInput<'_>) -> ScopePlan {
@@ -894,6 +942,13 @@ mod tests {
             artifact_state_chars: 96,
             ..AssistantRunCodexContextBudgetView::default()
         };
+        package.supply_quality = json!({
+            "status": "partial",
+            "suppliedItemCount": 3,
+            "citationLocatorCount": 2,
+            "fallbackChunkCount": 1,
+            "mediaContextCount": 1
+        });
         package
     }
 
@@ -918,6 +973,10 @@ mod tests {
         assert_eq!(
             output.execution_trail[0]["kind"],
             json!("codex_executor.shadow_dry_run")
+        );
+        assert_eq!(
+            output.execution_trail[0]["supply_quality"]["status"],
+            json!("partial")
         );
     }
 
@@ -950,6 +1009,14 @@ mod tests {
         assert_eq!(
             output.execution_trail[0]["tool_output_policy"]["max_item_chars"],
             json!(16000)
+        );
+        assert_eq!(
+            output.execution_trail[0]["supply_quality"]["citationLocatorCount"],
+            json!(2)
+        );
+        assert_eq!(
+            output.execution_trail[0]["supply_quality"]["fallbackChunkCount"],
+            json!(1)
         );
         assert_eq!(output.context_budget.selected_dataset_count, 1);
     }
