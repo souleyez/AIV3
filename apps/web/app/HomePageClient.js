@@ -3539,6 +3539,13 @@ export default function HomePageClient() {
           sidebarProps={sidebarProps}
           chatPanelProps={chatPanelProps}
           insightPanelProps={insightPanelProps}
+          sessions={sessions}
+          selectedSessionId={selectedSessionId}
+          currentConversationTitle={currentConversationTitle}
+          composingNewSession={composingNewSession}
+          accountAuth={sidebarProps.accountAuth}
+          onSelectSession={handleSelectConversation}
+          onStartNewConversation={handleStartNewConversation}
           selectedDataset={selectedDataset}
           selectedDatasets={selectedDatasets}
           stats={stats}

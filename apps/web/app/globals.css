@@ -10,6 +10,7 @@
   --success: #15803d;
   --danger: #b91c1c;
   --shadow: 0 18px 48px rgba(15, 23, 42, 0.08);
+  --assistant-composer-width: 720px;
 }
 
 * {
@@ -72,6 +73,16 @@ button {
   color: var(--text);
   background: #fff;
   border: 1px solid var(--line);
+}
+
+.assistant-shell .ghost-btn {
+  color: #dce6f4;
+  background: rgba(255, 255, 255, 0.075);
+  border-color: transparent;
+}
+
+.assistant-shell .primary-btn {
+  box-shadow: none;
 }
 
 .primary-btn:disabled,
@@ -542,6 +553,11 @@ button {
   border: 1px solid rgba(219, 231, 245, 0.92);
   border-radius: 18px;
   box-shadow: var(--shadow);
+}
+
+.assistant-shell .card {
+  border-color: transparent;
+  box-shadow: none;
 }
 
 .chat-panel {
@@ -1087,6 +1103,8 @@ button {
 }
 
 .chat-composer-wrap {
+  width: min(var(--assistant-composer-width), 100%);
+  margin-inline: auto;
   display: grid;
   gap: 8px;
   padding-top: 10px;
@@ -1115,6 +1133,18 @@ textarea {
   padding: 10px 12px;
   font-size: 12px;
   resize: vertical;
+}
+
+.assistant-shell input,
+.assistant-shell textarea {
+  border-color: transparent;
+  background: rgba(7, 11, 17, 0.64);
+  color: #f8fbff;
+}
+
+.assistant-shell input::placeholder,
+.assistant-shell textarea::placeholder {
+  color: #78879a;
 }
 
 .chat-action-stack {
@@ -3197,8 +3227,8 @@ body {
 
 .assistant-shell .card {
   background: rgba(21, 27, 36, 0.78);
-  border-color: rgba(255, 255, 255, 0.08);
-  box-shadow: 0 28px 70px rgba(0, 0, 0, 0.24);
+  border-color: transparent;
+  box-shadow: 0 24px 58px rgba(0, 0, 0, 0.2);
   backdrop-filter: blur(18px);
 }
 
@@ -3251,7 +3281,7 @@ body {
 .assistant-shell .right-brief-links button,
 .assistant-shell .result-text-link {
   background: rgba(255, 255, 255, 0.045);
-  border-color: rgba(255, 255, 255, 0.075);
+  border-color: transparent;
   color: #dce6f4;
 }
 
@@ -3641,15 +3671,16 @@ body {
 .home-toolbar-nav-link {
   display: inline-flex;
   align-items: center;
-  min-height: 30px;
-  padding: 0 10px;
+  min-height: 34px;
+  padding: 0 13px;
   border: 0;
   border-radius: 999px;
   background: transparent;
   color: #b7c2d0;
   text-decoration: none;
-  font-size: 12px;
-  font-weight: 800;
+  font-size: 16px;
+  font-weight: 900;
+  letter-spacing: 0.01em;
   white-space: nowrap;
 }
 
@@ -4257,13 +4288,15 @@ body {
   position: sticky;
   bottom: 18px;
   z-index: 14;
+  width: min(var(--assistant-composer-width), calc(100% - 24px));
+  margin-inline: auto;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 12px;
+  grid-template-columns: minmax(0, 1fr) 76px;
+  gap: 8px;
   align-items: end;
   padding: 12px;
-  border-radius: 24px;
-  background: rgba(18, 24, 32, 0.9);
+  border-radius: 20px;
+  background: rgba(18, 24, 32, 0.94);
   box-shadow: 0 18px 52px rgba(0, 0, 0, 0.28);
   backdrop-filter: blur(18px);
 }
@@ -4276,7 +4309,6 @@ body {
 
 .directory-composer-actions {
   display: grid;
-  grid-template-columns: 76px;
   grid-template-rows: repeat(3, minmax(34px, 1fr));
   gap: 6px;
 }
@@ -4300,12 +4332,11 @@ body {
 .mobile-home-topbar {
   min-height: 54px;
   display: grid;
-  grid-template-columns: 78px minmax(0, 1fr) 78px;
+  grid-template-columns: 70px minmax(0, 1fr) 70px;
   align-items: center;
   gap: 8px;
   padding: calc(8px + env(safe-area-inset-top)) 12px 8px;
   background: rgba(20, 26, 35, 0.92);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   backdrop-filter: blur(16px);
 }
 
@@ -4325,6 +4356,127 @@ body {
   font-weight: 850;
 }
 
+.mobile-conversation-menu,
+.mobile-account-menu {
+  position: relative;
+  min-width: 0;
+}
+
+.mobile-home-conversation-trigger {
+  width: 100%;
+  min-height: 36px;
+  display: grid;
+  gap: 2px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.075);
+  color: #eaf2ff;
+  text-align: center;
+}
+
+.mobile-home-conversation-trigger span {
+  color: #8fa0b7;
+  font-size: 10px;
+  font-weight: 850;
+}
+
+.mobile-home-conversation-trigger strong {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 900;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mobile-login-chip {
+  width: 100%;
+}
+
+.mobile-top-dropdown {
+  position: fixed;
+  left: 12px;
+  right: 12px;
+  top: calc(58px + env(safe-area-inset-top));
+  z-index: 52;
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 20px;
+  background: rgba(17, 23, 32, 0.98);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.42);
+  backdrop-filter: blur(18px);
+}
+
+.mobile-top-dropdown-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.mobile-top-dropdown-head strong,
+.mobile-account-summary strong {
+  color: #f8fbff;
+}
+
+.mobile-conversation-list {
+  max-height: 44vh;
+  display: grid;
+  gap: 7px;
+  overflow-y: auto;
+}
+
+.mobile-conversation-option {
+  display: grid;
+  gap: 3px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.045);
+  color: #dce8f8;
+  text-align: left;
+}
+
+.mobile-conversation-option.active {
+  background: rgba(37, 99, 235, 0.26);
+}
+
+.mobile-conversation-option span,
+.mobile-account-summary span,
+.mobile-account-field span,
+.mobile-account-message {
+  color: #98a7bb;
+  font-size: 12px;
+}
+
+.mobile-account-summary,
+.mobile-account-field {
+  display: grid;
+  gap: 6px;
+}
+
+.mobile-account-field input {
+  min-height: 36px;
+  border-radius: 13px;
+  padding: 0 12px;
+}
+
+.mobile-account-actions,
+.mobile-account-code {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.mobile-account-code {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.mobile-account-message {
+  margin: 0;
+  line-height: 1.55;
+}
+
 .mobile-home-topbar-chip:disabled {
   opacity: 0.45;
 }
@@ -4338,7 +4490,6 @@ body {
   color: #9eaabd;
   font-size: 12px;
   background: rgba(255, 255, 255, 0.035);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
 }
 
 .mobile-home-status-strip span,
@@ -4865,9 +5016,14 @@ body {
     padding: 7px 9px;
   }
 
-  .home-toolbar-nav-link,
   .home-toolbar-flyout-trigger {
     font-size: 11px;
+  }
+
+  .home-toolbar-nav-link {
+    min-height: 32px;
+    padding: 0 11px;
+    font-size: 15px;
   }
 
   .workspace-grid {
