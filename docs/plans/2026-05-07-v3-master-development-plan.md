@@ -308,7 +308,7 @@ The next development thread should keep the current UI shell stable and continue
 
 **Status:** New priority as of 2026-05-10. The current baseline has `llm-gateway` model lanes, MiniMax-compatible cleanup, ReAct tool contracts, and a dry-run/plan-only Codex Host bridge. It does not yet route normal assistant conversations through Codex as the primary reasoning/execution kernel.
 
-**Current implementation note:** `llm-gateway` now has a first-class `ModelProviderProfile` contract with provider/model id, wire API, capability manifest, auth env key name, timeout, rate-limit hints, cost hints, and redaction policy. Public manifests expose only redacted/safe metadata and tests cover GPT-style and MiniMax/Codex-shim profiles without leaking raw keys. `contracts` now has `AssistantRunCodexContextPackageView`, executor transport values, V3-owned safety policy, context budget diagnostics, and action contracts so the future Codex executor receives a V3-supplied package and can only suggest V3-validated actions. `assistant-runtime` now has a dry-run/plan-only `execute_codex_conversation_plan` adapter that records safe execution trails, exposes planned action types, rejects unsafe context packages, treats real Codex transports as unsupported until host validation, and always falls back to direct execution without mutating drafts or queues. `platform-api` can now opt in with `ASSISTANT_RUN_EXECUTOR=codex_dry_run|codex_plan_only|codex_exec_schema|codex_sdk_thread|codex_app_server|codex_mcp_server`; it builds a V3-scoped Codex context package for create/continue AssistantRun calls, records concise `assistant_run.codex_executor_diagnostic` events, and keeps direct execution authoritative.
+**Current implementation note:** `llm-gateway` now has a first-class `ModelProviderProfile` contract with provider/model id, wire API, capability manifest, auth env key name, timeout, rate-limit hints, cost hints, and redaction policy. Public manifests expose only redacted/safe metadata and tests cover GPT-style and MiniMax/Codex-shim profiles without leaking raw keys. It can also convert provider runtime metadata into Provider Shim usage events and summaries for future runtime inspect/PostgreSQL audit persistence. `contracts` now has `AssistantRunCodexContextPackageView`, executor transport values, V3-owned safety policy, context budget diagnostics, action contracts, Provider Shim observability snapshots, and a Codex tool-output budget policy so the future Codex executor receives a V3-supplied package and operations can inspect local shim health/profile/usage/budget/liveness state without exposing raw keys or prompts. `assistant-runtime` now has a dry-run/plan-only `execute_codex_conversation_plan` adapter that records safe execution trails, exposes planned action types, rejects unsafe context packages, treats real Codex transports as unsupported until host validation, and always falls back to direct execution without mutating drafts or queues. `platform-api` can now opt in with `ASSISTANT_RUN_EXECUTOR=codex_dry_run|codex_plan_only|codex_exec_schema|codex_sdk_thread|codex_app_server|codex_mcp_server`; it builds a V3-scoped Codex context package for create/continue AssistantRun calls, records concise `assistant_run.codex_executor_diagnostic` events, exposes AssistantRun detail diagnostics for latest Codex shadow status/context-budget pressure plus redacted provider usage summaries, and keeps direct execution authoritative. Codex context budget diagnostics now classify prompt/history, startup briefing, selected scope, inferred candidates, retrieval evidence, hidden conversation memory, detail targets, media summaries, current artifact state, and tool/evidence state with estimated character counts and soft-limit pressure. Codex tool-output trimming is narrow and only bounds oversized `tool_outputs` payload fields while preserving recent outputs, error/status fields, evidence references, source locators, and media timestamps; retrieval evidence and media summaries stay quality-first. ReAct/provider protocol hardening now rejects incomplete provider tool-call payloads and repairs duplicate tool-call replay, missing tool outputs, and repeated pending-tool liveness stalls before continuing the action loop. Shadow comparison diagnostics now record direct action types, Codex suggested action type, matched/diverged/no-suggestion status, and a hard mutation guard so Codex cannot mutate drafts or queues during shadow evaluation.
 
 **OpenAI Codex OSS reference checked on 2026-05-10:**
 
@@ -374,6 +374,8 @@ The next development thread should keep the current UI shell stable and continue
 - Create: `apps/web/app/lib/static-page-chart-runtime.js`
 - Test: `apps/web/app/lib/static-page-draft.test.mjs`
 
+**Status:** Completed in current baseline. The web package depends on `echarts`, draft normalization carries `chartRuntime`/`chartOptions`, unsafe option keys and script-like values are stripped, unknown runtimes fall back to deterministic rendering, and frontend draft tests cover default runtime, ECharts runtime, invalid runtime fallback, row normalization, synthesized preview options, and unsafe option stripping.
+
 **Steps:**
 
 1. Add `echarts` with `pnpm --filter @ai-data-platform-v3/web add echarts`.
@@ -400,6 +402,8 @@ The next development thread should keep the current UI shell stable and continue
 - Modify: `apps/web/app/components/static-page/StaticPagePlanningPanel.js`
 - Modify: `apps/web/app/globals.css`
 
+**Status:** Completed in current baseline. `StaticPageChartPreview` renders deterministic mini charts by default and hydrates ECharts client-side only when sanitized option/data are renderable. Module cards/final render surfaces expose compact runtime/data-quality labels, and missing ECharts data shows an explicit waiting state instead of fake bars.
+
 **Steps:**
 
 1. Create a client-only chart preview component for ECharts modules.
@@ -424,6 +428,8 @@ The next development thread should keep the current UI shell stable and continue
 - Modify: `crates/static-page-renderer/src/lib.rs`
 - Modify: `crates/platform-api/src/lib.rs`
 - Test: relevant unit tests in the same crates
+
+**Status:** Completed in current baseline. `static-page-runtime` accepts only deterministic/ECharts runtimes and safe plain-JSON ECharts options; `static-page-renderer` emits deterministic HTML/SVG fallback plus safe ECharts JSON hydration islands and data-quality/fallback manifest fields; `platform-api` keeps image-prompt payload, data snapshot, final render manifest, and HTML artifact reports aligned around the same runtime/data-quality contract.
 
 **Steps:**
 
@@ -483,6 +489,8 @@ The next development thread should keep the current UI shell stable and continue
 - Modify: `crates/platform-api/src/lib.rs`
 - Modify: `apps/web/app/components/static-page/StaticPageFinalRender.js`
 - Modify: `apps/web/app/components/InsightPanel.js`
+
+**Status:** Completed in current baseline.
 
 **Current implementation note:** Web UI background render submission, main-workspace status card, right-shelf cancel/retry actions, ZIP handoff, data-quality chips, workflow queued/rendering state synchronization, worker manifest failure diagnostics, worker-side cancellation race protection, PostgreSQL-backed worker completion/cancel tests, static-page render retry/dead-letter workflow regression coverage, and API retry/dead-letter output-state coverage are implemented. Final render manifests and ZIP handoff now also include module-level data quality/runtime diagnostics via `data-quality-report.json`, so handoff reviewers can see each module's title, data binding, sample row count, quality status, fallback mode, and recommended action. The final-render panel shows a compact module-level quality list with localized status/runtime labels, the right-side static-page shelf surfaces the first problem/fallback modules directly on each draft card, and the safe HTML artifact layer now synthesizes read-only `static_page_data_quality_report` artifacts from rendered final-page manifests for review in the common artifact shelf.
 

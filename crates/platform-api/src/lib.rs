@@ -16,8 +16,9 @@ use contracts::{
     AppendAssistantRunEventResponse, AppendChatSessionTurnRequest, AppendChatSessionTurnResponse,
     AppendStaticPageDraftOperationsRequest, AppendStaticPageDraftOperationsResponse,
     ApplyStaticPageDraftIntentRequest, ApplyStaticPageDraftIntentResponse,
-    AssistantRunCodexActionContractView, AssistantRunCodexContextBudgetView,
-    AssistantRunCodexContextPackageView, AssistantRunDetailView, AssistantRunEventView,
+    AssistantRunCodexActionContractView, AssistantRunCodexContextBudgetItemView,
+    AssistantRunCodexContextBudgetView, AssistantRunCodexContextPackageView,
+    AssistantRunCodexToolOutputPolicyView, AssistantRunDetailView, AssistantRunEventView,
     AssistantRunExecutorTransportView, AssistantRunMessageView, AssistantRunView,
     AuthAuditEventView, AuthSessionResponse, AuthSessionView, AuthUserView, BindEmailRequest,
     BindEmailResponse, ChatMessageView, ChatSessionView, ClaimLocalDataRequest,
@@ -6389,9 +6390,19 @@ async fn create_assistant_run(
             executor_transport,
         );
         let codex_output = execute_codex_conversation_plan(&codex_package);
+        let codex_shadow_comparison = assistant_run_codex_shadow_comparison(
+            &codex_output,
+            react_enabled,
+            &runtime_manifest,
+            &output_artifacts,
+            &react_events,
+            &selected_scope,
+            request.current_artifact.as_ref(),
+        );
         execution_trail.extend(assistant_run_codex_execution_trail_entries(
             &codex_output,
             now,
+            Some(&codex_shadow_comparison),
         ));
         state
             .storage
@@ -6411,7 +6422,10 @@ async fn create_assistant_run(
                 run.id,
                 &NewAssistantRunEvent {
                     event_name: "assistant_run.codex_executor_diagnostic".to_string(),
-                    payload: assistant_run_codex_event_payload(&codex_output),
+                    payload: assistant_run_codex_event_payload(
+                        &codex_output,
+                        Some(&codex_shadow_comparison),
+                    ),
                     created_at: now,
                 },
             )
@@ -6490,6 +6504,7 @@ async fn get_assistant_run(
         .list_events(state.tenant_id, run_id)
         .await
         .map_err(ApiError::from_storage)?;
+    let diagnostics = assistant_run_detail_diagnostics(&run, &events);
 
     Ok(Json(AssistantRunDetailView {
         run: to_assistant_run_view(run),
@@ -6497,6 +6512,7 @@ async fn get_assistant_run(
             .into_iter()
             .map(to_assistant_run_event_view)
             .collect(),
+        diagnostics,
     }))
 }
 
@@ -6708,11 +6724,24 @@ async fn continue_assistant_run(
                 executor_transport,
             );
             let codex_output = execute_codex_conversation_plan(&codex_package);
+            let codex_shadow_comparison = assistant_run_codex_shadow_comparison(
+                &codex_output,
+                react_enabled,
+                &runtime_manifest,
+                &assistant_artifacts,
+                &react_events,
+                &selected_scope,
+                request.current_artifact.as_ref(),
+            );
             execution_trail.extend(assistant_run_codex_execution_trail_entries(
                 &codex_output,
                 now,
+                Some(&codex_shadow_comparison),
             ));
-            Some(assistant_run_codex_event_payload(&codex_output))
+            Some(assistant_run_codex_event_payload(
+                &codex_output,
+                Some(&codex_shadow_comparison),
+            ))
         } else {
             None
         };
@@ -9134,6 +9163,37 @@ fn build_react_protocol_repair_at_step(
     evidence_state: &Value,
     step_index: usize,
 ) -> Option<AssistantRunReactActionResult> {
+    if let Some(call_id) = assistant_run_react_replays_completed_tool_call(decision, observations) {
+        return Some(build_assistant_run_react_policy_repair_result(
+            decision,
+            "duplicate tool-call replay detected; continue from the existing observation instead of replaying the same call.",
+            step_index,
+            vec![format!("tool_call:{call_id}")],
+            "duplicate_tool_call_replay",
+        ));
+    }
+
+    if let Some(pending) = assistant_run_react_pending_tool_output(observations) {
+        let (message, repair_code) = if pending.repeated {
+            (
+                "tool-call liveness stall detected; request a continuation or choose a different whitelisted action.",
+                "tool_call_liveness_stall",
+            )
+        } else {
+            (
+                "tool-call output is missing; wait for or repair the tool observation before continuing.",
+                "missing_tool_output",
+            )
+        };
+        return Some(build_assistant_run_react_policy_repair_result(
+            decision,
+            message,
+            step_index,
+            vec![format!("tool_call:{}", pending.call_id)],
+            repair_code,
+        ));
+    }
+
     if assistant_run_react_should_repair_terminal_action(
         decision,
         selected_scope,
@@ -9178,6 +9238,101 @@ fn build_react_protocol_repair_at_step(
     }
 
     None
+}
+
+struct AssistantRunReactPendingToolOutput {
+    call_id: String,
+    repeated: bool,
+}
+
+fn assistant_run_react_replays_completed_tool_call(
+    decision: &AssistantRunNextAction,
+    observations: &[Value],
+) -> Option<String> {
+    let call_id = assistant_run_react_call_id_from_value(&decision.arguments)?;
+    let already_completed = observations.iter().any(|observation| {
+        assistant_run_react_observation_call_id(observation).as_deref() == Some(call_id.as_str())
+            && assistant_run_react_observation_status(observation).is_some_and(|status| {
+                matches!(status, "completed" | "failed" | "rejected" | "denied")
+            })
+    });
+    already_completed.then_some(call_id)
+}
+
+fn assistant_run_react_pending_tool_output(
+    observations: &[Value],
+) -> Option<AssistantRunReactPendingToolOutput> {
+    let pending_observation = observations.iter().rev().find(|observation| {
+        assistant_run_react_observation_status(observation).is_some_and(|status| {
+            matches!(
+                status,
+                "tool_calls_emitted"
+                    | "tool_call_requested"
+                    | "pending_tool_output"
+                    | "tool_output_missing"
+            )
+        })
+    })?;
+    let call_id = assistant_run_react_observation_call_id(pending_observation)?;
+    let resolved = observations.iter().any(|observation| {
+        assistant_run_react_observation_call_id(observation).as_deref() == Some(call_id.as_str())
+            && assistant_run_react_observation_status(observation).is_some_and(|status| {
+                matches!(status, "completed" | "failed" | "rejected" | "denied")
+            })
+    });
+    if resolved {
+        return None;
+    }
+    let repeated = observations
+        .iter()
+        .rev()
+        .take(2)
+        .filter(|observation| {
+            assistant_run_react_observation_call_id(observation).as_deref()
+                == Some(call_id.as_str())
+                && assistant_run_react_observation_status(observation).is_some_and(|status| {
+                    matches!(
+                        status,
+                        "tool_calls_emitted"
+                            | "tool_call_requested"
+                            | "pending_tool_output"
+                            | "tool_output_missing"
+                    )
+                })
+        })
+        .count()
+        >= 2;
+
+    Some(AssistantRunReactPendingToolOutput { call_id, repeated })
+}
+
+fn assistant_run_react_call_id_from_value(value: &Value) -> Option<String> {
+    value
+        .get("tool_call_id")
+        .or_else(|| value.get("toolCallId"))
+        .or_else(|| value.get("call_id"))
+        .or_else(|| value.get("callId"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn assistant_run_react_observation_call_id(observation: &Value) -> Option<String> {
+    assistant_run_react_call_id_from_value(observation).or_else(|| {
+        observation
+            .get("tool_call")
+            .or_else(|| observation.get("toolCall"))
+            .and_then(assistant_run_react_call_id_from_value)
+    })
+}
+
+fn assistant_run_react_observation_status(observation: &Value) -> Option<&str> {
+    observation
+        .get("status")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
 }
 
 fn build_assistant_run_react_policy_repair_result(
@@ -9519,23 +9674,274 @@ fn build_assistant_run_codex_context_package(
 ) -> AssistantRunCodexContextPackageView {
     let mut package =
         AssistantRunCodexContextPackageView::new(assistant_run_id, user_prompt.trim());
+    let tool_output_policy = assistant_run_codex_tool_output_policy();
+    let bounded_evidence_state =
+        assistant_run_codex_bounded_evidence_state(evidence_state, &tool_output_policy);
     package.executor_transport = executor_transport;
     package.local_thread_id = local_thread_id.map(ToString::to_string);
     package.messages = messages.to_vec();
     package.startup_briefing = startup_briefing.clone();
     package.selected_scope = selected_scope.clone();
     package.inferred_scope_candidates = scope_candidates.to_vec();
-    package.evidence_state = evidence_state.clone();
-    package.hidden_memory_candidates = assistant_run_codex_hidden_memory_candidates(evidence_state);
+    package.evidence_state = bounded_evidence_state.clone();
+    package.hidden_memory_candidates =
+        assistant_run_codex_hidden_memory_candidates(&bounded_evidence_state);
     package.current_artifact = current_artifact.cloned();
     package.available_actions = assistant_run_codex_action_contracts(selected_scope);
+    package.tool_output_policy = tool_output_policy;
     package.context_budget = assistant_run_codex_context_budget(
+        user_prompt,
         messages,
+        startup_briefing,
         selected_scope,
-        evidence_state,
+        scope_candidates,
+        &bounded_evidence_state,
         current_artifact,
     );
     package
+}
+
+fn assistant_run_codex_tool_output_policy() -> AssistantRunCodexToolOutputPolicyView {
+    AssistantRunCodexToolOutputPolicyView {
+        max_total_chars: assistant_run_codex_env_usize(
+            "ASSISTANT_RUN_CODEX_TOOL_OUTPUT_MAX_TOTAL_CHARS",
+            80_000,
+        ),
+        max_item_chars: assistant_run_codex_env_usize(
+            "ASSISTANT_RUN_CODEX_TOOL_OUTPUT_MAX_ITEM_CHARS",
+            16_000,
+        ),
+        preserve_recent_output_count: assistant_run_codex_env_usize(
+            "ASSISTANT_RUN_CODEX_TOOL_OUTPUT_PRESERVE_RECENT",
+            3,
+        ),
+        preserve_error_fields: env_flag("ASSISTANT_RUN_CODEX_TOOL_OUTPUT_PRESERVE_ERRORS", true),
+        preserve_evidence_refs: env_flag("ASSISTANT_RUN_CODEX_TOOL_OUTPUT_PRESERVE_REFS", true),
+        preserve_media_timestamps: env_flag(
+            "ASSISTANT_RUN_CODEX_TOOL_OUTPUT_PRESERVE_MEDIA_TIMESTAMPS",
+            true,
+        ),
+    }
+}
+
+fn assistant_run_codex_env_usize(key: &str, default_value: usize) -> usize {
+    std::env::var(key)
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(default_value)
+}
+
+fn assistant_run_codex_bounded_evidence_state(
+    evidence_state: &Value,
+    policy: &AssistantRunCodexToolOutputPolicyView,
+) -> Value {
+    let mut bounded = evidence_state.clone();
+    let Some(object) = bounded.as_object_mut() else {
+        return bounded;
+    };
+    let Some(tool_outputs) = object.get_mut("tool_outputs").and_then(Value::as_array_mut) else {
+        return bounded;
+    };
+
+    let total_output_count = tool_outputs.len();
+    let mut trimmed_output_count = 0_usize;
+    let mut trimmed_field_count = 0_usize;
+    let mut largest_output_chars = 0_usize;
+    let mut total_chars = 0_usize;
+    for (index, output) in tool_outputs.iter_mut().enumerate() {
+        let is_recent =
+            total_output_count.saturating_sub(index) <= policy.preserve_recent_output_count;
+        let before_chars = assistant_run_codex_value_chars(output);
+        largest_output_chars = largest_output_chars.max(before_chars);
+        total_chars = total_chars.saturating_add(before_chars);
+        let trim_result = assistant_run_codex_trim_tool_output_value(output, policy, is_recent);
+        if trim_result.trimmed {
+            trimmed_output_count += 1;
+            trimmed_field_count += trim_result.trimmed_field_count;
+        }
+    }
+
+    let existing_trimmed_count = object
+        .get("trimmed_item_count")
+        .or_else(|| object.get("trimmedItemCount"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    if trimmed_output_count > 0 {
+        object.insert(
+            "trimmed_item_count".to_string(),
+            json!(existing_trimmed_count + trimmed_output_count as u64),
+        );
+    }
+    object.insert(
+        "codex_tool_output_budget".to_string(),
+        json!({
+            "policy": policy,
+            "tool_output_count": total_output_count,
+            "trimmed_output_count": trimmed_output_count,
+            "trimmed_field_count": trimmed_field_count,
+            "largest_output_chars": largest_output_chars,
+            "estimated_total_chars_before_trim": total_chars,
+            "preserves": {
+                "recent_output_count": policy.preserve_recent_output_count,
+                "error_fields": policy.preserve_error_fields,
+                "evidence_refs": policy.preserve_evidence_refs,
+                "media_timestamps": policy.preserve_media_timestamps,
+            }
+        }),
+    );
+    bounded
+}
+
+#[derive(Default)]
+struct AssistantRunCodexTrimResult {
+    trimmed: bool,
+    trimmed_field_count: usize,
+}
+
+fn assistant_run_codex_trim_tool_output_value(
+    value: &mut Value,
+    policy: &AssistantRunCodexToolOutputPolicyView,
+    is_recent: bool,
+) -> AssistantRunCodexTrimResult {
+    match value {
+        Value::Object(object) => {
+            let mut result = AssistantRunCodexTrimResult::default();
+            let mut trimmed_fields = Vec::new();
+            let keys: Vec<String> = object.keys().cloned().collect();
+            for key in keys {
+                let Some(child) = object.get_mut(&key) else {
+                    continue;
+                };
+                if let Value::String(text) = child {
+                    if assistant_run_codex_should_trim_tool_output_field(&key, policy) {
+                        let item_limit =
+                            assistant_run_codex_tool_output_item_limit(policy, is_recent);
+                        if let Some(trimmed) = assistant_run_codex_trim_text_value(text, item_limit)
+                        {
+                            *text = trimmed;
+                            result.trimmed = true;
+                            result.trimmed_field_count += 1;
+                            trimmed_fields.push(key);
+                        }
+                    }
+                    continue;
+                }
+                let nested = assistant_run_codex_trim_tool_output_value(child, policy, is_recent);
+                if nested.trimmed {
+                    result.trimmed = true;
+                    result.trimmed_field_count += nested.trimmed_field_count;
+                }
+            }
+            if !trimmed_fields.is_empty() {
+                object.insert("codex_trimmed_fields".to_string(), json!(trimmed_fields));
+            }
+            result
+        }
+        Value::Array(items) => items.iter_mut().fold(
+            AssistantRunCodexTrimResult::default(),
+            |mut result, item| {
+                let nested = assistant_run_codex_trim_tool_output_value(item, policy, is_recent);
+                if nested.trimmed {
+                    result.trimmed = true;
+                    result.trimmed_field_count += nested.trimmed_field_count;
+                }
+                result
+            },
+        ),
+        _ => AssistantRunCodexTrimResult::default(),
+    }
+}
+
+fn assistant_run_codex_tool_output_item_limit(
+    policy: &AssistantRunCodexToolOutputPolicyView,
+    is_recent: bool,
+) -> usize {
+    if is_recent {
+        policy
+            .max_item_chars
+            .saturating_mul(2)
+            .min(policy.max_total_chars)
+            .max(policy.max_item_chars)
+    } else {
+        policy.max_item_chars
+    }
+}
+
+fn assistant_run_codex_should_trim_tool_output_field(
+    key: &str,
+    policy: &AssistantRunCodexToolOutputPolicyView,
+) -> bool {
+    let lower = key.to_ascii_lowercase();
+    if policy.preserve_evidence_refs
+        && ["id", "ref", "refs", "citation", "source", "locator"]
+            .iter()
+            .any(|needle| lower.contains(needle))
+    {
+        return false;
+    }
+    if policy.preserve_media_timestamps
+        && [
+            "timestamp",
+            "timestamps",
+            "time_window",
+            "timecode",
+            "start_ms",
+            "end_ms",
+        ]
+        .iter()
+        .any(|needle| lower.contains(needle))
+    {
+        return false;
+    }
+    if policy.preserve_error_fields
+        && ["error_code", "failure_kind", "exit_code", "status"]
+            .iter()
+            .any(|needle| lower.contains(needle))
+    {
+        return false;
+    }
+    [
+        "content",
+        "output",
+        "stdout",
+        "stderr",
+        "text",
+        "body",
+        "raw",
+        "transcript",
+        "result",
+        "message",
+        "error",
+        "failure",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle))
+}
+
+fn assistant_run_codex_trim_text_value(value: &str, max_chars: usize) -> Option<String> {
+    let original_chars = value.chars().count();
+    if original_chars <= max_chars {
+        return None;
+    }
+    if max_chars < 80 {
+        return Some(format!(
+            "[codex-trimmed original_chars={original_chars} kept_chars=0]"
+        ));
+    }
+    let marker = format!(
+        "\n[codex-trimmed original_chars={} omitted_chars={}]\n",
+        original_chars,
+        original_chars.saturating_sub(max_chars)
+    );
+    let marker_chars = marker.chars().count();
+    let kept_chars = max_chars.saturating_sub(marker_chars).max(2);
+    let head_chars = kept_chars / 2;
+    let tail_chars = kept_chars.saturating_sub(head_chars);
+    let head: String = value.chars().take(head_chars).collect();
+    let tail_reversed: String = value.chars().rev().take(tail_chars).collect();
+    let tail: String = tail_reversed.chars().rev().collect();
+    Some(format!("{head}{marker}{tail}"))
 }
 
 fn assistant_run_codex_hidden_memory_candidates(evidence_state: &Value) -> Vec<Value> {
@@ -9547,35 +9953,215 @@ fn assistant_run_codex_hidden_memory_candidates(evidence_state: &Value) -> Vec<V
 }
 
 fn assistant_run_codex_context_budget(
+    user_prompt: &str,
     messages: &[AssistantRunMessageView],
+    startup_briefing: &Value,
     selected_scope: &Value,
+    scope_candidates: &[Value],
     evidence_state: &Value,
     current_artifact: Option<&Value>,
 ) -> AssistantRunCodexContextBudgetView {
+    let max_prompt_chars = std::env::var("ASSISTANT_RUN_CODEX_MAX_PROMPT_CHARS")
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok());
+    let category_soft_limit = std::env::var("ASSISTANT_RUN_CODEX_CATEGORY_SOFT_LIMIT_CHARS")
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .or_else(|| max_prompt_chars.map(|value| value.saturating_div(4).max(1)))
+        .or(Some(12_000));
+    let supplied_items = evidence_state
+        .get("supplied_items")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let hidden_memory_items = assistant_run_codex_hidden_memory_candidates(evidence_state);
+    let detail_targets = evidence_state
+        .get("detail_targets")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let artifact_state_chars = current_artifact
+        .and_then(|artifact| serde_json::to_string(artifact).ok())
+        .map(|value| value.chars().count())
+        .unwrap_or(0);
+    let tool_output_chars = serde_json::to_string(evidence_state)
+        .map(|value| value.chars().count())
+        .unwrap_or(0);
+    let trimmed_item_count = evidence_state
+        .get("trimmed_item_count")
+        .or_else(|| evidence_state.get("trimmedItemCount"))
+        .and_then(Value::as_u64)
+        .map(|value| value as usize)
+        .unwrap_or(0);
+    let prompt_and_history_chars = user_prompt.chars().count()
+        + messages
+            .iter()
+            .map(|message| message.content.chars().count())
+            .sum::<usize>();
+    let startup_briefing_chars = assistant_run_codex_value_chars(startup_briefing);
+    let selected_scope_chars = assistant_run_codex_value_chars(selected_scope);
+    let scope_candidate_chars = assistant_run_codex_values_chars(scope_candidates);
+    let supplied_item_chars = assistant_run_codex_values_chars(&supplied_items);
+    let hidden_memory_chars = assistant_run_codex_values_chars(&hidden_memory_items);
+    let detail_target_chars = assistant_run_codex_values_chars(&detail_targets);
+    let media_summary_count = assistant_run_codex_media_summary_count(&supplied_items);
+    let media_summary_chars = assistant_run_codex_media_summary_chars(&supplied_items);
+    let estimated_prompt_chars = prompt_and_history_chars
+        + startup_briefing_chars
+        + selected_scope_chars
+        + scope_candidate_chars
+        + tool_output_chars
+        + artifact_state_chars;
+    let budget_pressure =
+        assistant_run_codex_budget_pressure(estimated_prompt_chars, max_prompt_chars);
+    let items = vec![
+        AssistantRunCodexContextBudgetItemView::new(
+            "prompt_and_history",
+            messages.len() + 1,
+            prompt_and_history_chars,
+            category_soft_limit,
+            0,
+            Some("user prompt plus recent visible conversation messages".to_string()),
+        ),
+        AssistantRunCodexContextBudgetItemView::new(
+            "startup_briefing",
+            usize::from(!startup_briefing.is_null()),
+            startup_briefing_chars,
+            category_soft_limit,
+            0,
+            Some("product and database briefing supplied by V3".to_string()),
+        ),
+        AssistantRunCodexContextBudgetItemView::new(
+            "selected_scope",
+            selected_dataset_ids_from_scope(selected_scope).len()
+                + selected_document_ids_from_scope(selected_scope).len(),
+            selected_scope_chars,
+            category_soft_limit,
+            0,
+            Some("selected datasets, documents, memory flags, and supply policy".to_string()),
+        ),
+        AssistantRunCodexContextBudgetItemView::new(
+            "inferred_scope_candidates",
+            scope_candidates.len(),
+            scope_candidate_chars,
+            category_soft_limit,
+            0,
+            Some("visible scope candidates for model awareness, not direct evidence".to_string()),
+        ),
+        AssistantRunCodexContextBudgetItemView::new(
+            "retrieval_evidence",
+            supplied_items.len(),
+            supplied_item_chars,
+            category_soft_limit,
+            trimmed_item_count,
+            Some(
+                "V3-visible supplied evidence; high-value ids and citations must survive trimming"
+                    .to_string(),
+            ),
+        ),
+        AssistantRunCodexContextBudgetItemView::new(
+            "hidden_conversation_memory",
+            hidden_memory_items.len(),
+            hidden_memory_chars,
+            category_soft_limit,
+            0,
+            Some("intent-gated conversation memory candidates".to_string()),
+        ),
+        AssistantRunCodexContextBudgetItemView::new(
+            "detail_targets",
+            detail_targets.len(),
+            detail_target_chars,
+            category_soft_limit,
+            0,
+            Some(
+                "documents recommended for deeper read; not directly citable evidence".to_string(),
+            ),
+        ),
+        AssistantRunCodexContextBudgetItemView::new(
+            "media_payload_summaries",
+            media_summary_count,
+            media_summary_chars,
+            category_soft_limit,
+            0,
+            Some("transcript, scene, keyframe OCR, and media evidence summaries".to_string()),
+        ),
+        AssistantRunCodexContextBudgetItemView::new(
+            "current_artifact",
+            usize::from(current_artifact.is_some()),
+            artifact_state_chars,
+            category_soft_limit,
+            0,
+            Some("current static page/report artifact skeleton supplied by V3".to_string()),
+        ),
+        AssistantRunCodexContextBudgetItemView::new(
+            "tool_outputs",
+            usize::from(!evidence_state.is_null()),
+            tool_output_chars,
+            max_prompt_chars.or(category_soft_limit),
+            trimmed_item_count,
+            Some("complete evidence/tool state currently supplied to the executor".to_string()),
+        ),
+    ];
+
     AssistantRunCodexContextBudgetView {
-        max_prompt_chars: std::env::var("ASSISTANT_RUN_CODEX_MAX_PROMPT_CHARS")
-            .ok()
-            .and_then(|value| value.trim().parse::<usize>().ok()),
+        max_prompt_chars,
+        estimated_prompt_chars,
+        budget_pressure,
         included_message_count: messages.len(),
         selected_dataset_count: selected_dataset_ids_from_scope(selected_scope).len(),
         evidence_item_count: assistant_run_evidence_supplied_count(evidence_state),
-        hidden_memory_item_count: assistant_run_codex_hidden_memory_candidates(evidence_state)
-            .len(),
-        artifact_state_chars: current_artifact
-            .and_then(|artifact| serde_json::to_string(artifact).ok())
-            .map(|value| value.chars().count())
-            .unwrap_or(0),
-        tool_output_chars: serde_json::to_string(evidence_state)
-            .map(|value| value.chars().count())
-            .unwrap_or(0),
-        trimmed_item_count: evidence_state
-            .get("trimmed_item_count")
-            .or_else(|| evidence_state.get("trimmedItemCount"))
-            .and_then(Value::as_u64)
-            .map(|value| value as usize)
-            .unwrap_or(0),
+        hidden_memory_item_count: hidden_memory_items.len(),
+        artifact_state_chars,
+        tool_output_chars,
+        trimmed_item_count,
+        items,
         ..AssistantRunCodexContextBudgetView::default()
     }
+}
+
+fn assistant_run_codex_budget_pressure(char_count: usize, limit: Option<usize>) -> String {
+    match limit {
+        Some(limit) if limit > 0 && char_count > limit => "over_limit",
+        Some(limit) if limit > 0 && char_count * 10 >= limit * 7 => "attention",
+        Some(_) => "ok",
+        None => "unbounded",
+    }
+    .to_string()
+}
+
+fn assistant_run_codex_value_chars(value: &Value) -> usize {
+    if value.is_null() {
+        return 0;
+    }
+    serde_json::to_string(value)
+        .map(|value| value.chars().count())
+        .unwrap_or(0)
+}
+
+fn assistant_run_codex_values_chars(values: &[Value]) -> usize {
+    values.iter().map(assistant_run_codex_value_chars).sum()
+}
+
+fn assistant_run_codex_media_summary_count(items: &[Value]) -> usize {
+    items
+        .iter()
+        .filter(|item| {
+            item.get("media_context")
+                .or_else(|| item.get("mediaContext"))
+                .is_some()
+        })
+        .count()
+}
+
+fn assistant_run_codex_media_summary_chars(items: &[Value]) -> usize {
+    items
+        .iter()
+        .filter_map(|item| {
+            item.get("media_context")
+                .or_else(|| item.get("mediaContext"))
+        })
+        .map(assistant_run_codex_value_chars)
+        .sum()
 }
 
 fn assistant_run_codex_action_contracts(
@@ -9685,6 +10271,7 @@ fn assistant_run_codex_action_contracts(
 fn assistant_run_codex_execution_trail_entries(
     output: &CodexConversationExecutorOutput,
     now: DateTime<Utc>,
+    shadow_comparison: Option<&Value>,
 ) -> Vec<Value> {
     vec![json!({
         "status": "completed",
@@ -9694,11 +10281,15 @@ fn assistant_run_codex_execution_trail_entries(
         "codex_invoked": output.codex_invoked,
         "fallback_to_direct": output.fallback_to_direct,
         "planned_action_types": output.planned_action_types.clone(),
+        "shadow_comparison": shadow_comparison.cloned(),
         "at": now,
     })]
 }
 
-fn assistant_run_codex_event_payload(output: &CodexConversationExecutorOutput) -> Value {
+fn assistant_run_codex_event_payload(
+    output: &CodexConversationExecutorOutput,
+    shadow_comparison: Option<&Value>,
+) -> Value {
     json!({
         "transport": output.transport.as_str(),
         "status": output.status.as_str(),
@@ -9707,7 +10298,181 @@ fn assistant_run_codex_event_payload(output: &CodexConversationExecutorOutput) -
         "planned_action_types": output.planned_action_types.clone(),
         "context_budget": output.context_budget.clone(),
         "execution_trail": output.execution_trail.clone(),
+        "shadow_comparison": shadow_comparison.cloned(),
     })
+}
+
+fn assistant_run_codex_shadow_comparison(
+    output: &CodexConversationExecutorOutput,
+    direct_react_enabled: bool,
+    direct_runtime_manifest: &Value,
+    direct_output_artifacts: &[Value],
+    direct_react_events: &[AssistantRunReactEvent],
+    selected_scope: &Value,
+    current_artifact: Option<&Value>,
+) -> Value {
+    let artifact_types: Vec<Value> = direct_output_artifacts
+        .iter()
+        .filter_map(|artifact| artifact.get("type").and_then(Value::as_str))
+        .map(|value| json!(value))
+        .collect();
+    let react_event_names: Vec<Value> = direct_react_events
+        .iter()
+        .map(|event| json!(event.event_name.as_str()))
+        .collect();
+    let direct_action_types =
+        assistant_run_codex_direct_action_types(direct_output_artifacts, direct_react_events);
+    let selected_intent = assistant_run_scope_intent(selected_scope);
+    let static_page_context = selected_intent == "static_page"
+        || current_artifact
+            .map(assistant_run_is_static_page_artifact)
+            .unwrap_or(false)
+        || direct_output_artifacts.iter().any(|artifact| {
+            artifact
+                .get("type")
+                .and_then(Value::as_str)
+                .is_some_and(|kind| {
+                    matches!(
+                        kind,
+                        "static_page_draft" | "static_page_image_job" | "static_page_render_output"
+                    )
+                })
+        });
+    let suggested_action_type = output
+        .suggested_action
+        .as_ref()
+        .and_then(|action| {
+            action
+                .get("action_type")
+                .or_else(|| action.get("actionType"))
+                .or_else(|| action.get("type"))
+        })
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
+    let comparison_status = assistant_run_codex_shadow_comparison_status(
+        &direct_action_types,
+        suggested_action_type.as_deref(),
+    );
+    let direct_action_values: Vec<Value> = direct_action_types
+        .iter()
+        .map(|value| json!(value))
+        .collect();
+
+    json!({
+        "mode": "shadow_comparison",
+        "authoritative_executor": "direct",
+        "codex_mutation_allowed": false,
+        "codex_queue_allowed": false,
+        "direct_state_authoritative": true,
+        "static_page_flow_preserved": true,
+        "static_page_context": static_page_context,
+        "direct": {
+            "react_enabled": direct_react_enabled,
+            "runtime_mode": direct_runtime_manifest.get("mode").cloned().unwrap_or(Value::Null),
+            "provider": direct_runtime_manifest.get("provider").cloned().unwrap_or(Value::Null),
+            "model": direct_runtime_manifest.get("model").cloned().unwrap_or(Value::Null),
+            "artifact_types": artifact_types,
+            "react_event_names": react_event_names,
+            "action_types": direct_action_values,
+            "selected_intent": selected_intent,
+        },
+        "codex": {
+            "transport": output.transport.as_str(),
+            "status": output.status.as_str(),
+            "codex_invoked": output.codex_invoked,
+            "fallback_to_direct": output.fallback_to_direct,
+            "planned_action_types": output.planned_action_types.clone(),
+            "suggested_action_type": suggested_action_type,
+        },
+        "comparison": {
+            "status": comparison_status,
+            "codex_has_suggestion": output.suggested_action.is_some(),
+            "actionable": false,
+            "equivalence_scored": output.suggested_action.is_some(),
+            "reason": "shadow mode only; direct execution remains authoritative",
+            "next_gate": "enable Codex mutation only after repeated matched shadow runs",
+        }
+    })
+}
+
+fn assistant_run_codex_direct_action_types(
+    direct_output_artifacts: &[Value],
+    direct_react_events: &[AssistantRunReactEvent],
+) -> Vec<String> {
+    let mut actions = Vec::new();
+    for artifact in direct_output_artifacts {
+        let Some(kind) = artifact.get("type").and_then(Value::as_str) else {
+            continue;
+        };
+        let action = match kind {
+            "static_page_draft" => Some("create_static_page_draft"),
+            "static_page_image_job" => Some("submit_static_page_image_preview"),
+            "static_page_render_output" => Some("render_static_page"),
+            "assistant_message" => Some("final_answer"),
+            "report_draft" => Some("create_report_draft"),
+            _ => None,
+        };
+        if let Some(action) = action {
+            push_unique_string(&mut actions, action);
+        }
+    }
+    for event in direct_react_events {
+        if let Some(action) = assistant_run_action_type_from_event_name(&event.event_name) {
+            push_unique_string(&mut actions, action);
+        }
+    }
+    actions
+}
+
+fn assistant_run_action_type_from_event_name(event_name: &str) -> Option<&'static str> {
+    if event_name.contains("retrieve_evidence") {
+        Some("retrieve_evidence")
+    } else if event_name.contains("read_document_detail") {
+        Some("read_document_detail")
+    } else if event_name.contains("recall_conversation_memory") {
+        Some("recall_conversation_memory")
+    } else if event_name.contains("create_static_page_draft") {
+        Some("create_static_page_draft")
+    } else if event_name.contains("update_static_page_module") {
+        Some("update_static_page_module")
+    } else if event_name.contains("submit_static_page_image_preview") {
+        Some("submit_static_page_image_preview")
+    } else if event_name.contains("render_static_page") {
+        Some("render_static_page")
+    } else if event_name.contains("create_report_draft") {
+        Some("create_report_draft")
+    } else if event_name.contains("report_choice") {
+        Some("report_choice")
+    } else if event_name.contains("codex_host_task") {
+        Some("codex_host_task")
+    } else {
+        None
+    }
+}
+
+fn assistant_run_codex_shadow_comparison_status(
+    direct_action_types: &[String],
+    suggested_action_type: Option<&str>,
+) -> &'static str {
+    let Some(suggested_action_type) = suggested_action_type else {
+        return "no_codex_suggestion";
+    };
+    if direct_action_types
+        .iter()
+        .any(|action_type| action_type == suggested_action_type)
+    {
+        "matched"
+    } else if direct_action_types.is_empty() {
+        "codex_only"
+    } else {
+        "diverged"
+    }
+}
+
+fn push_unique_string(items: &mut Vec<String>, item: &str) {
+    if !items.iter().any(|existing| existing == item) {
+        items.push(item.to_string());
+    }
 }
 
 fn normalize_assistant_run_continue_max_steps(value: Option<usize>) -> usize {
@@ -18348,6 +19113,212 @@ fn to_workflow_execution_view(execution: WorkflowExecution) -> WorkflowExecution
     }
 }
 
+fn assistant_run_detail_diagnostics(run: &AssistantRun, events: &[AssistantRunEvent]) -> Value {
+    let provider_usage_events = assistant_run_provider_usage_events(run, events);
+    json!({
+        "codex_executor": assistant_run_codex_detail_diagnostics(events),
+        "provider_usage": {
+            "summary": assistant_run_provider_usage_summary(&provider_usage_events),
+            "recent_events": assistant_run_recent_provider_usage_events(provider_usage_events, 8),
+        },
+    })
+}
+
+fn assistant_run_codex_detail_diagnostics(events: &[AssistantRunEvent]) -> Value {
+    let codex_event_count = events
+        .iter()
+        .filter(|event| event.event_name == "assistant_run.codex_executor_diagnostic")
+        .count();
+    let latest = events
+        .iter()
+        .filter(|event| event.event_name == "assistant_run.codex_executor_diagnostic")
+        .last();
+    let latest_summary = latest
+        .map(|event| {
+            let payload = &event.payload;
+            let context_budget = payload.get("context_budget").map(|budget| {
+                json!({
+                    "estimated_prompt_chars": budget.get("estimated_prompt_chars").cloned().unwrap_or(Value::Null),
+                    "max_prompt_chars": budget.get("max_prompt_chars").cloned().unwrap_or(Value::Null),
+                    "budget_pressure": budget.get("budget_pressure").cloned().unwrap_or(Value::Null),
+                    "item_count": budget
+                        .get("items")
+                        .and_then(Value::as_array)
+                        .map(|items| items.len())
+                        .unwrap_or(0),
+                })
+            });
+            let shadow = payload.get("shadow_comparison");
+            let shadow_summary = shadow.map(|shadow| {
+                json!({
+                    "status": shadow
+                        .pointer("/comparison/status")
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                    "actionable": shadow
+                        .pointer("/comparison/actionable")
+                        .cloned()
+                        .unwrap_or(Value::Bool(false)),
+                    "codex_has_suggestion": shadow
+                        .pointer("/comparison/codex_has_suggestion")
+                        .cloned()
+                        .unwrap_or(Value::Bool(false)),
+                    "codex_mutation_allowed": shadow
+                        .get("codex_mutation_allowed")
+                        .cloned()
+                        .unwrap_or(Value::Bool(false)),
+                    "static_page_flow_preserved": shadow
+                        .get("static_page_flow_preserved")
+                        .cloned()
+                        .unwrap_or(Value::Bool(true)),
+                    "direct_action_types": shadow
+                        .pointer("/direct/action_types")
+                        .cloned()
+                        .unwrap_or_else(|| json!([])),
+                    "codex_suggested_action_type": shadow
+                        .pointer("/codex/suggested_action_type")
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                    "next_gate": shadow
+                        .pointer("/comparison/next_gate")
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                })
+            });
+
+            json!({
+                "event_id": event.id.to_string(),
+                "sequence_no": event.sequence_no,
+                "transport": payload.get("transport").cloned().unwrap_or(Value::Null),
+                "status": payload.get("status").cloned().unwrap_or(Value::Null),
+                "codex_invoked": payload
+                    .get("codex_invoked")
+                    .cloned()
+                    .unwrap_or(Value::Bool(false)),
+                "fallback_to_direct": payload
+                    .get("fallback_to_direct")
+                    .cloned()
+                    .unwrap_or(Value::Bool(true)),
+                "planned_action_types": payload
+                    .get("planned_action_types")
+                    .cloned()
+                    .unwrap_or_else(|| json!([])),
+                "context_budget": context_budget.unwrap_or(Value::Null),
+                "shadow_comparison": shadow_summary.unwrap_or(Value::Null),
+            })
+        })
+        .unwrap_or(Value::Null);
+
+    json!({
+        "event_count": codex_event_count,
+        "latest": latest_summary,
+        "mutation_allowed": false,
+        "queue_allowed": false,
+        "authority": "direct_until_shadow_gate_passes",
+    })
+}
+
+fn assistant_run_provider_usage_events(
+    run: &AssistantRun,
+    events: &[AssistantRunEvent],
+) -> Vec<Value> {
+    let mut usage_events = events
+        .iter()
+        .filter_map(|event| {
+            let runtime = event.payload.get("runtime")?;
+            assistant_run_provider_usage_event_from_runtime_manifest(
+                run.id,
+                Some(event.sequence_no),
+                Some(event.event_name.as_str()),
+                runtime,
+            )
+        })
+        .collect::<Vec<_>>();
+
+    if usage_events.is_empty() {
+        if let Some(event) = assistant_run_provider_usage_event_from_runtime_manifest(
+            run.id,
+            None,
+            Some("assistant_run.current_runtime"),
+            &run.runtime_manifest,
+        ) {
+            usage_events.push(event);
+        }
+    }
+
+    usage_events
+}
+
+fn assistant_run_provider_usage_event_from_runtime_manifest(
+    run_id: AssistantRunId,
+    sequence_no: Option<i32>,
+    event_name: Option<&str>,
+    runtime: &Value,
+) -> Option<Value> {
+    let provider = runtime.get("provider").and_then(Value::as_str)?;
+    let model = runtime.get("model").and_then(Value::as_str)?;
+    let usage = runtime.get("usage").filter(|value| value.is_object());
+    let provider_failure = runtime
+        .get("provider_failure")
+        .filter(|value| value.is_object());
+
+    Some(json!({
+        "assistant_run_id": run_id.to_string(),
+        "sequence_no": sequence_no,
+        "event_name": event_name,
+        "mode": runtime.get("mode").and_then(Value::as_str),
+        "provider": provider,
+        "model": model,
+        "lane": runtime.get("lane").and_then(Value::as_str),
+        "request_id": runtime.get("request_id").and_then(Value::as_str),
+        "status": if provider_failure.is_some() { "failed" } else { "responded" },
+        "input_tokens": usage
+            .and_then(|usage| usage.get("input_tokens"))
+            .and_then(Value::as_u64),
+        "output_tokens": usage
+            .and_then(|usage| usage.get("output_tokens"))
+            .and_then(Value::as_u64),
+        "total_tokens": usage
+            .and_then(|usage| usage.get("total_tokens"))
+            .and_then(Value::as_u64),
+        "latency_ms": runtime.get("latency_ms").and_then(Value::as_u64),
+        "provider_failure_kind": provider_failure
+            .and_then(|failure| failure.get("kind"))
+            .and_then(Value::as_str),
+    }))
+}
+
+fn assistant_run_provider_usage_summary(events: &[Value]) -> Value {
+    json!({
+        "request_count": events.len(),
+        "failed_request_count": events
+            .iter()
+            .filter(|event| event.get("status").and_then(Value::as_str) == Some("failed"))
+            .count(),
+        "input_tokens": assistant_run_sum_usage_field(events, "input_tokens"),
+        "output_tokens": assistant_run_sum_usage_field(events, "output_tokens"),
+        "total_tokens": assistant_run_sum_usage_field(events, "total_tokens"),
+        "last_request_id": events
+            .iter()
+            .rev()
+            .find_map(|event| event.get("request_id").and_then(Value::as_str))
+    })
+}
+
+fn assistant_run_recent_provider_usage_events(mut events: Vec<Value>, limit: usize) -> Vec<Value> {
+    if events.len() > limit {
+        events = events.split_off(events.len() - limit);
+    }
+    events
+}
+
+fn assistant_run_sum_usage_field(events: &[Value], field: &str) -> u64 {
+    events
+        .iter()
+        .filter_map(|event| event.get(field).and_then(Value::as_u64))
+        .sum()
+}
+
 fn value_array(value: Value) -> Vec<Value> {
     match value {
         Value::Array(items) => items,
@@ -21519,7 +22490,17 @@ mod tests {
         });
         let evidence_state = json!({
             "status": "supplied",
-            "supplied_items": [{"type": "retrieval_evidence", "summary": "订单延期风险"}],
+            "supplied_items": [{
+                "type": "retrieval_evidence",
+                "summary": "订单延期风险",
+                "media_context": {
+                    "media_kind": "audio",
+                    "transcript_windows": [{"text": "客户追问延期"}],
+                    "scene_windows": [],
+                    "keyframe_ocr_snippets": []
+                }
+            }],
+            "detail_targets": [{"document_id": "doc-1", "reason": "detail_first_scope"}],
             "conversation_memory_items": [{"summary": "用户上次要求做销售看板"}],
             "trimmed_item_count": 2
         });
@@ -21554,12 +22535,84 @@ mod tests {
         assert_eq!(package.context_budget.evidence_item_count, 1);
         assert_eq!(package.context_budget.hidden_memory_item_count, 1);
         assert_eq!(package.context_budget.trimmed_item_count, 2);
+        assert!(package.context_budget.estimated_prompt_chars > 0);
+        assert_eq!(package.context_budget.budget_pressure, "unbounded");
+        assert!(package
+            .context_budget
+            .items
+            .iter()
+            .any(|item| item.category == "retrieval_evidence" && item.trimmed_item_count == 2));
+        assert!(package
+            .context_budget
+            .items
+            .iter()
+            .any(|item| item.category == "media_payload_summaries" && item.item_count == 1));
+        assert!(package
+            .context_budget
+            .items
+            .iter()
+            .any(|item| item.category == "detail_targets" && item.item_count == 1));
         assert!(package.context_budget.artifact_state_chars > 0);
         assert!(package
             .action_types()
             .contains(&"update_static_page_module".to_string()));
         assert!(package.safety.v3_validates_all_actions);
         assert!(!package.safety.direct_database_access_allowed);
+    }
+
+    #[test]
+    fn assistant_run_codex_package_trims_oversized_tool_outputs_but_preserves_refs() {
+        let long_stdout = format!("stdout-start-{}-stdout-end", "x".repeat(40_000));
+        let evidence_state = json!({
+            "status": "supplied",
+            "supplied_items": [{
+                "type": "retrieval_evidence",
+                "summary": "关键证据不能被工具输出预算裁掉",
+                "retrieval_evidence_id": "evidence-keep"
+            }],
+            "tool_outputs": [{
+                "tool_call_id": "tool-1",
+                "evidence_ref": "evidence-keep",
+                "timestamp_ms": 12345,
+                "stdout": long_stdout,
+                "error_code": "E_TIMEOUT"
+            }]
+        });
+
+        let package = build_assistant_run_codex_context_package(
+            AssistantRunId::new(),
+            None,
+            "检查工具输出预算",
+            &[],
+            &json!({}),
+            &json!({"intent": "ordinary_chat"}),
+            &[],
+            &evidence_state,
+            None,
+            AssistantRunExecutorTransportView::CodexPlanOnly,
+        );
+
+        let tool_output = &package.evidence_state["tool_outputs"][0];
+        let stdout = tool_output["stdout"]
+            .as_str()
+            .expect("trimmed stdout should remain a string");
+        let serialized = package.evidence_state.to_string();
+
+        assert!(stdout.contains("stdout-start"));
+        assert!(stdout.contains("stdout-end"));
+        assert!(stdout.contains("[codex-trimmed"));
+        assert!(!stdout.contains(&"x".repeat(35_000)));
+        assert_eq!(tool_output["evidence_ref"], json!("evidence-keep"));
+        assert_eq!(tool_output["timestamp_ms"], json!(12345));
+        assert_eq!(tool_output["error_code"], json!("E_TIMEOUT"));
+        assert_eq!(tool_output["codex_trimmed_fields"], json!(["stdout"]));
+        assert_eq!(
+            package.evidence_state["codex_tool_output_budget"]["trimmed_output_count"],
+            json!(1)
+        );
+        assert_eq!(package.context_budget.trimmed_item_count, 1);
+        assert!(serialized.contains("关键证据不能被工具输出预算裁掉"));
+        assert!(package.tool_output_policy.preserve_evidence_refs);
     }
 
     #[test]
@@ -21578,15 +22631,220 @@ mod tests {
         );
 
         let output = execute_codex_conversation_plan(&package);
-        let payload = assistant_run_codex_event_payload(&output);
-        let trail = assistant_run_codex_execution_trail_entries(&output, Utc::now());
+        let shadow = assistant_run_codex_shadow_comparison(
+            &output,
+            false,
+            &json!({
+                "mode": "provider",
+                "provider": "placeholder",
+                "model": "assistant-chat-placeholder"
+            }),
+            &[json!({
+                "type": "assistant_message",
+                "content": "direct answer remains authoritative"
+            })],
+            &[],
+            &json!({"mode": "ordinary_chat"}),
+            None,
+        );
+        let payload = assistant_run_codex_event_payload(&output, Some(&shadow));
+        let trail = assistant_run_codex_execution_trail_entries(&output, Utc::now(), Some(&shadow));
 
         assert_eq!(payload["transport"], json!("codex_dry_run"));
         assert_eq!(payload["status"], json!("shadow_dry_run"));
         assert_eq!(payload["codex_invoked"], json!(false));
         assert_eq!(payload["fallback_to_direct"], json!(true));
+        assert_eq!(
+            payload["shadow_comparison"]["authoritative_executor"],
+            json!("direct")
+        );
+        assert_eq!(
+            payload["shadow_comparison"]["codex_mutation_allowed"],
+            json!(false)
+        );
+        assert_eq!(
+            payload["shadow_comparison"]["comparison"]["actionable"],
+            json!(false)
+        );
+        assert_eq!(
+            payload["shadow_comparison"]["comparison"]["status"],
+            json!("no_codex_suggestion")
+        );
         assert_eq!(trail[0]["label"], json!("Codex 执行器诊断"));
         assert_eq!(trail[0]["fallback_to_direct"], json!(true));
+        assert_eq!(
+            trail[0]["shadow_comparison"]["direct_state_authoritative"],
+            json!(true)
+        );
+
+        let mut suggested_output = output.clone();
+        suggested_output.suggested_action = Some(json!({
+            "action_type": "create_static_page_draft",
+            "reason": "shadow-only static page planning candidate"
+        }));
+        let matched_shadow = assistant_run_codex_shadow_comparison(
+            &suggested_output,
+            true,
+            &json!({
+                "mode": "provider",
+                "provider": "placeholder",
+                "model": "assistant-react-json-placeholder"
+            }),
+            &[json!({
+                "type": "static_page_draft",
+                "backendDraftId": "draft-1"
+            })],
+            &[],
+            &json!({"intent": "static_page"}),
+            None,
+        );
+        assert_eq!(
+            matched_shadow["direct"]["action_types"],
+            json!(["create_static_page_draft"])
+        );
+        assert_eq!(matched_shadow["comparison"]["status"], json!("matched"));
+        assert_eq!(
+            matched_shadow["comparison"]["next_gate"],
+            json!("enable Codex mutation only after repeated matched shadow runs")
+        );
+
+        suggested_output.suggested_action = Some(json!({
+            "action_type": "render_static_page"
+        }));
+        let diverged_shadow = assistant_run_codex_shadow_comparison(
+            &suggested_output,
+            true,
+            &json!({"mode": "provider"}),
+            &[json!({"type": "static_page_draft"})],
+            &[],
+            &json!({"intent": "static_page"}),
+            None,
+        );
+        assert_eq!(diverged_shadow["comparison"]["status"], json!("diverged"));
+        assert_eq!(diverged_shadow["codex_mutation_allowed"], json!(false));
+    }
+
+    #[test]
+    fn assistant_run_detail_diagnostics_summarize_codex_shadow_and_provider_usage() {
+        let tenant_id = TenantId::new();
+        let run_id = AssistantRunId::new();
+        let now = Utc::now();
+        let run = AssistantRun {
+            id: run_id,
+            tenant_id,
+            user_id: None,
+            local_thread_id: Some("browser-thread-runtime".to_string()),
+            user_prompt: "检查运行诊断".to_string(),
+            startup_briefing: json!({}),
+            selected_scope: json!({"intent": "ordinary_chat"}),
+            scope_candidates: json!([]),
+            context_policy: json!({}),
+            evidence_state: json!({"status": "not_requested"}),
+            service_lane: "ordinary_chat".to_string(),
+            execution_trail: json!([]),
+            output_artifacts: json!([]),
+            runtime_manifest: json!({
+                "mode": "provider",
+                "provider": "minmax",
+                "model": "abab-test",
+                "request_id": "req-current-runtime",
+                "usage": {"input_tokens": 1, "output_tokens": 2, "total_tokens": 3}
+            }),
+            created_at: now,
+            updated_at: now,
+        };
+        let events = vec![
+            AssistantRunEvent {
+                id: AssistantRunEventId::new(),
+                tenant_id,
+                run_id,
+                sequence_no: 1,
+                event_name: "assistant_run.completed".to_string(),
+                payload: json!({
+                    "runtime": {
+                        "mode": "provider",
+                        "provider": "minmax",
+                        "model": "abab-test",
+                        "lane": "assistant_chat",
+                        "request_id": "req-provider-1",
+                        "usage": {"input_tokens": 10, "output_tokens": 20, "total_tokens": 30},
+                        "latency_ms": 1200,
+                        "provider_failure": {
+                            "kind": "rate_limited",
+                            "message": "sk-should-not-leak raw prompt should not leak"
+                        }
+                    }
+                }),
+                created_at: now,
+            },
+            AssistantRunEvent {
+                id: AssistantRunEventId::new(),
+                tenant_id,
+                run_id,
+                sequence_no: 2,
+                event_name: "assistant_run.codex_executor_diagnostic".to_string(),
+                payload: json!({
+                    "transport": "codex_plan_only",
+                    "status": "plan_only",
+                    "codex_invoked": false,
+                    "fallback_to_direct": true,
+                    "planned_action_types": ["create_static_page_draft"],
+                    "context_budget": {
+                        "estimated_prompt_chars": 4096,
+                        "max_prompt_chars": 12000,
+                        "budget_pressure": "normal",
+                        "items": [{"category": "retrieval_evidence"}]
+                    },
+                    "shadow_comparison": {
+                        "codex_mutation_allowed": false,
+                        "static_page_flow_preserved": true,
+                        "direct": {"action_types": ["create_static_page_draft"]},
+                        "codex": {"suggested_action_type": "create_static_page_draft"},
+                        "comparison": {
+                            "status": "matched",
+                            "actionable": false,
+                            "codex_has_suggestion": true,
+                            "next_gate": "enable Codex mutation only after repeated matched shadow runs"
+                        }
+                    }
+                }),
+                created_at: now,
+            },
+        ];
+
+        let diagnostics = assistant_run_detail_diagnostics(&run, &events);
+        let serialized = diagnostics.to_string();
+
+        assert_eq!(
+            diagnostics["codex_executor"]["latest"]["shadow_comparison"]["status"],
+            json!("matched")
+        );
+        assert_eq!(
+            diagnostics["codex_executor"]["latest"]["context_budget"]["budget_pressure"],
+            json!("normal")
+        );
+        assert_eq!(
+            diagnostics["codex_executor"]["latest"]["shadow_comparison"]["codex_mutation_allowed"],
+            json!(false)
+        );
+        assert_eq!(
+            diagnostics["provider_usage"]["summary"]["request_count"],
+            json!(1)
+        );
+        assert_eq!(
+            diagnostics["provider_usage"]["summary"]["failed_request_count"],
+            json!(1)
+        );
+        assert_eq!(
+            diagnostics["provider_usage"]["summary"]["total_tokens"],
+            json!(30)
+        );
+        assert_eq!(
+            diagnostics["provider_usage"]["recent_events"][0]["provider_failure_kind"],
+            json!("rate_limited")
+        );
+        assert!(!serialized.contains("sk-should-not-leak"));
+        assert!(!serialized.contains("raw prompt should not leak"));
     }
 
     #[test]
@@ -23084,6 +24342,84 @@ mod tests {
         assert_eq!(
             repeated_repair.observation["repair_code"],
             json!("repeated_no_progress_action")
+        );
+    }
+
+    #[test]
+    fn assistant_run_react_protocol_repair_handles_tool_call_liveness_cases() {
+        let selected_scope = json!({
+            "mode": "selected",
+            "selected": [{"type": "dataset", "id": DatasetId::new().to_string()}],
+            "intent": "data_question",
+        });
+        let evidence_state = json!({"status": "empty", "supplied_items": []});
+        let retrieve_action = react_test_action(
+            AssistantRunReActStatus::Act,
+            AssistantRunReactActionType::RetrieveEvidence,
+            json!({
+                "dataset_id": selected_scope["selected"][0]["id"].as_str().unwrap(),
+                "tool_call_id": "call-1"
+            }),
+        );
+
+        let duplicate_repair = build_react_protocol_repair(
+            &retrieve_action,
+            &[json!({
+                "status": "completed",
+                "action_type": "retrieve_evidence",
+                "tool_call_id": "call-1",
+                "items": [{"summary": "已返回"}]
+            })],
+            &selected_scope,
+            &evidence_state,
+        )
+        .expect("duplicate completed tool call should be repaired");
+        assert_eq!(
+            duplicate_repair.observation["repair_code"],
+            json!("duplicate_tool_call_replay")
+        );
+
+        let missing_output_repair = build_react_protocol_repair(
+            &react_test_action(
+                AssistantRunReActStatus::FinalAnswer,
+                AssistantRunReactActionType::FinalAnswer,
+                json!({"content": "工具结果还没回来却准备回答"}),
+            ),
+            &[json!({
+                "status": "tool_calls_emitted",
+                "action_type": "retrieve_evidence",
+                "tool_call_id": "call-2"
+            })],
+            &selected_scope,
+            &evidence_state,
+        )
+        .expect("missing tool output should be repaired before continuing");
+        assert_eq!(
+            missing_output_repair.observation["repair_code"],
+            json!("missing_tool_output")
+        );
+
+        let liveness_repair = build_react_protocol_repair(
+            &retrieve_action,
+            &[
+                json!({
+                    "status": "tool_call_requested",
+                    "action_type": "retrieve_evidence",
+                    "tool_call_id": "call-3"
+                }),
+                json!({
+                    "status": "pending_tool_output",
+                    "action_type": "retrieve_evidence",
+                    "tool_call_id": "call-3"
+                }),
+            ],
+            &selected_scope,
+            &evidence_state,
+        )
+        .expect("repeated pending tool call should surface liveness repair");
+        assert_eq!(
+            liveness_repair.observation["repair_code"],
+            json!("tool_call_liveness_stall")
         );
     }
 

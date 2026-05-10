@@ -65,6 +65,7 @@ The first V3-side implementation is intentionally only a queue bridge plus dry-r
 - Shared request/result wire shapes live in `crates/contracts`, not in `platform-api`.
 - `crates/codex-host-agent` advances workflow state through storage, workflow definitions, and event bus dependencies. It must not depend on the browser-facing API crate.
 - AssistantRun events are mode-specific: `codex_host_task.dry_run_completed`, `codex_host_task.plan_only_completed`, or `codex_host_task.exec_completed`.
+- AssistantRun detail responses now expose a safe diagnostics summary for Codex executor shadow events and provider usage, so runtime/audit surfaces can show status without exposing raw prompts, provider keys, or verbose host logs.
 - No local Codex process is launched unless the worker is explicitly switched to `codex_exec` and passes the host/profile safety preflight.
 - Real `codex_exec` also requires a configured task workspace root. The agent creates a task-scoped workspace from the V3 `task_memory_space_id` and runs Codex from that directory instead of the agent's current working directory.
 
@@ -246,6 +247,8 @@ The shim may expose redacted diagnostics to V3:
 - usage summary and recent usage events
 - context-budget and tool-output budget reports
 - liveness/protocol-repair events
+
+The shared V3 contract for this exists as `ProviderShimObservabilitySnapshotView` in `crates/contracts`. `llm-gateway` can already derive the safe profile portion from `ModelProviderProfile`; future shim/host endpoints should fill runtime health, usage, balance, debug trace, budget, and liveness fields from bounded/redacted local diagnostics. AssistantRun Codex packages also carry a tool-output budget policy so oversized execution payloads can be bounded without dropping retrieval evidence, refs, media timestamps, or failure details.
 
 The shim must not expose:
 

@@ -7,6 +7,7 @@ authors.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+contracts = { path = "../contracts" }
 prompt-registry = { path = "../prompt-registry" }
 reqwest.workspace = true
 serde.workspace = true

@@ -1,4 +1,9 @@
 use anyhow::{anyhow, Context, Result};
+use contracts::{
+    ProviderShimCostHintsView, ProviderShimHealthView, ProviderShimObservabilitySnapshotView,
+    ProviderShimProfileSnapshotView, ProviderShimRateLimitHintsView,
+    ProviderShimRedactionPolicyView, ProviderShimUsageEventView, ProviderShimUsageSummaryView,
+};
 use prompt_registry::InMemoryPromptRegistry;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
@@ -520,6 +525,109 @@ impl ModelProviderProfile {
             "redaction": &self.redaction,
         })
     }
+
+    pub fn provider_shim_profile_snapshot(&self) -> ProviderShimProfileSnapshotView {
+        let auth_env_key_name = self
+            .auth_env_key_name
+            .as_deref()
+            .and_then(safe_env_key_name);
+        let auth_configured = self
+            .auth_env_key_name
+            .as_deref()
+            .and_then(|key| std::env::var(key).ok())
+            .map(|value| !value.trim().is_empty())
+            .unwrap_or(false);
+
+        ProviderShimProfileSnapshotView {
+            profile_id: self.profile_id.clone(),
+            provider_id: self.provider_id.clone(),
+            model_id: self.model_id.clone(),
+            wire_api: self.wire_api.as_str().to_string(),
+            endpoint_scope: provider_endpoint_scope(self.base_url.as_deref()),
+            base_url_configured: self.base_url.is_some(),
+            api_path: self.api_path.clone(),
+            auth_env_key_name,
+            auth_configured,
+            timeout_ms: self.timeout_ms,
+            capabilities: self.capabilities.names(),
+            rate_limit: ProviderShimRateLimitHintsView {
+                requests_per_minute: self.rate_limit.requests_per_minute,
+                tokens_per_minute: self.rate_limit.tokens_per_minute,
+                concurrent_requests: self.rate_limit.concurrent_requests,
+            },
+            cost: ProviderShimCostHintsView {
+                input_microusd_per_million_tokens: self.cost.input_microusd_per_million_tokens,
+                output_microusd_per_million_tokens: self.cost.output_microusd_per_million_tokens,
+                currency: self.cost.currency.clone(),
+            },
+            redaction: ProviderShimRedactionPolicyView {
+                redact_provider_errors: self.redaction.redact_provider_errors,
+                redact_request_payloads: self.redaction.redact_request_payloads,
+                redact_response_payloads: self.redaction.redact_response_payloads,
+                max_error_chars: self.redaction.max_error_chars,
+            },
+        }
+    }
+
+    pub fn provider_shim_observability_snapshot(
+        &self,
+        health: ProviderShimHealthView,
+    ) -> ProviderShimObservabilitySnapshotView {
+        ProviderShimObservabilitySnapshotView::new(health, self.provider_shim_profile_snapshot())
+    }
+}
+
+pub fn provider_shim_usage_event_from_runtime(
+    runtime: &LlmRuntimeMetadata,
+    assistant_run_id: Option<&str>,
+    workflow_execution_id: Option<&str>,
+) -> ProviderShimUsageEventView {
+    let provider_failure = runtime.provider_failure.as_ref();
+    ProviderShimUsageEventView {
+        request_id: runtime.request_id.clone(),
+        assistant_run_id: assistant_run_id.map(ToOwned::to_owned),
+        workflow_execution_id: workflow_execution_id.map(ToOwned::to_owned),
+        status: if provider_failure.is_some() {
+            "failed".to_string()
+        } else {
+            "responded".to_string()
+        },
+        input_tokens: runtime
+            .usage
+            .as_ref()
+            .map(|usage| usage.input_tokens as u64),
+        output_tokens: runtime
+            .usage
+            .as_ref()
+            .map(|usage| usage.output_tokens as u64),
+        total_tokens: runtime
+            .usage
+            .as_ref()
+            .map(|usage| usage.total_tokens as u64),
+        latency_ms: runtime.latency_ms,
+        provider_failure_kind: provider_failure.map(|failure| failure.kind.as_str().to_string()),
+        provider_failure_message: provider_failure.map(|failure| failure.message.clone()),
+        recorded_at: None,
+    }
+}
+
+pub fn provider_shim_usage_summary_from_events(
+    events: &[ProviderShimUsageEventView],
+) -> ProviderShimUsageSummaryView {
+    ProviderShimUsageSummaryView {
+        request_count: events.len() as u64,
+        failed_request_count: events
+            .iter()
+            .filter(|event| event.status == "failed")
+            .count() as u64,
+        input_tokens: events.iter().filter_map(|event| event.input_tokens).sum(),
+        output_tokens: events.iter().filter_map(|event| event.output_tokens).sum(),
+        total_tokens: events.iter().filter_map(|event| event.total_tokens).sum(),
+        last_request_id: events
+            .iter()
+            .rev()
+            .find_map(|event| event.request_id.clone()),
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -817,6 +925,27 @@ fn safe_env_key_name(value: &str) -> Option<String> {
         Some(value.to_string())
     } else {
         Some(REDACTED_VALUE.to_string())
+    }
+}
+
+fn provider_endpoint_scope(base_url: Option<&str>) -> String {
+    let Some(base_url) = base_url.map(str::trim).filter(|value| !value.is_empty()) else {
+        return "unconfigured".to_string();
+    };
+    let lower = base_url.to_ascii_lowercase();
+    if lower.starts_with("http://127.0.0.1")
+        || lower.starts_with("https://127.0.0.1")
+        || lower.starts_with("http://localhost")
+        || lower.starts_with("https://localhost")
+        || lower.starts_with("http://[::1]")
+        || lower.starts_with("https://[::1]")
+        || lower.starts_with("unix:")
+    {
+        "local_private".to_string()
+    } else if lower.starts_with("http://") || lower.starts_with("https://") {
+        "remote".to_string()
+    } else {
+        "unknown".to_string()
     }
 }
 
@@ -2445,6 +2574,132 @@ mod tests {
     }
 
     #[test]
+    fn model_provider_profile_builds_safe_provider_shim_observability_snapshot() {
+        let _guard = model_route_env_lock()
+            .lock()
+            .expect("model profile env lock");
+        clear_model_profile_env("TEST_SHIM_OBSERVABILITY_PROFILE");
+        std::env::set_var("MINIMAX_API_KEY", "sk-minimax-secret-value");
+        std::env::set_var(
+            "TEST_SHIM_OBSERVABILITY_PROFILE_PROFILE_ID",
+            "minimax-private-experiment",
+        );
+        std::env::set_var("TEST_SHIM_OBSERVABILITY_PROFILE_PROVIDER_ID", "minimax");
+        std::env::set_var("TEST_SHIM_OBSERVABILITY_PROFILE_MODEL_ID", "MiniMax-M2.7");
+        std::env::set_var(
+            "TEST_SHIM_OBSERVABILITY_PROFILE_BASE_URL",
+            "http://127.0.0.1:8999/v1?api_key=sk-base-secret",
+        );
+        std::env::set_var("TEST_SHIM_OBSERVABILITY_PROFILE_API_PATH", "/v1/responses");
+        std::env::set_var(
+            "TEST_SHIM_OBSERVABILITY_PROFILE_WIRE_API",
+            "codex_compatible_shim",
+        );
+        std::env::set_var(
+            "TEST_SHIM_OBSERVABILITY_PROFILE_AUTH_ENV_KEY",
+            "MINIMAX_API_KEY",
+        );
+        std::env::set_var(
+            "TEST_SHIM_OBSERVABILITY_PROFILE_CAPABILITIES",
+            "chat,json,tool_calling,codex_compatible",
+        );
+        std::env::set_var("TEST_SHIM_OBSERVABILITY_PROFILE_RATE_LIMIT_RPM", "30");
+
+        let profile = ModelProviderProfile::from_env("TEST_SHIM_OBSERVABILITY_PROFILE")
+            .expect("shim profile should parse");
+        let snapshot = profile.provider_shim_observability_snapshot(ProviderShimHealthView {
+            status: contracts::ProviderShimHealthStatusView::Healthy,
+            process_reachable: true,
+            upstream_reachable: true,
+            checked_at: None,
+            message: Some("ready".to_string()),
+        });
+        let serialized = serde_json::to_string(&snapshot).expect("snapshot should serialize");
+
+        clear_model_profile_env("TEST_SHIM_OBSERVABILITY_PROFILE");
+        std::env::remove_var("MINIMAX_API_KEY");
+        assert_eq!(snapshot.schema_version, 1);
+        assert_eq!(snapshot.profile.endpoint_scope, "local_private");
+        assert_eq!(
+            snapshot.profile.auth_env_key_name.as_deref(),
+            Some("MINIMAX_API_KEY")
+        );
+        assert!(snapshot.profile.auth_configured);
+        assert!(snapshot
+            .profile
+            .capabilities
+            .contains(&"codex_compatible".to_string()));
+        assert_eq!(snapshot.profile.rate_limit.requests_per_minute, Some(30));
+        assert!(!serialized.contains("sk-minimax-secret-value"));
+        assert!(!serialized.contains("sk-base-secret"));
+        assert!(!serialized.contains("127.0.0.1:8999"));
+        assert!(!serialized.contains("api_key"));
+    }
+
+    #[test]
+    fn provider_runtime_metadata_builds_provider_shim_usage_events() {
+        let responded_runtime = LlmRuntimeMetadata {
+            mode: LlmRuntimeMode::Provider,
+            provider: "minimax".to_string(),
+            model: "MiniMax-M2.7".to_string(),
+            lane: Some(MODEL_LANE_ASSISTANT_CHAT.to_string()),
+            request_id: Some("req-ok".to_string()),
+            finish_reason: Some(LlmFinishReason::Stop),
+            provider_failure: None,
+            latency_ms: Some(123),
+            usage: Some(LlmTokenUsage {
+                input_tokens: 100,
+                output_tokens: 40,
+                total_tokens: 140,
+            }),
+            system_prompt_key: None,
+            system_prompt_version: None,
+            tool_trace_count: 0,
+        };
+        let failed_runtime = LlmRuntimeMetadata {
+            provider_failure: Some(LlmProviderFailure {
+                kind: LlmProviderFailureKind::HttpStatus,
+                message: "upstream returned HTTP 429".to_string(),
+            }),
+            request_id: Some("req-failed".to_string()),
+            usage: None,
+            ..responded_runtime.clone()
+        };
+
+        let ok_event = provider_shim_usage_event_from_runtime(
+            &responded_runtime,
+            Some("assistant-run-1"),
+            None,
+        );
+        let failed_event =
+            provider_shim_usage_event_from_runtime(&failed_runtime, None, Some("workflow-1"));
+        let summary =
+            provider_shim_usage_summary_from_events(&[ok_event.clone(), failed_event.clone()]);
+
+        assert_eq!(ok_event.status, "responded");
+        assert_eq!(
+            ok_event.assistant_run_id.as_deref(),
+            Some("assistant-run-1")
+        );
+        assert_eq!(ok_event.total_tokens, Some(140));
+        assert_eq!(failed_event.status, "failed");
+        assert_eq!(
+            failed_event.provider_failure_kind.as_deref(),
+            Some("http_status")
+        );
+        assert_eq!(
+            failed_event.workflow_execution_id.as_deref(),
+            Some("workflow-1")
+        );
+        assert_eq!(summary.request_count, 2);
+        assert_eq!(summary.failed_request_count, 1);
+        assert_eq!(summary.input_tokens, 100);
+        assert_eq!(summary.output_tokens, 40);
+        assert_eq!(summary.total_tokens, 140);
+        assert_eq!(summary.last_request_id.as_deref(), Some("req-failed"));
+    }
+
+    #[test]
     fn provider_error_redacts_bearer_tokens() {
         let redacted =
             redact_provider_error("Authorization: Bearer secret-token-123 request failed");
@@ -2700,6 +2955,28 @@ mod tests {
             response.tool_calls[0].arguments,
             Some(json!({ "city": "Shanghai" }))
         );
+    }
+
+    #[test]
+    fn chat_completion_tool_call_extraction_rejects_incomplete_tool_request() {
+        let choice = json!({
+            "message": {
+                "tool_calls": [{
+                    "id": "call_missing_name",
+                    "type": "function",
+                    "function": {
+                        "arguments": "{\"city\":\"Chengdu\"}"
+                    }
+                }]
+            }
+        });
+
+        let error = extract_chat_completion_tool_calls(&choice)
+            .expect_err("missing function name should be a protocol error");
+
+        assert!(error
+            .to_string()
+            .contains("tool_call.function.name missing"));
     }
 
     #[test]

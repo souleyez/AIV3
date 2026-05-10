@@ -292,10 +292,15 @@ pub fn execute_codex_conversation_plan(
                 "planned_action_types": package.action_types(),
                 "context_budget": {
                     "quality_first": package.context_budget.quality_first,
+                    "estimated_prompt_chars": package.context_budget.estimated_prompt_chars,
+                    "budget_pressure": package.context_budget.budget_pressure,
                     "evidence_item_count": package.context_budget.evidence_item_count,
                     "selected_dataset_count": package.context_budget.selected_dataset_count,
                     "hidden_memory_item_count": package.context_budget.hidden_memory_item_count,
+                    "trimmed_item_count": package.context_budget.trimmed_item_count,
+                    "budget_item_count": package.context_budget.items.len(),
                 },
+                "tool_output_policy": package.tool_output_policy,
             })],
             context_budget: package.context_budget.clone(),
         },
@@ -933,6 +938,18 @@ mod tests {
         assert_eq!(
             output.execution_trail[0]["context_budget"]["evidence_item_count"],
             json!(3)
+        );
+        assert_eq!(
+            output.execution_trail[0]["context_budget"]["budget_pressure"],
+            json!("unbounded")
+        );
+        assert_eq!(
+            output.execution_trail[0]["context_budget"]["budget_item_count"],
+            json!(0)
+        );
+        assert_eq!(
+            output.execution_trail[0]["tool_output_policy"]["max_item_chars"],
+            json!(16000)
         );
         assert_eq!(output.context_budget.selected_dataset_count, 1);
     }

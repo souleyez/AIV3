@@ -372,9 +372,54 @@ impl Default for AssistantRunCodexSafetyPolicyView {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AssistantRunCodexContextBudgetItemView {
+    pub category: String,
+    pub item_count: usize,
+    pub char_count: usize,
+    pub soft_limit_chars: Option<usize>,
+    pub pressure: String,
+    pub trimmed_item_count: usize,
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
+impl AssistantRunCodexContextBudgetItemView {
+    pub fn new(
+        category: impl Into<String>,
+        item_count: usize,
+        char_count: usize,
+        soft_limit_chars: Option<usize>,
+        trimmed_item_count: usize,
+        note: Option<String>,
+    ) -> Self {
+        let pressure = match soft_limit_chars {
+            Some(limit) if limit > 0 && char_count > limit => "over_limit",
+            Some(limit) if limit > 0 && char_count * 10 >= limit * 7 => "attention",
+            Some(_) => "ok",
+            None => "unbounded",
+        }
+        .to_string();
+
+        Self {
+            category: category.into(),
+            item_count,
+            char_count,
+            soft_limit_chars,
+            pressure,
+            trimmed_item_count,
+            note,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AssistantRunCodexContextBudgetView {
     pub quality_first: bool,
     pub max_prompt_chars: Option<usize>,
+    #[serde(default)]
+    pub estimated_prompt_chars: usize,
+    #[serde(default)]
+    pub budget_pressure: String,
     pub included_message_count: usize,
     pub selected_dataset_count: usize,
     pub evidence_item_count: usize,
@@ -382,6 +427,8 @@ pub struct AssistantRunCodexContextBudgetView {
     pub artifact_state_chars: usize,
     pub tool_output_chars: usize,
     pub trimmed_item_count: usize,
+    #[serde(default)]
+    pub items: Vec<AssistantRunCodexContextBudgetItemView>,
 }
 
 impl Default for AssistantRunCodexContextBudgetView {
@@ -389,6 +436,8 @@ impl Default for AssistantRunCodexContextBudgetView {
         Self {
             quality_first: true,
             max_prompt_chars: None,
+            estimated_prompt_chars: 0,
+            budget_pressure: "unbounded".to_string(),
             included_message_count: 0,
             selected_dataset_count: 0,
             evidence_item_count: 0,
@@ -396,6 +445,264 @@ impl Default for AssistantRunCodexContextBudgetView {
             artifact_state_chars: 0,
             tool_output_chars: 0,
             trimmed_item_count: 0,
+            items: Vec::new(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderShimHealthStatusView {
+    Healthy,
+    Degraded,
+    Unavailable,
+    Unknown,
+}
+
+impl ProviderShimHealthStatusView {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Healthy => "healthy",
+            Self::Degraded => "degraded",
+            Self::Unavailable => "unavailable",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProviderShimHealthView {
+    pub status: ProviderShimHealthStatusView,
+    pub process_reachable: bool,
+    pub upstream_reachable: bool,
+    pub checked_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub message: Option<String>,
+}
+
+impl ProviderShimHealthView {
+    pub fn unknown(message: impl Into<String>) -> Self {
+        Self {
+            status: ProviderShimHealthStatusView::Unknown,
+            process_reachable: false,
+            upstream_reachable: false,
+            checked_at: None,
+            message: Some(message.into()),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProviderShimRateLimitHintsView {
+    pub requests_per_minute: Option<u32>,
+    pub tokens_per_minute: Option<u32>,
+    pub concurrent_requests: Option<u32>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProviderShimCostHintsView {
+    pub input_microusd_per_million_tokens: Option<u64>,
+    pub output_microusd_per_million_tokens: Option<u64>,
+    pub currency: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProviderShimRedactionPolicyView {
+    pub redact_provider_errors: bool,
+    pub redact_request_payloads: bool,
+    pub redact_response_payloads: bool,
+    pub max_error_chars: usize,
+}
+
+impl Default for ProviderShimRedactionPolicyView {
+    fn default() -> Self {
+        Self {
+            redact_provider_errors: true,
+            redact_request_payloads: true,
+            redact_response_payloads: true,
+            max_error_chars: 0,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProviderShimProfileSnapshotView {
+    pub profile_id: String,
+    pub provider_id: String,
+    pub model_id: String,
+    pub wire_api: String,
+    pub endpoint_scope: String,
+    pub base_url_configured: bool,
+    pub api_path: Option<String>,
+    pub auth_env_key_name: Option<String>,
+    pub auth_configured: bool,
+    pub timeout_ms: Option<u64>,
+    #[serde(default)]
+    pub capabilities: Vec<String>,
+    pub rate_limit: ProviderShimRateLimitHintsView,
+    pub cost: ProviderShimCostHintsView,
+    pub redaction: ProviderShimRedactionPolicyView,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProviderShimUsageSummaryView {
+    pub request_count: u64,
+    pub failed_request_count: u64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub total_tokens: u64,
+    pub last_request_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProviderShimUsageEventView {
+    pub request_id: Option<String>,
+    pub assistant_run_id: Option<String>,
+    pub workflow_execution_id: Option<String>,
+    pub status: String,
+    pub input_tokens: Option<u64>,
+    pub output_tokens: Option<u64>,
+    pub total_tokens: Option<u64>,
+    pub latency_ms: Option<u64>,
+    pub provider_failure_kind: Option<String>,
+    pub provider_failure_message: Option<String>,
+    pub recorded_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProviderShimBalanceView {
+    pub supported: bool,
+    pub currency: Option<String>,
+    pub amount_microunits: Option<i64>,
+    pub checked_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProviderShimDebugTraceStatusView {
+    pub enabled: bool,
+    pub redacted: bool,
+    pub storage: String,
+    pub retained_trace_count: usize,
+    pub latest_trace_id: Option<String>,
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
+impl Default for ProviderShimDebugTraceStatusView {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            redacted: true,
+            storage: "disabled".to_string(),
+            retained_trace_count: 0,
+            latest_trace_id: None,
+            note: None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProviderShimContextBudgetReportView {
+    pub quality_first: bool,
+    pub max_prompt_chars: Option<usize>,
+    pub estimated_prompt_chars: usize,
+    pub budget_pressure: String,
+    pub trimmed_item_count: usize,
+    #[serde(default)]
+    pub items: Vec<AssistantRunCodexContextBudgetItemView>,
+}
+
+impl From<AssistantRunCodexContextBudgetView> for ProviderShimContextBudgetReportView {
+    fn from(value: AssistantRunCodexContextBudgetView) -> Self {
+        Self {
+            quality_first: value.quality_first,
+            max_prompt_chars: value.max_prompt_chars,
+            estimated_prompt_chars: value.estimated_prompt_chars,
+            budget_pressure: value.budget_pressure,
+            trimmed_item_count: value.trimmed_item_count,
+            items: value.items,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProviderShimToolOutputBudgetView {
+    pub largest_output_chars: usize,
+    pub trimmed_output_count: usize,
+    pub preserved_recent_output_count: usize,
+    pub preserved_error_count: usize,
+    pub preserved_evidence_ref_count: usize,
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProviderShimLivenessEventView {
+    pub event_type: String,
+    pub status: String,
+    pub retry_count: usize,
+    pub action: Option<String>,
+    pub occurred_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProviderShimObservabilitySnapshotView {
+    pub schema_version: u32,
+    pub health: ProviderShimHealthView,
+    pub profile: ProviderShimProfileSnapshotView,
+    pub usage_summary: ProviderShimUsageSummaryView,
+    #[serde(default)]
+    pub recent_usage_events: Vec<ProviderShimUsageEventView>,
+    pub balance: ProviderShimBalanceView,
+    pub debug_trace_status: ProviderShimDebugTraceStatusView,
+    pub context_budget_report: Option<ProviderShimContextBudgetReportView>,
+    pub tool_output_budget: ProviderShimToolOutputBudgetView,
+    #[serde(default)]
+    pub liveness_events: Vec<ProviderShimLivenessEventView>,
+}
+
+impl ProviderShimObservabilitySnapshotView {
+    pub const SCHEMA_VERSION: u32 = 1;
+
+    pub fn new(health: ProviderShimHealthView, profile: ProviderShimProfileSnapshotView) -> Self {
+        Self {
+            schema_version: Self::SCHEMA_VERSION,
+            health,
+            profile,
+            usage_summary: ProviderShimUsageSummaryView::default(),
+            recent_usage_events: Vec::new(),
+            balance: ProviderShimBalanceView::default(),
+            debug_trace_status: ProviderShimDebugTraceStatusView::default(),
+            context_budget_report: None,
+            tool_output_budget: ProviderShimToolOutputBudgetView::default(),
+            liveness_events: Vec::new(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AssistantRunCodexToolOutputPolicyView {
+    pub max_total_chars: usize,
+    pub max_item_chars: usize,
+    pub preserve_recent_output_count: usize,
+    pub preserve_error_fields: bool,
+    pub preserve_evidence_refs: bool,
+    pub preserve_media_timestamps: bool,
+}
+
+impl Default for AssistantRunCodexToolOutputPolicyView {
+    fn default() -> Self {
+        Self {
+            max_total_chars: 80_000,
+            max_item_chars: 16_000,
+            preserve_recent_output_count: 3,
+            preserve_error_fields: true,
+            preserve_evidence_refs: true,
+            preserve_media_timestamps: true,
         }
     }
 }
@@ -454,6 +761,8 @@ pub struct AssistantRunCodexContextPackageView {
     pub available_actions: Vec<AssistantRunCodexActionContractView>,
     pub safety: AssistantRunCodexSafetyPolicyView,
     pub context_budget: AssistantRunCodexContextBudgetView,
+    #[serde(default)]
+    pub tool_output_policy: AssistantRunCodexToolOutputPolicyView,
 }
 
 impl AssistantRunCodexContextPackageView {
@@ -476,6 +785,7 @@ impl AssistantRunCodexContextPackageView {
             available_actions: Vec::new(),
             safety: AssistantRunCodexSafetyPolicyView::default(),
             context_budget: AssistantRunCodexContextBudgetView::default(),
+            tool_output_policy: AssistantRunCodexToolOutputPolicyView::default(),
         }
     }
 
@@ -1909,6 +2219,8 @@ pub struct AssistantRunEventView {
 pub struct AssistantRunDetailView {
     pub run: AssistantRunView,
     pub events: Vec<AssistantRunEventView>,
+    #[serde(default)]
+    pub diagnostics: Value,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -2602,11 +2914,21 @@ mod tests {
             included_message_count: 1,
             selected_dataset_count: 1,
             evidence_item_count: 1,
+            estimated_prompt_chars: 3200,
+            budget_pressure: "attention".to_string(),
             artifact_state_chars: package
                 .current_artifact
                 .as_ref()
                 .map(|value| value.to_string().len())
                 .unwrap_or_default(),
+            items: vec![AssistantRunCodexContextBudgetItemView::new(
+                "retrieval_evidence",
+                1,
+                2800,
+                Some(3000),
+                0,
+                Some("test evidence budget".to_string()),
+            )],
             ..AssistantRunCodexContextBudgetView::default()
         };
 
@@ -2646,9 +2968,128 @@ mod tests {
         );
         assert_eq!(context["context_budget"]["quality_first"], json!(true));
         assert_eq!(
+            context["context_budget"]["estimated_prompt_chars"],
+            json!(3200)
+        );
+        assert_eq!(
+            context["context_budget"]["budget_pressure"],
+            json!("attention")
+        );
+        assert_eq!(
+            context["context_budget"]["items"][0]["category"],
+            json!("retrieval_evidence")
+        );
+        assert_eq!(
+            context["context_budget"]["items"][0]["pressure"],
+            json!("attention")
+        );
+        assert_eq!(
             context["context_budget"]["selected_dataset_count"],
             json!(1)
         );
+        assert_eq!(
+            context["tool_output_policy"]["preserve_recent_output_count"],
+            json!(3)
+        );
+        assert_eq!(
+            context["tool_output_policy"]["preserve_evidence_refs"],
+            json!(true)
+        );
+    }
+
+    #[test]
+    fn provider_shim_observability_snapshot_serializes_redacted_runtime_status() {
+        let profile = ProviderShimProfileSnapshotView {
+            profile_id: "minimax-private-experiment".to_string(),
+            provider_id: "minimax".to_string(),
+            model_id: "MiniMax-M2.7".to_string(),
+            wire_api: "codex_compatible_shim".to_string(),
+            endpoint_scope: "local_private".to_string(),
+            base_url_configured: true,
+            api_path: Some("/v1/responses".to_string()),
+            auth_env_key_name: Some("MINIMAX_API_KEY".to_string()),
+            auth_configured: true,
+            timeout_ms: Some(45_000),
+            capabilities: vec![
+                "chat".to_string(),
+                "json_mode".to_string(),
+                "codex_compatible".to_string(),
+            ],
+            rate_limit: ProviderShimRateLimitHintsView {
+                requests_per_minute: Some(60),
+                tokens_per_minute: Some(120_000),
+                concurrent_requests: Some(2),
+            },
+            cost: ProviderShimCostHintsView {
+                input_microusd_per_million_tokens: Some(200_000),
+                output_microusd_per_million_tokens: Some(1_000_000),
+                currency: Some("USD".to_string()),
+            },
+            redaction: ProviderShimRedactionPolicyView {
+                redact_provider_errors: true,
+                redact_request_payloads: true,
+                redact_response_payloads: true,
+                max_error_chars: 900,
+            },
+        };
+        let mut snapshot = ProviderShimObservabilitySnapshotView::new(
+            ProviderShimHealthView {
+                status: ProviderShimHealthStatusView::Healthy,
+                process_reachable: true,
+                upstream_reachable: true,
+                checked_at: Some(Utc::now()),
+                message: Some("local shim ready".to_string()),
+            },
+            profile,
+        );
+        snapshot.usage_summary = ProviderShimUsageSummaryView {
+            request_count: 2,
+            failed_request_count: 1,
+            input_tokens: 1200,
+            output_tokens: 340,
+            total_tokens: 1540,
+            last_request_id: Some("req-redacted".to_string()),
+        };
+        snapshot.context_budget_report = Some(
+            AssistantRunCodexContextBudgetView {
+                estimated_prompt_chars: 8000,
+                budget_pressure: "attention".to_string(),
+                trimmed_item_count: 1,
+                items: vec![AssistantRunCodexContextBudgetItemView::new(
+                    "tool_outputs",
+                    3,
+                    6000,
+                    Some(7000),
+                    1,
+                    Some("bounded tool outputs".to_string()),
+                )],
+                ..AssistantRunCodexContextBudgetView::default()
+            }
+            .into(),
+        );
+        snapshot.liveness_events = vec![ProviderShimLivenessEventView {
+            event_type: "tool_call_loop".to_string(),
+            status: "continued".to_string(),
+            retry_count: 1,
+            action: Some("continue_after_incomplete_tool_call".to_string()),
+            occurred_at: Some(Utc::now()),
+            note: Some("prompt payload omitted".to_string()),
+        }];
+
+        let encoded = serde_json::to_value(&snapshot).expect("snapshot should serialize");
+        let serialized = encoded.to_string();
+
+        assert_eq!(encoded["schema_version"], json!(1));
+        assert_eq!(encoded["health"]["status"], json!("healthy"));
+        assert_eq!(encoded["profile"]["endpoint_scope"], json!("local_private"));
+        assert_eq!(
+            encoded["context_budget_report"]["items"][0]["category"],
+            json!("tool_outputs")
+        );
+        assert_eq!(encoded["liveness_events"][0]["retry_count"], json!(1));
+        assert!(!serialized.contains("sk-"));
+        assert!(!serialized.contains("raw prompt"));
+        assert!(!serialized.contains("api_key"));
     }
 
     #[test]

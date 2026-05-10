@@ -1350,6 +1350,7 @@ name = "llm-gateway"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "contracts",
  "prompt-registry",
  "reqwest",
  "serde",

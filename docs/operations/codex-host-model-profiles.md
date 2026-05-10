@@ -212,6 +212,15 @@ liveness_events         -> retry/continue decisions for incomplete tool-call loo
 
 These diagnostics must be redacted, bounded, and linked to V3 `AssistantRun` or workflow ids when possible. They are for operations and quality control; they are not user-facing answer content.
 
+Current V3-side foundation:
+
+- `contracts` defines a Provider Shim observability snapshot with health, profile/capability snapshot, usage summary/events, optional balance, debug-trace status, context-budget report, tool-output budget, and liveness events.
+- `llm-gateway` can build a safe profile/status snapshot from `ModelProviderProfile` without exposing raw provider keys or raw base URLs.
+- `llm-gateway` can also convert provider runtime metadata into redacted Provider Shim usage events and summaries, ready for V3 runtime inspect or future PostgreSQL audit persistence.
+- AssistantRun detail responses now include a safe diagnostics summary for the latest Codex shadow comparison, context-budget pressure, and redacted provider usage events. This gives audit/runtime views a stable read path without scanning raw event payloads in the browser.
+- AssistantRun Codex context packages now carry a tool-output budget policy; V3 only trims oversized `tool_outputs` payload fields and preserves evidence refs, source locators, media timestamps, and error/status details.
+- The snapshot is a contract for future local shim/host diagnostics. It is not yet a browser-facing route and does not grant the shim access to V3 tools, datasets, queues, or memory.
+
 ## Contract Boundary
 
 The worker consumes workflow context generated from `CodexHostTaskRequestView` and records workflow output shaped as `CodexHostTaskOutputView`. These shared contracts live in `crates/contracts` so `codex-host-agent` can stay independent of `platform-api`.
