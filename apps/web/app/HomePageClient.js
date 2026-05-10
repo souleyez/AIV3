@@ -755,11 +755,6 @@ export default function HomePageClient() {
   );
 
   function handlePageChange(nextPage) {
-    if (nextPage === 'members' && !accountStatusSummary.signedIn) {
-      setBanner('');
-      setError('进入成员需要先登录，请先在顶部“登录状态”完成登录。');
-      return;
-    }
     setActivePage(nextPage);
   }
 
@@ -3141,14 +3136,6 @@ export default function HomePageClient() {
       // Activity cache is only a local briefing hint; ignore write failures.
     }
   }, [activityEvents]);
-
-  useEffect(() => {
-    if (activePage === 'members' && !accountStatusSummary.signedIn) {
-      setActivePage('home');
-      setBanner('');
-      setError('进入成员需要先登录，请先在顶部“登录状态”完成登录。');
-    }
-  }, [activePage, accountStatusSummary.signedIn]);
 
   useEffect(() => {
     if (activePage === 'home') {

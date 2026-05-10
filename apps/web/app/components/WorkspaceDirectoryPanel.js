@@ -396,7 +396,24 @@ function SourcesPage({ documents, datasets }) {
   );
 }
 
+function MembersLoginOverlay({ accountStatusSummary }) {
+  return (
+    <div className="members-login-overlay" role="status" aria-live="polite">
+      <div className="members-login-card">
+        <span>需要登录</span>
+        <h3>成员页属于账号空间</h3>
+        <p>用户、机器人、第三方页面和对话成员组会跟随登录账号。请先在右上角“登录状态”完成邮箱密钥或验证码登录。</p>
+        <div className="members-login-steps">
+          <strong>{accountStatusSummary?.label || '当前未登录'}</strong>
+          <span>右上角：登录状态 -> 邮箱 / 验证码 / 密钥登录</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function MembersPage({ accountStatusSummary }) {
+  const signedIn = Boolean(accountStatusSummary?.signedIn);
   const cards = [
     ['用户管理', accountStatusSummary?.label || '未登录', '邮箱、密钥和私密数据归属先在顶部登录状态里管理。'],
     ['对话 / 成员组', '入口已接入', '顶部对话名称可下拉选择、重命名或新建对话；后续补归档旧对话。'],
@@ -404,15 +421,18 @@ function MembersPage({ accountStatusSummary }) {
     ['第三方页面管理', '规划中', '外部页面、嵌入入口和公开分享页统一归档。'],
   ];
   return (
-    <div className="directory-grid-cards">
-      {cards.map(([title, status, detail]) => (
-        <section className="directory-card member-card" key={title}>
-          <span>{status}</span>
-          <h3>{title}</h3>
-          <p>{detail}</p>
-          <button type="button" className="ghost-btn compact-action-btn" disabled>管理入口</button>
-        </section>
-      ))}
+    <div className={`members-page-shell${signedIn ? '' : ' locked'}`}>
+      <div className="directory-grid-cards members-grid" aria-hidden={!signedIn}>
+        {cards.map(([title, status, detail]) => (
+          <section className="directory-card member-card" key={title}>
+            <span>{status}</span>
+            <h3>{title}</h3>
+            <p>{detail}</p>
+            <button type="button" className="ghost-btn compact-action-btn" disabled>管理入口</button>
+          </section>
+        ))}
+      </div>
+      {signedIn ? null : <MembersLoginOverlay accountStatusSummary={accountStatusSummary} />}
     </div>
   );
 }
