@@ -230,6 +230,7 @@ pub const MODEL_LANE_DOCUMENT_VLM: &str = "document_vlm";
 pub const MODEL_LANE_AUDIO_TRANSCRIPT: &str = "audio_transcript";
 pub const MODEL_LANE_VIDEO_SCENE_SUMMARY: &str = "video_scene_summary";
 pub const MODEL_LANE_REPORT_PLANNING: &str = "report_planning";
+pub const MODEL_LANE_CODEX_CONVERSATION: &str = "codex_conversation";
 pub const MODEL_LANE_CODEX_TASK_SUMMARY: &str = "codex_task_summary";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -779,6 +780,18 @@ fn default_model_routes() -> Vec<ModelRoute> {
             "placeholder",
             "report-planning-placeholder",
             &["text", "json", "report"],
+        ),
+        default_model_route(
+            MODEL_LANE_CODEX_CONVERSATION,
+            "placeholder",
+            "codex-conversation-placeholder",
+            &[
+                "text",
+                "conversation",
+                "json",
+                "tool_control",
+                "codex_executor",
+            ],
         ),
         default_model_route(
             MODEL_LANE_CODEX_TASK_SUMMARY,

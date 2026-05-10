@@ -756,6 +756,8 @@ pub struct AssistantRunCodexContextPackageView {
     #[serde(default)]
     pub supply_quality: Value,
     #[serde(default)]
+    pub model_gateway: Value,
+    #[serde(default)]
     pub hidden_memory_candidates: Vec<Value>,
     #[serde(default)]
     pub current_artifact: Option<Value>,
@@ -783,6 +785,7 @@ impl AssistantRunCodexContextPackageView {
             inferred_scope_candidates: Vec::new(),
             evidence_state: Value::Null,
             supply_quality: Value::Null,
+            model_gateway: Value::Null,
             hidden_memory_candidates: Vec::new(),
             current_artifact: None,
             available_actions: Vec::new(),
@@ -2890,8 +2893,25 @@ mod tests {
             }
         });
         package.supply_quality = package.evidence_state["supply_quality"].clone();
+        package.model_gateway = json!({
+            "lane": "codex_conversation",
+            "selected_model": {
+                "mode": "provider",
+                "provider": "minimax",
+                "model": "MiniMax-M2.7"
+            },
+            "profile": {
+                "profile_id": "minimax-codex-shadow",
+                "wire_api": "codex_compatible_shim",
+                "capabilities": ["chat", "json", "tool_calling"]
+            }
+        });
         assert_eq!(
             AssistantRunCodexContextPackageView::new(assistant_run_id, "默认包").supply_quality,
+            Value::Null
+        );
+        assert_eq!(
+            AssistantRunCodexContextPackageView::new(assistant_run_id, "默认包").model_gateway,
             Value::Null
         );
         package.current_artifact = Some(json!({
@@ -3001,6 +3021,18 @@ mod tests {
         );
         assert_eq!(context["supply_quality"]["status"], json!("grounded"));
         assert_eq!(context["supply_quality"]["citationLocatorCount"], json!(1));
+        assert_eq!(
+            context["model_gateway"]["lane"],
+            json!("codex_conversation")
+        );
+        assert_eq!(
+            context["model_gateway"]["selected_model"]["provider"],
+            json!("minimax")
+        );
+        assert_eq!(
+            context["model_gateway"]["profile"]["wire_api"],
+            json!("codex_compatible_shim")
+        );
         assert_eq!(
             context["tool_output_policy"]["preserve_recent_output_count"],
             json!(3)

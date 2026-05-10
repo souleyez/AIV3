@@ -1,6 +1,6 @@
 use contracts::{
-    AssistantRunCodexContextBudgetView, AssistantRunCodexContextPackageView,
-    AssistantRunExecutorTransportView,
+    AssistantRunCodexActionContractView, AssistantRunCodexContextBudgetView,
+    AssistantRunCodexContextPackageView, AssistantRunExecutorTransportView,
 };
 use domain_model::{Dataset, DatasetId};
 use serde::{Deserialize, Serialize};
@@ -223,6 +223,9 @@ pub struct CodexConversationExecutorOutput {
     pub planned_action_types: Vec<String>,
     pub execution_trail: Vec<Value>,
     pub context_budget: AssistantRunCodexContextBudgetView,
+    pub model_gateway: Value,
+    pub output_schema: Option<Value>,
+    pub host_invocation: Option<Value>,
 }
 
 pub fn execute_codex_conversation_plan(
@@ -242,8 +245,12 @@ pub fn execute_codex_conversation_plan(
                 "reason": reason,
                 "fallback": "direct",
                 "supply_quality": codex_executor_supply_quality_summary(package),
+                "model_gateway": codex_executor_model_gateway_summary(package),
             })],
             context_budget: package.context_budget.clone(),
+            model_gateway: codex_executor_model_gateway_summary(package),
+            output_schema: None,
+            host_invocation: None,
         };
     }
 
@@ -260,8 +267,12 @@ pub fn execute_codex_conversation_plan(
                 "kind": "codex_executor.direct_passthrough",
                 "message": "direct executor remains active",
                 "supply_quality": codex_executor_supply_quality_summary(package),
+                "model_gateway": codex_executor_model_gateway_summary(package),
             })],
             context_budget: package.context_budget.clone(),
+            model_gateway: codex_executor_model_gateway_summary(package),
+            output_schema: None,
+            host_invocation: None,
         },
         AssistantRunExecutorTransportView::CodexDryRun => CodexConversationExecutorOutput {
             transport: package.executor_transport.clone(),
@@ -276,58 +287,81 @@ pub fn execute_codex_conversation_plan(
                 "assistant_run_id": package.assistant_run_id.to_string(),
                 "available_action_count": package.available_actions.len(),
                 "supply_quality": codex_executor_supply_quality_summary(package),
+                "model_gateway": codex_executor_model_gateway_summary(package),
                 "message": "Codex executor not invoked; direct flow remains authoritative",
             })],
             context_budget: package.context_budget.clone(),
+            model_gateway: codex_executor_model_gateway_summary(package),
+            output_schema: Some(codex_executor_action_output_schema(package)),
+            host_invocation: None,
         },
-        AssistantRunExecutorTransportView::CodexPlanOnly => CodexConversationExecutorOutput {
-            transport: package.executor_transport.clone(),
-            status: CodexConversationExecutorStatus::PlanOnly,
-            codex_invoked: false,
-            fallback_to_direct: true,
-            assistant_message: None,
-            suggested_action: None,
-            planned_action_types: package.action_types(),
-            execution_trail: vec![json!({
-                "kind": "codex_executor.plan_only",
-                "assistant_run_id": package.assistant_run_id.to_string(),
-                "transport": package.executor_transport.as_str(),
-                "planned_action_types": package.action_types(),
-                "context_budget": {
-                    "quality_first": package.context_budget.quality_first,
-                    "estimated_prompt_chars": package.context_budget.estimated_prompt_chars,
-                    "budget_pressure": package.context_budget.budget_pressure,
-                    "evidence_item_count": package.context_budget.evidence_item_count,
-                    "selected_dataset_count": package.context_budget.selected_dataset_count,
-                    "hidden_memory_item_count": package.context_budget.hidden_memory_item_count,
-                    "trimmed_item_count": package.context_budget.trimmed_item_count,
-                    "budget_item_count": package.context_budget.items.len(),
-                },
-                "supply_quality": codex_executor_supply_quality_summary(package),
-                "tool_output_policy": package.tool_output_policy,
-            })],
-            context_budget: package.context_budget.clone(),
-        },
+        AssistantRunExecutorTransportView::CodexPlanOnly => {
+            let suggested_action = codex_executor_suggest_action(package);
+            let output_schema = codex_executor_action_output_schema(package);
+            CodexConversationExecutorOutput {
+                transport: package.executor_transport.clone(),
+                status: CodexConversationExecutorStatus::PlanOnly,
+                codex_invoked: false,
+                fallback_to_direct: true,
+                assistant_message: None,
+                suggested_action: suggested_action.clone(),
+                planned_action_types: package.action_types(),
+                execution_trail: vec![json!({
+                    "kind": "codex_executor.plan_only",
+                    "assistant_run_id": package.assistant_run_id.to_string(),
+                    "transport": package.executor_transport.as_str(),
+                    "planned_action_types": package.action_types(),
+                    "suggested_action": suggested_action,
+                    "context_budget": {
+                        "quality_first": package.context_budget.quality_first,
+                        "estimated_prompt_chars": package.context_budget.estimated_prompt_chars,
+                        "budget_pressure": package.context_budget.budget_pressure,
+                        "evidence_item_count": package.context_budget.evidence_item_count,
+                        "selected_dataset_count": package.context_budget.selected_dataset_count,
+                        "hidden_memory_item_count": package.context_budget.hidden_memory_item_count,
+                        "trimmed_item_count": package.context_budget.trimmed_item_count,
+                        "budget_item_count": package.context_budget.items.len(),
+                    },
+                    "output_schema": output_schema.clone(),
+                    "supply_quality": codex_executor_supply_quality_summary(package),
+                    "model_gateway": codex_executor_model_gateway_summary(package),
+                    "tool_output_policy": package.tool_output_policy,
+                })],
+                context_budget: package.context_budget.clone(),
+                model_gateway: codex_executor_model_gateway_summary(package),
+                output_schema: Some(output_schema),
+                host_invocation: None,
+            }
+        }
         AssistantRunExecutorTransportView::CodexExecSchema
         | AssistantRunExecutorTransportView::CodexSdkThread
         | AssistantRunExecutorTransportView::CodexAppServer
-        | AssistantRunExecutorTransportView::CodexMcpServer => CodexConversationExecutorOutput {
-            transport: package.executor_transport.clone(),
-            status: CodexConversationExecutorStatus::UnsupportedTransport,
-            codex_invoked: false,
-            fallback_to_direct: true,
-            assistant_message: None,
-            suggested_action: None,
-            planned_action_types: package.action_types(),
-            execution_trail: vec![json!({
-                "kind": "codex_executor.unsupported_transport",
-                "transport": package.executor_transport.as_str(),
-                "fallback": "direct",
-                "supply_quality": codex_executor_supply_quality_summary(package),
-                "message": "real Codex execution is not wired in assistant-runtime",
-            })],
-            context_budget: package.context_budget.clone(),
-        },
+        | AssistantRunExecutorTransportView::CodexMcpServer => {
+            let output_schema = codex_executor_action_output_schema(package);
+            let host_invocation = codex_executor_host_invocation_blueprint(package, &output_schema);
+            CodexConversationExecutorOutput {
+                transport: package.executor_transport.clone(),
+                status: CodexConversationExecutorStatus::UnsupportedTransport,
+                codex_invoked: false,
+                fallback_to_direct: true,
+                assistant_message: None,
+                suggested_action: None,
+                planned_action_types: package.action_types(),
+                execution_trail: vec![json!({
+                    "kind": "codex_executor.unsupported_transport",
+                    "transport": package.executor_transport.as_str(),
+                    "fallback": "direct",
+                    "supply_quality": codex_executor_supply_quality_summary(package),
+                    "model_gateway": codex_executor_model_gateway_summary(package),
+                    "host_invocation": host_invocation.clone(),
+                    "message": "real Codex execution is not wired in assistant-runtime",
+                })],
+                context_budget: package.context_budget.clone(),
+                model_gateway: codex_executor_model_gateway_summary(package),
+                output_schema: Some(output_schema),
+                host_invocation: Some(host_invocation),
+            }
+        }
     }
 }
 
@@ -372,6 +406,425 @@ fn codex_executor_supply_quality_summary(package: &AssistantRunCodexContextPacka
             .and_then(Value::as_u64)
             .unwrap_or(0),
     })
+}
+
+fn codex_executor_model_gateway_summary(package: &AssistantRunCodexContextPackageView) -> Value {
+    if package.model_gateway.is_null() {
+        return json!({
+            "lane": "unknown",
+            "selected_model": Value::Null,
+            "profile_available": false,
+            "codex_real_execution_allowed": false,
+        });
+    }
+    let selected_model = package
+        .model_gateway
+        .get("selected_model")
+        .cloned()
+        .unwrap_or(Value::Null);
+    json!({
+        "lane": package
+            .model_gateway
+            .get("lane")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown"),
+        "selected_model": selected_model,
+        "profile_available": package.model_gateway.get("profile").is_some(),
+        "wire_api": package
+            .model_gateway
+            .pointer("/profile/wire_api")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown"),
+        "auth_configured": package
+            .model_gateway
+            .pointer("/profile/auth/configured")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        "codex_real_execution_allowed": false,
+    })
+}
+
+fn codex_executor_host_invocation_blueprint(
+    package: &AssistantRunCodexContextPackageView,
+    output_schema: &Value,
+) -> Value {
+    let kind = match package.executor_transport {
+        AssistantRunExecutorTransportView::CodexExecSchema => "codex_exec_output_schema",
+        AssistantRunExecutorTransportView::CodexSdkThread => "codex_sdk_thread",
+        AssistantRunExecutorTransportView::CodexAppServer => "codex_app_server",
+        AssistantRunExecutorTransportView::CodexMcpServer => "codex_mcp_server",
+        _ => "not_applicable",
+    };
+    json!({
+        "kind": kind,
+        "transport": package.executor_transport.as_str(),
+        "host_required": true,
+        "local_execution_allowed": false,
+        "mutation_allowed": false,
+        "queue_allowed": false,
+        "input_contract": "AssistantRunCodexContextPackageView",
+        "output_schema_title": output_schema
+            .get("title")
+            .and_then(Value::as_str)
+            .unwrap_or("V3CodexPlanOnlyActionSuggestion"),
+        "output_schema_required": output_schema
+            .get("required")
+            .cloned()
+            .unwrap_or_else(|| json!(["suggested_action"])),
+        "command_blueprint": {
+            "program": "codex",
+            "args": ["exec", "--output-schema", "<v3-managed-action-schema.json>"],
+            "stdin": "serialized AssistantRunCodexContextPackageView",
+            "workspace": "host-task-scoped-workspace",
+        },
+        "model_gateway": codex_executor_model_gateway_summary(package),
+        "safety": {
+            "v3_validates_all_actions": package.safety.v3_validates_all_actions,
+            "direct_database_access_allowed": package.safety.direct_database_access_allowed,
+            "direct_queue_access_allowed": package.safety.direct_queue_access_allowed,
+            "real_host_validation_required": true,
+        }
+    })
+}
+
+fn codex_executor_action_output_schema(package: &AssistantRunCodexContextPackageView) -> Value {
+    let mut action_types = package.action_types();
+    action_types.sort();
+    action_types.dedup();
+    json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "V3CodexPlanOnlyActionSuggestion",
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "assistant_message": {
+                "type": "string",
+                "description": "User-facing answer text when no V3 action is needed."
+            },
+            "suggested_action": {
+                "type": ["object", "null"],
+                "additionalProperties": false,
+                "properties": {
+                    "action_type": {
+                        "type": "string",
+                        "enum": action_types
+                    },
+                    "arguments": {
+                        "type": "object",
+                        "description": "Arguments must match the selected V3 action contract and remain subject to V3 validation."
+                    },
+                    "reason": {"type": "string"},
+                    "confidence": {"type": "string", "enum": ["low", "medium", "high"]},
+                    "requires_confirmation": {"type": "boolean"}
+                },
+                "required": ["action_type", "reason"]
+            },
+            "progress": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "label": {"type": "string"},
+                        "status": {"type": "string"}
+                    },
+                    "required": ["label", "status"]
+                }
+            }
+        },
+        "required": ["suggested_action"]
+    })
+}
+
+fn codex_executor_suggest_action(package: &AssistantRunCodexContextPackageView) -> Option<Value> {
+    let action_type = codex_executor_suggest_action_type(package)?;
+    let contract = package
+        .available_actions
+        .iter()
+        .find(|action| action.action_type == action_type)?;
+    Some(codex_executor_action_suggestion(
+        package,
+        contract,
+        codex_executor_suggestion_reason(&action_type),
+    ))
+}
+
+fn codex_executor_suggest_action_type(
+    package: &AssistantRunCodexContextPackageView,
+) -> Option<String> {
+    let available = package
+        .available_actions
+        .iter()
+        .map(|action| action.action_type.as_str())
+        .collect::<HashSet<_>>();
+    let supply_status = codex_executor_supply_status(package);
+    let static_page_context = codex_executor_scope_intent(package) == "static_page"
+        || package
+            .current_artifact
+            .as_ref()
+            .is_some_and(codex_executor_is_static_page_artifact);
+
+    if matches!(supply_status.as_str(), "missing" | "partial")
+        && available.contains("read_document_detail")
+        && codex_executor_has_detail_targets(package)
+    {
+        return Some("read_document_detail".to_string());
+    }
+    if matches!(supply_status.as_str(), "missing")
+        && available.contains("retrieve_evidence")
+        && package.context_budget.selected_dataset_count > 0
+    {
+        return Some("retrieve_evidence".to_string());
+    }
+    if package
+        .current_artifact
+        .as_ref()
+        .is_some_and(codex_executor_is_html_artifact)
+        && codex_executor_prompt_requests_artifact_edit(&package.user_prompt)
+        && available.contains("submit_html_artifact_event")
+    {
+        return Some("submit_html_artifact_event".to_string());
+    }
+    if static_page_context
+        && package.current_artifact.is_none()
+        && available.contains("create_static_page_draft")
+    {
+        return Some("create_static_page_draft".to_string());
+    }
+    if static_page_context
+        && codex_executor_prompt_requests_preview(&package.user_prompt)
+        && available.contains("submit_static_page_image_preview")
+    {
+        return Some("submit_static_page_image_preview".to_string());
+    }
+    if static_page_context
+        && package.current_artifact.is_some()
+        && available.contains("update_static_page_module")
+    {
+        return Some("update_static_page_module".to_string());
+    }
+    if codex_executor_scope_intent(package) == "report" && available.contains("create_report_draft")
+    {
+        return Some("create_report_draft".to_string());
+    }
+    if available.contains("final_answer") {
+        return Some("final_answer".to_string());
+    }
+    None
+}
+
+fn codex_executor_action_suggestion(
+    package: &AssistantRunCodexContextPackageView,
+    contract: &AssistantRunCodexActionContractView,
+    reason: &'static str,
+) -> Value {
+    json!({
+        "action_type": contract.action_type.clone(),
+        "title": contract.title.clone(),
+        "reason": reason,
+        "source": "codex_plan_only_shadow",
+        "confidence": codex_executor_suggestion_confidence(package, &contract.action_type),
+        "requires_v3_validation": contract.requires_v3_validation,
+        "mutates_state": contract.mutates_state,
+        "mutation_allowed": false,
+        "queue_allowed": false,
+        "arguments": codex_executor_suggestion_arguments(package, &contract.action_type),
+        "input_schema": contract.input_schema.clone(),
+    })
+}
+
+fn codex_executor_suggestion_arguments(
+    package: &AssistantRunCodexContextPackageView,
+    action_type: &str,
+) -> Value {
+    match action_type {
+        "read_document_detail" => json!({
+            "detail_targets": package
+                .evidence_state
+                .get("detail_targets")
+                .cloned()
+                .unwrap_or_else(|| json!([])),
+            "reason": "detail-first supply requested by V3 context",
+        }),
+        "retrieve_evidence" => json!({
+            "query": package.user_prompt,
+            "selected_scope": package.selected_scope,
+            "reason": "selected scope has missing supply",
+        }),
+        "create_static_page_draft" => json!({
+            "prompt": package.user_prompt,
+            "selected_scope": package.selected_scope,
+            "source": "codex_plan_only_shadow",
+        }),
+        "submit_static_page_image_preview" => json!({
+            "draft_id": codex_executor_artifact_id(package.current_artifact.as_ref()),
+            "source": "codex_plan_only_shadow",
+            "requires_customer_confirmation": true,
+        }),
+        "submit_html_artifact_event" => json!({
+            "artifact_id": codex_executor_artifact_id(package.current_artifact.as_ref()),
+            "event_type": "html_artifact.action_intent",
+            "payload": {
+                "prompt": package.user_prompt,
+                "source": "codex_plan_only_shadow"
+            },
+        }),
+        "update_static_page_module" => json!({
+            "draft_id": codex_executor_artifact_id(package.current_artifact.as_ref()),
+            "prompt": package.user_prompt,
+            "source": "codex_plan_only_shadow",
+        }),
+        "render_static_page" => json!({
+            "draft_id": codex_executor_artifact_id(package.current_artifact.as_ref()),
+            "source": "codex_plan_only_shadow",
+        }),
+        "create_report_draft" => json!({
+            "prompt": package.user_prompt,
+            "selected_scope": package.selected_scope,
+            "source": "codex_plan_only_shadow",
+        }),
+        "recall_conversation_memory" => json!({
+            "query": package.user_prompt,
+            "local_thread_id": package.local_thread_id,
+            "source": "codex_plan_only_shadow",
+        }),
+        "final_answer" => json!({
+            "mode": "model_authored_answer",
+            "source": "codex_plan_only_shadow",
+        }),
+        _ => json!({
+            "source": "codex_plan_only_shadow",
+        }),
+    }
+}
+
+fn codex_executor_suggestion_reason(action_type: &str) -> &'static str {
+    match action_type {
+        "read_document_detail" => {
+            "partial supply prefers detail read before high-confidence claims"
+        }
+        "retrieve_evidence" => "selected scope needs V3 retrieval before grounded answer",
+        "create_static_page_draft" => "static-page intent has no current draft in context",
+        "submit_static_page_image_preview" => {
+            "user prompt asks for effect preview from current draft"
+        }
+        "submit_html_artifact_event" => {
+            "current HTML artifact change must go through V3 validated artifact event"
+        }
+        "update_static_page_module" => {
+            "current static-page draft can be revised through V3 operations"
+        }
+        "create_report_draft" => "report intent can be handled by V3 report draft flow",
+        "final_answer" => "no platform action is required for this turn",
+        _ => "available V3 action contract selected by plan-only executor",
+    }
+}
+
+fn codex_executor_suggestion_confidence(
+    package: &AssistantRunCodexContextPackageView,
+    action_type: &str,
+) -> &'static str {
+    if action_type == "final_answer" {
+        return "medium";
+    }
+    if codex_executor_scope_intent(package) == "static_page"
+        || package
+            .current_artifact
+            .as_ref()
+            .is_some_and(codex_executor_is_static_page_artifact)
+    {
+        return "high";
+    }
+    "medium"
+}
+
+fn codex_executor_supply_status(package: &AssistantRunCodexContextPackageView) -> String {
+    let source = if package.supply_quality.is_null() {
+        package
+            .evidence_state
+            .get("supply_quality")
+            .or_else(|| package.evidence_state.get("supplyQuality"))
+            .unwrap_or(&Value::Null)
+    } else {
+        &package.supply_quality
+    };
+    source
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown")
+        .to_string()
+}
+
+fn codex_executor_scope_intent(package: &AssistantRunCodexContextPackageView) -> &str {
+    package
+        .selected_scope
+        .get("intent")
+        .and_then(Value::as_str)
+        .unwrap_or("ordinary_chat")
+}
+
+fn codex_executor_has_detail_targets(package: &AssistantRunCodexContextPackageView) -> bool {
+    package
+        .evidence_state
+        .get("detail_targets")
+        .and_then(Value::as_array)
+        .is_some_and(|items| !items.is_empty())
+}
+
+fn codex_executor_is_static_page_artifact(artifact: &Value) -> bool {
+    let kind = artifact
+        .get("kind")
+        .or_else(|| artifact.get("type"))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    kind.contains("static_page")
+        || artifact.get("backendDraftId").is_some()
+        || artifact.get("draft_id").is_some()
+        || artifact.get("draftId").is_some()
+}
+
+fn codex_executor_is_html_artifact(artifact: &Value) -> bool {
+    let kind = artifact
+        .get("kind")
+        .or_else(|| artifact.get("type"))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    kind == "html_artifact"
+        || artifact.get("template_id").is_some()
+        || artifact.get("templateId").is_some()
+        || artifact.get("interaction_mode").is_some()
+        || artifact.get("interactionMode").is_some()
+}
+
+fn codex_executor_artifact_id(artifact: Option<&Value>) -> Value {
+    artifact
+        .and_then(|artifact| {
+            artifact
+                .get("id")
+                .or_else(|| artifact.get("artifact_id"))
+                .or_else(|| artifact.get("artifactId"))
+                .or_else(|| artifact.get("backendDraftId"))
+                .or_else(|| artifact.get("draft_id"))
+                .or_else(|| artifact.get("draftId"))
+                .and_then(Value::as_str)
+        })
+        .map(|value| json!(value))
+        .unwrap_or(Value::Null)
+}
+
+fn codex_executor_prompt_requests_preview(prompt: &str) -> bool {
+    ["效果图", "预览图", "出图", "生成图", "image preview"]
+        .iter()
+        .any(|hint| prompt.contains(hint))
+}
+
+fn codex_executor_prompt_requests_artifact_edit(prompt: &str) -> bool {
+    [
+        "修改", "调整", "应用", "提交", "更新", "改成", "换成", "patch", "apply", "submit",
+        "update",
+    ]
+    .iter()
+    .any(|hint| prompt.contains(hint))
 }
 
 pub fn plan_scope(input: ScopePlannerInput<'_>) -> ScopePlan {
@@ -949,6 +1402,18 @@ mod tests {
             "fallbackChunkCount": 1,
             "mediaContextCount": 1
         });
+        package.model_gateway = json!({
+            "lane": "codex_conversation",
+            "selected_model": {
+                "mode": "provider",
+                "provider": "minimax",
+                "model": "MiniMax-M2.7"
+            },
+            "profile": {
+                "wire_api": "codex_compatible_shim",
+                "auth": {"configured": true}
+            }
+        });
         package
     }
 
@@ -995,6 +1460,21 @@ mod tests {
             json!(["update_static_page_module", "retrieve_dataset_detail"])
         );
         assert_eq!(
+            output
+                .suggested_action
+                .as_ref()
+                .and_then(|action| action.get("action_type").and_then(Value::as_str)),
+            Some("update_static_page_module")
+        );
+        assert_eq!(
+            output.execution_trail[0]["suggested_action"]["mutation_allowed"],
+            json!(false)
+        );
+        assert_eq!(
+            output.execution_trail[0]["suggested_action"]["arguments"]["draft_id"],
+            json!("draft-1")
+        );
+        assert_eq!(
             output.execution_trail[0]["context_budget"]["evidence_item_count"],
             json!(3)
         );
@@ -1011,6 +1491,17 @@ mod tests {
             json!(16000)
         );
         assert_eq!(
+            output.output_schema.as_ref().and_then(|schema| schema
+                .pointer("/properties/suggested_action/properties/action_type/enum")
+                .and_then(Value::as_array)
+                .map(|items| items.len())),
+            Some(2)
+        );
+        assert_eq!(
+            output.execution_trail[0]["output_schema"]["required"],
+            json!(["suggested_action"])
+        );
+        assert_eq!(
             output.execution_trail[0]["supply_quality"]["citationLocatorCount"],
             json!(2)
         );
@@ -1018,7 +1509,223 @@ mod tests {
             output.execution_trail[0]["supply_quality"]["fallbackChunkCount"],
             json!(1)
         );
+        assert_eq!(
+            output.execution_trail[0]["model_gateway"]["lane"],
+            json!("codex_conversation")
+        );
+        assert_eq!(
+            output.execution_trail[0]["model_gateway"]["wire_api"],
+            json!("codex_compatible_shim")
+        );
+        assert_eq!(output.model_gateway["auth_configured"], json!(true));
         assert_eq!(output.context_budget.selected_dataset_count, 1);
+    }
+
+    #[test]
+    fn codex_executor_plan_only_suggests_safe_v3_action_contracts() {
+        let mut package = codex_context_package();
+        package.executor_transport = AssistantRunExecutorTransportView::CodexPlanOnly;
+        package.current_artifact = None;
+        package.selected_scope = json!({"intent": "static_page"});
+        package.available_actions = vec![
+            AssistantRunCodexActionContractView::new(
+                "create_static_page_draft",
+                "创建静态页草稿",
+                "只能请求 V3 创建草稿",
+                json!({"type": "object"}),
+                true,
+            ),
+            AssistantRunCodexActionContractView::new(
+                "final_answer",
+                "模型回答",
+                "直接回答",
+                json!({"type": "object"}),
+                false,
+            ),
+        ];
+
+        let output = execute_codex_conversation_plan(&package);
+        let suggested_action = output
+            .suggested_action
+            .as_ref()
+            .expect("plan-only should suggest an action");
+
+        assert_eq!(
+            suggested_action["action_type"],
+            json!("create_static_page_draft")
+        );
+        assert_eq!(suggested_action["requires_v3_validation"], json!(true));
+        assert_eq!(suggested_action["mutation_allowed"], json!(false));
+        assert_eq!(
+            output.execution_trail[0]["suggested_action"]["source"],
+            json!("codex_plan_only_shadow")
+        );
+    }
+
+    #[test]
+    fn codex_executor_plan_only_prefers_retrieval_for_missing_selected_supply() {
+        let mut package = codex_context_package();
+        package.executor_transport = AssistantRunExecutorTransportView::CodexPlanOnly;
+        package.current_artifact = None;
+        package.selected_scope = json!({"intent": "data_question"});
+        package.context_budget.selected_dataset_count = 1;
+        package.supply_quality = json!({"status": "missing"});
+        package.available_actions = vec![
+            AssistantRunCodexActionContractView::new(
+                "retrieve_evidence",
+                "检索供料证据",
+                "只能请求 V3 在可见范围内检索",
+                json!({"type": "object"}),
+                false,
+            ),
+            AssistantRunCodexActionContractView::new(
+                "final_answer",
+                "模型回答",
+                "直接回答",
+                json!({"type": "object"}),
+                false,
+            ),
+        ];
+
+        let output = execute_codex_conversation_plan(&package);
+
+        assert_eq!(
+            output
+                .suggested_action
+                .as_ref()
+                .and_then(|action| action.get("action_type"))
+                .and_then(Value::as_str),
+            Some("retrieve_evidence")
+        );
+        assert_eq!(
+            output.execution_trail[0]["suggested_action"]["mutates_state"],
+            json!(false)
+        );
+        assert_eq!(
+            output
+                .suggested_action
+                .as_ref()
+                .and_then(|action| action.pointer("/arguments/query"))
+                .and_then(Value::as_str),
+            Some("继续优化静态页")
+        );
+        assert_eq!(
+            output.execution_trail[0]["suggested_action"]["arguments"]["selected_scope"]["intent"],
+            json!("data_question")
+        );
+    }
+
+    #[test]
+    fn codex_executor_plan_only_keeps_ordinary_chat_as_final_answer() {
+        let mut package = codex_context_package();
+        package.executor_transport = AssistantRunExecutorTransportView::CodexPlanOnly;
+        package.user_prompt = "猫为什么喜欢晒太阳？".to_string();
+        package.current_artifact = None;
+        package.selected_scope = json!({"intent": "ordinary_chat"});
+        package.context_budget.selected_dataset_count = 0;
+        package.supply_quality = json!({"status": "not_requested"});
+        package.available_actions = vec![
+            AssistantRunCodexActionContractView::new(
+                "retrieve_evidence",
+                "检索供料证据",
+                "只能请求 V3 在可见范围内检索",
+                json!({"type": "object"}),
+                false,
+            ),
+            AssistantRunCodexActionContractView::new(
+                "create_static_page_draft",
+                "创建静态页草稿",
+                "只能请求 V3 创建草稿",
+                json!({"type": "object"}),
+                true,
+            ),
+            AssistantRunCodexActionContractView::new(
+                "final_answer",
+                "模型回答",
+                "普通问答直接由模型回答",
+                json!({"type": "object"}),
+                false,
+            ),
+        ];
+
+        let output = execute_codex_conversation_plan(&package);
+
+        assert_eq!(
+            output
+                .suggested_action
+                .as_ref()
+                .and_then(|action| action.get("action_type"))
+                .and_then(Value::as_str),
+            Some("final_answer")
+        );
+        assert_eq!(
+            output.execution_trail[0]["suggested_action"]["mutates_state"],
+            json!(false)
+        );
+        assert_eq!(
+            output.execution_trail[0]["suggested_action"]["arguments"]["mode"],
+            json!("model_authored_answer")
+        );
+    }
+
+    #[test]
+    fn codex_executor_plan_only_routes_html_artifact_edits_through_artifact_event() {
+        let mut package = codex_context_package();
+        package.executor_transport = AssistantRunExecutorTransportView::CodexPlanOnly;
+        package.user_prompt = "把这个 HTML 产物里的标题改成经营风险总览并应用".to_string();
+        package.current_artifact = Some(json!({
+            "kind": "html_artifact",
+            "id": "html-static-page-handoff-1",
+            "template_id": "static_page_planning_handoff",
+            "interaction_mode": "action_intent"
+        }));
+        package.selected_scope = json!({"intent": "static_page"});
+        package.available_actions = vec![
+            AssistantRunCodexActionContractView::new(
+                "submit_html_artifact_event",
+                "提交 HTML 产物事件",
+                "只能提交 V3 校验后的 HTML artifact 事件",
+                json!({"type": "object"}),
+                true,
+            ),
+            AssistantRunCodexActionContractView::new(
+                "update_static_page_module",
+                "更新静态页模块",
+                "只能更新当前可见草稿",
+                json!({"type": "object"}),
+                true,
+            ),
+            AssistantRunCodexActionContractView::new(
+                "final_answer",
+                "模型回答",
+                "直接回答",
+                json!({"type": "object"}),
+                false,
+            ),
+        ];
+
+        let output = execute_codex_conversation_plan(&package);
+
+        assert_eq!(
+            output
+                .suggested_action
+                .as_ref()
+                .and_then(|action| action.get("action_type"))
+                .and_then(Value::as_str),
+            Some("submit_html_artifact_event")
+        );
+        assert_eq!(
+            output.execution_trail[0]["suggested_action"]["mutation_allowed"],
+            json!(false)
+        );
+        assert_eq!(
+            output.execution_trail[0]["suggested_action"]["arguments"]["artifact_id"],
+            json!("html-static-page-handoff-1")
+        );
+        assert_eq!(
+            output.execution_trail[0]["suggested_action"]["arguments"]["event_type"],
+            json!("html_artifact.action_intent")
+        );
     }
 
     #[test]
@@ -1060,6 +1767,26 @@ mod tests {
         assert_eq!(
             output.execution_trail[0]["transport"],
             json!("codex_exec_schema")
+        );
+        assert_eq!(
+            output
+                .host_invocation
+                .as_ref()
+                .and_then(|value| value.get("kind"))
+                .and_then(Value::as_str),
+            Some("codex_exec_output_schema")
+        );
+        assert_eq!(
+            output.execution_trail[0]["host_invocation"]["local_execution_allowed"],
+            json!(false)
+        );
+        assert_eq!(
+            output.execution_trail[0]["host_invocation"]["command_blueprint"]["program"],
+            json!("codex")
+        );
+        assert_eq!(
+            output.execution_trail[0]["host_invocation"]["model_gateway"]["lane"],
+            json!("codex_conversation")
         );
     }
 

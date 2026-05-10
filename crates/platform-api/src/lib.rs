@@ -73,7 +73,8 @@ use event_bus::{
 };
 use llm_gateway::{
     build_provider_from_env, render_runtime_manifest, resolve_runtime_selection_from_env,
-    LlmRequest, LlmResponse, MODEL_LANE_ASSISTANT_CHAT, MODEL_LANE_ASSISTANT_REACT_JSON,
+    LlmRequest, LlmResponse, LlmRuntimeSelection, ModelProviderProfile, MODEL_LANE_ASSISTANT_CHAT,
+    MODEL_LANE_ASSISTANT_REACT_JSON, MODEL_LANE_CODEX_CONVERSATION,
 };
 use prompt_registry::bootstrap_default_prompt_registry;
 use serde::{Deserialize, Serialize};
@@ -122,6 +123,7 @@ const DATASET_OUTPUT_RETRIEVAL_BIND_LIMIT: usize = 8;
 const RETRIEVAL_SEARCH_DEFAULT_LIMIT: usize = 8;
 const RETRIEVAL_SEARCH_MAX_LIMIT: usize = 20;
 const DEFAULT_ASSISTANT_RUN_RUNTIME_MODEL: &str = "placeholder-assistant-run-v1";
+const DEFAULT_ASSISTANT_RUN_CODEX_RUNTIME_MODEL: &str = "codex-conversation-placeholder";
 const DEFAULT_STATIC_PAGE_INTENT_RUNTIME_MODEL: &str = "static-page-intent-v1";
 const ASSISTANT_RUN_EVIDENCE_DEFAULT_LIMIT: usize = 4;
 const ASSISTANT_RUN_EVIDENCE_MAX_LIMIT: usize = 8;
@@ -6377,6 +6379,8 @@ async fn create_assistant_run(
         .map_err(ApiError::from_storage)?;
 
     if let Some(executor_transport) = assistant_run_executor_transport_from_env() {
+        let codex_runtime = assistant_run_codex_runtime_selection();
+        let codex_model_gateway = assistant_run_codex_model_gateway_snapshot(&codex_runtime);
         let codex_package = build_assistant_run_codex_context_package(
             run.id,
             run.local_thread_id.as_deref(),
@@ -6387,6 +6391,7 @@ async fn create_assistant_run(
             &codex_scope_candidates,
             &evidence_state,
             request.current_artifact.as_ref(),
+            &codex_model_gateway,
             executor_transport,
         );
         let codex_output = execute_codex_conversation_plan(&codex_package);
@@ -6711,6 +6716,8 @@ async fn continue_assistant_run(
     let codex_executor_event_payload =
         if let Some(executor_transport) = assistant_run_executor_transport_from_env() {
             let codex_scope_candidates = value_array(run.scope_candidates.clone());
+            let codex_runtime = assistant_run_codex_runtime_selection();
+            let codex_model_gateway = assistant_run_codex_model_gateway_snapshot(&codex_runtime);
             let codex_package = build_assistant_run_codex_context_package(
                 run.id,
                 run.local_thread_id.as_deref(),
@@ -6721,6 +6728,7 @@ async fn continue_assistant_run(
                 &codex_scope_candidates,
                 &evidence_state,
                 request.current_artifact.as_ref(),
+                &codex_model_gateway,
                 executor_transport,
             );
             let codex_output = execute_codex_conversation_plan(&codex_package);
@@ -9694,6 +9702,7 @@ fn build_assistant_run_codex_context_package(
     scope_candidates: &[Value],
     evidence_state: &Value,
     current_artifact: Option<&Value>,
+    model_gateway: &Value,
     executor_transport: AssistantRunExecutorTransportView,
 ) -> AssistantRunCodexContextPackageView {
     let mut package =
@@ -9709,6 +9718,7 @@ fn build_assistant_run_codex_context_package(
     package.inferred_scope_candidates = scope_candidates.to_vec();
     package.evidence_state = bounded_evidence_state.clone();
     package.supply_quality = assistant_run_codex_supply_quality(&bounded_evidence_state);
+    package.model_gateway = model_gateway.clone();
     package.hidden_memory_candidates =
         assistant_run_codex_hidden_memory_candidates(&bounded_evidence_state);
     package.current_artifact = current_artifact.cloned();
@@ -9724,6 +9734,77 @@ fn build_assistant_run_codex_context_package(
         current_artifact,
     );
     package
+}
+
+fn assistant_run_codex_runtime_selection() -> LlmRuntimeSelection {
+    resolve_runtime_selection_from_env(
+        "ASSISTANT_RUN_CODEX",
+        MODEL_LANE_CODEX_CONVERSATION,
+        DEFAULT_ASSISTANT_RUN_CODEX_RUNTIME_MODEL,
+    )
+}
+
+fn assistant_run_codex_model_gateway_snapshot(runtime: &LlmRuntimeSelection) -> Value {
+    let profile_env_prefix = std::env::var("ASSISTANT_RUN_CODEX_MODEL_PROFILE_ENV")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    let profile = profile_env_prefix
+        .as_deref()
+        .and_then(|prefix| ModelProviderProfile::from_env(prefix).ok())
+        .map(|profile| profile.public_manifest());
+    let profile_status = match (&profile_env_prefix, &profile) {
+        (Some(_), Some(_)) => "profile_loaded",
+        (Some(_), None) => "profile_unavailable",
+        (None, _) => "runtime_selection_only",
+    };
+    let profile_source = if profile.is_some() {
+        "model_provider_profile_env"
+    } else {
+        "llm_gateway_runtime_selection"
+    };
+
+    json!({
+        "lane": runtime.lane.as_str(),
+        "selected_model": {
+            "mode": runtime.mode.as_str(),
+            "provider": runtime.provider.as_str(),
+            "model": runtime.model.as_str(),
+        },
+        "profile_source": profile_source,
+        "profile_status": profile_status,
+        "profile_env_prefix": profile_env_prefix,
+        "profile": profile.unwrap_or_else(|| assistant_run_codex_runtime_selection_profile(runtime)),
+        "safety": {
+            "secrets_redacted": true,
+            "raw_provider_payloads_allowed": false,
+            "codex_real_execution_allowed_on_this_host": false,
+            "v3_validates_all_actions": true,
+        }
+    })
+}
+
+fn assistant_run_codex_runtime_selection_profile(runtime: &LlmRuntimeSelection) -> Value {
+    json!({
+        "profile_id": format!("{}:{}", runtime.provider, runtime.model),
+        "provider_id": runtime.provider.as_str(),
+        "model_id": runtime.model.as_str(),
+        "wire_api": if runtime.mode == "placeholder" {
+            "placeholder"
+        } else {
+            "runtime_selection"
+        },
+        "auth": {
+            "env_key_name": Value::Null,
+            "configured": runtime.mode == "placeholder",
+        },
+        "capabilities": [],
+        "redaction": {
+            "redact_provider_errors": true,
+            "redact_request_payloads": true,
+            "redact_response_payloads": true,
+        }
+    })
 }
 
 fn assistant_run_codex_supply_quality(evidence_state: &Value) -> Value {
@@ -10300,6 +10381,26 @@ fn assistant_run_codex_action_contracts(
             true,
         ),
         AssistantRunCodexActionContractView::new(
+            "submit_html_artifact_event",
+            "提交 HTML 产物事件",
+            "仅通过 V3 校验后的 html_artifact.patch 或 html_artifact.action_intent 更新受支持产物。",
+            json!({
+                "type": "object",
+                "properties": {
+                    "artifact_id": {"type": "string"},
+                    "event_type": {
+                        "type": "string",
+                        "enum": ["html_artifact.patch", "html_artifact.action_intent"]
+                    },
+                    "payload": {"type": "object"},
+                    "assistant_run_id": {"type": "string"},
+                    "local_thread_id": {"type": "string"}
+                },
+                "required": ["artifact_id", "event_type", "payload"]
+            }),
+            true,
+        ),
+        AssistantRunCodexActionContractView::new(
             "final_answer",
             "模型生成最终回答",
             "不调用平台工具，直接返回模型撰写的回答。",
@@ -10322,6 +10423,10 @@ fn assistant_run_codex_execution_trail_entries(
         "codex_invoked": output.codex_invoked,
         "fallback_to_direct": output.fallback_to_direct,
         "planned_action_types": output.planned_action_types.clone(),
+        "suggested_action": output.suggested_action.clone(),
+        "model_gateway": output.model_gateway.clone(),
+        "output_schema": output.output_schema.clone(),
+        "host_invocation": output.host_invocation.clone(),
         "shadow_comparison": shadow_comparison.cloned(),
         "at": now,
     })]
@@ -10337,6 +10442,10 @@ fn assistant_run_codex_event_payload(
         "codex_invoked": output.codex_invoked,
         "fallback_to_direct": output.fallback_to_direct,
         "planned_action_types": output.planned_action_types.clone(),
+        "suggested_action": output.suggested_action.clone(),
+        "model_gateway": output.model_gateway.clone(),
+        "output_schema": output.output_schema.clone(),
+        "host_invocation": output.host_invocation.clone(),
         "context_budget": output.context_budget.clone(),
         "execution_trail": output.execution_trail.clone(),
         "shadow_comparison": shadow_comparison.cloned(),
@@ -10390,9 +10499,16 @@ fn assistant_run_codex_shadow_comparison(
         })
         .and_then(Value::as_str)
         .map(ToOwned::to_owned);
+    let suggested_action_allowed = suggested_action_type.as_ref().is_none_or(|action_type| {
+        output
+            .planned_action_types
+            .iter()
+            .any(|planned| planned == action_type)
+    });
     let comparison_status = assistant_run_codex_shadow_comparison_status(
         &direct_action_types,
         suggested_action_type.as_deref(),
+        suggested_action_allowed,
     );
     let direct_action_values: Vec<Value> = direct_action_types
         .iter()
@@ -10424,13 +10540,19 @@ fn assistant_run_codex_shadow_comparison(
             "fallback_to_direct": output.fallback_to_direct,
             "planned_action_types": output.planned_action_types.clone(),
             "suggested_action_type": suggested_action_type,
+            "suggested_action_allowed": suggested_action_allowed,
+            "model_gateway": output.model_gateway.clone(),
         },
         "comparison": {
             "status": comparison_status,
             "codex_has_suggestion": output.suggested_action.is_some(),
             "actionable": false,
             "equivalence_scored": output.suggested_action.is_some(),
-            "reason": "shadow mode only; direct execution remains authoritative",
+            "reason": if suggested_action_allowed {
+                "shadow mode only; direct execution remains authoritative"
+            } else {
+                "codex suggested action is not in V3-provided action contracts"
+            },
             "next_gate": "enable Codex mutation only after repeated matched shadow runs",
         }
     })
@@ -10494,10 +10616,14 @@ fn assistant_run_action_type_from_event_name(event_name: &str) -> Option<&'stati
 fn assistant_run_codex_shadow_comparison_status(
     direct_action_types: &[String],
     suggested_action_type: Option<&str>,
+    suggested_action_allowed: bool,
 ) -> &'static str {
     let Some(suggested_action_type) = suggested_action_type else {
         return "no_codex_suggestion";
     };
+    if !suggested_action_allowed {
+        return "invalid_suggestion";
+    }
     if direct_action_types
         .iter()
         .any(|action_type| action_type == suggested_action_type)
@@ -19797,6 +19923,22 @@ fn assistant_run_codex_detail_diagnostics(events: &[AssistantRunEvent]) -> Value
                     .get("planned_action_types")
                     .cloned()
                     .unwrap_or_else(|| json!([])),
+                "suggested_action": payload
+                    .get("suggested_action")
+                    .cloned()
+                    .unwrap_or(Value::Null),
+                "model_gateway": payload
+                    .get("model_gateway")
+                    .cloned()
+                    .unwrap_or(Value::Null),
+                "output_schema": payload
+                    .get("output_schema")
+                    .cloned()
+                    .unwrap_or(Value::Null),
+                "host_invocation": payload
+                    .get("host_invocation")
+                    .cloned()
+                    .unwrap_or(Value::Null),
                 "context_budget": context_budget.unwrap_or(Value::Null),
                 "shadow_comparison": shadow_summary.unwrap_or(Value::Null),
             })
@@ -23026,6 +23168,7 @@ mod tests {
     use event_bus::{workflow_execution_transition_subject, workflow_task_enqueued_subject};
     use std::io::{Read, Write};
     use std::net::{TcpListener, TcpStream};
+    use std::sync::{Mutex, OnceLock};
     use std::thread;
     use test_fixtures::{
         local_postgres_storage, reset_local_postgres_storage, shared_local_postgres_test_lock,
@@ -23051,6 +23194,36 @@ mod tests {
         }
     }
 
+    fn codex_model_gateway_env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    fn clear_codex_model_gateway_env() {
+        for key in [
+            "ASSISTANT_RUN_CODEX_RUNTIME_MODE",
+            "ASSISTANT_RUN_CODEX_RUNTIME_PROVIDER",
+            "ASSISTANT_RUN_CODEX_RUNTIME_MODEL",
+            "ASSISTANT_RUN_CODEX_MODEL_PROFILE_ENV",
+            "LLM_GATEWAY_ROUTE_CODEX_CONVERSATION_PROVIDER",
+            "LLM_GATEWAY_ROUTE_CODEX_CONVERSATION_MODEL",
+            "LLM_GATEWAY_ROUTE_CODEX_CONVERSATION_CAPABILITIES",
+            "LLM_GATEWAY_ROUTE_CODEX_CONVERSATION_PRIORITY",
+            "TEST_CODEX_PROFILE_PROFILE_ID",
+            "TEST_CODEX_PROFILE_PROVIDER_ID",
+            "TEST_CODEX_PROFILE_MODEL_ID",
+            "TEST_CODEX_PROFILE_BASE_URL",
+            "TEST_CODEX_PROFILE_API_PATH",
+            "TEST_CODEX_PROFILE_WIRE_API",
+            "TEST_CODEX_PROFILE_AUTH_ENV_KEY",
+            "TEST_CODEX_PROFILE_CAPABILITIES",
+            "TEST_CODEX_PROFILE_TIMEOUT_MS",
+            "MINIMAX_TEST_CODEX_KEY",
+        ] {
+            std::env::remove_var(key);
+        }
+    }
+
     #[test]
     fn assistant_run_executor_transport_config_is_opt_in() {
         assert_eq!(assistant_run_executor_transport_from_value(""), None);
@@ -23068,6 +23241,101 @@ mod tests {
             Some(AssistantRunExecutorTransportView::CodexAppServer)
         );
         assert_eq!(assistant_run_executor_transport_from_value("unknown"), None);
+    }
+
+    #[test]
+    fn assistant_run_codex_model_gateway_snapshot_loads_redacted_profile() {
+        let _guard = codex_model_gateway_env_lock()
+            .lock()
+            .expect("codex model gateway env lock");
+        clear_codex_model_gateway_env();
+        std::env::set_var("LLM_GATEWAY_ROUTE_CODEX_CONVERSATION_PROVIDER", "minimax");
+        std::env::set_var("LLM_GATEWAY_ROUTE_CODEX_CONVERSATION_MODEL", "MiniMax-M2.7");
+        std::env::set_var(
+            "ASSISTANT_RUN_CODEX_MODEL_PROFILE_ENV",
+            "TEST_CODEX_PROFILE",
+        );
+        std::env::set_var("MINIMAX_TEST_CODEX_KEY", "sk-minimax-should-not-leak");
+        std::env::set_var("TEST_CODEX_PROFILE_PROFILE_ID", "minimax-codex-shadow");
+        std::env::set_var("TEST_CODEX_PROFILE_PROVIDER_ID", "minimax");
+        std::env::set_var("TEST_CODEX_PROFILE_MODEL_ID", "MiniMax-M2.7");
+        std::env::set_var(
+            "TEST_CODEX_PROFILE_BASE_URL",
+            "http://127.0.0.1:8999/v1?api_key=sk-base-secret",
+        );
+        std::env::set_var("TEST_CODEX_PROFILE_API_PATH", "/v1/responses");
+        std::env::set_var("TEST_CODEX_PROFILE_WIRE_API", "codex_compatible_shim");
+        std::env::set_var("TEST_CODEX_PROFILE_AUTH_ENV_KEY", "MINIMAX_TEST_CODEX_KEY");
+        std::env::set_var(
+            "TEST_CODEX_PROFILE_CAPABILITIES",
+            "chat,json,tool_calling,codex_compatible",
+        );
+        std::env::set_var("TEST_CODEX_PROFILE_TIMEOUT_MS", "45000");
+
+        let runtime = assistant_run_codex_runtime_selection();
+        let snapshot = assistant_run_codex_model_gateway_snapshot(&runtime);
+        let serialized = snapshot.to_string();
+
+        clear_codex_model_gateway_env();
+        assert_eq!(snapshot["lane"], json!("codex_conversation"));
+        assert_eq!(snapshot["profile_status"], json!("profile_loaded"));
+        assert_eq!(
+            snapshot["profile_source"],
+            json!("model_provider_profile_env")
+        );
+        assert_eq!(snapshot["selected_model"]["provider"], json!("minimax"));
+        assert_eq!(
+            snapshot["profile"]["profile_id"],
+            json!("minimax-codex-shadow")
+        );
+        assert_eq!(
+            snapshot["profile"]["wire_api"],
+            json!("codex_compatible_shim")
+        );
+        assert_eq!(snapshot["profile"]["auth"]["configured"], json!(true));
+        assert_eq!(snapshot["safety"]["secrets_redacted"], json!(true));
+        assert!(!serialized.contains("sk-minimax-should-not-leak"));
+        assert!(!serialized.contains("sk-base-secret"));
+    }
+
+    #[test]
+    fn assistant_run_codex_model_gateway_snapshot_falls_back_to_runtime_selection() {
+        let _guard = codex_model_gateway_env_lock()
+            .lock()
+            .expect("codex model gateway env lock");
+        clear_codex_model_gateway_env();
+        std::env::set_var(
+            "ASSISTANT_RUN_CODEX_MODEL_PROFILE_ENV",
+            "MISSING_CODEX_PROFILE",
+        );
+        std::env::set_var(
+            "LLM_GATEWAY_ROUTE_CODEX_CONVERSATION_PROVIDER",
+            "placeholder",
+        );
+        std::env::set_var(
+            "LLM_GATEWAY_ROUTE_CODEX_CONVERSATION_MODEL",
+            "codex-shadow-placeholder",
+        );
+
+        let runtime = assistant_run_codex_runtime_selection();
+        let snapshot = assistant_run_codex_model_gateway_snapshot(&runtime);
+
+        clear_codex_model_gateway_env();
+        assert_eq!(snapshot["profile_status"], json!("profile_unavailable"));
+        assert_eq!(
+            snapshot["profile_source"],
+            json!("llm_gateway_runtime_selection")
+        );
+        assert_eq!(snapshot["selected_model"]["mode"], json!("placeholder"));
+        assert_eq!(
+            snapshot["profile"]["profile_id"],
+            json!("placeholder:codex-shadow-placeholder")
+        );
+        assert_eq!(snapshot["profile"]["wire_api"], json!("placeholder"));
+        assert_eq!(
+            snapshot["safety"]["codex_real_execution_allowed_on_this_host"],
+            json!(false)
+        );
     }
 
     #[test]
@@ -23111,6 +23379,19 @@ mod tests {
             role: ChatMessageRole::User,
             content: "继续刚才那版".to_string(),
         }];
+        let model_gateway = json!({
+            "lane": "codex_conversation",
+            "selected_model": {
+                "mode": "provider",
+                "provider": "minimax",
+                "model": "MiniMax-M2.7"
+            },
+            "profile": {
+                "profile_id": "minimax-codex-shadow",
+                "wire_api": "codex_compatible_shim",
+                "auth": {"configured": true}
+            }
+        });
 
         let package = build_assistant_run_codex_context_package(
             AssistantRunId::new(),
@@ -23122,6 +23403,7 @@ mod tests {
             &[json!({"type": "dataset", "id": dataset_id.to_string()})],
             &evidence_state,
             Some(&artifact),
+            &model_gateway,
             AssistantRunExecutorTransportView::CodexPlanOnly,
         );
 
@@ -23136,6 +23418,11 @@ mod tests {
         assert_eq!(package.context_budget.trimmed_item_count, 2);
         assert_eq!(package.supply_quality["status"], json!("partial"));
         assert_eq!(package.supply_quality["mediaContextCount"], json!(1));
+        assert_eq!(package.model_gateway["lane"], json!("codex_conversation"));
+        assert_eq!(
+            package.model_gateway["selected_model"]["provider"],
+            json!("minimax")
+        );
         assert!(package.context_budget.estimated_prompt_chars > 0);
         assert_eq!(package.context_budget.budget_pressure, "unbounded");
         assert!(package
@@ -23157,6 +23444,20 @@ mod tests {
         assert!(package
             .action_types()
             .contains(&"update_static_page_module".to_string()));
+        assert!(package
+            .action_types()
+            .contains(&"submit_html_artifact_event".to_string()));
+        let html_artifact_action = package
+            .available_actions
+            .iter()
+            .find(|action| action.action_type == "submit_html_artifact_event")
+            .expect("html artifact action contract should exist");
+        assert!(html_artifact_action.requires_v3_validation);
+        assert!(html_artifact_action.mutates_state);
+        assert_eq!(
+            html_artifact_action.input_schema["properties"]["event_type"]["enum"],
+            json!(["html_artifact.patch", "html_artifact.action_intent"])
+        );
         assert!(package.safety.v3_validates_all_actions);
         assert!(!package.safety.direct_database_access_allowed);
     }
@@ -23190,6 +23491,7 @@ mod tests {
             &[],
             &evidence_state,
             None,
+            &json!({"lane": "codex_conversation"}),
             AssistantRunExecutorTransportView::CodexPlanOnly,
         );
 
@@ -23228,6 +23530,7 @@ mod tests {
             &[],
             &json!({"status": "not_requested", "supplied_items": []}),
             None,
+            &json!({"lane": "codex_conversation"}),
             AssistantRunExecutorTransportView::CodexDryRun,
         );
 
@@ -23255,6 +23558,16 @@ mod tests {
         assert_eq!(payload["status"], json!("shadow_dry_run"));
         assert_eq!(payload["codex_invoked"], json!(false));
         assert_eq!(payload["fallback_to_direct"], json!(true));
+        assert_eq!(payload["suggested_action"], Value::Null);
+        assert_eq!(
+            payload["output_schema"]["title"],
+            json!("V3CodexPlanOnlyActionSuggestion")
+        );
+        assert_eq!(payload["host_invocation"], Value::Null);
+        assert_eq!(
+            payload["model_gateway"]["lane"],
+            json!("codex_conversation")
+        );
         assert_eq!(
             payload["shadow_comparison"]["authoritative_executor"],
             json!("direct")
@@ -23308,6 +23621,25 @@ mod tests {
             matched_shadow["comparison"]["next_gate"],
             json!("enable Codex mutation only after repeated matched shadow runs")
         );
+        let matched_payload =
+            assistant_run_codex_event_payload(&suggested_output, Some(&matched_shadow));
+        assert_eq!(
+            matched_payload["suggested_action"]["action_type"],
+            json!("create_static_page_draft")
+        );
+        assert_eq!(
+            matched_payload["shadow_comparison"]["codex"]["model_gateway"]["lane"],
+            json!("codex_conversation")
+        );
+        assert_eq!(
+            matched_payload["output_schema"]["properties"]["suggested_action"]["properties"]
+                ["action_type"]["enum"]
+                .as_array()
+                .expect("output schema action enum should exist")
+                .iter()
+                .any(|value| value.as_str() == Some("create_static_page_draft")),
+            true
+        );
 
         suggested_output.suggested_action = Some(json!({
             "action_type": "render_static_page"
@@ -23323,6 +23655,28 @@ mod tests {
         );
         assert_eq!(diverged_shadow["comparison"]["status"], json!("diverged"));
         assert_eq!(diverged_shadow["codex_mutation_allowed"], json!(false));
+
+        suggested_output.suggested_action = Some(json!({
+            "action_type": "unsafe_os_command"
+        }));
+        let invalid_shadow = assistant_run_codex_shadow_comparison(
+            &suggested_output,
+            true,
+            &json!({"mode": "provider"}),
+            &[json!({"type": "static_page_draft"})],
+            &[],
+            &json!({"intent": "static_page"}),
+            None,
+        );
+        assert_eq!(
+            invalid_shadow["comparison"]["status"],
+            json!("invalid_suggestion")
+        );
+        assert_eq!(
+            invalid_shadow["codex"]["suggested_action_allowed"],
+            json!(false)
+        );
+        assert_eq!(invalid_shadow["comparison"]["actionable"], json!(false));
     }
 
     #[test]
@@ -23390,6 +23744,20 @@ mod tests {
                     "codex_invoked": false,
                     "fallback_to_direct": true,
                     "planned_action_types": ["create_static_page_draft"],
+                    "suggested_action": {
+                        "action_type": "create_static_page_draft",
+                        "mutation_allowed": false,
+                        "source": "codex_plan_only_shadow"
+                    },
+                    "model_gateway": {
+                        "lane": "codex_conversation",
+                        "selected_model": {
+                            "mode": "provider",
+                            "provider": "minimax",
+                            "model": "MiniMax-M2.7"
+                        },
+                        "profile_status": "profile_loaded"
+                    },
                     "context_budget": {
                         "estimated_prompt_chars": 4096,
                         "max_prompt_chars": 12000,
@@ -23427,6 +23795,22 @@ mod tests {
         assert_eq!(
             diagnostics["codex_executor"]["latest"]["shadow_comparison"]["codex_mutation_allowed"],
             json!(false)
+        );
+        assert_eq!(
+            diagnostics["codex_executor"]["latest"]["suggested_action"]["action_type"],
+            json!("create_static_page_draft")
+        );
+        assert_eq!(
+            diagnostics["codex_executor"]["latest"]["model_gateway"]["selected_model"]["provider"],
+            json!("minimax")
+        );
+        assert_eq!(
+            diagnostics["codex_executor"]["latest"]["output_schema"],
+            Value::Null
+        );
+        assert_eq!(
+            diagnostics["codex_executor"]["latest"]["host_invocation"],
+            Value::Null
         );
         assert_eq!(
             diagnostics["provider_usage"]["summary"]["request_count"],
