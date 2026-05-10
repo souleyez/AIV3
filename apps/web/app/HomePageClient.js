@@ -3500,13 +3500,6 @@ export default function HomePageClient() {
     accountStatusSummary,
     activityEvents,
     htmlArtifacts,
-    input,
-    onInputChange: setInput,
-    onSubmit: handleSubmitMessage,
-    onUploadClick: handleUploadButtonClick,
-    onStartStaticPageDraft: handleStartStaticPageDraft,
-    submitting: submitting || uploadingFiles,
-    uploadingFiles,
   };
   const uploadInput = (
     <input

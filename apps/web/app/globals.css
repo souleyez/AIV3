@@ -4364,39 +4364,6 @@ body {
   letter-spacing: 0;
 }
 
-.directory-floating-composer {
-  position: sticky;
-  bottom: 18px;
-  z-index: 14;
-  width: min(var(--assistant-composer-width), calc(100% - 24px));
-  margin-inline: auto;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 76px;
-  gap: 8px;
-  align-items: end;
-  padding: 12px;
-  border-radius: 20px;
-  background: rgba(18, 24, 32, 0.94);
-  box-shadow: 0 18px 52px rgba(0, 0, 0, 0.28);
-  backdrop-filter: blur(18px);
-}
-
-.directory-floating-composer textarea {
-  min-height: 62px;
-  max-height: 142px;
-  resize: vertical;
-}
-
-.directory-composer-actions {
-  display: grid;
-  grid-template-rows: repeat(3, minmax(34px, 1fr));
-  gap: 6px;
-}
-
-.directory-composer-actions > button {
-  width: 100%;
-}
-
 .mobile-home-shell {
   position: fixed;
   inset: 0;
@@ -5181,12 +5148,7 @@ body {
 }
 
 @media (max-width: 760px) {
-  .directory-create-row,
-  .directory-floating-composer {
-    grid-template-columns: 1fr;
-  }
-
-  .directory-composer-actions {
+  .directory-create-row {
     grid-template-columns: 1fr;
   }
 

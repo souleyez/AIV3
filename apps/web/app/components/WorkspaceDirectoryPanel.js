@@ -57,44 +57,6 @@ function MiniMetric({ label, value }) {
   );
 }
 
-function DirectoryComposer({
-  input,
-  onInputChange,
-  onSubmit,
-  onUploadClick,
-  onStartStaticPageDraft,
-  submitting,
-  uploadingFiles,
-}) {
-  return (
-    <div className="directory-floating-composer">
-      <textarea
-        value={input}
-        onChange={(event) => onInputChange?.(event.target.value)}
-        placeholder="告诉智能助手你要查资料、整理数据集、生成页面或继续修改当前产物"
-        disabled={submitting}
-        onKeyDown={(event) => {
-          if (event.key === 'Enter' && !event.shiftKey) {
-            event.preventDefault();
-            if (!submitting) onSubmit?.();
-          }
-        }}
-      />
-      <div className="directory-composer-actions">
-        <button className="primary-btn" type="button" onClick={onSubmit} disabled={!input.trim() || submitting}>
-          {submitting ? '发送中...' : '发送'}
-        </button>
-        <button className="ghost-btn" type="button" onClick={onUploadClick} disabled={submitting || !onUploadClick}>
-          {uploadingFiles ? '上传中...' : '上传'}
-        </button>
-        <button className="ghost-btn" type="button" onClick={() => onStartStaticPageDraft?.({ oneClick: true })} disabled={submitting}>
-          页面
-        </button>
-      </div>
-    </div>
-  );
-}
-
 function DatasetsPage({
   datasets,
   selectedDatasetId,
@@ -405,7 +367,7 @@ function MembersLoginOverlay({ accountStatusSummary }) {
         <p>用户、机器人、第三方页面和对话成员组会跟随登录账号。请先在右上角“登录状态”完成邮箱密钥或验证码登录。</p>
         <div className="members-login-steps">
           <strong>{accountStatusSummary?.label || '当前未登录'}</strong>
-          <span>右上角：登录状态 -> 邮箱 / 验证码 / 密钥登录</span>
+          <span>右上角“登录状态”里完成邮箱、验证码或密钥登录</span>
         </div>
       </div>
     </div>
@@ -504,13 +466,6 @@ export default function WorkspaceDirectoryPanel({
   accountStatusSummary,
   activityEvents,
   htmlArtifacts,
-  input,
-  onInputChange,
-  onSubmit,
-  onUploadClick,
-  onStartStaticPageDraft,
-  submitting,
-  uploadingFiles,
 }) {
   const copy = PAGE_COPY[activePage] || PAGE_COPY.datasets;
   return (
@@ -551,15 +506,6 @@ export default function WorkspaceDirectoryPanel({
       {activePage === 'sources' ? <SourcesPage documents={documents} datasets={datasets} /> : null}
       {activePage === 'members' ? <MembersPage accountStatusSummary={accountStatusSummary} /> : null}
       {activePage === 'audit' ? <AuditPage stats={stats} activityEvents={activityEvents} htmlArtifacts={htmlArtifacts} /> : null}
-      <DirectoryComposer
-        input={input}
-        onInputChange={onInputChange}
-        onSubmit={onSubmit}
-        onUploadClick={onUploadClick}
-        onStartStaticPageDraft={onStartStaticPageDraft}
-        submitting={submitting}
-        uploadingFiles={uploadingFiles}
-      />
     </section>
   );
 }
