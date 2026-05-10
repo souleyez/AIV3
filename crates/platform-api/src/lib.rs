@@ -1,4 +1,7 @@
-use assistant_runtime::{candidates_to_values, plan_scope, ScopePlannerInput};
+use assistant_runtime::{
+    candidates_to_values, execute_codex_conversation_plan, plan_scope,
+    CodexConversationExecutorOutput, ScopePlannerInput,
+};
 use auth_email::{send_verification_email, EmailOtpService, OtpVerificationStatus};
 use axum::{
     extract::{Path, Query, State},
@@ -12,27 +15,30 @@ use contracts::{
     AdvanceWorkflowExecutionResponse, ApiErrorResponse, AppendAssistantRunEventRequest,
     AppendAssistantRunEventResponse, AppendChatSessionTurnRequest, AppendChatSessionTurnResponse,
     AppendStaticPageDraftOperationsRequest, AppendStaticPageDraftOperationsResponse,
-    ApplyStaticPageDraftIntentRequest, ApplyStaticPageDraftIntentResponse, AssistantRunDetailView,
-    AssistantRunEventView, AssistantRunMessageView, AssistantRunView, AuthAuditEventView,
-    AuthSessionResponse, AuthSessionView, AuthUserView, BindEmailRequest, BindEmailResponse,
-    ChatMessageView, ChatSessionView, ClaimLocalDataRequest, ClaimLocalDataResponse,
-    CompareDocumentsRequest, CompareDocumentsView, ConfirmStaticPageImageJobRequest,
-    ConfirmStaticPageImageJobResponse, ContinueAssistantRunRequest, ContinueAssistantRunResponse,
-    ConversationMemoryItemView, CreateAssistantRunRequest, CreateAssistantRunResponse,
-    CreateChatSessionRequest, CreateChatSessionResponse, CreateConversationMemoryItemRequest,
-    CreateDatasetOutputRequest, CreateDatasetOutputResponse, CreateDatasetRequest,
-    CreateDatasetSecretBindingRequest, CreateDatasetSecretBindingResponse,
-    CreateDocumentIngestResponse, CreateMemoryDirectoryRefreshResponse, CreateReportPlanResponse,
-    CreateReportRenderRequest, CreateReportRenderResponse, CreateStaticPageDraftRequest,
-    CreateStaticPageDraftResponse, CreateStaticPageImageJobRequest,
-    CreateStaticPageImageJobResponse, CreateStaticPageRenderRequest,
-    CreateStaticPageRenderResponse, DatasetOutputView, DatasetSummary, DocumentChunkView,
-    DocumentDetailView, DocumentMediaDetailView, DocumentSummary, HealthResponse,
-    HtmlArtifactInteractionModeView, HtmlArtifactManifestView, KeyLoginRequest, KeyLoginResponse,
-    KeyRotateRequest, KeyRotateResponse, LlmInvocationView, LogoutResponse, MemoryDirectoryView,
-    PlanReportRequest, PublishReportRequest, PublishReportResponse, PublishedReportDetailView,
-    PublishedReportVersionView, PublishedReportView, RegisterDocumentRequest,
-    RegisterDocumentResponse, ReportPlanAstVersionView, ReportPlanSummary, ReportRenderOutputView,
+    ApplyStaticPageDraftIntentRequest, ApplyStaticPageDraftIntentResponse,
+    AssistantRunCodexActionContractView, AssistantRunCodexContextBudgetView,
+    AssistantRunCodexContextPackageView, AssistantRunDetailView, AssistantRunEventView,
+    AssistantRunExecutorTransportView, AssistantRunMessageView, AssistantRunView,
+    AuthAuditEventView, AuthSessionResponse, AuthSessionView, AuthUserView, BindEmailRequest,
+    BindEmailResponse, ChatMessageView, ChatSessionView, ClaimLocalDataRequest,
+    ClaimLocalDataResponse, CompareDocumentsRequest, CompareDocumentsView,
+    ConfirmStaticPageImageJobRequest, ConfirmStaticPageImageJobResponse,
+    ContinueAssistantRunRequest, ContinueAssistantRunResponse, ConversationMemoryItemView,
+    CreateAssistantRunRequest, CreateAssistantRunResponse, CreateChatSessionRequest,
+    CreateChatSessionResponse, CreateConversationMemoryItemRequest, CreateDatasetOutputRequest,
+    CreateDatasetOutputResponse, CreateDatasetRequest, CreateDatasetSecretBindingRequest,
+    CreateDatasetSecretBindingResponse, CreateDocumentIngestResponse,
+    CreateMemoryDirectoryRefreshResponse, CreateReportPlanResponse, CreateReportRenderRequest,
+    CreateReportRenderResponse, CreateStaticPageDraftRequest, CreateStaticPageDraftResponse,
+    CreateStaticPageImageJobRequest, CreateStaticPageImageJobResponse,
+    CreateStaticPageRenderRequest, CreateStaticPageRenderResponse, DatasetOutputView,
+    DatasetSummary, DocumentChunkView, DocumentDetailView, DocumentMediaDetailView,
+    DocumentSummary, HealthResponse, HtmlArtifactInteractionModeView, HtmlArtifactManifestView,
+    KeyLoginRequest, KeyLoginResponse, KeyRotateRequest, KeyRotateResponse, LlmInvocationView,
+    LogoutResponse, MemoryDirectoryView, PlanReportRequest, PublishReportRequest,
+    PublishReportResponse, PublishedReportDetailView, PublishedReportVersionView,
+    PublishedReportView, RegisterDocumentRequest, RegisterDocumentResponse,
+    ReportPlanAstVersionView, ReportPlanSummary, ReportRenderOutputView,
     ResolveDatasetSecretBindingsRequest, ResolveDatasetSecretBindingsResponse,
     RetrievalEvidenceView, RetrievalSearchHitView, RetrievalSearchResponse,
     RetryWorkflowExecutionRequest, RetryWorkflowExecutionResponse, StartEmailAuthRequest,
@@ -5956,8 +5962,12 @@ async fn update_chat_session(
     Json(request): Json<UpdateChatSessionRequest>,
 ) -> std::result::Result<Json<UpdateChatSessionResponse>, ApiError> {
     let session_id = parse_chat_session_id(&session_id)?;
-    let title = trim_optional(request.title)
-        .ok_or_else(|| ApiError::bad_request("chat_session_title_required", "title is required".to_string()))?;
+    let title = trim_optional(request.title).ok_or_else(|| {
+        ApiError::bad_request(
+            "chat_session_title_required",
+            "title is required".to_string(),
+        )
+    })?;
     validate_required("title", &title)?;
 
     let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
@@ -6199,7 +6209,11 @@ async fn create_assistant_run(
         DEFAULT_ASSISTANT_RUN_RUNTIME_MODEL,
     );
     let scope_candidates = request.scope_candidates.clone();
-    let react_enabled = assistant_run_react_enabled(&react_runtime.mode);
+    let react_enabled = assistant_run_react_enabled_for_scope(
+        &react_runtime.mode,
+        &selected_scope,
+        request.current_artifact.as_ref(),
+    );
     let runtime_mode_for_trail = if react_enabled {
         react_runtime.mode.clone()
     } else {
@@ -6283,6 +6297,7 @@ async fn create_assistant_run(
 
     let now = Utc::now();
     let planned_candidate_count = scope_candidates.len();
+    let codex_scope_candidates = scope_candidates.clone();
     let scope_candidates = Value::Array(scope_candidates.clone());
     let context_policy = request
         .context_policy_hint
@@ -6359,6 +6374,50 @@ async fn create_assistant_run(
         )
         .await
         .map_err(ApiError::from_storage)?;
+
+    if let Some(executor_transport) = assistant_run_executor_transport_from_env() {
+        let codex_package = build_assistant_run_codex_context_package(
+            run.id,
+            run.local_thread_id.as_deref(),
+            &request.prompt,
+            &request.messages,
+            &run.startup_briefing,
+            &selected_scope,
+            &codex_scope_candidates,
+            &evidence_state,
+            request.current_artifact.as_ref(),
+            executor_transport,
+        );
+        let codex_output = execute_codex_conversation_plan(&codex_package);
+        execution_trail.extend(assistant_run_codex_execution_trail_entries(
+            &codex_output,
+            now,
+        ));
+        state
+            .storage
+            .assistant_runs()
+            .update_execution_trail(
+                state.tenant_id,
+                run.id,
+                &Value::Array(execution_trail.clone()),
+            )
+            .await
+            .map_err(ApiError::from_storage)?;
+        state
+            .storage
+            .assistant_runs()
+            .append_event(
+                state.tenant_id,
+                run.id,
+                &NewAssistantRunEvent {
+                    event_name: "assistant_run.codex_executor_diagnostic".to_string(),
+                    payload: assistant_run_codex_event_payload(&codex_output),
+                    created_at: now,
+                },
+            )
+            .await
+            .map_err(ApiError::from_storage)?;
+    }
     for event in react_events {
         state
             .storage
@@ -6522,7 +6581,11 @@ async fn continue_assistant_run(
         )
         .await?
     };
-    let react_enabled = assistant_run_react_enabled(&react_runtime.mode);
+    let react_enabled = assistant_run_react_enabled_for_scope(
+        &react_runtime.mode,
+        &selected_scope,
+        request.current_artifact.as_ref(),
+    );
     let runtime_mode_for_trail = if react_enabled {
         react_runtime.mode.clone()
     } else {
@@ -6629,6 +6692,30 @@ async fn continue_assistant_run(
         "at": now,
     }));
     execution_trail.append(&mut react_trail_steps);
+    let codex_executor_event_payload =
+        if let Some(executor_transport) = assistant_run_executor_transport_from_env() {
+            let codex_scope_candidates = value_array(run.scope_candidates.clone());
+            let codex_package = build_assistant_run_codex_context_package(
+                run.id,
+                run.local_thread_id.as_deref(),
+                &continue_prompt,
+                &request.messages,
+                &run.startup_briefing,
+                &selected_scope,
+                &codex_scope_candidates,
+                &evidence_state,
+                request.current_artifact.as_ref(),
+                executor_transport,
+            );
+            let codex_output = execute_codex_conversation_plan(&codex_package);
+            execution_trail.extend(assistant_run_codex_execution_trail_entries(
+                &codex_output,
+                now,
+            ));
+            Some(assistant_run_codex_event_payload(&codex_output))
+        } else {
+            None
+        };
     let mut output_artifacts = value_array(run.output_artifacts.clone());
     output_artifacts.extend(assistant_artifacts.into_iter().map(|mut artifact| {
         if let Some(object) = artifact.as_object_mut() {
@@ -6683,6 +6770,22 @@ async fn continue_assistant_run(
                 &NewAssistantRunEvent {
                     event_name: event.event_name,
                     payload: event.payload,
+                    created_at: now,
+                },
+            )
+            .await
+            .map_err(ApiError::from_storage)?;
+    }
+    if let Some(payload) = codex_executor_event_payload {
+        state
+            .storage
+            .assistant_runs()
+            .append_event(
+                state.tenant_id,
+                run_id,
+                &NewAssistantRunEvent {
+                    event_name: "assistant_run.codex_executor_diagnostic".to_string(),
+                    payload,
                     created_at: now,
                 },
             )
@@ -7813,39 +7916,55 @@ fn build_assistant_run_provider_input_with_evidence(
     request: &CreateAssistantRunRequest,
     evidence_state: Option<&Value>,
 ) -> String {
-    let mut sections = vec![
-        "你是智能数据工作台里的普通聊天运行时。".to_string(),
-        "原则：不替用户编排答案；只根据用户问题、启动简报、范围候选和必要历史直接回答。"
-            .to_string(),
-        "系统能力：可普通聊天、检索供料、读取文档细节、读取音视频转写/场景等媒体细节、创建报表、规划/渲染/修改静态页、导出静态页 ZIP 交付包；缺数据时必须说明缺失，不能编造指标。"
-            .to_string(),
-    ];
+    let selected_scope = request.selected_scope.as_ref();
+    let plain_ordinary_chat = assistant_run_is_plain_ordinary_chat_scope(
+        selected_scope,
+        evidence_state,
+        request.current_artifact.as_ref(),
+    );
+    let mut sections = if plain_ordinary_chat {
+        vec![
+            "你是通用模型助手，运行在 AI 数据智能助手中。".to_string(),
+            "当前未选择数据集，也没有供料证据；请按普通模型问答直接回答用户问题，可以使用你的通用知识、推理和表达能力，不要因为缺少数据集而拒答、降级或强行讨论数据工作台。".to_string(),
+            "只有当用户明确询问本系统、数据集、文档、报表、静态页、上传或采集能力时，才结合产品背景说明系统能力。".to_string(),
+        ]
+    } else {
+        vec![
+            "你是 AI 数据智能助手里的模型回答运行时。".to_string(),
+            "宿主只负责识别意图、提供上下文和执行受控动作；最终正文由你自行组织，不要按宿主规则拼模板化回答。".to_string(),
+            "系统能力背景：可普通聊天、检索供料、读取文档细节、读取音视频转写/场景等媒体细节、创建报表、规划/渲染/修改静态页、导出静态页 ZIP 交付包。涉及供料中的数据、指标、文档事实或产物状态时，不要编造；普通常识和开放问答仍可使用模型通用能力。".to_string(),
+        ]
+    };
 
-    if let Some(briefing) = request.startup_briefing.as_ref() {
-        sections.push(format!(
-            "启动简报：{}",
-            serde_json::to_string(briefing).unwrap_or_else(|_| "{}".to_string())
-        ));
+    if !plain_ordinary_chat {
+        if let Some(briefing) = request.startup_briefing.as_ref() {
+            sections.push(format!(
+                "启动简报：{}",
+                serde_json::to_string(briefing).unwrap_or_else(|_| "{}".to_string())
+            ));
+        }
     }
-    if !request.scope_candidates.is_empty() {
+    if !plain_ordinary_chat && !request.scope_candidates.is_empty() {
         sections.push(format!(
             "范围候选：{}",
             serde_json::to_string(&request.scope_candidates).unwrap_or_else(|_| "[]".to_string())
         ));
     }
-    if let Some(selected_scope) = request.selected_scope.as_ref() {
-        sections.push(format!(
-            "当前选中范围：{}",
-            serde_json::to_string(selected_scope).unwrap_or_else(|_| "{}".to_string())
-        ));
+    if !plain_ordinary_chat {
+        if let Some(selected_scope) = selected_scope {
+            sections.push(format!(
+                "当前选中范围：{}",
+                serde_json::to_string(selected_scope).unwrap_or_else(|_| "{}".to_string())
+            ));
+        }
     }
     if let Some(evidence_state) = evidence_state {
         if evidence_state.get("status").and_then(Value::as_str) != Some("not_requested") {
             if let Some(brief) = build_assistant_run_model_supply_brief(evidence_state) {
-                sections.push(format!("供料综合提示：\n{brief}"));
+                sections.push(format!("供料提示（供你参考，不是回答模板）：\n{brief}"));
             }
             sections.push(format!(
-                "供料证据：{}",
+                "供料证据（可引用上下文）：{}",
                 serde_json::to_string(evidence_state).unwrap_or_else(|_| "{}".to_string())
             ));
         }
@@ -7884,25 +8003,38 @@ fn build_assistant_run_continue_provider_input(
     evidence_state: &Value,
     max_steps: usize,
 ) -> String {
-    let mut sections = vec![
-        "你是智能数据工作台里的 AssistantRun 连续执行运行时。".to_string(),
-        "原则：不替用户编造系统动作；如果需要平台能力，只提出下一步动作需求；基于已有供料直接继续回答。"
-            .to_string(),
-        format!("运行ID：{}", run.id),
-        format!("原始问题：{}", run.user_prompt.trim()),
-        format!("继续指令：{}", continue_prompt.trim()),
-        format!("本次最多连续动作数：{}", max_steps),
-        format!(
-            "当前选中范围：{}",
-            serde_json::to_string(selected_scope).unwrap_or_else(|_| "{}".to_string())
-        ),
-        format!(
-            "供料状态：{}",
-            serde_json::to_string(evidence_state).unwrap_or_else(|_| "{}".to_string())
-        ),
-    ];
+    let plain_ordinary_chat = assistant_run_is_plain_ordinary_chat_scope(
+        Some(selected_scope),
+        Some(evidence_state),
+        request.current_artifact.as_ref(),
+    );
+    let mut sections = if plain_ordinary_chat {
+        vec![
+            "你是通用模型助手，正在继续一轮普通对话。".to_string(),
+            "当前没有数据集供料或产物上下文；请按用户继续指令直接作答，不要因为运行在数据智能助手中而限制通用问答能力。".to_string(),
+            format!("原始问题：{}", run.user_prompt.trim()),
+            format!("继续指令：{}", continue_prompt.trim()),
+        ]
+    } else {
+        vec![
+            "你是 AI 数据智能助手里的 AssistantRun 连续执行回答运行时。".to_string(),
+            "宿主只负责供料和受控动作；最终正文由你自行组织。如果需要平台能力，只提出下一步动作需求；已有供料可作为上下文参考。".to_string(),
+            format!("运行ID：{}", run.id),
+            format!("原始问题：{}", run.user_prompt.trim()),
+            format!("继续指令：{}", continue_prompt.trim()),
+            format!("本次最多连续动作数：{}", max_steps),
+            format!(
+                "当前选中范围：{}",
+                serde_json::to_string(selected_scope).unwrap_or_else(|_| "{}".to_string())
+            ),
+            format!(
+                "供料状态：{}",
+                serde_json::to_string(evidence_state).unwrap_or_else(|_| "{}".to_string())
+            ),
+        ]
+    };
     if let Some(brief) = build_assistant_run_model_supply_brief(evidence_state) {
-        sections.push(format!("供料综合提示：\n{brief}"));
+        sections.push(format!("供料提示（供你参考，不是回答模板）：\n{brief}"));
     }
 
     if let Some(current_artifact) = request.current_artifact.as_ref() {
@@ -7946,7 +8078,7 @@ fn build_assistant_run_model_supply_brief(evidence_state: &Value) -> Option<Stri
         format!(
             "状态：{status}；可引用供料 {supplied_count} 条；建议细读目标 {detail_target_count} 个；兜底切片 {fallback_count} 条。"
         ),
-        "边界：正文只能基于 supplied_items 和已完成 observation；detail_targets 只代表建议细读目标，不是引用依据；缺字段、缺数据或 partial 解析必须明说，不能补假数。".to_string(),
+        "供料只作为可引用上下文；最终正文由模型自行组织。涉及供料里的数据、指标、文档事实或产物状态时不要编造；普通常识、解释和建议可以使用模型通用知识，并区分供料事实与通用判断。detail_targets 只代表建议细读目标，不是引用依据。".to_string(),
     ];
 
     if let Some(items) = evidence_state
@@ -9169,8 +9301,9 @@ fn react_requested_scope_denial(
 }
 
 fn assistant_run_react_scope_requires_supply(selected_scope: &Value) -> bool {
-    !selected_dataset_ids_from_scope(selected_scope).is_empty()
-        || selected_scope_requests_conversation_memory(selected_scope)
+    assistant_run_scope_intent(selected_scope) != "ordinary_chat"
+        && (!selected_dataset_ids_from_scope(selected_scope).is_empty()
+            || selected_scope_requests_conversation_memory(selected_scope))
 }
 
 fn assistant_run_react_has_supply_observation(
@@ -9293,6 +9426,288 @@ fn env_flag(key: &str, default_value: bool) -> bool {
             )
         })
         .unwrap_or(default_value)
+}
+
+fn assistant_run_is_plain_ordinary_chat_scope(
+    selected_scope: Option<&Value>,
+    evidence_state: Option<&Value>,
+    current_artifact: Option<&Value>,
+) -> bool {
+    if current_artifact.is_some() {
+        return false;
+    }
+    let Some(selected_scope) = selected_scope else {
+        return true;
+    };
+    let no_selected_supply = selected_dataset_ids_from_scope(selected_scope).is_empty()
+        && selected_document_ids_from_scope(selected_scope).is_empty()
+        && !selected_scope_requests_conversation_memory(selected_scope);
+    let ordinary_intent = assistant_run_scope_intent(selected_scope) == "ordinary_chat";
+    let no_evidence = evidence_state
+        .and_then(|state| state.get("status"))
+        .and_then(Value::as_str)
+        .map(|status| matches!(status, "not_requested" | "empty"))
+        .unwrap_or(true)
+        && evidence_state
+            .map(|state| assistant_run_evidence_supplied_count(state) == 0)
+            .unwrap_or(true);
+
+    ordinary_intent && no_selected_supply && no_evidence
+}
+
+fn assistant_run_react_enabled_for_scope(
+    runtime_mode: &str,
+    selected_scope: &Value,
+    current_artifact: Option<&Value>,
+) -> bool {
+    assistant_run_react_enabled(runtime_mode)
+        && assistant_run_react_scope_allows_tools(selected_scope, current_artifact)
+}
+
+fn assistant_run_react_scope_allows_tools(
+    selected_scope: &Value,
+    current_artifact: Option<&Value>,
+) -> bool {
+    (assistant_run_scope_intent(selected_scope) != "ordinary_chat" || current_artifact.is_some())
+        && !assistant_run_is_plain_ordinary_chat_scope(Some(selected_scope), None, current_artifact)
+}
+
+fn assistant_run_executor_transport_from_env() -> Option<AssistantRunExecutorTransportView> {
+    std::env::var("ASSISTANT_RUN_EXECUTOR")
+        .ok()
+        .and_then(|value| assistant_run_executor_transport_from_value(&value))
+}
+
+fn assistant_run_executor_transport_from_value(
+    value: &str,
+) -> Option<AssistantRunExecutorTransportView> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "" | "direct" => None,
+        "codex" | "codex_dry_run" | "dry_run" | "shadow" | "shadow_dry_run" => {
+            Some(AssistantRunExecutorTransportView::CodexDryRun)
+        }
+        "codex_plan_only" | "plan_only" | "plan" => {
+            Some(AssistantRunExecutorTransportView::CodexPlanOnly)
+        }
+        "codex_exec_schema" | "exec_schema" => {
+            Some(AssistantRunExecutorTransportView::CodexExecSchema)
+        }
+        "codex_sdk_thread" | "sdk_thread" => {
+            Some(AssistantRunExecutorTransportView::CodexSdkThread)
+        }
+        "codex_app_server" | "app_server" => {
+            Some(AssistantRunExecutorTransportView::CodexAppServer)
+        }
+        "codex_mcp_server" | "mcp_server" => {
+            Some(AssistantRunExecutorTransportView::CodexMcpServer)
+        }
+        _ => None,
+    }
+}
+
+fn build_assistant_run_codex_context_package(
+    assistant_run_id: AssistantRunId,
+    local_thread_id: Option<&str>,
+    user_prompt: &str,
+    messages: &[AssistantRunMessageView],
+    startup_briefing: &Value,
+    selected_scope: &Value,
+    scope_candidates: &[Value],
+    evidence_state: &Value,
+    current_artifact: Option<&Value>,
+    executor_transport: AssistantRunExecutorTransportView,
+) -> AssistantRunCodexContextPackageView {
+    let mut package =
+        AssistantRunCodexContextPackageView::new(assistant_run_id, user_prompt.trim());
+    package.executor_transport = executor_transport;
+    package.local_thread_id = local_thread_id.map(ToString::to_string);
+    package.messages = messages.to_vec();
+    package.startup_briefing = startup_briefing.clone();
+    package.selected_scope = selected_scope.clone();
+    package.inferred_scope_candidates = scope_candidates.to_vec();
+    package.evidence_state = evidence_state.clone();
+    package.hidden_memory_candidates = assistant_run_codex_hidden_memory_candidates(evidence_state);
+    package.current_artifact = current_artifact.cloned();
+    package.available_actions = assistant_run_codex_action_contracts(selected_scope);
+    package.context_budget = assistant_run_codex_context_budget(
+        messages,
+        selected_scope,
+        evidence_state,
+        current_artifact,
+    );
+    package
+}
+
+fn assistant_run_codex_hidden_memory_candidates(evidence_state: &Value) -> Vec<Value> {
+    evidence_state
+        .get("conversation_memory_items")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+}
+
+fn assistant_run_codex_context_budget(
+    messages: &[AssistantRunMessageView],
+    selected_scope: &Value,
+    evidence_state: &Value,
+    current_artifact: Option<&Value>,
+) -> AssistantRunCodexContextBudgetView {
+    AssistantRunCodexContextBudgetView {
+        max_prompt_chars: std::env::var("ASSISTANT_RUN_CODEX_MAX_PROMPT_CHARS")
+            .ok()
+            .and_then(|value| value.trim().parse::<usize>().ok()),
+        included_message_count: messages.len(),
+        selected_dataset_count: selected_dataset_ids_from_scope(selected_scope).len(),
+        evidence_item_count: assistant_run_evidence_supplied_count(evidence_state),
+        hidden_memory_item_count: assistant_run_codex_hidden_memory_candidates(evidence_state)
+            .len(),
+        artifact_state_chars: current_artifact
+            .and_then(|artifact| serde_json::to_string(artifact).ok())
+            .map(|value| value.chars().count())
+            .unwrap_or(0),
+        tool_output_chars: serde_json::to_string(evidence_state)
+            .map(|value| value.chars().count())
+            .unwrap_or(0),
+        trimmed_item_count: evidence_state
+            .get("trimmed_item_count")
+            .or_else(|| evidence_state.get("trimmedItemCount"))
+            .and_then(Value::as_u64)
+            .map(|value| value as usize)
+            .unwrap_or(0),
+        ..AssistantRunCodexContextBudgetView::default()
+    }
+}
+
+fn assistant_run_codex_action_contracts(
+    _selected_scope: &Value,
+) -> Vec<AssistantRunCodexActionContractView> {
+    vec![
+        AssistantRunCodexActionContractView::new(
+            "retrieve_evidence",
+            "检索供料证据",
+            "在 V3 可见范围内检索数据集、文档或对话记忆证据。",
+            json!({
+                "type": "object",
+                "properties": {
+                    "dataset_id": {"type": "string"},
+                    "query": {"type": "string"}
+                }
+            }),
+            false,
+        ),
+        AssistantRunCodexActionContractView::new(
+            "read_document_detail",
+            "读取文档详情",
+            "读取已选中或已命中供料范围内的文档详情。",
+            json!({
+                "type": "object",
+                "properties": {
+                    "document_id": {"type": "string"},
+                    "reason": {"type": "string"}
+                },
+                "required": ["document_id"]
+            }),
+            false,
+        ),
+        AssistantRunCodexActionContractView::new(
+            "recall_conversation_memory",
+            "召回对话记忆",
+            "按 V3 判断召回当前本地会话的隐藏对话记忆。",
+            json!({"type": "object", "properties": {"reason": {"type": "string"}}}),
+            false,
+        ),
+        AssistantRunCodexActionContractView::new(
+            "create_static_page_draft",
+            "创建静态页草稿",
+            "基于用户意图和供料状态创建静态页模块规划草稿。",
+            json!({"type": "object", "properties": {"objective": {"type": "string"}}}),
+            true,
+        ),
+        AssistantRunCodexActionContractView::new(
+            "update_static_page_module",
+            "更新静态页模块",
+            "只更新当前可见静态页草稿的模块、布局、内容、数据或图表配置。",
+            json!({
+                "type": "object",
+                "properties": {
+                    "module_id": {"type": "string"},
+                    "patch": {"type": "object"},
+                    "operations": {"type": "array"}
+                }
+            }),
+            true,
+        ),
+        AssistantRunCodexActionContractView::new(
+            "submit_static_page_image_preview",
+            "提交效果图生成",
+            "把当前静态页草稿提交到 V3 控制的效果图队列。",
+            json!({"type": "object", "properties": {"draft_id": {"type": "string"}}}),
+            true,
+        ),
+        AssistantRunCodexActionContractView::new(
+            "render_static_page",
+            "制作最终静态页",
+            "在已确认且未过期的效果图视觉合同下生成最终静态页。",
+            json!({"type": "object", "properties": {"draft_id": {"type": "string"}}}),
+            true,
+        ),
+        AssistantRunCodexActionContractView::new(
+            "list_report_options",
+            "列出报表选项",
+            "根据当前供料范围列出可创建的报表或静态页方向。",
+            json!({"type": "object", "properties": {"reason": {"type": "string"}}}),
+            false,
+        ),
+        AssistantRunCodexActionContractView::new(
+            "create_report_draft",
+            "创建报表草稿",
+            "基于 V3 供料创建报表草稿。",
+            json!({"type": "object", "properties": {"objective": {"type": "string"}}}),
+            true,
+        ),
+        AssistantRunCodexActionContractView::new(
+            "report_choice",
+            "选择报表流向",
+            "在模型需要用户确认时记录报表方向选择。",
+            json!({"type": "object", "properties": {"choice": {"type": "string"}}}),
+            true,
+        ),
+        AssistantRunCodexActionContractView::new(
+            "final_answer",
+            "模型生成最终回答",
+            "不调用平台工具，直接返回模型撰写的回答。",
+            json!({"type": "object", "properties": {"answer": {"type": "string"}}}),
+            false,
+        ),
+    ]
+}
+
+fn assistant_run_codex_execution_trail_entries(
+    output: &CodexConversationExecutorOutput,
+    now: DateTime<Utc>,
+) -> Vec<Value> {
+    vec![json!({
+        "status": "completed",
+        "label": "Codex 执行器诊断",
+        "transport": output.transport.as_str(),
+        "executor_status": output.status.as_str(),
+        "codex_invoked": output.codex_invoked,
+        "fallback_to_direct": output.fallback_to_direct,
+        "planned_action_types": output.planned_action_types.clone(),
+        "at": now,
+    })]
+}
+
+fn assistant_run_codex_event_payload(output: &CodexConversationExecutorOutput) -> Value {
+    json!({
+        "transport": output.transport.as_str(),
+        "status": output.status.as_str(),
+        "codex_invoked": output.codex_invoked,
+        "fallback_to_direct": output.fallback_to_direct,
+        "planned_action_types": output.planned_action_types.clone(),
+        "context_budget": output.context_budget.clone(),
+        "execution_trail": output.execution_trail.clone(),
+    })
 }
 
 fn normalize_assistant_run_continue_max_steps(value: Option<usize>) -> usize {
@@ -21072,6 +21487,109 @@ mod tests {
     }
 
     #[test]
+    fn assistant_run_executor_transport_config_is_opt_in() {
+        assert_eq!(assistant_run_executor_transport_from_value(""), None);
+        assert_eq!(assistant_run_executor_transport_from_value("direct"), None);
+        assert_eq!(
+            assistant_run_executor_transport_from_value("codex"),
+            Some(AssistantRunExecutorTransportView::CodexDryRun)
+        );
+        assert_eq!(
+            assistant_run_executor_transport_from_value("codex_plan_only"),
+            Some(AssistantRunExecutorTransportView::CodexPlanOnly)
+        );
+        assert_eq!(
+            assistant_run_executor_transport_from_value("app_server"),
+            Some(AssistantRunExecutorTransportView::CodexAppServer)
+        );
+        assert_eq!(assistant_run_executor_transport_from_value("unknown"), None);
+    }
+
+    #[test]
+    fn assistant_run_codex_package_keeps_v3_context_and_action_contracts() {
+        let dataset_id = DatasetId::new();
+        let selected_scope = json!({
+            "mode": "user_selected",
+            "intent": "static_page",
+            "datasets": [{"type": "dataset", "id": dataset_id.to_string()}],
+            "conversation_memory": ["current_thread"],
+            "supply_policy": {
+                "recommendedActions": ["retrieval.search", "static_page.plan"]
+            }
+        });
+        let evidence_state = json!({
+            "status": "supplied",
+            "supplied_items": [{"type": "retrieval_evidence", "summary": "订单延期风险"}],
+            "conversation_memory_items": [{"summary": "用户上次要求做销售看板"}],
+            "trimmed_item_count": 2
+        });
+        let artifact = json!({
+            "backendDraftId": "draft-1",
+            "modules": [{"id": "kpi-1", "title": "核心指标"}]
+        });
+        let messages = vec![AssistantRunMessageView {
+            role: ChatMessageRole::User,
+            content: "继续刚才那版".to_string(),
+        }];
+
+        let package = build_assistant_run_codex_context_package(
+            AssistantRunId::new(),
+            Some("browser-thread-1"),
+            "做一个订单风险静态页",
+            &messages,
+            &json!({"product": "AI数据智能助手"}),
+            &selected_scope,
+            &[json!({"type": "dataset", "id": dataset_id.to_string()})],
+            &evidence_state,
+            Some(&artifact),
+            AssistantRunExecutorTransportView::CodexPlanOnly,
+        );
+
+        assert_eq!(
+            package.executor_transport,
+            AssistantRunExecutorTransportView::CodexPlanOnly
+        );
+        assert_eq!(package.context_budget.included_message_count, 1);
+        assert_eq!(package.context_budget.selected_dataset_count, 1);
+        assert_eq!(package.context_budget.evidence_item_count, 1);
+        assert_eq!(package.context_budget.hidden_memory_item_count, 1);
+        assert_eq!(package.context_budget.trimmed_item_count, 2);
+        assert!(package.context_budget.artifact_state_chars > 0);
+        assert!(package
+            .action_types()
+            .contains(&"update_static_page_module".to_string()));
+        assert!(package.safety.v3_validates_all_actions);
+        assert!(!package.safety.direct_database_access_allowed);
+    }
+
+    #[test]
+    fn assistant_run_codex_diagnostic_payload_preserves_direct_fallback() {
+        let package = build_assistant_run_codex_context_package(
+            AssistantRunId::new(),
+            Some("browser-thread-1"),
+            "生成一个企业经营看板",
+            &[],
+            &json!({}),
+            &json!({"mode": "ordinary_chat"}),
+            &[],
+            &json!({"status": "not_requested", "supplied_items": []}),
+            None,
+            AssistantRunExecutorTransportView::CodexDryRun,
+        );
+
+        let output = execute_codex_conversation_plan(&package);
+        let payload = assistant_run_codex_event_payload(&output);
+        let trail = assistant_run_codex_execution_trail_entries(&output, Utc::now());
+
+        assert_eq!(payload["transport"], json!("codex_dry_run"));
+        assert_eq!(payload["status"], json!("shadow_dry_run"));
+        assert_eq!(payload["codex_invoked"], json!(false));
+        assert_eq!(payload["fallback_to_direct"], json!(true));
+        assert_eq!(trail[0]["label"], json!("Codex 执行器诊断"));
+        assert_eq!(trail[0]["fallback_to_direct"], json!(true));
+    }
+
+    #[test]
     fn html_artifacts_are_collected_from_nested_assistant_run_events() {
         let tenant_id = TenantId::new();
         let run_id = AssistantRunId::new();
@@ -21609,6 +22127,7 @@ mod tests {
 
     #[test]
     fn assistant_run_provider_input_includes_briefing_scope_and_history() {
+        let dataset_id = DatasetId::new();
         let input = build_assistant_run_provider_input(&CreateAssistantRunRequest {
             prompt: "继续总结订单风险".to_string(),
             local_thread_id: Some("browser-thread-1".to_string()),
@@ -21617,10 +22136,12 @@ mod tests {
                 "visibleDatasetCount": 2,
             })),
             selected_scope: Some(json!({
-                "datasets": ["orders"],
+                "datasets": [dataset_id],
+                "intent": "data_question",
             })),
             scope_candidates: vec![json!({
                 "type": "dataset",
+                "id": dataset_id,
                 "label": "订单",
             })],
             context_policy_hint: Some(json!({
@@ -21645,6 +22166,43 @@ mod tests {
         assert!(input.contains("当前选中范围"));
         assert!(input.contains("assistant: 已预选订单数据集"));
         assert!(input.contains("用户问题：继续总结订单风险"));
+    }
+
+    #[test]
+    fn assistant_run_provider_input_keeps_plain_ordinary_chat_unrestricted() {
+        let input = build_assistant_run_provider_input_with_evidence(
+            &CreateAssistantRunRequest {
+                prompt: "猫为什么喜欢晒太阳？".to_string(),
+                local_thread_id: Some("browser-thread-1".to_string()),
+                startup_briefing: Some(json!({
+                    "productTruth": "智能数据工作台",
+                    "capabilities": ["static_page", "dataset_search"],
+                })),
+                selected_scope: Some(json!({
+                    "mode": "ordinary_chat",
+                    "datasets": [],
+                    "conversation_memory": [],
+                    "intent": "ordinary_chat",
+                })),
+                scope_candidates: vec![json!({
+                    "type": "dataset",
+                    "title": "订单数据集",
+                })],
+                context_policy_hint: None,
+                current_artifact: None,
+                messages: Vec::new(),
+            },
+            Some(&json!({"status": "not_requested", "supplied_items": []})),
+        );
+
+        assert!(input.contains("通用模型助手"));
+        assert!(input.contains("可以使用你的通用知识、推理和表达能力"));
+        assert!(input.contains("不要因为缺少数据集而拒答"));
+        assert!(input.contains("用户问题：猫为什么喜欢晒太阳？"));
+        assert!(!input.contains("启动简报"));
+        assert!(!input.contains("范围候选"));
+        assert!(!input.contains("缺数据时必须说明缺失"));
+        assert!(!input.contains("规划/渲染/修改静态页"));
     }
 
     #[test]
@@ -21809,10 +22367,11 @@ mod tests {
             Some(&evidence_state),
         );
 
-        assert!(input.contains("供料综合提示"));
+        assert!(input.contains("供料提示（供你参考，不是回答模板）"));
         assert!(input.contains("可引用供料 1 条"));
         assert!(input.contains("兜底切片 1 条"));
-        assert!(input.contains("正文只能基于 supplied_items 和已完成 observation"));
+        assert!(input.contains("供料只作为可引用上下文"));
+        assert!(input.contains("普通常识、解释和建议可以使用模型通用知识"));
         assert!(input.contains("detail_targets 只代表建议细读目标"));
         assert!(input.contains("document_chunk_fallback"));
         assert!(input.contains("uploads/orders.md#chunk=1"));
@@ -22307,8 +22866,14 @@ mod tests {
         let selected_scope = json!({
             "mode": "selected",
             "selected": [{"type": "dataset", "id": dataset_id.to_string()}],
+            "intent": "data_question",
         });
         let ordinary_scope = json!({"mode": "ordinary_chat"});
+        let ordinary_selected_scope = json!({
+            "mode": "user_selected",
+            "selected": [{"type": "dataset", "id": dataset_id.to_string()}],
+            "intent": "ordinary_chat",
+        });
         let mut final_action = react_test_action(
             AssistantRunReActStatus::FinalAnswer,
             AssistantRunReactActionType::FinalAnswer,
@@ -22326,6 +22891,12 @@ mod tests {
             &final_action,
             &ordinary_scope,
             &json!({"status": "not_requested", "supplied_items": []}),
+            &[],
+        ));
+        assert!(!assistant_run_react_should_repair_terminal_action(
+            &final_action,
+            &ordinary_selected_scope,
+            &json!({"status": "empty", "supplied_items": []}),
             &[],
         ));
         assert!(!assistant_run_react_should_repair_terminal_action(
@@ -22375,6 +22946,35 @@ mod tests {
     }
 
     #[test]
+    fn assistant_run_react_scope_disables_tools_for_ordinary_chat_even_with_selected_supply() {
+        assert!(!assistant_run_react_scope_allows_tools(
+            &json!({
+                "mode": "ordinary_chat",
+                "intent": "ordinary_chat",
+                "datasets": [],
+                "conversation_memory": [],
+            }),
+            None,
+        ));
+        assert!(!assistant_run_react_scope_allows_tools(
+            &json!({
+                "mode": "user_selected",
+                "intent": "ordinary_chat",
+                "datasets": [DatasetId::new()],
+            }),
+            None,
+        ));
+        assert!(assistant_run_react_scope_allows_tools(
+            &json!({
+                "mode": "user_selected",
+                "intent": "data_question",
+                "datasets": [DatasetId::new()],
+            }),
+            None,
+        ));
+    }
+
+    #[test]
     fn assistant_run_react_protocol_repair_matrix_handles_terminal_and_policy_cases() {
         let dataset_id = DatasetId::new();
         let denied_dataset_id = DatasetId::new();
@@ -22386,6 +22986,7 @@ mod tests {
                 {"type": "dataset", "id": dataset_id.to_string()},
                 {"type": "document", "id": document_id.to_string()}
             ],
+            "intent": "data_question",
         });
         let empty_evidence = json!({"status": "empty", "supplied_items": []});
 

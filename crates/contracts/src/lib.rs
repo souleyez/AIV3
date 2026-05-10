@@ -322,6 +322,177 @@ pub struct CodexHostTaskOutputView {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+pub enum AssistantRunExecutorTransportView {
+    Direct,
+    CodexDryRun,
+    CodexPlanOnly,
+    CodexExecSchema,
+    CodexSdkThread,
+    CodexAppServer,
+    CodexMcpServer,
+}
+
+impl AssistantRunExecutorTransportView {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Direct => "direct",
+            Self::CodexDryRun => "codex_dry_run",
+            Self::CodexPlanOnly => "codex_plan_only",
+            Self::CodexExecSchema => "codex_exec_schema",
+            Self::CodexSdkThread => "codex_sdk_thread",
+            Self::CodexAppServer => "codex_app_server",
+            Self::CodexMcpServer => "codex_mcp_server",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AssistantRunCodexSafetyPolicyView {
+    pub v3_validates_all_actions: bool,
+    pub direct_database_access_allowed: bool,
+    pub direct_queue_access_allowed: bool,
+    pub direct_filesystem_access_allowed: bool,
+    pub provider_keys_in_prompt_allowed: bool,
+    pub raw_logs_require_redaction: bool,
+    pub static_page_state_machine_owned_by_v3: bool,
+}
+
+impl Default for AssistantRunCodexSafetyPolicyView {
+    fn default() -> Self {
+        Self {
+            v3_validates_all_actions: true,
+            direct_database_access_allowed: false,
+            direct_queue_access_allowed: false,
+            direct_filesystem_access_allowed: false,
+            provider_keys_in_prompt_allowed: false,
+            raw_logs_require_redaction: true,
+            static_page_state_machine_owned_by_v3: true,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AssistantRunCodexContextBudgetView {
+    pub quality_first: bool,
+    pub max_prompt_chars: Option<usize>,
+    pub included_message_count: usize,
+    pub selected_dataset_count: usize,
+    pub evidence_item_count: usize,
+    pub hidden_memory_item_count: usize,
+    pub artifact_state_chars: usize,
+    pub tool_output_chars: usize,
+    pub trimmed_item_count: usize,
+}
+
+impl Default for AssistantRunCodexContextBudgetView {
+    fn default() -> Self {
+        Self {
+            quality_first: true,
+            max_prompt_chars: None,
+            included_message_count: 0,
+            selected_dataset_count: 0,
+            evidence_item_count: 0,
+            hidden_memory_item_count: 0,
+            artifact_state_chars: 0,
+            tool_output_chars: 0,
+            trimmed_item_count: 0,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct AssistantRunCodexActionContractView {
+    pub action_type: String,
+    pub title: String,
+    pub description: String,
+    pub input_schema: Value,
+    pub requires_v3_validation: bool,
+    pub mutates_state: bool,
+}
+
+impl AssistantRunCodexActionContractView {
+    pub fn new(
+        action_type: impl Into<String>,
+        title: impl Into<String>,
+        description: impl Into<String>,
+        input_schema: Value,
+        mutates_state: bool,
+    ) -> Self {
+        Self {
+            action_type: action_type.into(),
+            title: title.into(),
+            description: description.into(),
+            input_schema,
+            requires_v3_validation: true,
+            mutates_state,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AssistantRunCodexContextPackageView {
+    pub schema_version: u32,
+    pub assistant_run_id: AssistantRunId,
+    pub local_thread_id: Option<String>,
+    pub executor_transport: AssistantRunExecutorTransportView,
+    pub user_prompt: String,
+    #[serde(default)]
+    pub messages: Vec<AssistantRunMessageView>,
+    #[serde(default)]
+    pub startup_briefing: Value,
+    #[serde(default)]
+    pub selected_scope: Value,
+    #[serde(default)]
+    pub inferred_scope_candidates: Vec<Value>,
+    #[serde(default)]
+    pub evidence_state: Value,
+    #[serde(default)]
+    pub hidden_memory_candidates: Vec<Value>,
+    #[serde(default)]
+    pub current_artifact: Option<Value>,
+    #[serde(default)]
+    pub available_actions: Vec<AssistantRunCodexActionContractView>,
+    pub safety: AssistantRunCodexSafetyPolicyView,
+    pub context_budget: AssistantRunCodexContextBudgetView,
+}
+
+impl AssistantRunCodexContextPackageView {
+    pub const SCHEMA_VERSION: u32 = 1;
+
+    pub fn new(assistant_run_id: AssistantRunId, user_prompt: impl Into<String>) -> Self {
+        Self {
+            schema_version: Self::SCHEMA_VERSION,
+            assistant_run_id,
+            local_thread_id: None,
+            executor_transport: AssistantRunExecutorTransportView::CodexDryRun,
+            user_prompt: user_prompt.into(),
+            messages: Vec::new(),
+            startup_briefing: Value::Null,
+            selected_scope: Value::Null,
+            inferred_scope_candidates: Vec::new(),
+            evidence_state: Value::Null,
+            hidden_memory_candidates: Vec::new(),
+            current_artifact: None,
+            available_actions: Vec::new(),
+            safety: AssistantRunCodexSafetyPolicyView::default(),
+            context_budget: AssistantRunCodexContextBudgetView::default(),
+        }
+    }
+
+    pub fn action_types(&self) -> Vec<String> {
+        self.available_actions
+            .iter()
+            .map(|action| action.action_type.clone())
+            .collect()
+    }
+
+    pub fn to_task_context(&self) -> serde_json::Result<Value> {
+        serde_json::to_value(self)
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum ToolExecutionSourceKindView {
     DatasetOutput,
     ChatMessage,
@@ -2373,6 +2544,110 @@ mod tests {
         assert_eq!(
             context["safety"]["real_codex_exec_requires_host_allowlist"],
             json!(true)
+        );
+    }
+
+    #[test]
+    fn assistant_run_codex_context_package_keeps_v3_as_control_plane() {
+        let assistant_run_id = AssistantRunId::new();
+        let mut package = AssistantRunCodexContextPackageView::new(
+            assistant_run_id,
+            "根据当前数据生成一页客户流失风险静态页",
+        );
+        package.local_thread_id = Some("browser-thread-1".to_string());
+        package.messages = vec![AssistantRunMessageView {
+            role: ChatMessageRole::User,
+            content: "继续刚才那版，把风险模块放大一点".to_string(),
+        }];
+        package.startup_briefing = json!({
+            "product": "AI数据智能助手",
+            "capabilities": ["static_page_plan", "retrieval"]
+        });
+        package.selected_scope = json!({
+            "datasets": [{"id": "dataset-1", "title": "客户服务记录"}]
+        });
+        package.evidence_state = json!({
+            "mode": "supplied_by_v3",
+            "items": [{"id": "evidence-1", "source": "chunk"}]
+        });
+        package.current_artifact = Some(json!({
+            "kind": "static_page_draft",
+            "draft_id": "draft-1",
+            "preview_status": "stale"
+        }));
+        package.available_actions = vec![
+            AssistantRunCodexActionContractView::new(
+                "update_static_page_module",
+                "更新静态页模块",
+                "只能更新当前可见静态页草稿中的模块",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "draft_id": {"type": "string"},
+                        "module_id": {"type": "string"}
+                    },
+                    "required": ["draft_id", "module_id"]
+                }),
+                true,
+            ),
+            AssistantRunCodexActionContractView::new(
+                "retrieve_dataset_detail",
+                "检索数据集详情",
+                "从V3已经判定可见的数据集范围内补充证据",
+                json!({"type": "object"}),
+                false,
+            ),
+        ];
+        package.context_budget = AssistantRunCodexContextBudgetView {
+            included_message_count: 1,
+            selected_dataset_count: 1,
+            evidence_item_count: 1,
+            artifact_state_chars: package
+                .current_artifact
+                .as_ref()
+                .map(|value| value.to_string().len())
+                .unwrap_or_default(),
+            ..AssistantRunCodexContextBudgetView::default()
+        };
+
+        let context = package
+            .to_task_context()
+            .expect("codex context package should serialize");
+
+        assert_eq!(context["schema_version"], json!(1));
+        assert_eq!(
+            context["assistant_run_id"],
+            json!(assistant_run_id.to_string())
+        );
+        assert_eq!(context["executor_transport"], json!("codex_dry_run"));
+        assert_eq!(context["safety"]["v3_validates_all_actions"], json!(true));
+        assert_eq!(
+            context["safety"]["direct_database_access_allowed"],
+            json!(false)
+        );
+        assert_eq!(
+            context["safety"]["direct_queue_access_allowed"],
+            json!(false)
+        );
+        assert_eq!(
+            context["safety"]["static_page_state_machine_owned_by_v3"],
+            json!(true)
+        );
+        assert_eq!(
+            context["available_actions"][0]["requires_v3_validation"],
+            json!(true)
+        );
+        assert_eq!(
+            package.action_types(),
+            vec![
+                "update_static_page_module".to_string(),
+                "retrieve_dataset_detail".to_string()
+            ]
+        );
+        assert_eq!(context["context_budget"]["quality_first"], json!(true));
+        assert_eq!(
+            context["context_budget"]["selected_dataset_count"],
+            json!(1)
         );
     }
 

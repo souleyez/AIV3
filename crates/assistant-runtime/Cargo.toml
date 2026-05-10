@@ -6,6 +6,7 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
+contracts = { path = "../contracts" }
 domain-model = { path = "../domain-model" }
 serde.workspace = true
 serde_json.workspace = true

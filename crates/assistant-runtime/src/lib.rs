@@ -1,3 +1,7 @@
+use contracts::{
+    AssistantRunCodexContextBudgetView, AssistantRunCodexContextPackageView,
+    AssistantRunExecutorTransportView,
+};
 use domain_model::{Dataset, DatasetId};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -186,6 +190,137 @@ pub struct ScopePlannerInput<'a> {
     pub conversation_memory_available: bool,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CodexConversationExecutorStatus {
+    DirectPassthrough,
+    ShadowDryRun,
+    PlanOnly,
+    RejectedUnsafeContext,
+    UnsupportedTransport,
+}
+
+impl CodexConversationExecutorStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::DirectPassthrough => "direct_passthrough",
+            Self::ShadowDryRun => "shadow_dry_run",
+            Self::PlanOnly => "plan_only",
+            Self::RejectedUnsafeContext => "rejected_unsafe_context",
+            Self::UnsupportedTransport => "unsupported_transport",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct CodexConversationExecutorOutput {
+    pub transport: AssistantRunExecutorTransportView,
+    pub status: CodexConversationExecutorStatus,
+    pub codex_invoked: bool,
+    pub fallback_to_direct: bool,
+    pub assistant_message: Option<String>,
+    pub suggested_action: Option<Value>,
+    pub planned_action_types: Vec<String>,
+    pub execution_trail: Vec<Value>,
+    pub context_budget: AssistantRunCodexContextBudgetView,
+}
+
+pub fn execute_codex_conversation_plan(
+    package: &AssistantRunCodexContextPackageView,
+) -> CodexConversationExecutorOutput {
+    if let Some(reason) = unsafe_codex_context_reason(package) {
+        return CodexConversationExecutorOutput {
+            transport: package.executor_transport.clone(),
+            status: CodexConversationExecutorStatus::RejectedUnsafeContext,
+            codex_invoked: false,
+            fallback_to_direct: true,
+            assistant_message: None,
+            suggested_action: None,
+            planned_action_types: Vec::new(),
+            execution_trail: vec![json!({
+                "kind": "codex_executor.rejected",
+                "reason": reason,
+                "fallback": "direct",
+            })],
+            context_budget: package.context_budget.clone(),
+        };
+    }
+
+    match package.executor_transport {
+        AssistantRunExecutorTransportView::Direct => CodexConversationExecutorOutput {
+            transport: package.executor_transport.clone(),
+            status: CodexConversationExecutorStatus::DirectPassthrough,
+            codex_invoked: false,
+            fallback_to_direct: true,
+            assistant_message: None,
+            suggested_action: None,
+            planned_action_types: Vec::new(),
+            execution_trail: vec![json!({
+                "kind": "codex_executor.direct_passthrough",
+                "message": "direct executor remains active",
+            })],
+            context_budget: package.context_budget.clone(),
+        },
+        AssistantRunExecutorTransportView::CodexDryRun => CodexConversationExecutorOutput {
+            transport: package.executor_transport.clone(),
+            status: CodexConversationExecutorStatus::ShadowDryRun,
+            codex_invoked: false,
+            fallback_to_direct: true,
+            assistant_message: None,
+            suggested_action: None,
+            planned_action_types: package.action_types(),
+            execution_trail: vec![json!({
+                "kind": "codex_executor.shadow_dry_run",
+                "assistant_run_id": package.assistant_run_id.to_string(),
+                "available_action_count": package.available_actions.len(),
+                "message": "Codex executor not invoked; direct flow remains authoritative",
+            })],
+            context_budget: package.context_budget.clone(),
+        },
+        AssistantRunExecutorTransportView::CodexPlanOnly => CodexConversationExecutorOutput {
+            transport: package.executor_transport.clone(),
+            status: CodexConversationExecutorStatus::PlanOnly,
+            codex_invoked: false,
+            fallback_to_direct: true,
+            assistant_message: None,
+            suggested_action: None,
+            planned_action_types: package.action_types(),
+            execution_trail: vec![json!({
+                "kind": "codex_executor.plan_only",
+                "assistant_run_id": package.assistant_run_id.to_string(),
+                "transport": package.executor_transport.as_str(),
+                "planned_action_types": package.action_types(),
+                "context_budget": {
+                    "quality_first": package.context_budget.quality_first,
+                    "evidence_item_count": package.context_budget.evidence_item_count,
+                    "selected_dataset_count": package.context_budget.selected_dataset_count,
+                    "hidden_memory_item_count": package.context_budget.hidden_memory_item_count,
+                },
+            })],
+            context_budget: package.context_budget.clone(),
+        },
+        AssistantRunExecutorTransportView::CodexExecSchema
+        | AssistantRunExecutorTransportView::CodexSdkThread
+        | AssistantRunExecutorTransportView::CodexAppServer
+        | AssistantRunExecutorTransportView::CodexMcpServer => CodexConversationExecutorOutput {
+            transport: package.executor_transport.clone(),
+            status: CodexConversationExecutorStatus::UnsupportedTransport,
+            codex_invoked: false,
+            fallback_to_direct: true,
+            assistant_message: None,
+            suggested_action: None,
+            planned_action_types: package.action_types(),
+            execution_trail: vec![json!({
+                "kind": "codex_executor.unsupported_transport",
+                "transport": package.executor_transport.as_str(),
+                "fallback": "direct",
+                "message": "real Codex execution is not wired in assistant-runtime",
+            })],
+            context_budget: package.context_budget.clone(),
+        },
+    }
+}
+
 pub fn plan_scope(input: ScopePlannerInput<'_>) -> ScopePlan {
     let prompt = input.prompt.trim();
     let mut candidates = Vec::new();
@@ -268,6 +403,33 @@ pub fn plan_scope(input: ScopePlannerInput<'_>) -> ScopePlan {
         hint,
         intent: intent.to_string(),
     }
+}
+
+fn unsafe_codex_context_reason(
+    package: &AssistantRunCodexContextPackageView,
+) -> Option<&'static str> {
+    if !package.safety.v3_validates_all_actions {
+        return Some("v3_action_validation_required");
+    }
+    if package.safety.direct_database_access_allowed {
+        return Some("direct_database_access_forbidden");
+    }
+    if package.safety.direct_queue_access_allowed {
+        return Some("direct_queue_access_forbidden");
+    }
+    if package.safety.direct_filesystem_access_allowed {
+        return Some("direct_filesystem_access_forbidden");
+    }
+    if package.safety.provider_keys_in_prompt_allowed {
+        return Some("provider_keys_in_prompt_forbidden");
+    }
+    if !package.safety.raw_logs_require_redaction {
+        return Some("raw_log_redaction_required");
+    }
+    if !package.safety.static_page_state_machine_owned_by_v3 {
+        return Some("static_page_state_machine_must_remain_v3_owned");
+    }
+    None
 }
 
 pub fn candidates_to_values(candidates: &[ScopeCandidate]) -> Vec<Value> {
@@ -671,6 +833,7 @@ fn recommended_tool_actions_for_scope(
 mod tests {
     use super::*;
     use chrono::Utc;
+    use contracts::{AssistantRunCodexActionContractView, AssistantRunCodexSafetyPolicyView};
     use domain_model::{DatasetLifecycle, DatasetVisibility, TenantId};
     use std::collections::BTreeMap;
 
@@ -689,6 +852,131 @@ mod tests {
             created_at: Utc::now(),
             updated_at: Utc::now(),
         }
+    }
+
+    fn codex_context_package() -> AssistantRunCodexContextPackageView {
+        let mut package = AssistantRunCodexContextPackageView::new(
+            domain_model::AssistantRunId::new(),
+            "继续优化静态页",
+        );
+        package.local_thread_id = Some("local-thread-1".to_string());
+        package.current_artifact = Some(json!({
+            "kind": "static_page_draft",
+            "draft_id": "draft-1",
+            "preview_status": "stale"
+        }));
+        package.available_actions = vec![
+            AssistantRunCodexActionContractView::new(
+                "update_static_page_module",
+                "更新静态页模块",
+                "只能更新当前可见静态页草稿",
+                json!({"type": "object"}),
+                true,
+            ),
+            AssistantRunCodexActionContractView::new(
+                "retrieve_dataset_detail",
+                "检索数据集详情",
+                "只能在V3选定的可见数据集范围内补充供料",
+                json!({"type": "object"}),
+                false,
+            ),
+        ];
+        package.context_budget = AssistantRunCodexContextBudgetView {
+            included_message_count: 2,
+            selected_dataset_count: 1,
+            evidence_item_count: 3,
+            hidden_memory_item_count: 1,
+            artifact_state_chars: 96,
+            ..AssistantRunCodexContextBudgetView::default()
+        };
+        package
+    }
+
+    #[test]
+    fn codex_executor_dry_run_never_invokes_or_mutates() {
+        let package = codex_context_package();
+
+        let output = execute_codex_conversation_plan(&package);
+
+        assert_eq!(output.status, CodexConversationExecutorStatus::ShadowDryRun);
+        assert!(!output.codex_invoked);
+        assert!(output.fallback_to_direct);
+        assert!(output.suggested_action.is_none());
+        assert!(output.assistant_message.is_none());
+        assert_eq!(
+            output.planned_action_types,
+            vec![
+                "update_static_page_module".to_string(),
+                "retrieve_dataset_detail".to_string()
+            ]
+        );
+        assert_eq!(
+            output.execution_trail[0]["kind"],
+            json!("codex_executor.shadow_dry_run")
+        );
+    }
+
+    #[test]
+    fn codex_executor_plan_only_reports_available_actions_without_invocation() {
+        let mut package = codex_context_package();
+        package.executor_transport = AssistantRunExecutorTransportView::CodexPlanOnly;
+
+        let output = execute_codex_conversation_plan(&package);
+
+        assert_eq!(output.status, CodexConversationExecutorStatus::PlanOnly);
+        assert!(!output.codex_invoked);
+        assert!(output.fallback_to_direct);
+        assert_eq!(
+            output.execution_trail[0]["planned_action_types"],
+            json!(["update_static_page_module", "retrieve_dataset_detail"])
+        );
+        assert_eq!(
+            output.execution_trail[0]["context_budget"]["evidence_item_count"],
+            json!(3)
+        );
+        assert_eq!(output.context_budget.selected_dataset_count, 1);
+    }
+
+    #[test]
+    fn codex_executor_rejects_unsafe_context_and_falls_back() {
+        let mut package = codex_context_package();
+        package.safety = AssistantRunCodexSafetyPolicyView {
+            direct_database_access_allowed: true,
+            ..AssistantRunCodexSafetyPolicyView::default()
+        };
+
+        let output = execute_codex_conversation_plan(&package);
+
+        assert_eq!(
+            output.status,
+            CodexConversationExecutorStatus::RejectedUnsafeContext
+        );
+        assert!(!output.codex_invoked);
+        assert!(output.fallback_to_direct);
+        assert!(output.planned_action_types.is_empty());
+        assert_eq!(
+            output.execution_trail[0]["reason"],
+            json!("direct_database_access_forbidden")
+        );
+    }
+
+    #[test]
+    fn codex_executor_real_transport_is_unsupported_until_host_validation() {
+        let mut package = codex_context_package();
+        package.executor_transport = AssistantRunExecutorTransportView::CodexExecSchema;
+
+        let output = execute_codex_conversation_plan(&package);
+
+        assert_eq!(
+            output.status,
+            CodexConversationExecutorStatus::UnsupportedTransport
+        );
+        assert!(!output.codex_invoked);
+        assert!(output.fallback_to_direct);
+        assert_eq!(
+            output.execution_trail[0]["transport"],
+            json!("codex_exec_schema")
+        );
     }
 
     #[test]

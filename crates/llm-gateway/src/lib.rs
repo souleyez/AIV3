@@ -227,6 +227,301 @@ pub const MODEL_LANE_VIDEO_SCENE_SUMMARY: &str = "video_scene_summary";
 pub const MODEL_LANE_REPORT_PLANNING: &str = "report_planning";
 pub const MODEL_LANE_CODEX_TASK_SUMMARY: &str = "codex_task_summary";
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelProfileWireApi {
+    ChatCompletions,
+    Responses,
+    CodexCompatibleShim,
+}
+
+impl ModelProfileWireApi {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::ChatCompletions => "chat_completions",
+            Self::Responses => "responses",
+            Self::CodexCompatibleShim => "codex_compatible_shim",
+        }
+    }
+
+    pub fn from_env_value(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "chat" | "chat_completions" | "openai_chat_completions" => Some(Self::ChatCompletions),
+            "responses" | "response" | "openai_responses" => Some(Self::Responses),
+            "codex_compatible_shim"
+            | "codex-compatible-shim"
+            | "codex_shim"
+            | "responses_shim"
+            | "provider_shim" => Some(Self::CodexCompatibleShim),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct ModelCapabilityManifest {
+    pub chat: bool,
+    pub reasoning: bool,
+    pub vision: bool,
+    pub audio: bool,
+    pub video: bool,
+    pub json_mode: bool,
+    pub tool_calling: bool,
+    pub image_prompt: bool,
+    pub static_page: bool,
+    pub codex_compatible: bool,
+    pub extra: Vec<String>,
+}
+
+impl ModelCapabilityManifest {
+    pub fn from_names(names: &[String]) -> Self {
+        let mut manifest = Self::default();
+        for raw_name in names {
+            let name = raw_name.trim();
+            if name.is_empty() {
+                continue;
+            }
+            match name.to_ascii_lowercase().as_str() {
+                "chat" | "conversation" => manifest.chat = true,
+                "reasoning" | "think" | "thinking" => manifest.reasoning = true,
+                "vision" | "document" | "vlm" => manifest.vision = true,
+                "audio" | "transcript" => manifest.audio = true,
+                "video" | "scene" => manifest.video = true,
+                "json" | "json_mode" | "structured_output" => manifest.json_mode = true,
+                "tool" | "tools" | "tool_calling" | "tool_control" => manifest.tool_calling = true,
+                "image_prompt" | "visual_prompt" => manifest.image_prompt = true,
+                "static_page" | "static_page_plan" | "static_page_edit" => {
+                    manifest.static_page = true
+                }
+                "codex" | "codex_compatible" | "codex_executor" => manifest.codex_compatible = true,
+                _ => {
+                    if !manifest.extra.iter().any(|item| item == name) {
+                        manifest.extra.push(name.to_string());
+                    }
+                }
+            }
+        }
+        manifest
+    }
+
+    pub fn names(&self) -> Vec<String> {
+        let mut names = Vec::new();
+        if self.chat {
+            names.push("chat".to_string());
+        }
+        if self.reasoning {
+            names.push("reasoning".to_string());
+        }
+        if self.vision {
+            names.push("vision".to_string());
+        }
+        if self.audio {
+            names.push("audio".to_string());
+        }
+        if self.video {
+            names.push("video".to_string());
+        }
+        if self.json_mode {
+            names.push("json_mode".to_string());
+        }
+        if self.tool_calling {
+            names.push("tool_calling".to_string());
+        }
+        if self.image_prompt {
+            names.push("image_prompt".to_string());
+        }
+        if self.static_page {
+            names.push("static_page".to_string());
+        }
+        if self.codex_compatible {
+            names.push("codex_compatible".to_string());
+        }
+        names.extend(self.extra.iter().cloned());
+        names
+    }
+
+    pub fn has(&self, capability: &str) -> bool {
+        self.names()
+            .iter()
+            .any(|name| name.eq_ignore_ascii_case(capability))
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct ModelRateLimitHints {
+    pub requests_per_minute: Option<u32>,
+    pub tokens_per_minute: Option<u32>,
+    pub concurrent_requests: Option<u32>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct ModelCostHints {
+    pub input_microusd_per_million_tokens: Option<u64>,
+    pub output_microusd_per_million_tokens: Option<u64>,
+    pub currency: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModelRedactionPolicy {
+    pub redact_provider_errors: bool,
+    pub redact_request_payloads: bool,
+    pub redact_response_payloads: bool,
+    pub max_error_chars: usize,
+}
+
+impl Default for ModelRedactionPolicy {
+    fn default() -> Self {
+        Self {
+            redact_provider_errors: true,
+            redact_request_payloads: true,
+            redact_response_payloads: true,
+            max_error_chars: PROVIDER_ERROR_MAX_CHARS,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModelProviderProfile {
+    pub profile_id: String,
+    pub provider_id: String,
+    pub model_id: String,
+    pub base_url: Option<String>,
+    pub api_path: Option<String>,
+    pub wire_api: ModelProfileWireApi,
+    pub auth_env_key_name: Option<String>,
+    pub capabilities: ModelCapabilityManifest,
+    pub timeout_ms: Option<u64>,
+    pub rate_limit: ModelRateLimitHints,
+    pub cost: ModelCostHints,
+    pub redaction: ModelRedactionPolicy,
+}
+
+impl ModelProviderProfile {
+    pub fn new(
+        profile_id: impl Into<String>,
+        provider_id: impl Into<String>,
+        model_id: impl Into<String>,
+    ) -> Self {
+        Self {
+            profile_id: profile_id.into(),
+            provider_id: provider_id.into(),
+            model_id: model_id.into(),
+            base_url: None,
+            api_path: None,
+            wire_api: ModelProfileWireApi::ChatCompletions,
+            auth_env_key_name: None,
+            capabilities: ModelCapabilityManifest::default(),
+            timeout_ms: None,
+            rate_limit: ModelRateLimitHints::default(),
+            cost: ModelCostHints::default(),
+            redaction: ModelRedactionPolicy::default(),
+        }
+    }
+
+    pub fn from_env(env_prefix: &str) -> Result<Self> {
+        let provider_id = required_env_string(env_prefix, "PROVIDER_ID")?;
+        let model_id = required_env_string(env_prefix, "MODEL_ID")?;
+        let profile_id = optional_env_string(env_prefix, "PROFILE_ID")
+            .unwrap_or_else(|| format!("{provider_id}:{model_id}"));
+        let mut profile = Self::new(profile_id, provider_id, model_id);
+        profile.base_url = optional_env_string(env_prefix, "BASE_URL");
+        profile.api_path = optional_env_string(env_prefix, "API_PATH");
+        profile.auth_env_key_name = optional_env_string(env_prefix, "AUTH_ENV_KEY");
+        profile.timeout_ms = optional_env_u64(env_prefix, "TIMEOUT_MS")?;
+        if let Some(wire_api) = optional_env_string(env_prefix, "WIRE_API") {
+            profile.wire_api = ModelProfileWireApi::from_env_value(&wire_api).ok_or_else(|| {
+                anyhow!(
+                    "invalid {env_prefix}_WIRE_API value {wire_api}; expected chat_completions, responses, or codex_compatible_shim"
+                )
+            })?;
+        }
+        if let Some(capabilities) = optional_env_string(env_prefix, "CAPABILITIES") {
+            let capability_names = split_csv_env(&capabilities);
+            profile.capabilities = ModelCapabilityManifest::from_names(&capability_names);
+        }
+        profile.rate_limit = ModelRateLimitHints {
+            requests_per_minute: optional_env_u32(env_prefix, "RATE_LIMIT_RPM")?,
+            tokens_per_minute: optional_env_u32(env_prefix, "RATE_LIMIT_TPM")?,
+            concurrent_requests: optional_env_u32(env_prefix, "RATE_LIMIT_CONCURRENCY")?,
+        };
+        profile.cost = ModelCostHints {
+            input_microusd_per_million_tokens: optional_env_u64(
+                env_prefix,
+                "COST_INPUT_MICROUSD_PER_MILLION_TOKENS",
+            )?,
+            output_microusd_per_million_tokens: optional_env_u64(
+                env_prefix,
+                "COST_OUTPUT_MICROUSD_PER_MILLION_TOKENS",
+            )?,
+            currency: optional_env_string(env_prefix, "COST_CURRENCY"),
+        };
+        profile.redaction = ModelRedactionPolicy {
+            redact_provider_errors: optional_env_bool(env_prefix, "REDACT_PROVIDER_ERRORS", true),
+            redact_request_payloads: optional_env_bool(env_prefix, "REDACT_REQUEST_PAYLOADS", true),
+            redact_response_payloads: optional_env_bool(
+                env_prefix,
+                "REDACT_RESPONSE_PAYLOADS",
+                true,
+            ),
+            max_error_chars: optional_env_usize(env_prefix, "MAX_ERROR_CHARS")?
+                .unwrap_or(PROVIDER_ERROR_MAX_CHARS),
+        };
+        Ok(profile)
+    }
+
+    pub fn to_model_route(&self, lane: &str, priority: i32) -> ModelRoute {
+        ModelRoute {
+            lane: lane.to_string(),
+            provider: self.provider_id.clone(),
+            model: self.model_id.clone(),
+            capability_class: self.capabilities.names(),
+            priority,
+            fallback_route: None,
+        }
+    }
+
+    pub fn runtime_selection_for_lane(&self, lane: &str) -> LlmRuntimeSelection {
+        LlmRuntimeSelection {
+            mode: "provider".to_string(),
+            provider: self.provider_id.clone(),
+            model: self.model_id.clone(),
+            lane: lane.to_string(),
+        }
+    }
+
+    pub fn public_manifest(&self) -> Value {
+        let auth_env_key_name = self
+            .auth_env_key_name
+            .as_deref()
+            .and_then(safe_env_key_name);
+        let auth_configured = self
+            .auth_env_key_name
+            .as_deref()
+            .and_then(|key| std::env::var(key).ok())
+            .map(|value| !value.trim().is_empty())
+            .unwrap_or(false);
+
+        json!({
+            "profile_id": self.profile_id.as_str(),
+            "provider_id": self.provider_id.as_str(),
+            "model_id": self.model_id.as_str(),
+            "wire_api": self.wire_api.as_str(),
+            "base_url": self.base_url.as_deref().map(redact_provider_error),
+            "api_path": self.api_path.as_deref(),
+            "auth": {
+                "env_key_name": auth_env_key_name,
+                "configured": auth_configured,
+            },
+            "capabilities": self.capabilities.names(),
+            "capability_flags": &self.capabilities,
+            "timeout_ms": self.timeout_ms,
+            "rate_limit": &self.rate_limit,
+            "cost": &self.cost,
+            "redaction": &self.redaction,
+        })
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ModelRoute {
     pub lane: String,
@@ -454,6 +749,75 @@ fn split_csv_env(value: &str) -> Vec<String> {
         .filter(|value| !value.is_empty())
         .map(ToString::to_string)
         .collect()
+}
+
+fn required_env_string(env_prefix: &str, suffix: &str) -> Result<String> {
+    optional_env_string(env_prefix, suffix)
+        .ok_or_else(|| anyhow!("{env_prefix}_{suffix} is required"))
+}
+
+fn optional_env_string(env_prefix: &str, suffix: &str) -> Option<String> {
+    std::env::var(format!("{env_prefix}_{suffix}"))
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn optional_env_u32(env_prefix: &str, suffix: &str) -> Result<Option<u32>> {
+    optional_env_string(env_prefix, suffix)
+        .map(|value| {
+            value
+                .parse::<u32>()
+                .map_err(|error| anyhow!("invalid {env_prefix}_{suffix} value {value}: {error}"))
+        })
+        .transpose()
+}
+
+fn optional_env_u64(env_prefix: &str, suffix: &str) -> Result<Option<u64>> {
+    optional_env_string(env_prefix, suffix)
+        .map(|value| {
+            value
+                .parse::<u64>()
+                .map_err(|error| anyhow!("invalid {env_prefix}_{suffix} value {value}: {error}"))
+        })
+        .transpose()
+}
+
+fn optional_env_usize(env_prefix: &str, suffix: &str) -> Result<Option<usize>> {
+    optional_env_string(env_prefix, suffix)
+        .map(|value| {
+            value
+                .parse::<usize>()
+                .map_err(|error| anyhow!("invalid {env_prefix}_{suffix} value {value}: {error}"))
+        })
+        .transpose()
+}
+
+fn optional_env_bool(env_prefix: &str, suffix: &str, default_value: bool) -> bool {
+    std::env::var(format!("{env_prefix}_{suffix}"))
+        .ok()
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(default_value)
+}
+
+fn safe_env_key_name(value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return None;
+    }
+    if value
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+    {
+        Some(value.to_string())
+    } else {
+        Some(REDACTED_VALUE.to_string())
+    }
 }
 
 const OPENCLAW_CORRECTIVE_RETRY_INSTRUCTIONS: [&str; 2] = [
@@ -1890,6 +2254,8 @@ mod tests {
 
     #[test]
     fn model_route_registry_selects_lane_default() {
+        let _guard = model_route_env_lock().lock().expect("model route env lock");
+        clear_model_route_env(MODEL_LANE_ASSISTANT_CHAT);
         let registry = ModelRouteRegistry::from_env_with_defaults(MODEL_LANE_ASSISTANT_CHAT);
         let route = registry
             .select(MODEL_LANE_ASSISTANT_CHAT)
@@ -1969,6 +2335,113 @@ mod tests {
         assert_eq!(selection.provider, "minimax_openai_compatible");
         assert_eq!(selection.model, "MiniMax-M2.7");
         assert_eq!(selection.lane, MODEL_LANE_ASSISTANT_CHAT);
+    }
+
+    #[test]
+    fn model_provider_profile_from_env_builds_redacted_gpt_manifest() {
+        let _guard = model_route_env_lock()
+            .lock()
+            .expect("model profile env lock");
+        clear_model_profile_env("TEST_GPT_PROFILE");
+        std::env::remove_var("OPENAI_API_KEY");
+        std::env::set_var("OPENAI_API_KEY", "sk-openai-secret");
+        std::env::set_var("TEST_GPT_PROFILE_PROFILE_ID", "gpt-main");
+        std::env::set_var("TEST_GPT_PROFILE_PROVIDER_ID", "openai");
+        std::env::set_var("TEST_GPT_PROFILE_MODEL_ID", "gpt-5.4");
+        std::env::set_var("TEST_GPT_PROFILE_BASE_URL", "https://api.openai.example/v1");
+        std::env::set_var("TEST_GPT_PROFILE_API_PATH", "/v1/chat/completions");
+        std::env::set_var("TEST_GPT_PROFILE_WIRE_API", "chat_completions");
+        std::env::set_var("TEST_GPT_PROFILE_AUTH_ENV_KEY", "OPENAI_API_KEY");
+        std::env::set_var(
+            "TEST_GPT_PROFILE_CAPABILITIES",
+            "chat,reasoning,json,tool_calling",
+        );
+        std::env::set_var("TEST_GPT_PROFILE_TIMEOUT_MS", "45000");
+        std::env::set_var("TEST_GPT_PROFILE_RATE_LIMIT_RPM", "120");
+        std::env::set_var(
+            "TEST_GPT_PROFILE_COST_INPUT_MICROUSD_PER_MILLION_TOKENS",
+            "2500000",
+        );
+        std::env::set_var(
+            "TEST_GPT_PROFILE_COST_OUTPUT_MICROUSD_PER_MILLION_TOKENS",
+            "10000000",
+        );
+        std::env::set_var("TEST_GPT_PROFILE_COST_CURRENCY", "USD");
+
+        let profile = ModelProviderProfile::from_env("TEST_GPT_PROFILE")
+            .expect("profile should parse from env");
+        let manifest = profile.public_manifest();
+        let serialized = manifest.to_string();
+        let selection = profile.runtime_selection_for_lane(MODEL_LANE_ASSISTANT_CHAT);
+
+        clear_model_profile_env("TEST_GPT_PROFILE");
+        std::env::remove_var("OPENAI_API_KEY");
+        assert_eq!(profile.profile_id, "gpt-main");
+        assert_eq!(profile.wire_api, ModelProfileWireApi::ChatCompletions);
+        assert_eq!(selection.provider, "openai");
+        assert_eq!(selection.model, "gpt-5.4");
+        assert_eq!(manifest["auth"]["env_key_name"], json!("OPENAI_API_KEY"));
+        assert_eq!(manifest["auth"]["configured"], json!(true));
+        assert_eq!(manifest["capability_flags"]["chat"], json!(true));
+        assert_eq!(manifest["capability_flags"]["reasoning"], json!(true));
+        assert_eq!(manifest["capability_flags"]["json_mode"], json!(true));
+        assert_eq!(manifest["capability_flags"]["tool_calling"], json!(true));
+        assert_eq!(manifest["timeout_ms"], json!(45000));
+        assert_eq!(manifest["rate_limit"]["requests_per_minute"], json!(120));
+        assert_eq!(
+            manifest["cost"]["output_microusd_per_million_tokens"],
+            json!(10000000)
+        );
+        assert!(!serialized.contains("sk-openai-secret"));
+    }
+
+    #[test]
+    fn model_provider_profile_redacts_secret_like_minimax_shim_metadata() {
+        let _guard = model_route_env_lock()
+            .lock()
+            .expect("model profile env lock");
+        clear_model_profile_env("TEST_MINIMAX_PROFILE");
+        std::env::set_var("TEST_MINIMAX_PROFILE_PROVIDER_ID", "minimax");
+        std::env::set_var("TEST_MINIMAX_PROFILE_MODEL_ID", "MiniMax-M2.7");
+        std::env::set_var(
+            "TEST_MINIMAX_PROFILE_BASE_URL",
+            "http://127.0.0.1:8999/v1?api_key=sk-base-secret",
+        );
+        std::env::set_var("TEST_MINIMAX_PROFILE_WIRE_API", "codex-compatible-shim");
+        std::env::set_var(
+            "TEST_MINIMAX_PROFILE_AUTH_ENV_KEY",
+            "sk-minimax-direct-secret",
+        );
+        std::env::set_var(
+            "TEST_MINIMAX_PROFILE_CAPABILITIES",
+            "chat,vision,audio,video,json,tools,image_prompt,static_page,codex_compatible",
+        );
+
+        let profile = ModelProviderProfile::from_env("TEST_MINIMAX_PROFILE")
+            .expect("minimax shim profile should parse");
+        let manifest = profile.public_manifest();
+        let serialized = manifest.to_string();
+        let route = profile.to_model_route(MODEL_LANE_STATIC_PAGE_INTENT, 200);
+
+        clear_model_profile_env("TEST_MINIMAX_PROFILE");
+        assert_eq!(profile.wire_api, ModelProfileWireApi::CodexCompatibleShim);
+        assert_eq!(manifest["auth"]["env_key_name"], json!(REDACTED_VALUE));
+        assert_eq!(manifest["auth"]["configured"], json!(false));
+        assert_eq!(manifest["capability_flags"]["vision"], json!(true));
+        assert_eq!(manifest["capability_flags"]["audio"], json!(true));
+        assert_eq!(manifest["capability_flags"]["video"], json!(true));
+        assert_eq!(
+            manifest["capability_flags"]["codex_compatible"],
+            json!(true)
+        );
+        assert_eq!(route.provider, "minimax");
+        assert_eq!(route.model, "MiniMax-M2.7");
+        assert!(route
+            .capability_class
+            .contains(&"codex_compatible".to_string()));
+        assert!(!serialized.contains("sk-base-secret"));
+        assert!(!serialized.contains("sk-minimax-direct-secret"));
+        assert!(serialized.contains(REDACTED_VALUE));
     }
 
     #[test]
@@ -2704,6 +3177,32 @@ mod tests {
     fn clear_model_route_env(lane: &str) {
         let prefix = model_route_env_prefix(lane);
         for suffix in ["PROVIDER", "MODEL", "CAPABILITIES", "PRIORITY", "FALLBACK"] {
+            std::env::remove_var(format!("{prefix}_{suffix}"));
+        }
+    }
+
+    fn clear_model_profile_env(prefix: &str) {
+        for suffix in [
+            "PROFILE_ID",
+            "PROVIDER_ID",
+            "MODEL_ID",
+            "BASE_URL",
+            "API_PATH",
+            "WIRE_API",
+            "AUTH_ENV_KEY",
+            "CAPABILITIES",
+            "TIMEOUT_MS",
+            "RATE_LIMIT_RPM",
+            "RATE_LIMIT_TPM",
+            "RATE_LIMIT_CONCURRENCY",
+            "COST_INPUT_MICROUSD_PER_MILLION_TOKENS",
+            "COST_OUTPUT_MICROUSD_PER_MILLION_TOKENS",
+            "COST_CURRENCY",
+            "REDACT_PROVIDER_ERRORS",
+            "REDACT_REQUEST_PAYLOADS",
+            "REDACT_RESPONSE_PAYLOADS",
+            "MAX_ERROR_CHARS",
+        ] {
             std::env::remove_var(format!("{prefix}_{suffix}"));
         }
     }

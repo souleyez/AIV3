@@ -51,6 +51,7 @@ name = "assistant-runtime"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "contracts",
  "domain-model",
  "serde",
  "serde_json",
