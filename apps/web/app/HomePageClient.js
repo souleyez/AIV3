@@ -754,6 +754,15 @@ export default function HomePageClient() {
     [activeSecretCount, authSession],
   );
 
+  function handlePageChange(nextPage) {
+    if (nextPage === 'members' && !accountStatusSummary.signedIn) {
+      setBanner('');
+      setError('进入成员需要先登录，请先在顶部“登录状态”完成登录。');
+      return;
+    }
+    setActivePage(nextPage);
+  }
+
   function promptRequestsStaticPage(prompt) {
     return /静态页|静态页面|页面规划|一页|生成页面|落地页/.test(String(prompt || ''));
   }
@@ -3134,6 +3143,14 @@ export default function HomePageClient() {
   }, [activityEvents]);
 
   useEffect(() => {
+    if (activePage === 'members' && !accountStatusSummary.signedIn) {
+      setActivePage('home');
+      setBanner('');
+      setError('进入成员需要先登录，请先在顶部“登录状态”完成登录。');
+    }
+  }, [activePage, accountStatusSummary.signedIn]);
+
+  useEffect(() => {
     if (activePage === 'home') {
       return;
     }
@@ -3554,7 +3571,7 @@ export default function HomePageClient() {
       <main className="main-panel main-panel-home">
         <HomeWorkspaceToolbar
           activePage={activePage}
-          onPageChange={setActivePage}
+          onPageChange={handlePageChange}
           selectedDataset={selectedDataset}
           selectedDatasets={selectedDatasets}
           stats={stats}

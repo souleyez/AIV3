@@ -2244,6 +2244,30 @@ textarea {
 
 .right-observation-card {
   gap: 12px;
+  border-color: rgba(69, 132, 255, 0.3);
+  background:
+    radial-gradient(circle at 12% 0%, rgba(45, 126, 255, 0.25), transparent 36%),
+    linear-gradient(145deg, #0b1424 0%, #101a2b 54%, #08101d 100%);
+  box-shadow: 0 22px 54px rgba(4, 12, 28, 0.24);
+}
+
+.right-results-card {
+  border-color: rgba(69, 132, 255, 0.28);
+  background:
+    radial-gradient(circle at 88% 0%, rgba(34, 211, 238, 0.18), transparent 34%),
+    radial-gradient(circle at 0% 58%, rgba(37, 99, 235, 0.16), transparent 40%),
+    linear-gradient(145deg, #0a1322 0%, #0f1b2d 58%, #07101e 100%);
+  box-shadow: 0 24px 58px rgba(3, 10, 26, 0.25);
+}
+
+.right-observation-card .insight-section-head h4,
+.right-results-card .insight-section-head h4 {
+  color: #f8fbff;
+}
+
+.right-observation-card .insight-section-head span,
+.right-results-card .insight-section-head span {
+  color: #93b7ee;
 }
 
 .right-observation-steps {
@@ -2255,17 +2279,18 @@ textarea {
   display: grid;
   gap: 4px;
   padding: 10px 11px;
+  border: 1px solid rgba(96, 165, 250, 0.18);
   border-radius: 15px;
-  background: rgba(15, 23, 42, 0.045);
+  background: rgba(9, 21, 40, 0.82);
 }
 
 .right-observation-step strong {
-  color: var(--text);
+  color: #eaf3ff;
   font-size: 13px;
 }
 
 .right-observation-step span {
-  color: var(--subtle);
+  color: #9bb5d9;
   font-size: 12px;
   line-height: 1.5;
 }
@@ -2283,7 +2308,7 @@ textarea {
 
 .right-brief-lines p {
   margin: 0;
-  color: var(--subtle);
+  color: #9bb5d9;
   font-size: 13px;
   line-height: 1.65;
 }
@@ -2292,8 +2317,9 @@ textarea {
   display: grid;
   gap: 7px;
   padding: 10px;
+  border: 1px solid rgba(96, 165, 250, 0.16);
   border-radius: 16px;
-  background: rgba(15, 23, 42, 0.04);
+  background: rgba(8, 19, 36, 0.72);
 }
 
 .right-stage-row {
@@ -2301,12 +2327,12 @@ textarea {
   align-items: baseline;
   justify-content: space-between;
   gap: 10px;
-  color: var(--subtle);
+  color: #8eaad0;
   font-size: 12px;
 }
 
 .right-stage-row strong {
-  color: var(--text);
+  color: #e6f0ff;
   font-size: 12px;
   text-align: right;
 }
@@ -2318,19 +2344,20 @@ textarea {
 
 .generated-project-card {
   overflow: hidden;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(80, 143, 255, 0.18);
   border-radius: 16px;
   background:
-    radial-gradient(circle at 8% 0%, rgba(45, 212, 191, 0.08), transparent 34%),
-    linear-gradient(145deg, rgba(20, 26, 34, 0.94), rgba(14, 18, 25, 0.9));
-  box-shadow: none;
+    radial-gradient(circle at 8% 0%, rgba(49, 130, 255, 0.18), transparent 34%),
+    linear-gradient(145deg, rgba(11, 24, 43, 0.96), rgba(7, 15, 29, 0.94));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
 .generated-project-card.active {
-  border-color: rgba(45, 212, 191, 0.34);
+  border-color: rgba(96, 165, 250, 0.48);
   background:
-    radial-gradient(circle at 8% 0%, rgba(45, 212, 191, 0.14), transparent 34%),
-    linear-gradient(145deg, rgba(22, 31, 40, 0.98), rgba(14, 20, 28, 0.94));
+    radial-gradient(circle at 8% 0%, rgba(59, 130, 246, 0.27), transparent 34%),
+    radial-gradient(circle at 100% 80%, rgba(34, 211, 238, 0.12), transparent 36%),
+    linear-gradient(145deg, rgba(13, 31, 55, 0.98), rgba(7, 18, 34, 0.96));
 }
 
 .generated-project-main {
@@ -2375,13 +2402,13 @@ textarea {
 
 .generated-project-title-row time {
   flex: 0 0 auto;
-  color: #7f8da3;
+  color: #88a8d6;
   font-size: 11px;
   font-weight: 760;
 }
 
 .generated-project-brief-row span {
-  color: #9aa7b9;
+  color: #9bb5d9;
   font-size: 12px;
   line-height: 1.3;
 }
@@ -2392,7 +2419,7 @@ textarea {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: #9ff4e6;
+  color: #8fd3ff;
   font-size: 11px;
   font-style: normal;
   font-weight: 820;
