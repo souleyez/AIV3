@@ -19845,14 +19845,12 @@ fn assistant_run_detail_diagnostics(run: &AssistantRun, events: &[AssistantRunEv
 }
 
 fn assistant_run_codex_detail_diagnostics(events: &[AssistantRunEvent]) -> Value {
-    let codex_event_count = events
+    let codex_events = events
         .iter()
         .filter(|event| event.event_name == "assistant_run.codex_executor_diagnostic")
-        .count();
-    let latest = events
-        .iter()
-        .filter(|event| event.event_name == "assistant_run.codex_executor_diagnostic")
-        .last();
+        .collect::<Vec<_>>();
+    let codex_event_count = codex_events.len();
+    let latest = codex_events.last().copied();
     let latest_summary = latest
         .map(|event| {
             let payload = &event.payload;
@@ -19948,9 +19946,97 @@ fn assistant_run_codex_detail_diagnostics(events: &[AssistantRunEvent]) -> Value
     json!({
         "event_count": codex_event_count,
         "latest": latest_summary,
+        "shadow_gate": assistant_run_codex_shadow_gate_summary(&codex_events),
         "mutation_allowed": false,
         "queue_allowed": false,
         "authority": "direct_until_shadow_gate_passes",
+    })
+}
+
+fn assistant_run_codex_shadow_gate_summary(events: &[&AssistantRunEvent]) -> Value {
+    const MIN_STABLE_SHADOW_EVENTS: usize = 3;
+    const SHADOW_GATE_WINDOW: usize = 20;
+
+    let window = events
+        .iter()
+        .rev()
+        .take(SHADOW_GATE_WINDOW)
+        .copied()
+        .collect::<Vec<_>>();
+    let mut matched_count = 0_usize;
+    let mut diverged_count = 0_usize;
+    let mut invalid_count = 0_usize;
+    let mut no_suggestion_count = 0_usize;
+    let mut unsafe_mutation_signal_count = 0_usize;
+
+    for event in &window {
+        let comparison = event
+            .payload
+            .get("shadow_comparison")
+            .unwrap_or(&Value::Null);
+        match comparison
+            .pointer("/comparison/status")
+            .and_then(Value::as_str)
+            .unwrap_or("missing")
+        {
+            "matched" => matched_count += 1,
+            "diverged" => diverged_count += 1,
+            "invalid_suggestion" => invalid_count += 1,
+            "no_codex_suggestion" => no_suggestion_count += 1,
+            _ => no_suggestion_count += 1,
+        }
+        if comparison
+            .get("codex_mutation_allowed")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+            || event
+                .payload
+                .get("suggested_action")
+                .and_then(|action| action.get("mutation_allowed"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+        {
+            unsafe_mutation_signal_count += 1;
+        }
+    }
+
+    let status = if window.len() < MIN_STABLE_SHADOW_EVENTS {
+        "insufficient_sample"
+    } else if invalid_count > 0 || unsafe_mutation_signal_count > 0 {
+        "blocked"
+    } else if diverged_count > 0 || no_suggestion_count > 0 {
+        "warming"
+    } else {
+        "eligible_for_host_validation"
+    };
+    let reason = match status {
+        "insufficient_sample" => "not enough Codex shadow diagnostic events",
+        "blocked" => "invalid or unsafe Codex shadow suggestion was observed",
+        "warming" => "Codex shadow suggestions are not consistently matched yet",
+        "eligible_for_host_validation" => {
+            "recent Codex shadow suggestions match direct actions; host validation can be considered"
+        }
+        _ => "unknown shadow gate status",
+    };
+
+    json!({
+        "status": status,
+        "reason": reason,
+        "window_size": window.len(),
+        "required_stable_events": MIN_STABLE_SHADOW_EVENTS,
+        "matched_count": matched_count,
+        "diverged_count": diverged_count,
+        "invalid_count": invalid_count,
+        "no_suggestion_count": no_suggestion_count,
+        "unsafe_mutation_signal_count": unsafe_mutation_signal_count,
+        "host_validation_allowed": status == "eligible_for_host_validation",
+        "codex_mutation_allowed": false,
+        "queue_allowed": false,
+        "next_gate": if status == "eligible_for_host_validation" {
+            "jump_host_or_mac_host_validation"
+        } else {
+            "continue_shadow_comparison"
+        },
     })
 }
 
@@ -23813,6 +23899,14 @@ mod tests {
             Value::Null
         );
         assert_eq!(
+            diagnostics["codex_executor"]["shadow_gate"]["status"],
+            json!("insufficient_sample")
+        );
+        assert_eq!(
+            diagnostics["codex_executor"]["shadow_gate"]["codex_mutation_allowed"],
+            json!(false)
+        );
+        assert_eq!(
             diagnostics["provider_usage"]["summary"]["request_count"],
             json!(1)
         );
@@ -23830,6 +23924,77 @@ mod tests {
         );
         assert!(!serialized.contains("sk-should-not-leak"));
         assert!(!serialized.contains("raw prompt should not leak"));
+    }
+
+    #[test]
+    fn assistant_run_codex_shadow_gate_tracks_stability_and_blocks_invalid() {
+        let tenant_id = TenantId::new();
+        let run_id = AssistantRunId::new();
+        let now = Utc::now();
+        let matched_event = |sequence_no| AssistantRunEvent {
+            id: AssistantRunEventId::new(),
+            tenant_id,
+            run_id,
+            sequence_no,
+            event_name: "assistant_run.codex_executor_diagnostic".to_string(),
+            payload: json!({
+                "suggested_action": {
+                    "action_type": "create_static_page_draft",
+                    "mutation_allowed": false
+                },
+                "shadow_comparison": {
+                    "codex_mutation_allowed": false,
+                    "comparison": {
+                        "status": "matched",
+                        "codex_has_suggestion": true
+                    }
+                }
+            }),
+            created_at: now,
+        };
+        let stable_events = vec![matched_event(1), matched_event(2), matched_event(3)];
+        let stable_refs = stable_events.iter().collect::<Vec<_>>();
+        let stable_gate = assistant_run_codex_shadow_gate_summary(&stable_refs);
+
+        assert_eq!(stable_gate["status"], json!("eligible_for_host_validation"));
+        assert_eq!(stable_gate["matched_count"], json!(3));
+        assert_eq!(stable_gate["host_validation_allowed"], json!(true));
+        assert_eq!(stable_gate["codex_mutation_allowed"], json!(false));
+        assert_eq!(
+            stable_gate["next_gate"],
+            json!("jump_host_or_mac_host_validation")
+        );
+
+        let mut blocked_events = stable_events;
+        blocked_events.push(AssistantRunEvent {
+            id: AssistantRunEventId::new(),
+            tenant_id,
+            run_id,
+            sequence_no: 4,
+            event_name: "assistant_run.codex_executor_diagnostic".to_string(),
+            payload: json!({
+                "suggested_action": {
+                    "action_type": "unsafe_os_command",
+                    "mutation_allowed": true
+                },
+                "shadow_comparison": {
+                    "codex_mutation_allowed": false,
+                    "comparison": {
+                        "status": "invalid_suggestion",
+                        "codex_has_suggestion": true
+                    }
+                }
+            }),
+            created_at: now,
+        });
+        let blocked_refs = blocked_events.iter().collect::<Vec<_>>();
+        let blocked_gate = assistant_run_codex_shadow_gate_summary(&blocked_refs);
+
+        assert_eq!(blocked_gate["status"], json!("blocked"));
+        assert_eq!(blocked_gate["invalid_count"], json!(1));
+        assert_eq!(blocked_gate["unsafe_mutation_signal_count"], json!(1));
+        assert_eq!(blocked_gate["host_validation_allowed"], json!(false));
+        assert_eq!(blocked_gate["queue_allowed"], json!(false));
     }
 
     #[test]
