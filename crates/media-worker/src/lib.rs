@@ -21,6 +21,7 @@ pub const DEFAULT_EXTRACTION_ARTIFACTS_MANIFEST_FILE_NAME: &str =
     "extraction_artifacts_manifest.json";
 pub const DEFAULT_SLIDE_CANDIDATES_FILE_NAME: &str = "slide_candidates_manifest.json";
 pub const DEFAULT_CONTACT_SHEET_PLAN_FILE_NAME: &str = "contact_sheet_plan.json";
+pub const DEFAULT_PPTX_BUILD_PLAN_FILE_NAME: &str = "pptx_build_plan.json";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MediaWorkflowTaskKind {
@@ -493,6 +494,35 @@ fn write_video_slide_candidate_review_files(
     )
     .map_err(|error| error.to_string())?;
 
+    let pptx_build_plan_path = artifacts_dir.join(DEFAULT_PPTX_BUILD_PLAN_FILE_NAME);
+    let pptx_build_plan = json!({
+        "status": "waiting_for_keep_list",
+        "source": "slide_candidates_manifest",
+        "document_id": document.id.to_string(),
+        "dataset_id": document.dataset_id.to_string(),
+        "title": document.title,
+        "candidate_manifest": candidate_manifest_path.display().to_string(),
+        "contact_sheet_plan": contact_sheet_plan_path.display().to_string(),
+        "recommended_output": artifacts_dir.join("video_slides_screenshot_based.pptx").display().to_string(),
+        "selection": {
+            "mode": "manual_or_model_review_required",
+            "selected_candidate_indices": [],
+            "rule": "Do not build a final PPTX until a keep-list is confirmed from the numbered contact sheet.",
+        },
+        "speaker_notes": {
+            "include_source_frame": true,
+            "include_candidate_index": true,
+            "include_timestamp_when_available": true,
+        },
+        "build_policy": "one_raster_image_per_slide_after_keep_list",
+        "skill_reference": "wechat-video-ppt-extract/build-selected",
+    });
+    fs::write(
+        &pptx_build_plan_path,
+        serde_json::to_vec_pretty(&pptx_build_plan).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
+
     Ok(Some(vec![
         video_generated_artifact_file(
             document,
@@ -505,6 +535,12 @@ fn write_video_slide_candidate_review_files(
             "contact_sheet_plan",
             "application/json",
             &contact_sheet_plan_path,
+        ),
+        video_generated_artifact_file(
+            document,
+            "pptx_build_plan",
+            "application/json",
+            &pptx_build_plan_path,
         ),
     ]))
 }
@@ -1477,6 +1513,9 @@ mod tests {
         assert!(files
             .iter()
             .any(|file| file["artifact_kind"] == json!("contact_sheet_plan")));
+        assert!(files
+            .iter()
+            .any(|file| file["artifact_kind"] == json!("pptx_build_plan")));
         let candidates_path = files
             .iter()
             .find(|file| file["artifact_kind"] == json!("slide_image_candidates"))
@@ -1485,6 +1524,15 @@ mod tests {
         let candidates = fs::read_to_string(candidates_path).expect("candidate manifest");
         assert!(candidates.contains("frame_000001.jpg"));
         assert!(candidates.contains("review_required"));
+        let pptx_plan_path = files
+            .iter()
+            .find(|file| file["artifact_kind"] == json!("pptx_build_plan"))
+            .and_then(|file| file["path"].as_str())
+            .expect("pptx build plan path");
+        let pptx_plan = fs::read_to_string(pptx_plan_path).expect("pptx build plan");
+        assert!(pptx_plan.contains("waiting_for_keep_list"));
+        assert!(pptx_plan.contains("selected_candidate_indices"));
+        assert!(pptx_plan.contains("video_slides_screenshot_based.pptx"));
     }
 
     #[test]
