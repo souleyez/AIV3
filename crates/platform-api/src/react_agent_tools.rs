@@ -11,15 +11,18 @@ use domain_model::{
 };
 use serde_json::{json, Value};
 use std::{collections::BTreeMap, env};
+use storage::NewDocument;
 use uuid::Uuid;
 
 use crate::{
     append_static_page_draft_run_event, append_static_page_operations_metadata,
     apply_static_page_operations_to_payload, build_assistant_run_evidence_state,
+    build_initial_upload_ingest_event, build_initial_upload_ingest_execution,
     ensure_react_requested_dataset_is_selected, ensure_scope_requests_conversation_memory,
-    load_visible_document_for_user, react_static_page_operations_from_arguments,
-    status_from_static_page_operations, status_from_static_page_payload,
-    summarize_static_page_operations, to_document_media_detail_view, ApiError, AppState,
+    load_visible_dataset_for_user, load_visible_document_for_user,
+    react_static_page_operations_from_arguments, status_from_static_page_operations,
+    status_from_static_page_payload, summarize_static_page_operations,
+    to_document_media_detail_view, ApiError, AppState,
 };
 use workflow_engine::WorkflowSignal;
 
@@ -152,7 +155,15 @@ pub(crate) async fn execute_assistant_run_react_action(
             Ok(openclaw_readonly_execution_result(action))
         }
         AssistantRunReactActionType::ResolveVideoUrl => {
-            Ok(video_url_resolution_placeholder_result(action, prompt))
+            resolve_video_url_result(
+                state,
+                action,
+                selected_scope,
+                prompt,
+                active_secret_binding_ids,
+                current_user_id,
+            )
+            .await
         }
         AssistantRunReactActionType::ExtractVideoPptTranscript => {
             video_ppt_extraction_result(
@@ -857,6 +868,180 @@ fn video_ppt_extraction_placeholder_result(
         }),
         final_answer: None,
     }
+}
+
+async fn resolve_video_url_result(
+    state: &AppState,
+    action: &AssistantRunNextAction,
+    selected_scope: &Value,
+    prompt: &str,
+    active_secret_binding_ids: &[SecretBindingId],
+    current_user_id: Option<UserId>,
+) -> std::result::Result<AssistantRunReactToolResult, ApiError> {
+    let base_result = video_url_resolution_placeholder_result(action, prompt);
+    if base_result
+        .observation
+        .get("reason")
+        .and_then(Value::as_str)
+        != Some("direct_video_url_resolved")
+    {
+        return Ok(base_result);
+    }
+
+    let Some(source_url) = base_result
+        .observation
+        .get("items")
+        .and_then(Value::as_array)
+        .and_then(|items| items.first())
+        .and_then(|item| item.get("source_url"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+    else {
+        return Ok(base_result);
+    };
+
+    let Some(dataset_id) = first_selected_dataset_id(selected_scope) else {
+        return Ok(base_result);
+    };
+    let dataset = load_visible_dataset_for_user(
+        state,
+        dataset_id,
+        active_secret_binding_ids,
+        current_user_id,
+    )
+    .await?;
+
+    let content_type = guess_video_content_type_from_url(&source_url).to_string();
+    let title = action
+        .arguments
+        .get("title")
+        .or_else(|| action.arguments.get("document_title"))
+        .or_else(|| action.arguments.get("documentTitle"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| direct_video_title_from_url(&source_url));
+    let document = state
+        .storage
+        .documents()
+        .create(
+            state.tenant_id,
+            NewDocument {
+                dataset_id,
+                title,
+                object_key: source_url.clone(),
+                content_type,
+                secret_binding_ids: dataset.default_secret_binding_ids.clone(),
+                owner_user_id: current_user_id,
+                metadata: json!({
+                    "source": "react_resolve_video_url",
+                    "remote_media": {
+                        "source_url": source_url,
+                        "source_type": "direct_video_url",
+                        "asset_state": "remote_registered",
+                        "ingest_requires_env": "INGEST_REMOTE_MEDIA_ENABLED",
+                    },
+                    "processing_policy": {
+                        "foreground_allowed": ["register_document", "enqueue_ingest"],
+                        "background_required": ["download_remote_media", "parse_content", "media_transcription", "scene_detection", "keyframe_ocr", "indexing"],
+                    },
+                    "parse_state": {
+                        "stage": "queued",
+                        "user_blocking": false,
+                    },
+                }),
+            },
+        )
+        .await
+        .map_err(ApiError::from_storage)?;
+
+    let execution = build_initial_upload_ingest_execution(state, &document)?;
+    let initial_event = build_initial_upload_ingest_event(&execution, &document);
+    state
+        .storage
+        .workflow_executions()
+        .create_with_initial_event(&execution, &initial_event)
+        .await
+        .map_err(ApiError::from_storage)?;
+    let started = crate::apply_workflow_signal(state, execution.id, WorkflowSignal::Start).await?;
+    let task_items = started
+        .enqueued_tasks
+        .iter()
+        .map(|task| {
+            json!({
+                "type": "workflow_task",
+                "workflow_task_id": task.id.to_string(),
+                "queue": task.queue,
+                "task_key": task.task_key,
+                "status": task.status.as_str(),
+                "available_at": task.available_at,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    Ok(AssistantRunReactToolResult {
+        observation: json!({
+            "status": "completed",
+            "action_type": action.action_type.as_str(),
+            "actionType": action.action_type.as_str(),
+            "message": "direct_video_url_registered",
+            "items": [{
+                "type": "resolved_video_source",
+                "source_type": "direct_video_url",
+                "source_url": document.object_key,
+                "asset_state": "remote_registered",
+                "document_id": document.id.to_string(),
+                "dataset_id": document.dataset_id.to_string(),
+                "title": document.title,
+                "content_type": document.content_type,
+                "workflow_execution_id": execution.id.to_string(),
+                "next_action": "extract_video_ppt_transcript",
+            }],
+            "tasks": task_items,
+            "limits": {
+                "remoteDownloadRequiresEnv": "INGEST_REMOTE_MEDIA_ENABLED",
+                "backgroundOnly": true,
+                "loginGatedSources": false,
+            },
+            "reason": "direct_video_url_registered",
+            "source_present": true,
+            "supported_sources": ["uploaded_video_file", "direct_video_url", "public_page_resolvable_video"],
+            "unsupported_sources": ["login_gated_page", "qr_login", "cookies", "screen_recording_bypass"],
+        }),
+        trail_step: json!({
+            "status": "completed",
+            "label": "解析公开视频地址",
+            "react_action": action.action_type.as_str(),
+            "reason": "direct_video_url_registered",
+            "document_id": document.id.to_string(),
+            "workflow_execution_id": execution.id.to_string(),
+            "at": Utc::now(),
+        }),
+        final_answer: None,
+    })
+}
+
+fn first_selected_dataset_id(selected_scope: &Value) -> Option<domain_model::DatasetId> {
+    selected_scope_id_strings(selected_scope, "dataset")
+        .into_iter()
+        .find_map(|raw| {
+            Uuid::parse_str(raw.trim())
+                .ok()
+                .map(domain_model::DatasetId)
+        })
+}
+
+fn direct_video_title_from_url(source_url: &str) -> String {
+    reqwest::Url::parse(source_url)
+        .ok()
+        .and_then(|url| {
+            url.path_segments()
+                .and_then(|mut segments| segments.next_back().map(str::to_string))
+        })
+        .map(|value| value.trim().trim_matches('/').to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "远程视频素材".to_string())
 }
 
 const REACT_VIDEO_PPT_MAX_DOCUMENTS: usize = 2;
@@ -1856,6 +2041,26 @@ mod tests {
             json!("video/mp4")
         );
         assert!(result.final_answer.is_none());
+    }
+
+    #[test]
+    fn video_url_resolution_helpers_select_dataset_and_title() {
+        let dataset_id = DatasetId::new();
+        let selected_scope = json!({
+            "datasets": [{
+                "type": "dataset",
+                "id": dataset_id.to_string(),
+                "label": "视频库"
+            }]
+        });
+
+        assert_eq!(first_selected_dataset_id(&selected_scope), Some(dataset_id));
+        assert_eq!(
+            direct_video_title_from_url(
+                "https://cdn.example.com/course/lesson-01.mp4?token=redacted"
+            ),
+            "lesson-01.mp4"
+        );
     }
 
     #[test]
