@@ -384,6 +384,7 @@ fn build_chart_runtime_manifest(modules: &Value, data_snapshot: &Value) -> Value
             let chart_runtime = module_chart_runtime(&module).to_string();
             let data_quality = module_data_quality(&module, data_snapshot);
             let data_quality_status = module_data_quality_status(&data_quality).to_string();
+            let binding_quality = module_binding_quality(&module, data_snapshot);
             let points = chart_points(&module, data_snapshot);
             *data_quality_counts.entry(data_quality.clone()).or_insert(0) += 1;
             *data_quality_status_counts
@@ -421,6 +422,15 @@ fn build_chart_runtime_manifest(modules: &Value, data_snapshot: &Value) -> Value
                 "visualizationType": visualization_type,
                 "chartRuntime": chart_runtime,
                 "dataBinding": module_data_binding_summary(&module, data_snapshot),
+                "bindingQuality": binding_quality.clone(),
+                "bindingQualityStatus": binding_quality
+                    .get("status")
+                    .cloned()
+                    .unwrap_or_else(|| json!("unknown")),
+                "chartDataFit": binding_quality
+                    .get("chartDataFit")
+                    .cloned()
+                    .unwrap_or_else(|| json!("unknown")),
                 "dataQuality": data_quality,
                 "dataQualityStatus": data_quality_status,
                 "dataQualityReason": module_data_quality_reason(&data_quality_status, points.len()),
@@ -507,6 +517,20 @@ fn module_data_quality(module: &Value, data_snapshot: &Value) -> String {
             }
         });
     data_quality.to_string()
+}
+
+fn module_binding_quality(module: &Value, data_snapshot: &Value) -> Value {
+    module
+        .get("id")
+        .and_then(Value::as_str)
+        .and_then(|id| data_snapshot_module_binding(data_snapshot, id))
+        .and_then(|binding| {
+            binding
+                .get("bindingQuality")
+                .or_else(|| binding.get("binding_quality"))
+        })
+        .cloned()
+        .unwrap_or_else(|| json!({}))
 }
 
 fn module_data_quality_status(data_quality: &str) -> &'static str {
@@ -1751,7 +1775,12 @@ mod tests {
                             { "label": "1月", "value": 1200, "kind": "module_data" },
                             { "label": "2月", "value": 1380, "kind": "module_data" }
                         ],
-                        "dataQuality": "module_data"
+                        "dataQuality": "module_data",
+                        "bindingQuality": {
+                            "status": "confirmed",
+                            "chartDataFit": "ready",
+                            "reason": "renderable_data_rows"
+                        }
                     }]
                 }
             }),
@@ -1802,6 +1831,14 @@ mod tests {
         assert_eq!(
             result.asset_manifest["chart_runtime"]["modules"][0]["dataBinding"]["evidenceCount"],
             2
+        );
+        assert_eq!(
+            result.asset_manifest["chart_runtime"]["modules"][0]["bindingQualityStatus"],
+            "confirmed"
+        );
+        assert_eq!(
+            result.asset_manifest["chart_runtime"]["modules"][0]["chartDataFit"],
+            "ready"
         );
         assert_eq!(
             result.asset_manifest["chart_runtime"]["modules"][0]["sampleDataRows"],

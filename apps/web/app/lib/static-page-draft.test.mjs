@@ -45,6 +45,8 @@ test('buildInitialStaticPageDraft creates default modules and mobile order', () 
   assert.equal(draft.dataSnapshot.moduleBindings.length, 5);
   assert.ok(draft.dataSnapshot.dataSourceCandidates.some((item) => item.sourceId === 'selected_scope'));
   assert.ok(draft.dataSnapshot.fieldCandidates.some((item) => item.fieldPath === 'retrieval.summary'));
+  assert.equal(draft.dataSnapshot.moduleBindings.find((item) => item.moduleId === 'hero').bindingQualityStatus, 'confirmed');
+  assert.equal(draft.dataSnapshot.moduleBindings.find((item) => item.moduleId === 'trend').chartDataFit, 'needs_sample_rows');
 });
 
 test('applyStaticPageOperation updates module copy without mutating original draft', () => {
@@ -564,6 +566,8 @@ test('module edit can update chart data rows and feed snapshot and image payload
     { label: '二月', value: 1380 },
   ]);
   assert.equal(binding.dataQuality, 'module_data');
+  assert.equal(binding.bindingQualityStatus, 'confirmed');
+  assert.equal(binding.chartDataFit, 'ready');
   assert.equal(binding.sampleData[0].value, 1200);
   assert.equal(imagePayload.modules.find((item) => item.id === 'trend').sampleData[1].label, '二月');
 });

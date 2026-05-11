@@ -337,15 +337,28 @@ export function buildStaticPageDataSnapshot(draft) {
     moduleBindings: modules.map((module) => {
       const visualization = normalizeVisualization(module.visualization || {});
       const sampleData = chartDataRowsFromVisualization(visualization);
+      const binding = normalizeDataBinding(module.dataBinding || {});
+      const dataQuality = sampleData.length ? 'module_data' : 'binding_only';
+      const bindingQuality = analyzeStaticPageModuleBinding({
+        binding,
+        visualization,
+        sampleData,
+        dataQuality,
+        fieldCandidates,
+      });
       return {
         moduleId: module.id,
         title: module.title,
-        binding: normalizeDataBinding(module.dataBinding || {}),
+        binding,
         visualizationType: visualization.type,
         chartRuntime: visualization.chartRuntime,
         chartOptions: visualization.chartOptions,
         sampleData,
-        dataQuality: sampleData.length ? 'module_data' : 'binding_only',
+        dataQuality,
+        bindingQuality,
+        bindingQualityStatus: bindingQuality.status,
+        chartDataFit: bindingQuality.chartDataFit,
+        recommendedAction: bindingQuality.recommendedAction,
       };
     }),
   };
@@ -541,6 +554,101 @@ function normalizeDataBinding(binding = {}) {
     fieldPath: binding.fieldPath || binding.field || null,
     aggregation: binding.aggregation || null,
     evidenceIds: Array.isArray(binding.evidenceIds) ? [...binding.evidenceIds] : [],
+  };
+}
+
+const VISUALIZATIONS_REQUIRING_SAMPLE_ROWS = new Set([
+  'kpi-cards',
+  'bar-chart',
+  'line-chart',
+  'donut-chart',
+  'table',
+  'risk-matrix',
+]);
+
+function moduleBindingHasSource(binding = {}) {
+  return Boolean(binding.sourceId || binding.fieldPath || binding.label);
+}
+
+function matchingFieldCandidate(fieldCandidates = [], sourceId, fieldPath) {
+  if (!fieldPath) return null;
+  return fieldCandidates.find((candidate) => {
+    const candidateField = candidate?.fieldPath || candidate?.field_path || candidate?.field || null;
+    if (candidateField !== fieldPath) return false;
+    const candidateSource = candidate?.sourceId || candidate?.source_id || null;
+    return !candidateSource || candidateSource === sourceId;
+  }) || null;
+}
+
+function bindingConfidence(candidate, sampleRows, status) {
+  const candidateConfidence = Number(candidate?.confidence);
+  if (Number.isFinite(candidateConfidence)) return candidateConfidence;
+  if (status === 'confirmed' && sampleRows > 0) return 0.92;
+  if (status === 'confirmed') return 0.72;
+  if (status === 'partial' && sampleRows > 0) return 0.62;
+  if (status === 'partial') return 0.48;
+  return 0;
+}
+
+function analyzeStaticPageModuleBinding({
+  binding,
+  visualization,
+  sampleData,
+  dataQuality,
+  fieldCandidates,
+}) {
+  const sourceId = binding?.sourceId || null;
+  const fieldPath = binding?.fieldPath || null;
+  const sampleRows = Array.isArray(sampleData) ? sampleData.length : 0;
+  const chartNeedsRows = VISUALIZATIONS_REQUIRING_SAMPLE_ROWS.has(visualization?.type);
+  const matchedFieldCandidate = matchingFieldCandidate(fieldCandidates, sourceId, fieldPath);
+  const hasBinding = moduleBindingHasSource(binding);
+
+  let status = 'partial';
+  let reason = 'binding_without_sample_rows';
+  let chartDataFit = 'needs_sample_rows';
+  let recommendedAction = '已有绑定意图但缺少可渲染数据行，最终页会降级为待确认状态。';
+
+  if (sampleRows > 0 && ['module_data', 'evidence_value'].includes(dataQuality)) {
+    status = 'confirmed';
+    reason = 'renderable_data_rows';
+    chartDataFit = 'ready';
+    recommendedAction = '数据样本可直接驱动该模块；交付前只需确认字段口径。';
+  } else if (chartNeedsRows && !fieldPath && !hasBinding) {
+    status = 'missing';
+    reason = 'chart_without_binding';
+    chartDataFit = 'missing_binding';
+    recommendedAction = '图表模块缺少字段绑定和样本数据，需要先绑定字段或补充数据行。';
+  } else if (chartNeedsRows && matchedFieldCandidate) {
+    status = 'partial';
+    reason = 'matched_field_candidate_without_rows';
+    chartDataFit = 'needs_sample_rows';
+    recommendedAction = '已匹配候选字段，但还缺少可渲染样本行；生成效果图前建议抽取或填写数据。';
+  } else if (!chartNeedsRows && (hasBinding || ['model', 'session', 'conversation_memory'].includes(sourceId))) {
+    status = 'confirmed';
+    reason = 'non_chart_binding_ready';
+    chartDataFit = 'not_required';
+    recommendedAction = '文本或结论模块不强制要求数值样本，可按当前绑定继续规划。';
+  } else if (!chartNeedsRows) {
+    status = 'missing';
+    reason = 'non_chart_without_binding';
+    chartDataFit = 'not_required';
+    recommendedAction = '该模块缺少内容来源，建议绑定模型总结、会话摘要或检索证据。';
+  }
+
+  return {
+    status,
+    reason,
+    chartDataFit,
+    recommendedAction,
+    sourceId,
+    fieldPath,
+    visualizationType: visualization?.type || 'text-insight',
+    chartRuntime: visualization?.chartRuntime || 'deterministic',
+    sampleRows,
+    dataQuality,
+    matchedFieldCandidate,
+    confidence: bindingConfidence(matchedFieldCandidate, sampleRows, status),
   };
 }
 
