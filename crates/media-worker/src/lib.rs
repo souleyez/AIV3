@@ -21,6 +21,7 @@ pub const DEFAULT_PPT_OUTLINE_ARTIFACT_FILE_NAME: &str = "ppt_outline.md";
 pub const DEFAULT_TIMESTAMP_MAP_ARTIFACT_FILE_NAME: &str = "timestamp_map.json";
 pub const DEFAULT_EXTRACTION_ARTIFACTS_MANIFEST_FILE_NAME: &str =
     "extraction_artifacts_manifest.json";
+pub const DEFAULT_FINAL_DELIVERABLES_MANIFEST_FILE_NAME: &str = "final_deliverables_manifest.json";
 pub const DEFAULT_SLIDE_CANDIDATES_FILE_NAME: &str = "slide_candidates_manifest.json";
 pub const DEFAULT_CONTACT_SHEET_PLAN_FILE_NAME: &str = "contact_sheet_plan.json";
 pub const DEFAULT_CONTACT_SHEET_HTML_FILE_NAME: &str = "raw_contact_sheet.html";
@@ -418,6 +419,24 @@ pub fn write_video_extraction_text_artifacts(
         &timestamp_map_path,
     ));
 
+    let final_deliverables_manifest_path =
+        artifacts_dir.join(DEFAULT_FINAL_DELIVERABLES_MANIFEST_FILE_NAME);
+    let final_deliverables_manifest =
+        video_final_deliverables_manifest(document, &files, frame_count);
+    let final_deliverables_manifest_bytes = serde_json::to_vec_pretty(&final_deliverables_manifest)
+        .map_err(|error| error.to_string())?;
+    fs::write(
+        &final_deliverables_manifest_path,
+        final_deliverables_manifest_bytes,
+    )
+    .map_err(|error| error.to_string())?;
+    files.push(video_generated_artifact_file(
+        document,
+        "final_deliverables_manifest",
+        "application/json",
+        &final_deliverables_manifest_path,
+    ));
+
     let manifest_path = artifacts_dir.join(DEFAULT_EXTRACTION_ARTIFACTS_MANIFEST_FILE_NAME);
     let manifest = json!({
         "status": "completed",
@@ -600,6 +619,29 @@ fn write_video_slide_candidate_review_files(
     )
     .map_err(|error| error.to_string())?;
 
+    let mut selected_slides_artifact = video_generated_artifact_file(
+        document,
+        "selected_slides_manifest",
+        "application/json",
+        &selected_slides_manifest_path,
+    );
+    if let Some(object) = selected_slides_artifact.as_object_mut() {
+        object.insert(
+            "status".to_string(),
+            selected_slides_manifest
+                .get("status")
+                .cloned()
+                .unwrap_or_else(|| json!("waiting_for_selection")),
+        );
+        object.insert(
+            "selected_count".to_string(),
+            selected_slides_manifest
+                .get("selected_count")
+                .cloned()
+                .unwrap_or_else(|| json!(0)),
+        );
+    }
+
     let mut artifact_files = vec![
         video_generated_artifact_file(
             document,
@@ -625,12 +667,7 @@ fn write_video_slide_candidate_review_files(
             "application/json",
             &keep_list_template_path,
         ),
-        video_generated_artifact_file(
-            document,
-            "selected_slides_manifest",
-            "application/json",
-            &selected_slides_manifest_path,
-        ),
+        selected_slides_artifact,
         video_generated_artifact_file(
             document,
             "pptx_build_plan",
@@ -1511,11 +1548,18 @@ fn video_deliverable_status(generated_artifacts: &Value) -> Value {
         .filter_map(|file| file.get("artifact_kind").and_then(Value::as_str))
         .collect::<BTreeSet<_>>();
     let has_pptx = artifact_kinds.contains("pptx");
-    let has_selected_slides = artifact_kinds.contains("selected_slides_manifest");
+    let has_selected_slides = files.iter().any(|file| {
+        file.get("artifact_kind").and_then(Value::as_str) == Some("selected_slides_manifest")
+            && file
+                .get("selected_count")
+                .and_then(Value::as_u64)
+                .is_some_and(|selected_count| selected_count > 0)
+    });
     let has_contact_sheet = artifact_kinds.contains("contact_sheet_html");
     let has_outline = artifact_kinds.contains("ppt_outline");
     let has_transcript = artifact_kinds.contains("transcript_text");
     let has_source_text = artifact_kinds.contains("source_text");
+    let has_final_deliverables_manifest = artifact_kinds.contains("final_deliverables_manifest");
     let state = if has_pptx {
         "final_pptx_ready"
     } else if has_selected_slides {
@@ -1539,8 +1583,74 @@ fn video_deliverable_status(generated_artifacts: &Value) -> Value {
         "has_ppt_outline": has_outline,
         "has_contact_sheet_html": has_contact_sheet,
         "has_selected_slides_manifest": has_selected_slides,
+        "has_final_deliverables_manifest": has_final_deliverables_manifest,
         "has_pptx": has_pptx,
     })
+}
+
+fn video_final_deliverables_manifest(
+    document: &Document,
+    files: &[Value],
+    frame_count: u64,
+) -> Value {
+    let generated_artifacts = json!({
+        "status": "completed",
+        "files": files,
+    });
+    let deliverable_status = video_deliverable_status(&generated_artifacts);
+    let state = deliverable_status
+        .get("state")
+        .and_then(Value::as_str)
+        .unwrap_or("planned");
+
+    json!({
+        "status": state,
+        "source": "media_worker_final_deliverables_manifest",
+        "document_id": document.id.to_string(),
+        "dataset_id": document.dataset_id.to_string(),
+        "title": document.title,
+        "frame_count": frame_count,
+        "deliverable_status": deliverable_status,
+        "final_outputs": video_artifact_files_by_kinds(files, &["pptx"]),
+        "review_outputs": video_artifact_files_by_kinds(files, &[
+            "slide_image_candidates",
+            "contact_sheet_plan",
+            "contact_sheet_html",
+            "ppt_keep_list_template",
+            "selected_slides_manifest",
+            "pptx_build_plan",
+        ]),
+        "evidence_outputs": video_artifact_files_by_kinds(files, &[
+            "frame_manifest",
+            "transcript_text",
+            "source_text",
+            "ppt_outline",
+            "timestamp_map",
+        ]),
+        "next_action": video_final_deliverables_next_action(state),
+    })
+}
+
+fn video_artifact_files_by_kinds(files: &[Value], kinds: &[&str]) -> Vec<Value> {
+    files
+        .iter()
+        .filter(|file| {
+            file.get("artifact_kind")
+                .and_then(Value::as_str)
+                .is_some_and(|kind| kinds.contains(&kind))
+        })
+        .cloned()
+        .collect()
+}
+
+fn video_final_deliverables_next_action(state: &str) -> &'static str {
+    match state {
+        "final_pptx_ready" => "persist or expose the final PPTX deliverable for download",
+        "selected_slides_ready" => "run the screenshot PPTX writer for selected slide frames",
+        "review_ready" => "review the contact sheet and fill ppt_keep_list_template.json",
+        "evidence_artifacts_ready" => "extract raw frames or keyframes before slide review",
+        _ => "wait for media evidence or frame extraction",
+    }
 }
 
 fn video_artifact_ref(document: &Document, artifact_kind: &str, format: &str) -> Value {
@@ -2148,7 +2258,7 @@ mod tests {
             json!(1)
         );
         assert_eq!(manifest["evidence_counts"]["frame_count"], json!(8));
-        assert_eq!(manifest["files"].as_array().expect("files").len(), 4);
+        assert_eq!(manifest["files"].as_array().expect("files").len(), 5);
 
         let transcript_path = manifest["files"]
             .as_array()
@@ -2169,6 +2279,17 @@ mod tests {
         let source_text = fs::read_to_string(source_text_path).expect("source text file");
         assert!(source_text.contains("Transcript Evidence"));
         assert!(source_text.contains("AI Data Platform"));
+        let final_manifest_path = manifest["files"]
+            .as_array()
+            .expect("files")
+            .iter()
+            .find(|file| file["artifact_kind"] == json!("final_deliverables_manifest"))
+            .and_then(|file| file["path"].as_str())
+            .expect("final deliverables manifest path");
+        let final_manifest =
+            fs::read_to_string(final_manifest_path).expect("final deliverables manifest");
+        assert!(final_manifest.contains("evidence_artifacts_ready"));
+        assert!(final_manifest.contains("evidence_outputs"));
     }
 
     #[test]
@@ -2247,6 +2368,9 @@ mod tests {
         assert!(files
             .iter()
             .any(|file| file["artifact_kind"] == json!("pptx_build_plan")));
+        assert!(files
+            .iter()
+            .any(|file| file["artifact_kind"] == json!("final_deliverables_manifest")));
         let candidates_path = files
             .iter()
             .find(|file| file["artifact_kind"] == json!("slide_image_candidates"))
@@ -2282,6 +2406,11 @@ mod tests {
             fs::read_to_string(selected_slides_path).expect("selected slides manifest");
         assert!(selected_slides.contains("waiting_for_selection"));
         assert!(selected_slides.contains("\"selected_count\": 0"));
+        let selected_slides_ref = files
+            .iter()
+            .find(|file| file["artifact_kind"] == json!("selected_slides_manifest"))
+            .expect("selected slides artifact ref");
+        assert_eq!(selected_slides_ref["selected_count"], json!(0));
         let pptx_plan_path = files
             .iter()
             .find(|file| file["artifact_kind"] == json!("pptx_build_plan"))
@@ -2292,6 +2421,15 @@ mod tests {
         assert!(pptx_plan.contains("ppt_keep_list_template.json"));
         assert!(pptx_plan.contains("selected_candidate_indices"));
         assert!(pptx_plan.contains(DEFAULT_VIDEO_SLIDES_PPTX_FILE_NAME));
+        let final_manifest_path = files
+            .iter()
+            .find(|file| file["artifact_kind"] == json!("final_deliverables_manifest"))
+            .and_then(|file| file["path"].as_str())
+            .expect("final deliverables manifest path");
+        let final_manifest =
+            fs::read_to_string(final_manifest_path).expect("final deliverables manifest");
+        assert!(final_manifest.contains("review_ready"));
+        assert!(final_manifest.contains("review_outputs"));
     }
 
     #[test]
@@ -2335,6 +2473,9 @@ mod tests {
         assert!(files
             .iter()
             .any(|file| file["artifact_kind"] == json!("pptx")));
+        assert!(files
+            .iter()
+            .any(|file| file["artifact_kind"] == json!("final_deliverables_manifest")));
         let selected_slides_path = files
             .iter()
             .find(|file| file["artifact_kind"] == json!("selected_slides_manifest"))
@@ -2346,6 +2487,11 @@ mod tests {
         assert!(selected_slides.contains("\"selected_candidate_indices\": [\n    2,\n    1\n  ]"));
         assert!(selected_slides.contains("frame_000002.jpg"));
         assert!(selected_slides.contains("frame_000001.jpg"));
+        let selected_slides_ref = files
+            .iter()
+            .find(|file| file["artifact_kind"] == json!("selected_slides_manifest"))
+            .expect("selected slides artifact ref");
+        assert_eq!(selected_slides_ref["selected_count"], json!(2));
         let keep_list = fs::read_to_string(keep_list_path).expect("preserved keep list");
         assert!(keep_list.contains("manual pick"));
         let pptx_plan_path = files
@@ -2376,6 +2522,16 @@ mod tests {
             .read_to_string(&mut presentation_rels)
             .expect("presentation relationships text");
         assert!(presentation_rels.contains("slide1.xml"));
+        let final_manifest_path = files
+            .iter()
+            .find(|file| file["artifact_kind"] == json!("final_deliverables_manifest"))
+            .and_then(|file| file["path"].as_str())
+            .expect("final deliverables manifest path");
+        let final_manifest =
+            fs::read_to_string(final_manifest_path).expect("final deliverables manifest");
+        assert!(final_manifest.contains("final_pptx_ready"));
+        assert!(final_manifest.contains("final_outputs"));
+        assert!(final_manifest.contains(DEFAULT_VIDEO_SLIDES_PPTX_FILE_NAME));
     }
 
     #[test]
