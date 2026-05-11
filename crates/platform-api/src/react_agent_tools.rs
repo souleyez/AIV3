@@ -2,7 +2,9 @@ use axum::Json;
 use chrono::Utc;
 use contracts::{
     CodexHostTaskMemoryPolicyView, CodexHostTaskRequestView, CodexHostTaskSafetyPolicyView,
-    CreateStaticPageImageJobRequest, CreateStaticPageRenderRequest,
+    CreateStaticPageImageJobRequest, CreateStaticPageRenderRequest, HtmlArtifactDataRefView,
+    HtmlArtifactInteractionModeView, HtmlArtifactManifestView, HtmlArtifactOwnerScopeView,
+    HtmlArtifactProvenanceView, HtmlArtifactSourceTypeView, HtmlArtifactTemplateIdView,
 };
 use domain_model::{
     AssistantRunId, Document, DocumentChunk, DocumentId, SecretBindingId, StaticPageDraftId,
@@ -19,7 +21,7 @@ use crate::{
     apply_static_page_operations_to_payload, build_assistant_run_evidence_state,
     build_initial_upload_ingest_event, build_initial_upload_ingest_execution,
     ensure_react_requested_dataset_is_selected, ensure_scope_requests_conversation_memory,
-    load_visible_dataset_for_user, load_visible_document_for_user,
+    html_artifact_safe_summary_text, load_visible_dataset_for_user, load_visible_document_for_user,
     react_static_page_operations_from_arguments, status_from_static_page_operations,
     status_from_static_page_payload, summarize_static_page_operations,
     to_document_media_detail_view, ApiError, AppState,
@@ -1129,6 +1131,8 @@ async fn video_ppt_extraction_result(
     };
     let item_count = items.len();
     let denied_count = denied.len();
+    let html_artifacts = video_extraction_summary_artifacts_from_items(&items);
+    let html_artifact_count = html_artifacts.len();
 
     Ok(AssistantRunReactToolResult {
         observation: json!({
@@ -1145,6 +1149,7 @@ async fn video_ppt_extraction_result(
                 "maxOcrSnippets": REACT_VIDEO_PPT_MAX_OCR_SNIPPETS,
             },
             "deliverables": ["transcript_text", "slide_image_candidates", "ppt_outline_or_pptx", "timestamp_map"],
+            "html_artifacts": html_artifacts,
             "no_host_composed_answer": true,
         }),
         trail_step: json!({
@@ -1153,6 +1158,7 @@ async fn video_ppt_extraction_result(
             "react_action": action.action_type.as_str(),
             "item_count": item_count,
             "denied_count": denied_count,
+            "html_artifact_count": html_artifact_count,
             "at": Utc::now(),
         }),
         final_answer: None,
@@ -1200,6 +1206,203 @@ fn video_ppt_extraction_item(detail: contracts::DocumentMediaDetailView) -> Valu
         "model_facing": detail.model_facing,
         "raw_media_metadata": detail.raw_media_metadata,
     })
+}
+
+fn video_extraction_summary_artifacts_from_items(items: &[Value]) -> Vec<HtmlArtifactManifestView> {
+    items
+        .iter()
+        .filter_map(video_extraction_summary_artifact_from_item)
+        .collect()
+}
+
+fn video_extraction_summary_artifact_from_item(item: &Value) -> Option<HtmlArtifactManifestView> {
+    let document = item.get("document")?;
+    let document_id = video_artifact_string(document, "id", 80)?;
+    let dataset_id = video_artifact_string(document, "dataset_id", 80).unwrap_or_default();
+    let title = video_artifact_string(document, "title", 120)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "视频素材".to_string());
+    let content_type = video_artifact_string(document, "content_type", 80).unwrap_or_default();
+    let lifecycle = video_artifact_string(document, "lifecycle", 40).unwrap_or_default();
+    let transcript_segments = video_artifact_transcript_segments(item.get("transcript_segments"));
+    let scenes = video_artifact_scenes(item.get("scenes"));
+    let keyframe_ocr_snippets =
+        video_artifact_keyframe_ocr_snippets(item.get("keyframe_ocr_snippets"));
+    let provider_evidence = video_artifact_provider_evidence(item.get("provider_evidence"));
+    let missing = video_artifact_string_array(item.get("missing"), 12, 80);
+    let evidence_status =
+        video_artifact_string(item, "evidence_status", 40).unwrap_or_else(|| "missing".to_string());
+    let parse_status =
+        video_artifact_string(item, "parse_status", 60).unwrap_or_else(|| "unknown".to_string());
+    let media_kind =
+        video_artifact_string(item, "media_kind", 40).unwrap_or_else(|| "video".to_string());
+    let safe_title = html_artifact_safe_summary_text(&title, 120);
+    let artifact_title = if safe_title.is_empty() {
+        "视频提取摘要".to_string()
+    } else {
+        format!("{safe_title} · 视频提取摘要")
+    };
+    let mut data_refs = vec![HtmlArtifactDataRefView {
+        kind: "document".to_string(),
+        id: document_id.clone(),
+        label: safe_title.clone(),
+    }];
+    if !dataset_id.is_empty() {
+        data_refs.push(HtmlArtifactDataRefView {
+            kind: "dataset".to_string(),
+            id: dataset_id.clone(),
+            label: "Dataset".to_string(),
+        });
+    }
+
+    Some(HtmlArtifactManifestView {
+        kind: "html_artifact".to_string(),
+        version: 1,
+        id: format!("html-video-extraction-{document_id}"),
+        title: artifact_title,
+        source_type: HtmlArtifactSourceTypeView::VideoExtraction,
+        template_id: HtmlArtifactTemplateIdView::VideoExtractionSummary,
+        owner_scope: HtmlArtifactOwnerScopeView {
+            scope_type: "document".to_string(),
+            id: document_id.clone(),
+        },
+        data_refs,
+        provenance: HtmlArtifactProvenanceView {
+            producer: "v3-media-runtime".to_string(),
+            reason: "video PPT/transcript extraction evidence summary".to_string(),
+            source_run_id: None,
+        },
+        interaction_mode: HtmlArtifactInteractionModeView::ReadOnly,
+        created_at: Utc::now(),
+        payload: json!({
+            "document": {
+                "id": document_id,
+                "datasetId": dataset_id,
+                "title": safe_title,
+                "contentType": content_type,
+                "lifecycle": lifecycle,
+            },
+            "mediaKind": media_kind,
+            "parseStatus": parse_status,
+            "evidenceStatus": evidence_status,
+            "summary": {
+                "transcriptSegmentCount": transcript_segments.len(),
+                "sceneCount": scenes.len(),
+                "keyframeOcrSnippetCount": keyframe_ocr_snippets.len(),
+                "providerEvidenceCount": provider_evidence.len(),
+            },
+            "transcriptSegments": transcript_segments,
+            "scenes": scenes,
+            "keyframeOcrSnippets": keyframe_ocr_snippets,
+            "providerEvidence": provider_evidence,
+            "missing": missing,
+            "deliverables": ["transcript_text", "slide_image_candidates", "ppt_outline_or_pptx", "timestamp_map"],
+            "note": "该产物只展示已解析的视频原文、场景和关键帧 OCR 证据；没有证据的部分保持缺失说明，不补造内容。"
+        }),
+    })
+}
+
+fn video_artifact_string(value: &Value, key: &str, max_chars: usize) -> Option<String> {
+    value
+        .get(key)
+        .and_then(Value::as_str)
+        .map(|raw| html_artifact_safe_summary_text(raw, max_chars))
+}
+
+fn video_artifact_number(value: &Value, key: &str) -> Option<f64> {
+    value.get(key).and_then(Value::as_f64)
+}
+
+fn video_artifact_bool(value: &Value, key: &str) -> Option<bool> {
+    value.get(key).and_then(Value::as_bool)
+}
+
+fn video_artifact_string_array(
+    value: Option<&Value>,
+    limit: usize,
+    max_chars: usize,
+) -> Vec<String> {
+    value
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .take(limit)
+        .map(|raw| html_artifact_safe_summary_text(raw, max_chars))
+        .filter(|value| !value.is_empty())
+        .collect()
+}
+
+fn video_artifact_transcript_segments(value: Option<&Value>) -> Vec<Value> {
+    value
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .take(REACT_VIDEO_PPT_MAX_TRANSCRIPT_SEGMENTS)
+        .map(|segment| {
+            json!({
+                "startSeconds": video_artifact_number(segment, "start_seconds"),
+                "endSeconds": video_artifact_number(segment, "end_seconds"),
+                "text": video_artifact_string(segment, "text", 500).unwrap_or_default(),
+                "source": video_artifact_string(segment, "source", 80).unwrap_or_default(),
+                "language": video_artifact_string(segment, "language", 40).unwrap_or_default(),
+                "confidence": video_artifact_number(segment, "confidence"),
+            })
+        })
+        .collect()
+}
+
+fn video_artifact_scenes(value: Option<&Value>) -> Vec<Value> {
+    value
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .take(REACT_VIDEO_PPT_MAX_SCENES)
+        .map(|scene| {
+            json!({
+                "startSeconds": video_artifact_number(scene, "start_seconds"),
+                "endSeconds": video_artifact_number(scene, "end_seconds"),
+                "representativeSeconds": video_artifact_number(scene, "representative_seconds"),
+                "summary": video_artifact_string(scene, "summary", 360).unwrap_or_default(),
+                "source": video_artifact_string(scene, "source", 80).unwrap_or_default(),
+            })
+        })
+        .collect()
+}
+
+fn video_artifact_keyframe_ocr_snippets(value: Option<&Value>) -> Vec<Value> {
+    value
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .take(REACT_VIDEO_PPT_MAX_OCR_SNIPPETS)
+        .map(|snippet| {
+            json!({
+                "timestampSeconds": video_artifact_number(snippet, "timestamp_seconds"),
+                "text": video_artifact_string(snippet, "text", 360).unwrap_or_default(),
+                "source": video_artifact_string(snippet, "source", 80).unwrap_or_default(),
+            })
+        })
+        .collect()
+}
+
+fn video_artifact_provider_evidence(value: Option<&Value>) -> Vec<Value> {
+    value
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .take(8)
+        .map(|evidence| {
+            json!({
+                "provider": video_artifact_string(evidence, "provider", 80).unwrap_or_default(),
+                "capability": video_artifact_string(evidence, "capability", 80).unwrap_or_default(),
+                "status": video_artifact_string(evidence, "status", 60).unwrap_or_default(),
+                "supported": video_artifact_bool(evidence, "supported").unwrap_or(false),
+                "detail": video_artifact_string(evidence, "detail", 260).unwrap_or_default(),
+                "model": video_artifact_string(evidence, "model", 100).unwrap_or_default(),
+            })
+        })
+        .collect()
 }
 
 fn is_video_document_material(document: &Document) -> bool {
@@ -2159,6 +2362,83 @@ mod tests {
             json!("AI 数据智能助手")
         );
         assert_eq!(item["missing"], json!([]));
+    }
+
+    #[test]
+    fn video_extraction_summary_artifact_uses_safe_manifest() {
+        let document = test_document("training.mp4", "video/mp4");
+        let detail = to_document_media_detail_view(
+            document,
+            vec![DocumentChunk {
+                id: DocumentChunkId::new(),
+                tenant_id: TenantId::new(),
+                dataset_id: DatasetId::new(),
+                document_id: DocumentId::new(),
+                chunk_index: 0,
+                content: "视频解析摘要".to_string(),
+                token_count: 6,
+                state: DocumentChunkState::Extracted,
+                metadata: BTreeMap::from_iter([(
+                    "parse_metadata".to_string(),
+                    json!({
+                        "media": {
+                            "kind": "video",
+                            "parse_status": "transcribed",
+                            "transcript_segments": [{
+                                "start_seconds": 1.0,
+                                "end_seconds": 3.0,
+                                "text": "第一页介绍系统目标",
+                                "source": "MEDIA_TRANSCRIBE_BIN"
+                            }],
+                            "scenes": [{
+                                "start_seconds": 1.0,
+                                "end_seconds": 8.0,
+                                "summary": "标题页",
+                                "source": "MEDIA_SCENE_BIN"
+                            }],
+                            "keyframe_ocr_snippets": [{
+                                "timestamp_seconds": 2.0,
+                                "text": "AI 数据智能助手",
+                                "source": "MEDIA_KEYFRAME_OCR_BIN"
+                            }],
+                            "provider_evidence": [{
+                                "provider": "minimax",
+                                "capability": "media_understanding",
+                                "status": "ready",
+                                "supported": true,
+                                "detail": "已启用视频解析",
+                                "model": "minimax-video"
+                            }]
+                        }
+                    }),
+                )]),
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+            }],
+        );
+        let item = video_ppt_extraction_item(detail);
+
+        let artifacts = video_extraction_summary_artifacts_from_items(&[item]);
+        let encoded = serde_json::to_value(&artifacts[0]).expect("artifact should serialize");
+
+        assert_eq!(artifacts.len(), 1);
+        assert_eq!(encoded["source_type"], json!("video_extraction"));
+        assert_eq!(encoded["template_id"], json!("video_extraction_summary"));
+        assert_eq!(encoded["owner_scope"]["type"], json!("document"));
+        assert_eq!(
+            encoded["payload"]["transcriptSegments"][0]["text"],
+            json!("第一页介绍系统目标")
+        );
+        assert_eq!(
+            encoded["payload"]["keyframeOcrSnippets"][0]["text"],
+            json!("AI 数据智能助手")
+        );
+        assert_eq!(
+            encoded["payload"]["providerEvidence"][0]["provider"],
+            json!("minimax")
+        );
+        assert!(!encoded.to_string().contains("object_key"));
+        assert!(!encoded.to_string().contains("file://"));
     }
 
     #[test]

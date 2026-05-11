@@ -7,6 +7,7 @@ export const HTML_ARTIFACT_TEMPLATE_IDS = Object.freeze([
   'static_page_data_quality_report',
   'report_render_summary',
   'code_review_summary',
+  'video_extraction_summary',
   'wechat_video_login_handoff',
 ]);
 
@@ -31,6 +32,7 @@ const TEMPLATE_LABELS = {
   static_page_data_quality_report: '静态页数据质量报告',
   report_render_summary: '报告渲染摘要',
   code_review_summary: '代码审查摘要',
+  video_extraction_summary: '视频提取摘要',
   wechat_video_login_handoff: '视频来源受限',
 };
 
@@ -435,6 +437,89 @@ function renderCodeReviewSummary(manifest) {
   `;
 }
 
+function formatSeconds(value) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return '';
+  const minutes = Math.floor(value / 60);
+  const seconds = Math.round(value % 60).toString().padStart(2, '0');
+  return `${minutes}:${seconds}`;
+}
+
+function renderVideoExtractionSummary(manifest) {
+  const payload = manifest.payload || {};
+  const document = isPlainObject(payload.document) ? payload.document : {};
+  const summary = isPlainObject(payload.summary) ? payload.summary : {};
+  const missing = arrayOrEmpty(payload.missing).map((value, index) => ({
+    title: value || `缺失项 ${index + 1}`,
+    detail: '当前解析结果没有提供这一类证据，后续应补充转写、关键帧或 OCR 能力后再生成完整 PPT。',
+  }));
+  const transcript = arrayOrEmpty(payload.transcriptSegments || payload.transcript_segments).map((segment, index) => {
+    const start = formatSeconds(segment.startSeconds ?? segment.start_seconds);
+    const end = formatSeconds(segment.endSeconds ?? segment.end_seconds);
+    return {
+      title: start || end ? `${start || '?'} - ${end || '?'}` : `原文片段 ${index + 1}`,
+      detail: segment.text || '',
+      meta: segment.source || '',
+    };
+  });
+  const scenes = arrayOrEmpty(payload.scenes).map((scene, index) => {
+    const start = formatSeconds(scene.startSeconds ?? scene.start_seconds);
+    const end = formatSeconds(scene.endSeconds ?? scene.end_seconds);
+    return {
+      title: start || end ? `${start || '?'} - ${end || '?'}` : `场景 ${index + 1}`,
+      detail: scene.summary || '',
+      meta: scene.source || '',
+    };
+  });
+  const ocr = arrayOrEmpty(payload.keyframeOcrSnippets || payload.keyframe_ocr_snippets).map((snippet, index) => {
+    const timestamp = formatSeconds(snippet.timestampSeconds ?? snippet.timestamp_seconds);
+    return {
+      title: timestamp ? `关键帧 ${timestamp}` : `关键帧 ${index + 1}`,
+      detail: snippet.text || '',
+      meta: snippet.source || '',
+    };
+  });
+  const providers = arrayOrEmpty(payload.providerEvidence || payload.provider_evidence).map((evidence) => ({
+    title: `${evidence.provider || 'provider'} · ${evidence.capability || 'capability'}`,
+    detail: evidence.detail || evidence.status || '',
+    meta: evidence.supported ? 'supported' : 'not_supported',
+  }));
+  return `
+    ${renderKeyValueGrid([
+      { label: '文档', value: document.title || manifest.title },
+      { label: '媒体类型', value: payload.mediaKind || payload.media_kind || 'video' },
+      { label: '解析状态', value: payload.parseStatus || payload.parse_status || 'unknown' },
+      { label: '证据状态', value: payload.evidenceStatus || payload.evidence_status || 'missing' },
+      { label: '原文片段', value: String(summary.transcriptSegmentCount ?? summary.transcript_segment_count ?? transcript.length) },
+      { label: '场景片段', value: String(summary.sceneCount ?? summary.scene_count ?? scenes.length) },
+      { label: '关键帧 OCR', value: String(summary.keyframeOcrSnippetCount ?? summary.keyframe_ocr_snippet_count ?? ocr.length) },
+    ])}
+    <section>
+      <h2>说明</h2>
+      <p>${escapeHtml(payload.note || '该摘要来自后台视频解析证据，用于让模型继续生成原文、页面映射、PPT 大纲或截图型 PPT。缺失项不会被补造。')}</p>
+    </section>
+    <section>
+      <h2>原文片段</h2>
+      ${renderList(transcript, '暂无原文片段。')}
+    </section>
+    <section>
+      <h2>场景片段</h2>
+      ${renderList(scenes, '暂无场景片段。')}
+    </section>
+    <section>
+      <h2>关键帧 OCR</h2>
+      ${renderList(ocr, '暂无关键帧 OCR。')}
+    </section>
+    <section>
+      <h2>缺失证据</h2>
+      ${renderList(missing, '当前没有缺失项。')}
+    </section>
+    <section>
+      <h2>解析提供方</h2>
+      ${renderList(providers, '暂无提供方记录。')}
+    </section>
+  `;
+}
+
 function renderWechatVideoLoginHandoff(manifest) {
   const payload = manifest.payload || {};
   const acquisitionSteps = [
@@ -566,9 +651,11 @@ export function renderHtmlArtifactDocument(input = {}) {
       : manifest.templateId === 'static_page_data_quality_report'
         ? renderStaticPageDataQualityReport(manifest)
         : manifest.templateId === 'report_render_summary'
-          ? renderReportRenderSummary(manifest)
-          : manifest.templateId === 'code_review_summary'
-            ? renderCodeReviewSummary(manifest)
+        ? renderReportRenderSummary(manifest)
+        : manifest.templateId === 'code_review_summary'
+          ? renderCodeReviewSummary(manifest)
+          : manifest.templateId === 'video_extraction_summary'
+            ? renderVideoExtractionSummary(manifest)
             : renderWechatVideoLoginHandoff(manifest);
   const allowScripts = manifest.interactionMode !== 'read_only';
   const script = renderInteractionScript(manifest);

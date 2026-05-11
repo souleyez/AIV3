@@ -223,6 +223,7 @@ pub enum HtmlArtifactTemplateIdView {
     StaticPageDataQualityReport,
     ReportRenderSummary,
     CodeReviewSummary,
+    VideoExtractionSummary,
     WechatVideoLoginHandoff,
 }
 
@@ -3224,6 +3225,56 @@ mod tests {
             HtmlArtifactTemplateIdView::ReportRenderSummary
         );
         assert_eq!(decoded.source_type, HtmlArtifactSourceTypeView::Report);
+    }
+
+    #[test]
+    fn html_artifact_video_extraction_summary_uses_safe_wire_shape() {
+        let manifest = HtmlArtifactManifestView {
+            kind: "html_artifact".to_string(),
+            version: 1,
+            id: "html-video-extraction-doc-1".to_string(),
+            title: "Video · Extraction Summary".to_string(),
+            source_type: HtmlArtifactSourceTypeView::VideoExtraction,
+            template_id: HtmlArtifactTemplateIdView::VideoExtractionSummary,
+            owner_scope: HtmlArtifactOwnerScopeView {
+                scope_type: "document".to_string(),
+                id: "doc-1".to_string(),
+            },
+            data_refs: vec![HtmlArtifactDataRefView {
+                kind: "document".to_string(),
+                id: "doc-1".to_string(),
+                label: "Video".to_string(),
+            }],
+            provenance: HtmlArtifactProvenanceView {
+                producer: "v3-media-runtime".to_string(),
+                reason: "video PPT/transcript extraction evidence summary".to_string(),
+                source_run_id: None,
+            },
+            interaction_mode: HtmlArtifactInteractionModeView::ReadOnly,
+            created_at: Utc::now(),
+            payload: json!({
+                "mediaKind": "video",
+                "parseStatus": "transcribed",
+                "evidenceStatus": "available"
+            }),
+        };
+
+        let encoded = serde_json::to_value(&manifest).expect("manifest should serialize");
+
+        assert_eq!(encoded["source_type"], json!("video_extraction"));
+        assert_eq!(encoded["template_id"], json!("video_extraction_summary"));
+        assert_eq!(encoded["owner_scope"]["type"], json!("document"));
+
+        let decoded: HtmlArtifactManifestView =
+            serde_json::from_value(encoded).expect("manifest should deserialize");
+        assert_eq!(
+            decoded.template_id,
+            HtmlArtifactTemplateIdView::VideoExtractionSummary
+        );
+        assert_eq!(
+            decoded.source_type,
+            HtmlArtifactSourceTypeView::VideoExtraction
+        );
     }
 
     #[test]

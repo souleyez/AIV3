@@ -246,6 +246,67 @@ test('renders report render summary template', () => {
   assert.match(report.html, /发布前检查/);
 });
 
+test('renders video extraction summary template', () => {
+  const video = renderHtmlArtifactDocument(baseManifest({
+    id: 'video-extraction-summary',
+    sourceType: 'video_extraction',
+    templateId: 'video_extraction_summary',
+    title: '课程视频 · 视频提取摘要',
+    ownerScope: { type: 'document', id: 'doc-1' },
+    payload: {
+      document: {
+        id: 'doc-1',
+        datasetId: 'dataset-1',
+        title: '课程视频',
+        contentType: 'video/mp4',
+        lifecycle: 'extracted',
+      },
+      mediaKind: 'video',
+      parseStatus: 'transcribed',
+      evidenceStatus: 'available',
+      summary: {
+        transcriptSegmentCount: 1,
+        sceneCount: 1,
+        keyframeOcrSnippetCount: 1,
+      },
+      transcriptSegments: [{
+        startSeconds: 1,
+        endSeconds: 3,
+        text: '第一页介绍系统目标',
+        source: 'MEDIA_TRANSCRIBE_BIN',
+      }],
+      scenes: [{
+        startSeconds: 1,
+        endSeconds: 8,
+        summary: '标题页',
+        source: 'MEDIA_SCENE_BIN',
+      }],
+      keyframeOcrSnippets: [{
+        timestampSeconds: 2,
+        text: 'AI 数据智能助手',
+        source: 'MEDIA_KEYFRAME_OCR_BIN',
+      }],
+      missing: [],
+      providerEvidence: [{
+        provider: 'minimax',
+        capability: 'media_understanding',
+        status: 'ready',
+        supported: true,
+        detail: '已启用视频解析',
+      }],
+      note: '缺失项不会被补造。',
+    },
+  }));
+
+  assert.equal(video.rejected, false);
+  assert.match(video.html, /视频提取摘要/);
+  assert.match(video.html, /第一页介绍系统目标/);
+  assert.match(video.html, /AI 数据智能助手/);
+  assert.match(video.html, /标题页/);
+  assert.match(video.html, /缺失项不会被补造/);
+  assert.match(video.html, /minimax/);
+});
+
 test('renders legacy video login handoff as unsupported source guidance', () => {
   const video = renderHtmlArtifactDocument(baseManifest({
     id: 'video-source-limited',

@@ -157,6 +157,56 @@ struct AssistantRunReactEvent {
     payload: Value,
 }
 
+fn assistant_run_react_completed_event_payload(
+    step_index: usize,
+    action_type: &str,
+    observation_summary: &Value,
+    entrypoint: Option<&str>,
+    observation: &Value,
+) -> Value {
+    let mut payload = json!({
+        "step": step_index,
+        "action_type": action_type,
+        "observation_summary": observation_summary.clone(),
+    });
+    if let Some(entrypoint) = entrypoint {
+        payload["entrypoint"] = json!(entrypoint);
+    }
+    if let Some(html_artifacts) = observation
+        .get("html_artifacts")
+        .and_then(Value::as_array)
+        .filter(|items| !items.is_empty())
+    {
+        payload["html_artifacts"] = Value::Array(html_artifacts.clone());
+    }
+    payload
+}
+
+fn assistant_run_react_output_artifacts_from_observations(observations: &[Value]) -> Vec<Value> {
+    let mut seen = BTreeSet::<String>::new();
+    let mut summaries = Vec::<Value>::new();
+    for artifact in observations
+        .iter()
+        .filter_map(|observation| observation.get("html_artifacts").and_then(Value::as_array))
+        .flat_map(|items| items.iter())
+    {
+        let Some(id) = artifact.get("id").and_then(Value::as_str) else {
+            continue;
+        };
+        if !seen.insert(id.to_string()) {
+            continue;
+        }
+        summaries.push(json!({
+            "type": "html_artifact",
+            "id": id,
+            "title": artifact.get("title").and_then(Value::as_str).unwrap_or("HTML 产物"),
+            "template_id": artifact.get("template_id").and_then(Value::as_str).unwrap_or(""),
+            "source_type": artifact.get("source_type").and_then(Value::as_str).unwrap_or(""),
+        }));
+    }
+    summaries
+}
+
 const STATIC_PAGE_DRAFT_LIST_DEFAULT_LIMIT: i64 = 12;
 const STATIC_PAGE_DRAFT_LIST_MAX_LIMIT: i64 = 50;
 const HTML_ARTIFACT_LIST_DEFAULT_LIMIT: i64 = 20;
@@ -8566,11 +8616,13 @@ async fn run_assistant_run_react_for_create(
             } else {
                 "assistant_run.react.action_completed".to_string()
             },
-            payload: json!({
-                "step": step_index,
-                "action_type": action.action_type.as_str(),
-                "observation_summary": observation_summary,
-            }),
+            payload: assistant_run_react_completed_event_payload(
+                step_index,
+                action.action_type.as_str(),
+                &observation_summary,
+                None,
+                &result.observation,
+            ),
         });
 
         if let Some(final_answer) = result.final_answer {
@@ -8605,12 +8657,15 @@ async fn run_assistant_run_react_for_create(
         &react_trace_steps,
     ));
 
-    let output_artifacts = vec![json!({
+    let mut output_artifacts = vec![json!({
         "type": "assistant_message",
         "role": ChatMessageRole::Assistant.as_str(),
         "content": assistant_message,
         "source": "assistant_run_react",
     })];
+    output_artifacts.extend(assistant_run_react_output_artifacts_from_observations(
+        &observations,
+    ));
 
     Ok(AssistantRunReactOutcome {
         runtime_manifest,
@@ -8781,12 +8836,13 @@ async fn run_assistant_run_react_for_continue(
             } else {
                 "assistant_run.react.action_completed".to_string()
             },
-            payload: json!({
-                "step": step_index,
-                "action_type": action.action_type.as_str(),
-                "observation_summary": observation_summary,
-                "entrypoint": "continue_assistant_run",
-            }),
+            payload: assistant_run_react_completed_event_payload(
+                step_index,
+                action.action_type.as_str(),
+                &observation_summary,
+                Some("continue_assistant_run"),
+                &result.observation,
+            ),
         });
 
         if let Some(final_answer) = result.final_answer {
@@ -8829,12 +8885,15 @@ async fn run_assistant_run_react_for_continue(
     ));
 
     *initial_evidence_state = evidence_state.clone();
-    let output_artifacts = vec![json!({
+    let mut output_artifacts = vec![json!({
         "type": "assistant_message",
         "role": ChatMessageRole::Assistant.as_str(),
         "content": assistant_message,
         "source": "assistant_run_react_continue",
     })];
+    output_artifacts.extend(assistant_run_react_output_artifacts_from_observations(
+        &observations,
+    ));
 
     Ok(AssistantRunReactOutcome {
         runtime_manifest,
