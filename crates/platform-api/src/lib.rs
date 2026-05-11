@@ -11947,8 +11947,96 @@ fn assistant_run_static_page_artifact_brief(current_artifact: &Value) -> Value {
     if !modules.is_empty() {
         brief.insert("modules".to_string(), Value::Array(modules));
     }
+    if let Some(binding_quality) = assistant_run_static_page_binding_quality_brief(current_artifact)
+    {
+        brief.insert("bindingQuality".to_string(), binding_quality);
+    }
 
     Value::Object(brief)
+}
+
+fn assistant_run_static_page_binding_quality_brief(current_artifact: &Value) -> Option<Value> {
+    let bindings = current_artifact
+        .get("dataSnapshot")
+        .or_else(|| current_artifact.get("data_snapshot"))
+        .and_then(|snapshot| {
+            snapshot
+                .get("moduleBindings")
+                .or_else(|| snapshot.get("module_bindings"))
+        })
+        .and_then(Value::as_array)?;
+
+    let modules = bindings
+        .iter()
+        .take(24)
+        .map(assistant_run_static_page_binding_quality_module_brief)
+        .collect::<Vec<_>>();
+    if modules.is_empty() {
+        return None;
+    }
+    let attention_modules = modules
+        .iter()
+        .filter(|module| {
+            module
+                .get("bindingQualityStatus")
+                .and_then(Value::as_str)
+                .is_some_and(|status| status != "confirmed")
+                || module
+                    .get("chartDataFit")
+                    .and_then(Value::as_str)
+                    .is_some_and(|fit| matches!(fit, "needs_sample_rows" | "missing_binding"))
+        })
+        .count();
+
+    Some(json!({
+        "moduleCount": modules.len(),
+        "attentionModules": attention_modules,
+        "policy": "quality_only_no_sample_rows",
+        "modules": modules,
+    }))
+}
+
+fn assistant_run_static_page_binding_quality_module_brief(binding: &Value) -> Value {
+    let data_binding = binding
+        .get("binding")
+        .or_else(|| binding.get("dataBinding"))
+        .or_else(|| binding.get("data_binding"))
+        .unwrap_or(&Value::Null);
+    let binding_quality = binding
+        .get("bindingQuality")
+        .or_else(|| binding.get("binding_quality"))
+        .unwrap_or(&Value::Null);
+    json!({
+        "moduleId": static_page_artifact_string(binding, &["moduleId", "module_id"]).unwrap_or_default(),
+        "title": static_page_artifact_string(binding, &["title"]).unwrap_or_default(),
+        "visualizationType": static_page_artifact_string(binding, &["visualizationType", "visualization_type"]).unwrap_or_default(),
+        "chartRuntime": static_page_artifact_string(binding, &["chartRuntime", "chart_runtime"]).unwrap_or_default(),
+        "dataQuality": static_page_artifact_string(binding, &["dataQuality", "data_quality"]).unwrap_or_default(),
+        "bindingQualityStatus": static_page_artifact_string(binding, &["bindingQualityStatus", "binding_quality_status"])
+            .or_else(|| static_page_artifact_string(binding_quality, &["status"]))
+            .unwrap_or_default(),
+        "chartDataFit": static_page_artifact_string(binding, &["chartDataFit", "chart_data_fit"])
+            .or_else(|| static_page_artifact_string(binding_quality, &["chartDataFit", "chart_data_fit"]))
+            .unwrap_or_default(),
+        "reason": static_page_artifact_string(binding_quality, &["reason"]).unwrap_or_default(),
+        "recommendedAction": static_page_artifact_string(binding, &["recommendedAction", "recommended_action"])
+            .or_else(|| static_page_artifact_string(binding_quality, &["recommendedAction", "recommended_action"]))
+            .unwrap_or_default(),
+        "sampleRows": binding_quality
+            .get("sampleRows")
+            .or_else(|| binding_quality.get("sample_rows"))
+            .and_then(Value::as_u64)
+            .or_else(|| {
+                binding
+                    .get("sampleData")
+                    .or_else(|| binding.get("sample_data"))
+                    .and_then(Value::as_array)
+                    .map(|items| items.len() as u64)
+            })
+            .unwrap_or(0),
+        "sourceId": static_page_artifact_string(data_binding, &["sourceId", "source_id"]).unwrap_or_default(),
+        "fieldPath": static_page_artifact_string(data_binding, &["fieldPath", "field_path", "field"]).unwrap_or_default(),
+    })
 }
 
 fn assistant_run_static_page_module_briefs(current_artifact: &Value) -> Vec<Value> {
@@ -28085,6 +28173,30 @@ mod tests {
                         "content": "当前打开产物正文不能进入 ReAct 规划提示",
                         "rows": [{"raw": "current-artifact-row-should-not-leak"}]
                     }],
+                    "dataSnapshot": {
+                        "module_bindings": [{
+                            "moduleId": "hero",
+                            "title": "核心判断",
+                            "binding": {
+                                "sourceId": "evidence",
+                                "fieldPath": "orders.amount"
+                            },
+                            "visualizationType": "line-chart",
+                            "chartRuntime": "deterministic",
+                            "sampleData": [{
+                                "label": "current-artifact-sensitive-sample",
+                                "value": 1200
+                            }],
+                            "dataQuality": "evidence_signal",
+                            "bindingQuality": {
+                                "status": "partial",
+                                "reason": "matched_field_candidate_without_rows",
+                                "chartDataFit": "needs_sample_rows",
+                                "recommendedAction": "先补充样本行再出效果图。",
+                                "sampleRows": 1
+                            }
+                        }]
+                    }
                 })),
                 messages: Vec::new(),
             },
@@ -28100,9 +28212,13 @@ mod tests {
         assert!(input.contains("\"previewStale\":true"));
         assert!(input.contains("\"previewStatus\":\"stale\""));
         assert!(input.contains("\"id\":\"hero\""));
+        assert!(input.contains("\"bindingQuality\""));
+        assert!(input.contains("\"chartDataFit\":\"needs_sample_rows\""));
+        assert!(input.contains("\"sampleRows\":1"));
         assert!(!input.contains("模块正文不能进入弱规划目录"));
         assert!(!input.contains("当前打开产物正文不能进入 ReAct 规划提示"));
         assert!(!input.contains("current-artifact-row-should-not-leak"));
+        assert!(!input.contains("current-artifact-sensitive-sample"));
     }
 
     #[test]
