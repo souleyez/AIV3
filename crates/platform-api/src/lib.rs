@@ -6378,7 +6378,7 @@ async fn create_assistant_run(
         .await
         .map_err(ApiError::from_storage)?;
 
-    if let Some(executor_transport) = assistant_run_executor_transport_from_env() {
+    if let Some(executor_selection) = assistant_run_executor_transport_selection_from_env() {
         let codex_runtime = assistant_run_codex_runtime_selection();
         let codex_model_gateway = assistant_run_codex_model_gateway_snapshot(&codex_runtime);
         let codex_package = build_assistant_run_codex_context_package(
@@ -6392,7 +6392,7 @@ async fn create_assistant_run(
             &evidence_state,
             request.current_artifact.as_ref(),
             &codex_model_gateway,
-            executor_transport,
+            executor_selection.effective_transport.clone(),
         );
         let codex_output = execute_codex_conversation_plan(&codex_package);
         let codex_shadow_comparison = assistant_run_codex_shadow_comparison(
@@ -6408,6 +6408,7 @@ async fn create_assistant_run(
             &codex_output,
             now,
             Some(&codex_shadow_comparison),
+            Some(&executor_selection.policy),
         ));
         state
             .storage
@@ -6430,6 +6431,7 @@ async fn create_assistant_run(
                     payload: assistant_run_codex_event_payload(
                         &codex_output,
                         Some(&codex_shadow_comparison),
+                        Some(&executor_selection.policy),
                     ),
                     created_at: now,
                 },
@@ -6714,7 +6716,7 @@ async fn continue_assistant_run(
     }));
     execution_trail.append(&mut react_trail_steps);
     let codex_executor_event_payload =
-        if let Some(executor_transport) = assistant_run_executor_transport_from_env() {
+        if let Some(executor_selection) = assistant_run_executor_transport_selection_from_env() {
             let codex_scope_candidates = value_array(run.scope_candidates.clone());
             let codex_runtime = assistant_run_codex_runtime_selection();
             let codex_model_gateway = assistant_run_codex_model_gateway_snapshot(&codex_runtime);
@@ -6729,7 +6731,7 @@ async fn continue_assistant_run(
                 &evidence_state,
                 request.current_artifact.as_ref(),
                 &codex_model_gateway,
-                executor_transport,
+                executor_selection.effective_transport.clone(),
             );
             let codex_output = execute_codex_conversation_plan(&codex_package);
             let codex_shadow_comparison = assistant_run_codex_shadow_comparison(
@@ -6745,10 +6747,12 @@ async fn continue_assistant_run(
                 &codex_output,
                 now,
                 Some(&codex_shadow_comparison),
+                Some(&executor_selection.policy),
             ));
             Some(assistant_run_codex_event_payload(
                 &codex_output,
                 Some(&codex_shadow_comparison),
+                Some(&executor_selection.policy),
             ))
         } else {
             None
@@ -9659,10 +9663,88 @@ fn assistant_run_react_scope_allows_tools(
         && !assistant_run_is_plain_ordinary_chat_scope(Some(selected_scope), None, current_artifact)
 }
 
-fn assistant_run_executor_transport_from_env() -> Option<AssistantRunExecutorTransportView> {
+#[derive(Clone, Debug)]
+struct AssistantRunExecutorTransportSelection {
+    effective_transport: AssistantRunExecutorTransportView,
+    policy: Value,
+}
+
+fn assistant_run_executor_transport_selection_from_env(
+) -> Option<AssistantRunExecutorTransportSelection> {
     std::env::var("ASSISTANT_RUN_EXECUTOR")
         .ok()
-        .and_then(|value| assistant_run_executor_transport_from_value(&value))
+        .and_then(|value| {
+            assistant_run_executor_transport_selection_from_value(
+                &value,
+                assistant_run_codex_real_transport_feature_gate_enabled(),
+            )
+        })
+}
+
+fn assistant_run_executor_transport_selection_from_value(
+    value: &str,
+    real_transport_feature_gate_enabled: bool,
+) -> Option<AssistantRunExecutorTransportSelection> {
+    let requested_transport = assistant_run_executor_transport_from_value(value)?;
+    let real_transport_requested = assistant_run_executor_transport_is_real(&requested_transport);
+    let downgraded = real_transport_requested && !real_transport_feature_gate_enabled;
+    let effective_transport = if downgraded {
+        AssistantRunExecutorTransportView::CodexPlanOnly
+    } else {
+        requested_transport.clone()
+    };
+    let downgrade_reason = if downgraded {
+        json!("real_transport_feature_gate_disabled")
+    } else {
+        Value::Null
+    };
+    let next_step = if downgraded {
+        "keep_codex_in_shadow_plan_only_until_promotion_gate_review"
+    } else if real_transport_requested {
+        "assistant_runtime_still_validates_real_transport_before_execution"
+    } else {
+        "run_codex_shadow_transport"
+    };
+
+    Some(AssistantRunExecutorTransportSelection {
+        effective_transport: effective_transport.clone(),
+        policy: json!({
+            "requested_transport": requested_transport.as_str(),
+            "effective_transport": effective_transport.as_str(),
+            "real_transport_requested": real_transport_requested,
+            "real_transport_feature_gate_enabled": real_transport_feature_gate_enabled,
+            "downgraded": downgraded,
+            "downgrade_reason": downgrade_reason,
+            "direct_execution_authoritative": true,
+            "codex_mutation_allowed": false,
+            "queue_allowed": false,
+            "manual_feature_gate_required_for_real_transport": real_transport_requested,
+            "host_validation_required_for_real_transport": real_transport_requested,
+            "next_step": next_step,
+        }),
+    })
+}
+
+fn assistant_run_executor_transport_is_real(transport: &AssistantRunExecutorTransportView) -> bool {
+    matches!(
+        transport,
+        AssistantRunExecutorTransportView::CodexExecSchema
+            | AssistantRunExecutorTransportView::CodexSdkThread
+            | AssistantRunExecutorTransportView::CodexAppServer
+            | AssistantRunExecutorTransportView::CodexMcpServer
+    )
+}
+
+fn assistant_run_codex_real_transport_feature_gate_enabled() -> bool {
+    std::env::var("ASSISTANT_RUN_CODEX_REAL_TRANSPORT_FEATURE_GATE")
+        .ok()
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "enabled" | "on" | "yes"
+            )
+        })
+        .unwrap_or(false)
 }
 
 fn assistant_run_executor_transport_from_value(
@@ -10414,19 +10496,24 @@ fn assistant_run_codex_execution_trail_entries(
     output: &CodexConversationExecutorOutput,
     now: DateTime<Utc>,
     shadow_comparison: Option<&Value>,
+    transport_policy: Option<&Value>,
 ) -> Vec<Value> {
     vec![json!({
         "status": "completed",
         "label": "Codex 执行器诊断",
         "transport": output.transport.as_str(),
+        "transport_policy": assistant_run_codex_transport_policy_summary(transport_policy),
         "executor_status": output.status.as_str(),
         "codex_invoked": output.codex_invoked,
         "fallback_to_direct": output.fallback_to_direct,
         "planned_action_types": output.planned_action_types.clone(),
-        "suggested_action": output.suggested_action.clone(),
+        "suggested_action": assistant_run_codex_suggested_action_summary(
+            output.suggested_action.as_ref(),
+            shadow_comparison,
+        ),
         "model_gateway": output.model_gateway.clone(),
         "output_schema": output.output_schema.clone(),
-        "host_invocation": output.host_invocation.clone(),
+        "host_invocation": assistant_run_codex_host_invocation_summary(output.host_invocation.as_ref()),
         "shadow_comparison": shadow_comparison.cloned(),
         "at": now,
     })]
@@ -10435,19 +10522,24 @@ fn assistant_run_codex_execution_trail_entries(
 fn assistant_run_codex_event_payload(
     output: &CodexConversationExecutorOutput,
     shadow_comparison: Option<&Value>,
+    transport_policy: Option<&Value>,
 ) -> Value {
     json!({
         "transport": output.transport.as_str(),
+        "transport_policy": assistant_run_codex_transport_policy_summary(transport_policy),
         "status": output.status.as_str(),
         "codex_invoked": output.codex_invoked,
         "fallback_to_direct": output.fallback_to_direct,
         "planned_action_types": output.planned_action_types.clone(),
-        "suggested_action": output.suggested_action.clone(),
+        "suggested_action": assistant_run_codex_suggested_action_summary(
+            output.suggested_action.as_ref(),
+            shadow_comparison,
+        ),
         "model_gateway": output.model_gateway.clone(),
         "output_schema": output.output_schema.clone(),
-        "host_invocation": output.host_invocation.clone(),
+        "host_invocation": assistant_run_codex_host_invocation_summary(output.host_invocation.as_ref()),
         "context_budget": output.context_budget.clone(),
-        "execution_trail": output.execution_trail.clone(),
+        "execution_trail": assistant_run_codex_runtime_execution_trail_summary(&output.execution_trail),
         "shadow_comparison": shadow_comparison.cloned(),
     })
 }
@@ -19851,6 +19943,12 @@ fn assistant_run_codex_detail_diagnostics(events: &[AssistantRunEvent]) -> Value
         .collect::<Vec<_>>();
     let codex_event_count = codex_events.len();
     let latest = codex_events.last().copied();
+    let host_validation_results = assistant_run_codex_host_validation_results(events, 8);
+    let host_validation_summary =
+        assistant_run_codex_host_validation_summary(&host_validation_results);
+    let shadow_gate = assistant_run_codex_shadow_gate_summary(&codex_events);
+    let promotion_gate =
+        assistant_run_codex_promotion_gate_summary(&shadow_gate, &host_validation_summary);
     let latest_summary = latest
         .map(|event| {
             let payload = &event.payload;
@@ -19908,6 +20006,9 @@ fn assistant_run_codex_detail_diagnostics(events: &[AssistantRunEvent]) -> Value
                 "event_id": event.id.to_string(),
                 "sequence_no": event.sequence_no,
                 "transport": payload.get("transport").cloned().unwrap_or(Value::Null),
+                "transport_policy": assistant_run_codex_transport_policy_summary(
+                    payload.get("transport_policy"),
+                ),
                 "status": payload.get("status").cloned().unwrap_or(Value::Null),
                 "codex_invoked": payload
                     .get("codex_invoked")
@@ -19921,21 +20022,22 @@ fn assistant_run_codex_detail_diagnostics(events: &[AssistantRunEvent]) -> Value
                     .get("planned_action_types")
                     .cloned()
                     .unwrap_or_else(|| json!([])),
-                "suggested_action": payload
-                    .get("suggested_action")
-                    .cloned()
-                    .unwrap_or(Value::Null),
-                "model_gateway": payload
-                    .get("model_gateway")
-                    .cloned()
-                    .unwrap_or(Value::Null),
+                "suggested_action": assistant_run_codex_suggested_action_summary(
+                    payload.get("suggested_action"),
+                    shadow,
+                ),
+                "model_gateway": assistant_run_codex_model_gateway_diagnostics_summary(
+                    payload.get("model_gateway"),
+                ),
                 "output_schema": payload
                     .get("output_schema")
                     .cloned()
                     .unwrap_or(Value::Null),
                 "host_invocation": payload
                     .get("host_invocation")
-                    .cloned()
+                    .map(|host_invocation| {
+                        assistant_run_codex_host_invocation_summary(Some(host_invocation))
+                    })
                     .unwrap_or(Value::Null),
                 "context_budget": context_budget.unwrap_or(Value::Null),
                 "shadow_comparison": shadow_summary.unwrap_or(Value::Null),
@@ -19946,10 +20048,353 @@ fn assistant_run_codex_detail_diagnostics(events: &[AssistantRunEvent]) -> Value
     json!({
         "event_count": codex_event_count,
         "latest": latest_summary,
-        "shadow_gate": assistant_run_codex_shadow_gate_summary(&codex_events),
+        "recent_shadow_events": assistant_run_codex_recent_shadow_events(&codex_events, 8),
+        "shadow_gate": shadow_gate,
+        "host_validation_summary": host_validation_summary,
+        "host_validation_results": host_validation_results,
+        "promotion_gate": promotion_gate,
         "mutation_allowed": false,
         "queue_allowed": false,
         "authority": "direct_until_shadow_gate_passes",
+    })
+}
+
+fn assistant_run_codex_transport_policy_summary(transport_policy: Option<&Value>) -> Value {
+    let Some(policy) = transport_policy.filter(|value| value.is_object()) else {
+        return Value::Null;
+    };
+
+    json!({
+        "requested_transport": policy
+            .get("requested_transport")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "effective_transport": policy
+            .get("effective_transport")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "real_transport_requested": policy
+            .get("real_transport_requested")
+            .cloned()
+            .unwrap_or(Value::Bool(false)),
+        "real_transport_feature_gate_enabled": policy
+            .get("real_transport_feature_gate_enabled")
+            .cloned()
+            .unwrap_or(Value::Bool(false)),
+        "downgraded": policy
+            .get("downgraded")
+            .cloned()
+            .unwrap_or(Value::Bool(false)),
+        "downgrade_reason": policy
+            .get("downgrade_reason")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "direct_execution_authoritative": policy
+            .get("direct_execution_authoritative")
+            .cloned()
+            .unwrap_or(Value::Bool(true)),
+        "codex_mutation_allowed": policy
+            .get("codex_mutation_allowed")
+            .cloned()
+            .unwrap_or(Value::Bool(false)),
+        "queue_allowed": policy
+            .get("queue_allowed")
+            .cloned()
+            .unwrap_or(Value::Bool(false)),
+        "manual_feature_gate_required_for_real_transport": policy
+            .get("manual_feature_gate_required_for_real_transport")
+            .cloned()
+            .unwrap_or(Value::Bool(false)),
+        "host_validation_required_for_real_transport": policy
+            .get("host_validation_required_for_real_transport")
+            .cloned()
+            .unwrap_or(Value::Bool(false)),
+        "next_step": policy.get("next_step").cloned().unwrap_or(Value::Null),
+    })
+}
+
+fn assistant_run_codex_host_invocation_summary(host_invocation: Option<&Value>) -> Value {
+    let Some(host_invocation) = host_invocation.filter(|value| value.is_object()) else {
+        return Value::Null;
+    };
+    let command_blueprint = host_invocation
+        .get("command_blueprint")
+        .filter(|value| value.is_object())
+        .map(|command| {
+            json!({
+                "program": command.get("program").cloned().unwrap_or(Value::Null),
+                "args": command.get("args").cloned().unwrap_or_else(|| json!([])),
+                "stdin": command.get("stdin").cloned().unwrap_or(Value::Null),
+                "workspace": command.get("workspace").cloned().unwrap_or(Value::Null),
+            })
+        })
+        .unwrap_or(Value::Null);
+    let safety = host_invocation
+        .get("safety")
+        .filter(|value| value.is_object())
+        .map(|safety| {
+            json!({
+                "v3_validates_all_actions": safety
+                    .get("v3_validates_all_actions")
+                    .cloned()
+                    .unwrap_or(Value::Bool(true)),
+                "direct_database_access_allowed": safety
+                    .get("direct_database_access_allowed")
+                    .cloned()
+                    .unwrap_or(Value::Bool(false)),
+                "direct_queue_access_allowed": safety
+                    .get("direct_queue_access_allowed")
+                    .cloned()
+                    .unwrap_or(Value::Bool(false)),
+                "real_host_validation_required": safety
+                    .get("real_host_validation_required")
+                    .cloned()
+                    .unwrap_or(Value::Bool(true)),
+            })
+        })
+        .unwrap_or(Value::Null);
+
+    json!({
+        "kind": host_invocation.get("kind").cloned().unwrap_or(Value::Null),
+        "transport": host_invocation
+            .get("transport")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "host_required": host_invocation
+            .get("host_required")
+            .cloned()
+            .unwrap_or(Value::Bool(true)),
+        "local_execution_allowed": host_invocation
+            .get("local_execution_allowed")
+            .cloned()
+            .unwrap_or(Value::Bool(false)),
+        "mutation_allowed": host_invocation
+            .get("mutation_allowed")
+            .cloned()
+            .unwrap_or(Value::Bool(false)),
+        "queue_allowed": host_invocation
+            .get("queue_allowed")
+            .cloned()
+            .unwrap_or(Value::Bool(false)),
+        "input_contract": host_invocation
+            .get("input_contract")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "output_schema_title": host_invocation
+            .get("output_schema_title")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "output_schema_required": host_invocation
+            .get("output_schema_required")
+            .cloned()
+            .unwrap_or_else(|| json!([])),
+        "command_blueprint": command_blueprint,
+        "model_gateway": assistant_run_codex_model_gateway_diagnostics_summary(
+            host_invocation.get("model_gateway"),
+        ),
+        "safety": safety,
+    })
+}
+
+fn assistant_run_codex_runtime_execution_trail_summary(items: &[Value]) -> Vec<Value> {
+    items
+        .iter()
+        .map(|item| {
+            let mut item = item.clone();
+            if let Some(object) = item.as_object_mut() {
+                if let Some(host_invocation) = object.get("host_invocation").cloned() {
+                    object.insert(
+                        "host_invocation".to_string(),
+                        assistant_run_codex_host_invocation_summary(Some(&host_invocation)),
+                    );
+                }
+                if let Some(suggested_action) = object.get("suggested_action").cloned() {
+                    object.insert(
+                        "suggested_action".to_string(),
+                        assistant_run_codex_suggested_action_summary(Some(&suggested_action), None),
+                    );
+                }
+            }
+            item
+        })
+        .collect()
+}
+
+fn assistant_run_codex_suggested_action_summary(
+    suggested_action: Option<&Value>,
+    shadow: Option<&Value>,
+) -> Value {
+    let Some(action) = suggested_action.filter(|value| value.is_object()) else {
+        return Value::Null;
+    };
+    let shadow = shadow.unwrap_or(&Value::Null);
+
+    json!({
+        "action_type": action
+            .get("action_type")
+            .cloned()
+            .or_else(|| shadow.pointer("/codex/suggested_action_type").cloned())
+            .unwrap_or(Value::Null),
+        "title": action.get("title").cloned().unwrap_or(Value::Null),
+        "source": action.get("source").cloned().unwrap_or(Value::Null),
+        "confidence": action.get("confidence").cloned().unwrap_or(Value::Null),
+        "requires_v3_validation": action
+            .get("requires_v3_validation")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "mutates_state": action.get("mutates_state").cloned().unwrap_or(Value::Null),
+        "mutation_allowed": action
+            .get("mutation_allowed")
+            .cloned()
+            .unwrap_or(Value::Bool(false)),
+        "queue_allowed": action
+            .get("queue_allowed")
+            .cloned()
+            .unwrap_or(Value::Bool(false)),
+        "requires_confirmation": action
+            .get("requires_confirmation")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "has_arguments": action.get("arguments").is_some(),
+        "has_input_schema": action.get("input_schema").is_some(),
+    })
+}
+
+fn assistant_run_codex_model_gateway_diagnostics_summary(model_gateway: Option<&Value>) -> Value {
+    let Some(model_gateway) = model_gateway.filter(|value| value.is_object()) else {
+        return Value::Null;
+    };
+    let selected_model = model_gateway
+        .get("selected_model")
+        .filter(|value| value.is_object())
+        .map(|selected| {
+            json!({
+                "mode": selected.get("mode").cloned().unwrap_or(Value::Null),
+                "provider": selected.get("provider").cloned().unwrap_or(Value::Null),
+                "model": selected.get("model").cloned().unwrap_or(Value::Null),
+            })
+        })
+        .unwrap_or(Value::Null);
+
+    json!({
+        "lane": model_gateway.get("lane").cloned().unwrap_or(Value::Null),
+        "selected_model": selected_model,
+        "profile_source": model_gateway
+            .get("profile_source")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "profile_status": model_gateway
+            .get("profile_status")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "profile_available": model_gateway.get("profile").is_some(),
+        "wire_api": model_gateway
+            .pointer("/profile/wire_api")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "auth_configured": model_gateway
+            .pointer("/profile/auth/configured")
+            .cloned()
+            .unwrap_or(Value::Bool(false)),
+        "secrets_redacted": model_gateway
+            .pointer("/safety/secrets_redacted")
+            .cloned()
+            .unwrap_or(Value::Bool(true)),
+        "raw_provider_payloads_allowed": model_gateway
+            .pointer("/safety/raw_provider_payloads_allowed")
+            .cloned()
+            .unwrap_or(Value::Bool(false)),
+        "codex_real_execution_allowed_on_this_host": model_gateway
+            .pointer("/safety/codex_real_execution_allowed_on_this_host")
+            .cloned()
+            .unwrap_or(Value::Bool(false)),
+        "v3_validates_all_actions": model_gateway
+            .pointer("/safety/v3_validates_all_actions")
+            .cloned()
+            .unwrap_or(Value::Bool(true)),
+    })
+}
+
+fn assistant_run_codex_recent_shadow_events(
+    events: &[&AssistantRunEvent],
+    limit: usize,
+) -> Vec<Value> {
+    events
+        .iter()
+        .rev()
+        .take(limit)
+        .copied()
+        .map(assistant_run_codex_shadow_event_summary)
+        .collect()
+}
+
+fn assistant_run_codex_shadow_event_summary(event: &AssistantRunEvent) -> Value {
+    let payload = &event.payload;
+    let shadow = payload.get("shadow_comparison").unwrap_or(&Value::Null);
+    let suggested_action = payload.get("suggested_action").unwrap_or(&Value::Null);
+    let model_gateway = payload.get("model_gateway").unwrap_or(&Value::Null);
+
+    json!({
+        "event_id": event.id.to_string(),
+        "sequence_no": event.sequence_no,
+        "transport": payload.get("transport").cloned().unwrap_or(Value::Null),
+        "transport_policy": assistant_run_codex_transport_policy_summary(
+            payload.get("transport_policy"),
+        ),
+        "status": payload.get("status").cloned().unwrap_or(Value::Null),
+        "comparison_status": shadow
+            .pointer("/comparison/status")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "actionable": shadow
+            .pointer("/comparison/actionable")
+            .cloned()
+            .unwrap_or(Value::Bool(false)),
+        "codex_has_suggestion": shadow
+            .pointer("/comparison/codex_has_suggestion")
+            .cloned()
+            .unwrap_or(Value::Bool(false)),
+        "direct_action_types": shadow
+            .pointer("/direct/action_types")
+            .cloned()
+            .unwrap_or_else(|| json!([])),
+        "codex_suggested_action_type": shadow
+            .pointer("/codex/suggested_action_type")
+            .cloned()
+            .or_else(|| suggested_action.get("action_type").cloned())
+            .unwrap_or(Value::Null),
+        "codex_suggested_action_allowed": shadow
+            .pointer("/codex/suggested_action_allowed")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "mutation_allowed": suggested_action
+            .get("mutation_allowed")
+            .cloned()
+            .unwrap_or(Value::Bool(false)),
+        "codex_mutation_allowed": shadow
+            .get("codex_mutation_allowed")
+            .cloned()
+            .unwrap_or(Value::Bool(false)),
+        "model_gateway_lane": model_gateway
+            .get("lane")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "model_provider": model_gateway
+            .pointer("/selected_model/provider")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "model": model_gateway
+            .pointer("/selected_model/model")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "profile_status": model_gateway
+            .get("profile_status")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "next_gate": shadow
+            .pointer("/comparison/next_gate")
+            .cloned()
+            .unwrap_or(Value::Null),
     })
 }
 
@@ -19968,24 +20413,20 @@ fn assistant_run_codex_shadow_gate_summary(events: &[&AssistantRunEvent]) -> Val
     let mut invalid_count = 0_usize;
     let mut no_suggestion_count = 0_usize;
     let mut unsafe_mutation_signal_count = 0_usize;
+    let mut matched_streak_count = 0_usize;
+    let mut streak_open = true;
+    let mut last_blocking_event = Value::Null;
 
     for event in &window {
         let comparison = event
             .payload
             .get("shadow_comparison")
             .unwrap_or(&Value::Null);
-        match comparison
+        let comparison_status = comparison
             .pointer("/comparison/status")
             .and_then(Value::as_str)
-            .unwrap_or("missing")
-        {
-            "matched" => matched_count += 1,
-            "diverged" => diverged_count += 1,
-            "invalid_suggestion" => invalid_count += 1,
-            "no_codex_suggestion" => no_suggestion_count += 1,
-            _ => no_suggestion_count += 1,
-        }
-        if comparison
+            .unwrap_or("missing");
+        let unsafe_mutation_signal = comparison
             .get("codex_mutation_allowed")
             .and_then(Value::as_bool)
             .unwrap_or(false)
@@ -19994,8 +20435,29 @@ fn assistant_run_codex_shadow_gate_summary(events: &[&AssistantRunEvent]) -> Val
                 .get("suggested_action")
                 .and_then(|action| action.get("mutation_allowed"))
                 .and_then(Value::as_bool)
-                .unwrap_or(false)
+                .unwrap_or(false);
+
+        if streak_open {
+            if comparison_status == "matched" && !unsafe_mutation_signal {
+                matched_streak_count += 1;
+            } else {
+                streak_open = false;
+            }
+        }
+        if last_blocking_event.is_null()
+            && (comparison_status != "matched" || unsafe_mutation_signal)
         {
+            last_blocking_event = assistant_run_codex_shadow_event_summary(event);
+        }
+
+        match comparison_status {
+            "matched" => matched_count += 1,
+            "diverged" => diverged_count += 1,
+            "invalid_suggestion" => invalid_count += 1,
+            "no_codex_suggestion" => no_suggestion_count += 1,
+            _ => no_suggestion_count += 1,
+        }
+        if unsafe_mutation_signal {
             unsafe_mutation_signal_count += 1;
         }
     }
@@ -20029,6 +20491,14 @@ fn assistant_run_codex_shadow_gate_summary(events: &[&AssistantRunEvent]) -> Val
         "invalid_count": invalid_count,
         "no_suggestion_count": no_suggestion_count,
         "unsafe_mutation_signal_count": unsafe_mutation_signal_count,
+        "matched_streak_count": matched_streak_count,
+        "last_blocking_event": last_blocking_event,
+        "host_validation": assistant_run_codex_host_validation_readiness(
+            status,
+            window.len(),
+            matched_streak_count,
+            &last_blocking_event,
+        ),
         "host_validation_allowed": status == "eligible_for_host_validation",
         "codex_mutation_allowed": false,
         "queue_allowed": false,
@@ -20038,6 +20508,339 @@ fn assistant_run_codex_shadow_gate_summary(events: &[&AssistantRunEvent]) -> Val
             "continue_shadow_comparison"
         },
     })
+}
+
+fn assistant_run_codex_host_validation_readiness(
+    gate_status: &str,
+    window_size: usize,
+    matched_streak_count: usize,
+    last_blocking_event: &Value,
+) -> Value {
+    let ready = gate_status == "eligible_for_host_validation";
+    let blocked_by = if ready {
+        Value::Null
+    } else if gate_status == "insufficient_sample" {
+        json!("insufficient_shadow_sample")
+    } else if !last_blocking_event.is_null() {
+        last_blocking_event
+            .get("comparison_status")
+            .cloned()
+            .unwrap_or_else(|| json!("shadow_gate_not_stable"))
+    } else {
+        json!("shadow_gate_not_stable")
+    };
+
+    json!({
+        "ready_for_jump_host_validation": ready,
+        "ready_for_mac_host_validation": ready,
+        "required_host_kinds": ["windows_jump", "mac_host"],
+        "candidate_transports": [
+            "codex_exec_schema",
+            "codex_sdk_thread",
+            "codex_app_server"
+        ],
+        "local_execution_allowed": false,
+        "direct_execution_authoritative": true,
+        "codex_mutation_allowed_before_host_validation": false,
+        "queue_allowed_before_host_validation": false,
+        "requires_task_workspace_root": true,
+        "requires_real_exec_allow_flag": true,
+        "requires_v3_action_validation": true,
+        "shadow_window_size": window_size,
+        "matched_streak_count": matched_streak_count,
+        "blocked_by": blocked_by,
+        "next_step": if ready {
+            "run_jump_host_smoke_with_codex_host_agent"
+        } else {
+            "continue_shadow_comparison_until_stable"
+        },
+    })
+}
+
+fn assistant_run_codex_host_validation_results(
+    events: &[AssistantRunEvent],
+    limit: usize,
+) -> Vec<Value> {
+    events
+        .iter()
+        .rev()
+        .filter_map(assistant_run_codex_host_validation_event_summary)
+        .take(limit)
+        .collect()
+}
+
+fn assistant_run_codex_host_validation_summary(results: &[Value]) -> Value {
+    let completed_count = results
+        .iter()
+        .filter(|result| {
+            result
+                .get("host_validation_completed")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+        })
+        .count();
+    let invalid_host_count = results
+        .iter()
+        .filter(|result| {
+            result.get("mode").and_then(Value::as_str) == Some("codex_exec")
+                && result.get("status").and_then(Value::as_str) == Some("completed")
+                && !result
+                    .get("host_kind_allowed")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+        })
+        .count();
+    let failed_count = results
+        .iter()
+        .filter(|result| {
+            result.get("mode").and_then(Value::as_str) == Some("codex_exec")
+                && !result
+                    .get("host_validation_completed")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+        })
+        .count();
+    let latest = results.first();
+    let latest_status = latest
+        .map(|result| {
+            if result
+                .get("host_validation_completed")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            {
+                "validated"
+            } else if result.get("mode").and_then(Value::as_str) == Some("codex_exec")
+                && result.get("status").and_then(Value::as_str) == Some("completed")
+            {
+                "invalid_host"
+            } else if result.get("mode").and_then(Value::as_str) == Some("codex_exec") {
+                "failed"
+            } else {
+                "observed_non_exec"
+            }
+        })
+        .unwrap_or("not_run");
+    let next_step = match latest_status {
+        "validated" => "review_host_report_then_consider_feature_gate_promotion",
+        "invalid_host" => "rerun_codex_host_smoke_on_windows_jump_or_mac_host",
+        "failed" => "inspect_redacted_codex_host_report_and_retry_on_jump_host",
+        _ => "run_jump_host_smoke_with_codex_host_agent_when_shadow_gate_ready",
+    };
+    let latest_summary = latest
+        .map(|result| {
+            json!({
+                "mode": result.get("mode").cloned().unwrap_or(Value::Null),
+                "status": result.get("status").cloned().unwrap_or(Value::Null),
+                "host_kind": result.get("host_kind").cloned().unwrap_or(Value::Null),
+                "host_kind_allowed": result
+                    .get("host_kind_allowed")
+                    .cloned()
+                    .unwrap_or(Value::Bool(false)),
+                "capability": result.get("capability").cloned().unwrap_or(Value::Null),
+                "codex_invoked": result
+                    .get("codex_invoked")
+                    .cloned()
+                    .unwrap_or(Value::Bool(false)),
+                "profile_kind": result.pointer("/profile/kind").cloned().unwrap_or(Value::Null),
+                "model": result.pointer("/profile/model").cloned().unwrap_or(Value::Null),
+                "workspace_configured": result
+                    .pointer("/command_plan/workspace_configured")
+                    .cloned()
+                    .unwrap_or(Value::Bool(false)),
+                "exit_code": result.pointer("/process/exit_code").cloned().unwrap_or(Value::Null),
+                "html_artifact_count": result
+                    .get("html_artifact_count")
+                    .cloned()
+                    .unwrap_or(Value::Null),
+            })
+        })
+        .unwrap_or(Value::Null);
+
+    json!({
+        "status": latest_status,
+        "result_count": results.len(),
+        "completed_count": completed_count,
+        "failed_count": failed_count,
+        "invalid_host_count": invalid_host_count,
+        "latest": latest_summary,
+        "direct_execution_authoritative": true,
+        "local_execution_allowed": false,
+        "codex_mutation_allowed": false,
+        "queue_allowed": false,
+        "next_step": next_step,
+    })
+}
+
+fn assistant_run_codex_promotion_gate_summary(
+    shadow_gate: &Value,
+    host_validation: &Value,
+) -> Value {
+    let shadow_ready = shadow_gate
+        .get("host_validation_allowed")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let host_validated = host_validation.get("status").and_then(Value::as_str) == Some("validated");
+    let status = if shadow_ready && host_validated {
+        "eligible_for_feature_gate_review"
+    } else if !shadow_ready {
+        "blocked_by_shadow_gate"
+    } else {
+        "blocked_by_host_validation"
+    };
+    let blocked_by = match status {
+        "eligible_for_feature_gate_review" => Value::Null,
+        "blocked_by_shadow_gate" => shadow_gate
+            .get("status")
+            .cloned()
+            .unwrap_or_else(|| json!("shadow_gate_not_ready")),
+        "blocked_by_host_validation" => host_validation
+            .get("status")
+            .cloned()
+            .unwrap_or_else(|| json!("host_validation_not_run")),
+        _ => json!("unknown"),
+    };
+    let next_step = match status {
+        "eligible_for_feature_gate_review" => {
+            "review_shadow_and_host_reports_before_enabling_codex_executor_gate"
+        }
+        "blocked_by_shadow_gate" => "continue_shadow_comparison_until_stable",
+        "blocked_by_host_validation" => "run_or_fix_jump_host_validation",
+        _ => "inspect_codex_executor_diagnostics",
+    };
+
+    json!({
+        "status": status,
+        "shadow_gate_status": shadow_gate.get("status").cloned().unwrap_or(Value::Null),
+        "host_validation_status": host_validation.get("status").cloned().unwrap_or(Value::Null),
+        "eligible_for_feature_gate_review": status == "eligible_for_feature_gate_review",
+        "blocked_by": blocked_by,
+        "direct_execution_authoritative": true,
+        "local_execution_allowed": false,
+        "codex_mutation_allowed": false,
+        "queue_allowed": false,
+        "requires_manual_feature_gate_change": true,
+        "next_step": next_step,
+    })
+}
+
+fn assistant_run_codex_host_validation_event_summary(event: &AssistantRunEvent) -> Option<Value> {
+    let output = assistant_run_codex_host_output_payload(&event.payload)?;
+    let mode = output
+        .get("mode")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    if !event.event_name.starts_with("codex_host")
+        && !event.event_name.contains("codex_host")
+        && mode != "codex_exec"
+    {
+        return None;
+    }
+    let status = output
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let host_kind = output.get("host_kind").and_then(Value::as_str);
+    let host_kind_allowed = assistant_run_codex_host_kind_is_allowed(host_kind);
+    let process = output.get("process").unwrap_or(&Value::Null);
+    let command_plan = output.get("command_plan").unwrap_or(&Value::Null);
+    let profile = output.get("profile").unwrap_or(&Value::Null);
+    let stdout_chars = process
+        .get("stdout_excerpt")
+        .and_then(Value::as_str)
+        .map(|value| value.chars().count())
+        .unwrap_or(0);
+    let stderr_chars = process
+        .get("stderr_excerpt")
+        .and_then(Value::as_str)
+        .map(|value| value.chars().count())
+        .unwrap_or(0);
+    let html_artifact_count = output
+        .get("html_artifacts")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0);
+
+    Some(json!({
+        "event_id": event.id.to_string(),
+        "sequence_no": event.sequence_no,
+        "event_name": event.event_name.clone(),
+        "mode": mode,
+        "status": status,
+        "host_kind": host_kind,
+        "host_kind_allowed": host_kind_allowed,
+        "host_validation_completed": mode == "codex_exec" && status == "completed" && host_kind_allowed,
+        "codex_invoked": output
+            .get("codex_invoked")
+            .cloned()
+            .unwrap_or(Value::Bool(false)),
+        "capability": output.get("capability").cloned().unwrap_or(Value::Null),
+        "profile": {
+            "id": profile.get("id").cloned().unwrap_or(Value::Null),
+            "kind": profile.get("kind").cloned().unwrap_or(Value::Null),
+            "model": profile.get("model").cloned().unwrap_or(Value::Null),
+            "provider_id": profile.get("provider_id").cloned().unwrap_or(Value::Null),
+            "wire_api": profile.get("wire_api").cloned().unwrap_or(Value::Null),
+            "base_url_configured": profile
+                .get("base_url_configured")
+                .cloned()
+                .unwrap_or(Value::Bool(false)),
+            "allowed_capability_count": profile
+                .get("allowed_capabilities")
+                .and_then(Value::as_array)
+                .map(Vec::len)
+                .unwrap_or(0),
+        },
+        "command_plan": {
+            "program": command_plan.get("program").cloned().unwrap_or(Value::Null),
+            "sandbox": command_plan.get("sandbox").cloned().unwrap_or(Value::Null),
+            "prompt_chars": command_plan.get("prompt_chars").cloned().unwrap_or(Value::Null),
+            "workspace_configured": command_plan
+                .get("workspace_configured")
+                .cloned()
+                .unwrap_or(Value::Bool(false)),
+            "workspace_label": command_plan
+                .get("workspace_label")
+                .cloned()
+                .unwrap_or(Value::Null),
+            "prompt_redacted": command_plan
+                .get("prompt_redacted")
+                .cloned()
+                .unwrap_or(Value::Bool(true)),
+        },
+        "process": {
+            "exit_code": process.get("exit_code").cloned().unwrap_or(Value::Null),
+            "stdout_chars": stdout_chars,
+            "stderr_chars": stderr_chars,
+        },
+        "task_chars": output.get("task_chars").cloned().unwrap_or(Value::Null),
+        "local_thread_id": output
+            .get("local_thread_id")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "task_memory_isolated": output
+            .get("task_memory_isolated")
+            .cloned()
+            .unwrap_or(Value::Bool(false)),
+        "task_memory_space_configured": output.get("task_memory_space_id").is_some(),
+        "html_artifact_count": html_artifact_count,
+        "raw_logs_exposed": false,
+    }))
+}
+
+fn assistant_run_codex_host_kind_is_allowed(host_kind: Option<&str>) -> bool {
+    matches!(host_kind, Some("windows_jump" | "mac_host"))
+}
+
+fn assistant_run_codex_host_output_payload(payload: &Value) -> Option<&Value> {
+    if payload.get("mode").and_then(Value::as_str).is_some() {
+        return Some(payload);
+    }
+    let output = payload.get("output")?;
+    if output.get("mode").and_then(Value::as_str).is_some() {
+        Some(output)
+    } else {
+        None
+    }
 }
 
 fn assistant_run_provider_usage_events(
@@ -23291,6 +24094,8 @@ mod tests {
             "ASSISTANT_RUN_CODEX_RUNTIME_PROVIDER",
             "ASSISTANT_RUN_CODEX_RUNTIME_MODEL",
             "ASSISTANT_RUN_CODEX_MODEL_PROFILE_ENV",
+            "ASSISTANT_RUN_CODEX_REAL_TRANSPORT_FEATURE_GATE",
+            "ASSISTANT_RUN_EXECUTOR",
             "LLM_GATEWAY_ROUTE_CODEX_CONVERSATION_PROVIDER",
             "LLM_GATEWAY_ROUTE_CODEX_CONVERSATION_MODEL",
             "LLM_GATEWAY_ROUTE_CODEX_CONVERSATION_CAPABILITIES",
@@ -23327,6 +24132,147 @@ mod tests {
             Some(AssistantRunExecutorTransportView::CodexAppServer)
         );
         assert_eq!(assistant_run_executor_transport_from_value("unknown"), None);
+
+        let downgraded =
+            assistant_run_executor_transport_selection_from_value("codex_exec_schema", false)
+                .expect("real transport selection");
+        assert_eq!(
+            downgraded.effective_transport,
+            AssistantRunExecutorTransportView::CodexPlanOnly
+        );
+        assert_eq!(
+            downgraded.policy["requested_transport"],
+            json!("codex_exec_schema")
+        );
+        assert_eq!(
+            downgraded.policy["effective_transport"],
+            json!("codex_plan_only")
+        );
+        assert_eq!(downgraded.policy["downgraded"], json!(true));
+        assert_eq!(
+            downgraded.policy["downgrade_reason"],
+            json!("real_transport_feature_gate_disabled")
+        );
+        assert_eq!(downgraded.policy["codex_mutation_allowed"], json!(false));
+        assert_eq!(downgraded.policy["queue_allowed"], json!(false));
+
+        let feature_gated =
+            assistant_run_executor_transport_selection_from_value("app_server", true)
+                .expect("feature gated real transport selection");
+        assert_eq!(
+            feature_gated.effective_transport,
+            AssistantRunExecutorTransportView::CodexAppServer
+        );
+        assert_eq!(feature_gated.policy["downgraded"], json!(false));
+        assert_eq!(
+            feature_gated.policy["manual_feature_gate_required_for_real_transport"],
+            json!(true)
+        );
+
+        let feature_gated_package = build_assistant_run_codex_context_package(
+            AssistantRunId::new(),
+            Some("browser-thread-transport"),
+            "检查真实 transport 是否仍受 assistant-runtime 限制",
+            &[],
+            &json!({"product": "AI数据智能助手"}),
+            &json!({"intent": "ordinary_chat"}),
+            &[],
+            &json!({"status": "not_requested"}),
+            None,
+            &json!({"lane": "codex_conversation"}),
+            feature_gated.effective_transport.clone(),
+        );
+        let mut feature_gated_output = execute_codex_conversation_plan(&feature_gated_package);
+        if let Some(host_invocation) = feature_gated_output.host_invocation.as_mut() {
+            if let Some(object) = host_invocation.as_object_mut() {
+                object.insert(
+                    "debug_token".to_string(),
+                    json!("sk-host-invocation-should-not-leak"),
+                );
+                object.insert(
+                    "env_key".to_string(),
+                    json!("ASSISTANT_RUN_CODEX_HOST_INVOCATION_DEBUG"),
+                );
+            }
+        }
+        if let Some(host_invocation) = feature_gated_output
+            .execution_trail
+            .get_mut(0)
+            .and_then(|entry| entry.get_mut("host_invocation"))
+            .and_then(Value::as_object_mut)
+        {
+            host_invocation.insert(
+                "debug_token".to_string(),
+                json!("sk-host-trail-should-not-leak"),
+            );
+            host_invocation.insert(
+                "env_key".to_string(),
+                json!("ASSISTANT_RUN_CODEX_HOST_TRAIL_DEBUG"),
+            );
+        }
+        let feature_gated_payload = assistant_run_codex_event_payload(
+            &feature_gated_output,
+            None,
+            Some(&feature_gated.policy),
+        );
+        let feature_gated_trail = assistant_run_codex_execution_trail_entries(
+            &feature_gated_output,
+            Utc::now(),
+            None,
+            Some(&feature_gated.policy),
+        );
+        let feature_gated_payload_serialized = feature_gated_payload.to_string();
+        let feature_gated_trail_serialized =
+            serde_json::to_string(&feature_gated_trail).expect("feature gated trail serializes");
+
+        assert_eq!(
+            feature_gated_output.transport,
+            AssistantRunExecutorTransportView::CodexAppServer
+        );
+        assert_eq!(
+            feature_gated_output.status.as_str(),
+            "unsupported_transport"
+        );
+        assert!(!feature_gated_output.codex_invoked);
+        assert!(feature_gated_output.fallback_to_direct);
+        assert_eq!(
+            feature_gated_payload["transport"],
+            json!("codex_app_server")
+        );
+        assert_eq!(
+            feature_gated_payload["transport_policy"]["real_transport_feature_gate_enabled"],
+            json!(true)
+        );
+        assert_eq!(
+            feature_gated_payload["transport_policy"]["downgraded"],
+            json!(false)
+        );
+        assert_eq!(
+            feature_gated_payload["host_invocation"]["local_execution_allowed"],
+            json!(false)
+        );
+        assert_eq!(
+            feature_gated_payload["host_invocation"]["debug_token"],
+            Value::Null
+        );
+        assert_eq!(
+            feature_gated_payload["host_invocation"]["env_key"],
+            Value::Null
+        );
+        assert_eq!(
+            feature_gated_trail[0]["transport_policy"]["effective_transport"],
+            json!("codex_app_server")
+        );
+        assert_eq!(
+            feature_gated_trail[0]["host_invocation"]["debug_token"],
+            Value::Null
+        );
+        assert!(!feature_gated_payload_serialized.contains("sk-host-invocation-should-not-leak"));
+        assert!(
+            !feature_gated_payload_serialized.contains("ASSISTANT_RUN_CODEX_HOST_INVOCATION_DEBUG")
+        );
+        assert!(!feature_gated_trail_serialized.contains("sk-host-trail-should-not-leak"));
+        assert!(!feature_gated_trail_serialized.contains("ASSISTANT_RUN_CODEX_HOST_TRAIL_DEBUG"));
     }
 
     #[test]
@@ -23637,10 +24583,48 @@ mod tests {
             &json!({"mode": "ordinary_chat"}),
             None,
         );
-        let payload = assistant_run_codex_event_payload(&output, Some(&shadow));
-        let trail = assistant_run_codex_execution_trail_entries(&output, Utc::now(), Some(&shadow));
+        let unsafe_transport_policy = json!({
+            "requested_transport": "codex_exec_schema",
+            "effective_transport": "codex_plan_only",
+            "real_transport_requested": true,
+            "real_transport_feature_gate_enabled": false,
+            "downgraded": true,
+            "downgrade_reason": "real_transport_feature_gate_disabled",
+            "direct_execution_authoritative": true,
+            "codex_mutation_allowed": false,
+            "queue_allowed": false,
+            "manual_feature_gate_required_for_real_transport": true,
+            "host_validation_required_for_real_transport": true,
+            "next_step": "keep_codex_in_shadow_plan_only_until_promotion_gate_review",
+            "debug_token": "sk-policy-payload-should-not-leak",
+            "env_key": "ASSISTANT_RUN_CODEX_REAL_TRANSPORT_FEATURE_GATE"
+        });
+        let payload = assistant_run_codex_event_payload(
+            &output,
+            Some(&shadow),
+            Some(&unsafe_transport_policy),
+        );
+        let trail = assistant_run_codex_execution_trail_entries(
+            &output,
+            Utc::now(),
+            Some(&shadow),
+            Some(&unsafe_transport_policy),
+        );
+        let payload_serialized = payload.to_string();
+        let trail_serialized = serde_json::to_string(&trail).expect("trail serializes");
 
         assert_eq!(payload["transport"], json!("codex_dry_run"));
+        assert_eq!(
+            payload["transport_policy"]["requested_transport"],
+            json!("codex_exec_schema")
+        );
+        assert_eq!(
+            payload["transport_policy"]["effective_transport"],
+            json!("codex_plan_only")
+        );
+        assert_eq!(payload["transport_policy"]["downgraded"], json!(true));
+        assert_eq!(payload["transport_policy"]["debug_token"], Value::Null);
+        assert_eq!(payload["transport_policy"]["env_key"], Value::Null);
         assert_eq!(payload["status"], json!("shadow_dry_run"));
         assert_eq!(payload["codex_invoked"], json!(false));
         assert_eq!(payload["fallback_to_direct"], json!(true));
@@ -23671,17 +24655,37 @@ mod tests {
             json!("no_codex_suggestion")
         );
         assert_eq!(trail[0]["label"], json!("Codex 执行器诊断"));
+        assert_eq!(
+            trail[0]["transport_policy"]["requested_transport"],
+            json!("codex_exec_schema")
+        );
+        assert_eq!(trail[0]["transport_policy"]["debug_token"], Value::Null);
         assert_eq!(trail[0]["fallback_to_direct"], json!(true));
         assert_eq!(
             trail[0]["shadow_comparison"]["direct_state_authoritative"],
             json!(true)
         );
+        assert!(!payload_serialized.contains("sk-policy-payload-should-not-leak"));
+        assert!(!payload_serialized.contains("ASSISTANT_RUN_CODEX_REAL_TRANSPORT_FEATURE_GATE"));
+        assert!(!trail_serialized.contains("sk-policy-payload-should-not-leak"));
+        assert!(!trail_serialized.contains("ASSISTANT_RUN_CODEX_REAL_TRANSPORT_FEATURE_GATE"));
 
         let mut suggested_output = output.clone();
         suggested_output.suggested_action = Some(json!({
             "action_type": "create_static_page_draft",
-            "reason": "shadow-only static page planning candidate"
+            "reason": "shadow-only static page planning candidate",
+            "arguments": {
+                "prompt": "codex suggested action payload raw prompt should not leak",
+                "provider_key": "sk-suggested-action-should-not-leak"
+            }
         }));
+        suggested_output.execution_trail = vec![json!({
+            "kind": "codex_executor.plan_only",
+            "suggested_action": suggested_output.suggested_action.clone(),
+            "host_invocation": {
+                "kind": "not_applicable"
+            }
+        })];
         let matched_shadow = assistant_run_codex_shadow_comparison(
             &suggested_output,
             true,
@@ -23708,11 +24712,44 @@ mod tests {
             json!("enable Codex mutation only after repeated matched shadow runs")
         );
         let matched_payload =
-            assistant_run_codex_event_payload(&suggested_output, Some(&matched_shadow));
+            assistant_run_codex_event_payload(&suggested_output, Some(&matched_shadow), None);
+        let matched_trail = assistant_run_codex_execution_trail_entries(
+            &suggested_output,
+            Utc::now(),
+            Some(&matched_shadow),
+            None,
+        );
+        let matched_payload_serialized = matched_payload.to_string();
+        let matched_trail_serialized =
+            serde_json::to_string(&matched_trail).expect("matched trail serializes");
         assert_eq!(
             matched_payload["suggested_action"]["action_type"],
             json!("create_static_page_draft")
         );
+        assert_eq!(
+            matched_payload["suggested_action"]["has_arguments"],
+            json!(true)
+        );
+        assert_eq!(
+            matched_payload["suggested_action"]["arguments"],
+            Value::Null
+        );
+        assert_eq!(
+            matched_payload["execution_trail"][0]["suggested_action"]["has_arguments"],
+            json!(true)
+        );
+        assert_eq!(
+            matched_payload["execution_trail"][0]["suggested_action"]["arguments"],
+            Value::Null
+        );
+        assert_eq!(
+            matched_trail[0]["suggested_action"]["has_arguments"],
+            json!(true)
+        );
+        assert!(!matched_payload_serialized.contains("codex suggested action payload raw prompt"));
+        assert!(!matched_payload_serialized.contains("sk-suggested-action-should-not-leak"));
+        assert!(!matched_trail_serialized.contains("codex suggested action payload raw prompt"));
+        assert!(!matched_trail_serialized.contains("sk-suggested-action-should-not-leak"));
         assert_eq!(
             matched_payload["shadow_comparison"]["codex"]["model_gateway"]["lane"],
             json!("codex_conversation")
@@ -23826,6 +24863,19 @@ mod tests {
                 event_name: "assistant_run.codex_executor_diagnostic".to_string(),
                 payload: json!({
                     "transport": "codex_plan_only",
+                    "transport_policy": {
+                        "requested_transport": "codex_exec_schema",
+                        "effective_transport": "codex_plan_only",
+                        "real_transport_requested": true,
+                        "real_transport_feature_gate_enabled": false,
+                        "downgraded": true,
+                        "downgrade_reason": "real_transport_feature_gate_disabled",
+                        "direct_execution_authoritative": true,
+                        "codex_mutation_allowed": false,
+                        "queue_allowed": false,
+                        "debug": "sk-policy-should-not-leak",
+                        "env_key": "ASSISTANT_RUN_CODEX_REAL_TRANSPORT_FEATURE_GATE"
+                    },
                     "status": "plan_only",
                     "codex_invoked": false,
                     "fallback_to_direct": true,
@@ -23833,7 +24883,11 @@ mod tests {
                     "suggested_action": {
                         "action_type": "create_static_page_draft",
                         "mutation_allowed": false,
-                        "source": "codex_plan_only_shadow"
+                        "queue_allowed": false,
+                        "source": "codex_plan_only_shadow",
+                        "arguments": {
+                            "prompt": "codex suggested action raw prompt should not leak"
+                        }
                     },
                     "model_gateway": {
                         "lane": "codex_conversation",
@@ -23842,7 +24896,23 @@ mod tests {
                             "provider": "minimax",
                             "model": "MiniMax-M2.7"
                         },
-                        "profile_status": "profile_loaded"
+                        "profile_source": "model_provider_profile_env",
+                        "profile_status": "profile_loaded",
+                        "profile_env_prefix": "ASSISTANT_RUN_CODEX_TEST_PROFILE",
+                        "profile": {
+                            "wire_api": "codex_compatible_shim",
+                            "auth": {
+                                "env_key_name": "MINIMAX_API_KEY",
+                                "configured": true
+                            },
+                            "debug": "sk-profile-should-not-leak"
+                        },
+                        "safety": {
+                            "secrets_redacted": true,
+                            "raw_provider_payloads_allowed": false,
+                            "codex_real_execution_allowed_on_this_host": false,
+                            "v3_validates_all_actions": true
+                        }
                     },
                     "context_budget": {
                         "estimated_prompt_chars": 4096,
@@ -23865,6 +24935,53 @@ mod tests {
                 }),
                 created_at: now,
             },
+            AssistantRunEvent {
+                id: AssistantRunEventId::new(),
+                tenant_id,
+                run_id,
+                sequence_no: 3,
+                event_name: "workflow.task.completed".to_string(),
+                payload: json!({
+                    "output": {
+                        "mode": "codex_exec",
+                        "codex_invoked": true,
+                        "status": "completed",
+                        "host_kind": "windows_jump",
+                        "assistant_run_id": run_id.to_string(),
+                        "capability": "inspect_project",
+                        "profile": {
+                            "id": "jump-minimax",
+                            "kind": "codex-compatible-shim",
+                            "model": "MiniMax-M2.7",
+                            "provider_id": "minimax",
+                            "base_url_configured": true,
+                            "env_key": "MINIMAX_API_KEY",
+                            "wire_api": "responses",
+                            "allowed_capabilities": ["inspect_project"]
+                        },
+                        "command_plan": {
+                            "program": "codex",
+                            "args_without_prompt": ["exec", "--secret", "sk-command-should-not-leak"],
+                            "prompt_chars": 128,
+                            "sandbox": "workspace-write",
+                            "workspace_configured": true,
+                            "workspace_label": "codex-host-task-smoke",
+                            "prompt_redacted": true
+                        },
+                        "process": {
+                            "exit_code": 0,
+                            "stdout_excerpt": "jump host stdout sk-should-not-leak",
+                            "stderr_excerpt": "jump host stderr raw prompt should not leak"
+                        },
+                        "task_chars": 256,
+                        "local_thread_id": "browser-thread-runtime",
+                        "task_memory_isolated": true,
+                        "task_memory_space_id": "codex-host-task:run:exec",
+                        "html_artifacts": [{"id": "codex-host-report-1"}]
+                    }
+                }),
+                created_at: now,
+            },
         ];
 
         let diagnostics = assistant_run_detail_diagnostics(&run, &events);
@@ -23879,6 +24996,30 @@ mod tests {
             json!("normal")
         );
         assert_eq!(
+            diagnostics["codex_executor"]["latest"]["transport_policy"]["requested_transport"],
+            json!("codex_exec_schema")
+        );
+        assert_eq!(
+            diagnostics["codex_executor"]["latest"]["transport_policy"]["effective_transport"],
+            json!("codex_plan_only")
+        );
+        assert_eq!(
+            diagnostics["codex_executor"]["latest"]["transport_policy"]["downgraded"],
+            json!(true)
+        );
+        assert_eq!(
+            diagnostics["codex_executor"]["latest"]["transport_policy"]["codex_mutation_allowed"],
+            json!(false)
+        );
+        assert_eq!(
+            diagnostics["codex_executor"]["latest"]["transport_policy"]["debug"],
+            Value::Null
+        );
+        assert_eq!(
+            diagnostics["codex_executor"]["latest"]["transport_policy"]["env_key"],
+            Value::Null
+        );
+        assert_eq!(
             diagnostics["codex_executor"]["latest"]["shadow_comparison"]["codex_mutation_allowed"],
             json!(false)
         );
@@ -23887,8 +25028,67 @@ mod tests {
             json!("create_static_page_draft")
         );
         assert_eq!(
+            diagnostics["codex_executor"]["latest"]["suggested_action"]["has_arguments"],
+            json!(true)
+        );
+        assert_eq!(
+            diagnostics["codex_executor"]["latest"]["suggested_action"]["arguments"],
+            Value::Null
+        );
+        assert_eq!(
+            diagnostics["codex_executor"]["latest"]["suggested_action"]["queue_allowed"],
+            json!(false)
+        );
+        assert_eq!(
             diagnostics["codex_executor"]["latest"]["model_gateway"]["selected_model"]["provider"],
             json!("minimax")
+        );
+        assert_eq!(
+            diagnostics["codex_executor"]["latest"]["model_gateway"]["wire_api"],
+            json!("codex_compatible_shim")
+        );
+        assert_eq!(
+            diagnostics["codex_executor"]["latest"]["model_gateway"]["auth_configured"],
+            json!(true)
+        );
+        assert_eq!(
+            diagnostics["codex_executor"]["latest"]["model_gateway"]["profile"],
+            Value::Null
+        );
+        assert_eq!(
+            diagnostics["codex_executor"]["latest"]["model_gateway"]["profile_env_prefix"],
+            Value::Null
+        );
+        assert_eq!(
+            diagnostics["codex_executor"]["recent_shadow_events"]
+                .as_array()
+                .map(Vec::len),
+            Some(1)
+        );
+        assert_eq!(
+            diagnostics["codex_executor"]["recent_shadow_events"][0]["comparison_status"],
+            json!("matched")
+        );
+        assert_eq!(
+            diagnostics["codex_executor"]["recent_shadow_events"][0]["codex_suggested_action_type"],
+            json!("create_static_page_draft")
+        );
+        assert_eq!(
+            diagnostics["codex_executor"]["recent_shadow_events"][0]["model_provider"],
+            json!("minimax")
+        );
+        assert_eq!(
+            diagnostics["codex_executor"]["recent_shadow_events"][0]["mutation_allowed"],
+            json!(false)
+        );
+        assert_eq!(
+            diagnostics["codex_executor"]["recent_shadow_events"][0]["transport_policy"]
+                ["requested_transport"],
+            json!("codex_exec_schema")
+        );
+        assert_eq!(
+            diagnostics["codex_executor"]["recent_shadow_events"][0]["transport_policy"]["debug"],
+            Value::Null
         );
         assert_eq!(
             diagnostics["codex_executor"]["latest"]["output_schema"],
@@ -23904,6 +25104,103 @@ mod tests {
         );
         assert_eq!(
             diagnostics["codex_executor"]["shadow_gate"]["codex_mutation_allowed"],
+            json!(false)
+        );
+        assert_eq!(
+            diagnostics["codex_executor"]["host_validation_results"]
+                .as_array()
+                .map(Vec::len),
+            Some(1)
+        );
+        assert_eq!(
+            diagnostics["codex_executor"]["host_validation_summary"]["status"],
+            json!("validated")
+        );
+        assert_eq!(
+            diagnostics["codex_executor"]["host_validation_summary"]["completed_count"],
+            json!(1)
+        );
+        assert_eq!(
+            diagnostics["codex_executor"]["host_validation_summary"]["failed_count"],
+            json!(0)
+        );
+        assert_eq!(
+            diagnostics["codex_executor"]["host_validation_summary"]["latest"]["profile_kind"],
+            json!("codex-compatible-shim")
+        );
+        assert_eq!(
+            diagnostics["codex_executor"]["host_validation_summary"]["latest"]["host_kind"],
+            json!("windows_jump")
+        );
+        assert_eq!(
+            diagnostics["codex_executor"]["host_validation_summary"]["latest"]["host_kind_allowed"],
+            json!(true)
+        );
+        assert_eq!(
+            diagnostics["codex_executor"]["host_validation_summary"]["latest"]
+                ["workspace_configured"],
+            json!(true)
+        );
+        assert_eq!(
+            diagnostics["codex_executor"]["host_validation_summary"]["codex_mutation_allowed"],
+            json!(false)
+        );
+        assert_eq!(
+            diagnostics["codex_executor"]["host_validation_summary"]["next_step"],
+            json!("review_host_report_then_consider_feature_gate_promotion")
+        );
+        assert_eq!(
+            diagnostics["codex_executor"]["promotion_gate"]["status"],
+            json!("blocked_by_shadow_gate")
+        );
+        assert_eq!(
+            diagnostics["codex_executor"]["promotion_gate"]["blocked_by"],
+            json!("insufficient_sample")
+        );
+        assert_eq!(
+            diagnostics["codex_executor"]["promotion_gate"]["eligible_for_feature_gate_review"],
+            json!(false)
+        );
+        assert_eq!(
+            diagnostics["codex_executor"]["promotion_gate"]["codex_mutation_allowed"],
+            json!(false)
+        );
+        assert_eq!(
+            diagnostics["codex_executor"]["host_validation_results"][0]
+                ["host_validation_completed"],
+            json!(true)
+        );
+        assert_eq!(
+            diagnostics["codex_executor"]["host_validation_results"][0]["mode"],
+            json!("codex_exec")
+        );
+        assert_eq!(
+            diagnostics["codex_executor"]["host_validation_results"][0]["host_kind"],
+            json!("windows_jump")
+        );
+        assert_eq!(
+            diagnostics["codex_executor"]["host_validation_results"][0]["host_kind_allowed"],
+            json!(true)
+        );
+        assert_eq!(
+            diagnostics["codex_executor"]["host_validation_results"][0]["profile"]["kind"],
+            json!("codex-compatible-shim")
+        );
+        assert_eq!(
+            diagnostics["codex_executor"]["host_validation_results"][0]["profile"]["env_key"],
+            Value::Null
+        );
+        assert_eq!(
+            diagnostics["codex_executor"]["host_validation_results"][0]["command_plan"]
+                ["workspace_configured"],
+            json!(true)
+        );
+        assert_eq!(
+            diagnostics["codex_executor"]["host_validation_results"][0]["process"]["exit_code"],
+            json!(0)
+        );
+        assert_eq!(
+            diagnostics["codex_executor"]["host_validation_results"][0]["raw_logs_exposed"],
             json!(false)
         );
         assert_eq!(
@@ -23924,6 +25221,15 @@ mod tests {
         );
         assert!(!serialized.contains("sk-should-not-leak"));
         assert!(!serialized.contains("raw prompt should not leak"));
+        assert!(!serialized.contains("codex suggested action raw prompt"));
+        assert!(!serialized.contains("sk-profile-should-not-leak"));
+        assert!(!serialized.contains("MINIMAX_API_KEY"));
+        assert!(!serialized.contains("ASSISTANT_RUN_CODEX_TEST_PROFILE"));
+        assert!(!serialized.contains("sk-policy-should-not-leak"));
+        assert!(!serialized.contains("ASSISTANT_RUN_CODEX_REAL_TRANSPORT_FEATURE_GATE"));
+        assert!(!serialized.contains("sk-command-should-not-leak"));
+        assert!(!serialized.contains("jump host stdout"));
+        assert!(!serialized.contains("jump host stderr"));
     }
 
     #[test]
@@ -23958,7 +25264,81 @@ mod tests {
 
         assert_eq!(stable_gate["status"], json!("eligible_for_host_validation"));
         assert_eq!(stable_gate["matched_count"], json!(3));
+        assert_eq!(stable_gate["matched_streak_count"], json!(3));
+        assert_eq!(stable_gate["last_blocking_event"], Value::Null);
         assert_eq!(stable_gate["host_validation_allowed"], json!(true));
+        assert_eq!(
+            stable_gate["host_validation"]["ready_for_jump_host_validation"],
+            json!(true)
+        );
+        assert_eq!(
+            stable_gate["host_validation"]["local_execution_allowed"],
+            json!(false)
+        );
+        assert_eq!(
+            stable_gate["host_validation"]["required_host_kinds"],
+            json!(["windows_jump", "mac_host"])
+        );
+        assert_eq!(
+            stable_gate["host_validation"]["requires_task_workspace_root"],
+            json!(true)
+        );
+        let validated_host_summary = assistant_run_codex_host_validation_summary(&[json!({
+            "mode": "codex_exec",
+            "status": "completed",
+            "host_kind": "windows_jump",
+            "host_kind_allowed": true,
+            "host_validation_completed": true,
+            "codex_invoked": true,
+            "profile": {"kind": "codex-native", "model": "codex-host"},
+            "command_plan": {"workspace_configured": true},
+            "process": {"exit_code": 0},
+            "html_artifact_count": 1,
+        })]);
+        let promotion_gate =
+            assistant_run_codex_promotion_gate_summary(&stable_gate, &validated_host_summary);
+        assert_eq!(
+            promotion_gate["status"],
+            json!("eligible_for_feature_gate_review")
+        );
+        assert_eq!(
+            promotion_gate["eligible_for_feature_gate_review"],
+            json!(true)
+        );
+        assert_eq!(promotion_gate["codex_mutation_allowed"], json!(false));
+        assert_eq!(promotion_gate["queue_allowed"], json!(false));
+        assert_eq!(
+            promotion_gate["requires_manual_feature_gate_change"],
+            json!(true)
+        );
+        let failed_host_summary = assistant_run_codex_host_validation_summary(&[json!({
+            "mode": "codex_exec",
+            "status": "failed",
+            "host_kind": "windows_jump",
+            "host_kind_allowed": true,
+            "host_validation_completed": false,
+            "codex_invoked": true,
+            "profile": {"kind": "codex-compatible-shim", "model": "MiniMax-M2.7"},
+            "command_plan": {"workspace_configured": true},
+            "process": {"exit_code": 1},
+            "html_artifact_count": 1,
+        })]);
+        let failed_host_promotion_gate =
+            assistant_run_codex_promotion_gate_summary(&stable_gate, &failed_host_summary);
+        assert_eq!(
+            failed_host_promotion_gate["status"],
+            json!("blocked_by_host_validation")
+        );
+        assert_eq!(failed_host_promotion_gate["blocked_by"], json!("failed"));
+        assert_eq!(
+            failed_host_promotion_gate["eligible_for_feature_gate_review"],
+            json!(false)
+        );
+        assert_eq!(
+            failed_host_promotion_gate["codex_mutation_allowed"],
+            json!(false)
+        );
+        assert_eq!(failed_host_promotion_gate["queue_allowed"], json!(false));
         assert_eq!(stable_gate["codex_mutation_allowed"], json!(false));
         assert_eq!(
             stable_gate["next_gate"],
@@ -23973,15 +25353,24 @@ mod tests {
             sequence_no: 4,
             event_name: "assistant_run.codex_executor_diagnostic".to_string(),
             payload: json!({
+                "provider_secret": "sk-should-not-leak",
                 "suggested_action": {
                     "action_type": "unsafe_os_command",
-                    "mutation_allowed": true
+                    "mutation_allowed": true,
+                    "arguments": {
+                        "prompt": "raw prompt should not leak"
+                    }
                 },
                 "shadow_comparison": {
                     "codex_mutation_allowed": false,
+                    "codex": {
+                        "suggested_action_type": "unsafe_os_command",
+                        "suggested_action_allowed": false
+                    },
                     "comparison": {
                         "status": "invalid_suggestion",
-                        "codex_has_suggestion": true
+                        "codex_has_suggestion": true,
+                        "actionable": false
                     }
                 }
             }),
@@ -23993,8 +25382,176 @@ mod tests {
         assert_eq!(blocked_gate["status"], json!("blocked"));
         assert_eq!(blocked_gate["invalid_count"], json!(1));
         assert_eq!(blocked_gate["unsafe_mutation_signal_count"], json!(1));
+        assert_eq!(blocked_gate["matched_streak_count"], json!(0));
+        assert_eq!(blocked_gate["last_blocking_event"]["sequence_no"], json!(4));
+        assert_eq!(
+            blocked_gate["last_blocking_event"]["comparison_status"],
+            json!("invalid_suggestion")
+        );
+        assert_eq!(
+            blocked_gate["last_blocking_event"]["codex_suggested_action_type"],
+            json!("unsafe_os_command")
+        );
         assert_eq!(blocked_gate["host_validation_allowed"], json!(false));
+        assert_eq!(
+            blocked_gate["host_validation"]["ready_for_jump_host_validation"],
+            json!(false)
+        );
+        assert_eq!(
+            blocked_gate["host_validation"]["blocked_by"],
+            json!("invalid_suggestion")
+        );
+        assert_eq!(
+            blocked_gate["host_validation"]["next_step"],
+            json!("continue_shadow_comparison_until_stable")
+        );
+        let blocked_promotion_gate =
+            assistant_run_codex_promotion_gate_summary(&blocked_gate, &validated_host_summary);
+        assert_eq!(
+            blocked_promotion_gate["status"],
+            json!("blocked_by_shadow_gate")
+        );
+        assert_eq!(blocked_promotion_gate["blocked_by"], json!("blocked"));
         assert_eq!(blocked_gate["queue_allowed"], json!(false));
+
+        let recent = assistant_run_codex_recent_shadow_events(&blocked_refs, 3);
+        assert_eq!(recent.len(), 3);
+        assert_eq!(recent[0]["sequence_no"], json!(4));
+        assert_eq!(recent[0]["comparison_status"], json!("invalid_suggestion"));
+        assert_eq!(
+            recent[0]["codex_suggested_action_type"],
+            json!("unsafe_os_command")
+        );
+        assert_eq!(recent[0]["codex_suggested_action_allowed"], json!(false));
+        assert_eq!(recent[0]["mutation_allowed"], json!(true));
+        assert_eq!(recent[0]["codex_mutation_allowed"], json!(false));
+        let recent_serialized = serde_json::to_string(&recent).expect("recent events serialize");
+        assert!(!recent_serialized.contains("sk-should-not-leak"));
+        assert!(!recent_serialized.contains("raw prompt should not leak"));
+    }
+
+    #[test]
+    fn assistant_run_codex_host_validation_summary_tracks_failed_and_non_exec_states() {
+        let empty = assistant_run_codex_host_validation_summary(&[]);
+        assert_eq!(empty["status"], json!("not_run"));
+        assert_eq!(empty["result_count"], json!(0));
+        assert_eq!(
+            empty["next_step"],
+            json!("run_jump_host_smoke_with_codex_host_agent_when_shadow_gate_ready")
+        );
+
+        let non_exec_results = vec![json!({
+            "mode": "plan_only",
+            "status": "completed",
+            "host_validation_completed": false,
+            "codex_invoked": false,
+            "capability": "inspect_project",
+            "profile": {"kind": "codex-compatible-shim", "model": "MiniMax-M2.7"},
+            "command_plan": {"workspace_configured": true},
+            "process": {"exit_code": Value::Null},
+            "html_artifact_count": 1,
+        })];
+        let non_exec = assistant_run_codex_host_validation_summary(&non_exec_results);
+        assert_eq!(non_exec["status"], json!("observed_non_exec"));
+        assert_eq!(non_exec["completed_count"], json!(0));
+        assert_eq!(non_exec["failed_count"], json!(0));
+        assert_eq!(non_exec["latest"]["codex_invoked"], json!(false));
+        assert_eq!(non_exec["codex_mutation_allowed"], json!(false));
+
+        let invalid_host_results = vec![json!({
+            "mode": "codex_exec",
+            "status": "completed",
+            "host_kind": "developer_workstation",
+            "host_kind_allowed": false,
+            "host_validation_completed": false,
+            "codex_invoked": true,
+            "capability": "inspect_project",
+            "profile": {"kind": "codex-native", "model": "codex-host"},
+            "command_plan": {"workspace_configured": true},
+            "process": {"exit_code": 0},
+            "html_artifact_count": 1,
+        })];
+        let invalid_host = assistant_run_codex_host_validation_summary(&invalid_host_results);
+        let invalid_promotion_gate = assistant_run_codex_promotion_gate_summary(
+            &json!({"host_validation_allowed": true, "status": "eligible_for_host_validation"}),
+            &invalid_host,
+        );
+
+        assert_eq!(invalid_host["status"], json!("invalid_host"));
+        assert_eq!(invalid_host["completed_count"], json!(0));
+        assert_eq!(invalid_host["failed_count"], json!(1));
+        assert_eq!(invalid_host["invalid_host_count"], json!(1));
+        assert_eq!(
+            invalid_host["latest"]["host_kind"],
+            json!("developer_workstation")
+        );
+        assert_eq!(invalid_host["latest"]["host_kind_allowed"], json!(false));
+        assert_eq!(
+            invalid_host["next_step"],
+            json!("rerun_codex_host_smoke_on_windows_jump_or_mac_host")
+        );
+        assert_eq!(
+            invalid_promotion_gate["status"],
+            json!("blocked_by_host_validation")
+        );
+        assert_eq!(invalid_promotion_gate["blocked_by"], json!("invalid_host"));
+        assert_eq!(
+            invalid_promotion_gate["eligible_for_feature_gate_review"],
+            json!(false)
+        );
+
+        let failed_results = vec![
+            json!({
+                "mode": "codex_exec",
+                "status": "failed",
+                "host_kind": "windows_jump",
+                "host_kind_allowed": true,
+                "host_validation_completed": false,
+                "codex_invoked": true,
+                "capability": "inspect_project",
+                "profile": {
+                    "kind": "codex-compatible-shim",
+                    "model": "MiniMax-M2.7",
+                    "env_key": "MINIMAX_API_KEY"
+                },
+                "command_plan": {"workspace_configured": true},
+                "process": {"exit_code": 1, "stderr_excerpt": "sk-should-not-leak"},
+                "html_artifact_count": 1,
+            }),
+            json!({
+                "mode": "codex_exec",
+                "status": "completed",
+                "host_kind": "windows_jump",
+                "host_kind_allowed": true,
+                "host_validation_completed": true,
+                "codex_invoked": true,
+                "capability": "inspect_project",
+                "profile": {"kind": "codex-compatible-shim", "model": "MiniMax-M2.7"},
+                "command_plan": {"workspace_configured": true},
+                "process": {"exit_code": 0},
+                "html_artifact_count": 1,
+            }),
+        ];
+        let failed = assistant_run_codex_host_validation_summary(&failed_results);
+        let serialized = failed.to_string();
+
+        assert_eq!(failed["status"], json!("failed"));
+        assert_eq!(failed["completed_count"], json!(1));
+        assert_eq!(failed["failed_count"], json!(1));
+        assert_eq!(failed["latest"]["exit_code"], json!(1));
+        assert_eq!(
+            failed["latest"]["profile_kind"],
+            json!("codex-compatible-shim")
+        );
+        assert_eq!(
+            failed["next_step"],
+            json!("inspect_redacted_codex_host_report_and_retry_on_jump_host")
+        );
+        assert_eq!(failed["direct_execution_authoritative"], json!(true));
+        assert_eq!(failed["local_execution_allowed"], json!(false));
+        assert_eq!(failed["queue_allowed"], json!(false));
+        assert!(!serialized.contains("MINIMAX_API_KEY"));
+        assert!(!serialized.contains("sk-should-not-leak"));
     }
 
     #[test]

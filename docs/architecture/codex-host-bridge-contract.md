@@ -65,7 +65,8 @@ The first V3-side implementation is intentionally only a queue bridge plus dry-r
 - Shared request/result wire shapes live in `crates/contracts`, not in `platform-api`.
 - `crates/codex-host-agent` advances workflow state through storage, workflow definitions, and event bus dependencies. It must not depend on the browser-facing API crate.
 - AssistantRun events are mode-specific: `codex_host_task.dry_run_completed`, `codex_host_task.plan_only_completed`, or `codex_host_task.exec_completed`.
-- AssistantRun detail responses now expose a safe diagnostics summary for Codex executor shadow events and provider usage, so runtime/audit surfaces can show status without exposing raw prompts, provider keys, or verbose host logs.
+- AssistantRun detail responses now expose safe diagnostics for Codex executor shadow events, jump-host/Mac-host validation readiness, completed Codex Host validation outputs, and provider usage, so runtime/audit surfaces can show status without exposing raw prompts, provider keys, command arguments, or verbose host logs.
+- Browser-facing AssistantRun execution treats `codex_exec_schema`, `codex_sdk_thread`, `codex_app_server`, and `codex_mcp_server` as requested transports only. Until the manual feature gate is explicitly enabled after shadow plus allowed-host validation, V3 records fixed-field `transport_policy`, `host_invocation`, and `suggested_action` summaries and downgrades the effective transport to `codex_plan_only`.
 - No local Codex process is launched unless the worker is explicitly switched to `codex_exec` and passes the host/profile safety preflight.
 - Real `codex_exec` also requires a configured task workspace root. The agent creates a task-scoped workspace from the V3 `task_memory_space_id` and runs Codex from that directory instead of the agent's current working directory.
 
@@ -108,6 +109,13 @@ The output contract owns these fields:
 - `task_memory_isolated`
 - optional `task_memory_space_id`
 - optional `html_artifacts` for safe V3-owned review surfaces such as `codex_execution_report`
+
+AssistantRun diagnostics may summarize this output as `codex_executor.host_validation_results`, but that summary must stay bounded and redacted:
+
+- include mode, status, capability, profile kind/model/provider, workspace configured/label, exit code, and log character counts
+- exclude raw command arguments, provider auth env names, stdout/stderr excerpts, provider keys, and raw prompts
+- include `host_kind` and count a completed `codex_exec` smoke as valid only when it comes from `windows_jump` or `mac_host`
+- keep `direct` execution authoritative until shadow comparison and allowed jump-host/Mac-host validation both pass
 
 All worker modes must serialize their successful output through `CodexHostTaskOutputView`. This includes `codex_exec`; real process output is represented only by safe profile, command-plan, process summaries, and sandboxable HTML artifact manifests.
 

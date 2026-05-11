@@ -273,6 +273,7 @@ fn codex_exec_output(
         mode: "codex_exec".to_string(),
         codex_invoked: true,
         status: "completed".to_string(),
+        host_kind: Some(decision.host_kind.clone()),
         assistant_run_id: task_context.assistant_run_id.to_string(),
         capability: task_context.capability.clone(),
         profile: Some(decision.profile.safe_summary()),
@@ -515,6 +516,7 @@ mod tests {
                 wire_api: None,
                 allowed_capabilities: vec!["inspect_project".to_string()],
             },
+            host_kind: "windows_jump".to_string(),
             command_plan: Some(command_plan.clone()),
         };
         let process_output = CodexProcessOutput {
@@ -527,6 +529,7 @@ mod tests {
 
         assert_eq!(output["mode"], json!("codex_exec"));
         assert_eq!(output["codex_invoked"], json!(true));
+        assert_eq!(output["host_kind"], json!("windows_jump"));
         assert_eq!(output["profile"]["kind"], json!("codex-native"));
         assert_eq!(output["command_plan"]["prompt_redacted"], json!(true));
         assert_eq!(

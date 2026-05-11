@@ -82,6 +82,7 @@ impl CodexHostTaskContext {
             mode: "dry_run".to_string(),
             codex_invoked: false,
             status: "completed".to_string(),
+            host_kind: None,
             assistant_run_id: self.assistant_run_id.to_string(),
             capability: self.capability.clone(),
             profile: None,
@@ -110,6 +111,7 @@ impl CodexHostTaskContext {
             mode: decision.mode.as_str().to_string(),
             codex_invoked: false,
             status: "planned".to_string(),
+            host_kind: Some(decision.host_kind.clone()),
             assistant_run_id: self.assistant_run_id.to_string(),
             capability: self.capability.clone(),
             profile: Some(decision.profile.safe_summary()),
@@ -149,6 +151,7 @@ impl CodexHostTaskContext {
             json!({
                 "mode": mode,
                 "status": status,
+                "hostKind": decision.map(|decision| decision.host_kind.clone()),
                 "capability": self.capability.clone(),
                 "summary": codex_host_report_summary(mode, status, &self.capability),
                 "workspaceLabel": command_plan
@@ -416,6 +419,7 @@ impl CodexHostAgentPolicy {
         Ok(CodexHostExecutionDecision {
             mode: self.mode.clone(),
             profile: self.profile.clone(),
+            host_kind: self.host_kind.clone(),
             command_plan,
         })
     }
@@ -456,6 +460,7 @@ impl CodexHostAgentPolicy {
 pub struct CodexHostExecutionDecision {
     pub mode: CodexHostExecutionMode,
     pub profile: CodexHostProfile,
+    pub host_kind: String,
     pub command_plan: Option<CodexCommandPlan>,
 }
 
@@ -748,6 +753,7 @@ mod tests {
         let decision = policy.prepare(&context).expect("decision");
 
         assert_eq!(decision.mode, CodexHostExecutionMode::DryRun);
+        assert_eq!(decision.host_kind, "developer_workstation");
         assert!(decision.command_plan.is_none());
     }
 
@@ -780,6 +786,7 @@ mod tests {
             planned_output["html_artifacts"][0]["payload"]["workspaceLabel"],
             json!("codex-host-task-test")
         );
+        assert_eq!(planned_output["host_kind"], json!("developer_workstation"));
         assert_eq!(
             planned_output["html_artifacts"][0]["payload"]["sandbox"],
             json!("read-only")
@@ -913,6 +920,7 @@ mod tests {
         let decision = policy.prepare(&context).expect("decision");
 
         assert_eq!(decision.mode, CodexHostExecutionMode::CodexExec);
+        assert_eq!(decision.host_kind, "windows_jump");
         let plan = decision.command_plan.expect("command plan");
         assert_eq!(
             plan.workspace_path.as_deref(),

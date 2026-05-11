@@ -307,6 +307,8 @@ pub struct CodexHostTaskOutputView {
     pub mode: String,
     pub codex_invoked: bool,
     pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_kind: Option<String>,
     pub assistant_run_id: String,
     pub capability: String,
     pub profile: Option<CodexHostTaskProfileSummaryView>,
