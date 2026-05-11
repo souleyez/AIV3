@@ -88,6 +88,7 @@ Completed and preserved:
 - The next architecture uplift is to connect model-gateway profiles to the Codex conversation executor so normal assistant conversations can be judged/executed by Codex while V3 supplies data and validates actions.
 - `openai/codex` OSS has been checked as the target execution-kernel reference. It is Apache-2.0, Rust-majority, installable by npm/Homebrew/releases, and exposes multiple integration surfaces: `codex exec` non-interactive runs, structured output schemas, SDK thread control, app-server JSON-RPC, and MCP server mode.
 - `CoDeepSeedeX` has been checked as a reference pattern for private Responses-compatible provider shims. It is useful for Codex-to-non-OpenAI provider adaptation, profile wrappers, health/usage/debug endpoints, context-budget diagnostics, tool-call protocol repair, and liveness guards. It is not a V3 dependency or replacement architecture.
+- Video PPT/transcript extraction is only partially present: V3 can parse uploaded/local audio-video evidence and preserve media timestamps, but it does not yet have a complete model-visible action contract for direct video-file extraction, public video URL/page resolution, captured media registration, PPT extraction, or transcript/PPT artifact lifecycle. Login-gated video sites, QR login, cookies, and recording bypass flows are out of scope for the next implementation slice.
 
 ## Architecture Modules
 
@@ -205,6 +206,7 @@ Continue improving supply quality, not UI form complexity:
 - Hidden conversation memory retrieval only when useful.
 - Better document structured profiles from MiniMax VLM metadata.
 - Media detail API for transcript windows, scenes, keyframes, OCR snippets, and provider evidence.
+- Direct-upload and publicly resolvable video acquisition: the assistant should know it can parse uploaded video files, direct video URLs, or public pages where V3 can safely resolve a video asset URL, then feed that media into the background parsing and PPT/transcript extraction pipeline. Login-gated pages, QR login, cookies, and browser recording bypass are explicitly excluded for now.
 - No foreground parsing beyond save/preclassify/register/enqueue.
 
 ### Priority 4: Safe HTML Artifact Layer
@@ -260,10 +262,11 @@ The next highest leverage order is:
 1. Preserve the current overall UI and stop broad shell redesign.
 2. Finish static-page module editability, planning quality, final-render fidelity, export diagnostics, and data-quality handling.
 3. Improve parsing, retrieval, hidden conversation memory, media understanding, and AssistantRun context supply so the model sees better evidence and current draft state.
-4. Build the model-gateway profile system and Codex conversation executor bridge behind feature flags and shadow/dry-run comparison, without changing the visible static-page flow.
-5. Add the safe HTML artifact viewer as a common review/report surface, starting with Codex execution reports and static-page planning handoffs.
-6. Validate real Codex execution only on the jump host or later Mac host.
-7. Resume account expansion only when product workflows need it.
+4. Add direct-upload / publicly resolvable video PPT extraction as a media-quality subtrack: model-visible action contract, video URL/page resolver, background media parsing, transcript/PPT extraction artifacts, and no host-composed fallback answers.
+5. Build the model-gateway profile system and Codex conversation executor bridge behind feature flags and shadow/dry-run comparison, without changing the visible static-page flow.
+6. Add the safe HTML artifact viewer as a common review/report surface, starting with Codex execution reports, static-page planning handoffs, and video extraction summaries.
+7. Validate real Codex/external-page fetching only on the jump host or later Mac host when browser access is needed.
+8. Resume account expansion only when product workflows need it.
 
 The main architectural risk is letting four "brains/builders" compete: direct model calls, Codex conversation executor, static-page renderer, and HTML artifact renderer. The boundary is strict: Codex decides conversation/action flow, V3 validates and supplies data, static-page renderer produces customer report pages, HTML artifact renderer displays review/control artifacts, and heavier Codex Host workflow tasks execute external work without owning V3 product state.
 
@@ -581,6 +584,86 @@ The next development thread should keep the current UI shell stable and continue
 - Missing transcription becomes partial parse, not hallucinated transcript.
 - Static-page/report flows can cite media evidence by timestamp when available.
 
+### Task 7A: Direct Or Public Video PPT Extraction Flow
+
+**Status:** Planned. This task turns the existing partial media foundation into a real assistant capability for direct video files and publicly resolvable video URLs/pages. Current baseline can parse uploaded/local media evidence. It cannot yet reliably resolve a public page to a video asset, register that asset into V3, or complete PPT/transcript extraction as a durable product artifact.
+
+**Capability boundary:**
+
+- Already exists: generic audio/video upload ingestion, media metadata/transcript/scene/keyframe evidence surfaces, media detail API, timestamp-aware retrieval/static-page supply, and safe HTML artifact contracts for displaying extraction summaries.
+- Missing: a model-visible V3 action contract for video-file/PPT extraction, a public-page video resolver, captured/public media registration, PPT/transcript extraction workflow, and final product artifacts.
+- Explicitly out of scope for this slice: site-specific login adapters, QR login, cookies/session reuse, login-gated sites, paywalled/private pages, and browser recording bypass flows.
+- Required assistant behavior: the assistant must know this capability from the startup briefing/action catalog. When the user uploads a video or provides a direct/publicly resolvable video URL/page and asks to extract PPT/original text, the model should answer in its own words and request the V3 action. If the model/provider fails, V3 must show failure and must not compose a fake assistant answer.
+
+**Implementation reference:** The local Codex skill `wechat-video-ppt-extract` is usable as the fixed post-video SOP for slide reconstruction. Treat the name as historical: in V3 it should be generalized to uploaded/direct/public videos, not WeChat-specific automation. The reliable reusable portion is: frame capture or frame import -> contact sheet -> light PPT rectangle extraction -> conservative dedupe -> manual/model-assisted keep-list -> screenshot-based PPTX with manifest/source notes. The existing helper script does not directly ingest an `.mp4`; if V3 already has a video file, first extract frames with FFmpeg/media worker into a `raw_frames`-style directory, then run the rectangle extraction/build steps and skip any recording step. The updated skill also defines an optional subtitle-overlay pass: OCR subtitle bands from original video frames, assign subtitles to pages using the pre-page rule, place text in a consistent box outside the PPT image area, and save transcript text plus JSON page mapping for later correction.
+
+**Target flow:**
+
+1. User uploads a video file, provides a direct video URL, or provides a public page where V3 can safely resolve a video asset URL.
+2. AssistantRun receives product/system briefing that explicitly lists `media.resolve_video_url`, `media.register_video_asset`, and `media.extract_ppt_transcript` as available V3-controlled actions.
+3. The model decides whether to ask V3 to parse the uploaded media directly or resolve/register a public video URL. It should not claim the video was accessed until V3 returns a successful observation.
+4. V3 validates the action, registers the uploaded/resolved video as a user/session-scoped document or asset, and returns a concise progress step in the existing chat/right-shelf surfaces.
+5. V3 enqueues background media parsing. Foreground chat remains responsive.
+6. Media parsing extracts audio transcript, OCR/keyframes/scenes, timestamps, and provider evidence through MiniMax/local tools where available.
+7. A PPT extraction worker groups keyframes/transcript into slide candidates, extracts original spoken text, generates a slide outline and optionally a PPTX/Markdown artifact, and records source timestamps for every page.
+8. The assistant receives the parsed evidence and returns the final model-authored summary, original transcript, and links to the PPT/transcript artifacts.
+
+**Files:**
+
+- Modify: `apps/web/app/lib/assistant-startup-briefing.js`
+- Modify: `apps/web/app/lib/scope-planner.js`
+- Modify: `apps/web/app/lib/html-artifact-manifest.js`
+- Modify: `crates/contracts/src/lib.rs`
+- Modify: `crates/assistant-runtime/src/lib.rs`
+- Modify: `crates/platform-api/src/lib.rs`
+- Modify: `crates/platform-api/src/react_agent_catalog.rs`
+- Modify: `crates/platform-api/src/react_agent_tools.rs`
+- Modify: `crates/workflow-definitions/src/lib.rs`
+- Modify: `crates/ingest-worker/src/lib.rs`
+- Create or modify: `crates/media-worker/src/lib.rs`
+- Create or modify: `crates/static-page-worker/src/lib.rs` only if extracted PPT artifacts reuse static-page/report render helpers.
+- Create migration if durable video extraction task/session rows are needed: `crates/storage/migrations/00xx_video_extraction.sql`
+
+**Implementation steps:**
+
+1. Add shared contracts for `VideoExtractionRequest`, `VideoExtractionState`, video source refs, resolved asset refs, and extraction artifact refs.
+2. Add V3 action contracts: `media.resolve_video_url`, `media.register_video_asset`, and `media.extract_ppt_transcript`.
+3. Add assistant startup-briefing text that tells the model this capability exists, when to request it, and the hard rule: do not say the video was accessed until the action observation says it was captured.
+4. Add scope-planner/media intent hints for video/PPT/original-text requests so the model sees the relevant action options without forcing a deterministic host answer.
+5. Implement a public-page resolver that accepts only safe HTTP(S) URLs, rejects login-required/private pages, detects direct media URLs and simple HTML video sources, and returns a bounded metadata/error observation.
+6. Implement or stub the video extraction workflow definition with states: `resolving_source`, `registered`, `parsing`, `extracting_ppt`, `completed`, `failed`, and `unsupported_source`.
+7. Enqueue the existing media parse path for the uploaded or resolved video file. Keep all heavy audio/OCR/VLM/keyframe extraction in background workers.
+8. Add a frame extraction stage for existing video files using FFmpeg/media-worker output compatible with the `wechat-video-ppt-extract` skill's `raw_frames` directory convention.
+9. Reuse the skill SOP for slide reconstruction: generate a contact sheet, extract light PPT rectangles, preserve a candidate manifest, select keep-list entries, and build a screenshot-based PPTX with speaker-note/source metadata.
+10. Add an optional subtitle extraction pass from original video frames, not cropped PPT images. Use the skill's pre-page assignment rule so narration/subtitle text between the previous slide and current slide attaches to the current page.
+11. Build the transcript/PPT extractor around that SOP: segment transcript, cluster keyframes, OCR slide text, produce slide candidates with timestamps, and emit Markdown/PPTX/source-text artifacts with evidence refs.
+12. Feed extraction artifacts back into AssistantRun as visible output artifacts and retrieval evidence, then let the model write the final response from supplied evidence.
+13. Add failure handling for unsupported source, unavailable video, resolver blocked, parse partial, provider failure, frame extraction failure, no slide rectangle found, subtitle OCR low confidence, and low-confidence extraction.
+14. Add UI artifact updates only inside the existing HTML artifact/right-shelf/main-chat surfaces. Do not add another chat input, popup workbench, or global panel.
+15. Add audit events that record state transitions and redacted resolver/provider metadata without cookies, private URLs, raw tokens, or provider keys.
+
+**Tests:**
+
+1. `cargo test -p contracts video_extraction`
+2. `cargo test -p assistant-runtime video_extraction`
+3. `cargo test -p platform-api video_extraction`
+4. `cargo test -p workflow-definitions video_extraction`
+5. `cargo test -p ingest-worker media`
+6. `cargo test -p media-worker` if the crate exists
+7. `node --test apps/web/app/lib/html-artifact-manifest.test.mjs`
+8. `pnpm --filter @ai-data-platform-v3/web build`
+9. Resolver smoke only after safe stubs pass: direct MP4 fixture, simple public HTML `<video>` fixture, unsupported/login-required fixture, and blocked/private URL fixture.
+
+**Acceptance:**
+
+- The assistant knows the direct/public video PPT extraction capability through model-facing briefing/action contracts, not through a host-composed answer.
+- Uploaded video files and direct/publicly resolvable video URLs can enter the same background parsing path.
+- Unsupported/login-gated/private sources are rejected with a clear observation instead of QR/login/recording workarounds.
+- Resolved video is registered as a user/session-scoped V3 document or asset and then parsed by background workers.
+- Final deliverables include original transcript text, optional subtitle/page map, screenshot-based PPTX or PPT/slide outline, Markdown artifact, source timestamps, parse confidence, candidate contact sheet, and missing-data warnings.
+- If MiniMax/model/provider fails, V3 reports the failure and preserves the user message; it does not fabricate the answer or pretend the video was accessed.
+- No login-gated acquisition, QR login, cookies, paywall bypass, or browser recording fallback is part of this slice.
+
 ### Task 8: Codex Host Contract Cleanup
 
 **Status:** Completed in current baseline. Shared request/result contracts live in `contracts`, `codex-host-agent` no longer depends on `platform-api`, dry-run/plan-only remain safe defaults, `codex_exec` is still host/profile gated, task memory space ids are first-class in the queue context, and successful worker outputs now serialize through `CodexHostTaskOutputView` with mode-specific AssistantRun events. Real `codex_exec` now additionally requires `CODEX_HOST_AGENT_TASK_WORKSPACE_ROOT`; the agent creates a task-scoped workspace label from `task_memory_space_id` and runs Codex from that directory instead of the host agent's current working directory.
@@ -728,6 +811,7 @@ Product mainline is static-page generation quality: module editing correctness, 
 The model-gateway/Codex conversation executor is now a core architecture track, not a distant sidecar. Build toward routing normal assistant turns through Codex behind feature flags and shadow/dry-run comparison, with V3 supplying context/evidence/tool contracts and validating every requested action.
 Gateway model profiles must support multiple provider APIs such as GPT-family and MiniMax-compatible providers through explicit capability manifests, redacted credentials, and fallback policy.
 Safe HTML artifacts are a shared review/control surface for Codex reports, planning handoffs, and lightweight JSON-patch editors; do not confuse them with final customer static-page delivery.
+Add direct-upload / publicly resolvable video PPT extraction as a planned media capability: the assistant must know it can request V3-controlled video URL/page resolution, video asset registration, background media parsing, transcript extraction, and PPT artifact generation. Do not support QR login, cookies, login-gated pages, or browser recording bypass in this slice. Do not host-compose the final answer; if the model/provider fails, surface failure.
 Do not resume account expansion unless fixing a security/access regression.
 Do not run real Codex execution on the local developer workstation; Codex real validation is only for the jump host or later Mac host.
 Continue with backend/static-page quality work while also starting Task 0A model-gateway/Codex executor foundation without changing the visible static-page workflow.
