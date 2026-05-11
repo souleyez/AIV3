@@ -432,30 +432,35 @@ fn remote_media_host_allowed(host: &str) -> bool {
 
 fn validate_remote_media_response_type(
     response: &reqwest::blocking::Response,
-    content_type: &str,
-    extension: &str,
+    _content_type: &str,
+    _extension: &str,
 ) -> std::io::Result<()> {
-    let expected_media = content_type.to_ascii_lowercase().starts_with("audio/")
-        || content_type.to_ascii_lowercase().starts_with("video/")
-        || is_audio_extension(extension)
-        || is_video_extension(extension);
     let response_type = response
         .headers()
         .get(reqwest::header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
         .unwrap_or_default()
         .to_ascii_lowercase();
-    if !response_type.is_empty()
-        && !response_type.starts_with("audio/")
-        && !response_type.starts_with("video/")
-        && !expected_media
-    {
+    if !remote_media_response_type_allowed(&response_type) {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             "remote response is not a media content type",
         ));
     }
     Ok(())
+}
+
+fn remote_media_response_type_allowed(response_type: &str) -> bool {
+    let media_type = response_type
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    media_type.is_empty()
+        || media_type.starts_with("audio/")
+        || media_type.starts_with("video/")
+        || media_type == "application/octet-stream"
 }
 
 fn extension_from_remote_url(url: &str) -> Option<String> {
@@ -2129,6 +2134,19 @@ mod tests {
             "https://cdn.example.com/course/lesson-01.mp4?token=redacted",
             "video/mp4"
         ));
+    }
+
+    #[test]
+    fn remote_media_response_type_rejects_html_even_for_video_extension() {
+        assert!(remote_media_response_type_allowed("video/mp4"));
+        assert!(remote_media_response_type_allowed(
+            "application/octet-stream"
+        ));
+        assert!(remote_media_response_type_allowed(""));
+        assert!(!remote_media_response_type_allowed(
+            "text/html; charset=utf-8"
+        ));
+        assert!(!remote_media_response_type_allowed("application/json"));
     }
 
     #[test]
