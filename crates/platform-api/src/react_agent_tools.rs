@@ -773,21 +773,46 @@ fn video_url_resolution_placeholder_result(
         .filter(|value| !value.is_empty())
         .or_else(|| first_url_in_text(prompt));
     let source_text = source_url.unwrap_or_default();
-    let reason = if source_text.is_empty() {
-        "direct_video_url_or_upload_required"
+    let (status, reason, items) = if source_text.is_empty() {
+        (
+            "rejected",
+            "direct_video_url_or_upload_required",
+            Vec::new(),
+        )
     } else if is_login_gated_video_source(source_text) || prompt.contains("视频号") {
-        "login_gated_video_source_not_supported"
+        (
+            "rejected",
+            "login_gated_video_source_not_supported",
+            Vec::new(),
+        )
+    } else if is_direct_video_url(source_text) {
+        (
+            "completed",
+            "direct_video_url_resolved",
+            vec![json!({
+                "type": "resolved_video_source",
+                "source_type": "direct_video_url",
+                "source_url": source_text,
+                "asset_state": "remote_unregistered",
+                "content_type_guess": guess_video_content_type_from_url(source_text),
+                "next_action": "register_remote_video_asset",
+            })],
+        )
     } else {
-        "video_url_resolution_worker_pending"
+        (
+            "rejected",
+            "video_url_resolution_worker_pending",
+            Vec::new(),
+        )
     };
     AssistantRunReactToolResult {
         observation: json!({
-            "status": "rejected",
+            "status": status,
             "action_type": action.action_type.as_str(),
             "actionType": action.action_type.as_str(),
             "message": reason,
-            "denied": [action.action_type.as_str()],
-            "items": [],
+            "denied": if status == "rejected" { json!([action.action_type.as_str()]) } else { json!([]) },
+            "items": items,
             "limits": {},
             "reason": reason,
             "source_present": !source_text.is_empty(),
@@ -796,7 +821,7 @@ fn video_url_resolution_placeholder_result(
             "next_step": "请上传视频文件，或提供可直接访问的视频 URL；后台解析器落地后再登记素材并排队提取 PPT/原文。",
         }),
         trail_step: json!({
-            "status": "rejected",
+            "status": status,
             "label": "解析公开视频地址",
             "react_action": action.action_type.as_str(),
             "reason": reason,
@@ -1017,6 +1042,42 @@ fn first_url_in_text(text: &str) -> Option<&str> {
 fn is_login_gated_video_source(source: &str) -> bool {
     let lower = source.to_ascii_lowercase();
     lower.contains("weixin.qq.com/sph/") || lower.contains("channels.weixin.qq.com/sph/")
+}
+
+fn is_direct_video_url(source: &str) -> bool {
+    let lower = source.trim().to_ascii_lowercase();
+    if !(lower.starts_with("http://") || lower.starts_with("https://")) {
+        return false;
+    }
+    let path = lower
+        .split(['?', '#'])
+        .next()
+        .unwrap_or(lower.as_str())
+        .trim_end_matches('/');
+    [".mp4", ".mov", ".m4v", ".webm", ".mkv", ".avi"]
+        .into_iter()
+        .any(|extension| path.ends_with(extension))
+}
+
+fn guess_video_content_type_from_url(source: &str) -> &'static str {
+    let path = source
+        .trim()
+        .to_ascii_lowercase()
+        .split(['?', '#'])
+        .next()
+        .unwrap_or_default()
+        .to_string();
+    if path.ends_with(".mov") {
+        "video/quicktime"
+    } else if path.ends_with(".webm") {
+        "video/webm"
+    } else if path.ends_with(".mkv") {
+        "video/x-matroska"
+    } else if path.ends_with(".avi") {
+        "video/x-msvideo"
+    } else {
+        "video/mp4"
+    }
 }
 
 fn static_page_preview_stale_react_result(
@@ -1768,6 +1829,31 @@ mod tests {
                 "cookies",
                 "screen_recording_bypass"
             ])
+        );
+        assert!(result.final_answer.is_none());
+    }
+
+    #[test]
+    fn video_url_resolution_accepts_direct_video_urls() {
+        let mut action = test_action(AssistantRunReactActionType::ResolveVideoUrl);
+        action.arguments =
+            json!({"source_url": "https://cdn.example.com/course/lesson-01.MP4?token=redacted"});
+
+        let result = video_url_resolution_placeholder_result(&action, "");
+
+        assert_eq!(result.observation["status"], json!("completed"));
+        assert_eq!(
+            result.observation["reason"],
+            json!("direct_video_url_resolved")
+        );
+        assert_eq!(result.observation["denied"], json!([]));
+        assert_eq!(
+            result.observation["items"][0]["source_type"],
+            json!("direct_video_url")
+        );
+        assert_eq!(
+            result.observation["items"][0]["content_type_guess"],
+            json!("video/mp4")
         );
         assert!(result.final_answer.is_none());
     }
