@@ -20053,6 +20053,13 @@ fn assistant_run_codex_detail_diagnostics(events: &[AssistantRunEvent]) -> Value
                 "model_gateway": assistant_run_codex_model_gateway_diagnostics_summary(
                     payload.get("model_gateway"),
                 ),
+                "provider_shim_observability": assistant_run_codex_provider_shim_observability_summary(
+                    payload
+                        .get("provider_shim_observability")
+                        .or_else(|| payload.get("provider_shim"))
+                        .or_else(|| payload.pointer("/model_gateway/provider_shim_observability"))
+                        .or_else(|| payload.pointer("/model_gateway/provider_shim")),
+                ),
                 "output_schema": payload
                     .get("output_schema")
                     .cloned()
@@ -20344,6 +20351,271 @@ fn assistant_run_codex_model_gateway_diagnostics_summary(model_gateway: Option<&
             .pointer("/safety/v3_validates_all_actions")
             .cloned()
             .unwrap_or(Value::Bool(true)),
+    })
+}
+
+fn assistant_run_codex_provider_shim_observability_summary(snapshot: Option<&Value>) -> Value {
+    let Some(snapshot) = snapshot.filter(|value| value.is_object()) else {
+        return Value::Null;
+    };
+    let health = snapshot
+        .get("health")
+        .filter(|value| value.is_object())
+        .map(|health| {
+            json!({
+                "status": health.get("status").cloned().unwrap_or(Value::Null),
+                "process_reachable": health
+                    .get("process_reachable")
+                    .cloned()
+                    .unwrap_or(Value::Bool(false)),
+                "upstream_reachable": health
+                    .get("upstream_reachable")
+                    .cloned()
+                    .unwrap_or(Value::Bool(false)),
+                "checked_at": health.get("checked_at").cloned().unwrap_or(Value::Null),
+                "has_message": health.get("message").is_some(),
+            })
+        })
+        .unwrap_or(Value::Null);
+    let profile = snapshot
+        .get("profile")
+        .filter(|value| value.is_object())
+        .map(|profile| {
+            json!({
+                "profile_id": profile.get("profile_id").cloned().unwrap_or(Value::Null),
+                "provider_id": profile.get("provider_id").cloned().unwrap_or(Value::Null),
+                "model_id": profile.get("model_id").cloned().unwrap_or(Value::Null),
+                "wire_api": profile.get("wire_api").cloned().unwrap_or(Value::Null),
+                "endpoint_scope": profile.get("endpoint_scope").cloned().unwrap_or(Value::Null),
+                "base_url_configured": profile
+                    .get("base_url_configured")
+                    .cloned()
+                    .unwrap_or(Value::Bool(false)),
+                "api_path": profile.get("api_path").cloned().unwrap_or(Value::Null),
+                "auth_configured": profile
+                    .get("auth_configured")
+                    .cloned()
+                    .unwrap_or(Value::Bool(false)),
+                "timeout_ms": profile.get("timeout_ms").cloned().unwrap_or(Value::Null),
+                "capabilities": profile
+                    .get("capabilities")
+                    .cloned()
+                    .unwrap_or_else(|| json!([])),
+                "rate_limit": {
+                    "requests_per_minute": profile
+                        .pointer("/rate_limit/requests_per_minute")
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                    "tokens_per_minute": profile
+                        .pointer("/rate_limit/tokens_per_minute")
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                    "concurrent_requests": profile
+                        .pointer("/rate_limit/concurrent_requests")
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                },
+                "cost": {
+                    "currency": profile.pointer("/cost/currency").cloned().unwrap_or(Value::Null),
+                    "input_microusd_per_million_tokens": profile
+                        .pointer("/cost/input_microusd_per_million_tokens")
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                    "output_microusd_per_million_tokens": profile
+                        .pointer("/cost/output_microusd_per_million_tokens")
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                },
+                "redaction": {
+                    "redact_provider_errors": profile
+                        .pointer("/redaction/redact_provider_errors")
+                        .cloned()
+                        .unwrap_or(Value::Bool(true)),
+                    "redact_request_payloads": profile
+                        .pointer("/redaction/redact_request_payloads")
+                        .cloned()
+                        .unwrap_or(Value::Bool(true)),
+                    "redact_response_payloads": profile
+                        .pointer("/redaction/redact_response_payloads")
+                        .cloned()
+                        .unwrap_or(Value::Bool(true)),
+                    "max_error_chars": profile
+                        .pointer("/redaction/max_error_chars")
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                },
+            })
+        })
+        .unwrap_or(Value::Null);
+    let usage_summary = snapshot
+        .get("usage_summary")
+        .filter(|value| value.is_object())
+        .map(|usage| {
+            json!({
+                "request_count": usage.get("request_count").cloned().unwrap_or(Value::Null),
+                "failed_request_count": usage
+                    .get("failed_request_count")
+                    .cloned()
+                    .unwrap_or(Value::Null),
+                "input_tokens": usage.get("input_tokens").cloned().unwrap_or(Value::Null),
+                "output_tokens": usage.get("output_tokens").cloned().unwrap_or(Value::Null),
+                "total_tokens": usage.get("total_tokens").cloned().unwrap_or(Value::Null),
+                "has_last_request_id": usage.get("last_request_id").is_some(),
+            })
+        })
+        .unwrap_or(Value::Null);
+    let recent_usage_events = snapshot
+        .get("recent_usage_events")
+        .and_then(Value::as_array)
+        .map(|events| {
+            let failed_count = events
+                .iter()
+                .filter(|event| {
+                    event
+                        .get("status")
+                        .and_then(Value::as_str)
+                        .map(|status| status != "ok" && status != "completed")
+                        .unwrap_or(false)
+                })
+                .count();
+            json!({
+                "event_count": events.len(),
+                "failed_event_count": failed_count,
+                "latest_status": events
+                    .last()
+                    .and_then(|event| event.get("status"))
+                    .cloned()
+                    .unwrap_or(Value::Null),
+                "latest_failure_kind": events
+                    .last()
+                    .and_then(|event| event.get("provider_failure_kind"))
+                    .cloned()
+                    .unwrap_or(Value::Null),
+            })
+        })
+        .unwrap_or_else(|| {
+            json!({
+                "event_count": 0,
+                "failed_event_count": 0,
+                "latest_status": Value::Null,
+                "latest_failure_kind": Value::Null,
+            })
+        });
+    let balance = snapshot
+        .get("balance")
+        .filter(|value| value.is_object())
+        .map(|balance| {
+            json!({
+                "supported": balance.get("supported").cloned().unwrap_or(Value::Bool(false)),
+                "currency": balance.get("currency").cloned().unwrap_or(Value::Null),
+                "has_amount": balance.get("amount_microunits").is_some(),
+                "checked_at": balance.get("checked_at").cloned().unwrap_or(Value::Null),
+                "has_note": balance.get("note").is_some(),
+            })
+        })
+        .unwrap_or(Value::Null);
+    let debug_trace_status = snapshot
+        .get("debug_trace_status")
+        .filter(|value| value.is_object())
+        .map(|trace| {
+            json!({
+                "enabled": trace.get("enabled").cloned().unwrap_or(Value::Bool(false)),
+                "redacted": trace.get("redacted").cloned().unwrap_or(Value::Bool(true)),
+                "storage": trace.get("storage").cloned().unwrap_or(Value::Null),
+                "retained_trace_count": trace
+                    .get("retained_trace_count")
+                    .cloned()
+                    .unwrap_or(Value::Null),
+                "has_latest_trace": trace.get("latest_trace_id").is_some(),
+                "has_note": trace.get("note").is_some(),
+            })
+        })
+        .unwrap_or(Value::Null);
+    let context_budget_report = snapshot
+        .get("context_budget_report")
+        .filter(|value| value.is_object())
+        .map(|budget| {
+            json!({
+                "quality_first": budget.get("quality_first").cloned().unwrap_or(Value::Bool(true)),
+                "max_prompt_chars": budget.get("max_prompt_chars").cloned().unwrap_or(Value::Null),
+                "estimated_prompt_chars": budget
+                    .get("estimated_prompt_chars")
+                    .cloned()
+                    .unwrap_or(Value::Null),
+                "budget_pressure": budget.get("budget_pressure").cloned().unwrap_or(Value::Null),
+                "trimmed_item_count": budget
+                    .get("trimmed_item_count")
+                    .cloned()
+                    .unwrap_or(Value::Null),
+                "item_count": budget
+                    .get("items")
+                    .and_then(Value::as_array)
+                    .map(Vec::len)
+                    .unwrap_or(0),
+            })
+        })
+        .unwrap_or(Value::Null);
+    let tool_output_budget = snapshot
+        .get("tool_output_budget")
+        .filter(|value| value.is_object())
+        .map(|budget| {
+            json!({
+                "largest_output_chars": budget
+                    .get("largest_output_chars")
+                    .cloned()
+                    .unwrap_or(Value::Null),
+                "trimmed_output_count": budget
+                    .get("trimmed_output_count")
+                    .cloned()
+                    .unwrap_or(Value::Null),
+                "preserved_recent_output_count": budget
+                    .get("preserved_recent_output_count")
+                    .cloned()
+                    .unwrap_or(Value::Null),
+                "preserved_error_count": budget
+                    .get("preserved_error_count")
+                    .cloned()
+                    .unwrap_or(Value::Null),
+                "preserved_evidence_ref_count": budget
+                    .get("preserved_evidence_ref_count")
+                    .cloned()
+                    .unwrap_or(Value::Null),
+                "has_note": budget.get("note").is_some(),
+            })
+        })
+        .unwrap_or(Value::Null);
+    let liveness_events = snapshot
+        .get("liveness_events")
+        .and_then(Value::as_array)
+        .map(|events| {
+            json!({
+                "event_count": events.len(),
+                "latest": events.last().map(|event| {
+                    json!({
+                        "event_type": event.get("event_type").cloned().unwrap_or(Value::Null),
+                        "status": event.get("status").cloned().unwrap_or(Value::Null),
+                        "retry_count": event.get("retry_count").cloned().unwrap_or(Value::Null),
+                        "action": event.get("action").cloned().unwrap_or(Value::Null),
+                        "occurred_at": event.get("occurred_at").cloned().unwrap_or(Value::Null),
+                        "has_note": event.get("note").is_some(),
+                    })
+                }).unwrap_or(Value::Null),
+            })
+        })
+        .unwrap_or_else(|| json!({"event_count": 0, "latest": Value::Null}));
+
+    json!({
+        "schema_version": snapshot.get("schema_version").cloned().unwrap_or(Value::Null),
+        "health": health,
+        "profile": profile,
+        "usage_summary": usage_summary,
+        "recent_usage_events": recent_usage_events,
+        "balance": balance,
+        "debug_trace_status": debug_trace_status,
+        "context_budget_report": context_budget_report,
+        "tool_output_budget": tool_output_budget,
+        "liveness_events": liveness_events,
+        "raw_payloads_exposed": false,
     })
 }
 
@@ -25057,6 +25329,102 @@ mod tests {
                             "v3_validates_all_actions": true
                         }
                     },
+                    "provider_shim_observability": {
+                        "schema_version": 1,
+                        "health": {
+                            "status": "degraded",
+                            "process_reachable": true,
+                            "upstream_reachable": false,
+                            "checked_at": "2026-05-11T02:20:00Z",
+                            "message": "upstream error sk-provider-shim-health"
+                        },
+                        "profile": {
+                            "profile_id": "minimax-codex-shadow",
+                            "provider_id": "minimax",
+                            "model_id": "MiniMax-M2.7",
+                            "wire_api": "codex_compatible_shim",
+                            "endpoint_scope": "local_private",
+                            "base_url_configured": true,
+                            "api_path": "/v1/responses",
+                            "auth_env_key_name": "MINIMAX_API_KEY",
+                            "auth_configured": true,
+                            "timeout_ms": 45000,
+                            "capabilities": ["chat", "json", "codex_compatible"],
+                            "rate_limit": {
+                                "requests_per_minute": 30,
+                                "tokens_per_minute": 100000,
+                                "concurrent_requests": 2
+                            },
+                            "cost": {
+                                "currency": "USD",
+                                "input_microusd_per_million_tokens": 100000,
+                                "output_microusd_per_million_tokens": 200000
+                            },
+                            "redaction": {
+                                "redact_provider_errors": true,
+                                "redact_request_payloads": true,
+                                "redact_response_payloads": true,
+                                "max_error_chars": 0
+                            }
+                        },
+                        "usage_summary": {
+                            "request_count": 2,
+                            "failed_request_count": 1,
+                            "input_tokens": 100,
+                            "output_tokens": 40,
+                            "total_tokens": 140,
+                            "last_request_id": "req-shim-secret"
+                        },
+                        "recent_usage_events": [{
+                            "request_id": "req-shim-secret",
+                            "status": "failed",
+                            "input_tokens": 100,
+                            "output_tokens": 40,
+                            "total_tokens": 140,
+                            "latency_ms": 900,
+                            "provider_failure_kind": "upstream_unavailable",
+                            "provider_failure_message": "raw MiniMax failure sk-provider-shim-error"
+                        }],
+                        "balance": {
+                            "supported": true,
+                            "currency": "USD",
+                            "amount_microunits": 123456789,
+                            "checked_at": "2026-05-11T02:21:00Z",
+                            "note": "balance note should not leak"
+                        },
+                        "debug_trace_status": {
+                            "enabled": true,
+                            "redacted": true,
+                            "storage": "local_redacted",
+                            "retained_trace_count": 3,
+                            "latest_trace_id": "trace-secret-id",
+                            "note": "trace note should not leak"
+                        },
+                        "context_budget_report": {
+                            "quality_first": true,
+                            "max_prompt_chars": 12000,
+                            "estimated_prompt_chars": 4096,
+                            "budget_pressure": "normal",
+                            "trimmed_item_count": 1,
+                            "items": [{"category": "tool_outputs"}]
+                        },
+                        "tool_output_budget": {
+                            "largest_output_chars": 2048,
+                            "trimmed_output_count": 1,
+                            "preserved_recent_output_count": 2,
+                            "preserved_error_count": 1,
+                            "preserved_evidence_ref_count": 4,
+                            "note": "tool note should not leak"
+                        },
+                        "liveness_events": [{
+                            "event_type": "tool_call_liveness_stall",
+                            "status": "recovered",
+                            "retry_count": 1,
+                            "action": "continue",
+                            "occurred_at": "2026-05-11T02:22:00Z",
+                            "note": "liveness note should not leak"
+                        }]
+                    },
                     "context_budget": {
                         "estimated_prompt_chars": 4096,
                         "max_prompt_chars": 12000,
@@ -25201,6 +25569,86 @@ mod tests {
         assert_eq!(
             diagnostics["codex_executor"]["latest"]["model_gateway"]["profile_env_prefix"],
             Value::Null
+        );
+        assert_eq!(
+            diagnostics["codex_executor"]["latest"]["provider_shim_observability"]["health"]
+                ["status"],
+            json!("degraded")
+        );
+        assert_eq!(
+            diagnostics["codex_executor"]["latest"]["provider_shim_observability"]["health"]
+                ["has_message"],
+            json!(true)
+        );
+        assert_eq!(
+            diagnostics["codex_executor"]["latest"]["provider_shim_observability"]["profile"]
+                ["provider_id"],
+            json!("minimax")
+        );
+        assert_eq!(
+            diagnostics["codex_executor"]["latest"]["provider_shim_observability"]["profile"]
+                ["auth_configured"],
+            json!(true)
+        );
+        assert_eq!(
+            diagnostics["codex_executor"]["latest"]["provider_shim_observability"]["profile"]
+                ["auth_env_key_name"],
+            Value::Null
+        );
+        assert_eq!(
+            diagnostics["codex_executor"]["latest"]["provider_shim_observability"]["usage_summary"]
+                ["request_count"],
+            json!(2)
+        );
+        assert_eq!(
+            diagnostics["codex_executor"]["latest"]["provider_shim_observability"]["usage_summary"]
+                ["has_last_request_id"],
+            json!(true)
+        );
+        assert_eq!(
+            diagnostics["codex_executor"]["latest"]["provider_shim_observability"]
+                ["recent_usage_events"]["failed_event_count"],
+            json!(1)
+        );
+        assert_eq!(
+            diagnostics["codex_executor"]["latest"]["provider_shim_observability"]["balance"]
+                ["has_amount"],
+            json!(true)
+        );
+        assert_eq!(
+            diagnostics["codex_executor"]["latest"]["provider_shim_observability"]["balance"]
+                ["amount_microunits"],
+            Value::Null
+        );
+        assert_eq!(
+            diagnostics["codex_executor"]["latest"]["provider_shim_observability"]
+                ["debug_trace_status"]["has_latest_trace"],
+            json!(true)
+        );
+        assert_eq!(
+            diagnostics["codex_executor"]["latest"]["provider_shim_observability"]
+                ["debug_trace_status"]["latest_trace_id"],
+            Value::Null
+        );
+        assert_eq!(
+            diagnostics["codex_executor"]["latest"]["provider_shim_observability"]
+                ["context_budget_report"]["budget_pressure"],
+            json!("normal")
+        );
+        assert_eq!(
+            diagnostics["codex_executor"]["latest"]["provider_shim_observability"]
+                ["tool_output_budget"]["trimmed_output_count"],
+            json!(1)
+        );
+        assert_eq!(
+            diagnostics["codex_executor"]["latest"]["provider_shim_observability"]
+                ["liveness_events"]["latest"]["event_type"],
+            json!("tool_call_liveness_stall")
+        );
+        assert_eq!(
+            diagnostics["codex_executor"]["latest"]["provider_shim_observability"]
+                ["raw_payloads_exposed"],
+            json!(false)
         );
         assert_eq!(
             diagnostics["codex_executor"]["recent_shadow_events"]
@@ -25392,6 +25840,16 @@ mod tests {
         assert!(!serialized.contains("sk-command-should-not-leak"));
         assert!(!serialized.contains("jump host stdout"));
         assert!(!serialized.contains("jump host stderr"));
+        assert!(!serialized.contains("sk-provider-shim-health"));
+        assert!(!serialized.contains("MINIMAX_API_KEY"));
+        assert!(!serialized.contains("req-shim-secret"));
+        assert!(!serialized.contains("sk-provider-shim-error"));
+        assert!(!serialized.contains("123456789"));
+        assert!(!serialized.contains("balance note should not leak"));
+        assert!(!serialized.contains("trace-secret-id"));
+        assert!(!serialized.contains("trace note should not leak"));
+        assert!(!serialized.contains("tool note should not leak"));
+        assert!(!serialized.contains("liveness note should not leak"));
     }
 
     #[test]

@@ -316,6 +316,8 @@ The next development thread should keep the current UI shell stable and continue
 
 **2026-05-11 transport gate follow-up:** Browser-facing real transport requests now require two explicit operator gates before reaching `assistant-runtime`: `ASSISTANT_RUN_CODEX_REAL_TRANSPORT_FEATURE_GATE=enabled` and `ASSISTANT_RUN_CODEX_REAL_TRANSPORT_PROMOTION_REVIEW_APPROVED=approved`. If either gate is missing, V3 records the requested transport in `transport_policy` but downgrades the effective executor to `codex_plan_only`. The promotion-review gate should only be enabled after the read-only `promotion_gate` says shadow comparison and jump-host/Mac-host validation are eligible for feature-gate review.
 
+**2026-05-11 provider-shim diagnostics follow-up:** AssistantRun Codex diagnostics now include a fixed-field `provider_shim_observability` summary when a shadow executor or future shim supplies the contract snapshot. The summary exposes health status, profile/model/wire API, safe usage counts, budget pressure, tool-output trimming counts, and liveness event status, while deliberately hiding auth env names, raw provider errors, request ids, trace ids, raw balance amounts, and diagnostic notes.
+
 **OpenAI Codex OSS reference checked on 2026-05-10:**
 
 - Repository: `https://github.com/openai/codex`
