@@ -623,6 +623,17 @@ fn codex_executor_suggest_action_type(
         && codex_executor_prompt_requests_preview(&package.user_prompt)
         && available.contains("submit_static_page_image_preview")
     {
+        if codex_executor_static_page_needs_data_quality_attention(package) {
+            if available.contains("update_static_page_module") && package.current_artifact.is_some()
+            {
+                return Some("update_static_page_module".to_string());
+            }
+            if available.contains("retrieve_evidence")
+                && package.context_budget.selected_dataset_count > 0
+            {
+                return Some("retrieve_evidence".to_string());
+            }
+        }
         return Some("submit_static_page_image_preview".to_string());
     }
     if static_page_context
@@ -735,6 +746,7 @@ fn codex_executor_suggestion_arguments(
         "update_static_page_module" => json!({
             "draft_id": codex_executor_artifact_id(package.current_artifact.as_ref()),
             "prompt": package.user_prompt,
+            "data_quality_gate": codex_executor_static_page_quality_gate(package),
             "source": "codex_plan_only_shadow",
         }),
         "render_static_page" => json!({
@@ -852,6 +864,113 @@ fn codex_executor_has_detail_targets(package: &AssistantRunCodexContextPackageVi
         .get("detail_targets")
         .and_then(Value::as_array)
         .is_some_and(|items| !items.is_empty())
+}
+
+fn codex_executor_static_page_needs_data_quality_attention(
+    package: &AssistantRunCodexContextPackageView,
+) -> bool {
+    package
+        .current_artifact
+        .as_ref()
+        .and_then(codex_executor_static_page_binding_quality)
+        .is_some_and(codex_executor_binding_quality_needs_attention)
+}
+
+fn codex_executor_static_page_quality_gate(package: &AssistantRunCodexContextPackageView) -> Value {
+    let Some(binding_quality) = package
+        .current_artifact
+        .as_ref()
+        .and_then(codex_executor_static_page_binding_quality)
+    else {
+        return Value::Null;
+    };
+
+    let modules = binding_quality
+        .get("modules")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter(|module| codex_executor_binding_quality_module_needs_attention(module))
+                .take(8)
+                .map(|module| {
+                    json!({
+                        "module_id": codex_executor_quality_string(module, &["module_id", "moduleId", "id"]),
+                        "title": codex_executor_quality_string(module, &["title", "module_title", "moduleTitle"]),
+                        "binding_quality_status": codex_executor_quality_string(module, &["bindingQualityStatus", "binding_quality_status", "status"]),
+                        "chart_data_fit": codex_executor_quality_string(module, &["chartDataFit", "chart_data_fit"]),
+                        "sample_rows": codex_executor_quality_u64(module, &["sampleRows", "sample_rows"]),
+                        "recommended_action": codex_executor_quality_string(module, &["recommendedAction", "recommended_action"]),
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    json!({
+        "has_attention": codex_executor_binding_quality_needs_attention(binding_quality),
+        "attention_modules": codex_executor_quality_u64(binding_quality, &["attentionModules", "attention_modules"]),
+        "modules": modules,
+    })
+}
+
+fn codex_executor_static_page_binding_quality(artifact: &Value) -> Option<&Value> {
+    artifact
+        .get("bindingQuality")
+        .or_else(|| artifact.get("binding_quality"))
+}
+
+fn codex_executor_binding_quality_needs_attention(binding_quality: &Value) -> bool {
+    if codex_executor_quality_u64(binding_quality, &["attentionModules", "attention_modules"]) > 0 {
+        return true;
+    }
+    binding_quality
+        .get("modules")
+        .and_then(Value::as_array)
+        .is_some_and(|items| {
+            items
+                .iter()
+                .any(codex_executor_binding_quality_module_needs_attention)
+        })
+}
+
+fn codex_executor_binding_quality_module_needs_attention(module: &Value) -> bool {
+    let status = codex_executor_quality_string(
+        module,
+        &["bindingQualityStatus", "binding_quality_status", "status"],
+    );
+    if !status.is_empty() && !matches!(status.as_str(), "confirmed" | "ready" | "non_chart") {
+        return true;
+    }
+
+    let chart_data_fit = codex_executor_quality_string(module, &["chartDataFit", "chart_data_fit"]);
+    if !chart_data_fit.is_empty()
+        && !matches!(
+            chart_data_fit.as_str(),
+            "ready" | "not_required" | "non_chart_ready"
+        )
+    {
+        return true;
+    }
+
+    false
+}
+
+fn codex_executor_quality_string(value: &Value, keys: &[&str]) -> String {
+    keys.iter()
+        .find_map(|key| value.get(*key).and_then(Value::as_str))
+        .unwrap_or_default()
+        .to_string()
+}
+
+fn codex_executor_quality_u64(value: &Value, keys: &[&str]) -> u64 {
+    keys.iter()
+        .find_map(|key| {
+            value
+                .get(*key)
+                .and_then(|item| item.as_u64().or_else(|| item.as_str()?.parse::<u64>().ok()))
+        })
+        .unwrap_or(0)
 }
 
 fn codex_executor_is_static_page_artifact(artifact: &Value) -> bool {
@@ -1634,6 +1753,145 @@ mod tests {
         );
         assert_eq!(output.model_gateway["auth_configured"], json!(true));
         assert_eq!(output.context_budget.selected_dataset_count, 1);
+    }
+
+    #[test]
+    fn codex_executor_plan_only_blocks_preview_when_static_page_data_quality_needs_attention() {
+        let mut package = codex_context_package();
+        package.executor_transport = AssistantRunExecutorTransportView::CodexPlanOnly;
+        package.user_prompt = "生成效果图给客户确认".to_string();
+        package.selected_scope = json!({"intent": "static_page"});
+        package.current_artifact = Some(json!({
+            "kind": "static_page_draft",
+            "draft_id": "draft-quality-1",
+            "bindingQuality": {
+                "attentionModules": 1,
+                "modules": [
+                    {
+                        "moduleId": "module-risk",
+                        "title": "风险趋势",
+                        "bindingQualityStatus": "matched_field_candidate",
+                        "chartDataFit": "needs_sample_rows",
+                        "sampleRows": 0,
+                        "recommendedAction": "retrieve_sample_rows"
+                    }
+                ]
+            }
+        }));
+        package.available_actions = vec![
+            AssistantRunCodexActionContractView::new(
+                "submit_static_page_image_preview",
+                "提交静态页效果图",
+                "只能提交 V3 校验后的当前草稿效果图请求",
+                json!({"type": "object"}),
+                true,
+            ),
+            AssistantRunCodexActionContractView::new(
+                "update_static_page_module",
+                "更新静态页模块",
+                "只能更新当前可见草稿",
+                json!({"type": "object"}),
+                true,
+            ),
+            AssistantRunCodexActionContractView::new(
+                "final_answer",
+                "模型回答",
+                "直接回答",
+                json!({"type": "object"}),
+                false,
+            ),
+        ];
+
+        let output = execute_codex_conversation_plan(&package);
+        let suggested_action = output
+            .suggested_action
+            .as_ref()
+            .expect("data-quality gate should suggest module repair");
+
+        assert_eq!(
+            suggested_action["action_type"],
+            json!("update_static_page_module")
+        );
+        assert_eq!(
+            suggested_action["arguments"]["draft_id"],
+            json!("draft-quality-1")
+        );
+        assert_eq!(
+            suggested_action["arguments"]["data_quality_gate"]["has_attention"],
+            json!(true)
+        );
+        assert_eq!(
+            suggested_action["arguments"]["data_quality_gate"]["attention_modules"],
+            json!(1)
+        );
+        assert_eq!(
+            suggested_action["arguments"]["data_quality_gate"]["modules"][0]["chart_data_fit"],
+            json!("needs_sample_rows")
+        );
+        assert_eq!(suggested_action["mutation_allowed"], json!(false));
+    }
+
+    #[test]
+    fn codex_executor_plan_only_allows_preview_when_static_page_data_quality_is_confirmed() {
+        let mut package = codex_context_package();
+        package.executor_transport = AssistantRunExecutorTransportView::CodexPlanOnly;
+        package.user_prompt = "生成效果图给客户确认".to_string();
+        package.selected_scope = json!({"intent": "static_page"});
+        package.current_artifact = Some(json!({
+            "kind": "static_page_draft",
+            "draft_id": "draft-quality-2",
+            "bindingQuality": {
+                "attentionModules": 0,
+                "modules": [
+                    {
+                        "moduleId": "module-sales",
+                        "title": "销售趋势",
+                        "bindingQualityStatus": "confirmed",
+                        "chartDataFit": "ready",
+                        "sampleRows": 8,
+                        "recommendedAction": "数据样本可直接驱动该模块；交付前只需确认字段口径。"
+                    }
+                ]
+            }
+        }));
+        package.available_actions = vec![
+            AssistantRunCodexActionContractView::new(
+                "submit_static_page_image_preview",
+                "提交静态页效果图",
+                "只能提交 V3 校验后的当前草稿效果图请求",
+                json!({"type": "object"}),
+                true,
+            ),
+            AssistantRunCodexActionContractView::new(
+                "update_static_page_module",
+                "更新静态页模块",
+                "只能更新当前可见草稿",
+                json!({"type": "object"}),
+                true,
+            ),
+            AssistantRunCodexActionContractView::new(
+                "final_answer",
+                "模型回答",
+                "直接回答",
+                json!({"type": "object"}),
+                false,
+            ),
+        ];
+
+        let output = execute_codex_conversation_plan(&package);
+
+        assert_eq!(
+            output
+                .suggested_action
+                .as_ref()
+                .and_then(|action| action.get("action_type"))
+                .and_then(Value::as_str),
+            Some("submit_static_page_image_preview")
+        );
+        assert_eq!(
+            output.execution_trail[0]["suggested_action"]["arguments"]["draft_id"],
+            json!("draft-quality-2")
+        );
     }
 
     #[test]

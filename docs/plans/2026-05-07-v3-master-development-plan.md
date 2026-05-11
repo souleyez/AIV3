@@ -81,6 +81,7 @@ Completed and preserved:
 - Static-page render/export manifests classify module data quality as confirmed, partial, or missing; the handoff README, main workspace, and right shelf expose those counts.
 - Background static-page render now preserves queued/rendering/failed/cancelled workflow state in the output and manifest so the main workspace and right shelf stay consistent.
 - Assistant startup briefing and scope planning expose product capability, controlled action policy, quality-first context budget, recommended tool actions, and minimal UI intent chips.
+- Codex plan-only action suggestions now consume static-page `bindingQuality` summaries: if chart/module data still needs attention, the executor suggests module repair or retrieval instead of submitting an effect-image preview; confirmed data quality still allows the normal `效果图——生成页面` path.
 - Home UI shell is now close to fixed: homepage keeps the conversation composer, directory pages remove the composer, the left rail remains dataset-only, the top toolbar owns page navigation/login/model status, the right shelf owns drafts/results, and members shows an explicit login-required overlay instead of looking broken.
 - Java 8 parity audit is complete: Java/Vue used `gridstack` plus `echarts`; V3 keeps `react-grid-layout` and adds ECharts as advanced chart runtime.
 - Model gateway seed exists in `llm-gateway` with model lanes, provider error redaction, and MiniMax reasoning block cleanup.
@@ -179,6 +180,8 @@ The target flow is:
 5. Codex uses the configured model profile through the model gateway, decides whether to answer, retrieve more, update a draft, request an image preview, render a page, recall memory, or continue execution.
 6. V3 validates every requested action against user/session/dataset/artifact scope.
 7. V3 persists events, supplied evidence, actions, artifacts, and the final model-authored response.
+
+For static-page turns, Codex action planning must respect V3's data-quality gates. A request for an effect image is not enough by itself: if the current artifact reports missing bindings, matched-field-only candidates, inferred chart signals, or chart data without sample rows, the executor should first request retrieval or module repair through V3-validated actions. This keeps the GPT Image bridge and final renderer from turning weak evidence into polished-looking fake dashboards.
 
 The product must support:
 
