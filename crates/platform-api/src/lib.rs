@@ -10536,6 +10536,7 @@ fn assistant_run_codex_execution_trail_entries(
             shadow_comparison,
         ),
         "model_gateway": output.model_gateway.clone(),
+        "provider_shim_observability": assistant_run_codex_provider_shim_observability_from_output(output),
         "output_schema": output.output_schema.clone(),
         "host_invocation": assistant_run_codex_host_invocation_summary(output.host_invocation.as_ref()),
         "shadow_comparison": shadow_comparison.cloned(),
@@ -10560,11 +10561,122 @@ fn assistant_run_codex_event_payload(
             shadow_comparison,
         ),
         "model_gateway": output.model_gateway.clone(),
+        "provider_shim_observability": assistant_run_codex_provider_shim_observability_from_output(output),
         "output_schema": output.output_schema.clone(),
         "host_invocation": assistant_run_codex_host_invocation_summary(output.host_invocation.as_ref()),
         "context_budget": output.context_budget.clone(),
         "execution_trail": assistant_run_codex_runtime_execution_trail_summary(&output.execution_trail),
         "shadow_comparison": shadow_comparison.cloned(),
+    })
+}
+
+fn assistant_run_codex_provider_shim_observability_from_output(
+    output: &CodexConversationExecutorOutput,
+) -> Value {
+    let wire_api = output
+        .model_gateway
+        .get("wire_api")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let is_provider_shim = matches!(
+        wire_api,
+        "codex_compatible_shim" | "codex-compatible-shim" | "codex_shim" | "provider_shim"
+    );
+    if !is_provider_shim {
+        return Value::Null;
+    }
+
+    let selected_model = output
+        .model_gateway
+        .get("selected_model")
+        .filter(|value| value.is_object())
+        .unwrap_or(&Value::Null);
+    let provider_id = selected_model
+        .get("provider")
+        .cloned()
+        .unwrap_or(Value::Null);
+    let model_id = selected_model.get("model").cloned().unwrap_or(Value::Null);
+    let auth_configured = output
+        .model_gateway
+        .get("auth_configured")
+        .cloned()
+        .unwrap_or(Value::Bool(false));
+
+    json!({
+        "schema_version": 1,
+        "source": "v3_codex_event_synthetic",
+        "health": {
+            "status": "unknown",
+            "process_reachable": false,
+            "upstream_reachable": false,
+            "checked_at": Value::Null,
+        },
+        "profile": {
+            "profile_id": Value::Null,
+            "provider_id": provider_id,
+            "model_id": model_id,
+            "wire_api": wire_api,
+            "endpoint_scope": "v3_server_profile",
+            "base_url_configured": false,
+            "api_path": Value::Null,
+            "auth_configured": auth_configured,
+            "timeout_ms": Value::Null,
+            "capabilities": [],
+            "rate_limit": {
+                "requests_per_minute": Value::Null,
+                "tokens_per_minute": Value::Null,
+                "concurrent_requests": Value::Null,
+            },
+            "cost": {
+                "currency": Value::Null,
+                "input_microusd_per_million_tokens": Value::Null,
+                "output_microusd_per_million_tokens": Value::Null,
+            },
+            "redaction": {
+                "redact_provider_errors": true,
+                "redact_request_payloads": true,
+                "redact_response_payloads": true,
+                "max_error_chars": 0,
+            },
+        },
+        "usage_summary": {
+            "request_count": 0,
+            "failed_request_count": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "total_tokens": 0,
+            "last_request_id": Value::Null,
+        },
+        "recent_usage_events": [],
+        "balance": {
+            "supported": false,
+            "currency": Value::Null,
+            "amount_microunits": Value::Null,
+            "checked_at": Value::Null,
+        },
+        "debug_trace_status": {
+            "enabled": false,
+            "redacted": true,
+            "storage": "disabled",
+            "retained_trace_count": 0,
+            "latest_trace_id": Value::Null,
+        },
+        "context_budget_report": {
+            "quality_first": output.context_budget.quality_first,
+            "max_prompt_chars": output.context_budget.max_prompt_chars,
+            "estimated_prompt_chars": output.context_budget.estimated_prompt_chars,
+            "budget_pressure": output.context_budget.budget_pressure.clone(),
+            "trimmed_item_count": output.context_budget.trimmed_item_count,
+            "items": output.context_budget.items.clone(),
+        },
+        "tool_output_budget": {
+            "largest_output_chars": 0,
+            "trimmed_output_count": output.context_budget.trimmed_item_count,
+            "preserved_recent_output_count": 0,
+            "preserved_error_count": 0,
+            "preserved_evidence_ref_count": output.context_budget.evidence_item_count,
+        },
+        "liveness_events": [],
     })
 }
 
@@ -24836,7 +24948,10 @@ mod tests {
             "profile": {
                 "profile_id": "minimax-codex-shadow",
                 "wire_api": "codex_compatible_shim",
-                "auth": {"configured": true}
+                "auth": {
+                    "configured": true,
+                    "env_key_name": "MINIMAX_API_KEY"
+                }
             }
         });
 
@@ -24907,6 +25022,50 @@ mod tests {
         );
         assert!(package.safety.v3_validates_all_actions);
         assert!(!package.safety.direct_database_access_allowed);
+
+        let output = execute_codex_conversation_plan(&package);
+        let payload = assistant_run_codex_event_payload(&output, None, None);
+        let trail = assistant_run_codex_execution_trail_entries(&output, Utc::now(), None, None);
+        let payload_serialized = payload.to_string();
+        let trail_serialized =
+            serde_json::to_string(&trail).expect("codex diagnostic trail serializes");
+
+        assert_eq!(
+            payload["provider_shim_observability"]["profile"]["provider_id"],
+            json!("minimax")
+        );
+        assert_eq!(
+            payload["provider_shim_observability"]["profile"]["model_id"],
+            json!("MiniMax-M2.7")
+        );
+        assert_eq!(
+            payload["provider_shim_observability"]["profile"]["wire_api"],
+            json!("codex_compatible_shim")
+        );
+        assert_eq!(
+            payload["provider_shim_observability"]["profile"]["auth_configured"],
+            json!(true)
+        );
+        assert_eq!(
+            payload["provider_shim_observability"]["profile"]["auth_env_key_name"],
+            Value::Null
+        );
+        assert_eq!(
+            payload["provider_shim_observability"]["context_budget_report"]["budget_pressure"],
+            json!("unbounded")
+        );
+        assert_eq!(
+            payload["provider_shim_observability"]["tool_output_budget"]
+                ["preserved_evidence_ref_count"],
+            json!(1)
+        );
+        assert_eq!(
+            trail[0]["provider_shim_observability"]["profile"]["provider_id"],
+            json!("minimax")
+        );
+        assert!(!payload_serialized.contains("MINIMAX_API_KEY"));
+        assert!(!payload_serialized.contains("minimax-codex-shadow"));
+        assert!(!trail_serialized.contains("MINIMAX_API_KEY"));
     }
 
     #[test]

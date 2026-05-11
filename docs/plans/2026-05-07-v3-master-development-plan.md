@@ -318,6 +318,8 @@ The next development thread should keep the current UI shell stable and continue
 
 **2026-05-11 provider-shim diagnostics follow-up:** AssistantRun Codex diagnostics now include a fixed-field `provider_shim_observability` summary when a shadow executor or future shim supplies the contract snapshot. The summary exposes health status, profile/model/wire API, safe usage counts, budget pressure, tool-output trimming counts, and liveness event status, while deliberately hiding auth env names, raw provider errors, request ids, trace ids, raw balance amounts, and diagnostic notes.
 
+**2026-05-11 provider-shim event follow-up:** Codex diagnostic event payloads and UI-readable execution trail entries now synthesize a safe `provider_shim_observability` snapshot for `codex_compatible_shim` profiles even before a real shim process reports health. The synthetic snapshot is intentionally conservative: health is `unknown`, usage is zero, context-budget/tool-output summaries come from the V3 Codex context package, and profile/auth fields stay redacted.
+
 **OpenAI Codex OSS reference checked on 2026-05-10:**
 
 - Repository: `https://github.com/openai/codex`
