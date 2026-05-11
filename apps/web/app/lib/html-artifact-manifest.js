@@ -483,6 +483,9 @@ function renderVideoExtractionSummary(manifest) {
     detail: evidence.detail || evidence.status || '',
     meta: evidence.supported ? 'supported' : 'not_supported',
   }));
+  const deliverableStatus = isPlainObject(payload.deliverableStatus || payload.deliverable_status)
+    ? payload.deliverableStatus || payload.deliverable_status
+    : {};
   const generatedArtifacts = isPlainObject(payload.generatedArtifacts || payload.generated_artifacts)
     ? payload.generatedArtifacts || payload.generated_artifacts
     : {};
@@ -500,6 +503,8 @@ function renderVideoExtractionSummary(manifest) {
       { label: '媒体类型', value: payload.mediaKind || payload.media_kind || 'video' },
       { label: '解析状态', value: payload.parseStatus || payload.parse_status || 'unknown' },
       { label: '证据状态', value: payload.evidenceStatus || payload.evidence_status || 'missing' },
+      { label: '交付状态', value: deliverableStatus.state || 'unknown' },
+      { label: 'PPTX', value: deliverableStatus.hasPptx || deliverableStatus.has_pptx ? 'ready' : 'not ready' },
       { label: '原文片段', value: String(summary.transcriptSegmentCount ?? summary.transcript_segment_count ?? transcript.length) },
       { label: '场景片段', value: String(summary.sceneCount ?? summary.scene_count ?? scenes.length) },
       { label: '关键帧 OCR', value: String(summary.keyframeOcrSnippetCount ?? summary.keyframe_ocr_snippet_count ?? ocr.length) },

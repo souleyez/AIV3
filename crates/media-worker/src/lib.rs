@@ -127,6 +127,7 @@ pub fn extract_video_ppt_output_with_artifacts(
         &frame_extraction,
         &generated_artifacts,
     );
+    let deliverable_status = video_deliverable_status(&generated_artifacts);
     let status = if evidence.has_evidence() {
         "completed"
     } else {
@@ -147,10 +148,11 @@ pub fn extract_video_ppt_output_with_artifacts(
         },
         "frame_extraction": frame_extraction,
         "generated_artifacts": generated_artifacts,
+        "deliverable_status": deliverable_status,
         "artifacts": artifacts,
         "html_artifacts": [],
         "no_host_composed_answer": true,
-        "note": "media-worker summarizes persisted media evidence, records raw_frames extraction state, and writes deterministic text artifacts when evidence exists; durable PPTX artifacts remain later stages.",
+        "note": "media-worker summarizes persisted media evidence, records raw_frames extraction state, writes deterministic text/review artifacts, and emits a basic screenshot PPTX when a confirmed keep-list exists.",
     })
 }
 
@@ -1230,6 +1232,14 @@ pub fn video_extraction_html_artifact_from_output(
         "missing"
     };
     let missing = video_extraction_missing_items(&evidence_summary, &frame_extraction);
+    let generated_artifacts = output
+        .get("generated_artifacts")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let deliverable_status = output
+        .get("deliverable_status")
+        .cloned()
+        .unwrap_or_else(|| video_deliverable_status(&generated_artifacts));
     let local_thread_id = local_thread_id
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -1270,6 +1280,7 @@ pub fn video_extraction_html_artifact_from_output(
             "media_kind": "video",
             "parse_status": status,
             "evidence_status": evidence_status,
+            "deliverable_status": deliverable_status,
             "summary": evidence_summary,
             "missing": missing,
             "provider_evidence": [
@@ -1282,9 +1293,9 @@ pub fn video_extraction_html_artifact_from_output(
                 }
             ],
             "artifacts": output.get("artifacts").cloned().unwrap_or_else(|| json!([])),
-            "generated_artifacts": output.get("generated_artifacts").cloned().unwrap_or_else(|| json!({})),
+            "generated_artifacts": generated_artifacts,
             "local_thread_id": local_thread_id,
-            "note": "后台视频抽取阶段已完成；该摘要只展示已实际产生或已明确缺失的证据，后续生成 PPT/Markdown 时继续沿用这些证据。"
+            "note": "后台视频抽取阶段已完成；该摘要只展示已实际产生或已明确缺失的证据和交付物，不会补造缺失内容。"
         }
     }))
 }
@@ -1487,6 +1498,49 @@ fn merged_video_extraction_artifact_refs(
     }
 
     artifacts
+}
+
+fn video_deliverable_status(generated_artifacts: &Value) -> Value {
+    let files = generated_artifacts
+        .get("files")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let artifact_kinds = files
+        .iter()
+        .filter_map(|file| file.get("artifact_kind").and_then(Value::as_str))
+        .collect::<BTreeSet<_>>();
+    let has_pptx = artifact_kinds.contains("pptx");
+    let has_selected_slides = artifact_kinds.contains("selected_slides_manifest");
+    let has_contact_sheet = artifact_kinds.contains("contact_sheet_html");
+    let has_outline = artifact_kinds.contains("ppt_outline");
+    let has_transcript = artifact_kinds.contains("transcript_text");
+    let has_source_text = artifact_kinds.contains("source_text");
+    let state = if has_pptx {
+        "final_pptx_ready"
+    } else if has_selected_slides {
+        "selected_slides_ready"
+    } else if has_contact_sheet {
+        "review_ready"
+    } else if has_outline || has_transcript || has_source_text {
+        "evidence_artifacts_ready"
+    } else {
+        generated_artifacts
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or("planned")
+    };
+
+    json!({
+        "state": state,
+        "file_count": files.len(),
+        "has_transcript_text": has_transcript,
+        "has_source_text": has_source_text,
+        "has_ppt_outline": has_outline,
+        "has_contact_sheet_html": has_contact_sheet,
+        "has_selected_slides_manifest": has_selected_slides,
+        "has_pptx": has_pptx,
+    })
 }
 
 fn video_artifact_ref(document: &Document, artifact_kind: &str, format: &str) -> Value {
@@ -1962,6 +2016,13 @@ mod tests {
                 "format": "text/markdown",
                 "path": "generated_artifacts/ppt_outline.md",
                 "uri": format!("artifact://video-{}-ppt_outline", document.id)
+            }, {
+                "artifact_kind": "pptx",
+                "artifact_id": format!("video-{}-pptx", document.id),
+                "title": "generated pptx",
+                "format": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                "path": "generated_artifacts/video_slides_screenshot_based.pptx",
+                "uri": format!("artifact://video-{}-pptx", document.id)
             }]
         });
 
@@ -1993,7 +2054,15 @@ mod tests {
             .any(|artifact| artifact["artifact_kind"] == json!("ppt_outline")));
         assert!(artifacts
             .iter()
+            .any(|artifact| artifact["artifact_kind"] == json!("pptx")));
+        assert!(artifacts
+            .iter()
             .any(|artifact| artifact["artifact_kind"] == json!("html_summary")));
+        assert_eq!(
+            output["deliverable_status"]["state"],
+            json!("final_pptx_ready")
+        );
+        assert_eq!(output["deliverable_status"]["has_pptx"], json!(true));
     }
 
     #[test]
@@ -2026,6 +2095,10 @@ mod tests {
         assert_eq!(
             artifact["payload"]["provider_evidence"][0]["supported"],
             json!(true)
+        );
+        assert_eq!(
+            artifact["payload"]["deliverable_status"]["state"],
+            json!("planned")
         );
         assert_eq!(artifact["payload"]["missing"][0], json!("transcript_text"));
     }
