@@ -21,6 +21,34 @@ const MEDIA_HINTS: &[&str] = &[
     "OCR",
 ];
 
+const VIDEO_PPT_SOURCE_HINTS: &[&str] = &[
+    "视频",
+    "mp4",
+    "mov",
+    "m4v",
+    "webm",
+    "公开视频",
+    "视频地址",
+    "视频链接",
+    "url",
+    "URL",
+    "上传",
+];
+
+const VIDEO_PPT_OUTPUT_HINTS: &[&str] = &[
+    "ppt",
+    "PPT",
+    "powerpoint",
+    "PowerPoint",
+    "幻灯片",
+    "课件",
+    "原文",
+    "字幕",
+    "转写",
+    "讲稿",
+    "提取",
+];
+
 const BUSINESS_HINTS: &[(&str, &[&str])] = &[
     (
         "订单",
@@ -956,6 +984,8 @@ fn selected_scope_from_candidates(
         .map(|items| !items.is_empty())
         .unwrap_or(false);
     let detail_prompt = prompt_has_media_detail(prompt);
+    let video_ppt_extraction = prompt_wants_video_ppt_extraction(prompt);
+    let direct_video_source = prompt_has_direct_video_source(prompt);
 
     if let Some(dataset) = candidates.iter().find(|candidate| {
         candidate.candidate_type == ScopeCandidateType::Dataset
@@ -966,7 +996,7 @@ fn selected_scope_from_candidates(
             "datasets": [dataset.id],
             "conversation_memory": conversation_memory,
             "intent": intent,
-            "supply_policy": supply_policy_for_scope(intent, true, has_memory, detail_prompt),
+            "supply_policy": supply_policy_for_scope(intent, true, has_memory, detail_prompt, video_ppt_extraction, direct_video_source),
         });
     }
 
@@ -983,7 +1013,7 @@ fn selected_scope_from_candidates(
             "conversation_memory": conversation_memory,
             "reason": dataset.reason,
             "intent": intent,
-            "supply_policy": supply_policy_for_scope(intent, true, has_memory, detail_prompt),
+            "supply_policy": supply_policy_for_scope(intent, true, has_memory, detail_prompt, video_ppt_extraction, direct_video_source),
         });
     }
 
@@ -992,7 +1022,7 @@ fn selected_scope_from_candidates(
         "datasets": [],
         "conversation_memory": conversation_memory,
         "intent": intent,
-        "supply_policy": supply_policy_for_scope(intent, false, has_memory, detail_prompt),
+        "supply_policy": supply_policy_for_scope(intent, false, has_memory, detail_prompt, video_ppt_extraction, direct_video_source),
     })
 }
 
@@ -1239,7 +1269,8 @@ fn infer_assistant_intent(prompt: &str) -> &'static str {
     if prompt_has_any(prompt, &lower_prompt, REPORT_HINTS) {
         return "report";
     }
-    if prompt_has_any(prompt, &lower_prompt, DATA_QUESTION_HINTS)
+    if prompt_wants_video_ppt_extraction(prompt)
+        || prompt_has_any(prompt, &lower_prompt, DATA_QUESTION_HINTS)
         || BUSINESS_HINTS
             .iter()
             .flat_map(|(_, hints)| hints.iter())
@@ -1265,6 +1296,25 @@ fn prompt_has_media_detail(prompt: &str) -> bool {
     prompt_has_any(prompt, &lower_prompt, MEDIA_HINTS)
 }
 
+fn prompt_wants_video_ppt_extraction(prompt: &str) -> bool {
+    let lower_prompt = prompt.to_ascii_lowercase();
+    prompt_has_any(prompt, &lower_prompt, VIDEO_PPT_SOURCE_HINTS)
+        && prompt_has_any(prompt, &lower_prompt, VIDEO_PPT_OUTPUT_HINTS)
+}
+
+fn prompt_has_direct_video_source(prompt: &str) -> bool {
+    let lower_prompt = prompt.to_ascii_lowercase();
+    lower_prompt.contains("http://")
+        || lower_prompt.contains("https://")
+        || lower_prompt.contains(".mp4")
+        || lower_prompt.contains(".mov")
+        || lower_prompt.contains(".m4v")
+        || lower_prompt.contains(".webm")
+        || prompt.contains("公开视频")
+        || prompt.contains("视频地址")
+        || prompt.contains("视频链接")
+}
+
 fn intent_label(intent: &str) -> Option<&'static str> {
     match intent {
         "static_page" => Some("静态页规划"),
@@ -1279,9 +1329,11 @@ fn supply_policy_for_scope(
     has_dataset: bool,
     has_memory: bool,
     detail_prompt: bool,
+    video_ppt_extraction: bool,
+    direct_video_source: bool,
 ) -> Value {
-    let prefer_detail =
-        has_dataset && (matches!(intent, "static_page" | "report") || detail_prompt);
+    let prefer_detail = has_dataset
+        && (matches!(intent, "static_page" | "report") || detail_prompt || video_ppt_extraction);
     json!({
         "intent": intent,
         "answerPolicy": "model_authored_host_supplied",
@@ -1303,7 +1355,7 @@ fn supply_policy_for_scope(
             "not_requested"
         },
         "preferDetail": prefer_detail,
-        "recommendedActions": recommended_tool_actions_for_scope(intent, has_dataset, prefer_detail, detail_prompt),
+        "recommendedActions": recommended_tool_actions_for_scope(intent, has_dataset, prefer_detail, detail_prompt, video_ppt_extraction, direct_video_source),
         "noFakeData": true,
     })
 }
@@ -1313,6 +1365,8 @@ fn recommended_tool_actions_for_scope(
     has_dataset: bool,
     prefer_detail: bool,
     detail_prompt: bool,
+    video_ppt_extraction: bool,
+    direct_video_source: bool,
 ) -> Vec<&'static str> {
     let mut actions = Vec::new();
     if has_dataset {
@@ -1321,8 +1375,14 @@ fn recommended_tool_actions_for_scope(
     if prefer_detail {
         actions.push("retrieval.read_detail");
     }
-    if detail_prompt {
+    if detail_prompt && (!video_ppt_extraction || has_dataset) {
         actions.push("media.detail");
+    }
+    if video_ppt_extraction {
+        if direct_video_source {
+            actions.push("media.resolve_video_url");
+        }
+        actions.push("media.extract_ppt_transcript");
     }
     match intent {
         "static_page" => actions.push("static_page.plan"),
@@ -1999,6 +2059,32 @@ mod tests {
         assert_eq!(
             plan.selected_scope["supply_policy"]["recommendedActions"],
             json!(["ordinary_chat.answer"])
+        );
+    }
+
+    #[test]
+    fn direct_video_ppt_extraction_does_not_force_dataset_retrieval() {
+        let plan = plan_scope(ScopePlannerInput {
+            prompt: "https://example.com/talk.mp4 帮我提取视频里的PPT和原文",
+            visible_datasets: &[dataset("订单", "orders"), dataset("客服", "support")],
+            selected_dataset_id: None,
+            conversation_memory_available: false,
+        });
+
+        assert!(plan.candidates.is_empty());
+        assert_eq!(plan.intent, "data_question");
+        assert_eq!(plan.selected_scope["mode"], json!("ordinary_chat"));
+        assert_eq!(
+            plan.selected_scope["supply_policy"]["retrievalPolicy"],
+            json!("not_requested")
+        );
+        assert_eq!(
+            plan.selected_scope["supply_policy"]["candidatePolicy"],
+            json!("ordinary_chat_without_forced_dataset")
+        );
+        assert_eq!(
+            plan.selected_scope["supply_policy"]["recommendedActions"],
+            json!(["media.resolve_video_url", "media.extract_ppt_transcript"])
         );
     }
 
