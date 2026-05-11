@@ -5,6 +5,8 @@ use contracts::{
     CreateStaticPageImageJobRequest, CreateStaticPageRenderRequest, HtmlArtifactDataRefView,
     HtmlArtifactInteractionModeView, HtmlArtifactManifestView, HtmlArtifactOwnerScopeView,
     HtmlArtifactProvenanceView, HtmlArtifactSourceTypeView, HtmlArtifactTemplateIdView,
+    VideoExtractionArtifactKindView, VideoExtractionRequestView, VideoExtractionSourceKindView,
+    VideoExtractionSourceRefView,
 };
 use domain_model::{
     AssistantRunId, Document, DocumentChunk, DocumentId, SecretBindingId, StaticPageDraftId,
@@ -172,6 +174,8 @@ pub(crate) async fn execute_assistant_run_react_action(
                 state,
                 action,
                 selected_scope,
+                active_assistant_run_id,
+                local_thread_id,
                 active_secret_binding_ids,
                 current_user_id,
             )
@@ -1485,6 +1489,8 @@ async fn video_ppt_extraction_result(
     state: &AppState,
     action: &AssistantRunNextAction,
     selected_scope: &Value,
+    active_assistant_run_id: Option<AssistantRunId>,
+    local_thread_id: Option<&str>,
     active_secret_binding_ids: &[SecretBindingId],
     current_user_id: Option<UserId>,
 ) -> std::result::Result<AssistantRunReactToolResult, ApiError> {
@@ -1497,6 +1503,7 @@ async fn video_ppt_extraction_result(
     let selected_document_ids = selected_scope_id_strings(selected_scope, "document");
     let mut items = Vec::new();
     let mut denied = Vec::new();
+    let mut queued_workflows = Vec::new();
 
     for document_id in requested_document_ids
         .into_iter()
@@ -1531,6 +1538,13 @@ async fn video_ppt_extraction_result(
             continue;
         }
 
+        let extraction_execution = build_initial_video_extraction_execution(
+            state,
+            action,
+            active_assistant_run_id,
+            local_thread_id,
+            &document,
+        )?;
         let chunks = state
             .storage
             .document_chunks()
@@ -1538,7 +1552,13 @@ async fn video_ppt_extraction_result(
             .await
             .map_err(ApiError::from_storage)?;
         let detail = to_document_media_detail_view(document, chunks);
-        items.push(video_ppt_extraction_item(detail));
+        let item = video_ppt_extraction_item(detail);
+        if !video_ppt_extraction_item_has_evidence(&item) {
+            queued_workflows.push(
+                create_and_start_video_extraction_execution(state, extraction_execution).await?,
+            );
+        }
+        items.push(item);
     }
 
     let has_items = !items.is_empty();
@@ -1549,6 +1569,8 @@ async fn video_ppt_extraction_result(
     });
     let status = if has_extracted_evidence {
         "completed"
+    } else if !queued_workflows.is_empty() {
+        "queued"
     } else if has_items {
         "partial"
     } else {
@@ -1556,6 +1578,7 @@ async fn video_ppt_extraction_result(
     };
     let message = match status {
         "completed" => "video PPT/transcript evidence supplied",
+        "queued" => "video PPT/transcript extraction queued",
         "partial" => "video registered but parsed PPT/transcript evidence is partial or missing",
         _ => "uploaded_or_resolved_video_required",
     };
@@ -1580,6 +1603,7 @@ async fn video_ppt_extraction_result(
             },
             "deliverables": ["transcript_text", "slide_image_candidates", "ppt_outline_or_pptx", "timestamp_map"],
             "html_artifacts": html_artifacts,
+            "workflow_executions": queued_workflows,
             "no_host_composed_answer": true,
         }),
         trail_step: json!({
@@ -1589,10 +1613,237 @@ async fn video_ppt_extraction_result(
             "item_count": item_count,
             "denied_count": denied_count,
             "html_artifact_count": html_artifact_count,
+            "workflow_execution_count": queued_workflows.len(),
             "at": Utc::now(),
         }),
         final_answer: None,
     })
+}
+
+fn video_ppt_extraction_item_has_evidence(item: &Value) -> bool {
+    item.get("evidence_status")
+        .and_then(Value::as_str)
+        .is_some_and(|status| status == "available")
+}
+
+async fn create_and_start_video_extraction_execution(
+    state: &AppState,
+    execution: WorkflowExecution,
+) -> std::result::Result<Value, ApiError> {
+    let initial_event = build_initial_video_extraction_event(&execution);
+    state
+        .storage
+        .workflow_executions()
+        .create_with_initial_event(&execution, &initial_event)
+        .await
+        .map_err(ApiError::from_storage)?;
+    let started = crate::apply_workflow_signal(state, execution.id, WorkflowSignal::Start).await?;
+    let tasks = started
+        .enqueued_tasks
+        .iter()
+        .map(|task| {
+            json!({
+                "type": "workflow_task",
+                "workflow_task_id": task.id.to_string(),
+                "queue": task.queue,
+                "task_key": task.task_key,
+                "status": task.status.as_str(),
+                "available_at": task.available_at,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    Ok(json!({
+        "type": "video_extraction_workflow",
+        "workflow_execution_id": execution.id.to_string(),
+        "stage": started.execution.stage,
+        "status": started.execution.status.as_str(),
+        "tasks": tasks,
+    }))
+}
+
+fn build_initial_video_extraction_execution(
+    state: &AppState,
+    action: &AssistantRunNextAction,
+    assistant_run_id: Option<AssistantRunId>,
+    local_thread_id: Option<&str>,
+    document: &Document,
+) -> std::result::Result<WorkflowExecution, ApiError> {
+    let definition = state
+        .workflow_catalog
+        .find_definition(WorkflowKind::VideoExtraction)
+        .ok_or_else(|| {
+            ApiError::internal(
+                "workflow_definition_missing",
+                "video_extraction workflow definition is not registered".to_string(),
+            )
+        })?;
+    let now = Utc::now();
+    let execution_id = WorkflowExecutionId::new();
+    let runtime_state = definition.initial_state(execution_id, now);
+    let request = VideoExtractionRequestView {
+        assistant_run_id,
+        local_thread_id: local_thread_id
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string),
+        source: video_extraction_source_ref_for_document(document),
+        target_dataset_id: Some(document.dataset_id),
+        requested_outputs: video_extraction_requested_outputs(action),
+        background_only: true,
+    };
+    let mut context = match request.to_workflow_context() {
+        Value::Object(map) => map,
+        _ => runtime_state.context,
+    };
+    context.insert(
+        "document_id".to_string(),
+        Value::String(document.id.to_string()),
+    );
+    context.insert(
+        "dataset_id".to_string(),
+        Value::String(document.dataset_id.to_string()),
+    );
+    context.insert(
+        "document_title".to_string(),
+        Value::String(html_artifact_safe_summary_text(&document.title, 160)),
+    );
+    context.insert(
+        "content_type".to_string(),
+        Value::String(document.content_type.clone()),
+    );
+    context.insert(
+        "retries_remaining".to_string(),
+        Value::Number(runtime_state.retries_remaining.into()),
+    );
+
+    Ok(WorkflowExecution {
+        id: execution_id,
+        tenant_id: state.tenant_id,
+        dataset_id: Some(document.dataset_id),
+        report_plan_id: None,
+        kind: WorkflowKind::VideoExtraction,
+        version: runtime_state.version,
+        stage: runtime_state.stage,
+        status: runtime_state.status,
+        attempt: 0,
+        context: Value::Object(context),
+        created_at: now,
+        updated_at: now,
+    })
+}
+
+fn build_initial_video_extraction_event(execution: &WorkflowExecution) -> WorkflowEventRecord {
+    WorkflowEventRecord {
+        id: WorkflowEventId::new(),
+        execution_id: execution.id,
+        sequence_no: 1,
+        event_name: "video_extraction.created".to_string(),
+        payload: json!({
+            "kind": execution.kind.as_str(),
+            "version": execution.version,
+            "status": execution.status.as_str(),
+            "stage": execution.stage,
+            "document_id": execution.context.get("document_id").cloned().unwrap_or(Value::Null),
+            "dataset_id": execution.context.get("dataset_id").cloned().unwrap_or(Value::Null),
+            "source": execution.context.get("source").cloned().unwrap_or(Value::Null),
+            "requested_outputs": execution.context.get("requested_outputs").cloned().unwrap_or(Value::Null),
+        }),
+        created_at: execution.created_at,
+    }
+}
+
+fn video_extraction_source_ref_for_document(document: &Document) -> VideoExtractionSourceRefView {
+    let remote_media = document.metadata.get("remote_media");
+    let source_type = remote_media
+        .and_then(|value| value.get("source_type"))
+        .and_then(Value::as_str)
+        .and_then(video_extraction_source_kind_from_str)
+        .unwrap_or_else(|| {
+            if document.object_key.starts_with("http://")
+                || document.object_key.starts_with("https://")
+            {
+                VideoExtractionSourceKindView::DirectVideoUrl
+            } else {
+                VideoExtractionSourceKindView::UploadedVideoFile
+            }
+        });
+    let source_url = remote_media
+        .and_then(|value| value.get("source_url"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .or_else(|| {
+            (document.object_key.starts_with("http://")
+                || document.object_key.starts_with("https://"))
+            .then(|| document.object_key.clone())
+        });
+    let source_page_url = remote_media
+        .and_then(|value| value.get("source_page_url"))
+        .and_then(Value::as_str)
+        .map(str::to_string);
+
+    VideoExtractionSourceRefView {
+        source_type,
+        document_id: Some(document.id),
+        source_url,
+        source_page_url,
+        title_hint: Some(document.title.clone()),
+    }
+}
+
+fn video_extraction_source_kind_from_str(value: &str) -> Option<VideoExtractionSourceKindView> {
+    match value {
+        "uploaded_video_file" => Some(VideoExtractionSourceKindView::UploadedVideoFile),
+        "direct_video_url" => Some(VideoExtractionSourceKindView::DirectVideoUrl),
+        "public_page_resolvable_video" => {
+            Some(VideoExtractionSourceKindView::PublicPageResolvableVideo)
+        }
+        _ => None,
+    }
+}
+
+fn video_extraction_requested_outputs(
+    action: &AssistantRunNextAction,
+) -> Vec<VideoExtractionArtifactKindView> {
+    let requested = action
+        .arguments
+        .get("deliverables")
+        .or_else(|| action.arguments.get("requested_outputs"))
+        .or_else(|| action.arguments.get("requestedOutputs"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .filter_map(video_extraction_artifact_kind_from_str)
+        .collect::<Vec<_>>();
+
+    if requested.is_empty() {
+        vec![
+            VideoExtractionArtifactKindView::TranscriptText,
+            VideoExtractionArtifactKindView::SlideImageCandidates,
+            VideoExtractionArtifactKindView::PptOutline,
+            VideoExtractionArtifactKindView::Pptx,
+            VideoExtractionArtifactKindView::Markdown,
+            VideoExtractionArtifactKindView::TimestampMap,
+            VideoExtractionArtifactKindView::HtmlSummary,
+        ]
+    } else {
+        requested
+    }
+}
+
+fn video_extraction_artifact_kind_from_str(value: &str) -> Option<VideoExtractionArtifactKindView> {
+    match value {
+        "transcript_text" => Some(VideoExtractionArtifactKindView::TranscriptText),
+        "slide_image_candidates" => Some(VideoExtractionArtifactKindView::SlideImageCandidates),
+        "ppt_outline" | "ppt_outline_or_pptx" => Some(VideoExtractionArtifactKindView::PptOutline),
+        "pptx" => Some(VideoExtractionArtifactKindView::Pptx),
+        "markdown" => Some(VideoExtractionArtifactKindView::Markdown),
+        "source_text" => Some(VideoExtractionArtifactKindView::SourceText),
+        "timestamp_map" => Some(VideoExtractionArtifactKindView::TimestampMap),
+        "html_summary" => Some(VideoExtractionArtifactKindView::HtmlSummary),
+        _ => None,
+    }
 }
 
 fn video_ppt_extraction_item(detail: contracts::DocumentMediaDetailView) -> Value {
@@ -2906,6 +3157,60 @@ mod tests {
             json!("AI 数据智能助手")
         );
         assert_eq!(item["missing"], json!([]));
+        assert!(video_ppt_extraction_item_has_evidence(&item));
+    }
+
+    #[test]
+    fn video_extraction_source_ref_preserves_remote_media_metadata() {
+        let mut document =
+            test_document("https://cdn.example.com/course/lesson-01.mp4", "video/mp4");
+        document.metadata.insert(
+            "remote_media".to_string(),
+            json!({
+                "source_url": "https://cdn.example.com/course/lesson-01.mp4",
+                "source_page_url": "https://example.com/course",
+                "source_type": "public_page_resolvable_video"
+            }),
+        );
+
+        let source = video_extraction_source_ref_for_document(&document);
+
+        assert_eq!(
+            source.source_type,
+            VideoExtractionSourceKindView::PublicPageResolvableVideo
+        );
+        assert_eq!(source.document_id, Some(document.id));
+        assert_eq!(
+            source.source_url.as_deref(),
+            Some("https://cdn.example.com/course/lesson-01.mp4")
+        );
+        assert_eq!(
+            source.source_page_url.as_deref(),
+            Some("https://example.com/course")
+        );
+    }
+
+    #[test]
+    fn video_extraction_requested_outputs_default_and_normalize_aliases() {
+        let mut action = test_action(AssistantRunReactActionType::ExtractVideoPptTranscript);
+
+        let defaults = video_extraction_requested_outputs(&action);
+        assert!(defaults.contains(&VideoExtractionArtifactKindView::TranscriptText));
+        assert!(defaults.contains(&VideoExtractionArtifactKindView::Pptx));
+        assert!(defaults.contains(&VideoExtractionArtifactKindView::HtmlSummary));
+
+        action.arguments = json!({
+            "deliverables": ["ppt_outline_or_pptx", "markdown", "unknown"]
+        });
+        let requested = video_extraction_requested_outputs(&action);
+
+        assert_eq!(
+            requested,
+            vec![
+                VideoExtractionArtifactKindView::PptOutline,
+                VideoExtractionArtifactKindView::Markdown,
+            ]
+        );
     }
 
     #[test]
