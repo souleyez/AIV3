@@ -1,14 +1,15 @@
 use anyhow::{anyhow, Result};
 use chrono::Utc;
-use domain_model::{WorkflowKind, WorkflowTask};
+use domain_model::{AssistantRunId, WorkflowExecution, WorkflowKind, WorkflowTask};
 use event_bus::{workflow_task_enqueued_subject, EventBus, EventSubscription};
 use media_worker::{
     extract_video_ppt_output_with_frame_extraction, frame_extraction_config_from_env,
     register_video_asset_output, resolve_video_source_output,
-    run_video_frame_extraction_if_enabled, FrameExtractionConfig, MediaWorkflowTaskKind,
+    run_video_frame_extraction_if_enabled, video_extraction_html_artifact_from_output,
+    FrameExtractionConfig, MediaWorkflowTaskKind,
 };
 use serde_json::Value;
-use storage::{PgStorage, DEFAULT_LOCAL_DATABASE_URL};
+use storage::{NewAssistantRunEvent, PgStorage, DEFAULT_LOCAL_DATABASE_URL};
 use tokio::time::Duration;
 use uuid::Uuid;
 use workflow_engine::{WorkflowCatalog, WorkflowSignal};
@@ -147,10 +148,22 @@ async fn process_task(
             task.execution_id,
             WorkflowSignal::StepCompleted {
                 task_key: task.task_key.clone(),
-                output: Some(output),
+                output: Some(output.clone()),
             },
         )
         .await?;
+
+        if task_kind == MediaWorkflowTaskKind::ExtractVideoPpt {
+            if let Err(error) =
+                append_video_extraction_assistant_event(storage, &execution, &output).await
+            {
+                tracing::warn!(
+                    error = ?error,
+                    execution_id = %execution.id,
+                    "media worker could not append assistant video extraction event"
+                );
+            }
+        }
 
         Ok(())
     }
@@ -196,6 +209,64 @@ async fn process_task(
         task_key = %task.task_key,
         "media task completed"
     );
+
+    Ok(())
+}
+
+async fn append_video_extraction_assistant_event(
+    storage: &PgStorage,
+    execution: &WorkflowExecution,
+    output: &Value,
+) -> Result<()> {
+    let Some(raw_run_id) = execution
+        .context
+        .get("assistant_run_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(());
+    };
+    let run_id = raw_run_id
+        .parse::<Uuid>()
+        .map(AssistantRunId)
+        .map_err(|error| anyhow!("invalid assistant_run_id in video workflow context: {error}"))?;
+    let run = storage
+        .assistant_runs()
+        .get_by_id(execution.tenant_id, run_id)
+        .await?
+        .ok_or_else(|| anyhow!("assistant run {run_id} not found"))?;
+    let local_thread_id = execution
+        .context
+        .get("local_thread_id")
+        .and_then(Value::as_str)
+        .or(run.local_thread_id.as_deref());
+    let html_artifacts =
+        video_extraction_html_artifact_from_output(&run_id.to_string(), local_thread_id, output)
+            .into_iter()
+            .collect::<Vec<_>>();
+
+    storage
+        .assistant_runs()
+        .append_event(
+            execution.tenant_id,
+            run_id,
+            &NewAssistantRunEvent {
+                event_name: "video_extraction.workflow_completed".to_string(),
+                payload: serde_json::json!({
+                    "status": output.get("status").and_then(Value::as_str).unwrap_or("partial"),
+                    "workflow_execution_id": execution.id.to_string(),
+                    "workflow_kind": execution.kind.as_str(),
+                    "document_id": output.get("document_id").cloned().unwrap_or(Value::Null),
+                    "dataset_id": output.get("dataset_id").cloned().unwrap_or(Value::Null),
+                    "output": output,
+                    "html_artifacts": html_artifacts,
+                    "no_host_composed_answer": true,
+                }),
+                created_at: Utc::now(),
+            },
+        )
+        .await?;
 
     Ok(())
 }

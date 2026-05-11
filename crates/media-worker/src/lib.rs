@@ -1,3 +1,4 @@
+use chrono::Utc;
 use domain_model::{Document, DocumentChunk, WorkflowTask};
 use serde_json::{json, Value};
 use std::{
@@ -257,6 +258,137 @@ pub fn video_frame_extraction_plan(document: &Document) -> Value {
         "contact_sheet_source": DEFAULT_RAW_FRAMES_DIR_NAME,
         "sop": "wechat-video-ppt-extract/raw_frames",
     })
+}
+
+pub fn video_extraction_html_artifact_from_output(
+    assistant_run_id: &str,
+    local_thread_id: Option<&str>,
+    output: &Value,
+) -> Option<Value> {
+    let document_id = output.get("document_id").and_then(Value::as_str)?;
+    let title = output
+        .get("title")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("视频 PPT 提取");
+    let status = output
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("partial");
+    let evidence_summary = output
+        .get("evidence_summary")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let frame_extraction = output
+        .get("frame_extraction")
+        .cloned()
+        .unwrap_or_else(|| json!({ "status": "planned" }));
+    let frame_status = frame_extraction
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("planned");
+    let frame_count = frame_extraction
+        .get("frame_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let evidence_status = if status == "completed" || frame_count > 0 {
+        "available"
+    } else {
+        "missing"
+    };
+    let missing = video_extraction_missing_items(&evidence_summary, &frame_extraction);
+    let local_thread_id = local_thread_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+
+    Some(json!({
+        "kind": "html_artifact",
+        "version": 1,
+        "id": format!("html-artifact-video-extraction-{assistant_run_id}-{document_id}"),
+        "title": format!("{title} - 视频提取摘要"),
+        "source_type": "video_extraction",
+        "template_id": "video_extraction_summary",
+        "owner_scope": {
+            "type": "assistant_run",
+            "id": assistant_run_id,
+        },
+        "data_refs": [
+            {
+                "kind": "document",
+                "id": document_id,
+                "label": title,
+            }
+        ],
+        "provenance": {
+            "producer": "media-worker",
+            "reason": "video_extraction_workflow_completed",
+            "source_run_id": assistant_run_id,
+        },
+        "interaction_mode": "read_only",
+        "created_at": Utc::now(),
+        "payload": {
+            "document": {
+                "id": document_id,
+                "dataset_id": output.get("dataset_id").cloned().unwrap_or(Value::Null),
+                "title": title,
+                "content_type": output.get("content_type").cloned().unwrap_or(Value::Null),
+            },
+            "media_kind": "video",
+            "parse_status": status,
+            "evidence_status": evidence_status,
+            "summary": evidence_summary,
+            "missing": missing,
+            "provider_evidence": [
+                {
+                    "provider": "media-worker",
+                    "capability": "ffmpeg_raw_frames",
+                    "status": frame_status,
+                    "supported": frame_status == "completed",
+                    "detail": format!("raw_frames={frame_count}; manifest={}", frame_extraction.get("manifest_file_name").and_then(Value::as_str).unwrap_or(DEFAULT_FRAME_MANIFEST_FILE_NAME)),
+                }
+            ],
+            "artifacts": output.get("artifacts").cloned().unwrap_or_else(|| json!([])),
+            "local_thread_id": local_thread_id,
+            "note": "后台视频抽取阶段已完成；该摘要只展示已实际产生或已明确缺失的证据，后续生成 PPT/Markdown 时继续沿用这些证据。"
+        }
+    }))
+}
+
+fn video_extraction_missing_items(
+    evidence_summary: &Value,
+    frame_extraction: &Value,
+) -> Vec<&'static str> {
+    let transcript_count = evidence_summary
+        .get("transcript_segment_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let scene_count = evidence_summary
+        .get("scene_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let ocr_count = evidence_summary
+        .get("keyframe_ocr_snippet_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let frame_count = frame_extraction
+        .get("frame_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let mut missing = Vec::new();
+    if transcript_count == 0 {
+        missing.push("transcript_text");
+    }
+    if scene_count == 0 {
+        missing.push("scene_windows");
+    }
+    if ocr_count == 0 {
+        missing.push("keyframe_ocr");
+    }
+    if frame_count == 0 {
+        missing.push("raw_frames");
+    }
+    missing
 }
 
 pub fn frame_extraction_config_from_env() -> FrameExtractionConfig {
@@ -533,6 +665,40 @@ mod tests {
         assert_eq!(artifacts.len(), 1);
         assert_eq!(artifacts[0]["artifact_kind"], json!("frame_manifest"));
         assert_eq!(artifacts[0]["format"], json!("application/json"));
+    }
+
+    #[test]
+    fn video_extraction_html_artifact_summarizes_background_output() {
+        let document = test_document();
+        let frame_extraction = json!({
+            "status": "completed",
+            "manifest_path": "C:/tmp/video-extraction/frame_manifest.json",
+            "manifest_file_name": DEFAULT_FRAME_MANIFEST_FILE_NAME,
+            "frame_count": 12
+        });
+        let output =
+            extract_video_ppt_output_with_frame_extraction(&document, &[], frame_extraction);
+
+        let artifact = video_extraction_html_artifact_from_output(
+            "00000000-0000-0000-0000-000000000001",
+            Some("local-thread-1"),
+            &output,
+        )
+        .expect("artifact");
+
+        assert_eq!(artifact["kind"], json!("html_artifact"));
+        assert_eq!(artifact["source_type"], json!("video_extraction"));
+        assert_eq!(artifact["template_id"], json!("video_extraction_summary"));
+        assert_eq!(artifact["interaction_mode"], json!("read_only"));
+        assert_eq!(
+            artifact["payload"]["provider_evidence"][0]["capability"],
+            json!("ffmpeg_raw_frames")
+        );
+        assert_eq!(
+            artifact["payload"]["provider_evidence"][0]["supported"],
+            json!(true)
+        );
+        assert_eq!(artifact["payload"]["missing"][0], json!("transcript_text"));
     }
 
     #[test]
