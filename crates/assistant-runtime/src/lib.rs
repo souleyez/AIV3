@@ -635,10 +635,45 @@ fn codex_executor_suggest_action_type(
     {
         return Some("create_report_draft".to_string());
     }
+    let recommended_actions = codex_executor_scope_recommended_actions(package);
+    if recommended_actions.contains("media.resolve_video_url")
+        && available.contains("resolve_video_url")
+    {
+        return Some("resolve_video_url".to_string());
+    }
+    if recommended_actions.contains("media.extract_ppt_transcript")
+        && available.contains("extract_video_ppt_transcript")
+    {
+        return Some("extract_video_ppt_transcript".to_string());
+    }
     if available.contains("final_answer") {
         return Some("final_answer".to_string());
     }
     None
+}
+
+fn codex_executor_scope_recommended_actions(
+    package: &AssistantRunCodexContextPackageView,
+) -> HashSet<&str> {
+    package
+        .selected_scope
+        .get("supply_policy")
+        .or_else(|| package.selected_scope.get("supplyPolicy"))
+        .and_then(|policy| {
+            policy
+                .get("recommendedActions")
+                .or_else(|| policy.get("recommended_actions"))
+        })
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .collect::<HashSet<_>>()
+        })
+        .unwrap_or_default()
 }
 
 fn codex_executor_action_suggestion(
@@ -716,6 +751,20 @@ fn codex_executor_suggestion_arguments(
             "local_thread_id": package.local_thread_id,
             "source": "codex_plan_only_shadow",
         }),
+        "resolve_video_url" => json!({
+            "prompt": package.user_prompt,
+            "selected_scope": package.selected_scope,
+            "allowed_source_types": ["direct_video_url", "public_page_resolvable_video"],
+            "disallowed_source_types": ["login_gated_page", "qr_login", "cookies", "screen_recording_bypass"],
+            "source": "codex_plan_only_shadow",
+        }),
+        "extract_video_ppt_transcript" => json!({
+            "prompt": package.user_prompt,
+            "selected_scope": package.selected_scope,
+            "required_asset_state": "uploaded_or_resolved_video",
+            "deliverables": ["transcript_text", "slide_image_candidates", "ppt_outline_or_pptx", "timestamp_map"],
+            "source": "codex_plan_only_shadow",
+        }),
         "final_answer" => json!({
             "mode": "model_authored_answer",
             "source": "codex_plan_only_shadow",
@@ -743,6 +792,12 @@ fn codex_executor_suggestion_reason(action_type: &str) -> &'static str {
             "current static-page draft can be revised through V3 operations"
         }
         "create_report_draft" => "report intent can be handled by V3 report draft flow",
+        "resolve_video_url" => {
+            "video PPT extraction starts with V3-controlled public/direct video resolution"
+        }
+        "extract_video_ppt_transcript" => {
+            "video asset is the required input for transcript and PPT extraction"
+        }
         "final_answer" => "no platform action is required for this turn",
         _ => "available V3 action contract selected by plan-only executor",
     }
@@ -1672,6 +1727,68 @@ mod tests {
         assert_eq!(
             output.execution_trail[0]["suggested_action"]["arguments"]["selected_scope"]["intent"],
             json!("data_question")
+        );
+    }
+
+    #[test]
+    fn codex_executor_plan_only_suggests_video_url_resolution() {
+        let mut package = codex_context_package();
+        package.executor_transport = AssistantRunExecutorTransportView::CodexPlanOnly;
+        package.user_prompt = "https://example.com/talk.mp4 帮我提取视频里的PPT和原文".to_string();
+        package.current_artifact = None;
+        package.context_budget.selected_dataset_count = 0;
+        package.supply_quality = json!({"status": "not_requested"});
+        package.selected_scope = json!({
+            "intent": "data_question",
+            "supply_policy": {
+                "recommendedActions": ["media.resolve_video_url", "media.extract_ppt_transcript"]
+            }
+        });
+        package.available_actions = vec![
+            AssistantRunCodexActionContractView::new(
+                "resolve_video_url",
+                "解析公开视频地址",
+                "只能请求 V3 解析直接或公开页面视频地址",
+                json!({"type": "object"}),
+                true,
+            ),
+            AssistantRunCodexActionContractView::new(
+                "extract_video_ppt_transcript",
+                "提取视频 PPT 和原文",
+                "只能在 V3 已登记视频素材后排后台解析",
+                json!({"type": "object"}),
+                true,
+            ),
+            AssistantRunCodexActionContractView::new(
+                "final_answer",
+                "模型回答",
+                "直接回答",
+                json!({"type": "object"}),
+                false,
+            ),
+        ];
+
+        let output = execute_codex_conversation_plan(&package);
+        let suggested_action = output
+            .suggested_action
+            .as_ref()
+            .expect("plan-only should suggest a video resolver action");
+
+        assert_eq!(suggested_action["action_type"], json!("resolve_video_url"));
+        assert_eq!(suggested_action["mutates_state"], json!(true));
+        assert_eq!(suggested_action["mutation_allowed"], json!(false));
+        assert_eq!(
+            suggested_action["arguments"]["allowed_source_types"],
+            json!(["direct_video_url", "public_page_resolvable_video"])
+        );
+        assert_eq!(
+            suggested_action["arguments"]["disallowed_source_types"],
+            json!([
+                "login_gated_page",
+                "qr_login",
+                "cookies",
+                "screen_recording_bypass"
+            ])
         );
     }
 

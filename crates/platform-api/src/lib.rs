@@ -10459,6 +10459,45 @@ fn assistant_run_codex_action_contracts(
             false,
         ),
         AssistantRunCodexActionContractView::new(
+            "resolve_video_url",
+            "解析公开视频地址",
+            "只允许 V3 解析直接视频 URL 或公开页面可解析视频地址；不支持登录态、扫码、Cookie 或录屏绕过。",
+            json!({
+                "type": "object",
+                "properties": {
+                    "source_url": {"type": "string"},
+                    "prompt": {"type": "string"},
+                    "allowed_source_types": {
+                        "type": "array",
+                        "items": {"type": "string", "enum": ["direct_video_url", "public_page_resolvable_video"]}
+                    },
+                    "disallowed_source_types": {
+                        "type": "array",
+                        "items": {"type": "string", "enum": ["login_gated_page", "qr_login", "cookies", "screen_recording_bypass"]}
+                    }
+                }
+            }),
+            true,
+        ),
+        AssistantRunCodexActionContractView::new(
+            "extract_video_ppt_transcript",
+            "提取视频 PPT 和原文",
+            "在 V3 已登记的视频素材上排后台任务，生成原文、关键帧/PPT 候选、页面映射和缺失证据说明。",
+            json!({
+                "type": "object",
+                "properties": {
+                    "asset_id": {"type": "string"},
+                    "document_id": {"type": "string"},
+                    "deliverables": {
+                        "type": "array",
+                        "items": {"type": "string", "enum": ["transcript_text", "slide_image_candidates", "ppt_outline_or_pptx", "timestamp_map"]}
+                    },
+                    "reason": {"type": "string"}
+                }
+            }),
+            true,
+        ),
+        AssistantRunCodexActionContractView::new(
             "create_static_page_draft",
             "创建静态页草稿",
             "基于用户意图和供料状态创建静态页模块规划草稿。",
@@ -11322,6 +11361,7 @@ fn assistant_run_recommended_supply_actions(
     has_supplied_items: bool,
 ) -> Vec<&'static str> {
     let mut actions = Vec::new();
+    let recommended_tool_actions = assistant_run_scope_recommended_tool_actions(selected_scope);
     if !selected_dataset_ids_from_scope(selected_scope).is_empty() {
         actions.push("retrieve_evidence");
         if assistant_run_scope_prefers_detail(selected_scope) && has_supplied_items {
@@ -11335,6 +11375,18 @@ fn assistant_run_recommended_supply_actions(
         "static_page" => actions.push("create_static_page_draft"),
         "report" => actions.push("list_report_options"),
         _ => {}
+    }
+    if recommended_tool_actions
+        .iter()
+        .any(|action| action == "media.resolve_video_url")
+    {
+        actions.push("resolve_video_url");
+    }
+    if recommended_tool_actions
+        .iter()
+        .any(|action| action == "media.extract_ppt_transcript")
+    {
+        actions.push("extract_video_ppt_transcript");
     }
     actions
 }
@@ -25059,6 +25111,12 @@ mod tests {
         assert!(package
             .action_types()
             .contains(&"submit_html_artifact_event".to_string()));
+        assert!(package
+            .action_types()
+            .contains(&"resolve_video_url".to_string()));
+        assert!(package
+            .action_types()
+            .contains(&"extract_video_ppt_transcript".to_string()));
         let html_artifact_action = package
             .available_actions
             .iter()
@@ -25069,6 +25127,18 @@ mod tests {
         assert_eq!(
             html_artifact_action.input_schema["properties"]["event_type"]["enum"],
             json!(["html_artifact.patch", "html_artifact.action_intent"])
+        );
+        let video_resolver_action = package
+            .available_actions
+            .iter()
+            .find(|action| action.action_type == "resolve_video_url")
+            .expect("video resolver action contract should exist");
+        assert!(video_resolver_action.requires_v3_validation);
+        assert!(video_resolver_action.mutates_state);
+        assert_eq!(
+            video_resolver_action.input_schema["properties"]["allowed_source_types"]["items"]
+                ["enum"],
+            json!(["direct_video_url", "public_page_resolvable_video"])
         );
         assert!(package.safety.v3_validates_all_actions);
         assert!(!package.safety.direct_database_access_allowed);
@@ -27659,6 +27729,32 @@ mod tests {
                 "retrieval.search".to_string(),
                 "retrieval.read_detail".to_string(),
                 "static_page.plan".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn assistant_run_video_ppt_scope_exposes_media_supply_actions() {
+        let selected_scope = json!({
+            "mode": "ordinary_chat",
+            "datasets": [],
+            "intent": "data_question",
+            "supply_policy": {
+                "retrievalPolicy": "not_requested",
+                "preferDetail": false,
+                "recommendedActions": ["media.resolve_video_url", "media.extract_ppt_transcript"]
+            }
+        });
+
+        assert_eq!(
+            assistant_run_recommended_supply_actions(&selected_scope, false),
+            vec!["resolve_video_url", "extract_video_ppt_transcript"]
+        );
+        assert_eq!(
+            assistant_run_scope_recommended_tool_actions(&selected_scope),
+            vec![
+                "media.resolve_video_url".to_string(),
+                "media.extract_ppt_transcript".to_string()
             ]
         );
     }
