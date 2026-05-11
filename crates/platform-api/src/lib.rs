@@ -6473,7 +6473,6 @@ async fn create_assistant_run(
         .await
         .map_err(ApiError::from_storage)?;
 
-    let mut assistant_message_override = None;
     if let Some(artifact) =
         wechat_video_login_handoff_artifact_from_prompt(run.id, &request.prompt, now)
     {
@@ -6500,10 +6499,6 @@ async fn create_assistant_run(
             "title": artifact.title,
             "template_id": "wechat_video_login_handoff",
         }));
-        assistant_message_override = Some(
-            "已识别为微信视频号 PPT 提取任务。该视频需要微信授权，已生成登录交接产物；下一步由执行器推送扫码二维码，用户扫码后获取视频文件，必要时录屏，再继续解析并生成 PPT 草稿。"
-                .to_string(),
-        );
     }
 
     Ok((
@@ -6512,14 +6507,12 @@ async fn create_assistant_run(
             assistant_run_id: run.id,
             assistant_message: AssistantRunMessageView {
                 role: ChatMessageRole::Assistant,
-                content: assistant_message_override.unwrap_or_else(|| {
-                    output_artifacts
-                        .first()
-                        .and_then(|artifact| artifact.get("content"))
-                        .and_then(Value::as_str)
-                        .unwrap_or_default()
-                        .to_string()
-                }),
+                content: output_artifacts
+                    .first()
+                    .and_then(|artifact| artifact.get("content"))
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
             },
             runtime: run.runtime_manifest,
             selected_scope,

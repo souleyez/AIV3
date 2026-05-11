@@ -19,7 +19,7 @@ import {
   summarizeAccountState,
   validateAccountEmail,
 } from './lib/account-auth';
-import { buildAssistantStartupBriefing, formatStartupBriefingForModel } from './lib/assistant-startup-briefing';
+import { buildAssistantStartupBriefing } from './lib/assistant-startup-briefing';
 import { planAssistantScope, selectPlannerDatasetIds } from './lib/scope-planner';
 import {
   applyStaticPageOperation,
@@ -2259,12 +2259,32 @@ export default function HomePageClient() {
       return;
     }
 
+    const userMessage = createLocalMessage('user', prompt);
+    const baseMessages = selectedSessionId ? visibleMessages : localMessages;
+    const wasSelectedSessionId = Boolean(selectedSessionId);
+
+    if (!selectedSessionId && !draftSessionTitle.trim()) {
+      setDraftSessionTitle(buildDefaultConversationTitle(prompt, draftSessionStartedAt));
+    }
+    if (wasSelectedSessionId) {
+      setSelectedSessionId(null);
+    }
+    setLocalMessages((current) => [
+      ...(wasSelectedSessionId ? baseMessages : current),
+      userMessage,
+    ].slice(-40));
+    setInput('');
+    setComposingNewSession(false);
+    setSubmitting(false);
+    setError('');
+    setBanner('已发送，助手正在后台处理；你可以继续输入。');
+
     const nextScopePlan = planAssistantScope({
       prompt,
       datasets,
       selectedDatasetId,
       selectedDatasetIds,
-      conversationMemory: visibleMessages,
+      conversationMemory: [...visibleMessages, userMessage],
       activeStaticPageDraft,
     });
     setScopePlan(nextScopePlan);
@@ -2300,18 +2320,13 @@ export default function HomePageClient() {
     }
 
     if (shouldUseAssistantRun) {
-      setSubmitting(true);
       try {
-        if (!selectedSessionId && !draftSessionTitle.trim()) {
-          setDraftSessionTitle(buildDefaultConversationTitle(prompt, draftSessionStartedAt));
-        }
-        const userMessage = createLocalMessage('user', prompt);
         const assistantSelectedScope = buildAssistantRunSelectedScope(effectiveDatasetIds, nextScopePlan);
         const briefing = buildAssistantStartupBriefing({
           datasets,
           reportPlans,
           publishedReports,
-          latestMessages: [...localMessages, userMessage],
+          latestMessages: [...visibleMessages, userMessage],
           activityEvents,
           selectedDataset: effectiveDataset,
           selectedDatasets: effectiveDatasets,
@@ -2367,29 +2382,15 @@ export default function HomePageClient() {
           if (backendStaticPageEditRequested) {
             pendingStaticPageDraft = handleApplyStaticPagePrompt(prompt);
           }
-          const scopeDescription = effectiveDatasets.length
-            ? `当前供料范围：${effectiveDatasets.map((dataset) => dataset.title || dataset.key || '当前数据集').join('、')}，本地兜底会继续优先使用这些范围。`
-            : '当前没有锁定数据集，所以不会强行检索资料。';
-          assistantContent = [
-            `已进入普通聊天模式；${scopeDescription}`,
-            formatStartupBriefingForModel(briefing),
-            nextScopePlan.hint ? `供料判断：${nextScopePlan.hint}。你也可以在左侧取消或改选。` : '供料判断：暂未命中具体数据集。',
-            `AssistantRun 暂不可用：${assistantRunError instanceof Error ? assistantRunError.message : '请求失败'}。`,
-          ].join('\n\n');
+          assistantContent = `模型服务暂不可用，本轮没有生成回复。错误：${assistantRunError instanceof Error ? assistantRunError.message : '请求失败'}。`;
         }
 
         const assistantMessage = createLocalMessage('assistant', assistantContent);
-        if (selectedSessionId) {
-          setSelectedSessionId(null);
-        }
         setLocalMessages((current) => [
-          ...(selectedSessionId ? visibleMessages : current),
-          userMessage,
+          ...current,
           assistantMessage,
         ].slice(-40));
         rememberLocalUserStatement(userMessage, assistantRunId);
-        setInput('');
-        setComposingNewSession(false);
         setBanner(
           usedBackendAssistantRun
             ? staticPageCreateRequested
@@ -2399,7 +2400,7 @@ export default function HomePageClient() {
               : usedAssistantRunContinue
                 ? '已在同一个 AssistantRun 上继续执行；记录只缓存在当前浏览器。'
               : '已通过 AssistantRun 返回普通聊天；记录只缓存在当前浏览器。'
-            : 'AssistantRun 暂不可用，已用本地占位回复保留这轮普通聊天。',
+            : '模型服务暂不可用，本轮回复失败；用户消息已保留。',
         );
         setError('');
       } finally {
