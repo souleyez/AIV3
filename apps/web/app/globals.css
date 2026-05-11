@@ -2462,6 +2462,10 @@ textarea {
   padding: 0 12px 11px;
 }
 
+.artifact-download-link {
+  text-decoration: none;
+}
+
 .right-brief-links {
   display: grid;
   gap: 7px;

@@ -182,7 +182,101 @@ function htmlArtifactSummary(artifact) {
     meta: `${result.manifest.templateLabel} · ${result.manifest.interactionMode}`,
     sourceLabel: result.manifest.sourceLabel,
     createdAt: result.manifest.createdAt,
+    templateId: result.manifest.templateId,
+    payload: result.manifest.payload,
+    provenance: result.manifest.provenance,
   };
+}
+
+function artifactKindLabel(kind) {
+  const labels = {
+    pptx: '下载PPTX',
+    final_deliverables_manifest: '交付清单',
+    extraction_artifacts_manifest: '产物索引',
+    transcript_text: '原文',
+    source_text: '来源文档',
+    ppt_outline: 'PPT大纲',
+    timestamp_map: '时间映射',
+    contact_sheet_html: '接触表',
+    ppt_keep_list_template: 'Keep-list',
+    selected_slides_manifest: '选页清单',
+    pptx_build_plan: '构建计划',
+  };
+  return labels[kind] || formatSnakeCaseLabel(kind || '文件');
+}
+
+function htmlArtifactGeneratedFiles(artifact) {
+  const result = normalizeHtmlArtifactManifest(artifact);
+  if (result.rejected) return [];
+  const generatedArtifacts = result.manifest.payload?.generatedArtifacts || result.manifest.payload?.generated_artifacts || {};
+  const files = Array.isArray(generatedArtifacts.files) ? generatedArtifacts.files : [];
+  const sourceRunId = result.manifest.provenance?.sourceRunId || '';
+  const localThreadId = result.manifest.payload?.localThreadId || result.manifest.payload?.local_thread_id || '';
+  return files.map((file, index) => {
+    const kind = file?.artifactKind || file?.artifact_kind || '';
+    const path = file?.path || file?.uri || '';
+    const params = new URLSearchParams();
+    if (sourceRunId) {
+      params.set('assistant_run_id', sourceRunId);
+    } else if (localThreadId) {
+      params.set('local_thread_id', localThreadId);
+    }
+    return {
+      index,
+      kind,
+      label: artifactKindLabel(kind),
+      path,
+      downloadable: Boolean(file?.path && params.toString()),
+      url: params.toString()
+        ? `/api/v3/html-artifacts/${encodeURIComponent(result.manifest.id)}/files/${index}?${params.toString()}`
+        : '',
+    };
+  });
+}
+
+function preferredHtmlArtifactDownloads(artifact) {
+  const priority = [
+    'pptx',
+    'final_deliverables_manifest',
+    'extraction_artifacts_manifest',
+    'ppt_outline',
+    'transcript_text',
+  ];
+  const files = htmlArtifactGeneratedFiles(artifact).filter((file) => file.downloadable);
+  return files
+    .sort((left, right) => {
+      const leftIndex = priority.indexOf(left.kind);
+      const rightIndex = priority.indexOf(right.kind);
+      return (leftIndex === -1 ? 99 : leftIndex) - (rightIndex === -1 ? 99 : rightIndex);
+    })
+    .slice(0, 4);
+}
+
+function htmlArtifactProjectStage(summary) {
+  const status = summary.payload?.deliverableStatus || summary.payload?.deliverable_status || {};
+  const state = status.state || summary.payload?.parseStatus || summary.payload?.parse_status || summary.meta;
+  if (summary.templateId === 'video_extraction_summary') {
+    return {
+      label: '视频/PPT',
+      status: state === 'final_pptx_ready' ? 'PPTX已就绪' : formatSnakeCaseLabel(state || '处理中'),
+    };
+  }
+  return {
+    label: summary.sourceLabel || '产物',
+    status: formatSnakeCaseLabel(state || summary.meta || '已生成'),
+  };
+}
+
+function htmlArtifactBrief(summary) {
+  const status = summary.payload?.deliverableStatus || summary.payload?.deliverable_status || {};
+  if (summary.templateId === 'video_extraction_summary') {
+    const parts = [
+      status.hasPptx || status.has_pptx ? 'PPTX ready' : 'PPTX waiting',
+      status.hasFinalDeliverablesManifest || status.has_final_deliverables_manifest ? 'manifest ready' : '',
+    ].filter(Boolean);
+    return parts.join(' · ') || summary.subtitle || summary.meta;
+  }
+  return summary.subtitle || summary.meta;
 }
 
 function buildReportControlNotice({
@@ -690,6 +784,52 @@ function GeneratedProjectCard({
   );
 }
 
+function GeneratedHtmlArtifactCard({
+  artifact,
+  active,
+  onSelect,
+}) {
+  const summary = htmlArtifactSummary(artifact);
+  const stage = htmlArtifactProjectStage(summary);
+  const downloads = preferredHtmlArtifactDownloads(artifact);
+  return (
+    <article className={`generated-project-card html-artifact-project-card ${active ? 'active' : ''}`.trim()}>
+      <button
+        type="button"
+        className="generated-project-main"
+        disabled={summary.rejected}
+        onClick={summary.rejected ? undefined : onSelect}
+      >
+        <div className="generated-project-title-row">
+          <strong>{truncateText(summary.title, 38)}</strong>
+          <time dateTime={summary.createdAt || undefined}>{summary.createdAt ? formatRelativeTime(summary.createdAt) : '刚刚'}</time>
+        </div>
+        <div className="generated-project-brief-row">
+          <span>{truncateText(htmlArtifactBrief(summary), 58)}</span>
+          <em>{stage.label} · {stage.status}</em>
+        </div>
+      </button>
+      {active ? (
+        <div className="generated-project-actions" aria-label="产物操作">
+          <button type="button" className="ghost-btn compact-action-btn" disabled={summary.rejected} onClick={onSelect}>
+            打开详情
+          </button>
+          {downloads.map((file) => (
+            <a
+              key={`${file.index}-${file.kind}`}
+              className="ghost-btn compact-action-btn artifact-download-link"
+              href={file.url}
+              download
+            >
+              {file.label}
+            </a>
+          ))}
+        </div>
+      ) : null}
+    </article>
+  );
+}
+
 export default function InsightPanel({
   dataset,
   sessions,
@@ -729,7 +869,12 @@ export default function InsightPanel({
   onSelectHtmlArtifact,
 }) {
   const [copiedProjectId, setCopiedProjectId] = useState('');
-  const resultCount = staticPageDrafts.length;
+  const shelfHtmlArtifacts = htmlArtifacts.filter((artifact) => {
+    const templateId = artifact?.templateId || artifact?.template_id;
+    return templateId !== 'static_page_planning_handoff'
+      && templateId !== 'static_page_data_quality_report';
+  });
+  const resultCount = staticPageDrafts.length + shelfHtmlArtifacts.length;
 
   async function copyProjectLink(draft) {
     const link = typeof window === 'undefined'
@@ -768,6 +913,17 @@ export default function InsightPanel({
                 onDelete={() => onDeleteStaticPageDraft?.(draft.id)}
                 onRevert={() => onRevertStaticPageStage?.(draft.id)}
                 onCopyLink={() => copyProjectLink(draft)}
+              />
+            );
+          })}
+          {shelfHtmlArtifacts.map((artifact) => {
+            const artifactId = artifact?.id || artifact?.artifact_id;
+            return (
+              <GeneratedHtmlArtifactCard
+                key={artifactId}
+                active={activeHtmlArtifactId === artifactId}
+                artifact={artifact}
+                onSelect={() => onSelectHtmlArtifact?.(artifactId)}
               />
             );
           })}

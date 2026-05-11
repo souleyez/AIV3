@@ -38,9 +38,9 @@ export async function proxyPlatformApiRequest(request, pathSegments) {
       cache: 'no-store',
     });
 
-    const payload = await response.text();
+    const payload = await response.arrayBuffer();
     const forwardedHeaders = new Headers();
-    ['content-type', 'cache-control', 'etag'].forEach((name) => {
+    ['content-type', 'cache-control', 'etag', 'content-disposition', 'content-length'].forEach((name) => {
       const value = response.headers.get(name);
       if (value) forwardedHeaders.set(name, value);
     });

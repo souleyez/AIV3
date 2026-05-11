@@ -88,6 +88,8 @@ use static_page_runtime::{
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     fmt::Display,
+    fs,
+    path::PathBuf,
     time::Instant,
 };
 use storage::{
@@ -267,6 +269,12 @@ struct HtmlArtifactListQuery {
     limit: Option<i64>,
 }
 
+#[derive(Debug, Deserialize)]
+struct HtmlArtifactFileQuery {
+    local_thread_id: Option<String>,
+    assistant_run_id: Option<String>,
+}
+
 #[derive(Clone)]
 pub struct AppState {
     event_bus: EventBus,
@@ -433,6 +441,10 @@ pub fn router(
         .route(
             "/v1/html-artifacts/{artifact_id}/events",
             axum::routing::post(submit_html_artifact_event),
+        )
+        .route(
+            "/v1/html-artifacts/{artifact_id}/files/{file_index}",
+            get(download_html_artifact_file),
         )
         .route("/v1/static-page-drafts", get(list_static_page_drafts))
         .route(
@@ -7185,6 +7197,55 @@ async fn submit_html_artifact_event(
             event: to_assistant_run_event_view(event),
         }),
     ))
+}
+
+async fn download_html_artifact_file(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((artifact_id, file_index)): Path<(String, usize)>,
+    Query(query): Query<HtmlArtifactFileQuery>,
+) -> std::result::Result<Response, ApiError> {
+    validate_required("artifact_id", &artifact_id)?;
+    let current_user_id = current_auth_user_id(&state, &headers).await?;
+    let request = SubmitHtmlArtifactEventRequest {
+        assistant_run_id: query.assistant_run_id,
+        local_thread_id: query.local_thread_id,
+        event_type: String::new(),
+        payload: Value::Null,
+    };
+    let (_run, artifact) = load_visible_html_artifact_for_submit(
+        &state,
+        current_user_id,
+        artifact_id.trim(),
+        &request,
+    )
+    .await?;
+    let file = html_artifact_downloadable_file(&artifact, file_index)?;
+    let bytes = fs::read(&file.path).map_err(|error| {
+        ApiError::not_found(
+            "html_artifact_file_unavailable",
+            format!("generated artifact file is not available: {error}"),
+        )
+    })?;
+    let mut builder = Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, file.content_type)
+        .header(header::CACHE_CONTROL, "no-store")
+        .header(
+            header::CONTENT_DISPOSITION,
+            format!("attachment; filename=\"{}\"", file.file_name),
+        );
+    if let Ok(length) = HeaderValue::from_str(&bytes.len().to_string()) {
+        builder = builder.header(header::CONTENT_LENGTH, length);
+    }
+    builder
+        .body(axum::body::Body::from(bytes))
+        .map_err(|error| {
+            ApiError::internal(
+                "html_artifact_download_response_failed",
+                format!("failed to build artifact download response: {error}"),
+            )
+        })
 }
 
 async fn create_static_page_draft_for_assistant_run(
@@ -15715,6 +15776,156 @@ fn sort_and_dedupe_html_artifacts(artifacts: &mut Vec<HtmlArtifactManifestView>)
     });
     let mut seen = HashSet::<String>::new();
     artifacts.retain(|artifact| seen.insert(artifact.id.clone()));
+}
+
+#[derive(Debug)]
+struct HtmlArtifactDownloadableFile {
+    path: PathBuf,
+    file_name: String,
+    content_type: String,
+}
+
+fn html_artifact_downloadable_file(
+    artifact: &HtmlArtifactManifestView,
+    file_index: usize,
+) -> std::result::Result<HtmlArtifactDownloadableFile, ApiError> {
+    if artifact.template_id != contracts::HtmlArtifactTemplateIdView::VideoExtractionSummary {
+        return Err(ApiError::bad_request(
+            "html_artifact_file_download_unsupported",
+            "only video extraction generated files are downloadable in this slice".to_string(),
+        ));
+    }
+    let generated_artifacts = artifact
+        .payload
+        .get("generated_artifacts")
+        .or_else(|| artifact.payload.get("generatedArtifacts"))
+        .ok_or_else(|| {
+            ApiError::not_found(
+                "html_artifact_file_not_found",
+                "HTML artifact does not expose generated files".to_string(),
+            )
+        })?;
+    let files = generated_artifacts
+        .get("files")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            ApiError::not_found(
+                "html_artifact_file_not_found",
+                "HTML artifact generated file list is missing".to_string(),
+            )
+        })?;
+    let file = files.get(file_index).ok_or_else(|| {
+        ApiError::not_found(
+            "html_artifact_file_not_found",
+            format!("generated file index {file_index} was not found"),
+        )
+    })?;
+    let raw_path = html_artifact_file_string(file, &["path"]).ok_or_else(|| {
+        ApiError::not_found(
+            "html_artifact_file_not_found",
+            "generated file path is missing".to_string(),
+        )
+    })?;
+    let target_path = html_artifact_safe_local_path(&raw_path)?;
+    let canonical_target = fs::canonicalize(&target_path).map_err(|error| {
+        ApiError::not_found(
+            "html_artifact_file_unavailable",
+            format!("generated file is not available: {error}"),
+        )
+    })?;
+    let allowed_roots = html_artifact_allowed_generated_roots(generated_artifacts);
+    if allowed_roots.is_empty()
+        || !allowed_roots
+            .iter()
+            .any(|root| canonical_target.starts_with(root))
+    {
+        return Err(ApiError::bad_request(
+            "html_artifact_file_path_denied",
+            "generated file path is outside the artifact workspace".to_string(),
+        ));
+    }
+    let file_name = html_artifact_download_file_name(file, &canonical_target);
+    let content_type = html_artifact_file_string(file, &["format", "mime", "content_type"])
+        .unwrap_or_else(|| "application/octet-stream".to_string());
+    Ok(HtmlArtifactDownloadableFile {
+        path: canonical_target,
+        file_name,
+        content_type,
+    })
+}
+
+fn html_artifact_file_string(value: &Value, keys: &[&str]) -> Option<String> {
+    keys.iter()
+        .find_map(|key| value.get(*key).and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn html_artifact_safe_local_path(raw_path: &str) -> std::result::Result<PathBuf, ApiError> {
+    let raw_path = raw_path.trim();
+    if raw_path.contains("://") || raw_path.starts_with("\\\\") {
+        return Err(ApiError::bad_request(
+            "html_artifact_file_path_denied",
+            "generated file path must be a local file path".to_string(),
+        ));
+    }
+    let path = PathBuf::from(raw_path);
+    if !path.is_absolute() {
+        return Err(ApiError::bad_request(
+            "html_artifact_file_path_denied",
+            "generated file path must be absolute".to_string(),
+        ));
+    }
+    Ok(path)
+}
+
+fn html_artifact_allowed_generated_roots(generated_artifacts: &Value) -> Vec<PathBuf> {
+    ["artifacts_dir", "session_dir", "manifest_path"]
+        .into_iter()
+        .filter_map(|key| generated_artifacts.get(key).and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && !value.contains("://") && !value.starts_with("\\\\"))
+        .filter_map(|value| {
+            let path = PathBuf::from(value);
+            if !path.is_absolute() {
+                return None;
+            }
+            let root = if path.is_file() {
+                path.parent().map(PathBuf::from)?
+            } else {
+                path
+            };
+            fs::canonicalize(root).ok()
+        })
+        .collect()
+}
+
+fn html_artifact_download_file_name(file: &Value, path: &std::path::Path) -> String {
+    let raw = html_artifact_file_string(file, &["file_name", "filename", "name"])
+        .or_else(|| {
+            path.file_name()
+                .and_then(|value| value.to_str())
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| "video-artifact.bin".to_string());
+    let safe = raw
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_') {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>()
+        .trim_matches('_')
+        .to_string();
+    if safe.is_empty() {
+        "video-artifact.bin".to_string()
+    } else {
+        safe.chars().take(120).collect()
+    }
 }
 
 async fn load_report_render_summary_artifacts_for_plan(
@@ -26624,6 +26835,107 @@ mod tests {
         assert_eq!(artifacts[0].id, "html-artifact-new");
         assert_eq!(artifacts[1].id, "html-artifact-old");
         assert_eq!(artifacts[0].payload["mode"], json!("plan_only"));
+    }
+
+    #[test]
+    fn html_artifact_video_download_file_stays_inside_generated_workspace() {
+        let root =
+            std::env::temp_dir().join(format!("aidp-v3-html-artifact-download-{}", Uuid::new_v4()));
+        let artifacts_dir = root.join("generated_artifacts");
+        fs::create_dir_all(&artifacts_dir).expect("test artifacts dir should be created");
+        let file_path = artifacts_dir.join("final_deliverables_manifest.json");
+        fs::write(&file_path, "{}").expect("test manifest should be written");
+        let artifact = HtmlArtifactManifestView {
+            kind: "html_artifact".to_string(),
+            version: 1,
+            id: "html-artifact-video".to_string(),
+            title: "视频提取摘要".to_string(),
+            source_type: contracts::HtmlArtifactSourceTypeView::VideoExtraction,
+            template_id: contracts::HtmlArtifactTemplateIdView::VideoExtractionSummary,
+            owner_scope: contracts::HtmlArtifactOwnerScopeView {
+                scope_type: "assistant_run".to_string(),
+                id: AssistantRunId::new().to_string(),
+            },
+            data_refs: Vec::new(),
+            provenance: contracts::HtmlArtifactProvenanceView {
+                producer: "media-worker".to_string(),
+                reason: "video_extraction_workflow_completed".to_string(),
+                source_run_id: Some(AssistantRunId::new().to_string()),
+            },
+            interaction_mode: HtmlArtifactInteractionModeView::ReadOnly,
+            created_at: Utc::now(),
+            payload: json!({
+                "generated_artifacts": {
+                    "session_dir": root.display().to_string(),
+                    "artifacts_dir": artifacts_dir.display().to_string(),
+                    "files": [{
+                        "artifact_kind": "final_deliverables_manifest",
+                        "format": "application/json",
+                        "path": file_path.display().to_string()
+                    }]
+                }
+            }),
+        };
+
+        let download = html_artifact_downloadable_file(&artifact, 0)
+            .expect("file inside generated workspace should be downloadable");
+
+        assert!(download.path.ends_with("final_deliverables_manifest.json"));
+        assert_eq!(download.file_name, "final_deliverables_manifest.json");
+        assert_eq!(download.content_type, "application/json");
+    }
+
+    #[test]
+    fn html_artifact_video_download_rejects_paths_outside_workspace() {
+        let root = std::env::temp_dir().join(format!(
+            "aidp-v3-html-artifact-download-root-{}",
+            Uuid::new_v4()
+        ));
+        let artifacts_dir = root.join("generated_artifacts");
+        fs::create_dir_all(&artifacts_dir).expect("test artifacts dir should be created");
+        let outside_dir = std::env::temp_dir().join(format!(
+            "aidp-v3-html-artifact-download-outside-{}",
+            Uuid::new_v4()
+        ));
+        fs::create_dir_all(&outside_dir).expect("test outside dir should be created");
+        let outside_file = outside_dir.join("leak.txt");
+        fs::write(&outside_file, "nope").expect("test outside file should be written");
+        let artifact = HtmlArtifactManifestView {
+            kind: "html_artifact".to_string(),
+            version: 1,
+            id: "html-artifact-video".to_string(),
+            title: "视频提取摘要".to_string(),
+            source_type: contracts::HtmlArtifactSourceTypeView::VideoExtraction,
+            template_id: contracts::HtmlArtifactTemplateIdView::VideoExtractionSummary,
+            owner_scope: contracts::HtmlArtifactOwnerScopeView {
+                scope_type: "assistant_run".to_string(),
+                id: AssistantRunId::new().to_string(),
+            },
+            data_refs: Vec::new(),
+            provenance: contracts::HtmlArtifactProvenanceView {
+                producer: "media-worker".to_string(),
+                reason: "video_extraction_workflow_completed".to_string(),
+                source_run_id: Some(AssistantRunId::new().to_string()),
+            },
+            interaction_mode: HtmlArtifactInteractionModeView::ReadOnly,
+            created_at: Utc::now(),
+            payload: json!({
+                "generated_artifacts": {
+                    "session_dir": root.display().to_string(),
+                    "artifacts_dir": artifacts_dir.display().to_string(),
+                    "files": [{
+                        "artifact_kind": "transcript_text",
+                        "format": "text/plain",
+                        "path": outside_file.display().to_string()
+                    }]
+                }
+            }),
+        };
+
+        let error = html_artifact_downloadable_file(&artifact, 0)
+            .expect_err("file outside generated workspace must be denied");
+
+        assert_eq!(error.payload.code, "html_artifact_file_path_denied");
     }
 
     #[test]
