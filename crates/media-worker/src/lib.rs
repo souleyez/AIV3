@@ -1,5 +1,10 @@
 use domain_model::{Document, DocumentChunk, WorkflowTask};
 use serde_json::{json, Value};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 pub const DEFAULT_FRAME_EXTRACTION_INTERVAL_SECONDS: f64 = 0.15;
 pub const DEFAULT_RAW_FRAMES_DIR_NAME: &str = "raw_frames";
@@ -70,9 +75,20 @@ pub fn register_video_asset_output(document: &Document) -> Value {
 }
 
 pub fn extract_video_ppt_output(document: &Document, chunks: &[DocumentChunk]) -> Value {
+    extract_video_ppt_output_with_frame_extraction(
+        document,
+        chunks,
+        video_frame_extraction_plan(document),
+    )
+}
+
+pub fn extract_video_ppt_output_with_frame_extraction(
+    document: &Document,
+    chunks: &[DocumentChunk],
+    frame_extraction: Value,
+) -> Value {
     let evidence = video_evidence_summary_from_chunks(chunks);
     let artifacts = video_extraction_artifact_refs(document, &evidence);
-    let frame_extraction = video_frame_extraction_plan(document);
     let status = if evidence.has_evidence() {
         "completed"
     } else {
@@ -99,6 +115,125 @@ pub fn extract_video_ppt_output(document: &Document, chunks: &[DocumentChunk]) -
     })
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct FrameExtractionConfig {
+    pub enabled: bool,
+    pub ffmpeg_bin: String,
+    pub output_root: PathBuf,
+    pub interval_seconds: f64,
+}
+
+impl Default for FrameExtractionConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            ffmpeg_bin: "ffmpeg".to_string(),
+            output_root: std::env::temp_dir().join("aidp-v3-video-extraction"),
+            interval_seconds: DEFAULT_FRAME_EXTRACTION_INTERVAL_SECONDS,
+        }
+    }
+}
+
+pub fn run_video_frame_extraction_if_enabled(
+    document: &Document,
+    config: &FrameExtractionConfig,
+) -> Value {
+    if !config.enabled {
+        return video_frame_extraction_plan(document);
+    }
+
+    let Some(input_path) = resolve_local_media_input_path(document) else {
+        let mut plan = video_frame_extraction_plan(document);
+        if let Some(object) = plan.as_object_mut() {
+            object.insert("status".to_string(), Value::String("skipped".to_string()));
+            object.insert("enabled".to_string(), Value::Bool(true));
+            object.insert(
+                "reason".to_string(),
+                Value::String("local_media_path_not_available".to_string()),
+            );
+        }
+        return plan;
+    };
+
+    match run_video_frame_extraction(document, &input_path, config) {
+        Ok(manifest) => manifest,
+        Err(error) => json!({
+            "status": "failed",
+            "source": "ffmpeg_external_process",
+            "enabled": true,
+            "reason": error,
+            "input_path": input_path.display().to_string(),
+            "sop": "wechat-video-ppt-extract/raw_frames",
+        }),
+    }
+}
+
+pub fn run_video_frame_extraction(
+    document: &Document,
+    input_path: &Path,
+    config: &FrameExtractionConfig,
+) -> Result<Value, String> {
+    if !input_path.is_file() {
+        return Err("local_media_path_not_found".to_string());
+    }
+    if config.interval_seconds <= 0.0 {
+        return Err("invalid_frame_interval".to_string());
+    }
+
+    let session_dir = config
+        .output_root
+        .join(format!("video-extraction-{}", document.id));
+    let raw_frames_dir = session_dir.join(DEFAULT_RAW_FRAMES_DIR_NAME);
+    fs::create_dir_all(&raw_frames_dir).map_err(|error| error.to_string())?;
+    let output_pattern = raw_frames_dir.join(DEFAULT_RAW_FRAME_FILE_PATTERN);
+    let fps_filter = format!("fps=1/{}", config.interval_seconds);
+    let output = Command::new(&config.ffmpeg_bin)
+        .arg("-hide_banner")
+        .arg("-loglevel")
+        .arg("error")
+        .arg("-y")
+        .arg("-i")
+        .arg(input_path)
+        .arg("-vf")
+        .arg(&fps_filter)
+        .arg(output_pattern.as_os_str())
+        .output()
+        .map_err(|error| error.to_string())?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr)
+            .chars()
+            .take(1_000)
+            .collect::<String>();
+        return Err(if stderr.trim().is_empty() {
+            format!("ffmpeg exited with {}", output.status)
+        } else {
+            stderr
+        });
+    }
+
+    let frame_count = fs::read_dir(&raw_frames_dir)
+        .map_err(|error| error.to_string())?
+        .filter_map(Result::ok)
+        .filter(|entry| entry.path().is_file())
+        .count();
+
+    Ok(json!({
+        "status": "completed",
+        "source": "ffmpeg_external_process",
+        "enabled": true,
+        "input_path": input_path.display().to_string(),
+        "session_dir": session_dir.display().to_string(),
+        "raw_frames_dir": raw_frames_dir.display().to_string(),
+        "frame_file_pattern": DEFAULT_RAW_FRAME_FILE_PATTERN,
+        "interval_seconds": config.interval_seconds,
+        "save_all": true,
+        "contact_sheet_source": DEFAULT_RAW_FRAMES_DIR_NAME,
+        "frame_count": frame_count,
+        "sop": "wechat-video-ppt-extract/raw_frames",
+    }))
+}
+
 pub fn video_frame_extraction_plan(document: &Document) -> Value {
     json!({
         "status": "planned",
@@ -113,6 +248,64 @@ pub fn video_frame_extraction_plan(document: &Document) -> Value {
         "contact_sheet_source": DEFAULT_RAW_FRAMES_DIR_NAME,
         "sop": "wechat-video-ppt-extract/raw_frames",
     })
+}
+
+pub fn frame_extraction_config_from_env() -> FrameExtractionConfig {
+    let mut config = FrameExtractionConfig::default();
+    config.enabled = env_flag("MEDIA_FRAME_EXTRACTION_ENABLED", false);
+    if let Some(ffmpeg_bin) = optional_env("MEDIA_FFMPEG_BIN") {
+        config.ffmpeg_bin = ffmpeg_bin;
+    }
+    if let Some(output_root) = optional_env("MEDIA_FRAME_OUTPUT_ROOT") {
+        config.output_root = PathBuf::from(output_root);
+    }
+    if let Some(interval) = optional_env("MEDIA_FRAME_INTERVAL_SECONDS")
+        .and_then(|value| value.parse::<f64>().ok())
+        .filter(|value| *value > 0.0)
+    {
+        config.interval_seconds = interval;
+    }
+    config
+}
+
+pub fn resolve_local_media_input_path(document: &Document) -> Option<PathBuf> {
+    let raw = document.object_key.trim();
+    if raw.starts_with("http://") || raw.starts_with("https://") {
+        return None;
+    }
+
+    let raw = raw.trim_start_matches("file://");
+    if raw.is_empty() {
+        return None;
+    }
+
+    let direct = PathBuf::from(raw);
+    if direct.is_file() {
+        return Some(direct);
+    }
+
+    let root = std::env::var("PLATFORM_LOCAL_OBJECT_ROOT").ok()?;
+    let rooted = Path::new(&root).join(raw);
+    rooted.is_file().then_some(rooted)
+}
+
+fn env_flag(key: &str, default: bool) -> bool {
+    std::env::var(key)
+        .ok()
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(default)
+}
+
+fn optional_env(key: &str) -> Option<String> {
+    std::env::var(key)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
 }
 
 pub fn video_evidence_summary_from_chunks(
@@ -296,5 +489,49 @@ mod tests {
             completed["artifacts"][0]["artifact_kind"],
             json!("transcript_text")
         );
+    }
+
+    #[test]
+    fn frame_extraction_is_planned_by_default_and_skips_remote_sources_when_enabled() {
+        let mut document = test_document();
+        let disabled = run_video_frame_extraction_if_enabled(
+            &document,
+            &FrameExtractionConfig {
+                enabled: false,
+                ..FrameExtractionConfig::default()
+            },
+        );
+
+        assert_eq!(disabled["status"], json!("planned"));
+        assert_eq!(disabled["enabled"], json!(false));
+
+        document.object_key = "https://cdn.example.com/video.mp4".to_string();
+        let skipped = run_video_frame_extraction_if_enabled(
+            &document,
+            &FrameExtractionConfig {
+                enabled: true,
+                ..FrameExtractionConfig::default()
+            },
+        );
+
+        assert_eq!(skipped["status"], json!("skipped"));
+        assert_eq!(skipped["enabled"], json!(true));
+        assert_eq!(skipped["reason"], json!("local_media_path_not_available"));
+    }
+
+    #[test]
+    fn frame_extraction_rejects_missing_local_input_without_invoking_ffmpeg() {
+        let document = test_document();
+        let config = FrameExtractionConfig {
+            enabled: true,
+            ..FrameExtractionConfig::default()
+        };
+        let missing =
+            std::env::temp_dir().join(format!("aidp-v3-missing-video-{}.mp4", DocumentId::new()));
+
+        let error = run_video_frame_extraction(&document, &missing, &config)
+            .expect_err("missing input should be rejected before ffmpeg");
+
+        assert_eq!(error, "local_media_path_not_found");
     }
 }

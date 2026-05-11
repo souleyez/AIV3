@@ -3,8 +3,9 @@ use chrono::Utc;
 use domain_model::{WorkflowKind, WorkflowTask};
 use event_bus::{workflow_task_enqueued_subject, EventBus, EventSubscription};
 use media_worker::{
-    extract_video_ppt_output, register_video_asset_output, resolve_video_source_output,
-    MediaWorkflowTaskKind,
+    extract_video_ppt_output_with_frame_extraction, frame_extraction_config_from_env,
+    register_video_asset_output, resolve_video_source_output,
+    run_video_frame_extraction_if_enabled, FrameExtractionConfig, MediaWorkflowTaskKind,
 };
 use serde_json::Value;
 use storage::{PgStorage, DEFAULT_LOCAL_DATABASE_URL};
@@ -32,6 +33,7 @@ async fn main() -> Result<()> {
     let storage = PgStorage::connect(&database_url).await?;
     let workflow_catalog = workflow_definitions::catalog();
     let event_bus = EventBus::connect_from_env_or_disabled("PLATFORM_NATS_URL").await;
+    let frame_extraction_config = frame_extraction_config_from_env();
     let wake_task_key = task_key.as_deref().unwrap_or(DEFAULT_WAKE_TASK_KEY);
     let wake_subject = workflow_task_enqueued_subject(&queue, wake_task_key);
     let mut task_waker = event_bus
@@ -47,6 +49,8 @@ async fn main() -> Result<()> {
         %wake_subject,
         event_bus_enabled = event_bus.is_enabled(),
         poll_interval_ms = poll_interval,
+        frame_extraction_enabled = frame_extraction_config.enabled,
+        frame_extraction_interval_seconds = frame_extraction_config.interval_seconds,
         %database_url,
         "media-worker polling started"
     );
@@ -58,8 +62,14 @@ async fn main() -> Result<()> {
             .await
         {
             Ok(Some(task)) => {
-                if let Err(error) =
-                    process_task(&storage, &workflow_catalog, &event_bus, task).await
+                if let Err(error) = process_task(
+                    &storage,
+                    &workflow_catalog,
+                    &event_bus,
+                    &frame_extraction_config,
+                    task,
+                )
+                .await
                 {
                     tracing::error!(error = ?error, "media task processing failed");
                 }
@@ -79,6 +89,7 @@ async fn process_task(
     storage: &PgStorage,
     workflow_catalog: &WorkflowCatalog,
     event_bus: &EventBus,
+    frame_extraction_config: &FrameExtractionConfig,
     task: WorkflowTask,
 ) -> Result<()> {
     let process_result: Result<()> = async {
@@ -122,7 +133,9 @@ async fn process_task(
                     .document_chunks()
                     .list_by_document(task.tenant_id, document_id)
                     .await?;
-                extract_video_ppt_output(&document, &chunks)
+                let frame_extraction =
+                    run_video_frame_extraction_if_enabled(&document, frame_extraction_config);
+                extract_video_ppt_output_with_frame_extraction(&document, &chunks, frame_extraction)
             }
         };
 
