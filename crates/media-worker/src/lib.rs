@@ -2,6 +2,7 @@ use chrono::Utc;
 use domain_model::{Document, DocumentChunk, WorkflowTask};
 use serde_json::{json, Value};
 use std::{
+    collections::BTreeSet,
     fs,
     path::{Path, PathBuf},
     process::Command,
@@ -112,7 +113,12 @@ pub fn extract_video_ppt_output_with_artifacts(
     generated_artifacts: Value,
 ) -> Value {
     let evidence = video_evidence_summary_from_chunks(chunks);
-    let artifacts = video_extraction_artifact_refs(document, &evidence, &frame_extraction);
+    let artifacts = merged_video_extraction_artifact_refs(
+        document,
+        &evidence,
+        &frame_extraction,
+        &generated_artifacts,
+    );
     let status = if evidence.has_evidence() {
         "completed"
     } else {
@@ -786,6 +792,46 @@ fn video_extraction_artifact_refs(
     artifacts
 }
 
+fn merged_video_extraction_artifact_refs(
+    document: &Document,
+    evidence: &VideoExtractionEvidenceSummary,
+    frame_extraction: &Value,
+    generated_artifacts: &Value,
+) -> Vec<Value> {
+    let mut artifacts = Vec::new();
+    let mut seen_kinds = BTreeSet::<String>::new();
+
+    for artifact in generated_artifacts
+        .get("files")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|artifact| {
+            artifact
+                .get("artifact_kind")
+                .and_then(Value::as_str)
+                .is_some()
+        })
+    {
+        if let Some(kind) = artifact.get("artifact_kind").and_then(Value::as_str) {
+            seen_kinds.insert(kind.to_string());
+        }
+        artifacts.push(artifact.clone());
+    }
+
+    for artifact in video_extraction_artifact_refs(document, evidence, frame_extraction) {
+        let Some(kind) = artifact.get("artifact_kind").and_then(Value::as_str) else {
+            artifacts.push(artifact);
+            continue;
+        };
+        if seen_kinds.insert(kind.to_string()) {
+            artifacts.push(artifact);
+        }
+    }
+
+    artifacts
+}
+
 fn video_artifact_ref(document: &Document, artifact_kind: &str, format: &str) -> Value {
     let artifact_id = format!("video-{}-{artifact_kind}", document.id);
     json!({
@@ -1139,6 +1185,66 @@ mod tests {
         assert_eq!(artifacts.len(), 1);
         assert_eq!(artifacts[0]["artifact_kind"], json!("frame_manifest"));
         assert_eq!(artifacts[0]["format"], json!("application/json"));
+    }
+
+    #[test]
+    fn extract_output_prefers_generated_file_refs_over_placeholder_refs() {
+        let document = test_document();
+        let chunk = test_chunk(json!({
+            "media": {
+                "transcript_segments": [{"text": "page one"}],
+                "scenes": [],
+                "keyframe_ocr_snippets": [{"text": "title"}]
+            }
+        }));
+        let generated_artifacts = json!({
+            "status": "completed",
+            "files": [{
+                "artifact_kind": "transcript_text",
+                "artifact_id": format!("video-{}-transcript_text", document.id),
+                "title": "generated transcript",
+                "format": "text/plain",
+                "path": "generated_artifacts/transcript.txt",
+                "uri": format!("artifact://video-{}-transcript_text", document.id)
+            }, {
+                "artifact_kind": "ppt_outline",
+                "artifact_id": format!("video-{}-ppt_outline", document.id),
+                "title": "generated outline",
+                "format": "text/markdown",
+                "path": "generated_artifacts/ppt_outline.md",
+                "uri": format!("artifact://video-{}-ppt_outline", document.id)
+            }]
+        });
+
+        let output = extract_video_ppt_output_with_artifacts(
+            &document,
+            &[chunk],
+            video_frame_extraction_plan(&document),
+            generated_artifacts,
+        );
+
+        let artifacts = output["artifacts"].as_array().expect("artifacts");
+        assert_eq!(
+            artifacts
+                .iter()
+                .filter(|artifact| artifact["artifact_kind"] == json!("transcript_text"))
+                .count(),
+            1
+        );
+        let transcript = artifacts
+            .iter()
+            .find(|artifact| artifact["artifact_kind"] == json!("transcript_text"))
+            .expect("transcript artifact");
+        assert_eq!(
+            transcript["path"],
+            json!("generated_artifacts/transcript.txt")
+        );
+        assert!(artifacts
+            .iter()
+            .any(|artifact| artifact["artifact_kind"] == json!("ppt_outline")));
+        assert!(artifacts
+            .iter()
+            .any(|artifact| artifact["artifact_kind"] == json!("html_summary")));
     }
 
     #[test]
