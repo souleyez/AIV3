@@ -31,6 +31,8 @@ pub(crate) enum AssistantRunReActActionType {
     ReadDocumentDetail,
     RecallConversationMemory,
     ListReportOptions,
+    ResolveVideoUrl,
+    ExtractVideoPptTranscript,
     CreateStaticPageDraft,
     UpdateStaticPageModule,
     SubmitStaticPageImagePreview,
@@ -50,6 +52,8 @@ impl AssistantRunReActActionType {
             "read_document_detail" => Some(Self::ReadDocumentDetail),
             "recall_conversation_memory" => Some(Self::RecallConversationMemory),
             "list_report_options" => Some(Self::ListReportOptions),
+            "resolve_video_url" => Some(Self::ResolveVideoUrl),
+            "extract_video_ppt_transcript" => Some(Self::ExtractVideoPptTranscript),
             "create_static_page_draft" => Some(Self::CreateStaticPageDraft),
             "update_static_page_module" => Some(Self::UpdateStaticPageModule),
             "submit_static_page_image_preview" => Some(Self::SubmitStaticPageImagePreview),
@@ -70,6 +74,8 @@ impl AssistantRunReActActionType {
             Self::ReadDocumentDetail => "read_document_detail",
             Self::RecallConversationMemory => "recall_conversation_memory",
             Self::ListReportOptions => "list_report_options",
+            Self::ResolveVideoUrl => "resolve_video_url",
+            Self::ExtractVideoPptTranscript => "extract_video_ppt_transcript",
             Self::CreateStaticPageDraft => "create_static_page_draft",
             Self::UpdateStaticPageModule => "update_static_page_module",
             Self::SubmitStaticPageImagePreview => "submit_static_page_image_preview",
@@ -506,6 +512,32 @@ mod tests {
             AssistantRunReActActionType::CodexHostTask
         );
         assert_eq!(decision.arguments["capability"], json!("inspect_project"));
+    }
+
+    #[test]
+    fn parses_video_ppt_actions() {
+        let resolve = parse_assistant_run_react_decision(
+            r#"{"status":"act","intent":"data_question","reason":"解析视频地址","action":{"type":"resolve_video_url","arguments":{"source_url":"https://example.com/talk.mp4"}}}"#,
+        )
+        .expect("video resolver action should parse");
+        let extract = parse_assistant_run_react_decision(
+            r#"{"action_type":"extract_video_ppt_transcript","reason_summary":"提取视频 PPT","arguments":{"asset_id":"asset-1"},"requires_confirmation":false}"#,
+        )
+        .expect("video extraction action should parse");
+
+        assert_eq!(
+            resolve.action_type,
+            AssistantRunReActActionType::ResolveVideoUrl
+        );
+        assert_eq!(
+            resolve.arguments["source_url"],
+            json!("https://example.com/talk.mp4")
+        );
+        assert_eq!(
+            extract.action_type,
+            AssistantRunReActActionType::ExtractVideoPptTranscript
+        );
+        assert_eq!(extract.arguments["asset_id"], json!("asset-1"));
     }
 
     #[test]

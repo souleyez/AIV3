@@ -151,6 +151,12 @@ pub(crate) async fn execute_assistant_run_react_action(
         AssistantRunReactActionType::OpenClawReadonlyExecution => {
             Ok(openclaw_readonly_execution_result(action))
         }
+        AssistantRunReactActionType::ResolveVideoUrl => {
+            Ok(video_url_resolution_placeholder_result(action, prompt))
+        }
+        AssistantRunReactActionType::ExtractVideoPptTranscript => {
+            Ok(video_ppt_extraction_placeholder_result(action))
+        }
         AssistantRunReactActionType::CodexHostTask => {
             codex_host_task_result(state, action, active_assistant_run_id, local_thread_id).await
         }
@@ -209,6 +215,8 @@ pub(crate) fn assistant_run_react_action_label(
         AssistantRunReactActionType::ReadDocumentDetail => "读取文档详情",
         AssistantRunReactActionType::RecallConversationMemory => "召回对话记忆",
         AssistantRunReactActionType::ListReportOptions => "列出报表选项",
+        AssistantRunReactActionType::ResolveVideoUrl => "解析公开视频地址",
+        AssistantRunReactActionType::ExtractVideoPptTranscript => "提取视频 PPT 和原文",
         AssistantRunReactActionType::CreateStaticPageDraft => "创建静态页草稿",
         AssistantRunReactActionType::UpdateStaticPageModule => "更新静态页模块",
         AssistantRunReactActionType::SubmitStaticPageImagePreview => "提交效果图生成",
@@ -743,6 +751,96 @@ fn rejected_react_tool_result(
         }),
         final_answer: None,
     }
+}
+
+fn video_url_resolution_placeholder_result(
+    action: &AssistantRunNextAction,
+    prompt: &str,
+) -> AssistantRunReactToolResult {
+    let source_url = action
+        .arguments
+        .get("source_url")
+        .or_else(|| action.arguments.get("sourceUrl"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .or_else(|| first_url_in_text(prompt));
+    let source_text = source_url.unwrap_or_default();
+    let reason = if source_text.is_empty() {
+        "direct_video_url_or_upload_required"
+    } else if is_login_gated_video_source(source_text) || prompt.contains("视频号") {
+        "login_gated_video_source_not_supported"
+    } else {
+        "video_url_resolution_worker_pending"
+    };
+    AssistantRunReactToolResult {
+        observation: json!({
+            "status": "rejected",
+            "action_type": action.action_type.as_str(),
+            "actionType": action.action_type.as_str(),
+            "message": reason,
+            "denied": [action.action_type.as_str()],
+            "items": [],
+            "limits": {},
+            "reason": reason,
+            "source_present": !source_text.is_empty(),
+            "supported_sources": ["uploaded_video_file", "direct_video_url", "public_page_resolvable_video"],
+            "unsupported_sources": ["login_gated_page", "qr_login", "cookies", "screen_recording_bypass"],
+            "next_step": "请上传视频文件，或提供可直接访问的视频 URL；后台解析器落地后再登记素材并排队提取 PPT/原文。",
+        }),
+        trail_step: json!({
+            "status": "rejected",
+            "label": "解析公开视频地址",
+            "react_action": action.action_type.as_str(),
+            "reason": reason,
+            "at": Utc::now(),
+        }),
+        final_answer: None,
+    }
+}
+
+fn video_ppt_extraction_placeholder_result(
+    action: &AssistantRunNextAction,
+) -> AssistantRunReactToolResult {
+    AssistantRunReactToolResult {
+        observation: json!({
+            "status": "rejected",
+            "action_type": action.action_type.as_str(),
+            "actionType": action.action_type.as_str(),
+            "message": "uploaded_or_resolved_video_required",
+            "denied": [action.action_type.as_str()],
+            "items": [],
+            "limits": {},
+            "reason": "uploaded_or_resolved_video_required",
+            "required_asset_state": "uploaded_or_resolved_video",
+            "deliverables": ["transcript_text", "slide_image_candidates", "ppt_outline_or_pptx", "timestamp_map"],
+            "next_step": "先通过上传或公开视频地址解析拿到 V3 登记的视频素材，再排后台任务提取原文和 PPT。",
+        }),
+        trail_step: json!({
+            "status": "rejected",
+            "label": "提取视频 PPT 和原文",
+            "react_action": action.action_type.as_str(),
+            "reason": "uploaded_or_resolved_video_required",
+            "at": Utc::now(),
+        }),
+        final_answer: None,
+    }
+}
+
+fn first_url_in_text(text: &str) -> Option<&str> {
+    text.split_whitespace()
+        .find(|part| part.starts_with("http://") || part.starts_with("https://"))
+        .map(|part| {
+            part.trim_matches(|ch: char| {
+                matches!(ch, '，' | '。' | ',' | '.' | ')' | '）' | ']' | '】')
+            })
+        })
+        .filter(|value| !value.is_empty())
+}
+
+fn is_login_gated_video_source(source: &str) -> bool {
+    let lower = source.to_ascii_lowercase();
+    lower.contains("weixin.qq.com/sph/") || lower.contains("channels.weixin.qq.com/sph/")
 }
 
 fn static_page_preview_stale_react_result(
@@ -1451,6 +1549,53 @@ mod tests {
         );
         assert_eq!(result.observation["items"], json!([]));
         assert_eq!(result.observation["limits"], json!({}));
+        assert!(result.final_answer.is_none());
+    }
+
+    #[test]
+    fn video_url_resolution_placeholder_blocks_login_gated_sources() {
+        let mut action = test_action(AssistantRunReactActionType::ResolveVideoUrl);
+        action.arguments = json!({"source_url": "https://weixin.qq.com/sph/ActLMg4yTD"});
+
+        let result = video_url_resolution_placeholder_result(&action, "");
+
+        assert_eq!(result.observation["status"], json!("rejected"));
+        assert_eq!(
+            result.observation["reason"],
+            json!("login_gated_video_source_not_supported")
+        );
+        assert_eq!(
+            result.observation["unsupported_sources"],
+            json!([
+                "login_gated_page",
+                "qr_login",
+                "cookies",
+                "screen_recording_bypass"
+            ])
+        );
+        assert!(result.final_answer.is_none());
+    }
+
+    #[test]
+    fn video_ppt_extraction_placeholder_requires_registered_video() {
+        let action = test_action(AssistantRunReactActionType::ExtractVideoPptTranscript);
+
+        let result = video_ppt_extraction_placeholder_result(&action);
+
+        assert_eq!(result.observation["status"], json!("rejected"));
+        assert_eq!(
+            result.observation["required_asset_state"],
+            json!("uploaded_or_resolved_video")
+        );
+        assert_eq!(
+            result.observation["deliverables"],
+            json!([
+                "transcript_text",
+                "slide_image_candidates",
+                "ppt_outline_or_pptx",
+                "timestamp_map"
+            ])
+        );
         assert!(result.final_answer.is_none());
     }
 

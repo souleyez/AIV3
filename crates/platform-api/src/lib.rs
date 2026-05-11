@@ -8866,12 +8866,13 @@ fn build_assistant_run_react_provider_input(
         "你是智能数据工作台里的 Host-Controlled ReAct 运行时。".to_string(),
         "你只能提出下一步动作，不能假装已经执行平台动作。V3 Host 会验证、执行、记录并返回 observation。".to_string(),
         "只返回一个 JSON 对象，禁止 Markdown，禁止解释 JSON 外的文字。".to_string(),
-        "JSON Schema: {\"action_type\":\"retrieve_evidence|read_document_detail|recall_conversation_memory|list_report_options|report_choice|create_static_page_draft|update_static_page_module|submit_static_page_image_preview|render_static_page|create_report_draft|openclaw_memory_recall|openclaw_readonly_execution|codex_host_task|final_answer\",\"reason_summary\":\"给用户看的简短原因\",\"arguments\":{},\"requires_confirmation\":false}".to_string(),
+        "JSON Schema: {\"action_type\":\"retrieve_evidence|read_document_detail|recall_conversation_memory|list_report_options|report_choice|resolve_video_url|extract_video_ppt_transcript|create_static_page_draft|update_static_page_module|submit_static_page_image_preview|render_static_page|create_report_draft|openclaw_memory_recall|openclaw_readonly_execution|codex_host_task|final_answer\",\"reason_summary\":\"给用户看的简短原因\",\"arguments\":{},\"requires_confirmation\":false}".to_string(),
         "目录、候选列表和系统说明只用于规划下一步，不是可引用证据。".to_string(),
         "选中数据集或对话记忆时，final_answer 必须基于已返回的 observation；否则先选择 retrieve_evidence、read_document_detail 或 recall_conversation_memory。".to_string(),
         "工具选择：retrieve_evidence 用于发现候选证据；read_document_detail 用于需要原文措辞、OCR、表格、音视频转写/场景或画像字段等细节时，document_id 必须来自选中范围或已返回 observation；最终引用只能来自 observation。".to_string(),
         "如果弱规划目录或供料证据里出现 detailTargets，优先用其中的 document_id 调 read_document_detail；detailTargets 只是深读目标，不是可引用证据。".to_string(),
         "静态页或报表意图且存在数据集时，优先 retrieve_evidence；若需要模块数据、字段、表格/OCR 或原文措辞，继续 read_document_detail，再创建静态页/报表动作。".to_string(),
+        "视频 PPT/原文提取：仅支持上传视频文件、直接视频 URL 或公开页面可解析视频地址；先用 resolve_video_url，已有登记视频素材后才用 extract_video_ppt_transcript；不要请求扫码、Cookie、登录态页面或录屏绕过。".to_string(),
         "如果当前打开产物是静态页草稿，用户要求修改标题、内容、图表、数据绑定或布局时，优先用 update_static_page_module；Host 只会把操作应用到当前已持久化草稿。".to_string(),
         "如果弱规划目录或当前打开产物显示静态页 previewStale=true 或 previewStatus=stale，禁止直接 render_static_page；应先 submit_static_page_image_preview，等用户确认新的效果图后再渲染最终页。".to_string(),
         "OpenClaw 和 Codex Host 都是可选外挂能力；openclaw_memory_recall、openclaw_readonly_execution、codex_host_task 可能被 Host 拒绝，不能绕过 V3 选中范围、记忆、任务隔离和执行 allowlist。".to_string(),
@@ -8947,12 +8948,13 @@ fn build_assistant_run_react_continue_provider_input(
         "你是智能数据工作台里的 Host-Controlled ReAct 继续执行运行时。".to_string(),
         "你只能提出下一步动作，不能假装已经执行平台动作。V3 Host 会验证、执行、记录并返回 observation。".to_string(),
         "只返回一个 JSON 对象，禁止 Markdown，禁止解释 JSON 外的文字。".to_string(),
-        "JSON Schema: {\"action_type\":\"retrieve_evidence|read_document_detail|recall_conversation_memory|list_report_options|report_choice|create_static_page_draft|update_static_page_module|submit_static_page_image_preview|render_static_page|create_report_draft|openclaw_memory_recall|openclaw_readonly_execution|codex_host_task|final_answer\",\"reason_summary\":\"给用户看的简短原因\",\"arguments\":{},\"requires_confirmation\":false}".to_string(),
+        "JSON Schema: {\"action_type\":\"retrieve_evidence|read_document_detail|recall_conversation_memory|list_report_options|report_choice|resolve_video_url|extract_video_ppt_transcript|create_static_page_draft|update_static_page_module|submit_static_page_image_preview|render_static_page|create_report_draft|openclaw_memory_recall|openclaw_readonly_execution|codex_host_task|final_answer\",\"reason_summary\":\"给用户看的简短原因\",\"arguments\":{},\"requires_confirmation\":false}".to_string(),
         "目录、候选列表和系统说明只用于规划下一步，不是可引用证据。".to_string(),
         "选中数据集或对话记忆时，final_answer 必须基于已返回的 observation；否则先选择 retrieve_evidence、read_document_detail 或 recall_conversation_memory。".to_string(),
         "工具选择：retrieve_evidence 用于发现候选证据；read_document_detail 用于需要原文措辞、OCR、表格、音视频转写/场景或画像字段等细节时，document_id 必须来自选中范围或已返回 observation；最终引用只能来自 observation。".to_string(),
         "如果弱规划目录或供料证据里出现 detailTargets，优先用其中的 document_id 调 read_document_detail；detailTargets 只是深读目标，不是可引用证据。".to_string(),
         "静态页或报表意图且存在数据集时，优先 retrieve_evidence；若需要模块数据、字段、表格/OCR 或原文措辞，继续 read_document_detail，再创建静态页/报表动作。".to_string(),
+        "视频 PPT/原文提取：仅支持上传视频文件、直接视频 URL 或公开页面可解析视频地址；先用 resolve_video_url，已有登记视频素材后才用 extract_video_ppt_transcript；不要请求扫码、Cookie、登录态页面或录屏绕过。".to_string(),
         "如果当前打开产物是静态页草稿，用户要求修改标题、内容、图表、数据绑定或布局时，优先用 update_static_page_module；Host 只会把操作应用到当前已持久化草稿。".to_string(),
         "如果弱规划目录或当前打开产物显示静态页 previewStale=true 或 previewStatus=stale，禁止直接 render_static_page；应先 submit_static_page_image_preview，等用户确认新的效果图后再渲染最终页。".to_string(),
         "OpenClaw 和 Codex Host 都是可选外挂能力；openclaw_memory_recall、openclaw_readonly_execution、codex_host_task 可能被 Host 拒绝，不能绕过 V3 选中范围、记忆、任务隔离和执行 allowlist。".to_string(),
@@ -27476,6 +27478,9 @@ mod tests {
         assert!(input.contains("read_document_detail 用于需要原文措辞"));
         assert!(input.contains("detailTargets 只是深读目标"));
         assert!(input.contains("静态页或报表意图"));
+        assert!(input.contains("resolve_video_url"));
+        assert!(input.contains("extract_video_ppt_transcript"));
+        assert!(input.contains("不要请求扫码、Cookie、登录态页面或录屏绕过"));
         assert!(input.contains("最终引用只能来自 observation"));
         assert!(input.contains("OpenClaw 和 Codex Host 都是可选外挂能力"));
         assert!(!input.contains("secret-provider-key"));
