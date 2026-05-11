@@ -499,6 +499,138 @@ pub fn bootstrap_default_tool_registry() -> InMemoryToolRegistry {
             timeout_ms: Some(30_000),
         },
     ));
+    registry.register(ToolDefinition::internal(
+        "media.resolve_video_url",
+        "Resolve Public Video URL",
+        "media_source",
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "source_url": { "type": "string" },
+                "prompt": { "type": ["string", "null"] },
+                "allowed_source_types": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "enum": ["direct_video_url", "public_page_resolvable_video"]
+                    }
+                },
+                "disallowed_source_types": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "enum": [
+                            "login_gated_page",
+                            "qr_login",
+                            "cookies",
+                            "screen_recording_bypass"
+                        ]
+                    }
+                }
+            },
+            "required": ["source_url"]
+        }),
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "status": {
+                    "type": "string",
+                    "enum": ["completed", "unsupported_source", "failed"]
+                },
+                "source": { "type": ["object", "null"] },
+                "reason": { "type": "string" },
+                "registerable": { "type": "boolean" },
+                "unsupported_sources": {
+                    "type": "array",
+                    "items": { "type": "string" }
+                }
+            },
+            "required": ["status", "reason", "registerable", "unsupported_sources"]
+        }),
+    ));
+    registry.register(ToolDefinition::internal(
+        "media.register_video_asset",
+        "Register Video Asset",
+        "dataset",
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "source": { "type": "object" },
+                "target_dataset_id": { "type": "string" },
+                "assistant_run_id": { "type": ["string", "null"] },
+                "local_thread_id": { "type": ["string", "null"] },
+                "background_only": { "type": "boolean" }
+            },
+            "required": ["source", "target_dataset_id"]
+        }),
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "status": {
+                    "type": "string",
+                    "enum": ["registered", "unsupported_source", "failed"]
+                },
+                "request": { "type": "object" },
+                "resolved_asset": { "type": ["object", "null"] },
+                "workflow_execution": { "type": ["object", "null"] },
+                "tasks": {
+                    "type": "array",
+                    "items": { "type": "object" }
+                }
+            },
+            "required": ["status", "request", "resolved_asset", "workflow_execution", "tasks"]
+        }),
+    ));
+    registry.register(ToolDefinition::internal(
+        "media.extract_ppt_transcript",
+        "Extract Video PPT Transcript",
+        "document",
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "document_id": { "type": "string" },
+                "workflow_execution_id": { "type": ["string", "null"] },
+                "deliverables": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "enum": [
+                            "transcript_text",
+                            "slide_image_candidates",
+                            "ppt_outline",
+                            "pptx",
+                            "markdown",
+                            "source_text",
+                            "timestamp_map",
+                            "html_summary"
+                        ]
+                    }
+                },
+                "background_only": { "type": "boolean" }
+            },
+            "required": ["document_id"]
+        }),
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "status": {
+                    "type": "string",
+                    "enum": ["queued", "partial", "completed", "unsupported_source", "failed"]
+                },
+                "state": { "type": ["object", "null"] },
+                "artifacts": {
+                    "type": "array",
+                    "items": { "type": "object" }
+                },
+                "html_artifacts": {
+                    "type": "array",
+                    "items": { "type": "object" }
+                },
+                "no_host_composed_answer": { "type": "boolean" }
+            },
+            "required": ["status", "artifacts", "html_artifacts", "no_host_composed_answer"]
+        }),
+    ));
     registry.register(ToolDefinition::cli(
         "memory_directory.refresh",
         "Memory Directory Refresh",
@@ -778,6 +910,85 @@ mod tests {
         assert!(registry.get("chat_session.report_entry").is_some());
         assert!(registry.get("report.render").is_some());
         assert_eq!(registry.list_cli().len(), 12);
+    }
+
+    #[test]
+    fn bootstrap_default_tool_registry_registers_video_internal_tools() {
+        let registry = bootstrap_default_tool_registry();
+
+        assert!(registry.get("media.resolve_video_url").is_some());
+        assert!(registry.get("media.register_video_asset").is_some());
+        assert!(registry.get("media.extract_ppt_transcript").is_some());
+        assert_eq!(registry.list_cli().len(), 12);
+
+        for key in [
+            "media.resolve_video_url",
+            "media.register_video_asset",
+            "media.extract_ppt_transcript",
+        ] {
+            let tool = registry.get(key).expect("media tool should be registered");
+            assert_eq!(tool.invocation_mode, ToolInvocationMode::Internal);
+            assert!(tool.cli.is_none());
+        }
+    }
+
+    #[test]
+    fn video_media_tools_expose_safe_scope_boundaries() {
+        let registry = bootstrap_default_tool_registry();
+        let resolver = registry
+            .get("media.resolve_video_url")
+            .expect("resolver should be registered");
+        let register = registry
+            .get("media.register_video_asset")
+            .expect("register should be registered");
+        let extractor = registry
+            .get("media.extract_ppt_transcript")
+            .expect("extractor should be registered");
+
+        assert_eq!(resolver.scope_policy, "media_source");
+        assert_eq!(
+            resolver.input_schema["properties"]["disallowed_source_types"]["items"]["enum"],
+            json!([
+                "login_gated_page",
+                "qr_login",
+                "cookies",
+                "screen_recording_bypass"
+            ])
+        );
+        assert_eq!(
+            resolver.output_schema["properties"]["registerable"]["type"],
+            json!("boolean")
+        );
+
+        assert_eq!(register.scope_policy, "dataset");
+        assert_eq!(
+            register.input_schema["required"],
+            json!(["source", "target_dataset_id"])
+        );
+        assert_eq!(
+            register.output_schema["properties"]["workflow_execution"]["type"],
+            json!(["object", "null"])
+        );
+
+        assert_eq!(extractor.scope_policy, "document");
+        assert_eq!(extractor.input_schema["required"], json!(["document_id"]));
+        assert_eq!(
+            extractor.input_schema["properties"]["deliverables"]["items"]["enum"],
+            json!([
+                "transcript_text",
+                "slide_image_candidates",
+                "ppt_outline",
+                "pptx",
+                "markdown",
+                "source_text",
+                "timestamp_map",
+                "html_summary"
+            ])
+        );
+        assert_eq!(
+            extractor.output_schema["properties"]["no_host_composed_answer"]["type"],
+            json!("boolean")
+        );
     }
 
     #[test]
