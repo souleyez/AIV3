@@ -1410,6 +1410,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "media-worker"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "domain-model",
+ "event-bus",
+ "observability",
+ "platform-api",
+ "serde_json",
+ "storage",
+ "tokio",
+ "tracing",
+ "uuid",
+ "workflow-definitions",
+ "workflow-engine",
+]
+
+[[package]]
 name = "memchr"
 version = "2.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -12,6 +12,7 @@ members = [
     "crates/llm-gateway",
     "crates/document-vlm-runtime",
     "crates/ingest-worker",
+    "crates/media-worker",
     "crates/retrieval-worker",
     "crates/memory-worker",
     "crates/dataset-output-worker",

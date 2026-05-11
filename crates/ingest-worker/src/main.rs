@@ -9,7 +9,7 @@ use tokio::time::Duration;
 use workflow_engine::{WorkflowCatalog, WorkflowSignal};
 
 const DEFAULT_QUEUE: &str = "ingest";
-const DEFAULT_TASK_KEY: &str = "ingest_uploaded_document";
+const DEFAULT_WAKE_TASK_KEY: &str = "ingest_uploaded_document";
 const DEFAULT_POLL_INTERVAL_MS: u64 = 1_000;
 
 #[tokio::main]
@@ -19,8 +19,7 @@ async fn main() -> Result<()> {
     let database_url = std::env::var("PLATFORM_DATABASE_URL")
         .unwrap_or_else(|_| DEFAULT_LOCAL_DATABASE_URL.to_string());
     let queue = std::env::var("INGEST_QUEUE").unwrap_or_else(|_| DEFAULT_QUEUE.to_string());
-    let task_key =
-        std::env::var("INGEST_TASK_KEY").unwrap_or_else(|_| DEFAULT_TASK_KEY.to_string());
+    let task_key = optional_env("INGEST_TASK_KEY");
     let poll_interval = std::env::var("INGEST_POLL_INTERVAL_MS")
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
@@ -30,17 +29,18 @@ async fn main() -> Result<()> {
     let workflow_catalog = workflow_definitions::catalog();
     let event_bus = EventBus::connect_from_env_or_disabled("PLATFORM_NATS_URL").await;
     let processor = LocalIngestProcessor;
-    let wake_subject = workflow_task_enqueued_subject(&queue, &task_key);
+    let wake_task_key = task_key.as_deref().unwrap_or(DEFAULT_WAKE_TASK_KEY);
+    let wake_subject = workflow_task_enqueued_subject(&queue, wake_task_key);
     let mut task_waker = event_bus
         .subscribe_queue_or_disabled(
             &wake_subject,
-            Some(&format!("ingest_worker.{queue}.{task_key}")),
+            Some(&format!("ingest_worker.{queue}.{wake_task_key}")),
         )
         .await;
 
     tracing::info!(
         %queue,
-        %task_key,
+        task_key = task_key.as_deref().unwrap_or("*"),
         %wake_subject,
         event_bus_enabled = event_bus.is_enabled(),
         poll_interval_ms = poll_interval,
@@ -51,7 +51,7 @@ async fn main() -> Result<()> {
     loop {
         match storage
             .workflow_tasks()
-            .claim_next_available(&queue, Some(&task_key), Utc::now())
+            .claim_next_available(&queue, task_key.as_deref(), Utc::now())
             .await
         {
             Ok(Some(task)) => {
@@ -273,6 +273,13 @@ fn context_uuid_string(value: &Value, key: &str) -> Result<Option<uuid::Uuid>> {
         Value::Null => Ok(None),
         _ => Err(anyhow!("workflow execution context must be a JSON object")),
     }
+}
+
+fn optional_env(key: &str) -> Option<String> {
+    std::env::var(key)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty() && value != "*")
 }
 
 async fn wait_for_next_task_signal(task_waker: &mut EventSubscription, poll_interval_ms: u64) {
