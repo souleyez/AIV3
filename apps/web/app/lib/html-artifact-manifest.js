@@ -7,6 +7,7 @@ export const HTML_ARTIFACT_TEMPLATE_IDS = Object.freeze([
   'static_page_data_quality_report',
   'report_render_summary',
   'code_review_summary',
+  'wechat_video_login_handoff',
 ]);
 
 export const HTML_ARTIFACT_SOURCE_TYPES = Object.freeze([
@@ -14,6 +15,7 @@ export const HTML_ARTIFACT_SOURCE_TYPES = Object.freeze([
   'static_page',
   'report',
   'code_review',
+  'video_extraction',
   'manual',
 ]);
 
@@ -29,6 +31,7 @@ const TEMPLATE_LABELS = {
   static_page_data_quality_report: '静态页数据质量报告',
   report_render_summary: '报告渲染摘要',
   code_review_summary: '代码审查摘要',
+  wechat_video_login_handoff: '视频登录交接',
 };
 
 const SOURCE_LABELS = {
@@ -36,6 +39,7 @@ const SOURCE_LABELS = {
   static_page: '静态页',
   report: '报告',
   code_review: '代码审查',
+  video_extraction: '视频提取',
   manual: '手动产物',
 };
 
@@ -431,6 +435,49 @@ function renderCodeReviewSummary(manifest) {
   `;
 }
 
+function renderWechatVideoLoginHandoff(manifest) {
+  const payload = manifest.payload || {};
+  const qrImage = stringOrFallback(payload.qrImageDataUrl || payload.qr_image_data_url);
+  const safeQrImage = qrImage.startsWith('data:image/') ? qrImage : '';
+  const acquisitionSteps = arrayOrEmpty(payload.acquisitionSteps || payload.acquisition_steps).map((step, index) => ({
+    title: step.title || step.label || `获取步骤 ${index + 1}`,
+    detail: step.detail || step.summary || step.description || '',
+    meta: step.status || step.meta || '',
+  }));
+  const extractionSteps = arrayOrEmpty(payload.extractionSteps || payload.extraction_steps).map((step, index) => ({
+    title: step.title || step.label || `解析步骤 ${index + 1}`,
+    detail: step.detail || step.summary || step.description || '',
+    meta: step.status || step.meta || '',
+  }));
+  return `
+    ${renderKeyValueGrid([
+      { label: '平台', value: payload.sourcePlatform || payload.source_platform || '微信视频号' },
+      { label: '短链', value: payload.shortCode || payload.short_code || '未识别' },
+      { label: '当前阶段', value: payload.status || 'login_required' },
+      { label: '登录方式', value: payload.loginMethod || payload.login_method || '扫码登录' },
+      { label: '二维码', value: safeQrImage ? '已生成' : (payload.qrStatus || payload.qr_status || '待生成') },
+      { label: '产物目标', value: payload.targetArtifact || payload.target_artifact || '视频 PPT 提取' },
+    ])}
+    <section>
+      <h2>登录交接</h2>
+      <p>${escapeHtml(payload.summary || '该视频号内容需要微信授权后才能获取视频文件。助手已进入扫码登录交接阶段。')}</p>
+      ${safeQrImage ? `<div class="qr-box"><img alt="微信扫码登录二维码" src="${escapeHtml(safeQrImage)}"></div>` : '<p class="empty">二维码尚未生成。后续执行器会打开视频号页面并把登录二维码推送到这里，用户扫码后继续获取视频。</p>'}
+    </section>
+    <section>
+      <h2>获取视频</h2>
+      ${renderList(acquisitionSteps, '暂无获取步骤。')}
+    </section>
+    <section>
+      <h2>解析成 PPT</h2>
+      ${renderList(extractionSteps, '暂无解析步骤。')}
+    </section>
+    <section>
+      <h2>失败兜底</h2>
+      <p>${escapeHtml(payload.fallback || '如果登录态仍无法直接下载视频，则由执行器录屏保存视频，再走同一套语音、字幕、关键帧和页面大纲提取链路。')}</p>
+    </section>
+  `;
+}
+
 function jsonPatchPayloadFromManifest(manifest) {
   const payload = manifest.payload || {};
   const operations = arrayOrEmpty(payload.operations || payload.patch || payload.pendingPatch || payload.pending_patch);
@@ -506,7 +553,9 @@ export function renderHtmlArtifactDocument(input = {}) {
         ? renderStaticPageDataQualityReport(manifest)
         : manifest.templateId === 'report_render_summary'
           ? renderReportRenderSummary(manifest)
-          : renderCodeReviewSummary(manifest);
+          : manifest.templateId === 'code_review_summary'
+            ? renderCodeReviewSummary(manifest)
+            : renderWechatVideoLoginHandoff(manifest);
   const allowScripts = manifest.interactionMode !== 'read_only';
   const script = renderInteractionScript(manifest);
   const canSubmit = hasSubmittableArtifactAction(manifest);
@@ -536,6 +585,8 @@ export function renderHtmlArtifactDocument(input = {}) {
     .list { display: grid; gap: 10px; }
     .list article { padding: 14px; margin-top: 0; display: grid; gap: 6px; }
     .list strong { font-size: 14px; }
+    .qr-box { margin-top: 14px; display: inline-grid; padding: 12px; border-radius: 18px; background: #fff; }
+    .qr-box img { width: min(220px, 56vw); height: auto; display: block; }
     textarea { width: 100%; box-sizing: border-box; resize: vertical; margin-top: 12px; border: 0; border-radius: 16px; padding: 12px; background: #f1f5f9; color: #0f172a; font: inherit; line-height: 1.5; outline: 2px solid transparent; }
     textarea:focus { outline-color: #94a3b8; background: #fff; }
     .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 16px; }

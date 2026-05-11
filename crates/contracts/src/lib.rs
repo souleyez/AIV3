@@ -211,6 +211,7 @@ pub enum HtmlArtifactSourceTypeView {
     StaticPage,
     Report,
     CodeReview,
+    VideoExtraction,
     Manual,
 }
 
@@ -222,6 +223,7 @@ pub enum HtmlArtifactTemplateIdView {
     StaticPageDataQualityReport,
     ReportRenderSummary,
     CodeReviewSummary,
+    WechatVideoLoginHandoff,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

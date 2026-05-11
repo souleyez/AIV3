@@ -6252,7 +6252,7 @@ async fn create_assistant_run(
         None
     };
 
-    let (runtime_manifest, mut react_trail_steps, output_artifacts, react_events) =
+    let (runtime_manifest, mut react_trail_steps, mut output_artifacts, react_events) =
         match react_outcome {
             Some(outcome) => {
                 evidence_state = outcome.evidence_state;
@@ -6472,6 +6472,34 @@ async fn create_assistant_run(
         )
         .await
         .map_err(ApiError::from_storage)?;
+
+    if let Some(artifact) =
+        wechat_video_login_handoff_artifact_from_prompt(run.id, &request.prompt, now)
+    {
+        state
+            .storage
+            .assistant_runs()
+            .append_event(
+                state.tenant_id,
+                run.id,
+                &NewAssistantRunEvent {
+                    event_name: "assistant_run.wechat_video_login_handoff_required".to_string(),
+                    payload: json!({
+                        "reason": "wechat_video_requires_login",
+                        "html_artifacts": [artifact.clone()],
+                    }),
+                    created_at: now,
+                },
+            )
+            .await
+            .map_err(ApiError::from_storage)?;
+        output_artifacts.push(json!({
+            "type": "html_artifact",
+            "id": artifact.id,
+            "title": artifact.title,
+            "template_id": "wechat_video_login_handoff",
+        }));
+    }
 
     Ok((
         StatusCode::CREATED,
@@ -15691,6 +15719,108 @@ fn report_render_summary_warnings(
         "title": title,
         "detail": detail,
     })]
+}
+
+fn wechat_video_login_handoff_artifact_from_prompt(
+    run_id: AssistantRunId,
+    prompt: &str,
+    created_at: DateTime<Utc>,
+) -> Option<HtmlArtifactManifestView> {
+    let lower = prompt.to_ascii_lowercase();
+    let mentions_wechat_video = lower.contains("weixin.qq.com/sph/")
+        || lower.contains("channels.weixin.qq.com/sph/")
+        || prompt.contains("视频号");
+    let wants_slide_output = lower.contains("ppt")
+        || lower.contains("powerpoint")
+        || prompt.contains("课件")
+        || prompt.contains("幻灯片")
+        || (prompt.contains("提取") && prompt.contains("视频"));
+    if !mentions_wechat_video || !wants_slide_output {
+        return None;
+    }
+
+    let short_code =
+        extract_wechat_video_short_code(prompt).unwrap_or_else(|| "unknown-short-code".to_string());
+    Some(HtmlArtifactManifestView {
+        kind: "html_artifact".to_string(),
+        version: 1,
+        id: format!("html-wechat-video-login-{run_id}"),
+        title: "微信视频号 PPT 提取 · 登录交接".to_string(),
+        source_type: contracts::HtmlArtifactSourceTypeView::VideoExtraction,
+        template_id: contracts::HtmlArtifactTemplateIdView::WechatVideoLoginHandoff,
+        owner_scope: contracts::HtmlArtifactOwnerScopeView {
+            scope_type: "assistant_run".to_string(),
+            id: run_id.to_string(),
+        },
+        data_refs: vec![contracts::HtmlArtifactDataRefView {
+            kind: "wechat_video_short_code".to_string(),
+            id: short_code.clone(),
+            label: "微信视频号短链".to_string(),
+        }],
+        provenance: contracts::HtmlArtifactProvenanceView {
+            producer: "v3-platform-api".to_string(),
+            reason: "wechat video extraction requires user login".to_string(),
+            source_run_id: Some(run_id.to_string()),
+        },
+        interaction_mode: HtmlArtifactInteractionModeView::ReadOnly,
+        created_at,
+        payload: json!({
+            "sourcePlatform": "微信视频号",
+            "shortCode": short_code,
+            "status": "login_required",
+            "loginMethod": "扫码登录",
+            "qrStatus": "pending_executor",
+            "targetArtifact": "视频 PPT 提取",
+            "summary": "服务端直接读取视频号接口会触发权限校验，当前任务已转入扫码登录交接；用户扫码后继续获取视频文件，无法直取时走录屏兜底。",
+            "acquisitionSteps": [
+                {
+                    "title": "打开视频号页面",
+                    "detail": "执行器打开微信视频号页面，检测登录态；未登录时生成二维码交给用户扫码。",
+                    "status": "pending"
+                },
+                {
+                    "title": "获取视频素材",
+                    "detail": "登录成功后优先获取视频文件；如果受限，则使用浏览器播放录屏保存素材。",
+                    "status": "blocked_by_login"
+                }
+            ],
+            "extractionSteps": [
+                {
+                    "title": "提取语音与字幕",
+                    "detail": "从视频中抽取音频、字幕和时间轴文本，形成可检索讲稿。",
+                    "status": "waiting_video"
+                },
+                {
+                    "title": "抽取关键帧",
+                    "detail": "按镜头变化和内容节点抽关键帧，用于识别原始 PPT 页面或画面结构。",
+                    "status": "waiting_video"
+                },
+                {
+                    "title": "生成 PPT 草稿",
+                    "detail": "合并讲稿、关键帧和视觉线索，产出标题、目录、逐页要点和可交付 PPT 结构。",
+                    "status": "waiting_video"
+                }
+            ],
+            "fallback": "如果登录后仍无法下载视频，则由执行器录屏保存，再走同一套音频、字幕、关键帧与页面结构提取流程。"
+        }),
+    })
+}
+
+fn extract_wechat_video_short_code(prompt: &str) -> Option<String> {
+    const MARKERS: [&str; 2] = ["weixin.qq.com/sph/", "channels.weixin.qq.com/sph/"];
+    for marker in MARKERS {
+        if let Some(start) = prompt.find(marker) {
+            let raw = &prompt[start + marker.len()..];
+            let code = raw
+                .chars()
+                .take_while(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-'))
+                .collect::<String>();
+            if !code.is_empty() {
+                return Some(code);
+            }
+        }
+    }
+    None
 }
 
 async fn load_static_page_handoff_artifacts_for_run(
@@ -26441,6 +26571,42 @@ mod tests {
         assert_eq!(artifacts[0].id, "html-artifact-new");
         assert_eq!(artifacts[1].id, "html-artifact-old");
         assert_eq!(artifacts[0].payload["mode"], json!("plan_only"));
+    }
+
+    #[test]
+    fn wechat_video_login_handoff_artifact_detects_ppt_extraction_task() {
+        let run_id = AssistantRunId::new();
+        let now = Utc::now();
+        let artifact = wechat_video_login_handoff_artifact_from_prompt(
+            run_id,
+            "https://weixin.qq.com/sph/ActLMg4yTD 试试用智能助手提取这个视频的PPT",
+            now,
+        )
+        .expect("wechat video PPT task should create a login handoff artifact");
+
+        assert_eq!(
+            artifact.source_type,
+            contracts::HtmlArtifactSourceTypeView::VideoExtraction
+        );
+        assert_eq!(
+            artifact.template_id,
+            contracts::HtmlArtifactTemplateIdView::WechatVideoLoginHandoff
+        );
+        assert_eq!(artifact.owner_scope.id, run_id.to_string());
+        assert_eq!(artifact.payload["shortCode"], json!("ActLMg4yTD"));
+        assert_eq!(artifact.payload["status"], json!("login_required"));
+        assert_eq!(artifact.payload["qrStatus"], json!("pending_executor"));
+    }
+
+    #[test]
+    fn wechat_video_login_handoff_artifact_ignores_plain_chat() {
+        let artifact = wechat_video_login_handoff_artifact_from_prompt(
+            AssistantRunId::new(),
+            "猫为什么喜欢晒太阳",
+            Utc::now(),
+        );
+
+        assert!(artifact.is_none());
     }
 
     #[test]
