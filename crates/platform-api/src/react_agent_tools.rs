@@ -445,7 +445,7 @@ async fn submit_static_page_image_preview_for_current_draft(
         .unwrap_or(prompt)
         .to_string();
     let draft = crate::load_static_page_draft_or_404(state, draft_id).await?;
-    let (_status, Json(response)) = crate::create_static_page_image_job_for_draft(
+    let response = crate::create_static_page_image_job_for_draft(
         state,
         draft,
         CreateStaticPageImageJobRequest {
@@ -453,7 +453,17 @@ async fn submit_static_page_image_preview_for_current_draft(
             image_prompt_payload,
         },
     )
-    .await?;
+    .await;
+    let (_status, Json(response)) = match response {
+        Ok(response) => response,
+        Err(error) if error.payload.code == "static_page_preview_data_quality_gate" => {
+            return Ok(rejected_react_tool_result(
+                action,
+                "static_page_preview_data_quality_gate",
+            ));
+        }
+        Err(error) => return Err(error),
+    };
     let image_job_status =
         serde_json::to_value(&response.image_job.status).unwrap_or_else(|_| json!("unknown"));
 

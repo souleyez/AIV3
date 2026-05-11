@@ -30,6 +30,7 @@ import {
   canRequestStaticPageFinalRender,
   interpretStaticPagePrompt,
   staticPageFinalRenderBlockReason,
+  staticPagePreviewBlockReason,
 } from './lib/static-page-draft';
 import {
   buildLocalUploadObjectKey,
@@ -2746,16 +2747,33 @@ export default function HomePageClient() {
       return optimisticDraft;
     }
 
-    const draft = replaceDraftWithOperation(activeStaticPageDraft, operation);
-
     if (operation.type === 'queue_image_job') {
-      if (activeStaticPageDraft.backendDraftId) {
-        createBackendStaticPageImageJob(activeStaticPageDraft, operation).catch((syncError) => {
-          setBanner(`效果图已先进入本地排队；后端队列暂不可用：${syncError instanceof Error ? syncError.message : '请求失败'}。`);
-        });
+      const blockReason = staticPagePreviewBlockReason(activeStaticPageDraft);
+      if (blockReason) {
+        setBanner('');
+        setError(blockReason);
+        setStaticPageEditorOpen(true);
+        return activeStaticPageDraft;
       }
-      return draft;
+      setError('');
+      if (activeStaticPageDraft.backendDraftId) {
+        setStaticPageActionBusy(true);
+        createBackendStaticPageImageJob(activeStaticPageDraft, operation)
+          .then(() => {
+            setStaticPageEditorOpen(false);
+            setMobilePanel('chat');
+          })
+          .catch((syncError) => {
+            setBanner('');
+            setError(`效果图未入队：${syncError instanceof Error ? syncError.message : '请求失败'}。`);
+          })
+          .finally(() => setStaticPageActionBusy(false));
+        return activeStaticPageDraft;
+      }
+      return replaceDraftWithOperation(activeStaticPageDraft, operation);
     }
+
+    const draft = replaceDraftWithOperation(activeStaticPageDraft, operation);
 
     if (operation.type === 'confirm_preview') {
       if (draft.backendDraftId) {
@@ -2845,6 +2863,13 @@ export default function HomePageClient() {
         type: 'queue_image_job',
         queueMessage: STATIC_PAGE_QUEUE_MESSAGE,
       };
+      const blockReason = staticPagePreviewBlockReason(draft);
+      if (blockReason) {
+        setBanner('');
+        setError(blockReason);
+        setStaticPageEditorOpen(true);
+        return draft;
+      }
 
       if (draft.backendDraftId) {
         const { draft: queuedDraft } = await createBackendStaticPageImageJob(draft, queueOperation);

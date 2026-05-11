@@ -1223,6 +1223,57 @@ export function canRequestStaticPageFinalRender(draft = {}) {
   return Boolean(draft.previewImage?.assetKey || draft.previewContract?.assetKey);
 }
 
+function bindingSampleRows(binding = {}) {
+  const qualityRows = Number(binding.bindingQuality?.sampleRows ?? binding.binding_quality?.sample_rows);
+  if (Number.isFinite(qualityRows)) return qualityRows;
+  const rows = binding.sampleData || binding.sample_data;
+  return Array.isArray(rows) ? rows.length : 0;
+}
+
+function bindingNeedsPreviewAttention(binding = {}) {
+  const status = String(
+    binding.bindingQualityStatus
+      || binding.binding_quality_status
+      || binding.bindingQuality?.status
+      || binding.binding_quality?.status
+      || '',
+  ).trim();
+  if (status && !['confirmed', 'ready', 'non_chart'].includes(status)) return true;
+
+  const chartDataFit = String(
+    binding.chartDataFit
+      || binding.chart_data_fit
+      || binding.bindingQuality?.chartDataFit
+      || binding.binding_quality?.chart_data_fit
+      || '',
+  ).trim();
+  if (chartDataFit && !['ready', 'not_required', 'non_chart_ready'].includes(chartDataFit)) return true;
+
+  const visualizationType = String(binding.visualizationType || binding.visualization_type || '').trim();
+  return VISUALIZATIONS_REQUIRING_SAMPLE_ROWS.has(visualizationType) && bindingSampleRows(binding) === 0;
+}
+
+function bindingPreviewLabel(binding = {}) {
+  const title = binding.title || binding.moduleTitle || binding.moduleId || binding.module_id || '未命名模块';
+  const chartDataFit = String(binding.chartDataFit || binding.chart_data_fit || '').trim();
+  const status = String(binding.bindingQualityStatus || binding.binding_quality_status || '').trim();
+  const marker = chartDataFit && !['ready', 'not_required', 'non_chart_ready'].includes(chartDataFit)
+    ? chartDataFit
+    : status;
+  return marker ? `${title}（${marker}）` : String(title);
+}
+
+export function staticPagePreviewBlockReason(draft = {}) {
+  const snapshot = draft?.dataSnapshot || draft?.data_snapshot || buildStaticPageDataSnapshot(draft);
+  const bindings = snapshot?.moduleBindings || snapshot?.module_bindings || [];
+  const attentionBindings = Array.isArray(bindings)
+    ? bindings.filter(bindingNeedsPreviewAttention)
+    : [];
+  if (!attentionBindings.length) return '';
+  const labels = attentionBindings.slice(0, 3).map(bindingPreviewLabel).join('、');
+  return `当前静态页还有 ${attentionBindings.length} 个模块的数据绑定未达到效果图生成要求：${labels}。请先回到模块编辑补充样本行、重新绑定字段，或让 V3 检索/修复模块数据。`;
+}
+
 export function staticPageFinalRenderBlockReason(draft = {}) {
   if (draft?.previewContract?.status === 'stale' || draft?.imageJob?.status === 'stale') {
     return '规划已经改过，需要重新生成并确认效果图。';

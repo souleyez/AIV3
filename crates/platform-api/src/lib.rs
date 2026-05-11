@@ -7626,6 +7626,23 @@ async fn create_static_page_image_job_for_draft(
     mut draft: StaticPageDraft,
     request: CreateStaticPageImageJobRequest,
 ) -> std::result::Result<(StatusCode, Json<CreateStaticPageImageJobResponse>), ApiError> {
+    if let Some(reason) = static_page_preview_data_quality_block_reason(&draft) {
+        return Err(ApiError::bad_request(
+            "static_page_preview_data_quality_gate",
+            reason,
+        ));
+    }
+    if !request.image_prompt_payload.is_null() {
+        if let Some(reason) =
+            static_page_preview_data_quality_block_reason_for_payload(&request.image_prompt_payload)
+        {
+            return Err(ApiError::bad_request(
+                "static_page_preview_data_quality_gate",
+                reason,
+            ));
+        }
+    }
+
     let image_prompt_payload = if request.image_prompt_payload.is_null() {
         build_static_page_image_prompt_payload(&draft, request.prompt.as_deref())
     } else {
@@ -22529,6 +22546,126 @@ fn build_static_page_image_prompt_payload(draft: &StaticPageDraft, prompt: Optio
     })
 }
 
+fn static_page_preview_data_quality_block_reason(draft: &StaticPageDraft) -> Option<String> {
+    let mut payload = draft.draft_payload.clone();
+    ensure_json_object(&mut payload);
+    if let Some(object) = payload.as_object_mut() {
+        object
+            .entry("selected_scope".to_string())
+            .or_insert_with(|| draft.selected_scope.clone());
+    }
+    refresh_static_page_payload_design_contract(&mut payload);
+
+    static_page_preview_data_quality_block_reason_for_payload(&payload)
+}
+
+fn static_page_preview_data_quality_block_reason_for_payload(payload: &Value) -> Option<String> {
+    let attention_modules = static_page_preview_data_quality_attention_modules(payload);
+    if attention_modules.is_empty() {
+        return None;
+    }
+    Some(static_page_preview_data_quality_message(&attention_modules))
+}
+
+fn static_page_preview_data_quality_attention_modules(payload: &Value) -> Vec<Value> {
+    payload
+        .get("dataSnapshot")
+        .or_else(|| payload.get("data_snapshot"))
+        .and_then(|snapshot| {
+            snapshot
+                .get("moduleBindings")
+                .or_else(|| snapshot.get("module_bindings"))
+        })
+        .and_then(Value::as_array)
+        .map(|bindings| {
+            bindings
+                .iter()
+                .take(24)
+                .map(assistant_run_static_page_binding_quality_module_brief)
+                .filter(static_page_preview_binding_module_needs_attention)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+}
+
+fn static_page_preview_binding_module_needs_attention(module: &Value) -> bool {
+    let status = static_page_artifact_string(
+        module,
+        &["bindingQualityStatus", "binding_quality_status", "status"],
+    )
+    .unwrap_or_default();
+    if !status.is_empty() && !matches!(status.as_str(), "confirmed" | "ready" | "non_chart") {
+        return true;
+    }
+
+    let chart_data_fit = static_page_artifact_string(module, &["chartDataFit", "chart_data_fit"])
+        .unwrap_or_default();
+    if !chart_data_fit.is_empty()
+        && !matches!(
+            chart_data_fit.as_str(),
+            "ready" | "not_required" | "non_chart_ready"
+        )
+    {
+        return true;
+    }
+
+    let visualization_type =
+        static_page_artifact_string(module, &["visualizationType", "visualization_type"])
+            .unwrap_or_default();
+    static_page_visualization_needs_sample_rows(&visualization_type)
+        && static_page_preview_quality_u64(module, &["sampleRows", "sample_rows"]) == 0
+}
+
+fn static_page_preview_quality_u64(value: &Value, keys: &[&str]) -> u64 {
+    keys.iter()
+        .find_map(|key| {
+            value
+                .get(*key)
+                .and_then(|item| item.as_u64().or_else(|| item.as_str()?.parse::<u64>().ok()))
+        })
+        .unwrap_or(0)
+}
+
+fn static_page_preview_data_quality_message(modules: &[Value]) -> String {
+    let labels = modules
+        .iter()
+        .take(3)
+        .map(static_page_preview_data_quality_module_label)
+        .collect::<Vec<_>>()
+        .join("、");
+    let suffix = format!(" {} 个模块", modules.len());
+    format!(
+        "当前静态页还有{suffix}的数据绑定未达到效果图生成要求：{labels}。请先回到模块编辑补充样本行、重新绑定字段，或让 V3 检索/修复模块数据。"
+    )
+}
+
+fn static_page_preview_data_quality_module_label(module: &Value) -> String {
+    let title = static_page_artifact_string(module, &["title"])
+        .or_else(|| static_page_artifact_string(module, &["moduleId", "module_id", "id"]))
+        .unwrap_or_else(|| "未命名模块".to_string());
+    let chart_data_fit = static_page_artifact_string(module, &["chartDataFit", "chart_data_fit"])
+        .unwrap_or_default();
+    let status = static_page_artifact_string(
+        module,
+        &["bindingQualityStatus", "binding_quality_status", "status"],
+    )
+    .unwrap_or_default();
+    let marker = if !chart_data_fit.is_empty()
+        && !matches!(
+            chart_data_fit.as_str(),
+            "ready" | "not_required" | "non_chart_ready"
+        ) {
+        chart_data_fit
+    } else {
+        status
+    };
+    if marker.is_empty() {
+        title
+    } else {
+        format!("{title}（{marker}）")
+    }
+}
+
 fn build_static_page_render_queue_manifest(
     draft: &StaticPageDraft,
     image_job: Option<&StaticPageImageJob>,
@@ -30103,6 +30240,53 @@ mod tests {
     }
 
     #[test]
+    fn static_page_preview_gate_blocks_unrenderable_chart_bindings() {
+        let now = Utc::now();
+        let draft = StaticPageDraft {
+            id: StaticPageDraftId::new(),
+            tenant_id: TenantId::new(),
+            owner_user_id: None,
+            assistant_run_id: AssistantRunId::new(),
+            title: "经营分析静态页".to_string(),
+            status: StaticPageDraftStatus::Planned,
+            selected_scope: json!({
+                "mode": "user_selected",
+                "datasets": [DatasetId::new().to_string()],
+            }),
+            visibility_snapshot: json!({"policy": "test"}),
+            source_refs: Value::Null,
+            draft_payload: json!({
+                "version": 1,
+                "status": "planning",
+                "modules": [{
+                    "id": "trend",
+                    "title": "订单趋势",
+                    "dataBinding": {
+                        "sourceId": "dataset",
+                        "fieldPath": "dataset.metrics_summary",
+                        "label": "订单金额"
+                    },
+                    "visualization": {
+                        "type": "line-chart",
+                        "chartOptions": {
+                            "dataKey": "dataset.metrics_summary"
+                        }
+                    }
+                }]
+            }),
+            created_at: now,
+            updated_at: now,
+        };
+
+        let reason = static_page_preview_data_quality_block_reason(&draft)
+            .expect("chart without sample rows should be blocked");
+
+        assert!(reason.contains("订单趋势"));
+        assert!(reason.contains("needs_sample_rows"));
+        assert!(reason.contains("补充样本行"));
+    }
+
+    #[test]
     fn static_page_data_snapshot_prefers_explicit_evidence_values() {
         let dataset_id = DatasetId::new();
         let selected_scope = json!({
@@ -30845,6 +31029,143 @@ mod tests {
         assert_eq!(
             render_before_confirm.payload.code,
             "static_page_preview_not_confirmed"
+        );
+
+        let preview_before_data_repair = create_static_page_image_job(
+            State(state.clone()),
+            HeaderMap::new(),
+            Path(draft_response.draft.id.to_string()),
+            Json(CreateStaticPageImageJobRequest {
+                prompt: Some("生成一张经营分析效果图".to_string()),
+                image_prompt_payload: Value::Null,
+            }),
+        )
+        .await
+        .expect_err("preview queue should require renderable module data");
+        assert_eq!(
+            preview_before_data_repair.payload.code,
+            "static_page_preview_data_quality_gate"
+        );
+        assert!(preview_before_data_repair
+            .payload
+            .message
+            .contains("数据绑定未达到效果图生成要求"));
+
+        let (data_repair_status, Json(data_repair_response)) = append_static_page_draft_operations(
+            State(state.clone()),
+            HeaderMap::new(),
+            Path(draft_response.draft.id.to_string()),
+            Json(AppendStaticPageDraftOperationsRequest {
+                prompt: Some("补齐效果图所需模块数据".to_string()),
+                summary: Some("补齐图表模块样本行，允许效果图入队。".to_string()),
+                operations: vec![
+                    json!({
+                        "type": "update_module",
+                        "targetModuleId": "hero",
+                        "patch": {
+                            "dataBinding": {
+                                "type": "model_summary",
+                                "label": "模型总结",
+                                "sourceId": "model"
+                            },
+                            "visualization": {
+                                "type": "headline",
+                                "label": "大标题 + 关键结论"
+                            }
+                        }
+                    }),
+                    json!({
+                        "type": "update_module",
+                        "targetModuleId": "kpi",
+                        "patch": {
+                            "dataBinding": {
+                                "type": "module_data",
+                                "label": "关键指标样本",
+                                "sourceId": "dataset",
+                                "fieldPath": "dataset.metrics_summary"
+                            },
+                            "visualization": {
+                                "type": "kpi-cards",
+                                "label": "关键指标卡",
+                                "data": [
+                                    {"label": "收入", "value": 1200},
+                                    {"label": "客户数", "value": 320}
+                                ]
+                            }
+                        }
+                    }),
+                    json!({
+                        "type": "update_module",
+                        "targetModuleId": "trend",
+                        "patch": {
+                            "dataBinding": {
+                                "type": "module_data",
+                                "label": "订单金额",
+                                "sourceId": "dataset",
+                                "fieldPath": "orders.amount"
+                            },
+                            "visualization": {
+                                "type": "line-chart",
+                                "label": "趋势折线图",
+                                "chartOptions": {
+                                    "showLegend": true,
+                                    "showAxis": true,
+                                    "valueFormat": "currency",
+                                    "dataKey": "orders.amount"
+                                },
+                                "data": [
+                                    {"label": "1月", "value": 1200},
+                                    {"label": "2月", "value": 1380}
+                                ]
+                            }
+                        }
+                    }),
+                    json!({
+                        "type": "update_module",
+                        "targetModuleId": "risk",
+                        "patch": {
+                            "dataBinding": {
+                                "type": "module_data",
+                                "label": "风险样本",
+                                "sourceId": "model",
+                                "fieldPath": "risk.score"
+                            },
+                            "visualization": {
+                                "type": "risk-matrix",
+                                "label": "风险优先级矩阵",
+                                "data": [
+                                    {"label": "交付风险", "value": 0.7},
+                                    {"label": "机会空间", "value": 0.4}
+                                ]
+                            }
+                        }
+                    }),
+                    json!({
+                        "type": "update_module",
+                        "targetModuleId": "next-steps",
+                        "patch": {
+                            "dataBinding": {
+                                "type": "model_summary",
+                                "label": "模型建议动作",
+                                "sourceId": "model"
+                            },
+                            "visualization": {
+                                "type": "timeline",
+                                "label": "阶段时间线"
+                            }
+                        }
+                    }),
+                ],
+                draft_payload: None,
+            }),
+        )
+        .await
+        .expect("static page data repair operations should append");
+        assert_eq!(data_repair_status, StatusCode::CREATED);
+        assert_eq!(
+            data_repair_response.draft.draft_payload["dataSnapshot"]["module_bindings"][0]
+                ["bindingQualityStatus"],
+            json!("confirmed")
         );
 
         let (job_status, Json(job_response)) = create_static_page_image_job(

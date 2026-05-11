@@ -16,6 +16,7 @@ import {
   canRequestStaticPageFinalRender,
   interpretStaticPagePrompt,
   staticPageFinalRenderBlockReason,
+  staticPagePreviewBlockReason,
   validateMobileOrder,
   validateStaticPageLayout,
 } from './static-page-draft.js';
@@ -47,6 +48,62 @@ test('buildInitialStaticPageDraft creates default modules and mobile order', () 
   assert.ok(draft.dataSnapshot.fieldCandidates.some((item) => item.fieldPath === 'retrieval.summary'));
   assert.equal(draft.dataSnapshot.moduleBindings.find((item) => item.moduleId === 'hero').bindingQualityStatus, 'confirmed');
   assert.equal(draft.dataSnapshot.moduleBindings.find((item) => item.moduleId === 'trend').chartDataFit, 'needs_sample_rows');
+});
+
+test('preview queue gate blocks chart modules without renderable sample rows', () => {
+  const draft = buildInitialStaticPageDraft({
+    datasetId: 'dataset-1',
+    sessionId: 'session-1',
+  });
+
+  const blockReason = staticPagePreviewBlockReason(draft);
+  assert.match(blockReason, /数据绑定未达到效果图生成要求/);
+  assert.match(blockReason, /关键指标/);
+  assert.match(blockReason, /needs_sample_rows/);
+
+  const ready = applyStaticPageOperations(draft, [
+    {
+      type: 'update_module',
+      targetModuleId: 'kpi',
+      patch: {
+        visualization: {
+          type: 'kpi-cards',
+          data: [
+            { label: '收入', value: 1200 },
+            { label: '客户数', value: 320 },
+          ],
+        },
+      },
+    },
+    {
+      type: 'update_module',
+      targetModuleId: 'trend',
+      patch: {
+        visualization: {
+          type: 'line-chart',
+          data: [
+            { label: '1月', value: 1200 },
+            { label: '2月', value: 1380 },
+          ],
+        },
+      },
+    },
+    {
+      type: 'update_module',
+      targetModuleId: 'risk',
+      patch: {
+        visualization: {
+          type: 'risk-matrix',
+          data: [
+            { label: '交付风险', value: 0.7 },
+            { label: '机会空间', value: 0.4 },
+          ],
+        },
+      },
+    },
+  ]);
+
+  assert.equal(staticPagePreviewBlockReason(ready), '');
 });
 
 test('applyStaticPageOperation updates module copy without mutating original draft', () => {
