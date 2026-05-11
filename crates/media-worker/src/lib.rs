@@ -14,6 +14,7 @@ pub const DEFAULT_RAW_FRAME_FILE_PATTERN: &str = "frame_%06d.jpg";
 pub const DEFAULT_FRAME_MANIFEST_FILE_NAME: &str = "frame_manifest.json";
 pub const DEFAULT_GENERATED_ARTIFACTS_DIR_NAME: &str = "generated_artifacts";
 pub const DEFAULT_TRANSCRIPT_ARTIFACT_FILE_NAME: &str = "transcript.txt";
+pub const DEFAULT_SOURCE_TEXT_ARTIFACT_FILE_NAME: &str = "source_text.md";
 pub const DEFAULT_PPT_OUTLINE_ARTIFACT_FILE_NAME: &str = "ppt_outline.md";
 pub const DEFAULT_TIMESTAMP_MAP_ARTIFACT_FILE_NAME: &str = "timestamp_map.json";
 pub const DEFAULT_EXTRACTION_ARTIFACTS_MANIFEST_FILE_NAME: &str =
@@ -339,6 +340,21 @@ pub fn write_video_extraction_text_artifacts(
             "transcript_text",
             "text/plain",
             &transcript_path,
+        ));
+    }
+
+    if evidence.has_any() || frame_count > 0 {
+        let source_text_path = artifacts_dir.join(DEFAULT_SOURCE_TEXT_ARTIFACT_FILE_NAME);
+        fs::write(
+            &source_text_path,
+            render_video_source_text_markdown(document, &evidence, frame_extraction),
+        )
+        .map_err(|error| error.to_string())?;
+        files.push(video_generated_artifact_file(
+            document,
+            "source_text",
+            "text/markdown",
+            &source_text_path,
         ));
     }
 
@@ -975,6 +991,87 @@ fn render_video_ppt_outline_markdown(
     output
 }
 
+fn render_video_source_text_markdown(
+    document: &Document,
+    evidence: &VideoMediaEvidenceItems,
+    frame_extraction: &Value,
+) -> String {
+    let frame_count = frame_extraction
+        .get("frame_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let mut output = format!("# Source Text: {}\n\n", document.title);
+    output.push_str("This file contains only evidence extracted or observed by V3. Missing evidence is left explicit rather than fabricated.\n\n");
+    output.push_str("## Counts\n\n");
+    output.push_str(&format!(
+        "- Transcript segments: {}\n- Scenes: {}\n- Keyframe OCR snippets: {}\n- Raw frames: {}\n\n",
+        evidence.transcript_segments.len(),
+        evidence.scenes.len(),
+        evidence.keyframe_ocr_snippets.len(),
+        frame_count
+    ));
+
+    output.push_str("## Transcript Evidence\n\n");
+    if evidence.transcript_segments.is_empty() {
+        output.push_str("- Missing transcript evidence.\n\n");
+    } else {
+        for segment in &evidence.transcript_segments {
+            let text =
+                video_item_text(segment, &["text", "content", "summary"]).unwrap_or_default();
+            let range = video_time_range_label(segment);
+            output.push_str(&format!("- {}{}\n", optional_time_prefix(&range), text));
+        }
+        output.push('\n');
+    }
+
+    output.push_str("## Scene Evidence\n\n");
+    if evidence.scenes.is_empty() {
+        output.push_str("- Missing scene evidence.\n\n");
+    } else {
+        for scene in &evidence.scenes {
+            let summary = video_item_text(scene, &["summary", "text", "description"])
+                .unwrap_or_else(|| "Untitled scene".to_string());
+            let range = video_time_range_label(scene);
+            output.push_str(&format!("- {}{}\n", optional_time_prefix(&range), summary));
+        }
+        output.push('\n');
+    }
+
+    output.push_str("## Keyframe OCR Evidence\n\n");
+    if evidence.keyframe_ocr_snippets.is_empty() {
+        output.push_str("- Missing keyframe OCR evidence.\n\n");
+    } else {
+        for snippet in &evidence.keyframe_ocr_snippets {
+            let text = video_item_text(snippet, &["text", "ocr_text", "summary"])
+                .unwrap_or_else(|| "No OCR text".to_string());
+            let timestamp = video_timestamp_label(snippet);
+            output.push_str(&format!("- {}{}\n", optional_time_prefix(&timestamp), text));
+        }
+        output.push('\n');
+    }
+
+    output.push_str("## Raw Frame Evidence\n\n");
+    if frame_count == 0 {
+        output.push_str("- Missing raw frame evidence.\n");
+    } else {
+        output.push_str(&format!("- Raw frames captured: {frame_count}\n"));
+        if let Some(raw_frames_dir) = frame_extraction
+            .get("raw_frames_dir")
+            .and_then(Value::as_str)
+        {
+            output.push_str(&format!("- Raw frames directory: {raw_frames_dir}\n"));
+        }
+        if let Some(manifest_path) = frame_extraction
+            .get("manifest_path")
+            .and_then(Value::as_str)
+        {
+            output.push_str(&format!("- Frame manifest: {manifest_path}\n"));
+        }
+    }
+
+    output
+}
+
 fn video_generated_artifact_file(
     document: &Document,
     artifact_kind: &str,
@@ -1326,7 +1423,7 @@ mod tests {
             json!(1)
         );
         assert_eq!(manifest["evidence_counts"]["frame_count"], json!(8));
-        assert_eq!(manifest["files"].as_array().expect("files").len(), 3);
+        assert_eq!(manifest["files"].as_array().expect("files").len(), 4);
 
         let transcript_path = manifest["files"]
             .as_array()
@@ -1337,6 +1434,16 @@ mod tests {
             .expect("transcript path");
         let transcript = fs::read_to_string(transcript_path).expect("transcript file");
         assert!(transcript.contains("第一页讲产品定位"));
+        let source_text_path = manifest["files"]
+            .as_array()
+            .expect("files")
+            .iter()
+            .find(|file| file["artifact_kind"] == json!("source_text"))
+            .and_then(|file| file["path"].as_str())
+            .expect("source text path");
+        let source_text = fs::read_to_string(source_text_path).expect("source text file");
+        assert!(source_text.contains("Transcript Evidence"));
+        assert!(source_text.contains("AI Data Platform"));
     }
 
     #[test]
