@@ -1,6 +1,10 @@
 use domain_model::{Document, DocumentChunk, WorkflowTask};
 use serde_json::{json, Value};
 
+pub const DEFAULT_FRAME_EXTRACTION_INTERVAL_SECONDS: f64 = 0.15;
+pub const DEFAULT_RAW_FRAMES_DIR_NAME: &str = "raw_frames";
+pub const DEFAULT_RAW_FRAME_FILE_PATTERN: &str = "frame_%06d.jpg";
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MediaWorkflowTaskKind {
     ResolveVideoSource,
@@ -68,6 +72,7 @@ pub fn register_video_asset_output(document: &Document) -> Value {
 pub fn extract_video_ppt_output(document: &Document, chunks: &[DocumentChunk]) -> Value {
     let evidence = video_evidence_summary_from_chunks(chunks);
     let artifacts = video_extraction_artifact_refs(document, &evidence);
+    let frame_extraction = video_frame_extraction_plan(document);
     let status = if evidence.has_evidence() {
         "completed"
     } else {
@@ -86,10 +91,27 @@ pub fn extract_video_ppt_output(document: &Document, chunks: &[DocumentChunk]) -
             "keyframe_ocr_snippet_count": evidence.keyframe_ocr_snippet_count,
             "chunk_count": evidence.chunk_count,
         },
+        "frame_extraction": frame_extraction,
         "artifacts": artifacts,
         "html_artifacts": [],
         "no_host_composed_answer": true,
-        "note": "media-worker only summarizes persisted media evidence in this slice; PPTX/Markdown durable artifact writing remains a later stage.",
+        "note": "media-worker summarizes persisted media evidence and records the raw_frames extraction plan in this slice; executing FFmpeg and writing durable PPTX/Markdown artifacts remain later stages.",
+    })
+}
+
+pub fn video_frame_extraction_plan(document: &Document) -> Value {
+    json!({
+        "status": "planned",
+        "source": "ffmpeg_external_process",
+        "enabled": false,
+        "input_required": "local_media_path",
+        "session_dir": format!("video-extraction-{}", document.id),
+        "raw_frames_dir": format!("video-extraction-{}/{}", document.id, DEFAULT_RAW_FRAMES_DIR_NAME),
+        "frame_file_pattern": DEFAULT_RAW_FRAME_FILE_PATTERN,
+        "interval_seconds": DEFAULT_FRAME_EXTRACTION_INTERVAL_SECONDS,
+        "save_all": true,
+        "contact_sheet_source": DEFAULT_RAW_FRAMES_DIR_NAME,
+        "sop": "wechat-video-ppt-extract/raw_frames",
     })
 }
 
@@ -245,6 +267,15 @@ mod tests {
         let document = test_document();
         let partial = extract_video_ppt_output(&document, &[]);
         assert_eq!(partial["status"], json!("partial"));
+        assert_eq!(partial["frame_extraction"]["status"], json!("planned"));
+        assert_eq!(
+            partial["frame_extraction"]["raw_frames_dir"],
+            json!(format!("video-extraction-{}/raw_frames", document.id))
+        );
+        assert_eq!(
+            partial["frame_extraction"]["interval_seconds"],
+            json!(DEFAULT_FRAME_EXTRACTION_INTERVAL_SECONDS)
+        );
         assert!(partial["artifacts"].as_array().expect("array").is_empty());
 
         let chunk = test_chunk(json!({
