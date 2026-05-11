@@ -330,6 +330,15 @@ pub fn write_video_extraction_text_artifacts(
     fs::create_dir_all(&artifacts_dir).map_err(|error| error.to_string())?;
 
     let mut files = Vec::<Value>::new();
+    if let Some(frame_manifest_path) = frame_extraction_manifest_path(frame_extraction) {
+        files.push(video_generated_artifact_file(
+            document,
+            "frame_manifest",
+            "application/json",
+            &frame_manifest_path,
+        ));
+    }
+
     if !evidence.transcript_segments.is_empty() {
         let transcript_path = artifacts_dir.join(DEFAULT_TRANSCRIPT_ARTIFACT_FILE_NAME);
         fs::write(
@@ -1157,6 +1166,16 @@ fn video_generated_artifact_file(
     })
 }
 
+fn frame_extraction_manifest_path(frame_extraction: &Value) -> Option<PathBuf> {
+    frame_extraction
+        .get("manifest_path")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .filter(|path| path.is_file())
+}
+
 fn video_item_text(value: &Value, keys: &[&str]) -> Option<String> {
     keys.iter()
         .find_map(|key| value.get(*key).and_then(Value::as_str))
@@ -1512,6 +1531,39 @@ mod tests {
         let source_text = fs::read_to_string(source_text_path).expect("source text file");
         assert!(source_text.contains("Transcript Evidence"));
         assert!(source_text.contains("AI Data Platform"));
+    }
+
+    #[test]
+    fn writes_video_text_artifacts_promotes_frame_manifest_file_ref() {
+        let document = test_document();
+        let output_root = std::env::temp_dir().join(format!(
+            "aidp-v3-video-frame-manifest-artifact-test-{}",
+            DocumentId::new()
+        ));
+        let session_dir = output_root.join(format!("video-extraction-{}", document.id));
+        fs::create_dir_all(&session_dir).expect("session dir");
+        let frame_manifest_path = session_dir.join(DEFAULT_FRAME_MANIFEST_FILE_NAME);
+        fs::write(&frame_manifest_path, br#"{"frame_count":1}"#).expect("frame manifest");
+        let frame_extraction = json!({
+            "status": "completed",
+            "manifest_path": frame_manifest_path.display().to_string(),
+            "frame_count": 1
+        });
+
+        let manifest =
+            write_video_extraction_text_artifacts(&document, &[], &frame_extraction, &output_root)
+                .expect("text artifacts");
+
+        let files = manifest["files"].as_array().expect("files");
+        let frame_manifest = files
+            .iter()
+            .find(|file| file["artifact_kind"] == json!("frame_manifest"))
+            .expect("frame manifest artifact");
+        assert_eq!(frame_manifest["format"], json!("application/json"));
+        assert_eq!(
+            frame_manifest["path"],
+            json!(frame_manifest_path.display().to_string())
+        );
     }
 
     #[test]
