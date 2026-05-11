@@ -1191,6 +1191,7 @@ dependencies = [
  "event-bus",
  "observability",
  "platform-api",
+ "reqwest",
  "serde",
  "serde_json",
  "storage",

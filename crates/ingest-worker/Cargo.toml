@@ -13,6 +13,7 @@ domain-model = { path = "../domain-model" }
 event-bus = { path = "../event-bus" }
 observability = { path = "../observability" }
 platform-api = { path = "../platform-api" }
+reqwest.workspace = true
 serde_json.workspace = true
 serde.workspace = true
 storage = { path = "../storage" }

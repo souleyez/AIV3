@@ -7,11 +7,15 @@ use domain_model::{DatasetId, DocumentId};
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::{
+    collections::hash_map::DefaultHasher,
     fs,
     fs::File,
-    io::Read,
+    hash::{Hash, Hasher},
+    io::{Read, Write},
+    net::IpAddr,
     path::{Path, PathBuf},
     process::Command,
+    time::Duration,
 };
 use zip::ZipArchive;
 
@@ -79,9 +83,7 @@ pub fn extract_document_text(
     object_key: &str,
     content_type: &str,
 ) -> std::io::Result<ExtractedDocumentText> {
-    let path = resolve_local_object_path(object_key).ok_or_else(|| {
-        std::io::Error::new(std::io::ErrorKind::NotFound, "local object file not found")
-    })?;
+    let path = resolve_ingest_object_path(object_key, content_type)?;
     let extension = path
         .extension()
         .and_then(|value| value.to_str())
@@ -248,6 +250,16 @@ fn build_placeholder_outcome(job: &IngestJob) -> IngestOutcome {
     }
 }
 
+fn resolve_ingest_object_path(object_key: &str, content_type: &str) -> std::io::Result<PathBuf> {
+    if is_remote_media_object_key(object_key, content_type) {
+        return resolve_remote_media_object_path(object_key, content_type);
+    }
+
+    resolve_local_object_path(object_key).ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::NotFound, "local object file not found")
+    })
+}
+
 fn resolve_local_object_path(object_key: &str) -> Option<PathBuf> {
     let raw = object_key.trim().trim_start_matches("file://");
     if raw.is_empty() {
@@ -262,6 +274,244 @@ fn resolve_local_object_path(object_key: &str) -> Option<PathBuf> {
     let root = std::env::var("PLATFORM_LOCAL_OBJECT_ROOT").ok()?;
     let rooted = Path::new(&root).join(raw);
     rooted.is_file().then_some(rooted)
+}
+
+fn is_remote_media_object_key(object_key: &str, content_type: &str) -> bool {
+    let raw = object_key.trim();
+    if !(raw.starts_with("http://") || raw.starts_with("https://")) {
+        return false;
+    }
+    let extension = extension_from_remote_url(raw)
+        .unwrap_or_else(|| infer_extension_from_content_type(content_type));
+    is_audio_extension(&extension) || is_video_extension(&extension)
+}
+
+fn resolve_remote_media_object_path(
+    object_key: &str,
+    content_type: &str,
+) -> std::io::Result<PathBuf> {
+    if !env_flag("INGEST_REMOTE_MEDIA_ENABLED", false) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "remote media ingest is disabled",
+        ));
+    }
+
+    let url = reqwest::Url::parse(object_key.trim()).map_err(|error| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("invalid remote media url: {error}"),
+        )
+    })?;
+    validate_remote_media_url(&url, content_type)?;
+
+    let cache_dir = remote_media_cache_dir();
+    fs::create_dir_all(&cache_dir)?;
+    let extension = extension_from_remote_url(url.as_str())
+        .unwrap_or_else(|| infer_extension_from_content_type(content_type));
+    let target_path = cache_dir.join(format!(
+        "remote-media-{}{}",
+        remote_media_cache_key(url.as_str()),
+        extension
+    ));
+    if target_path.is_file() {
+        return Ok(target_path);
+    }
+
+    let max_bytes = env_u64("INGEST_REMOTE_MEDIA_MAX_BYTES", 200 * 1024 * 1024);
+    let timeout_secs = env_u64("INGEST_REMOTE_MEDIA_TIMEOUT_SECS", 60).max(1);
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(timeout_secs))
+        .build()
+        .map_err(remote_media_io_error)?;
+    let mut response = client
+        .get(url.clone())
+        .send()
+        .map_err(remote_media_io_error)?;
+    if !response.status().is_success() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("remote media returned HTTP {}", response.status()),
+        ));
+    }
+    if response
+        .content_length()
+        .is_some_and(|content_length| content_length > max_bytes)
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "remote media exceeds max allowed bytes",
+        ));
+    }
+    validate_remote_media_response_type(&response, content_type, &extension)?;
+
+    let temp_path = cache_dir.join(format!(
+        "remote-media-{}-{}.part{}",
+        remote_media_cache_key(url.as_str()),
+        uuid::Uuid::new_v4(),
+        extension
+    ));
+    let mut file = File::create(&temp_path)?;
+    let mut downloaded = 0u64;
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let read = response.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        downloaded += read as u64;
+        if downloaded > max_bytes {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "remote media exceeds max allowed bytes",
+            ));
+        }
+        file.write_all(&buffer[..read])?;
+    }
+    file.flush()?;
+    fs::rename(&temp_path, &target_path)?;
+    Ok(target_path)
+}
+
+fn validate_remote_media_url(url: &reqwest::Url, content_type: &str) -> std::io::Result<()> {
+    if !matches!(url.scheme(), "http" | "https") {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "remote media url must use http or https",
+        ));
+    }
+    let host = url.host_str().unwrap_or_default();
+    if !remote_media_host_allowed(host) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "remote media host is not allowed",
+        ));
+    }
+    let lower = url.as_str().to_ascii_lowercase();
+    if lower.contains("weixin.qq.com/sph/") || lower.contains("channels.weixin.qq.com/sph/") {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "login-gated media sources are not supported",
+        ));
+    }
+    let extension = extension_from_remote_url(url.as_str())
+        .unwrap_or_else(|| infer_extension_from_content_type(content_type));
+    if !(is_audio_extension(&extension) || is_video_extension(&extension)) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "remote media url must point to an audio or video file",
+        ));
+    }
+    Ok(())
+}
+
+fn remote_media_host_allowed(host: &str) -> bool {
+    let lower = host.trim().trim_matches(['[', ']']).to_ascii_lowercase();
+    if lower.is_empty()
+        || lower == "localhost"
+        || lower.ends_with(".localhost")
+        || lower.ends_with(".local")
+    {
+        return false;
+    }
+    if let Ok(ip) = lower.parse::<IpAddr>() {
+        return match ip {
+            IpAddr::V4(ip) => {
+                !(ip.is_private()
+                    || ip.is_loopback()
+                    || ip.is_link_local()
+                    || ip.is_broadcast()
+                    || ip.is_documentation()
+                    || ip.octets()[0] == 0)
+            }
+            IpAddr::V6(ip) => !(ip.is_loopback() || ip.is_unspecified() || ip.is_unique_local()),
+        };
+    }
+    true
+}
+
+fn validate_remote_media_response_type(
+    response: &reqwest::blocking::Response,
+    content_type: &str,
+    extension: &str,
+) -> std::io::Result<()> {
+    let expected_media = content_type.to_ascii_lowercase().starts_with("audio/")
+        || content_type.to_ascii_lowercase().starts_with("video/")
+        || is_audio_extension(extension)
+        || is_video_extension(extension);
+    let response_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if !response_type.is_empty()
+        && !response_type.starts_with("audio/")
+        && !response_type.starts_with("video/")
+        && !expected_media
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "remote response is not a media content type",
+        ));
+    }
+    Ok(())
+}
+
+fn extension_from_remote_url(url: &str) -> Option<String> {
+    let parsed = reqwest::Url::parse(url).ok()?;
+    let path = parsed.path().to_ascii_lowercase();
+    [
+        ".mp4", ".mov", ".m4v", ".webm", ".mkv", ".avi", ".mpeg", ".mpg", ".mp3", ".wav", ".m4a",
+        ".aac", ".flac", ".ogg", ".opus",
+    ]
+    .into_iter()
+    .find(|extension| path.ends_with(extension))
+    .map(str::to_string)
+}
+
+fn remote_media_cache_dir() -> PathBuf {
+    if let Ok(raw) = std::env::var("INGEST_REMOTE_MEDIA_CACHE_DIR") {
+        let path = PathBuf::from(raw.trim());
+        if !path.as_os_str().is_empty() {
+            return path;
+        }
+    }
+    std::env::temp_dir().join("aidp-v3-remote-media-cache")
+}
+
+fn remote_media_cache_key(value: &str) -> String {
+    let mut hasher = DefaultHasher::new();
+    value.hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
+}
+
+fn remote_media_io_error(error: reqwest::Error) -> std::io::Error {
+    let kind = if error.is_timeout() {
+        std::io::ErrorKind::TimedOut
+    } else {
+        std::io::ErrorKind::Other
+    };
+    std::io::Error::new(kind, error.to_string())
+}
+
+fn env_flag(name: &str, default: bool) -> bool {
+    std::env::var(name)
+        .ok()
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on" | "enabled"
+            )
+        })
+        .unwrap_or(default)
+}
+
+fn env_u64(name: &str, default: u64) -> u64 {
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .unwrap_or(default)
 }
 
 fn infer_extension_from_content_type(content_type: &str) -> String {
@@ -1844,6 +2094,41 @@ mod tests {
 
         assert_eq!(processor.process(&pdf_job).chunk_count(), 12);
         assert_eq!(processor.process(&markdown_job).chunk_count(), 4);
+    }
+
+    #[test]
+    fn remote_media_ingest_is_disabled_by_default() {
+        with_env_var("INGEST_REMOTE_MEDIA_ENABLED", None, || {
+            let processor = LocalIngestProcessor;
+            let outcome = processor.process(&IngestJob {
+                dataset_id: DatasetId::new(),
+                document_id: DocumentId::new(),
+                title: "remote-course.mp4".to_string(),
+                object_key: "https://cdn.example.com/course/lesson-01.mp4".to_string(),
+                content_type: "video/mp4".to_string(),
+            });
+
+            assert!(outcome.used_placeholder);
+            assert_eq!(outcome.parse_method, "placeholder");
+        });
+    }
+
+    #[test]
+    fn remote_media_url_guards_reject_private_and_login_gated_sources() {
+        let private_url =
+            reqwest::Url::parse("https://127.0.0.1/video.mp4").expect("private URL should parse");
+        let wechat_url = reqwest::Url::parse("https://weixin.qq.com/sph/ActLMg4yTD.mp4")
+            .expect("wechat URL should parse");
+        let public_url = reqwest::Url::parse("https://cdn.example.com/course/lesson-01.mp4")
+            .expect("public URL should parse");
+
+        assert!(validate_remote_media_url(&private_url, "video/mp4").is_err());
+        assert!(validate_remote_media_url(&wechat_url, "video/mp4").is_err());
+        assert!(validate_remote_media_url(&public_url, "video/mp4").is_ok());
+        assert!(is_remote_media_object_key(
+            "https://cdn.example.com/course/lesson-01.mp4?token=redacted",
+            "video/mp4"
+        ));
     }
 
     #[test]
