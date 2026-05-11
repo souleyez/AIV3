@@ -19,3 +19,4 @@ tracing.workspace = true
 uuid.workspace = true
 workflow-definitions = { path = "../workflow-definitions" }
 workflow-engine = { path = "../workflow-engine" }
+zip.workspace = true

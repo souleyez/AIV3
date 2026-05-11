@@ -3,10 +3,12 @@ use domain_model::{Document, DocumentChunk, WorkflowTask};
 use serde_json::{json, Value};
 use std::{
     collections::BTreeSet,
-    fs,
+    fs::{self, File},
+    io::Write,
     path::{Path, PathBuf},
     process::Command,
 };
+use zip::{write::SimpleFileOptions, ZipWriter};
 
 pub const DEFAULT_FRAME_EXTRACTION_INTERVAL_SECONDS: f64 = 0.15;
 pub const DEFAULT_RAW_FRAMES_DIR_NAME: &str = "raw_frames";
@@ -25,6 +27,7 @@ pub const DEFAULT_CONTACT_SHEET_HTML_FILE_NAME: &str = "raw_contact_sheet.html";
 pub const DEFAULT_PPT_KEEP_LIST_TEMPLATE_FILE_NAME: &str = "ppt_keep_list_template.json";
 pub const DEFAULT_SELECTED_SLIDES_MANIFEST_FILE_NAME: &str = "selected_slides_manifest.json";
 pub const DEFAULT_PPTX_BUILD_PLAN_FILE_NAME: &str = "pptx_build_plan.json";
+pub const DEFAULT_VIDEO_SLIDES_PPTX_FILE_NAME: &str = "video_slides_screenshot_based.pptx";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MediaWorkflowTaskKind {
@@ -559,9 +562,13 @@ fn write_video_slide_candidate_review_files(
     .map_err(|error| error.to_string())?;
 
     let pptx_build_plan_path = artifacts_dir.join(DEFAULT_PPTX_BUILD_PLAN_FILE_NAME);
+    let pptx_output_path = artifacts_dir.join(DEFAULT_VIDEO_SLIDES_PPTX_FILE_NAME);
     let has_selected_slides = !selected_candidate_indices.is_empty();
+    if has_selected_slides {
+        write_screenshot_based_pptx(document, &selected_slides_manifest, &pptx_output_path)?;
+    }
     let pptx_build_plan = json!({
-        "status": if has_selected_slides { "ready_for_pptx_writer" } else { "waiting_for_keep_list" },
+        "status": if has_selected_slides { "completed" } else { "waiting_for_keep_list" },
         "source": "slide_candidates_manifest",
         "document_id": document.id.to_string(),
         "dataset_id": document.dataset_id.to_string(),
@@ -571,10 +578,10 @@ fn write_video_slide_candidate_review_files(
         "contact_sheet_html": contact_sheet_html_path.display().to_string(),
         "keep_list_template": keep_list_template_path.display().to_string(),
         "selected_slides_manifest": selected_slides_manifest_path.display().to_string(),
-        "recommended_output": artifacts_dir.join("video_slides_screenshot_based.pptx").display().to_string(),
+        "recommended_output": pptx_output_path.display().to_string(),
         "selection": {
             "mode": "manual_or_model_review_required",
-            "selected_candidate_indices": selected_candidate_indices,
+            "selected_candidate_indices": selected_candidate_indices.clone(),
             "rule": "Do not build a final PPTX until ppt_keep_list_template.json is filled and confirmed from the numbered contact sheet.",
         },
         "speaker_notes": {
@@ -591,7 +598,7 @@ fn write_video_slide_candidate_review_files(
     )
     .map_err(|error| error.to_string())?;
 
-    Ok(Some(vec![
+    let mut artifact_files = vec![
         video_generated_artifact_file(
             document,
             "slide_image_candidates",
@@ -628,7 +635,17 @@ fn write_video_slide_candidate_review_files(
             "application/json",
             &pptx_build_plan_path,
         ),
-    ]))
+    ];
+    if has_selected_slides {
+        artifact_files.push(video_generated_artifact_file(
+            document,
+            "pptx",
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            &pptx_output_path,
+        ));
+    }
+
+    Ok(Some(artifact_files))
 }
 
 fn sorted_raw_frame_files(raw_frames_dir: &Path) -> Result<Vec<PathBuf>, String> {
@@ -812,6 +829,358 @@ fn selected_slides_manifest_from_keep_list(
         },
     })
 }
+
+fn write_screenshot_based_pptx(
+    document: &Document,
+    selected_slides_manifest: &Value,
+    output_path: &Path,
+) -> Result<(), String> {
+    let candidates = selected_slides_manifest
+        .get("selected_candidates")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "selected_candidates_missing".to_string())?;
+    if candidates.is_empty() {
+        return Err("selected_candidates_empty".to_string());
+    }
+
+    let file = File::create(output_path).map_err(|error| error.to_string())?;
+    let mut writer = ZipWriter::new(file);
+    write_pptx_text_entry(
+        &mut writer,
+        "[Content_Types].xml",
+        &render_pptx_content_types(candidates),
+    )?;
+    write_pptx_text_entry(&mut writer, "_rels/.rels", &render_pptx_root_rels())?;
+    write_pptx_text_entry(
+        &mut writer,
+        "docProps/app.xml",
+        &render_pptx_app_props(candidates.len()),
+    )?;
+    write_pptx_text_entry(
+        &mut writer,
+        "docProps/core.xml",
+        &render_pptx_core_props(document),
+    )?;
+    write_pptx_text_entry(
+        &mut writer,
+        "ppt/presentation.xml",
+        &render_pptx_presentation(candidates.len()),
+    )?;
+    write_pptx_text_entry(
+        &mut writer,
+        "ppt/_rels/presentation.xml.rels",
+        &render_pptx_presentation_rels(candidates.len()),
+    )?;
+    write_pptx_text_entry(
+        &mut writer,
+        "ppt/slideMasters/slideMaster1.xml",
+        PPTX_SLIDE_MASTER_XML,
+    )?;
+    write_pptx_text_entry(
+        &mut writer,
+        "ppt/slideMasters/_rels/slideMaster1.xml.rels",
+        PPTX_SLIDE_MASTER_RELS_XML,
+    )?;
+    write_pptx_text_entry(
+        &mut writer,
+        "ppt/slideLayouts/slideLayout1.xml",
+        PPTX_SLIDE_LAYOUT_XML,
+    )?;
+    write_pptx_text_entry(
+        &mut writer,
+        "ppt/slideLayouts/_rels/slideLayout1.xml.rels",
+        PPTX_SLIDE_LAYOUT_RELS_XML,
+    )?;
+    write_pptx_text_entry(&mut writer, "ppt/theme/theme1.xml", PPTX_THEME_XML)?;
+
+    for (index, candidate) in candidates.iter().enumerate() {
+        let slide_number = index + 1;
+        let frame_path = candidate
+            .get("frame_path")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+            .ok_or_else(|| format!("selected_candidate_{slide_number}_frame_path_missing"))?;
+        let extension = pptx_media_extension(&frame_path);
+        write_pptx_text_entry(
+            &mut writer,
+            &format!("ppt/slides/slide{slide_number}.xml"),
+            &render_pptx_slide(slide_number, candidate),
+        )?;
+        write_pptx_text_entry(
+            &mut writer,
+            &format!("ppt/slides/_rels/slide{slide_number}.xml.rels"),
+            &render_pptx_slide_rels(slide_number, extension),
+        )?;
+        let image_bytes = fs::read(&frame_path).map_err(|error| error.to_string())?;
+        write_pptx_binary_entry(
+            &mut writer,
+            &format!("ppt/media/image{slide_number}.{extension}"),
+            &image_bytes,
+        )?;
+    }
+
+    writer.finish().map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+fn write_pptx_text_entry(
+    writer: &mut ZipWriter<File>,
+    name: &str,
+    content: &str,
+) -> Result<(), String> {
+    writer
+        .start_file(name, SimpleFileOptions::default())
+        .map_err(|error| error.to_string())?;
+    writer
+        .write_all(content.as_bytes())
+        .map_err(|error| error.to_string())
+}
+
+fn write_pptx_binary_entry(
+    writer: &mut ZipWriter<File>,
+    name: &str,
+    bytes: &[u8],
+) -> Result<(), String> {
+    writer
+        .start_file(name, SimpleFileOptions::default())
+        .map_err(|error| error.to_string())?;
+    writer.write_all(bytes).map_err(|error| error.to_string())
+}
+
+fn render_pptx_content_types(candidates: &[Value]) -> String {
+    let mut media_defaults = BTreeSet::<&'static str>::new();
+    for candidate in candidates {
+        if let Some(frame_path) = candidate.get("frame_path").and_then(Value::as_str) {
+            media_defaults.insert(pptx_media_extension(&PathBuf::from(frame_path)));
+        }
+    }
+
+    let mut output = String::from(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+<Default Extension="xml" ContentType="application/xml"/>
+"#,
+    );
+    for extension in media_defaults {
+        output.push_str(&format!(
+            r#"<Default Extension="{extension}" ContentType="{}"/>"#,
+            pptx_media_content_type(extension)
+        ));
+        output.push('\n');
+    }
+    output.push_str(
+        r#"<Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>
+<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>
+<Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/>
+<Override PartName="/ppt/slideMasters/slideMaster1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideMaster+xml"/>
+<Override PartName="/ppt/slideLayouts/slideLayout1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideLayout+xml"/>
+<Override PartName="/ppt/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/>
+"#,
+    );
+    for index in 1..=candidates.len() {
+        output.push_str(&format!(
+            r#"<Override PartName="/ppt/slides/slide{index}.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/>"#
+        ));
+        output.push('\n');
+    }
+    output.push_str("</Types>\n");
+    output
+}
+
+fn render_pptx_root_rels() -> String {
+    r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="ppt/presentation.xml"/>
+<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/>
+<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/>
+</Relationships>
+"#
+    .to_string()
+}
+
+fn render_pptx_app_props(slide_count: usize) -> String {
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">
+<Application>AI Data Platform V3</Application>
+<PresentationFormat>On-screen Show (16:9)</PresentationFormat>
+<Slides>{slide_count}</Slides>
+<Company>AI Data Platform</Company>
+</Properties>
+"#
+    )
+}
+
+fn render_pptx_core_props(document: &Document) -> String {
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+<dc:title>{}</dc:title>
+<dc:creator>AI Data Platform V3</dc:creator>
+<cp:keywords>video,ppt,selected-slides</cp:keywords>
+<dcterms:created xsi:type="dcterms:W3CDTF">{}</dcterms:created>
+<dcterms:modified xsi:type="dcterms:W3CDTF">{}</dcterms:modified>
+</cp:coreProperties>
+"#,
+        html_escape_text(&document.title),
+        document.created_at.to_rfc3339(),
+        document.updated_at.to_rfc3339()
+    )
+}
+
+fn render_pptx_presentation(slide_count: usize) -> String {
+    let mut slide_ids = String::new();
+    for index in 1..=slide_count {
+        slide_ids.push_str(&format!(
+            r#"<p:sldId id="{}" r:id="rId{}"/>"#,
+            255 + index,
+            index + 1
+        ));
+    }
+
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<p:presentation xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
+<p:sldMasterIdLst><p:sldMasterId id="2147483648" r:id="rId1"/></p:sldMasterIdLst>
+<p:sldIdLst>{slide_ids}</p:sldIdLst>
+<p:sldSz cx="12192000" cy="6858000" type="wide"/>
+<p:notesSz cx="6858000" cy="9144000"/>
+</p:presentation>
+"#
+    )
+}
+
+fn render_pptx_presentation_rels(slide_count: usize) -> String {
+    let mut output = String::from(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideMaster" Target="slideMasters/slideMaster1.xml"/>
+"#,
+    );
+    for index in 1..=slide_count {
+        output.push_str(&format!(
+            r#"<Relationship Id="rId{}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide{index}.xml"/>"#,
+            index + 1
+        ));
+        output.push('\n');
+    }
+    output.push_str("</Relationships>\n");
+    output
+}
+
+fn render_pptx_slide(slide_number: usize, candidate: &Value) -> String {
+    let candidate_index = candidate
+        .get("candidate_index")
+        .and_then(Value::as_u64)
+        .unwrap_or(slide_number as u64);
+    let file_name = candidate
+        .get("file_name")
+        .and_then(Value::as_str)
+        .unwrap_or("frame");
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
+<p:cSld>
+<p:spTree>
+<p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>
+<p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr>
+<p:pic>
+<p:nvPicPr><p:cNvPr id="2" name="Candidate {candidate_index}: {}"/><p:cNvPicPr><a:picLocks noChangeAspect="1"/></p:cNvPicPr><p:nvPr/></p:nvPicPr>
+<p:blipFill><a:blip r:embed="rId1"/><a:stretch><a:fillRect/></a:stretch></p:blipFill>
+<p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="12192000" cy="6858000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr>
+</p:pic>
+</p:spTree>
+</p:cSld>
+<p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr>
+</p:sld>
+"#,
+        html_escape_attr(file_name)
+    )
+}
+
+fn render_pptx_slide_rels(slide_number: usize, extension: &str) -> String {
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/image{slide_number}.{extension}"/>
+<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="../slideLayouts/slideLayout1.xml"/>
+</Relationships>
+"#
+    )
+}
+
+fn pptx_media_extension(path: &Path) -> &'static str {
+    match path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("jpg")
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "jpeg" => "jpeg",
+        "png" => "png",
+        "gif" => "gif",
+        "bmp" => "bmp",
+        "tif" => "tif",
+        "tiff" => "tiff",
+        _ => "jpg",
+    }
+}
+
+fn pptx_media_content_type(extension: &str) -> &'static str {
+    match extension {
+        "jpeg" | "jpg" => "image/jpeg",
+        "png" => "image/png",
+        "gif" => "image/gif",
+        "bmp" => "image/bmp",
+        "tif" | "tiff" => "image/tiff",
+        _ => "image/jpeg",
+    }
+}
+
+const PPTX_SLIDE_MASTER_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<p:sldMaster xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
+<p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr></p:spTree></p:cSld>
+<p:clrMap bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2" accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink"/>
+<p:sldLayoutIdLst><p:sldLayoutId id="2147483649" r:id="rId1"/></p:sldLayoutIdLst>
+<p:txStyles><p:titleStyle/><p:bodyStyle/><p:otherStyle/></p:txStyles>
+</p:sldMaster>
+"#;
+
+const PPTX_SLIDE_MASTER_RELS_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="../slideLayouts/slideLayout1.xml"/>
+<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme" Target="../theme/theme1.xml"/>
+</Relationships>
+"#;
+
+const PPTX_SLIDE_LAYOUT_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<p:sldLayout xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" type="blank" preserve="1">
+<p:cSld name="Blank"><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr></p:spTree></p:cSld>
+<p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr>
+</p:sldLayout>
+"#;
+
+const PPTX_SLIDE_LAYOUT_RELS_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideMaster" Target="../slideMasters/slideMaster1.xml"/>
+</Relationships>
+"#;
+
+const PPTX_THEME_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="AI Data Platform">
+<a:themeElements>
+<a:clrScheme name="AIDP"><a:dk1><a:srgbClr val="111319"/></a:dk1><a:lt1><a:srgbClr val="FFFFFF"/></a:lt1><a:dk2><a:srgbClr val="1F2430"/></a:dk2><a:lt2><a:srgbClr val="E7EAF0"/></a:lt2><a:accent1><a:srgbClr val="4F8CFF"/></a:accent1><a:accent2><a:srgbClr val="62D2A2"/></a:accent2><a:accent3><a:srgbClr val="F7B955"/></a:accent3><a:accent4><a:srgbClr val="F16C7F"/></a:accent4><a:accent5><a:srgbClr val="9D7CFF"/></a:accent5><a:accent6><a:srgbClr val="7DD3FC"/></a:accent6><a:hlink><a:srgbClr val="4F8CFF"/></a:hlink><a:folHlink><a:srgbClr val="9D7CFF"/></a:folHlink></a:clrScheme>
+<a:fontScheme name="AIDP"><a:majorFont><a:latin typeface="Aptos Display"/></a:majorFont><a:minorFont><a:latin typeface="Aptos"/></a:minorFont></a:fontScheme>
+<a:fmtScheme name="AIDP"><a:fillStyleLst><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:fillStyleLst><a:lnStyleLst><a:ln w="9525"><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:ln></a:lnStyleLst><a:effectStyleLst><a:effectStyle><a:effectLst/></a:effectStyle></a:effectStyleLst><a:bgFillStyleLst><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:bgFillStyleLst></a:fmtScheme>
+</a:themeElements>
+<a:objectDefaults/>
+<a:extraClrSchemeLst/>
+</a:theme>
+"#;
 
 pub fn video_generated_artifacts_plan(document: &Document) -> Value {
     json!({
@@ -1440,7 +1809,8 @@ mod tests {
         DatasetId, DocumentChunkId, DocumentChunkState, DocumentId, DocumentLifecycle, TenantId,
     };
     use serde_json::json;
-    use std::collections::BTreeMap;
+    use std::{collections::BTreeMap, io::Read};
+    use zip::ZipArchive;
 
     fn test_document() -> Document {
         Document {
@@ -1848,7 +2218,7 @@ mod tests {
         assert!(pptx_plan.contains("waiting_for_keep_list"));
         assert!(pptx_plan.contains("ppt_keep_list_template.json"));
         assert!(pptx_plan.contains("selected_candidate_indices"));
-        assert!(pptx_plan.contains("video_slides_screenshot_based.pptx"));
+        assert!(pptx_plan.contains(DEFAULT_VIDEO_SLIDES_PPTX_FILE_NAME));
     }
 
     #[test]
@@ -1889,6 +2259,9 @@ mod tests {
                 .expect("candidate artifacts");
 
         let files = manifest["files"].as_array().expect("files");
+        assert!(files
+            .iter()
+            .any(|file| file["artifact_kind"] == json!("pptx")));
         let selected_slides_path = files
             .iter()
             .find(|file| file["artifact_kind"] == json!("selected_slides_manifest"))
@@ -1908,8 +2281,28 @@ mod tests {
             .and_then(|file| file["path"].as_str())
             .expect("pptx build plan path");
         let pptx_plan = fs::read_to_string(pptx_plan_path).expect("pptx build plan");
-        assert!(pptx_plan.contains("ready_for_pptx_writer"));
+        assert!(pptx_plan.contains("completed"));
         assert!(pptx_plan.contains("selected_slides_manifest.json"));
+        let pptx_path = files
+            .iter()
+            .find(|file| file["artifact_kind"] == json!("pptx"))
+            .and_then(|file| file["path"].as_str())
+            .expect("pptx path");
+        let mut archive =
+            ZipArchive::new(File::open(pptx_path).expect("pptx file")).expect("pptx zip");
+        assert!(archive.by_name("[Content_Types].xml").is_ok());
+        assert!(archive.by_name("ppt/presentation.xml").is_ok());
+        assert!(archive.by_name("ppt/slides/slide1.xml").is_ok());
+        assert!(archive.by_name("ppt/slides/slide2.xml").is_ok());
+        assert!(archive.by_name("ppt/media/image1.jpg").is_ok());
+        assert!(archive.by_name("ppt/media/image2.jpg").is_ok());
+        let mut presentation_rels = String::new();
+        archive
+            .by_name("ppt/_rels/presentation.xml.rels")
+            .expect("presentation relationships")
+            .read_to_string(&mut presentation_rels)
+            .expect("presentation relationships text");
+        assert!(presentation_rels.contains("slide1.xml"));
     }
 
     #[test]
