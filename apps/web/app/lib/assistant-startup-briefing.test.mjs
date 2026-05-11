@@ -43,11 +43,16 @@ test('startup briefing summarizes visible datasets and system capability', () =>
   assert.equal(briefing.datasetBriefs[0].parseStatusSummary, 'completed:3');
   assert.deepEqual(briefing.datasetBriefs[0].materialHints, ['tabular']);
   assert.ok(briefing.capabilities.includes('media_detail'));
+  assert.ok(briefing.capabilities.includes('video_url_resolve'));
+  assert.ok(briefing.capabilities.includes('video_ppt_extract'));
   assert.ok(briefing.capabilities.includes('continuous_execution'));
   assert.match(briefing.productCapabilities.staticPage, /静态页规划/);
   assert.match(briefing.productCapabilities.staticPage, /index\.html/);
   assert.match(briefing.productCapabilities.staticPage, /ZIP 交付包/);
   assert.match(briefing.productCapabilities.media, /partial/);
+  assert.match(briefing.productCapabilities.media, /视频 URL/);
+  assert.match(briefing.productCapabilities.media, /PPT\/原文提取/);
+  assert.match(briefing.productCapabilities.media, /登录态、扫码、Cookie/);
   assert.match(briefing.productCapabilities.continuousExecution, /受控动作/);
   assert.match(briefing.latestActivity, /订单数据/);
   assert.match(briefing.productTruth, /智能数据工作台/);
@@ -61,6 +66,7 @@ test('formatted briefing tells model when no dataset is selected', () => {
   assert.match(formatted, /普通模型聊天/);
   assert.match(formatted, /创建报表/);
   assert.match(formatted, /媒体细节/);
+  assert.match(formatted, /视频转 PPT\/原文提取/);
   assert.match(formatted, /规划\/渲染\/修改静态页/);
   assert.match(formatted, /导出静态页 ZIP 交付包/);
   assert.match(formatted, /连续提出检索/);

@@ -1,4 +1,6 @@
 const MEDIA_DATASET_PATTERN = /音视频|音频|视频|录音|转写|字幕|会议|访谈|关键帧|ocr/i;
+const VIDEO_PPT_EXTRACTION_PATTERN = /((视频|mp4|mov|m4v|webm|公开视频|视频地址|视频链接|url|URL|上传).*(ppt|PPT|幻灯片|课件|原文|字幕|转写|讲稿|提取))|((ppt|PPT|幻灯片|课件|原文|字幕|转写|讲稿|提取).*(视频|mp4|mov|m4v|webm|公开视频|视频地址|视频链接|url|URL|上传))/i;
+const DIRECT_VIDEO_SOURCE_PATTERN = /https?:\/\/\S+|\.(mp4|mov|m4v|webm)(\b|$)|公开视频|视频地址|视频链接|url|URL/i;
 
 const DATASET_HINTS = [
   { pattern: /订单|销售|营收|收入|库存|发货|客单|转化|复购|经营/, label: '订单' },
@@ -271,6 +273,7 @@ function inferAssistantIntent(prompt, options = {}) {
   if (STATIC_PAGE_HINT.test(prompt)) return 'static_page';
   if (REPORT_HINT.test(prompt)) return 'report';
   if (options.hasActiveStaticPageDraft && options.promptTouchesActiveStaticDraft) return 'static_page';
+  if (VIDEO_PPT_EXTRACTION_PATTERN.test(prompt)) return 'data_question';
   if (DATA_QUESTION_HINT.test(prompt) || DATASET_HINTS.some((hint) => hint.pattern.test(prompt))) {
     return 'data_question';
   }
@@ -281,7 +284,8 @@ function buildSupplyStrategy(intent, candidates, prompt = '') {
   const hasDataset = candidates.some((candidate) => candidate.type === 'dataset');
   const hasStaticPageDraft = candidates.some((candidate) => candidate.type === 'static_page_draft');
   const hasConversationMemory = candidates.some((candidate) => candidate.type === 'conversation_memory');
-  const needsDetail = hasDataset && (['static_page', 'report'].includes(intent) || MEDIA_DATASET_PATTERN.test(prompt));
+  const wantsVideoPptExtraction = VIDEO_PPT_EXTRACTION_PATTERN.test(prompt);
+  const needsDetail = hasDataset && (['static_page', 'report'].includes(intent) || MEDIA_DATASET_PATTERN.test(prompt) || wantsVideoPptExtraction);
   return {
     intent,
     answerPolicy: 'model_authored_host_supplied',
@@ -301,13 +305,14 @@ function buildSupplyStrategy(intent, candidates, prompt = '') {
     recommendedActions: buildRecommendedActions(intent, {
       hasDataset,
       hasStaticPageDraft,
+      wantsVideoPptExtraction,
       prompt,
     }),
     noFakeData: true,
   };
 }
 
-function buildRecommendedActions(intent, { hasDataset, hasStaticPageDraft, prompt }) {
+function buildRecommendedActions(intent, { hasDataset, hasStaticPageDraft, wantsVideoPptExtraction, prompt }) {
   const actions = [];
   if (hasDataset) {
     actions.push('retrieval.search');
@@ -315,8 +320,14 @@ function buildRecommendedActions(intent, { hasDataset, hasStaticPageDraft, promp
   if (hasDataset && (intent === 'static_page' || intent === 'report' || MEDIA_DATASET_PATTERN.test(prompt))) {
     actions.push('retrieval.read_detail');
   }
-  if (MEDIA_DATASET_PATTERN.test(prompt)) {
+  if (MEDIA_DATASET_PATTERN.test(prompt) && (!wantsVideoPptExtraction || hasDataset)) {
     actions.push('media.detail');
+  }
+  if (wantsVideoPptExtraction) {
+    if (DIRECT_VIDEO_SOURCE_PATTERN.test(prompt)) {
+      actions.push('media.resolve_video_url');
+    }
+    actions.push('media.extract_ppt_transcript');
   }
   if (intent === 'static_page') {
     actions.push(hasStaticPageDraft ? 'static_page.update_draft' : 'static_page.plan');

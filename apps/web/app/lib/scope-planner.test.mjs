@@ -70,6 +70,21 @@ test('scope planner keeps unrelated no-dataset chat as ordinary model chat', () 
   assert.deepEqual(plan.supplyStrategy.recommendedActions, ['ordinary_chat.answer']);
 });
 
+test('scope planner recommends direct video PPT extraction without forcing dataset retrieval', () => {
+  const plan = planAssistantScope({
+    prompt: 'https://example.com/talk.mp4 帮我提取视频里的PPT和原文',
+    datasets,
+  });
+
+  assert.equal(plan.intent, 'data_question');
+  assert.equal(selectPlannerDatasetId(plan), '');
+  assert.equal(plan.candidates.length, 0);
+  assert.equal(plan.supplyStrategy.retrievalPolicy, 'not_requested');
+  assert.equal(plan.supplyStrategy.preferDetail, false);
+  assert.equal(plan.supplyStrategy.candidatePolicy, 'ordinary_chat_without_forced_dataset');
+  assert.deepEqual(plan.supplyStrategy.recommendedActions, ['media.resolve_video_url', 'media.extract_ppt_transcript']);
+});
+
 test('scope planner preselects media dataset for audio and video prompts', () => {
   const plan = planAssistantScope({
     prompt: '这段录音讲了什么，帮我提炼重点',
