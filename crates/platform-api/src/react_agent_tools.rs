@@ -19,7 +19,7 @@ use crate::{
     ensure_react_requested_dataset_is_selected, ensure_scope_requests_conversation_memory,
     load_visible_document_for_user, react_static_page_operations_from_arguments,
     status_from_static_page_operations, status_from_static_page_payload,
-    summarize_static_page_operations, ApiError, AppState,
+    summarize_static_page_operations, to_document_media_detail_view, ApiError, AppState,
 };
 use workflow_engine::WorkflowSignal;
 
@@ -155,7 +155,14 @@ pub(crate) async fn execute_assistant_run_react_action(
             Ok(video_url_resolution_placeholder_result(action, prompt))
         }
         AssistantRunReactActionType::ExtractVideoPptTranscript => {
-            Ok(video_ppt_extraction_placeholder_result(action))
+            video_ppt_extraction_result(
+                state,
+                action,
+                selected_scope,
+                active_secret_binding_ids,
+                current_user_id,
+            )
+            .await
         }
         AssistantRunReactActionType::CodexHostTask => {
             codex_host_task_result(state, action, active_assistant_run_id, local_thread_id).await
@@ -827,6 +834,175 @@ fn video_ppt_extraction_placeholder_result(
     }
 }
 
+const REACT_VIDEO_PPT_MAX_DOCUMENTS: usize = 2;
+const REACT_VIDEO_PPT_MAX_TRANSCRIPT_SEGMENTS: usize = 20;
+const REACT_VIDEO_PPT_MAX_SCENES: usize = 12;
+const REACT_VIDEO_PPT_MAX_OCR_SNIPPETS: usize = 30;
+
+async fn video_ppt_extraction_result(
+    state: &AppState,
+    action: &AssistantRunNextAction,
+    selected_scope: &Value,
+    active_secret_binding_ids: &[SecretBindingId],
+    current_user_id: Option<UserId>,
+) -> std::result::Result<AssistantRunReactToolResult, ApiError> {
+    let requested_document_ids = requested_document_ids_from_action(action, selected_scope);
+    if requested_document_ids.is_empty() {
+        return Ok(video_ppt_extraction_placeholder_result(action));
+    }
+
+    let selected_dataset_ids = selected_scope_id_strings(selected_scope, "dataset");
+    let selected_document_ids = selected_scope_id_strings(selected_scope, "document");
+    let mut items = Vec::new();
+    let mut denied = Vec::new();
+
+    for document_id in requested_document_ids
+        .into_iter()
+        .take(REACT_VIDEO_PPT_MAX_DOCUMENTS)
+    {
+        let document = match load_visible_document_for_user(
+            state,
+            document_id,
+            active_secret_binding_ids,
+            current_user_id,
+        )
+        .await
+        {
+            Ok(document) => document,
+            Err(_) => {
+                denied.push(format!("document:{document_id}"));
+                continue;
+            }
+        };
+
+        if !document_allowed_by_selected_scope(
+            &document,
+            &selected_dataset_ids,
+            &selected_document_ids,
+        ) {
+            denied.push(format!("document:{document_id}"));
+            continue;
+        }
+
+        if !is_video_document_material(&document) {
+            denied.push(format!("document:{document_id}:not_video"));
+            continue;
+        }
+
+        let chunks = state
+            .storage
+            .document_chunks()
+            .list_by_document(state.tenant_id, document_id)
+            .await
+            .map_err(ApiError::from_storage)?;
+        let detail = to_document_media_detail_view(document, chunks);
+        items.push(video_ppt_extraction_item(detail));
+    }
+
+    let has_items = !items.is_empty();
+    let has_extracted_evidence = items.iter().any(|item| {
+        item.get("evidence_status")
+            .and_then(Value::as_str)
+            .is_some_and(|status| status == "available")
+    });
+    let status = if has_extracted_evidence {
+        "completed"
+    } else if has_items {
+        "partial"
+    } else {
+        "rejected"
+    };
+    let message = match status {
+        "completed" => "video PPT/transcript evidence supplied",
+        "partial" => "video registered but parsed PPT/transcript evidence is partial or missing",
+        _ => "uploaded_or_resolved_video_required",
+    };
+    let item_count = items.len();
+    let denied_count = denied.len();
+
+    Ok(AssistantRunReactToolResult {
+        observation: json!({
+            "status": status,
+            "action_type": action.action_type.as_str(),
+            "actionType": action.action_type.as_str(),
+            "message": message,
+            "items": items,
+            "denied": denied,
+            "limits": {
+                "maxDocuments": REACT_VIDEO_PPT_MAX_DOCUMENTS,
+                "maxTranscriptSegments": REACT_VIDEO_PPT_MAX_TRANSCRIPT_SEGMENTS,
+                "maxScenes": REACT_VIDEO_PPT_MAX_SCENES,
+                "maxOcrSnippets": REACT_VIDEO_PPT_MAX_OCR_SNIPPETS,
+            },
+            "deliverables": ["transcript_text", "slide_image_candidates", "ppt_outline_or_pptx", "timestamp_map"],
+            "no_host_composed_answer": true,
+        }),
+        trail_step: json!({
+            "status": status,
+            "label": "提取视频 PPT 和原文",
+            "react_action": action.action_type.as_str(),
+            "item_count": item_count,
+            "denied_count": denied_count,
+            "at": Utc::now(),
+        }),
+        final_answer: None,
+    })
+}
+
+fn video_ppt_extraction_item(detail: contracts::DocumentMediaDetailView) -> Value {
+    let transcript_count = detail.transcript_segments.len();
+    let scene_count = detail.scenes.len();
+    let ocr_count = detail.keyframe_ocr_snippets.len();
+    let evidence_status = if transcript_count > 0 || scene_count > 0 || ocr_count > 0 {
+        "available"
+    } else {
+        "missing"
+    };
+    let missing = [
+        (transcript_count == 0, "transcript_text"),
+        (ocr_count == 0, "slide_image_candidates"),
+        (scene_count == 0, "scene_windows"),
+    ]
+    .into_iter()
+    .filter_map(|(is_missing, key)| is_missing.then_some(key))
+    .collect::<Vec<_>>();
+
+    json!({
+        "type": "video_ppt_transcript_evidence",
+        "document": detail.document,
+        "media_kind": detail.media_kind,
+        "parse_status": detail.parse_status,
+        "evidence_status": evidence_status,
+        "transcript_segments": detail.transcript_segments
+            .into_iter()
+            .take(REACT_VIDEO_PPT_MAX_TRANSCRIPT_SEGMENTS)
+            .collect::<Vec<_>>(),
+        "scenes": detail.scenes
+            .into_iter()
+            .take(REACT_VIDEO_PPT_MAX_SCENES)
+            .collect::<Vec<_>>(),
+        "keyframe_ocr_snippets": detail.keyframe_ocr_snippets
+            .into_iter()
+            .take(REACT_VIDEO_PPT_MAX_OCR_SNIPPETS)
+            .collect::<Vec<_>>(),
+        "provider_evidence": detail.provider_evidence,
+        "missing": missing,
+        "model_facing": detail.model_facing,
+        "raw_media_metadata": detail.raw_media_metadata,
+    })
+}
+
+fn is_video_document_material(document: &Document) -> bool {
+    let content_type = document.content_type.trim().to_ascii_lowercase();
+    if content_type.starts_with("video/") {
+        return true;
+    }
+    let object_key = document.object_key.to_ascii_lowercase();
+    [".mp4", ".mov", ".m4v", ".webm", ".mkv", ".avi"]
+        .into_iter()
+        .any(|extension| object_key.ends_with(extension))
+}
+
 fn first_url_in_text(text: &str) -> Option<&str> {
     text.split_whitespace()
         .find(|part| part.starts_with("http://") || part.starts_with("https://"))
@@ -1496,9 +1672,12 @@ mod tests {
     use super::*;
     use crate::react_agent_contract::AssistantRunReActStatus;
     use domain_model::{
-        DatasetId, DocumentChunkId, DocumentChunkState, DocumentLifecycle, TenantId,
+        DatasetId, DocumentChunkId, DocumentChunkState, DocumentId, DocumentLifecycle, TenantId,
     };
-    use std::sync::{Mutex, OnceLock};
+    use std::{
+        collections::BTreeMap,
+        sync::{Mutex, OnceLock},
+    };
 
     fn openclaw_env_test_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -1529,6 +1708,23 @@ mod tests {
             answer: None,
             citations: Vec::new(),
             conversation_state: json!({}),
+        }
+    }
+
+    fn test_document(object_key: &str, content_type: &str) -> Document {
+        Document {
+            id: DocumentId::new(),
+            tenant_id: TenantId::new(),
+            dataset_id: DatasetId::new(),
+            owner_user_id: None,
+            title: "测试视频".to_string(),
+            object_key: object_key.to_string(),
+            content_type: content_type.to_string(),
+            lifecycle: DocumentLifecycle::Extracted,
+            secret_binding_ids: Vec::new(),
+            metadata: BTreeMap::new(),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
         }
     }
 
@@ -1597,6 +1793,81 @@ mod tests {
             ])
         );
         assert!(result.final_answer.is_none());
+    }
+
+    #[test]
+    fn video_document_material_accepts_video_content_type_and_extension() {
+        let mut document = test_document("training.mov", "application/octet-stream");
+
+        assert!(is_video_document_material(&document));
+
+        document.object_key = "file:///tmp/training.bin".to_string();
+        document.content_type = "video/mp4".to_string();
+        assert!(is_video_document_material(&document));
+
+        document.content_type = "application/pdf".to_string();
+        assert!(!is_video_document_material(&document));
+    }
+
+    #[test]
+    fn video_ppt_extraction_item_keeps_media_evidence_for_model() {
+        let document = test_document("training.mp4", "video/mp4");
+        let detail = to_document_media_detail_view(
+            document,
+            vec![DocumentChunk {
+                id: DocumentChunkId::new(),
+                tenant_id: TenantId::new(),
+                dataset_id: DatasetId::new(),
+                document_id: DocumentId::new(),
+                chunk_index: 0,
+                content: "视频解析摘要".to_string(),
+                token_count: 6,
+                state: DocumentChunkState::Extracted,
+                metadata: BTreeMap::from_iter([(
+                    "parse_metadata".to_string(),
+                    json!({
+                        "media": {
+                            "kind": "video",
+                            "parse_status": "transcribed",
+                            "transcript_segments": [{
+                                "start_seconds": 1.0,
+                                "end_seconds": 3.0,
+                                "text": "第一页介绍系统目标",
+                                "source": "MEDIA_TRANSCRIBE_BIN"
+                            }],
+                            "scenes": [{
+                                "start_seconds": 1.0,
+                                "end_seconds": 8.0,
+                                "summary": "标题页",
+                                "source": "MEDIA_SCENE_BIN"
+                            }],
+                            "keyframe_ocr_snippets": [{
+                                "timestamp_seconds": 2.0,
+                                "text": "AI 数据智能助手",
+                                "source": "MEDIA_KEYFRAME_OCR_BIN"
+                            }],
+                            "provider_evidence": []
+                        }
+                    }),
+                )]),
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+            }],
+        );
+
+        let item = video_ppt_extraction_item(detail);
+
+        assert_eq!(item["type"], json!("video_ppt_transcript_evidence"));
+        assert_eq!(item["evidence_status"], json!("available"));
+        assert_eq!(
+            item["transcript_segments"][0]["text"],
+            json!("第一页介绍系统目标")
+        );
+        assert_eq!(
+            item["keyframe_ocr_snippets"][0]["text"],
+            json!("AI 数据智能助手")
+        );
+        assert_eq!(item["missing"], json!([]));
     }
 
     #[test]

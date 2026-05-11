@@ -88,7 +88,7 @@ Completed and preserved:
 - The next architecture uplift is to connect model-gateway profiles to the Codex conversation executor so normal assistant conversations can be judged/executed by Codex while V3 supplies data and validates actions.
 - `openai/codex` OSS has been checked as the target execution-kernel reference. It is Apache-2.0, Rust-majority, installable by npm/Homebrew/releases, and exposes multiple integration surfaces: `codex exec` non-interactive runs, structured output schemas, SDK thread control, app-server JSON-RPC, and MCP server mode.
 - `CoDeepSeedeX` has been checked as a reference pattern for private Responses-compatible provider shims. It is useful for Codex-to-non-OpenAI provider adaptation, profile wrappers, health/usage/debug endpoints, context-budget diagnostics, tool-call protocol repair, and liveness guards. It is not a V3 dependency or replacement architecture.
-- Video PPT/transcript extraction is only partially present: V3 can parse uploaded/local audio-video evidence and preserve media timestamps, but it does not yet have a complete model-visible action contract for direct video-file extraction, public video URL/page resolution, captured media registration, PPT extraction, or transcript/PPT artifact lifecycle. Login-gated video sites, QR login, cookies, and recording bypass flows are out of scope for the next implementation slice.
+- Video PPT/transcript extraction is partially present: V3 can parse uploaded/local audio-video evidence, preserve media timestamps, expose model-visible `resolve_video_url` / `extract_video_ppt_transcript` action contracts, and let ReAct supply parsed transcript/scene/keyframe OCR evidence from selected uploaded video documents without host-composed answers. Public video URL/page resolution, remote media registration, dedicated PPT extraction artifacts, and transcript/PPT artifact lifecycle are still pending. Login-gated video sites, QR login, cookies, and recording bypass flows are out of scope for the next implementation slice.
 
 ## Architecture Modules
 
@@ -262,7 +262,7 @@ The next highest leverage order is:
 1. Preserve the current overall UI and stop broad shell redesign.
 2. Finish static-page module editability, planning quality, final-render fidelity, export diagnostics, and data-quality handling.
 3. Improve parsing, retrieval, hidden conversation memory, media understanding, and AssistantRun context supply so the model sees better evidence and current draft state.
-4. Add direct-upload / publicly resolvable video PPT extraction as a media-quality subtrack: model-visible action contract, video URL/page resolver, background media parsing, transcript/PPT extraction artifacts, and no host-composed fallback answers.
+4. Continue direct-upload / publicly resolvable video PPT extraction as a media-quality subtrack: complete the public video URL/page resolver, remote media registration, background media parsing, transcript/PPT extraction artifacts, and no host-composed fallback answers. Uploaded video evidence supply through ReAct already exists.
 5. Build the model-gateway profile system and Codex conversation executor bridge behind feature flags and shadow/dry-run comparison, without changing the visible static-page flow.
 6. Add the safe HTML artifact viewer as a common review/report surface, starting with Codex execution reports, static-page planning handoffs, and video extraction summaries.
 7. Validate real Codex/external-page fetching only on the jump host or later Mac host when browser access is needed.
