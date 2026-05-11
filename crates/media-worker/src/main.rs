@@ -9,7 +9,7 @@ use media_worker::{
     FrameExtractionConfig, MediaWorkflowTaskKind,
 };
 use serde_json::Value;
-use storage::{NewAssistantRunEvent, PgStorage, DEFAULT_LOCAL_DATABASE_URL};
+use storage::{NewAssistantRunEvent, NewHtmlArtifact, PgStorage, DEFAULT_LOCAL_DATABASE_URL};
 use tokio::time::Duration;
 use uuid::Uuid;
 use workflow_engine::{WorkflowCatalog, WorkflowSignal};
@@ -267,6 +267,50 @@ async fn append_video_extraction_assistant_event(
             },
         )
         .await?;
+    persist_video_extraction_html_artifacts(storage, &run, &html_artifacts).await?;
+
+    Ok(())
+}
+
+async fn persist_video_extraction_html_artifacts(
+    storage: &PgStorage,
+    run: &domain_model::AssistantRun,
+    html_artifacts: &[Value],
+) -> Result<()> {
+    for artifact in html_artifacts {
+        let Some(id) = artifact.get("id").and_then(Value::as_str) else {
+            continue;
+        };
+        storage
+            .html_artifacts()
+            .upsert(
+                run.tenant_id,
+                &NewHtmlArtifact {
+                    id: id.to_string(),
+                    owner_user_id: run.user_id,
+                    assistant_run_id: Some(run.id),
+                    local_thread_id: run.local_thread_id.clone(),
+                    source_type: artifact
+                        .get("source_type")
+                        .and_then(Value::as_str)
+                        .unwrap_or("video_extraction")
+                        .to_string(),
+                    template_id: artifact
+                        .get("template_id")
+                        .and_then(Value::as_str)
+                        .unwrap_or("video_extraction_summary")
+                        .to_string(),
+                    interaction_mode: artifact
+                        .get("interaction_mode")
+                        .and_then(Value::as_str)
+                        .unwrap_or("read_only")
+                        .to_string(),
+                    manifest: artifact.clone(),
+                    created_at: Utc::now(),
+                },
+            )
+            .await?;
+    }
 
     Ok(())
 }
