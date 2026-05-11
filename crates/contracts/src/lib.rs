@@ -327,6 +327,152 @@ pub struct CodexHostTaskOutputView {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+pub enum VideoExtractionSourceKindView {
+    UploadedVideoFile,
+    DirectVideoUrl,
+    PublicPageResolvableVideo,
+}
+
+impl VideoExtractionSourceKindView {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::UploadedVideoFile => "uploaded_video_file",
+            Self::DirectVideoUrl => "direct_video_url",
+            Self::PublicPageResolvableVideo => "public_page_resolvable_video",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct VideoExtractionSourceRefView {
+    pub source_type: VideoExtractionSourceKindView,
+    pub document_id: Option<DocumentId>,
+    pub source_url: Option<String>,
+    pub source_page_url: Option<String>,
+    pub title_hint: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct VideoExtractionResolvedAssetRefView {
+    pub document_id: DocumentId,
+    pub dataset_id: DatasetId,
+    pub title: String,
+    pub content_type: String,
+    pub asset_state: String,
+    pub workflow_execution_id: Option<WorkflowExecutionId>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum VideoExtractionArtifactKindView {
+    TranscriptText,
+    SlideImageCandidates,
+    PptOutline,
+    Pptx,
+    Markdown,
+    SourceText,
+    TimestampMap,
+    HtmlSummary,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct VideoExtractionArtifactRefView {
+    pub artifact_kind: VideoExtractionArtifactKindView,
+    pub artifact_id: String,
+    pub title: String,
+    pub format: String,
+    pub uri: Option<String>,
+    pub html_artifact_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum VideoExtractionStageView {
+    Queued,
+    ResolvingSource,
+    Registered,
+    Parsing,
+    ExtractingPpt,
+    Completed,
+    Failed,
+    UnsupportedSource,
+    Cancelled,
+    DeadLettered,
+}
+
+impl VideoExtractionStageView {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Queued => "queued",
+            Self::ResolvingSource => "resolving_source",
+            Self::Registered => "registered",
+            Self::Parsing => "parsing",
+            Self::ExtractingPpt => "extracting_ppt",
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+            Self::UnsupportedSource => "unsupported_source",
+            Self::Cancelled => "cancelled",
+            Self::DeadLettered => "dead_lettered",
+        }
+    }
+
+    pub fn from_stage(value: &str) -> Option<Self> {
+        match value {
+            "queued" => Some(Self::Queued),
+            "resolving_source" => Some(Self::ResolvingSource),
+            "registered" => Some(Self::Registered),
+            "parsing" => Some(Self::Parsing),
+            "extracting_ppt" => Some(Self::ExtractingPpt),
+            "completed" => Some(Self::Completed),
+            "failed" => Some(Self::Failed),
+            "unsupported_source" => Some(Self::UnsupportedSource),
+            "cancelled" => Some(Self::Cancelled),
+            "dead_lettered" => Some(Self::DeadLettered),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct VideoExtractionRequestView {
+    pub assistant_run_id: Option<AssistantRunId>,
+    pub local_thread_id: Option<String>,
+    pub source: VideoExtractionSourceRefView,
+    pub target_dataset_id: Option<DatasetId>,
+    pub requested_outputs: Vec<VideoExtractionArtifactKindView>,
+    pub background_only: bool,
+}
+
+impl VideoExtractionRequestView {
+    pub fn to_workflow_context(&self) -> Value {
+        json!({
+            "kind": WorkflowKind::VideoExtraction.as_str(),
+            "assistant_run_id": self.assistant_run_id.map(|id| id.to_string()),
+            "local_thread_id": self.local_thread_id.clone(),
+            "source": self.source.clone(),
+            "target_dataset_id": self.target_dataset_id.map(|id| id.to_string()),
+            "requested_outputs": self.requested_outputs.clone(),
+            "background_only": self.background_only,
+            "queue": "media",
+            "task_key": "resolve_video_source",
+        })
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct VideoExtractionStateView {
+    pub workflow_execution_id: WorkflowExecutionId,
+    pub stage: VideoExtractionStageView,
+    pub status: WorkflowStatus,
+    pub source: VideoExtractionSourceRefView,
+    pub resolved_asset: Option<VideoExtractionResolvedAssetRefView>,
+    pub artifacts: Vec<VideoExtractionArtifactRefView>,
+    pub message: Option<String>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum AssistantRunExecutorTransportView {
     Direct,
     CodexDryRun,
@@ -3175,6 +3321,112 @@ mod tests {
             HtmlArtifactTemplateIdView::CodexExecutionReport
         );
         assert_eq!(decoded.source_type, HtmlArtifactSourceTypeView::CodexHost);
+    }
+
+    #[test]
+    fn video_extraction_request_context_uses_stable_wire_shape() {
+        let assistant_run_id = AssistantRunId::new();
+        let dataset_id = DatasetId::new();
+        let document_id = DocumentId::new();
+        let request = VideoExtractionRequestView {
+            assistant_run_id: Some(assistant_run_id),
+            local_thread_id: Some("browser-thread-a".to_string()),
+            source: VideoExtractionSourceRefView {
+                source_type: VideoExtractionSourceKindView::PublicPageResolvableVideo,
+                document_id: Some(document_id),
+                source_url: Some("https://example.com/video.mp4".to_string()),
+                source_page_url: Some("https://example.com/watch".to_string()),
+                title_hint: Some("Demo Video".to_string()),
+            },
+            target_dataset_id: Some(dataset_id),
+            requested_outputs: vec![
+                VideoExtractionArtifactKindView::TranscriptText,
+                VideoExtractionArtifactKindView::Pptx,
+                VideoExtractionArtifactKindView::HtmlSummary,
+            ],
+            background_only: true,
+        };
+
+        let encoded = serde_json::to_value(&request).expect("request should serialize");
+
+        assert_eq!(
+            encoded["source"]["source_type"],
+            json!("public_page_resolvable_video")
+        );
+        assert_eq!(encoded["requested_outputs"][1], json!("pptx"));
+        assert_eq!(encoded["background_only"], json!(true));
+
+        let context = request.to_workflow_context();
+        assert_eq!(context["kind"], json!("video_extraction_workflow"));
+        assert_eq!(
+            context["assistant_run_id"],
+            json!(assistant_run_id.to_string())
+        );
+        assert_eq!(context["target_dataset_id"], json!(dataset_id.to_string()));
+        assert_eq!(context["queue"], json!("media"));
+        assert_eq!(context["task_key"], json!("resolve_video_source"));
+
+        let decoded: VideoExtractionRequestView =
+            serde_json::from_value(encoded).expect("request should deserialize");
+        assert_eq!(
+            decoded.source.source_type,
+            VideoExtractionSourceKindView::PublicPageResolvableVideo
+        );
+        assert_eq!(
+            decoded.requested_outputs,
+            vec![
+                VideoExtractionArtifactKindView::TranscriptText,
+                VideoExtractionArtifactKindView::Pptx,
+                VideoExtractionArtifactKindView::HtmlSummary,
+            ]
+        );
+    }
+
+    #[test]
+    fn video_extraction_state_and_artifacts_use_workflow_stage_names() {
+        let state = VideoExtractionStateView {
+            workflow_execution_id: WorkflowExecutionId::new(),
+            stage: VideoExtractionStageView::ExtractingPpt,
+            status: WorkflowStatus::Running,
+            source: VideoExtractionSourceRefView {
+                source_type: VideoExtractionSourceKindView::UploadedVideoFile,
+                document_id: Some(DocumentId::new()),
+                source_url: None,
+                source_page_url: None,
+                title_hint: Some("Uploaded Video".to_string()),
+            },
+            resolved_asset: Some(VideoExtractionResolvedAssetRefView {
+                document_id: DocumentId::new(),
+                dataset_id: DatasetId::new(),
+                title: "Uploaded Video".to_string(),
+                content_type: "video/mp4".to_string(),
+                asset_state: "parsed".to_string(),
+                workflow_execution_id: Some(WorkflowExecutionId::new()),
+            }),
+            artifacts: vec![VideoExtractionArtifactRefView {
+                artifact_kind: VideoExtractionArtifactKindView::Markdown,
+                artifact_id: "video-artifact-md-1".to_string(),
+                title: "原文和 PPT 大纲".to_string(),
+                format: "text/markdown".to_string(),
+                uri: Some("artifact://video-artifact-md-1".to_string()),
+                html_artifact_id: None,
+            }],
+            message: Some("extracting PPT candidates".to_string()),
+            updated_at: Utc::now(),
+        };
+
+        let encoded = serde_json::to_value(&state).expect("state should serialize");
+
+        assert_eq!(encoded["stage"], json!("extracting_ppt"));
+        assert_eq!(encoded["artifacts"][0]["artifact_kind"], json!("markdown"));
+        assert_eq!(
+            VideoExtractionStageView::from_stage("extracting_ppt"),
+            Some(VideoExtractionStageView::ExtractingPpt)
+        );
+        assert_eq!(
+            VideoExtractionStageView::ExtractingPpt.as_str(),
+            "extracting_ppt"
+        );
     }
 
     #[test]
