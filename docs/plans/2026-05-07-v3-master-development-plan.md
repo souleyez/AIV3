@@ -314,6 +314,8 @@ The next development thread should keep the current UI shell stable and continue
 
 **2026-05-11 follow-up:** Host validation is now stricter than `codex_exec + completed + allowed host`. A smoke result only counts as validated when it is from `windows_jump` or `mac_host`, actually invoked Codex, used a configured task workspace, kept the command prompt redacted, exited with code `0`, and reported isolated task memory plus a configured task memory space. Completed-looking outputs that fail any of those guardrails are counted as `failed` with `guard_failed_count`, so they cannot make the promotion gate eligible.
 
+**2026-05-11 transport gate follow-up:** Browser-facing real transport requests now require two explicit operator gates before reaching `assistant-runtime`: `ASSISTANT_RUN_CODEX_REAL_TRANSPORT_FEATURE_GATE=enabled` and `ASSISTANT_RUN_CODEX_REAL_TRANSPORT_PROMOTION_REVIEW_APPROVED=approved`. If either gate is missing, V3 records the requested transport in `transport_policy` but downgrades the effective executor to `codex_plan_only`. The promotion-review gate should only be enabled after the read-only `promotion_gate` says shadow comparison and jump-host/Mac-host validation are eligible for feature-gate review.
+
 **OpenAI Codex OSS reference checked on 2026-05-10:**
 
 - Repository: `https://github.com/openai/codex`

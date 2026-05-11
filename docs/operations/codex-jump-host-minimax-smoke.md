@@ -112,7 +112,7 @@ Expected Host-side guardrails:
 Expected V3 diagnostic closure:
 
 - AssistantRun detail diagnostics should keep `codex_executor.shadow_gate.host_validation.ready_for_jump_host_validation=true` only after stable matched shadow runs.
-- Browser-facing AssistantRun diagnostics should show any requested real transport downgrade in `codex_executor.latest.transport_policy` until the manual real-transport feature gate is enabled.
+- Browser-facing AssistantRun diagnostics should show any requested real transport downgrade in `codex_executor.latest.transport_policy` until both `ASSISTANT_RUN_CODEX_REAL_TRANSPORT_FEATURE_GATE=enabled` and `ASSISTANT_RUN_CODEX_REAL_TRANSPORT_PROMOTION_REVIEW_APPROVED=approved` are enabled after promotion review.
 - Completed jump-host output should appear under `codex_executor.host_validation_results`.
 - A successful smoke result should have `mode=codex_exec`, `status=completed`, `host_kind=windows_jump` or `host_kind=mac_host`, `host_validation_completed=true`, `codex_invoked=true`, `command_plan.workspace_configured=true`, and `process.exit_code=0`.
 - V3 now treats the following as required validation guards, not optional diagnostics: `codex_invoked=true`, `command_plan.workspace_configured=true`, `command_plan.prompt_redacted=true`, `process.exit_code=0`, `task_memory_isolated=true`, and `task_memory_space_configured=true`.

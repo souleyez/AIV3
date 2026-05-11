@@ -9677,6 +9677,7 @@ fn assistant_run_executor_transport_selection_from_env(
             assistant_run_executor_transport_selection_from_value(
                 &value,
                 assistant_run_codex_real_transport_feature_gate_enabled(),
+                assistant_run_codex_real_transport_promotion_review_approved(),
             )
         })
 }
@@ -9684,22 +9685,31 @@ fn assistant_run_executor_transport_selection_from_env(
 fn assistant_run_executor_transport_selection_from_value(
     value: &str,
     real_transport_feature_gate_enabled: bool,
+    real_transport_promotion_review_approved: bool,
 ) -> Option<AssistantRunExecutorTransportSelection> {
     let requested_transport = assistant_run_executor_transport_from_value(value)?;
     let real_transport_requested = assistant_run_executor_transport_is_real(&requested_transport);
-    let downgraded = real_transport_requested && !real_transport_feature_gate_enabled;
+    let real_transport_allowed = !real_transport_requested
+        || (real_transport_feature_gate_enabled && real_transport_promotion_review_approved);
+    let downgraded = real_transport_requested && !real_transport_allowed;
     let effective_transport = if downgraded {
         AssistantRunExecutorTransportView::CodexPlanOnly
     } else {
         requested_transport.clone()
     };
-    let downgrade_reason = if downgraded {
+    let downgrade_reason = if real_transport_requested && !real_transport_feature_gate_enabled {
         json!("real_transport_feature_gate_disabled")
+    } else if real_transport_requested && !real_transport_promotion_review_approved {
+        json!("real_transport_promotion_review_not_approved")
+    } else if downgraded {
+        json!("real_transport_not_allowed")
     } else {
         Value::Null
     };
-    let next_step = if downgraded {
+    let next_step = if real_transport_requested && !real_transport_feature_gate_enabled {
         "keep_codex_in_shadow_plan_only_until_promotion_gate_review"
+    } else if real_transport_requested && !real_transport_promotion_review_approved {
+        "review_shadow_and_host_reports_before_enabling_real_transport"
     } else if real_transport_requested {
         "assistant_runtime_still_validates_real_transport_before_execution"
     } else {
@@ -9713,12 +9723,14 @@ fn assistant_run_executor_transport_selection_from_value(
             "effective_transport": effective_transport.as_str(),
             "real_transport_requested": real_transport_requested,
             "real_transport_feature_gate_enabled": real_transport_feature_gate_enabled,
+            "real_transport_promotion_review_approved": real_transport_promotion_review_approved,
             "downgraded": downgraded,
             "downgrade_reason": downgrade_reason,
             "direct_execution_authoritative": true,
             "codex_mutation_allowed": false,
             "queue_allowed": false,
             "manual_feature_gate_required_for_real_transport": real_transport_requested,
+            "promotion_review_required_for_real_transport": real_transport_requested,
             "host_validation_required_for_real_transport": real_transport_requested,
             "next_step": next_step,
         }),
@@ -9742,6 +9754,18 @@ fn assistant_run_codex_real_transport_feature_gate_enabled() -> bool {
             matches!(
                 value.trim().to_ascii_lowercase().as_str(),
                 "1" | "true" | "enabled" | "on" | "yes"
+            )
+        })
+        .unwrap_or(false)
+}
+
+fn assistant_run_codex_real_transport_promotion_review_approved() -> bool {
+    std::env::var("ASSISTANT_RUN_CODEX_REAL_TRANSPORT_PROMOTION_REVIEW_APPROVED")
+        .ok()
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "approved" | "enabled" | "on" | "yes"
             )
         })
         .unwrap_or(false)
@@ -20081,6 +20105,10 @@ fn assistant_run_codex_transport_policy_summary(transport_policy: Option<&Value>
             .get("real_transport_feature_gate_enabled")
             .cloned()
             .unwrap_or(Value::Bool(false)),
+        "real_transport_promotion_review_approved": policy
+            .get("real_transport_promotion_review_approved")
+            .cloned()
+            .unwrap_or(Value::Bool(false)),
         "downgraded": policy
             .get("downgraded")
             .cloned()
@@ -20103,6 +20131,10 @@ fn assistant_run_codex_transport_policy_summary(transport_policy: Option<&Value>
             .unwrap_or(Value::Bool(false)),
         "manual_feature_gate_required_for_real_transport": policy
             .get("manual_feature_gate_required_for_real_transport")
+            .cloned()
+            .unwrap_or(Value::Bool(false)),
+        "promotion_review_required_for_real_transport": policy
+            .get("promotion_review_required_for_real_transport")
             .cloned()
             .unwrap_or(Value::Bool(false)),
         "host_validation_required_for_real_transport": policy
@@ -24173,6 +24205,7 @@ mod tests {
             "ASSISTANT_RUN_CODEX_RUNTIME_MODEL",
             "ASSISTANT_RUN_CODEX_MODEL_PROFILE_ENV",
             "ASSISTANT_RUN_CODEX_REAL_TRANSPORT_FEATURE_GATE",
+            "ASSISTANT_RUN_CODEX_REAL_TRANSPORT_PROMOTION_REVIEW_APPROVED",
             "ASSISTANT_RUN_EXECUTOR",
             "LLM_GATEWAY_ROUTE_CODEX_CONVERSATION_PROVIDER",
             "LLM_GATEWAY_ROUTE_CODEX_CONVERSATION_MODEL",
@@ -24211,9 +24244,12 @@ mod tests {
         );
         assert_eq!(assistant_run_executor_transport_from_value("unknown"), None);
 
-        let downgraded =
-            assistant_run_executor_transport_selection_from_value("codex_exec_schema", false)
-                .expect("real transport selection");
+        let downgraded = assistant_run_executor_transport_selection_from_value(
+            "codex_exec_schema",
+            false,
+            false,
+        )
+        .expect("real transport selection");
         assert_eq!(
             downgraded.effective_transport,
             AssistantRunExecutorTransportView::CodexPlanOnly
@@ -24234,8 +24270,33 @@ mod tests {
         assert_eq!(downgraded.policy["codex_mutation_allowed"], json!(false));
         assert_eq!(downgraded.policy["queue_allowed"], json!(false));
 
+        let review_blocked =
+            assistant_run_executor_transport_selection_from_value("app_server", true, false)
+                .expect("review-blocked real transport selection");
+        assert_eq!(
+            review_blocked.effective_transport,
+            AssistantRunExecutorTransportView::CodexPlanOnly
+        );
+        assert_eq!(review_blocked.policy["downgraded"], json!(true));
+        assert_eq!(
+            review_blocked.policy["downgrade_reason"],
+            json!("real_transport_promotion_review_not_approved")
+        );
+        assert_eq!(
+            review_blocked.policy["real_transport_feature_gate_enabled"],
+            json!(true)
+        );
+        assert_eq!(
+            review_blocked.policy["real_transport_promotion_review_approved"],
+            json!(false)
+        );
+        assert_eq!(
+            review_blocked.policy["promotion_review_required_for_real_transport"],
+            json!(true)
+        );
+
         let feature_gated =
-            assistant_run_executor_transport_selection_from_value("app_server", true)
+            assistant_run_executor_transport_selection_from_value("app_server", true, true)
                 .expect("feature gated real transport selection");
         assert_eq!(
             feature_gated.effective_transport,
@@ -24244,6 +24305,10 @@ mod tests {
         assert_eq!(feature_gated.policy["downgraded"], json!(false));
         assert_eq!(
             feature_gated.policy["manual_feature_gate_required_for_real_transport"],
+            json!(true)
+        );
+        assert_eq!(
+            feature_gated.policy["real_transport_promotion_review_approved"],
             json!(true)
         );
 
