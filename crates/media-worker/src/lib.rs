@@ -9,6 +9,7 @@ use std::{
 pub const DEFAULT_FRAME_EXTRACTION_INTERVAL_SECONDS: f64 = 0.15;
 pub const DEFAULT_RAW_FRAMES_DIR_NAME: &str = "raw_frames";
 pub const DEFAULT_RAW_FRAME_FILE_PATTERN: &str = "frame_%06d.jpg";
+pub const DEFAULT_FRAME_MANIFEST_FILE_NAME: &str = "frame_manifest.json";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MediaWorkflowTaskKind {
@@ -88,7 +89,7 @@ pub fn extract_video_ppt_output_with_frame_extraction(
     frame_extraction: Value,
 ) -> Value {
     let evidence = video_evidence_summary_from_chunks(chunks);
-    let artifacts = video_extraction_artifact_refs(document, &evidence);
+    let artifacts = video_extraction_artifact_refs(document, &evidence, &frame_extraction);
     let status = if evidence.has_evidence() {
         "completed"
     } else {
@@ -111,7 +112,7 @@ pub fn extract_video_ppt_output_with_frame_extraction(
         "artifacts": artifacts,
         "html_artifacts": [],
         "no_host_composed_answer": true,
-        "note": "media-worker summarizes persisted media evidence and records the raw_frames extraction plan in this slice; executing FFmpeg and writing durable PPTX/Markdown artifacts remain later stages.",
+        "note": "media-worker summarizes persisted media evidence and records raw_frames extraction state; durable PPTX/Markdown artifacts remain later stages.",
     })
 }
 
@@ -218,20 +219,27 @@ pub fn run_video_frame_extraction(
         .filter(|entry| entry.path().is_file())
         .count();
 
-    Ok(json!({
+    let manifest_path = session_dir.join(DEFAULT_FRAME_MANIFEST_FILE_NAME);
+    let manifest = json!({
         "status": "completed",
         "source": "ffmpeg_external_process",
         "enabled": true,
         "input_path": input_path.display().to_string(),
         "session_dir": session_dir.display().to_string(),
         "raw_frames_dir": raw_frames_dir.display().to_string(),
+        "manifest_path": manifest_path.display().to_string(),
+        "manifest_file_name": DEFAULT_FRAME_MANIFEST_FILE_NAME,
         "frame_file_pattern": DEFAULT_RAW_FRAME_FILE_PATTERN,
         "interval_seconds": config.interval_seconds,
         "save_all": true,
         "contact_sheet_source": DEFAULT_RAW_FRAMES_DIR_NAME,
         "frame_count": frame_count,
         "sop": "wechat-video-ppt-extract/raw_frames",
-    }))
+    });
+    let manifest_bytes = serde_json::to_vec_pretty(&manifest).map_err(|error| error.to_string())?;
+    fs::write(&manifest_path, manifest_bytes).map_err(|error| error.to_string())?;
+
+    Ok(manifest)
 }
 
 pub fn video_frame_extraction_plan(document: &Document) -> Value {
@@ -242,6 +250,7 @@ pub fn video_frame_extraction_plan(document: &Document) -> Value {
         "input_required": "local_media_path",
         "session_dir": format!("video-extraction-{}", document.id),
         "raw_frames_dir": format!("video-extraction-{}/{}", document.id, DEFAULT_RAW_FRAMES_DIR_NAME),
+        "manifest_file_name": DEFAULT_FRAME_MANIFEST_FILE_NAME,
         "frame_file_pattern": DEFAULT_RAW_FRAME_FILE_PATTERN,
         "interval_seconds": DEFAULT_FRAME_EXTRACTION_INTERVAL_SECONDS,
         "save_all": true,
@@ -335,6 +344,7 @@ pub fn video_evidence_summary_from_chunks(
 fn video_extraction_artifact_refs(
     document: &Document,
     evidence: &VideoExtractionEvidenceSummary,
+    frame_extraction: &Value,
 ) -> Vec<Value> {
     let mut artifacts = Vec::new();
     if evidence.transcript_segment_count > 0 {
@@ -358,6 +368,17 @@ fn video_extraction_artifact_refs(
             "application/json",
         ));
         artifacts.push(video_artifact_ref(document, "html_summary", "text/html"));
+    }
+    if frame_extraction
+        .get("manifest_path")
+        .and_then(Value::as_str)
+        .is_some_and(|value| !value.trim().is_empty())
+    {
+        artifacts.push(video_artifact_ref(
+            document,
+            "frame_manifest",
+            "application/json",
+        ));
     }
     artifacts
 }
@@ -469,6 +490,10 @@ mod tests {
             partial["frame_extraction"]["interval_seconds"],
             json!(DEFAULT_FRAME_EXTRACTION_INTERVAL_SECONDS)
         );
+        assert_eq!(
+            partial["frame_extraction"]["manifest_file_name"],
+            json!(DEFAULT_FRAME_MANIFEST_FILE_NAME)
+        );
         assert!(partial["artifacts"].as_array().expect("array").is_empty());
 
         let chunk = test_chunk(json!({
@@ -489,6 +514,25 @@ mod tests {
             completed["artifacts"][0]["artifact_kind"],
             json!("transcript_text")
         );
+    }
+
+    #[test]
+    fn extract_output_includes_frame_manifest_artifact_when_manifest_exists() {
+        let document = test_document();
+        let frame_extraction = json!({
+            "status": "completed",
+            "manifest_path": "C:/tmp/video-extraction/frame_manifest.json",
+            "raw_frames_dir": "C:/tmp/video-extraction/raw_frames",
+            "frame_count": 12
+        });
+
+        let output =
+            extract_video_ppt_output_with_frame_extraction(&document, &[], frame_extraction);
+
+        let artifacts = output["artifacts"].as_array().expect("artifacts");
+        assert_eq!(artifacts.len(), 1);
+        assert_eq!(artifacts[0]["artifact_kind"], json!("frame_manifest"));
+        assert_eq!(artifacts[0]["format"], json!("application/json"));
     }
 
     #[test]
