@@ -23,6 +23,7 @@ pub const DEFAULT_SLIDE_CANDIDATES_FILE_NAME: &str = "slide_candidates_manifest.
 pub const DEFAULT_CONTACT_SHEET_PLAN_FILE_NAME: &str = "contact_sheet_plan.json";
 pub const DEFAULT_CONTACT_SHEET_HTML_FILE_NAME: &str = "raw_contact_sheet.html";
 pub const DEFAULT_PPT_KEEP_LIST_TEMPLATE_FILE_NAME: &str = "ppt_keep_list_template.json";
+pub const DEFAULT_SELECTED_SLIDES_MANIFEST_FILE_NAME: &str = "selected_slides_manifest.json";
 pub const DEFAULT_PPTX_BUILD_PLAN_FILE_NAME: &str = "pptx_build_plan.json";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -514,6 +515,8 @@ fn write_video_slide_candidate_review_files(
     .map_err(|error| error.to_string())?;
 
     let keep_list_template_path = artifacts_dir.join(DEFAULT_PPT_KEEP_LIST_TEMPLATE_FILE_NAME);
+    let selected_candidate_indices =
+        read_selected_candidate_indices_from_keep_list(&keep_list_template_path, candidates.len());
     let keep_list_template = json!({
         "status": "waiting_for_selection",
         "source": "slide_candidates_manifest",
@@ -531,26 +534,47 @@ fn write_video_slide_candidate_review_files(
             "do_not_auto_select_all_frames": true,
         },
     });
-    fs::write(
+    if !keep_list_template_path.is_file() {
+        fs::write(
+            &keep_list_template_path,
+            serde_json::to_vec_pretty(&keep_list_template).map_err(|error| error.to_string())?,
+        )
+        .map_err(|error| error.to_string())?;
+    }
+
+    let selected_slides_manifest_path =
+        artifacts_dir.join(DEFAULT_SELECTED_SLIDES_MANIFEST_FILE_NAME);
+    let selected_slides_manifest = selected_slides_manifest_from_keep_list(
+        document,
+        &frames,
+        &selected_candidate_indices,
+        &candidate_manifest_path,
+        &contact_sheet_html_path,
         &keep_list_template_path,
-        serde_json::to_vec_pretty(&keep_list_template).map_err(|error| error.to_string())?,
+    );
+    fs::write(
+        &selected_slides_manifest_path,
+        serde_json::to_vec_pretty(&selected_slides_manifest).map_err(|error| error.to_string())?,
     )
     .map_err(|error| error.to_string())?;
 
     let pptx_build_plan_path = artifacts_dir.join(DEFAULT_PPTX_BUILD_PLAN_FILE_NAME);
+    let has_selected_slides = !selected_candidate_indices.is_empty();
     let pptx_build_plan = json!({
-        "status": "waiting_for_keep_list",
+        "status": if has_selected_slides { "ready_for_pptx_writer" } else { "waiting_for_keep_list" },
         "source": "slide_candidates_manifest",
         "document_id": document.id.to_string(),
         "dataset_id": document.dataset_id.to_string(),
         "title": document.title,
         "candidate_manifest": candidate_manifest_path.display().to_string(),
         "contact_sheet_plan": contact_sheet_plan_path.display().to_string(),
+        "contact_sheet_html": contact_sheet_html_path.display().to_string(),
         "keep_list_template": keep_list_template_path.display().to_string(),
+        "selected_slides_manifest": selected_slides_manifest_path.display().to_string(),
         "recommended_output": artifacts_dir.join("video_slides_screenshot_based.pptx").display().to_string(),
         "selection": {
             "mode": "manual_or_model_review_required",
-            "selected_candidate_indices": [],
+            "selected_candidate_indices": selected_candidate_indices,
             "rule": "Do not build a final PPTX until ppt_keep_list_template.json is filled and confirmed from the numbered contact sheet.",
         },
         "speaker_notes": {
@@ -591,6 +615,12 @@ fn write_video_slide_candidate_review_files(
             "ppt_keep_list_template",
             "application/json",
             &keep_list_template_path,
+        ),
+        video_generated_artifact_file(
+            document,
+            "selected_slides_manifest",
+            "application/json",
+            &selected_slides_manifest_path,
         ),
         video_generated_artifact_file(
             document,
@@ -708,6 +738,79 @@ fn html_escape_text(value: &str) -> String {
 
 fn html_escape_attr(value: &str) -> String {
     html_escape_text(value).replace('"', "&quot;")
+}
+
+fn read_selected_candidate_indices_from_keep_list(
+    path: &Path,
+    candidate_count: usize,
+) -> Vec<usize> {
+    let Some(value) = fs::read_to_string(path)
+        .ok()
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+    else {
+        return Vec::new();
+    };
+    selected_candidate_indices_from_value(&value, candidate_count)
+}
+
+fn selected_candidate_indices_from_value(value: &Value, candidate_count: usize) -> Vec<usize> {
+    let mut seen = BTreeSet::<usize>::new();
+    value
+        .get("selected_candidate_indices")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_u64)
+        .filter_map(|raw| usize::try_from(raw).ok())
+        .filter(|candidate_index| (1..=candidate_count).contains(candidate_index))
+        .filter(|candidate_index| seen.insert(*candidate_index))
+        .collect()
+}
+
+fn selected_slides_manifest_from_keep_list(
+    document: &Document,
+    frames: &[PathBuf],
+    selected_candidate_indices: &[usize],
+    candidate_manifest_path: &Path,
+    contact_sheet_html_path: &Path,
+    keep_list_template_path: &Path,
+) -> Value {
+    let selected_candidates = selected_candidate_indices
+        .iter()
+        .filter_map(|candidate_index| {
+            let frame = frames.get(candidate_index.saturating_sub(1))?;
+            let file_name = frame
+                .file_name()
+                .and_then(|value| value.to_str())
+                .unwrap_or("frame");
+            Some(json!({
+                "candidate_index": candidate_index,
+                "file_name": file_name,
+                "frame_path": frame.display().to_string(),
+                "contact_sheet_anchor": format!("candidate-{candidate_index}"),
+                "selection_status": "selected",
+            }))
+        })
+        .collect::<Vec<_>>();
+
+    json!({
+        "status": if selected_candidates.is_empty() { "waiting_for_selection" } else { "ready_for_pptx_writer" },
+        "source": "ppt_keep_list_template",
+        "document_id": document.id.to_string(),
+        "dataset_id": document.dataset_id.to_string(),
+        "title": document.title,
+        "candidate_manifest": candidate_manifest_path.display().to_string(),
+        "contact_sheet_html": contact_sheet_html_path.display().to_string(),
+        "keep_list_template": keep_list_template_path.display().to_string(),
+        "selected_candidate_indices": selected_candidate_indices,
+        "selected_count": selected_candidates.len(),
+        "selected_candidates": selected_candidates,
+        "next_step": if selected_candidates.is_empty() {
+            "fill ppt_keep_list_template.json from the numbered contact sheet"
+        } else {
+            "build screenshot-based PPTX from selected_candidates only"
+        },
+    })
 }
 
 pub fn video_generated_artifacts_plan(document: &Document) -> Value {
@@ -1697,6 +1800,9 @@ mod tests {
             .any(|file| file["artifact_kind"] == json!("ppt_keep_list_template")));
         assert!(files
             .iter()
+            .any(|file| file["artifact_kind"] == json!("selected_slides_manifest")));
+        assert!(files
+            .iter()
             .any(|file| file["artifact_kind"] == json!("pptx_build_plan")));
         let candidates_path = files
             .iter()
@@ -1724,6 +1830,15 @@ mod tests {
         let keep_list = fs::read_to_string(keep_list_path).expect("keep list template");
         assert!(keep_list.contains("waiting_for_selection"));
         assert!(keep_list.contains("do_not_auto_select_all_frames"));
+        let selected_slides_path = files
+            .iter()
+            .find(|file| file["artifact_kind"] == json!("selected_slides_manifest"))
+            .and_then(|file| file["path"].as_str())
+            .expect("selected slides manifest path");
+        let selected_slides =
+            fs::read_to_string(selected_slides_path).expect("selected slides manifest");
+        assert!(selected_slides.contains("waiting_for_selection"));
+        assert!(selected_slides.contains("\"selected_count\": 0"));
         let pptx_plan_path = files
             .iter()
             .find(|file| file["artifact_kind"] == json!("pptx_build_plan"))
@@ -1734,6 +1849,67 @@ mod tests {
         assert!(pptx_plan.contains("ppt_keep_list_template.json"));
         assert!(pptx_plan.contains("selected_candidate_indices"));
         assert!(pptx_plan.contains("video_slides_screenshot_based.pptx"));
+    }
+
+    #[test]
+    fn writes_selected_slide_manifest_from_existing_keep_list() {
+        let document = test_document();
+        let output_root = std::env::temp_dir().join(format!(
+            "aidp-v3-video-selected-slides-test-{}",
+            DocumentId::new()
+        ));
+        let session_dir = output_root.join(format!("video-extraction-{}", document.id));
+        let artifacts_dir = session_dir.join(DEFAULT_GENERATED_ARTIFACTS_DIR_NAME);
+        let raw_frames_dir = session_dir.join(DEFAULT_RAW_FRAMES_DIR_NAME);
+        fs::create_dir_all(&raw_frames_dir).expect("raw frames dir");
+        fs::create_dir_all(&artifacts_dir).expect("artifacts dir");
+        fs::write(raw_frames_dir.join("frame_000001.jpg"), b"fake").expect("frame 1");
+        fs::write(raw_frames_dir.join("frame_000002.jpg"), b"fake").expect("frame 2");
+        fs::write(raw_frames_dir.join("frame_000003.jpg"), b"fake").expect("frame 3");
+        let keep_list_path = artifacts_dir.join(DEFAULT_PPT_KEEP_LIST_TEMPLATE_FILE_NAME);
+        fs::write(
+            &keep_list_path,
+            serde_json::to_vec_pretty(&json!({
+                "status": "selected",
+                "selected_candidate_indices": [2, 1, 2, 99, 0],
+                "selection_notes": ["manual pick"]
+            }))
+            .expect("keep list bytes"),
+        )
+        .expect("keep list");
+        let frame_extraction = json!({
+            "status": "completed",
+            "raw_frames_dir": raw_frames_dir.display().to_string(),
+            "frame_count": 3,
+            "manifest_file_name": DEFAULT_FRAME_MANIFEST_FILE_NAME
+        });
+
+        let manifest =
+            write_video_extraction_text_artifacts(&document, &[], &frame_extraction, &output_root)
+                .expect("candidate artifacts");
+
+        let files = manifest["files"].as_array().expect("files");
+        let selected_slides_path = files
+            .iter()
+            .find(|file| file["artifact_kind"] == json!("selected_slides_manifest"))
+            .and_then(|file| file["path"].as_str())
+            .expect("selected slides manifest path");
+        let selected_slides =
+            fs::read_to_string(selected_slides_path).expect("selected slides manifest");
+        assert!(selected_slides.contains("ready_for_pptx_writer"));
+        assert!(selected_slides.contains("\"selected_candidate_indices\": [\n    2,\n    1\n  ]"));
+        assert!(selected_slides.contains("frame_000002.jpg"));
+        assert!(selected_slides.contains("frame_000001.jpg"));
+        let keep_list = fs::read_to_string(keep_list_path).expect("preserved keep list");
+        assert!(keep_list.contains("manual pick"));
+        let pptx_plan_path = files
+            .iter()
+            .find(|file| file["artifact_kind"] == json!("pptx_build_plan"))
+            .and_then(|file| file["path"].as_str())
+            .expect("pptx build plan path");
+        let pptx_plan = fs::read_to_string(pptx_plan_path).expect("pptx build plan");
+        assert!(pptx_plan.contains("ready_for_pptx_writer"));
+        assert!(pptx_plan.contains("selected_slides_manifest.json"));
     }
 
     #[test]
