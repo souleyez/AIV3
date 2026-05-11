@@ -308,6 +308,15 @@ test('renders video extraction summary template', () => {
           path: 'generated_artifacts/ppt_outline.md',
         }],
       },
+      deliverableStatus: {
+        state: 'evidence_artifacts_ready',
+        warningCount: 1,
+        warnings: [{
+          code: 'missing_transcript_alignment',
+          severity: 'medium',
+          message: 'Speaker notes cannot be aligned yet.',
+        }],
+      },
       note: '缺失项不会被补造。',
     },
   }));
@@ -322,6 +331,8 @@ test('renders video extraction summary template', () => {
   assert.match(video.html, /生成文件/);
   assert.match(video.html, /generated_artifacts\/transcript\.txt/);
   assert.match(video.html, /ppt_outline/);
+  assert.match(video.html, /质量提示/);
+  assert.match(video.html, /Speaker notes cannot be aligned yet/);
 });
 
 test('renders legacy video login handoff as unsupported source guidance', () => {

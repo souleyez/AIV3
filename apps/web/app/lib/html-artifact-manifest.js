@@ -497,6 +497,11 @@ function renderVideoExtractionSummary(manifest) {
     ].filter(Boolean).join(' · '),
     meta: file.artifactKind || file.artifact_kind || '',
   }));
+  const qualityWarnings = arrayOrEmpty(deliverableStatus.warnings).map((warning, index) => ({
+    title: warning.code || `质量提示 ${index + 1}`,
+    detail: warning.message || warning.detail || '',
+    meta: warning.severity || 'info',
+  }));
   return `
     ${renderKeyValueGrid([
       { label: '文档', value: document.title || manifest.title },
@@ -505,6 +510,7 @@ function renderVideoExtractionSummary(manifest) {
       { label: '证据状态', value: payload.evidenceStatus || payload.evidence_status || 'missing' },
       { label: '交付状态', value: deliverableStatus.state || 'unknown' },
       { label: 'PPTX', value: deliverableStatus.hasPptx || deliverableStatus.has_pptx ? 'ready' : 'not ready' },
+      { label: '质量提示', value: String(deliverableStatus.warningCount ?? deliverableStatus.warning_count ?? qualityWarnings.length) },
       { label: '原文片段', value: String(summary.transcriptSegmentCount ?? summary.transcript_segment_count ?? transcript.length) },
       { label: '场景片段', value: String(summary.sceneCount ?? summary.scene_count ?? scenes.length) },
       { label: '关键帧 OCR', value: String(summary.keyframeOcrSnippetCount ?? summary.keyframe_ocr_snippet_count ?? ocr.length) },
@@ -512,6 +518,10 @@ function renderVideoExtractionSummary(manifest) {
     <section>
       <h2>说明</h2>
       <p>${escapeHtml(payload.note || '该摘要来自后台视频解析证据，用于让模型继续生成原文、页面映射、PPT 大纲或截图型 PPT。缺失项不会被补造。')}</p>
+    </section>
+    <section>
+      <h2>质量提示</h2>
+      ${renderList(qualityWarnings, '暂无质量提示。')}
     </section>
     <section>
       <h2>原文片段</h2>

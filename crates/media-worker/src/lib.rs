@@ -27,6 +27,7 @@ pub const DEFAULT_CONTACT_SHEET_PLAN_FILE_NAME: &str = "contact_sheet_plan.json"
 pub const DEFAULT_CONTACT_SHEET_HTML_FILE_NAME: &str = "raw_contact_sheet.html";
 pub const DEFAULT_PPT_KEEP_LIST_TEMPLATE_FILE_NAME: &str = "ppt_keep_list_template.json";
 pub const DEFAULT_SELECTED_SLIDES_MANIFEST_FILE_NAME: &str = "selected_slides_manifest.json";
+pub const DEFAULT_SLIDE_NOTES_ARTIFACT_FILE_NAME: &str = "slide_notes.md";
 pub const DEFAULT_PPTX_BUILD_PLAN_FILE_NAME: &str = "pptx_build_plan.json";
 pub const DEFAULT_VIDEO_SLIDES_PPTX_FILE_NAME: &str = "video_slides_screenshot_based.pptx";
 
@@ -582,6 +583,13 @@ fn write_video_slide_candidate_review_files(
     )
     .map_err(|error| error.to_string())?;
 
+    let slide_notes_path = artifacts_dir.join(DEFAULT_SLIDE_NOTES_ARTIFACT_FILE_NAME);
+    fs::write(
+        &slide_notes_path,
+        render_selected_slide_notes_markdown(document, &selected_slides_manifest),
+    )
+    .map_err(|error| error.to_string())?;
+
     let pptx_build_plan_path = artifacts_dir.join(DEFAULT_PPTX_BUILD_PLAN_FILE_NAME);
     let pptx_output_path = artifacts_dir.join(DEFAULT_VIDEO_SLIDES_PPTX_FILE_NAME);
     let has_selected_slides = !selected_candidate_indices.is_empty();
@@ -668,6 +676,7 @@ fn write_video_slide_candidate_review_files(
             &keep_list_template_path,
         ),
         selected_slides_artifact,
+        video_generated_artifact_file(document, "slide_notes", "text/markdown", &slide_notes_path),
         video_generated_artifact_file(
             document,
             "pptx_build_plan",
@@ -869,6 +878,72 @@ fn selected_slides_manifest_from_keep_list(
     })
 }
 
+fn render_selected_slide_notes_markdown(
+    document: &Document,
+    selected_slides_manifest: &Value,
+) -> String {
+    let selected_candidates = selected_slides_manifest
+        .get("selected_candidates")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut output = format!("# Slide Notes: {}\n\n", document.title);
+    output.push_str("This file is deterministic evidence for the screenshot-based PPTX. It contains only source frame/candidate metadata and review warnings; narration alignment is a later enhancement.\n\n");
+    output.push_str("## Quality Warnings\n\n");
+    let warnings = video_selected_slide_quality_warnings(selected_slides_manifest);
+    for warning in warnings {
+        output.push_str(&format!("- {warning}\n"));
+    }
+    output.push('\n');
+    output.push_str("## Slides\n\n");
+    if selected_candidates.is_empty() {
+        output.push_str("- No selected slides yet. Fill `ppt_keep_list_template.json` from the numbered contact sheet before building the final PPTX.\n");
+        return output;
+    }
+    for (index, candidate) in selected_candidates.iter().enumerate() {
+        let slide_number = index + 1;
+        let candidate_index = candidate
+            .get("candidate_index")
+            .and_then(Value::as_u64)
+            .unwrap_or(slide_number as u64);
+        let file_name = candidate
+            .get("file_name")
+            .and_then(Value::as_str)
+            .unwrap_or("frame");
+        let frame_path = candidate
+            .get("frame_path")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        output.push_str(&format!(
+            "### Slide {slide_number}\n\n- Candidate: {candidate_index}\n- Source frame: {file_name}\n- Frame path: {frame_path}\n- Speaker notes: Source frame {file_name}; candidate {candidate_index}. Human/model review should align transcript/subtitles before customer delivery.\n\n"
+        ));
+    }
+    output
+}
+
+fn video_selected_slide_quality_warnings(selected_slides_manifest: &Value) -> Vec<String> {
+    let selected_count = selected_slides_manifest
+        .get("selected_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let mut warnings = Vec::new();
+    if selected_count == 0 {
+        warnings.push(
+            "No selected slides yet; PPTX generation is blocked until keep-list review completes."
+                .to_string(),
+        );
+    }
+    warnings.push(
+        "Speaker notes currently contain source frame metadata only; transcript/subtitle alignment is not yet verified."
+            .to_string(),
+    );
+    warnings.push(
+        "Slide images are raw frame screenshots until rectangle extraction/dedupe is promoted into the worker."
+            .to_string(),
+    );
+    warnings
+}
+
 fn write_screenshot_based_pptx(
     document: &Document,
     selected_slides_manifest: &Value,
@@ -931,6 +1006,16 @@ fn write_screenshot_based_pptx(
         PPTX_SLIDE_LAYOUT_RELS_XML,
     )?;
     write_pptx_text_entry(&mut writer, "ppt/theme/theme1.xml", PPTX_THEME_XML)?;
+    write_pptx_text_entry(
+        &mut writer,
+        "ppt/notesMasters/notesMaster1.xml",
+        PPTX_NOTES_MASTER_XML,
+    )?;
+    write_pptx_text_entry(
+        &mut writer,
+        "ppt/notesMasters/_rels/notesMaster1.xml.rels",
+        PPTX_NOTES_MASTER_RELS_XML,
+    )?;
 
     for (index, candidate) in candidates.iter().enumerate() {
         let slide_number = index + 1;
@@ -951,6 +1036,16 @@ fn write_screenshot_based_pptx(
             &mut writer,
             &format!("ppt/slides/_rels/slide{slide_number}.xml.rels"),
             &render_pptx_slide_rels(slide_number, extension),
+        )?;
+        write_pptx_text_entry(
+            &mut writer,
+            &format!("ppt/notesSlides/notesSlide{slide_number}.xml"),
+            &render_pptx_notes_slide(slide_number, candidate),
+        )?;
+        write_pptx_text_entry(
+            &mut writer,
+            &format!("ppt/notesSlides/_rels/notesSlide{slide_number}.xml.rels"),
+            &render_pptx_notes_slide_rels(slide_number),
         )?;
         let image_bytes = fs::read(&frame_path).map_err(|error| error.to_string())?;
         write_pptx_binary_entry(
@@ -1016,12 +1111,17 @@ fn render_pptx_content_types(candidates: &[Value]) -> String {
 <Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/>
 <Override PartName="/ppt/slideMasters/slideMaster1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideMaster+xml"/>
 <Override PartName="/ppt/slideLayouts/slideLayout1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideLayout+xml"/>
+<Override PartName="/ppt/notesMasters/notesMaster1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.notesMaster+xml"/>
 <Override PartName="/ppt/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/>
 "#,
     );
     for index in 1..=candidates.len() {
         output.push_str(&format!(
             r#"<Override PartName="/ppt/slides/slide{index}.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/>"#
+        ));
+        output.push('\n');
+        output.push_str(&format!(
+            r#"<Override PartName="/ppt/notesSlides/notesSlide{index}.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.notesSlide+xml"/>"#
         ));
         output.push('\n');
     }
@@ -1106,6 +1206,11 @@ fn render_pptx_presentation_rels(slide_count: usize) -> String {
         ));
         output.push('\n');
     }
+    output.push_str(&format!(
+        r#"<Relationship Id="rId{}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/notesMaster" Target="notesMasters/notesMaster1.xml"/>"#,
+        slide_count + 2
+    ));
+    output.push('\n');
     output.push_str("</Relationships>\n");
     output
 }
@@ -1146,6 +1251,55 @@ fn render_pptx_slide_rels(slide_number: usize, extension: &str) -> String {
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
 <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/image{slide_number}.{extension}"/>
 <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="../slideLayouts/slideLayout1.xml"/>
+<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/notesSlide" Target="../notesSlides/notesSlide{slide_number}.xml"/>
+</Relationships>
+"#
+    )
+}
+
+fn render_pptx_notes_slide(slide_number: usize, candidate: &Value) -> String {
+    let candidate_index = candidate
+        .get("candidate_index")
+        .and_then(Value::as_u64)
+        .unwrap_or(slide_number as u64);
+    let file_name = candidate
+        .get("file_name")
+        .and_then(Value::as_str)
+        .unwrap_or("frame");
+    let frame_path = candidate
+        .get("frame_path")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let note = format!(
+        "Source frame: {file_name}; candidate: {candidate_index}; path: {frame_path}. Transcript/subtitle alignment is not yet verified."
+    );
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<p:notes xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
+<p:cSld>
+<p:spTree>
+<p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>
+<p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr>
+<p:sp>
+<p:nvSpPr><p:cNvPr id="2" name="Speaker Notes"/><p:cNvSpPr txBox="1"/><p:nvPr><p:ph type="body" idx="1"/></p:nvPr></p:nvSpPr>
+<p:spPr><a:xfrm><a:off x="685800" y="914400"/><a:ext cx="5486400" cy="5486400"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr>
+<p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr lang="zh-CN" sz="1400"/><a:t>{}</a:t></a:r></a:p></p:txBody>
+</p:sp>
+</p:spTree>
+</p:cSld>
+<p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr>
+</p:notes>
+"#,
+        html_escape_text(&note)
+    )
+}
+
+fn render_pptx_notes_slide_rels(slide_number: usize) -> String {
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/notesMaster" Target="../notesMasters/notesMaster1.xml"/>
+<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="../slides/slide{slide_number}.xml"/>
 </Relationships>
 "#
     )
@@ -1206,6 +1360,20 @@ const PPTX_SLIDE_LAYOUT_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" stan
 const PPTX_SLIDE_LAYOUT_RELS_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
 <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideMaster" Target="../slideMasters/slideMaster1.xml"/>
+</Relationships>
+"#;
+
+const PPTX_NOTES_MASTER_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<p:notesMaster xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
+<p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr></p:spTree></p:cSld>
+<p:clrMap bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2" accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink"/>
+<p:notesStyle/>
+</p:notesMaster>
+"#;
+
+const PPTX_NOTES_MASTER_RELS_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme" Target="../theme/theme1.xml"/>
 </Relationships>
 "#;
 
@@ -1560,6 +1728,13 @@ fn video_deliverable_status(generated_artifacts: &Value) -> Value {
     let has_transcript = artifact_kinds.contains("transcript_text");
     let has_source_text = artifact_kinds.contains("source_text");
     let has_final_deliverables_manifest = artifact_kinds.contains("final_deliverables_manifest");
+    let warnings = video_generated_artifact_quality_warnings(
+        &files,
+        has_pptx,
+        has_selected_slides,
+        has_contact_sheet,
+        has_transcript,
+    );
     let state = if has_pptx {
         "final_pptx_ready"
     } else if has_selected_slides {
@@ -1585,7 +1760,58 @@ fn video_deliverable_status(generated_artifacts: &Value) -> Value {
         "has_selected_slides_manifest": has_selected_slides,
         "has_final_deliverables_manifest": has_final_deliverables_manifest,
         "has_pptx": has_pptx,
+        "warning_count": warnings.len(),
+        "warnings": warnings,
     })
+}
+
+fn video_generated_artifact_quality_warnings(
+    files: &[Value],
+    has_pptx: bool,
+    has_selected_slides: bool,
+    has_contact_sheet: bool,
+    has_transcript: bool,
+) -> Vec<Value> {
+    let mut warnings = Vec::new();
+    if !has_transcript {
+        warnings.push(json!({
+            "code": "missing_transcript_alignment",
+            "severity": "medium",
+            "message": "No transcript evidence is attached yet; speaker notes cannot be aligned to narration."
+        }));
+    }
+    if !has_contact_sheet {
+        warnings.push(json!({
+            "code": "missing_contact_sheet",
+            "severity": "medium",
+            "message": "No numbered contact sheet is available yet; slide selection should not be trusted for customer delivery."
+        }));
+    }
+    if !has_selected_slides {
+        warnings.push(json!({
+            "code": "keep_list_not_confirmed",
+            "severity": "high",
+            "message": "No confirmed selected slides were found; fill the keep-list before final PPTX delivery."
+        }));
+    }
+    if has_pptx {
+        warnings.push(json!({
+            "code": "screenshot_based_pptx",
+            "severity": "low",
+            "message": "PPTX uses raster screenshots; editable native slide reconstruction is not included in this slice."
+        }));
+    }
+    if files
+        .iter()
+        .any(|file| file.get("artifact_kind").and_then(Value::as_str) == Some("slide_notes"))
+    {
+        warnings.push(json!({
+            "code": "speaker_notes_metadata_only",
+            "severity": "low",
+            "message": "Speaker notes currently preserve source frame metadata only; subtitle/讲稿对页 remains a later enhancement."
+        }));
+    }
+    warnings
 }
 
 fn video_final_deliverables_manifest(
@@ -2411,6 +2637,14 @@ mod tests {
             .find(|file| file["artifact_kind"] == json!("selected_slides_manifest"))
             .expect("selected slides artifact ref");
         assert_eq!(selected_slides_ref["selected_count"], json!(0));
+        let slide_notes_path = files
+            .iter()
+            .find(|file| file["artifact_kind"] == json!("slide_notes"))
+            .and_then(|file| file["path"].as_str())
+            .expect("slide notes path");
+        let slide_notes = fs::read_to_string(slide_notes_path).expect("slide notes");
+        assert!(slide_notes.contains("Quality Warnings"));
+        assert!(slide_notes.contains("No selected slides yet"));
         let pptx_plan_path = files
             .iter()
             .find(|file| file["artifact_kind"] == json!("pptx_build_plan"))
@@ -2513,6 +2747,9 @@ mod tests {
         assert!(archive.by_name("ppt/presentation.xml").is_ok());
         assert!(archive.by_name("ppt/slides/slide1.xml").is_ok());
         assert!(archive.by_name("ppt/slides/slide2.xml").is_ok());
+        assert!(archive.by_name("ppt/notesSlides/notesSlide1.xml").is_ok());
+        assert!(archive.by_name("ppt/notesSlides/notesSlide2.xml").is_ok());
+        assert!(archive.by_name("ppt/notesMasters/notesMaster1.xml").is_ok());
         assert!(archive.by_name("ppt/media/image1.jpg").is_ok());
         assert!(archive.by_name("ppt/media/image2.jpg").is_ok());
         let mut presentation_rels = String::new();
@@ -2522,6 +2759,21 @@ mod tests {
             .read_to_string(&mut presentation_rels)
             .expect("presentation relationships text");
         assert!(presentation_rels.contains("slide1.xml"));
+        assert!(presentation_rels.contains("notesMaster1.xml"));
+        let mut slide_rels = String::new();
+        archive
+            .by_name("ppt/slides/_rels/slide1.xml.rels")
+            .expect("slide relationships")
+            .read_to_string(&mut slide_rels)
+            .expect("slide relationships text");
+        assert!(slide_rels.contains("notesSlide1.xml"));
+        let mut notes = String::new();
+        archive
+            .by_name("ppt/notesSlides/notesSlide1.xml")
+            .expect("notes slide")
+            .read_to_string(&mut notes)
+            .expect("notes slide text");
+        assert!(notes.contains("Source frame"));
         let final_manifest_path = files
             .iter()
             .find(|file| file["artifact_kind"] == json!("final_deliverables_manifest"))
@@ -2532,6 +2784,15 @@ mod tests {
         assert!(final_manifest.contains("final_pptx_ready"));
         assert!(final_manifest.contains("final_outputs"));
         assert!(final_manifest.contains(DEFAULT_VIDEO_SLIDES_PPTX_FILE_NAME));
+        assert!(final_manifest.contains("speaker_notes_metadata_only"));
+        let slide_notes_path = files
+            .iter()
+            .find(|file| file["artifact_kind"] == json!("slide_notes"))
+            .and_then(|file| file["path"].as_str())
+            .expect("slide notes path");
+        let slide_notes = fs::read_to_string(slide_notes_path).expect("slide notes");
+        assert!(slide_notes.contains("Slide 1"));
+        assert!(slide_notes.contains("candidate 2"));
     }
 
     #[test]

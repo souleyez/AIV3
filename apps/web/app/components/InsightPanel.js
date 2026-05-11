@@ -196,6 +196,7 @@ function artifactKindLabel(kind) {
     transcript_text: '原文',
     source_text: '来源文档',
     ppt_outline: 'PPT大纲',
+    slide_notes: '讲稿备注',
     timestamp_map: '时间映射',
     contact_sheet_html: '接触表',
     ppt_keep_list_template: 'Keep-list',
@@ -240,6 +241,7 @@ function preferredHtmlArtifactDownloads(artifact) {
     'final_deliverables_manifest',
     'extraction_artifacts_manifest',
     'ppt_outline',
+    'slide_notes',
     'transcript_text',
   ];
   const files = htmlArtifactGeneratedFiles(artifact).filter((file) => file.downloadable);
