@@ -245,3 +245,31 @@ test('renders report render summary template', () => {
   assert.match(report.html, /report\.publish/);
   assert.match(report.html, /发布前检查/);
 });
+
+test('renders legacy video login handoff as unsupported source guidance', () => {
+  const video = renderHtmlArtifactDocument(baseManifest({
+    id: 'video-source-limited',
+    sourceType: 'video_extraction',
+    templateId: 'wechat_video_login_handoff',
+    title: '视频来源受限',
+    payload: {
+      sourcePlatform: '微信视频号',
+      shortCode: 'ActLMg4yTD',
+      status: 'login_required',
+      loginMethod: '扫码登录',
+      qrStatus: 'pending_executor',
+      summary: '扫码登录交接',
+      fallback: '录屏保存视频',
+      targetArtifact: '视频 PPT 提取',
+    },
+  }));
+
+  assert.equal(video.rejected, false);
+  assert.match(video.html, /视频来源受限/);
+  assert.match(video.html, /不执行扫码登录、Cookie、登录态页面获取或录屏绕过/);
+  assert.match(video.html, /请上传视频文件/);
+  assert.match(video.html, /视频 PPT 提取/);
+  assert.doesNotMatch(video.html, /二维码/);
+  assert.doesNotMatch(video.html, /扫码登录交接/);
+  assert.doesNotMatch(video.html, /录屏保存视频/);
+});

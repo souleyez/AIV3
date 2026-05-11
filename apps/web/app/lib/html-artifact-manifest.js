@@ -31,7 +31,7 @@ const TEMPLATE_LABELS = {
   static_page_data_quality_report: '静态页数据质量报告',
   report_render_summary: '报告渲染摘要',
   code_review_summary: '代码审查摘要',
-  wechat_video_login_handoff: '视频登录交接',
+  wechat_video_login_handoff: '视频来源受限',
 };
 
 const SOURCE_LABELS = {
@@ -437,31 +437,45 @@ function renderCodeReviewSummary(manifest) {
 
 function renderWechatVideoLoginHandoff(manifest) {
   const payload = manifest.payload || {};
-  const qrImage = stringOrFallback(payload.qrImageDataUrl || payload.qr_image_data_url);
-  const safeQrImage = qrImage.startsWith('data:image/') ? qrImage : '';
-  const acquisitionSteps = arrayOrEmpty(payload.acquisitionSteps || payload.acquisition_steps).map((step, index) => ({
-    title: step.title || step.label || `获取步骤 ${index + 1}`,
-    detail: step.detail || step.summary || step.description || '',
-    meta: step.status || step.meta || '',
-  }));
-  const extractionSteps = arrayOrEmpty(payload.extractionSteps || payload.extraction_steps).map((step, index) => ({
-    title: step.title || step.label || `解析步骤 ${index + 1}`,
-    detail: step.detail || step.summary || step.description || '',
-    meta: step.status || step.meta || '',
-  }));
+  const acquisitionSteps = [
+    {
+      title: '提供可解析视频素材',
+      detail: '当前只支持上传视频文件、直接视频 URL，或公开页面里可直接解析到的视频地址。',
+      meta: 'required',
+    },
+    {
+      title: '进入后台解析',
+      detail: '拿到视频素材后再执行抽音频、抽关键帧、字幕/OCR 和 PPT/原文产物生成。',
+      meta: 'waiting_video',
+    },
+  ];
+  const extractionSteps = [
+    {
+      title: '提取原文',
+      detail: '从视频音频、字幕或转写结果中形成带时间戳的原文。',
+      meta: 'waiting_video',
+    },
+    {
+      title: '提取 PPT 画面',
+      detail: '从关键帧或页面区域中识别截图型幻灯片和页面文字。',
+      meta: 'waiting_video',
+    },
+    {
+      title: '生成交付产物',
+      detail: '输出原文、页面映射、截图型 PPT/大纲和缺失证据说明。',
+      meta: 'waiting_video',
+    },
+  ];
   return `
     ${renderKeyValueGrid([
-      { label: '平台', value: payload.sourcePlatform || payload.source_platform || '微信视频号' },
-      { label: '短链', value: payload.shortCode || payload.short_code || '未识别' },
-      { label: '当前阶段', value: payload.status || 'login_required' },
-      { label: '登录方式', value: payload.loginMethod || payload.login_method || '扫码登录' },
-      { label: '二维码', value: safeQrImage ? '已生成' : (payload.qrStatus || payload.qr_status || '待生成') },
+      { label: '来源', value: payload.sourcePlatform || payload.source_platform || '登录受限视频来源' },
+      { label: '来源标识', value: payload.shortCode || payload.short_code || '未识别' },
+      { label: '当前阶段', value: 'unsupported_login_gated_source' },
       { label: '产物目标', value: payload.targetArtifact || payload.target_artifact || '视频 PPT 提取' },
     ])}
     <section>
-      <h2>登录交接</h2>
-      <p>${escapeHtml(payload.summary || '该视频号内容需要微信授权后才能获取视频文件。助手已进入扫码登录交接阶段。')}</p>
-      ${safeQrImage ? `<div class="qr-box"><img alt="微信扫码登录二维码" src="${escapeHtml(safeQrImage)}"></div>` : '<p class="empty">二维码尚未生成。后续执行器会打开视频号页面并把登录二维码推送到这里，用户扫码后继续获取视频。</p>'}
+      <h2>来源受限</h2>
+      <p>当前开发切片不执行扫码登录、Cookie、登录态页面获取或录屏绕过。请上传视频文件，或提供可以直接访问的视频 URL；拿到视频素材后再进入同一套 PPT/原文提取流程。</p>
     </section>
     <section>
       <h2>获取视频</h2>
@@ -472,8 +486,8 @@ function renderWechatVideoLoginHandoff(manifest) {
       ${renderList(extractionSteps, '暂无解析步骤。')}
     </section>
     <section>
-      <h2>失败兜底</h2>
-      <p>${escapeHtml(payload.fallback || '如果登录态仍无法直接下载视频，则由执行器录屏保存视频，再走同一套语音、字幕、关键帧和页面大纲提取链路。')}</p>
+      <h2>缺少视频素材</h2>
+      <p>没有直接视频文件或可解析视频地址时，本轮不会继续伪造解析结果。用户补充素材后，系统再排后台任务并把提取产物写入智能助手产物区。</p>
     </section>
   `;
 }
