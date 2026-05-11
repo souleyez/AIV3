@@ -21,6 +21,7 @@ pub const DEFAULT_EXTRACTION_ARTIFACTS_MANIFEST_FILE_NAME: &str =
     "extraction_artifacts_manifest.json";
 pub const DEFAULT_SLIDE_CANDIDATES_FILE_NAME: &str = "slide_candidates_manifest.json";
 pub const DEFAULT_CONTACT_SHEET_PLAN_FILE_NAME: &str = "contact_sheet_plan.json";
+pub const DEFAULT_CONTACT_SHEET_HTML_FILE_NAME: &str = "raw_contact_sheet.html";
 pub const DEFAULT_PPT_KEEP_LIST_TEMPLATE_FILE_NAME: &str = "ppt_keep_list_template.json";
 pub const DEFAULT_PPTX_BUILD_PLAN_FILE_NAME: &str = "pptx_build_plan.json";
 
@@ -488,13 +489,21 @@ fn write_video_slide_candidate_review_files(
     )
     .map_err(|error| error.to_string())?;
 
+    let contact_sheet_html_path = artifacts_dir.join(DEFAULT_CONTACT_SHEET_HTML_FILE_NAME);
+    fs::write(
+        &contact_sheet_html_path,
+        render_raw_contact_sheet_html(document, &frames, artifacts_dir),
+    )
+    .map_err(|error| error.to_string())?;
+
     let contact_sheet_plan_path = artifacts_dir.join(DEFAULT_CONTACT_SHEET_PLAN_FILE_NAME);
     let contact_sheet_plan = json!({
         "status": "planned",
         "source": "raw_frames",
         "raw_frames_dir": raw_frames_dir.display().to_string(),
         "candidate_manifest": candidate_manifest_path.display().to_string(),
-        "recommended_output": artifacts_dir.join("raw_contact_sheet.jpg").display().to_string(),
+        "preview_html": contact_sheet_html_path.display().to_string(),
+        "recommended_output": contact_sheet_html_path.display().to_string(),
         "review_rule": "build a numbered contact sheet before rectangle extraction; keep user/model selected slide numbers only",
         "skill_reference": "wechat-video-ppt-extract/contact-sheet --source raw_frames",
     });
@@ -573,6 +582,12 @@ fn write_video_slide_candidate_review_files(
         ),
         video_generated_artifact_file(
             document,
+            "contact_sheet_html",
+            "text/html",
+            &contact_sheet_html_path,
+        ),
+        video_generated_artifact_file(
+            document,
             "ppt_keep_list_template",
             "application/json",
             &keep_list_template_path,
@@ -616,6 +631,83 @@ fn sorted_raw_frame_files(raw_frames_dir: &Path) -> Result<Vec<PathBuf>, String>
             )
     });
     Ok(frames)
+}
+
+fn render_raw_contact_sheet_html(
+    document: &Document,
+    frames: &[PathBuf],
+    artifacts_dir: &Path,
+) -> String {
+    let mut output = String::new();
+    output.push_str("<!doctype html>\n<html lang=\"zh-CN\">\n<head>\n");
+    output.push_str("<meta charset=\"utf-8\">\n");
+    output.push_str("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n");
+    output.push_str(&format!(
+        "<title>{} - raw contact sheet</title>\n",
+        html_escape_text(&document.title)
+    ));
+    output.push_str("<style>\n");
+    output.push_str(":root{color-scheme:dark;background:#111319;color:#e7eaf0;font-family:ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,\"Segoe UI\",sans-serif;}\n");
+    output.push_str("body{margin:0;padding:24px;background:#111319;}\n");
+    output.push_str("header{margin-bottom:18px;color:#c7ccd7;}\n");
+    output.push_str("h1{margin:0 0 6px;font-size:18px;color:#f3f5f8;font-weight:650;}\n");
+    output.push_str("p{margin:0;font-size:12px;line-height:1.55;}\n");
+    output.push_str(
+        ".grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px;}\n",
+    );
+    output.push_str("figure{margin:0;padding:10px;border-radius:14px;background:#191d26;}\n");
+    output.push_str(
+        "img{width:100%;height:auto;display:block;border-radius:10px;background:#0b0d12;}\n",
+    );
+    output.push_str("figcaption{margin-top:8px;font-size:12px;color:#c7ccd7;display:flex;gap:8px;justify-content:space-between;align-items:center;}\n");
+    output.push_str(".index{color:#ffffff;font-weight:700;}\n");
+    output.push_str(".name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}\n");
+    output.push_str("</style>\n</head>\n<body>\n");
+    output.push_str("<header>\n");
+    output.push_str(&format!("<h1>{}</h1>\n", html_escape_text(&document.title)));
+    output.push_str(&format!(
+        "<p>候选帧接触表。请用编号填写 {}，不要默认全选。</p>\n",
+        DEFAULT_PPT_KEEP_LIST_TEMPLATE_FILE_NAME
+    ));
+    output.push_str("</header>\n<main class=\"grid\">\n");
+
+    for (index, frame) in frames.iter().enumerate() {
+        let candidate_index = index + 1;
+        let file_name = frame
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("frame");
+        let src = contact_sheet_frame_src(frame, artifacts_dir);
+        output.push_str(&format!(
+            "<figure id=\"candidate-{candidate_index}\"><img src=\"{}\" alt=\"Candidate {candidate_index}: {}\"><figcaption><span class=\"index\">#{candidate_index}</span><span class=\"name\">{}</span></figcaption></figure>\n",
+            html_escape_attr(&src),
+            html_escape_attr(file_name),
+            html_escape_text(file_name)
+        ));
+    }
+
+    output.push_str("</main>\n</body>\n</html>\n");
+    output
+}
+
+fn contact_sheet_frame_src(frame: &Path, artifacts_dir: &Path) -> String {
+    let source = artifacts_dir
+        .parent()
+        .and_then(|session_dir| frame.strip_prefix(session_dir).ok())
+        .map(|relative_to_session| PathBuf::from("..").join(relative_to_session))
+        .unwrap_or_else(|| frame.to_path_buf());
+    source.display().to_string().replace('\\', "/")
+}
+
+fn html_escape_text(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+fn html_escape_attr(value: &str) -> String {
+    html_escape_text(value).replace('"', "&quot;")
 }
 
 pub fn video_generated_artifacts_plan(document: &Document) -> Value {
@@ -1599,6 +1691,9 @@ mod tests {
             .any(|file| file["artifact_kind"] == json!("contact_sheet_plan")));
         assert!(files
             .iter()
+            .any(|file| file["artifact_kind"] == json!("contact_sheet_html")));
+        assert!(files
+            .iter()
             .any(|file| file["artifact_kind"] == json!("ppt_keep_list_template")));
         assert!(files
             .iter()
@@ -1611,6 +1706,16 @@ mod tests {
         let candidates = fs::read_to_string(candidates_path).expect("candidate manifest");
         assert!(candidates.contains("frame_000001.jpg"));
         assert!(candidates.contains("review_required"));
+        let contact_sheet_html_path = files
+            .iter()
+            .find(|file| file["artifact_kind"] == json!("contact_sheet_html"))
+            .and_then(|file| file["path"].as_str())
+            .expect("contact sheet html path");
+        let contact_sheet_html =
+            fs::read_to_string(contact_sheet_html_path).expect("contact sheet html");
+        assert!(contact_sheet_html.contains("candidate-1"));
+        assert!(contact_sheet_html.contains("../raw_frames/frame_000001.jpg"));
+        assert!(contact_sheet_html.contains(DEFAULT_PPT_KEEP_LIST_TEMPLATE_FILE_NAME));
         let keep_list_path = files
             .iter()
             .find(|file| file["artifact_kind"] == json!("ppt_keep_list_template"))
