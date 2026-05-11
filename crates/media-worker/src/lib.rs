@@ -17,6 +17,8 @@ pub const DEFAULT_PPT_OUTLINE_ARTIFACT_FILE_NAME: &str = "ppt_outline.md";
 pub const DEFAULT_TIMESTAMP_MAP_ARTIFACT_FILE_NAME: &str = "timestamp_map.json";
 pub const DEFAULT_EXTRACTION_ARTIFACTS_MANIFEST_FILE_NAME: &str =
     "extraction_artifacts_manifest.json";
+pub const DEFAULT_SLIDE_CANDIDATES_FILE_NAME: &str = "slide_candidates_manifest.json";
+pub const DEFAULT_CONTACT_SHEET_PLAN_FILE_NAME: &str = "contact_sheet_plan.json";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MediaWorkflowTaskKind {
@@ -350,6 +352,12 @@ pub fn write_video_extraction_text_artifacts(
         ));
     }
 
+    if let Some(candidate_files) =
+        write_video_slide_candidate_review_files(document, frame_extraction, &artifacts_dir)?
+    {
+        files.extend(candidate_files);
+    }
+
     let timestamp_map_path = artifacts_dir.join(DEFAULT_TIMESTAMP_MAP_ARTIFACT_FILE_NAME);
     let timestamp_map = json!({
         "document_id": document.id.to_string(),
@@ -390,6 +398,125 @@ pub fn write_video_extraction_text_artifacts(
     fs::write(&manifest_path, manifest_bytes).map_err(|error| error.to_string())?;
 
     Ok(manifest)
+}
+
+fn write_video_slide_candidate_review_files(
+    document: &Document,
+    frame_extraction: &Value,
+    artifacts_dir: &Path,
+) -> Result<Option<Vec<Value>>, String> {
+    let raw_frames_dir = frame_extraction
+        .get("raw_frames_dir")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from);
+    let Some(raw_frames_dir) = raw_frames_dir else {
+        return Ok(None);
+    };
+    if !raw_frames_dir.is_dir() {
+        return Ok(None);
+    }
+
+    let frames = sorted_raw_frame_files(&raw_frames_dir)?;
+    if frames.is_empty() {
+        return Ok(None);
+    }
+
+    let candidates = frames
+        .iter()
+        .enumerate()
+        .map(|(index, path)| {
+            json!({
+                "candidate_index": index + 1,
+                "source": "raw_frames",
+                "file_name": path.file_name().and_then(|value| value.to_str()).unwrap_or("frame"),
+                "frame_path": path.display().to_string(),
+                "selection_status": "review_required",
+                "notes": "Candidate frame retained conservatively; rectangle extraction/dedupe/manual keep-list are later stages.",
+            })
+        })
+        .collect::<Vec<_>>();
+    let candidate_manifest_path = artifacts_dir.join(DEFAULT_SLIDE_CANDIDATES_FILE_NAME);
+    let candidate_manifest = json!({
+        "status": "review_required",
+        "source": "raw_frames",
+        "document_id": document.id.to_string(),
+        "dataset_id": document.dataset_id.to_string(),
+        "title": document.title,
+        "raw_frames_dir": raw_frames_dir.display().to_string(),
+        "candidate_count": candidates.len(),
+        "dedupe_policy": "conservative_keep_all_until_review",
+        "candidates": candidates,
+    });
+    fs::write(
+        &candidate_manifest_path,
+        serde_json::to_vec_pretty(&candidate_manifest).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
+
+    let contact_sheet_plan_path = artifacts_dir.join(DEFAULT_CONTACT_SHEET_PLAN_FILE_NAME);
+    let contact_sheet_plan = json!({
+        "status": "planned",
+        "source": "raw_frames",
+        "raw_frames_dir": raw_frames_dir.display().to_string(),
+        "candidate_manifest": candidate_manifest_path.display().to_string(),
+        "recommended_output": artifacts_dir.join("raw_contact_sheet.jpg").display().to_string(),
+        "review_rule": "build a numbered contact sheet before rectangle extraction; keep user/model selected slide numbers only",
+        "skill_reference": "wechat-video-ppt-extract/contact-sheet --source raw_frames",
+    });
+    fs::write(
+        &contact_sheet_plan_path,
+        serde_json::to_vec_pretty(&contact_sheet_plan).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
+
+    Ok(Some(vec![
+        video_generated_artifact_file(
+            document,
+            "slide_image_candidates",
+            "application/json",
+            &candidate_manifest_path,
+        ),
+        video_generated_artifact_file(
+            document,
+            "contact_sheet_plan",
+            "application/json",
+            &contact_sheet_plan_path,
+        ),
+    ]))
+}
+
+fn sorted_raw_frame_files(raw_frames_dir: &Path) -> Result<Vec<PathBuf>, String> {
+    let mut frames = fs::read_dir(raw_frames_dir)
+        .map_err(|error| error.to_string())?
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .filter(|path| path.is_file())
+        .filter(|path| {
+            path.extension()
+                .and_then(|value| value.to_str())
+                .map(|extension| {
+                    matches!(
+                        extension.to_ascii_lowercase().as_str(),
+                        "jpg" | "jpeg" | "png" | "webp"
+                    )
+                })
+                .unwrap_or(false)
+        })
+        .collect::<Vec<_>>();
+    frames.sort_by(|left, right| {
+        left.file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default()
+            .cmp(
+                right
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or_default(),
+            )
+    });
+    Ok(frames)
 }
 
 pub fn video_generated_artifacts_plan(document: &Document) -> Value {
@@ -1104,6 +1231,47 @@ mod tests {
             .expect("transcript path");
         let transcript = fs::read_to_string(transcript_path).expect("transcript file");
         assert!(transcript.contains("第一页讲产品定位"));
+    }
+
+    #[test]
+    fn writes_slide_candidate_review_files_from_raw_frames() {
+        let document = test_document();
+        let output_root = std::env::temp_dir().join(format!(
+            "aidp-v3-video-candidates-test-{}",
+            DocumentId::new()
+        ));
+        let raw_frames_dir = output_root
+            .join(format!("video-extraction-{}", document.id))
+            .join(DEFAULT_RAW_FRAMES_DIR_NAME);
+        fs::create_dir_all(&raw_frames_dir).expect("raw frames dir");
+        fs::write(raw_frames_dir.join("frame_000002.jpg"), b"fake").expect("frame 2");
+        fs::write(raw_frames_dir.join("frame_000001.jpg"), b"fake").expect("frame 1");
+        let frame_extraction = json!({
+            "status": "completed",
+            "raw_frames_dir": raw_frames_dir.display().to_string(),
+            "frame_count": 2,
+            "manifest_file_name": DEFAULT_FRAME_MANIFEST_FILE_NAME
+        });
+
+        let manifest =
+            write_video_extraction_text_artifacts(&document, &[], &frame_extraction, &output_root)
+                .expect("candidate artifacts");
+
+        let files = manifest["files"].as_array().expect("files");
+        assert!(files
+            .iter()
+            .any(|file| file["artifact_kind"] == json!("slide_image_candidates")));
+        assert!(files
+            .iter()
+            .any(|file| file["artifact_kind"] == json!("contact_sheet_plan")));
+        let candidates_path = files
+            .iter()
+            .find(|file| file["artifact_kind"] == json!("slide_image_candidates"))
+            .and_then(|file| file["path"].as_str())
+            .expect("candidate manifest path");
+        let candidates = fs::read_to_string(candidates_path).expect("candidate manifest");
+        assert!(candidates.contains("frame_000001.jpg"));
+        assert!(candidates.contains("review_required"));
     }
 
     #[test]
