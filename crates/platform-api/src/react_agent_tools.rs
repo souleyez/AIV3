@@ -12,7 +12,7 @@ use domain_model::{
     WorkflowExecutionId, WorkflowKind,
 };
 use serde_json::{json, Value};
-use std::{collections::BTreeMap, env};
+use std::{collections::BTreeMap, env, net::IpAddr, time::Duration};
 use storage::NewDocument;
 use uuid::Uuid;
 
@@ -777,14 +777,7 @@ fn video_url_resolution_placeholder_result(
     action: &AssistantRunNextAction,
     prompt: &str,
 ) -> AssistantRunReactToolResult {
-    let source_url = action
-        .arguments
-        .get("source_url")
-        .or_else(|| action.arguments.get("sourceUrl"))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .or_else(|| first_url_in_text(prompt));
+    let source_url = requested_video_source_url(action, prompt);
     let source_text = source_url.unwrap_or_default();
     let (status, reason, items) = if source_text.is_empty() {
         (
@@ -844,6 +837,380 @@ fn video_url_resolution_placeholder_result(
     }
 }
 
+fn requested_video_source_url<'a>(
+    action: &'a AssistantRunNextAction,
+    prompt: &'a str,
+) -> Option<&'a str> {
+    action
+        .arguments
+        .get("source_url")
+        .or_else(|| action.arguments.get("sourceUrl"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .or_else(|| first_url_in_text(prompt))
+}
+
+#[derive(Clone, Debug)]
+struct ResolvedVideoSource {
+    source_url: String,
+    source_page_url: Option<String>,
+    source_type: &'static str,
+    registration_reason: &'static str,
+    title_hint: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+struct PublicVideoPageResolutionFailure {
+    reason: &'static str,
+    detail: String,
+}
+
+const PUBLIC_VIDEO_PAGE_MAX_BYTES: usize = 512 * 1024;
+
+async fn resolve_public_video_page_source(
+    source_url: &str,
+) -> std::result::Result<ResolvedVideoSource, PublicVideoPageResolutionFailure> {
+    let page_url = reqwest::Url::parse(source_url.trim()).map_err(|error| {
+        PublicVideoPageResolutionFailure {
+            reason: "public_page_invalid_url",
+            detail: format!("invalid public page URL: {error}"),
+        }
+    })?;
+    validate_public_video_page_url(&page_url)?;
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(12))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|error| PublicVideoPageResolutionFailure {
+            reason: "public_page_resolver_client_failed",
+            detail: format!("failed to build resolver client: {error}"),
+        })?;
+    let mut response = client.get(page_url.clone()).send().await.map_err(|error| {
+        PublicVideoPageResolutionFailure {
+            reason: "public_page_fetch_failed",
+            detail: format!("failed to fetch public page: {error}"),
+        }
+    })?;
+    if response.status().is_redirection() {
+        return Err(PublicVideoPageResolutionFailure {
+            reason: "public_page_redirect_not_followed",
+            detail: format!("public page returned redirect HTTP {}", response.status()),
+        });
+    }
+    if !response.status().is_success() {
+        return Err(PublicVideoPageResolutionFailure {
+            reason: "public_page_fetch_failed",
+            detail: format!("public page returned HTTP {}", response.status()),
+        });
+    }
+    let response_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if !public_video_page_response_type_allowed(&response_type) {
+        return Err(PublicVideoPageResolutionFailure {
+            reason: "public_page_not_html",
+            detail: "public page response is not HTML".to_string(),
+        });
+    }
+    if response
+        .content_length()
+        .is_some_and(|content_length| content_length as usize > PUBLIC_VIDEO_PAGE_MAX_BYTES)
+    {
+        return Err(PublicVideoPageResolutionFailure {
+            reason: "public_page_too_large",
+            detail: "public page exceeds resolver byte limit".to_string(),
+        });
+    }
+
+    let mut bytes = Vec::new();
+    while let Some(chunk) =
+        response
+            .chunk()
+            .await
+            .map_err(|error| PublicVideoPageResolutionFailure {
+                reason: "public_page_fetch_failed",
+                detail: format!("failed to read public page: {error}"),
+            })?
+    {
+        if bytes.len() + chunk.len() > PUBLIC_VIDEO_PAGE_MAX_BYTES {
+            return Err(PublicVideoPageResolutionFailure {
+                reason: "public_page_too_large",
+                detail: "public page exceeds resolver byte limit".to_string(),
+            });
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    let html = String::from_utf8_lossy(&bytes);
+    let title_hint = extract_html_title(&html);
+    let candidates = extract_video_source_candidates_from_html(&html);
+    for candidate in candidates {
+        if let Some(video_url) = resolve_public_video_candidate(&page_url, &candidate) {
+            return Ok(ResolvedVideoSource {
+                source_url: video_url.as_str().to_string(),
+                source_page_url: Some(page_url.as_str().to_string()),
+                source_type: "public_page_resolvable_video",
+                registration_reason: "public_page_video_url_registered",
+                title_hint: title_hint.clone(),
+            });
+        }
+    }
+
+    Err(PublicVideoPageResolutionFailure {
+        reason: "public_page_video_not_found",
+        detail: "public page did not expose a direct video URL in supported fields".to_string(),
+    })
+}
+
+fn public_video_page_resolution_failure_result(
+    action: &AssistantRunNextAction,
+    source_url: &str,
+    failure: PublicVideoPageResolutionFailure,
+) -> AssistantRunReactToolResult {
+    AssistantRunReactToolResult {
+        observation: json!({
+            "status": "rejected",
+            "action_type": action.action_type.as_str(),
+            "actionType": action.action_type.as_str(),
+            "message": failure.reason,
+            "denied": [action.action_type.as_str()],
+            "items": [],
+            "limits": {
+                "maxPageBytes": PUBLIC_VIDEO_PAGE_MAX_BYTES,
+                "redirectsFollowed": false,
+                "loginGatedSources": false,
+            },
+            "reason": failure.reason,
+            "detail": failure.detail,
+            "source_present": true,
+            "source_host": public_url_host_label(source_url),
+            "supported_sources": ["uploaded_video_file", "direct_video_url", "public_page_resolvable_video"],
+            "unsupported_sources": ["login_gated_page", "qr_login", "cookies", "screen_recording_bypass"],
+            "next_step": "请提供可直接访问的视频 URL，或上传视频文件；公开视频页面必须在 HTML 中暴露 video/source/og:video 直连地址。",
+        }),
+        trail_step: json!({
+            "status": "rejected",
+            "label": "解析公开视频地址",
+            "react_action": action.action_type.as_str(),
+            "reason": failure.reason,
+            "at": Utc::now(),
+        }),
+        final_answer: None,
+    }
+}
+
+fn validate_public_video_page_url(
+    url: &reqwest::Url,
+) -> std::result::Result<(), PublicVideoPageResolutionFailure> {
+    if !matches!(url.scheme(), "http" | "https") {
+        return Err(PublicVideoPageResolutionFailure {
+            reason: "public_page_invalid_scheme",
+            detail: "public page URL must use HTTP or HTTPS".to_string(),
+        });
+    }
+    if is_login_gated_video_source(url.as_str()) {
+        return Err(PublicVideoPageResolutionFailure {
+            reason: "login_gated_video_source_not_supported",
+            detail: "login-gated video sources are not supported".to_string(),
+        });
+    }
+    let host = url.host_str().unwrap_or_default();
+    if !public_video_page_host_allowed(host) {
+        return Err(PublicVideoPageResolutionFailure {
+            reason: "public_page_host_not_allowed",
+            detail: "public page host is local, private, or otherwise blocked".to_string(),
+        });
+    }
+    Ok(())
+}
+
+fn public_video_page_host_allowed(host: &str) -> bool {
+    let lower = host.trim().trim_matches(['[', ']']).to_ascii_lowercase();
+    if lower.is_empty()
+        || lower == "localhost"
+        || lower.ends_with(".localhost")
+        || lower.ends_with(".local")
+    {
+        return false;
+    }
+    if let Ok(ip) = lower.parse::<IpAddr>() {
+        return match ip {
+            IpAddr::V4(ip) => {
+                !(ip.is_private()
+                    || ip.is_loopback()
+                    || ip.is_link_local()
+                    || ip.is_broadcast()
+                    || ip.is_documentation()
+                    || ip.octets()[0] == 0)
+            }
+            IpAddr::V6(ip) => !(ip.is_loopback() || ip.is_unspecified() || ip.is_unique_local()),
+        };
+    }
+    true
+}
+
+fn public_video_page_response_type_allowed(response_type: &str) -> bool {
+    let media_type = response_type.split(';').next().unwrap_or_default().trim();
+    media_type.is_empty() || matches!(media_type, "text/html" | "application/xhtml+xml")
+}
+
+fn resolve_public_video_candidate(
+    page_url: &reqwest::Url,
+    candidate: &str,
+) -> Option<reqwest::Url> {
+    let trimmed = candidate.trim();
+    if trimmed.is_empty()
+        || trimmed.starts_with('#')
+        || trimmed.to_ascii_lowercase().starts_with("javascript:")
+        || trimmed.to_ascii_lowercase().starts_with("data:")
+    {
+        return None;
+    }
+    let url = reqwest::Url::parse(trimmed)
+        .or_else(|_| page_url.join(trimmed))
+        .ok()?;
+    if validate_public_video_page_url(&url).is_err() || !is_direct_video_url(url.as_str()) {
+        return None;
+    }
+    Some(url)
+}
+
+fn public_url_host_label(source_url: &str) -> String {
+    reqwest::Url::parse(source_url)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_string))
+        .unwrap_or_default()
+}
+
+fn extract_video_source_candidates_from_html(html: &str) -> Vec<String> {
+    let mut candidates = Vec::new();
+    let mut cursor = 0usize;
+    while let Some(relative_start) = html[cursor..].find('<') {
+        let start = cursor + relative_start + 1;
+        let Some(relative_end) = html[start..].find('>') else {
+            break;
+        };
+        let end = start + relative_end;
+        let tag = &html[start..end];
+        let lower = tag.trim_start().to_ascii_lowercase();
+        if lower.starts_with("video") || lower.starts_with("source") {
+            if let Some(src) = html_attr_value(tag, "src") {
+                candidates.push(src);
+            }
+        } else if lower.starts_with("meta") && html_meta_tag_is_video(tag) {
+            if let Some(content) = html_attr_value(tag, "content") {
+                candidates.push(content);
+            }
+        }
+        cursor = end + 1;
+    }
+    candidates
+}
+
+fn html_meta_tag_is_video(tag: &str) -> bool {
+    ["property", "name", "itemprop"]
+        .into_iter()
+        .filter_map(|attr| html_attr_value(tag, attr))
+        .any(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "og:video"
+                    | "og:video:url"
+                    | "og:video:secure_url"
+                    | "twitter:player:stream"
+                    | "video"
+            )
+        })
+}
+
+fn extract_html_title(html: &str) -> Option<String> {
+    let lower = html.to_ascii_lowercase();
+    let start = lower.find("<title")?;
+    let open_end = lower[start..].find('>')? + start + 1;
+    let close = lower[open_end..].find("</title>")? + open_end;
+    let title = html_attr_unescape(&html[open_end..close]);
+    let safe = html_artifact_safe_summary_text(&title, 120);
+    (!safe.is_empty()).then_some(safe)
+}
+
+fn html_attr_value(tag: &str, attr: &str) -> Option<String> {
+    let lower = tag.to_ascii_lowercase();
+    let bytes = tag.as_bytes();
+    let lower_bytes = lower.as_bytes();
+    let attr_bytes = attr.as_bytes();
+    let mut search_from = 0usize;
+    while search_from < lower_bytes.len() {
+        let relative = lower[search_from..].find(attr)?;
+        let start = search_from + relative;
+        let end = start + attr_bytes.len();
+        if !html_attr_boundary_before(lower_bytes, start)
+            || !html_attr_boundary_after(lower_bytes, end)
+        {
+            search_from = end;
+            continue;
+        }
+        let mut cursor = end;
+        while cursor < lower_bytes.len() && lower_bytes[cursor].is_ascii_whitespace() {
+            cursor += 1;
+        }
+        if lower_bytes.get(cursor) != Some(&b'=') {
+            search_from = end;
+            continue;
+        }
+        cursor += 1;
+        while cursor < lower_bytes.len() && lower_bytes[cursor].is_ascii_whitespace() {
+            cursor += 1;
+        }
+        let quote = lower_bytes.get(cursor).copied();
+        if matches!(quote, Some(b'"' | b'\'')) {
+            cursor += 1;
+            let value_start = cursor;
+            while cursor < lower_bytes.len() && lower_bytes[cursor] != quote.unwrap() {
+                cursor += 1;
+            }
+            return Some(html_attr_unescape(&tag[value_start..cursor]));
+        }
+        let value_start = cursor;
+        while cursor < lower_bytes.len()
+            && !lower_bytes[cursor].is_ascii_whitespace()
+            && lower_bytes[cursor] != b'>'
+        {
+            cursor += 1;
+        }
+        return Some(html_attr_unescape(
+            std::str::from_utf8(&bytes[value_start..cursor]).unwrap_or_default(),
+        ));
+    }
+    None
+}
+
+fn html_attr_boundary_before(bytes: &[u8], start: usize) -> bool {
+    start == 0 || !html_attr_name_char(bytes[start - 1])
+}
+
+fn html_attr_boundary_after(bytes: &[u8], end: usize) -> bool {
+    bytes
+        .get(end)
+        .is_some_and(|value| value.is_ascii_whitespace() || *value == b'=')
+}
+
+fn html_attr_name_char(value: u8) -> bool {
+    value.is_ascii_alphanumeric() || matches!(value, b'-' | b'_' | b':')
+}
+
+fn html_attr_unescape(value: &str) -> String {
+    value
+        .replace("&amp;", "&")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+}
+
 fn video_ppt_extraction_placeholder_result(
     action: &AssistantRunNextAction,
 ) -> AssistantRunReactToolResult {
@@ -881,28 +1248,46 @@ async fn resolve_video_url_result(
     current_user_id: Option<UserId>,
 ) -> std::result::Result<AssistantRunReactToolResult, ApiError> {
     let base_result = video_url_resolution_placeholder_result(action, prompt);
-    if base_result
+    let base_reason = base_result
         .observation
         .get("reason")
         .and_then(Value::as_str)
-        != Some("direct_video_url_resolved")
-    {
-        return Ok(base_result);
-    }
+        .unwrap_or_default();
 
-    let Some(source_url) = base_result
-        .observation
-        .get("items")
-        .and_then(Value::as_array)
-        .and_then(|items| items.first())
-        .and_then(|item| item.get("source_url"))
-        .and_then(Value::as_str)
-        .map(str::to_string)
+    let Some(requested_source_url) = requested_video_source_url(action, prompt).map(str::to_string)
     else {
         return Ok(base_result);
     };
 
+    let resolved = if base_reason == "direct_video_url_resolved" {
+        ResolvedVideoSource {
+            source_url: requested_source_url.clone(),
+            source_page_url: None,
+            source_type: "direct_video_url",
+            registration_reason: "direct_video_url_registered",
+            title_hint: Some(direct_video_title_from_url(&requested_source_url)),
+        }
+    } else if base_reason == "video_url_resolution_worker_pending" {
+        match resolve_public_video_page_source(&requested_source_url).await {
+            Ok(resolved) => resolved,
+            Err(failure) => {
+                return Ok(public_video_page_resolution_failure_result(
+                    action,
+                    &requested_source_url,
+                    failure,
+                ));
+            }
+        }
+    } else {
+        return Ok(base_result);
+    };
+
     let Some(dataset_id) = first_selected_dataset_id(selected_scope) else {
+        if resolved.source_type == "public_page_resolvable_video" {
+            return Ok(public_video_page_resolution_unregistered_result(
+                action, &resolved,
+            ));
+        }
         return Ok(base_result);
     };
     let dataset = load_visible_dataset_for_user(
@@ -913,7 +1298,7 @@ async fn resolve_video_url_result(
     )
     .await?;
 
-    let content_type = guess_video_content_type_from_url(&source_url).to_string();
+    let content_type = guess_video_content_type_from_url(&resolved.source_url).to_string();
     let title = action
         .arguments
         .get("title")
@@ -923,7 +1308,8 @@ async fn resolve_video_url_result(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string)
-        .unwrap_or_else(|| direct_video_title_from_url(&source_url));
+        .or(resolved.title_hint.clone())
+        .unwrap_or_else(|| direct_video_title_from_url(&resolved.source_url));
     let document = state
         .storage
         .documents()
@@ -932,15 +1318,16 @@ async fn resolve_video_url_result(
             NewDocument {
                 dataset_id,
                 title,
-                object_key: source_url.clone(),
+                object_key: resolved.source_url.clone(),
                 content_type,
                 secret_binding_ids: dataset.default_secret_binding_ids.clone(),
                 owner_user_id: current_user_id,
                 metadata: json!({
                     "source": "react_resolve_video_url",
                     "remote_media": {
-                        "source_url": source_url,
-                        "source_type": "direct_video_url",
+                        "source_url": resolved.source_url.clone(),
+                        "source_page_url": resolved.source_page_url.clone(),
+                        "source_type": resolved.source_type,
                         "asset_state": "remote_registered",
                         "ingest_requires_env": "INGEST_REMOTE_MEDIA_ENABLED",
                     },
@@ -987,11 +1374,12 @@ async fn resolve_video_url_result(
             "status": "completed",
             "action_type": action.action_type.as_str(),
             "actionType": action.action_type.as_str(),
-            "message": "direct_video_url_registered",
+            "message": resolved.registration_reason,
             "items": [{
                 "type": "resolved_video_source",
-                "source_type": "direct_video_url",
+                "source_type": resolved.source_type,
                 "source_url": document.object_key,
+                "source_page_url": resolved.source_page_url,
                 "asset_state": "remote_registered",
                 "document_id": document.id.to_string(),
                 "dataset_id": document.dataset_id.to_string(),
@@ -1006,7 +1394,7 @@ async fn resolve_video_url_result(
                 "backgroundOnly": true,
                 "loginGatedSources": false,
             },
-            "reason": "direct_video_url_registered",
+            "reason": resolved.registration_reason,
             "source_present": true,
             "supported_sources": ["uploaded_video_file", "direct_video_url", "public_page_resolvable_video"],
             "unsupported_sources": ["login_gated_page", "qr_login", "cookies", "screen_recording_bypass"],
@@ -1015,13 +1403,55 @@ async fn resolve_video_url_result(
             "status": "completed",
             "label": "解析公开视频地址",
             "react_action": action.action_type.as_str(),
-            "reason": "direct_video_url_registered",
+            "reason": resolved.registration_reason,
             "document_id": document.id.to_string(),
             "workflow_execution_id": execution.id.to_string(),
             "at": Utc::now(),
         }),
         final_answer: None,
     })
+}
+
+fn public_video_page_resolution_unregistered_result(
+    action: &AssistantRunNextAction,
+    resolved: &ResolvedVideoSource,
+) -> AssistantRunReactToolResult {
+    AssistantRunReactToolResult {
+        observation: json!({
+            "status": "completed",
+            "action_type": action.action_type.as_str(),
+            "actionType": action.action_type.as_str(),
+            "message": "public_page_video_url_resolved",
+            "denied": [],
+            "items": [{
+                "type": "resolved_video_source",
+                "source_type": resolved.source_type,
+                "source_url": resolved.source_url,
+                "source_page_url": resolved.source_page_url,
+                "asset_state": "remote_unregistered",
+                "content_type_guess": guess_video_content_type_from_url(&resolved.source_url),
+                "next_action": "register_remote_video_asset",
+            }],
+            "limits": {
+                "maxPageBytes": PUBLIC_VIDEO_PAGE_MAX_BYTES,
+                "backgroundOnly": true,
+                "loginGatedSources": false,
+            },
+            "reason": "public_page_video_url_resolved",
+            "source_present": true,
+            "supported_sources": ["uploaded_video_file", "direct_video_url", "public_page_resolvable_video"],
+            "unsupported_sources": ["login_gated_page", "qr_login", "cookies", "screen_recording_bypass"],
+            "next_step": "已解析到公开视频直连地址；选择一个可见数据集后，V3 可以登记该视频并排后台解析。",
+        }),
+        trail_step: json!({
+            "status": "completed",
+            "label": "解析公开视频地址",
+            "react_action": action.action_type.as_str(),
+            "reason": "public_page_video_url_resolved",
+            "at": Utc::now(),
+        }),
+        final_answer: None,
+    }
 }
 
 fn first_selected_dataset_id(selected_scope: &Value) -> Option<domain_model::DatasetId> {
@@ -2264,6 +2694,120 @@ mod tests {
             ),
             "lesson-01.mp4"
         );
+    }
+
+    #[test]
+    fn public_video_page_extracts_video_sources_from_html() {
+        let html = r#"
+            <html>
+              <head>
+                <title>公开课视频</title>
+                <meta property="og:video" content="/assets/intro.mp4?token=redacted&amp;v=1">
+              </head>
+              <body>
+                <video data-src="/ignored.mp4" src="./lesson-01.webm"></video>
+                <source src='https://cdn.example.com/course/lesson-02.mp4'>
+              </body>
+            </html>
+        "#;
+        let page_url = reqwest::Url::parse("https://example.com/course/page.html")
+            .expect("page URL should parse");
+        let candidates = extract_video_source_candidates_from_html(html);
+        let resolved = candidates
+            .iter()
+            .filter_map(|candidate| resolve_public_video_candidate(&page_url, candidate))
+            .map(|url| url.as_str().to_string())
+            .collect::<Vec<_>>();
+
+        assert_eq!(extract_html_title(html), Some("公开课视频".to_string()));
+        assert_eq!(candidates[0], "/assets/intro.mp4?token=redacted&v=1");
+        assert_eq!(
+            resolved,
+            vec![
+                "https://example.com/assets/intro.mp4?token=redacted&v=1".to_string(),
+                "https://example.com/course/lesson-01.webm".to_string(),
+                "https://cdn.example.com/course/lesson-02.mp4".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn public_video_page_blocks_private_or_login_gated_sources() {
+        let private_url =
+            reqwest::Url::parse("http://127.0.0.1/video-page").expect("private URL should parse");
+        let login_url = reqwest::Url::parse("https://weixin.qq.com/sph/ActLMg4yTD")
+            .expect("login URL should parse");
+        let page_url =
+            reqwest::Url::parse("https://example.com/page").expect("page URL should parse");
+
+        assert_eq!(
+            validate_public_video_page_url(&private_url)
+                .expect_err("private host should be rejected")
+                .reason,
+            "public_page_host_not_allowed"
+        );
+        assert_eq!(
+            validate_public_video_page_url(&login_url)
+                .expect_err("login gated source should be rejected")
+                .reason,
+            "login_gated_video_source_not_supported"
+        );
+        assert!(resolve_public_video_candidate(&page_url, "http://localhost/video.mp4").is_none());
+        assert!(resolve_public_video_candidate(&page_url, "javascript:alert(1)").is_none());
+    }
+
+    #[test]
+    fn public_video_page_failure_result_is_structured() {
+        let action = test_action(AssistantRunReactActionType::ResolveVideoUrl);
+        let result = public_video_page_resolution_failure_result(
+            &action,
+            "https://example.com/page",
+            PublicVideoPageResolutionFailure {
+                reason: "public_page_video_not_found",
+                detail: "no supported video tag".to_string(),
+            },
+        );
+
+        assert_eq!(result.observation["status"], json!("rejected"));
+        assert_eq!(
+            result.observation["reason"],
+            json!("public_page_video_not_found")
+        );
+        assert_eq!(result.observation["source_host"], json!("example.com"));
+        assert_eq!(
+            result.observation["limits"]["redirectsFollowed"],
+            json!(false)
+        );
+        assert!(result.final_answer.is_none());
+    }
+
+    #[test]
+    fn public_video_page_unregistered_result_keeps_resolved_video() {
+        let action = test_action(AssistantRunReactActionType::ResolveVideoUrl);
+        let resolved = ResolvedVideoSource {
+            source_url: "https://cdn.example.com/lesson.mp4".to_string(),
+            source_page_url: Some("https://example.com/course".to_string()),
+            source_type: "public_page_resolvable_video",
+            registration_reason: "public_page_video_url_registered",
+            title_hint: Some("公开课".to_string()),
+        };
+
+        let result = public_video_page_resolution_unregistered_result(&action, &resolved);
+
+        assert_eq!(result.observation["status"], json!("completed"));
+        assert_eq!(
+            result.observation["reason"],
+            json!("public_page_video_url_resolved")
+        );
+        assert_eq!(
+            result.observation["items"][0]["asset_state"],
+            json!("remote_unregistered")
+        );
+        assert_eq!(
+            result.observation["items"][0]["source_type"],
+            json!("public_page_resolvable_video")
+        );
+        assert!(result.final_answer.is_none());
     }
 
     #[test]
