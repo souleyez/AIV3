@@ -474,6 +474,7 @@ pub enum WorkflowKind {
     StaticPageImageGeneration,
     StaticPageRender,
     CodexHostTask,
+    VideoExtraction,
 }
 
 impl WorkflowKind {
@@ -488,6 +489,7 @@ impl WorkflowKind {
             Self::StaticPageImageGeneration => "static_page_image_generation_workflow",
             Self::StaticPageRender => "static_page_render_workflow",
             Self::CodexHostTask => "codex_host_task_workflow",
+            Self::VideoExtraction => "video_extraction_workflow",
         }
     }
 
@@ -502,6 +504,7 @@ impl WorkflowKind {
             "static_page_image_generation_workflow" => Some(Self::StaticPageImageGeneration),
             "static_page_render_workflow" => Some(Self::StaticPageRender),
             "codex_host_task_workflow" => Some(Self::CodexHostTask),
+            "video_extraction_workflow" => Some(Self::VideoExtraction),
             _ => None,
         }
     }
@@ -859,7 +862,7 @@ mod tests {
     use super::{
         AuthAuditOutcome, AuthChallengePurpose, AuthSessionMethod, DocumentLifecycle,
         LlmInvocationFinishReason, LlmInvocationMode, LlmInvocationSourceKind, PublishedSurface,
-        ToolExecutionSourceKind,
+        ToolExecutionSourceKind, WorkflowKind,
     };
 
     #[test]
@@ -885,6 +888,18 @@ mod tests {
         assert_eq!(
             DocumentLifecycle::from_str("archived").expect("document lifecycle parses"),
             DocumentLifecycle::Archived
+        );
+    }
+
+    #[test]
+    fn workflow_kind_roundtrips_video_extraction() {
+        assert_eq!(
+            WorkflowKind::VideoExtraction.as_str(),
+            "video_extraction_workflow"
+        );
+        assert_eq!(
+            WorkflowKind::from_str("video_extraction_workflow"),
+            Some(WorkflowKind::VideoExtraction)
         );
     }
 

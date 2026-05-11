@@ -269,6 +269,330 @@ impl WorkflowDefinition for LinearWorkflowDefinition {
     }
 }
 
+struct VideoExtractionWorkflowDefinition;
+
+impl VideoExtractionWorkflowDefinition {
+    fn pending_state(
+        execution_id: WorkflowExecutionId,
+        now: DateTime<Utc>,
+    ) -> WorkflowRuntimeState {
+        let mut context = Map::new();
+        context.insert("queue".to_string(), Value::String("media".to_string()));
+        context.insert(
+            "task_key".to_string(),
+            Value::String("resolve_video_source".to_string()),
+        );
+        context.insert(
+            "states".to_string(),
+            json!([
+                "resolving_source",
+                "registered",
+                "parsing",
+                "extracting_ppt",
+                "completed",
+                "failed",
+                "unsupported_source"
+            ]),
+        );
+
+        WorkflowRuntimeState {
+            execution_id,
+            kind: WorkflowKind::VideoExtraction,
+            version: "0.1.0".to_string(),
+            stage: "queued".to_string(),
+            status: WorkflowStatus::Pending,
+            retries_remaining: 3,
+            context,
+            updated_at: now,
+        }
+    }
+
+    fn next_task_for_stage(stage: &str) -> Option<WorkflowStepSpec> {
+        match stage {
+            "registered" => Some(WorkflowStepSpec {
+                queue: "media",
+                task_key: "register_video_asset",
+            }),
+            "parsing" => Some(WorkflowStepSpec {
+                queue: "ingest",
+                task_key: "parse_video_media",
+            }),
+            "extracting_ppt" => Some(WorkflowStepSpec {
+                queue: "media",
+                task_key: "extract_video_ppt",
+            }),
+            _ => None,
+        }
+    }
+
+    fn stage_after_completed_task(
+        current_stage: &str,
+        task_key: &str,
+        output: Option<&Value>,
+    ) -> Result<VideoExtractionStageOutcome, WorkflowTransitionError> {
+        if video_extraction_output_is_unsupported(output) {
+            return Ok(VideoExtractionStageOutcome::UnsupportedSource);
+        }
+
+        match (current_stage, task_key) {
+            ("resolving_source", "resolve_video_source") => {
+                Ok(VideoExtractionStageOutcome::Next("registered"))
+            }
+            ("registered", "register_video_asset") => {
+                Ok(VideoExtractionStageOutcome::Next("parsing"))
+            }
+            ("parsing", "parse_video_media") => {
+                Ok(VideoExtractionStageOutcome::Next("extracting_ppt"))
+            }
+            ("extracting_ppt", "extract_video_ppt") => Ok(VideoExtractionStageOutcome::Completed),
+            _ => Err(WorkflowTransitionError::InvalidTransition(format!(
+                "workflow={} stage={} task_key={task_key}",
+                WorkflowKind::VideoExtraction.as_str(),
+                current_stage
+            ))),
+        }
+    }
+}
+
+enum VideoExtractionStageOutcome {
+    Next(&'static str),
+    Completed,
+    UnsupportedSource,
+}
+
+impl WorkflowDefinition for VideoExtractionWorkflowDefinition {
+    fn kind(&self) -> WorkflowKind {
+        WorkflowKind::VideoExtraction
+    }
+
+    fn version(&self) -> &'static str {
+        "0.1.0"
+    }
+
+    fn summary(&self) -> &'static str {
+        "Resolve video sources, parse media evidence, and extract PPT/transcript deliverables."
+    }
+
+    fn accepted_signals(&self) -> &'static [WorkflowSignalKind] {
+        STANDARD_SIGNALS
+    }
+
+    fn initial_state(
+        &self,
+        execution_id: WorkflowExecutionId,
+        now: DateTime<Utc>,
+    ) -> WorkflowRuntimeState {
+        Self::pending_state(execution_id, now)
+    }
+
+    fn transition(
+        &self,
+        state: &WorkflowRuntimeState,
+        signal: WorkflowSignal,
+        now: DateTime<Utc>,
+    ) -> Result<WorkflowTransition, WorkflowTransitionError> {
+        match signal {
+            WorkflowSignal::Start if state.status == WorkflowStatus::Pending => {
+                let mut next_state = state.clone();
+                next_state.stage = "resolving_source".to_string();
+                next_state.status = WorkflowStatus::Running;
+                next_state.updated_at = now;
+
+                Ok(WorkflowTransition {
+                    next_state,
+                    persisted_event: workflow_event(
+                        "workflow.started",
+                        json!({ "task_key": "resolve_video_source", "queue": "media" }),
+                        now,
+                    ),
+                    enqueued_tasks: vec![WorkflowTaskRequest {
+                        queue: "media".to_string(),
+                        task_key: "resolve_video_source".to_string(),
+                        payload: json!({
+                            "execution_id": state.execution_id,
+                            "kind": WorkflowKind::VideoExtraction.as_str(),
+                            "stage": "resolving_source"
+                        }),
+                    }],
+                })
+            }
+            WorkflowSignal::StepCompleted { task_key, output }
+                if state.status == WorkflowStatus::Running =>
+            {
+                let outcome =
+                    Self::stage_after_completed_task(&state.stage, &task_key, output.as_ref())?;
+                let mut next_state = state.clone();
+                next_state.updated_at = now;
+                if let Some(output) = output {
+                    next_state.context.insert("last_output".to_string(), output);
+                }
+
+                match outcome {
+                    VideoExtractionStageOutcome::Next(next_stage) => {
+                        next_state.stage = next_stage.to_string();
+                        next_state.status = WorkflowStatus::Running;
+                        let next_task = Self::next_task_for_stage(next_stage).ok_or_else(|| {
+                            WorkflowTransitionError::InvalidTransition(format!(
+                                "missing video extraction task for stage {next_stage}"
+                            ))
+                        })?;
+                        Ok(WorkflowTransition {
+                            next_state,
+                            persisted_event: workflow_event(
+                                "workflow.step_completed",
+                                json!({ "task_key": task_key, "next_stage": next_stage }),
+                                now,
+                            ),
+                            enqueued_tasks: vec![WorkflowTaskRequest {
+                                queue: next_task.queue.to_string(),
+                                task_key: next_task.task_key.to_string(),
+                                payload: json!({
+                                    "execution_id": state.execution_id,
+                                    "kind": WorkflowKind::VideoExtraction.as_str(),
+                                    "stage": next_stage
+                                }),
+                            }],
+                        })
+                    }
+                    VideoExtractionStageOutcome::Completed => {
+                        next_state.stage = "completed".to_string();
+                        next_state.status = WorkflowStatus::Succeeded;
+                        Ok(WorkflowTransition {
+                            next_state,
+                            persisted_event: workflow_event(
+                                "workflow.completed",
+                                json!({ "task_key": task_key }),
+                                now,
+                            ),
+                            enqueued_tasks: Vec::new(),
+                        })
+                    }
+                    VideoExtractionStageOutcome::UnsupportedSource => {
+                        next_state.stage = "unsupported_source".to_string();
+                        next_state.status = WorkflowStatus::Failed;
+                        Ok(WorkflowTransition {
+                            next_state,
+                            persisted_event: workflow_event(
+                                "workflow.unsupported_source",
+                                json!({ "task_key": task_key }),
+                                now,
+                            ),
+                            enqueued_tasks: Vec::new(),
+                        })
+                    }
+                }
+            }
+            WorkflowSignal::StepFailed { task_key, error }
+                if state.status == WorkflowStatus::Running =>
+            {
+                let mut next_state = state.clone();
+                next_state.stage = if error == "unsupported_source" {
+                    "unsupported_source".to_string()
+                } else {
+                    "failed".to_string()
+                };
+                next_state.status = WorkflowStatus::Failed;
+                next_state.updated_at = now;
+                next_state
+                    .context
+                    .insert("last_error".to_string(), Value::String(error.clone()));
+                next_state.context.insert(
+                    "failed_task_key".to_string(),
+                    Value::String(task_key.clone()),
+                );
+
+                Ok(WorkflowTransition {
+                    next_state,
+                    persisted_event: workflow_event(
+                        "workflow.step_failed",
+                        json!({ "task_key": task_key, "error": error }),
+                        now,
+                    ),
+                    enqueued_tasks: Vec::new(),
+                })
+            }
+            WorkflowSignal::RetryRequested { reason } if state.status == WorkflowStatus::Failed => {
+                if state.retries_remaining == 0 {
+                    let mut next_state = state.clone();
+                    next_state.stage = "dead_lettered".to_string();
+                    next_state.status = WorkflowStatus::DeadLettered;
+                    next_state.updated_at = now;
+                    return Ok(WorkflowTransition {
+                        next_state,
+                        persisted_event: workflow_event(
+                            "workflow.dead_lettered",
+                            json!({ "reason": reason }),
+                            now,
+                        ),
+                        enqueued_tasks: Vec::new(),
+                    });
+                }
+
+                let mut next_state = Self::pending_state(state.execution_id, now);
+                next_state.retries_remaining = state.retries_remaining - 1;
+                next_state
+                    .context
+                    .insert("retry_reason".to_string(), Value::String(reason.clone()));
+
+                Ok(WorkflowTransition {
+                    next_state,
+                    persisted_event: workflow_event(
+                        "workflow.retry_requested",
+                        json!({ "reason": reason }),
+                        now,
+                    ),
+                    enqueued_tasks: Vec::new(),
+                })
+            }
+            WorkflowSignal::CancelRequested { reason } => {
+                let mut next_state = state.clone();
+                next_state.stage = "cancelled".to_string();
+                next_state.status = WorkflowStatus::Cancelled;
+                next_state.updated_at = now;
+                next_state
+                    .context
+                    .insert("cancel_reason".to_string(), Value::String(reason.clone()));
+
+                Ok(WorkflowTransition {
+                    next_state,
+                    persisted_event: workflow_event(
+                        "workflow.cancel_requested",
+                        json!({ "reason": reason }),
+                        now,
+                    ),
+                    enqueued_tasks: Vec::new(),
+                })
+            }
+            WorkflowSignal::PublishRequested { .. } => {
+                Err(WorkflowTransitionError::UnsupportedSignal)
+            }
+            _ => Err(WorkflowTransitionError::InvalidTransition(format!(
+                "workflow={} stage={} status={:?}",
+                WorkflowKind::VideoExtraction.as_str(),
+                state.stage,
+                state.status
+            ))),
+        }
+    }
+}
+
+fn video_extraction_output_is_unsupported(output: Option<&Value>) -> bool {
+    output.is_some_and(|value| {
+        value
+            .get("status")
+            .and_then(Value::as_str)
+            .is_some_and(|status| status == "unsupported_source")
+            || value
+                .get("reason")
+                .and_then(Value::as_str)
+                .is_some_and(|reason| reason == "unsupported_source")
+            || value
+                .get("unsupported_source")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+    })
+}
+
 pub fn registry() -> Vec<DynWorkflowDefinition> {
     vec![
         Arc::new(LinearWorkflowDefinition {
@@ -349,6 +673,7 @@ pub fn registry() -> Vec<DynWorkflowDefinition> {
             success_stage: "codex_host_task_completed",
             next_step: None,
         }),
+        Arc::new(VideoExtractionWorkflowDefinition),
     ]
 }
 
@@ -377,12 +702,13 @@ mod tests {
         let entries = registry();
         let names: Vec<_> = entries.iter().map(|entry| entry.kind().as_str()).collect();
 
-        assert_eq!(entries.len(), 9);
+        assert_eq!(entries.len(), 10);
         assert!(names.contains(&"chat_session_workflow"));
         assert!(names.contains(&"report_render_workflow"));
         assert!(names.contains(&"static_page_image_generation_workflow"));
         assert!(names.contains(&"static_page_render_workflow"));
         assert!(names.contains(&"codex_host_task_workflow"));
+        assert!(names.contains(&"video_extraction_workflow"));
     }
 
     #[test]
@@ -447,6 +773,116 @@ mod tests {
         assert_eq!(done.enqueued_tasks[0].task_key, "index_retrieval_artifacts");
         assert_eq!(finished.next_state.status, WorkflowStatus::Succeeded);
         assert_eq!(finished.next_state.stage, "upload_ingest_completed");
+    }
+
+    #[test]
+    fn video_extraction_workflow_walks_expected_stages() {
+        let definition = registry()
+            .into_iter()
+            .find(|entry| entry.kind() == WorkflowKind::VideoExtraction)
+            .expect("video extraction workflow exists");
+        let now = Utc::now();
+        let pending = definition.initial_state(WorkflowExecutionId::new(), now);
+        let resolving = definition
+            .transition(&pending, WorkflowSignal::Start, now)
+            .expect("video extraction starts");
+
+        assert_eq!(
+            definition.summary(),
+            "Resolve video sources, parse media evidence, and extract PPT/transcript deliverables."
+        );
+        assert_eq!(resolving.next_state.status, WorkflowStatus::Running);
+        assert_eq!(resolving.next_state.stage, "resolving_source");
+        assert_eq!(resolving.enqueued_tasks[0].queue, "media");
+        assert_eq!(resolving.enqueued_tasks[0].task_key, "resolve_video_source");
+
+        let registered = definition
+            .transition(
+                &resolving.next_state,
+                WorkflowSignal::StepCompleted {
+                    task_key: "resolve_video_source".to_string(),
+                    output: Some(json!({ "source_type": "direct_video_url" })),
+                },
+                now,
+            )
+            .expect("source resolves");
+        assert_eq!(registered.next_state.stage, "registered");
+        assert_eq!(
+            registered.enqueued_tasks[0].task_key,
+            "register_video_asset"
+        );
+
+        let parsing = definition
+            .transition(
+                &registered.next_state,
+                WorkflowSignal::StepCompleted {
+                    task_key: "register_video_asset".to_string(),
+                    output: Some(json!({ "asset_state": "registered" })),
+                },
+                now,
+            )
+            .expect("asset registers");
+        assert_eq!(parsing.next_state.stage, "parsing");
+        assert_eq!(parsing.enqueued_tasks[0].queue, "ingest");
+        assert_eq!(parsing.enqueued_tasks[0].task_key, "parse_video_media");
+
+        let extracting = definition
+            .transition(
+                &parsing.next_state,
+                WorkflowSignal::StepCompleted {
+                    task_key: "parse_video_media".to_string(),
+                    output: Some(json!({ "parse_status": "transcribed" })),
+                },
+                now,
+            )
+            .expect("media parses");
+        assert_eq!(extracting.next_state.stage, "extracting_ppt");
+        assert_eq!(extracting.enqueued_tasks[0].task_key, "extract_video_ppt");
+
+        let completed = definition
+            .transition(
+                &extracting.next_state,
+                WorkflowSignal::StepCompleted {
+                    task_key: "extract_video_ppt".to_string(),
+                    output: Some(json!({ "artifact_count": 2 })),
+                },
+                now,
+            )
+            .expect("ppt extraction completes");
+        assert_eq!(completed.next_state.status, WorkflowStatus::Succeeded);
+        assert_eq!(completed.next_state.stage, "completed");
+        assert!(completed.enqueued_tasks.is_empty());
+    }
+
+    #[test]
+    fn video_extraction_workflow_has_unsupported_source_branch() {
+        let definition = registry()
+            .into_iter()
+            .find(|entry| entry.kind() == WorkflowKind::VideoExtraction)
+            .expect("video extraction workflow exists");
+        let now = Utc::now();
+        let pending = definition.initial_state(WorkflowExecutionId::new(), now);
+        let resolving = definition
+            .transition(&pending, WorkflowSignal::Start, now)
+            .expect("video extraction starts");
+        let unsupported = definition
+            .transition(
+                &resolving.next_state,
+                WorkflowSignal::StepCompleted {
+                    task_key: "resolve_video_source".to_string(),
+                    output: Some(json!({ "status": "unsupported_source" })),
+                },
+                now,
+            )
+            .expect("unsupported source is explicit");
+
+        assert_eq!(unsupported.next_state.status, WorkflowStatus::Failed);
+        assert_eq!(unsupported.next_state.stage, "unsupported_source");
+        assert_eq!(
+            unsupported.persisted_event.name,
+            "workflow.unsupported_source"
+        );
+        assert!(unsupported.enqueued_tasks.is_empty());
     }
 
     #[test]

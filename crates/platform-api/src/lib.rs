@@ -3030,7 +3030,9 @@ fn infer_model_facing_capability_class(
         | WorkflowKind::StaticPageRender => {
             contracts::ModelFacingCapabilityClassView::ReportGenerationAndEditing
         }
-        WorkflowKind::UploadIngest | WorkflowKind::CodexHostTask => {
+        WorkflowKind::UploadIngest
+        | WorkflowKind::CodexHostTask
+        | WorkflowKind::VideoExtraction => {
             contracts::ModelFacingCapabilityClassView::ControlledPlatformAction
         }
     }
