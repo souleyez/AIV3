@@ -20572,12 +20572,7 @@ fn assistant_run_codex_host_validation_results(
 fn assistant_run_codex_host_validation_summary(results: &[Value]) -> Value {
     let completed_count = results
         .iter()
-        .filter(|result| {
-            result
-                .get("host_validation_completed")
-                .and_then(Value::as_bool)
-                .unwrap_or(false)
-        })
+        .filter(|result| assistant_run_codex_host_validation_result_completed(result))
         .count();
     let invalid_host_count = results
         .iter()
@@ -20590,27 +20585,36 @@ fn assistant_run_codex_host_validation_summary(results: &[Value]) -> Value {
                     .unwrap_or(false)
         })
         .count();
+    let guard_failed_count = results
+        .iter()
+        .filter(|result| {
+            result.get("mode").and_then(Value::as_str) == Some("codex_exec")
+                && result.get("status").and_then(Value::as_str) == Some("completed")
+                && result
+                    .get("host_kind_allowed")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+                && !assistant_run_codex_host_validation_result_completed(result)
+        })
+        .count();
     let failed_count = results
         .iter()
         .filter(|result| {
             result.get("mode").and_then(Value::as_str) == Some("codex_exec")
-                && !result
-                    .get("host_validation_completed")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false)
+                && !assistant_run_codex_host_validation_result_completed(result)
         })
         .count();
     let latest = results.first();
     let latest_status = latest
         .map(|result| {
-            if result
-                .get("host_validation_completed")
-                .and_then(Value::as_bool)
-                .unwrap_or(false)
-            {
+            if assistant_run_codex_host_validation_result_completed(result) {
                 "validated"
             } else if result.get("mode").and_then(Value::as_str) == Some("codex_exec")
                 && result.get("status").and_then(Value::as_str) == Some("completed")
+                && !result
+                    .get("host_kind_allowed")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
             {
                 "invalid_host"
             } else if result.get("mode").and_then(Value::as_str) == Some("codex_exec") {
@@ -20641,13 +20645,26 @@ fn assistant_run_codex_host_validation_summary(results: &[Value]) -> Value {
                     .get("codex_invoked")
                     .cloned()
                     .unwrap_or(Value::Bool(false)),
+                "validation_requirements_met": assistant_run_codex_host_validation_result_completed(result),
                 "profile_kind": result.pointer("/profile/kind").cloned().unwrap_or(Value::Null),
                 "model": result.pointer("/profile/model").cloned().unwrap_or(Value::Null),
                 "workspace_configured": result
                     .pointer("/command_plan/workspace_configured")
                     .cloned()
                     .unwrap_or(Value::Bool(false)),
+                "prompt_redacted": result
+                    .pointer("/command_plan/prompt_redacted")
+                    .cloned()
+                    .unwrap_or(Value::Bool(false)),
                 "exit_code": result.pointer("/process/exit_code").cloned().unwrap_or(Value::Null),
+                "task_memory_isolated": result
+                    .get("task_memory_isolated")
+                    .cloned()
+                    .unwrap_or(Value::Bool(false)),
+                "task_memory_space_configured": result
+                    .get("task_memory_space_configured")
+                    .cloned()
+                    .unwrap_or(Value::Bool(false)),
                 "html_artifact_count": result
                     .get("html_artifact_count")
                     .cloned()
@@ -20662,6 +20679,7 @@ fn assistant_run_codex_host_validation_summary(results: &[Value]) -> Value {
         "completed_count": completed_count,
         "failed_count": failed_count,
         "invalid_host_count": invalid_host_count,
+        "guard_failed_count": guard_failed_count,
         "latest": latest_summary,
         "direct_execution_authoritative": true,
         "local_execution_allowed": false,
@@ -20744,6 +20762,36 @@ fn assistant_run_codex_host_validation_event_summary(event: &AssistantRunEvent) 
     let process = output.get("process").unwrap_or(&Value::Null);
     let command_plan = output.get("command_plan").unwrap_or(&Value::Null);
     let profile = output.get("profile").unwrap_or(&Value::Null);
+    let codex_invoked = output
+        .get("codex_invoked")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let workspace_configured = command_plan
+        .get("workspace_configured")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let prompt_redacted = command_plan
+        .get("prompt_redacted")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let exit_code_is_zero = process
+        .get("exit_code")
+        .and_then(Value::as_i64)
+        .is_some_and(|exit_code| exit_code == 0);
+    let task_memory_isolated = output
+        .get("task_memory_isolated")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let task_memory_space_configured = output.get("task_memory_space_id").is_some();
+    let host_validation_completed = mode == "codex_exec"
+        && status == "completed"
+        && host_kind_allowed
+        && codex_invoked
+        && workspace_configured
+        && prompt_redacted
+        && exit_code_is_zero
+        && task_memory_isolated
+        && task_memory_space_configured;
     let stdout_chars = process
         .get("stdout_excerpt")
         .and_then(Value::as_str)
@@ -20768,11 +20816,8 @@ fn assistant_run_codex_host_validation_event_summary(event: &AssistantRunEvent) 
         "status": status,
         "host_kind": host_kind,
         "host_kind_allowed": host_kind_allowed,
-        "host_validation_completed": mode == "codex_exec" && status == "completed" && host_kind_allowed,
-        "codex_invoked": output
-            .get("codex_invoked")
-            .cloned()
-            .unwrap_or(Value::Bool(false)),
+        "host_validation_completed": host_validation_completed,
+        "codex_invoked": codex_invoked,
         "capability": output.get("capability").cloned().unwrap_or(Value::Null),
         "profile": {
             "id": profile.get("id").cloned().unwrap_or(Value::Null),
@@ -20821,10 +20866,43 @@ fn assistant_run_codex_host_validation_event_summary(event: &AssistantRunEvent) 
             .get("task_memory_isolated")
             .cloned()
             .unwrap_or(Value::Bool(false)),
-        "task_memory_space_configured": output.get("task_memory_space_id").is_some(),
+        "task_memory_space_configured": task_memory_space_configured,
         "html_artifact_count": html_artifact_count,
         "raw_logs_exposed": false,
     }))
+}
+
+fn assistant_run_codex_host_validation_result_completed(result: &Value) -> bool {
+    result.get("mode").and_then(Value::as_str) == Some("codex_exec")
+        && result.get("status").and_then(Value::as_str) == Some("completed")
+        && result
+            .get("host_kind_allowed")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && result
+            .get("codex_invoked")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && result
+            .pointer("/command_plan/workspace_configured")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && result
+            .pointer("/command_plan/prompt_redacted")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && result
+            .pointer("/process/exit_code")
+            .and_then(Value::as_i64)
+            .is_some_and(|exit_code| exit_code == 0)
+        && result
+            .get("task_memory_isolated")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && result
+            .get("task_memory_space_configured")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
 }
 
 fn assistant_run_codex_host_kind_is_allowed(host_kind: Option<&str>) -> bool {
@@ -25142,6 +25220,25 @@ mod tests {
             json!(true)
         );
         assert_eq!(
+            diagnostics["codex_executor"]["host_validation_summary"]["latest"]["prompt_redacted"],
+            json!(true)
+        );
+        assert_eq!(
+            diagnostics["codex_executor"]["host_validation_summary"]["latest"]
+                ["task_memory_isolated"],
+            json!(true)
+        );
+        assert_eq!(
+            diagnostics["codex_executor"]["host_validation_summary"]["latest"]
+                ["task_memory_space_configured"],
+            json!(true)
+        );
+        assert_eq!(
+            diagnostics["codex_executor"]["host_validation_summary"]["latest"]
+                ["validation_requirements_met"],
+            json!(true)
+        );
+        assert_eq!(
             diagnostics["codex_executor"]["host_validation_summary"]["codex_mutation_allowed"],
             json!(false)
         );
@@ -25291,8 +25388,10 @@ mod tests {
             "host_validation_completed": true,
             "codex_invoked": true,
             "profile": {"kind": "codex-native", "model": "codex-host"},
-            "command_plan": {"workspace_configured": true},
+            "command_plan": {"workspace_configured": true, "prompt_redacted": true},
             "process": {"exit_code": 0},
+            "task_memory_isolated": true,
+            "task_memory_space_configured": true,
             "html_artifact_count": 1,
         })]);
         let promotion_gate =
@@ -25319,8 +25418,10 @@ mod tests {
             "host_validation_completed": false,
             "codex_invoked": true,
             "profile": {"kind": "codex-compatible-shim", "model": "MiniMax-M2.7"},
-            "command_plan": {"workspace_configured": true},
+            "command_plan": {"workspace_configured": true, "prompt_redacted": true},
             "process": {"exit_code": 1},
+            "task_memory_isolated": true,
+            "task_memory_space_configured": true,
             "html_artifact_count": 1,
         })]);
         let failed_host_promotion_gate =
@@ -25447,7 +25548,7 @@ mod tests {
             "codex_invoked": false,
             "capability": "inspect_project",
             "profile": {"kind": "codex-compatible-shim", "model": "MiniMax-M2.7"},
-            "command_plan": {"workspace_configured": true},
+            "command_plan": {"workspace_configured": true, "prompt_redacted": true},
             "process": {"exit_code": Value::Null},
             "html_artifact_count": 1,
         })];
@@ -25467,8 +25568,10 @@ mod tests {
             "codex_invoked": true,
             "capability": "inspect_project",
             "profile": {"kind": "codex-native", "model": "codex-host"},
-            "command_plan": {"workspace_configured": true},
+            "command_plan": {"workspace_configured": true, "prompt_redacted": true},
             "process": {"exit_code": 0},
+            "task_memory_isolated": true,
+            "task_memory_space_configured": true,
             "html_artifact_count": 1,
         })];
         let invalid_host = assistant_run_codex_host_validation_summary(&invalid_host_results);
@@ -25500,6 +25603,41 @@ mod tests {
             json!(false)
         );
 
+        let guard_failed_results = vec![json!({
+            "mode": "codex_exec",
+            "status": "completed",
+            "host_kind": "windows_jump",
+            "host_kind_allowed": true,
+            "host_validation_completed": true,
+            "codex_invoked": true,
+            "capability": "inspect_project",
+            "profile": {"kind": "codex-compatible-shim", "model": "MiniMax-M2.7"},
+            "command_plan": {
+                "workspace_configured": false,
+                "prompt_redacted": true
+            },
+            "process": {"exit_code": 0},
+            "task_memory_isolated": true,
+            "task_memory_space_configured": true,
+            "html_artifact_count": 1,
+        })];
+        let guard_failed = assistant_run_codex_host_validation_summary(&guard_failed_results);
+
+        assert_eq!(guard_failed["status"], json!("failed"));
+        assert_eq!(guard_failed["completed_count"], json!(0));
+        assert_eq!(guard_failed["failed_count"], json!(1));
+        assert_eq!(guard_failed["invalid_host_count"], json!(0));
+        assert_eq!(guard_failed["guard_failed_count"], json!(1));
+        assert_eq!(
+            guard_failed["latest"]["validation_requirements_met"],
+            json!(false)
+        );
+        assert_eq!(guard_failed["latest"]["workspace_configured"], json!(false));
+        assert_eq!(
+            guard_failed["next_step"],
+            json!("inspect_redacted_codex_host_report_and_retry_on_jump_host")
+        );
+
         let failed_results = vec![
             json!({
                 "mode": "codex_exec",
@@ -25514,8 +25652,10 @@ mod tests {
                     "model": "MiniMax-M2.7",
                     "env_key": "MINIMAX_API_KEY"
                 },
-                "command_plan": {"workspace_configured": true},
+                "command_plan": {"workspace_configured": true, "prompt_redacted": true},
                 "process": {"exit_code": 1, "stderr_excerpt": "sk-should-not-leak"},
+                "task_memory_isolated": true,
+                "task_memory_space_configured": true,
                 "html_artifact_count": 1,
             }),
             json!({
@@ -25527,8 +25667,10 @@ mod tests {
                 "codex_invoked": true,
                 "capability": "inspect_project",
                 "profile": {"kind": "codex-compatible-shim", "model": "MiniMax-M2.7"},
-                "command_plan": {"workspace_configured": true},
+                "command_plan": {"workspace_configured": true, "prompt_redacted": true},
                 "process": {"exit_code": 0},
+                "task_memory_isolated": true,
+                "task_memory_space_configured": true,
                 "html_artifact_count": 1,
             }),
         ];
