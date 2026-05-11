@@ -3,10 +3,11 @@ use chrono::Utc;
 use domain_model::{AssistantRunId, WorkflowExecution, WorkflowKind, WorkflowTask};
 use event_bus::{workflow_task_enqueued_subject, EventBus, EventSubscription};
 use media_worker::{
-    extract_video_ppt_output_with_frame_extraction, frame_extraction_config_from_env,
+    extract_video_ppt_output_with_artifacts, frame_extraction_config_from_env,
     register_video_asset_output, resolve_video_source_output,
     run_video_frame_extraction_if_enabled, video_extraction_html_artifact_from_output,
-    FrameExtractionConfig, MediaWorkflowTaskKind,
+    write_video_extraction_text_artifacts_if_available, FrameExtractionConfig,
+    MediaWorkflowTaskKind,
 };
 use serde_json::Value;
 use storage::{NewAssistantRunEvent, NewHtmlArtifact, PgStorage, DEFAULT_LOCAL_DATABASE_URL};
@@ -136,7 +137,18 @@ async fn process_task(
                     .await?;
                 let frame_extraction =
                     run_video_frame_extraction_if_enabled(&document, frame_extraction_config);
-                extract_video_ppt_output_with_frame_extraction(&document, &chunks, frame_extraction)
+                let generated_artifacts = write_video_extraction_text_artifacts_if_available(
+                    &document,
+                    &chunks,
+                    &frame_extraction,
+                    &frame_extraction_config.output_root,
+                );
+                extract_video_ppt_output_with_artifacts(
+                    &document,
+                    &chunks,
+                    frame_extraction,
+                    generated_artifacts,
+                )
             }
         };
 

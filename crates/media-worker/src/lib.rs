@@ -11,6 +11,12 @@ pub const DEFAULT_FRAME_EXTRACTION_INTERVAL_SECONDS: f64 = 0.15;
 pub const DEFAULT_RAW_FRAMES_DIR_NAME: &str = "raw_frames";
 pub const DEFAULT_RAW_FRAME_FILE_PATTERN: &str = "frame_%06d.jpg";
 pub const DEFAULT_FRAME_MANIFEST_FILE_NAME: &str = "frame_manifest.json";
+pub const DEFAULT_GENERATED_ARTIFACTS_DIR_NAME: &str = "generated_artifacts";
+pub const DEFAULT_TRANSCRIPT_ARTIFACT_FILE_NAME: &str = "transcript.txt";
+pub const DEFAULT_PPT_OUTLINE_ARTIFACT_FILE_NAME: &str = "ppt_outline.md";
+pub const DEFAULT_TIMESTAMP_MAP_ARTIFACT_FILE_NAME: &str = "timestamp_map.json";
+pub const DEFAULT_EXTRACTION_ARTIFACTS_MANIFEST_FILE_NAME: &str =
+    "extraction_artifacts_manifest.json";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MediaWorkflowTaskKind {
@@ -89,6 +95,20 @@ pub fn extract_video_ppt_output_with_frame_extraction(
     chunks: &[DocumentChunk],
     frame_extraction: Value,
 ) -> Value {
+    extract_video_ppt_output_with_artifacts(
+        document,
+        chunks,
+        frame_extraction,
+        video_generated_artifacts_plan(document),
+    )
+}
+
+pub fn extract_video_ppt_output_with_artifacts(
+    document: &Document,
+    chunks: &[DocumentChunk],
+    frame_extraction: Value,
+    generated_artifacts: Value,
+) -> Value {
     let evidence = video_evidence_summary_from_chunks(chunks);
     let artifacts = video_extraction_artifact_refs(document, &evidence, &frame_extraction);
     let status = if evidence.has_evidence() {
@@ -110,10 +130,11 @@ pub fn extract_video_ppt_output_with_frame_extraction(
             "chunk_count": evidence.chunk_count,
         },
         "frame_extraction": frame_extraction,
+        "generated_artifacts": generated_artifacts,
         "artifacts": artifacts,
         "html_artifacts": [],
         "no_host_composed_answer": true,
-        "note": "media-worker summarizes persisted media evidence and records raw_frames extraction state; durable PPTX/Markdown artifacts remain later stages.",
+        "note": "media-worker summarizes persisted media evidence, records raw_frames extraction state, and writes deterministic text artifacts when evidence exists; durable PPTX artifacts remain later stages.",
     })
 }
 
@@ -260,6 +281,128 @@ pub fn video_frame_extraction_plan(document: &Document) -> Value {
     })
 }
 
+pub fn write_video_extraction_text_artifacts_if_available(
+    document: &Document,
+    chunks: &[DocumentChunk],
+    frame_extraction: &Value,
+    output_root: &Path,
+) -> Value {
+    match write_video_extraction_text_artifacts(document, chunks, frame_extraction, output_root) {
+        Ok(manifest) => manifest,
+        Err(error) => json!({
+            "status": "failed",
+            "source": "media_worker_text_artifact_writer",
+            "reason": error,
+            "session_dir": output_root.join(format!("video-extraction-{}", document.id)).display().to_string(),
+            "artifacts_dir_name": DEFAULT_GENERATED_ARTIFACTS_DIR_NAME,
+        }),
+    }
+}
+
+pub fn write_video_extraction_text_artifacts(
+    document: &Document,
+    chunks: &[DocumentChunk],
+    frame_extraction: &Value,
+    output_root: &Path,
+) -> Result<Value, String> {
+    let evidence = video_media_evidence_items_from_chunks(chunks);
+    let frame_count = frame_extraction
+        .get("frame_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    if !evidence.has_any() && frame_count == 0 {
+        return Ok(video_generated_artifacts_plan(document));
+    }
+
+    let session_dir = output_root.join(format!("video-extraction-{}", document.id));
+    let artifacts_dir = session_dir.join(DEFAULT_GENERATED_ARTIFACTS_DIR_NAME);
+    fs::create_dir_all(&artifacts_dir).map_err(|error| error.to_string())?;
+
+    let mut files = Vec::<Value>::new();
+    if !evidence.transcript_segments.is_empty() {
+        let transcript_path = artifacts_dir.join(DEFAULT_TRANSCRIPT_ARTIFACT_FILE_NAME);
+        fs::write(
+            &transcript_path,
+            render_video_transcript_text(&evidence.transcript_segments),
+        )
+        .map_err(|error| error.to_string())?;
+        files.push(video_generated_artifact_file(
+            document,
+            "transcript_text",
+            "text/plain",
+            &transcript_path,
+        ));
+    }
+
+    if !evidence.scenes.is_empty() || !evidence.keyframe_ocr_snippets.is_empty() || frame_count > 0
+    {
+        let outline_path = artifacts_dir.join(DEFAULT_PPT_OUTLINE_ARTIFACT_FILE_NAME);
+        fs::write(
+            &outline_path,
+            render_video_ppt_outline_markdown(document, &evidence, frame_extraction),
+        )
+        .map_err(|error| error.to_string())?;
+        files.push(video_generated_artifact_file(
+            document,
+            "ppt_outline",
+            "text/markdown",
+            &outline_path,
+        ));
+    }
+
+    let timestamp_map_path = artifacts_dir.join(DEFAULT_TIMESTAMP_MAP_ARTIFACT_FILE_NAME);
+    let timestamp_map = json!({
+        "document_id": document.id.to_string(),
+        "dataset_id": document.dataset_id.to_string(),
+        "title": document.title,
+        "transcript_segments": evidence.transcript_segments.clone(),
+        "scenes": evidence.scenes.clone(),
+        "keyframe_ocr_snippets": evidence.keyframe_ocr_snippets.clone(),
+        "frame_extraction": frame_extraction,
+    });
+    let timestamp_map_bytes =
+        serde_json::to_vec_pretty(&timestamp_map).map_err(|error| error.to_string())?;
+    fs::write(&timestamp_map_path, timestamp_map_bytes).map_err(|error| error.to_string())?;
+    files.push(video_generated_artifact_file(
+        document,
+        "timestamp_map",
+        "application/json",
+        &timestamp_map_path,
+    ));
+
+    let manifest_path = artifacts_dir.join(DEFAULT_EXTRACTION_ARTIFACTS_MANIFEST_FILE_NAME);
+    let manifest = json!({
+        "status": "completed",
+        "source": "media_worker_text_artifact_writer",
+        "session_dir": session_dir.display().to_string(),
+        "artifacts_dir": artifacts_dir.display().to_string(),
+        "manifest_path": manifest_path.display().to_string(),
+        "manifest_file_name": DEFAULT_EXTRACTION_ARTIFACTS_MANIFEST_FILE_NAME,
+        "evidence_counts": {
+            "transcript_segment_count": evidence.transcript_segments.len(),
+            "scene_count": evidence.scenes.len(),
+            "keyframe_ocr_snippet_count": evidence.keyframe_ocr_snippets.len(),
+            "frame_count": frame_count,
+        },
+        "files": files,
+    });
+    let manifest_bytes = serde_json::to_vec_pretty(&manifest).map_err(|error| error.to_string())?;
+    fs::write(&manifest_path, manifest_bytes).map_err(|error| error.to_string())?;
+
+    Ok(manifest)
+}
+
+pub fn video_generated_artifacts_plan(document: &Document) -> Value {
+    json!({
+        "status": "planned",
+        "source": "media_worker_text_artifact_writer",
+        "session_dir": format!("video-extraction-{}", document.id),
+        "artifacts_dir": format!("video-extraction-{}/{}", document.id, DEFAULT_GENERATED_ARTIFACTS_DIR_NAME),
+        "manifest_file_name": DEFAULT_EXTRACTION_ARTIFACTS_MANIFEST_FILE_NAME,
+        "files": [],
+    })
+}
+
 pub fn video_extraction_html_artifact_from_output(
     assistant_run_id: &str,
     local_thread_id: Option<&str>,
@@ -349,6 +492,7 @@ pub fn video_extraction_html_artifact_from_output(
                 }
             ],
             "artifacts": output.get("artifacts").cloned().unwrap_or_else(|| json!([])),
+            "generated_artifacts": output.get("generated_artifacts").cloned().unwrap_or_else(|| json!({})),
             "local_thread_id": local_thread_id,
             "note": "后台视频抽取阶段已完成；该摘要只展示已实际产生或已明确缺失的证据，后续生成 PPT/Markdown 时继续沿用这些证据。"
         }
@@ -534,6 +678,208 @@ fn array_len(value: &Value, key: &str) -> usize {
         .unwrap_or(0)
 }
 
+#[derive(Clone, Debug, Default)]
+struct VideoMediaEvidenceItems {
+    transcript_segments: Vec<Value>,
+    scenes: Vec<Value>,
+    keyframe_ocr_snippets: Vec<Value>,
+}
+
+impl VideoMediaEvidenceItems {
+    fn has_any(&self) -> bool {
+        !self.transcript_segments.is_empty()
+            || !self.scenes.is_empty()
+            || !self.keyframe_ocr_snippets.is_empty()
+    }
+}
+
+fn video_media_evidence_items_from_chunks(chunks: &[DocumentChunk]) -> VideoMediaEvidenceItems {
+    let mut evidence = VideoMediaEvidenceItems::default();
+    for chunk in chunks {
+        let Some(media) = media_value_from_chunk(chunk) else {
+            continue;
+        };
+        evidence
+            .transcript_segments
+            .extend(cloned_array_items(media, "transcript_segments"));
+        evidence.scenes.extend(cloned_array_items(media, "scenes"));
+        evidence
+            .keyframe_ocr_snippets
+            .extend(cloned_array_items(media, "keyframe_ocr_snippets"));
+    }
+    evidence
+}
+
+fn media_value_from_chunk(chunk: &DocumentChunk) -> Option<&Value> {
+    chunk
+        .metadata
+        .get("parse_metadata")
+        .and_then(|value| value.get("media"))
+        .or_else(|| chunk.metadata.get("media"))
+}
+
+fn cloned_array_items(value: &Value, key: &str) -> Vec<Value> {
+    value
+        .get(key)
+        .and_then(Value::as_array)
+        .map(|items| items.iter().cloned().collect())
+        .unwrap_or_default()
+}
+
+fn render_video_transcript_text(segments: &[Value]) -> String {
+    let mut output = String::new();
+    for (index, segment) in segments.iter().enumerate() {
+        let text = video_item_text(segment, &["text", "content", "summary"]).unwrap_or_default();
+        let range = video_time_range_label(segment);
+        if !range.is_empty() {
+            output.push_str(&format!("[{range}] {text}\n"));
+        } else {
+            output.push_str(&format!("{}: {text}\n", index + 1));
+        }
+    }
+    output
+}
+
+fn render_video_ppt_outline_markdown(
+    document: &Document,
+    evidence: &VideoMediaEvidenceItems,
+    frame_extraction: &Value,
+) -> String {
+    let mut output = format!("# {}\n\n", document.title);
+    let frame_count = frame_extraction
+        .get("frame_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    output.push_str("## Extraction Summary\n\n");
+    output.push_str(&format!(
+        "- Transcript segments: {}\n- Scenes: {}\n- Keyframe OCR snippets: {}\n- Raw frames: {}\n\n",
+        evidence.transcript_segments.len(),
+        evidence.scenes.len(),
+        evidence.keyframe_ocr_snippets.len(),
+        frame_count
+    ));
+
+    output.push_str("## Slide / Scene Candidates\n\n");
+    if evidence.scenes.is_empty() && evidence.keyframe_ocr_snippets.is_empty() {
+        output.push_str("- No scene or OCR candidates yet. Use raw frames/contact sheet before final PPTX generation.\n\n");
+    } else {
+        for (index, scene) in evidence.scenes.iter().enumerate() {
+            let range = video_time_range_label(scene);
+            let summary = video_item_text(scene, &["summary", "text", "description"])
+                .unwrap_or_else(|| "Untitled scene".to_string());
+            output.push_str(&format!(
+                "- Scene {}{}: {}\n",
+                index + 1,
+                optional_time_suffix(&range),
+                summary
+            ));
+        }
+        for (index, snippet) in evidence.keyframe_ocr_snippets.iter().enumerate() {
+            let timestamp = video_timestamp_label(snippet);
+            let text = video_item_text(snippet, &["text", "ocr_text", "summary"])
+                .unwrap_or_else(|| "No OCR text".to_string());
+            output.push_str(&format!(
+                "- OCR {}{}: {}\n",
+                index + 1,
+                optional_time_suffix(&timestamp),
+                text
+            ));
+        }
+        output.push('\n');
+    }
+
+    output.push_str("## Transcript\n\n");
+    if evidence.transcript_segments.is_empty() {
+        output.push_str("No transcript segments yet.\n");
+    } else {
+        for segment in &evidence.transcript_segments {
+            let text =
+                video_item_text(segment, &["text", "content", "summary"]).unwrap_or_default();
+            let range = video_time_range_label(segment);
+            output.push_str(&format!("- {}{}\n", optional_time_prefix(&range), text));
+        }
+    }
+    output
+}
+
+fn video_generated_artifact_file(
+    document: &Document,
+    artifact_kind: &str,
+    format: &str,
+    path: &Path,
+) -> Value {
+    let artifact_id = format!("video-{}-{artifact_kind}", document.id);
+    json!({
+        "artifact_kind": artifact_kind,
+        "artifact_id": artifact_id,
+        "title": format!("{} - {}", document.title, artifact_kind),
+        "format": format,
+        "path": path.display().to_string(),
+        "uri": format!("artifact://{artifact_id}"),
+    })
+}
+
+fn video_item_text(value: &Value, keys: &[&str]) -> Option<String> {
+    keys.iter()
+        .find_map(|key| value.get(*key).and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn video_time_range_label(value: &Value) -> String {
+    let start = video_number_field(value, &["start_seconds", "startSeconds", "start"]);
+    let end = video_number_field(value, &["end_seconds", "endSeconds", "end"]);
+    match (start, end) {
+        (Some(start), Some(end)) => format!("{}-{}", format_seconds(start), format_seconds(end)),
+        (Some(start), None) => format_seconds(start),
+        (None, Some(end)) => format_seconds(end),
+        (None, None) => String::new(),
+    }
+}
+
+fn video_timestamp_label(value: &Value) -> String {
+    video_number_field(
+        value,
+        &[
+            "timestamp_seconds",
+            "timestampSeconds",
+            "time_seconds",
+            "timeSeconds",
+        ],
+    )
+    .map(format_seconds)
+    .unwrap_or_default()
+}
+
+fn video_number_field(value: &Value, keys: &[&str]) -> Option<f64> {
+    keys.iter().find_map(|key| value.get(*key)?.as_f64())
+}
+
+fn format_seconds(value: f64) -> String {
+    let safe_value = value.max(0.0);
+    let total_seconds = safe_value.round() as u64;
+    let minutes = total_seconds / 60;
+    let seconds = total_seconds % 60;
+    format!("{minutes}:{seconds:02}")
+}
+
+fn optional_time_suffix(value: &str) -> String {
+    if value.is_empty() {
+        String::new()
+    } else {
+        format!(" ({value})")
+    }
+}
+
+fn optional_time_prefix(value: &str) -> String {
+    if value.is_empty() {
+        String::new()
+    } else {
+        format!("[{value}] ")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -626,6 +972,7 @@ mod tests {
             partial["frame_extraction"]["manifest_file_name"],
             json!(DEFAULT_FRAME_MANIFEST_FILE_NAME)
         );
+        assert_eq!(partial["generated_artifacts"]["status"], json!("planned"));
         assert!(partial["artifacts"].as_array().expect("array").is_empty());
 
         let chunk = test_chunk(json!({
@@ -699,6 +1046,64 @@ mod tests {
             json!(true)
         );
         assert_eq!(artifact["payload"]["missing"][0], json!("transcript_text"));
+    }
+
+    #[test]
+    fn writes_video_text_artifacts_from_media_evidence() {
+        let document = test_document();
+        let chunk = test_chunk(json!({
+            "media": {
+                "transcript_segments": [{
+                    "start_seconds": 0.0,
+                    "end_seconds": 2.4,
+                    "text": "第一页讲产品定位"
+                }],
+                "scenes": [{
+                    "start_seconds": 0.0,
+                    "end_seconds": 2.4,
+                    "summary": "标题页"
+                }],
+                "keyframe_ocr_snippets": [{
+                    "timestamp_seconds": 1.2,
+                    "text": "AI Data Platform"
+                }]
+            }
+        }));
+        let output_root = std::env::temp_dir().join(format!(
+            "aidp-v3-video-artifacts-test-{}",
+            DocumentId::new()
+        ));
+        let frame_extraction = json!({
+            "status": "completed",
+            "frame_count": 8,
+            "manifest_file_name": DEFAULT_FRAME_MANIFEST_FILE_NAME
+        });
+
+        let manifest = write_video_extraction_text_artifacts(
+            &document,
+            &[chunk],
+            &frame_extraction,
+            &output_root,
+        )
+        .expect("text artifacts");
+
+        assert_eq!(manifest["status"], json!("completed"));
+        assert_eq!(
+            manifest["evidence_counts"]["transcript_segment_count"],
+            json!(1)
+        );
+        assert_eq!(manifest["evidence_counts"]["frame_count"], json!(8));
+        assert_eq!(manifest["files"].as_array().expect("files").len(), 3);
+
+        let transcript_path = manifest["files"]
+            .as_array()
+            .expect("files")
+            .iter()
+            .find(|file| file["artifact_kind"] == json!("transcript_text"))
+            .and_then(|file| file["path"].as_str())
+            .expect("transcript path");
+        let transcript = fs::read_to_string(transcript_path).expect("transcript file");
+        assert!(transcript.contains("第一页讲产品定位"));
     }
 
     #[test]
