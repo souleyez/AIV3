@@ -755,6 +755,8 @@ fn contains_unsafe_key(value: &Value) -> bool {
 }
 
 fn build_provider_input(request: &StaticPageIntentRequest) -> String {
+    let binding_quality_summary =
+        static_page_provider_binding_quality_summary(&request.draft_payload);
     json!({
         "instruction": [
             "You are the static page planning runtime.",
@@ -766,6 +768,8 @@ fn build_provider_input(request: &StaticPageIntentRequest) -> String {
             "For data binding use dataBinding={type,label,sourceId,fieldPath,aggregation,evidenceIds}. For charts use visualization={type,label,chartRuntime,chartOptions}.",
             "chartRuntime must be deterministic or echarts. Use echarts only for advanced plain-JSON ECharts options; never output functions, HTML, URLs, javascript:, renderItem, or event handler keys.",
             "Prefer fieldPath values from draft_payload.dataSnapshot.field_candidates or draft_payload.data_snapshot.field_candidates when they exist.",
+            "Read assistant_context.static_page_binding_quality before changing dataBinding or chart type.",
+            "Do not treat a matched field candidate as renderable chart data. If chartDataFit is needs_sample_rows or missing_binding, add/suggest module sample rows, switch to a non-chart visualization, or keep the module pending; do not queue image/final render unless the user explicitly accepts partial data.",
             "Use only visible selected_scope and supplied evidence. Never invent private data."
         ],
         "prompt": request.prompt,
@@ -777,9 +781,113 @@ fn build_provider_input(request: &StaticPageIntentRequest) -> String {
             "evidence_state": request.evidence_state,
             "conversation_memory_refs": request.conversation_memory_refs,
             "messages": request.messages,
+            "static_page_binding_quality": binding_quality_summary,
         }
     })
     .to_string()
+}
+
+fn static_page_provider_binding_quality_summary(draft_payload: &Value) -> Value {
+    const MODULE_LIMIT: usize = 16;
+
+    let module_bindings = draft_payload
+        .get("dataSnapshot")
+        .or_else(|| draft_payload.get("data_snapshot"))
+        .and_then(|snapshot| {
+            snapshot
+                .get("moduleBindings")
+                .or_else(|| snapshot.get("module_bindings"))
+        })
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .take(MODULE_LIMIT)
+                .map(static_page_provider_module_binding_quality)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    let attention_modules = module_bindings
+        .iter()
+        .filter(|module| {
+            module
+                .get("bindingQualityStatus")
+                .and_then(Value::as_str)
+                .is_some_and(|status| status != "confirmed")
+                || module
+                    .get("chartDataFit")
+                    .and_then(Value::as_str)
+                    .is_some_and(|fit| matches!(fit, "needs_sample_rows" | "missing_binding"))
+        })
+        .count();
+
+    json!({
+        "version": 1,
+        "source": "draft_payload.dataSnapshot.module_bindings",
+        "moduleLimit": MODULE_LIMIT,
+        "moduleCount": module_bindings.len(),
+        "attentionModules": attention_modules,
+        "moduleBindings": module_bindings,
+        "policy": [
+            "confirmed/ready modules can proceed to preview.",
+            "partial inferred_signal modules are evidence-backed but not exact data; ask for extraction or confirmation before final delivery.",
+            "needs_sample_rows or missing_binding chart modules must receive sample rows, change visualization, or stay pending before preview/final render."
+        ],
+    })
+}
+
+fn static_page_provider_module_binding_quality(binding: &Value) -> Value {
+    let binding_object = binding
+        .get("binding")
+        .or_else(|| binding.get("dataBinding"))
+        .or_else(|| binding.get("data_binding"))
+        .unwrap_or(&Value::Null);
+    let binding_quality = binding
+        .get("bindingQuality")
+        .or_else(|| binding.get("binding_quality"))
+        .unwrap_or(&Value::Null);
+    json!({
+        "moduleId": string_field(binding, &["moduleId", "module_id"]),
+        "title": string_field(binding, &["title"]),
+        "visualizationType": string_field(binding, &["visualizationType", "visualization_type"]),
+        "chartRuntime": string_field(binding, &["chartRuntime", "chart_runtime"]),
+        "dataQuality": string_field(binding, &["dataQuality", "data_quality"]),
+        "bindingQualityStatus": string_field(binding, &["bindingQualityStatus", "binding_quality_status"])
+            .or_else(|| string_field(binding_quality, &["status"])),
+        "chartDataFit": string_field(binding, &["chartDataFit", "chart_data_fit"])
+            .or_else(|| string_field(binding_quality, &["chartDataFit", "chart_data_fit"])),
+        "recommendedAction": string_field(binding, &["recommendedAction", "recommended_action"])
+            .or_else(|| string_field(binding_quality, &["recommendedAction", "recommended_action"])),
+        "reason": string_field(binding_quality, &["reason"]),
+        "sampleRows": number_field(binding_quality, &["sampleRows", "sample_rows"])
+            .or_else(|| array_len_field(binding, &["sampleData", "sample_data"])),
+        "sourceId": string_field(binding_object, &["sourceId", "source_id"])
+            .or_else(|| string_field(binding_quality, &["sourceId", "source_id"])),
+        "fieldPath": string_field(binding_object, &["fieldPath", "field_path", "field"])
+            .or_else(|| string_field(binding_quality, &["fieldPath", "field_path", "field"])),
+        "confidence": number_field(binding_quality, &["confidence"]),
+    })
+}
+
+fn string_field(value: &Value, keys: &[&str]) -> Option<String> {
+    keys.iter()
+        .find_map(|key| value.get(*key).and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn number_field(value: &Value, keys: &[&str]) -> Option<Value> {
+    keys.iter()
+        .find_map(|key| value.get(*key).and_then(Value::as_f64))
+        .map(|number| json!(number))
+}
+
+fn array_len_field(value: &Value, keys: &[&str]) -> Option<Value> {
+    keys.iter()
+        .find_map(|key| value.get(*key).and_then(Value::as_array).map(Vec::len))
+        .map(|len| json!(len))
 }
 
 fn parse_provider_payload(output_text: &str) -> Result<Value> {
@@ -1113,6 +1221,63 @@ mod tests {
             operation["type"] == json!("change_data_binding")
                 && operation["dataBinding"]["sourceId"] == json!("conversation_memory")
         }));
+    }
+
+    #[test]
+    fn provider_input_exposes_compact_binding_quality_summary() {
+        let mut request = sample_request("继续优化趋势模块");
+        request.draft_payload = json!({
+            "modules": [{
+                "id": "trend",
+                "title": "趋势变化",
+                "visualization": {"type": "line-chart"}
+            }],
+            "dataSnapshot": {
+                "module_bindings": [{
+                    "moduleId": "trend",
+                    "title": "趋势变化",
+                    "binding": {
+                        "sourceId": "evidence",
+                        "fieldPath": "orders.amount"
+                    },
+                    "visualizationType": "line-chart",
+                    "chartRuntime": "deterministic",
+                    "sampleData": [
+                        {"label": "一月", "value": 1200},
+                        {"label": "二月", "value": 1380}
+                    ],
+                    "dataQuality": "evidence_signal",
+                    "bindingQuality": {
+                        "status": "partial",
+                        "reason": "matched_field_candidate_without_rows",
+                        "chartDataFit": "needs_sample_rows",
+                        "recommendedAction": "已匹配候选字段，但还缺少可渲染样本行。",
+                        "confidence": 0.48
+                    }
+                }]
+            }
+        });
+
+        let input = build_provider_input(&request);
+        let payload = serde_json::from_str::<Value>(&input).expect("input should be JSON");
+        let instructions = payload["instruction"]
+            .as_array()
+            .expect("provider input should include instructions");
+        let quality = &payload["assistant_context"]["static_page_binding_quality"];
+        let module = &quality["moduleBindings"][0];
+
+        assert!(instructions.iter().any(|instruction| {
+            instruction
+                .as_str()
+                .is_some_and(|text| text.contains("chartDataFit"))
+        }));
+        assert_eq!(quality["attentionModules"], json!(1));
+        assert_eq!(module["moduleId"], json!("trend"));
+        assert_eq!(module["fieldPath"], json!("orders.amount"));
+        assert_eq!(module["bindingQualityStatus"], json!("partial"));
+        assert_eq!(module["chartDataFit"], json!("needs_sample_rows"));
+        assert_eq!(module["sampleRows"], json!(2));
+        assert!(module.get("sampleData").is_none());
     }
 
     #[test]
