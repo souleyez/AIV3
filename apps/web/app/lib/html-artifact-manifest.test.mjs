@@ -294,6 +294,20 @@ test('renders video extraction summary template', () => {
         supported: true,
         detail: '已启用视频解析',
       }],
+      generatedArtifacts: {
+        status: 'completed',
+        files: [{
+          artifactKind: 'transcript_text',
+          title: '课程视频 - transcript_text',
+          format: 'text/plain',
+          path: 'generated_artifacts/transcript.txt',
+        }, {
+          artifactKind: 'ppt_outline',
+          title: '课程视频 - ppt_outline',
+          format: 'text/markdown',
+          path: 'generated_artifacts/ppt_outline.md',
+        }],
+      },
       note: '缺失项不会被补造。',
     },
   }));
@@ -305,6 +319,9 @@ test('renders video extraction summary template', () => {
   assert.match(video.html, /标题页/);
   assert.match(video.html, /缺失项不会被补造/);
   assert.match(video.html, /minimax/);
+  assert.match(video.html, /生成文件/);
+  assert.match(video.html, /generated_artifacts\/transcript\.txt/);
+  assert.match(video.html, /ppt_outline/);
 });
 
 test('renders legacy video login handoff as unsupported source guidance', () => {

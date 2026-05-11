@@ -483,6 +483,17 @@ function renderVideoExtractionSummary(manifest) {
     detail: evidence.detail || evidence.status || '',
     meta: evidence.supported ? 'supported' : 'not_supported',
   }));
+  const generatedArtifacts = isPlainObject(payload.generatedArtifacts || payload.generated_artifacts)
+    ? payload.generatedArtifacts || payload.generated_artifacts
+    : {};
+  const generatedFiles = arrayOrEmpty(generatedArtifacts.files).map((file, index) => ({
+    title: file.title || file.artifactKind || file.artifact_kind || `生成文件 ${index + 1}`,
+    detail: [
+      file.format || '',
+      file.path || file.uri || '',
+    ].filter(Boolean).join(' · '),
+    meta: file.artifactKind || file.artifact_kind || '',
+  }));
   return `
     ${renderKeyValueGrid([
       { label: '文档', value: document.title || manifest.title },
@@ -516,6 +527,10 @@ function renderVideoExtractionSummary(manifest) {
     <section>
       <h2>解析提供方</h2>
       ${renderList(providers, '暂无提供方记录。')}
+    </section>
+    <section>
+      <h2>生成文件</h2>
+      ${renderList(generatedFiles, '暂无生成文件。')}
     </section>
   `;
 }
