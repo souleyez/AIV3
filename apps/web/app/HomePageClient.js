@@ -19,6 +19,7 @@ import {
   summarizeAccountState,
   validateAccountEmail,
 } from './lib/account-auth';
+import { buildApiError, staticPagePreviewGateErrorMessage } from './lib/api-error';
 import { buildAssistantStartupBriefing } from './lib/assistant-startup-briefing';
 import { planAssistantScope, selectPlannerDatasetIds } from './lib/scope-planner';
 import {
@@ -331,7 +332,7 @@ async function fetchJson(url, options = {}) {
     const message = typeof payload === 'string'
       ? payload
       : payload?.message || payload?.payload?.message || payload?.error || `Request failed: ${response.status}`;
-    throw new Error(message);
+    throw buildApiError(payload, message, response.status);
   }
 
   return payload;
@@ -2765,7 +2766,7 @@ export default function HomePageClient() {
           })
           .catch((syncError) => {
             setBanner('');
-            setError(`效果图未入队：${syncError instanceof Error ? syncError.message : '请求失败'}。`);
+            setError(`效果图未入队：${staticPagePreviewGateErrorMessage(syncError)}。`);
           })
           .finally(() => setStaticPageActionBusy(false));
         return activeStaticPageDraft;
@@ -2885,7 +2886,7 @@ export default function HomePageClient() {
       setBanner('当前草稿尚未同步到后端，已生成本地模拟效果图；正式运行会进入 Cloudflare/Codex 生图队列。');
       return previewDraft;
     } catch (actionError) {
-      setError(actionError instanceof Error ? actionError.message : '静态页生成动作失败');
+      setError(staticPagePreviewGateErrorMessage(actionError, '静态页生成动作失败'));
       return draft;
     } finally {
       setStaticPageActionBusy(false);
