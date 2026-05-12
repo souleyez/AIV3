@@ -3303,6 +3303,10 @@ fn video_final_deliverables_manifest(
         "title": document.title,
         "frame_count": frame_count,
         "deliverable_status": deliverable_status,
+        "manifest_outputs": video_public_artifact_files_by_kinds(files, &[
+            "final_deliverables_manifest",
+            "extraction_artifacts_manifest",
+        ]),
         "final_outputs": video_public_artifact_files_by_kinds(files, &["pptx"]),
         "review_outputs": video_public_artifact_files_by_kinds(files, &[
             "slide_image_candidates",
@@ -5121,10 +5125,18 @@ mod tests {
         let final_manifest_json: Value =
             serde_json::from_str(&final_manifest).expect("final manifest json");
         assert!(final_manifest.contains("evidence_artifacts_ready"));
+        assert!(final_manifest.contains("manifest_outputs"));
         assert!(final_manifest.contains("evidence_outputs"));
+        assert!(final_manifest.contains("final_deliverables_manifest"));
+        assert!(final_manifest.contains("extraction_artifacts_manifest"));
         assert!(final_manifest.contains("\"path\": \"[redacted]\""));
         assert!(final_manifest.contains("\"file_name\""));
         assert!(!final_manifest.contains("aidp-v3-video-artifacts-test"));
+        assert!(final_manifest_json["manifest_outputs"]
+            .as_array()
+            .expect("manifest outputs")
+            .iter()
+            .any(|file| file["artifact_kind"] == json!("extraction_artifacts_manifest")));
         assert_eq!(
             final_manifest_json["deliverable_status"]["has_final_deliverables_manifest"],
             json!(true)
@@ -5529,6 +5541,7 @@ mod tests {
         let final_manifest =
             fs::read_to_string(final_manifest_path).expect("final deliverables manifest");
         assert!(final_manifest.contains("final_pptx_ready"));
+        assert!(final_manifest.contains("manifest_outputs"));
         assert!(final_manifest.contains("final_outputs"));
         assert!(final_manifest.contains(DEFAULT_VIDEO_SLIDES_PPTX_FILE_NAME));
         assert!(final_manifest.contains("speaker_notes_metadata_only"));
