@@ -306,6 +306,11 @@ test('renders video extraction summary template', () => {
           title: '课程视频 - ppt_outline',
           format: 'text/markdown',
           path: 'generated_artifacts/ppt_outline.md',
+        }, {
+          artifactKind: 'pptx',
+          title: '课程视频 - pptx',
+          format: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+          path: 'C:\\Users\\soulzyn\\private\\video_slides_screenshot_based.pptx',
         }],
       },
       deliverableStatus: {
@@ -402,6 +407,8 @@ test('renders video extraction summary template', () => {
   assert.match(video.html, /transcript\.txt/);
   assert.doesNotMatch(video.html, /generated_artifacts\/transcript\.txt/);
   assert.match(video.html, /ppt_outline/);
+  assert.match(video.html, /video_slides_screenshot_based\.pptx/);
+  assert.doesNotMatch(video.html, /C:\\Users\\soulzyn/);
   assert.match(video.html, /质量提示/);
   assert.match(video.html, /Speaker notes cannot be aligned yet/);
   assert.match(video.html, /审计摘要/);
