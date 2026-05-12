@@ -2600,6 +2600,9 @@ fn video_extraction_completion_next_actions(
     if file_kinds.contains("final_deliverables_manifest") {
         actions.push(json!("review_final_deliverables_manifest"));
     }
+    if file_kinds.contains("extraction_artifacts_manifest") {
+        actions.push(json!("review_extraction_artifacts_manifest"));
+    }
     if file_kinds.contains("subtitle_page_map") {
         actions.push(json!("review_subtitle_page_map"));
     }
@@ -4689,6 +4692,12 @@ mod tests {
                 "title": "final deliverables manifest",
                 "format": "application/json",
                 "path": "generated_artifacts/final_deliverables_manifest.json"
+            }, {
+                "artifact_kind": "extraction_artifacts_manifest",
+                "artifact_id": format!("video-{}-extraction-artifacts", document.id),
+                "title": "extraction artifacts manifest",
+                "format": "application/json",
+                "path": "generated_artifacts/extraction_artifacts_manifest.json"
             }]
         });
         let output = extract_video_ppt_output_with_artifacts(
@@ -4716,10 +4725,18 @@ mod tests {
             .as_array()
             .expect("ready file kinds")
             .contains(&json!("subtitle_page_map")));
+        assert!(follow_up["ready_file_kinds"]
+            .as_array()
+            .expect("ready file kinds")
+            .contains(&json!("extraction_artifacts_manifest")));
         assert!(follow_up["next_actions"]
             .as_array()
             .expect("next actions")
             .contains(&json!("download_pptx")));
+        assert!(follow_up["next_actions"]
+            .as_array()
+            .expect("next actions")
+            .contains(&json!("review_extraction_artifacts_manifest")));
         assert!(follow_up["next_actions"]
             .as_array()
             .expect("next actions")
