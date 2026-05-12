@@ -6,7 +6,7 @@
 
 **Branch:** `main`
 
-**Latest pushed commit:** `cefbeb7 Gate static page previews on data quality`
+**Latest pushed commit:** `14c09fa Render video artifact group audit`
 
 **Active master plan:** `docs/plans/2026-05-07-v3-master-development-plan.md`
 
@@ -49,7 +49,7 @@ Completed and pushed:
 - Model gateway seed exists in `llm-gateway` with model lanes, provider error redaction, and MiniMax reasoning-block cleanup.
 - Codex Host bridge exists in dry-run/plan-only form. Real execution remains blocked by default.
 - Safe HTML artifacts exist for planning handoff, execution/report summaries, and controlled JSON-patch/action-intent flows.
-- Video PPT/transcript extraction pipeline is partially present: direct/public video source resolution, workflow stubs, media worker stages, ingest worker media parsing, raw frame/contact sheet/selected slide/final manifest artifacts, basic screenshot PPTX output, and read-only video summary artifacts.
+- Video PPT/transcript extraction pipeline is partially present but now has a much stronger deliverable lifecycle: direct/public video source resolution, workflow stubs, media worker stages, ingest worker media parsing, raw frame/contact sheet/selected slide/final manifest artifacts, basic screenshot PPTX output, `slide_notes.md`, `subtitle_page_map.json`, grouped durable output artifacts, read-only video summary artifacts, guarded downloads, completion follow-up actions, status-only user notification metadata, and redacted completion audit rows with artifact group counts.
 
 Most recent development slice:
 
@@ -57,47 +57,45 @@ Most recent development slice:
 - Static-page runtime provider input receives compact binding-quality summaries without leaking raw sample rows.
 - ReAct current-artifact briefs expose quality-only binding summaries.
 - Codex plan-only action suggestions now consume static-page `bindingQuality`: if module/chart data still needs attention, Codex suggests module repair or retrieval instead of submitting effect-image preview; confirmed quality still allows the normal preview path.
+- Actual backend image-preview and final-render routes also block weak `bindingQuality` submissions and return structured gate details. The frontend preserves those details and avoids optimistic render/preview state when the backend rejects a weak draft.
+- Video/PPT deliverables now flow through durable `video_extraction_artifacts` with `manifest_outputs`, `final_outputs`, `review_outputs`, and `evidence_outputs`; the safe HTML summary and right shelf expose ready states, next actions, and redacted audit counts without host-composing the final assistant answer.
 
 ## Important Current Gap
 
-The latest gate is implemented in the Codex plan-only action suggestion layer. It improves model/action planning, but it is not yet guaranteed to block every direct UI/API preview submission path.
+The static-page preview/final-render data-quality gate is now wired into the real backend path as well as Codex plan-only suggestions. The current highest-value gap is no longer "can the button bypass the gate"; it is proving the video/PPT flow end-to-end with a controlled sample and jump-host validation.
 
 Recommended next small closure:
 
-1. Trace the actual `效果图——生成页面` frontend/API path.
-2. Add a V3-side validation or warning gate before preview queue submission when current draft `bindingQuality` reports missing bindings, inferred signals, matched-field-only candidates, or chart modules without sample rows.
-3. Keep user flow simple: the user should see a concise reason and can return to module editing; avoid adding new global UI.
-4. Add tests that prove direct preview submission cannot silently bypass the same quality gate that Codex plan-only now follows.
-
-This closes the loophole between "model suggested action" and "user clicked button".
+1. Pick or create a controlled video fixture that can safely run through the existing media-worker path.
+2. Run the local deterministic `media-worker` tests first, then use the jump host for any Codex/real-video smoke work; do not run real `codex exec` locally.
+3. Verify the resulting summary exposes `PPTX`, `final_deliverables_manifest`, `extraction_artifacts_manifest`, `slide_notes`, `subtitle_page_map`, grouped output lists, guarded downloads, completion follow-up, and redacted audit counts.
+4. Fix only the first concrete gap found in that end-to-end path; keep login-gated acquisition, QR login, cookies, and recording bypass out of scope.
 
 ## Suggested Next Work Order
 
-1. **Static-page preview gate hardening**
-   - Make preview queue submission respect `bindingQuality` in the actual backend/API path.
-   - Preserve user agency, but do not let weak data become a polished fake effect image without explicit visible warning.
-   - Likely files: `crates/platform-api/src/lib.rs`, `apps/web/app/lib/static-page-draft.js`, static-page frontend action components, and existing static-page tests.
-
-2. **Video/PPT deliverable lifecycle**
-   - Ensure `final_deliverables_manifest.json` appears in durable artifact/output lists.
-   - Add right-shelf discovery, download entry, and artifact status normalization.
+1. **Video/PPT end-to-end validation**
+   - Run a controlled video/PPT extraction path and verify deliverable files, right-shelf discovery, guarded downloads, safe HTML summary, completion follow-up, and redacted audit group counts.
    - Keep login-gated acquisition out of scope.
-   - Likely files: `crates/media-worker`, `crates/ingest-worker`, `crates/platform-api/src/lib.rs`, artifact listing code, web right shelf code.
+   - Likely files: `crates/media-worker`, `crates/ingest-worker`, `crates/platform-api/src/lib.rs`, `apps/web/app/lib/html-artifact-manifest.js`, web right shelf code, and fixtures/smoke docs if needed.
 
-3. **Video/PPT quality enhancement**
-   - Add Markdown transcript/output, better PPTX speaker notes, subtitle-to-page mapping, and low-confidence warnings.
+2. **Video/PPT quality enhancement**
+   - Improve rectangle extraction/dedupe promotion, richer PPTX speaker notes, subtitle-to-page correction, and low-confidence warnings.
    - Use the local `wechat-video-ppt-extract` skill only as the fixed post-video SOP: frame import/capture, contact sheet, rectangle extraction, conservative dedupe, keep-list, screenshot PPTX with manifest/source notes.
 
-4. **Static-page planning quality**
+3. **Static-page planning quality**
    - Improve natural-language module planning, data binding selection, chart type selection, and evidence-to-module mapping.
    - Strengthen "do not fake data" behavior for image prompt generation and final render.
 
-5. **Codex executor bridge**
+4. **Codex executor bridge**
    - Keep direct execution off this machine.
    - Continue dry-run/plan-only parity first.
    - Then jump-host shadow smoke.
    - Then small traffic plan-only comparison.
    - Only after that consider real execution gates.
+
+5. **Static-page gate maintenance**
+   - Treat preview/final-render `bindingQuality` gates as implemented baseline.
+   - Only revisit if a direct UI/API bypass, unclear user-facing repair hint, or regression appears.
 
 Account/member/auth work is maintenance-only unless a security/access bug appears.
 
@@ -159,11 +157,11 @@ Read:
 - docs/handoffs/2026-05-12-v3-thread-handoff.md
 - docs/plans/2026-05-07-v3-master-development-plan.md
 
-Current latest pushed commit should be cefbeb7: "Gate static page previews on data quality".
+Current latest pushed commit should be 14c09fa: "Render video artifact group audit".
 
 Keep the current UI shell stable. Do not redesign the assistant layout. Focus on backend capability and quality.
 
-Start with the next recommended small closure: trace the actual static-page `效果图——生成页面` preview submission path and make direct preview submission respect the same `bindingQuality` data-quality gate now used by Codex plan-only action suggestions. If the current draft has missing bindings, matched-field-only candidates, inferred chart signals, or chart modules without sample rows, V3 should request retrieval/module repair or show a concise warning instead of silently queueing a polished effect image.
+Start with the next recommended small closure: validate the video/PPT extraction deliverable path end-to-end with a controlled sample. Confirm that the workflow exposes PPTX, final and extraction manifests, slide notes, subtitle page maps, grouped durable outputs, guarded downloads, completion follow-up metadata, and redacted audit group counts. Use the jump host for any real Codex validation; do not run real `codex exec` locally.
 
 Do not run real Codex execution on this local machine. Do not delete files directly. Run focused tests and commit only verified, low-risk changes.
 ```
