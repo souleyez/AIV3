@@ -30471,6 +30471,99 @@ mod tests {
     }
 
     #[test]
+    fn static_page_preview_gate_blocks_inferred_evidence_signals() {
+        let now = Utc::now();
+        let dataset_id = DatasetId::new();
+        let selected_scope = json!({
+            "mode": "user_selected",
+            "datasets": [dataset_id.to_string()],
+        });
+        let evidence_state = json!({
+            "status": "supplied",
+            "supplied_items": [{
+                "type": "retrieval_evidence",
+                "dataset_id": dataset_id.to_string(),
+                "document_id": Uuid::new_v4().to_string(),
+                "document_chunk_id": Uuid::new_v4().to_string(),
+                "retrieval_evidence_id": Uuid::new_v4().to_string(),
+                "source_locator": "documents/order-risk.md#chunk=0",
+                "summary": "Order revenue and delay risk evidence",
+                "content_excerpt": "订单金额 revenue increased last month, but delay risk also rose.",
+                "payload_filter_key": "dataset/order-risk",
+                "evidence_manifest": {
+                    "embedding": {
+                        "term_weights": {
+                            "order": 1.0,
+                            "revenue": 0.9,
+                            "risk": 0.8
+                        }
+                    }
+                }
+            }]
+        });
+        let draft = StaticPageDraft {
+            id: StaticPageDraftId::new(),
+            tenant_id: TenantId::new(),
+            owner_user_id: None,
+            assistant_run_id: AssistantRunId::new(),
+            title: "经营分析静态页".to_string(),
+            status: StaticPageDraftStatus::Planned,
+            selected_scope: selected_scope.clone(),
+            visibility_snapshot: json!({"policy": "test"}),
+            source_refs: Value::Null,
+            draft_payload: json!({
+                "version": 1,
+                "status": "planning",
+                "assistant_context": {
+                    "selected_scope": selected_scope,
+                    "evidence_state": evidence_state
+                },
+                "modules": [{
+                    "id": "trend",
+                    "title": "订单趋势",
+                    "dataBinding": {
+                        "sourceId": "evidence",
+                        "fieldPath": "orders.amount"
+                    },
+                    "visualization": {
+                        "type": "line-chart",
+                        "chartOptions": {
+                            "dataKey": "orders.amount"
+                        }
+                    }
+                }]
+            }),
+            created_at: now,
+            updated_at: now,
+        };
+
+        let (reason, details) = static_page_preview_data_quality_gate_for_draft(&draft)
+            .expect("inferred evidence signals should be repaired before preview");
+        let attention_module = &details["attentionModules"][0];
+
+        assert!(reason.contains("订单趋势"));
+        assert!(reason.contains("inferred_signal"));
+        assert_eq!(attention_module["chartDataFit"], json!("inferred_signal"));
+        assert_eq!(
+            attention_module["reason"],
+            json!("inferred_evidence_signal")
+        );
+        assert_eq!(attention_module["sampleRows"], json!(1));
+        assert!(attention_module["gateReasons"]
+            .as_array()
+            .expect("gate reasons")
+            .contains(&json!("binding_quality_status:partial")));
+        assert!(attention_module["gateReasons"]
+            .as_array()
+            .expect("gate reasons")
+            .contains(&json!("chart_data_fit:inferred_signal")));
+        assert_eq!(
+            details["gateReasonCounts"]["chart_data_fit:inferred_signal"],
+            json!(1)
+        );
+    }
+
+    #[test]
     fn static_page_data_snapshot_prefers_explicit_evidence_values() {
         let dataset_id = DatasetId::new();
         let selected_scope = json!({
