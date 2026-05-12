@@ -84,10 +84,28 @@ request_count=1
 codex_invoked=true
 ```
 
+2026-05-12 re-run from the developer workstation through SSH, with the smoke script piped to jump-host Node and Codex launched only on `windows-jump`:
+
+```text
+command=powershell -ExecutionPolicy Bypass -File scripts\run-jump-host-codex-shim-smoke.ps1
+mode=fake
+result=ok
+codex_status=0
+request_count=1
+expected_text_found=true
+raw_request_output_printed=false
+```
+
 On Windows, Node's `spawn("codex")` may fail even when `ssh windows-jump codex --version` works, because Codex is installed through the npm shim. Use the JS entrypoint explicitly:
 
 ```powershell
 $env:CODEX_HOST_SHIM_CODEX_JS = "C:\Users\soulz\AppData\Roaming\npm\node_modules\@openai\codex\bin\codex.js"
+```
+
+The repository wrapper for this is:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\run-jump-host-codex-shim-smoke.ps1
 ```
 
 The smoke tool now prints request/output summaries by default instead of raw request bodies or raw Codex stdout/stderr. Set `CODEX_HOST_SHIM_SHOW_REQUEST=true` or `CODEX_HOST_SHIM_SHOW_OUTPUT=true` only for local, temporary debugging when raw prompt/log exposure is acceptable.
