@@ -328,6 +328,7 @@ test('renders video extraction summary template', () => {
           'retry_generated_artifact_writer',
           'attach_or_parse_transcript_evidence',
           'generate_contact_sheet_from_raw_frames',
+          'review_contact_sheet_or_promote_rectangle_extraction',
           'fill_ppt_keep_list_template',
           'review_low_confidence_transcript',
           'rerun_or_review_subtitle_ocr',
@@ -366,6 +367,7 @@ test('renders video extraction summary template', () => {
   assert.match(video.html, /重试生成文件写入/);
   assert.match(video.html, /补充或解析转写证据/);
   assert.match(video.html, /基于原始帧生成联系表/);
+  assert.match(video.html, /复核联系表或补齐矩形提取/);
   assert.match(video.html, /填写 PPT 保留页清单/);
   assert.match(video.html, /复核低置信度转写片段/);
   assert.match(video.html, /重跑或复核字幕 OCR/);

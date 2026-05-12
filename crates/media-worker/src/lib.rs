@@ -520,6 +520,7 @@ fn write_video_slide_candidate_review_files(
         "title": document.title,
         "raw_frames_dir": raw_frames_dir.display().to_string(),
         "candidate_count": candidates.len(),
+        "rectangle_extraction_status": "not_promoted",
         "dedupe_policy": "conservative_keep_all_until_review",
         "candidates": candidates,
     });
@@ -679,13 +680,32 @@ fn write_video_slide_candidate_review_files(
         );
     }
 
+    let mut slide_candidates_artifact = video_generated_artifact_file(
+        document,
+        "slide_image_candidates",
+        "application/json",
+        &candidate_manifest_path,
+    );
+    if let Some(object) = slide_candidates_artifact.as_object_mut() {
+        object.insert(
+            "candidate_count".to_string(),
+            candidate_manifest
+                .get("candidate_count")
+                .cloned()
+                .unwrap_or_else(|| json!(0)),
+        );
+        object.insert(
+            "rectangle_extraction_status".to_string(),
+            candidate_manifest
+                .get("rectangle_extraction_status")
+                .cloned()
+                .unwrap_or_else(|| json!("not_promoted")),
+        );
+        object.insert("selection_status".to_string(), json!("review_required"));
+    }
+
     let mut artifact_files = vec![
-        video_generated_artifact_file(
-            document,
-            "slide_image_candidates",
-            "application/json",
-            &candidate_manifest_path,
-        ),
+        slide_candidates_artifact,
         video_generated_artifact_file(
             document,
             "contact_sheet_plan",
@@ -1976,6 +1996,11 @@ fn video_extraction_completion_next_actions(
     if warning_codes.contains("missing_contact_sheet") {
         actions.push(json!("generate_contact_sheet_from_raw_frames"));
     }
+    if warning_codes.contains("no_slide_rectangle_found") {
+        actions.push(json!(
+            "review_contact_sheet_or_promote_rectangle_extraction"
+        ));
+    }
     if warning_codes.contains("keep_list_not_confirmed") {
         actions.push(json!("fill_ppt_keep_list_template"));
     }
@@ -2405,6 +2430,13 @@ fn video_generated_artifact_quality_warnings(
             "message": "No confirmed selected slides were found; fill the keep-list before final PPTX delivery."
         }));
     }
+    if video_has_raw_frame_candidates(files) && !video_has_promoted_slide_rectangles(files) {
+        warnings.push(json!({
+            "code": "no_slide_rectangle_found",
+            "severity": "medium",
+            "message": "No promoted slide-rectangle extraction is available yet; current candidates are raw frames/contact-sheet entries and require keep-list review before final delivery."
+        }));
+    }
     if has_pptx {
         warnings.push(json!({
             "code": "screenshot_based_pptx",
@@ -2429,6 +2461,28 @@ fn video_generated_artifact_quality_warnings(
         }));
     }
     warnings
+}
+
+fn video_has_raw_frame_candidates(files: &[Value]) -> bool {
+    files.iter().any(|file| {
+        file.get("artifact_kind").and_then(Value::as_str) == Some("slide_image_candidates")
+            && file
+                .get("candidate_count")
+                .and_then(Value::as_u64)
+                .is_some_and(|candidate_count| candidate_count > 0)
+    })
+}
+
+fn video_has_promoted_slide_rectangles(files: &[Value]) -> bool {
+    files.iter().any(|file| {
+        matches!(
+            file.get("artifact_kind").and_then(Value::as_str),
+            Some("slide_rectangles_manifest" | "rectangle_extraction_manifest")
+        ) || file
+            .get("rectangle_extraction_status")
+            .and_then(Value::as_str)
+            .is_some_and(|status| matches!(status, "completed" | "promoted" | "available"))
+    })
 }
 
 fn video_partial_evidence_warning(evidence: &VideoMediaEvidenceItems) -> Option<Value> {
@@ -3850,6 +3904,19 @@ mod tests {
         assert!(files
             .iter()
             .any(|file| file["artifact_kind"] == json!("final_deliverables_manifest")));
+        let slide_candidates_ref = files
+            .iter()
+            .find(|file| file["artifact_kind"] == json!("slide_image_candidates"))
+            .expect("slide candidates artifact ref");
+        assert_eq!(slide_candidates_ref["candidate_count"], json!(2));
+        assert_eq!(
+            slide_candidates_ref["rectangle_extraction_status"],
+            json!("not_promoted")
+        );
+        assert_eq!(
+            slide_candidates_ref["selection_status"],
+            json!("review_required")
+        );
         let candidates_path = files
             .iter()
             .find(|file| file["artifact_kind"] == json!("slide_image_candidates"))
@@ -3858,6 +3925,7 @@ mod tests {
         let candidates = fs::read_to_string(candidates_path).expect("candidate manifest");
         assert!(candidates.contains("frame_000001.jpg"));
         assert!(candidates.contains("review_required"));
+        assert!(candidates.contains("rectangle_extraction_status"));
         let contact_sheet_html_path = files
             .iter()
             .find(|file| file["artifact_kind"] == json!("contact_sheet_html"))
@@ -3917,6 +3985,30 @@ mod tests {
             fs::read_to_string(final_manifest_path).expect("final deliverables manifest");
         assert!(final_manifest.contains("review_ready"));
         assert!(final_manifest.contains("review_outputs"));
+        let generated_artifacts = json!({
+            "status": "completed",
+            "files": files.clone()
+        });
+        let deliverable_status = video_deliverable_status(&generated_artifacts);
+        let warnings = deliverable_status["warnings"]
+            .as_array()
+            .expect("deliverable warnings");
+        assert!(warnings
+            .iter()
+            .any(|warning| warning["code"] == json!("no_slide_rectangle_found")));
+        let next_actions = video_extraction_completion_next_actions(
+            deliverable_status["state"]
+                .as_str()
+                .expect("deliverable state"),
+            files,
+            &deliverable_status,
+        );
+        assert!(
+            next_actions
+                .iter()
+                .any(|action| action
+                    == &json!("review_contact_sheet_or_promote_rectangle_extraction"))
+        );
     }
 
     #[test]
