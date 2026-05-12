@@ -500,6 +500,9 @@ fn write_video_slide_candidate_review_files(
         .enumerate()
         .map(|(index, path)| {
             let timestamp_seconds = video_candidate_timestamp_seconds(index + 1, frame_extraction);
+            let evidence_refs =
+                video_candidate_nearby_evidence_refs(timestamp_seconds, evidence, frame_extraction);
+            let evidence_ref_count = video_evidence_ref_count(&evidence_refs);
             json!({
                 "candidate_index": index + 1,
                 "source": "raw_frames",
@@ -507,11 +510,22 @@ fn write_video_slide_candidate_review_files(
                 "frame_path": path.display().to_string(),
                 "timestamp_seconds": timestamp_seconds,
                 "timestamp_label": format_seconds(timestamp_seconds),
+                "evidence_reference_status": if evidence_ref_count == 0 { "raw_frame_only" } else { "matched_nearby_evidence" },
+                "nearby_evidence_refs": evidence_refs,
                 "selection_status": "review_required",
                 "notes": "Candidate frame retained conservatively; rectangle extraction/dedupe/manual keep-list are later stages.",
             })
         })
         .collect::<Vec<_>>();
+    let candidate_evidence_ref_count = candidates
+        .iter()
+        .map(|candidate| {
+            candidate
+                .get("nearby_evidence_refs")
+                .map(video_evidence_ref_count)
+                .unwrap_or(0)
+        })
+        .sum::<usize>();
     let candidate_manifest_path = artifacts_dir.join(DEFAULT_SLIDE_CANDIDATES_FILE_NAME);
     let candidate_manifest = json!({
         "status": "review_required",
@@ -521,6 +535,12 @@ fn write_video_slide_candidate_review_files(
         "title": document.title,
         "raw_frames_dir": raw_frames_dir.display().to_string(),
         "candidate_count": candidates.len(),
+        "candidate_evidence_ref_count": candidate_evidence_ref_count,
+        "candidate_evidence_policy": {
+            "status": if candidate_evidence_ref_count == 0 { "raw_frames_only" } else { "timestamp_nearby_refs" },
+            "match_rule": "scene overlap by candidate timestamp; OCR and transcript refs use timestamp proximity with a conservative closest fallback",
+            "redaction": "source/provider/locator fields are sanitized before writing candidate evidence refs",
+        },
         "rectangle_extraction_status": "not_promoted",
         "dedupe_policy": "conservative_keep_all_until_review",
         "candidates": candidates,
@@ -888,6 +908,297 @@ fn selected_candidate_indices_from_value(value: &Value, candidate_count: usize) 
         .filter(|candidate_index| (1..=candidate_count).contains(candidate_index))
         .filter(|candidate_index| seen.insert(*candidate_index))
         .collect()
+}
+
+fn video_candidate_nearby_evidence_refs(
+    timestamp_seconds: f64,
+    evidence: &VideoMediaEvidenceItems,
+    frame_extraction: &Value,
+) -> Value {
+    let window_seconds = video_frame_interval_seconds(frame_extraction).max(1.0);
+    json!({
+        "policy": "timestamp_nearby_with_closest_fallback",
+        "window_seconds": window_seconds,
+        "scene_refs": video_candidate_scene_refs(timestamp_seconds, &evidence.scenes, window_seconds),
+        "transcript_refs": video_candidate_transcript_refs(timestamp_seconds, &evidence.transcript_segments, window_seconds),
+        "ocr_refs": video_candidate_ocr_refs(timestamp_seconds, &evidence.keyframe_ocr_snippets, window_seconds),
+    })
+}
+
+fn video_evidence_ref_count(value: &Value) -> usize {
+    ["scene_refs", "transcript_refs", "ocr_refs"]
+        .iter()
+        .map(|key| {
+            value
+                .get(*key)
+                .and_then(Value::as_array)
+                .map(Vec::len)
+                .unwrap_or(0)
+        })
+        .sum()
+}
+
+fn video_candidate_scene_refs(
+    timestamp_seconds: f64,
+    scenes: &[Value],
+    window_seconds: f64,
+) -> Vec<Value> {
+    let mut ranked = scenes
+        .iter()
+        .enumerate()
+        .filter_map(|(index, scene)| {
+            video_range_distance_seconds(scene, timestamp_seconds)
+                .map(|distance| (distance, index, scene))
+        })
+        .collect::<Vec<_>>();
+    ranked.sort_by(|left, right| video_ranked_distance_order(left.0, left.1, right.0, right.1));
+
+    let mut refs = ranked
+        .iter()
+        .filter(|(distance, _, scene)| {
+            *distance <= window_seconds || video_range_contains_timestamp(scene, timestamp_seconds)
+        })
+        .take(3)
+        .map(|(distance, index, scene)| {
+            let match_rule = if video_range_contains_timestamp(scene, timestamp_seconds) {
+                "overlaps_timestamp"
+            } else {
+                "nearby_timestamp"
+            };
+            video_candidate_evidence_ref(
+                scene,
+                "scene",
+                *index + 1,
+                Some(*distance),
+                match_rule,
+                &["summary", "text", "description"],
+            )
+        })
+        .collect::<Vec<_>>();
+
+    if refs.is_empty() {
+        if let Some((distance, index, scene)) = ranked.first() {
+            refs.push(video_candidate_evidence_ref(
+                scene,
+                "scene",
+                *index + 1,
+                Some(*distance),
+                "closest_available",
+                &["summary", "text", "description"],
+            ));
+        } else if let Some((index, scene)) = scenes.iter().enumerate().next() {
+            refs.push(video_candidate_evidence_ref(
+                scene,
+                "scene",
+                index + 1,
+                None,
+                "untimed_available",
+                &["summary", "text", "description"],
+            ));
+        }
+    }
+
+    refs
+}
+
+fn video_candidate_transcript_refs(
+    timestamp_seconds: f64,
+    transcript_segments: &[Value],
+    window_seconds: f64,
+) -> Vec<Value> {
+    let mut ranked = transcript_segments
+        .iter()
+        .enumerate()
+        .filter_map(|(index, segment)| {
+            video_range_distance_seconds(segment, timestamp_seconds)
+                .map(|distance| (distance, index, segment))
+        })
+        .collect::<Vec<_>>();
+    ranked.sort_by(|left, right| video_ranked_distance_order(left.0, left.1, right.0, right.1));
+
+    let mut refs = ranked
+        .iter()
+        .filter(|(distance, _, segment)| {
+            *distance <= window_seconds
+                || video_range_contains_timestamp(segment, timestamp_seconds)
+        })
+        .take(3)
+        .map(|(distance, index, segment)| {
+            let match_rule = if video_range_contains_timestamp(segment, timestamp_seconds) {
+                "overlaps_timestamp"
+            } else {
+                "nearby_timestamp"
+            };
+            video_candidate_evidence_ref(
+                segment,
+                "transcript",
+                *index + 1,
+                Some(*distance),
+                match_rule,
+                &["text", "content", "summary"],
+            )
+        })
+        .collect::<Vec<_>>();
+
+    if refs.is_empty() {
+        if let Some((distance, index, segment)) = ranked.first() {
+            refs.push(video_candidate_evidence_ref(
+                segment,
+                "transcript",
+                *index + 1,
+                Some(*distance),
+                "closest_available",
+                &["text", "content", "summary"],
+            ));
+        } else if let Some((index, segment)) = transcript_segments.iter().enumerate().next() {
+            refs.push(video_candidate_evidence_ref(
+                segment,
+                "transcript",
+                index + 1,
+                None,
+                "untimed_available",
+                &["text", "content", "summary"],
+            ));
+        }
+    }
+
+    refs
+}
+
+fn video_candidate_ocr_refs(
+    timestamp_seconds: f64,
+    ocr_snippets: &[Value],
+    window_seconds: f64,
+) -> Vec<Value> {
+    let mut ranked = ocr_snippets
+        .iter()
+        .enumerate()
+        .filter_map(|(index, snippet)| {
+            video_timestamp_distance_seconds(snippet, timestamp_seconds)
+                .map(|distance| (distance, index, snippet))
+        })
+        .collect::<Vec<_>>();
+    ranked.sort_by(|left, right| video_ranked_distance_order(left.0, left.1, right.0, right.1));
+
+    let mut refs = ranked
+        .iter()
+        .filter(|(distance, _, _)| *distance <= window_seconds)
+        .take(3)
+        .map(|(distance, index, snippet)| {
+            video_candidate_evidence_ref(
+                snippet,
+                "ocr",
+                *index + 1,
+                Some(*distance),
+                "nearby_timestamp",
+                &["text", "ocr_text", "summary"],
+            )
+        })
+        .collect::<Vec<_>>();
+
+    if refs.is_empty() {
+        if let Some((distance, index, snippet)) = ranked.first() {
+            refs.push(video_candidate_evidence_ref(
+                snippet,
+                "ocr",
+                *index + 1,
+                Some(*distance),
+                "closest_available",
+                &["text", "ocr_text", "summary"],
+            ));
+        } else if let Some((index, snippet)) = ocr_snippets.iter().enumerate().next() {
+            refs.push(video_candidate_evidence_ref(
+                snippet,
+                "ocr",
+                index + 1,
+                None,
+                "untimed_available",
+                &["text", "ocr_text", "summary"],
+            ));
+        }
+    }
+
+    refs
+}
+
+fn video_candidate_evidence_ref(
+    value: &Value,
+    kind: &str,
+    index: usize,
+    distance_seconds: Option<f64>,
+    match_rule: &str,
+    text_keys: &[&str],
+) -> Value {
+    let text = video_item_text(value, text_keys)
+        .map(|text| video_safe_evidence_text(&text))
+        .unwrap_or_else(|| "unknown".to_string());
+    let time_label = if kind == "ocr" {
+        video_timestamp_label(value)
+    } else {
+        video_time_range_label(value)
+    };
+    json!({
+        "kind": kind,
+        "index": index,
+        "reference": video_evidence_reference_label(value, kind, index),
+        "time_label": time_label,
+        "match": match_rule,
+        "distance_seconds": distance_seconds.map(video_rounded_distance_seconds),
+        "text": text,
+    })
+}
+
+fn video_range_distance_seconds(value: &Value, timestamp_seconds: f64) -> Option<f64> {
+    let start = video_number_field(value, &["start_seconds", "startSeconds", "start"]);
+    let end = video_number_field(value, &["end_seconds", "endSeconds", "end"]);
+    match (start, end) {
+        (Some(start), Some(end)) if timestamp_seconds >= start && timestamp_seconds <= end => {
+            Some(0.0)
+        }
+        (Some(start), Some(_end)) if timestamp_seconds < start => Some(start - timestamp_seconds),
+        (Some(_), Some(end)) => Some(timestamp_seconds - end),
+        (Some(start), None) => Some((timestamp_seconds - start).abs()),
+        (None, Some(end)) => Some((timestamp_seconds - end).abs()),
+        (None, None) => None,
+    }
+}
+
+fn video_range_contains_timestamp(value: &Value, timestamp_seconds: f64) -> bool {
+    let start = video_number_field(value, &["start_seconds", "startSeconds", "start"]);
+    let end = video_number_field(value, &["end_seconds", "endSeconds", "end"]);
+    matches!(
+        (start, end),
+        (Some(start), Some(end)) if timestamp_seconds >= start && timestamp_seconds <= end
+    )
+}
+
+fn video_timestamp_distance_seconds(value: &Value, timestamp_seconds: f64) -> Option<f64> {
+    video_number_field(
+        value,
+        &[
+            "timestamp_seconds",
+            "timestampSeconds",
+            "time_seconds",
+            "timeSeconds",
+        ],
+    )
+    .map(|timestamp| (timestamp_seconds - timestamp).abs())
+}
+
+fn video_ranked_distance_order(
+    left_distance: f64,
+    left_index: usize,
+    right_distance: f64,
+    right_index: usize,
+) -> std::cmp::Ordering {
+    left_distance
+        .partial_cmp(&right_distance)
+        .unwrap_or(std::cmp::Ordering::Equal)
+        .then_with(|| left_index.cmp(&right_index))
+}
+
+fn video_rounded_distance_seconds(value: f64) -> f64 {
+    (value * 100.0).round() / 100.0
 }
 
 fn selected_slides_manifest_from_keep_list(
@@ -4566,12 +4877,39 @@ mod tests {
             "status": "completed",
             "raw_frames_dir": raw_frames_dir.display().to_string(),
             "frame_count": 2,
+            "interval_seconds": 0.15,
             "manifest_file_name": DEFAULT_FRAME_MANIFEST_FILE_NAME
         });
+        let chunk = test_chunk(json!({
+            "media": {
+                "transcript_segments": [{
+                    "start_seconds": 0.0,
+                    "end_seconds": 0.2,
+                    "text": "Opening narration",
+                    "source": "MEDIA_TRANSCRIBE_BIN"
+                }],
+                "scenes": [{
+                    "start_seconds": 0.0,
+                    "end_seconds": 0.3,
+                    "summary": "Opening slide",
+                    "source": "MEDIA_SCENE_BIN"
+                }],
+                "keyframe_ocr_snippets": [{
+                    "timestamp_seconds": 0.15,
+                    "text": "Opening Title",
+                    "source": "C:/private/frame.jpg",
+                    "ocr_confidence": 0.9
+                }]
+            }
+        }));
 
-        let manifest =
-            write_video_extraction_text_artifacts(&document, &[], &frame_extraction, &output_root)
-                .expect("candidate artifacts");
+        let manifest = write_video_extraction_text_artifacts(
+            &document,
+            &[chunk],
+            &frame_extraction,
+            &output_root,
+        )
+        .expect("candidate artifacts");
 
         let files = manifest["files"].as_array().expect("files");
         assert!(files
@@ -4617,6 +4955,42 @@ mod tests {
         assert!(candidates.contains("frame_000001.jpg"));
         assert!(candidates.contains("review_required"));
         assert!(candidates.contains("rectangle_extraction_status"));
+        assert!(candidates.contains("candidate_evidence_policy"));
+        assert!(candidates.contains("matched_nearby_evidence"));
+        assert!(candidates.contains("Opening narration"));
+        assert!(candidates.contains("Opening slide"));
+        assert!(candidates.contains("Opening Title"));
+        assert!(candidates.contains("source=[redacted]"));
+        assert!(!candidates.contains("C:/private/frame.jpg"));
+        let candidate_manifest: Value =
+            serde_json::from_str(&candidates).expect("candidate manifest json");
+        assert!(
+            candidate_manifest["candidate_evidence_ref_count"]
+                .as_u64()
+                .expect("candidate evidence ref count")
+                >= 3
+        );
+        let first_candidate = candidate_manifest["candidates"]
+            .as_array()
+            .expect("candidate array")
+            .first()
+            .expect("first candidate");
+        assert_eq!(
+            first_candidate["evidence_reference_status"],
+            json!("matched_nearby_evidence")
+        );
+        assert!(!first_candidate["nearby_evidence_refs"]["scene_refs"]
+            .as_array()
+            .expect("scene refs")
+            .is_empty());
+        assert!(!first_candidate["nearby_evidence_refs"]["transcript_refs"]
+            .as_array()
+            .expect("transcript refs")
+            .is_empty());
+        assert!(!first_candidate["nearby_evidence_refs"]["ocr_refs"]
+            .as_array()
+            .expect("ocr refs")
+            .is_empty());
         let contact_sheet_html_path = files
             .iter()
             .find(|file| file["artifact_kind"] == json!("contact_sheet_html"))
