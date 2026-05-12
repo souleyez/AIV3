@@ -381,6 +381,12 @@ test('renders video extraction summary template', () => {
         warningCodes: ['missing_transcript_alignment', 'provider_failure'],
         warningCount: 2,
         providerFailureCount: 1,
+        artifactGroupCounts: {
+          manifestOutputs: 2,
+          finalOutputs: 1,
+          reviewOutputs: 3,
+          evidenceOutputs: 4,
+        },
         providerFailures: [{
           provider: 'minimax',
           capability: 'native_video_understanding',
@@ -421,6 +427,8 @@ test('renders video extraction summary template', () => {
   assert.match(video.html, /public_page_resolvable_video/);
   assert.match(video.html, /url_redacted=yes/);
   assert.match(video.html, /provider_failures=1/);
+  assert.match(video.html, /产物分组/);
+  assert.match(video.html, /manifest=2 · final=1 · review=3 · evidence=4/);
   assert.match(video.html, /native_video_understanding/);
   assert.match(video.html, /raw_urls=no/);
   assert.match(video.html, /provider_keys=no/);

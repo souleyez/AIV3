@@ -596,6 +596,9 @@ function renderVideoExtractionSummary(manifest) {
     ? completionAudit.sourceResolution || completionAudit.source_resolution
     : {};
   const auditRedaction = isPlainObject(completionAudit.redaction) ? completionAudit.redaction : {};
+  const auditGroupCounts = isPlainObject(completionAudit.artifactGroupCounts || completionAudit.artifact_group_counts)
+    ? completionAudit.artifactGroupCounts || completionAudit.artifact_group_counts
+    : {};
   const auditWarningCodes = arrayOrEmpty(completionAudit.warningCodes || completionAudit.warning_codes);
   const auditProviderFailures = arrayOrEmpty(completionAudit.providerFailures || completionAudit.provider_failures)
     .map((failure, index) => ({
@@ -626,6 +629,16 @@ function renderVideoExtractionSummary(manifest) {
       title: '告警与提供方',
       detail: auditWarningCodes.length ? auditWarningCodes.join(', ') : 'no warnings',
       meta: `warnings=${completionAudit.warningCount ?? completionAudit.warning_count ?? 0} · provider_failures=${completionAudit.providerFailureCount ?? completionAudit.provider_failure_count ?? auditProviderFailures.length}`,
+    });
+    auditRows.push({
+      title: '产物分组',
+      detail: [
+        `manifest=${auditGroupCounts.manifestOutputs ?? auditGroupCounts.manifest_outputs ?? 0}`,
+        `final=${auditGroupCounts.finalOutputs ?? auditGroupCounts.final_outputs ?? 0}`,
+        `review=${auditGroupCounts.reviewOutputs ?? auditGroupCounts.review_outputs ?? 0}`,
+        `evidence=${auditGroupCounts.evidenceOutputs ?? auditGroupCounts.evidence_outputs ?? 0}`,
+      ].join(' · '),
+      meta: 'artifact_group_counts',
     });
     auditRows.push({
       title: '脱敏边界',
