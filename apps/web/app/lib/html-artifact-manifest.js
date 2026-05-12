@@ -462,6 +462,12 @@ const VIDEO_FOLLOW_UP_ACTION_LABELS = {
   review_final_deliverables_manifest: '复核交付清单',
   review_subtitle_page_map: '复核字幕对页',
   complete_keep_list_or_review_missing_inputs: '完成选页或补齐缺失输入',
+  retry_frame_extraction: '重试原始帧提取',
+  provide_local_media_file_or_parsed_frames: '提供本地视频或已解析帧',
+  retry_generated_artifact_writer: '重试生成文件写入',
+  attach_or_parse_transcript_evidence: '补充或解析转写证据',
+  generate_contact_sheet_from_raw_frames: '基于原始帧生成联系表',
+  fill_ppt_keep_list_template: '填写 PPT 保留页清单',
 };
 
 function videoArtifactKindLabel(kind) {

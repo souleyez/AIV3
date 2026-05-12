@@ -321,7 +321,16 @@ test('renders video extraction summary template', () => {
         kind: 'video_extraction_completion_follow_up',
         status: 'evidence_artifacts_ready',
         readyFileKinds: ['transcript_text', 'ppt_outline'],
-        nextActions: ['open_video_extraction_summary', 'complete_keep_list_or_review_missing_inputs'],
+        nextActions: [
+          'open_video_extraction_summary',
+          'retry_frame_extraction',
+          'provide_local_media_file_or_parsed_frames',
+          'retry_generated_artifact_writer',
+          'attach_or_parse_transcript_evidence',
+          'generate_contact_sheet_from_raw_frames',
+          'fill_ppt_keep_list_template',
+          'complete_keep_list_or_review_missing_inputs',
+        ],
         modelFollowUp: {
           required: true,
           instruction: 'Use this structured completion status to notify the user.',
@@ -348,6 +357,12 @@ test('renders video extraction summary template', () => {
   assert.match(video.html, /后续提醒/);
   assert.match(video.html, /model follow-up required/);
   assert.match(video.html, /PPT 大纲/);
+  assert.match(video.html, /重试原始帧提取/);
+  assert.match(video.html, /提供本地视频或已解析帧/);
+  assert.match(video.html, /重试生成文件写入/);
+  assert.match(video.html, /补充或解析转写证据/);
+  assert.match(video.html, /基于原始帧生成联系表/);
+  assert.match(video.html, /填写 PPT 保留页清单/);
   assert.match(video.html, /完成选页或补齐缺失输入/);
   assert.match(video.html, /Use this structured completion status/);
 });
