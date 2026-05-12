@@ -471,6 +471,7 @@ const VIDEO_FOLLOW_UP_ACTION_LABELS = {
   review_low_confidence_transcript: '复核低置信度转写片段',
   rerun_or_review_subtitle_ocr: '重跑或复核字幕 OCR',
   rerun_or_refresh_video_parse: '重跑或刷新视频解析',
+  check_video_provider_configuration: '检查视频解析提供方配置',
 };
 
 function videoArtifactKindLabel(kind) {

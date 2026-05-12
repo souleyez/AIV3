@@ -1988,6 +1988,9 @@ fn video_extraction_completion_next_actions(
     if warning_codes.contains("parse_partial") {
         actions.push(json!("rerun_or_refresh_video_parse"));
     }
+    if warning_codes.contains("provider_failure") {
+        actions.push(json!("check_video_provider_configuration"));
+    }
     if file_kinds.contains("pptx") {
         actions.push(json!("download_pptx"));
     }
@@ -2348,6 +2351,9 @@ fn video_deliverable_status_with_evidence_and_frame_extraction(
         if let Some(warning) = video_partial_evidence_warning(evidence) {
             append_deliverable_warning(object, warning);
         }
+        if let Some(warning) = video_provider_failure_warning(evidence) {
+            append_deliverable_warning(object, warning);
+        }
         for warning in video_low_confidence_evidence_warnings(evidence) {
             append_deliverable_warning(object, warning);
         }
@@ -2502,6 +2508,63 @@ fn video_low_confidence_evidence_warnings(evidence: &VideoMediaEvidenceItems) ->
     warnings
 }
 
+fn video_provider_failure_warning(evidence: &VideoMediaEvidenceItems) -> Option<Value> {
+    let failed_providers = evidence
+        .provider_evidence
+        .iter()
+        .filter(|item| video_provider_evidence_is_failure(item))
+        .map(|item| {
+            json!({
+                "provider": video_item_text(item, &["provider"]).unwrap_or_else(|| "unknown".to_string()),
+                "capability": video_item_text(item, &["capability"]).unwrap_or_else(|| "unknown".to_string()),
+                "status": video_item_text(item, &["status"]).unwrap_or_else(|| "unknown".to_string()),
+            })
+        })
+        .collect::<Vec<_>>();
+    if failed_providers.is_empty() {
+        return None;
+    }
+
+    let all_providers_failed = failed_providers.len() == evidence.provider_evidence.len();
+    Some(json!({
+        "code": "provider_failure",
+        "severity": if all_providers_failed { "high" } else { "medium" },
+        "message": if all_providers_failed {
+            "All recorded video parsing provider capabilities are unavailable or unsupported; refresh provider configuration before relying on extracted media evidence."
+        } else {
+            "At least one recorded video parsing provider capability is unavailable or unsupported; review provider configuration before final delivery."
+        },
+        "failed_provider_count": failed_providers.len(),
+        "providers": failed_providers,
+    }))
+}
+
+fn video_provider_evidence_is_failure(value: &Value) -> bool {
+    if value
+        .get("supported")
+        .and_then(Value::as_bool)
+        .is_some_and(|supported| !supported)
+    {
+        return true;
+    }
+
+    let status = value
+        .get("status")
+        .and_then(Value::as_str)
+        .map(|status| status.trim().to_ascii_lowercase())
+        .unwrap_or_default();
+    matches!(
+        status.as_str(),
+        "failed"
+            | "error"
+            | "unavailable"
+            | "unsupported"
+            | "not_supported"
+            | "configured_unverified"
+            | "probe_missing"
+    )
+}
+
 fn video_evidence_confidence_below_threshold(value: &Value, keys: &[&str]) -> bool {
     keys.iter().any(|key| {
         value
@@ -2603,6 +2666,7 @@ struct VideoMediaEvidenceItems {
     transcript_segments: Vec<Value>,
     scenes: Vec<Value>,
     keyframe_ocr_snippets: Vec<Value>,
+    provider_evidence: Vec<Value>,
 }
 
 impl VideoMediaEvidenceItems {
@@ -2626,6 +2690,9 @@ fn video_media_evidence_items_from_chunks(chunks: &[DocumentChunk]) -> VideoMedi
         evidence
             .keyframe_ocr_snippets
             .extend(cloned_array_items(media, "keyframe_ocr_snippets"));
+        evidence
+            .provider_evidence
+            .extend(cloned_array_items(media, "provider_evidence"));
     }
     evidence
 }
@@ -3188,6 +3255,51 @@ mod tests {
         let next_actions = follow_up["next_actions"].as_array().expect("next actions");
         assert!(next_actions.contains(&json!("review_low_confidence_transcript")));
         assert!(next_actions.contains(&json!("rerun_or_review_subtitle_ocr")));
+    }
+
+    #[test]
+    fn extract_output_surfaces_provider_failure_warning() {
+        let document = test_document();
+        let chunk = test_chunk(json!({
+            "media": {
+                "transcript_segments": [{"text": "page one"}],
+                "scenes": [{"summary": "title page"}],
+                "keyframe_ocr_snippets": [{"text": "slide title"}],
+                "provider_evidence": [{
+                    "provider": "minimax",
+                    "capability": "native_video_understanding",
+                    "status": "configured_unverified",
+                    "supported": false,
+                    "detail": "probe missing",
+                    "endpoint": "/video",
+                    "model": "MiniMax-M2.5-highspeed"
+                }]
+            }
+        }));
+
+        let output = extract_video_ppt_output_with_frame_extraction(
+            &document,
+            &[chunk],
+            video_frame_extraction_plan(&document),
+        );
+
+        let warnings = output["deliverable_status"]["warnings"]
+            .as_array()
+            .expect("warnings");
+        assert!(warnings.iter().any(|warning| {
+            warning["code"] == json!("provider_failure")
+                && warning["severity"] == json!("high")
+                && warning["failed_provider_count"] == json!(1)
+                && warning["providers"][0]["provider"] == json!("minimax")
+                && warning["providers"][0]["capability"] == json!("native_video_understanding")
+        }));
+
+        let follow_up =
+            video_extraction_completion_follow_up_from_output(&output, &[]).expect("follow up");
+        assert!(follow_up["next_actions"]
+            .as_array()
+            .expect("next actions")
+            .contains(&json!("check_video_provider_configuration")));
     }
 
     #[test]
