@@ -457,9 +457,14 @@ async fn submit_static_page_image_preview_for_current_draft(
     let (_status, Json(response)) = match response {
         Ok(response) => response,
         Err(error) if error.payload.code == "static_page_preview_data_quality_gate" => {
-            return Ok(rejected_react_tool_result(
+            return Ok(rejected_react_tool_result_with_details(
                 action,
                 "static_page_preview_data_quality_gate",
+                json!({
+                    "message": error.payload.message,
+                    "dataQualityGate": error.payload.details.clone(),
+                    "data_quality_gate": error.payload.details,
+                }),
             ));
         }
         Err(error) => return Err(error),
@@ -765,24 +770,46 @@ fn rejected_react_tool_result(
     action: &AssistantRunNextAction,
     reason: &str,
 ) -> AssistantRunReactToolResult {
+    rejected_react_tool_result_with_optional_details(action, reason, None)
+}
+
+fn rejected_react_tool_result_with_details(
+    action: &AssistantRunNextAction,
+    reason: &str,
+    details: Value,
+) -> AssistantRunReactToolResult {
+    rejected_react_tool_result_with_optional_details(action, reason, Some(details))
+}
+
+fn rejected_react_tool_result_with_optional_details(
+    action: &AssistantRunNextAction,
+    reason: &str,
+    details: Option<Value>,
+) -> AssistantRunReactToolResult {
+    let mut observation = json!({
+        "status": "rejected",
+        "action_type": action.action_type.as_str(),
+        "actionType": action.action_type.as_str(),
+        "message": reason,
+        "denied": [action.action_type.as_str()],
+        "items": [],
+        "limits": {},
+        "reason": reason,
+    });
+    let mut trail_step = json!({
+        "status": "rejected",
+        "label": assistant_run_react_action_label(&action.action_type),
+        "react_action": action.action_type.as_str(),
+        "reason": reason,
+        "at": Utc::now(),
+    });
+    if let Some(details) = details {
+        observation["details"] = details.clone();
+        trail_step["details"] = details;
+    }
     AssistantRunReactToolResult {
-        observation: json!({
-            "status": "rejected",
-            "action_type": action.action_type.as_str(),
-            "actionType": action.action_type.as_str(),
-            "message": reason,
-            "denied": [action.action_type.as_str()],
-            "items": [],
-            "limits": {},
-            "reason": reason,
-        }),
-        trail_step: json!({
-            "status": "rejected",
-            "label": assistant_run_react_action_label(&action.action_type),
-            "react_action": action.action_type.as_str(),
-            "reason": reason,
-            "at": Utc::now(),
-        }),
+        observation,
+        trail_step,
         final_answer: None,
     }
 }
@@ -2917,6 +2944,33 @@ mod tests {
         );
         assert_eq!(result.observation["items"], json!([]));
         assert_eq!(result.observation["limits"], json!({}));
+        assert!(result.observation.get("details").is_none());
+        assert!(result.final_answer.is_none());
+    }
+
+    #[test]
+    fn rejected_tool_result_can_carry_structured_details() {
+        let action = test_action(AssistantRunReactActionType::SubmitStaticPageImagePreview);
+        let result = rejected_react_tool_result_with_details(
+            &action,
+            "static_page_preview_data_quality_gate",
+            json!({
+                "dataQualityGate": {
+                    "attentionModuleCount": 1,
+                    "recommendedActions": ["static_page.update_draft"]
+                }
+            }),
+        );
+
+        assert_eq!(result.observation["status"], json!("rejected"));
+        assert_eq!(
+            result.observation["details"]["dataQualityGate"]["attentionModuleCount"],
+            json!(1)
+        );
+        assert_eq!(
+            result.trail_step["details"]["dataQualityGate"]["recommendedActions"][0],
+            json!("static_page.update_draft")
+        );
         assert!(result.final_answer.is_none());
     }
 

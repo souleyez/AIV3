@@ -7626,19 +7626,21 @@ async fn create_static_page_image_job_for_draft(
     mut draft: StaticPageDraft,
     request: CreateStaticPageImageJobRequest,
 ) -> std::result::Result<(StatusCode, Json<CreateStaticPageImageJobResponse>), ApiError> {
-    if let Some(reason) = static_page_preview_data_quality_block_reason(&draft) {
-        return Err(ApiError::bad_request(
+    if let Some((reason, details)) = static_page_preview_data_quality_gate_for_draft(&draft) {
+        return Err(ApiError::bad_request_with_details(
             "static_page_preview_data_quality_gate",
             reason,
+            details,
         ));
     }
     if !request.image_prompt_payload.is_null() {
-        if let Some(reason) =
-            static_page_preview_data_quality_block_reason_for_payload(&request.image_prompt_payload)
+        if let Some((reason, details)) =
+            static_page_preview_data_quality_gate_for_payload(&request.image_prompt_payload)
         {
-            return Err(ApiError::bad_request(
+            return Err(ApiError::bad_request_with_details(
                 "static_page_preview_data_quality_gate",
                 reason,
+                details,
             ));
         }
     }
@@ -22546,7 +22548,9 @@ fn build_static_page_image_prompt_payload(draft: &StaticPageDraft, prompt: Optio
     })
 }
 
-fn static_page_preview_data_quality_block_reason(draft: &StaticPageDraft) -> Option<String> {
+fn static_page_preview_data_quality_gate_for_draft(
+    draft: &StaticPageDraft,
+) -> Option<(String, Value)> {
     let mut payload = draft.draft_payload.clone();
     ensure_json_object(&mut payload);
     if let Some(object) = payload.as_object_mut() {
@@ -22556,15 +22560,17 @@ fn static_page_preview_data_quality_block_reason(draft: &StaticPageDraft) -> Opt
     }
     refresh_static_page_payload_design_contract(&mut payload);
 
-    static_page_preview_data_quality_block_reason_for_payload(&payload)
+    static_page_preview_data_quality_gate_for_payload(&payload)
 }
 
-fn static_page_preview_data_quality_block_reason_for_payload(payload: &Value) -> Option<String> {
+fn static_page_preview_data_quality_gate_for_payload(payload: &Value) -> Option<(String, Value)> {
     let attention_modules = static_page_preview_data_quality_attention_modules(payload);
     if attention_modules.is_empty() {
         return None;
     }
-    Some(static_page_preview_data_quality_message(&attention_modules))
+    let message = static_page_preview_data_quality_message(&attention_modules);
+    let details = static_page_preview_data_quality_details(&attention_modules, &message);
+    Some((message, details))
 }
 
 fn static_page_preview_data_quality_attention_modules(payload: &Value) -> Vec<Value> {
@@ -22637,6 +22643,33 @@ fn static_page_preview_data_quality_message(modules: &[Value]) -> String {
     format!(
         "当前静态页还有{suffix}的数据绑定未达到效果图生成要求：{labels}。请先回到模块编辑补充样本行、重新绑定字段，或让 V3 检索/修复模块数据。"
     )
+}
+
+fn static_page_preview_data_quality_details(modules: &[Value], message: &str) -> Value {
+    let modules = modules.iter().take(24).cloned().collect::<Vec<_>>();
+    let module_count = modules.len();
+    json!({
+        "gate": "static_page_preview_data_quality",
+        "blockedAction": "submit_static_page_image_preview",
+        "blocked_action": "submit_static_page_image_preview",
+        "reason": message,
+        "attentionModuleCount": module_count,
+        "attention_module_count": module_count,
+        "attentionModules": modules.clone(),
+        "attention_modules": modules,
+        "recommendedActions": [
+            "static_page.update_draft",
+            "retrieval.search",
+            "static_page.submit_preview_after_repair"
+        ],
+        "recommended_actions": [
+            "static_page.update_draft",
+            "retrieval.search",
+            "static_page.submit_preview_after_repair"
+        ],
+        "nextStep": "Return to module editing, add sample rows or rebind weak fields, then submit the effect preview again.",
+        "next_step": "Return to module editing, add sample rows or rebind weak fields, then submit the effect preview again."
+    })
 }
 
 fn static_page_preview_data_quality_module_label(module: &Value) -> String {
@@ -25234,6 +25267,18 @@ impl ApiError {
             payload: ApiErrorResponse {
                 code: code.to_string(),
                 message,
+                details: None,
+            },
+        }
+    }
+
+    fn bad_request_with_details(code: &str, message: String, details: Value) -> Self {
+        Self {
+            status: StatusCode::BAD_REQUEST,
+            payload: ApiErrorResponse {
+                code: code.to_string(),
+                message,
+                details: Some(details),
             },
         }
     }
@@ -25244,6 +25289,7 @@ impl ApiError {
             payload: ApiErrorResponse {
                 code: code.to_string(),
                 message,
+                details: None,
             },
         }
     }
@@ -25254,6 +25300,7 @@ impl ApiError {
             payload: ApiErrorResponse {
                 code: code.to_string(),
                 message,
+                details: None,
             },
         }
     }
@@ -25264,6 +25311,7 @@ impl ApiError {
             payload: ApiErrorResponse {
                 code: code.to_string(),
                 message,
+                details: None,
             },
         }
     }
@@ -25274,6 +25322,7 @@ impl ApiError {
             payload: ApiErrorResponse {
                 code: code.to_string(),
                 message,
+                details: None,
             },
         }
     }
@@ -25287,6 +25336,7 @@ impl ApiError {
                         payload: ApiErrorResponse {
                             code: "conflict".to_string(),
                             message: db_error.message().to_string(),
+                            details: None,
                         },
                     };
                 }
@@ -30278,7 +30328,7 @@ mod tests {
             updated_at: now,
         };
 
-        let reason = static_page_preview_data_quality_block_reason(&draft)
+        let (reason, _details) = static_page_preview_data_quality_gate_for_draft(&draft)
             .expect("chart without sample rows should be blocked");
 
         assert!(reason.contains("订单趋势"));
@@ -31050,6 +31100,32 @@ mod tests {
             .payload
             .message
             .contains("数据绑定未达到效果图生成要求"));
+        let preview_gate_details = preview_before_data_repair
+            .payload
+            .details
+            .as_ref()
+            .expect("preview quality gate details");
+        assert_eq!(
+            preview_gate_details["gate"],
+            json!("static_page_preview_data_quality")
+        );
+        assert_eq!(
+            preview_gate_details["blockedAction"],
+            json!("submit_static_page_image_preview")
+        );
+        assert!(preview_gate_details["attentionModuleCount"]
+            .as_u64()
+            .is_some_and(|count| count > 0));
+        assert!(preview_gate_details["attentionModules"]
+            .as_array()
+            .expect("attention modules")
+            .iter()
+            .any(|module| module["moduleId"] == json!("kpi")
+                && module["chartDataFit"] == json!("needs_sample_rows")));
+        assert!(preview_gate_details["recommendedActions"]
+            .as_array()
+            .expect("recommended actions")
+            .contains(&json!("static_page.update_draft")));
 
         let (data_repair_status, Json(data_repair_response)) = append_static_page_draft_operations(
             State(state.clone()),

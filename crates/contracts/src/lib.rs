@@ -25,6 +25,8 @@ pub struct HealthResponse {
 pub struct ApiErrorResponse {
     pub code: String,
     pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub details: Option<Value>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
