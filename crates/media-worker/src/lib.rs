@@ -5791,6 +5791,131 @@ mod tests {
     }
 
     #[test]
+    fn controlled_video_sample_deliverable_contract_is_complete() {
+        let document = test_document();
+        let output_root =
+            std::env::temp_dir().join(format!("aidp-v3-video-contract-test-{}", DocumentId::new()));
+        let session_dir = output_root.join(format!("video-extraction-{}", document.id));
+        let artifacts_dir = session_dir.join(DEFAULT_GENERATED_ARTIFACTS_DIR_NAME);
+        let raw_frames_dir = session_dir.join(DEFAULT_RAW_FRAMES_DIR_NAME);
+        fs::create_dir_all(&raw_frames_dir).expect("raw frames dir");
+        fs::create_dir_all(&artifacts_dir).expect("artifacts dir");
+        fs::write(raw_frames_dir.join("frame_000001.jpg"), b"fake").expect("frame 1");
+        fs::write(raw_frames_dir.join("frame_000002.jpg"), b"fake").expect("frame 2");
+        fs::write(
+            artifacts_dir.join(DEFAULT_PPT_KEEP_LIST_TEMPLATE_FILE_NAME),
+            serde_json::to_vec_pretty(&json!({
+                "status": "selected",
+                "selected_candidate_indices": [2],
+                "selection_notes": ["controlled contract sample"]
+            }))
+            .expect("keep list bytes"),
+        )
+        .expect("keep list");
+        let frame_extraction = json!({
+            "status": "completed",
+            "raw_frames_dir": raw_frames_dir.display().to_string(),
+            "frame_count": 2,
+            "interval_seconds": 1.0,
+            "manifest_file_name": DEFAULT_FRAME_MANIFEST_FILE_NAME
+        });
+        let chunk = test_chunk(json!({
+            "media": {
+                "transcript_segments": [{
+                    "start_seconds": 0.2,
+                    "end_seconds": 0.6,
+                    "text": "Narration for the selected contract slide"
+                }],
+                "scenes": [{
+                    "start_seconds": 0.0,
+                    "end_seconds": 1.0,
+                    "summary": "Title slide scene"
+                }],
+                "keyframe_ocr_snippets": [{
+                    "timestamp_seconds": 1.0,
+                    "text": "Contract slide title"
+                }]
+            }
+        }));
+
+        let generated_artifacts = write_video_extraction_text_artifacts(
+            &document,
+            std::slice::from_ref(&chunk),
+            &frame_extraction,
+            &output_root,
+        )
+        .expect("controlled deliverables");
+        let output = extract_video_ppt_output_with_artifacts(
+            &document,
+            &[chunk],
+            frame_extraction,
+            generated_artifacts,
+        );
+        let run_id = "00000000-0000-0000-0000-000000000001";
+        let html_artifact =
+            video_extraction_html_artifact_from_output(run_id, Some("local-thread-1"), &output)
+                .expect("html artifact");
+        let output_artifact = video_extraction_output_artifact_from_output(
+            run_id,
+            Some("local-thread-1"),
+            &output,
+            std::slice::from_ref(&html_artifact),
+        )
+        .expect("output artifact");
+
+        assert_eq!(
+            output_artifact["deliverable_status"]["state"],
+            json!("final_pptx_ready")
+        );
+        assert!(output_artifact["manifest_outputs"]
+            .as_array()
+            .expect("manifest outputs")
+            .iter()
+            .any(|file| file["artifact_kind"] == json!("final_deliverables_manifest")));
+        assert!(output_artifact["manifest_outputs"]
+            .as_array()
+            .expect("manifest outputs")
+            .iter()
+            .any(|file| file["artifact_kind"] == json!("extraction_artifacts_manifest")));
+        assert!(output_artifact["final_outputs"]
+            .as_array()
+            .expect("final outputs")
+            .iter()
+            .any(|file| file["artifact_kind"] == json!("pptx")));
+        assert!(output_artifact["review_outputs"]
+            .as_array()
+            .expect("review outputs")
+            .iter()
+            .any(|file| file["artifact_kind"] == json!("slide_notes")));
+        assert!(output_artifact["evidence_outputs"]
+            .as_array()
+            .expect("evidence outputs")
+            .iter()
+            .any(|file| file["artifact_kind"] == json!("subtitle_page_map")));
+        assert!(output_artifact["completion_follow_up"]["next_actions"]
+            .as_array()
+            .expect("next actions")
+            .contains(&json!("download_pptx")));
+        assert!(output_artifact["completion_follow_up"]["next_actions"]
+            .as_array()
+            .expect("next actions")
+            .contains(&json!("review_slide_notes")));
+        assert_eq!(
+            html_artifact["payload"]["completion_follow_up"]["html_artifact_ids"][0],
+            html_artifact["id"]
+        );
+        let audit_counts = &output_artifact["completion_audit"]["artifact_group_counts"];
+        assert_eq!(audit_counts["manifest_outputs"], json!(2));
+        assert_eq!(audit_counts["final_outputs"], json!(1));
+        assert!(audit_counts["review_outputs"].as_u64().unwrap_or(0) >= 1);
+        assert!(audit_counts["evidence_outputs"].as_u64().unwrap_or(0) >= 1);
+        assert_eq!(
+            output_artifact["completion_audit"]["redaction"]["provider_keys_included"],
+            json!(false)
+        );
+    }
+
+    #[test]
     fn frame_extraction_is_planned_by_default_and_skips_remote_sources_when_enabled() {
         let mut document = test_document();
         let disabled = run_video_frame_extraction_if_enabled(
