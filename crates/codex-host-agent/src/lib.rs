@@ -174,8 +174,8 @@ impl CodexHostTaskContext {
                 })),
                 "process": process.as_ref().map(|process| json!({
                     "exitCode": process.exit_code,
-                    "stdoutChars": process.stdout_excerpt.chars().count(),
-                    "stderrChars": process.stderr_excerpt.chars().count(),
+                    "stdoutChars": process.stdout_chars,
+                    "stderrChars": process.stderr_chars,
                 })),
                 "steps": codex_host_report_steps(mode),
                 "risks": codex_host_report_risks(mode),
@@ -335,8 +335,10 @@ impl CodexProcessOutput {
     pub fn safe_summary(&self) -> CodexHostProcessOutputSummaryView {
         CodexHostProcessOutputSummaryView {
             exit_code: self.exit_code,
-            stdout_excerpt: self.stdout_excerpt.clone(),
-            stderr_excerpt: self.stderr_excerpt.clone(),
+            stdout_chars: self.stdout_excerpt.chars().count(),
+            stderr_chars: self.stderr_excerpt.chars().count(),
+            stdout_excerpt: String::new(),
+            stderr_excerpt: String::new(),
         }
     }
 }

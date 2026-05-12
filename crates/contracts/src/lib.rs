@@ -202,6 +202,8 @@ pub struct CodexHostCommandPlanSummaryView {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CodexHostProcessOutputSummaryView {
     pub exit_code: Option<i32>,
+    pub stdout_chars: usize,
+    pub stderr_chars: usize,
     pub stdout_excerpt: String,
     pub stderr_excerpt: String,
 }

@@ -242,10 +242,10 @@ fn run_codex_exec(
 
     if !output.status.success() {
         return Err(anyhow!(
-            "Codex Host command failed with status {:?}; stdout={}; stderr={}",
+            "Codex Host command failed with status {:?}; stdout_chars={}; stderr_chars={}",
             process_output.exit_code,
-            process_output.stdout_excerpt,
-            process_output.stderr_excerpt
+            process_output.stdout_excerpt.chars().count(),
+            process_output.stderr_excerpt.chars().count()
         ));
     }
 
@@ -536,7 +536,10 @@ mod tests {
             output["command_plan"]["workspace_label"],
             json!("codex-host-task-test")
         );
-        assert_eq!(output["process"]["stdout_excerpt"], json!("ok"));
+        assert_eq!(output["process"]["stdout_chars"], json!(2));
+        assert_eq!(output["process"]["stderr_chars"], json!(0));
+        assert_eq!(output["process"]["stdout_excerpt"], json!(""));
+        assert_eq!(output["process"]["stderr_excerpt"], json!(""));
         assert_eq!(
             output["html_artifacts"][0]["template_id"],
             json!("codex_execution_report")

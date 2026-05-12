@@ -21699,14 +21699,26 @@ fn assistant_run_codex_host_validation_event_summary(event: &AssistantRunEvent) 
         && task_memory_isolated
         && task_memory_space_configured;
     let stdout_chars = process
-        .get("stdout_excerpt")
-        .and_then(Value::as_str)
-        .map(|value| value.chars().count())
+        .get("stdout_chars")
+        .and_then(Value::as_u64)
+        .map(|value| value as usize)
+        .or_else(|| {
+            process
+                .get("stdout_excerpt")
+                .and_then(Value::as_str)
+                .map(|value| value.chars().count())
+        })
         .unwrap_or(0);
     let stderr_chars = process
-        .get("stderr_excerpt")
-        .and_then(Value::as_str)
-        .map(|value| value.chars().count())
+        .get("stderr_chars")
+        .and_then(Value::as_u64)
+        .map(|value| value as usize)
+        .or_else(|| {
+            process
+                .get("stderr_excerpt")
+                .and_then(Value::as_str)
+                .map(|value| value.chars().count())
+        })
         .unwrap_or(0);
     let html_artifact_count = output
         .get("html_artifacts")
