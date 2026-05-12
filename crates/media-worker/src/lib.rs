@@ -130,7 +130,8 @@ pub fn extract_video_ppt_output_with_artifacts(
         &frame_extraction,
         &generated_artifacts,
     );
-    let deliverable_status = video_deliverable_status(&generated_artifacts);
+    let deliverable_status =
+        video_deliverable_status_with_frame_extraction(&generated_artifacts, &frame_extraction);
     let status = if evidence.has_evidence() {
         "completed"
     } else {
@@ -2228,6 +2229,57 @@ fn video_deliverable_status(generated_artifacts: &Value) -> Value {
     })
 }
 
+fn video_deliverable_status_with_frame_extraction(
+    generated_artifacts: &Value,
+    frame_extraction: &Value,
+) -> Value {
+    let mut status = video_deliverable_status(generated_artifacts);
+    let frame_status = frame_extraction
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if frame_status.is_empty() {
+        return status;
+    }
+
+    let reason = frame_extraction
+        .get("reason")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if let Some(object) = status.as_object_mut() {
+        object.insert("frame_extraction_status".to_string(), json!(frame_status));
+        if !reason.is_empty() {
+            object.insert("frame_extraction_reason".to_string(), json!(reason));
+        }
+        if matches!(frame_status, "failed" | "skipped") {
+            let mut warning = json!({
+                "code": if frame_status == "failed" { "frame_extraction_failed" } else { "frame_extraction_skipped" },
+                "severity": if frame_status == "failed" { "high" } else { "medium" },
+                "message": if frame_status == "failed" {
+                    "Raw frame extraction failed; contact sheet, slide selection, and screenshot PPTX are blocked until the source is available and FFmpeg succeeds."
+                } else {
+                    "Raw frame extraction was skipped; contact sheet, slide selection, and screenshot PPTX require a local media file or parsed frame evidence."
+                },
+            });
+            if !reason.is_empty() {
+                warning["reason"] = json!(reason);
+            }
+            let warnings = object
+                .entry("warnings".to_string())
+                .or_insert_with(|| json!([]));
+            let mut next_warning_count = None;
+            if let Some(warnings) = warnings.as_array_mut() {
+                warnings.push(warning);
+                next_warning_count = Some(warnings.len());
+            }
+            if let Some(next_warning_count) = next_warning_count {
+                object.insert("warning_count".to_string(), json!(next_warning_count));
+            }
+        }
+    }
+    status
+}
+
 fn video_generated_artifact_quality_warnings(
     files: &[Value],
     has_pptx: bool,
@@ -2795,6 +2847,37 @@ mod tests {
         assert_eq!(artifacts.len(), 1);
         assert_eq!(artifacts[0]["artifact_kind"], json!("frame_manifest"));
         assert_eq!(artifacts[0]["format"], json!("application/json"));
+    }
+
+    #[test]
+    fn extract_output_surfaces_failed_frame_extraction_warning() {
+        let document = test_document();
+        let frame_extraction = json!({
+            "status": "failed",
+            "source": "ffmpeg_external_process",
+            "reason": "ffmpeg exited with status 1",
+            "input_path": "C:/tmp/missing-video.mp4"
+        });
+
+        let output =
+            extract_video_ppt_output_with_frame_extraction(&document, &[], frame_extraction);
+
+        assert_eq!(
+            output["deliverable_status"]["frame_extraction_status"],
+            json!("failed")
+        );
+        assert_eq!(
+            output["deliverable_status"]["frame_extraction_reason"],
+            json!("ffmpeg exited with status 1")
+        );
+        let warnings = output["deliverable_status"]["warnings"]
+            .as_array()
+            .expect("warnings");
+        assert!(warnings.iter().any(|warning| {
+            warning["code"] == json!("frame_extraction_failed")
+                && warning["severity"] == json!("high")
+                && warning["reason"] == json!("ffmpeg exited with status 1")
+        }));
     }
 
     #[test]
