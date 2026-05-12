@@ -2150,6 +2150,37 @@ pub fn video_extraction_output_artifact_from_output(
                 "transcript_text",
             ],
         ),
+        "manifest_outputs": video_artifact_files_by_kinds(
+            &files,
+            &[
+                "final_deliverables_manifest",
+                "extraction_artifacts_manifest",
+            ],
+        ),
+        "final_outputs": video_artifact_files_by_kinds(&files, &["pptx"]),
+        "review_outputs": video_artifact_files_by_kinds(
+            &files,
+            &[
+                "slide_image_candidates",
+                "contact_sheet_plan",
+                "contact_sheet_html",
+                "ppt_keep_list_template",
+                "selected_slides_manifest",
+                "slide_notes",
+                "pptx_build_plan",
+            ],
+        ),
+        "evidence_outputs": video_artifact_files_by_kinds(
+            &files,
+            &[
+                "frame_manifest",
+                "transcript_text",
+                "source_text",
+                "ppt_outline",
+                "timestamp_map",
+                "subtitle_page_map",
+            ],
+        ),
         "final_deliverables_manifest": final_deliverables_manifest,
         "html_artifacts": html_artifact_summaries,
         "html_artifact_ids": html_artifact_ids,
@@ -4617,6 +4648,20 @@ mod tests {
                 "format": "application/json",
                 "path": "generated_artifacts/extraction_artifacts_manifest.json",
                 "uri": format!("artifact://video-{}-extraction-manifest", document.id)
+            }, {
+                "artifact_kind": "slide_notes",
+                "artifact_id": format!("video-{}-slide-notes", document.id),
+                "title": "slide notes",
+                "format": "text/markdown",
+                "path": "generated_artifacts/slide_notes.md",
+                "uri": format!("artifact://video-{}-slide-notes", document.id)
+            }, {
+                "artifact_kind": "subtitle_page_map",
+                "artifact_id": format!("video-{}-subtitle-page-map", document.id),
+                "title": "subtitle page map",
+                "format": "application/json",
+                "path": "generated_artifacts/subtitle_page_map.json",
+                "uri": format!("artifact://video-{}-subtitle-page-map", document.id)
             }]
         });
         let output = extract_video_ppt_output_with_artifacts(
@@ -4655,6 +4700,14 @@ mod tests {
             json!(true)
         );
         assert_eq!(
+            output_artifact["deliverable_status"]["has_slide_notes"],
+            json!(true)
+        );
+        assert_eq!(
+            output_artifact["deliverable_status"]["has_subtitle_page_map"],
+            json!(true)
+        );
+        assert_eq!(
             output_artifact["final_deliverables_manifest"]["path"],
             json!("generated_artifacts/final_deliverables_manifest.json")
         );
@@ -4675,6 +4728,26 @@ mod tests {
             .expect("primary files")
             .iter()
             .any(|file| file["artifact_kind"] == json!("final_deliverables_manifest")));
+        assert!(output_artifact["manifest_outputs"]
+            .as_array()
+            .expect("manifest outputs")
+            .iter()
+            .any(|file| file["artifact_kind"] == json!("extraction_artifacts_manifest")));
+        assert!(output_artifact["final_outputs"]
+            .as_array()
+            .expect("final outputs")
+            .iter()
+            .any(|file| file["artifact_kind"] == json!("pptx")));
+        assert!(output_artifact["review_outputs"]
+            .as_array()
+            .expect("review outputs")
+            .iter()
+            .any(|file| file["artifact_kind"] == json!("slide_notes")));
+        assert!(output_artifact["evidence_outputs"]
+            .as_array()
+            .expect("evidence outputs")
+            .iter()
+            .any(|file| file["artifact_kind"] == json!("subtitle_page_map")));
         assert_eq!(output_artifact["html_artifact_ids"][0], html_artifact["id"]);
     }
 
