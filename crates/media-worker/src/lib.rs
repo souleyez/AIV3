@@ -3590,17 +3590,25 @@ fn render_video_source_text_markdown(
         output.push_str("- Missing raw frame evidence.\n");
     } else {
         output.push_str(&format!("- Raw frames captured: {frame_count}\n"));
-        if let Some(raw_frames_dir) = frame_extraction
+        if frame_extraction
             .get("raw_frames_dir")
             .and_then(Value::as_str)
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty())
         {
-            output.push_str(&format!("- Raw frames directory: {raw_frames_dir}\n"));
+            output.push_str("- Raw frames directory: [redacted]\n");
         }
         if let Some(manifest_path) = frame_extraction
             .get("manifest_path")
             .and_then(Value::as_str)
         {
-            output.push_str(&format!("- Frame manifest: {manifest_path}\n"));
+            let manifest_file_name = Path::new(manifest_path)
+                .file_name()
+                .and_then(|value| value.to_str())
+                .unwrap_or(DEFAULT_FRAME_MANIFEST_FILE_NAME);
+            output.push_str(&format!(
+                "- Frame manifest: {manifest_file_name} (path redacted)\n"
+            ));
         }
     }
 
@@ -4840,6 +4848,8 @@ mod tests {
         let frame_extraction = json!({
             "status": "completed",
             "frame_count": 8,
+            "raw_frames_dir": "C:/private/video-extraction/raw_frames",
+            "manifest_path": "C:/private/video-extraction/frame_manifest.json",
             "manifest_file_name": DEFAULT_FRAME_MANIFEST_FILE_NAME
         });
 
@@ -4887,7 +4897,10 @@ mod tests {
         assert!(source_text.contains("native_video_understanding"));
         assert!(source_text.contains("not_supported"));
         assert!(source_text.contains("AI Data Platform"));
+        assert!(source_text.contains("Raw frames directory: [redacted]"));
+        assert!(source_text.contains("Frame manifest: frame_manifest.json (path redacted)"));
         assert!(!source_text.contains("C:/private/video"));
+        assert!(!source_text.contains("C:/private/video-extraction"));
         assert!(!source_text.contains("secret-token"));
         let outline_path = manifest["files"]
             .as_array()
