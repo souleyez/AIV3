@@ -1864,7 +1864,7 @@ pub fn video_extraction_completion_follow_up_from_output(
         "deliverable_status": deliverable_status,
         "ready_file_kinds": ready_file_kinds,
         "html_artifact_ids": html_artifact_ids,
-        "next_actions": video_extraction_completion_next_actions(state, &files),
+        "next_actions": video_extraction_completion_next_actions(state, &files, &deliverable_status),
         "model_follow_up": {
             "required": true,
             "instruction": "Use this structured completion status to notify the user in the next model-authored turn; do not claim missing files are available.",
@@ -1945,12 +1945,26 @@ fn video_ready_file_kinds(files: &[Value]) -> Vec<String> {
         .collect()
 }
 
-fn video_extraction_completion_next_actions(state: &str, files: &[Value]) -> Vec<Value> {
+fn video_extraction_completion_next_actions(
+    state: &str,
+    files: &[Value],
+    deliverable_status: &Value,
+) -> Vec<Value> {
     let file_kinds = files
         .iter()
         .filter_map(|file| file.get("artifact_kind").and_then(Value::as_str))
         .collect::<BTreeSet<_>>();
     let mut actions = vec![json!("open_video_extraction_summary")];
+    let warning_codes = deliverable_warning_codes(deliverable_status);
+    if warning_codes.contains("frame_extraction_failed") {
+        actions.push(json!("retry_frame_extraction"));
+    }
+    if warning_codes.contains("frame_extraction_skipped") {
+        actions.push(json!("provide_local_media_file_or_parsed_frames"));
+    }
+    if warning_codes.contains("generated_artifacts_failed") {
+        actions.push(json!("retry_generated_artifact_writer"));
+    }
     if file_kinds.contains("pptx") {
         actions.push(json!("download_pptx"));
     }
@@ -1964,6 +1978,16 @@ fn video_extraction_completion_next_actions(state: &str, files: &[Value]) -> Vec
         actions.push(json!("complete_keep_list_or_review_missing_inputs"));
     }
     actions
+}
+
+fn deliverable_warning_codes(deliverable_status: &Value) -> BTreeSet<&str> {
+    deliverable_status
+        .get("warnings")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|warning| warning.get("code").and_then(Value::as_str))
+        .collect()
 }
 
 fn video_extraction_missing_items(
@@ -3226,6 +3250,53 @@ mod tests {
             .expect("next actions")
             .contains(&json!("review_subtitle_page_map")));
         assert_eq!(follow_up["model_follow_up"]["required"], json!(true));
+    }
+
+    #[test]
+    fn video_extraction_completion_follow_up_uses_warning_specific_next_actions() {
+        let document = test_document();
+        let frame_extraction = json!({
+            "status": "failed",
+            "source": "ffmpeg_external_process",
+            "reason": "ffmpeg exited with status 1"
+        });
+        let generated_artifacts = json!({
+            "status": "failed",
+            "source": "media_worker_text_artifact_writer",
+            "reason": "disk full",
+            "files": []
+        });
+        let output = extract_video_ppt_output_with_artifacts(
+            &document,
+            &[],
+            frame_extraction,
+            generated_artifacts,
+        );
+
+        let follow_up =
+            video_extraction_completion_follow_up_from_output(&output, &[]).expect("follow up");
+        let next_actions = follow_up["next_actions"].as_array().expect("next actions");
+
+        assert!(next_actions.contains(&json!("retry_frame_extraction")));
+        assert!(next_actions.contains(&json!("retry_generated_artifact_writer")));
+        assert!(next_actions.contains(&json!("complete_keep_list_or_review_missing_inputs")));
+
+        let skipped_output = extract_video_ppt_output_with_frame_extraction(
+            &document,
+            &[],
+            json!({
+                "status": "skipped",
+                "source": "ffmpeg_external_process",
+                "reason": "local_media_path_not_available"
+            }),
+        );
+        let skipped_follow_up =
+            video_extraction_completion_follow_up_from_output(&skipped_output, &[])
+                .expect("skipped follow up");
+        assert!(skipped_follow_up["next_actions"]
+            .as_array()
+            .expect("skipped next actions")
+            .contains(&json!("provide_local_media_file_or_parsed_frames")));
     }
 
     #[test]
