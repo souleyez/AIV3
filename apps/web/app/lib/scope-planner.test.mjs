@@ -85,6 +85,34 @@ test('scope planner recommends direct video PPT extraction without forcing datas
   assert.deepEqual(plan.supplyStrategy.recommendedActions, ['media.resolve_video_url', 'media.extract_ppt_transcript']);
 });
 
+test('scope planner recommends public video page resolution before PPT extraction', () => {
+  const plan = planAssistantScope({
+    prompt: 'https://example.com/course-page 帮我提取这个公开视频里的PPT和字幕',
+    datasets,
+  });
+
+  assert.equal(plan.intent, 'data_question');
+  assert.equal(selectPlannerDatasetId(plan), '');
+  assert.equal(plan.candidates.length, 0);
+  assert.equal(plan.supplyStrategy.retrievalPolicy, 'not_requested');
+  assert.equal(plan.supplyStrategy.candidatePolicy, 'ordinary_chat_without_forced_dataset');
+  assert.deepEqual(plan.supplyStrategy.recommendedActions, ['media.resolve_video_url', 'media.extract_ppt_transcript']);
+});
+
+test('scope planner recommends uploaded video extraction without public URL resolution', () => {
+  const plan = planAssistantScope({
+    prompt: '我刚上传了一个视频，帮我提取里面的PPT和原文',
+    datasets,
+  });
+
+  assert.equal(plan.intent, 'data_question');
+  assert.equal(selectPlannerDatasetId(plan), '');
+  assert.equal(plan.candidates.length, 0);
+  assert.equal(plan.supplyStrategy.retrievalPolicy, 'not_requested');
+  assert.equal(plan.supplyStrategy.preferDetail, false);
+  assert.deepEqual(plan.supplyStrategy.recommendedActions, ['media.extract_ppt_transcript']);
+});
+
 test('scope planner preselects media dataset for audio and video prompts', () => {
   const plan = planAssistantScope({
     prompt: '这段录音讲了什么，帮我提炼重点',
