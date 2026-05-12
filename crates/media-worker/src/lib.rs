@@ -3133,6 +3133,9 @@ fn render_video_ppt_outline_markdown(
         evidence.keyframe_ocr_snippets.len(),
         frame_count
     ));
+    output.push_str("## Evidence References\n\n");
+    output.push_str(&render_video_evidence_reference_lines(evidence));
+    output.push('\n');
 
     output.push_str("## Slide / Scene Candidates\n\n");
     if evidence.scenes.is_empty() && evidence.keyframe_ocr_snippets.is_empty() {
@@ -3142,22 +3145,26 @@ fn render_video_ppt_outline_markdown(
             let range = video_time_range_label(scene);
             let summary = video_item_text(scene, &["summary", "text", "description"])
                 .unwrap_or_else(|| "Untitled scene".to_string());
+            let reference = video_evidence_reference_label(scene, "scene", index + 1);
             output.push_str(&format!(
-                "- Scene {}{}: {}\n",
+                "- Scene {}{}: {} ({})\n",
                 index + 1,
                 optional_time_suffix(&range),
-                summary
+                summary,
+                reference
             ));
         }
         for (index, snippet) in evidence.keyframe_ocr_snippets.iter().enumerate() {
             let timestamp = video_timestamp_label(snippet);
             let text = video_item_text(snippet, &["text", "ocr_text", "summary"])
                 .unwrap_or_else(|| "No OCR text".to_string());
+            let reference = video_evidence_reference_label(snippet, "ocr", index + 1);
             output.push_str(&format!(
-                "- OCR {}{}: {}\n",
+                "- OCR {}{}: {} ({})\n",
                 index + 1,
                 optional_time_suffix(&timestamp),
-                text
+                text,
+                reference
             ));
         }
         output.push('\n');
@@ -3167,11 +3174,17 @@ fn render_video_ppt_outline_markdown(
     if evidence.transcript_segments.is_empty() {
         output.push_str("No transcript segments yet.\n");
     } else {
-        for segment in &evidence.transcript_segments {
+        for (index, segment) in evidence.transcript_segments.iter().enumerate() {
             let text =
                 video_item_text(segment, &["text", "content", "summary"]).unwrap_or_default();
             let range = video_time_range_label(segment);
-            output.push_str(&format!("- {}{}\n", optional_time_prefix(&range), text));
+            let reference = video_evidence_reference_label(segment, "transcript", index + 1);
+            output.push_str(&format!(
+                "- {}{} ({})\n",
+                optional_time_prefix(&range),
+                text,
+                reference
+            ));
         }
     }
     output
@@ -3196,16 +3209,29 @@ fn render_video_source_text_markdown(
         evidence.keyframe_ocr_snippets.len(),
         frame_count
     ));
+    output.push_str("## Evidence References\n\n");
+    output.push_str(&render_video_evidence_reference_lines(evidence));
+    output.push('\n');
+
+    output.push_str("## Provider Evidence\n\n");
+    output.push_str(&render_video_provider_evidence_lines(evidence));
+    output.push('\n');
 
     output.push_str("## Transcript Evidence\n\n");
     if evidence.transcript_segments.is_empty() {
         output.push_str("- Missing transcript evidence.\n\n");
     } else {
-        for segment in &evidence.transcript_segments {
+        for (index, segment) in evidence.transcript_segments.iter().enumerate() {
             let text =
                 video_item_text(segment, &["text", "content", "summary"]).unwrap_or_default();
             let range = video_time_range_label(segment);
-            output.push_str(&format!("- {}{}\n", optional_time_prefix(&range), text));
+            let reference = video_evidence_reference_label(segment, "transcript", index + 1);
+            output.push_str(&format!(
+                "- {}{} ({})\n",
+                optional_time_prefix(&range),
+                text,
+                reference
+            ));
         }
         output.push('\n');
     }
@@ -3214,11 +3240,17 @@ fn render_video_source_text_markdown(
     if evidence.scenes.is_empty() {
         output.push_str("- Missing scene evidence.\n\n");
     } else {
-        for scene in &evidence.scenes {
+        for (index, scene) in evidence.scenes.iter().enumerate() {
             let summary = video_item_text(scene, &["summary", "text", "description"])
                 .unwrap_or_else(|| "Untitled scene".to_string());
             let range = video_time_range_label(scene);
-            output.push_str(&format!("- {}{}\n", optional_time_prefix(&range), summary));
+            let reference = video_evidence_reference_label(scene, "scene", index + 1);
+            output.push_str(&format!(
+                "- {}{} ({})\n",
+                optional_time_prefix(&range),
+                summary,
+                reference
+            ));
         }
         output.push('\n');
     }
@@ -3227,11 +3259,17 @@ fn render_video_source_text_markdown(
     if evidence.keyframe_ocr_snippets.is_empty() {
         output.push_str("- Missing keyframe OCR evidence.\n\n");
     } else {
-        for snippet in &evidence.keyframe_ocr_snippets {
+        for (index, snippet) in evidence.keyframe_ocr_snippets.iter().enumerate() {
             let text = video_item_text(snippet, &["text", "ocr_text", "summary"])
                 .unwrap_or_else(|| "No OCR text".to_string());
             let timestamp = video_timestamp_label(snippet);
-            output.push_str(&format!("- {}{}\n", optional_time_prefix(&timestamp), text));
+            let reference = video_evidence_reference_label(snippet, "ocr", index + 1);
+            output.push_str(&format!(
+                "- {}{} ({})\n",
+                optional_time_prefix(&timestamp),
+                text,
+                reference
+            ));
         }
         output.push('\n');
     }
@@ -3256,6 +3294,123 @@ fn render_video_source_text_markdown(
     }
 
     output
+}
+
+fn render_video_evidence_reference_lines(evidence: &VideoMediaEvidenceItems) -> String {
+    let mut output = String::new();
+    if evidence.transcript_segments.is_empty()
+        && evidence.scenes.is_empty()
+        && evidence.keyframe_ocr_snippets.is_empty()
+    {
+        output.push_str("- No evidence references available yet.\n");
+        return output;
+    }
+
+    for (index, segment) in evidence.transcript_segments.iter().enumerate().take(12) {
+        output.push_str(&format!(
+            "- Transcript {}: {}\n",
+            index + 1,
+            video_evidence_reference_label(segment, "transcript", index + 1)
+        ));
+    }
+    for (index, scene) in evidence.scenes.iter().enumerate().take(12) {
+        output.push_str(&format!(
+            "- Scene {}: {}\n",
+            index + 1,
+            video_evidence_reference_label(scene, "scene", index + 1)
+        ));
+    }
+    for (index, snippet) in evidence.keyframe_ocr_snippets.iter().enumerate().take(12) {
+        output.push_str(&format!(
+            "- OCR {}: {}\n",
+            index + 1,
+            video_evidence_reference_label(snippet, "ocr", index + 1)
+        ));
+    }
+    output
+}
+
+fn render_video_provider_evidence_lines(evidence: &VideoMediaEvidenceItems) -> String {
+    if evidence.provider_evidence.is_empty() {
+        return "- No provider evidence recorded.\n".to_string();
+    }
+
+    let mut output = String::new();
+    for provider in evidence.provider_evidence.iter().take(12) {
+        let provider_name = video_safe_evidence_text(
+            &video_item_text(provider, &["provider"]).unwrap_or_else(|| "unknown".to_string()),
+        );
+        let capability = video_safe_evidence_text(
+            &video_item_text(provider, &["capability"]).unwrap_or_else(|| "unknown".to_string()),
+        );
+        let status = video_safe_evidence_text(
+            &video_item_text(provider, &["status"]).unwrap_or_else(|| "unknown".to_string()),
+        );
+        let supported = provider
+            .get("supported")
+            .and_then(Value::as_bool)
+            .map(|value| if value { "supported" } else { "not_supported" })
+            .unwrap_or("unknown_support");
+        output.push_str(&format!(
+            "- {provider_name} / {capability}: {status}; {supported}\n"
+        ));
+    }
+    output
+}
+
+fn video_evidence_reference_label(value: &Value, kind: &str, index: usize) -> String {
+    let mut parts = vec![format!("ref={kind}#{index}")];
+    let time = if kind == "ocr" {
+        video_timestamp_label(value)
+    } else {
+        video_time_range_label(value)
+    };
+    if !time.is_empty() {
+        parts.push(format!("time={time}"));
+    }
+    if let Some(source) = video_item_text(value, &["source", "provider", "origin"]) {
+        parts.push(format!("source={}", video_safe_evidence_text(&source)));
+    }
+    if let Some(locator) = video_item_text(
+        value,
+        &[
+            "evidence_ref",
+            "evidenceRef",
+            "source_ref",
+            "sourceRef",
+            "source_locator",
+            "sourceLocator",
+            "chunk_id",
+            "chunkId",
+        ],
+    ) {
+        parts.push(format!("locator={}", video_safe_evidence_text(&locator)));
+    }
+    if let Some(confidence) = video_number_field(value, &["confidence", "ocr_confidence"]) {
+        parts.push(format!("confidence={confidence:.2}"));
+    }
+    parts.join("; ")
+}
+
+fn video_safe_evidence_text(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return "unknown".to_string();
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    let looks_secret = lower.contains("token")
+        || lower.contains("cookie")
+        || lower.contains("authorization")
+        || lower.contains("bearer ")
+        || lower.contains("provider_key")
+        || lower.contains("secret");
+    let looks_url = lower.starts_with("http://") || lower.starts_with("https://");
+    let looks_path = trimmed.contains("\\") || trimmed.contains(":/") || trimmed.starts_with('/');
+    if looks_secret || looks_url || looks_path {
+        "[redacted]".to_string()
+    } else {
+        trimmed.chars().take(120).collect()
+    }
 }
 
 fn video_generated_artifact_file(
@@ -4257,16 +4412,29 @@ mod tests {
                 "transcript_segments": [{
                     "start_seconds": 0.0,
                     "end_seconds": 2.4,
-                    "text": "第一页讲产品定位"
+                    "text": "第一页讲产品定位",
+                    "source": "MEDIA_TRANSCRIBE_BIN",
+                    "evidence_ref": "chunk-1",
+                    "confidence": 0.91
                 }],
                 "scenes": [{
                     "start_seconds": 0.0,
                     "end_seconds": 2.4,
-                    "summary": "标题页"
+                    "summary": "标题页",
+                    "source": "MEDIA_SCENE_BIN"
                 }],
                 "keyframe_ocr_snippets": [{
                     "timestamp_seconds": 1.2,
-                    "text": "AI Data Platform"
+                    "text": "AI Data Platform",
+                    "source": "C:/private/video/frame_000001.jpg",
+                    "ocr_confidence": 0.88
+                }],
+                "provider_evidence": [{
+                    "provider": "minimax",
+                    "capability": "native_video_understanding",
+                    "status": "configured_unverified",
+                    "supported": false,
+                    "detail": "failed with secret-token"
                 }]
             }
         }));
@@ -4314,7 +4482,27 @@ mod tests {
             .expect("source text path");
         let source_text = fs::read_to_string(source_text_path).expect("source text file");
         assert!(source_text.contains("Transcript Evidence"));
+        assert!(source_text.contains("Evidence References"));
+        assert!(source_text.contains("Provider Evidence"));
+        assert!(source_text.contains("ref=transcript#1"));
+        assert!(source_text.contains("source=MEDIA_TRANSCRIBE_BIN"));
+        assert!(source_text.contains("confidence=0.91"));
+        assert!(source_text.contains("native_video_understanding"));
+        assert!(source_text.contains("not_supported"));
         assert!(source_text.contains("AI Data Platform"));
+        assert!(!source_text.contains("C:/private/video"));
+        assert!(!source_text.contains("secret-token"));
+        let outline_path = manifest["files"]
+            .as_array()
+            .expect("files")
+            .iter()
+            .find(|file| file["artifact_kind"] == json!("ppt_outline"))
+            .and_then(|file| file["path"].as_str())
+            .expect("outline path");
+        let outline = fs::read_to_string(outline_path).expect("outline file");
+        assert!(outline.contains("Evidence References"));
+        assert!(outline.contains("ref=scene#1"));
+        assert!(outline.contains("source=[redacted]"));
         let final_manifest_path = manifest["files"]
             .as_array()
             .expect("files")
