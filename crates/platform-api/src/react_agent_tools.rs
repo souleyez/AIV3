@@ -825,6 +825,8 @@ fn video_url_resolution_placeholder_result(
             Vec::new(),
         )
     };
+    let failure_kind = (status == "rejected").then(|| video_resolution_failure_kind(reason));
+    let failure_next_action = failure_kind.map(video_resolution_failure_next_action);
     AssistantRunReactToolResult {
         observation: json!({
             "status": status,
@@ -835,6 +837,8 @@ fn video_url_resolution_placeholder_result(
             "items": items,
             "limits": {},
             "reason": reason,
+            "failure_kind": failure_kind,
+            "failure_next_action": failure_next_action,
             "source_present": !source_text.is_empty(),
             "supported_sources": ["uploaded_video_file", "direct_video_url", "public_page_resolvable_video"],
             "unsupported_sources": ["login_gated_page", "qr_login", "cookies", "screen_recording_bypass"],
@@ -999,6 +1003,8 @@ fn public_video_page_resolution_failure_result(
                 "loginGatedSources": false,
             },
             "reason": failure.reason,
+            "failure_kind": video_resolution_failure_kind(failure.reason),
+            "failure_next_action": video_resolution_failure_next_action(video_resolution_failure_kind(failure.reason)),
             "detail": failure.detail,
             "source_present": true,
             "source_host": public_url_host_label(source_url),
@@ -1014,6 +1020,32 @@ fn public_video_page_resolution_failure_result(
             "at": Utc::now(),
         }),
         final_answer: None,
+    }
+}
+
+fn video_resolution_failure_kind(reason: &str) -> &'static str {
+    match reason {
+        "direct_video_url_or_upload_required" => "missing_source",
+        "login_gated_video_source_not_supported" | "public_page_invalid_scheme" => {
+            "unsupported_source"
+        }
+        "public_page_host_not_allowed"
+        | "public_page_redirect_not_followed"
+        | "public_page_too_large" => "resolver_blocked",
+        "public_page_fetch_failed" | "public_page_not_html" | "public_page_video_not_found" => {
+            "unavailable_video"
+        }
+        _ => "resolver_failed",
+    }
+}
+
+fn video_resolution_failure_next_action(failure_kind: &str) -> &'static str {
+    match failure_kind {
+        "missing_source" => "provide_direct_video_url_or_upload",
+        "unsupported_source" => "provide_supported_public_or_uploaded_video",
+        "resolver_blocked" => "provide_direct_video_url_or_upload",
+        "unavailable_video" => "check_public_video_availability_or_upload",
+        _ => "retry_video_url_resolution_or_upload",
     }
 }
 
@@ -2901,6 +2933,14 @@ mod tests {
             json!("login_gated_video_source_not_supported")
         );
         assert_eq!(
+            result.observation["failure_kind"],
+            json!("unsupported_source")
+        );
+        assert_eq!(
+            result.observation["failure_next_action"],
+            json!("provide_supported_public_or_uploaded_video")
+        );
+        assert_eq!(
             result.observation["unsupported_sources"],
             json!([
                 "login_gated_page",
@@ -3034,11 +3074,44 @@ mod tests {
             result.observation["reason"],
             json!("public_page_video_not_found")
         );
+        assert_eq!(
+            result.observation["failure_kind"],
+            json!("unavailable_video")
+        );
+        assert_eq!(
+            result.observation["failure_next_action"],
+            json!("check_public_video_availability_or_upload")
+        );
         assert_eq!(result.observation["source_host"], json!("example.com"));
         assert_eq!(
             result.observation["limits"]["redirectsFollowed"],
             json!(false)
         );
+        assert!(result.final_answer.is_none());
+    }
+
+    #[test]
+    fn public_video_page_failure_result_classifies_resolver_blocks() {
+        let action = test_action(AssistantRunReactActionType::ResolveVideoUrl);
+        let result = public_video_page_resolution_failure_result(
+            &action,
+            "http://127.0.0.1/video-page",
+            PublicVideoPageResolutionFailure {
+                reason: "public_page_host_not_allowed",
+                detail: "public page host is local, private, or otherwise blocked".to_string(),
+            },
+        );
+
+        assert_eq!(result.observation["status"], json!("rejected"));
+        assert_eq!(
+            result.observation["failure_kind"],
+            json!("resolver_blocked")
+        );
+        assert_eq!(
+            result.observation["failure_next_action"],
+            json!("provide_direct_video_url_or_upload")
+        );
+        assert_eq!(result.observation["source_host"], json!("127.0.0.1"));
         assert!(result.final_answer.is_none());
     }
 
