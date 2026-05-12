@@ -1801,6 +1801,60 @@ pub fn video_extraction_output_artifact_from_output(
         "final_deliverables_manifest": final_deliverables_manifest,
         "html_artifacts": html_artifact_summaries,
         "html_artifact_ids": html_artifact_ids,
+        "completion_follow_up": video_extraction_completion_follow_up_from_output(output, html_artifacts),
+    }))
+}
+
+pub fn video_extraction_completion_follow_up_from_output(
+    output: &Value,
+    html_artifacts: &[Value],
+) -> Option<Value> {
+    let document_id = output.get("document_id").and_then(Value::as_str)?;
+    let title = output
+        .get("title")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("视频 PPT 提取");
+    let generated_artifacts = output
+        .get("generated_artifacts")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let deliverable_status = output
+        .get("deliverable_status")
+        .cloned()
+        .unwrap_or_else(|| video_deliverable_status(&generated_artifacts));
+    let files = generated_artifacts
+        .get("files")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let ready_file_kinds = video_ready_file_kinds(&files);
+    let html_artifact_ids = html_artifacts
+        .iter()
+        .filter_map(|artifact| artifact.get("id").and_then(Value::as_str))
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    let state = deliverable_status
+        .get("state")
+        .and_then(Value::as_str)
+        .or_else(|| output.get("status").and_then(Value::as_str))
+        .unwrap_or("partial");
+
+    Some(json!({
+        "kind": "video_extraction_completion_follow_up",
+        "document_id": document_id,
+        "dataset_id": output.get("dataset_id").cloned().unwrap_or(Value::Null),
+        "title": title,
+        "status": state,
+        "deliverable_status": deliverable_status,
+        "ready_file_kinds": ready_file_kinds,
+        "html_artifact_ids": html_artifact_ids,
+        "next_actions": video_extraction_completion_next_actions(state, &files),
+        "model_follow_up": {
+            "required": true,
+            "instruction": "Use this structured completion status to notify the user in the next model-authored turn; do not claim missing files are available.",
+        },
+        "no_host_composed_answer": true,
     }))
 }
 
@@ -1852,6 +1906,49 @@ fn video_extraction_html_artifact_summary(artifact: &Value) -> Option<Value> {
             .and_then(Value::as_str)
             .unwrap_or("video_extraction"),
     }))
+}
+
+fn video_ready_file_kinds(files: &[Value]) -> Vec<String> {
+    files
+        .iter()
+        .filter_map(|file| file.get("artifact_kind").and_then(Value::as_str))
+        .filter(|kind| {
+            matches!(
+                *kind,
+                "pptx"
+                    | "final_deliverables_manifest"
+                    | "extraction_artifacts_manifest"
+                    | "ppt_outline"
+                    | "slide_notes"
+                    | "subtitle_page_map"
+                    | "transcript_text"
+                    | "source_text"
+                    | "timestamp_map"
+            )
+        })
+        .map(str::to_string)
+        .collect()
+}
+
+fn video_extraction_completion_next_actions(state: &str, files: &[Value]) -> Vec<Value> {
+    let file_kinds = files
+        .iter()
+        .filter_map(|file| file.get("artifact_kind").and_then(Value::as_str))
+        .collect::<BTreeSet<_>>();
+    let mut actions = vec![json!("open_video_extraction_summary")];
+    if file_kinds.contains("pptx") {
+        actions.push(json!("download_pptx"));
+    }
+    if file_kinds.contains("final_deliverables_manifest") {
+        actions.push(json!("review_final_deliverables_manifest"));
+    }
+    if file_kinds.contains("subtitle_page_map") {
+        actions.push(json!("review_subtitle_page_map"));
+    }
+    if state != "final_pptx_ready" {
+        actions.push(json!("complete_keep_list_or_review_missing_inputs"));
+    }
+    actions
 }
 
 fn video_extraction_missing_items(
@@ -2863,12 +2960,82 @@ mod tests {
             output_artifact["final_deliverables_manifest"]["path"],
             json!("generated_artifacts/final_deliverables_manifest.json")
         );
+        assert_eq!(
+            output_artifact["completion_follow_up"]["kind"],
+            json!("video_extraction_completion_follow_up")
+        );
+        assert_eq!(
+            output_artifact["completion_follow_up"]["no_host_composed_answer"],
+            json!(true)
+        );
         assert!(output_artifact["primary_files"]
             .as_array()
             .expect("primary files")
             .iter()
             .any(|file| file["artifact_kind"] == json!("final_deliverables_manifest")));
         assert_eq!(output_artifact["html_artifact_ids"][0], html_artifact["id"]);
+    }
+
+    #[test]
+    fn video_extraction_completion_follow_up_lists_ready_files_and_next_actions() {
+        let document = test_document();
+        let run_id = "00000000-0000-0000-0000-000000000001";
+        let generated_artifacts = json!({
+            "status": "completed",
+            "files": [{
+                "artifact_kind": "pptx",
+                "artifact_id": format!("video-{}-pptx", document.id),
+                "title": "generated pptx",
+                "format": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                "path": "generated_artifacts/video_slides_screenshot_based.pptx"
+            }, {
+                "artifact_kind": "subtitle_page_map",
+                "artifact_id": format!("video-{}-subtitle_page_map", document.id),
+                "title": "subtitle page map",
+                "format": "application/json",
+                "path": "generated_artifacts/subtitle_page_map.json"
+            }, {
+                "artifact_kind": "final_deliverables_manifest",
+                "artifact_id": format!("video-{}-final-deliverables", document.id),
+                "title": "final deliverables manifest",
+                "format": "application/json",
+                "path": "generated_artifacts/final_deliverables_manifest.json"
+            }]
+        });
+        let output = extract_video_ppt_output_with_artifacts(
+            &document,
+            &[],
+            video_frame_extraction_plan(&document),
+            generated_artifacts,
+        );
+        let html_artifact =
+            video_extraction_html_artifact_from_output(run_id, Some("local-thread-1"), &output)
+                .expect("html artifact");
+
+        let follow_up =
+            video_extraction_completion_follow_up_from_output(&output, &[html_artifact.clone()])
+                .expect("follow up");
+
+        assert_eq!(
+            follow_up["kind"],
+            json!("video_extraction_completion_follow_up")
+        );
+        assert_eq!(follow_up["document_id"], json!(document.id.to_string()));
+        assert_eq!(follow_up["no_host_composed_answer"], json!(true));
+        assert_eq!(follow_up["html_artifact_ids"][0], html_artifact["id"]);
+        assert!(follow_up["ready_file_kinds"]
+            .as_array()
+            .expect("ready file kinds")
+            .contains(&json!("subtitle_page_map")));
+        assert!(follow_up["next_actions"]
+            .as_array()
+            .expect("next actions")
+            .contains(&json!("download_pptx")));
+        assert!(follow_up["next_actions"]
+            .as_array()
+            .expect("next actions")
+            .contains(&json!("review_subtitle_page_map")));
+        assert_eq!(follow_up["model_follow_up"]["required"], json!(true));
     }
 
     #[test]

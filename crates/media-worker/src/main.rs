@@ -6,8 +6,9 @@ use media_worker::{
     extract_video_ppt_output_with_artifacts, frame_extraction_config_from_env,
     merge_video_extraction_output_artifacts, register_video_asset_output,
     resolve_video_source_output, run_video_frame_extraction_if_enabled,
-    video_extraction_html_artifact_from_output, write_video_extraction_text_artifacts_if_available,
-    FrameExtractionConfig, MediaWorkflowTaskKind,
+    video_extraction_completion_follow_up_from_output, video_extraction_html_artifact_from_output,
+    write_video_extraction_text_artifacts_if_available, FrameExtractionConfig,
+    MediaWorkflowTaskKind,
 };
 use serde_json::Value;
 use storage::{NewAssistantRunEvent, NewHtmlArtifact, PgStorage, DEFAULT_LOCAL_DATABASE_URL};
@@ -257,6 +258,8 @@ async fn append_video_extraction_assistant_event(
         video_extraction_html_artifact_from_output(&run_id.to_string(), local_thread_id, output)
             .into_iter()
             .collect::<Vec<_>>();
+    let completion_follow_up =
+        video_extraction_completion_follow_up_from_output(output, &html_artifacts);
 
     storage
         .assistant_runs()
@@ -273,6 +276,7 @@ async fn append_video_extraction_assistant_event(
                     "dataset_id": output.get("dataset_id").cloned().unwrap_or(Value::Null),
                     "output": output,
                     "html_artifacts": html_artifacts,
+                    "completion_follow_up": completion_follow_up,
                     "no_host_composed_answer": true,
                 }),
                 created_at: Utc::now(),
