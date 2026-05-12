@@ -27,6 +27,7 @@ pub const DEFAULT_CONTACT_SHEET_PLAN_FILE_NAME: &str = "contact_sheet_plan.json"
 pub const DEFAULT_CONTACT_SHEET_HTML_FILE_NAME: &str = "raw_contact_sheet.html";
 pub const DEFAULT_PPT_KEEP_LIST_TEMPLATE_FILE_NAME: &str = "ppt_keep_list_template.json";
 pub const DEFAULT_SELECTED_SLIDES_MANIFEST_FILE_NAME: &str = "selected_slides_manifest.json";
+pub const DEFAULT_SUBTITLE_PAGE_MAP_FILE_NAME: &str = "subtitle_page_map.json";
 pub const DEFAULT_SLIDE_NOTES_ARTIFACT_FILE_NAME: &str = "slide_notes.md";
 pub const DEFAULT_PPTX_BUILD_PLAN_FILE_NAME: &str = "pptx_build_plan.json";
 pub const DEFAULT_VIDEO_SLIDES_PPTX_FILE_NAME: &str = "video_slides_screenshot_based.pptx";
@@ -394,9 +395,12 @@ pub fn write_video_extraction_text_artifacts(
         ));
     }
 
-    if let Some(candidate_files) =
-        write_video_slide_candidate_review_files(document, frame_extraction, &artifacts_dir)?
-    {
+    if let Some(candidate_files) = write_video_slide_candidate_review_files(
+        document,
+        &evidence,
+        frame_extraction,
+        &artifacts_dir,
+    )? {
         files.extend(candidate_files);
     }
 
@@ -462,6 +466,7 @@ pub fn write_video_extraction_text_artifacts(
 
 fn write_video_slide_candidate_review_files(
     document: &Document,
+    evidence: &VideoMediaEvidenceItems,
     frame_extraction: &Value,
     artifacts_dir: &Path,
 ) -> Result<Option<Vec<Value>>, String> {
@@ -487,11 +492,14 @@ fn write_video_slide_candidate_review_files(
         .iter()
         .enumerate()
         .map(|(index, path)| {
+            let timestamp_seconds = video_candidate_timestamp_seconds(index + 1, frame_extraction);
             json!({
                 "candidate_index": index + 1,
                 "source": "raw_frames",
                 "file_name": path.file_name().and_then(|value| value.to_str()).unwrap_or("frame"),
                 "frame_path": path.display().to_string(),
+                "timestamp_seconds": timestamp_seconds,
+                "timestamp_label": format_seconds(timestamp_seconds),
                 "selection_status": "review_required",
                 "notes": "Candidate frame retained conservatively; rectangle extraction/dedupe/manual keep-list are later stages.",
             })
@@ -573,6 +581,8 @@ fn write_video_slide_candidate_review_files(
         document,
         &frames,
         &selected_candidate_indices,
+        evidence,
+        frame_extraction,
         &candidate_manifest_path,
         &contact_sheet_html_path,
         &keep_list_template_path,
@@ -582,6 +592,18 @@ fn write_video_slide_candidate_review_files(
         serde_json::to_vec_pretty(&selected_slides_manifest).map_err(|error| error.to_string())?,
     )
     .map_err(|error| error.to_string())?;
+
+    let subtitle_page_map = video_subtitle_page_map_from_selected_slides(&selected_slides_manifest);
+    let subtitle_page_map_path = artifacts_dir.join(DEFAULT_SUBTITLE_PAGE_MAP_FILE_NAME);
+    let has_subtitle_page_map =
+        subtitle_page_map.get("status").and_then(Value::as_str) == Some("mapped");
+    if has_subtitle_page_map {
+        fs::write(
+            &subtitle_page_map_path,
+            serde_json::to_vec_pretty(&subtitle_page_map).map_err(|error| error.to_string())?,
+        )
+        .map_err(|error| error.to_string())?;
+    }
 
     let slide_notes_path = artifacts_dir.join(DEFAULT_SLIDE_NOTES_ARTIFACT_FILE_NAME);
     fs::write(
@@ -617,6 +639,7 @@ fn write_video_slide_candidate_review_files(
             "include_source_frame": true,
             "include_candidate_index": true,
             "include_timestamp_when_available": true,
+            "include_transcript_pre_page_map": has_subtitle_page_map,
         },
         "build_policy": "one_raster_image_per_slide_after_keep_list",
         "skill_reference": "wechat-video-ppt-extract/build-selected",
@@ -684,6 +707,14 @@ fn write_video_slide_candidate_review_files(
             &pptx_build_plan_path,
         ),
     ];
+    if has_subtitle_page_map {
+        artifact_files.push(video_generated_artifact_file(
+            document,
+            "subtitle_page_map",
+            "application/json",
+            &subtitle_page_map_path,
+        ));
+    }
     if has_selected_slides {
         artifact_files.push(video_generated_artifact_file(
             document,
@@ -836,22 +867,62 @@ fn selected_slides_manifest_from_keep_list(
     document: &Document,
     frames: &[PathBuf],
     selected_candidate_indices: &[usize],
+    evidence: &VideoMediaEvidenceItems,
+    frame_extraction: &Value,
     candidate_manifest_path: &Path,
     contact_sheet_html_path: &Path,
     keep_list_template_path: &Path,
 ) -> Value {
+    let mut previous_timestamp_seconds = 0.0_f64;
     let selected_candidates = selected_candidate_indices
         .iter()
+        .enumerate()
         .filter_map(|candidate_index| {
+            let slide_index = candidate_index.0;
+            let candidate_index = candidate_index.1;
             let frame = frames.get(candidate_index.saturating_sub(1))?;
             let file_name = frame
                 .file_name()
                 .and_then(|value| value.to_str())
                 .unwrap_or("frame");
+            let timestamp_seconds =
+                video_candidate_timestamp_seconds(*candidate_index, frame_extraction);
+            let window_start_seconds = if slide_index == 0 {
+                0.0
+            } else {
+                previous_timestamp_seconds.min(timestamp_seconds)
+            };
+            let window_end_seconds = if timestamp_seconds > window_start_seconds {
+                timestamp_seconds
+            } else {
+                window_start_seconds + video_frame_interval_seconds(frame_extraction)
+            };
+            previous_timestamp_seconds = timestamp_seconds;
+            let transcript_segments = video_transcript_segments_for_window(
+                &evidence.transcript_segments,
+                window_start_seconds,
+                window_end_seconds,
+            );
+            let subtitle_alignment_status = if evidence.transcript_segments.is_empty() {
+                "missing_transcript"
+            } else if transcript_segments.is_empty() {
+                "unmatched"
+            } else {
+                "pre_page_mapped"
+            };
             Some(json!({
                 "candidate_index": candidate_index,
                 "file_name": file_name,
                 "frame_path": frame.display().to_string(),
+                "timestamp_seconds": timestamp_seconds,
+                "timestamp_label": format_seconds(timestamp_seconds),
+                "transcript_window": {
+                    "start_seconds": window_start_seconds,
+                    "end_seconds": window_end_seconds,
+                    "assignment_rule": "pre_page_previous_to_current",
+                },
+                "subtitle_alignment_status": subtitle_alignment_status,
+                "transcript_segments": transcript_segments,
                 "contact_sheet_anchor": format!("candidate-{candidate_index}"),
                 "selection_status": "selected",
             }))
@@ -876,6 +947,97 @@ fn selected_slides_manifest_from_keep_list(
             "build screenshot-based PPTX from selected_candidates only"
         },
     })
+}
+
+fn video_subtitle_page_map_from_selected_slides(selected_slides_manifest: &Value) -> Value {
+    let selected_candidates = selected_slides_manifest
+        .get("selected_candidates")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let pages = selected_candidates
+        .iter()
+        .enumerate()
+        .filter_map(|(index, candidate)| {
+            let transcript_segments = candidate
+                .get("transcript_segments")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            if transcript_segments.is_empty() {
+                return None;
+            }
+            Some(json!({
+                "slide_number": index + 1,
+                "candidate_index": candidate.get("candidate_index").cloned().unwrap_or(Value::Null),
+                "source_frame": candidate.get("file_name").cloned().unwrap_or(Value::Null),
+                "timestamp_seconds": candidate.get("timestamp_seconds").cloned().unwrap_or(Value::Null),
+                "transcript_window": candidate.get("transcript_window").cloned().unwrap_or_else(|| json!({})),
+                "assignment_rule": "pre_page_previous_to_current",
+                "transcript_segments": transcript_segments,
+            }))
+        })
+        .collect::<Vec<_>>();
+
+    json!({
+        "status": if pages.is_empty() { "unmapped" } else { "mapped" },
+        "source": "selected_slides_manifest",
+        "document_id": selected_slides_manifest.get("document_id").cloned().unwrap_or(Value::Null),
+        "dataset_id": selected_slides_manifest.get("dataset_id").cloned().unwrap_or(Value::Null),
+        "title": selected_slides_manifest.get("title").cloned().unwrap_or(Value::Null),
+        "assignment_rule": "pre_page_previous_to_current",
+        "page_count": pages.len(),
+        "pages": pages,
+    })
+}
+
+fn video_transcript_segments_for_window(
+    transcript_segments: &[Value],
+    start_seconds: f64,
+    end_seconds: f64,
+) -> Vec<Value> {
+    transcript_segments
+        .iter()
+        .filter(|segment| {
+            let midpoint = video_transcript_segment_midpoint_seconds(segment);
+            midpoint >= start_seconds && midpoint <= end_seconds
+        })
+        .map(|segment| {
+            json!({
+                "start_seconds": video_number_field(segment, &["start_seconds", "startSeconds", "start"]),
+                "end_seconds": video_number_field(segment, &["end_seconds", "endSeconds", "end"]),
+                "text": video_item_text(segment, &["text", "content", "summary"]).unwrap_or_default(),
+            })
+        })
+        .collect()
+}
+
+fn video_transcript_segment_midpoint_seconds(segment: &Value) -> f64 {
+    let start = video_number_field(segment, &["start_seconds", "startSeconds", "start"]);
+    let end = video_number_field(segment, &["end_seconds", "endSeconds", "end"]);
+    match (start, end) {
+        (Some(start), Some(end)) if end >= start => (start + end) / 2.0,
+        (Some(start), _) => start,
+        (_, Some(end)) => end,
+        _ => 0.0,
+    }
+}
+
+fn video_candidate_timestamp_seconds(candidate_index: usize, frame_extraction: &Value) -> f64 {
+    candidate_index
+        .saturating_sub(1)
+        .to_string()
+        .parse::<f64>()
+        .unwrap_or(0.0)
+        * video_frame_interval_seconds(frame_extraction)
+}
+
+fn video_frame_interval_seconds(frame_extraction: &Value) -> f64 {
+    frame_extraction
+        .get("interval_seconds")
+        .and_then(Value::as_f64)
+        .filter(|value| *value > 0.0)
+        .unwrap_or(DEFAULT_FRAME_EXTRACTION_INTERVAL_SECONDS)
 }
 
 fn render_selected_slide_notes_markdown(
@@ -914,9 +1076,32 @@ fn render_selected_slide_notes_markdown(
             .get("frame_path")
             .and_then(Value::as_str)
             .unwrap_or("");
+        let timestamp = candidate
+            .get("timestamp_label")
+            .and_then(Value::as_str)
+            .unwrap_or("");
         output.push_str(&format!(
-            "### Slide {slide_number}\n\n- Candidate: {candidate_index}\n- Source frame: {file_name}\n- Frame path: {frame_path}\n- Speaker notes: Source frame {file_name}; candidate {candidate_index}. Human/model review should align transcript/subtitles before customer delivery.\n\n"
+            "### Slide {slide_number}\n\n- Candidate: {candidate_index}\n- Source frame: {file_name}\n- Frame timestamp: {}\n- Frame path: {frame_path}\n",
+            if timestamp.is_empty() { "unknown" } else { timestamp }
         ));
+        let transcript_segments = candidate
+            .get("transcript_segments")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        if transcript_segments.is_empty() {
+            output.push_str(&format!("- Speaker notes: Source frame metadata only for candidate {candidate_index}. Human/model review should align transcript/subtitles before customer delivery.\n\n"));
+        } else {
+            output.push_str("- Speaker notes: pre-page transcript assignment is available and still requires review.\n");
+            output.push_str("- Aligned transcript:\n");
+            for segment in transcript_segments {
+                let text =
+                    video_item_text(&segment, &["text", "content", "summary"]).unwrap_or_default();
+                let range = video_time_range_label(&segment);
+                output.push_str(&format!("  - {}{}\n", optional_time_prefix(&range), text));
+            }
+            output.push('\n');
+        }
     }
     output
 }
@@ -933,10 +1118,28 @@ fn video_selected_slide_quality_warnings(selected_slides_manifest: &Value) -> Ve
                 .to_string(),
         );
     }
-    warnings.push(
-        "Speaker notes currently contain source frame metadata only; transcript/subtitle alignment is not yet verified."
-            .to_string(),
-    );
+    let has_transcript_alignment = selected_slides_manifest
+        .get("selected_candidates")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .any(|candidate| {
+            candidate
+                .get("transcript_segments")
+                .and_then(Value::as_array)
+                .is_some_and(|segments| !segments.is_empty())
+        });
+    if has_transcript_alignment {
+        warnings.push(
+            "Speaker notes include deterministic pre-page transcript assignment and still require review."
+                .to_string(),
+        );
+    } else {
+        warnings.push(
+            "Speaker notes currently contain source frame metadata only; transcript/subtitle alignment is not yet verified."
+                .to_string(),
+        );
+    }
     warnings.push(
         "Slide images are raw frame screenshots until rectangle extraction/dedupe is promoted into the worker."
             .to_string(),
@@ -1270,8 +1473,25 @@ fn render_pptx_notes_slide(slide_number: usize, candidate: &Value) -> String {
         .get("frame_path")
         .and_then(Value::as_str)
         .unwrap_or("");
+    let timestamp = candidate
+        .get("timestamp_label")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let transcript_note = candidate
+        .get("transcript_segments")
+        .and_then(Value::as_array)
+        .filter(|segments| !segments.is_empty())
+        .map(|segments| {
+            let text = segments
+                .iter()
+                .filter_map(|segment| video_item_text(segment, &["text", "content", "summary"]))
+                .collect::<Vec<_>>()
+                .join(" ");
+            format!(" Pre-page transcript: {text}.")
+        })
+        .unwrap_or_else(|| " Transcript/subtitle alignment is not yet verified.".to_string());
     let note = format!(
-        "Source frame: {file_name}; candidate: {candidate_index}; path: {frame_path}. Transcript/subtitle alignment is not yet verified."
+        "Source frame: {file_name}; candidate: {candidate_index}; timestamp: {timestamp}; path: {frame_path}.{transcript_note}"
     );
     format!(
         r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -1574,6 +1794,7 @@ pub fn video_extraction_output_artifact_from_output(
                 "extraction_artifacts_manifest",
                 "ppt_outline",
                 "slide_notes",
+                "subtitle_page_map",
                 "transcript_text",
             ],
         ),
@@ -1856,12 +2077,14 @@ fn video_deliverable_status(generated_artifacts: &Value) -> Value {
     let has_transcript = artifact_kinds.contains("transcript_text");
     let has_source_text = artifact_kinds.contains("source_text");
     let has_final_deliverables_manifest = artifact_kinds.contains("final_deliverables_manifest");
+    let has_subtitle_page_map = artifact_kinds.contains("subtitle_page_map");
     let warnings = video_generated_artifact_quality_warnings(
         &files,
         has_pptx,
         has_selected_slides,
         has_contact_sheet,
         has_transcript,
+        has_subtitle_page_map,
     );
     let state = if has_pptx {
         "final_pptx_ready"
@@ -1887,6 +2110,7 @@ fn video_deliverable_status(generated_artifacts: &Value) -> Value {
         "has_contact_sheet_html": has_contact_sheet,
         "has_selected_slides_manifest": has_selected_slides,
         "has_final_deliverables_manifest": has_final_deliverables_manifest,
+        "has_subtitle_page_map": has_subtitle_page_map,
         "has_pptx": has_pptx,
         "warning_count": warnings.len(),
         "warnings": warnings,
@@ -1899,6 +2123,7 @@ fn video_generated_artifact_quality_warnings(
     has_selected_slides: bool,
     has_contact_sheet: bool,
     has_transcript: bool,
+    has_subtitle_page_map: bool,
 ) -> Vec<Value> {
     let mut warnings = Vec::new();
     if !has_transcript {
@@ -1929,7 +2154,13 @@ fn video_generated_artifact_quality_warnings(
             "message": "PPTX uses raster screenshots; editable native slide reconstruction is not included in this slice."
         }));
     }
-    if files
+    if has_subtitle_page_map {
+        warnings.push(json!({
+            "code": "speaker_notes_pre_page_alignment",
+            "severity": "low",
+            "message": "Speaker notes include deterministic pre-page transcript assignment; review alignment before delivery."
+        }));
+    } else if files
         .iter()
         .any(|file| file.get("artifact_kind").and_then(Value::as_str) == Some("slide_notes"))
     {
@@ -1980,6 +2211,7 @@ fn video_final_deliverables_manifest(
             "source_text",
             "ppt_outline",
             "timestamp_map",
+            "subtitle_page_map",
         ]),
         "next_action": video_final_deliverables_next_action(state),
     })
@@ -3066,6 +3298,101 @@ mod tests {
         let slide_notes = fs::read_to_string(slide_notes_path).expect("slide notes");
         assert!(slide_notes.contains("Slide 1"));
         assert!(slide_notes.contains("candidate 2"));
+    }
+
+    #[test]
+    fn writes_subtitle_page_map_and_transcript_notes_for_selected_slides() {
+        let document = test_document();
+        let output_root = std::env::temp_dir().join(format!(
+            "aidp-v3-video-subtitle-map-test-{}",
+            DocumentId::new()
+        ));
+        let session_dir = output_root.join(format!("video-extraction-{}", document.id));
+        let artifacts_dir = session_dir.join(DEFAULT_GENERATED_ARTIFACTS_DIR_NAME);
+        let raw_frames_dir = session_dir.join(DEFAULT_RAW_FRAMES_DIR_NAME);
+        fs::create_dir_all(&raw_frames_dir).expect("raw frames dir");
+        fs::create_dir_all(&artifacts_dir).expect("artifacts dir");
+        fs::write(raw_frames_dir.join("frame_000001.jpg"), b"fake").expect("frame 1");
+        fs::write(raw_frames_dir.join("frame_000002.jpg"), b"fake").expect("frame 2");
+        let keep_list_path = artifacts_dir.join(DEFAULT_PPT_KEEP_LIST_TEMPLATE_FILE_NAME);
+        fs::write(
+            &keep_list_path,
+            serde_json::to_vec_pretty(&json!({
+                "status": "selected",
+                "selected_candidate_indices": [2]
+            }))
+            .expect("keep list bytes"),
+        )
+        .expect("keep list");
+        let frame_extraction = json!({
+            "status": "completed",
+            "raw_frames_dir": raw_frames_dir.display().to_string(),
+            "frame_count": 2,
+            "interval_seconds": 1.0,
+            "manifest_file_name": DEFAULT_FRAME_MANIFEST_FILE_NAME
+        });
+        let chunk = test_chunk(json!({
+            "media": {
+                "transcript_segments": [{
+                    "start_seconds": 0.2,
+                    "end_seconds": 0.6,
+                    "text": "Narration for the first selected slide"
+                }],
+                "scenes": [],
+                "keyframe_ocr_snippets": []
+            }
+        }));
+
+        let manifest = write_video_extraction_text_artifacts(
+            &document,
+            &[chunk],
+            &frame_extraction,
+            &output_root,
+        )
+        .expect("subtitle page map artifacts");
+
+        let files = manifest["files"].as_array().expect("files");
+        let subtitle_page_map_path = files
+            .iter()
+            .find(|file| file["artifact_kind"] == json!("subtitle_page_map"))
+            .and_then(|file| file["path"].as_str())
+            .expect("subtitle page map path");
+        let subtitle_page_map =
+            fs::read_to_string(subtitle_page_map_path).expect("subtitle page map");
+        assert!(subtitle_page_map.contains("pre_page_previous_to_current"));
+        assert!(subtitle_page_map.contains("Narration for the first selected slide"));
+        let slide_notes_path = files
+            .iter()
+            .find(|file| file["artifact_kind"] == json!("slide_notes"))
+            .and_then(|file| file["path"].as_str())
+            .expect("slide notes path");
+        let slide_notes = fs::read_to_string(slide_notes_path).expect("slide notes");
+        assert!(slide_notes.contains("Aligned transcript"));
+        assert!(slide_notes.contains("Narration for the first selected slide"));
+        let pptx_path = files
+            .iter()
+            .find(|file| file["artifact_kind"] == json!("pptx"))
+            .and_then(|file| file["path"].as_str())
+            .expect("pptx path");
+        let mut archive =
+            ZipArchive::new(File::open(pptx_path).expect("pptx file")).expect("pptx zip");
+        let mut notes = String::new();
+        archive
+            .by_name("ppt/notesSlides/notesSlide1.xml")
+            .expect("notes slide")
+            .read_to_string(&mut notes)
+            .expect("notes slide text");
+        assert!(notes.contains("Pre-page transcript"));
+        assert!(notes.contains("Narration for the first selected slide"));
+        let final_manifest_path = files
+            .iter()
+            .find(|file| file["artifact_kind"] == json!("final_deliverables_manifest"))
+            .and_then(|file| file["path"].as_str())
+            .expect("final deliverables manifest path");
+        let final_manifest =
+            fs::read_to_string(final_manifest_path).expect("final deliverables manifest");
+        assert!(final_manifest.contains("subtitle_page_map"));
+        assert!(final_manifest.contains("speaker_notes_pre_page_alignment"));
     }
 
     #[test]
