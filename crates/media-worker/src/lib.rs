@@ -1669,12 +1669,25 @@ pub fn video_extraction_html_artifact_from_output(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string);
+    let artifact_id = format!("html-artifact-video-extraction-{assistant_run_id}-{document_id}");
+    let artifact_title = format!("{title} - 视频提取摘要");
+    let artifact_summary = json!({
+        "id": artifact_id,
+        "type": "html_artifact",
+        "title": artifact_title,
+        "template_id": "video_extraction_summary",
+        "source_type": "video_extraction",
+    });
+    let completion_follow_up = video_extraction_completion_follow_up_from_output(
+        output,
+        std::slice::from_ref(&artifact_summary),
+    );
 
     Some(json!({
         "kind": "html_artifact",
         "version": 1,
-        "id": format!("html-artifact-video-extraction-{assistant_run_id}-{document_id}"),
-        "title": format!("{title} - 视频提取摘要"),
+        "id": artifact_summary["id"].clone(),
+        "title": artifact_summary["title"].clone(),
         "source_type": "video_extraction",
         "template_id": "video_extraction_summary",
         "owner_scope": {
@@ -1719,6 +1732,7 @@ pub fn video_extraction_html_artifact_from_output(
             ],
             "artifacts": output.get("artifacts").cloned().unwrap_or_else(|| json!([])),
             "generated_artifacts": generated_artifacts,
+            "completion_follow_up": completion_follow_up,
             "local_thread_id": local_thread_id,
             "note": "后台视频抽取阶段已完成；该摘要只展示已实际产生或已明确缺失的证据和交付物，不会补造缺失内容。"
         }
@@ -2894,6 +2908,18 @@ mod tests {
             json!("planned")
         );
         assert_eq!(artifact["payload"]["missing"][0], json!("transcript_text"));
+        assert_eq!(
+            artifact["payload"]["completion_follow_up"]["kind"],
+            json!("video_extraction_completion_follow_up")
+        );
+        assert_eq!(
+            artifact["payload"]["completion_follow_up"]["html_artifact_ids"][0],
+            artifact["id"]
+        );
+        assert_eq!(
+            artifact["payload"]["completion_follow_up"]["no_host_composed_answer"],
+            json!(true)
+        );
     }
 
     #[test]
