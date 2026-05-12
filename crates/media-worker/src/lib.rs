@@ -1879,6 +1879,14 @@ pub fn video_extraction_completion_follow_up_from_output(
         .and_then(Value::as_str)
         .or_else(|| output.get("status").and_then(Value::as_str))
         .unwrap_or("partial");
+    let next_actions = video_extraction_completion_next_actions(state, &files, &deliverable_status);
+    let user_notification = video_extraction_completion_user_notification(
+        state,
+        &ready_file_kinds,
+        &html_artifact_ids,
+        &deliverable_status,
+        &next_actions,
+    );
 
     Some(json!({
         "kind": "video_extraction_completion_follow_up",
@@ -1889,11 +1897,12 @@ pub fn video_extraction_completion_follow_up_from_output(
         "deliverable_status": deliverable_status,
         "ready_file_kinds": ready_file_kinds,
         "html_artifact_ids": html_artifact_ids,
-        "next_actions": video_extraction_completion_next_actions(state, &files, &deliverable_status),
+        "next_actions": next_actions,
         "model_follow_up": {
             "required": true,
             "instruction": "Use this structured completion status to notify the user in the next model-authored turn; do not claim missing files are available.",
         },
+        "user_notification": user_notification,
         "no_host_composed_answer": true,
     }))
 }
@@ -2029,6 +2038,72 @@ fn video_extraction_completion_next_actions(
         actions.push(json!("complete_keep_list_or_review_missing_inputs"));
     }
     actions
+}
+
+fn video_extraction_completion_user_notification(
+    state: &str,
+    ready_file_kinds: &[String],
+    html_artifact_ids: &[String],
+    deliverable_status: &Value,
+    next_actions: &[Value],
+) -> Value {
+    let warning_count = deliverable_status
+        .get("warning_count")
+        .and_then(Value::as_u64)
+        .unwrap_or_else(|| {
+            deliverable_status
+                .get("warnings")
+                .and_then(Value::as_array)
+                .map(|warnings| warnings.len() as u64)
+                .unwrap_or(0)
+        });
+    let has_pptx = deliverable_status
+        .get("has_pptx")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let ready_file_count = ready_file_kinds.len();
+    let primary_next_action = next_actions.first().cloned().unwrap_or(Value::Null);
+    let (severity, title, message) = if has_pptx || state == "final_pptx_ready" {
+        (
+            "success",
+            "视频/PPT 提取已完成",
+            "后台任务已生成可下载 PPTX，并已更新右侧视频提取摘要。",
+        )
+    } else if warning_count > 0 {
+        (
+            "warning",
+            "视频/PPT 提取需要复核",
+            "后台任务已更新视频提取摘要，但仍有缺失证据或待复核交付项。",
+        )
+    } else if ready_file_count > 0 {
+        (
+            "info",
+            "视频/PPT 产物已更新",
+            "后台任务已生成部分可复核文件，并已更新右侧视频提取摘要。",
+        )
+    } else {
+        (
+            "warning",
+            "视频/PPT 提取未产生交付文件",
+            "后台任务已结束，但当前没有可下载交付文件；请查看摘要中的下一步。",
+        )
+    };
+
+    json!({
+        "kind": "video_extraction_status_notification",
+        "channel": "assistant_run_artifact_status",
+        "scope": "status_only",
+        "user_visible": true,
+        "severity": severity,
+        "title": title,
+        "message": message,
+        "status": state,
+        "ready_file_count": ready_file_count,
+        "warning_count": warning_count,
+        "html_artifact_ids": html_artifact_ids,
+        "primary_next_action": primary_next_action,
+        "no_host_composed_answer": true,
+    })
 }
 
 fn deliverable_warning_codes(deliverable_status: &Value) -> BTreeSet<&str> {
@@ -3621,6 +3696,19 @@ mod tests {
             .expect("next actions")
             .contains(&json!("review_subtitle_page_map")));
         assert_eq!(follow_up["model_follow_up"]["required"], json!(true));
+        assert_eq!(
+            follow_up["user_notification"]["kind"],
+            json!("video_extraction_status_notification")
+        );
+        assert_eq!(follow_up["user_notification"]["severity"], json!("success"));
+        assert_eq!(
+            follow_up["user_notification"]["no_host_composed_answer"],
+            json!(true)
+        );
+        assert_eq!(
+            follow_up["user_notification"]["html_artifact_ids"][0],
+            html_artifact["id"]
+        );
     }
 
     #[test]
@@ -3654,6 +3742,15 @@ mod tests {
         assert!(next_actions.contains(&json!("generate_contact_sheet_from_raw_frames")));
         assert!(next_actions.contains(&json!("fill_ppt_keep_list_template")));
         assert!(next_actions.contains(&json!("complete_keep_list_or_review_missing_inputs")));
+        assert_eq!(follow_up["user_notification"]["severity"], json!("warning"));
+        assert_eq!(
+            follow_up["user_notification"]["scope"],
+            json!("status_only")
+        );
+        assert_eq!(
+            follow_up["user_notification"]["no_host_composed_answer"],
+            json!(true)
+        );
 
         let skipped_output = extract_video_ppt_output_with_frame_extraction(
             &document,
