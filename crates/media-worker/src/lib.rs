@@ -2916,6 +2916,7 @@ fn video_deliverable_status(generated_artifacts: &Value) -> Value {
     let has_final_deliverables_manifest = artifact_kinds.contains("final_deliverables_manifest");
     let has_extraction_artifacts_manifest =
         artifact_kinds.contains("extraction_artifacts_manifest");
+    let has_slide_notes = artifact_kinds.contains("slide_notes");
     let has_subtitle_page_map = artifact_kinds.contains("subtitle_page_map");
     let mut warnings = video_generated_artifact_quality_warnings(
         &files,
@@ -2969,6 +2970,7 @@ fn video_deliverable_status(generated_artifacts: &Value) -> Value {
         "has_selected_slides_manifest": has_selected_slides,
         "has_final_deliverables_manifest": has_final_deliverables_manifest,
         "has_extraction_artifacts_manifest": has_extraction_artifacts_manifest,
+        "has_slide_notes": has_slide_notes,
         "has_subtitle_page_map": has_subtitle_page_map,
         "has_pptx": has_pptx,
         "generated_artifacts_status": generated_artifacts_status,
@@ -4743,6 +4745,10 @@ mod tests {
             .as_array()
             .expect("ready file kinds")
             .contains(&json!("extraction_artifacts_manifest")));
+        assert_eq!(
+            follow_up["deliverable_status"]["has_slide_notes"],
+            json!(true)
+        );
         assert!(follow_up["next_actions"]
             .as_array()
             .expect("next actions")

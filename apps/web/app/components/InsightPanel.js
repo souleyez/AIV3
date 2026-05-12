@@ -298,6 +298,7 @@ function htmlArtifactBrief(summary) {
       status.hasPptx || status.has_pptx ? 'PPTX ready' : 'PPTX waiting',
       status.hasFinalDeliverablesManifest || status.has_final_deliverables_manifest ? 'deliverable manifest ready' : '',
       status.hasExtractionArtifactsManifest || status.has_extraction_artifacts_manifest ? 'artifact index ready' : '',
+      status.hasSlideNotes || status.has_slide_notes ? 'slide notes ready' : '',
       auditSuffix.trim().replace(/^·\s*/, ''),
     ].filter(Boolean);
     return parts.join(' · ') || summary.subtitle || summary.meta;
