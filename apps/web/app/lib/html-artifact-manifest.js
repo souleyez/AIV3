@@ -483,6 +483,10 @@ function videoFollowUpActionLabel(action) {
   return VIDEO_FOLLOW_UP_ACTION_LABELS[action] || action || '后续动作';
 }
 
+function yesNo(value) {
+  return value ? 'yes' : 'no';
+}
+
 function renderVideoExtractionSummary(manifest) {
   const payload = manifest.payload || {};
   const document = isPlainObject(payload.document) ? payload.document : {};
@@ -571,6 +575,57 @@ function renderVideoExtractionSummary(manifest) {
       userNotification.primaryNextAction || userNotification.primary_next_action || '',
     ].filter(Boolean).join(' · '),
   }] : [];
+  const completionAudit = isPlainObject(payload.completionAudit || payload.completion_audit)
+    ? payload.completionAudit || payload.completion_audit
+    : {};
+  const auditTransition = isPlainObject(completionAudit.stateTransition || completionAudit.state_transition)
+    ? completionAudit.stateTransition || completionAudit.state_transition
+    : {};
+  const auditSource = isPlainObject(completionAudit.sourceResolution || completionAudit.source_resolution)
+    ? completionAudit.sourceResolution || completionAudit.source_resolution
+    : {};
+  const auditRedaction = isPlainObject(completionAudit.redaction) ? completionAudit.redaction : {};
+  const auditWarningCodes = arrayOrEmpty(completionAudit.warningCodes || completionAudit.warning_codes);
+  const auditProviderFailures = arrayOrEmpty(completionAudit.providerFailures || completionAudit.provider_failures)
+    .map((failure, index) => ({
+      title: `${failure.provider || 'provider'} · ${failure.capability || 'capability'}`,
+      detail: failure.status || `provider failure ${index + 1}`,
+      meta: failure.supported ? 'supported' : 'not_supported',
+    }));
+  const auditRows = [];
+  if (Object.keys(completionAudit).length) {
+    auditRows.push({
+      title: '状态流转',
+      detail: `${auditTransition.outputStatus || auditTransition.output_status || 'unknown'} -> ${auditTransition.deliverableState || auditTransition.deliverable_state || 'unknown'}`,
+      meta: auditTransition.workflowTask || auditTransition.workflow_task || 'extract_video_ppt',
+    });
+    auditRows.push({
+      title: '来源解析',
+      detail: [
+        auditSource.sourceType || auditSource.source_type || 'unknown',
+        auditSource.assetState || auditSource.asset_state || 'unknown',
+        auditSource.contentType || auditSource.content_type || '',
+      ].filter(Boolean).join(' · '),
+      meta: [
+        `url_redacted=${yesNo(auditSource.sourceUrlRedacted ?? auditSource.source_url_redacted)}`,
+        `page_redacted=${yesNo(auditSource.sourcePageUrlRedacted ?? auditSource.source_page_url_redacted)}`,
+      ].join(' · '),
+    });
+    auditRows.push({
+      title: '告警与提供方',
+      detail: auditWarningCodes.length ? auditWarningCodes.join(', ') : 'no warnings',
+      meta: `warnings=${completionAudit.warningCount ?? completionAudit.warning_count ?? 0} · provider_failures=${completionAudit.providerFailureCount ?? completionAudit.provider_failure_count ?? auditProviderFailures.length}`,
+    });
+    auditRows.push({
+      title: '脱敏边界',
+      detail: '不展示原始 URL、Cookie、provider key、raw provider payload 或本地源路径。',
+      meta: [
+        `raw_urls=${yesNo(auditRedaction.rawUrlsIncluded ?? auditRedaction.raw_urls_included)}`,
+        `cookies=${yesNo(auditRedaction.cookiesIncluded ?? auditRedaction.cookies_included)}`,
+        `provider_keys=${yesNo(auditRedaction.providerKeysIncluded ?? auditRedaction.provider_keys_included)}`,
+      ].join(' · '),
+    });
+  }
   const followUpStatus = completionFollowUp.status || deliverableStatus.state || 'unknown';
   return `
     ${renderKeyValueGrid([
@@ -608,6 +663,11 @@ function renderVideoExtractionSummary(manifest) {
     <section>
       <h2>质量提示</h2>
       ${renderList(qualityWarnings, '暂无质量提示。')}
+    </section>
+    <section>
+      <h2>审计摘要</h2>
+      ${renderList(auditRows, '暂无审计摘要。')}
+      ${renderList(auditProviderFailures, '暂无提供方失败记录。')}
     </section>
     <section>
       <h2>原文片段</h2>

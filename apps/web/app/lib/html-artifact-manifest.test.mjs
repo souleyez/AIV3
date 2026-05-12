@@ -353,6 +353,40 @@ test('renders video extraction summary template', () => {
         },
         noHostComposedAnswer: true,
       },
+      completionAudit: {
+        kind: 'video_extraction_completion_audit',
+        version: 1,
+        stateTransition: {
+          workflowTask: 'extract_video_ppt',
+          outputStatus: 'completed',
+          deliverableState: 'evidence_artifacts_ready',
+        },
+        sourceResolution: {
+          sourceType: 'public_page_resolvable_video',
+          assetState: 'remote_registered',
+          contentType: 'video/mp4',
+          sourceUrlPresent: true,
+          sourceUrlRedacted: true,
+          sourcePageUrlPresent: true,
+          sourcePageUrlRedacted: true,
+        },
+        warningCodes: ['missing_transcript_alignment', 'provider_failure'],
+        warningCount: 2,
+        providerFailureCount: 1,
+        providerFailures: [{
+          provider: 'minimax',
+          capability: 'native_video_understanding',
+          status: 'unsupported',
+          supported: false,
+        }],
+        redaction: {
+          rawUrlsIncluded: false,
+          privatePathsIncluded: false,
+          cookiesIncluded: false,
+          providerKeysIncluded: false,
+          rawProviderPayloadsIncluded: false,
+        },
+      },
       note: '缺失项不会被补造。',
     },
   }));
@@ -369,6 +403,16 @@ test('renders video extraction summary template', () => {
   assert.match(video.html, /ppt_outline/);
   assert.match(video.html, /质量提示/);
   assert.match(video.html, /Speaker notes cannot be aligned yet/);
+  assert.match(video.html, /审计摘要/);
+  assert.match(video.html, /状态流转/);
+  assert.match(video.html, /completed -&gt; evidence_artifacts_ready/);
+  assert.match(video.html, /来源解析/);
+  assert.match(video.html, /public_page_resolvable_video/);
+  assert.match(video.html, /url_redacted=yes/);
+  assert.match(video.html, /provider_failures=1/);
+  assert.match(video.html, /native_video_understanding/);
+  assert.match(video.html, /raw_urls=no/);
+  assert.match(video.html, /provider_keys=no/);
   assert.match(video.html, /完成状态/);
   assert.match(video.html, /后续提醒/);
   assert.match(video.html, /model follow-up required/);
@@ -390,6 +434,9 @@ test('renders video extraction summary template', () => {
   assert.match(video.html, /检查视频解析提供方配置/);
   assert.match(video.html, /完成选页或补齐缺失输入/);
   assert.match(video.html, /Use this structured completion status/);
+  assert.doesNotMatch(video.html, /private\.example/);
+  assert.doesNotMatch(video.html, /secret-token/);
+  assert.doesNotMatch(video.html, /secret-cookie/);
 });
 
 test('renders legacy video login handoff as unsupported source guidance', () => {
