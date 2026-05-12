@@ -558,6 +558,19 @@ function renderVideoExtractionSummary(manifest) {
   const followUpModel = isPlainObject(completionFollowUp.modelFollowUp || completionFollowUp.model_follow_up)
     ? completionFollowUp.modelFollowUp || completionFollowUp.model_follow_up
     : {};
+  const userNotification = isPlainObject(completionFollowUp.userNotification || completionFollowUp.user_notification)
+    ? completionFollowUp.userNotification || completionFollowUp.user_notification
+    : {};
+  const notificationVisible = userNotification.userVisible ?? userNotification.user_visible ?? false;
+  const notificationRows = notificationVisible ? [{
+    title: userNotification.title || '视频/PPT 提取状态',
+    detail: userNotification.message || '',
+    meta: [
+      userNotification.severity || '',
+      userNotification.scope || '',
+      userNotification.primaryNextAction || userNotification.primary_next_action || '',
+    ].filter(Boolean).join(' · '),
+  }] : [];
   const followUpStatus = completionFollowUp.status || deliverableStatus.state || 'unknown';
   return `
     ${renderKeyValueGrid([
@@ -570,6 +583,7 @@ function renderVideoExtractionSummary(manifest) {
       { label: '质量提示', value: String(deliverableStatus.warningCount ?? deliverableStatus.warning_count ?? qualityWarnings.length) },
       { label: '就绪文件', value: String(readyFiles.length || generatedFiles.length) },
       { label: '后续提醒', value: followUpModel.required ? 'model follow-up required' : 'not requested' },
+      { label: '用户通知', value: notificationVisible ? (userNotification.title || userNotification.severity || 'ready') : 'not requested' },
       { label: '原文片段', value: String(summary.transcriptSegmentCount ?? summary.transcript_segment_count ?? transcript.length) },
       { label: '场景片段', value: String(summary.sceneCount ?? summary.scene_count ?? scenes.length) },
       { label: '关键帧 OCR', value: String(summary.keyframeOcrSnippetCount ?? summary.keyframe_ocr_snippet_count ?? ocr.length) },
@@ -582,6 +596,10 @@ function renderVideoExtractionSummary(manifest) {
       <h2>完成状态</h2>
       <p>${escapeHtml(`后台提取状态：${followUpStatus}。${followUpModel.instruction || '下一次模型回复应基于这些结构化状态继续，不补造缺失文件。'}`)}</p>
       ${renderList(readyFiles, '暂无已就绪交付文件。')}
+    </section>
+    <section>
+      <h2>用户通知</h2>
+      ${renderList(notificationRows, '暂无用户通知。')}
     </section>
     <section>
       <h2>下一步</h2>

@@ -340,6 +340,17 @@ test('renders video extraction summary template', () => {
           required: true,
           instruction: 'Use this structured completion status to notify the user.',
         },
+        userNotification: {
+          kind: 'video_extraction_status_notification',
+          channel: 'assistant_run_artifact_status',
+          scope: 'status_only',
+          userVisible: true,
+          severity: 'warning',
+          title: '视频/PPT 提取需要复核',
+          message: '后台任务已更新视频提取摘要，但仍有缺失证据或待复核交付项。',
+          primaryNextAction: 'open_video_extraction_summary',
+          noHostComposedAnswer: true,
+        },
         noHostComposedAnswer: true,
       },
       note: '缺失项不会被补造。',
@@ -361,6 +372,10 @@ test('renders video extraction summary template', () => {
   assert.match(video.html, /完成状态/);
   assert.match(video.html, /后续提醒/);
   assert.match(video.html, /model follow-up required/);
+  assert.match(video.html, /用户通知/);
+  assert.match(video.html, /视频\/PPT 提取需要复核/);
+  assert.match(video.html, /后台任务已更新视频提取摘要/);
+  assert.match(video.html, /status_only/);
   assert.match(video.html, /PPT 大纲/);
   assert.match(video.html, /重试原始帧提取/);
   assert.match(video.html, /提供本地视频或已解析帧/);

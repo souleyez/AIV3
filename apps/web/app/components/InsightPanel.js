@@ -274,6 +274,11 @@ function htmlArtifactProjectStage(summary) {
 function htmlArtifactBrief(summary) {
   const status = summary.payload?.deliverableStatus || summary.payload?.deliverable_status || {};
   if (summary.templateId === 'video_extraction_summary') {
+    const completionFollowUp = summary.payload?.completionFollowUp || summary.payload?.completion_follow_up || {};
+    const notification = completionFollowUp.userNotification || completionFollowUp.user_notification || {};
+    if (notification.userVisible || notification.user_visible) {
+      return notification.title || notification.message || summary.subtitle || summary.meta;
+    }
     const parts = [
       status.hasPptx || status.has_pptx ? 'PPTX ready' : 'PPTX waiting',
       status.hasFinalDeliverablesManifest || status.has_final_deliverables_manifest ? 'manifest ready' : '',
