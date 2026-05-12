@@ -2288,6 +2288,7 @@ pub fn video_extraction_completion_audit_from_output(output: &Value) -> Value {
         .take(32)
         .map(str::to_string)
         .collect::<Vec<_>>();
+    let artifact_group_counts = video_artifact_group_counts(&files);
     let output_status = output
         .get("status")
         .and_then(Value::as_str)
@@ -2334,6 +2335,8 @@ pub fn video_extraction_completion_audit_from_output(output: &Value) -> Value {
             .get("status")
             .and_then(Value::as_str)
             .unwrap_or("unknown"),
+        "artifactGroupCounts": artifact_group_counts.clone(),
+        "artifact_group_counts": artifact_group_counts,
         "artifactKinds": artifact_kinds.clone(),
         "artifact_kinds": artifact_kinds,
         "warningCodes": warning_codes.clone(),
@@ -2577,6 +2580,33 @@ fn video_ready_file_kinds(files: &[Value]) -> Vec<String> {
         })
         .map(str::to_string)
         .collect()
+}
+
+fn video_artifact_group_counts(files: &[Value]) -> Value {
+    json!({
+        "manifest_outputs": video_artifact_files_by_kinds(files, &[
+            "final_deliverables_manifest",
+            "extraction_artifacts_manifest",
+        ]).len(),
+        "final_outputs": video_artifact_files_by_kinds(files, &["pptx"]).len(),
+        "review_outputs": video_artifact_files_by_kinds(files, &[
+            "slide_image_candidates",
+            "contact_sheet_plan",
+            "contact_sheet_html",
+            "ppt_keep_list_template",
+            "selected_slides_manifest",
+            "slide_notes",
+            "pptx_build_plan",
+        ]).len(),
+        "evidence_outputs": video_artifact_files_by_kinds(files, &[
+            "frame_manifest",
+            "transcript_text",
+            "source_text",
+            "ppt_outline",
+            "timestamp_map",
+            "subtitle_page_map",
+        ]).len(),
+    })
 }
 
 fn video_extraction_completion_next_actions(
@@ -4944,8 +4974,17 @@ mod tests {
             "generated_artifacts": {
                 "status": "completed",
                 "files": [{
+                    "artifact_kind": "pptx",
+                    "path": "generated_artifacts/video_slides_screenshot_based.pptx"
+                }, {
                     "artifact_kind": "final_deliverables_manifest",
                     "path": "generated_artifacts/final_deliverables_manifest.json"
+                }, {
+                    "artifact_kind": "slide_notes",
+                    "path": "generated_artifacts/slide_notes.md"
+                }, {
+                    "artifact_kind": "subtitle_page_map",
+                    "path": "generated_artifacts/subtitle_page_map.json"
                 }]
             },
             "deliverable_status": {
@@ -4977,6 +5016,10 @@ mod tests {
         assert_eq!(audit["frame_extraction_status"], json!("failed"));
         assert_eq!(audit["generated_artifacts_status"], json!("completed"));
         assert_eq!(audit["provider_failure_count"], json!(1));
+        assert_eq!(audit["artifact_group_counts"]["manifest_outputs"], json!(1));
+        assert_eq!(audit["artifact_group_counts"]["final_outputs"], json!(1));
+        assert_eq!(audit["artifact_group_counts"]["review_outputs"], json!(1));
+        assert_eq!(audit["artifact_group_counts"]["evidence_outputs"], json!(1));
         assert_eq!(
             audit["source_resolution"]["source_type"],
             json!("direct_video_url")
