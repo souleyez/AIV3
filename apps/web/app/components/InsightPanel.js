@@ -241,9 +241,9 @@ function preferredHtmlArtifactDownloads(artifact) {
     'pptx',
     'final_deliverables_manifest',
     'extraction_artifacts_manifest',
-    'ppt_outline',
     'slide_notes',
     'subtitle_page_map',
+    'ppt_outline',
     'transcript_text',
   ];
   const files = htmlArtifactGeneratedFiles(artifact).filter((file) => file.downloadable);
@@ -253,7 +253,7 @@ function preferredHtmlArtifactDownloads(artifact) {
       const rightIndex = priority.indexOf(right.kind);
       return (leftIndex === -1 ? 99 : leftIndex) - (rightIndex === -1 ? 99 : rightIndex);
     })
-    .slice(0, 4);
+    .slice(0, 5);
 }
 
 function htmlArtifactProjectStage(summary) {
