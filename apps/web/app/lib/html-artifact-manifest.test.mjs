@@ -331,6 +331,7 @@ test('renders video extraction summary template', () => {
           'fill_ppt_keep_list_template',
           'review_low_confidence_transcript',
           'rerun_or_review_subtitle_ocr',
+          'rerun_or_refresh_video_parse',
           'complete_keep_list_or_review_missing_inputs',
         ],
         modelFollowUp: {
@@ -367,6 +368,7 @@ test('renders video extraction summary template', () => {
   assert.match(video.html, /填写 PPT 保留页清单/);
   assert.match(video.html, /复核低置信度转写片段/);
   assert.match(video.html, /重跑或复核字幕 OCR/);
+  assert.match(video.html, /重跑或刷新视频解析/);
   assert.match(video.html, /完成选页或补齐缺失输入/);
   assert.match(video.html, /Use this structured completion status/);
 });

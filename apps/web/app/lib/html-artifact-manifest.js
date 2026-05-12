@@ -470,6 +470,7 @@ const VIDEO_FOLLOW_UP_ACTION_LABELS = {
   fill_ppt_keep_list_template: '填写 PPT 保留页清单',
   review_low_confidence_transcript: '复核低置信度转写片段',
   rerun_or_review_subtitle_ocr: '重跑或复核字幕 OCR',
+  rerun_or_refresh_video_parse: '重跑或刷新视频解析',
 };
 
 function videoArtifactKindLabel(kind) {

@@ -1985,6 +1985,9 @@ fn video_extraction_completion_next_actions(
     if warning_codes.contains("subtitle_ocr_low_confidence") {
         actions.push(json!("rerun_or_review_subtitle_ocr"));
     }
+    if warning_codes.contains("parse_partial") {
+        actions.push(json!("rerun_or_refresh_video_parse"));
+    }
     if file_kinds.contains("pptx") {
         actions.push(json!("download_pptx"));
     }
@@ -2342,6 +2345,9 @@ fn video_deliverable_status_with_evidence_and_frame_extraction(
     let mut status =
         video_deliverable_status_with_frame_extraction(generated_artifacts, frame_extraction);
     if let Some(object) = status.as_object_mut() {
+        if let Some(warning) = video_partial_evidence_warning(evidence) {
+            append_deliverable_warning(object, warning);
+        }
         for warning in video_low_confidence_evidence_warnings(evidence) {
             append_deliverable_warning(object, warning);
         }
@@ -2417,6 +2423,39 @@ fn video_generated_artifact_quality_warnings(
         }));
     }
     warnings
+}
+
+fn video_partial_evidence_warning(evidence: &VideoMediaEvidenceItems) -> Option<Value> {
+    let mut missing = Vec::new();
+    if evidence.transcript_segments.is_empty() {
+        missing.push("transcript_segments");
+    }
+    if evidence.scenes.is_empty() {
+        missing.push("scene_windows");
+    }
+    if evidence.keyframe_ocr_snippets.is_empty() {
+        missing.push("keyframe_ocr_snippets");
+    }
+    if missing.is_empty() {
+        return None;
+    }
+
+    let has_any = evidence.has_any();
+    Some(json!({
+        "code": "parse_partial",
+        "severity": if has_any { "medium" } else { "high" },
+        "message": if has_any {
+            "Video parsing produced only partial evidence; rerun parsing or attach missing transcript/scene/OCR evidence before final delivery."
+        } else {
+            "Video parsing has not produced transcript, scene, or keyframe OCR evidence yet; final PPT/source-text delivery is blocked."
+        },
+        "missing_evidence": missing,
+        "observed_evidence": {
+            "transcript_segment_count": evidence.transcript_segments.len(),
+            "scene_count": evidence.scenes.len(),
+            "keyframe_ocr_snippet_count": evidence.keyframe_ocr_snippets.len(),
+        }
+    }))
 }
 
 fn video_low_confidence_evidence_warnings(evidence: &VideoMediaEvidenceItems) -> Vec<Value> {
@@ -2947,6 +2986,24 @@ mod tests {
         );
         assert_eq!(partial["generated_artifacts"]["status"], json!("planned"));
         assert!(partial["artifacts"].as_array().expect("array").is_empty());
+        let partial_warnings = partial["deliverable_status"]["warnings"]
+            .as_array()
+            .expect("partial warnings");
+        assert!(partial_warnings.iter().any(|warning| {
+            warning["code"] == json!("parse_partial")
+                && warning["severity"] == json!("high")
+                && warning["missing_evidence"]
+                    .as_array()
+                    .expect("missing")
+                    .len()
+                    == 3
+        }));
+        let partial_follow_up =
+            video_extraction_completion_follow_up_from_output(&partial, &[]).expect("follow up");
+        assert!(partial_follow_up["next_actions"]
+            .as_array()
+            .expect("next actions")
+            .contains(&json!("rerun_or_refresh_video_parse")));
 
         let chunk = test_chunk(json!({
             "media": {
@@ -2966,6 +3023,16 @@ mod tests {
             completed["artifacts"][0]["artifact_kind"],
             json!("transcript_text")
         );
+        let completed_warnings = completed["deliverable_status"]["warnings"]
+            .as_array()
+            .expect("completed warnings");
+        assert!(completed_warnings.iter().any(|warning| {
+            if warning["code"] != json!("parse_partial") || warning["severity"] != json!("medium") {
+                return false;
+            }
+            let missing = warning["missing_evidence"].as_array().expect("missing");
+            missing.len() == 1 && missing[0] == json!("scene_windows")
+        }));
     }
 
     #[test]
