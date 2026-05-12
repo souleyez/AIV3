@@ -1410,16 +1410,12 @@ fn render_selected_slide_notes_markdown(
             .get("file_name")
             .and_then(Value::as_str)
             .unwrap_or("frame");
-        let frame_path = candidate
-            .get("frame_path")
-            .and_then(Value::as_str)
-            .unwrap_or("");
         let timestamp = candidate
             .get("timestamp_label")
             .and_then(Value::as_str)
             .unwrap_or("");
         output.push_str(&format!(
-            "### Slide {slide_number}\n\n- Candidate: {candidate_index}\n- Source frame: {file_name}\n- Frame timestamp: {}\n- Frame path: {frame_path}\n",
+            "### Slide {slide_number}\n\n- Candidate: {candidate_index}\n- Source frame: {file_name}\n- Frame timestamp: {}\n- Internal frame path: [redacted]\n",
             if timestamp.is_empty() { "unknown" } else { timestamp }
         ));
         let transcript_segments = candidate
@@ -1807,10 +1803,6 @@ fn render_pptx_notes_slide(slide_number: usize, candidate: &Value) -> String {
         .get("file_name")
         .and_then(Value::as_str)
         .unwrap_or("frame");
-    let frame_path = candidate
-        .get("frame_path")
-        .and_then(Value::as_str)
-        .unwrap_or("");
     let timestamp = candidate
         .get("timestamp_label")
         .and_then(Value::as_str)
@@ -1829,7 +1821,7 @@ fn render_pptx_notes_slide(slide_number: usize, candidate: &Value) -> String {
         })
         .unwrap_or_else(|| " Transcript/subtitle alignment is not yet verified.".to_string());
     let note = format!(
-        "Source frame: {file_name}; candidate: {candidate_index}; timestamp: {timestamp}; path: {frame_path}.{transcript_note}"
+        "Source frame: {file_name}; candidate: {candidate_index}; timestamp: {timestamp}; internal path: [redacted].{transcript_note}"
     );
     format!(
         r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -5280,6 +5272,8 @@ mod tests {
             .read_to_string(&mut notes)
             .expect("notes slide text");
         assert!(notes.contains("Source frame"));
+        assert!(notes.contains("[redacted]"));
+        assert!(!notes.contains(&raw_frames_dir.display().to_string()));
         let final_manifest_path = files
             .iter()
             .find(|file| file["artifact_kind"] == json!("final_deliverables_manifest"))
@@ -5299,6 +5293,8 @@ mod tests {
         let slide_notes = fs::read_to_string(slide_notes_path).expect("slide notes");
         assert!(slide_notes.contains("Slide 1"));
         assert!(slide_notes.contains("candidate 2"));
+        assert!(slide_notes.contains("Internal frame path: [redacted]"));
+        assert!(!slide_notes.contains(&raw_frames_dir.display().to_string()));
     }
 
     #[test]
