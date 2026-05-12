@@ -1,5 +1,9 @@
 {
   "name": "ai-data-platform-v3",
   "private": true,
-  "version": "0.1.0"
+  "version": "0.1.0",
+  "scripts": {
+    "test:video-deliverables": "node --test tools/validate-video-deliverables.test.mjs",
+    "validate:video-deliverables": "node tools/validate-video-deliverables.mjs"
+  }
 }

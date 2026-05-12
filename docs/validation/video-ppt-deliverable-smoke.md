@@ -23,7 +23,7 @@ Run these before any jump-host smoke:
 
 ```powershell
 cargo test -p media-worker controlled_video_sample_deliverable_contract_is_complete
-node --test tools\validate-video-deliverables.test.mjs
+npm run test:video-deliverables
 git diff --check
 ```
 
@@ -45,13 +45,13 @@ Real Codex validation belongs on `windows-jump` or the later Mac host. Do not ru
 After a jump-host media smoke produces a `video-extraction-<document_id>` session directory, run the validator against that session directory or its `generated_artifacts` child:
 
 ```powershell
-node tools\validate-video-deliverables.mjs "C:\Users\soulz\codex-host\tasks\<task>\video-extraction-<document_id>"
+npm run validate:video-deliverables -- "C:\Users\soulz\codex-host\tasks\<task>\video-extraction-<document_id>"
 ```
 
 For machine-readable output:
 
 ```powershell
-node tools\validate-video-deliverables.mjs "C:\Users\soulz\codex-host\tasks\<task>\video-extraction-<document_id>" --json
+npm run validate:video-deliverables -- "C:\Users\soulz\codex-host\tasks\<task>\video-extraction-<document_id>" --json
 ```
 
 Expected result:
