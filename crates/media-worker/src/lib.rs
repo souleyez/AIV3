@@ -412,15 +412,7 @@ pub fn write_video_extraction_text_artifacts(
     }
 
     let timestamp_map_path = artifacts_dir.join(DEFAULT_TIMESTAMP_MAP_ARTIFACT_FILE_NAME);
-    let timestamp_map = json!({
-        "document_id": document.id.to_string(),
-        "dataset_id": document.dataset_id.to_string(),
-        "title": document.title,
-        "transcript_segments": evidence.transcript_segments.clone(),
-        "scenes": evidence.scenes.clone(),
-        "keyframe_ocr_snippets": evidence.keyframe_ocr_snippets.clone(),
-        "frame_extraction": frame_extraction,
-    });
+    let timestamp_map = video_public_timestamp_map(document, &evidence, frame_extraction);
     let timestamp_map_bytes =
         serde_json::to_vec_pretty(&timestamp_map).map_err(|error| error.to_string())?;
     fs::write(&timestamp_map_path, timestamp_map_bytes).map_err(|error| error.to_string())?;
@@ -3313,6 +3305,71 @@ fn video_final_deliverables_manifest(
     })
 }
 
+fn video_public_timestamp_map(
+    document: &Document,
+    evidence: &VideoMediaEvidenceItems,
+    frame_extraction: &Value,
+) -> Value {
+    json!({
+        "document_id": document.id.to_string(),
+        "dataset_id": document.dataset_id.to_string(),
+        "title": document.title,
+        "redaction": {
+            "status": "applied",
+            "policy": "paths_urls_tokens_and_provider_secrets_are_redacted",
+        },
+        "transcript_segments": video_public_evidence_array(&evidence.transcript_segments),
+        "scenes": video_public_evidence_array(&evidence.scenes),
+        "keyframe_ocr_snippets": video_public_evidence_array(&evidence.keyframe_ocr_snippets),
+        "frame_extraction": video_public_evidence_value(frame_extraction),
+    })
+}
+
+fn video_public_evidence_array(items: &[Value]) -> Vec<Value> {
+    items.iter().map(video_public_evidence_value).collect()
+}
+
+fn video_public_evidence_value(value: &Value) -> Value {
+    match value {
+        Value::Array(items) => json!(items
+            .iter()
+            .map(video_public_evidence_value)
+            .collect::<Vec<_>>()),
+        Value::Object(object) => {
+            let sanitized = object
+                .iter()
+                .map(|(key, value)| (key.clone(), video_public_evidence_field(key, value)))
+                .collect::<serde_json::Map<_, _>>();
+            Value::Object(sanitized)
+        }
+        Value::String(value) => json!(video_safe_evidence_text(value)),
+        _ => value.clone(),
+    }
+}
+
+fn video_public_evidence_field(key: &str, value: &Value) -> Value {
+    let lower_key = key.to_ascii_lowercase();
+    let key_requires_redaction = lower_key.contains("path")
+        || lower_key.contains("dir")
+        || lower_key.contains("url")
+        || lower_key.contains("cookie")
+        || lower_key.contains("authorization")
+        || lower_key.contains("provider_key")
+        || lower_key.contains("token")
+        || lower_key.contains("secret")
+        || lower_key == "object_key";
+    match value {
+        Value::String(text) if key_requires_redaction => {
+            if lower_key.contains("file_name") || lower_key == "filename" {
+                json!(video_safe_evidence_text(text))
+            } else {
+                json!("[redacted]")
+            }
+        }
+        _ => video_public_evidence_value(value),
+    }
+}
+
 fn video_public_extraction_artifacts_manifest(manifest: &Value) -> Value {
     let mut public_manifest = manifest.clone();
     let Some(object) = public_manifest.as_object_mut() else {
@@ -4990,6 +5047,21 @@ mod tests {
         assert!(outline.contains("provider_failure"));
         assert!(outline.contains("ref=scene#1"));
         assert!(outline.contains("source=[redacted]"));
+        let timestamp_map_path = manifest["files"]
+            .as_array()
+            .expect("files")
+            .iter()
+            .find(|file| file["artifact_kind"] == json!("timestamp_map"))
+            .and_then(|file| file["path"].as_str())
+            .expect("timestamp map path");
+        let timestamp_map = fs::read_to_string(timestamp_map_path).expect("timestamp map");
+        assert!(timestamp_map.contains("paths_urls_tokens_and_provider_secrets_are_redacted"));
+        assert!(timestamp_map.contains("\"source\": \"MEDIA_TRANSCRIBE_BIN\""));
+        assert!(timestamp_map.contains("\"raw_frames_dir\": \"[redacted]\""));
+        assert!(timestamp_map.contains("\"manifest_path\": \"[redacted]\""));
+        assert!(!timestamp_map.contains("C:/private/video"));
+        assert!(!timestamp_map.contains("C:/private/video-extraction"));
+        assert!(!timestamp_map.contains("secret-token"));
         let final_manifest_path = manifest["files"]
             .as_array()
             .expect("files")
