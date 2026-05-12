@@ -27,6 +27,7 @@ const MEDIA_EXTRACTION_POLICY = {
     'slide_notes',
     'subtitle_page_map',
     'final_deliverables_manifest',
+    'extraction_artifacts_manifest',
     'video_slides_screenshot_based.pptx',
   ],
   accessRule: '未收到 V3 observation 确认视频源解析、转写、抽帧或 PPT 产物前，不要声称已访问视频或看过视频内容。',
@@ -157,7 +158,7 @@ function formatMediaExtractionPolicyForModel(policy) {
     ? policy.controlledPipeline.join(' -> ')
     : '';
   const outputArtifacts = Array.isArray(policy.outputArtifacts)
-    ? policy.outputArtifacts.slice(0, 10).join('、')
+    ? policy.outputArtifacts.slice(0, 12).join('、')
     : '';
   return [
     `媒体提取边界：支持 ${supportedSources || '无'}；不支持 ${unsupportedSources || '无'}。`,

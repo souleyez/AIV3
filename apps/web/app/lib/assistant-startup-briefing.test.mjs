@@ -67,6 +67,8 @@ test('startup briefing summarizes visible datasets and system capability', () =>
     'media.extract_ppt_transcript',
   ]);
   assert.ok(briefing.mediaExtractionPolicy.outputArtifacts.includes('subtitle_page_map'));
+  assert.ok(briefing.mediaExtractionPolicy.outputArtifacts.includes('final_deliverables_manifest'));
+  assert.ok(briefing.mediaExtractionPolicy.outputArtifacts.includes('extraction_artifacts_manifest'));
   assert.match(briefing.mediaExtractionPolicy.accessRule, /不要声称已访问视频/);
   assert.match(briefing.productCapabilities.continuousExecution, /受控动作/);
   assert.match(briefing.latestActivity, /订单数据/);
@@ -89,6 +91,8 @@ test('formatted briefing tells model when no dataset is selected', () => {
   assert.match(formatted, /Cookie\/Session 复用/);
   assert.match(formatted, /不要声称已访问视频/);
   assert.match(formatted, /subtitle_page_map/);
+  assert.match(formatted, /final_deliverables_manifest/);
+  assert.match(formatted, /extraction_artifacts_manifest/);
   assert.match(formatted, /规划\/渲染\/修改静态页/);
   assert.match(formatted, /导出静态页 ZIP 交付包/);
   assert.match(formatted, /连续提出检索/);
