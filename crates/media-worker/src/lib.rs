@@ -2190,7 +2190,7 @@ fn video_deliverable_status(generated_artifacts: &Value) -> Value {
     let has_source_text = artifact_kinds.contains("source_text");
     let has_final_deliverables_manifest = artifact_kinds.contains("final_deliverables_manifest");
     let has_subtitle_page_map = artifact_kinds.contains("subtitle_page_map");
-    let warnings = video_generated_artifact_quality_warnings(
+    let mut warnings = video_generated_artifact_quality_warnings(
         &files,
         has_pptx,
         has_selected_slides,
@@ -2198,6 +2198,25 @@ fn video_deliverable_status(generated_artifacts: &Value) -> Value {
         has_transcript,
         has_subtitle_page_map,
     );
+    let generated_artifacts_status = generated_artifacts
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("planned");
+    let generated_artifacts_reason = generated_artifacts
+        .get("reason")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if generated_artifacts_status == "failed" {
+        let mut warning = json!({
+            "code": "generated_artifacts_failed",
+            "severity": "high",
+            "message": "Generated video/PPT artifact writing failed; final files may be missing until the artifact writer is retried successfully."
+        });
+        if !generated_artifacts_reason.is_empty() {
+            warning["reason"] = json!(generated_artifacts_reason);
+        }
+        warnings.push(warning);
+    }
     let state = if has_pptx {
         "final_pptx_ready"
     } else if has_selected_slides {
@@ -2224,6 +2243,7 @@ fn video_deliverable_status(generated_artifacts: &Value) -> Value {
         "has_final_deliverables_manifest": has_final_deliverables_manifest,
         "has_subtitle_page_map": has_subtitle_page_map,
         "has_pptx": has_pptx,
+        "generated_artifacts_status": generated_artifacts_status,
         "warning_count": warnings.len(),
         "warnings": warnings,
     })
@@ -2877,6 +2897,67 @@ mod tests {
             warning["code"] == json!("frame_extraction_failed")
                 && warning["severity"] == json!("high")
                 && warning["reason"] == json!("ffmpeg exited with status 1")
+        }));
+    }
+
+    #[test]
+    fn extract_output_surfaces_skipped_frame_extraction_warning() {
+        let document = test_document();
+        let frame_extraction = json!({
+            "status": "skipped",
+            "source": "ffmpeg_external_process",
+            "reason": "local_media_path_not_available"
+        });
+
+        let output =
+            extract_video_ppt_output_with_frame_extraction(&document, &[], frame_extraction);
+
+        assert_eq!(
+            output["deliverable_status"]["frame_extraction_status"],
+            json!("skipped")
+        );
+        assert_eq!(
+            output["deliverable_status"]["frame_extraction_reason"],
+            json!("local_media_path_not_available")
+        );
+        let warnings = output["deliverable_status"]["warnings"]
+            .as_array()
+            .expect("warnings");
+        assert!(warnings.iter().any(|warning| {
+            warning["code"] == json!("frame_extraction_skipped")
+                && warning["severity"] == json!("medium")
+                && warning["reason"] == json!("local_media_path_not_available")
+        }));
+    }
+
+    #[test]
+    fn extract_output_surfaces_generated_artifact_writer_failure() {
+        let document = test_document();
+        let generated_artifacts = json!({
+            "status": "failed",
+            "source": "media_worker_text_artifact_writer",
+            "reason": "disk full",
+            "files": []
+        });
+
+        let output = extract_video_ppt_output_with_artifacts(
+            &document,
+            &[],
+            video_frame_extraction_plan(&document),
+            generated_artifacts,
+        );
+
+        assert_eq!(
+            output["deliverable_status"]["generated_artifacts_status"],
+            json!("failed")
+        );
+        let warnings = output["deliverable_status"]["warnings"]
+            .as_array()
+            .expect("warnings");
+        assert!(warnings.iter().any(|warning| {
+            warning["code"] == json!("generated_artifacts_failed")
+                && warning["severity"] == json!("high")
+                && warning["reason"] == json!("disk full")
         }));
     }
 
