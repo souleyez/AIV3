@@ -425,6 +425,20 @@ pub fn write_video_extraction_text_artifacts(
 
     let final_deliverables_manifest_path =
         artifacts_dir.join(DEFAULT_FINAL_DELIVERABLES_MANIFEST_FILE_NAME);
+    let manifest_path = artifacts_dir.join(DEFAULT_EXTRACTION_ARTIFACTS_MANIFEST_FILE_NAME);
+    files.push(video_generated_artifact_file(
+        document,
+        "final_deliverables_manifest",
+        "application/json",
+        &final_deliverables_manifest_path,
+    ));
+    files.push(video_generated_artifact_file(
+        document,
+        "extraction_artifacts_manifest",
+        "application/json",
+        &manifest_path,
+    ));
+
     let final_deliverables_manifest =
         video_final_deliverables_manifest(document, &files, frame_count);
     let final_deliverables_manifest_bytes = serde_json::to_vec_pretty(&final_deliverables_manifest)
@@ -434,14 +448,7 @@ pub fn write_video_extraction_text_artifacts(
         final_deliverables_manifest_bytes,
     )
     .map_err(|error| error.to_string())?;
-    files.push(video_generated_artifact_file(
-        document,
-        "final_deliverables_manifest",
-        "application/json",
-        &final_deliverables_manifest_path,
-    ));
 
-    let manifest_path = artifacts_dir.join(DEFAULT_EXTRACTION_ARTIFACTS_MANIFEST_FILE_NAME);
     let manifest = json!({
         "status": "completed",
         "source": "media_worker_text_artifact_writer",
@@ -2901,6 +2908,8 @@ fn video_deliverable_status(generated_artifacts: &Value) -> Value {
     let has_transcript = artifact_kinds.contains("transcript_text");
     let has_source_text = artifact_kinds.contains("source_text");
     let has_final_deliverables_manifest = artifact_kinds.contains("final_deliverables_manifest");
+    let has_extraction_artifacts_manifest =
+        artifact_kinds.contains("extraction_artifacts_manifest");
     let has_subtitle_page_map = artifact_kinds.contains("subtitle_page_map");
     let mut warnings = video_generated_artifact_quality_warnings(
         &files,
@@ -2953,6 +2962,7 @@ fn video_deliverable_status(generated_artifacts: &Value) -> Value {
         "has_contact_sheet_html": has_contact_sheet,
         "has_selected_slides_manifest": has_selected_slides,
         "has_final_deliverables_manifest": has_final_deliverables_manifest,
+        "has_extraction_artifacts_manifest": has_extraction_artifacts_manifest,
         "has_subtitle_page_map": has_subtitle_page_map,
         "has_pptx": has_pptx,
         "generated_artifacts_status": generated_artifacts_status,
@@ -4628,6 +4638,10 @@ mod tests {
             json!(true)
         );
         assert_eq!(
+            output_artifact["deliverable_status"]["has_extraction_artifacts_manifest"],
+            json!(true)
+        );
+        assert_eq!(
             output_artifact["final_deliverables_manifest"]["path"],
             json!("generated_artifacts/final_deliverables_manifest.json")
         );
@@ -5010,7 +5024,12 @@ mod tests {
             json!(1)
         );
         assert_eq!(manifest["evidence_counts"]["frame_count"], json!(8));
-        assert_eq!(manifest["files"].as_array().expect("files").len(), 5);
+        assert_eq!(manifest["files"].as_array().expect("files").len(), 6);
+        assert!(manifest["files"]
+            .as_array()
+            .expect("files")
+            .iter()
+            .any(|file| file["artifact_kind"] == json!("extraction_artifacts_manifest")));
 
         let transcript_path = manifest["files"]
             .as_array()
@@ -5082,16 +5101,27 @@ mod tests {
             .expect("final deliverables manifest path");
         let final_manifest =
             fs::read_to_string(final_manifest_path).expect("final deliverables manifest");
+        let final_manifest_json: Value =
+            serde_json::from_str(&final_manifest).expect("final manifest json");
         assert!(final_manifest.contains("evidence_artifacts_ready"));
         assert!(final_manifest.contains("evidence_outputs"));
         assert!(final_manifest.contains("\"path\": \"[redacted]\""));
         assert!(final_manifest.contains("\"file_name\""));
         assert!(!final_manifest.contains("aidp-v3-video-artifacts-test"));
+        assert_eq!(
+            final_manifest_json["deliverable_status"]["has_final_deliverables_manifest"],
+            json!(true)
+        );
+        assert_eq!(
+            final_manifest_json["deliverable_status"]["has_extraction_artifacts_manifest"],
+            json!(true)
+        );
         let extraction_manifest_path = manifest["manifest_path"]
             .as_str()
             .expect("extraction manifest path");
         let extraction_manifest =
             fs::read_to_string(extraction_manifest_path).expect("extraction manifest");
+        assert!(extraction_manifest.contains("extraction_artifacts_manifest"));
         assert!(extraction_manifest.contains("\"path\": \"[redacted]\""));
         assert!(extraction_manifest.contains("\"session_dir\": \"[redacted]\""));
         assert!(extraction_manifest.contains("\"manifest_path\": \"[redacted]\""));

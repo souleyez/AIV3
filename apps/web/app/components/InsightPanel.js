@@ -296,7 +296,8 @@ function htmlArtifactBrief(summary) {
     }
     const parts = [
       status.hasPptx || status.has_pptx ? 'PPTX ready' : 'PPTX waiting',
-      status.hasFinalDeliverablesManifest || status.has_final_deliverables_manifest ? 'manifest ready' : '',
+      status.hasFinalDeliverablesManifest || status.has_final_deliverables_manifest ? 'deliverable manifest ready' : '',
+      status.hasExtractionArtifactsManifest || status.has_extraction_artifacts_manifest ? 'artifact index ready' : '',
       auditSuffix.trim().replace(/^·\s*/, ''),
     ].filter(Boolean);
     return parts.join(' · ') || summary.subtitle || summary.meta;
