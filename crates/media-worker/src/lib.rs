@@ -3314,6 +3314,7 @@ fn video_final_deliverables_manifest(
             "contact_sheet_html",
             "ppt_keep_list_template",
             "selected_slides_manifest",
+            "slide_notes",
             "pptx_build_plan",
         ]),
         "evidence_outputs": video_public_artifact_files_by_kinds(files, &[
@@ -5397,6 +5398,7 @@ mod tests {
             fs::read_to_string(final_manifest_path).expect("final deliverables manifest");
         assert!(final_manifest.contains("review_ready"));
         assert!(final_manifest.contains("review_outputs"));
+        assert!(final_manifest.contains("slide_notes"));
         let generated_artifacts = json!({
             "status": "completed",
             "files": files.clone()
@@ -5543,6 +5545,7 @@ mod tests {
         assert!(final_manifest.contains("final_pptx_ready"));
         assert!(final_manifest.contains("manifest_outputs"));
         assert!(final_manifest.contains("final_outputs"));
+        assert!(final_manifest.contains("slide_notes"));
         assert!(final_manifest.contains(DEFAULT_VIDEO_SLIDES_PPTX_FILE_NAME));
         assert!(final_manifest.contains("speaker_notes_metadata_only"));
         let slide_notes_path = files
