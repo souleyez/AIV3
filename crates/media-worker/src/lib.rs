@@ -149,6 +149,7 @@ pub fn extract_video_ppt_output_with_artifacts(
         "dataset_id": document.dataset_id.to_string(),
         "title": document.title,
         "content_type": document.content_type,
+        "source_summary": video_source_summary_from_document(document),
         "evidence_summary": {
             "transcript_segment_count": evidence.transcript_segment_count,
             "scene_count": evidence.scene_count,
@@ -1759,6 +1760,7 @@ pub fn video_extraction_html_artifact_from_output(
             "artifacts": output.get("artifacts").cloned().unwrap_or_else(|| json!([])),
             "generated_artifacts": generated_artifacts,
             "completion_follow_up": completion_follow_up,
+            "completion_audit": video_extraction_completion_audit_from_output(output),
             "local_thread_id": local_thread_id,
             "note": "后台视频抽取阶段已完成；该摘要只展示已实际产生或已明确缺失的证据和交付物，不会补造缺失内容。"
         }
@@ -1842,6 +1844,7 @@ pub fn video_extraction_output_artifact_from_output(
         "html_artifacts": html_artifact_summaries,
         "html_artifact_ids": html_artifact_ids,
         "completion_follow_up": video_extraction_completion_follow_up_from_output(output, html_artifacts),
+        "completion_audit": video_extraction_completion_audit_from_output(output),
     }))
 }
 
@@ -1936,6 +1939,8 @@ pub fn video_extraction_completion_audit_from_output(output: &Value) -> Value {
         .flatten()
         .filter(|warning| warning.get("code").and_then(Value::as_str) == Some("provider_failure"))
         .count();
+    let provider_failures = video_provider_failure_audit_summaries(&deliverable_status);
+    let source_resolution = video_completion_source_resolution_audit(output);
     let artifact_kinds = files
         .iter()
         .filter_map(|file| file.get("artifact_kind").and_then(Value::as_str))
@@ -1994,6 +1999,10 @@ pub fn video_extraction_completion_audit_from_output(output: &Value) -> Value {
         "warning_codes": warning_codes,
         "warning_count": warning_count,
         "provider_failure_count": provider_failure_count,
+        "sourceResolution": source_resolution.clone(),
+        "source_resolution": source_resolution,
+        "providerFailures": provider_failures.clone(),
+        "provider_failures": provider_failures,
         "redaction": {
             "raw_urls_included": false,
             "private_paths_included": false,
@@ -2002,6 +2011,159 @@ pub fn video_extraction_completion_audit_from_output(output: &Value) -> Value {
             "raw_provider_payloads_included": false,
         },
     })
+}
+
+fn video_source_summary_from_document(document: &Document) -> Value {
+    let remote_media = document.metadata.get("remote_media");
+    let source_type = remote_media
+        .and_then(|value| value.get("source_type"))
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| {
+            if video_string_is_http_url(&document.object_key) {
+                "direct_video_url"
+            } else {
+                "uploaded_or_local_video"
+            }
+        });
+    let asset_state = remote_media
+        .and_then(|value| value.get("asset_state"))
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| {
+            if video_string_is_http_url(&document.object_key) {
+                "remote_registered"
+            } else {
+                "local_or_uploaded"
+            }
+        });
+    let source_url_present = remote_media
+        .and_then(|value| value.get("source_url"))
+        .and_then(Value::as_str)
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| video_string_is_http_url(&document.object_key));
+    let source_page_url_present = remote_media
+        .and_then(|value| value.get("source_page_url"))
+        .and_then(Value::as_str)
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false);
+    let ingest_requires_env = remote_media
+        .and_then(|value| value.get("ingest_requires_env"))
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_string);
+
+    json!({
+        "kind": "video_source_summary",
+        "source_type": source_type,
+        "asset_state": asset_state,
+        "content_type": document.content_type,
+        "source_url_present": source_url_present,
+        "source_page_url_present": source_page_url_present,
+        "source_url_redacted": source_url_present,
+        "source_page_url_redacted": source_page_url_present,
+        "object_key_redacted": video_string_is_http_url(&document.object_key),
+        "ingest_requires_env": ingest_requires_env,
+    })
+}
+
+fn video_completion_source_resolution_audit(output: &Value) -> Value {
+    let source_summary = output
+        .get("source_summary")
+        .or_else(|| output.get("sourceSummary"));
+    let source_type = video_value_string(source_summary, &["source_type", "sourceType"], "unknown");
+    let asset_state = video_value_string(source_summary, &["asset_state", "assetState"], "unknown");
+    let content_type =
+        video_value_string(source_summary, &["content_type", "contentType"], "unknown");
+    let source_url_present = video_value_bool(
+        source_summary,
+        &["source_url_present", "sourceUrlPresent"],
+        false,
+    );
+    let source_page_url_present = video_value_bool(
+        source_summary,
+        &["source_page_url_present", "sourcePageUrlPresent"],
+        false,
+    );
+    let ingest_requires_env = source_summary
+        .and_then(|value| {
+            value
+                .get("ingest_requires_env")
+                .or_else(|| value.get("ingestRequiresEnv"))
+        })
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_string);
+
+    json!({
+        "source_type": source_type,
+        "asset_state": asset_state,
+        "content_type": content_type,
+        "source_url_present": source_url_present,
+        "source_page_url_present": source_page_url_present,
+        "source_url_redacted": source_url_present,
+        "source_page_url_redacted": source_page_url_present,
+        "ingest_requires_env": ingest_requires_env,
+    })
+}
+
+fn video_provider_failure_audit_summaries(deliverable_status: &Value) -> Vec<Value> {
+    deliverable_status
+        .get("warnings")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|warning| warning.get("code").and_then(Value::as_str) == Some("provider_failure"))
+        .flat_map(|warning| {
+            warning
+                .get("providers")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_else(|| vec![warning.clone()])
+        })
+        .take(16)
+        .map(|provider| {
+            json!({
+                "provider": provider
+                    .get("provider")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown"),
+                "capability": provider
+                    .get("capability")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown"),
+                "status": provider
+                    .get("status")
+                    .and_then(Value::as_str)
+                    .unwrap_or("failed"),
+                "supported": provider
+                    .get("supported")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+            })
+        })
+        .collect()
+}
+
+fn video_value_string(source: Option<&Value>, keys: &[&str], fallback: &str) -> String {
+    source
+        .and_then(|value| {
+            keys.iter()
+                .find_map(|key| value.get(*key).and_then(Value::as_str))
+        })
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(fallback)
+        .to_string()
+}
+
+fn video_value_bool(source: Option<&Value>, keys: &[&str], fallback: bool) -> bool {
+    source
+        .and_then(|value| keys.iter().find_map(|key| value.get(*key)))
+        .and_then(Value::as_bool)
+        .unwrap_or(fallback)
+}
+
+fn video_string_is_http_url(value: &str) -> bool {
+    let trimmed = value.trim();
+    trimmed.starts_with("http://") || trimmed.starts_with("https://")
 }
 
 pub fn merge_video_extraction_output_artifacts(
@@ -3604,6 +3766,53 @@ mod tests {
     }
 
     #[test]
+    fn extract_output_records_redacted_video_source_summary() {
+        let mut document = test_document();
+        document.object_key =
+            "https://private.example.test/course/lesson.mp4?token=secret-token".to_string();
+        document.metadata = BTreeMap::from_iter([(
+            "remote_media".to_string(),
+            json!({
+                "source_url": "https://private.example.test/course/lesson.mp4?token=secret-token",
+                "source_page_url": "https://private.example.test/lesson?cookie=secret-cookie",
+                "source_type": "public_page_resolvable_video",
+                "asset_state": "remote_registered",
+                "ingest_requires_env": "INGEST_REMOTE_MEDIA_ENABLED"
+            }),
+        )]);
+
+        let output = extract_video_ppt_output_with_artifacts(
+            &document,
+            &[],
+            video_frame_extraction_plan(&document),
+            json!({"status": "planned", "files": []}),
+        );
+        let serialized = serde_json::to_string(&output).expect("output serializes");
+
+        assert_eq!(
+            output["source_summary"]["source_type"],
+            json!("public_page_resolvable_video")
+        );
+        assert_eq!(
+            output["source_summary"]["asset_state"],
+            json!("remote_registered")
+        );
+        assert_eq!(output["source_summary"]["source_url_present"], json!(true));
+        assert_eq!(output["source_summary"]["source_url_redacted"], json!(true));
+        assert_eq!(
+            output["source_summary"]["source_page_url_present"],
+            json!(true)
+        );
+        assert_eq!(
+            output["source_summary"]["ingest_requires_env"],
+            json!("INGEST_REMOTE_MEDIA_ENABLED")
+        );
+        assert!(!serialized.contains("private.example.test"));
+        assert!(!serialized.contains("secret-token"));
+        assert!(!serialized.contains("secret-cookie"));
+    }
+
+    #[test]
     fn video_extraction_html_artifact_summarizes_background_output() {
         let document = test_document();
         let frame_extraction = json!({
@@ -3650,6 +3859,10 @@ mod tests {
         assert_eq!(
             artifact["payload"]["completion_follow_up"]["no_host_composed_answer"],
             json!(true)
+        );
+        assert_eq!(
+            artifact["payload"]["completion_audit"]["kind"],
+            json!("video_extraction_completion_audit")
         );
     }
 
@@ -3724,6 +3937,10 @@ mod tests {
         assert_eq!(
             output_artifact["completion_follow_up"]["no_host_composed_answer"],
             json!(true)
+        );
+        assert_eq!(
+            output_artifact["completion_audit"]["kind"],
+            json!("video_extraction_completion_audit")
         );
         assert!(output_artifact["primary_files"]
             .as_array()
@@ -3881,6 +4098,16 @@ mod tests {
                 "raw_url": "https://private.example.test/raw",
                 "authorization": "Bearer secret-token"
             },
+            "source_summary": {
+                "source_type": "direct_video_url",
+                "asset_state": "remote_registered",
+                "content_type": "video/mp4",
+                "source_url": "https://private.example.test/video.mp4?token=secret-token",
+                "source_url_present": true,
+                "source_page_url": "https://private.example.test/page?cookie=secret-cookie",
+                "source_page_url_present": true,
+                "ingest_requires_env": "INGEST_REMOTE_MEDIA_ENABLED"
+            },
             "frame_extraction": {
                 "status": "failed",
                 "reason": "C:/private/source/video.mp4 could not be read"
@@ -3898,7 +4125,14 @@ mod tests {
                 "warnings": [{
                     "code": "provider_failure",
                     "provider": "minimax",
-                    "reason": "provider rejected sk-provider-secret"
+                    "reason": "provider rejected sk-provider-secret",
+                    "providers": [{
+                        "provider": "minimax",
+                        "capability": "native_video_understanding",
+                        "status": "unsupported",
+                        "supported": false,
+                        "detail": "failed with sk-provider-secret"
+                    }]
                 }]
             }
         });
@@ -3914,6 +4148,23 @@ mod tests {
         assert_eq!(audit["frame_extraction_status"], json!("failed"));
         assert_eq!(audit["generated_artifacts_status"], json!("completed"));
         assert_eq!(audit["provider_failure_count"], json!(1));
+        assert_eq!(
+            audit["source_resolution"]["source_type"],
+            json!("direct_video_url")
+        );
+        assert_eq!(
+            audit["source_resolution"]["source_url_redacted"],
+            json!(true)
+        );
+        assert_eq!(
+            audit["source_resolution"]["source_page_url_redacted"],
+            json!(true)
+        );
+        assert_eq!(audit["provider_failures"][0]["provider"], json!("minimax"));
+        assert_eq!(
+            audit["provider_failures"][0]["capability"],
+            json!("native_video_understanding")
+        );
         assert!(audit["warning_codes"]
             .as_array()
             .expect("warning codes")
