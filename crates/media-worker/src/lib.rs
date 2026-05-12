@@ -2603,6 +2603,9 @@ fn video_extraction_completion_next_actions(
     if file_kinds.contains("extraction_artifacts_manifest") {
         actions.push(json!("review_extraction_artifacts_manifest"));
     }
+    if file_kinds.contains("slide_notes") {
+        actions.push(json!("review_slide_notes"));
+    }
     if file_kinds.contains("subtitle_page_map") {
         actions.push(json!("review_subtitle_page_map"));
     }
@@ -4703,6 +4706,12 @@ mod tests {
                 "title": "extraction artifacts manifest",
                 "format": "application/json",
                 "path": "generated_artifacts/extraction_artifacts_manifest.json"
+            }, {
+                "artifact_kind": "slide_notes",
+                "artifact_id": format!("video-{}-slide-notes", document.id),
+                "title": "slide notes",
+                "format": "text/markdown",
+                "path": "generated_artifacts/slide_notes.md"
             }]
         });
         let output = extract_video_ppt_output_with_artifacts(
@@ -4742,6 +4751,10 @@ mod tests {
             .as_array()
             .expect("next actions")
             .contains(&json!("review_extraction_artifacts_manifest")));
+        assert!(follow_up["next_actions"]
+            .as_array()
+            .expect("next actions")
+            .contains(&json!("review_slide_notes")));
         assert!(follow_up["next_actions"]
             .as_array()
             .expect("next actions")

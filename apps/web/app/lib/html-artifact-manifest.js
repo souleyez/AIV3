@@ -470,6 +470,7 @@ const VIDEO_FOLLOW_UP_ACTION_LABELS = {
   download_pptx: '下载 PPTX',
   review_final_deliverables_manifest: '复核交付清单',
   review_extraction_artifacts_manifest: '复核产物索引',
+  review_slide_notes: '复核讲稿备注',
   review_subtitle_page_map: '复核字幕对页',
   complete_keep_list_or_review_missing_inputs: '完成选页或补齐缺失输入',
   retry_frame_extraction: '重试原始帧提取',
