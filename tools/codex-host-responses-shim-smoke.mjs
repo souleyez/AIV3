@@ -13,9 +13,17 @@ const sandbox = process.env.CODEX_HOST_SHIM_SANDBOX || "read-only";
 const jsonEvents = ["1", "true", "yes"].includes(
   String(process.env.CODEX_HOST_SHIM_JSON || "").toLowerCase(),
 );
+const showRawRequest = ["1", "true", "yes"].includes(
+  String(process.env.CODEX_HOST_SHIM_SHOW_REQUEST || "").toLowerCase(),
+);
+const showRawOutput = ["1", "true", "yes"].includes(
+  String(process.env.CODEX_HOST_SHIM_SHOW_OUTPUT || "").toLowerCase(),
+);
 
 let requestCount = 0;
 let lastRequest = "";
+let lastRequestSummary = {};
+let finished = false;
 
 function sanitize(text) {
   return String(text || "").replace(/[A-Za-z0-9_-]{20,}/g, "[redacted]");
@@ -121,6 +129,61 @@ function flattenInput(value) {
   return "";
 }
 
+function summarizeRequest(method, url, body) {
+  let parsed = {};
+  try {
+    parsed = JSON.parse(body || "{}");
+  } catch {
+    parsed = {};
+  }
+  const inputText = [
+    flattenInput(parsed?.instructions),
+    flattenInput(parsed?.input),
+  ]
+    .filter(Boolean)
+    .join("\n");
+  return {
+    method,
+    url,
+    model: typeof parsed?.model === "string" ? parsed.model : "",
+    stream: parsed?.stream !== false,
+    inputChars: inputText.length,
+    bodyChars: String(body || "").length,
+  };
+}
+
+function finishSmoke(status, signal, stdout, stderr, timedOut, errorMessage = "") {
+  if (finished) return;
+  finished = true;
+  const output = sanitize(`${stdout || ""}\n${stderr || ""}`).slice(0, 5000);
+  const outputSummary = {
+    stdoutChars: String(stdout || "").length,
+    stderrChars: String(stderr || "").length,
+    expectedTextFound: String(stdout || "").includes(expected),
+  };
+  console.log(`CODEX_SHIM_MODE=${mode}`);
+  console.log(`CODEX_SHIM_STATUS=${Number.isInteger(status) ? status : ""}`);
+  console.log(`CODEX_SHIM_SIGNAL=${signal || ""}`);
+  console.log(`CODEX_SHIM_ERROR=${errorMessage || (timedOut ? "timeout" : "none")}`);
+  console.log(`CODEX_SHIM_REQUEST_COUNT=${requestCount}`);
+  console.log("CODEX_SHIM_LAST_REQUEST_BEGIN");
+  if (showRawRequest) {
+    console.log(sanitize(lastRequest).slice(0, 2000));
+  } else {
+    console.log(JSON.stringify(lastRequestSummary));
+  }
+  console.log("CODEX_SHIM_LAST_REQUEST_END");
+  console.log("CODEX_SHIM_OUTPUT_BEGIN");
+  if (showRawOutput) {
+    console.log(output);
+  } else {
+    console.log(JSON.stringify(outputSummary));
+  }
+  console.log("CODEX_SHIM_OUTPUT_END");
+  const exitCode = Number.isInteger(status) ? status : 2;
+  server.close(() => process.exit(exitCode || (timedOut ? 3 : 0)));
+}
+
 async function completeWithMiniMax(requestBody) {
   const apiKey = process.env.MINIMAX_API_KEY;
   if (!apiKey) {
@@ -162,6 +225,7 @@ const server = http.createServer((req, res) => {
   req.on("end", async () => {
     requestCount += 1;
     lastRequest = `${req.method} ${req.url}\n${body}`;
+    lastRequestSummary = summarizeRequest(req.method, req.url, body);
     if (req.method !== "POST" || req.url !== "/v1/responses") {
       res.writeHead(404, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: "not_found" }));
@@ -227,20 +291,12 @@ server.listen(port, "127.0.0.1", () => {
     timedOut = true;
     child.kill("SIGTERM");
   }, Number(process.env.CODEX_HOST_SHIM_TIMEOUT_MS || 120000));
+  child.on("error", (error) => {
+    clearTimeout(timer);
+    finishSmoke(null, "", stdout, stderr, timedOut, sanitize(error.message));
+  });
   child.on("close", (status, signal) => {
     clearTimeout(timer);
-    const output = sanitize(`${stdout}\n${stderr}`).slice(0, 5000);
-    console.log(`CODEX_SHIM_MODE=${mode}`);
-    console.log(`CODEX_SHIM_STATUS=${status}`);
-    console.log(`CODEX_SHIM_SIGNAL=${signal || ""}`);
-    console.log(`CODEX_SHIM_ERROR=${timedOut ? "timeout" : "none"}`);
-    console.log(`CODEX_SHIM_REQUEST_COUNT=${requestCount}`);
-    console.log("CODEX_SHIM_LAST_REQUEST_BEGIN");
-    console.log(sanitize(lastRequest).slice(0, 2000));
-    console.log("CODEX_SHIM_LAST_REQUEST_END");
-    console.log("CODEX_SHIM_OUTPUT_BEGIN");
-    console.log(output);
-    console.log("CODEX_SHIM_OUTPUT_END");
-    server.close(() => process.exit(status || (timedOut ? 3 : 0)));
+    finishSmoke(status, signal, stdout, stderr, timedOut);
   });
 });

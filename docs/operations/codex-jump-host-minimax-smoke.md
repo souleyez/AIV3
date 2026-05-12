@@ -15,6 +15,18 @@ codex_version=codex-cli 0.123.0
 codex_home=C:\Users\soulz\.codex
 ```
 
+2026-05-12 jump-host connectivity was rechecked from the developer workstation:
+
+```text
+host_alias=windows-jump
+ssh=ok
+codex_version=codex-cli 0.123.0
+node_version=22.22.1 reported by shell; 24.14.1 observed by the npm shim process
+task_workspace_root=C:\Users\soulz\codex-host\tasks
+```
+
+The previously documented `D:\codex-host\tasks` path is not available on the current jump host because there is no `D:` drive. Use the user-profile workspace root above unless a dedicated data disk is provisioned later.
+
 ## MiniMax Smoke Result
 
 ```text
@@ -62,6 +74,24 @@ Reusable smoke tool:
 tools/codex-host-responses-shim-smoke.mjs
 ```
 
+2026-05-12 fake Responses-shim smoke on `windows-jump`:
+
+```text
+mode=fake
+result=ok
+expected_text=CODEX_HOST_SMOKE_OK
+request_count=1
+codex_invoked=true
+```
+
+On Windows, Node's `spawn("codex")` may fail even when `ssh windows-jump codex --version` works, because Codex is installed through the npm shim. Use the JS entrypoint explicitly:
+
+```powershell
+$env:CODEX_HOST_SHIM_CODEX_JS = "C:\Users\soulz\AppData\Roaming\npm\node_modules\@openai\codex\bin\codex.js"
+```
+
+The smoke tool now prints request/output summaries by default instead of raw request bodies or raw Codex stdout/stderr. Set `CODEX_HOST_SHIM_SHOW_REQUEST=true` or `CODEX_HOST_SHIM_SHOW_OUTPUT=true` only for local, temporary debugging when raw prompt/log exposure is acceptable.
+
 ## Safe Smoke Rules
 
 - Do not run local-machine Codex for this project validation.
@@ -91,7 +121,7 @@ $env:CODEX_HOST_AGENT_PROFILE_MODEL = "MiniMax-M2.7"
 $env:CODEX_HOST_AGENT_PROFILE_PROVIDER_ID = "minimax"
 $env:CODEX_HOST_AGENT_PROFILE_WIRE_API = "responses"
 $env:CODEX_HOST_AGENT_PROFILE_ALLOWED_CAPABILITIES = "inspect_project,code_review"
-$env:CODEX_HOST_AGENT_TASK_WORKSPACE_ROOT = "D:\codex-host\tasks"
+$env:CODEX_HOST_AGENT_TASK_WORKSPACE_ROOT = "C:\Users\soulz\codex-host\tasks"
 ```
 
 Only after the command plan is redacted and the task workspace label is correct, enable real execution:
