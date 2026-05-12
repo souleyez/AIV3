@@ -7,6 +7,7 @@ const mode = process.env.CODEX_HOST_SHIM_MODE || "fake";
 const model = process.env.CODEX_HOST_SHIM_MODEL || "MiniMax-M2.7";
 const baseUrl = process.env.CODEX_HOST_SHIM_MINIMAX_BASE_URL || "https://api.minimaxi.com/v1";
 const expected = process.env.CODEX_HOST_SHIM_EXPECTED || "CODEX_HOST_SMOKE_OK";
+const fakeResponse = process.env.CODEX_HOST_SHIM_FAKE_RESPONSE || expected;
 const codexBin = process.env.CODEX_HOST_SHIM_CODEX_BIN || "codex";
 const codexJs = process.env.CODEX_HOST_SHIM_CODEX_JS || "";
 const sandbox = process.env.CODEX_HOST_SHIM_SANDBOX || "read-only";
@@ -161,10 +162,20 @@ function finishSmoke(status, signal, stdout, stderr, timedOut, errorMessage = ""
     stderrChars: String(stderr || "").length,
     expectedTextFound: String(stdout || "").includes(expected),
   };
+  let finalError = errorMessage || (timedOut ? "timeout" : "none");
+  let exitCode = Number.isInteger(status) ? status : 2;
+  if (exitCode === 0 && requestCount === 0) {
+    exitCode = 5;
+    finalError = "no_responses_request";
+  }
+  if (exitCode === 0 && !outputSummary.expectedTextFound) {
+    exitCode = 4;
+    finalError = "expected_text_missing";
+  }
   console.log(`CODEX_SHIM_MODE=${mode}`);
   console.log(`CODEX_SHIM_STATUS=${Number.isInteger(status) ? status : ""}`);
   console.log(`CODEX_SHIM_SIGNAL=${signal || ""}`);
-  console.log(`CODEX_SHIM_ERROR=${errorMessage || (timedOut ? "timeout" : "none")}`);
+  console.log(`CODEX_SHIM_ERROR=${finalError}`);
   console.log(`CODEX_SHIM_REQUEST_COUNT=${requestCount}`);
   console.log("CODEX_SHIM_LAST_REQUEST_BEGIN");
   if (showRawRequest) {
@@ -180,7 +191,6 @@ function finishSmoke(status, signal, stdout, stderr, timedOut, errorMessage = ""
     console.log(JSON.stringify(outputSummary));
   }
   console.log("CODEX_SHIM_OUTPUT_END");
-  const exitCode = Number.isInteger(status) ? status : 2;
   server.close(() => process.exit(exitCode || (timedOut ? 3 : 0)));
 }
 
@@ -233,7 +243,7 @@ const server = http.createServer((req, res) => {
     }
     try {
       const requestBody = JSON.parse(body || "{}");
-      const text = mode === "minimax" ? await completeWithMiniMax(requestBody) : expected;
+      const text = mode === "minimax" ? await completeWithMiniMax(requestBody) : fakeResponse;
       sendResponses(res, requestBody, text || expected);
     } catch (error) {
       res.writeHead(500, { "content-type": "application/json" });

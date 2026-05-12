@@ -92,6 +92,8 @@ $env:CODEX_HOST_SHIM_CODEX_JS = "C:\Users\soulz\AppData\Roaming\npm\node_modules
 
 The smoke tool now prints request/output summaries by default instead of raw request bodies or raw Codex stdout/stderr. Set `CODEX_HOST_SHIM_SHOW_REQUEST=true` or `CODEX_HOST_SHIM_SHOW_OUTPUT=true` only for local, temporary debugging when raw prompt/log exposure is acceptable.
 
+The smoke tool exits non-zero if Codex does not call the shim or if stdout does not contain `CODEX_HOST_SHIM_EXPECTED`. For negative-path checks, set `CODEX_HOST_SHIM_FAKE_RESPONSE` to a different value; the tool should return `CODEX_SHIM_ERROR=expected_text_missing`.
+
 ## Safe Smoke Rules
 
 - Do not run local-machine Codex for this project validation.
