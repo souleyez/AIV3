@@ -4,10 +4,10 @@ use domain_model::{AssistantRunId, WorkflowExecution, WorkflowKind, WorkflowTask
 use event_bus::{workflow_task_enqueued_subject, EventBus, EventSubscription};
 use media_worker::{
     extract_video_ppt_output_with_artifacts, frame_extraction_config_from_env,
-    register_video_asset_output, resolve_video_source_output,
-    run_video_frame_extraction_if_enabled, video_extraction_html_artifact_from_output,
-    write_video_extraction_text_artifacts_if_available, FrameExtractionConfig,
-    MediaWorkflowTaskKind,
+    merge_video_extraction_output_artifacts, register_video_asset_output,
+    resolve_video_source_output, run_video_frame_extraction_if_enabled,
+    video_extraction_html_artifact_from_output, write_video_extraction_text_artifacts_if_available,
+    FrameExtractionConfig, MediaWorkflowTaskKind,
 };
 use serde_json::Value;
 use storage::{NewAssistantRunEvent, NewHtmlArtifact, PgStorage, DEFAULT_LOCAL_DATABASE_URL};
@@ -280,6 +280,17 @@ async fn append_video_extraction_assistant_event(
         )
         .await?;
     persist_video_extraction_html_artifacts(storage, &run, &html_artifacts).await?;
+    let output_artifacts = merge_video_extraction_output_artifacts(
+        &run.output_artifacts,
+        &run_id.to_string(),
+        local_thread_id,
+        output,
+        &html_artifacts,
+    );
+    storage
+        .assistant_runs()
+        .attach_output_artifacts(execution.tenant_id, run_id, &output_artifacts)
+        .await?;
 
     Ok(())
 }

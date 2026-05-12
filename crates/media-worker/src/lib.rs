@@ -1505,6 +1505,134 @@ pub fn video_extraction_html_artifact_from_output(
     }))
 }
 
+pub fn video_extraction_output_artifact_from_output(
+    assistant_run_id: &str,
+    local_thread_id: Option<&str>,
+    output: &Value,
+    html_artifacts: &[Value],
+) -> Option<Value> {
+    let document_id = output.get("document_id").and_then(Value::as_str)?;
+    let title = output
+        .get("title")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("视频 PPT 提取");
+    let generated_artifacts = output
+        .get("generated_artifacts")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let deliverable_status = output
+        .get("deliverable_status")
+        .cloned()
+        .unwrap_or_else(|| video_deliverable_status(&generated_artifacts));
+    let files = generated_artifacts
+        .get("files")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let final_deliverables_manifest = files
+        .iter()
+        .find(|file| {
+            file.get("artifact_kind").and_then(Value::as_str) == Some("final_deliverables_manifest")
+        })
+        .cloned()
+        .unwrap_or(Value::Null);
+    let html_artifact_summaries = html_artifacts
+        .iter()
+        .filter_map(video_extraction_html_artifact_summary)
+        .collect::<Vec<_>>();
+    let html_artifact_ids = html_artifact_summaries
+        .iter()
+        .filter_map(|artifact| artifact.get("id").and_then(Value::as_str))
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+
+    Some(json!({
+        "type": "video_extraction_artifacts",
+        "id": format!("video-extraction-{assistant_run_id}-{document_id}"),
+        "title": format!("{title} - 视频/PPT交付物"),
+        "assistant_run_id": assistant_run_id,
+        "local_thread_id": local_thread_id
+            .map(str::trim)
+            .filter(|value| !value.is_empty()),
+        "document_id": document_id,
+        "dataset_id": output.get("dataset_id").cloned().unwrap_or(Value::Null),
+        "status": deliverable_status
+            .get("state")
+            .and_then(Value::as_str)
+            .or_else(|| output.get("status").and_then(Value::as_str))
+            .unwrap_or("partial"),
+        "deliverable_status": deliverable_status,
+        "file_count": files.len(),
+        "generated_artifacts": generated_artifacts,
+        "artifacts": output.get("artifacts").cloned().unwrap_or_else(|| json!([])),
+        "primary_files": video_artifact_files_by_kinds(
+            &files,
+            &[
+                "pptx",
+                "final_deliverables_manifest",
+                "extraction_artifacts_manifest",
+                "ppt_outline",
+                "slide_notes",
+                "transcript_text",
+            ],
+        ),
+        "final_deliverables_manifest": final_deliverables_manifest,
+        "html_artifacts": html_artifact_summaries,
+        "html_artifact_ids": html_artifact_ids,
+    }))
+}
+
+pub fn merge_video_extraction_output_artifacts(
+    existing_output_artifacts: &Value,
+    assistant_run_id: &str,
+    local_thread_id: Option<&str>,
+    output: &Value,
+    html_artifacts: &[Value],
+) -> Value {
+    let Some(next_artifact) = video_extraction_output_artifact_from_output(
+        assistant_run_id,
+        local_thread_id,
+        output,
+        html_artifacts,
+    ) else {
+        return existing_output_artifacts
+            .as_array()
+            .cloned()
+            .map(Value::Array)
+            .unwrap_or_else(|| json!([]));
+    };
+    let next_id = next_artifact
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let mut artifacts = existing_output_artifacts
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    artifacts.retain(|artifact| artifact.get("id").and_then(Value::as_str) != Some(&next_id));
+    artifacts.push(next_artifact);
+    Value::Array(artifacts)
+}
+
+fn video_extraction_html_artifact_summary(artifact: &Value) -> Option<Value> {
+    let id = artifact.get("id").and_then(Value::as_str)?;
+    Some(json!({
+        "id": id,
+        "type": "html_artifact",
+        "title": artifact.get("title").and_then(Value::as_str).unwrap_or("视频提取摘要"),
+        "template_id": artifact
+            .get("template_id")
+            .and_then(Value::as_str)
+            .unwrap_or("video_extraction_summary"),
+        "source_type": artifact
+            .get("source_type")
+            .and_then(Value::as_str)
+            .unwrap_or("video_extraction"),
+    }))
+}
+
 fn video_extraction_missing_items(
     evidence_summary: &Value,
     frame_extraction: &Value,
@@ -2437,6 +2565,151 @@ mod tests {
             json!("planned")
         );
         assert_eq!(artifact["payload"]["missing"][0], json!("transcript_text"));
+    }
+
+    #[test]
+    fn video_extraction_output_artifact_tracks_final_deliverables() {
+        let document = test_document();
+        let run_id = "00000000-0000-0000-0000-000000000001";
+        let generated_artifacts = json!({
+            "status": "completed",
+            "files": [{
+                "artifact_kind": "pptx",
+                "artifact_id": format!("video-{}-pptx", document.id),
+                "title": "generated pptx",
+                "format": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                "path": "generated_artifacts/video_slides_screenshot_based.pptx",
+                "uri": format!("artifact://video-{}-pptx", document.id)
+            }, {
+                "artifact_kind": "final_deliverables_manifest",
+                "artifact_id": format!("video-{}-final-deliverables", document.id),
+                "title": "final deliverables manifest",
+                "format": "application/json",
+                "path": "generated_artifacts/final_deliverables_manifest.json",
+                "uri": format!("artifact://video-{}-final-deliverables", document.id)
+            }, {
+                "artifact_kind": "extraction_artifacts_manifest",
+                "artifact_id": format!("video-{}-extraction-manifest", document.id),
+                "title": "extraction artifacts manifest",
+                "format": "application/json",
+                "path": "generated_artifacts/extraction_artifacts_manifest.json",
+                "uri": format!("artifact://video-{}-extraction-manifest", document.id)
+            }]
+        });
+        let output = extract_video_ppt_output_with_artifacts(
+            &document,
+            &[],
+            video_frame_extraction_plan(&document),
+            generated_artifacts,
+        );
+        let html_artifact =
+            video_extraction_html_artifact_from_output(run_id, Some("local-thread-1"), &output)
+                .expect("html artifact");
+
+        let output_artifact = video_extraction_output_artifact_from_output(
+            run_id,
+            Some("local-thread-1"),
+            &output,
+            &[html_artifact.clone()],
+        )
+        .expect("output artifact");
+
+        assert_eq!(output_artifact["type"], json!("video_extraction_artifacts"));
+        assert_eq!(
+            output_artifact["document_id"],
+            json!(document.id.to_string())
+        );
+        assert_eq!(
+            output_artifact["deliverable_status"]["state"],
+            json!("final_pptx_ready")
+        );
+        assert_eq!(
+            output_artifact["deliverable_status"]["has_final_deliverables_manifest"],
+            json!(true)
+        );
+        assert_eq!(
+            output_artifact["final_deliverables_manifest"]["path"],
+            json!("generated_artifacts/final_deliverables_manifest.json")
+        );
+        assert!(output_artifact["primary_files"]
+            .as_array()
+            .expect("primary files")
+            .iter()
+            .any(|file| file["artifact_kind"] == json!("final_deliverables_manifest")));
+        assert_eq!(output_artifact["html_artifact_ids"][0], html_artifact["id"]);
+    }
+
+    #[test]
+    fn merge_video_extraction_output_artifacts_replaces_same_document_summary() {
+        let document = test_document();
+        let run_id = "00000000-0000-0000-0000-000000000001";
+        let first_output = extract_video_ppt_output_with_artifacts(
+            &document,
+            &[],
+            video_frame_extraction_plan(&document),
+            json!({
+                "status": "completed",
+                "files": [{
+                    "artifact_kind": "transcript_text",
+                    "artifact_id": format!("video-{}-transcript", document.id),
+                    "title": "transcript",
+                    "format": "text/plain",
+                    "path": "generated_artifacts/transcript.txt"
+                }]
+            }),
+        );
+        let first_artifact = video_extraction_output_artifact_from_output(
+            run_id,
+            Some("local-thread-1"),
+            &first_output,
+            &[],
+        )
+        .expect("first artifact");
+        let second_output = extract_video_ppt_output_with_artifacts(
+            &document,
+            &[],
+            video_frame_extraction_plan(&document),
+            json!({
+                "status": "completed",
+                "files": [{
+                    "artifact_kind": "final_deliverables_manifest",
+                    "artifact_id": format!("video-{}-final-deliverables", document.id),
+                    "title": "final deliverables manifest",
+                    "format": "application/json",
+                    "path": "generated_artifacts/final_deliverables_manifest.json"
+                }]
+            }),
+        );
+        let existing = json!([
+            first_artifact,
+            {
+                "type": "other_artifact",
+                "id": "keep-me"
+            }
+        ]);
+
+        let merged = merge_video_extraction_output_artifacts(
+            &existing,
+            run_id,
+            Some("local-thread-1"),
+            &second_output,
+            &[],
+        );
+
+        let artifacts = merged.as_array().expect("merged artifacts");
+        let video_artifacts = artifacts
+            .iter()
+            .filter(|artifact| artifact["type"] == json!("video_extraction_artifacts"))
+            .collect::<Vec<_>>();
+        assert_eq!(artifacts.len(), 2);
+        assert_eq!(video_artifacts.len(), 1);
+        assert!(artifacts
+            .iter()
+            .any(|artifact| artifact["id"] == json!("keep-me")));
+        assert_eq!(
+            video_artifacts[0]["final_deliverables_manifest"]["path"],
+            json!("generated_artifacts/final_deliverables_manifest.json")
+        );
     }
 
     #[test]
