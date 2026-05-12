@@ -299,6 +299,7 @@ function htmlArtifactBrief(summary) {
       status.hasFinalDeliverablesManifest || status.has_final_deliverables_manifest ? 'deliverable manifest ready' : '',
       status.hasExtractionArtifactsManifest || status.has_extraction_artifacts_manifest ? 'artifact index ready' : '',
       status.hasSlideNotes || status.has_slide_notes ? 'slide notes ready' : '',
+      status.hasSubtitlePageMap || status.has_subtitle_page_map ? 'subtitle map ready' : '',
       auditSuffix.trim().replace(/^·\s*/, ''),
     ].filter(Boolean);
     return parts.join(' · ') || summary.subtitle || summary.meta;

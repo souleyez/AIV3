@@ -341,6 +341,7 @@ test('renders video extraction summary template', () => {
           'check_video_provider_configuration',
           'review_extraction_artifacts_manifest',
           'review_slide_notes',
+          'review_subtitle_page_map',
           'complete_keep_list_or_review_missing_inputs',
         ],
         modelFollowUp: {
@@ -444,6 +445,7 @@ test('renders video extraction summary template', () => {
   assert.match(video.html, /检查视频解析提供方配置/);
   assert.match(video.html, /复核产物索引/);
   assert.match(video.html, /复核讲稿备注/);
+  assert.match(video.html, /复核字幕对页/);
   assert.match(video.html, /完成选页或补齐缺失输入/);
   assert.match(video.html, /Use this structured completion status/);
   assert.doesNotMatch(video.html, /private\.example/);
