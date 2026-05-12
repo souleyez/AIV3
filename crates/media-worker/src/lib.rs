@@ -541,7 +541,7 @@ fn write_video_slide_candidate_review_files(
     });
     fs::write(
         &candidate_manifest_path,
-        serde_json::to_vec_pretty(&candidate_manifest).map_err(|error| error.to_string())?,
+        video_public_json_bytes(&candidate_manifest)?,
     )
     .map_err(|error| error.to_string())?;
 
@@ -565,7 +565,7 @@ fn write_video_slide_candidate_review_files(
     });
     fs::write(
         &contact_sheet_plan_path,
-        serde_json::to_vec_pretty(&contact_sheet_plan).map_err(|error| error.to_string())?,
+        video_public_json_bytes(&contact_sheet_plan)?,
     )
     .map_err(|error| error.to_string())?;
 
@@ -592,7 +592,7 @@ fn write_video_slide_candidate_review_files(
     if !keep_list_template_path.is_file() {
         fs::write(
             &keep_list_template_path,
-            serde_json::to_vec_pretty(&keep_list_template).map_err(|error| error.to_string())?,
+            video_public_json_bytes(&keep_list_template)?,
         )
         .map_err(|error| error.to_string())?;
     }
@@ -611,7 +611,7 @@ fn write_video_slide_candidate_review_files(
     );
     fs::write(
         &selected_slides_manifest_path,
-        serde_json::to_vec_pretty(&selected_slides_manifest).map_err(|error| error.to_string())?,
+        video_public_json_bytes(&selected_slides_manifest)?,
     )
     .map_err(|error| error.to_string())?;
 
@@ -622,7 +622,7 @@ fn write_video_slide_candidate_review_files(
     if has_subtitle_page_map {
         fs::write(
             &subtitle_page_map_path,
-            serde_json::to_vec_pretty(&subtitle_page_map).map_err(|error| error.to_string())?,
+            video_public_json_bytes(&subtitle_page_map)?,
         )
         .map_err(|error| error.to_string())?;
     }
@@ -647,11 +647,17 @@ fn write_video_slide_candidate_review_files(
         "dataset_id": document.dataset_id.to_string(),
         "title": document.title,
         "candidate_manifest": candidate_manifest_path.display().to_string(),
+        "candidate_manifest_file_name": DEFAULT_SLIDE_CANDIDATES_FILE_NAME,
         "contact_sheet_plan": contact_sheet_plan_path.display().to_string(),
+        "contact_sheet_plan_file_name": DEFAULT_CONTACT_SHEET_PLAN_FILE_NAME,
         "contact_sheet_html": contact_sheet_html_path.display().to_string(),
+        "contact_sheet_html_file_name": DEFAULT_CONTACT_SHEET_HTML_FILE_NAME,
         "keep_list_template": keep_list_template_path.display().to_string(),
+        "keep_list_template_file_name": DEFAULT_PPT_KEEP_LIST_TEMPLATE_FILE_NAME,
         "selected_slides_manifest": selected_slides_manifest_path.display().to_string(),
+        "selected_slides_manifest_file_name": DEFAULT_SELECTED_SLIDES_MANIFEST_FILE_NAME,
         "recommended_output": pptx_output_path.display().to_string(),
+        "recommended_output_file_name": DEFAULT_VIDEO_SLIDES_PPTX_FILE_NAME,
         "selection": {
             "mode": "manual_or_model_review_required",
             "selected_candidate_indices": selected_candidate_indices.clone(),
@@ -668,7 +674,7 @@ fn write_video_slide_candidate_review_files(
     });
     fs::write(
         &pptx_build_plan_path,
-        serde_json::to_vec_pretty(&pptx_build_plan).map_err(|error| error.to_string())?,
+        video_public_json_bytes(&pptx_build_plan)?,
     )
     .map_err(|error| error.to_string())?;
 
@@ -3325,6 +3331,11 @@ fn video_public_timestamp_map(
     })
 }
 
+fn video_public_json_bytes(value: &Value) -> Result<Vec<u8>, String> {
+    serde_json::to_vec_pretty(&video_public_evidence_value(value))
+        .map_err(|error| error.to_string())
+}
+
 fn video_public_evidence_array(items: &[Value]) -> Vec<Value> {
     items.iter().map(video_public_evidence_value).collect()
 }
@@ -5217,11 +5228,14 @@ mod tests {
         assert!(candidates.contains("rectangle_extraction_status"));
         assert!(candidates.contains("candidate_evidence_policy"));
         assert!(candidates.contains("matched_nearby_evidence"));
+        assert!(candidates.contains("\"raw_frames_dir\": \"[redacted]\""));
+        assert!(candidates.contains("\"frame_path\": \"[redacted]\""));
         assert!(candidates.contains("Opening narration"));
         assert!(candidates.contains("Opening slide"));
         assert!(candidates.contains("Opening Title"));
         assert!(candidates.contains("source=[redacted]"));
         assert!(!candidates.contains("C:/private/frame.jpg"));
+        assert!(!candidates.contains(&output_root.display().to_string()));
         let candidate_manifest: Value =
             serde_json::from_str(&candidates).expect("candidate manifest json");
         assert!(
@@ -5261,6 +5275,16 @@ mod tests {
         assert!(contact_sheet_html.contains("candidate-1"));
         assert!(contact_sheet_html.contains("../raw_frames/frame_000001.jpg"));
         assert!(contact_sheet_html.contains(DEFAULT_PPT_KEEP_LIST_TEMPLATE_FILE_NAME));
+        let contact_sheet_plan_path = files
+            .iter()
+            .find(|file| file["artifact_kind"] == json!("contact_sheet_plan"))
+            .and_then(|file| file["path"].as_str())
+            .expect("contact sheet plan path");
+        let contact_sheet_plan =
+            fs::read_to_string(contact_sheet_plan_path).expect("contact sheet plan");
+        assert!(contact_sheet_plan.contains("\"raw_frames_dir\": \"[redacted]\""));
+        assert!(contact_sheet_plan.contains("\"candidate_manifest\": \"[redacted]\""));
+        assert!(!contact_sheet_plan.contains(&output_root.display().to_string()));
         let keep_list_path = files
             .iter()
             .find(|file| file["artifact_kind"] == json!("ppt_keep_list_template"))
@@ -5278,6 +5302,8 @@ mod tests {
             fs::read_to_string(selected_slides_path).expect("selected slides manifest");
         assert!(selected_slides.contains("waiting_for_selection"));
         assert!(selected_slides.contains("\"selected_count\": 0"));
+        assert!(selected_slides.contains("\"candidate_manifest\": \"[redacted]\""));
+        assert!(!selected_slides.contains(&output_root.display().to_string()));
         let selected_slides_ref = files
             .iter()
             .find(|file| file["artifact_kind"] == json!("selected_slides_manifest"))
@@ -5298,9 +5324,11 @@ mod tests {
             .expect("pptx build plan path");
         let pptx_plan = fs::read_to_string(pptx_plan_path).expect("pptx build plan");
         assert!(pptx_plan.contains("waiting_for_keep_list"));
-        assert!(pptx_plan.contains("ppt_keep_list_template.json"));
+        assert!(pptx_plan.contains("\"keep_list_template\": \"[redacted]\""));
+        assert!(pptx_plan.contains("\"recommended_output\": \"[redacted]\""));
         assert!(pptx_plan.contains("selected_candidate_indices"));
         assert!(pptx_plan.contains(DEFAULT_VIDEO_SLIDES_PPTX_FILE_NAME));
+        assert!(!pptx_plan.contains(&output_root.display().to_string()));
         let final_manifest_path = files
             .iter()
             .find(|file| file["artifact_kind"] == json!("final_deliverables_manifest"))
