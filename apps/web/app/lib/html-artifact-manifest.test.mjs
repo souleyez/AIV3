@@ -317,6 +317,17 @@ test('renders video extraction summary template', () => {
           message: 'Speaker notes cannot be aligned yet.',
         }],
       },
+      completionFollowUp: {
+        kind: 'video_extraction_completion_follow_up',
+        status: 'evidence_artifacts_ready',
+        readyFileKinds: ['transcript_text', 'ppt_outline'],
+        nextActions: ['open_video_extraction_summary', 'complete_keep_list_or_review_missing_inputs'],
+        modelFollowUp: {
+          required: true,
+          instruction: 'Use this structured completion status to notify the user.',
+        },
+        noHostComposedAnswer: true,
+      },
       note: '缺失项不会被补造。',
     },
   }));
@@ -333,6 +344,12 @@ test('renders video extraction summary template', () => {
   assert.match(video.html, /ppt_outline/);
   assert.match(video.html, /质量提示/);
   assert.match(video.html, /Speaker notes cannot be aligned yet/);
+  assert.match(video.html, /完成状态/);
+  assert.match(video.html, /后续提醒/);
+  assert.match(video.html, /model follow-up required/);
+  assert.match(video.html, /PPT 大纲/);
+  assert.match(video.html, /完成选页或补齐缺失输入/);
+  assert.match(video.html, /Use this structured completion status/);
 });
 
 test('renders legacy video login handoff as unsupported source guidance', () => {

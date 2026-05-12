@@ -444,6 +444,34 @@ function formatSeconds(value) {
   return `${minutes}:${seconds}`;
 }
 
+const VIDEO_ARTIFACT_KIND_LABELS = {
+  pptx: 'PPTX',
+  final_deliverables_manifest: '交付清单',
+  extraction_artifacts_manifest: '产物索引',
+  ppt_outline: 'PPT 大纲',
+  slide_notes: '讲稿备注',
+  subtitle_page_map: '字幕对页',
+  transcript_text: '原文',
+  source_text: '来源文本',
+  timestamp_map: '时间映射',
+};
+
+const VIDEO_FOLLOW_UP_ACTION_LABELS = {
+  open_video_extraction_summary: '打开视频提取摘要',
+  download_pptx: '下载 PPTX',
+  review_final_deliverables_manifest: '复核交付清单',
+  review_subtitle_page_map: '复核字幕对页',
+  complete_keep_list_or_review_missing_inputs: '完成选页或补齐缺失输入',
+};
+
+function videoArtifactKindLabel(kind) {
+  return VIDEO_ARTIFACT_KIND_LABELS[kind] || kind || '交付文件';
+}
+
+function videoFollowUpActionLabel(action) {
+  return VIDEO_FOLLOW_UP_ACTION_LABELS[action] || action || '后续动作';
+}
+
 function renderVideoExtractionSummary(manifest) {
   const payload = manifest.payload || {};
   const document = isPlainObject(payload.document) ? payload.document : {};
@@ -502,6 +530,24 @@ function renderVideoExtractionSummary(manifest) {
     detail: warning.message || warning.detail || '',
     meta: warning.severity || 'info',
   }));
+  const completionFollowUp = isPlainObject(payload.completionFollowUp || payload.completion_follow_up)
+    ? payload.completionFollowUp || payload.completion_follow_up
+    : {};
+  const readyFileKinds = arrayOrEmpty(completionFollowUp.readyFileKinds || completionFollowUp.ready_file_kinds);
+  const readyFiles = readyFileKinds.map((kind, index) => ({
+    title: videoArtifactKindLabel(kind),
+    detail: kind,
+    meta: `ready-${index + 1}`,
+  }));
+  const nextActions = arrayOrEmpty(completionFollowUp.nextActions || completionFollowUp.next_actions).map((action, index) => ({
+    title: videoFollowUpActionLabel(action),
+    detail: action,
+    meta: `next-${index + 1}`,
+  }));
+  const followUpModel = isPlainObject(completionFollowUp.modelFollowUp || completionFollowUp.model_follow_up)
+    ? completionFollowUp.modelFollowUp || completionFollowUp.model_follow_up
+    : {};
+  const followUpStatus = completionFollowUp.status || deliverableStatus.state || 'unknown';
   return `
     ${renderKeyValueGrid([
       { label: '文档', value: document.title || manifest.title },
@@ -511,6 +557,8 @@ function renderVideoExtractionSummary(manifest) {
       { label: '交付状态', value: deliverableStatus.state || 'unknown' },
       { label: 'PPTX', value: deliverableStatus.hasPptx || deliverableStatus.has_pptx ? 'ready' : 'not ready' },
       { label: '质量提示', value: String(deliverableStatus.warningCount ?? deliverableStatus.warning_count ?? qualityWarnings.length) },
+      { label: '就绪文件', value: String(readyFiles.length || generatedFiles.length) },
+      { label: '后续提醒', value: followUpModel.required ? 'model follow-up required' : 'not requested' },
       { label: '原文片段', value: String(summary.transcriptSegmentCount ?? summary.transcript_segment_count ?? transcript.length) },
       { label: '场景片段', value: String(summary.sceneCount ?? summary.scene_count ?? scenes.length) },
       { label: '关键帧 OCR', value: String(summary.keyframeOcrSnippetCount ?? summary.keyframe_ocr_snippet_count ?? ocr.length) },
@@ -518,6 +566,15 @@ function renderVideoExtractionSummary(manifest) {
     <section>
       <h2>说明</h2>
       <p>${escapeHtml(payload.note || '该摘要来自后台视频解析证据，用于让模型继续生成原文、页面映射、PPT 大纲或截图型 PPT。缺失项不会被补造。')}</p>
+    </section>
+    <section>
+      <h2>完成状态</h2>
+      <p>${escapeHtml(`后台提取状态：${followUpStatus}。${followUpModel.instruction || '下一次模型回复应基于这些结构化状态继续，不补造缺失文件。'}`)}</p>
+      ${renderList(readyFiles, '暂无已就绪交付文件。')}
+    </section>
+    <section>
+      <h2>下一步</h2>
+      ${renderList(nextActions, '暂无建议动作。')}
     </section>
     <section>
       <h2>质量提示</h2>
