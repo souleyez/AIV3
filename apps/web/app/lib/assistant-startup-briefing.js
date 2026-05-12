@@ -11,7 +11,12 @@ const MEDIA_EXTRACTION_POLICY = {
     '录屏绕过',
     '私有或付费内容',
   ],
-  requiredActions: ['media.resolve_video_url', 'media.extract_ppt_transcript'],
+  modelRequestActions: ['media.resolve_video_url', 'media.extract_ppt_transcript'],
+  controlledPipeline: [
+    'media.resolve_video_url',
+    'media.register_video_asset',
+    'media.extract_ppt_transcript',
+  ],
   outputArtifacts: [
     'video_source_resolution',
     'transcript_text',
@@ -129,7 +134,8 @@ function buildMediaExtractionPolicy() {
     ...MEDIA_EXTRACTION_POLICY,
     supportedSources: [...MEDIA_EXTRACTION_POLICY.supportedSources],
     unsupportedSources: [...MEDIA_EXTRACTION_POLICY.unsupportedSources],
-    requiredActions: [...MEDIA_EXTRACTION_POLICY.requiredActions],
+    modelRequestActions: [...MEDIA_EXTRACTION_POLICY.modelRequestActions],
+    controlledPipeline: [...MEDIA_EXTRACTION_POLICY.controlledPipeline],
     outputArtifacts: [...MEDIA_EXTRACTION_POLICY.outputArtifacts],
   };
 }
@@ -144,15 +150,19 @@ function formatMediaExtractionPolicyForModel(policy) {
   const unsupportedSources = Array.isArray(policy.unsupportedSources)
     ? policy.unsupportedSources.join('、')
     : '';
-  const requiredActions = Array.isArray(policy.requiredActions)
-    ? policy.requiredActions.join(' -> ')
+  const modelRequestActions = Array.isArray(policy.modelRequestActions)
+    ? policy.modelRequestActions.join('、')
+    : '';
+  const controlledPipeline = Array.isArray(policy.controlledPipeline)
+    ? policy.controlledPipeline.join(' -> ')
     : '';
   const outputArtifacts = Array.isArray(policy.outputArtifacts)
     ? policy.outputArtifacts.slice(0, 10).join('、')
     : '';
   return [
     `媒体提取边界：支持 ${supportedSources || '无'}；不支持 ${unsupportedSources || '无'}。`,
-    requiredActions ? `动作路径：${requiredActions}。` : '',
+    modelRequestActions ? `模型请求入口：${modelRequestActions}。` : '',
+    controlledPipeline ? `后台受控链路：${controlledPipeline}。` : '',
     outputArtifacts ? `关键产物：${outputArtifacts}。` : '',
     policy.accessRule || '',
     policy.evidenceRule || '',

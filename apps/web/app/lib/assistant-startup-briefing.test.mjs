@@ -57,8 +57,15 @@ test('startup briefing summarizes visible datasets and system capability', () =>
   assert.ok(briefing.mediaExtractionPolicy.supportedSources.includes('直接视频 URL'));
   assert.ok(briefing.mediaExtractionPolicy.unsupportedSources.includes('扫码登录'));
   assert.ok(briefing.mediaExtractionPolicy.unsupportedSources.includes('Cookie/Session 复用'));
-  assert.ok(briefing.mediaExtractionPolicy.requiredActions.includes('media.resolve_video_url'));
-  assert.ok(briefing.mediaExtractionPolicy.requiredActions.includes('media.extract_ppt_transcript'));
+  assert.deepEqual(briefing.mediaExtractionPolicy.modelRequestActions, [
+    'media.resolve_video_url',
+    'media.extract_ppt_transcript',
+  ]);
+  assert.deepEqual(briefing.mediaExtractionPolicy.controlledPipeline, [
+    'media.resolve_video_url',
+    'media.register_video_asset',
+    'media.extract_ppt_transcript',
+  ]);
   assert.ok(briefing.mediaExtractionPolicy.outputArtifacts.includes('subtitle_page_map'));
   assert.match(briefing.mediaExtractionPolicy.accessRule, /不要声称已访问视频/);
   assert.match(briefing.productCapabilities.continuousExecution, /受控动作/);
@@ -76,7 +83,8 @@ test('formatted briefing tells model when no dataset is selected', () => {
   assert.match(formatted, /媒体细节/);
   assert.match(formatted, /视频转 PPT\/原文提取/);
   assert.match(formatted, /媒体提取边界/);
-  assert.match(formatted, /media\.resolve_video_url -> media\.extract_ppt_transcript/);
+  assert.match(formatted, /模型请求入口：media\.resolve_video_url、media\.extract_ppt_transcript/);
+  assert.match(formatted, /后台受控链路：media\.resolve_video_url -> media\.register_video_asset -> media\.extract_ppt_transcript/);
   assert.match(formatted, /扫码登录/);
   assert.match(formatted, /Cookie\/Session 复用/);
   assert.match(formatted, /不要声称已访问视频/);
