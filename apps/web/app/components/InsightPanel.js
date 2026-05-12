@@ -276,12 +276,28 @@ function htmlArtifactBrief(summary) {
   if (summary.templateId === 'video_extraction_summary') {
     const completionFollowUp = summary.payload?.completionFollowUp || summary.payload?.completion_follow_up || {};
     const notification = completionFollowUp.userNotification || completionFollowUp.user_notification || {};
+    const completionAudit = summary.payload?.completionAudit || summary.payload?.completion_audit || {};
+    const auditProviderFailures = Number(
+      completionAudit.providerFailureCount
+        ?? completionAudit.provider_failure_count
+        ?? (completionAudit.providerFailures || completionAudit.provider_failures || []).length
+        ?? 0,
+    );
+    const auditWarningCount = Number(completionAudit.warningCount ?? completionAudit.warning_count ?? 0);
+    const auditSuffix = auditProviderFailures > 0
+      ? ` · 审计：${auditProviderFailures} 个提供方需复核`
+      : auditWarningCount > 0
+        ? ` · 审计：${auditWarningCount} 条质量提示`
+        : completionAudit.kind
+          ? ' · 审计已脱敏'
+          : '';
     if (notification.userVisible || notification.user_visible) {
-      return notification.title || notification.message || summary.subtitle || summary.meta;
+      return `${notification.title || notification.message || summary.subtitle || summary.meta}${auditSuffix}`;
     }
     const parts = [
       status.hasPptx || status.has_pptx ? 'PPTX ready' : 'PPTX waiting',
       status.hasFinalDeliverablesManifest || status.has_final_deliverables_manifest ? 'manifest ready' : '',
+      auditSuffix.trim().replace(/^·\s*/, ''),
     ].filter(Boolean);
     return parts.join(' · ') || summary.subtitle || summary.meta;
   }
