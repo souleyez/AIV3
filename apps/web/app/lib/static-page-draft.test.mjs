@@ -27,41 +27,8 @@ import {
   staticPageChartRowsFromModule,
 } from './static-page-chart-runtime.js';
 
-test('buildInitialStaticPageDraft creates default modules and mobile order', () => {
-  const draft = buildInitialStaticPageDraft({
-    datasetId: 'dataset-1',
-    sessionId: 'session-1',
-    conversationSummary: '客户需要一页经营摘要。',
-    evidenceIds: ['ev-1'],
-  });
-
-  assert.equal(draft.datasetId, 'dataset-1');
-  assert.equal(draft.sessionId, 'session-1');
-  assert.equal(draft.modules.length, 5);
-  assert.deepEqual(draft.mobileOrder, draft.modules.map((module) => module.id));
-  assert.equal(draft.source.evidenceIds[0], 'ev-1');
-  assert.equal(draft.visualSpec.styleDirection, 'client-delivery');
-  assert.equal(draft.renderSpec.componentModel, 'dom-text-svg-chart');
-  assert.equal(draft.previewContract.status, 'not_requested');
-  assert.equal(draft.dataSnapshot.moduleBindings.length, 5);
-  assert.ok(draft.dataSnapshot.dataSourceCandidates.some((item) => item.sourceId === 'selected_scope'));
-  assert.ok(draft.dataSnapshot.fieldCandidates.some((item) => item.fieldPath === 'retrieval.summary'));
-  assert.equal(draft.dataSnapshot.moduleBindings.find((item) => item.moduleId === 'hero').bindingQualityStatus, 'confirmed');
-  assert.equal(draft.dataSnapshot.moduleBindings.find((item) => item.moduleId === 'trend').chartDataFit, 'needs_sample_rows');
-});
-
-test('preview queue gate blocks chart modules without renderable sample rows', () => {
-  const draft = buildInitialStaticPageDraft({
-    datasetId: 'dataset-1',
-    sessionId: 'session-1',
-  });
-
-  const blockReason = staticPagePreviewBlockReason(draft);
-  assert.match(blockReason, /数据绑定未达到效果图生成要求/);
-  assert.match(blockReason, /关键指标/);
-  assert.match(blockReason, /needs_sample_rows/);
-
-  const ready = applyStaticPageOperations(draft, [
+function makeDefaultStaticPageChartDataReady(draft) {
+  return applyStaticPageOperations(draft, [
     {
       type: 'update_module',
       targetModuleId: 'kpi',
@@ -102,6 +69,43 @@ test('preview queue gate blocks chart modules without renderable sample rows', (
       },
     },
   ]);
+}
+
+test('buildInitialStaticPageDraft creates default modules and mobile order', () => {
+  const draft = buildInitialStaticPageDraft({
+    datasetId: 'dataset-1',
+    sessionId: 'session-1',
+    conversationSummary: '客户需要一页经营摘要。',
+    evidenceIds: ['ev-1'],
+  });
+
+  assert.equal(draft.datasetId, 'dataset-1');
+  assert.equal(draft.sessionId, 'session-1');
+  assert.equal(draft.modules.length, 5);
+  assert.deepEqual(draft.mobileOrder, draft.modules.map((module) => module.id));
+  assert.equal(draft.source.evidenceIds[0], 'ev-1');
+  assert.equal(draft.visualSpec.styleDirection, 'client-delivery');
+  assert.equal(draft.renderSpec.componentModel, 'dom-text-svg-chart');
+  assert.equal(draft.previewContract.status, 'not_requested');
+  assert.equal(draft.dataSnapshot.moduleBindings.length, 5);
+  assert.ok(draft.dataSnapshot.dataSourceCandidates.some((item) => item.sourceId === 'selected_scope'));
+  assert.ok(draft.dataSnapshot.fieldCandidates.some((item) => item.fieldPath === 'retrieval.summary'));
+  assert.equal(draft.dataSnapshot.moduleBindings.find((item) => item.moduleId === 'hero').bindingQualityStatus, 'confirmed');
+  assert.equal(draft.dataSnapshot.moduleBindings.find((item) => item.moduleId === 'trend').chartDataFit, 'needs_sample_rows');
+});
+
+test('preview queue gate blocks chart modules without renderable sample rows', () => {
+  const draft = buildInitialStaticPageDraft({
+    datasetId: 'dataset-1',
+    sessionId: 'session-1',
+  });
+
+  const blockReason = staticPagePreviewBlockReason(draft);
+  assert.match(blockReason, /数据绑定未达到效果图生成要求/);
+  assert.match(blockReason, /关键指标/);
+  assert.match(blockReason, /needs_sample_rows/);
+
+  const ready = makeDefaultStaticPageChartDataReady(draft);
 
   assert.equal(staticPagePreviewBlockReason(ready), '');
 });
@@ -400,8 +404,8 @@ test('final render request stores local mock renderer payload', () => {
   assert.equal(rendering.finalPage.payload.previewImage.assetKey, 'preview-1.png');
 });
 
-test('final render can only start from current confirmed preview', () => {
-  const confirmed = applyStaticPageOperation(buildInitialStaticPageDraft(), {
+test('final render can only start from current confirmed preview with ready data', () => {
+  const confirmed = applyStaticPageOperation(makeDefaultStaticPageChartDataReady(buildInitialStaticPageDraft()), {
     type: 'confirm_preview',
     previewImage: { assetKey: 'preview-1.png' },
   });
@@ -437,6 +441,18 @@ test('final render can only start from current confirmed preview', () => {
   assert.match(staticPageFinalRenderBlockReason(stale), /重新生成并确认效果图/);
   assert.equal(canRequestStaticPageFinalRender(missingAsset), false);
   assert.match(staticPageFinalRenderBlockReason(missingAsset), /资源缺失/);
+});
+
+test('final render gate blocks historical confirmed previews with weak module data', () => {
+  const confirmed = applyStaticPageOperation(buildInitialStaticPageDraft(), {
+    type: 'confirm_preview',
+    previewImage: { assetKey: 'legacy-preview.png' },
+  });
+
+  assert.equal(canRequestStaticPageFinalRender(confirmed), false);
+  assert.match(staticPageFinalRenderBlockReason(confirmed), /最终页面生成要求/);
+  assert.match(staticPageFinalRenderBlockReason(confirmed), /needs_sample_rows/);
+  assert.match(staticPageFinalRenderBlockReason(confirmed), /重新生成并确认效果图/);
 });
 
 test('final render request accepts backend rendered output', () => {

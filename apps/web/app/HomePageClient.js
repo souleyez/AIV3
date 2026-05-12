@@ -2743,7 +2743,9 @@ export default function HomePageClient() {
         },
       });
       createBackendStaticPageRender(optimisticDraft, operation).catch((syncError) => {
-        setBanner(`静态页已先进入本地后台状态；后端渲染暂不可用：${syncError instanceof Error ? syncError.message : '请求失败'}。`);
+        replaceStaticPageDraft(activeStaticPageDraft.id, activeStaticPageDraft);
+        setBanner('');
+        setError(`静态页未进入后台制作：${staticPagePreviewGateErrorMessage(syncError, '后端渲染暂不可用')}。`);
       });
       return optimisticDraft;
     }

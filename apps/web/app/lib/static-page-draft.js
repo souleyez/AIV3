@@ -1215,12 +1215,7 @@ export function applyStaticPageOperations(draft, operations = []) {
 }
 
 export function canRequestStaticPageFinalRender(draft = {}) {
-  const finalStatus = draft?.finalPage?.status || '';
-  const retryableFinalStatus = finalStatus === 'failed' || finalStatus === 'cancelled';
-  if (!draft || (draft.status !== 'effect_confirmed' && !retryableFinalStatus)) return false;
-  if (draft.previewContract?.status !== 'confirmed') return false;
-  if (draft.imageJob?.status === 'stale') return false;
-  return Boolean(draft.previewImage?.assetKey || draft.previewContract?.assetKey);
+  return staticPageFinalRenderBlockReason(draft) === '';
 }
 
 function bindingSampleRows(binding = {}) {
@@ -1263,7 +1258,7 @@ function bindingPreviewLabel(binding = {}) {
   return marker ? `${title}（${marker}）` : String(title);
 }
 
-export function staticPagePreviewBlockReason(draft = {}) {
+function staticPageDataQualityBlockReason(draft = {}, actionLabel, nextInstruction) {
   const snapshot = draft?.dataSnapshot || draft?.data_snapshot || buildStaticPageDataSnapshot(draft);
   const bindings = snapshot?.moduleBindings || snapshot?.module_bindings || [];
   const attentionBindings = Array.isArray(bindings)
@@ -1271,7 +1266,15 @@ export function staticPagePreviewBlockReason(draft = {}) {
     : [];
   if (!attentionBindings.length) return '';
   const labels = attentionBindings.slice(0, 3).map(bindingPreviewLabel).join('、');
-  return `当前静态页还有 ${attentionBindings.length} 个模块的数据绑定未达到效果图生成要求：${labels}。请先回到模块编辑补充样本行、重新绑定字段，或让 V3 检索/修复模块数据。`;
+  return `当前静态页还有 ${attentionBindings.length} 个模块的数据绑定未达到${actionLabel}：${labels}。${nextInstruction}`;
+}
+
+export function staticPagePreviewBlockReason(draft = {}) {
+  return staticPageDataQualityBlockReason(
+    draft,
+    '效果图生成要求',
+    '请先回到模块编辑补充样本行、重新绑定字段，或让 V3 检索/修复模块数据。',
+  );
 }
 
 export function staticPageFinalRenderBlockReason(draft = {}) {
@@ -1289,7 +1292,11 @@ export function staticPageFinalRenderBlockReason(draft = {}) {
   if (!draft?.previewImage?.assetKey && !draft?.previewContract?.assetKey) {
     return '效果图资源缺失，请重新生成效果图。';
   }
-  return '';
+  return staticPageDataQualityBlockReason(
+    draft,
+    '最终页面生成要求',
+    '请先回到模块编辑补充样本行、重新绑定字段，或让 V3 检索/修复模块数据，然后重新生成并确认效果图。',
+  );
 }
 
 export function interpretStaticPagePrompt(draft, prompt = '') {
