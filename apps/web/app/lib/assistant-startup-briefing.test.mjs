@@ -38,7 +38,7 @@ test('startup briefing summarizes visible datasets and system capability', () =>
   assert.equal(briefing.publishedReportCount, 1);
   assert.equal(briefing.staticPageDraftCount, 0);
   assert.equal(briefing.selectedScopeLabel, '订单数据');
-  assert.equal(briefing.briefingVersion, 2);
+  assert.equal(briefing.briefingVersion, 3);
   assert.equal(briefing.datasetBriefs.length, 2);
   assert.equal(briefing.datasetBriefs[0].parseStatusSummary, 'completed:3');
   assert.deepEqual(briefing.datasetBriefs[0].materialHints, ['tabular']);
@@ -53,6 +53,14 @@ test('startup briefing summarizes visible datasets and system capability', () =>
   assert.match(briefing.productCapabilities.media, /视频 URL/);
   assert.match(briefing.productCapabilities.media, /PPT\/原文提取/);
   assert.match(briefing.productCapabilities.media, /登录态、扫码、Cookie/);
+  assert.ok(briefing.mediaExtractionPolicy.supportedSources.includes('上传视频文件'));
+  assert.ok(briefing.mediaExtractionPolicy.supportedSources.includes('直接视频 URL'));
+  assert.ok(briefing.mediaExtractionPolicy.unsupportedSources.includes('扫码登录'));
+  assert.ok(briefing.mediaExtractionPolicy.unsupportedSources.includes('Cookie/Session 复用'));
+  assert.ok(briefing.mediaExtractionPolicy.requiredActions.includes('media.resolve_video_url'));
+  assert.ok(briefing.mediaExtractionPolicy.requiredActions.includes('media.extract_ppt_transcript'));
+  assert.ok(briefing.mediaExtractionPolicy.outputArtifacts.includes('subtitle_page_map'));
+  assert.match(briefing.mediaExtractionPolicy.accessRule, /不要声称已访问视频/);
   assert.match(briefing.productCapabilities.continuousExecution, /受控动作/);
   assert.match(briefing.latestActivity, /订单数据/);
   assert.match(briefing.productTruth, /智能数据工作台/);
@@ -67,6 +75,12 @@ test('formatted briefing tells model when no dataset is selected', () => {
   assert.match(formatted, /创建报表/);
   assert.match(formatted, /媒体细节/);
   assert.match(formatted, /视频转 PPT\/原文提取/);
+  assert.match(formatted, /媒体提取边界/);
+  assert.match(formatted, /media\.resolve_video_url -> media\.extract_ppt_transcript/);
+  assert.match(formatted, /扫码登录/);
+  assert.match(formatted, /Cookie\/Session 复用/);
+  assert.match(formatted, /不要声称已访问视频/);
+  assert.match(formatted, /subtitle_page_map/);
   assert.match(formatted, /规划\/渲染\/修改静态页/);
   assert.match(formatted, /导出静态页 ZIP 交付包/);
   assert.match(formatted, /连续提出检索/);

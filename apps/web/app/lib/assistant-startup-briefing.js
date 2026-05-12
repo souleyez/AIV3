@@ -1,3 +1,33 @@
+const MEDIA_EXTRACTION_POLICY = {
+  supportedSources: [
+    '上传视频文件',
+    '直接视频 URL',
+    '可公开访问且可解析视频地址的页面',
+  ],
+  unsupportedSources: [
+    '登录态页面',
+    '扫码登录',
+    'Cookie/Session 复用',
+    '录屏绕过',
+    '私有或付费内容',
+  ],
+  requiredActions: ['media.resolve_video_url', 'media.extract_ppt_transcript'],
+  outputArtifacts: [
+    'video_source_resolution',
+    'transcript_text',
+    'ppt_outline',
+    'timestamp_map',
+    'slide_candidates_manifest',
+    'selected_slides_manifest',
+    'slide_notes',
+    'subtitle_page_map',
+    'final_deliverables_manifest',
+    'video_slides_screenshot_based.pptx',
+  ],
+  accessRule: '未收到 V3 observation 确认视频源解析、转写、抽帧或 PPT 产物前，不要声称已访问视频或看过视频内容。',
+  evidenceRule: '转写、OCR、场景切片、时间戳或 subtitle_page_map 缺失时，保持 partial 并说明缺失项。',
+};
+
 export function buildAssistantStartupBriefing({
   datasets = [],
   reportPlans = [],
@@ -29,7 +59,7 @@ export function buildAssistantStartupBriefing({
   ].filter(Boolean)[0] || '暂无最近上传、采集或对话摘要。';
 
   return {
-    briefingVersion: 2,
+    briefingVersion: 3,
     productTruth: '这是一个围绕数据集、文档、采集源、检索供料、报表和静态页输出的智能数据工作台。',
     operatingPrinciple: '系统只负责识别意图、检索供料和执行受控动作；最终正文由模型根据 observation 自行回答，不由宿主拼装。',
     visibleDatasetCount: visibleDatasets.length,
@@ -61,6 +91,7 @@ export function buildAssistantStartupBriefing({
       'controlled_action',
       'continuous_execution',
     ],
+    mediaExtractionPolicy: buildMediaExtractionPolicy(),
     productCapabilities: {
       staticPage: '可以在主对话区发起静态页规划、效果图排队、模块编辑、最终静态页渲染，并导出 index.html 与包含 manifest/data/modules/render-spec/runtime/README 的 ZIP 交付包。',
       report: '可以让模型主动发起报表/看板创建，但必须先通过工具列出选项并由宿主执行。',
@@ -81,6 +112,7 @@ export function formatStartupBriefingForModel(briefing) {
     source.selectedScopeLabel ? `当前供料范围：${source.selectedScopeLabel}` : '当前未选数据集，可按普通模型聊天回答。',
     source.operatingPrinciple,
     '系统能力：可普通聊天、资料检索、读取文档细节、读取音视频转写/场景等媒体细节、上传或公开视频 URL 的视频转 PPT/原文提取、创建报表、规划/渲染/修改静态页、导出静态页 ZIP 交付包；缺证据时必须说明缺失，不能编造数据。',
+    formatMediaExtractionPolicyForModel(source.mediaExtractionPolicy),
     source.productCapabilities?.continuousExecution || '',
     `最近状态：${source.latestActivity || '暂无。'}`,
     `解析状态：${source.parseStateSummary || '暂无解析状态。'}`,
@@ -90,6 +122,41 @@ export function formatStartupBriefingForModel(briefing) {
       : '',
   ];
   return parts.filter(Boolean).join('\n');
+}
+
+function buildMediaExtractionPolicy() {
+  return {
+    ...MEDIA_EXTRACTION_POLICY,
+    supportedSources: [...MEDIA_EXTRACTION_POLICY.supportedSources],
+    unsupportedSources: [...MEDIA_EXTRACTION_POLICY.unsupportedSources],
+    requiredActions: [...MEDIA_EXTRACTION_POLICY.requiredActions],
+    outputArtifacts: [...MEDIA_EXTRACTION_POLICY.outputArtifacts],
+  };
+}
+
+function formatMediaExtractionPolicyForModel(policy) {
+  if (!policy || typeof policy !== 'object') {
+    return '';
+  }
+  const supportedSources = Array.isArray(policy.supportedSources)
+    ? policy.supportedSources.join('、')
+    : '';
+  const unsupportedSources = Array.isArray(policy.unsupportedSources)
+    ? policy.unsupportedSources.join('、')
+    : '';
+  const requiredActions = Array.isArray(policy.requiredActions)
+    ? policy.requiredActions.join(' -> ')
+    : '';
+  const outputArtifacts = Array.isArray(policy.outputArtifacts)
+    ? policy.outputArtifacts.slice(0, 10).join('、')
+    : '';
+  return [
+    `媒体提取边界：支持 ${supportedSources || '无'}；不支持 ${unsupportedSources || '无'}。`,
+    requiredActions ? `动作路径：${requiredActions}。` : '',
+    outputArtifacts ? `关键产物：${outputArtifacts}。` : '',
+    policy.accessRule || '',
+    policy.evidenceRule || '',
+  ].filter(Boolean).join(' ');
 }
 
 function sumNumericField(items, fieldNames) {
