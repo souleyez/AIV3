@@ -6,6 +6,7 @@ use media_worker::{
     extract_video_ppt_output_with_artifacts, frame_extraction_config_from_env,
     merge_video_extraction_output_artifacts, register_video_asset_output,
     resolve_video_source_output, run_video_frame_extraction_if_enabled,
+    video_extraction_completion_audit_from_output,
     video_extraction_completion_follow_up_from_output, video_extraction_html_artifact_from_output,
     write_video_extraction_text_artifacts_if_available, FrameExtractionConfig,
     MediaWorkflowTaskKind,
@@ -260,6 +261,7 @@ async fn append_video_extraction_assistant_event(
             .collect::<Vec<_>>();
     let completion_follow_up =
         video_extraction_completion_follow_up_from_output(output, &html_artifacts);
+    let completion_audit = video_extraction_completion_audit_from_output(output);
 
     storage
         .assistant_runs()
@@ -277,6 +279,7 @@ async fn append_video_extraction_assistant_event(
                     "output": output,
                     "html_artifacts": html_artifacts,
                     "completion_follow_up": completion_follow_up,
+                    "completion_audit": completion_audit,
                     "no_host_composed_answer": true,
                 }),
                 created_at: Utc::now(),

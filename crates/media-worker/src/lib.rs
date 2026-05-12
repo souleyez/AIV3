@@ -1907,6 +1907,103 @@ pub fn video_extraction_completion_follow_up_from_output(
     }))
 }
 
+pub fn video_extraction_completion_audit_from_output(output: &Value) -> Value {
+    let generated_artifacts = output
+        .get("generated_artifacts")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let deliverable_status = output
+        .get("deliverable_status")
+        .cloned()
+        .unwrap_or_else(|| video_deliverable_status(&generated_artifacts));
+    let files = generated_artifacts
+        .get("files")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let frame_extraction = output
+        .get("frame_extraction")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let warning_codes = deliverable_warning_codes(&deliverable_status)
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    let provider_failure_count = deliverable_status
+        .get("warnings")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|warning| warning.get("code").and_then(Value::as_str) == Some("provider_failure"))
+        .count();
+    let artifact_kinds = files
+        .iter()
+        .filter_map(|file| file.get("artifact_kind").and_then(Value::as_str))
+        .take(32)
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    let output_status = output
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("partial");
+    let deliverable_state = deliverable_status
+        .get("state")
+        .and_then(Value::as_str)
+        .unwrap_or(output_status);
+    let warning_count = deliverable_status
+        .get("warning_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(warning_codes.len() as u64);
+
+    json!({
+        "kind": "video_extraction_completion_audit",
+        "version": 1,
+        "stateTransition": {
+            "workflowTask": "extract_video_ppt",
+            "outputStatus": output_status,
+            "deliverableState": deliverable_state,
+        },
+        "state_transition": {
+            "workflow_task": "extract_video_ppt",
+            "output_status": output_status,
+            "deliverable_state": deliverable_state,
+        },
+        "documentId": output.get("document_id").cloned().unwrap_or(Value::Null),
+        "document_id": output.get("document_id").cloned().unwrap_or(Value::Null),
+        "datasetId": output.get("dataset_id").cloned().unwrap_or(Value::Null),
+        "dataset_id": output.get("dataset_id").cloned().unwrap_or(Value::Null),
+        "frameExtractionStatus": frame_extraction
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown"),
+        "frame_extraction_status": frame_extraction
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown"),
+        "generatedArtifactsStatus": generated_artifacts
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown"),
+        "generated_artifacts_status": generated_artifacts
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown"),
+        "artifactKinds": artifact_kinds.clone(),
+        "artifact_kinds": artifact_kinds,
+        "warningCodes": warning_codes.clone(),
+        "warning_codes": warning_codes,
+        "warning_count": warning_count,
+        "provider_failure_count": provider_failure_count,
+        "redaction": {
+            "raw_urls_included": false,
+            "private_paths_included": false,
+            "cookies_included": false,
+            "provider_keys_included": false,
+            "raw_provider_payloads_included": false,
+        },
+    })
+}
+
 pub fn merge_video_extraction_output_artifacts(
     existing_output_artifacts: &Value,
     assistant_run_id: &str,
@@ -3768,6 +3865,64 @@ mod tests {
             .as_array()
             .expect("skipped next actions")
             .contains(&json!("provide_local_media_file_or_parsed_frames")));
+    }
+
+    #[test]
+    fn video_extraction_completion_audit_redacts_source_and_provider_material() {
+        let document = test_document();
+        let output = json!({
+            "status": "completed",
+            "document_id": document.id.to_string(),
+            "dataset_id": document.dataset_id.to_string(),
+            "source_url": "https://private.example.test/video.mp4?token=secret-token",
+            "cookie": "SESSION=secret-cookie",
+            "provider_key": "sk-provider-secret",
+            "provider_payload": {
+                "raw_url": "https://private.example.test/raw",
+                "authorization": "Bearer secret-token"
+            },
+            "frame_extraction": {
+                "status": "failed",
+                "reason": "C:/private/source/video.mp4 could not be read"
+            },
+            "generated_artifacts": {
+                "status": "completed",
+                "files": [{
+                    "artifact_kind": "final_deliverables_manifest",
+                    "path": "generated_artifacts/final_deliverables_manifest.json"
+                }]
+            },
+            "deliverable_status": {
+                "state": "evidence_artifacts_ready",
+                "warning_count": 1,
+                "warnings": [{
+                    "code": "provider_failure",
+                    "provider": "minimax",
+                    "reason": "provider rejected sk-provider-secret"
+                }]
+            }
+        });
+
+        let audit = video_extraction_completion_audit_from_output(&output);
+        let serialized = serde_json::to_string(&audit).expect("audit serializes");
+
+        assert_eq!(audit["kind"], json!("video_extraction_completion_audit"));
+        assert_eq!(
+            audit["state_transition"]["deliverable_state"],
+            json!("evidence_artifacts_ready")
+        );
+        assert_eq!(audit["frame_extraction_status"], json!("failed"));
+        assert_eq!(audit["generated_artifacts_status"], json!("completed"));
+        assert_eq!(audit["provider_failure_count"], json!(1));
+        assert!(audit["warning_codes"]
+            .as_array()
+            .expect("warning codes")
+            .contains(&json!("provider_failure")));
+        assert!(!serialized.contains("private.example.test"));
+        assert!(!serialized.contains("secret-token"));
+        assert!(!serialized.contains("secret-cookie"));
+        assert!(!serialized.contains("sk-provider-secret"));
+        assert!(!serialized.contains("C:/private/source"));
     }
 
     #[test]
