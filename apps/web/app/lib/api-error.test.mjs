@@ -43,3 +43,20 @@ test('staticPagePreviewGateErrorMessage can append module details when backend m
   assert.match(staticPagePreviewGateErrorMessage(error), /订单趋势/);
   assert.match(staticPagePreviewGateErrorMessage(error), /needs_sample_rows/);
 });
+
+test('staticPagePreviewGateErrorMessage handles final render data-quality gates', () => {
+  const error = buildApiError({
+    code: 'static_page_final_render_data_quality_gate',
+    message: '最终页生成已拦截。',
+    details: {
+      attention_modules: [{
+        module_id: 'risk',
+        title: '风险提示',
+        binding_quality_status: 'matched_field_candidate',
+      }],
+    },
+  }, '请求失败', 400);
+
+  assert.match(staticPagePreviewGateErrorMessage(error), /风险提示/);
+  assert.match(staticPagePreviewGateErrorMessage(error), /matched_field_candidate/);
+});

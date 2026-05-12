@@ -559,6 +559,17 @@ async fn render_static_page_for_current_draft(
         Err(error) if error.payload.code == "static_page_preview_stale" => {
             return Ok(static_page_preview_stale_react_result(action));
         }
+        Err(error) if error.payload.code == "static_page_final_render_data_quality_gate" => {
+            return Ok(rejected_react_tool_result_with_details(
+                action,
+                "static_page_final_render_data_quality_gate",
+                json!({
+                    "message": error.payload.message,
+                    "dataQualityGate": error.payload.details.clone(),
+                    "data_quality_gate": error.payload.details,
+                }),
+            ));
+        }
         Err(error) => return Err(error),
     };
     let render_status =

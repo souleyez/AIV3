@@ -23,7 +23,7 @@ export function apiErrorMessage(error, fallbackMessage = '请求失败') {
 
 export function staticPagePreviewGateErrorMessage(error, fallbackMessage = '请求失败') {
   const message = apiErrorMessage(error, fallbackMessage);
-  if (apiErrorCode(error) !== 'static_page_preview_data_quality_gate') {
+  if (!STATIC_PAGE_DATA_QUALITY_GATE_CODES.has(apiErrorCode(error))) {
     return message;
   }
 
@@ -39,6 +39,11 @@ export function staticPagePreviewGateErrorMessage(error, fallbackMessage = '请�
   }
   return `${message} 需处理模块：${labels}。`;
 }
+
+const STATIC_PAGE_DATA_QUALITY_GATE_CODES = new Set([
+  'static_page_preview_data_quality_gate',
+  'static_page_final_render_data_quality_gate',
+]);
 
 function apiPayloadMessage(payload, fallbackMessage) {
   if (typeof payload === 'string') return payload || fallbackMessage;

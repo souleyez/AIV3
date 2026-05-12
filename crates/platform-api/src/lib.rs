@@ -7849,6 +7849,13 @@ async fn create_static_page_render_for_draft(
     let image_job =
         resolve_confirmed_static_page_image_job(state, &draft, request.image_job_id).await?;
     ensure_static_page_preview_contract_current(&draft, image_job.as_ref())?;
+    if let Some((reason, details)) = static_page_final_render_data_quality_gate_for_draft(&draft) {
+        return Err(ApiError::bad_request_with_details(
+            "static_page_final_render_data_quality_gate",
+            reason,
+            details,
+        ));
+    }
     if request.background {
         let mut render_output = state
             .storage
@@ -22569,7 +22576,48 @@ fn static_page_preview_data_quality_gate_for_payload(payload: &Value) -> Option<
         return None;
     }
     let message = static_page_preview_data_quality_message(&attention_modules);
-    let details = static_page_preview_data_quality_details(&attention_modules, &message);
+    let details = static_page_data_quality_gate_details(
+        &attention_modules,
+        &message,
+        "submit_static_page_image_preview",
+        "Return to module editing, add sample rows or rebind weak fields, then submit the effect preview again.",
+        &[
+            "static_page.update_draft",
+            "retrieval.search",
+            "static_page.submit_preview_after_repair",
+        ],
+    );
+    Some((message, details))
+}
+
+fn static_page_final_render_data_quality_gate_for_draft(
+    draft: &StaticPageDraft,
+) -> Option<(String, Value)> {
+    let mut payload = draft.draft_payload.clone();
+    ensure_json_object(&mut payload);
+    if let Some(object) = payload.as_object_mut() {
+        object
+            .entry("selected_scope".to_string())
+            .or_insert_with(|| draft.selected_scope.clone());
+    }
+    refresh_static_page_payload_design_contract(&mut payload);
+
+    let attention_modules = static_page_preview_data_quality_attention_modules(&payload);
+    if attention_modules.is_empty() {
+        return None;
+    }
+    let message = static_page_preview_data_quality_message(&attention_modules);
+    let details = static_page_data_quality_gate_details(
+        &attention_modules,
+        &message,
+        "render_static_page",
+        "Return to module editing, add sample rows or rebind weak fields, then regenerate and confirm the effect preview before final render.",
+        &[
+            "static_page.update_draft",
+            "retrieval.search",
+            "submit_static_page_image_preview",
+        ],
+    );
     Some((message, details))
 }
 
@@ -22645,30 +22693,28 @@ fn static_page_preview_data_quality_message(modules: &[Value]) -> String {
     )
 }
 
-fn static_page_preview_data_quality_details(modules: &[Value], message: &str) -> Value {
+fn static_page_data_quality_gate_details(
+    modules: &[Value],
+    message: &str,
+    blocked_action: &str,
+    next_step: &str,
+    recommended_actions: &[&str],
+) -> Value {
     let modules = modules.iter().take(24).cloned().collect::<Vec<_>>();
     let module_count = modules.len();
     json!({
         "gate": "static_page_preview_data_quality",
-        "blockedAction": "submit_static_page_image_preview",
-        "blocked_action": "submit_static_page_image_preview",
+        "blockedAction": blocked_action,
+        "blocked_action": blocked_action,
         "reason": message,
         "attentionModuleCount": module_count,
         "attention_module_count": module_count,
         "attentionModules": modules.clone(),
         "attention_modules": modules,
-        "recommendedActions": [
-            "static_page.update_draft",
-            "retrieval.search",
-            "static_page.submit_preview_after_repair"
-        ],
-        "recommended_actions": [
-            "static_page.update_draft",
-            "retrieval.search",
-            "static_page.submit_preview_after_repair"
-        ],
-        "nextStep": "Return to module editing, add sample rows or rebind weak fields, then submit the effect preview again.",
-        "next_step": "Return to module editing, add sample rows or rebind weak fields, then submit the effect preview again."
+        "recommendedActions": recommended_actions,
+        "recommended_actions": recommended_actions,
+        "nextStep": next_step,
+        "next_step": next_step
     })
 }
 
@@ -30681,6 +30727,72 @@ mod tests {
         let error = ensure_static_page_preview_contract_current(&draft, Some(&job))
             .expect_err("stale preview should be rejected");
         assert_eq!(error.payload.code, "static_page_preview_stale");
+    }
+
+    #[test]
+    fn static_page_final_render_gate_blocks_unrenderable_chart_bindings() {
+        let now = Utc::now();
+        let confirmed_payload = apply_static_page_operations_to_payload(
+            json!({
+                "version": 1,
+                "status": "planning",
+                "styleDirection": "client-delivery",
+                "modules": [{
+                    "id": "trend",
+                    "title": "订单趋势",
+                    "dataBinding": {
+                        "sourceId": "dataset",
+                        "fieldPath": "orders.amount",
+                        "label": "订单金额"
+                    },
+                    "visualization": {
+                        "type": "line-chart",
+                        "chartOptions": {
+                            "dataKey": "orders.amount"
+                        }
+                    }
+                }]
+            }),
+            &[json!({
+                "type": "confirm_preview",
+                "previewImage": {
+                    "kind": "static-page-effect-preview",
+                    "assetKey": "static-page-previews/trend.png",
+                    "imageJobId": StaticPageImageJobId::new(),
+                }
+            })],
+            Some("效果图已确认。"),
+        );
+        let draft = StaticPageDraft {
+            id: StaticPageDraftId::new(),
+            tenant_id: TenantId::new(),
+            owner_user_id: None,
+            assistant_run_id: AssistantRunId::new(),
+            title: "经营趋势静态页".to_string(),
+            status: StaticPageDraftStatus::Confirmed,
+            selected_scope: json!({"mode": "user_selected"}),
+            visibility_snapshot: Value::Null,
+            source_refs: Value::Null,
+            draft_payload: confirmed_payload,
+            created_at: now,
+            updated_at: now,
+        };
+
+        let (reason, details) = static_page_final_render_data_quality_gate_for_draft(&draft)
+            .expect("final render should be blocked until chart rows are renderable");
+
+        assert!(reason.contains("订单趋势"));
+        assert_eq!(details["blockedAction"], json!("render_static_page"));
+        assert!(details["attentionModules"]
+            .as_array()
+            .expect("attention modules")
+            .iter()
+            .any(|module| module["moduleId"] == json!("trend")
+                && module["chartDataFit"] == json!("needs_sample_rows")));
+        assert!(details["recommendedActions"]
+            .as_array()
+            .expect("recommended actions")
+            .contains(&json!("submit_static_page_image_preview")));
     }
 
     #[test]
