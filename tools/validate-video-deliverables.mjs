@@ -110,7 +110,7 @@ export function validateVideoDeliverables(inputPath) {
 
   const pptx = files.find((file) => file.kind === "pptx");
   if (pptx?.exists && !fileStartsWithZipMagic(pptx.path)) {
-    warnings.push(issue("pptx_zip_magic_missing", "PPTX does not start with ZIP magic bytes", "pptx"));
+    errors.push(issue("pptx_zip_magic_missing", "PPTX does not start with ZIP magic bytes", "pptx"));
   }
 
   if (finalManifest) {

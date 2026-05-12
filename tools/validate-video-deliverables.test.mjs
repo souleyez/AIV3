@@ -38,6 +38,16 @@ test("rejects inconsistent final manifest status", () => {
   assert.ok(result.errors.some((error) => error.code === "deliverable_status_missing_flag" && error.kind === "subtitle_page_map"));
 });
 
+test("rejects malformed pptx containers", () => {
+  const sessionDir = createCompleteDeliverables();
+  fs.writeFileSync(path.join(sessionDir, "generated_artifacts", "video_slides_screenshot_based.pptx"), "not a pptx");
+
+  const result = validateVideoDeliverables(sessionDir);
+
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.some((error) => error.code === "pptx_zip_magic_missing" && error.kind === "pptx"));
+});
+
 test("rejects unredacted local paths in public JSON", () => {
   const sessionDir = createCompleteDeliverables();
   const subtitleMapPath = path.join(sessionDir, "generated_artifacts", "subtitle_page_map.json");
