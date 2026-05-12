@@ -399,7 +399,8 @@ test('renders video extraction summary template', () => {
   assert.match(video.html, /缺失项不会被补造/);
   assert.match(video.html, /minimax/);
   assert.match(video.html, /生成文件/);
-  assert.match(video.html, /generated_artifacts\/transcript\.txt/);
+  assert.match(video.html, /transcript\.txt/);
+  assert.doesNotMatch(video.html, /generated_artifacts\/transcript\.txt/);
   assert.match(video.html, /ppt_outline/);
   assert.match(video.html, /质量提示/);
   assert.match(video.html, /Speaker notes cannot be aligned yet/);

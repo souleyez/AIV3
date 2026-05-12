@@ -83,6 +83,15 @@ function clampText(value, max = 240) {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }
 
+function displayArtifactFileName(file = {}) {
+  const explicit = stringOrFallback(file.fileName || file.file_name);
+  if (explicit) return explicit;
+  const rawPath = stringOrFallback(file.path || file.uri);
+  if (!rawPath) return '';
+  const normalized = rawPath.replace(/\\/g, '/');
+  return normalized.split('/').filter(Boolean).pop() || rawPath;
+}
+
 function unsafeStringReason(value) {
   if (typeof value !== 'string') return '';
   const hit = UNSAFE_STRING_PATTERNS.find((pattern) => pattern.test(value));
@@ -536,7 +545,7 @@ function renderVideoExtractionSummary(manifest) {
     title: file.title || file.artifactKind || file.artifact_kind || `生成文件 ${index + 1}`,
     detail: [
       file.format || '',
-      file.path || file.uri || '',
+      displayArtifactFileName(file),
     ].filter(Boolean).join(' · '),
     meta: file.artifactKind || file.artifact_kind || '',
   }));
