@@ -1965,6 +1965,15 @@ fn video_extraction_completion_next_actions(
     if warning_codes.contains("generated_artifacts_failed") {
         actions.push(json!("retry_generated_artifact_writer"));
     }
+    if warning_codes.contains("missing_transcript_alignment") {
+        actions.push(json!("attach_or_parse_transcript_evidence"));
+    }
+    if warning_codes.contains("missing_contact_sheet") {
+        actions.push(json!("generate_contact_sheet_from_raw_frames"));
+    }
+    if warning_codes.contains("keep_list_not_confirmed") {
+        actions.push(json!("fill_ppt_keep_list_template"));
+    }
     if file_kinds.contains("pptx") {
         actions.push(json!("download_pptx"));
     }
@@ -3279,6 +3288,9 @@ mod tests {
 
         assert!(next_actions.contains(&json!("retry_frame_extraction")));
         assert!(next_actions.contains(&json!("retry_generated_artifact_writer")));
+        assert!(next_actions.contains(&json!("attach_or_parse_transcript_evidence")));
+        assert!(next_actions.contains(&json!("generate_contact_sheet_from_raw_frames")));
+        assert!(next_actions.contains(&json!("fill_ppt_keep_list_template")));
         assert!(next_actions.contains(&json!("complete_keep_list_or_review_missing_inputs")));
 
         let skipped_output = extract_video_ppt_output_with_frame_extraction(
