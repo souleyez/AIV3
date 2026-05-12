@@ -468,6 +468,8 @@ const VIDEO_FOLLOW_UP_ACTION_LABELS = {
   attach_or_parse_transcript_evidence: '补充或解析转写证据',
   generate_contact_sheet_from_raw_frames: '基于原始帧生成联系表',
   fill_ppt_keep_list_template: '填写 PPT 保留页清单',
+  review_low_confidence_transcript: '复核低置信度转写片段',
+  rerun_or_review_subtitle_ocr: '重跑或复核字幕 OCR',
 };
 
 function videoArtifactKindLabel(kind) {

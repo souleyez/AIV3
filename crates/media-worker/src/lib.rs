@@ -31,6 +31,7 @@ pub const DEFAULT_SUBTITLE_PAGE_MAP_FILE_NAME: &str = "subtitle_page_map.json";
 pub const DEFAULT_SLIDE_NOTES_ARTIFACT_FILE_NAME: &str = "slide_notes.md";
 pub const DEFAULT_PPTX_BUILD_PLAN_FILE_NAME: &str = "pptx_build_plan.json";
 pub const DEFAULT_VIDEO_SLIDES_PPTX_FILE_NAME: &str = "video_slides_screenshot_based.pptx";
+const LOW_CONFIDENCE_VIDEO_EVIDENCE_THRESHOLD: f64 = 0.65;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MediaWorkflowTaskKind {
@@ -124,14 +125,18 @@ pub fn extract_video_ppt_output_with_artifacts(
     generated_artifacts: Value,
 ) -> Value {
     let evidence = video_evidence_summary_from_chunks(chunks);
+    let evidence_items = video_media_evidence_items_from_chunks(chunks);
     let artifacts = merged_video_extraction_artifact_refs(
         document,
         &evidence,
         &frame_extraction,
         &generated_artifacts,
     );
-    let deliverable_status =
-        video_deliverable_status_with_frame_extraction(&generated_artifacts, &frame_extraction);
+    let deliverable_status = video_deliverable_status_with_evidence_and_frame_extraction(
+        &generated_artifacts,
+        &frame_extraction,
+        &evidence_items,
+    );
     let status = if evidence.has_evidence() {
         "completed"
     } else {
@@ -1974,6 +1979,12 @@ fn video_extraction_completion_next_actions(
     if warning_codes.contains("keep_list_not_confirmed") {
         actions.push(json!("fill_ppt_keep_list_template"));
     }
+    if warning_codes.contains("low_confidence_transcript") {
+        actions.push(json!("review_low_confidence_transcript"));
+    }
+    if warning_codes.contains("subtitle_ocr_low_confidence") {
+        actions.push(json!("rerun_or_review_subtitle_ocr"));
+    }
     if file_kinds.contains("pptx") {
         actions.push(json!("download_pptx"));
     }
@@ -2317,20 +2328,39 @@ fn video_deliverable_status_with_frame_extraction(
             if !reason.is_empty() {
                 warning["reason"] = json!(reason);
             }
-            let warnings = object
-                .entry("warnings".to_string())
-                .or_insert_with(|| json!([]));
-            let mut next_warning_count = None;
-            if let Some(warnings) = warnings.as_array_mut() {
-                warnings.push(warning);
-                next_warning_count = Some(warnings.len());
-            }
-            if let Some(next_warning_count) = next_warning_count {
-                object.insert("warning_count".to_string(), json!(next_warning_count));
-            }
+            append_deliverable_warning(object, warning);
         }
     }
     status
+}
+
+fn video_deliverable_status_with_evidence_and_frame_extraction(
+    generated_artifacts: &Value,
+    frame_extraction: &Value,
+    evidence: &VideoMediaEvidenceItems,
+) -> Value {
+    let mut status =
+        video_deliverable_status_with_frame_extraction(generated_artifacts, frame_extraction);
+    if let Some(object) = status.as_object_mut() {
+        for warning in video_low_confidence_evidence_warnings(evidence) {
+            append_deliverable_warning(object, warning);
+        }
+    }
+    status
+}
+
+fn append_deliverable_warning(status: &mut serde_json::Map<String, Value>, warning: Value) {
+    let warnings = status
+        .entry("warnings".to_string())
+        .or_insert_with(|| json!([]));
+    let mut next_warning_count = None;
+    if let Some(warnings) = warnings.as_array_mut() {
+        warnings.push(warning);
+        next_warning_count = Some(warnings.len());
+    }
+    if let Some(next_warning_count) = next_warning_count {
+        status.insert("warning_count".to_string(), json!(next_warning_count));
+    }
 }
 
 fn video_generated_artifact_quality_warnings(
@@ -2387,6 +2417,61 @@ fn video_generated_artifact_quality_warnings(
         }));
     }
     warnings
+}
+
+fn video_low_confidence_evidence_warnings(evidence: &VideoMediaEvidenceItems) -> Vec<Value> {
+    let low_confidence_transcript_count = evidence
+        .transcript_segments
+        .iter()
+        .filter(|segment| {
+            video_evidence_confidence_below_threshold(
+                segment,
+                &["confidence", "transcript_confidence"],
+            )
+        })
+        .count();
+    let low_confidence_ocr_count = evidence
+        .keyframe_ocr_snippets
+        .iter()
+        .filter(|snippet| {
+            video_evidence_confidence_below_threshold(
+                snippet,
+                &["confidence", "ocr_confidence", "text_confidence"],
+            )
+        })
+        .count();
+
+    let mut warnings = Vec::new();
+    if low_confidence_transcript_count > 0 {
+        warnings.push(json!({
+            "code": "low_confidence_transcript",
+            "severity": "medium",
+            "message": "Some transcript segments have low confidence; review or replace them before using narration as final source text.",
+            "count": low_confidence_transcript_count,
+            "threshold": LOW_CONFIDENCE_VIDEO_EVIDENCE_THRESHOLD,
+        }));
+    }
+    if low_confidence_ocr_count > 0 {
+        warnings.push(json!({
+            "code": "subtitle_ocr_low_confidence",
+            "severity": "medium",
+            "message": "Some keyframe/subtitle OCR snippets have low confidence; rerun OCR or manually verify text before final PPT delivery.",
+            "count": low_confidence_ocr_count,
+            "threshold": LOW_CONFIDENCE_VIDEO_EVIDENCE_THRESHOLD,
+        }));
+    }
+    warnings
+}
+
+fn video_evidence_confidence_below_threshold(value: &Value, keys: &[&str]) -> bool {
+    keys.iter().any(|key| {
+        value
+            .get(*key)
+            .and_then(Value::as_f64)
+            .is_some_and(|confidence| {
+                confidence >= 0.0 && confidence < LOW_CONFIDENCE_VIDEO_EVIDENCE_THRESHOLD
+            })
+    })
 }
 
 fn video_final_deliverables_manifest(
@@ -2992,6 +3077,50 @@ mod tests {
                 && warning["severity"] == json!("high")
                 && warning["reason"] == json!("disk full")
         }));
+    }
+
+    #[test]
+    fn extract_output_surfaces_low_confidence_evidence_warnings() {
+        let document = test_document();
+        let chunk = test_chunk(json!({
+            "media": {
+                "transcript_segments": [{
+                    "text": "page one",
+                    "confidence": 0.42
+                }],
+                "scenes": [],
+                "keyframe_ocr_snippets": [{
+                    "text": "slide title",
+                    "ocr_confidence": 0.5
+                }]
+            }
+        }));
+
+        let output = extract_video_ppt_output_with_frame_extraction(
+            &document,
+            &[chunk],
+            video_frame_extraction_plan(&document),
+        );
+
+        let warnings = output["deliverable_status"]["warnings"]
+            .as_array()
+            .expect("warnings");
+        assert!(warnings.iter().any(|warning| {
+            warning["code"] == json!("low_confidence_transcript")
+                && warning["severity"] == json!("medium")
+                && warning["count"] == json!(1)
+        }));
+        assert!(warnings.iter().any(|warning| {
+            warning["code"] == json!("subtitle_ocr_low_confidence")
+                && warning["severity"] == json!("medium")
+                && warning["count"] == json!(1)
+        }));
+
+        let follow_up =
+            video_extraction_completion_follow_up_from_output(&output, &[]).expect("follow up");
+        let next_actions = follow_up["next_actions"].as_array().expect("next actions");
+        assert!(next_actions.contains(&json!("review_low_confidence_transcript")));
+        assert!(next_actions.contains(&json!("rerun_or_review_subtitle_ocr")));
     }
 
     #[test]
