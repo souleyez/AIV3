@@ -22700,8 +22700,13 @@ fn static_page_data_quality_gate_details(
     next_step: &str,
     recommended_actions: &[&str],
 ) -> Value {
-    let modules = modules.iter().take(24).cloned().collect::<Vec<_>>();
+    let modules = modules
+        .iter()
+        .take(24)
+        .map(static_page_data_quality_gate_module)
+        .collect::<Vec<_>>();
     let module_count = modules.len();
+    let gate_reason_counts = static_page_data_quality_gate_reason_counts(&modules);
     json!({
         "gate": "static_page_preview_data_quality",
         "blockedAction": blocked_action,
@@ -22711,11 +22716,74 @@ fn static_page_data_quality_gate_details(
         "attention_module_count": module_count,
         "attentionModules": modules.clone(),
         "attention_modules": modules,
+        "gateReasonCounts": gate_reason_counts.clone(),
+        "gate_reason_counts": gate_reason_counts,
         "recommendedActions": recommended_actions,
         "recommended_actions": recommended_actions,
         "nextStep": next_step,
         "next_step": next_step
     })
+}
+
+fn static_page_data_quality_gate_module(module: &Value) -> Value {
+    let mut module = module.clone();
+    let gate_reasons = static_page_preview_binding_module_gate_reasons(&module);
+    if let Some(object) = module.as_object_mut() {
+        let gate_reasons = json!(gate_reasons);
+        object.insert("gateReasons".to_string(), gate_reasons.clone());
+        object.insert("gate_reasons".to_string(), gate_reasons);
+    }
+    module
+}
+
+fn static_page_preview_binding_module_gate_reasons(module: &Value) -> Vec<String> {
+    let mut reasons = Vec::new();
+    let status = static_page_artifact_string(
+        module,
+        &["bindingQualityStatus", "binding_quality_status", "status"],
+    )
+    .unwrap_or_default();
+    if !status.is_empty() && !matches!(status.as_str(), "confirmed" | "ready" | "non_chart") {
+        reasons.push(format!("binding_quality_status:{status}"));
+    }
+
+    let chart_data_fit = static_page_artifact_string(module, &["chartDataFit", "chart_data_fit"])
+        .unwrap_or_default();
+    if !chart_data_fit.is_empty()
+        && !matches!(
+            chart_data_fit.as_str(),
+            "ready" | "not_required" | "non_chart_ready"
+        )
+    {
+        reasons.push(format!("chart_data_fit:{chart_data_fit}"));
+    }
+
+    let visualization_type =
+        static_page_artifact_string(module, &["visualizationType", "visualization_type"])
+            .unwrap_or_default();
+    if static_page_visualization_needs_sample_rows(&visualization_type)
+        && static_page_preview_quality_u64(module, &["sampleRows", "sample_rows"]) == 0
+    {
+        reasons.push("chart_sample_rows_missing".to_string());
+    }
+
+    if reasons.is_empty() {
+        reasons.push("data_quality_attention_required".to_string());
+    }
+    reasons
+}
+
+fn static_page_data_quality_gate_reason_counts(modules: &[Value]) -> Value {
+    let mut counts = BTreeMap::<String, u64>::new();
+    for reason in modules
+        .iter()
+        .filter_map(|module| module.get("gateReasons").and_then(Value::as_array))
+        .flatten()
+        .filter_map(Value::as_str)
+    {
+        *counts.entry(reason.to_string()).or_insert(0) += 1;
+    }
+    json!(counts)
 }
 
 fn static_page_preview_data_quality_module_label(module: &Value) -> String {
@@ -30374,12 +30442,20 @@ mod tests {
             updated_at: now,
         };
 
-        let (reason, _details) = static_page_preview_data_quality_gate_for_draft(&draft)
+        let (reason, details) = static_page_preview_data_quality_gate_for_draft(&draft)
             .expect("chart without sample rows should be blocked");
 
         assert!(reason.contains("订单趋势"));
         assert!(reason.contains("needs_sample_rows"));
         assert!(reason.contains("补充样本行"));
+        assert!(details["attentionModules"][0]["gateReasons"]
+            .as_array()
+            .expect("gate reasons")
+            .contains(&json!("chart_data_fit:needs_sample_rows")));
+        assert_eq!(
+            details["gateReasonCounts"]["chart_sample_rows_missing"],
+            json!(1)
+        );
     }
 
     #[test]
@@ -31233,7 +31309,16 @@ mod tests {
             .expect("attention modules")
             .iter()
             .any(|module| module["moduleId"] == json!("kpi")
-                && module["chartDataFit"] == json!("needs_sample_rows")));
+                && module["chartDataFit"] == json!("needs_sample_rows")
+                && module["gateReasons"]
+                    .as_array()
+                    .expect("gate reasons")
+                    .contains(&json!("chart_sample_rows_missing"))));
+        assert!(
+            preview_gate_details["gateReasonCounts"]["chart_data_fit:needs_sample_rows"]
+                .as_u64()
+                .is_some_and(|count| count > 0)
+        );
         assert!(preview_gate_details["recommendedActions"]
             .as_array()
             .expect("recommended actions")
