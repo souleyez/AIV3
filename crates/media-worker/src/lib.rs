@@ -465,7 +465,9 @@ pub fn write_video_extraction_text_artifacts(
         },
         "files": files,
     });
-    let manifest_bytes = serde_json::to_vec_pretty(&manifest).map_err(|error| error.to_string())?;
+    let public_manifest = video_public_extraction_artifacts_manifest(&manifest);
+    let manifest_bytes =
+        serde_json::to_vec_pretty(&public_manifest).map_err(|error| error.to_string())?;
     fs::write(&manifest_path, manifest_bytes).map_err(|error| error.to_string())?;
 
     Ok(manifest)
@@ -3290,8 +3292,8 @@ fn video_final_deliverables_manifest(
         "title": document.title,
         "frame_count": frame_count,
         "deliverable_status": deliverable_status,
-        "final_outputs": video_artifact_files_by_kinds(files, &["pptx"]),
-        "review_outputs": video_artifact_files_by_kinds(files, &[
+        "final_outputs": video_public_artifact_files_by_kinds(files, &["pptx"]),
+        "review_outputs": video_public_artifact_files_by_kinds(files, &[
             "slide_image_candidates",
             "contact_sheet_plan",
             "contact_sheet_html",
@@ -3299,7 +3301,7 @@ fn video_final_deliverables_manifest(
             "selected_slides_manifest",
             "pptx_build_plan",
         ]),
-        "evidence_outputs": video_artifact_files_by_kinds(files, &[
+        "evidence_outputs": video_public_artifact_files_by_kinds(files, &[
             "frame_manifest",
             "transcript_text",
             "source_text",
@@ -3309,6 +3311,79 @@ fn video_final_deliverables_manifest(
         ]),
         "next_action": video_final_deliverables_next_action(state),
     })
+}
+
+fn video_public_extraction_artifacts_manifest(manifest: &Value) -> Value {
+    let mut public_manifest = manifest.clone();
+    let Some(object) = public_manifest.as_object_mut() else {
+        return public_manifest;
+    };
+
+    for key in ["session_dir", "artifacts_dir"] {
+        if object
+            .get(key)
+            .and_then(Value::as_str)
+            .is_some_and(|value| !value.trim().is_empty())
+        {
+            object.insert(key.to_string(), json!("[redacted]"));
+            object.insert(format!("{key}_redacted"), json!(true));
+        }
+    }
+    if let Some(manifest_path) = object.get("manifest_path").and_then(Value::as_str) {
+        let manifest_file_name = Path::new(manifest_path)
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or(DEFAULT_EXTRACTION_ARTIFACTS_MANIFEST_FILE_NAME)
+            .to_string();
+        object.insert("manifest_path".to_string(), json!("[redacted]"));
+        object.insert("manifest_file_name".to_string(), json!(manifest_file_name));
+        object.insert("manifest_path_redacted".to_string(), json!(true));
+    }
+    let public_files = object.get("files").and_then(Value::as_array).map(|files| {
+        files
+            .iter()
+            .map(video_public_artifact_file)
+            .collect::<Vec<_>>()
+    });
+    if let Some(public_files) = public_files {
+        object.insert("files".to_string(), json!(public_files));
+    }
+
+    public_manifest
+}
+
+fn video_public_artifact_files_by_kinds(files: &[Value], kinds: &[&str]) -> Vec<Value> {
+    files
+        .iter()
+        .filter(|file| {
+            file.get("artifact_kind")
+                .and_then(Value::as_str)
+                .is_some_and(|kind| kinds.contains(&kind))
+        })
+        .map(video_public_artifact_file)
+        .collect()
+}
+
+fn video_public_artifact_file(file: &Value) -> Value {
+    let mut public_file = file.clone();
+    let Some(object) = public_file.as_object_mut() else {
+        return public_file;
+    };
+    let Some(path) = object.get("path").and_then(Value::as_str) else {
+        return public_file;
+    };
+    if path.trim().is_empty() {
+        return public_file;
+    }
+
+    let file_name = Path::new(path)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("artifact");
+    object.insert("file_name".to_string(), json!(file_name));
+    object.insert("path".to_string(), json!("[redacted]"));
+    object.insert("path_redacted".to_string(), json!(true));
+    public_file
 }
 
 fn video_artifact_files_by_kinds(files: &[Value], kinds: &[&str]) -> Vec<Value> {
@@ -4926,6 +5001,18 @@ mod tests {
             fs::read_to_string(final_manifest_path).expect("final deliverables manifest");
         assert!(final_manifest.contains("evidence_artifacts_ready"));
         assert!(final_manifest.contains("evidence_outputs"));
+        assert!(final_manifest.contains("\"path\": \"[redacted]\""));
+        assert!(final_manifest.contains("\"file_name\""));
+        assert!(!final_manifest.contains("aidp-v3-video-artifacts-test"));
+        let extraction_manifest_path = manifest["manifest_path"]
+            .as_str()
+            .expect("extraction manifest path");
+        let extraction_manifest =
+            fs::read_to_string(extraction_manifest_path).expect("extraction manifest");
+        assert!(extraction_manifest.contains("\"path\": \"[redacted]\""));
+        assert!(extraction_manifest.contains("\"session_dir\": \"[redacted]\""));
+        assert!(extraction_manifest.contains("\"manifest_path\": \"[redacted]\""));
+        assert!(!extraction_manifest.contains("aidp-v3-video-artifacts-test"));
     }
 
     #[test]
