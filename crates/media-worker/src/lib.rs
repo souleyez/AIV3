@@ -3448,6 +3448,10 @@ fn render_video_ppt_outline_markdown(
     output.push_str(&render_video_evidence_reference_lines(evidence));
     output.push('\n');
 
+    output.push_str("## Quality Notes\n\n");
+    output.push_str(&render_video_quality_note_lines(evidence, frame_extraction));
+    output.push('\n');
+
     output.push_str("## Slide / Scene Candidates\n\n");
     if evidence.scenes.is_empty() && evidence.keyframe_ocr_snippets.is_empty() {
         output.push_str("- No scene or OCR candidates yet. Use raw frames/contact sheet before final PPTX generation.\n\n");
@@ -3522,6 +3526,10 @@ fn render_video_source_text_markdown(
     ));
     output.push_str("## Evidence References\n\n");
     output.push_str(&render_video_evidence_reference_lines(evidence));
+    output.push('\n');
+
+    output.push_str("## Quality Notes\n\n");
+    output.push_str(&render_video_quality_note_lines(evidence, frame_extraction));
     output.push('\n');
 
     output.push_str("## Provider Evidence\n\n");
@@ -3605,6 +3613,90 @@ fn render_video_source_text_markdown(
     }
 
     output
+}
+
+fn render_video_quality_note_lines(
+    evidence: &VideoMediaEvidenceItems,
+    frame_extraction: &Value,
+) -> String {
+    let mut lines = Vec::new();
+    if evidence.transcript_segments.is_empty() {
+        lines.push("- Missing transcript evidence; source text and speaker notes cannot be treated as final narration.".to_string());
+    }
+    if evidence.scenes.is_empty() {
+        lines.push("- Missing scene evidence; slide grouping should stay review-only.".to_string());
+    }
+    if evidence.keyframe_ocr_snippets.is_empty() {
+        lines.push("- Missing keyframe OCR evidence; slide text should be verified from frames or source files.".to_string());
+    }
+
+    for warning in video_low_confidence_evidence_warnings(evidence) {
+        let code = warning
+            .get("code")
+            .and_then(Value::as_str)
+            .unwrap_or("low_confidence_evidence");
+        let count = warning.get("count").and_then(Value::as_u64).unwrap_or(0);
+        lines.push(format!(
+            "- {code}: {count} low-confidence evidence item(s) require review."
+        ));
+    }
+
+    if let Some(warning) = video_provider_failure_warning(evidence) {
+        let count = warning
+            .get("failed_provider_count")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        lines.push(format!(
+            "- provider_failure: {count} provider capability check(s) failed or are unverified."
+        ));
+        for provider in warning
+            .get("providers")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .take(3)
+        {
+            let provider_name = provider
+                .get("provider")
+                .and_then(Value::as_str)
+                .map(video_safe_evidence_text)
+                .unwrap_or_else(|| "unknown".to_string());
+            let capability = provider
+                .get("capability")
+                .and_then(Value::as_str)
+                .map(video_safe_evidence_text)
+                .unwrap_or_else(|| "unknown".to_string());
+            let status = provider
+                .get("status")
+                .and_then(Value::as_str)
+                .map(video_safe_evidence_text)
+                .unwrap_or_else(|| "unknown".to_string());
+            lines.push(format!(
+                "  - provider={provider_name}; capability={capability}; status={status}"
+            ));
+        }
+    }
+
+    let frame_status = frame_extraction
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if matches!(frame_status, "failed" | "skipped") {
+        let reason = frame_extraction
+            .get("reason")
+            .and_then(Value::as_str)
+            .map(video_safe_evidence_text)
+            .unwrap_or_else(|| "unknown".to_string());
+        lines.push(format!(
+            "- frame_extraction_{frame_status}: raw frames/contact sheet are not complete; reason={reason}."
+        ));
+    }
+
+    if lines.is_empty() {
+        "- No blocking quality notes recorded for the current evidence set.\n".to_string()
+    } else {
+        format!("{}\n", lines.join("\n"))
+    }
 }
 
 fn render_video_evidence_reference_lines(evidence: &VideoMediaEvidenceItems) -> String {
@@ -4794,6 +4886,8 @@ mod tests {
         let source_text = fs::read_to_string(source_text_path).expect("source text file");
         assert!(source_text.contains("Transcript Evidence"));
         assert!(source_text.contains("Evidence References"));
+        assert!(source_text.contains("Quality Notes"));
+        assert!(source_text.contains("provider_failure"));
         assert!(source_text.contains("Provider Evidence"));
         assert!(source_text.contains("ref=transcript#1"));
         assert!(source_text.contains("source=MEDIA_TRANSCRIBE_BIN"));
@@ -4812,6 +4906,8 @@ mod tests {
             .expect("outline path");
         let outline = fs::read_to_string(outline_path).expect("outline file");
         assert!(outline.contains("Evidence References"));
+        assert!(outline.contains("Quality Notes"));
+        assert!(outline.contains("provider_failure"));
         assert!(outline.contains("ref=scene#1"));
         assert!(outline.contains("source=[redacted]"));
         let final_manifest_path = manifest["files"]
