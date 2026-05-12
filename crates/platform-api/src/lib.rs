@@ -27435,13 +27435,19 @@ mod tests {
     }
 
     #[test]
-    fn html_artifact_video_download_file_stays_inside_generated_workspace() {
+    fn html_artifact_video_download_files_stay_inside_generated_workspace() {
         let root =
             std::env::temp_dir().join(format!("aidp-v3-html-artifact-download-{}", Uuid::new_v4()));
         let artifacts_dir = root.join("generated_artifacts");
         fs::create_dir_all(&artifacts_dir).expect("test artifacts dir should be created");
-        let file_path = artifacts_dir.join("final_deliverables_manifest.json");
-        fs::write(&file_path, "{}").expect("test manifest should be written");
+        let final_manifest_path = artifacts_dir.join("final_deliverables_manifest.json");
+        let pptx_path = artifacts_dir.join("video_slides_screenshot_based.pptx");
+        let slide_notes_path = artifacts_dir.join("slide_notes.md");
+        let subtitle_map_path = artifacts_dir.join("subtitle_page_map.json");
+        fs::write(&final_manifest_path, "{}").expect("test manifest should be written");
+        fs::write(&pptx_path, "pptx").expect("test pptx should be written");
+        fs::write(&slide_notes_path, "# notes").expect("test notes should be written");
+        fs::write(&subtitle_map_path, "{}").expect("test subtitle map should be written");
         let artifact = HtmlArtifactManifestView {
             kind: "html_artifact".to_string(),
             version: 1,
@@ -27468,18 +27474,42 @@ mod tests {
                     "files": [{
                         "artifact_kind": "final_deliverables_manifest",
                         "format": "application/json",
-                        "path": file_path.display().to_string()
+                        "path": final_manifest_path.display().to_string()
+                    }, {
+                        "artifact_kind": "pptx",
+                        "format": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                        "path": pptx_path.display().to_string()
+                    }, {
+                        "artifact_kind": "slide_notes",
+                        "format": "text/markdown",
+                        "path": slide_notes_path.display().to_string()
+                    }, {
+                        "artifact_kind": "subtitle_page_map",
+                        "format": "application/json",
+                        "path": subtitle_map_path.display().to_string()
                     }]
                 }
             }),
         };
 
-        let download = html_artifact_downloadable_file(&artifact, 0)
-            .expect("file inside generated workspace should be downloadable");
+        let expected = [
+            (0, "final_deliverables_manifest.json", "application/json"),
+            (
+                1,
+                "video_slides_screenshot_based.pptx",
+                "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            ),
+            (2, "slide_notes.md", "text/markdown"),
+            (3, "subtitle_page_map.json", "application/json"),
+        ];
+        for (index, file_name, content_type) in expected {
+            let download = html_artifact_downloadable_file(&artifact, index)
+                .expect("file inside generated workspace should be downloadable");
 
-        assert!(download.path.ends_with("final_deliverables_manifest.json"));
-        assert_eq!(download.file_name, "final_deliverables_manifest.json");
-        assert_eq!(download.content_type, "application/json");
+            assert!(download.path.ends_with(file_name));
+            assert_eq!(download.file_name, file_name);
+            assert_eq!(download.content_type, content_type);
+        }
     }
 
     #[test]
