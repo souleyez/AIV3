@@ -1,0 +1,109 @@
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import test from "node:test";
+import { validateVideoDeliverables } from "./validate-video-deliverables.mjs";
+
+test("accepts a complete video deliverables directory", () => {
+  const sessionDir = createCompleteDeliverables();
+  const result = validateVideoDeliverables(sessionDir);
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.errors, []);
+  assert.equal(result.files.length, 5);
+  assert.ok(result.files.every((file) => file.exists));
+});
+
+test("rejects missing review files", () => {
+  const sessionDir = createCompleteDeliverables();
+  fs.unlinkSync(path.join(sessionDir, "generated_artifacts", "slide_notes.md"));
+
+  const result = validateVideoDeliverables(sessionDir);
+
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.some((error) => error.code === "missing_required_file" && error.kind === "slide_notes"));
+});
+
+test("rejects inconsistent final manifest status", () => {
+  const sessionDir = createCompleteDeliverables();
+  const finalManifestPath = path.join(sessionDir, "generated_artifacts", "final_deliverables_manifest.json");
+  const finalManifest = JSON.parse(fs.readFileSync(finalManifestPath, "utf8"));
+  finalManifest.deliverable_status.has_subtitle_page_map = false;
+  fs.writeFileSync(finalManifestPath, JSON.stringify(finalManifest, null, 2));
+
+  const result = validateVideoDeliverables(sessionDir);
+
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.some((error) => error.code === "deliverable_status_missing_flag" && error.kind === "subtitle_page_map"));
+});
+
+test("rejects unredacted local paths in public JSON", () => {
+  const sessionDir = createCompleteDeliverables();
+  const subtitleMapPath = path.join(sessionDir, "generated_artifacts", "subtitle_page_map.json");
+  fs.writeFileSync(
+    subtitleMapPath,
+    JSON.stringify({ pages: [{ page: 1, frame_path: "C:\\private\\video\\frame_000001.jpg" }] }, null, 2),
+  );
+
+  const result = validateVideoDeliverables(sessionDir);
+
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.some((error) => error.code === "unredacted_local_path_or_token" && error.kind === "subtitle_page_map"));
+});
+
+function createCompleteDeliverables() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "aidp-v3-video-deliverables-test-"));
+  const artifactsDir = path.join(root, "generated_artifacts");
+  fs.mkdirSync(artifactsDir, { recursive: true });
+
+  fs.writeFileSync(path.join(artifactsDir, "video_slides_screenshot_based.pptx"), Buffer.from([0x50, 0x4b, 0x03, 0x04]));
+  fs.writeFileSync(path.join(artifactsDir, "slide_notes.md"), "# Slide Notes\n\nAligned transcript is ready.\n");
+  fs.writeFileSync(
+    path.join(artifactsDir, "subtitle_page_map.json"),
+    JSON.stringify({ redaction: { status: "applied" }, pages: [{ page: 1, transcript: "Aligned transcript" }] }, null, 2),
+  );
+
+  const files = [
+    "pptx",
+    "final_deliverables_manifest",
+    "extraction_artifacts_manifest",
+    "slide_notes",
+    "subtitle_page_map",
+  ].map((kind) => ({
+    artifact_kind: kind,
+    path: "[redacted]",
+  }));
+
+  fs.writeFileSync(
+    path.join(artifactsDir, "final_deliverables_manifest.json"),
+    JSON.stringify(
+      {
+        status: "final_pptx_ready",
+        deliverable_status: {
+          state: "final_pptx_ready",
+          has_pptx: true,
+          has_final_deliverables_manifest: true,
+          has_extraction_artifacts_manifest: true,
+          has_slide_notes: true,
+          has_subtitle_page_map: true,
+        },
+        manifest_outputs: files.filter((file) =>
+          ["final_deliverables_manifest", "extraction_artifacts_manifest"].includes(file.artifact_kind),
+        ),
+        final_outputs: files.filter((file) => file.artifact_kind === "pptx"),
+        review_outputs: files.filter((file) => file.artifact_kind === "slide_notes"),
+        evidence_outputs: files.filter((file) => file.artifact_kind === "subtitle_page_map"),
+      },
+      null,
+      2,
+    ),
+  );
+
+  fs.writeFileSync(
+    path.join(artifactsDir, "extraction_artifacts_manifest.json"),
+    JSON.stringify({ status: "completed", files }, null, 2),
+  );
+
+  return root;
+}
