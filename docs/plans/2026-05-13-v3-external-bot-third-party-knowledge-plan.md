@@ -12,6 +12,11 @@
 
 **Third-party Sendable Guide (CN):** `docs/integrations/third-party-integration-api.zh-CN.md`
 
+**Current Progress:**
+- Phase 5 generic source sync workflow is connected through `platform-api`, `workflow-definitions`, `ingest-worker`, `retrieval-worker`, and `external-source-worker`.
+- Generic source MVP currently supports mock HTTPS connector fixtures for external users, groups, document metadata, document bodies, and ACL snapshots.
+- Next implementation checkpoint: add Feishu/Lark and WeCom channel adapters on top of the normalized external integration surface.
+
 ---
 
 ## Product Positioning
@@ -356,16 +361,18 @@ It should not ask operators to manually label documents, rewrite permissions, or
 
 **Files:**
 - Create: `crates/workflow-definitions/src/external_source_sync.rs` if the crate is split, otherwise extend `crates/workflow-definitions/src/lib.rs`.
+- Create: `crates/external-source-worker/src/main.rs`.
 - Modify: `crates/ingest-worker/src/lib.rs`
 - Modify: `crates/retrieval-worker/src/lib.rs`
 - Modify: `crates/platform-api/src/external_integrations.rs`
 
 **Steps:**
-1. Define a mock HTTPS connector fixture for document metadata, body, user, group, and ACL pulls.
-2. Add sync workflow states: `sync_users`, `sync_acl`, `sync_metadata`, `fetch_content`, `ingest`, `index`, `completed`, `failed`.
-3. Reuse existing ingest pipeline for parsed content.
-4. Attach ACL snapshots to indexed chunks.
-5. Commit `Add generic external source sync MVP`.
+1. Done: Define a mock HTTPS connector fixture for document metadata, body, user, group, and ACL pulls.
+2. Done: Add sync workflow states: `sync_users`, `sync_acl`, `sync_metadata`, `fetch_content`, `ingest`, `index`, `completed`, `failed`.
+3. Done: Reuse existing ingest pipeline for parsed content.
+4. Done: Attach ACL snapshots to indexed chunks.
+5. Done: Add `external-source-worker` to claim `external_source` tasks and emit workflow outputs for ingest/index.
+6. Commit `Add generic external source sync MVP`.
 
 ### Phase 6: Feishu/Lark and WeCom adapters
 

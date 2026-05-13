@@ -11,6 +11,7 @@ members = [
     "crates/mcp-gateway",
     "crates/llm-gateway",
     "crates/document-vlm-runtime",
+    "crates/external-source-worker",
     "crates/ingest-worker",
     "crates/media-worker",
     "crates/retrieval-worker",
