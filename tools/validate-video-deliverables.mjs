@@ -120,6 +120,7 @@ export function validateVideoDeliverables(inputPath) {
     validateExtractionManifest(extractionManifest, errors);
   }
   if (subtitlePageMap) {
+    validateSubtitlePageMap(subtitlePageMap, errors);
     validateRedactedJson(subtitlePageMap, "subtitle_page_map", errors);
   }
   const slideNotes = files.find((file) => file.kind === "slide_notes");
@@ -175,6 +176,22 @@ function validateExtractionManifest(manifest, errors) {
     }
   }
   validateRedactedJson(manifest, "extraction_artifacts_manifest", errors);
+}
+
+function validateSubtitlePageMap(map, errors) {
+  const pages = Array.isArray(map.pages) ? map.pages : [];
+  if (map.status !== "mapped") {
+    errors.push(issue("subtitle_page_map_not_mapped", "subtitle_page_map status is not mapped", "subtitle_page_map"));
+  }
+  if (map.assignment_rule !== "pre_page_previous_to_current") {
+    errors.push(issue("subtitle_page_map_assignment_rule_invalid", "subtitle_page_map assignment rule is invalid", "subtitle_page_map"));
+  }
+  if (!Number.isInteger(map.page_count) || map.page_count < 1 || map.page_count !== pages.length) {
+    errors.push(issue("subtitle_page_map_page_count_invalid", "subtitle_page_map page_count does not match pages", "subtitle_page_map"));
+  }
+  if (!pages.some((page) => Array.isArray(page?.transcript_segments) && page.transcript_segments.length > 0)) {
+    errors.push(issue("subtitle_page_map_transcript_segments_missing", "subtitle_page_map has no transcript segments", "subtitle_page_map"));
+  }
 }
 
 function validateRedactedJson(value, kind, errors) {

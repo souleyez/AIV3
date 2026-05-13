@@ -110,6 +110,23 @@ test("rejects unredacted local paths in public JSON", () => {
   assert.ok(result.errors.some((error) => error.code === "unredacted_local_path_or_token" && error.kind === "subtitle_page_map"));
 });
 
+test("rejects unmapped subtitle page maps", () => {
+  const sessionDir = createCompleteDeliverables();
+  const subtitleMapPath = path.join(sessionDir, "generated_artifacts", "subtitle_page_map.json");
+  const subtitleMap = JSON.parse(fs.readFileSync(subtitleMapPath, "utf8"));
+  subtitleMap.status = "unmapped";
+  subtitleMap.page_count = 0;
+  subtitleMap.pages = [];
+  fs.writeFileSync(subtitleMapPath, JSON.stringify(subtitleMap, null, 2));
+
+  const result = validateVideoDeliverables(sessionDir);
+
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.some((error) => error.code === "subtitle_page_map_not_mapped"));
+  assert.ok(result.errors.some((error) => error.code === "subtitle_page_map_page_count_invalid"));
+  assert.ok(result.errors.some((error) => error.code === "subtitle_page_map_transcript_segments_missing"));
+});
+
 test("rejects unredacted local paths in slide notes", () => {
   const sessionDir = createCompleteDeliverables();
   fs.writeFileSync(
@@ -132,7 +149,23 @@ function createCompleteDeliverables() {
   fs.writeFileSync(path.join(artifactsDir, "slide_notes.md"), "# Slide Notes\n\nAligned transcript is ready.\n");
   fs.writeFileSync(
     path.join(artifactsDir, "subtitle_page_map.json"),
-    JSON.stringify({ redaction: { status: "applied" }, pages: [{ page: 1, transcript: "Aligned transcript" }] }, null, 2),
+    JSON.stringify(
+      {
+        status: "mapped",
+        assignment_rule: "pre_page_previous_to_current",
+        page_count: 1,
+        pages: [
+          {
+            slide_number: 1,
+            candidate_index: 2,
+            source_frame: "frame_000002.jpg",
+            transcript_segments: [{ start_seconds: 0.2, end_seconds: 0.6, text: "Aligned transcript" }],
+          },
+        ],
+      },
+      null,
+      2,
+    ),
   );
 
   const files = [
