@@ -771,6 +771,30 @@ pub async fn request_workflow_retry(
     retry_workflow_execution_with_state(&state, execution_id, request).await
 }
 
+pub async fn dispatch_external_action_workflow_task(
+    storage: PgStorage,
+    tenant_id: TenantId,
+    connection_id: String,
+    action_id: String,
+) -> std::result::Result<Value, ApiError> {
+    let state = AppState::new(
+        storage,
+        workflow_definitions::catalog(),
+        tenant_id,
+        EventBus::Disabled,
+    );
+    let outcome =
+        dispatch_external_action_run_if_ready(&state, &connection_id, &action_id, Utc::now())
+            .await?;
+    Ok(json!({
+        "action_id": action_id,
+        "connection_id": connection_id,
+        "status": outcome.status,
+        "external_request_id": outcome.external_request_id,
+        "failure_kind": outcome.failure_kind,
+    }))
+}
+
 pub async fn request_report_plan_continue(
     storage: PgStorage,
     tenant_id: TenantId,
@@ -3106,7 +3130,8 @@ fn infer_model_facing_capability_class(
         WorkflowKind::UploadIngest
         | WorkflowKind::CodexHostTask
         | WorkflowKind::VideoExtraction
-        | WorkflowKind::ExternalSourceSync => {
+        | WorkflowKind::ExternalSourceSync
+        | WorkflowKind::ExternalActionDispatch => {
             contracts::ModelFacingCapabilityClassView::ControlledPlatformAction
         }
     }
@@ -6705,6 +6730,13 @@ struct ExternalActionDispatchAuth {
     signing_secret: Option<String>,
 }
 
+#[derive(Clone, Debug, Default)]
+struct ExternalActionRetrySchedule {
+    affected_action_count: i64,
+    workflow_execution: Option<WorkflowExecutionView>,
+    enqueued_tasks: Vec<WorkflowTaskView>,
+}
+
 async fn list_external_integrations(
     State(state): State<AppState>,
 ) -> std::result::Result<Json<ListExternalIntegrationsResponse>, ApiError> {
@@ -6960,20 +6992,20 @@ async fn retry_external_integration(
         );
     }
 
-    let mut affected_action_count = 0;
+    let mut action_schedule = ExternalActionRetrySchedule::default();
     if channel_exists {
-        affected_action_count =
+        action_schedule =
             retry_external_channel_action_runs(&state, &integration_id, Utc::now()).await?;
     }
 
     let status = if sync_response.is_some() {
         "running"
-    } else if affected_action_count > 0 {
-        "retry_attempted"
+    } else if action_schedule.affected_action_count > 0 {
+        "retry_queued"
     } else {
         "no_retryable_action"
     };
-    let (sync_run_id, workflow_execution, enqueued_tasks) = sync_response
+    let (sync_run_id, mut workflow_execution, mut enqueued_tasks) = sync_response
         .map(|response| {
             (
                 Some(response.sync_run_id),
@@ -6982,6 +7014,10 @@ async fn retry_external_integration(
             )
         })
         .unwrap_or((None, None, Vec::new()));
+    if workflow_execution.is_none() {
+        workflow_execution = action_schedule.workflow_execution;
+    }
+    enqueued_tasks.extend(action_schedule.enqueued_tasks);
 
     Ok(Json(ExternalIntegrationControlResponse {
         accepted: true,
@@ -6994,12 +7030,12 @@ async fn retry_external_integration(
         status: status.to_string(),
         message: if source_exists {
             "external source retry sync has been enqueued".to_string()
-        } else if affected_action_count > 0 {
-            "retry attempted for retryable external action runs".to_string()
+        } else if action_schedule.affected_action_count > 0 {
+            "retryable external action runs have been queued".to_string()
         } else {
             "no retryable external action run was found".to_string()
         },
-        affected_action_count,
+        affected_action_count: action_schedule.affected_action_count,
         sync_run_id,
         workflow_execution,
         enqueued_tasks,
@@ -7226,7 +7262,7 @@ async fn retry_external_channel_action_runs(
     state: &AppState,
     integration_id: &str,
     now: DateTime<Utc>,
-) -> std::result::Result<i64, ApiError> {
+) -> std::result::Result<ExternalActionRetrySchedule, ApiError> {
     let rows = sqlx::query(
         r#"
         select id
@@ -7246,16 +7282,88 @@ async fn retry_external_channel_action_runs(
     .await
     .map_err(|error| ApiError::from_storage(anyhow::Error::new(error)))?;
 
-    let mut attempted = 0;
+    let mut schedule = ExternalActionRetrySchedule::default();
     for row in rows {
         let action_id: String = row.get("id");
-        let outcome =
-            dispatch_external_action_run_if_ready(state, integration_id, &action_id, now).await?;
-        if outcome.status != "already_dispatched" && outcome.status != "waiting_confirmation" {
-            attempted += 1;
+        let started =
+            enqueue_external_action_dispatch_retry(state, integration_id, &action_id, now).await?;
+        if schedule.workflow_execution.is_none() {
+            schedule.workflow_execution = Some(started.execution.clone());
         }
+        schedule.enqueued_tasks.extend(started.enqueued_tasks);
+        schedule.affected_action_count += 1;
     }
-    Ok(attempted)
+    Ok(schedule)
+}
+
+async fn enqueue_external_action_dispatch_retry(
+    state: &AppState,
+    connection_id: &str,
+    action_id: &str,
+    now: DateTime<Utc>,
+) -> std::result::Result<AdvanceWorkflowExecutionResponse, ApiError> {
+    let workflow_execution =
+        build_initial_external_action_dispatch_execution(state, connection_id, action_id, now)?;
+    let initial_event =
+        build_initial_external_action_dispatch_event(&workflow_execution, connection_id, action_id);
+    state
+        .storage
+        .workflow_executions()
+        .create_with_initial_event(&workflow_execution, &initial_event)
+        .await
+        .map_err(ApiError::from_storage)?;
+    let started = apply_workflow_signal_with_dependencies(
+        &state.storage,
+        &state.workflow_catalog,
+        &state.event_bus,
+        state.tenant_id,
+        workflow_execution.id,
+        WorkflowSignal::Start,
+    )
+    .await?;
+    mark_external_action_retry_queued(state, action_id, &started, now).await?;
+    Ok(started)
+}
+
+async fn mark_external_action_retry_queued(
+    state: &AppState,
+    action_id: &str,
+    started: &AdvanceWorkflowExecutionResponse,
+    now: DateTime<Utc>,
+) -> std::result::Result<(), ApiError> {
+    let task_ids: Vec<String> = started
+        .enqueued_tasks
+        .iter()
+        .map(|task| task.id.to_string())
+        .collect();
+    let result_patch = json!({
+        "status": "retry_queued",
+        "retry": {
+            "workflow_execution_id": started.execution.id,
+            "workflow_stage": started.execution.stage,
+            "task_ids": task_ids,
+            "queue": "external_action",
+            "queued_at": now,
+        },
+        "updated_at": now,
+    });
+    sqlx::query(
+        r#"
+        update external_action_runs
+        set result_summary = result_summary || $3,
+            failure_kind = null,
+            updated_at = $4
+        where tenant_id = $1 and id = $2
+        "#,
+    )
+    .bind(state.tenant_id.0)
+    .bind(action_id)
+    .bind(result_patch)
+    .bind(now)
+    .execute(state.storage.pool())
+    .await
+    .map_err(|error| ApiError::from_storage(anyhow::Error::new(error)))?;
+    Ok(())
 }
 
 async fn load_external_channel_audit_items(
@@ -17726,6 +17834,57 @@ fn build_initial_external_source_sync_execution(
     })
 }
 
+fn build_initial_external_action_dispatch_execution(
+    state: &AppState,
+    connection_id: &str,
+    action_id: &str,
+    now: DateTime<Utc>,
+) -> std::result::Result<WorkflowExecution, ApiError> {
+    let definition = state
+        .workflow_catalog
+        .find_definition(WorkflowKind::ExternalActionDispatch)
+        .ok_or_else(|| {
+            ApiError::internal(
+                "workflow_definition_missing",
+                "external_action_dispatch workflow definition is not registered".to_string(),
+            )
+        })?;
+    let execution_id = WorkflowExecutionId::new();
+    let runtime_state = definition.initial_state(execution_id, now);
+    let mut context = runtime_state.context;
+    context.insert(
+        "retries_remaining".to_string(),
+        Value::Number(runtime_state.retries_remaining.into()),
+    );
+    context.insert(
+        "channel_connection_id".to_string(),
+        Value::String(connection_id.to_string()),
+    );
+    context.insert(
+        "external_action_id".to_string(),
+        Value::String(action_id.to_string()),
+    );
+    context.insert(
+        "requested_from".to_string(),
+        Value::String("external_integrations_panel".to_string()),
+    );
+
+    Ok(WorkflowExecution {
+        id: execution_id,
+        tenant_id: state.tenant_id,
+        dataset_id: None,
+        report_plan_id: None,
+        kind: WorkflowKind::ExternalActionDispatch,
+        version: runtime_state.version,
+        stage: runtime_state.stage,
+        status: runtime_state.status,
+        attempt: 0,
+        context: Value::Object(context),
+        created_at: now,
+        updated_at: now,
+    })
+}
+
 fn build_initial_memory_directory_execution(
     state: &AppState,
     dataset_id: DatasetId,
@@ -18193,6 +18352,28 @@ fn build_initial_external_source_sync_event(
             "connector_kind": source.connector_kind,
             "sync_mode": source.sync_mode,
             "permission_mode": source.permission_mode,
+        }),
+        created_at: execution.created_at,
+    }
+}
+
+fn build_initial_external_action_dispatch_event(
+    execution: &WorkflowExecution,
+    connection_id: &str,
+    action_id: &str,
+) -> WorkflowEventRecord {
+    WorkflowEventRecord {
+        id: domain_model::WorkflowEventId::new(),
+        execution_id: execution.id,
+        sequence_no: 1,
+        event_name: "workflow.execution_created".to_string(),
+        payload: json!({
+            "kind": execution.kind.as_str(),
+            "version": execution.version,
+            "status": execution.status.as_str(),
+            "stage": execution.stage,
+            "channel_connection_id": connection_id,
+            "external_action_id": action_id,
         }),
         created_at: execution.created_at,
     }
@@ -29714,6 +29895,111 @@ mod tests {
         assert_eq!(
             confirmed_result_summary["dispatch"]["reason"],
             json!("dispatch_endpoint_missing")
+        );
+    }
+
+    #[tokio::test]
+    async fn external_integration_retry_queues_external_action_dispatch_workflow() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping external action retry queue test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("external-action-retry-test-{}", Uuid::new_v4()),
+                "External Action Retry Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage,
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        insert_generic_external_channel_connection(&state, "generic-chat-main").await;
+        sqlx::query(
+            r#"
+            insert into external_action_runs (
+                id,
+                tenant_id,
+                requester_summary,
+                risk_level,
+                target_system,
+                action_type,
+                arguments_redacted,
+                confirmation_state,
+                result_summary,
+                failure_kind
+            )
+            values ($1, $2, $3, 'low_risk_write', 'external_channel', 'external_business_action.invoke', $4, 'confirmed', $5, 'request_failed')
+            "#,
+        )
+        .bind("act-retry-001")
+        .bind(state.tenant_id.0)
+        .bind(json!({
+            "platform": "generic_chat",
+            "channel_connection_id": "generic-chat-main",
+            "conversation_external_id": "chat-risk-room",
+            "sender_external_id": "user-ext-001"
+        }))
+        .bind(json!({"operation": "create_ticket"}))
+        .bind(json!({"status": "dispatch_failed"}))
+        .execute(state.storage.pool())
+        .await
+        .expect("retryable external action run should be inserted");
+
+        let Json(response) = retry_external_integration(
+            State(state.clone()),
+            Path("generic-chat-main".to_string()),
+            Json(ExternalIntegrationControlRequest {
+                reason: Some("operator retry".to_string()),
+                sync_kind: None,
+            }),
+        )
+        .await
+        .expect("retry should be accepted");
+
+        assert_eq!(response.status, "retry_queued");
+        assert_eq!(response.affected_action_count, 1);
+        assert_eq!(response.enqueued_tasks.len(), 1);
+        assert_eq!(response.enqueued_tasks[0].queue, "external_action");
+        assert_eq!(
+            response.enqueued_tasks[0].task_key,
+            "dispatch_external_action"
+        );
+        assert_eq!(
+            response
+                .workflow_execution
+                .as_ref()
+                .expect("workflow should be returned")
+                .kind,
+            WorkflowKind::ExternalActionDispatch
+        );
+
+        let row = sqlx::query(
+            r#"
+            select result_summary, failure_kind
+            from external_action_runs
+            where tenant_id = $1 and id = 'act-retry-001'
+            "#,
+        )
+        .bind(state.tenant_id.0)
+        .fetch_one(state.storage.pool())
+        .await
+        .expect("action run should still exist");
+        let result_summary = row.get::<Value, _>("result_summary");
+        assert_eq!(result_summary["status"], json!("retry_queued"));
+        assert_eq!(result_summary["retry"]["queue"], json!("external_action"));
+        assert_eq!(
+            row.get::<Option<String>, _>("failure_kind").as_deref(),
+            None
         );
     }
 

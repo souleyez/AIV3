@@ -476,6 +476,7 @@ pub enum WorkflowKind {
     CodexHostTask,
     VideoExtraction,
     ExternalSourceSync,
+    ExternalActionDispatch,
 }
 
 impl WorkflowKind {
@@ -492,6 +493,7 @@ impl WorkflowKind {
             Self::CodexHostTask => "codex_host_task_workflow",
             Self::VideoExtraction => "video_extraction_workflow",
             Self::ExternalSourceSync => "external_source_sync_workflow",
+            Self::ExternalActionDispatch => "external_action_dispatch_workflow",
         }
     }
 
@@ -508,6 +510,7 @@ impl WorkflowKind {
             "codex_host_task_workflow" => Some(Self::CodexHostTask),
             "video_extraction_workflow" => Some(Self::VideoExtraction),
             "external_source_sync_workflow" => Some(Self::ExternalSourceSync),
+            "external_action_dispatch_workflow" => Some(Self::ExternalActionDispatch),
             _ => None,
         }
     }
@@ -911,6 +914,14 @@ mod tests {
         assert_eq!(
             WorkflowKind::from_str("external_source_sync_workflow"),
             Some(WorkflowKind::ExternalSourceSync)
+        );
+        assert_eq!(
+            WorkflowKind::ExternalActionDispatch.as_str(),
+            "external_action_dispatch_workflow"
+        );
+        assert_eq!(
+            WorkflowKind::from_str("external_action_dispatch_workflow"),
+            Some(WorkflowKind::ExternalActionDispatch)
         );
     }
 

@@ -72,7 +72,7 @@ export function controlResultLabel(result) {
   }
   if (result.action === 'retry') {
     return result.affectedActionCount > 0
-      ? `已尝试重试 ${result.affectedActionCount} 个动作`
+      ? `已入队 ${result.affectedActionCount} 个动作重试`
       : '暂无可重试动作';
   }
   if (result.action === 'disable') {

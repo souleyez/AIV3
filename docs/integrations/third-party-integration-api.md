@@ -30,10 +30,10 @@ Already implemented:
 - Observe-first integration list and audit endpoints.
 - Limited management controls: disable, retry, and secret-rotation request markers.
 - Standalone external integration observability panel on `https://v3.elepcloud.com/`.
+- External action retry requests now enqueue `external_action_dispatch_workflow` tasks on the `external_action` worker queue instead of dispatching synchronously from the management request.
 
 Planned next:
 
-- Move external action dispatch retries into dedicated retryable worker execution.
 - Add deeper permission-drift and source-sync recovery signals to the observability panel.
 - Extend artifact publishing status and revocation controls.
 
@@ -695,7 +695,7 @@ The audit response returns a newest-first redacted timeline for messages, action
 POST /v1/external/integrations/{integration_id}/retry
 ```
 
-For source integrations, this enqueues an incremental source sync. For channel integrations, this attempts retry for recent action runs that are confirmed or do not require confirmation and are currently marked `dispatch_blocked` or `dispatch_failed`. Worker-backed retry scheduling is still a follow-up hardening item.
+For source integrations, this enqueues an incremental source sync. For channel integrations, this queues recent action runs that are confirmed or do not require confirmation and are currently marked `dispatch_blocked` or `dispatch_failed` into `external_action_dispatch_workflow` on the `external_action` queue. The worker dispatches the validated external action to the configured third-party endpoint and advances the workflow with a redacted output summary.
 
 ```http
 POST /v1/external/integrations/{integration_id}/disable

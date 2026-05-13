@@ -719,6 +719,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "external-action-worker"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "domain-model",
+ "event-bus",
+ "observability",
+ "platform-api",
+ "serde_json",
+ "storage",
+ "tokio",
+ "tracing",
+ "workflow-definitions",
+ "workflow-engine",
+]
+
+[[package]]
 name = "external-source-worker"
 version = "0.1.0"
 dependencies = [

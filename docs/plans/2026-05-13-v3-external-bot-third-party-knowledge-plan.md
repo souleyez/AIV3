@@ -25,7 +25,8 @@
 - Phase 7 fifth checkpoint now exposes observe-first read APIs for external integrations and redacted audit timelines, including channel/source health, last activity, pending/blocked/failed/dispatched action counters, and sanitized action/message/sync summaries for the management UI.
 - Phase 7 sixth checkpoint now wires a standalone external integrations observability page, host-routes `v3.elepcloud.com` to that panel without main-workspace navigation links, and exposes same-domain `/v1/...` proxy paths so third-party API examples default to `https://v3.elepcloud.com`.
 - Phase 8 first checkpoint now adds limited management controls to the observe-first panel and API: source retry sync, channel action retry attempts, disable, and secret-rotation request markers, all using redacted responses.
-- Next implementation checkpoint: move external action dispatch retries into dedicated retryable worker execution and expand permission-drift/source-recovery signals on the panel.
+- Phase 8 second checkpoint now moves channel action retry from synchronous management requests into `external_action_dispatch_workflow`, enqueues retry tasks on the `external_action` worker queue, and adds `external-action-worker` to dispatch validated actions with workflow success/failure transitions.
+- Next implementation checkpoint: expand permission-drift/source-recovery signals on the panel and add deeper artifact publish/revoke status controls.
 
 ---
 

@@ -74,6 +74,16 @@ test('normalizeControlResult summarizes management control responses', () => {
   assert.equal(result.integrationId, 'src-docs');
   assert.equal(result.enqueuedTaskCount, 1);
   assert.equal(controlResultLabel(result), '同步已入队：sync-run-001');
+
+  assert.equal(
+    controlResultLabel(normalizeControlResult({
+      accepted: true,
+      action: 'retry',
+      affected_action_count: 2,
+      enqueued_tasks: [{}, {}],
+    })),
+    '已入队 2 个动作重试',
+  );
 });
 
 test('external integrations page does not include direct home navigation links', () => {

@@ -685,7 +685,7 @@ GET /v1/external/integrations/{integration_id}/audit
 POST /v1/external/integrations/{integration_id}/retry
 ```
 
-资料源集成会入队一次增量同步；聊天通道集成会尝试重试最近处于 `dispatch_blocked` 或 `dispatch_failed` 的、已经确认或无需确认的外部动作。真正的后台 worker 化重试调度仍属于后续增强项。
+资料源集成会入队一次增量同步；聊天通道集成会把最近处于 `dispatch_blocked` 或 `dispatch_failed` 的、已经确认或无需确认的外部动作排入 `external_action_dispatch_workflow`，并由 `external_action` worker 后台派发到已配置的第三方 endpoint。worker 输出只保存脱敏后的派发状态和结果摘要。
 
 ```http
 POST /v1/external/integrations/{integration_id}/disable
