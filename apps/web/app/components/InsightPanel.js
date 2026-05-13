@@ -256,13 +256,31 @@ function preferredHtmlArtifactDownloads(artifact) {
     .slice(0, 5);
 }
 
+function videoDeliverablePackage(payload = {}) {
+  return payload?.deliverablePackage || payload?.deliverable_package || {};
+}
+
+function videoDeliverablePackageStatus(payload = {}) {
+  const deliverablePackage = videoDeliverablePackage(payload);
+  const lifecycle = deliverablePackage.lifecycleState || deliverablePackage.lifecycle_state || '';
+  const immutable = deliverablePackage.immutableVersion || deliverablePackage.immutable_version;
+  const publishable = deliverablePackage.publishable === true;
+  const missing = deliverablePackage.missingRequiredFileKinds || deliverablePackage.missing_required_file_kinds || [];
+  if (immutable) return '已发布版本';
+  if (publishable || lifecycle === 'downloadable_not_published') return '可下载未发布';
+  if (Array.isArray(missing) && missing.length > 0) return `交付包缺${missing.length}项`;
+  if (lifecycle === 'not_ready') return '交付包未完成';
+  return '';
+}
+
 function htmlArtifactProjectStage(summary) {
   const status = summary.payload?.deliverableStatus || summary.payload?.deliverable_status || {};
   const state = status.state || summary.payload?.parseStatus || summary.payload?.parse_status || summary.meta;
   if (summary.templateId === 'video_extraction_summary') {
+    const packageStatus = videoDeliverablePackageStatus(summary.payload);
     return {
       label: '视频/PPT',
-      status: state === 'final_pptx_ready' ? 'PPTX已就绪' : formatSnakeCaseLabel(state || '处理中'),
+      status: packageStatus || (state === 'final_pptx_ready' ? 'PPTX已就绪' : formatSnakeCaseLabel(state || '处理中')),
     };
   }
   return {
@@ -274,6 +292,8 @@ function htmlArtifactProjectStage(summary) {
 function htmlArtifactBrief(summary) {
   const status = summary.payload?.deliverableStatus || summary.payload?.deliverable_status || {};
   if (summary.templateId === 'video_extraction_summary') {
+    const packageStatus = videoDeliverablePackageStatus(summary.payload);
+    const packageSuffix = packageStatus ? ` · ${packageStatus}` : '';
     const completionFollowUp = summary.payload?.completionFollowUp || summary.payload?.completion_follow_up || {};
     const notification = completionFollowUp.userNotification || completionFollowUp.user_notification || {};
     const completionAudit = summary.payload?.completionAudit || summary.payload?.completion_audit || {};
@@ -292,7 +312,7 @@ function htmlArtifactBrief(summary) {
           ? ' · 审计已脱敏'
           : '';
     if (notification.userVisible || notification.user_visible) {
-      return `${notification.title || notification.message || summary.subtitle || summary.meta}${auditSuffix}`;
+      return `${notification.title || notification.message || summary.subtitle || summary.meta}${packageSuffix}${auditSuffix}`;
     }
     const parts = [
       status.hasPptx || status.has_pptx ? 'PPTX ready' : 'PPTX waiting',
@@ -300,6 +320,7 @@ function htmlArtifactBrief(summary) {
       status.hasExtractionArtifactsManifest || status.has_extraction_artifacts_manifest ? 'artifact index ready' : '',
       status.hasSlideNotes || status.has_slide_notes ? 'slide notes ready' : '',
       status.hasSubtitlePageMap || status.has_subtitle_page_map ? 'subtitle map ready' : '',
+      packageStatus,
       auditSuffix.trim().replace(/^·\s*/, ''),
     ].filter(Boolean);
     return parts.join(' · ') || summary.subtitle || summary.meta;
