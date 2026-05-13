@@ -29,6 +29,212 @@ pub struct ApiErrorResponse {
     pub details: Option<Value>,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ExternalChannelPlatformView {
+    Feishu,
+    Lark,
+    WeCom,
+    GenericChat,
+    ThirdParty,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ExternalMessageTypeView {
+    Text,
+    Image,
+    File,
+    Audio,
+    Video,
+    Card,
+    Event,
+    Unknown,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ExternalAttachmentRefView {
+    pub attachment_external_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filename: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size_bytes: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub download_url_redacted: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ExternalBotMessageView {
+    pub platform: ExternalChannelPlatformView,
+    pub tenant_external_id: String,
+    pub bot_external_id: String,
+    pub conversation_external_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_external_id: Option<String>,
+    pub sender_external_id: String,
+    pub message_external_id: String,
+    pub message_type: ExternalMessageTypeView,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mention_external_user_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachment_refs: Vec<ExternalAttachmentRefView>,
+    pub idempotency_key: String,
+    pub received_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ExternalPrincipalTrustLevelView {
+    Unresolved,
+    Guest,
+    ExternalUser,
+    Employee,
+    Manager,
+    Admin,
+    SystemOperator,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ExternalPrincipalView {
+    pub tenant_id: String,
+    pub platform: ExternalChannelPlatformView,
+    pub external_user_id: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub external_department_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub external_group_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub external_role_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub v3_user_id: Option<String>,
+    pub trust_level: ExternalPrincipalTrustLevelView,
+    #[serde(default)]
+    pub is_disabled: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ThirdPartyConnectorKindView {
+    Document,
+    UserDirectory,
+    Artifact,
+    ChatChannel,
+    Action,
+    Combined,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ThirdPartySyncModeView {
+    Push,
+    Pull,
+    Hybrid,
+    Manual,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ThirdPartyPermissionModeView {
+    SourceAclSnapshot,
+    SourceRuntimeCheck,
+    V3Managed,
+    TenantPublic,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum IntegrationHealthStatusView {
+    Unknown,
+    Healthy,
+    Degraded,
+    Failing,
+    Disabled,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct IntegrationHealthView {
+    pub status: IntegrationHealthStatusView,
+    pub checked_at: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_success_at: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_failure_at: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ThirdPartyKnowledgeSourceView {
+    pub source_id: String,
+    pub tenant_id: String,
+    pub connector_kind: ThirdPartyConnectorKindView,
+    pub base_url_redacted: String,
+    pub sync_mode: ThirdPartySyncModeView,
+    pub permission_mode: ThirdPartyPermissionModeView,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub supported_capabilities: Vec<String>,
+    pub health: IntegrationHealthView,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ExternalDocumentAclSnapshotView {
+    pub source_id: String,
+    pub document_external_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revision_external_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allowed_user_external_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allowed_department_external_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allowed_group_external_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allowed_role_external_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub denied_user_external_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub denied_department_external_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub denied_group_external_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub denied_role_external_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub acl_hash: Option<String>,
+    pub captured_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ExternalActionRiskLevelView {
+    ReadOnly,
+    LowRiskWrite,
+    HighRiskWrite,
+    CrossSystem,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ExternalActionIntentView {
+    pub action_id: String,
+    pub tenant_id: String,
+    pub requester: ExternalPrincipalView,
+    pub risk_level: ExternalActionRiskLevelView,
+    pub target_system: String,
+    pub action_type: String,
+    #[serde(default)]
+    pub arguments_redacted: Value,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub source_evidence_refs: Vec<String>,
+    pub requires_confirmation: bool,
+    pub idempotency_key: String,
+    pub created_at: DateTime<Utc>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WorkflowDefinitionView {
     pub kind: WorkflowKind,
@@ -2949,6 +3155,180 @@ mod tests {
     use super::*;
     use chrono::Utc;
     use serde_json::json;
+
+    #[test]
+    fn external_bot_message_contract_uses_channel_safe_wire_shape() {
+        let received_at = Utc::now();
+        let message: ExternalBotMessageView = serde_json::from_value(json!({
+            "platform": "we_com",
+            "tenant_external_id": "corp-001",
+            "bot_external_id": "bot-qa",
+            "conversation_external_id": "chat-risk-review",
+            "sender_external_id": "user-a",
+            "message_external_id": "msg-001",
+            "message_type": "text",
+            "text": "本周订单风险有哪些？",
+            "attachment_refs": [
+                {
+                    "attachment_external_id": "file-001",
+                    "filename": "orders.xlsx",
+                    "content_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    "size_bytes": 2048,
+                    "download_url_redacted": "https://wecom.example/download/[redacted]"
+                }
+            ],
+            "idempotency_key": "wecom:corp-001:msg-001",
+            "received_at": received_at
+        }))
+        .expect("external bot message should deserialize");
+
+        assert_eq!(message.platform, ExternalChannelPlatformView::WeCom);
+        assert_eq!(message.message_type, ExternalMessageTypeView::Text);
+        assert!(message.mention_external_user_ids.is_empty());
+        assert_eq!(
+            message.attachment_refs[0].filename.as_deref(),
+            Some("orders.xlsx")
+        );
+
+        let encoded = serde_json::to_value(&message).expect("message should serialize");
+        assert_eq!(encoded["platform"], json!("we_com"));
+        assert_eq!(encoded["message_type"], json!("text"));
+        assert_eq!(
+            encoded["attachment_refs"][0]["download_url_redacted"],
+            json!("https://wecom.example/download/[redacted]")
+        );
+        assert!(encoded.get("thread_external_id").is_none());
+    }
+
+    #[test]
+    fn external_principal_and_acl_snapshot_roundtrip_permission_shape() {
+        let captured_at = Utc::now();
+        let principal = ExternalPrincipalView {
+            tenant_id: "tenant-001".to_string(),
+            platform: ExternalChannelPlatformView::Feishu,
+            external_user_id: "ou-user-a".to_string(),
+            external_department_ids: vec!["dept-sales".to_string()],
+            external_group_ids: vec!["group-risk".to_string()],
+            external_role_ids: vec!["role-manager".to_string()],
+            v3_user_id: Some("v3-user-a".to_string()),
+            trust_level: ExternalPrincipalTrustLevelView::Manager,
+            is_disabled: false,
+        };
+        let acl = ExternalDocumentAclSnapshotView {
+            source_id: "src-feishu-docs".to_string(),
+            document_external_id: "doc-risk-001".to_string(),
+            revision_external_id: Some("rev-7".to_string()),
+            allowed_user_external_ids: vec!["ou-user-a".to_string()],
+            allowed_department_external_ids: vec!["dept-sales".to_string()],
+            allowed_group_external_ids: vec!["group-risk".to_string()],
+            allowed_role_external_ids: vec!["role-manager".to_string()],
+            denied_user_external_ids: vec!["ou-user-blocked".to_string()],
+            denied_department_external_ids: Vec::new(),
+            denied_group_external_ids: Vec::new(),
+            denied_role_external_ids: Vec::new(),
+            acl_hash: Some("acl-hash-001".to_string()),
+            captured_at,
+        };
+
+        let encoded_principal =
+            serde_json::to_value(&principal).expect("principal should serialize");
+        let encoded_acl = serde_json::to_value(&acl).expect("acl should serialize");
+
+        assert_eq!(encoded_principal["platform"], json!("feishu"));
+        assert_eq!(encoded_principal["trust_level"], json!("manager"));
+        assert_eq!(encoded_acl["revision_external_id"], json!("rev-7"));
+        assert_eq!(
+            encoded_acl["denied_user_external_ids"],
+            json!(["ou-user-blocked"])
+        );
+
+        let decoded_acl: ExternalDocumentAclSnapshotView =
+            serde_json::from_value(encoded_acl).expect("acl should deserialize");
+        assert_eq!(decoded_acl.captured_at, captured_at);
+        assert_eq!(decoded_acl.acl_hash.as_deref(), Some("acl-hash-001"));
+    }
+
+    #[test]
+    fn third_party_source_and_action_intent_keep_runtime_values_redacted() {
+        let now = Utc::now();
+        let source = ThirdPartyKnowledgeSourceView {
+            source_id: "src-third-docs".to_string(),
+            tenant_id: "tenant-001".to_string(),
+            connector_kind: ThirdPartyConnectorKindView::Document,
+            base_url_redacted: "https://docs.example.com/[tenant]/".to_string(),
+            sync_mode: ThirdPartySyncModeView::Hybrid,
+            permission_mode: ThirdPartyPermissionModeView::SourceAclSnapshot,
+            supported_capabilities: vec![
+                "documents.list".to_string(),
+                "documents.fetch_acl".to_string(),
+            ],
+            health: IntegrationHealthView {
+                status: IntegrationHealthStatusView::Degraded,
+                checked_at: now,
+                last_success_at: Some(now),
+                last_failure_at: Some(now),
+                failure_kind: Some("rate_limited".to_string()),
+                message: Some("Retry scheduled; token value is not exposed".to_string()),
+            },
+        };
+        let requester = ExternalPrincipalView {
+            tenant_id: "tenant-001".to_string(),
+            platform: ExternalChannelPlatformView::GenericChat,
+            external_user_id: "user-portal-a".to_string(),
+            external_department_ids: Vec::new(),
+            external_group_ids: vec!["support".to_string()],
+            external_role_ids: Vec::new(),
+            v3_user_id: None,
+            trust_level: ExternalPrincipalTrustLevelView::Employee,
+            is_disabled: false,
+        };
+        let intent = ExternalActionIntentView {
+            action_id: "act-001".to_string(),
+            tenant_id: "tenant-001".to_string(),
+            requester,
+            risk_level: ExternalActionRiskLevelView::HighRiskWrite,
+            target_system: "ticketing".to_string(),
+            action_type: "ticket.update_priority".to_string(),
+            arguments_redacted: json!({
+                "ticket_id": "T-1001",
+                "priority": "high",
+                "auth_token": "[redacted]"
+            }),
+            source_evidence_refs: vec!["retrieval:chunk-001".to_string()],
+            requires_confirmation: true,
+            idempotency_key: "external-action:act-001".to_string(),
+            created_at: now,
+        };
+
+        let encoded_source = serde_json::to_value(&source).expect("source should serialize");
+        let encoded_intent = serde_json::to_value(&intent).expect("intent should serialize");
+        let serialized_intent = encoded_intent.to_string();
+
+        assert_eq!(encoded_source["connector_kind"], json!("document"));
+        assert_eq!(encoded_source["sync_mode"], json!("hybrid"));
+        assert_eq!(
+            encoded_source["permission_mode"],
+            json!("source_acl_snapshot")
+        );
+        assert_eq!(encoded_source["health"]["status"], json!("degraded"));
+        assert_eq!(encoded_intent["risk_level"], json!("high_risk_write"));
+        assert_eq!(encoded_intent["requires_confirmation"], json!(true));
+        assert!(encoded_intent.get("arguments").is_none());
+        assert!(serialized_intent.contains("arguments_redacted"));
+        assert!(!serialized_intent.contains("sk-"));
+        assert!(!serialized_intent.contains("raw_secret"));
+
+        let decoded_intent: ExternalActionIntentView =
+            serde_json::from_value(encoded_intent).expect("intent should deserialize");
+        assert_eq!(
+            decoded_intent.requester.platform,
+            ExternalChannelPlatformView::GenericChat
+        );
+        assert_eq!(
+            decoded_intent.risk_level,
+            ExternalActionRiskLevelView::HighRiskWrite
+        );
+    }
 
     #[test]
     fn workflow_runtime_inspect_view_defaults_pretty_summaries_when_missing() {
