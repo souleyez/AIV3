@@ -1,6 +1,6 @@
 use anyhow::{anyhow, Result};
 use chrono::Utc;
-use domain_model::{DocumentChunk, DocumentLifecycle};
+use domain_model::{Document, DocumentChunk, DocumentLifecycle};
 use event_bus::{workflow_task_enqueued_subject, EventBus, EventSubscription};
 use retrieval_worker::{
     LocalLexicalRetrievalIndexer, RetrievalChunkInput, RetrievalIndexJob, RetrievalIndexer,
@@ -13,6 +13,7 @@ use workflow_engine::{WorkflowCatalog, WorkflowSignal};
 
 const DEFAULT_QUEUE: &str = "retrieval";
 const DEFAULT_TASK_KEY: &str = "index_retrieval_artifacts";
+const EXTERNAL_SOURCE_INDEX_TASK_KEY: &str = "index_external_retrieval";
 const DEFAULT_POLL_INTERVAL_MS: u64 = 1_000;
 
 #[tokio::main]
@@ -22,8 +23,7 @@ async fn main() -> Result<()> {
     let database_url = std::env::var("PLATFORM_DATABASE_URL")
         .unwrap_or_else(|_| DEFAULT_LOCAL_DATABASE_URL.to_string());
     let queue = std::env::var("RETRIEVAL_QUEUE").unwrap_or_else(|_| DEFAULT_QUEUE.to_string());
-    let task_key =
-        std::env::var("RETRIEVAL_TASK_KEY").unwrap_or_else(|_| DEFAULT_TASK_KEY.to_string());
+    let task_key = optional_env("RETRIEVAL_TASK_KEY");
     let poll_interval = std::env::var("RETRIEVAL_POLL_INTERVAL_MS")
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
@@ -33,17 +33,18 @@ async fn main() -> Result<()> {
     let workflow_catalog = workflow_definitions::catalog();
     let event_bus = EventBus::connect_from_env_or_disabled("PLATFORM_NATS_URL").await;
     let indexer = LocalLexicalRetrievalIndexer;
-    let wake_subject = workflow_task_enqueued_subject(&queue, &task_key);
+    let wake_task_key = task_key.as_deref().unwrap_or(DEFAULT_TASK_KEY);
+    let wake_subject = workflow_task_enqueued_subject(&queue, wake_task_key);
     let mut task_waker = event_bus
         .subscribe_queue_or_disabled(
             &wake_subject,
-            Some(&format!("retrieval_worker.{queue}.{task_key}")),
+            Some(&format!("retrieval_worker.{queue}.{wake_task_key}")),
         )
         .await;
 
     tracing::info!(
         %queue,
-        %task_key,
+        task_key = task_key.as_deref().unwrap_or("*"),
         %wake_subject,
         event_bus_enabled = event_bus.is_enabled(),
         poll_interval_ms = poll_interval,
@@ -54,7 +55,7 @@ async fn main() -> Result<()> {
     loop {
         match storage
             .workflow_tasks()
-            .claim_next_available(&queue, Some(&task_key), Utc::now())
+            .claim_next_available(&queue, task_key.as_deref(), Utc::now())
             .await
         {
             Ok(Some(task)) => {
@@ -82,6 +83,17 @@ async fn process_task(
     indexer: &impl RetrievalIndexer,
     task: domain_model::WorkflowTask,
 ) -> Result<()> {
+    if task.task_key == EXTERNAL_SOURCE_INDEX_TASK_KEY {
+        return process_external_source_index_task(
+            storage,
+            workflow_catalog,
+            event_bus,
+            indexer,
+            task,
+        )
+        .await;
+    }
+
     let execution = storage
         .workflow_executions()
         .get_by_id(task.tenant_id, task.execution_id)
@@ -180,6 +192,11 @@ async fn process_task(
             if let Some(media_manifest) = retrieval_media_manifest(chunk) {
                 if let Some(object) = evidence_manifest.as_object_mut() {
                     object.insert("media".to_string(), media_manifest);
+                }
+            }
+            if let Some(external_acl) = retrieval_external_acl_manifest(&document, chunk) {
+                if let Some(object) = evidence_manifest.as_object_mut() {
+                    object.insert("external_acl".to_string(), external_acl);
                 }
             }
             new_retrieval_evidences.push(NewRetrievalEvidence {
@@ -333,6 +350,278 @@ async fn process_task(
     Ok(())
 }
 
+#[derive(Clone, Debug)]
+struct ExternalIndexedDocumentSummary {
+    document_id: domain_model::DocumentId,
+    indexed_chunk_count: usize,
+    retrieval_evidence_count: usize,
+}
+
+async fn process_external_source_index_task(
+    storage: &PgStorage,
+    workflow_catalog: &WorkflowCatalog,
+    event_bus: &EventBus,
+    indexer: &impl RetrievalIndexer,
+    task: domain_model::WorkflowTask,
+) -> Result<()> {
+    let execution = storage
+        .workflow_executions()
+        .get_by_id(task.tenant_id, task.execution_id)
+        .await?
+        .ok_or_else(|| anyhow!("workflow execution {} not found", task.execution_id))?;
+    let dataset_id = execution
+        .dataset_id
+        .ok_or_else(|| anyhow!("workflow execution {} has no dataset id", execution.id))?;
+    let document_ids = external_index_document_ids(&execution.context, &task.payload)?;
+
+    let process_result: Result<Value> = async {
+        let mut summaries = Vec::with_capacity(document_ids.len());
+        for document_id in document_ids {
+            summaries.push(
+                index_external_document(storage, indexer, &task, dataset_id, document_id).await?,
+            );
+        }
+        let indexed_chunk_count = summaries
+            .iter()
+            .map(|summary| summary.indexed_chunk_count)
+            .sum::<usize>();
+        let retrieval_evidence_count = summaries
+            .iter()
+            .map(|summary| summary.retrieval_evidence_count)
+            .sum::<usize>();
+        let signal_output = json!({
+            "source_id": context_string(&execution.context, "source_id")?,
+            "external_sync_run_id": context_string(&execution.context, "external_sync_run_id")?,
+            "document_count": summaries.len(),
+            "indexed_chunk_count": indexed_chunk_count,
+            "retrieval_evidence_count": retrieval_evidence_count,
+            "document_ids": summaries
+                .iter()
+                .map(|summary| json!(summary.document_id))
+                .collect::<Vec<_>>(),
+        });
+        update_external_sync_run_index_counts(storage, task.tenant_id, &signal_output).await?;
+        Ok(signal_output)
+    }
+    .await;
+
+    match process_result {
+        Ok(signal_output) => {
+            platform_api::apply_workflow_signal_with_dependencies(
+                storage,
+                workflow_catalog,
+                event_bus,
+                task.tenant_id,
+                task.execution_id,
+                WorkflowSignal::StepCompleted {
+                    task_key: task.task_key.clone(),
+                    output: Some(signal_output),
+                },
+            )
+            .await?;
+            storage
+                .workflow_tasks()
+                .mark_succeeded(task.id, Utc::now())
+                .await?;
+            tracing::info!(
+                task_id = %task.id,
+                execution_id = %task.execution_id,
+                "external source retrieval index task completed"
+            );
+            Ok(())
+        }
+        Err(error) => {
+            let error_message = error.to_string();
+            if let Err(signal_error) = platform_api::apply_workflow_signal_with_dependencies(
+                storage,
+                workflow_catalog,
+                event_bus,
+                task.tenant_id,
+                task.execution_id,
+                WorkflowSignal::StepFailed {
+                    task_key: task.task_key.clone(),
+                    error: error_message.clone(),
+                },
+            )
+            .await
+            {
+                tracing::error!(
+                    error = ?signal_error,
+                    task_id = %task.id,
+                    "retrieval worker failed to send external source step_failed signal"
+                );
+            }
+            storage
+                .workflow_tasks()
+                .mark_failed(task.id, &error_message, Utc::now())
+                .await?;
+            Err(error)
+        }
+    }
+}
+
+async fn index_external_document(
+    storage: &PgStorage,
+    indexer: &impl RetrievalIndexer,
+    task: &domain_model::WorkflowTask,
+    dataset_id: domain_model::DatasetId,
+    document_id: domain_model::DocumentId,
+) -> Result<ExternalIndexedDocumentSummary> {
+    let document = storage
+        .documents()
+        .get_by_id(task.tenant_id, document_id)
+        .await?
+        .ok_or_else(|| anyhow!("document {} not found", document_id))?;
+    let chunks = storage
+        .document_chunks()
+        .list_by_document(task.tenant_id, document_id)
+        .await?;
+    if chunks.is_empty() {
+        return Err(anyhow!(
+            "document {} has no extracted chunks to index",
+            document_id
+        ));
+    }
+
+    let indexed_at = Utc::now();
+    let outcome = indexer.index(&RetrievalIndexJob {
+        dataset_id,
+        document_id,
+        chunks: chunks
+            .iter()
+            .map(|chunk| RetrievalChunkInput {
+                chunk_index: chunk.chunk_index,
+                content: chunk.content.clone(),
+                token_count: chunk.token_count.max(0) as usize,
+            })
+            .collect(),
+    });
+    let embedding_model = outcome.embedding_model.clone();
+    let payload_filter_key = outcome.payload_filter_key.clone();
+    let chunk_profiles = BTreeMap::from_iter(
+        outcome
+            .chunk_profiles
+            .iter()
+            .cloned()
+            .map(|profile| (profile.chunk_index, profile)),
+    );
+    let mut new_retrieval_evidences = Vec::with_capacity(chunks.len());
+    for chunk in &chunks {
+        let profile = chunk_profiles.get(&chunk.chunk_index).ok_or_else(|| {
+            anyhow!(
+                "retrieval lexical profile missing for document {} chunk {}",
+                document_id,
+                chunk.chunk_index
+            )
+        })?;
+        let source_locator = retrieval_source_locator(document_id, chunk);
+        let mut evidence_manifest = json!({
+            "schema_version": "0.4.0",
+            "generator": "retrieval-worker",
+            "dataset_id": dataset_id,
+            "document_id": document_id,
+            "document_chunk_id": chunk.id,
+            "chunk_index": chunk.chunk_index,
+            "indexed_at": indexed_at,
+            "embedding": {
+                "status": "indexed",
+                "model": &embedding_model,
+                "token_count": profile.token_count,
+                "strategy": "local_lexical_v1",
+                "signature_terms": profile.signature_terms,
+                "term_weights": profile.term_weights,
+                "vector_norm": profile.vector_norm,
+            },
+            "recall": {
+                "status": "ready",
+                "score": profile.recall_score,
+                "rank_hint": profile.rank_hint,
+            },
+            "evidence": {
+                "document_chunk_id": chunk.id,
+                "payload_filter_key": &payload_filter_key,
+                "source_locator": source_locator.clone(),
+            },
+        });
+        if let Some(media_manifest) = retrieval_media_manifest(chunk) {
+            if let Some(object) = evidence_manifest.as_object_mut() {
+                object.insert("media".to_string(), media_manifest);
+            }
+        }
+        if let Some(external_acl) = retrieval_external_acl_manifest(&document, chunk) {
+            if let Some(object) = evidence_manifest.as_object_mut() {
+                object.insert("external_acl".to_string(), external_acl);
+            }
+        }
+        new_retrieval_evidences.push(NewRetrievalEvidence {
+            execution_id: task.execution_id,
+            dataset_id,
+            document_id,
+            document_chunk_id: chunk.id,
+            chunk_index: chunk.chunk_index,
+            source_locator,
+            content_excerpt: excerpt(&chunk.content, 240),
+            summary: format!(
+                "{} chunk {} indexed for external source retrieval recall.",
+                document.title, chunk.chunk_index
+            ),
+            payload_filter_key: payload_filter_key.clone(),
+            embedding_model: embedding_model.clone(),
+            recall_score: profile.recall_score,
+            evidence_manifest,
+            created_at: indexed_at,
+        });
+    }
+    let retrieval_evidences = storage
+        .retrieval_evidences()
+        .create_many(task.tenant_id, &new_retrieval_evidences)
+        .await?;
+    let indexed_chunks = storage
+        .document_chunks()
+        .mark_indexed(
+            task.tenant_id,
+            document_id,
+            &json!({
+                "retrieval": {
+                    "indexer": "local_lexical",
+                    "indexed_at": indexed_at,
+                    "embedding_model": &embedding_model,
+                    "payload_filter_key": &payload_filter_key,
+                    "retrieval_evidence_count": retrieval_evidences.len(),
+                }
+            }),
+            indexed_at,
+        )
+        .await?;
+    storage
+        .documents()
+        .update_state(
+            task.tenant_id,
+            document_id,
+            DocumentLifecycle::Indexed,
+            Some(&document.title),
+            &json!({
+                "retrieval": {
+                    "indexer": "local_lexical",
+                    "indexed_at": indexed_at,
+                    "embedding_model": &embedding_model,
+                    "embedded_chunks": outcome.embedded_chunks,
+                    "payload_filter_key": &payload_filter_key,
+                    "retrieval_evidence_count": retrieval_evidences.len(),
+                    "latest_execution_id": task.execution_id,
+                }
+            }),
+            indexed_at,
+        )
+        .await?;
+
+    Ok(ExternalIndexedDocumentSummary {
+        document_id,
+        indexed_chunk_count: indexed_chunks.len(),
+        retrieval_evidence_count: retrieval_evidences.len(),
+    })
+}
+
 fn excerpt(content: &str, max_chars: usize) -> String {
     let trimmed = content.trim();
     let total_chars = trimmed.chars().count();
@@ -388,6 +677,121 @@ fn retrieval_media_manifest(chunk: &DocumentChunk) -> Option<Value> {
         "keyframe_ocr_snippet_count": media_array_len(media, "keyframe_ocr_snippets"),
         "provider_evidence_count": media_array_len(media, "provider_evidence"),
     }))
+}
+
+fn retrieval_external_acl_manifest(document: &Document, chunk: &DocumentChunk) -> Option<Value> {
+    chunk
+        .metadata
+        .get("external_acl")
+        .or_else(|| document.metadata.get("external_acl"))
+        .or_else(|| document.metadata.get("external_source"))
+        .and_then(Value::as_object)
+        .map(|external_acl| {
+            json!({
+                "source_id": external_acl.get("source_id").and_then(Value::as_str),
+                "document_external_id": external_acl
+                    .get("document_external_id")
+                    .and_then(Value::as_str),
+                "revision_external_id": external_acl
+                    .get("revision_external_id")
+                    .and_then(Value::as_str),
+                "acl_hash": external_acl.get("acl_hash").and_then(Value::as_str),
+            })
+        })
+        .filter(|value| {
+            value.get("source_id").and_then(Value::as_str).is_some()
+                && value
+                    .get("document_external_id")
+                    .and_then(Value::as_str)
+                    .is_some()
+        })
+}
+
+fn external_index_document_ids(
+    context: &Value,
+    task_payload: &Value,
+) -> Result<Vec<domain_model::DocumentId>> {
+    let candidates = [
+        context.pointer("/last_output/document_ids"),
+        context.pointer("/last_output/ingested_document_ids"),
+        task_payload.get("document_ids"),
+        task_payload.get("ingested_document_ids"),
+    ];
+    let values = candidates
+        .into_iter()
+        .flatten()
+        .find_map(Value::as_array)
+        .ok_or_else(|| anyhow!("external retrieval index requires document_ids array"))?;
+    if values.is_empty() {
+        return Err(anyhow!(
+            "external retrieval index requires at least one document id"
+        ));
+    }
+
+    values
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .ok_or_else(|| anyhow!("external document id must be a string"))
+                .and_then(|raw| {
+                    raw.parse::<uuid::Uuid>()
+                        .map(domain_model::DocumentId)
+                        .map_err(|error| anyhow!("invalid external document id {raw}: {error}"))
+                })
+        })
+        .collect()
+}
+
+async fn update_external_sync_run_index_counts(
+    storage: &PgStorage,
+    tenant_id: domain_model::TenantId,
+    signal_output: &Value,
+) -> Result<()> {
+    let Some(sync_run_id) = signal_output
+        .get("external_sync_run_id")
+        .and_then(Value::as_str)
+        .and_then(|raw| uuid::Uuid::parse_str(raw).ok())
+    else {
+        return Ok(());
+    };
+
+    sqlx::query(
+        r#"
+        update external_sync_runs
+        set counts = counts || $3,
+            updated_at = $4
+        where tenant_id = $1 and id = $2
+        "#,
+    )
+    .bind(tenant_id.0)
+    .bind(sync_run_id)
+    .bind(json!({
+        "chunks_indexed": signal_output
+            .get("indexed_chunk_count")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+        "retrieval_evidences_indexed": signal_output
+            .get("retrieval_evidence_count")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+    }))
+    .bind(Utc::now())
+    .execute(storage.pool())
+    .await?;
+
+    Ok(())
+}
+
+fn context_string(value: &Value, key: &str) -> Result<Option<String>> {
+    match value {
+        Value::Object(map) => Ok(map
+            .get(key)
+            .and_then(Value::as_str)
+            .map(ToString::to_string)),
+        Value::Null => Ok(None),
+        _ => Err(anyhow!("workflow execution context must be a JSON object")),
+    }
 }
 
 fn chunk_media_metadata(chunk: &DocumentChunk) -> Option<&Value> {
@@ -458,6 +862,13 @@ fn media_locator_suffix(start_seconds: Option<f64>, end_seconds: Option<f64>) ->
     Some(suffix)
 }
 
+fn optional_env(key: &str) -> Option<String> {
+    std::env::var(key)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty() && value != "*")
+}
+
 async fn wait_for_next_task_signal(task_waker: &mut EventSubscription, poll_interval_ms: u64) {
     if let Some(event) = task_waker
         .wait_for_event(Duration::from_millis(poll_interval_ms))
@@ -471,7 +882,9 @@ async fn wait_for_next_task_signal(task_waker: &mut EventSubscription, poll_inte
 mod tests {
     use super::*;
     use chrono::Utc;
-    use domain_model::{DatasetId, DocumentChunkId, DocumentChunkState, DocumentId, TenantId};
+    use domain_model::{
+        DatasetId, DocumentChunkId, DocumentChunkState, DocumentId, DocumentLifecycle, TenantId,
+    };
 
     fn media_chunk(metadata: Value) -> DocumentChunk {
         let now = Utc::now();
@@ -485,6 +898,29 @@ mod tests {
             token_count: 18,
             state: DocumentChunkState::Extracted,
             metadata: BTreeMap::from_iter([("parse_metadata".to_string(), metadata)]),
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    fn document_with_metadata(metadata: Value) -> Document {
+        let now = Utc::now();
+        Document {
+            id: DocumentId::new(),
+            tenant_id: TenantId::new(),
+            dataset_id: DatasetId::new(),
+            owner_user_id: None,
+            title: "External Doc".to_string(),
+            object_key: "external/src/doc".to_string(),
+            content_type: "text/markdown".to_string(),
+            lifecycle: DocumentLifecycle::Extracted,
+            secret_binding_ids: Vec::new(),
+            metadata: metadata
+                .as_object()
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .collect(),
             created_at: now,
             updated_at: now,
         }
@@ -545,5 +981,51 @@ mod tests {
         assert_eq!(manifest["scene_count"], json!(1));
         assert_eq!(manifest["keyframe_ocr_snippet_count"], json!(1));
         assert_eq!(manifest["provider_evidence_count"], json!(1));
+    }
+
+    #[test]
+    fn retrieval_external_acl_manifest_prefers_chunk_acl_ref() {
+        let document = document_with_metadata(json!({
+            "external_source": {
+                "source_id": "src-docs",
+                "document_external_id": "doc-from-document"
+            }
+        }));
+        let chunk = media_chunk(json!({}));
+        let mut chunk = chunk;
+        chunk.metadata.insert(
+            "external_acl".to_string(),
+            json!({
+                "source_id": "src-docs",
+                "document_external_id": "doc-from-chunk",
+                "revision_external_id": "rev-3",
+                "acl_hash": "acl-3"
+            }),
+        );
+
+        let manifest =
+            retrieval_external_acl_manifest(&document, &chunk).expect("external ACL ref");
+
+        assert_eq!(manifest["source_id"], json!("src-docs"));
+        assert_eq!(manifest["document_external_id"], json!("doc-from-chunk"));
+        assert_eq!(manifest["revision_external_id"], json!("rev-3"));
+        assert_eq!(manifest["acl_hash"], json!("acl-3"));
+    }
+
+    #[test]
+    fn external_index_document_ids_parse_workflow_last_output() {
+        let first = DocumentId::new();
+        let second = DocumentId::new();
+        let ids = external_index_document_ids(
+            &json!({
+                "last_output": {
+                    "document_ids": [first.to_string(), second.to_string()]
+                }
+            }),
+            &json!({}),
+        )
+        .expect("external document ids should parse");
+
+        assert_eq!(ids, vec![first, second]);
     }
 }

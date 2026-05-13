@@ -1,15 +1,18 @@
 use anyhow::{anyhow, Result};
 use chrono::Utc;
-use domain_model::DocumentLifecycle;
+use domain_model::{Document, DocumentLifecycle};
 use event_bus::{workflow_task_enqueued_subject, EventBus, EventSubscription};
-use ingest_worker::{IngestJob, IngestOutcome, IngestProcessor, LocalIngestProcessor};
+use ingest_worker::{
+    split_text_chunks, IngestJob, IngestOutcome, IngestProcessor, LocalIngestProcessor,
+};
 use serde_json::{json, Value};
-use storage::{NewDocumentChunk, PgStorage, DEFAULT_LOCAL_DATABASE_URL};
+use storage::{NewDocument, NewDocumentChunk, PgStorage, DEFAULT_LOCAL_DATABASE_URL};
 use tokio::time::Duration;
 use workflow_engine::{WorkflowCatalog, WorkflowSignal};
 
 const DEFAULT_QUEUE: &str = "ingest";
 const DEFAULT_WAKE_TASK_KEY: &str = "ingest_uploaded_document";
+const EXTERNAL_SOURCE_INGEST_TASK_KEY: &str = "ingest_external_content";
 const DEFAULT_POLL_INTERVAL_MS: u64 = 1_000;
 
 #[tokio::main]
@@ -73,6 +76,21 @@ async fn main() -> Result<()> {
 }
 
 async fn process_task(
+    storage: &PgStorage,
+    workflow_catalog: &WorkflowCatalog,
+    event_bus: &EventBus,
+    processor: &impl IngestProcessor,
+    task: domain_model::WorkflowTask,
+) -> Result<()> {
+    if task.task_key == EXTERNAL_SOURCE_INGEST_TASK_KEY {
+        return process_external_source_ingest_task(storage, workflow_catalog, event_bus, task)
+            .await;
+    }
+
+    process_uploaded_document_task(storage, workflow_catalog, event_bus, processor, task).await
+}
+
+async fn process_uploaded_document_task(
     storage: &PgStorage,
     workflow_catalog: &WorkflowCatalog,
     event_bus: &EventBus,
@@ -231,6 +249,178 @@ async fn process_task(
     Ok(())
 }
 
+#[derive(Clone, Debug)]
+struct ExternalSourceDocumentInput {
+    document_external_id: String,
+    revision_external_id: Option<String>,
+    title: String,
+    content_type: String,
+    body: String,
+    metadata: Value,
+    acl_snapshot: Option<Value>,
+    acl_hash: Option<String>,
+}
+
+async fn process_external_source_ingest_task(
+    storage: &PgStorage,
+    workflow_catalog: &WorkflowCatalog,
+    event_bus: &EventBus,
+    task: domain_model::WorkflowTask,
+) -> Result<()> {
+    let execution = storage
+        .workflow_executions()
+        .get_by_id(task.tenant_id, task.execution_id)
+        .await?
+        .ok_or_else(|| anyhow!("workflow execution {} not found", task.execution_id))?;
+    let dataset_id = execution
+        .dataset_id
+        .ok_or_else(|| anyhow!("workflow execution {} has no dataset id", execution.id))?;
+    let source_id = match context_string(&execution.context, "source_id")? {
+        Some(source_id) => Some(source_id),
+        None => context_string(&task.payload, "source_id")?,
+    }
+    .ok_or_else(|| anyhow!("workflow execution {} missing source_id", execution.id))?;
+    let sync_run_id = match context_string(&execution.context, "external_sync_run_id")? {
+        Some(sync_run_id) => Some(sync_run_id),
+        None => context_string(&task.payload, "external_sync_run_id")?,
+    };
+    let documents = external_source_documents_from_context(&execution.context, &task.payload)?;
+
+    let process_result: Result<Value> = async {
+        let mut document_summaries = Vec::with_capacity(documents.len());
+        let mut total_chunks = 0usize;
+        for input in documents {
+            let document = upsert_external_source_document(
+                storage,
+                task.tenant_id,
+                dataset_id,
+                &source_id,
+                sync_run_id.as_deref(),
+                &input,
+            )
+            .await?;
+            if let Some(acl_snapshot) = input.acl_snapshot.as_ref() {
+                upsert_external_permission_snapshot(
+                    storage,
+                    task.tenant_id,
+                    &source_id,
+                    &input,
+                    acl_snapshot,
+                )
+                .await?;
+            }
+
+            let chunks =
+                build_external_source_document_chunks(dataset_id, document.id, &source_id, &input);
+            total_chunks += chunks.len();
+            storage
+                .document_chunks()
+                .replace_for_document(task.tenant_id, document.id, &chunks)
+                .await?;
+            let updated_document = storage
+                .documents()
+                .update_state(
+                    task.tenant_id,
+                    document.id,
+                    DocumentLifecycle::Extracted,
+                    Some(&input.title),
+                    &json!({
+                        "ingest": {
+                            "processor": "external_source_inline",
+                            "parse_method": "external_source_inline",
+                            "chunk_count": chunks.len(),
+                            "extracted_chars": input.body.chars().count(),
+                            "content_type": input.content_type,
+                            "object_key": document.object_key,
+                            "extracted_at": Utc::now(),
+                        },
+                        "external_source": external_source_ref(&source_id, sync_run_id.as_deref(), &input),
+                    }),
+                    Utc::now(),
+                )
+                .await?;
+            document_summaries.push(json!({
+                "document_id": updated_document.id,
+                "document_external_id": input.document_external_id,
+                "revision_external_id": input.revision_external_id,
+                "chunk_count": chunks.len(),
+                "lifecycle": updated_document.lifecycle.as_str(),
+            }));
+        }
+
+        let signal_output = json!({
+            "source_id": source_id,
+            "external_sync_run_id": sync_run_id,
+            "document_count": document_summaries.len(),
+            "chunk_count": total_chunks,
+            "document_ids": document_summaries
+                .iter()
+                .filter_map(|summary| summary.get("document_id").cloned())
+                .collect::<Vec<_>>(),
+            "external_documents": document_summaries,
+        });
+        update_external_sync_run_counts(storage, task.tenant_id, &signal_output).await?;
+
+        Ok(signal_output)
+    }
+    .await;
+
+    match process_result {
+        Ok(signal_output) => {
+            platform_api::apply_workflow_signal_with_dependencies(
+                storage,
+                workflow_catalog,
+                event_bus,
+                task.tenant_id,
+                task.execution_id,
+                WorkflowSignal::StepCompleted {
+                    task_key: task.task_key.clone(),
+                    output: Some(signal_output),
+                },
+            )
+            .await?;
+            storage
+                .workflow_tasks()
+                .mark_succeeded(task.id, Utc::now())
+                .await?;
+            tracing::info!(
+                task_id = %task.id,
+                execution_id = %task.execution_id,
+                source_id = %source_id,
+                "external source ingest task completed"
+            );
+            Ok(())
+        }
+        Err(error) => {
+            let error_message = error.to_string();
+            if let Err(signal_error) = platform_api::apply_workflow_signal_with_dependencies(
+                storage,
+                workflow_catalog,
+                event_bus,
+                task.tenant_id,
+                task.execution_id,
+                WorkflowSignal::StepFailed {
+                    task_key: task.task_key.clone(),
+                    error: error_message.clone(),
+                },
+            )
+            .await
+            {
+                tracing::error!(
+                    error = ?signal_error,
+                    task_id = %task.id,
+                    "ingest worker failed to send external source step_failed signal"
+                );
+            }
+            storage
+                .workflow_tasks()
+                .mark_failed(task.id, &error_message, Utc::now())
+                .await?;
+            Err(error)
+        }
+    }
+}
+
 fn build_document_chunks(
     dataset_id: domain_model::DatasetId,
     document_id: domain_model::DocumentId,
@@ -257,6 +447,321 @@ fn build_document_chunks(
             created_at,
         })
         .collect()
+}
+
+fn build_external_source_document_chunks(
+    dataset_id: domain_model::DatasetId,
+    document_id: domain_model::DocumentId,
+    source_id: &str,
+    input: &ExternalSourceDocumentInput,
+) -> Vec<NewDocumentChunk> {
+    let created_at = Utc::now();
+    let external_source = external_source_ref(source_id, None, input);
+    let external_acl = external_acl_ref(source_id, input);
+
+    split_text_chunks(&input.body, 1_800)
+        .into_iter()
+        .enumerate()
+        .map(|(index, content)| NewDocumentChunk {
+            dataset_id,
+            document_id,
+            chunk_index: index as i32,
+            token_count: estimate_token_count(&content),
+            content,
+            metadata: json!({
+                "extractor": "external_source_inline",
+                "parse_method": "external_source_inline",
+                "source": "external_source_sync_workflow",
+                "external_source": external_source,
+                "external_acl": external_acl,
+                "parse_metadata": input.metadata.clone(),
+            }),
+            created_at,
+        })
+        .collect()
+}
+
+async fn upsert_external_source_document(
+    storage: &PgStorage,
+    tenant_id: domain_model::TenantId,
+    dataset_id: domain_model::DatasetId,
+    source_id: &str,
+    sync_run_id: Option<&str>,
+    input: &ExternalSourceDocumentInput,
+) -> Result<Document> {
+    if let Some(document) =
+        find_external_source_document(storage, tenant_id, dataset_id, source_id, input).await?
+    {
+        return Ok(document);
+    }
+
+    storage
+        .documents()
+        .create(
+            tenant_id,
+            NewDocument {
+                dataset_id,
+                title: input.title.clone(),
+                object_key: external_source_object_key(source_id, input),
+                content_type: input.content_type.clone(),
+                secret_binding_ids: Vec::new(),
+                owner_user_id: None,
+                metadata: json!({
+                    "external_source": external_source_ref(source_id, sync_run_id, input),
+                    "external_metadata": input.metadata.clone(),
+                }),
+            },
+        )
+        .await
+}
+
+async fn find_external_source_document(
+    storage: &PgStorage,
+    tenant_id: domain_model::TenantId,
+    dataset_id: domain_model::DatasetId,
+    source_id: &str,
+    input: &ExternalSourceDocumentInput,
+) -> Result<Option<Document>> {
+    let documents = storage
+        .documents()
+        .list_by_dataset(tenant_id, dataset_id)
+        .await?;
+    Ok(documents.into_iter().find(|document| {
+        document
+            .metadata
+            .get("external_source")
+            .and_then(Value::as_object)
+            .is_some_and(|metadata| {
+                metadata.get("source_id").and_then(Value::as_str) == Some(source_id)
+                    && metadata.get("document_external_id").and_then(Value::as_str)
+                        == Some(input.document_external_id.as_str())
+            })
+    }))
+}
+
+async fn upsert_external_permission_snapshot(
+    storage: &PgStorage,
+    tenant_id: domain_model::TenantId,
+    source_id: &str,
+    input: &ExternalSourceDocumentInput,
+    acl_snapshot: &Value,
+) -> Result<()> {
+    let now = Utc::now();
+    let updated = sqlx::query(
+        r#"
+        update external_permission_snapshots
+        set acl_snapshot = $5,
+            acl_hash = $6,
+            captured_at = $7
+        where tenant_id = $1
+          and source_id = $2
+          and document_external_id = $3
+          and coalesce(revision_external_id, '') = coalesce($4::text, '')
+        "#,
+    )
+    .bind(tenant_id.0)
+    .bind(source_id)
+    .bind(&input.document_external_id)
+    .bind(&input.revision_external_id)
+    .bind(acl_snapshot)
+    .bind(&input.acl_hash)
+    .bind(now)
+    .execute(storage.pool())
+    .await?;
+
+    if updated.rows_affected() == 0 {
+        sqlx::query(
+            r#"
+            insert into external_permission_snapshots (
+                tenant_id,
+                source_id,
+                document_external_id,
+                revision_external_id,
+                acl_snapshot,
+                acl_hash,
+                captured_at
+            )
+            values ($1, $2, $3, $4, $5, $6, $7)
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(source_id)
+        .bind(&input.document_external_id)
+        .bind(&input.revision_external_id)
+        .bind(acl_snapshot)
+        .bind(&input.acl_hash)
+        .bind(now)
+        .execute(storage.pool())
+        .await?;
+    }
+
+    Ok(())
+}
+
+async fn update_external_sync_run_counts(
+    storage: &PgStorage,
+    tenant_id: domain_model::TenantId,
+    signal_output: &Value,
+) -> Result<()> {
+    let Some(sync_run_id) = signal_output
+        .get("external_sync_run_id")
+        .and_then(Value::as_str)
+        .and_then(|raw| uuid::Uuid::parse_str(raw).ok())
+    else {
+        return Ok(());
+    };
+
+    sqlx::query(
+        r#"
+        update external_sync_runs
+        set counts = counts || $3,
+            updated_at = $4
+        where tenant_id = $1 and id = $2
+        "#,
+    )
+    .bind(tenant_id.0)
+    .bind(sync_run_id)
+    .bind(json!({
+        "documents_ingested": signal_output
+            .get("document_count")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+        "chunks_ingested": signal_output
+            .get("chunk_count")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+    }))
+    .bind(Utc::now())
+    .execute(storage.pool())
+    .await?;
+
+    Ok(())
+}
+
+fn external_source_documents_from_context(
+    context: &Value,
+    task_payload: &Value,
+) -> Result<Vec<ExternalSourceDocumentInput>> {
+    let candidates = [
+        context.pointer("/last_output/external_documents"),
+        context.pointer("/last_output/documents"),
+        task_payload.get("external_documents"),
+        task_payload.get("documents"),
+    ];
+    let documents = candidates
+        .into_iter()
+        .flatten()
+        .find_map(Value::as_array)
+        .ok_or_else(|| anyhow!("external source ingest requires external_documents array"))?;
+
+    if documents.is_empty() {
+        return Err(anyhow!(
+            "external source ingest requires at least one external document"
+        ));
+    }
+
+    documents
+        .iter()
+        .map(external_source_document_from_value)
+        .collect()
+}
+
+fn external_source_document_from_value(value: &Value) -> Result<ExternalSourceDocumentInput> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| anyhow!("external document must be a JSON object"))?;
+    let document_external_id = string_field(value, &["document_external_id", "documentExternalId"])
+        .ok_or_else(|| anyhow!("external document missing document_external_id"))?;
+    let body = string_field(value, &["body", "content", "text"])
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            anyhow!("external document {document_external_id} missing non-empty body")
+        })?;
+    let title = string_field(value, &["title", "name"])
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| document_external_id.clone());
+    let content_type = string_field(value, &["content_type", "contentType"])
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "text/markdown".to_string());
+    let revision_external_id = string_field(value, &["revision_external_id", "revisionExternalId"]);
+    let metadata = object
+        .get("metadata")
+        .filter(|value| value.is_object())
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let acl_snapshot = object
+        .get("acl_snapshot")
+        .or_else(|| object.get("aclSnapshot"))
+        .or_else(|| object.get("acl"))
+        .filter(|value| value.is_object())
+        .cloned();
+    let acl_hash = string_field(value, &["acl_hash", "aclHash"]);
+
+    Ok(ExternalSourceDocumentInput {
+        document_external_id,
+        revision_external_id,
+        title,
+        content_type,
+        body,
+        metadata,
+        acl_snapshot,
+        acl_hash,
+    })
+}
+
+fn string_field(value: &Value, keys: &[&str]) -> Option<String> {
+    keys.iter()
+        .find_map(|key| value.get(*key).and_then(Value::as_str))
+        .map(ToString::to_string)
+}
+
+fn context_string(value: &Value, key: &str) -> Result<Option<String>> {
+    match value {
+        Value::Object(map) => Ok(map
+            .get(key)
+            .and_then(Value::as_str)
+            .map(ToString::to_string)),
+        Value::Null => Ok(None),
+        _ => Err(anyhow!("workflow execution context must be a JSON object")),
+    }
+}
+
+fn external_source_ref(
+    source_id: &str,
+    sync_run_id: Option<&str>,
+    input: &ExternalSourceDocumentInput,
+) -> Value {
+    json!({
+        "source_id": source_id,
+        "document_external_id": input.document_external_id,
+        "revision_external_id": input.revision_external_id,
+        "external_sync_run_id": sync_run_id,
+        "synced_at": Utc::now(),
+    })
+}
+
+fn external_acl_ref(source_id: &str, input: &ExternalSourceDocumentInput) -> Value {
+    json!({
+        "source_id": source_id,
+        "document_external_id": input.document_external_id,
+        "revision_external_id": input.revision_external_id,
+        "acl_hash": input.acl_hash,
+    })
+}
+
+fn external_source_object_key(source_id: &str, input: &ExternalSourceDocumentInput) -> String {
+    match input.revision_external_id.as_deref() {
+        Some(revision) if !revision.is_empty() => {
+            format!(
+                "external/{}/{}/{}",
+                source_id, input.document_external_id, revision
+            )
+        }
+        _ => format!("external/{}/{}", source_id, input.document_external_id),
+    }
 }
 
 fn estimate_token_count(content: &str) -> i32 {
@@ -288,5 +793,88 @@ async fn wait_for_next_task_signal(task_waker: &mut EventSubscription, poll_inte
         .await
     {
         tracing::debug!(subject = %event.subject, "ingest worker received task wake signal");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use domain_model::{DatasetId, DocumentId};
+
+    #[test]
+    fn external_source_documents_parse_from_workflow_last_output() {
+        let context = json!({
+            "last_output": {
+                "external_documents": [{
+                    "document_external_id": "doc-001",
+                    "revision_external_id": "rev-7",
+                    "title": "采购制度",
+                    "content_type": "text/markdown",
+                    "body": "第一章 采购审批。\n\n第二章 供应商准入。",
+                    "metadata": {
+                        "path": "/wiki/purchase"
+                    },
+                    "acl_snapshot": {
+                        "allowed_group_external_ids": ["procurement"]
+                    },
+                    "acl_hash": "acl-001"
+                }]
+            }
+        });
+
+        let documents = external_source_documents_from_context(&context, &json!({}))
+            .expect("external documents should parse");
+
+        assert_eq!(documents.len(), 1);
+        assert_eq!(documents[0].document_external_id, "doc-001");
+        assert_eq!(documents[0].revision_external_id.as_deref(), Some("rev-7"));
+        assert_eq!(documents[0].title, "采购制度");
+        assert_eq!(documents[0].acl_hash.as_deref(), Some("acl-001"));
+        assert_eq!(
+            documents[0]
+                .acl_snapshot
+                .as_ref()
+                .and_then(|value| value.get("allowed_group_external_ids"))
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn external_source_chunks_carry_acl_reference_for_retrieval_gate() {
+        let input = external_source_document_from_value(&json!({
+            "document_external_id": "doc-002",
+            "revision_external_id": "rev-8",
+            "title": "订单风险制度",
+            "body": "订单延期超过两天需要赔付提醒。",
+            "acl_hash": "acl-002"
+        }))
+        .expect("external document should parse");
+
+        let chunks = build_external_source_document_chunks(
+            DatasetId::new(),
+            DocumentId::new(),
+            "src-docs",
+            &input,
+        );
+
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(
+            chunks[0].metadata["source"],
+            json!("external_source_sync_workflow")
+        );
+        assert_eq!(
+            chunks[0].metadata["external_acl"]["source_id"],
+            json!("src-docs")
+        );
+        assert_eq!(
+            chunks[0].metadata["external_acl"]["document_external_id"],
+            json!("doc-002")
+        );
+        assert_eq!(
+            chunks[0].metadata["external_acl"]["revision_external_id"],
+            json!("rev-8")
+        );
     }
 }
