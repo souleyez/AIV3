@@ -6658,6 +6658,26 @@ struct ExternalActionRunPlan {
     target_system: String,
 }
 
+#[derive(Clone, Debug)]
+struct ExternalActionDispatchRecord {
+    action_id: String,
+    assistant_run_id: Option<AssistantRunId>,
+    requester_summary: Value,
+    risk_level: String,
+    target_system: String,
+    action_type: String,
+    arguments_redacted: Value,
+    confirmation_state: String,
+    external_request_id: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+struct ExternalActionDispatchOutcome {
+    status: String,
+    external_request_id: Option<String>,
+    failure_kind: Option<String>,
+}
+
 async fn create_external_source_sync(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -7031,6 +7051,11 @@ async fn confirm_external_channel_action(
     .execute(state.storage.pool())
     .await
     .map_err(|error| ApiError::from_storage(anyhow::Error::new(error)))?;
+    let dispatch_outcome = if request.decision == ExternalActionConfirmationDecisionView::Approved {
+        Some(dispatch_external_action_run_if_ready(&state, &connection_id, &action_id, now).await?)
+    } else {
+        None
+    };
 
     state
         .storage
@@ -7047,6 +7072,9 @@ async fn confirm_external_channel_action(
                     "sender_external_user_id": confirmation_summary["confirmation"]["sender_external_user_id"],
                     "comment_present": confirmation_summary["confirmation"]["comment_present"],
                     "idempotency_key": confirmation_summary["confirmation"]["idempotency_key"],
+                    "dispatch_status": dispatch_outcome.as_ref().map(|outcome| outcome.status.as_str()),
+                    "external_request_id": dispatch_outcome.as_ref().and_then(|outcome| outcome.external_request_id.as_deref()),
+                    "failure_kind": dispatch_outcome.as_ref().and_then(|outcome| outcome.failure_kind.as_deref()),
                 }),
                 created_at: now,
             },
@@ -7120,6 +7148,10 @@ async fn plan_and_record_external_action_run(
         now,
     )
     .await?;
+    if !plan.requires_confirmation {
+        let _ = dispatch_external_action_run_if_ready(state, connection_id, &plan.action_id, now)
+            .await?;
+    }
     state
         .storage
         .assistant_runs()
@@ -7287,6 +7319,384 @@ async fn record_external_action_run_from_suggestion(
         requires_confirmation,
         target_system,
     })
+}
+
+async fn dispatch_external_action_run_if_ready(
+    state: &AppState,
+    connection_id: &str,
+    action_id: &str,
+    now: DateTime<Utc>,
+) -> std::result::Result<ExternalActionDispatchOutcome, ApiError> {
+    let connection = load_external_channel_connection(state, connection_id).await?;
+    ensure_external_channel_enabled(connection_id, &connection)?;
+    let record = load_external_action_dispatch_record(state, action_id).await?;
+    if record
+        .requester_summary
+        .get("channel_connection_id")
+        .and_then(Value::as_str)
+        != Some(connection_id)
+    {
+        return Err(ApiError::forbidden(
+            "external_action_dispatch_channel_mismatch",
+            "external action run does not belong to this channel connection".to_string(),
+        ));
+    }
+
+    if let Some(external_request_id) = record.external_request_id.clone() {
+        return Ok(ExternalActionDispatchOutcome {
+            status: "already_dispatched".to_string(),
+            external_request_id: Some(external_request_id),
+            failure_kind: None,
+        });
+    }
+
+    match record.confirmation_state.as_str() {
+        "not_required" | "confirmed" => {}
+        "pending" => {
+            return Ok(ExternalActionDispatchOutcome {
+                status: "waiting_confirmation".to_string(),
+                external_request_id: None,
+                failure_kind: None,
+            });
+        }
+        "rejected" => {
+            let outcome = ExternalActionDispatchOutcome {
+                status: "rejected_no_dispatch".to_string(),
+                external_request_id: None,
+                failure_kind: None,
+            };
+            persist_external_action_dispatch_outcome(state, action_id, &outcome, json!({}), now)
+                .await?;
+            return Ok(outcome);
+        }
+        other => {
+            let outcome = ExternalActionDispatchOutcome {
+                status: "invalid_confirmation_state".to_string(),
+                external_request_id: None,
+                failure_kind: Some("invalid_confirmation_state".to_string()),
+            };
+            persist_external_action_dispatch_outcome(
+                state,
+                action_id,
+                &outcome,
+                json!({"invalid_confirmation_state": other}),
+                now,
+            )
+            .await?;
+            return Ok(outcome);
+        }
+    }
+
+    let Some(dispatch_url) =
+        external_action_dispatch_url_from_config(&connection.config_redacted, &record.action_type)
+    else {
+        let outcome = ExternalActionDispatchOutcome {
+            status: "dispatch_blocked".to_string(),
+            external_request_id: None,
+            failure_kind: Some("dispatch_endpoint_missing".to_string()),
+        };
+        persist_external_action_dispatch_outcome(
+            state,
+            action_id,
+            &outcome,
+            json!({
+                "endpoint_configured": false,
+                "reason": "dispatch_endpoint_missing",
+            }),
+            now,
+        )
+        .await?;
+        return Ok(outcome);
+    };
+
+    let parsed_url = match reqwest::Url::parse(&dispatch_url) {
+        Ok(url) if matches!(url.scheme(), "http" | "https") => url,
+        _ => {
+            let outcome = ExternalActionDispatchOutcome {
+                status: "dispatch_blocked".to_string(),
+                external_request_id: None,
+                failure_kind: Some("dispatch_endpoint_invalid".to_string()),
+            };
+            persist_external_action_dispatch_outcome(
+                state,
+                action_id,
+                &outcome,
+                json!({
+                    "endpoint_configured": true,
+                    "reason": "dispatch_endpoint_invalid",
+                }),
+                now,
+            )
+            .await?;
+            return Ok(outcome);
+        }
+    };
+
+    let payload = external_action_dispatch_payload(&record);
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(12))
+        .build()
+        .map_err(|error| {
+            ApiError::internal(
+                "external_action_dispatch_client_failed",
+                format!("failed to create external action dispatch client: {error}"),
+            )
+        })?;
+    let response = match client.post(parsed_url.clone()).json(&payload).send().await {
+        Ok(response) => response,
+        Err(error) => {
+            let outcome = ExternalActionDispatchOutcome {
+                status: "dispatch_failed".to_string(),
+                external_request_id: None,
+                failure_kind: Some("request_failed".to_string()),
+            };
+            persist_external_action_dispatch_outcome(
+                state,
+                action_id,
+                &outcome,
+                json!({
+                    "endpoint_configured": true,
+                    "endpoint_host": parsed_url.host_str(),
+                    "reason": "request_failed",
+                    "request_error_kind": external_action_reqwest_error_kind(&error),
+                }),
+                now,
+            )
+            .await?;
+            return Ok(outcome);
+        }
+    };
+    let http_status = response.status().as_u16();
+    let response_text = response.text().await.unwrap_or_default();
+    let response_json = serde_json::from_str::<Value>(&response_text).ok();
+    let response_summary = external_action_response_summary(response_json.as_ref(), &response_text);
+    let external_request_id = response_json
+        .as_ref()
+        .and_then(external_action_response_request_id)
+        .unwrap_or_else(|| action_id.to_string());
+    let success = (200..300).contains(&http_status);
+    let outcome = ExternalActionDispatchOutcome {
+        status: if success {
+            "dispatched".to_string()
+        } else {
+            "dispatch_failed".to_string()
+        },
+        external_request_id: success.then_some(external_request_id),
+        failure_kind: (!success).then_some("http_status".to_string()),
+    };
+    persist_external_action_dispatch_outcome(
+        state,
+        action_id,
+        &outcome,
+        json!({
+            "endpoint_configured": true,
+            "endpoint_host": parsed_url.host_str(),
+            "http_status": http_status,
+            "response_summary": response_summary,
+        }),
+        now,
+    )
+    .await?;
+    Ok(outcome)
+}
+
+async fn load_external_action_dispatch_record(
+    state: &AppState,
+    action_id: &str,
+) -> std::result::Result<ExternalActionDispatchRecord, ApiError> {
+    let row = sqlx::query(
+        r#"
+        select id,
+               assistant_run_id,
+               requester_summary,
+               risk_level,
+               target_system,
+               action_type,
+               arguments_redacted,
+               confirmation_state,
+               external_request_id
+        from external_action_runs
+        where tenant_id = $1 and id = $2
+        "#,
+    )
+    .bind(state.tenant_id.0)
+    .bind(action_id)
+    .fetch_optional(state.storage.pool())
+    .await
+    .map_err(|error| ApiError::from_storage(anyhow::Error::new(error)))?
+    .ok_or_else(|| {
+        ApiError::not_found(
+            "external_action_run_not_found",
+            format!("external action run {action_id} was not found"),
+        )
+    })?;
+
+    Ok(ExternalActionDispatchRecord {
+        action_id: row.get("id"),
+        assistant_run_id: row
+            .get::<Option<Uuid>, _>("assistant_run_id")
+            .map(AssistantRunId),
+        requester_summary: row.get("requester_summary"),
+        risk_level: row.get("risk_level"),
+        target_system: row.get("target_system"),
+        action_type: row.get("action_type"),
+        arguments_redacted: row.get("arguments_redacted"),
+        confirmation_state: row.get("confirmation_state"),
+        external_request_id: row.get("external_request_id"),
+    })
+}
+
+async fn persist_external_action_dispatch_outcome(
+    state: &AppState,
+    action_id: &str,
+    outcome: &ExternalActionDispatchOutcome,
+    dispatch_summary: Value,
+    now: DateTime<Utc>,
+) -> std::result::Result<(), ApiError> {
+    let result_patch = json!({
+        "status": outcome.status,
+        "dispatch": dispatch_summary,
+        "updated_at": now,
+    });
+    sqlx::query(
+        r#"
+        update external_action_runs
+        set external_request_id = coalesce($3, external_request_id),
+            result_summary = result_summary || $4,
+            failure_kind = $5,
+            updated_at = $6
+        where tenant_id = $1 and id = $2
+        "#,
+    )
+    .bind(state.tenant_id.0)
+    .bind(action_id)
+    .bind(&outcome.external_request_id)
+    .bind(&result_patch)
+    .bind(&outcome.failure_kind)
+    .bind(now)
+    .execute(state.storage.pool())
+    .await
+    .map_err(|error| ApiError::from_storage(anyhow::Error::new(error)))?;
+    Ok(())
+}
+
+fn external_action_dispatch_url_from_config(config: &Value, action_type: &str) -> Option<String> {
+    let action_specific = if action_type.starts_with("external_artifact.") {
+        external_config_string(
+            config,
+            &[
+                "artifact_action_dispatch_url",
+                "artifactActionDispatchUrl",
+                "artifact_dispatch_url",
+                "artifactDispatchUrl",
+            ],
+        )
+    } else {
+        external_config_string(
+            config,
+            &[
+                "business_action_dispatch_url",
+                "businessActionDispatchUrl",
+                "business_dispatch_url",
+                "businessDispatchUrl",
+            ],
+        )
+    };
+    action_specific.or_else(|| {
+        external_config_string(
+            config,
+            &[
+                "external_action_dispatch_url",
+                "externalActionDispatchUrl",
+                "action_dispatch_url",
+                "actionDispatchUrl",
+            ],
+        )
+    })
+}
+
+fn external_action_dispatch_payload(record: &ExternalActionDispatchRecord) -> Value {
+    json!({
+        "action_id": record.action_id,
+        "assistant_run_id": record.assistant_run_id,
+        "action_type": record.action_type,
+        "risk_level": record.risk_level,
+        "target_system": record.target_system,
+        "arguments_redacted": record.arguments_redacted,
+        "confirmation_state": record.confirmation_state,
+        "requester_summary": {
+            "platform": record.requester_summary.get("platform").cloned().unwrap_or(Value::Null),
+            "tenant_external_id": record.requester_summary.get("tenant_external_id").cloned().unwrap_or(Value::Null),
+            "conversation_external_id": record.requester_summary.get("conversation_external_id").cloned().unwrap_or(Value::Null),
+            "sender_external_id": record.requester_summary.get("sender_external_id").cloned().unwrap_or(Value::Null),
+        },
+        "raw_arguments_included": false,
+    })
+}
+
+fn external_action_reqwest_error_kind(error: &reqwest::Error) -> &'static str {
+    if error.is_timeout() {
+        "timeout"
+    } else if error.is_connect() {
+        "connect"
+    } else if error.is_request() {
+        "request"
+    } else if error.is_body() {
+        "body"
+    } else if error.is_decode() {
+        "decode"
+    } else {
+        "unknown"
+    }
+}
+
+fn external_action_response_request_id(response: &Value) -> Option<String> {
+    response
+        .get("external_request_id")
+        .or_else(|| response.get("externalRequestId"))
+        .or_else(|| response.get("request_id"))
+        .or_else(|| response.get("requestId"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
+fn external_action_response_summary(response: Option<&Value>, response_text: &str) -> Value {
+    if let Some(response) = response {
+        return json!({
+            "json": external_action_redacted_response_summary(response),
+        });
+    }
+    json!({
+        "text_chars": response_text.chars().count(),
+        "body_redacted": true,
+    })
+}
+
+fn external_action_redacted_response_summary(response: &Value) -> Value {
+    match response {
+        Value::Object(map) => {
+            let mut summary = Map::new();
+            for key in [
+                "external_request_id",
+                "externalRequestId",
+                "request_id",
+                "requestId",
+                "status",
+                "code",
+            ] {
+                if let Some(value) = map.get(key) {
+                    summary.insert(key.to_string(), value.clone());
+                }
+            }
+            if map.contains_key("message") {
+                summary.insert("message_present".to_string(), json!(true));
+            }
+            Value::Object(summary)
+        }
+        _ => Value::Null,
+    }
 }
 
 async fn ingest_feishu_channel_callback(
@@ -27895,6 +28305,94 @@ mod tests {
         assert_eq!(external_channel_platform_from_wire_value("wechat"), None);
     }
 
+    #[test]
+    fn external_action_dispatch_url_prefers_action_specific_endpoint() {
+        let config = json!({
+            "action_dispatch_url": "https://generic.example/actions",
+            "artifact_dispatch_url": "https://artifact.example/actions",
+            "business_action_dispatch_url": "https://business.example/actions",
+        });
+
+        assert_eq!(
+            external_action_dispatch_url_from_config(&config, "external_artifact.publish")
+                .as_deref(),
+            Some("https://artifact.example/actions")
+        );
+        assert_eq!(
+            external_action_dispatch_url_from_config(&config, "external_business_action.invoke")
+                .as_deref(),
+            Some("https://business.example/actions")
+        );
+        assert_eq!(
+            external_action_dispatch_url_from_config(
+                &json!({"action_dispatch_url": "[redacted]"}),
+                "external_business_action.invoke",
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn external_action_dispatch_payload_excludes_raw_requester_fields() {
+        let record = ExternalActionDispatchRecord {
+            action_id: "act-001".to_string(),
+            assistant_run_id: Some(AssistantRunId(Uuid::new_v4())),
+            requester_summary: json!({
+                "platform": "generic_chat",
+                "tenant_external_id": "tenant-ext-001",
+                "conversation_external_id": "chat-ext-001",
+                "sender_external_id": "user-ext-001",
+                "channel_connection_id": "generic-chat-main",
+                "raw_prompt": "create a secret ticket",
+            }),
+            risk_level: "cross_system".to_string(),
+            target_system: "external_channel".to_string(),
+            action_type: "external_business_action.invoke".to_string(),
+            arguments_redacted: json!({
+                "raw_prompt_redacted": true,
+                "operation": "create_ticket",
+            }),
+            confirmation_state: "confirmed".to_string(),
+            external_request_id: None,
+        };
+
+        let payload = external_action_dispatch_payload(&record);
+        let payload_text = payload.to_string();
+
+        assert_eq!(payload["raw_arguments_included"], json!(false));
+        assert_eq!(
+            payload["requester_summary"]["sender_external_id"],
+            json!("user-ext-001")
+        );
+        assert!(!payload_text.contains("create a secret ticket"));
+        assert!(!payload_text.contains("channel_connection_id"));
+    }
+
+    #[test]
+    fn external_action_response_summary_redacts_unrecognized_response_fields() {
+        let response = json!({
+            "external_request_id": "req-001",
+            "status": "queued",
+            "message": "accepted but hidden",
+            "token": "secret-token",
+        });
+
+        let json_summary = external_action_response_summary(Some(&response), "");
+        let json_summary_text = json_summary.to_string();
+        assert_eq!(
+            json_summary["json"]["external_request_id"],
+            json!("req-001")
+        );
+        assert_eq!(json_summary["json"]["status"], json!("queued"));
+        assert_eq!(json_summary["json"]["message_present"], json!(true));
+        assert!(!json_summary_text.contains("secret-token"));
+        assert!(!json_summary_text.contains("accepted but hidden"));
+
+        let text_summary = external_action_response_summary(None, "secret body");
+        assert_eq!(text_summary["body_redacted"], json!(true));
+        assert!(!text_summary.to_string().contains("secret body"));
+    }
+
     async fn insert_generic_external_channel_connection(state: &AppState, connection_id: &str) {
         sqlx::query(
             r#"
@@ -28034,7 +28532,7 @@ mod tests {
 
         let confirmed_row = sqlx::query(
             r#"
-            select confirmation_state, result_summary
+            select confirmation_state, failure_kind, result_summary
             from external_action_runs
             where tenant_id = $1 and id = $2
             "#,
@@ -28050,8 +28548,23 @@ mod tests {
             "confirmed"
         );
         assert_eq!(
-            confirmed_row.get::<Value, _>("result_summary")["confirmation"]["decision"],
+            confirmed_row
+                .get::<Option<String>, _>("failure_kind")
+                .as_deref(),
+            Some("dispatch_endpoint_missing")
+        );
+        let confirmed_result_summary = confirmed_row.get::<Value, _>("result_summary");
+        assert_eq!(
+            confirmed_result_summary["confirmation"]["decision"],
             json!("approved")
+        );
+        assert_eq!(
+            confirmed_result_summary["status"],
+            json!("dispatch_blocked")
+        );
+        assert_eq!(
+            confirmed_result_summary["dispatch"]["reason"],
+            json!("dispatch_endpoint_missing")
         );
     }
 

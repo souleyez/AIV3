@@ -545,6 +545,14 @@ V3 可以在用户授权和系统校验后调用第三方业务接口，例如�
 | `high` | 对外发布、变更权限、发起审批 | 必须用户确认 |
 | `critical` | 财务、法务、删除、跨系统重大变更 | 需要更严格的确认和审计 |
 
+当前实现状态：外部聊天通道中的业务动作已具备 MVP 闭环。V3 会先保存模型选择的动作意图；高风险和跨系统动作必须等待用户确认；已确认或无需确认的动作，才会派发到第三方配置的 HTTPS endpoint。若未配置派发 endpoint，V3 会把动作记录为 `dispatch_blocked`，失败原因记录为 `dispatch_endpoint_missing`，用于观测和审计，不会静默丢弃。
+
+派发 endpoint 配置键：
+
+- 产物动作优先读取 `artifact_action_dispatch_url`、`artifactActionDispatchUrl`、`artifact_dispatch_url`、`artifactDispatchUrl`；
+- 业务动作优先读取 `business_action_dispatch_url`、`businessActionDispatchUrl`、`business_dispatch_url`、`businessDispatchUrl`；
+- 两类动作都可回退读取 `external_action_dispatch_url`、`externalActionDispatchUrl`、`action_dispatch_url`、`actionDispatchUrl`。
+
 动作意图示例：
 
 ```json
@@ -562,6 +570,32 @@ V3 可以在用户授权和系统校验后调用第三方业务接口，例如�
   "idempotency_key": "action:create-ticket:arun_01HXEXAMPLE"
 }
 ```
+
+V3 派发给第三方时，只发送脱敏 payload：
+
+```json
+{
+  "action_id": "act-001",
+  "assistant_run_id": "arun-001",
+  "action_type": "ticket.update_priority",
+  "risk_level": "high_risk_write",
+  "target_system": "ticketing",
+  "confirmation_state": "confirmed",
+  "arguments_redacted": {
+    "ticket_id": "T-1001",
+    "priority": "high"
+  },
+  "requester_summary": {
+    "platform": "generic_chat",
+    "tenant_external_id": "tenant-001",
+    "conversation_external_id": "chat-risk-room",
+    "sender_external_id": "user-a"
+  },
+  "raw_arguments_included": false
+}
+```
+
+第三方响应可返回 `external_request_id`、`externalRequestId`、`request_id` 或 `requestId`。V3 会保存该请求 id 和脱敏后的结果摘要；第三方原始响应正文、令牌、密钥、任意 message 文本不会写入动作摘要。
 
 ## 14. 回复格式
 

@@ -545,7 +545,7 @@ Request body:
 
 External actions are business operations requested by the model but validated and executed by V3.
 
-Implementation status: planned.
+Implementation status: MVP available for external channel action runs. V3 persists model-selected action intents, pauses high-risk and cross-system actions until confirmation, and dispatches confirmed or confirmation-free runs only to a configured third-party HTTPS endpoint. If no endpoint is configured, V3 records `dispatch_blocked` with `dispatch_endpoint_missing` for audit instead of silently dropping the action.
 
 Risk levels:
 
@@ -580,6 +580,38 @@ Action intent example:
 ```
 
 High-risk or cross-system actions must pause until confirmation is received.
+
+Dispatch endpoint configuration keys:
+
+- Artifact actions prefer `artifact_action_dispatch_url`, `artifactActionDispatchUrl`, `artifact_dispatch_url`, or `artifactDispatchUrl`.
+- Business actions prefer `business_action_dispatch_url`, `businessActionDispatchUrl`, `business_dispatch_url`, or `businessDispatchUrl`.
+- Both action families can fall back to `external_action_dispatch_url`, `externalActionDispatchUrl`, `action_dispatch_url`, or `actionDispatchUrl`.
+
+V3 sends only a redacted dispatch payload:
+
+```json
+{
+  "action_id": "act-001",
+  "assistant_run_id": "arun-001",
+  "action_type": "ticket.update_priority",
+  "risk_level": "high_risk_write",
+  "target_system": "ticketing",
+  "confirmation_state": "confirmed",
+  "arguments_redacted": {
+    "ticket_id": "T-1001",
+    "priority": "high"
+  },
+  "requester_summary": {
+    "platform": "generic_chat",
+    "tenant_external_id": "tenant-001",
+    "conversation_external_id": "chat-risk-room",
+    "sender_external_id": "user-a"
+  },
+  "raw_arguments_included": false
+}
+```
+
+Dispatch responses may return `external_request_id`, `externalRequestId`, `request_id`, or `requestId`. V3 stores that id and a redacted result summary. Raw third-party response bodies, tokens, secrets, and arbitrary message text are not stored in action summaries.
 
 ## Reply Envelope
 

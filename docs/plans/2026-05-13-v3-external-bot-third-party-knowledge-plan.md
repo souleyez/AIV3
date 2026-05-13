@@ -20,7 +20,8 @@
 - Phase 6 now supports Feishu/Lark encrypted `encrypt` callback bodies using the official AES-256-CBC event decryption shape.
 - Phase 7 first checkpoint now defines external action risk/confirmation policy contracts, registers external artifact/action tools, exposes external channel Codex action contracts, and routes Codex plan-only suggestions across read-only, low-risk write, high-risk confirmation, and cross-system confirmation cases.
 - Phase 7 second checkpoint now persists `external_action_runs` from normalized external channel messages when Codex plan-only selects an external action, returns confirmation-required replies for high-risk/cross-system actions, and accepts normalized confirmation callbacks.
-- Next implementation checkpoint: dispatch confirmed/not-required external action runs to the configured third-party artifact/action API and store external request/result summaries.
+- Phase 7 third checkpoint now dispatches confirmed or confirmation-free external action runs to configured third-party artifact/action HTTPS endpoints, stores external request ids and redacted result summaries, and records auditable blocked states when dispatch endpoints are missing or invalid.
+- Next implementation checkpoint: harden external action dispatch with auth/signature headers, retry/worker execution, and observe-first management UI status for pending, blocked, dispatched, and failed runs.
 
 ---
 
