@@ -16,7 +16,8 @@
 - Phase 5 generic source sync workflow is connected through `platform-api`, `workflow-definitions`, `ingest-worker`, `retrieval-worker`, and `external-source-worker`.
 - Generic source MVP currently supports mock HTTPS connector fixtures for external users, groups, document metadata, document bodies, and ACL snapshots.
 - Phase 6 thin adapters now cover Feishu/Lark and WeCom callback signature validation, timestamp/replay checks, event normalization, and channel-safe reply payload rendering.
-- Next implementation checkpoint: wire platform-specific adapter entrypoints to stored connection configuration and the normalized external channel ingestion endpoint.
+- Phase 6 platform-specific callback entrypoints now read stored connection config and hand normalized Feishu/Lark and WeCom messages to the unified external channel ingestion endpoint.
+- Next implementation checkpoint: add Feishu encrypted callback body decryption and then move into Phase 7 external artifact/action runtime.
 
 ---
 
@@ -389,7 +390,8 @@ It should not ask operators to manually label documents, rewrite permissions, or
 3. Done: Convert platform events to `ExternalBotMessageView` in thin adapter modules.
 4. Done: Convert `ExternalBotReplyView` to platform text/card-safe reply payloads.
 5. Done: Keep adapters thin; shared behavior stays in normalized channel ingestion.
-6. Commit `Add Feishu and WeCom channel adapters`.
+6. Done: Add platform-specific callback routes that load stored connection config and call normalized channel ingestion.
+7. Commit `Add Feishu and WeCom channel adapters`.
 
 ### Phase 7: External artifact and transaction runtime
 

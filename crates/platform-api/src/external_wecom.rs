@@ -1,3 +1,6 @@
+use aes::Aes256;
+use base64::{engine::general_purpose, Engine as _};
+use cbc::cipher::{block_padding::NoPadding, BlockDecryptMut, KeyIvInit};
 use chrono::{DateTime, Utc};
 use contracts::{
     ExternalAttachmentRefView, ExternalBotMessageView, ExternalBotReplyTypeView,
@@ -15,6 +18,8 @@ pub struct WeComAdapterConfig {
     pub tenant_external_id: String,
     pub bot_external_id: String,
     pub token: String,
+    pub encoding_aes_key: Option<String>,
+    pub receive_id: Option<String>,
     pub max_clock_skew_seconds: i64,
 }
 
@@ -28,6 +33,8 @@ impl WeComAdapterConfig {
             tenant_external_id: tenant_external_id.into(),
             bot_external_id: bot_external_id.into(),
             token: token.into(),
+            encoding_aes_key: None,
+            receive_id: None,
             max_clock_skew_seconds: DEFAULT_MAX_CLOCK_SKEW_SECONDS,
         }
     }
@@ -154,6 +161,29 @@ pub fn validate_wecom_callback(
     Ok(())
 }
 
+pub fn decrypt_wecom_echostr(
+    echostr: &str,
+    encoding_aes_key: &str,
+    expected_receive_id: Option<&str>,
+) -> Result<String, WeComAdapterError> {
+    decrypt_wecom_encrypt(echostr, encoding_aes_key, expected_receive_id)
+}
+
+pub fn decrypt_wecom_envelope(
+    encrypted_xml: &str,
+    encoding_aes_key: &str,
+    expected_receive_id: Option<&str>,
+) -> Result<String, WeComAdapterError> {
+    let fields = parse_wecom_xml(encrypted_xml)?;
+    let encrypt = fields.get("Encrypt").ok_or_else(|| {
+        WeComAdapterError::new(
+            "wecom_encrypt_missing",
+            "WeCom callback envelope is missing the Encrypt field",
+        )
+    })?;
+    decrypt_wecom_encrypt(encrypt, encoding_aes_key, expected_receive_id)
+}
+
 pub fn normalize_wecom_callback(
     config: &WeComAdapterConfig,
     params: &WeComCallbackParams,
@@ -198,6 +228,129 @@ pub fn normalize_wecom_callback(
         &message_fields,
         now,
     )?))
+}
+
+fn decrypt_wecom_encrypt(
+    encrypt: &str,
+    encoding_aes_key: &str,
+    expected_receive_id: Option<&str>,
+) -> Result<String, WeComAdapterError> {
+    let aes_key = decode_wecom_aes_key(encoding_aes_key)?;
+    let mut ciphertext = general_purpose::STANDARD.decode(encrypt).map_err(|error| {
+        WeComAdapterError::new(
+            "wecom_encrypt_base64_invalid",
+            format!("WeCom encrypted payload is not valid base64: {error}"),
+        )
+    })?;
+    if ciphertext.len() % 16 != 0 {
+        return Err(WeComAdapterError::new(
+            "wecom_ciphertext_invalid",
+            "WeCom encrypted payload length must be a multiple of AES block size",
+        ));
+    }
+
+    let iv = &aes_key[..16];
+    let decrypted = cbc::Decryptor::<Aes256>::new_from_slices(&aes_key, iv)
+        .map_err(|error| {
+            WeComAdapterError::new(
+                "wecom_cipher_init_failed",
+                format!("WeCom AES decryptor could not be initialized: {error}"),
+            )
+        })?
+        .decrypt_padded_mut::<NoPadding>(&mut ciphertext)
+        .map_err(|error| {
+            WeComAdapterError::new(
+                "wecom_decrypt_failed",
+                format!("WeCom encrypted payload could not be decrypted: {error}"),
+            )
+        })?;
+    let unpadded_len = strip_wecom_pkcs7_padding(decrypted)?;
+    let unpadded = &decrypted[..unpadded_len];
+    if unpadded.len() < 20 {
+        return Err(WeComAdapterError::new(
+            "wecom_plaintext_invalid",
+            "WeCom decrypted payload is too short",
+        ));
+    }
+    let msg_len =
+        u32::from_be_bytes([unpadded[16], unpadded[17], unpadded[18], unpadded[19]]) as usize;
+    let msg_start = 20;
+    let msg_end = msg_start + msg_len;
+    if msg_end > unpadded.len() {
+        return Err(WeComAdapterError::new(
+            "wecom_plaintext_invalid",
+            "WeCom decrypted payload message length exceeds payload size",
+        ));
+    }
+    let msg = std::str::from_utf8(&unpadded[msg_start..msg_end]).map_err(|error| {
+        WeComAdapterError::new(
+            "wecom_plaintext_invalid",
+            format!("WeCom decrypted XML is not UTF-8: {error}"),
+        )
+    })?;
+    let receive_id = std::str::from_utf8(&unpadded[msg_end..]).map_err(|error| {
+        WeComAdapterError::new(
+            "wecom_receive_id_invalid",
+            format!("WeCom decrypted receive id is not UTF-8: {error}"),
+        )
+    })?;
+    if let Some(expected) = expected_receive_id.filter(|value| !value.trim().is_empty()) {
+        if receive_id != expected {
+            return Err(WeComAdapterError::new(
+                "wecom_receive_id_mismatch",
+                "WeCom decrypted receive id did not match the configured connection",
+            ));
+        }
+    }
+    Ok(msg.to_string())
+}
+
+fn decode_wecom_aes_key(encoding_aes_key: &str) -> Result<[u8; 32], WeComAdapterError> {
+    if encoding_aes_key.len() != 43 {
+        return Err(WeComAdapterError::new(
+            "wecom_encoding_aes_key_invalid",
+            "WeCom EncodingAESKey must be 43 characters",
+        ));
+    }
+    let decoded = general_purpose::STANDARD
+        .decode(format!("{encoding_aes_key}="))
+        .map_err(|error| {
+            WeComAdapterError::new(
+                "wecom_encoding_aes_key_invalid",
+                format!("WeCom EncodingAESKey is not valid base64: {error}"),
+            )
+        })?;
+    decoded.try_into().map_err(|_| {
+        WeComAdapterError::new(
+            "wecom_encoding_aes_key_invalid",
+            "WeCom EncodingAESKey must decode to 32 bytes",
+        )
+    })
+}
+
+fn strip_wecom_pkcs7_padding(decrypted: &[u8]) -> Result<usize, WeComAdapterError> {
+    let padding = *decrypted.last().ok_or_else(|| {
+        WeComAdapterError::new(
+            "wecom_plaintext_invalid",
+            "WeCom decrypted payload is empty",
+        )
+    })? as usize;
+    if !(1..=32).contains(&padding) || padding > decrypted.len() {
+        return Err(WeComAdapterError::new(
+            "wecom_padding_invalid",
+            "WeCom decrypted payload has invalid PKCS#7 padding",
+        ));
+    }
+    if !decrypted[decrypted.len() - padding..]
+        .iter()
+        .all(|byte| *byte as usize == padding)
+    {
+        return Err(WeComAdapterError::new(
+            "wecom_padding_invalid",
+            "WeCom decrypted payload has inconsistent PKCS#7 padding",
+        ));
+    }
+    Ok(decrypted.len() - padding)
 }
 
 pub fn render_wecom_reply_body(reply: &ExternalBotReplyView, agent_id: impl Into<String>) -> Value {
@@ -388,6 +541,8 @@ mod tests {
             tenant_external_id: "corp_001".to_string(),
             bot_external_id: "1000002".to_string(),
             token: "token".to_string(),
+            encoding_aes_key: None,
+            receive_id: None,
             max_clock_skew_seconds: 300,
         }
     }

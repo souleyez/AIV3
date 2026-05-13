@@ -8,6 +8,7 @@ use auth_scope::{
     ScopeResolver,
 };
 use axum::{
+    body::Bytes,
     extract::{Path, Query, State},
     http::{header, HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
@@ -284,6 +285,14 @@ struct HtmlArtifactFileQuery {
     assistant_run_id: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct WeComCallbackQuery {
+    msg_signature: String,
+    timestamp: String,
+    nonce: String,
+    echostr: Option<String>,
+}
+
 #[derive(Clone)]
 pub struct AppState {
     event_bus: EventBus,
@@ -432,6 +441,14 @@ pub fn router(
         .route(
             "/v1/external/channels/{connection_id}/events",
             axum::routing::post(ingest_external_channel_event),
+        )
+        .route(
+            "/v1/external/channels/{connection_id}/feishu/callback",
+            axum::routing::post(ingest_feishu_channel_callback),
+        )
+        .route(
+            "/v1/external/channels/{connection_id}/wecom/callback",
+            get(verify_wecom_channel_callback).post(ingest_wecom_channel_callback),
         )
         .route(
             "/v1/external/sources/{source_id}/sync",
@@ -6611,6 +6628,7 @@ async fn create_assistant_run(
 struct ExternalChannelConnectionSummary {
     platform: ExternalChannelPlatformView,
     status: String,
+    config_redacted: Value,
 }
 
 #[derive(Clone, Debug)]
@@ -6709,10 +6727,20 @@ async fn ingest_external_channel_event(
     Path(connection_id): Path<String>,
     Json(message): Json<ExternalBotMessageView>,
 ) -> std::result::Result<(StatusCode, Json<ExternalChannelEventResponse>), ApiError> {
-    validate_required("connection_id", &connection_id)?;
+    let (status, response) =
+        ingest_external_channel_message(&state, &connection_id, message).await?;
+    Ok((status, Json(response)))
+}
+
+async fn ingest_external_channel_message(
+    state: &AppState,
+    connection_id: &str,
+    message: ExternalBotMessageView,
+) -> std::result::Result<(StatusCode, ExternalChannelEventResponse), ApiError> {
+    validate_required("connection_id", connection_id)?;
     validate_external_bot_message(&message)?;
 
-    let connection = load_external_channel_connection(&state, &connection_id).await?;
+    let connection = load_external_channel_connection(state, connection_id).await?;
     if connection.status != "enabled" {
         return Err(ApiError::forbidden(
             "external_channel_disabled",
@@ -6736,17 +6764,17 @@ async fn ingest_external_channel_event(
     {
         return Ok((
             StatusCode::OK,
-            Json(ExternalChannelEventResponse {
+            ExternalChannelEventResponse {
                 accepted: true,
                 assistant_run_id: Some(existing_run_id),
                 idempotency_key: message.idempotency_key.clone(),
                 reply: external_channel_task_status_reply(&message, "duplicate_accepted"),
-            }),
+            },
         ));
     }
 
     let now = Utc::now();
-    let assistant_request = external_bot_message_to_assistant_run_request(&connection_id, &message);
+    let assistant_request = external_bot_message_to_assistant_run_request(connection_id, &message);
     let selected_scope = assistant_request
         .selected_scope
         .clone()
@@ -6826,18 +6854,178 @@ async fn ingest_external_channel_event(
         )
         .await
         .map_err(ApiError::from_storage)?;
-    record_external_message_event(&state, &connection_id, run.id, &message, &payload_summary)
-        .await?;
+    record_external_message_event(state, connection_id, run.id, &message, &payload_summary).await?;
 
     Ok((
         StatusCode::ACCEPTED,
-        Json(ExternalChannelEventResponse {
+        ExternalChannelEventResponse {
             accepted: true,
             assistant_run_id: Some(run.id),
             idempotency_key: message.idempotency_key.clone(),
             reply: external_channel_task_status_reply(&message, "accepted"),
-        }),
+        },
     ))
+}
+
+async fn ingest_feishu_channel_callback(
+    State(state): State<AppState>,
+    Path(connection_id): Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> std::result::Result<(StatusCode, Json<Value>), ApiError> {
+    validate_required("connection_id", &connection_id)?;
+    let connection = load_external_channel_connection(&state, &connection_id).await?;
+    ensure_external_channel_enabled(&connection_id, &connection)?;
+    ensure_external_channel_platform(
+        &connection_id,
+        &connection,
+        &[
+            ExternalChannelPlatformView::Feishu,
+            ExternalChannelPlatformView::Lark,
+        ],
+    )?;
+    let config = feishu_adapter_config_from_connection(&connection_id, &connection)?;
+    let raw_body = raw_utf8_body(body, "feishu_callback_body_invalid")?;
+    let callback_headers = feishu_callback_headers_from_map(&headers)?;
+    match external_feishu::normalize_feishu_callback(
+        &config,
+        callback_headers.as_ref(),
+        &raw_body,
+        Utc::now(),
+        None,
+    )
+    .map_err(api_error_from_feishu_adapter)?
+    {
+        external_feishu::FeishuCallbackOutcome::Challenge { challenge } => {
+            Ok((StatusCode::OK, Json(json!({ "challenge": challenge }))))
+        }
+        external_feishu::FeishuCallbackOutcome::Ignored { event_type } => Ok((
+            StatusCode::OK,
+            Json(json!({
+                "accepted": true,
+                "ignored": true,
+                "event_type": event_type,
+            })),
+        )),
+        external_feishu::FeishuCallbackOutcome::Message(message) => {
+            let (status, response) =
+                ingest_external_channel_message(&state, &connection_id, message).await?;
+            let platform_reply = external_feishu::render_feishu_reply_body(&response.reply);
+            Ok((
+                status,
+                Json(external_platform_callback_response(
+                    &response,
+                    platform_reply,
+                )),
+            ))
+        }
+    }
+}
+
+async fn verify_wecom_channel_callback(
+    State(state): State<AppState>,
+    Path(connection_id): Path<String>,
+    Query(query): Query<WeComCallbackQuery>,
+) -> std::result::Result<Response, ApiError> {
+    validate_required("connection_id", &connection_id)?;
+    let connection = load_external_channel_connection(&state, &connection_id).await?;
+    ensure_external_channel_enabled(&connection_id, &connection)?;
+    ensure_external_channel_platform(
+        &connection_id,
+        &connection,
+        &[ExternalChannelPlatformView::WeCom],
+    )?;
+    let config = wecom_adapter_config_from_connection(&connection_id, &connection)?;
+    let echostr = query.echostr.ok_or_else(|| {
+        ApiError::bad_request(
+            "wecom_echostr_missing",
+            "WeCom callback verification requires echostr".to_string(),
+        )
+    })?;
+    let params =
+        external_wecom::WeComCallbackParams::new(query.msg_signature, query.timestamp, query.nonce);
+    external_wecom::validate_wecom_callback(
+        &params,
+        &config.token,
+        &echostr,
+        Utc::now(),
+        config.max_clock_skew_seconds,
+        None,
+    )
+    .map_err(api_error_from_wecom_adapter)?;
+    let body = match config.encoding_aes_key.as_deref() {
+        Some(encoding_aes_key) => external_wecom::decrypt_wecom_echostr(
+            &echostr,
+            encoding_aes_key,
+            config.receive_id.as_deref(),
+        )
+        .map_err(api_error_from_wecom_adapter)?,
+        None => echostr,
+    };
+    Ok((StatusCode::OK, body).into_response())
+}
+
+async fn ingest_wecom_channel_callback(
+    State(state): State<AppState>,
+    Path(connection_id): Path<String>,
+    Query(query): Query<WeComCallbackQuery>,
+    body: Bytes,
+) -> std::result::Result<(StatusCode, Json<Value>), ApiError> {
+    validate_required("connection_id", &connection_id)?;
+    let connection = load_external_channel_connection(&state, &connection_id).await?;
+    ensure_external_channel_enabled(&connection_id, &connection)?;
+    ensure_external_channel_platform(
+        &connection_id,
+        &connection,
+        &[ExternalChannelPlatformView::WeCom],
+    )?;
+    let config = wecom_adapter_config_from_connection(&connection_id, &connection)?;
+    let encrypted_xml = raw_utf8_body(body, "wecom_callback_body_invalid")?;
+    let params =
+        external_wecom::WeComCallbackParams::new(query.msg_signature, query.timestamp, query.nonce);
+    let decrypted_xml = match config.encoding_aes_key.as_deref() {
+        Some(encoding_aes_key) => Some(
+            external_wecom::decrypt_wecom_envelope(
+                &encrypted_xml,
+                encoding_aes_key,
+                config.receive_id.as_deref(),
+            )
+            .map_err(api_error_from_wecom_adapter)?,
+        ),
+        None => None,
+    };
+    match external_wecom::normalize_wecom_callback(
+        &config,
+        &params,
+        &encrypted_xml,
+        decrypted_xml.as_deref(),
+        Utc::now(),
+        None,
+    )
+    .map_err(api_error_from_wecom_adapter)?
+    {
+        external_wecom::WeComCallbackOutcome::Ignored { message_type } => Ok((
+            StatusCode::OK,
+            Json(json!({
+                "accepted": true,
+                "ignored": true,
+                "message_type": message_type,
+            })),
+        )),
+        external_wecom::WeComCallbackOutcome::Message(message) => {
+            let (status, response) =
+                ingest_external_channel_message(&state, &connection_id, message).await?;
+            let platform_reply =
+                external_wecom::render_wecom_reply_body(&response.reply, config.bot_external_id);
+            Ok((
+                status,
+                Json(external_platform_callback_response(
+                    &response,
+                    platform_reply,
+                )),
+            ))
+        }
+    }
 }
 
 async fn load_external_channel_connection(
@@ -6846,7 +7034,7 @@ async fn load_external_channel_connection(
 ) -> std::result::Result<ExternalChannelConnectionSummary, ApiError> {
     let row = sqlx::query(
         r#"
-        select platform, status
+        select platform, status, config_redacted
         from external_channel_connections
         where tenant_id = $1 and id = $2
         "#,
@@ -6874,7 +7062,221 @@ async fn load_external_channel_connection(
     Ok(ExternalChannelConnectionSummary {
         platform,
         status: row.get("status"),
+        config_redacted: row.get("config_redacted"),
     })
+}
+
+fn ensure_external_channel_enabled(
+    connection_id: &str,
+    connection: &ExternalChannelConnectionSummary,
+) -> std::result::Result<(), ApiError> {
+    if connection.status != "enabled" {
+        return Err(ApiError::forbidden(
+            "external_channel_disabled",
+            format!("external channel connection {connection_id} is not enabled"),
+        ));
+    }
+    Ok(())
+}
+
+fn ensure_external_channel_platform(
+    connection_id: &str,
+    connection: &ExternalChannelConnectionSummary,
+    expected: &[ExternalChannelPlatformView],
+) -> std::result::Result<(), ApiError> {
+    if expected
+        .iter()
+        .any(|platform| platform == &connection.platform)
+    {
+        return Ok(());
+    }
+    Err(ApiError::bad_request_with_details(
+        "external_channel_platform_mismatch",
+        "external channel callback platform does not match the configured connection".to_string(),
+        json!({
+            "connection_id": connection_id,
+            "connection_platform": external_channel_platform_wire_value(&connection.platform),
+            "expected_platforms": expected
+                .iter()
+                .map(external_channel_platform_wire_value)
+                .collect::<Vec<_>>(),
+        }),
+    ))
+}
+
+fn feishu_adapter_config_from_connection(
+    connection_id: &str,
+    connection: &ExternalChannelConnectionSummary,
+) -> std::result::Result<external_feishu::FeishuAdapterConfig, ApiError> {
+    let config = &connection.config_redacted;
+    let mut adapter = external_feishu::FeishuAdapterConfig::new(
+        connection.platform.clone(),
+        external_config_string(
+            config,
+            &["tenant_external_id", "tenantExternalId", "tenant_key"],
+        )
+        .unwrap_or_else(|| connection_id.to_string()),
+        external_config_string(
+            config,
+            &["bot_external_id", "botExternalId", "app_id", "appId"],
+        )
+        .unwrap_or_else(|| connection_id.to_string()),
+        required_external_config_string(
+            config,
+            &["verification_token", "verificationToken", "token"],
+            "feishu_verification_token_missing",
+            "Feishu channel connection config requires verification_token",
+        )?,
+        required_external_config_string(
+            config,
+            &["encrypt_key", "encryptKey"],
+            "feishu_encrypt_key_missing",
+            "Feishu channel connection config requires encrypt_key",
+        )?,
+    );
+    if let Some(max_clock_skew_seconds) =
+        external_config_i64(config, &["max_clock_skew_seconds", "maxClockSkewSeconds"])
+    {
+        adapter.max_clock_skew_seconds = max_clock_skew_seconds;
+    }
+    Ok(adapter)
+}
+
+fn wecom_adapter_config_from_connection(
+    connection_id: &str,
+    connection: &ExternalChannelConnectionSummary,
+) -> std::result::Result<external_wecom::WeComAdapterConfig, ApiError> {
+    let config = &connection.config_redacted;
+    let mut adapter = external_wecom::WeComAdapterConfig::new(
+        external_config_string(
+            config,
+            &[
+                "tenant_external_id",
+                "tenantExternalId",
+                "corp_id",
+                "corpId",
+                "receive_id",
+            ],
+        )
+        .unwrap_or_else(|| connection_id.to_string()),
+        external_config_string(
+            config,
+            &["bot_external_id", "botExternalId", "agent_id", "agentId"],
+        )
+        .unwrap_or_else(|| connection_id.to_string()),
+        required_external_config_string(
+            config,
+            &["token", "callback_token", "callbackToken"],
+            "wecom_token_missing",
+            "WeCom channel connection config requires token",
+        )?,
+    );
+    adapter.encoding_aes_key =
+        external_config_string(config, &["encoding_aes_key", "encodingAesKey"]);
+    adapter.receive_id =
+        external_config_string(config, &["receive_id", "receiveId", "corp_id", "corpId"]);
+    if let Some(max_clock_skew_seconds) =
+        external_config_i64(config, &["max_clock_skew_seconds", "maxClockSkewSeconds"])
+    {
+        adapter.max_clock_skew_seconds = max_clock_skew_seconds;
+    }
+    Ok(adapter)
+}
+
+fn feishu_callback_headers_from_map(
+    headers: &HeaderMap,
+) -> std::result::Result<Option<external_feishu::FeishuCallbackHeaders>, ApiError> {
+    let timestamp = optional_header_string(headers, "x-lark-request-timestamp")?;
+    let nonce = optional_header_string(headers, "x-lark-request-nonce")?;
+    let signature = optional_header_string(headers, "x-lark-signature")?;
+    match (timestamp, nonce, signature) {
+        (None, None, None) => Ok(None),
+        (Some(timestamp), Some(nonce), Some(signature)) => Ok(Some(
+            external_feishu::FeishuCallbackHeaders::new(timestamp, nonce, signature),
+        )),
+        _ => Err(ApiError::bad_request(
+            "feishu_signature_headers_incomplete",
+            "Feishu callback requires timestamp, nonce, and signature headers together".to_string(),
+        )),
+    }
+}
+
+fn optional_header_string(
+    headers: &HeaderMap,
+    name: &'static str,
+) -> std::result::Result<Option<String>, ApiError> {
+    headers
+        .get(name)
+        .map(|value| {
+            value.to_str().map(|value| value.to_string()).map_err(|_| {
+                ApiError::bad_request(
+                    "external_callback_header_invalid",
+                    format!("external callback header {name} must be valid UTF-8"),
+                )
+            })
+        })
+        .transpose()
+}
+
+fn raw_utf8_body(body: Bytes, code: &str) -> std::result::Result<String, ApiError> {
+    String::from_utf8(body.to_vec()).map_err(|error| {
+        ApiError::bad_request(
+            code,
+            format!("external callback body must be valid UTF-8: {error}"),
+        )
+    })
+}
+
+fn required_external_config_string(
+    config: &Value,
+    keys: &[&str],
+    code: &str,
+    message: &str,
+) -> std::result::Result<String, ApiError> {
+    external_config_string(config, keys)
+        .ok_or_else(|| ApiError::bad_request(code, message.to_string()))
+}
+
+fn external_config_string(config: &Value, keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|key| {
+        config
+            .get(*key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty() && !value.starts_with("[redacted"))
+            .map(ToString::to_string)
+    })
+}
+
+fn external_config_i64(config: &Value, keys: &[&str]) -> Option<i64> {
+    keys.iter().find_map(|key| {
+        config.get(*key).and_then(|value| {
+            value
+                .as_i64()
+                .or_else(|| value.as_str().and_then(|text| text.trim().parse().ok()))
+        })
+    })
+}
+
+fn external_platform_callback_response(
+    response: &ExternalChannelEventResponse,
+    platform_reply: Value,
+) -> Value {
+    json!({
+        "accepted": response.accepted,
+        "assistant_run_id": response.assistant_run_id,
+        "idempotency_key": response.idempotency_key,
+        "reply": response.reply,
+        "platform_reply": platform_reply,
+    })
+}
+
+fn api_error_from_feishu_adapter(error: external_feishu::FeishuAdapterError) -> ApiError {
+    ApiError::bad_request(error.code, error.message)
+}
+
+fn api_error_from_wecom_adapter(error: external_wecom::WeComAdapterError) -> ApiError {
+    ApiError::bad_request(error.code, error.message)
 }
 
 async fn load_external_source_connection(
@@ -26794,6 +27196,39 @@ mod tests {
         .expect("sample external bot message")
     }
 
+    fn wecom_test_encoding_aes_key() -> String {
+        use base64::{engine::general_purpose, Engine as _};
+
+        let key: Vec<u8> = (1u8..=32).collect();
+        general_purpose::STANDARD
+            .encode(key)
+            .trim_end_matches('=')
+            .to_string()
+    }
+
+    fn encrypt_wecom_test_xml(xml: &str, receive_id: &str, encoding_aes_key: &str) -> String {
+        use aes::Aes256;
+        use base64::{engine::general_purpose, Engine as _};
+        use cbc::cipher::{block_padding::NoPadding, BlockEncryptMut, KeyIvInit};
+
+        let key = general_purpose::STANDARD
+            .decode(format!("{encoding_aes_key}="))
+            .expect("test EncodingAESKey should decode");
+        let mut plaintext = vec![0x42; 16];
+        plaintext.extend_from_slice(&(xml.len() as u32).to_be_bytes());
+        plaintext.extend_from_slice(xml.as_bytes());
+        plaintext.extend_from_slice(receive_id.as_bytes());
+        let padding = 32 - (plaintext.len() % 32);
+        let padding = if padding == 0 { 32 } else { padding };
+        plaintext.extend(std::iter::repeat_n(padding as u8, padding));
+        let plaintext_len = plaintext.len();
+        let encrypted = cbc::Encryptor::<Aes256>::new_from_slices(&key, &key[..16])
+            .expect("test AES encryptor should initialize")
+            .encrypt_padded_mut::<NoPadding>(&mut plaintext, plaintext_len)
+            .expect("test plaintext is block aligned");
+        general_purpose::STANDARD.encode(encrypted)
+    }
+
     #[test]
     fn external_bot_message_maps_to_assistant_run_request_scope() {
         let message = sample_external_bot_message();
@@ -26884,6 +27319,221 @@ mod tests {
         );
         assert!(normalize_external_source_sync_kind(Some("raw_secret_dump")).is_err());
         assert!(normalize_external_source_sync_object(json!([]), "checkpoint").is_err());
+    }
+
+    #[tokio::test]
+    async fn feishu_callback_endpoint_uses_connection_config_and_normalized_ingestion() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping Feishu callback endpoint test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("feishu-callback-test-{}", Uuid::new_v4()),
+                "Feishu Callback Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage,
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        sqlx::query(
+            r#"
+            insert into external_channel_connections (
+                id,
+                tenant_id,
+                platform,
+                connection_key,
+                display_name,
+                config_redacted,
+                status
+            )
+            values ($1, $2, 'feishu', $1, 'Feishu Bot', $3, 'enabled')
+            "#,
+        )
+        .bind("feishu-main")
+        .bind(state.tenant_id.0)
+        .bind(json!({
+            "verification_token": "verification-token",
+            "encrypt_key": "encrypt-key",
+            "tenant_external_id": "tenant-feishu",
+            "bot_external_id": "cli_v3"
+        }))
+        .execute(state.storage.pool())
+        .await
+        .expect("external channel connection should be inserted");
+
+        let now = Utc::now();
+        let raw_body = json!({
+            "schema": "2.0",
+            "header": {
+                "event_id": "evt-route-001",
+                "event_type": "im.message.receive_v1",
+                "app_id": "cli_v3",
+                "tenant_key": "tenant-feishu",
+                "create_time": now.timestamp_millis().to_string(),
+                "token": "verification-token"
+            },
+            "event": {
+                "sender": {
+                    "sender_id": {
+                        "open_id": "ou_sender",
+                        "user_id": "user_sender"
+                    }
+                },
+                "message": {
+                    "message_id": "om_route_001",
+                    "chat_id": "oc_route_room",
+                    "message_type": "text",
+                    "content": "{\"text\":\"hello from Feishu\"}"
+                }
+            }
+        })
+        .to_string();
+        let timestamp = now.timestamp().to_string();
+        let signature = external_feishu::feishu_callback_signature(
+            &timestamp,
+            "nonce-route-001",
+            "encrypt-key",
+            &raw_body,
+        );
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-lark-request-timestamp",
+            HeaderValue::from_str(&timestamp).unwrap(),
+        );
+        headers.insert(
+            "x-lark-request-nonce",
+            HeaderValue::from_static("nonce-route-001"),
+        );
+        headers.insert(
+            "x-lark-signature",
+            HeaderValue::from_str(&signature).unwrap(),
+        );
+
+        let (status, Json(response)) = ingest_feishu_channel_callback(
+            State(state.clone()),
+            Path("feishu-main".to_string()),
+            headers,
+            Bytes::from(raw_body),
+        )
+        .await
+        .expect("Feishu callback should be accepted");
+
+        assert_eq!(status, StatusCode::ACCEPTED);
+        assert_eq!(response["accepted"], json!(true));
+        assert_eq!(
+            response["idempotency_key"],
+            json!("feishu:tenant-feishu:cli_v3:evt-route-001")
+        );
+        assert_eq!(
+            response["platform_reply"]["receive_id"],
+            json!("oc_route_room")
+        );
+        assert!(response["assistant_run_id"].as_str().is_some());
+    }
+
+    #[tokio::test]
+    async fn wecom_callback_endpoint_decrypts_xml_and_uses_normalized_ingestion() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping WeCom callback endpoint test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("wecom-callback-test-{}", Uuid::new_v4()),
+                "WeCom Callback Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage,
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        let encoding_aes_key = wecom_test_encoding_aes_key();
+        sqlx::query(
+            r#"
+            insert into external_channel_connections (
+                id,
+                tenant_id,
+                platform,
+                connection_key,
+                display_name,
+                config_redacted,
+                status
+            )
+            values ($1, $2, 'we_com', $1, 'WeCom Bot', $3, 'enabled')
+            "#,
+        )
+        .bind("wecom-main")
+        .bind(state.tenant_id.0)
+        .bind(json!({
+            "token": "token",
+            "encoding_aes_key": encoding_aes_key.clone(),
+            "receive_id": "corp_001",
+            "tenant_external_id": "corp_001",
+            "bot_external_id": "1000002"
+        }))
+        .execute(state.storage.pool())
+        .await
+        .expect("external channel connection should be inserted");
+
+        let now = Utc::now();
+        let decrypted_xml = format!(
+            "<xml><ToUserName><![CDATA[corp_001]]></ToUserName><FromUserName><![CDATA[user_alpha]]></FromUserName><CreateTime>{}</CreateTime><MsgType><![CDATA[text]]></MsgType><Content><![CDATA[hello from WeCom]]></Content><MsgId>wecom-route-001</MsgId><AgentID>1000002</AgentID></xml>",
+            now.timestamp()
+        );
+        let encrypt = encrypt_wecom_test_xml(&decrypted_xml, "corp_001", &encoding_aes_key);
+        let encrypted_xml = format!(
+            "<xml><ToUserName><![CDATA[corp_001]]></ToUserName><AgentID><![CDATA[1000002]]></AgentID><Encrypt><![CDATA[{encrypt}]]></Encrypt></xml>"
+        );
+        let timestamp = now.timestamp().to_string();
+        let signature = external_wecom::wecom_callback_signature(
+            "token",
+            &timestamp,
+            "nonce-route-001",
+            &encrypt,
+        );
+
+        let (status, Json(response)) = ingest_wecom_channel_callback(
+            State(state.clone()),
+            Path("wecom-main".to_string()),
+            Query(WeComCallbackQuery {
+                msg_signature: signature,
+                timestamp,
+                nonce: "nonce-route-001".to_string(),
+                echostr: None,
+            }),
+            Bytes::from(encrypted_xml),
+        )
+        .await
+        .expect("WeCom callback should be accepted");
+
+        assert_eq!(status, StatusCode::ACCEPTED);
+        assert_eq!(response["accepted"], json!(true));
+        assert_eq!(
+            response["idempotency_key"],
+            json!("we_com:corp_001:1000002:wecom-route-001")
+        );
+        assert_eq!(response["platform_reply"]["touser"], json!("user_alpha"));
+        assert!(response["assistant_run_id"].as_str().is_some());
     }
 
     #[tokio::test]
