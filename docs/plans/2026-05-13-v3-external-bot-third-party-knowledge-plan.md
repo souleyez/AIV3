@@ -21,7 +21,8 @@
 - Phase 7 first checkpoint now defines external action risk/confirmation policy contracts, registers external artifact/action tools, exposes external channel Codex action contracts, and routes Codex plan-only suggestions across read-only, low-risk write, high-risk confirmation, and cross-system confirmation cases.
 - Phase 7 second checkpoint now persists `external_action_runs` from normalized external channel messages when Codex plan-only selects an external action, returns confirmation-required replies for high-risk/cross-system actions, and accepts normalized confirmation callbacks.
 - Phase 7 third checkpoint now dispatches confirmed or confirmation-free external action runs to configured third-party artifact/action HTTPS endpoints, stores external request ids and redacted result summaries, and records auditable blocked states when dispatch endpoints are missing or invalid.
-- Next implementation checkpoint: harden external action dispatch with auth/signature headers, retry/worker execution, and observe-first management UI status for pending, blocked, dispatched, and failed runs.
+- Phase 7 fourth checkpoint now hardens outbound external action dispatch with dispatch-specific bearer/signature credentials, HMAC request headers, and auditable `dispatch_auth_missing` / `dispatch_auth_invalid` blocked states. V3 does not reuse platform callback tokens for action dispatch.
+- Next implementation checkpoint: move external action dispatch into retryable worker execution and expose observe-first management UI status for pending, blocked, dispatched, and failed runs.
 
 ---
 

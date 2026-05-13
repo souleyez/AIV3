@@ -15,7 +15,7 @@ use axum::{
     routing::get,
     Json, Router,
 };
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use contracts::{
     AdvanceWorkflowExecutionResponse, ApiErrorResponse, AppendAssistantRunEventRequest,
     AppendAssistantRunEventResponse, AppendChatSessionTurnRequest, AppendChatSessionTurnResponse,
@@ -80,6 +80,7 @@ use domain_model::{
 use event_bus::{
     workflow_execution_transition_subject, workflow_task_enqueued_subject, EventBus, EventEnvelope,
 };
+use hmac::{Hmac, Mac};
 use llm_gateway::{
     build_provider_from_env, render_runtime_manifest, resolve_runtime_selection_from_env,
     LlmRequest, LlmResponse, LlmRuntimeSelection, ModelProviderProfile, MODEL_LANE_ASSISTANT_CHAT,
@@ -6678,6 +6679,12 @@ struct ExternalActionDispatchOutcome {
     failure_kind: Option<String>,
 }
 
+#[derive(Clone, Debug, Default)]
+struct ExternalActionDispatchAuth {
+    bearer_token: Option<String>,
+    signing_secret: Option<String>,
+}
+
 async fn create_external_source_sync(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -7433,6 +7440,66 @@ async fn dispatch_external_action_run_if_ready(
     };
 
     let payload = external_action_dispatch_payload(&record);
+    let auth = external_action_dispatch_auth_from_config(&connection.config_redacted);
+    if !external_action_dispatch_auth_configured(&auth) {
+        let outcome = ExternalActionDispatchOutcome {
+            status: "dispatch_blocked".to_string(),
+            external_request_id: None,
+            failure_kind: Some("dispatch_auth_missing".to_string()),
+        };
+        persist_external_action_dispatch_outcome(
+            state,
+            action_id,
+            &outcome,
+            json!({
+                "endpoint_configured": true,
+                "endpoint_host": parsed_url.host_str(),
+                "auth_mode": "none",
+                "reason": "dispatch_auth_missing",
+            }),
+            now,
+        )
+        .await?;
+        return Ok(outcome);
+    }
+    let body = serde_json::to_vec(&payload).map_err(|error| {
+        ApiError::internal(
+            "external_action_dispatch_payload_failed",
+            format!("failed to serialize external action dispatch payload: {error}"),
+        )
+    })?;
+    let nonce = Uuid::new_v4().simple().to_string();
+    let headers = match external_action_dispatch_headers(
+        connection_id,
+        &parsed_url,
+        &body,
+        now,
+        &nonce,
+        &auth,
+    ) {
+        Ok(headers) => headers,
+        Err(reason) => {
+            let outcome = ExternalActionDispatchOutcome {
+                status: "dispatch_blocked".to_string(),
+                external_request_id: None,
+                failure_kind: Some("dispatch_auth_invalid".to_string()),
+            };
+            persist_external_action_dispatch_outcome(
+                state,
+                action_id,
+                &outcome,
+                json!({
+                    "endpoint_configured": true,
+                    "endpoint_host": parsed_url.host_str(),
+                    "auth_mode": external_action_dispatch_auth_mode(&auth),
+                    "reason": reason,
+                }),
+                now,
+            )
+            .await?;
+            return Ok(outcome);
+        }
+    };
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(12))
         .build()
@@ -7442,7 +7509,13 @@ async fn dispatch_external_action_run_if_ready(
                 format!("failed to create external action dispatch client: {error}"),
             )
         })?;
-    let response = match client.post(parsed_url.clone()).json(&payload).send().await {
+    let response = match client
+        .post(parsed_url.clone())
+        .headers(headers)
+        .body(body)
+        .send()
+        .await
+    {
         Ok(response) => response,
         Err(error) => {
             let outcome = ExternalActionDispatchOutcome {
@@ -7457,6 +7530,7 @@ async fn dispatch_external_action_run_if_ready(
                 json!({
                     "endpoint_configured": true,
                     "endpoint_host": parsed_url.host_str(),
+                    "auth_mode": external_action_dispatch_auth_mode(&auth),
                     "reason": "request_failed",
                     "request_error_kind": external_action_reqwest_error_kind(&error),
                 }),
@@ -7491,6 +7565,7 @@ async fn dispatch_external_action_run_if_ready(
         json!({
             "endpoint_configured": true,
             "endpoint_host": parsed_url.host_str(),
+            "auth_mode": external_action_dispatch_auth_mode(&auth),
             "http_status": http_status,
             "response_summary": response_summary,
         }),
@@ -7632,6 +7707,133 @@ fn external_action_dispatch_payload(record: &ExternalActionDispatchRecord) -> Va
         },
         "raw_arguments_included": false,
     })
+}
+
+fn external_action_dispatch_auth_from_config(config: &Value) -> ExternalActionDispatchAuth {
+    ExternalActionDispatchAuth {
+        bearer_token: external_config_string(
+            config,
+            &[
+                "external_action_bearer_token",
+                "externalActionBearerToken",
+                "action_bearer_token",
+                "actionBearerToken",
+                "dispatch_bearer_token",
+                "dispatchBearerToken",
+            ],
+        ),
+        signing_secret: external_config_string(
+            config,
+            &[
+                "external_action_signing_secret",
+                "externalActionSigningSecret",
+                "action_signing_secret",
+                "actionSigningSecret",
+                "dispatch_signing_secret",
+                "dispatchSigningSecret",
+            ],
+        ),
+    }
+}
+
+fn external_action_dispatch_auth_configured(auth: &ExternalActionDispatchAuth) -> bool {
+    auth.bearer_token.is_some() || auth.signing_secret.is_some()
+}
+
+fn external_action_dispatch_auth_mode(auth: &ExternalActionDispatchAuth) -> &'static str {
+    match (auth.signing_secret.is_some(), auth.bearer_token.is_some()) {
+        (true, true) => "signature_and_bearer",
+        (true, false) => "signature",
+        (false, true) => "bearer",
+        (false, false) => "none",
+    }
+}
+
+fn external_action_dispatch_headers(
+    connection_id: &str,
+    url: &reqwest::Url,
+    body: &[u8],
+    now: DateTime<Utc>,
+    nonce: &str,
+    auth: &ExternalActionDispatchAuth,
+) -> std::result::Result<reqwest::header::HeaderMap, String> {
+    let timestamp = now.to_rfc3339_opts(SecondsFormat::Secs, true);
+    let body_sha256 = sha256_hex([body]);
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert(
+        reqwest::header::CONTENT_TYPE,
+        reqwest::header::HeaderValue::from_static("application/json"),
+    );
+    insert_dispatch_header(&mut headers, "x-v3-connection-id", connection_id)?;
+    insert_dispatch_header(&mut headers, "x-v3-timestamp", &timestamp)?;
+    insert_dispatch_header(&mut headers, "x-v3-nonce", nonce)?;
+    insert_dispatch_header(&mut headers, "x-v3-content-sha256", &body_sha256)?;
+    if let Some(token) = auth.bearer_token.as_deref() {
+        let header_value = reqwest::header::HeaderValue::from_str(&format!("Bearer {token}"))
+            .map_err(|_| "invalid_header_value:authorization".to_string())?;
+        headers.insert(reqwest::header::AUTHORIZATION, header_value);
+    }
+    if let Some(secret) = auth.signing_secret.as_deref() {
+        let signature_path = external_action_dispatch_signature_path(url);
+        let canonical = external_action_dispatch_signature_payload(
+            "POST",
+            &signature_path,
+            &timestamp,
+            nonce,
+            &body_sha256,
+        );
+        let signature = external_action_dispatch_signature_hex(secret, &canonical);
+        insert_dispatch_header(
+            &mut headers,
+            "x-v3-signature",
+            &format!("sha256={signature}"),
+        )?;
+    }
+    Ok(headers)
+}
+
+fn insert_dispatch_header(
+    headers: &mut reqwest::header::HeaderMap,
+    name: &'static str,
+    value: &str,
+) -> std::result::Result<(), String> {
+    let header_value = reqwest::header::HeaderValue::from_str(value)
+        .map_err(|_| format!("invalid_header_value:{name}"))?;
+    headers.insert(reqwest::header::HeaderName::from_static(name), header_value);
+    Ok(())
+}
+
+fn external_action_dispatch_signature_path(url: &reqwest::Url) -> String {
+    match url.query() {
+        Some(query) => format!("{}?{query}", url.path()),
+        None => url.path().to_string(),
+    }
+}
+
+fn external_action_dispatch_signature_payload(
+    method: &str,
+    path: &str,
+    timestamp: &str,
+    nonce: &str,
+    body_sha256: &str,
+) -> String {
+    format!("{method}\n{path}\n{timestamp}\n{nonce}\n{body_sha256}")
+}
+
+fn external_action_dispatch_signature_hex(secret: &str, payload: &str) -> String {
+    type HmacSha256 = Hmac<Sha256>;
+    let mut mac =
+        HmacSha256::new_from_slice(secret.as_bytes()).expect("HMAC accepts any key length");
+    mac.update(payload.as_bytes());
+    bytes_to_lower_hex(mac.finalize().into_bytes().as_slice())
+}
+
+fn bytes_to_lower_hex(bytes: &[u8]) -> String {
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        output.push_str(&format!("{byte:02x}"));
+    }
+    output
 }
 
 fn external_action_reqwest_error_kind(error: &reqwest::Error) -> &'static str {
@@ -28329,6 +28531,89 @@ mod tests {
                 "external_business_action.invoke",
             ),
             None
+        );
+    }
+
+    #[test]
+    fn external_action_dispatch_auth_uses_only_explicit_dispatch_credentials() {
+        let auth = external_action_dispatch_auth_from_config(&json!({
+            "token": "callback-token-should-not-be-used",
+            "dispatch_bearer_token": "dispatch-token",
+            "dispatch_signing_secret": "dispatch-secret",
+        }));
+
+        assert_eq!(auth.bearer_token.as_deref(), Some("dispatch-token"));
+        assert_eq!(auth.signing_secret.as_deref(), Some("dispatch-secret"));
+        assert!(external_action_dispatch_auth_configured(&auth));
+        assert_eq!(
+            external_action_dispatch_auth_mode(&auth),
+            "signature_and_bearer"
+        );
+
+        let redacted_auth = external_action_dispatch_auth_from_config(&json!({
+            "dispatch_bearer_token": "[redacted]",
+            "dispatch_signing_secret": "[redacted]"
+        }));
+        assert!(!external_action_dispatch_auth_configured(&redacted_auth));
+        assert_eq!(external_action_dispatch_auth_mode(&redacted_auth), "none");
+    }
+
+    #[test]
+    fn external_action_dispatch_headers_include_bearer_and_signature() {
+        let auth = ExternalActionDispatchAuth {
+            bearer_token: Some("dispatch-token".to_string()),
+            signing_secret: Some("dispatch-secret".to_string()),
+        };
+        let url = reqwest::Url::parse("https://api.example.com/actions/dispatch?tenant=t1")
+            .expect("dispatch url should parse");
+        let body = br#"{"action_id":"act-001"}"#;
+        let now = DateTime::parse_from_rfc3339("2026-05-14T09:30:00Z")
+            .expect("timestamp should parse")
+            .with_timezone(&Utc);
+        let headers = external_action_dispatch_headers(
+            "generic-chat-main",
+            &url,
+            body,
+            now,
+            "nonce-001",
+            &auth,
+        )
+        .expect("dispatch headers should build");
+
+        let body_hash = sha256_hex([body.as_slice()]);
+        let canonical = external_action_dispatch_signature_payload(
+            "POST",
+            "/actions/dispatch?tenant=t1",
+            "2026-05-14T09:30:00Z",
+            "nonce-001",
+            &body_hash,
+        );
+        let expected_signature =
+            external_action_dispatch_signature_hex("dispatch-secret", &canonical);
+
+        assert_eq!(
+            headers
+                .get("authorization")
+                .and_then(|value| value.to_str().ok()),
+            Some("Bearer dispatch-token")
+        );
+        assert_eq!(
+            headers
+                .get("x-v3-connection-id")
+                .and_then(|value| value.to_str().ok()),
+            Some("generic-chat-main")
+        );
+        assert_eq!(
+            headers
+                .get("x-v3-content-sha256")
+                .and_then(|value| value.to_str().ok()),
+            Some(body_hash.as_str())
+        );
+        assert_eq!(
+            headers
+                .get("x-v3-signature")
+                .and_then(|value| value.to_str().ok()),
+            Some(format!("sha256={expected_signature}").as_str())
         );
     }
 

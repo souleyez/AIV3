@@ -156,8 +156,9 @@ method + "\n" + path + "\n" + timestamp + "\n" + nonce + "\n" + raw_body_sha256
 
 Current implementation note:
 
-- The first implemented route validates the connection and event shape.
-- Full production signing, replay window, token rotation, and per-connection auth policy are planned in the adapter/API hardening slice.
+- Inbound channel routes validate the connection and event shape; Feishu/Lark and WeCom routes use their platform-specific callback checks where implemented.
+- Outbound external action dispatch now requires a dispatch-specific bearer token or signing secret when an endpoint is configured.
+- Replay window enforcement, token rotation UI, and per-connection auth policy controls remain in the adapter/API hardening slice.
 
 ## Idempotency
 
@@ -587,6 +588,13 @@ Dispatch endpoint configuration keys:
 - Business actions prefer `business_action_dispatch_url`, `businessActionDispatchUrl`, `business_dispatch_url`, or `businessDispatchUrl`.
 - Both action families can fall back to `external_action_dispatch_url`, `externalActionDispatchUrl`, `action_dispatch_url`, or `actionDispatchUrl`.
 
+Dispatch authentication configuration keys:
+
+- Bearer token: `external_action_bearer_token`, `externalActionBearerToken`, `action_bearer_token`, `actionBearerToken`, `dispatch_bearer_token`, or `dispatchBearerToken`.
+- Signing secret: `external_action_signing_secret`, `externalActionSigningSecret`, `action_signing_secret`, `actionSigningSecret`, `dispatch_signing_secret`, or `dispatchSigningSecret`.
+
+V3 deliberately does not reuse generic platform callback tokens such as `token`, `callback_token`, or `verification_token` for outbound action dispatch. If an endpoint is configured without a dispatch-specific bearer token or signing secret, V3 records `dispatch_blocked` with `dispatch_auth_missing`.
+
 V3 sends only a redacted dispatch payload:
 
 ```json
@@ -612,6 +620,19 @@ V3 sends only a redacted dispatch payload:
 ```
 
 Dispatch responses may return `external_request_id`, `externalRequestId`, `request_id`, or `requestId`. V3 stores that id and a redacted result summary. Raw third-party response bodies, tokens, secrets, and arbitrary message text are not stored in action summaries.
+
+Outbound dispatch headers:
+
+```http
+Authorization: Bearer <dispatch token>
+X-V3-Connection-Id: generic-chat-main
+X-V3-Timestamp: 2026-05-14T09:30:00Z
+X-V3-Nonce: 01HX...
+X-V3-Content-SHA256: <hex sha256 of raw JSON body>
+X-V3-Signature: sha256=<HMAC-SHA256 hex>
+```
+
+`Authorization` is present only when a dispatch bearer token is configured. `X-V3-Signature` is present only when a dispatch signing secret is configured. When both are configured, V3 sends both.
 
 ## Reply Envelope
 

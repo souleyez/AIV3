@@ -165,6 +165,12 @@ method + "\n" + path + "\n" + timestamp + "\n" + nonce + "\n" + raw_body_sha256
 
 飞书、Lark、企业微信等标准平台接入时，应优先使用平台官方签名和事件校验机制，再转换为 V3 内部统一事件。
 
+当前实现状态：
+
+- 入站聊天通道会校验连接和事件形态；飞书/Lark、企业微信已实现的平台入口使用各自的平台回调校验。
+- V3 向第三方派发外部业务动作时，若配置了派发 endpoint，则必须同时配置派发专用 Bearer Token 或签名密钥之一。
+- 重放窗口、密钥轮换界面和更细的连接级鉴权策略仍属于后续 hardening。
+
 ## 8. 幂等规则
 
 第三方发送消息、同步文档、推送权限或回调动作结果时，都应提供稳定幂等键。
@@ -553,6 +559,13 @@ V3 可以在用户授权和系统校验后调用第三方业务接口，例如�
 - 业务动作优先读取 `business_action_dispatch_url`、`businessActionDispatchUrl`、`business_dispatch_url`、`businessDispatchUrl`；
 - 两类动作都可回退读取 `external_action_dispatch_url`、`externalActionDispatchUrl`、`action_dispatch_url`、`actionDispatchUrl`。
 
+派发鉴权配置键：
+
+- Bearer Token：`external_action_bearer_token`、`externalActionBearerToken`、`action_bearer_token`、`actionBearerToken`、`dispatch_bearer_token`、`dispatchBearerToken`；
+- 签名密钥：`external_action_signing_secret`、`externalActionSigningSecret`、`action_signing_secret`、`actionSigningSecret`、`dispatch_signing_secret`、`dispatchSigningSecret`。
+
+V3 不会把飞书、企微或第三方回调用的通用 `token`、`callback_token`、`verification_token` 当作外部动作派发凭证复用。若配置了派发 endpoint，但没有配置派发专用 Bearer Token 或签名密钥，V3 会记录 `dispatch_blocked`，失败原因是 `dispatch_auth_missing`。
+
 动作意图示例：
 
 ```json
@@ -596,6 +609,19 @@ V3 派发给第三方时，只发送脱敏 payload：
 ```
 
 第三方响应可返回 `external_request_id`、`externalRequestId`、`request_id` 或 `requestId`。V3 会保存该请求 id 和脱敏后的结果摘要；第三方原始响应正文、令牌、密钥、任意 message 文本不会写入动作摘要。
+
+V3 出站派发请求头：
+
+```http
+Authorization: Bearer <dispatch token>
+X-V3-Connection-Id: generic-chat-main
+X-V3-Timestamp: 2026-05-14T09:30:00Z
+X-V3-Nonce: 01HX...
+X-V3-Content-SHA256: <JSON 原始请求体的 sha256 hex>
+X-V3-Signature: sha256=<HMAC-SHA256 hex>
+```
+
+只有配置派发 Bearer Token 时才会发送 `Authorization`。只有配置派发签名密钥时才会发送 `X-V3-Signature`。两者都配置时，V3 会同时发送。
 
 ## 14. 回复格式
 

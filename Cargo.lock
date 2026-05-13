@@ -1774,6 +1774,7 @@ dependencies = [
  "contracts",
  "domain-model",
  "event-bus",
+ "hmac",
  "llm-gateway",
  "observability",
  "prompt-registry",
