@@ -23,7 +23,8 @@
 - Phase 7 third checkpoint now dispatches confirmed or confirmation-free external action runs to configured third-party artifact/action HTTPS endpoints, stores external request ids and redacted result summaries, and records auditable blocked states when dispatch endpoints are missing or invalid.
 - Phase 7 fourth checkpoint now hardens outbound external action dispatch with dispatch-specific bearer/signature credentials, HMAC request headers, and auditable `dispatch_auth_missing` / `dispatch_auth_invalid` blocked states. V3 does not reuse platform callback tokens for action dispatch.
 - Phase 7 fifth checkpoint now exposes observe-first read APIs for external integrations and redacted audit timelines, including channel/source health, last activity, pending/blocked/failed/dispatched action counters, and sanitized action/message/sync summaries for the management UI.
-- Next implementation checkpoint: move external action dispatch into retryable worker execution and wire the management UI panel to the new observe-first read APIs.
+- Phase 7 sixth checkpoint now wires a standalone external integrations observability page, host-routes `v3.elepcloud.com` to that panel without main-workspace navigation links, and exposes same-domain `/v1/...` proxy paths so third-party API examples default to `https://v3.elepcloud.com`.
+- Next implementation checkpoint: move external action dispatch into retryable worker execution and add management retry/disable controls on top of the observe-first panel.
 
 ---
 

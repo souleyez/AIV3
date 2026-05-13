@@ -1,9 +1,10 @@
 # V3 Third-Party Integration API
 
-**Document status:** Draft v0.1  
-**Last updated:** 2026-05-13  
-**Audience:** third-party system owners, customer IT teams, V3 integration developers  
+**Document status:** Draft v0.1
+**Last updated:** 2026-05-14
+**Audience:** third-party system owners, customer IT teams, V3 integration developers
 **Canonical plan:** `docs/plans/2026-05-13-v3-external-bot-third-party-knowledge-plan.md`
+**Default public base URL:** `https://v3.elepcloud.com`
 
 This document describes how external systems connect to V3 after the external bot and third-party knowledge track is complete.
 
@@ -33,6 +34,12 @@ Planned next:
 - Artifact publishing and external action runtime.
 - Feishu/Lark and WeCom platform adapters.
 - Observe-first management UI.
+
+Default public routing:
+
+- `https://v3.elepcloud.com/` opens the external integration observability panel.
+- Third-party API calls should use `https://v3.elepcloud.com/v1/...` by default.
+- The observability domain does not expose direct navigation back to the main V3 workspace.
 
 ## Integration Modes
 
