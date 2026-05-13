@@ -332,6 +332,59 @@ pub struct ExternalChannelEventResponse {
     pub reply: ExternalBotReplyView,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct ExternalIntegrationSummaryView {
+    pub integration_id: String,
+    pub integration_kind: String,
+    pub display_name: String,
+    pub provider: String,
+    pub status: String,
+    pub health_status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_event_at: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_sync_at: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_success_at: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_failure_at: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disabled_at: Option<DateTime<Utc>>,
+    pub pending_action_count: i64,
+    pub blocked_action_count: i64,
+    pub failed_action_count: i64,
+    pub dispatched_action_count: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latest_action_at: Option<DateTime<Utc>>,
+    pub config_summary: Value,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct ListExternalIntegrationsResponse {
+    pub integrations: Vec<ExternalIntegrationSummaryView>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct ExternalIntegrationAuditItemView {
+    pub item_type: String,
+    pub created_at: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assistant_run_id: Option<AssistantRunId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_kind: Option<String>,
+    pub summary: Value,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct ExternalIntegrationAuditResponse {
+    pub integration_id: String,
+    pub items: Vec<ExternalIntegrationAuditItemView>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CreateExternalSourceSyncRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]

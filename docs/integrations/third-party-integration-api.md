@@ -666,6 +666,22 @@ Rules:
 - `artifact_link` must use V3-authorized links.
 - `requires_confirmation` must include a pending action id in the card or status payload.
 
+## Management Observability API
+
+V3 exposes observe-first management endpoints for operators and the V3 console. These endpoints are not a third-party chat surface and must not expose raw credentials, raw provider payloads, or document bodies.
+
+```http
+GET /v1/external/integrations
+```
+
+The response lists channel and source integrations with health, last activity timestamps, action dispatch counters, and a redacted configuration summary.
+
+```http
+GET /v1/external/integrations/{integration_id}/audit
+```
+
+The audit response returns a newest-first redacted timeline for messages, action runs, and source sync runs related to the integration. Action entries include confirmation state, dispatch status/reason, auth mode, HTTP status, and redacted response summary. Sensitive keys such as `token`, `secret`, `authorization`, `cookie`, and `password` are removed from nested summaries.
+
 ## Data Redaction
 
 The following values must not appear in logs, public API responses, management UI summaries, model context, or generated artifacts unless explicitly authorized:

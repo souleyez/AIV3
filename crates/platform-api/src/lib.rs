@@ -43,12 +43,14 @@ use contracts::{
     DocumentSummary, ExternalActionConfirmationDecisionView, ExternalActionConfirmationRequestView,
     ExternalActionConfirmationResponseView, ExternalBotMessageView, ExternalBotReplyTypeView,
     ExternalBotReplyView, ExternalChannelEventResponse, ExternalChannelPlatformView,
-    ExternalMessageTypeView, HealthResponse, HtmlArtifactInteractionModeView,
-    HtmlArtifactManifestView, KeyLoginRequest, KeyLoginResponse, KeyRotateRequest,
-    KeyRotateResponse, LlmInvocationView, LogoutResponse, MemoryDirectoryView, PlanReportRequest,
-    PublishReportRequest, PublishReportResponse, PublishedReportDetailView,
-    PublishedReportVersionView, PublishedReportView, RegisterDocumentRequest,
-    RegisterDocumentResponse, ReportPlanAstVersionView, ReportPlanSummary, ReportRenderOutputView,
+    ExternalIntegrationAuditItemView, ExternalIntegrationAuditResponse,
+    ExternalIntegrationSummaryView, ExternalMessageTypeView, HealthResponse,
+    HtmlArtifactInteractionModeView, HtmlArtifactManifestView, KeyLoginRequest, KeyLoginResponse,
+    KeyRotateRequest, KeyRotateResponse, ListExternalIntegrationsResponse, LlmInvocationView,
+    LogoutResponse, MemoryDirectoryView, PlanReportRequest, PublishReportRequest,
+    PublishReportResponse, PublishedReportDetailView, PublishedReportVersionView,
+    PublishedReportView, RegisterDocumentRequest, RegisterDocumentResponse,
+    ReportPlanAstVersionView, ReportPlanSummary, ReportRenderOutputView,
     ResolveDatasetSecretBindingsRequest, ResolveDatasetSecretBindingsResponse,
     RetrievalEvidenceView, RetrievalSearchHitView, RetrievalSearchResponse,
     RetryWorkflowExecutionRequest, RetryWorkflowExecutionResponse, StartEmailAuthRequest,
@@ -440,6 +442,11 @@ pub fn router(
         .route(
             "/v1/assistant-runs",
             axum::routing::post(create_assistant_run),
+        )
+        .route("/v1/external/integrations", get(list_external_integrations))
+        .route(
+            "/v1/external/integrations/{integration_id}/audit",
+            get(get_external_integration_audit),
         )
         .route(
             "/v1/external/channels/{connection_id}/events",
@@ -6683,6 +6690,444 @@ struct ExternalActionDispatchOutcome {
 struct ExternalActionDispatchAuth {
     bearer_token: Option<String>,
     signing_secret: Option<String>,
+}
+
+async fn list_external_integrations(
+    State(state): State<AppState>,
+) -> std::result::Result<Json<ListExternalIntegrationsResponse>, ApiError> {
+    let mut integrations = Vec::new();
+    let channel_rows = sqlx::query(
+        r#"
+        select c.id,
+               c.platform,
+               c.display_name,
+               c.status,
+               c.health_status,
+               c.last_event_at,
+               c.last_success_at,
+               c.last_failure_at,
+               c.disabled_at,
+               c.config_redacted,
+               coalesce((
+                   select count(*)
+                   from external_action_runs a
+                   where a.tenant_id = c.tenant_id
+                     and a.requester_summary ->> 'channel_connection_id' = c.id
+                     and a.confirmation_state = 'pending'
+               ), 0)::bigint as pending_action_count,
+               coalesce((
+                   select count(*)
+                   from external_action_runs a
+                   where a.tenant_id = c.tenant_id
+                     and a.requester_summary ->> 'channel_connection_id' = c.id
+                     and a.result_summary ->> 'status' = 'dispatch_blocked'
+               ), 0)::bigint as blocked_action_count,
+               coalesce((
+                   select count(*)
+                   from external_action_runs a
+                   where a.tenant_id = c.tenant_id
+                     and a.requester_summary ->> 'channel_connection_id' = c.id
+                     and a.result_summary ->> 'status' = 'dispatch_failed'
+               ), 0)::bigint as failed_action_count,
+               coalesce((
+                   select count(*)
+                   from external_action_runs a
+                   where a.tenant_id = c.tenant_id
+                     and a.requester_summary ->> 'channel_connection_id' = c.id
+                     and a.result_summary ->> 'status' = 'dispatched'
+               ), 0)::bigint as dispatched_action_count,
+               (
+                   select max(a.updated_at)
+                   from external_action_runs a
+                   where a.tenant_id = c.tenant_id
+                     and a.requester_summary ->> 'channel_connection_id' = c.id
+               ) as latest_action_at
+        from external_channel_connections c
+        where c.tenant_id = $1
+        order by c.updated_at desc
+        "#,
+    )
+    .bind(state.tenant_id.0)
+    .fetch_all(state.storage.pool())
+    .await
+    .map_err(|error| ApiError::from_storage(anyhow::Error::new(error)))?;
+
+    for row in channel_rows {
+        let config_redacted = row.get::<Value, _>("config_redacted");
+        integrations.push(ExternalIntegrationSummaryView {
+            integration_id: row.get("id"),
+            integration_kind: "channel".to_string(),
+            display_name: row.get("display_name"),
+            provider: row.get("platform"),
+            status: row.get("status"),
+            health_status: row.get("health_status"),
+            last_event_at: row.get("last_event_at"),
+            last_sync_at: None,
+            last_success_at: row.get("last_success_at"),
+            last_failure_at: row.get("last_failure_at"),
+            disabled_at: row.get("disabled_at"),
+            pending_action_count: row.get("pending_action_count"),
+            blocked_action_count: row.get("blocked_action_count"),
+            failed_action_count: row.get("failed_action_count"),
+            dispatched_action_count: row.get("dispatched_action_count"),
+            latest_action_at: row.get("latest_action_at"),
+            config_summary: external_integration_config_summary(&config_redacted),
+        });
+    }
+
+    let source_rows = sqlx::query(
+        r#"
+        select s.id,
+               s.connector_kind,
+               s.display_name,
+               s.health_status,
+               s.last_sync_at,
+               s.last_success_at,
+               s.last_failure_at,
+               s.disabled_at,
+               s.config_redacted
+        from external_source_connections s
+        where s.tenant_id = $1
+        order by s.updated_at desc
+        "#,
+    )
+    .bind(state.tenant_id.0)
+    .fetch_all(state.storage.pool())
+    .await
+    .map_err(|error| ApiError::from_storage(anyhow::Error::new(error)))?;
+
+    for row in source_rows {
+        let disabled_at = row.get::<Option<DateTime<Utc>>, _>("disabled_at");
+        let config_redacted = row.get::<Value, _>("config_redacted");
+        integrations.push(ExternalIntegrationSummaryView {
+            integration_id: row.get("id"),
+            integration_kind: "source".to_string(),
+            display_name: row.get("display_name"),
+            provider: row.get("connector_kind"),
+            status: if disabled_at.is_some() {
+                "disabled".to_string()
+            } else {
+                "enabled".to_string()
+            },
+            health_status: row.get("health_status"),
+            last_event_at: None,
+            last_sync_at: row.get("last_sync_at"),
+            last_success_at: row.get("last_success_at"),
+            last_failure_at: row.get("last_failure_at"),
+            disabled_at,
+            pending_action_count: 0,
+            blocked_action_count: 0,
+            failed_action_count: 0,
+            dispatched_action_count: 0,
+            latest_action_at: None,
+            config_summary: external_integration_config_summary(&config_redacted),
+        });
+    }
+
+    integrations.sort_by(|left, right| {
+        right
+            .last_failure_at
+            .or(right.latest_action_at)
+            .or(right.last_success_at)
+            .or(right.last_event_at)
+            .or(right.last_sync_at)
+            .cmp(
+                &left
+                    .last_failure_at
+                    .or(left.latest_action_at)
+                    .or(left.last_success_at)
+                    .or(left.last_event_at)
+                    .or(left.last_sync_at),
+            )
+    });
+
+    Ok(Json(ListExternalIntegrationsResponse { integrations }))
+}
+
+async fn get_external_integration_audit(
+    State(state): State<AppState>,
+    Path(integration_id): Path<String>,
+) -> std::result::Result<Json<ExternalIntegrationAuditResponse>, ApiError> {
+    validate_required("integration_id", &integration_id)?;
+    let channel_exists = external_channel_connection_exists(&state, &integration_id).await?;
+    let source_exists = external_source_connection_exists(&state, &integration_id).await?;
+    if !channel_exists && !source_exists {
+        return Err(ApiError::not_found(
+            "external_integration_not_found",
+            format!("external integration {integration_id} was not found"),
+        ));
+    }
+
+    let mut items = Vec::new();
+    if channel_exists {
+        items.extend(load_external_channel_audit_items(&state, &integration_id).await?);
+    }
+    if source_exists {
+        items.extend(load_external_source_audit_items(&state, &integration_id).await?);
+    }
+    items.sort_by(|left, right| right.created_at.cmp(&left.created_at));
+    items.truncate(50);
+    Ok(Json(ExternalIntegrationAuditResponse {
+        integration_id,
+        items,
+    }))
+}
+
+async fn external_channel_connection_exists(
+    state: &AppState,
+    integration_id: &str,
+) -> std::result::Result<bool, ApiError> {
+    let exists = sqlx::query_scalar::<_, bool>(
+        r#"
+        select exists(
+            select 1
+            from external_channel_connections
+            where tenant_id = $1 and id = $2
+        )
+        "#,
+    )
+    .bind(state.tenant_id.0)
+    .bind(integration_id)
+    .fetch_one(state.storage.pool())
+    .await
+    .map_err(|error| ApiError::from_storage(anyhow::Error::new(error)))?;
+    Ok(exists)
+}
+
+async fn external_source_connection_exists(
+    state: &AppState,
+    integration_id: &str,
+) -> std::result::Result<bool, ApiError> {
+    let exists = sqlx::query_scalar::<_, bool>(
+        r#"
+        select exists(
+            select 1
+            from external_source_connections
+            where tenant_id = $1 and id = $2
+        )
+        "#,
+    )
+    .bind(state.tenant_id.0)
+    .bind(integration_id)
+    .fetch_one(state.storage.pool())
+    .await
+    .map_err(|error| ApiError::from_storage(anyhow::Error::new(error)))?;
+    Ok(exists)
+}
+
+async fn load_external_channel_audit_items(
+    state: &AppState,
+    integration_id: &str,
+) -> std::result::Result<Vec<ExternalIntegrationAuditItemView>, ApiError> {
+    let mut items = Vec::new();
+    let message_rows = sqlx::query(
+        r#"
+        select assistant_run_id,
+               direction,
+               platform,
+               conversation_external_id,
+               message_external_id,
+               payload_summary,
+               created_at
+        from external_message_events
+        where tenant_id = $1 and channel_connection_id = $2
+        order by created_at desc
+        limit 25
+        "#,
+    )
+    .bind(state.tenant_id.0)
+    .bind(integration_id)
+    .fetch_all(state.storage.pool())
+    .await
+    .map_err(|error| ApiError::from_storage(anyhow::Error::new(error)))?;
+
+    for row in message_rows {
+        let payload_summary = row.get::<Value, _>("payload_summary");
+        items.push(ExternalIntegrationAuditItemView {
+            item_type: "message".to_string(),
+            created_at: row.get("created_at"),
+            assistant_run_id: row
+                .get::<Option<Uuid>, _>("assistant_run_id")
+                .map(AssistantRunId),
+            action_id: None,
+            status: Some(row.get("direction")),
+            failure_kind: None,
+            summary: json!({
+                "platform": row.get::<String, _>("platform"),
+                "conversation_external_id": row.get::<String, _>("conversation_external_id"),
+                "message_external_id": row.get::<String, _>("message_external_id"),
+                "payload_summary": external_integration_redacted_summary(payload_summary),
+            }),
+        });
+    }
+
+    let action_rows = sqlx::query(
+        r#"
+        select id,
+               assistant_run_id,
+               confirmation_state,
+               external_request_id,
+               result_summary,
+               failure_kind,
+               updated_at
+        from external_action_runs
+        where tenant_id = $1
+          and requester_summary ->> 'channel_connection_id' = $2
+        order by updated_at desc
+        limit 25
+        "#,
+    )
+    .bind(state.tenant_id.0)
+    .bind(integration_id)
+    .fetch_all(state.storage.pool())
+    .await
+    .map_err(|error| ApiError::from_storage(anyhow::Error::new(error)))?;
+
+    for row in action_rows {
+        let result_summary = row.get::<Value, _>("result_summary");
+        let confirmation_state = row.get::<String, _>("confirmation_state");
+        let status = result_summary
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or(confirmation_state.as_str())
+            .to_string();
+        items.push(ExternalIntegrationAuditItemView {
+            item_type: "action".to_string(),
+            created_at: row.get("updated_at"),
+            assistant_run_id: row
+                .get::<Option<Uuid>, _>("assistant_run_id")
+                .map(AssistantRunId),
+            action_id: Some(row.get("id")),
+            status: Some(status),
+            failure_kind: row.get("failure_kind"),
+            summary: external_action_run_audit_summary(
+                &confirmation_state,
+                row.get::<Option<String>, _>("external_request_id")
+                    .as_deref(),
+                &result_summary,
+            ),
+        });
+    }
+
+    Ok(items)
+}
+
+async fn load_external_source_audit_items(
+    state: &AppState,
+    integration_id: &str,
+) -> std::result::Result<Vec<ExternalIntegrationAuditItemView>, ApiError> {
+    let rows = sqlx::query(
+        r#"
+        select sync_kind,
+               status,
+               checkpoint,
+               counts,
+               failure_kind,
+               updated_at
+        from external_sync_runs
+        where tenant_id = $1 and source_id = $2
+        order by updated_at desc
+        limit 50
+        "#,
+    )
+    .bind(state.tenant_id.0)
+    .bind(integration_id)
+    .fetch_all(state.storage.pool())
+    .await
+    .map_err(|error| ApiError::from_storage(anyhow::Error::new(error)))?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| ExternalIntegrationAuditItemView {
+            item_type: "sync".to_string(),
+            created_at: row.get("updated_at"),
+            assistant_run_id: None,
+            action_id: None,
+            status: Some(row.get("status")),
+            failure_kind: row.get("failure_kind"),
+            summary: json!({
+                "sync_kind": row.get::<String, _>("sync_kind"),
+                "counts": external_integration_redacted_summary(row.get::<Value, _>("counts")),
+                "checkpoint": external_integration_redacted_summary(row.get::<Value, _>("checkpoint")),
+            }),
+        })
+        .collect())
+}
+
+fn external_integration_config_summary(config: &Value) -> Value {
+    let dispatch_auth = external_action_dispatch_auth_from_config(config);
+    json!({
+        "key_count": config.as_object().map(Map::len).unwrap_or(0),
+        "redacted_value_present": external_integration_has_redacted_value(config),
+        "dispatch_endpoint_configured": external_action_dispatch_url_from_config(config, "external_business_action.invoke").is_some()
+            || external_action_dispatch_url_from_config(config, "external_artifact.publish").is_some(),
+        "dispatch_auth_mode": external_action_dispatch_auth_mode(&dispatch_auth),
+        "platform_callback_token_configured": external_config_string(
+            config,
+            &[
+                "token",
+                "callback_token",
+                "callbackToken",
+                "verification_token",
+                "verificationToken",
+            ],
+        )
+        .is_some(),
+    })
+}
+
+fn external_action_run_audit_summary(
+    confirmation_state: &str,
+    external_request_id: Option<&str>,
+    result_summary: &Value,
+) -> Value {
+    let dispatch = result_summary.get("dispatch").unwrap_or(&Value::Null);
+    json!({
+        "confirmation_state": confirmation_state,
+        "external_request_recorded": external_request_id.is_some(),
+        "dispatch_status": result_summary.get("status").cloned().unwrap_or(Value::Null),
+        "dispatch_reason": dispatch.get("reason").cloned().unwrap_or(Value::Null),
+        "dispatch_auth_mode": dispatch.get("auth_mode").cloned().unwrap_or(Value::Null),
+        "http_status": dispatch.get("http_status").cloned().unwrap_or(Value::Null),
+        "response_summary": dispatch.get("response_summary").cloned().unwrap_or(Value::Null),
+    })
+}
+
+fn external_integration_redacted_summary(value: Value) -> Value {
+    match value {
+        Value::Object(map) => Value::Object(
+            map.into_iter()
+                .filter(|(key, _)| !external_integration_sensitive_key(key))
+                .map(|(key, value)| (key, external_integration_redacted_summary(value)))
+                .collect(),
+        ),
+        Value::Array(items) => Value::Array(
+            items
+                .into_iter()
+                .map(external_integration_redacted_summary)
+                .collect(),
+        ),
+        Value::String(text) if text.starts_with("[redacted") => json!("[redacted]"),
+        other => other,
+    }
+}
+
+fn external_integration_sensitive_key(key: &str) -> bool {
+    let lower = key.to_ascii_lowercase();
+    lower.contains("secret")
+        || lower.contains("token")
+        || lower.contains("authorization")
+        || lower.contains("cookie")
+        || lower.contains("password")
+}
+
+fn external_integration_has_redacted_value(value: &Value) -> bool {
+    match value {
+        Value::String(text) => text.starts_with("[redacted"),
+        Value::Array(items) => items.iter().any(external_integration_has_redacted_value),
+        Value::Object(map) => map.values().any(external_integration_has_redacted_value),
+        _ => false,
+    }
 }
 
 async fn create_external_source_sync(
@@ -28676,6 +29121,49 @@ mod tests {
         let text_summary = external_action_response_summary(None, "secret body");
         assert_eq!(text_summary["body_redacted"], json!(true));
         assert!(!text_summary.to_string().contains("secret body"));
+    }
+
+    #[test]
+    fn external_integration_config_summary_does_not_expose_secret_values() {
+        let summary = external_integration_config_summary(&json!({
+            "action_dispatch_url": "https://api.example.com/actions",
+            "dispatch_bearer_token": "dispatch-token",
+            "token": "callback-token",
+            "nested": {
+                "signing_secret": "hidden"
+            }
+        }));
+        let summary_text = summary.to_string();
+
+        assert_eq!(summary["dispatch_endpoint_configured"], json!(true));
+        assert_eq!(summary["dispatch_auth_mode"], json!("bearer"));
+        assert_eq!(summary["platform_callback_token_configured"], json!(true));
+        assert!(!summary_text.contains("dispatch-token"));
+        assert!(!summary_text.contains("callback-token"));
+        assert!(!summary_text.contains("hidden"));
+    }
+
+    #[test]
+    fn external_integration_redacted_summary_removes_sensitive_keys_recursively() {
+        let summary = external_integration_redacted_summary(json!({
+            "safe": "kept",
+            "token": "secret-token",
+            "nested": {
+                "authorization": "Bearer secret",
+                "status": "ok"
+            },
+            "items": [
+                {"cookie": "secret-cookie", "count": 1}
+            ]
+        }));
+        let summary_text = summary.to_string();
+
+        assert_eq!(summary["safe"], json!("kept"));
+        assert_eq!(summary["nested"]["status"], json!("ok"));
+        assert_eq!(summary["items"][0]["count"], json!(1));
+        assert!(!summary_text.contains("secret-token"));
+        assert!(!summary_text.contains("Bearer secret"));
+        assert!(!summary_text.contains("secret-cookie"));
     }
 
     async fn insert_generic_external_channel_connection(state: &AppState, connection_id: &str) {
