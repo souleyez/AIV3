@@ -235,6 +235,41 @@ pub struct ExternalActionIntentView {
     pub created_at: DateTime<Utc>,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ExternalBotReplyTypeView {
+    TaskStatus,
+    Text,
+    Card,
+    ArtifactLink,
+    RequiresConfirmation,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ExternalBotReplyView {
+    pub target_conversation_external_id: String,
+    pub reply_type: ExternalBotReplyTypeView,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub card: Option<Value>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub artifact_links: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_status: Option<String>,
+    #[serde(default)]
+    pub requires_confirmation: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ExternalChannelEventResponse {
+    pub accepted: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assistant_run_id: Option<AssistantRunId>,
+    pub idempotency_key: String,
+    pub reply: ExternalBotReplyView,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WorkflowDefinitionView {
     pub kind: WorkflowKind,
@@ -3327,6 +3362,41 @@ mod tests {
         assert_eq!(
             decoded_intent.risk_level,
             ExternalActionRiskLevelView::HighRiskWrite
+        );
+    }
+
+    #[test]
+    fn external_channel_event_response_uses_task_status_reply_envelope() {
+        let run_id = AssistantRunId::new();
+        let response = ExternalChannelEventResponse {
+            accepted: true,
+            assistant_run_id: Some(run_id),
+            idempotency_key: "generic:tenant:msg-001".to_string(),
+            reply: ExternalBotReplyView {
+                target_conversation_external_id: "chat-001".to_string(),
+                reply_type: ExternalBotReplyTypeView::TaskStatus,
+                text: None,
+                card: None,
+                artifact_links: Vec::new(),
+                task_status: Some("accepted".to_string()),
+                requires_confirmation: false,
+            },
+        };
+
+        let encoded = serde_json::to_value(&response).expect("response should serialize");
+
+        assert_eq!(encoded["accepted"], json!(true));
+        assert_eq!(encoded["assistant_run_id"], json!(run_id.to_string()));
+        assert_eq!(encoded["reply"]["reply_type"], json!("task_status"));
+        assert_eq!(encoded["reply"]["task_status"], json!("accepted"));
+        assert!(encoded["reply"].get("text").is_none());
+
+        let decoded: ExternalChannelEventResponse =
+            serde_json::from_value(encoded).expect("response should deserialize");
+        assert_eq!(decoded.assistant_run_id, Some(run_id));
+        assert_eq!(
+            decoded.reply.reply_type,
+            ExternalBotReplyTypeView::TaskStatus
         );
     }
 

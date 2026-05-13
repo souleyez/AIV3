@@ -34,16 +34,17 @@ use contracts::{
     CreateStaticPageImageJobRequest, CreateStaticPageImageJobResponse,
     CreateStaticPageRenderRequest, CreateStaticPageRenderResponse, DatasetOutputView,
     DatasetSummary, DocumentChunkView, DocumentDetailView, DocumentMediaDetailView,
-    DocumentSummary, HealthResponse, HtmlArtifactInteractionModeView, HtmlArtifactManifestView,
-    KeyLoginRequest, KeyLoginResponse, KeyRotateRequest, KeyRotateResponse, LlmInvocationView,
-    LogoutResponse, MemoryDirectoryView, PlanReportRequest, PublishReportRequest,
-    PublishReportResponse, PublishedReportDetailView, PublishedReportVersionView,
-    PublishedReportView, RegisterDocumentRequest, RegisterDocumentResponse,
-    ReportPlanAstVersionView, ReportPlanSummary, ReportRenderOutputView,
-    ResolveDatasetSecretBindingsRequest, ResolveDatasetSecretBindingsResponse,
-    RetrievalEvidenceView, RetrievalSearchHitView, RetrievalSearchResponse,
-    RetryWorkflowExecutionRequest, RetryWorkflowExecutionResponse, StartEmailAuthRequest,
-    StartEmailAuthResponse, StaticPageDraftView, StaticPageImageJobView,
+    DocumentSummary, ExternalBotMessageView, ExternalBotReplyTypeView, ExternalBotReplyView,
+    ExternalChannelEventResponse, ExternalChannelPlatformView, ExternalMessageTypeView,
+    HealthResponse, HtmlArtifactInteractionModeView, HtmlArtifactManifestView, KeyLoginRequest,
+    KeyLoginResponse, KeyRotateRequest, KeyRotateResponse, LlmInvocationView, LogoutResponse,
+    MemoryDirectoryView, PlanReportRequest, PublishReportRequest, PublishReportResponse,
+    PublishedReportDetailView, PublishedReportVersionView, PublishedReportView,
+    RegisterDocumentRequest, RegisterDocumentResponse, ReportPlanAstVersionView, ReportPlanSummary,
+    ReportRenderOutputView, ResolveDatasetSecretBindingsRequest,
+    ResolveDatasetSecretBindingsResponse, RetrievalEvidenceView, RetrievalSearchHitView,
+    RetrievalSearchResponse, RetryWorkflowExecutionRequest, RetryWorkflowExecutionResponse,
+    StartEmailAuthRequest, StartEmailAuthResponse, StaticPageDraftView, StaticPageImageJobView,
     StaticPageRenderOutputView, SubmitHtmlArtifactEventRequest, SubmitHtmlArtifactEventResponse,
     ToolDefinitionView, ToolExecutionView, UpdateChatSessionReportEntryRequest,
     UpdateChatSessionReportEntryResponse, UpdateChatSessionRequest, UpdateChatSessionResponse,
@@ -80,6 +81,7 @@ use prompt_registry::bootstrap_default_prompt_registry;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
+use sqlx::Row;
 use static_page_renderer::{render_static_page, StaticPageRenderRequest};
 use static_page_runtime::{
     interpret_static_page_intent_deterministic, interpret_static_page_intent_with_provider,
@@ -419,6 +421,10 @@ pub fn router(
         .route(
             "/v1/assistant-runs",
             axum::routing::post(create_assistant_run),
+        )
+        .route(
+            "/v1/external/channels/{connection_id}/events",
+            axum::routing::post(ingest_external_channel_event),
         )
         .route("/v1/assistant-runs/{run_id}", get(get_assistant_run))
         .route(
@@ -6587,6 +6593,420 @@ async fn create_assistant_run(
             required_confirmations: Vec::new(),
         }),
     ))
+}
+
+#[derive(Clone, Debug)]
+struct ExternalChannelConnectionSummary {
+    platform: ExternalChannelPlatformView,
+    status: String,
+}
+
+async fn ingest_external_channel_event(
+    State(state): State<AppState>,
+    Path(connection_id): Path<String>,
+    Json(message): Json<ExternalBotMessageView>,
+) -> std::result::Result<(StatusCode, Json<ExternalChannelEventResponse>), ApiError> {
+    validate_required("connection_id", &connection_id)?;
+    validate_external_bot_message(&message)?;
+
+    let connection = load_external_channel_connection(&state, &connection_id).await?;
+    if connection.status != "enabled" {
+        return Err(ApiError::forbidden(
+            "external_channel_disabled",
+            format!("external channel connection {connection_id} is not enabled"),
+        ));
+    }
+    if connection.platform != message.platform {
+        return Err(ApiError::bad_request_with_details(
+            "external_channel_platform_mismatch",
+            "external channel event platform does not match the configured connection".to_string(),
+            json!({
+                "connection_id": connection_id,
+                "connection_platform": external_channel_platform_wire_value(&connection.platform),
+                "message_platform": external_channel_platform_wire_value(&message.platform),
+            }),
+        ));
+    }
+
+    if let Some(existing_run_id) =
+        load_external_message_event_run_id(&state, &message.idempotency_key).await?
+    {
+        return Ok((
+            StatusCode::OK,
+            Json(ExternalChannelEventResponse {
+                accepted: true,
+                assistant_run_id: Some(existing_run_id),
+                idempotency_key: message.idempotency_key.clone(),
+                reply: external_channel_task_status_reply(&message, "duplicate_accepted"),
+            }),
+        ));
+    }
+
+    let now = Utc::now();
+    let assistant_request = external_bot_message_to_assistant_run_request(&connection_id, &message);
+    let selected_scope = assistant_request
+        .selected_scope
+        .clone()
+        .unwrap_or_else(|| json!({}));
+    let scope_candidates = Value::Array(assistant_request.scope_candidates.clone());
+    let context_policy = assistant_request
+        .context_policy_hint
+        .clone()
+        .unwrap_or_else(|| json!({}));
+    let startup_briefing = assistant_request
+        .startup_briefing
+        .clone()
+        .unwrap_or_else(|| json!({}));
+    let run = state
+        .storage
+        .assistant_runs()
+        .create(
+            state.tenant_id,
+            &NewAssistantRun {
+                user_id: None,
+                local_thread_id: assistant_request.local_thread_id.clone(),
+                user_prompt: assistant_request.prompt.trim().to_string(),
+                startup_briefing,
+                selected_scope,
+                scope_candidates,
+                context_policy,
+                evidence_state: json!({
+                    "status": "pending",
+                    "source": "external_channel",
+                    "supplied_count": 0,
+                    "guidance": "external channel event accepted; V3 retrieval and permission supply run after identity/source policy resolution"
+                }),
+                service_lane: "external_channel".to_string(),
+                execution_trail: json!([
+                    {
+                        "status": "completed",
+                        "label": "接收外部通道消息",
+                        "channel_connection_id": connection_id,
+                        "platform": external_channel_platform_wire_value(&message.platform),
+                        "at": now
+                    },
+                    {
+                        "status": "pending",
+                        "label": "等待 V3 外部身份和资料权限解析",
+                        "at": now
+                    }
+                ]),
+                output_artifacts: json!([]),
+                runtime_manifest: json!({
+                    "mode": "accepted",
+                    "lane": "external_channel",
+                    "model": "pending-assistant-run-executor",
+                    "provider": "v3-control-plane"
+                }),
+                created_at: now,
+            },
+        )
+        .await
+        .map_err(ApiError::from_storage)?;
+
+    let payload_summary = external_bot_message_payload_summary(&message);
+    state
+        .storage
+        .assistant_runs()
+        .append_event(
+            state.tenant_id,
+            run.id,
+            &NewAssistantRunEvent {
+                event_name: "assistant_run.external_channel_message_received".to_string(),
+                payload: json!({
+                    "channel_connection_id": connection_id,
+                    "message": payload_summary,
+                    "idempotency_key": message.idempotency_key,
+                }),
+                created_at: now,
+            },
+        )
+        .await
+        .map_err(ApiError::from_storage)?;
+    record_external_message_event(&state, &connection_id, run.id, &message, &payload_summary)
+        .await?;
+
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(ExternalChannelEventResponse {
+            accepted: true,
+            assistant_run_id: Some(run.id),
+            idempotency_key: message.idempotency_key.clone(),
+            reply: external_channel_task_status_reply(&message, "accepted"),
+        }),
+    ))
+}
+
+async fn load_external_channel_connection(
+    state: &AppState,
+    connection_id: &str,
+) -> std::result::Result<ExternalChannelConnectionSummary, ApiError> {
+    let row = sqlx::query(
+        r#"
+        select platform, status
+        from external_channel_connections
+        where tenant_id = $1 and id = $2
+        "#,
+    )
+    .bind(state.tenant_id.0)
+    .bind(connection_id)
+    .fetch_optional(state.storage.pool())
+    .await
+    .map_err(|error| ApiError::from_storage(anyhow::Error::new(error)))?;
+
+    let Some(row) = row else {
+        return Err(ApiError::not_found(
+            "external_channel_connection_not_found",
+            format!("external channel connection {connection_id} was not found"),
+        ));
+    };
+    let platform: String = row.get("platform");
+    let platform = external_channel_platform_from_wire_value(&platform).ok_or_else(|| {
+        ApiError::bad_request(
+            "external_channel_platform_invalid",
+            format!("external channel connection {connection_id} has invalid platform {platform}"),
+        )
+    })?;
+
+    Ok(ExternalChannelConnectionSummary {
+        platform,
+        status: row.get("status"),
+    })
+}
+
+async fn load_external_message_event_run_id(
+    state: &AppState,
+    idempotency_key: &str,
+) -> std::result::Result<Option<AssistantRunId>, ApiError> {
+    let row = sqlx::query(
+        r#"
+        select assistant_run_id
+        from external_message_events
+        where tenant_id = $1 and idempotency_key = $2
+        "#,
+    )
+    .bind(state.tenant_id.0)
+    .bind(idempotency_key)
+    .fetch_optional(state.storage.pool())
+    .await
+    .map_err(|error| ApiError::from_storage(anyhow::Error::new(error)))?;
+
+    Ok(row
+        .and_then(|row| row.get::<Option<Uuid>, _>("assistant_run_id"))
+        .map(AssistantRunId))
+}
+
+async fn record_external_message_event(
+    state: &AppState,
+    connection_id: &str,
+    assistant_run_id: AssistantRunId,
+    message: &ExternalBotMessageView,
+    payload_summary: &Value,
+) -> std::result::Result<(), ApiError> {
+    sqlx::query(
+        r#"
+        insert into external_message_events (
+            tenant_id,
+            channel_connection_id,
+            assistant_run_id,
+            direction,
+            platform,
+            conversation_external_id,
+            message_external_id,
+            idempotency_key,
+            payload_summary
+        )
+        values ($1, $2, $3, 'inbound', $4, $5, $6, $7, $8)
+        on conflict (tenant_id, idempotency_key) do nothing
+        "#,
+    )
+    .bind(state.tenant_id.0)
+    .bind(connection_id)
+    .bind(assistant_run_id.0)
+    .bind(external_channel_platform_wire_value(&message.platform))
+    .bind(&message.conversation_external_id)
+    .bind(&message.message_external_id)
+    .bind(&message.idempotency_key)
+    .bind(payload_summary)
+    .execute(state.storage.pool())
+    .await
+    .map_err(|error| ApiError::from_storage(anyhow::Error::new(error)))?;
+
+    Ok(())
+}
+
+fn external_bot_message_to_assistant_run_request(
+    connection_id: &str,
+    message: &ExternalBotMessageView,
+) -> CreateAssistantRunRequest {
+    let prompt = external_bot_message_prompt(message);
+    let local_thread_id = external_bot_message_local_thread_id(message);
+    let platform = external_channel_platform_wire_value(&message.platform);
+    let message_type = external_message_type_wire_value(&message.message_type);
+    let selected_scope = json!({
+        "type": "external_channel",
+        "channel_connection_id": connection_id,
+        "platform": platform,
+        "tenant_external_id": message.tenant_external_id,
+        "bot_external_id": message.bot_external_id,
+        "conversation_external_id": message.conversation_external_id,
+        "sender_external_id": message.sender_external_id,
+        "message_external_id": message.message_external_id,
+    });
+
+    CreateAssistantRunRequest {
+        prompt,
+        local_thread_id: Some(local_thread_id),
+        startup_briefing: Some(json!({
+            "surface": "external_channel",
+            "platform": platform,
+            "channel_connection_id": connection_id,
+            "policy": "V3 owns external identity resolution, permission supply, action validation, and audit before replying."
+        })),
+        selected_scope: Some(selected_scope.clone()),
+        scope_candidates: vec![json!({
+            "type": "external_channel",
+            "label": format!("{} external conversation", platform),
+            "score": 1.0,
+            "scope": selected_scope,
+        })],
+        context_policy_hint: Some(json!({
+            "source": "external_channel",
+            "message_type": message_type,
+            "permission_boundary": "resolve_external_principal_before_retrieval",
+            "forbid_cross_tenant_context": true,
+        })),
+        current_artifact: None,
+        messages: Vec::new(),
+    }
+}
+
+fn external_bot_message_payload_summary(message: &ExternalBotMessageView) -> Value {
+    json!({
+        "platform": external_channel_platform_wire_value(&message.platform),
+        "tenant_external_id": message.tenant_external_id,
+        "bot_external_id": message.bot_external_id,
+        "conversation_external_id": message.conversation_external_id,
+        "thread_external_id": message.thread_external_id,
+        "sender_external_id": message.sender_external_id,
+        "message_external_id": message.message_external_id,
+        "message_type": external_message_type_wire_value(&message.message_type),
+        "text_chars": message.text.as_ref().map(|text| text.chars().count()).unwrap_or(0),
+        "mention_count": message.mention_external_user_ids.len(),
+        "attachment_count": message.attachment_refs.len(),
+        "attachments": message.attachment_refs.iter().map(|attachment| json!({
+            "attachment_external_id": attachment.attachment_external_id,
+            "filename": attachment.filename,
+            "content_type": attachment.content_type,
+            "size_bytes": attachment.size_bytes,
+            "download_url_redacted": attachment.download_url_redacted.as_ref().map(|_| "[redacted]"),
+        })).collect::<Vec<_>>(),
+        "received_at": message.received_at,
+    })
+}
+
+fn external_channel_task_status_reply(
+    message: &ExternalBotMessageView,
+    task_status: &str,
+) -> ExternalBotReplyView {
+    ExternalBotReplyView {
+        target_conversation_external_id: message.conversation_external_id.clone(),
+        reply_type: ExternalBotReplyTypeView::TaskStatus,
+        text: None,
+        card: None,
+        artifact_links: Vec::new(),
+        task_status: Some(task_status.to_string()),
+        requires_confirmation: false,
+    }
+}
+
+fn external_bot_message_prompt(message: &ExternalBotMessageView) -> String {
+    message
+        .text
+        .as_ref()
+        .map(|text| text.trim())
+        .filter(|text| !text.is_empty())
+        .map(ToString::to_string)
+        .unwrap_or_else(|| {
+            format!(
+                "External {} message {} with {} attachment(s)",
+                external_message_type_wire_value(&message.message_type),
+                message.message_external_id,
+                message.attachment_refs.len()
+            )
+        })
+}
+
+fn external_bot_message_local_thread_id(message: &ExternalBotMessageView) -> String {
+    format!(
+        "external:{}:{}:{}:{}",
+        external_channel_platform_wire_value(&message.platform),
+        message.tenant_external_id,
+        message.bot_external_id,
+        message.conversation_external_id
+    )
+}
+
+fn validate_external_bot_message(
+    message: &ExternalBotMessageView,
+) -> std::result::Result<(), ApiError> {
+    validate_required("tenant_external_id", &message.tenant_external_id)?;
+    validate_required("bot_external_id", &message.bot_external_id)?;
+    validate_required(
+        "conversation_external_id",
+        &message.conversation_external_id,
+    )?;
+    validate_required("sender_external_id", &message.sender_external_id)?;
+    validate_required("message_external_id", &message.message_external_id)?;
+    validate_required("idempotency_key", &message.idempotency_key)?;
+    if message
+        .text
+        .as_ref()
+        .map(|text| text.trim().is_empty())
+        .unwrap_or(true)
+        && message.attachment_refs.is_empty()
+    {
+        return Err(ApiError::bad_request(
+            "external_message_empty",
+            "external channel event must include text or attachments".to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
+fn external_channel_platform_wire_value(platform: &ExternalChannelPlatformView) -> &'static str {
+    match platform {
+        ExternalChannelPlatformView::Feishu => "feishu",
+        ExternalChannelPlatformView::Lark => "lark",
+        ExternalChannelPlatformView::WeCom => "we_com",
+        ExternalChannelPlatformView::GenericChat => "generic_chat",
+        ExternalChannelPlatformView::ThirdParty => "third_party",
+    }
+}
+
+fn external_channel_platform_from_wire_value(value: &str) -> Option<ExternalChannelPlatformView> {
+    match value {
+        "feishu" => Some(ExternalChannelPlatformView::Feishu),
+        "lark" => Some(ExternalChannelPlatformView::Lark),
+        "we_com" => Some(ExternalChannelPlatformView::WeCom),
+        "generic_chat" => Some(ExternalChannelPlatformView::GenericChat),
+        "third_party" => Some(ExternalChannelPlatformView::ThirdParty),
+        _ => None,
+    }
+}
+
+fn external_message_type_wire_value(message_type: &ExternalMessageTypeView) -> &'static str {
+    match message_type {
+        ExternalMessageTypeView::Text => "text",
+        ExternalMessageTypeView::Image => "image",
+        ExternalMessageTypeView::File => "file",
+        ExternalMessageTypeView::Audio => "audio",
+        ExternalMessageTypeView::Video => "video",
+        ExternalMessageTypeView::Card => "card",
+        ExternalMessageTypeView::Event => "event",
+        ExternalMessageTypeView::Unknown => "unknown",
+    }
 }
 
 async fn get_assistant_run(
@@ -25431,6 +25851,17 @@ impl ApiError {
         }
     }
 
+    fn forbidden(code: &str, message: String) -> Self {
+        Self {
+            status: StatusCode::FORBIDDEN,
+            payload: ApiErrorResponse {
+                code: code.to_string(),
+                message,
+                details: None,
+            },
+        }
+    }
+
     fn too_many_requests(code: &str, message: String) -> Self {
         Self {
             status: StatusCode::TOO_MANY_REQUESTS,
@@ -25581,6 +26012,109 @@ mod tests {
         ] {
             std::env::remove_var(key);
         }
+    }
+
+    fn sample_external_bot_message() -> ExternalBotMessageView {
+        serde_json::from_value(json!({
+            "platform": "generic_chat",
+            "tenant_external_id": "tenant-ext-001",
+            "bot_external_id": "bot-v3",
+            "conversation_external_id": "chat-risk-room",
+            "sender_external_id": "user-ext-001",
+            "message_external_id": "msg-001",
+            "message_type": "text",
+            "text": "订单延期风险有哪些？",
+            "attachment_refs": [
+                {
+                    "attachment_external_id": "file-001",
+                    "filename": "orders.xlsx",
+                    "content_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    "size_bytes": 4096,
+                    "download_url_redacted": "https://docs.example.com/download/raw-token"
+                }
+            ],
+            "idempotency_key": "generic:tenant-ext-001:msg-001",
+            "received_at": Utc::now()
+        }))
+        .expect("sample external bot message")
+    }
+
+    #[test]
+    fn external_bot_message_maps_to_assistant_run_request_scope() {
+        let message = sample_external_bot_message();
+        let request = external_bot_message_to_assistant_run_request("generic-chat-main", &message);
+
+        assert_eq!(request.prompt, "订单延期风险有哪些？");
+        assert_eq!(
+            request.local_thread_id.as_deref(),
+            Some("external:generic_chat:tenant-ext-001:bot-v3:chat-risk-room")
+        );
+        assert_eq!(
+            request
+                .startup_briefing
+                .as_ref()
+                .and_then(|value| value.get("surface"))
+                .and_then(Value::as_str),
+            Some("external_channel")
+        );
+        assert_eq!(
+            request
+                .selected_scope
+                .as_ref()
+                .and_then(|value| value.get("channel_connection_id"))
+                .and_then(Value::as_str),
+            Some("generic-chat-main")
+        );
+        assert_eq!(
+            request
+                .context_policy_hint
+                .as_ref()
+                .and_then(|value| value.get("permission_boundary"))
+                .and_then(Value::as_str),
+            Some("resolve_external_principal_before_retrieval")
+        );
+        assert_eq!(request.scope_candidates.len(), 1);
+    }
+
+    #[test]
+    fn external_bot_message_summary_redacts_body_and_attachment_url() {
+        let message = sample_external_bot_message();
+        let summary = external_bot_message_payload_summary(&message);
+        let serialized = summary.to_string();
+
+        assert_eq!(summary["message_type"], json!("text"));
+        assert_eq!(summary["text_chars"], json!(10));
+        assert_eq!(summary["attachment_count"], json!(1));
+        assert_eq!(
+            summary["attachments"][0]["download_url_redacted"],
+            json!("[redacted]")
+        );
+        assert!(!serialized.contains("订单延期风险有哪些"));
+        assert!(!serialized.contains("raw-token"));
+    }
+
+    #[test]
+    fn external_channel_task_status_reply_is_not_model_answer() {
+        let message = sample_external_bot_message();
+        let reply = external_channel_task_status_reply(&message, "accepted");
+
+        assert_eq!(reply.reply_type, ExternalBotReplyTypeView::TaskStatus);
+        assert_eq!(reply.task_status.as_deref(), Some("accepted"));
+        assert_eq!(reply.text, None);
+        assert!(!reply.requires_confirmation);
+    }
+
+    #[test]
+    fn external_channel_platform_wire_values_match_storage_values() {
+        assert_eq!(
+            external_channel_platform_wire_value(&ExternalChannelPlatformView::WeCom),
+            "we_com"
+        );
+        assert_eq!(
+            external_channel_platform_from_wire_value("generic_chat"),
+            Some(ExternalChannelPlatformView::GenericChat)
+        );
+        assert_eq!(external_channel_platform_from_wire_value("wechat"), None);
     }
 
     #[test]
