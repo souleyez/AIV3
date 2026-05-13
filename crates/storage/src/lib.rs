@@ -70,6 +70,12 @@ pub const HTML_ARTIFACTS_SCHEMA: Migration = Migration {
     sql: include_str!("../migrations/0007_html_artifacts.sql"),
 };
 
+pub const EXTERNAL_INTEGRATIONS_SCHEMA: Migration = Migration {
+    version: "0008",
+    description: "external bot and third-party integrations",
+    sql: include_str!("../migrations/0008_external_integrations.sql"),
+};
+
 pub const MIGRATIONS: &[Migration] = &[
     INITIAL_SCHEMA,
     WORKFLOW_RUNTIME_RECORDS_SCHEMA,
@@ -77,6 +83,7 @@ pub const MIGRATIONS: &[Migration] = &[
     ACCOUNT_ARTIFACT_HARDENING_SCHEMA,
     MEMORY_DIRECTORY_SCOPE_HARDENING_SCHEMA,
     HTML_ARTIFACTS_SCHEMA,
+    EXTERNAL_INTEGRATIONS_SCHEMA,
 ];
 
 pub const TABLES: &[&str] = &[
@@ -108,6 +115,13 @@ pub const TABLES: &[&str] = &[
     "assistant_runs",
     "conversation_memory_items",
     "html_artifacts",
+    "external_channel_connections",
+    "external_source_connections",
+    "external_principals",
+    "external_permission_snapshots",
+    "external_message_events",
+    "external_action_runs",
+    "external_sync_runs",
     "static_page_drafts",
     "static_page_image_jobs",
     "static_page_render_outputs",
@@ -5903,6 +5917,57 @@ fn merge_chunk_metadata(
     Ok(Value::Object(merged))
 }
 
+pub fn external_integration_config_redacted_summary(config: &Value) -> Value {
+    redact_external_config_value(None, config)
+}
+
+fn redact_external_config_value(parent_key: Option<&str>, value: &Value) -> Value {
+    if parent_key
+        .map(external_integration_config_key_is_sensitive)
+        .unwrap_or(false)
+    {
+        return Value::String("[redacted]".to_string());
+    }
+
+    match value {
+        Value::Object(map) => Value::Object(
+            map.iter()
+                .map(|(key, value)| {
+                    (
+                        key.clone(),
+                        redact_external_config_value(Some(key.as_str()), value),
+                    )
+                })
+                .collect(),
+        ),
+        Value::Array(values) => Value::Array(
+            values
+                .iter()
+                .map(|value| redact_external_config_value(parent_key, value))
+                .collect(),
+        ),
+        other => other.clone(),
+    }
+}
+
+fn external_integration_config_key_is_sensitive(key: &str) -> bool {
+    let lower = key.to_ascii_lowercase();
+    [
+        "secret",
+        "token",
+        "password",
+        "private_key",
+        "api_key",
+        "access_key",
+        "refresh_key",
+        "signing_key",
+        "encrypt_key",
+        "credential",
+    ]
+    .iter()
+    .any(|marker| lower.contains(marker))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5968,7 +6033,7 @@ mod tests {
                 .iter()
                 .map(|migration| migration.version)
                 .collect::<Vec<_>>(),
-            vec!["0001", "0002", "0004", "0005", "0006"]
+            vec!["0001", "0002", "0004", "0005", "0006", "0007", "0008"]
         );
         assert!(MIGRATIONS
             .iter()
@@ -5979,6 +6044,12 @@ mod tests {
         assert!(MIGRATIONS
             .iter()
             .any(|migration| migration.description == "memory directory scope hardening"));
+        assert!(MIGRATIONS
+            .iter()
+            .any(|migration| migration.description == "safe html artifact records"));
+        assert!(MIGRATIONS
+            .iter()
+            .any(|migration| migration.description == "external bot and third-party integrations"));
     }
 
     #[test]
@@ -6007,6 +6078,68 @@ mod tests {
         assert!(MEMORY_DIRECTORY_SCOPE_HARDENING_SCHEMA
             .sql
             .contains("add column if not exists source_document_ids"));
+    }
+
+    #[test]
+    fn external_integrations_schema_mentions_observe_first_tables() {
+        for table in [
+            "external_channel_connections",
+            "external_source_connections",
+            "external_principals",
+            "external_permission_snapshots",
+            "external_message_events",
+            "external_action_runs",
+            "external_sync_runs",
+        ] {
+            assert!(TABLES.contains(&table));
+            assert!(EXTERNAL_INTEGRATIONS_SCHEMA
+                .sql
+                .contains(&format!("create table if not exists {table}")));
+        }
+
+        assert!(EXTERNAL_INTEGRATIONS_SCHEMA
+            .sql
+            .contains("config_redacted jsonb not null"));
+        assert!(EXTERNAL_INTEGRATIONS_SCHEMA
+            .sql
+            .contains("arguments_redacted jsonb not null"));
+        assert!(EXTERNAL_INTEGRATIONS_SCHEMA
+            .sql
+            .contains("references external_source_connections"));
+        assert!(EXTERNAL_INTEGRATIONS_SCHEMA
+            .sql
+            .contains("references external_channel_connections"));
+    }
+
+    #[test]
+    fn external_integration_config_summary_redacts_secrets_recursively() {
+        let summary = external_integration_config_redacted_summary(&json!({
+            "base_url": "https://docs.example.com",
+            "client_secret": "raw-client-secret",
+            "verification_token": "raw-verification-token",
+            "nested": {
+                "api_key": "raw-api-key",
+                "allowed_project": "orders"
+            },
+            "webhooks": [
+                {
+                    "signing_key": "raw-signing-key",
+                    "name": "ticketing"
+                }
+            ]
+        }));
+        let serialized = summary.to_string();
+
+        assert_eq!(summary["base_url"], json!("https://docs.example.com"));
+        assert_eq!(summary["client_secret"], json!("[redacted]"));
+        assert_eq!(summary["verification_token"], json!("[redacted]"));
+        assert_eq!(summary["nested"]["api_key"], json!("[redacted]"));
+        assert_eq!(summary["nested"]["allowed_project"], json!("orders"));
+        assert_eq!(summary["webhooks"][0]["signing_key"], json!("[redacted]"));
+        assert!(!serialized.contains("raw-client-secret"));
+        assert!(!serialized.contains("raw-verification-token"));
+        assert!(!serialized.contains("raw-api-key"));
+        assert!(!serialized.contains("raw-signing-key"));
     }
 
     #[test]

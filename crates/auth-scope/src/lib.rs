@@ -20,6 +20,9 @@ pub enum ScopeResource {
     Document(DocumentId),
     Secret(SecretBindingId),
     PublishedReport(PublishedReportId),
+    ExternalIntegration(TenantId),
+    ExternalSource(TenantId),
+    ExternalActionRun(TenantId),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -54,6 +57,62 @@ impl ScopeResolver {
                 allowed: principal.readable_report_ids.contains(report_id),
                 reason: "published asset scope".to_string(),
             },
+            ScopeResource::ExternalIntegration(tenant_id) => ScopeDecision {
+                allowed: principal.tenant_id == *tenant_id,
+                reason: "external integration tenant scope".to_string(),
+            },
+            ScopeResource::ExternalSource(tenant_id) => ScopeDecision {
+                allowed: principal.tenant_id == *tenant_id,
+                reason: "external source tenant scope".to_string(),
+            },
+            ScopeResource::ExternalActionRun(tenant_id) => ScopeDecision {
+                allowed: principal.tenant_id == *tenant_id,
+                reason: "external action tenant scope".to_string(),
+            },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn principal_for_tenant(tenant_id: TenantId) -> PrincipalContext {
+        PrincipalContext {
+            tenant_id,
+            user_id: UserId::new(),
+            roles: vec!["operator".to_string()],
+            readable_dataset_ids: Vec::new(),
+            readable_document_ids: Vec::new(),
+            readable_report_ids: Vec::new(),
+            unlocked_secret_grant_ids: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn external_integration_scope_is_limited_to_principal_tenant() {
+        let tenant_id = TenantId::new();
+        let other_tenant_id = TenantId::new();
+        let principal = principal_for_tenant(tenant_id);
+        let resolver = ScopeResolver;
+
+        let own_integration =
+            resolver.can_access(&principal, &ScopeResource::ExternalIntegration(tenant_id));
+        let other_integration = resolver.can_access(
+            &principal,
+            &ScopeResource::ExternalIntegration(other_tenant_id),
+        );
+        let own_source = resolver.can_access(&principal, &ScopeResource::ExternalSource(tenant_id));
+        let own_action =
+            resolver.can_access(&principal, &ScopeResource::ExternalActionRun(tenant_id));
+
+        assert!(own_integration.allowed);
+        assert!(!other_integration.allowed);
+        assert!(own_source.allowed);
+        assert!(own_action.allowed);
+        assert_eq!(
+            other_integration.reason,
+            "external integration tenant scope"
+        );
     }
 }
