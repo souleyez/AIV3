@@ -112,6 +112,8 @@ use uuid::Uuid;
 use workflow_engine::{WorkflowCatalog, WorkflowRuntimeState, WorkflowSignal};
 
 pub mod auth_email;
+pub mod external_feishu;
+pub mod external_wecom;
 mod react_agent_catalog;
 mod react_agent_contract;
 mod react_agent_tools;

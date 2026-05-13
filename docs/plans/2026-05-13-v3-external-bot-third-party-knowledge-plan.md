@@ -15,7 +15,8 @@
 **Current Progress:**
 - Phase 5 generic source sync workflow is connected through `platform-api`, `workflow-definitions`, `ingest-worker`, `retrieval-worker`, and `external-source-worker`.
 - Generic source MVP currently supports mock HTTPS connector fixtures for external users, groups, document metadata, document bodies, and ACL snapshots.
-- Next implementation checkpoint: add Feishu/Lark and WeCom channel adapters on top of the normalized external integration surface.
+- Phase 6 thin adapters now cover Feishu/Lark and WeCom callback signature validation, timestamp/replay checks, event normalization, and channel-safe reply payload rendering.
+- Next implementation checkpoint: wire platform-specific adapter entrypoints to stored connection configuration and the normalized external channel ingestion endpoint.
 
 ---
 
@@ -383,11 +384,11 @@ It should not ask operators to manually label documents, rewrite permissions, or
 - Add tests next to the adapter modules.
 
 **Steps:**
-1. Re-check official Feishu/Lark and WeCom bot/event documentation.
-2. Add signature/timestamp/replay validation tests from official examples or sanitized fixtures.
-3. Convert platform events to `ExternalBotMessageView`.
-4. Convert `ExternalBotReplyView` to platform text/card/file replies.
-5. Keep adapters thin; shared behavior stays in normalized channel ingestion.
+1. Done: Re-check official Feishu/Lark and WeCom bot/event documentation.
+2. Done: Add signature/timestamp/replay validation tests from official examples or sanitized fixtures.
+3. Done: Convert platform events to `ExternalBotMessageView` in thin adapter modules.
+4. Done: Convert `ExternalBotReplyView` to platform text/card-safe reply payloads.
+5. Done: Keep adapters thin; shared behavior stays in normalized channel ingestion.
 6. Commit `Add Feishu and WeCom channel adapters`.
 
 ### Phase 7: External artifact and transaction runtime
