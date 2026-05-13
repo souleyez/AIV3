@@ -4,5 +4,6 @@ Place workflow replay fixtures, API contract checks, and system validation repor
 
 Current operator-facing references:
 
+- [external-bot-third-party-smoke.md](</C:/Users/soulzyn/Desktop/codex/ai-data-platform-v3/docs/validation/external-bot-third-party-smoke.md>)
 - [runtime-inspect-pretty.md](</C:/Users/soulzyn/Desktop/codex/ai-data-platform-v3/docs/validation/runtime-inspect-pretty.md>)
 - [video-ppt-deliverable-smoke.md](</C:/Users/soulzyn/Desktop/codex/ai-data-platform-v3/docs/validation/video-ppt-deliverable-smoke.md>)

@@ -28,7 +28,8 @@
 - Phase 8 second checkpoint now moves channel action retry from synchronous management requests into `external_action_dispatch_workflow`, enqueues retry tasks on the `external_action` worker queue, and adds `external-action-worker` to dispatch validated actions with workflow success/failure transitions.
 - Phase 8 third checkpoint now adds observe-only permission drift and source recovery signals to `GET /v1/external/integrations` and the standalone panel, including external identity mapping gaps, disabled external principals, ACL snapshot freshness, failed sync counts, and recovery status.
 - Phase 8 fourth checkpoint now adds observe-only external artifact publish/status/revoke summaries to `GET /v1/external/integrations`, marks artifact action audit entries with action type and safe artifact refs, shows artifact state on the standalone panel, and documents the third-party artifact dispatch handoff shape.
-- Next implementation checkpoint: add end-to-end external bot and third-party smoke fixtures.
+- Phase 9 first checkpoint now adds `scripts/run-external-bot-third-party-smoke.ps1` and `docs/validation/external-bot-third-party-smoke.md`, collecting deterministic policy checks, database-backed ACL/source/adapter/action tests, and the external panel contract into one repeatable smoke entrypoint.
+- Next implementation checkpoint: run the full smoke with PostgreSQL available on the jump host or deployment target and capture a validation report.
 
 ---
 
@@ -442,11 +443,11 @@ It should not ask operators to manually label documents, rewrite permissions, or
 - Create: `docs/validation/external-bot-third-party-smoke.md`
 
 **Steps:**
-1. Seed one tenant, three external users, three documents, and mixed ACLs.
-2. Send the same normalized question as different users.
-3. Assert each AssistantRun receives only allowed evidence.
-4. Assert Feishu/WeCom mock adapters return channel-safe replies.
-5. Assert a low-risk transaction completes and a high-risk transaction pauses for confirmation.
+1. Done: collect the existing database-backed ACL fixture that seeds one tenant, three external users, mixed ACLs, and filters the same question by principal.
+2. Done: include normalized Feishu/Lark and WeCom callback adapter tests.
+3. Done: include source sync workflow and high-risk external channel confirmation tests.
+4. Done: include deterministic low-risk artifact publish, high-risk revoke, cross-system action, artifact observability, and panel contract tests.
+5. Add a jump-host or deployment-target validation report with PostgreSQL available.
 6. Commit `Add external bot third-party smoke`.
 
 ## Acceptance Criteria
