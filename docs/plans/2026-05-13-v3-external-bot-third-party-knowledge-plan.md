@@ -8,6 +8,8 @@
 
 **Tech Stack:** Rust crates `contracts`, `platform-api`, `assistant-runtime`, `auth-scope`, `storage`, `ingest-worker`, `retrieval-worker`, `workflow-definitions`, `workflow-engine`, `tool-registry`, and `observability`; Next.js app `apps/web` for V3's observe-first management UI; PostgreSQL migrations in `crates/storage/migrations`; official Feishu/Lark and WeCom HTTP/event APIs after implementation-time documentation verification; generic HTTPS callback and polling APIs for pure third-party integrations.
 
+**Third-party API Guide:** `docs/integrations/third-party-integration-api.md`
+
 ---
 
 ## Product Positioning
@@ -228,6 +230,8 @@ Secrets must stay outside public API responses. Management endpoints expose reda
 
 ## API Surface
 
+The third-party-facing API guide is maintained in `docs/integrations/third-party-integration-api.md`. This plan remains the implementation roadmap; the integration guide is the external-facing contract narrative and should be updated whenever endpoint shape, auth policy, idempotency, or permission behavior changes.
+
 ### Platform and adapter APIs
 
 - `POST /v1/external/channels/{connection_id}/events`: normalized inbound events from adapters or third-party chat pages.
@@ -280,12 +284,14 @@ It should not ask operators to manually label documents, rewrite permissions, or
 **Files:**
 - Modify: `docs/plans/2026-05-07-v3-master-development-plan.md`
 - Create: `docs/plans/2026-05-13-v3-external-bot-third-party-knowledge-plan.md`
+- Create: `docs/integrations/third-party-integration-api.md`
 
 **Steps:**
 1. Record this plan and add the master-plan pointer.
-2. Verify no implementation files changed.
-3. Run markdown/diff hygiene.
-4. Commit the planning checkpoint.
+2. Add the third-party-facing API guide covering chat, document, user/permission, artifact, action, auth, idempotency, error, and deployment contracts.
+3. Verify no implementation files changed.
+4. Run markdown/diff hygiene.
+5. Commit the planning checkpoint.
 
 ### Phase 1: Shared contracts only
 
@@ -319,6 +325,7 @@ It should not ask operators to manually label documents, rewrite permissions, or
 - Modify: `crates/platform-api/src/main.rs`
 - Create: `crates/platform-api/src/external_integrations.rs`
 - Modify: `crates/assistant-runtime/src/lib.rs`
+- Modify: `docs/integrations/third-party-integration-api.md` if request/response shape changes.
 
 **Steps:**
 1. Add tests for idempotent inbound message handling.

@@ -220,6 +220,8 @@ V3 must gain an external integration mainline without becoming a platform-specif
 
 Detailed implementation plan: `docs/plans/2026-05-13-v3-external-bot-third-party-knowledge-plan.md`.
 
+Third-party-facing API guide: `docs/integrations/third-party-integration-api.md`.
+
 The product must support:
 
 - Standard Feishu/Lark and WeCom bot/channel adapters for official message, event, card/file reply, callback, signature, replay-protection, and tenant-routing interfaces.
