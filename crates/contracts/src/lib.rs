@@ -385,6 +385,31 @@ pub struct ExternalIntegrationAuditResponse {
     pub items: Vec<ExternalIntegrationAuditItemView>,
 }
 
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ExternalIntegrationControlRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sync_kind: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ExternalIntegrationControlResponse {
+    pub accepted: bool,
+    pub integration_id: String,
+    pub integration_kind: String,
+    pub action: String,
+    pub status: String,
+    pub message: String,
+    pub affected_action_count: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sync_run_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow_execution: Option<WorkflowExecutionView>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub enqueued_tasks: Vec<WorkflowTaskView>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CreateExternalSourceSyncRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -3674,6 +3699,37 @@ mod tests {
             encoded["workflow_execution"]["kind"],
             json!("ExternalSourceSync")
         );
+        assert!(encoded.get("enqueued_tasks").is_none());
+    }
+
+    #[test]
+    fn external_integration_control_response_omits_empty_workflow_fields() {
+        let request: ExternalIntegrationControlRequest = serde_json::from_value(json!({
+            "reason": "operator_retry",
+            "sync_kind": "incremental"
+        }))
+        .expect("control request should deserialize");
+        assert_eq!(request.reason.as_deref(), Some("operator_retry"));
+        assert_eq!(request.sync_kind.as_deref(), Some("incremental"));
+
+        let response = ExternalIntegrationControlResponse {
+            accepted: true,
+            integration_id: "src-docs".to_string(),
+            integration_kind: "source".to_string(),
+            action: "retry".to_string(),
+            status: "running".to_string(),
+            message: "external source retry enqueued".to_string(),
+            affected_action_count: 0,
+            sync_run_id: Some("sync-run-001".to_string()),
+            workflow_execution: None,
+            enqueued_tasks: Vec::new(),
+        };
+        let encoded = serde_json::to_value(response).expect("response should serialize");
+
+        assert_eq!(encoded["accepted"], json!(true));
+        assert_eq!(encoded["integration_kind"], json!("source"));
+        assert_eq!(encoded["sync_run_id"], json!("sync-run-001"));
+        assert!(encoded.get("workflow_execution").is_none());
         assert!(encoded.get("enqueued_tasks").is_none());
     }
 

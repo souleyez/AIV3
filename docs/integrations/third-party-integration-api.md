@@ -26,14 +26,16 @@ Already implemented:
 - Normalized inbound chat event endpoint: `POST /v1/external/channels/{connection_id}/events`.
 - Inbound event idempotency record and redacted message summary.
 - Creation of an `external_channel` AssistantRun from normalized inbound messages.
+- Source sync endpoint: `POST /v1/external/sources/{source_id}/sync`.
+- Observe-first integration list and audit endpoints.
+- Limited management controls: disable, retry, and secret-rotation request markers.
+- Standalone external integration observability panel on `https://v3.elepcloud.com/`.
 
 Planned next:
 
-- External identity and ACL permission graph.
-- Document/user/source sync endpoints and workers.
-- Artifact publishing and external action runtime.
-- Feishu/Lark and WeCom platform adapters.
-- Observe-first management UI.
+- Move external action dispatch retries into dedicated retryable worker execution.
+- Add deeper permission-drift and source-sync recovery signals to the observability panel.
+- Extend artifact publishing status and revocation controls.
 
 Default public routing:
 
@@ -688,6 +690,24 @@ GET /v1/external/integrations/{integration_id}/audit
 ```
 
 The audit response returns a newest-first redacted timeline for messages, action runs, and source sync runs related to the integration. Action entries include confirmation state, dispatch status/reason, auth mode, HTTP status, and redacted response summary. Sensitive keys such as `token`, `secret`, `authorization`, `cookie`, and `password` are removed from nested summaries.
+
+```http
+POST /v1/external/integrations/{integration_id}/retry
+```
+
+For source integrations, this enqueues an incremental source sync. For channel integrations, this attempts retry for recent action runs that are confirmed or do not require confirmation and are currently marked `dispatch_blocked` or `dispatch_failed`. Worker-backed retry scheduling is still a follow-up hardening item.
+
+```http
+POST /v1/external/integrations/{integration_id}/disable
+```
+
+Marks a channel or source integration disabled. Disabled channel connections reject future inbound events; disabled source connections reject new sync jobs.
+
+```http
+POST /v1/external/integrations/{integration_id}/rotate-secret
+```
+
+Records a secret-rotation request marker in redacted connection configuration. It does not return or store raw secret material in public summaries.
 
 ## Data Redaction
 

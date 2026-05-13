@@ -44,6 +44,7 @@ use contracts::{
     ExternalActionConfirmationResponseView, ExternalBotMessageView, ExternalBotReplyTypeView,
     ExternalBotReplyView, ExternalChannelEventResponse, ExternalChannelPlatformView,
     ExternalIntegrationAuditItemView, ExternalIntegrationAuditResponse,
+    ExternalIntegrationControlRequest, ExternalIntegrationControlResponse,
     ExternalIntegrationSummaryView, ExternalMessageTypeView, HealthResponse,
     HtmlArtifactInteractionModeView, HtmlArtifactManifestView, KeyLoginRequest, KeyLoginResponse,
     KeyRotateRequest, KeyRotateResponse, ListExternalIntegrationsResponse, LlmInvocationView,
@@ -447,6 +448,18 @@ pub fn router(
         .route(
             "/v1/external/integrations/{integration_id}/audit",
             get(get_external_integration_audit),
+        )
+        .route(
+            "/v1/external/integrations/{integration_id}/disable",
+            axum::routing::post(disable_external_integration),
+        )
+        .route(
+            "/v1/external/integrations/{integration_id}/retry",
+            axum::routing::post(retry_external_integration),
+        )
+        .route(
+            "/v1/external/integrations/{integration_id}/rotate-secret",
+            axum::routing::post(rotate_external_integration_secret),
         )
         .route(
             "/v1/external/channels/{connection_id}/events",
@@ -6873,6 +6886,159 @@ async fn get_external_integration_audit(
     }))
 }
 
+async fn disable_external_integration(
+    State(state): State<AppState>,
+    Path(integration_id): Path<String>,
+    Json(request): Json<ExternalIntegrationControlRequest>,
+) -> std::result::Result<Json<ExternalIntegrationControlResponse>, ApiError> {
+    validate_required("integration_id", &integration_id)?;
+    let now = Utc::now();
+    let reason_present = external_control_reason_present(request.reason.as_deref());
+    let channel_count =
+        disable_external_channel_connection(&state, &integration_id, reason_present, now).await?;
+    let source_count =
+        disable_external_source_connection(&state, &integration_id, reason_present, now).await?;
+    if channel_count == 0 && source_count == 0 {
+        return Err(ApiError::not_found(
+            "external_integration_not_found",
+            format!("external integration {integration_id} was not found"),
+        ));
+    }
+
+    Ok(Json(ExternalIntegrationControlResponse {
+        accepted: true,
+        integration_id,
+        integration_kind: external_control_integration_kind(channel_count, source_count),
+        action: "disable".to_string(),
+        status: "disabled".to_string(),
+        message: "external integration disabled; future events or sync jobs will be rejected"
+            .to_string(),
+        affected_action_count: 0,
+        sync_run_id: None,
+        workflow_execution: None,
+        enqueued_tasks: Vec::new(),
+    }))
+}
+
+async fn retry_external_integration(
+    State(state): State<AppState>,
+    Path(integration_id): Path<String>,
+    Json(request): Json<ExternalIntegrationControlRequest>,
+) -> std::result::Result<Json<ExternalIntegrationControlResponse>, ApiError> {
+    validate_required("integration_id", &integration_id)?;
+    let channel_exists = external_channel_connection_exists(&state, &integration_id).await?;
+    let source_exists = external_source_connection_exists(&state, &integration_id).await?;
+    if !channel_exists && !source_exists {
+        return Err(ApiError::not_found(
+            "external_integration_not_found",
+            format!("external integration {integration_id} was not found"),
+        ));
+    }
+
+    let mut sync_response = None;
+    if source_exists {
+        let sync_kind = request
+            .sync_kind
+            .clone()
+            .or_else(|| Some("incremental".to_string()));
+        sync_response = Some(
+            enqueue_external_source_sync(
+                &state,
+                &integration_id,
+                CreateExternalSourceSyncRequest {
+                    sync_kind,
+                    dataset_id: None,
+                    checkpoint: json!({
+                        "management_retry": true,
+                    }),
+                    connector_context: json!({
+                        "requested_from": "external_integrations_panel",
+                    }),
+                },
+            )
+            .await?,
+        );
+    }
+
+    let mut affected_action_count = 0;
+    if channel_exists {
+        affected_action_count =
+            retry_external_channel_action_runs(&state, &integration_id, Utc::now()).await?;
+    }
+
+    let status = if sync_response.is_some() {
+        "running"
+    } else if affected_action_count > 0 {
+        "retry_attempted"
+    } else {
+        "no_retryable_action"
+    };
+    let (sync_run_id, workflow_execution, enqueued_tasks) = sync_response
+        .map(|response| {
+            (
+                Some(response.sync_run_id),
+                Some(response.workflow_execution),
+                response.enqueued_tasks,
+            )
+        })
+        .unwrap_or((None, None, Vec::new()));
+
+    Ok(Json(ExternalIntegrationControlResponse {
+        accepted: true,
+        integration_id,
+        integration_kind: external_control_integration_kind(
+            channel_exists as u64,
+            source_exists as u64,
+        ),
+        action: "retry".to_string(),
+        status: status.to_string(),
+        message: if source_exists {
+            "external source retry sync has been enqueued".to_string()
+        } else if affected_action_count > 0 {
+            "retry attempted for retryable external action runs".to_string()
+        } else {
+            "no retryable external action run was found".to_string()
+        },
+        affected_action_count,
+        sync_run_id,
+        workflow_execution,
+        enqueued_tasks,
+    }))
+}
+
+async fn rotate_external_integration_secret(
+    State(state): State<AppState>,
+    Path(integration_id): Path<String>,
+    Json(request): Json<ExternalIntegrationControlRequest>,
+) -> std::result::Result<Json<ExternalIntegrationControlResponse>, ApiError> {
+    validate_required("integration_id", &integration_id)?;
+    let now = Utc::now();
+    let reason_present = external_control_reason_present(request.reason.as_deref());
+    let channel_count =
+        mark_external_channel_secret_rotation(&state, &integration_id, reason_present, now).await?;
+    let source_count =
+        mark_external_source_secret_rotation(&state, &integration_id, reason_present, now).await?;
+    if channel_count == 0 && source_count == 0 {
+        return Err(ApiError::not_found(
+            "external_integration_not_found",
+            format!("external integration {integration_id} was not found"),
+        ));
+    }
+
+    Ok(Json(ExternalIntegrationControlResponse {
+        accepted: true,
+        integration_id,
+        integration_kind: external_control_integration_kind(channel_count, source_count),
+        action: "rotate_secret".to_string(),
+        status: "rotation_requested".to_string(),
+        message: "secret rotation request recorded; secret material is not exposed".to_string(),
+        affected_action_count: 0,
+        sync_run_id: None,
+        workflow_execution: None,
+        enqueued_tasks: Vec::new(),
+    }))
+}
+
 async fn external_channel_connection_exists(
     state: &AppState,
     integration_id: &str,
@@ -6913,6 +7079,183 @@ async fn external_source_connection_exists(
     .await
     .map_err(|error| ApiError::from_storage(anyhow::Error::new(error)))?;
     Ok(exists)
+}
+
+fn external_control_reason_present(reason: Option<&str>) -> bool {
+    reason.map(str::trim).is_some_and(|value| !value.is_empty())
+}
+
+fn external_control_integration_kind(channel_count: u64, source_count: u64) -> String {
+    match (channel_count > 0, source_count > 0) {
+        (true, true) => "mixed".to_string(),
+        (true, false) => "channel".to_string(),
+        (false, true) => "source".to_string(),
+        (false, false) => "unknown".to_string(),
+    }
+}
+
+fn external_control_config_patch(action: &str, reason_present: bool, now: DateTime<Utc>) -> Value {
+    json!({
+        "management_control": {
+            "last_action": action,
+            "reason_present": reason_present,
+            "updated_at": now,
+            "secret_material_included": false,
+        }
+    })
+}
+
+async fn disable_external_channel_connection(
+    state: &AppState,
+    integration_id: &str,
+    reason_present: bool,
+    now: DateTime<Utc>,
+) -> std::result::Result<u64, ApiError> {
+    let result = sqlx::query(
+        r#"
+        update external_channel_connections
+        set status = 'disabled',
+            health_status = 'disabled',
+            disabled_at = coalesce(disabled_at, $3),
+            config_redacted = config_redacted || $4,
+            updated_at = $3
+        where tenant_id = $1 and id = $2
+        "#,
+    )
+    .bind(state.tenant_id.0)
+    .bind(integration_id)
+    .bind(now)
+    .bind(external_control_config_patch(
+        "disable",
+        reason_present,
+        now,
+    ))
+    .execute(state.storage.pool())
+    .await
+    .map_err(|error| ApiError::from_storage(anyhow::Error::new(error)))?;
+    Ok(result.rows_affected())
+}
+
+async fn disable_external_source_connection(
+    state: &AppState,
+    integration_id: &str,
+    reason_present: bool,
+    now: DateTime<Utc>,
+) -> std::result::Result<u64, ApiError> {
+    let result = sqlx::query(
+        r#"
+        update external_source_connections
+        set health_status = 'disabled',
+            disabled_at = coalesce(disabled_at, $3),
+            config_redacted = config_redacted || $4,
+            updated_at = $3
+        where tenant_id = $1 and id = $2
+        "#,
+    )
+    .bind(state.tenant_id.0)
+    .bind(integration_id)
+    .bind(now)
+    .bind(external_control_config_patch(
+        "disable",
+        reason_present,
+        now,
+    ))
+    .execute(state.storage.pool())
+    .await
+    .map_err(|error| ApiError::from_storage(anyhow::Error::new(error)))?;
+    Ok(result.rows_affected())
+}
+
+async fn mark_external_channel_secret_rotation(
+    state: &AppState,
+    integration_id: &str,
+    reason_present: bool,
+    now: DateTime<Utc>,
+) -> std::result::Result<u64, ApiError> {
+    let result = sqlx::query(
+        r#"
+        update external_channel_connections
+        set config_redacted = config_redacted || $4,
+            updated_at = $3
+        where tenant_id = $1 and id = $2
+        "#,
+    )
+    .bind(state.tenant_id.0)
+    .bind(integration_id)
+    .bind(now)
+    .bind(external_control_config_patch(
+        "rotate_secret",
+        reason_present,
+        now,
+    ))
+    .execute(state.storage.pool())
+    .await
+    .map_err(|error| ApiError::from_storage(anyhow::Error::new(error)))?;
+    Ok(result.rows_affected())
+}
+
+async fn mark_external_source_secret_rotation(
+    state: &AppState,
+    integration_id: &str,
+    reason_present: bool,
+    now: DateTime<Utc>,
+) -> std::result::Result<u64, ApiError> {
+    let result = sqlx::query(
+        r#"
+        update external_source_connections
+        set config_redacted = config_redacted || $4,
+            updated_at = $3
+        where tenant_id = $1 and id = $2
+        "#,
+    )
+    .bind(state.tenant_id.0)
+    .bind(integration_id)
+    .bind(now)
+    .bind(external_control_config_patch(
+        "rotate_secret",
+        reason_present,
+        now,
+    ))
+    .execute(state.storage.pool())
+    .await
+    .map_err(|error| ApiError::from_storage(anyhow::Error::new(error)))?;
+    Ok(result.rows_affected())
+}
+
+async fn retry_external_channel_action_runs(
+    state: &AppState,
+    integration_id: &str,
+    now: DateTime<Utc>,
+) -> std::result::Result<i64, ApiError> {
+    let rows = sqlx::query(
+        r#"
+        select id
+        from external_action_runs
+        where tenant_id = $1
+          and requester_summary ->> 'channel_connection_id' = $2
+          and external_request_id is null
+          and confirmation_state in ('not_required', 'confirmed')
+          and result_summary ->> 'status' in ('dispatch_blocked', 'dispatch_failed')
+        order by updated_at desc
+        limit 10
+        "#,
+    )
+    .bind(state.tenant_id.0)
+    .bind(integration_id)
+    .fetch_all(state.storage.pool())
+    .await
+    .map_err(|error| ApiError::from_storage(anyhow::Error::new(error)))?;
+
+    let mut attempted = 0;
+    for row in rows {
+        let action_id: String = row.get("id");
+        let outcome =
+            dispatch_external_action_run_if_ready(state, integration_id, &action_id, now).await?;
+        if outcome.status != "already_dispatched" && outcome.status != "waiting_confirmation" {
+            attempted += 1;
+        }
+    }
+    Ok(attempted)
 }
 
 async fn load_external_channel_audit_items(
@@ -7149,7 +7492,16 @@ async fn create_external_source_sync(
         .await?;
     }
 
-    let source = load_external_source_connection(&state, &source_id).await?;
+    let response = enqueue_external_source_sync(&state, &source_id, request).await?;
+    Ok((StatusCode::ACCEPTED, Json(response)))
+}
+
+async fn enqueue_external_source_sync(
+    state: &AppState,
+    source_id: &str,
+    request: CreateExternalSourceSyncRequest,
+) -> std::result::Result<CreateExternalSourceSyncResponse, ApiError> {
+    let source = load_external_source_connection(state, source_id).await?;
     if source.disabled_at.is_some() {
         return Err(ApiError::forbidden(
             "external_source_disabled",
@@ -7162,10 +7514,10 @@ async fn create_external_source_sync(
     let connector_context =
         normalize_external_source_sync_object(request.connector_context, "connector_context")?;
     let sync_run_id = Uuid::new_v4();
-    create_external_sync_run(&state, sync_run_id, &source, &sync_kind, &checkpoint).await?;
+    create_external_sync_run(state, sync_run_id, &source, &sync_kind, &checkpoint).await?;
 
     let workflow_execution = build_initial_external_source_sync_execution(
-        &state,
+        state,
         &source,
         sync_run_id,
         &sync_kind,
@@ -7194,20 +7546,17 @@ async fn create_external_source_sync(
         WorkflowSignal::Start,
     )
     .await?;
-    update_external_sync_run_started(&state, sync_run_id, &started).await?;
+    update_external_sync_run_started(state, sync_run_id, &started).await?;
 
-    Ok((
-        StatusCode::ACCEPTED,
-        Json(CreateExternalSourceSyncResponse {
-            accepted: true,
-            source_id: source.source_id,
-            sync_run_id: sync_run_id.to_string(),
-            sync_kind,
-            status: "running".to_string(),
-            workflow_execution: started.execution,
-            enqueued_tasks: started.enqueued_tasks,
-        }),
-    ))
+    Ok(CreateExternalSourceSyncResponse {
+        accepted: true,
+        source_id: source.source_id,
+        sync_run_id: sync_run_id.to_string(),
+        sync_kind,
+        status: "running".to_string(),
+        workflow_execution: started.execution,
+        enqueued_tasks: started.enqueued_tasks,
+    })
 }
 
 async fn ingest_external_channel_event(
@@ -29164,6 +29513,33 @@ mod tests {
         assert!(!summary_text.contains("secret-token"));
         assert!(!summary_text.contains("Bearer secret"));
         assert!(!summary_text.contains("secret-cookie"));
+    }
+
+    #[test]
+    fn external_control_config_patch_never_stores_operator_reason_text() {
+        let now = Utc::now();
+        let patch = external_control_config_patch("rotate_secret", true, now);
+        let patch_text = patch.to_string();
+
+        assert_eq!(
+            patch["management_control"]["last_action"],
+            json!("rotate_secret")
+        );
+        assert_eq!(patch["management_control"]["reason_present"], json!(true));
+        assert_eq!(
+            patch["management_control"]["secret_material_included"],
+            json!(false)
+        );
+        assert!(!patch_text.contains("operator"));
+        assert!(!patch_text.contains("secret-token"));
+    }
+
+    #[test]
+    fn external_control_integration_kind_tracks_mixed_connections() {
+        assert_eq!(external_control_integration_kind(1, 0), "channel");
+        assert_eq!(external_control_integration_kind(0, 1), "source");
+        assert_eq!(external_control_integration_kind(1, 1), "mixed");
+        assert_eq!(external_control_integration_kind(0, 0), "unknown");
     }
 
     async fn insert_generic_external_channel_connection(state: &AppState, connection_id: &str) {

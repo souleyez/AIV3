@@ -49,6 +49,41 @@ export function normalizeAuditItem(raw = {}) {
   };
 }
 
+export function normalizeControlResult(raw = {}) {
+  return {
+    accepted: Boolean(raw.accepted),
+    integrationId: String(raw.integration_id || ''),
+    integrationKind: String(raw.integration_kind || 'unknown'),
+    action: String(raw.action || 'control'),
+    status: String(raw.status || 'unknown'),
+    message: String(raw.message || ''),
+    affectedActionCount: numberOrZero(raw.affected_action_count),
+    syncRunId: raw.sync_run_id || null,
+    enqueuedTaskCount: Array.isArray(raw.enqueued_tasks) ? raw.enqueued_tasks.length : 0,
+  };
+}
+
+export function controlResultLabel(result) {
+  if (!result?.accepted) {
+    return '操作未受理';
+  }
+  if (result.action === 'retry' && result.syncRunId) {
+    return `同步已入队：${result.syncRunId}`;
+  }
+  if (result.action === 'retry') {
+    return result.affectedActionCount > 0
+      ? `已尝试重试 ${result.affectedActionCount} 个动作`
+      : '暂无可重试动作';
+  }
+  if (result.action === 'disable') {
+    return '集成已停用';
+  }
+  if (result.action === 'rotate_secret') {
+    return '密钥轮换请求已记录';
+  }
+  return result.message || '操作已受理';
+}
+
 export function integrationSignal(integration = {}) {
   if (String(integration.status || '').toLowerCase() === 'disabled') {
     return 'disabled';

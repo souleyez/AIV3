@@ -681,6 +681,24 @@ GET /v1/external/integrations/{integration_id}/audit
 
 返回该集成相关的消息、动作和同步记录时间线。动作记录会展示确认状态、派发状态、派发原因、鉴权模式、HTTP 状态和脱敏响应摘要。嵌套摘要中的 `token`、`secret`、`authorization`、`cookie`、`password` 等敏感键会被移除。
 
+```http
+POST /v1/external/integrations/{integration_id}/retry
+```
+
+资料源集成会入队一次增量同步；聊天通道集成会尝试重试最近处于 `dispatch_blocked` 或 `dispatch_failed` 的、已经确认或无需确认的外部动作。真正的后台 worker 化重试调度仍属于后续增强项。
+
+```http
+POST /v1/external/integrations/{integration_id}/disable
+```
+
+停用聊天通道或资料源连接。停用后的聊天通道会拒绝后续入站事件；停用后的资料源会拒绝新的同步任务。
+
+```http
+POST /v1/external/integrations/{integration_id}/rotate-secret
+```
+
+记录一次密钥轮换请求标记。该接口不会在公开响应、观测页面或配置摘要中返回原始密钥材料。
+
 ## 16. 错误格式
 
 错误响应统一使用：

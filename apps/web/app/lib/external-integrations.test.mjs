@@ -4,8 +4,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {
   buildThirdPartyApiUrl,
+  controlResultLabel,
   formatObservationTime,
   latestIntegrationActivity,
+  normalizeControlResult,
   normalizeAuditItem,
   normalizeIntegrationSummary,
   signalLabel,
@@ -55,6 +57,23 @@ test('normalizeAuditItem keeps redacted summary shape stable', () => {
   assert.equal(item.actionId, 'act-001');
   assert.equal(item.summary.dispatch_reason, 'dispatch_auth_missing');
   assert.notEqual(formatObservationTime(item.createdAt), '无记录');
+});
+
+test('normalizeControlResult summarizes management control responses', () => {
+  const result = normalizeControlResult({
+    accepted: true,
+    integration_id: 'src-docs',
+    integration_kind: 'source',
+    action: 'retry',
+    status: 'running',
+    affected_action_count: 0,
+    sync_run_id: 'sync-run-001',
+    enqueued_tasks: [{ task_id: 'task-1' }],
+  });
+
+  assert.equal(result.integrationId, 'src-docs');
+  assert.equal(result.enqueuedTaskCount, 1);
+  assert.equal(controlResultLabel(result), '同步已入队：sync-run-001');
 });
 
 test('external integrations page does not include direct home navigation links', () => {

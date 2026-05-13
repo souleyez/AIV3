@@ -3,8 +3,10 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   buildThirdPartyApiUrl,
+  controlResultLabel,
   formatObservationTime,
   latestIntegrationActivity,
+  normalizeControlResult,
   normalizeAuditItem,
   normalizeIntegrationSummary,
   signalLabel,
@@ -13,10 +15,18 @@ import {
 
 const REFRESH_INTERVAL_MS = 15000;
 
-async function fetchJson(pathname) {
+async function fetchJson(pathname, options = {}) {
+  const headers = { accept: 'application/json', ...(options.headers || {}) };
+  let body = options.body;
+  if (body && typeof body === 'object' && !(body instanceof FormData)) {
+    headers['content-type'] = 'application/json';
+    body = JSON.stringify(body);
+  }
   const response = await fetch(pathname, {
+    method: options.method || 'GET',
     cache: 'no-store',
-    headers: { accept: 'application/json' },
+    headers,
+    body,
   });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
@@ -45,6 +55,8 @@ export default function ExternalIntegrationsPageClient() {
   const [loading, setLoading] = useState(true);
   const [auditLoading, setAuditLoading] = useState(false);
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+  const [controlBusy, setControlBusy] = useState('');
   const [updatedAt, setUpdatedAt] = useState(null);
 
   async function loadIntegrations({ silent = false } = {}) {
@@ -80,6 +92,36 @@ export default function ExternalIntegrationsPageClient() {
       setAuditItems([]);
     } finally {
       setAuditLoading(false);
+    }
+  }
+
+  async function handleControl(action) {
+    if (!selected || controlBusy) {
+      return;
+    }
+    const endpoint = action === 'rotate_secret' ? 'rotate-secret' : action;
+    const busyKey = `${action}:${selected.id}`;
+    setControlBusy(busyKey);
+    setError('');
+    setNotice('');
+    try {
+      const result = normalizeControlResult(await fetchJson(
+        `/api/v3/external/integrations/${encodeURIComponent(selected.id)}/${endpoint}`,
+        {
+          method: 'POST',
+          body: {
+            reason: `web_external_integrations_${action}`,
+            sync_kind: selected.kind === 'source' && action === 'retry' ? 'incremental' : undefined,
+          },
+        },
+      ));
+      setNotice(controlResultLabel(result));
+      await loadIntegrations({ silent: true });
+      await loadAudit(selected.id);
+    } catch (controlError) {
+      setError(controlError instanceof Error ? controlError.message : '外部集成操作失败');
+    } finally {
+      setControlBusy('');
     }
   }
 
@@ -150,6 +192,7 @@ export default function ExternalIntegrationsPageClient() {
       </section>
 
       {error ? <div className="external-error-line">{error}</div> : null}
+      {notice ? <div className="external-notice-line">{notice}</div> : null}
 
       <section className="external-dashboard-grid">
         <div className="external-panel external-list-panel">
@@ -207,6 +250,32 @@ export default function ExternalIntegrationsPageClient() {
 
           {selected ? (
             <>
+              <div className="external-control-row" aria-label="外部集成管理操作">
+                <button
+                  type="button"
+                  className="external-control-button"
+                  disabled={Boolean(controlBusy)}
+                  onClick={() => handleControl('retry')}
+                >
+                  {controlBusy === `retry:${selected.id}` ? '重试中' : selected.kind === 'source' ? '重试同步' : '重试动作'}
+                </button>
+                <button
+                  type="button"
+                  className="external-control-button"
+                  disabled={Boolean(controlBusy)}
+                  onClick={() => handleControl('rotate_secret')}
+                >
+                  {controlBusy === `rotate_secret:${selected.id}` ? '记录中' : '标记轮换'}
+                </button>
+                <button
+                  type="button"
+                  className="external-control-button external-control-danger"
+                  disabled={Boolean(controlBusy) || selected.signal === 'disabled'}
+                  onClick={() => handleControl('disable')}
+                >
+                  {controlBusy === `disable:${selected.id}` ? '停用中' : '停用'}
+                </button>
+              </div>
               <div className="external-detail-strip">
                 <div>
                   <span>健康</span>

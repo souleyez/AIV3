@@ -24,7 +24,8 @@
 - Phase 7 fourth checkpoint now hardens outbound external action dispatch with dispatch-specific bearer/signature credentials, HMAC request headers, and auditable `dispatch_auth_missing` / `dispatch_auth_invalid` blocked states. V3 does not reuse platform callback tokens for action dispatch.
 - Phase 7 fifth checkpoint now exposes observe-first read APIs for external integrations and redacted audit timelines, including channel/source health, last activity, pending/blocked/failed/dispatched action counters, and sanitized action/message/sync summaries for the management UI.
 - Phase 7 sixth checkpoint now wires a standalone external integrations observability page, host-routes `v3.elepcloud.com` to that panel without main-workspace navigation links, and exposes same-domain `/v1/...` proxy paths so third-party API examples default to `https://v3.elepcloud.com`.
-- Next implementation checkpoint: move external action dispatch into retryable worker execution and add management retry/disable controls on top of the observe-first panel.
+- Phase 8 first checkpoint now adds limited management controls to the observe-first panel and API: source retry sync, channel action retry attempts, disable, and secret-rotation request markers, all using redacted responses.
+- Next implementation checkpoint: move external action dispatch retries into dedicated retryable worker execution and expand permission-drift/source-recovery signals on the panel.
 
 ---
 
@@ -427,7 +428,7 @@ It should not ask operators to manually label documents, rewrite permissions, or
 **Steps:**
 1. Add a directory entry for external integrations without changing the global shell.
 2. Show health, sync, permission drift, message/audit, and pending confirmation summaries.
-3. Add disable, retry, resync, and rotate-secret affordances.
+3. Done: Add disable, retry/resync, and rotate-secret affordances to the standalone observe-first panel and API.
 4. Avoid a new chat composer or manual document-curation workflow.
 5. Commit `Add external integrations observability UI`.
 

@@ -5323,6 +5323,17 @@ body {
   font-weight: 700;
 }
 
+.external-notice-line {
+  width: min(1480px, 100%);
+  margin: 0 auto 12px;
+  padding: 10px 12px;
+  border: 1px solid #9cc2ad;
+  border-radius: 8px;
+  background: #eef8f1;
+  color: #145c37;
+  font-weight: 700;
+}
+
 .external-dashboard-grid {
   width: min(1480px, 100%);
   margin: 0 auto;
@@ -5480,6 +5491,42 @@ body {
   font-size: 12px;
 }
 
+.external-control-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  padding: 14px 14px 0;
+}
+
+.external-control-button {
+  min-width: 0;
+  min-height: 34px;
+  padding: 8px 10px;
+  border: 1px solid #9ba7b4;
+  border-radius: 6px;
+  background: #f8fafc;
+  color: #1f2937;
+  font-size: 12px;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
+.external-control-button:hover:not(:disabled) {
+  border-color: #1f2937;
+  background: #eef2f7;
+}
+
+.external-control-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.56;
+}
+
+.external-control-danger {
+  border-color: #d29a8d;
+  background: #fff4f0;
+  color: #9f2d18;
+}
+
 .external-detail-strip {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -5583,7 +5630,8 @@ body {
   }
 
   .external-hero-metrics,
-  .external-detail-strip {
+  .external-detail-strip,
+  .external-control-row {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
