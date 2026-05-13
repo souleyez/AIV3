@@ -64,6 +64,28 @@ test("rejects extraction manifest entries pointing at unexpected file names", ()
   assert.ok(result.errors.some((error) => error.code === "extraction_manifest_missing_file" && error.kind === "slide_notes"));
 });
 
+test("rejects public manifest entries without redacted paths", () => {
+  const sessionDir = createCompleteDeliverables();
+  const finalManifestPath = path.join(sessionDir, "generated_artifacts", "final_deliverables_manifest.json");
+  const finalManifest = JSON.parse(fs.readFileSync(finalManifestPath, "utf8"));
+  finalManifest.final_outputs[0].path = "generated_artifacts/video_slides_screenshot_based.pptx";
+  finalManifest.final_outputs[0].path_redacted = false;
+  fs.writeFileSync(finalManifestPath, JSON.stringify(finalManifest, null, 2));
+
+  const extractionManifestPath = path.join(sessionDir, "generated_artifacts", "extraction_artifacts_manifest.json");
+  const extractionManifest = JSON.parse(fs.readFileSync(extractionManifestPath, "utf8"));
+  const slideNotes = extractionManifest.files.find((file) => file.artifact_kind === "slide_notes");
+  slideNotes.path = "generated_artifacts/slide_notes.md";
+  delete slideNotes.path_redacted;
+  fs.writeFileSync(extractionManifestPath, JSON.stringify(extractionManifest, null, 2));
+
+  const result = validateVideoDeliverables(sessionDir);
+
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.some((error) => error.code === "manifest_file_path_not_redacted" && error.kind === "pptx"));
+  assert.ok(result.errors.some((error) => error.code === "manifest_file_path_not_redacted" && error.kind === "slide_notes"));
+});
+
 test("rejects malformed pptx containers", () => {
   const sessionDir = createCompleteDeliverables();
   fs.writeFileSync(path.join(sessionDir, "generated_artifacts", "video_slides_screenshot_based.pptx"), "not a pptx");
@@ -110,6 +132,7 @@ function createCompleteDeliverables() {
     artifact_kind: kind,
     file_name: fileNameForKind(kind),
     path: "[redacted]",
+    path_redacted: true,
   }));
 
   fs.writeFileSync(

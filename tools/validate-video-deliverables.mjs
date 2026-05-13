@@ -150,8 +150,11 @@ function validateFinalManifest(manifest, errors, warnings) {
     warnings.push(issue("deliverable_state_not_final", `deliverable state is ${state || "missing"}`));
   }
   for (const file of REQUIRED_FILES) {
-    if (!groupContainsFile(manifest[file.group], file)) {
+    const entry = findFileEntry(manifest[file.group], file);
+    if (!entry) {
       errors.push(issue("final_manifest_group_missing_file", `${file.group} does not include ${file.kind} ${file.fileName}`, file.kind));
+    } else {
+      validatePublicManifestFileEntry(entry, file, "final_deliverables_manifest", errors);
     }
   }
   validateRedactedJson(manifest, "final_deliverables_manifest", errors);
@@ -160,8 +163,11 @@ function validateFinalManifest(manifest, errors, warnings) {
 function validateExtractionManifest(manifest, errors) {
   const files = Array.isArray(manifest.files) ? manifest.files : [];
   for (const file of REQUIRED_FILES) {
-    if (!files.some((entry) => entryMatchesFile(entry, file))) {
+    const entry = findFileEntry(files, file);
+    if (!entry) {
       errors.push(issue("extraction_manifest_missing_file", `extraction manifest does not include ${file.kind} ${file.fileName}`, file.kind));
+    } else {
+      validatePublicManifestFileEntry(entry, file, "extraction_artifacts_manifest", errors);
     }
   }
   validateRedactedJson(manifest, "extraction_artifacts_manifest", errors);
@@ -177,8 +183,14 @@ function validateRedactedJson(value, kind, errors) {
   }
 }
 
-function groupContainsFile(group, file) {
-  return Array.isArray(group) && group.some((entry) => entryMatchesFile(entry, file));
+function validatePublicManifestFileEntry(entry, file, manifestKind, errors) {
+  if (entry?.path !== "[redacted]" || entry?.path_redacted !== true) {
+    errors.push(issue("manifest_file_path_not_redacted", `${manifestKind} ${file.kind} path is not redacted`, file.kind));
+  }
+}
+
+function findFileEntry(entries, file) {
+  return Array.isArray(entries) ? entries.find((entry) => entryMatchesFile(entry, file)) : undefined;
 }
 
 function entryMatchesFile(entry, file) {
