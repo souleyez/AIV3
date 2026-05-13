@@ -122,6 +122,10 @@ export function validateVideoDeliverables(inputPath) {
   if (subtitlePageMap) {
     validateRedactedJson(subtitlePageMap, "subtitle_page_map", errors);
   }
+  const slideNotes = files.find((file) => file.kind === "slide_notes");
+  if (slideNotes?.exists) {
+    validateRedactedTextFile(slideNotes.path, "slide_notes", errors);
+  }
 
   return {
     ok: errors.length === 0,
@@ -174,7 +178,18 @@ function validateExtractionManifest(manifest, errors) {
 }
 
 function validateRedactedJson(value, kind, errors) {
-  const text = JSON.stringify(value);
+  validateRedactedText(JSON.stringify(value), kind, errors);
+}
+
+function validateRedactedTextFile(filePath, kind, errors) {
+  try {
+    validateRedactedText(fs.readFileSync(filePath, "utf8"), kind, errors);
+  } catch (error) {
+    errors.push(issue("text_file_read_failed", `${kind} text read failed: ${error.message}`, kind));
+  }
+}
+
+function validateRedactedText(text, kind, errors) {
   for (const pattern of LOCAL_PATH_PATTERNS) {
     if (pattern.test(text)) {
       errors.push(issue("unredacted_local_path_or_token", `${kind} contains an unredacted local path or token-like URL`, kind));

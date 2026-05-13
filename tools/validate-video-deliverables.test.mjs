@@ -110,6 +110,19 @@ test("rejects unredacted local paths in public JSON", () => {
   assert.ok(result.errors.some((error) => error.code === "unredacted_local_path_or_token" && error.kind === "subtitle_page_map"));
 });
 
+test("rejects unredacted local paths in slide notes", () => {
+  const sessionDir = createCompleteDeliverables();
+  fs.writeFileSync(
+    path.join(sessionDir, "generated_artifacts", "slide_notes.md"),
+    "Internal frame path: C:\\private\\video\\frame_000001.jpg",
+  );
+
+  const result = validateVideoDeliverables(sessionDir);
+
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.some((error) => error.code === "unredacted_local_path_or_token" && error.kind === "slide_notes"));
+});
+
 function createCompleteDeliverables() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "aidp-v3-video-deliverables-test-"));
   const artifactsDir = path.join(root, "generated_artifacts");

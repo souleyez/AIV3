@@ -36,7 +36,7 @@ The media-worker test builds a controlled sample path in a temporary directory. 
 - `subtitle_page_map.json`
 - final manifest status flags and output groups
 - extraction manifest file-kind coverage
-- public JSON redaction for local paths and token-like URLs
+- public manifest, JSON, and Markdown redaction for local paths and token-like URLs
 
 ## Jump-Host Smoke Check
 
