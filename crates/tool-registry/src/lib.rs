@@ -631,6 +631,138 @@ pub fn bootstrap_default_tool_registry() -> InMemoryToolRegistry {
             "required": ["status", "artifacts", "html_artifacts", "no_host_composed_answer"]
         }),
     ));
+    registry.register(ToolDefinition::internal(
+        "external_artifact.status",
+        "External Artifact Status",
+        "external_action",
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "connection_id": { "type": "string" },
+                "target_system": { "type": "string" },
+                "artifact_ref": { "type": ["string", "null"] },
+                "risk_level": {
+                    "type": "string",
+                    "enum": external_action_risk_levels()
+                },
+                "requires_confirmation": { "type": "boolean" },
+                "arguments_redacted": { "type": "object" },
+                "source_evidence_refs": {
+                    "type": "array",
+                    "items": { "type": "string" }
+                },
+                "idempotency_key": { "type": "string" }
+            },
+            "required": [
+                "connection_id",
+                "target_system",
+                "risk_level",
+                "requires_confirmation",
+                "arguments_redacted"
+            ]
+        }),
+        external_action_output_schema(),
+    ));
+    registry.register(ToolDefinition::internal(
+        "external_artifact.publish",
+        "External Artifact Publish",
+        "external_action",
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "connection_id": { "type": "string" },
+                "target_system": { "type": "string" },
+                "artifact_ref": { "type": "string" },
+                "risk_level": {
+                    "type": "string",
+                    "enum": external_action_risk_levels()
+                },
+                "requires_confirmation": { "type": "boolean" },
+                "arguments_redacted": { "type": "object" },
+                "source_evidence_refs": {
+                    "type": "array",
+                    "items": { "type": "string" }
+                },
+                "idempotency_key": { "type": "string" }
+            },
+            "required": [
+                "connection_id",
+                "target_system",
+                "artifact_ref",
+                "risk_level",
+                "requires_confirmation",
+                "arguments_redacted"
+            ]
+        }),
+        external_action_output_schema(),
+    ));
+    registry.register(ToolDefinition::internal(
+        "external_artifact.revoke",
+        "External Artifact Revoke",
+        "external_action",
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "connection_id": { "type": "string" },
+                "target_system": { "type": "string" },
+                "artifact_ref": { "type": "string" },
+                "risk_level": {
+                    "type": "string",
+                    "enum": external_action_risk_levels()
+                },
+                "requires_confirmation": { "type": "boolean" },
+                "confirmation_reason": { "type": "string" },
+                "arguments_redacted": { "type": "object" },
+                "source_evidence_refs": {
+                    "type": "array",
+                    "items": { "type": "string" }
+                },
+                "idempotency_key": { "type": "string" }
+            },
+            "required": [
+                "connection_id",
+                "target_system",
+                "artifact_ref",
+                "risk_level",
+                "requires_confirmation",
+                "arguments_redacted"
+            ]
+        }),
+        external_action_output_schema(),
+    ));
+    registry.register(ToolDefinition::internal(
+        "external_business_action.invoke",
+        "External Business Action Invoke",
+        "external_action",
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "connection_id": { "type": "string" },
+                "target_system": { "type": "string" },
+                "business_action_type": { "type": "string" },
+                "risk_level": {
+                    "type": "string",
+                    "enum": external_action_risk_levels()
+                },
+                "requires_confirmation": { "type": "boolean" },
+                "arguments_redacted": { "type": "object" },
+                "source_evidence_refs": {
+                    "type": "array",
+                    "items": { "type": "string" }
+                },
+                "idempotency_key": { "type": "string" }
+            },
+            "required": [
+                "connection_id",
+                "target_system",
+                "business_action_type",
+                "risk_level",
+                "requires_confirmation",
+                "arguments_redacted"
+            ]
+        }),
+        external_action_output_schema(),
+    ));
     registry.register(ToolDefinition::cli(
         "memory_directory.refresh",
         "Memory Directory Refresh",
@@ -768,6 +900,48 @@ pub fn bootstrap_default_tool_registry() -> InMemoryToolRegistry {
 
 pub fn find_default_tool(key: &str) -> Option<ToolDefinition> {
     bootstrap_default_tool_registry().get(key).cloned()
+}
+
+fn external_action_risk_levels() -> Value {
+    serde_json::json!([
+        "read_only",
+        "low_risk_write",
+        "high_risk_write",
+        "cross_system"
+    ])
+}
+
+fn external_action_output_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "status": {
+                "type": "string",
+                "enum": [
+                    "planned",
+                    "requires_confirmation",
+                    "queued",
+                    "completed",
+                    "failed"
+                ]
+            },
+            "external_action_intent": { "type": "object" },
+            "confirmation_state": {
+                "type": "string",
+                "enum": ["not_required", "pending", "confirmed", "rejected"]
+            },
+            "external_request_id": { "type": ["string", "null"] },
+            "result_summary": { "type": ["object", "null"] },
+            "failure_kind": { "type": ["string", "null"] },
+            "no_host_direct_write": { "type": "boolean" }
+        },
+        "required": [
+            "status",
+            "external_action_intent",
+            "confirmation_state",
+            "no_host_direct_write"
+        ]
+    })
 }
 
 pub fn find_default_tool_snapshot_value(key: &str) -> Option<Value> {
@@ -930,6 +1104,96 @@ mod tests {
             assert_eq!(tool.invocation_mode, ToolInvocationMode::Internal);
             assert!(tool.cli.is_none());
         }
+    }
+
+    #[test]
+    fn bootstrap_default_tool_registry_registers_external_action_internal_tools() {
+        let registry = bootstrap_default_tool_registry();
+
+        for key in [
+            "external_artifact.status",
+            "external_artifact.publish",
+            "external_artifact.revoke",
+            "external_business_action.invoke",
+        ] {
+            let tool = registry
+                .get(key)
+                .expect("external action tool should be registered");
+            assert_eq!(tool.invocation_mode, ToolInvocationMode::Internal);
+            assert_eq!(tool.scope_policy, "external_action");
+            assert!(tool.cli.is_none());
+        }
+        assert_eq!(registry.list_cli().len(), 12);
+    }
+
+    #[test]
+    fn external_action_tools_expose_redacted_risk_and_confirmation_contracts() {
+        let registry = bootstrap_default_tool_registry();
+        let status = registry
+            .get("external_artifact.status")
+            .expect("status action should be registered");
+        let publish = registry
+            .get("external_artifact.publish")
+            .expect("publish action should be registered");
+        let revoke = registry
+            .get("external_artifact.revoke")
+            .expect("revoke action should be registered");
+        let business = registry
+            .get("external_business_action.invoke")
+            .expect("business action should be registered");
+
+        assert_eq!(
+            status.input_schema["properties"]["risk_level"]["enum"],
+            json!([
+                "read_only",
+                "low_risk_write",
+                "high_risk_write",
+                "cross_system"
+            ])
+        );
+        assert_eq!(
+            publish.input_schema["required"],
+            json!([
+                "connection_id",
+                "target_system",
+                "artifact_ref",
+                "risk_level",
+                "requires_confirmation",
+                "arguments_redacted"
+            ])
+        );
+        assert!(publish
+            .input_schema
+            .pointer("/properties/arguments")
+            .is_none());
+        assert_eq!(
+            revoke.input_schema["properties"]["confirmation_reason"]["type"],
+            json!("string")
+        );
+        assert_eq!(
+            business.input_schema["required"],
+            json!([
+                "connection_id",
+                "target_system",
+                "business_action_type",
+                "risk_level",
+                "requires_confirmation",
+                "arguments_redacted"
+            ])
+        );
+        assert_eq!(
+            business.output_schema["properties"]["no_host_direct_write"]["type"],
+            json!("boolean")
+        );
+        assert_eq!(
+            business.output_schema["required"],
+            json!([
+                "status",
+                "external_action_intent",
+                "confirmation_state",
+                "no_host_direct_write"
+            ])
+        );
     }
 
     #[test]

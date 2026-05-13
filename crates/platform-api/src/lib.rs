@@ -11634,9 +11634,9 @@ fn assistant_run_codex_media_summary_chars(items: &[Value]) -> usize {
 }
 
 fn assistant_run_codex_action_contracts(
-    _selected_scope: &Value,
+    selected_scope: &Value,
 ) -> Vec<AssistantRunCodexActionContractView> {
-    vec![
+    let mut actions = vec![
         AssistantRunCodexActionContractView::new(
             "retrieve_evidence",
             "检索供料证据",
@@ -11793,7 +11793,109 @@ fn assistant_run_codex_action_contracts(
             json!({"type": "object", "properties": {"answer": {"type": "string"}}}),
             false,
         ),
-    ]
+    ];
+
+    if selected_scope.get("type").and_then(Value::as_str) == Some("external_channel") {
+        actions.extend([
+            AssistantRunCodexActionContractView::new(
+                "external_artifact.status",
+                "查询第三方产物状态",
+                "只读查询第三方产物或投递请求状态；不得直接写第三方系统。",
+                assistant_run_codex_external_action_schema(false, false),
+                false,
+            ),
+            AssistantRunCodexActionContractView::new(
+                "external_artifact.publish",
+                "发布第三方产物",
+                "通过 V3 校验、审计和幂等边界向第三方产物系统发布当前产物。",
+                assistant_run_codex_external_action_schema(true, false),
+                true,
+            ),
+            AssistantRunCodexActionContractView::new(
+                "external_artifact.revoke",
+                "撤回第三方产物",
+                "撤回或下线第三方产物，属于高风险写入，必须先通过原聊天通道或可信页面确认。",
+                assistant_run_codex_external_action_schema(true, true),
+                true,
+            ),
+            AssistantRunCodexActionContractView::new(
+                "external_business_action.invoke",
+                "执行第三方事务动作",
+                "跨系统业务动作只生成 V3 受控意图；高风险或跨系统写入必须确认后再执行。",
+                assistant_run_codex_external_business_action_schema(),
+                true,
+            ),
+        ]);
+    }
+
+    actions
+}
+
+fn assistant_run_codex_external_action_schema(
+    artifact_required: bool,
+    confirmation_required: bool,
+) -> Value {
+    let artifact_type = if artifact_required {
+        json!("string")
+    } else {
+        json!(["string", "null"])
+    };
+    json!({
+        "type": "object",
+        "properties": {
+            "connection_id": {"type": "string"},
+            "target_system": {"type": "string"},
+            "artifact_ref": {"type": artifact_type},
+            "risk_level": {
+                "type": "string",
+                "enum": ["read_only", "low_risk_write", "high_risk_write", "cross_system"]
+            },
+            "requires_confirmation": {"type": "boolean", "const": confirmation_required},
+            "arguments_redacted": {"type": "object"},
+            "source_evidence_refs": {
+                "type": "array",
+                "items": {"type": "string"}
+            },
+            "idempotency_key": {"type": "string"}
+        },
+        "required": [
+            "connection_id",
+            "target_system",
+            "risk_level",
+            "requires_confirmation",
+            "arguments_redacted"
+        ]
+    })
+}
+
+fn assistant_run_codex_external_business_action_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "connection_id": {"type": "string"},
+            "target_system": {"type": "string"},
+            "business_action_type": {"type": "string"},
+            "risk_level": {
+                "type": "string",
+                "enum": ["read_only", "low_risk_write", "high_risk_write", "cross_system"]
+            },
+            "requires_confirmation": {"type": "boolean", "const": true},
+            "arguments_redacted": {"type": "object"},
+            "source_evidence_refs": {
+                "type": "array",
+                "items": {"type": "string"}
+            },
+            "idempotency_key": {"type": "string"}
+        },
+        "required": [
+            "connection_id",
+            "target_system",
+            "business_action_type",
+            "risk_level",
+            "requires_confirmation",
+            "arguments_redacted"
+        ]
+    })
 }
 
 fn assistant_run_codex_execution_trail_entries(
@@ -28156,6 +28258,58 @@ mod tests {
         assert!(!payload_serialized.contains("MINIMAX_API_KEY"));
         assert!(!payload_serialized.contains("minimax-codex-shadow"));
         assert!(!trail_serialized.contains("MINIMAX_API_KEY"));
+    }
+
+    #[test]
+    fn assistant_run_codex_external_channel_scope_exposes_external_action_contracts() {
+        let selected_scope = json!({
+            "type": "external_channel",
+            "channel_connection_id": "channel-third-party-1",
+            "platform": "third_party",
+            "message_external_id": "msg-1"
+        });
+
+        let actions = assistant_run_codex_action_contracts(&selected_scope);
+
+        assert!(actions.iter().any(|action| {
+            action.action_type == "external_artifact.status" && !action.mutates_state
+        }));
+        assert!(actions.iter().any(|action| {
+            action.action_type == "external_artifact.publish" && action.mutates_state
+        }));
+        let revoke = actions
+            .iter()
+            .find(|action| action.action_type == "external_artifact.revoke")
+            .expect("revoke action should be available for external channel");
+        let business = actions
+            .iter()
+            .find(|action| action.action_type == "external_business_action.invoke")
+            .expect("business action should be available for external channel");
+
+        assert_eq!(
+            revoke.input_schema["properties"]["requires_confirmation"]["const"],
+            json!(true)
+        );
+        assert_eq!(
+            revoke.input_schema["properties"]["risk_level"]["enum"],
+            json!([
+                "read_only",
+                "low_risk_write",
+                "high_risk_write",
+                "cross_system"
+            ])
+        );
+        assert_eq!(
+            business.input_schema["required"],
+            json!([
+                "connection_id",
+                "target_system",
+                "business_action_type",
+                "risk_level",
+                "requires_confirmation",
+                "arguments_redacted"
+            ])
+        );
     }
 
     #[test]

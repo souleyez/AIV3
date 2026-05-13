@@ -219,6 +219,34 @@ pub enum ExternalActionRiskLevelView {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ExternalActionCapabilityView {
+    ArtifactPublish,
+    ArtifactRevoke,
+    ArtifactStatus,
+    BusinessAction,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ExternalActionConfirmationModeView {
+    NotRequired,
+    OriginalChannel,
+    TrustedCustomerPage,
+    SourceSystem,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ExternalActionPolicyView {
+    pub capability: ExternalActionCapabilityView,
+    pub action_type: String,
+    pub target_system: String,
+    pub risk_level: ExternalActionRiskLevelView,
+    pub requires_confirmation: bool,
+    pub confirmation_mode: ExternalActionConfirmationModeView,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ExternalActionIntentView {
     pub action_id: String,
     pub tenant_id: String,
@@ -3387,6 +3415,62 @@ mod tests {
             decoded_intent.risk_level,
             ExternalActionRiskLevelView::HighRiskWrite
         );
+    }
+
+    #[test]
+    fn external_action_policy_serializes_risk_and_confirmation_modes() {
+        let policies = vec![
+            ExternalActionPolicyView {
+                capability: ExternalActionCapabilityView::ArtifactStatus,
+                action_type: "external_artifact.status".to_string(),
+                target_system: "third_party_artifact_api".to_string(),
+                risk_level: ExternalActionRiskLevelView::ReadOnly,
+                requires_confirmation: false,
+                confirmation_mode: ExternalActionConfirmationModeView::NotRequired,
+            },
+            ExternalActionPolicyView {
+                capability: ExternalActionCapabilityView::ArtifactPublish,
+                action_type: "external_artifact.publish".to_string(),
+                target_system: "third_party_artifact_api".to_string(),
+                risk_level: ExternalActionRiskLevelView::LowRiskWrite,
+                requires_confirmation: false,
+                confirmation_mode: ExternalActionConfirmationModeView::NotRequired,
+            },
+            ExternalActionPolicyView {
+                capability: ExternalActionCapabilityView::ArtifactRevoke,
+                action_type: "external_artifact.revoke".to_string(),
+                target_system: "third_party_artifact_api".to_string(),
+                risk_level: ExternalActionRiskLevelView::HighRiskWrite,
+                requires_confirmation: true,
+                confirmation_mode: ExternalActionConfirmationModeView::OriginalChannel,
+            },
+            ExternalActionPolicyView {
+                capability: ExternalActionCapabilityView::BusinessAction,
+                action_type: "external_business_action.invoke".to_string(),
+                target_system: "third_party_business_api".to_string(),
+                risk_level: ExternalActionRiskLevelView::CrossSystem,
+                requires_confirmation: true,
+                confirmation_mode: ExternalActionConfirmationModeView::TrustedCustomerPage,
+            },
+        ];
+
+        let encoded = serde_json::to_value(&policies).expect("policies should serialize");
+
+        assert_eq!(encoded[0]["capability"], json!("artifact_status"));
+        assert_eq!(encoded[0]["risk_level"], json!("read_only"));
+        assert_eq!(encoded[0]["confirmation_mode"], json!("not_required"));
+        assert_eq!(encoded[1]["risk_level"], json!("low_risk_write"));
+        assert_eq!(encoded[2]["requires_confirmation"], json!(true));
+        assert_eq!(encoded[2]["confirmation_mode"], json!("original_channel"));
+        assert_eq!(encoded[3]["risk_level"], json!("cross_system"));
+        assert_eq!(
+            encoded[3]["confirmation_mode"],
+            json!("trusted_customer_page")
+        );
+
+        let decoded: Vec<ExternalActionPolicyView> =
+            serde_json::from_value(encoded).expect("policies should deserialize");
+        assert_eq!(decoded, policies);
     }
 
     #[test]

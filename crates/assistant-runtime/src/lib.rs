@@ -543,7 +543,11 @@ fn codex_executor_action_output_schema(package: &AssistantRunCodexContextPackage
                     },
                     "reason": {"type": "string"},
                     "confidence": {"type": "string", "enum": ["low", "medium", "high"]},
-                    "requires_confirmation": {"type": "boolean"}
+                    "requires_confirmation": {"type": "boolean"},
+                    "external_action_policy": {
+                        "type": ["object", "null"],
+                        "description": "Risk and confirmation policy for external artifact or business actions."
+                    }
                 },
                 "required": ["action_type", "reason"]
             },
@@ -657,6 +661,9 @@ fn codex_executor_suggest_action_type(
     {
         return Some("extract_video_ppt_transcript".to_string());
     }
+    if let Some(action_type) = codex_executor_external_action_type(package, &available) {
+        return Some(action_type);
+    }
     if available.contains("final_answer") {
         return Some("final_answer".to_string());
     }
@@ -687,17 +694,70 @@ fn codex_executor_scope_recommended_actions(
         .unwrap_or_default()
 }
 
+fn codex_executor_external_action_type(
+    package: &AssistantRunCodexContextPackageView,
+    available: &HashSet<&str>,
+) -> Option<String> {
+    if !codex_executor_is_external_channel_scope(package) {
+        return None;
+    }
+    let recommended_actions = codex_executor_scope_recommended_actions(package);
+    for action_type in [
+        "external_artifact.status",
+        "external_artifact.publish",
+        "external_artifact.revoke",
+        "external_business_action.invoke",
+    ] {
+        if recommended_actions.contains(action_type) && available.contains(action_type) {
+            return Some(action_type.to_string());
+        }
+    }
+
+    let prompt = package.user_prompt.as_str();
+    if codex_executor_prompt_requests_external_status(prompt)
+        && available.contains("external_artifact.status")
+    {
+        return Some("external_artifact.status".to_string());
+    }
+    if codex_executor_prompt_requests_external_revoke(prompt)
+        && package.current_artifact.is_some()
+        && available.contains("external_artifact.revoke")
+    {
+        return Some("external_artifact.revoke".to_string());
+    }
+    if codex_executor_prompt_requests_external_publish(prompt)
+        && package.current_artifact.is_some()
+        && available.contains("external_artifact.publish")
+    {
+        return Some("external_artifact.publish".to_string());
+    }
+    if codex_executor_prompt_requests_external_business_action(prompt)
+        && available.contains("external_business_action.invoke")
+    {
+        return Some("external_business_action.invoke".to_string());
+    }
+    None
+}
+
 fn codex_executor_action_suggestion(
     package: &AssistantRunCodexContextPackageView,
     contract: &AssistantRunCodexActionContractView,
     reason: &'static str,
 ) -> Value {
+    let external_action_policy =
+        codex_executor_external_action_policy(package, &contract.action_type);
+    let requires_confirmation = external_action_policy
+        .get("requires_confirmation")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     json!({
         "action_type": contract.action_type.clone(),
         "title": contract.title.clone(),
         "reason": reason,
         "source": "codex_plan_only_shadow",
         "confidence": codex_executor_suggestion_confidence(package, &contract.action_type),
+        "requires_confirmation": requires_confirmation,
+        "external_action_policy": external_action_policy,
         "requires_v3_validation": contract.requires_v3_validation,
         "mutates_state": contract.mutates_state,
         "mutation_allowed": false,
@@ -777,6 +837,26 @@ fn codex_executor_suggestion_arguments(
             "deliverables": ["transcript_text", "slide_image_candidates", "ppt_outline_or_pptx", "timestamp_map"],
             "source": "codex_plan_only_shadow",
         }),
+        "external_artifact.status" => codex_executor_external_action_arguments(
+            package,
+            "external_artifact.status",
+            "artifact_status",
+        ),
+        "external_artifact.publish" => codex_executor_external_action_arguments(
+            package,
+            "external_artifact.publish",
+            "artifact_publish",
+        ),
+        "external_artifact.revoke" => codex_executor_external_action_arguments(
+            package,
+            "external_artifact.revoke",
+            "artifact_revoke",
+        ),
+        "external_business_action.invoke" => codex_executor_external_action_arguments(
+            package,
+            "external_business_action.invoke",
+            "business_action",
+        ),
         "final_answer" => json!({
             "mode": "model_authored_answer",
             "source": "codex_plan_only_shadow",
@@ -785,6 +865,168 @@ fn codex_executor_suggestion_arguments(
             "source": "codex_plan_only_shadow",
         }),
     }
+}
+
+fn codex_executor_external_action_arguments(
+    package: &AssistantRunCodexContextPackageView,
+    action_type: &str,
+    business_action_type: &str,
+) -> Value {
+    let policy = codex_executor_external_action_policy(package, action_type);
+    let risk_level = policy
+        .get("risk_level")
+        .and_then(Value::as_str)
+        .unwrap_or("read_only");
+    let requires_confirmation = policy
+        .get("requires_confirmation")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let artifact_ref = codex_executor_artifact_id(package.current_artifact.as_ref());
+    json!({
+        "connection_id": codex_executor_external_connection_id(package),
+        "target_system": codex_executor_external_target_system(package),
+        "artifact_ref": artifact_ref,
+        "business_action_type": business_action_type,
+        "risk_level": risk_level,
+        "requires_confirmation": requires_confirmation,
+        "confirmation_mode": policy
+            .get("confirmation_mode")
+            .cloned()
+            .unwrap_or_else(|| json!("not_required")),
+        "arguments_redacted": codex_executor_external_arguments_redacted(
+            package,
+            action_type,
+            business_action_type
+        ),
+        "source_evidence_refs": codex_executor_external_source_evidence_refs(package),
+        "idempotency_key": format!(
+            "{}:{}:{}",
+            codex_executor_external_connection_id(package),
+            action_type,
+            codex_executor_external_message_id(package)
+        ),
+        "source": "codex_plan_only_shadow",
+    })
+}
+
+fn codex_executor_external_action_policy(
+    package: &AssistantRunCodexContextPackageView,
+    action_type: &str,
+) -> Value {
+    if !codex_executor_is_external_channel_scope(package) {
+        return Value::Null;
+    }
+    let (capability, risk_level, requires_confirmation, confirmation_mode) = match action_type {
+        "external_artifact.status" => ("artifact_status", "read_only", false, "not_required"),
+        "external_artifact.publish" => {
+            ("artifact_publish", "low_risk_write", false, "not_required")
+        }
+        "external_artifact.revoke" => (
+            "artifact_revoke",
+            "high_risk_write",
+            true,
+            "original_channel",
+        ),
+        "external_business_action.invoke" => (
+            "business_action",
+            "cross_system",
+            true,
+            "trusted_customer_page",
+        ),
+        _ => return Value::Null,
+    };
+    json!({
+        "capability": capability,
+        "action_type": action_type,
+        "target_system": codex_executor_external_target_system(package),
+        "risk_level": risk_level,
+        "requires_confirmation": requires_confirmation,
+        "confirmation_mode": confirmation_mode,
+        "confirmation_boundary": if requires_confirmation {
+            "original_channel_or_trusted_customer_page"
+        } else {
+            "not_required"
+        },
+        "raw_arguments_allowed": false,
+        "v3_persists_external_action_run": true,
+    })
+}
+
+fn codex_executor_is_external_channel_scope(package: &AssistantRunCodexContextPackageView) -> bool {
+    package.selected_scope.get("type").and_then(Value::as_str) == Some("external_channel")
+        || package
+            .startup_briefing
+            .get("surface")
+            .and_then(Value::as_str)
+            == Some("external_channel")
+}
+
+fn codex_executor_external_connection_id(package: &AssistantRunCodexContextPackageView) -> String {
+    package
+        .selected_scope
+        .get("channel_connection_id")
+        .or_else(|| package.selected_scope.get("channelConnectionId"))
+        .and_then(Value::as_str)
+        .unwrap_or("external-channel")
+        .to_string()
+}
+
+fn codex_executor_external_target_system(package: &AssistantRunCodexContextPackageView) -> String {
+    package
+        .selected_scope
+        .get("target_system")
+        .or_else(|| package.selected_scope.get("targetSystem"))
+        .and_then(Value::as_str)
+        .unwrap_or("external_channel")
+        .to_string()
+}
+
+fn codex_executor_external_message_id(package: &AssistantRunCodexContextPackageView) -> String {
+    package
+        .selected_scope
+        .get("message_external_id")
+        .or_else(|| package.selected_scope.get("messageExternalId"))
+        .and_then(Value::as_str)
+        .unwrap_or("message")
+        .to_string()
+}
+
+fn codex_executor_external_arguments_redacted(
+    package: &AssistantRunCodexContextPackageView,
+    action_type: &str,
+    business_action_type: &str,
+) -> Value {
+    json!({
+        "action_type": action_type,
+        "business_action_type": business_action_type,
+        "prompt_chars": package.user_prompt.chars().count(),
+        "artifact_ref_present": package.current_artifact.is_some(),
+        "raw_prompt_redacted": true,
+    })
+}
+
+fn codex_executor_external_source_evidence_refs(
+    package: &AssistantRunCodexContextPackageView,
+) -> Vec<String> {
+    package
+        .evidence_state
+        .get("supplied_items")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    item.get("retrieval_evidence_id")
+                        .or_else(|| item.get("retrievalEvidenceId"))
+                        .or_else(|| item.get("evidence_ref"))
+                        .or_else(|| item.get("evidenceRef"))
+                        .and_then(Value::as_str)
+                })
+                .take(8)
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
 }
 
 fn codex_executor_suggestion_reason(action_type: &str) -> &'static str {
@@ -809,6 +1051,18 @@ fn codex_executor_suggestion_reason(action_type: &str) -> &'static str {
         }
         "extract_video_ppt_transcript" => {
             "video asset is the required input for transcript and PPT extraction"
+        }
+        "external_artifact.status" => {
+            "external artifact status is a read-only V3-controlled action"
+        }
+        "external_artifact.publish" => {
+            "external artifact publication must be issued through the V3 action boundary"
+        }
+        "external_artifact.revoke" => {
+            "external artifact revocation is high-risk and requires channel confirmation"
+        }
+        "external_business_action.invoke" => {
+            "cross-system external business actions require V3 validation and confirmation"
         }
         "final_answer" => "no platform action is required for this turn",
         _ => "available V3 action contract selected by plan-only executor",
@@ -1024,6 +1278,60 @@ fn codex_executor_prompt_requests_artifact_edit(prompt: &str) -> bool {
     [
         "修改", "调整", "应用", "提交", "更新", "改成", "换成", "patch", "apply", "submit",
         "update",
+    ]
+    .iter()
+    .any(|hint| prompt.contains(hint))
+}
+
+fn codex_executor_prompt_requests_external_status(prompt: &str) -> bool {
+    [
+        "状态",
+        "进度",
+        "查一下",
+        "查询",
+        "是否发布",
+        "status",
+        "check",
+    ]
+    .iter()
+    .any(|hint| prompt.contains(hint))
+}
+
+fn codex_executor_prompt_requests_external_publish(prompt: &str) -> bool {
+    ["发布", "发送", "同步", "上线", "公开", "publish", "release"]
+        .iter()
+        .any(|hint| prompt.contains(hint))
+}
+
+fn codex_executor_prompt_requests_external_revoke(prompt: &str) -> bool {
+    [
+        "撤回",
+        "撤销",
+        "取消发布",
+        "下线",
+        "停用",
+        "revoke",
+        "unpublish",
+    ]
+    .iter()
+    .any(|hint| prompt.contains(hint))
+}
+
+fn codex_executor_prompt_requests_external_business_action(prompt: &str) -> bool {
+    [
+        "创建",
+        "更新",
+        "处理",
+        "办理",
+        "发起",
+        "提交",
+        "开通",
+        "关闭",
+        "审批",
+        "退款",
+        "工单",
+        "business action",
+        "invoke",
     ]
     .iter()
     .any(|hint| prompt.contains(hint))
@@ -1651,6 +1959,72 @@ mod tests {
         package
     }
 
+    fn external_action_context_package(
+        prompt: &str,
+        current_artifact: Option<Value>,
+    ) -> AssistantRunCodexContextPackageView {
+        let mut package = codex_context_package();
+        package.executor_transport = AssistantRunExecutorTransportView::CodexPlanOnly;
+        package.user_prompt = prompt.to_string();
+        package.current_artifact = current_artifact;
+        package.context_budget.selected_dataset_count = 0;
+        package.supply_quality = json!({"status": "not_requested"});
+        package.startup_briefing = json!({"surface": "external_channel"});
+        package.selected_scope = json!({
+            "type": "external_channel",
+            "channel_connection_id": "channel-third-party-1",
+            "platform": "third_party",
+            "conversation_external_id": "conv-1",
+            "sender_external_id": "user-1",
+            "message_external_id": "msg-1",
+            "target_system": "third_party_artifact_api"
+        });
+        package.evidence_state = json!({
+            "supplied_items": [{
+                "retrieval_evidence_id": "evidence-1",
+                "summary": "用户可见的外部资料证据"
+            }]
+        });
+        package.available_actions = vec![
+            AssistantRunCodexActionContractView::new(
+                "external_artifact.status",
+                "查询第三方产物状态",
+                "只读查询第三方产物状态。",
+                json!({"type": "object"}),
+                false,
+            ),
+            AssistantRunCodexActionContractView::new(
+                "external_artifact.publish",
+                "发布第三方产物",
+                "通过 V3 受控边界发布产物。",
+                json!({"type": "object"}),
+                true,
+            ),
+            AssistantRunCodexActionContractView::new(
+                "external_artifact.revoke",
+                "撤回第三方产物",
+                "撤回已发布产物，需要确认。",
+                json!({"type": "object"}),
+                true,
+            ),
+            AssistantRunCodexActionContractView::new(
+                "external_business_action.invoke",
+                "调用第三方事务动作",
+                "跨系统业务动作，需要确认。",
+                json!({"type": "object"}),
+                true,
+            ),
+            AssistantRunCodexActionContractView::new(
+                "final_answer",
+                "模型回答",
+                "直接回答",
+                json!({"type": "object"}),
+                false,
+            ),
+        ];
+        package
+    }
+
     #[test]
     fn codex_executor_dry_run_never_invokes_or_mutates() {
         let package = codex_context_package();
@@ -2047,6 +2421,136 @@ mod tests {
                 "cookies",
                 "screen_recording_bypass"
             ])
+        );
+    }
+
+    #[test]
+    fn codex_executor_external_artifact_status_is_read_only() {
+        let package = external_action_context_package("查一下第三方产物状态", None);
+
+        let output = execute_codex_conversation_plan(&package);
+        let suggested_action = output
+            .suggested_action
+            .as_ref()
+            .expect("external status should be suggested");
+
+        assert_eq!(
+            suggested_action["action_type"],
+            json!("external_artifact.status")
+        );
+        assert_eq!(suggested_action["mutates_state"], json!(false));
+        assert_eq!(suggested_action["requires_confirmation"], json!(false));
+        assert_eq!(
+            suggested_action["external_action_policy"]["risk_level"],
+            json!("read_only")
+        );
+        assert_eq!(
+            suggested_action["arguments"]["risk_level"],
+            json!("read_only")
+        );
+        assert_eq!(
+            suggested_action["arguments"]["source_evidence_refs"],
+            json!(["evidence-1"])
+        );
+    }
+
+    #[test]
+    fn codex_executor_external_artifact_publish_is_low_risk_write() {
+        let package = external_action_context_package(
+            "把当前产物发布到第三方页面",
+            Some(json!({
+                "kind": "external_artifact",
+                "id": "artifact-1"
+            })),
+        );
+
+        let output = execute_codex_conversation_plan(&package);
+        let suggested_action = output
+            .suggested_action
+            .as_ref()
+            .expect("external publish should be suggested");
+
+        assert_eq!(
+            suggested_action["action_type"],
+            json!("external_artifact.publish")
+        );
+        assert_eq!(suggested_action["mutates_state"], json!(true));
+        assert_eq!(suggested_action["requires_confirmation"], json!(false));
+        assert_eq!(
+            suggested_action["external_action_policy"]["risk_level"],
+            json!("low_risk_write")
+        );
+        assert_eq!(
+            suggested_action["arguments"]["artifact_ref"],
+            json!("artifact-1")
+        );
+        assert_eq!(
+            suggested_action["arguments"]["arguments_redacted"]["raw_prompt_redacted"],
+            json!(true)
+        );
+    }
+
+    #[test]
+    fn codex_executor_external_artifact_revoke_requires_high_risk_confirmation() {
+        let package = external_action_context_package(
+            "撤回刚才发布的第三方产物",
+            Some(json!({
+                "kind": "external_artifact",
+                "artifact_id": "artifact-2"
+            })),
+        );
+
+        let output = execute_codex_conversation_plan(&package);
+        let suggested_action = output
+            .suggested_action
+            .as_ref()
+            .expect("external revoke should be suggested");
+
+        assert_eq!(
+            suggested_action["action_type"],
+            json!("external_artifact.revoke")
+        );
+        assert_eq!(suggested_action["requires_confirmation"], json!(true));
+        assert_eq!(
+            suggested_action["external_action_policy"]["risk_level"],
+            json!("high_risk_write")
+        );
+        assert_eq!(
+            suggested_action["external_action_policy"]["confirmation_mode"],
+            json!("original_channel")
+        );
+        assert_eq!(
+            suggested_action["arguments"]["artifact_ref"],
+            json!("artifact-2")
+        );
+    }
+
+    #[test]
+    fn codex_executor_external_business_action_requires_cross_system_confirmation() {
+        let package = external_action_context_package("帮用户创建一个售后工单并提交", None);
+
+        let output = execute_codex_conversation_plan(&package);
+        let suggested_action = output
+            .suggested_action
+            .as_ref()
+            .expect("external business action should be suggested");
+
+        assert_eq!(
+            suggested_action["action_type"],
+            json!("external_business_action.invoke")
+        );
+        assert_eq!(suggested_action["requires_confirmation"], json!(true));
+        assert_eq!(
+            suggested_action["external_action_policy"]["risk_level"],
+            json!("cross_system")
+        );
+        assert_eq!(
+            suggested_action["external_action_policy"]["confirmation_mode"],
+            json!("trusted_customer_page")
+        );
+        assert_eq!(
+            suggested_action["arguments"]["business_action_type"],
+            json!("business_action")
         );
     }
 

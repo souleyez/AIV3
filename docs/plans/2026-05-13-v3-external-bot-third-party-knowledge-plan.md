@@ -18,7 +18,8 @@
 - Phase 6 thin adapters now cover Feishu/Lark and WeCom callback signature validation, timestamp/replay checks, event normalization, and channel-safe reply payload rendering.
 - Phase 6 platform-specific callback entrypoints now read stored connection config and hand normalized Feishu/Lark and WeCom messages to the unified external channel ingestion endpoint.
 - Phase 6 now supports Feishu/Lark encrypted `encrypt` callback bodies using the official AES-256-CBC event decryption shape.
-- Next implementation checkpoint: move into Phase 7 external artifact/action runtime.
+- Phase 7 first checkpoint now defines external action risk/confirmation policy contracts, registers external artifact/action tools, exposes external channel Codex action contracts, and routes Codex plan-only suggestions across read-only, low-risk write, high-risk confirmation, and cross-system confirmation cases.
+- Next implementation checkpoint: persist and execute `external_action_runs` from the normalized channel flow, then wire confirmation callbacks for high-risk and cross-system writes.
 
 ---
 
@@ -403,10 +404,10 @@ It should not ask operators to manually label documents, rewrite permissions, or
 - Modify: `crates/workflow-definitions/src/lib.rs`
 
 **Steps:**
-1. Define V3 action contracts for external artifact publish/revoke/status and external business actions.
-2. Add tests for read-only, low-risk write, high-risk confirmation, and cross-system confirmation.
+1. Done: Define V3 action contracts for external artifact publish/revoke/status and external business actions.
+2. Done: Add tests for read-only, low-risk write, high-risk confirmation, and cross-system confirmation.
 3. Persist external action runs with redacted arguments and external result summaries.
-4. Require confirmation for high-risk and cross-system writes.
+4. Partial: Codex plan-only policy now marks high-risk and cross-system actions as confirmation-required; runtime persistence/execution still needs to enforce it.
 5. Commit `Add external action runtime`.
 
 ### Phase 8: Observe-first management UI
