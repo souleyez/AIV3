@@ -150,8 +150,8 @@ function validateFinalManifest(manifest, errors, warnings) {
     warnings.push(issue("deliverable_state_not_final", `deliverable state is ${state || "missing"}`));
   }
   for (const file of REQUIRED_FILES) {
-    if (!groupContainsKind(manifest[file.group], file.kind)) {
-      errors.push(issue("final_manifest_group_missing_kind", `${file.group} does not include ${file.kind}`, file.kind));
+    if (!groupContainsFile(manifest[file.group], file)) {
+      errors.push(issue("final_manifest_group_missing_file", `${file.group} does not include ${file.kind} ${file.fileName}`, file.kind));
     }
   }
   validateRedactedJson(manifest, "final_deliverables_manifest", errors);
@@ -160,8 +160,8 @@ function validateFinalManifest(manifest, errors, warnings) {
 function validateExtractionManifest(manifest, errors) {
   const files = Array.isArray(manifest.files) ? manifest.files : [];
   for (const file of REQUIRED_FILES) {
-    if (!files.some((entry) => entry?.artifact_kind === file.kind)) {
-      errors.push(issue("extraction_manifest_missing_kind", `extraction manifest does not include ${file.kind}`, file.kind));
+    if (!files.some((entry) => entryMatchesFile(entry, file))) {
+      errors.push(issue("extraction_manifest_missing_file", `extraction manifest does not include ${file.kind} ${file.fileName}`, file.kind));
     }
   }
   validateRedactedJson(manifest, "extraction_artifacts_manifest", errors);
@@ -177,8 +177,12 @@ function validateRedactedJson(value, kind, errors) {
   }
 }
 
-function groupContainsKind(group, kind) {
-  return Array.isArray(group) && group.some((entry) => entry?.artifact_kind === kind);
+function groupContainsFile(group, file) {
+  return Array.isArray(group) && group.some((entry) => entryMatchesFile(entry, file));
+}
+
+function entryMatchesFile(entry, file) {
+  return entry?.artifact_kind === file.kind && entry?.file_name === file.fileName;
 }
 
 function readJsonFile(filePath, kind, errors) {

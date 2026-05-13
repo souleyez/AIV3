@@ -38,6 +38,32 @@ test("rejects inconsistent final manifest status", () => {
   assert.ok(result.errors.some((error) => error.code === "deliverable_status_missing_flag" && error.kind === "subtitle_page_map"));
 });
 
+test("rejects manifest entries pointing at unexpected file names", () => {
+  const sessionDir = createCompleteDeliverables();
+  const finalManifestPath = path.join(sessionDir, "generated_artifacts", "final_deliverables_manifest.json");
+  const finalManifest = JSON.parse(fs.readFileSync(finalManifestPath, "utf8"));
+  finalManifest.evidence_outputs[0].file_name = "subtitle-page-map-wrong.json";
+  fs.writeFileSync(finalManifestPath, JSON.stringify(finalManifest, null, 2));
+
+  const result = validateVideoDeliverables(sessionDir);
+
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.some((error) => error.code === "final_manifest_group_missing_file" && error.kind === "subtitle_page_map"));
+});
+
+test("rejects extraction manifest entries pointing at unexpected file names", () => {
+  const sessionDir = createCompleteDeliverables();
+  const extractionManifestPath = path.join(sessionDir, "generated_artifacts", "extraction_artifacts_manifest.json");
+  const extractionManifest = JSON.parse(fs.readFileSync(extractionManifestPath, "utf8"));
+  extractionManifest.files.find((file) => file.artifact_kind === "slide_notes").file_name = "speaker-notes-wrong.md";
+  fs.writeFileSync(extractionManifestPath, JSON.stringify(extractionManifest, null, 2));
+
+  const result = validateVideoDeliverables(sessionDir);
+
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.some((error) => error.code === "extraction_manifest_missing_file" && error.kind === "slide_notes"));
+});
+
 test("rejects malformed pptx containers", () => {
   const sessionDir = createCompleteDeliverables();
   fs.writeFileSync(path.join(sessionDir, "generated_artifacts", "video_slides_screenshot_based.pptx"), "not a pptx");
@@ -82,6 +108,7 @@ function createCompleteDeliverables() {
     "subtitle_page_map",
   ].map((kind) => ({
     artifact_kind: kind,
+    file_name: fileNameForKind(kind),
     path: "[redacted]",
   }));
 
@@ -116,4 +143,14 @@ function createCompleteDeliverables() {
   );
 
   return root;
+}
+
+function fileNameForKind(kind) {
+  return {
+    pptx: "video_slides_screenshot_based.pptx",
+    final_deliverables_manifest: "final_deliverables_manifest.json",
+    extraction_artifacts_manifest: "extraction_artifacts_manifest.json",
+    slide_notes: "slide_notes.md",
+    subtitle_page_map: "subtitle_page_map.json",
+  }[kind];
 }
