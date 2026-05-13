@@ -33,6 +33,7 @@ use contracts::{
     CreateChatSessionResponse, CreateConversationMemoryItemRequest, CreateDatasetOutputRequest,
     CreateDatasetOutputResponse, CreateDatasetRequest, CreateDatasetSecretBindingRequest,
     CreateDatasetSecretBindingResponse, CreateDocumentIngestResponse,
+    CreateExternalSourceSyncRequest, CreateExternalSourceSyncResponse,
     CreateMemoryDirectoryRefreshResponse, CreateReportPlanResponse, CreateReportRenderRequest,
     CreateReportRenderResponse, CreateStaticPageDraftRequest, CreateStaticPageDraftResponse,
     CreateStaticPageImageJobRequest, CreateStaticPageImageJobResponse,
@@ -429,6 +430,10 @@ pub fn router(
         .route(
             "/v1/external/channels/{connection_id}/events",
             axum::routing::post(ingest_external_channel_event),
+        )
+        .route(
+            "/v1/external/sources/{source_id}/sync",
+            axum::routing::post(create_external_source_sync),
         )
         .route("/v1/assistant-runs/{run_id}", get(get_assistant_run))
         .route(
@@ -3054,7 +3059,8 @@ fn infer_model_facing_capability_class(
         }
         WorkflowKind::UploadIngest
         | WorkflowKind::CodexHostTask
-        | WorkflowKind::VideoExtraction => {
+        | WorkflowKind::VideoExtraction
+        | WorkflowKind::ExternalSourceSync => {
             contracts::ModelFacingCapabilityClassView::ControlledPlatformAction
         }
     }
@@ -6605,6 +6611,97 @@ struct ExternalChannelConnectionSummary {
     status: String,
 }
 
+#[derive(Clone, Debug)]
+struct ExternalSourceConnectionSummary {
+    source_id: String,
+    connector_kind: String,
+    display_name: String,
+    sync_mode: String,
+    permission_mode: String,
+    health_status: String,
+    disabled_at: Option<DateTime<Utc>>,
+}
+
+async fn create_external_source_sync(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(source_id): Path<String>,
+    Json(request): Json<CreateExternalSourceSyncRequest>,
+) -> std::result::Result<(StatusCode, Json<CreateExternalSourceSyncResponse>), ApiError> {
+    validate_required("source_id", &source_id)?;
+    let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
+    let current_user_id = current_auth_user_id(&state, &headers).await?;
+    if let Some(dataset_id) = request.dataset_id {
+        load_visible_dataset_for_user(
+            &state,
+            dataset_id,
+            &active_secret_binding_ids,
+            current_user_id,
+        )
+        .await?;
+    }
+
+    let source = load_external_source_connection(&state, &source_id).await?;
+    if source.disabled_at.is_some() {
+        return Err(ApiError::forbidden(
+            "external_source_disabled",
+            format!("external source connection {source_id} is disabled"),
+        ));
+    }
+
+    let sync_kind = normalize_external_source_sync_kind(request.sync_kind.as_deref())?;
+    let checkpoint = normalize_external_source_sync_object(request.checkpoint, "checkpoint")?;
+    let connector_context =
+        normalize_external_source_sync_object(request.connector_context, "connector_context")?;
+    let sync_run_id = Uuid::new_v4();
+    create_external_sync_run(&state, sync_run_id, &source, &sync_kind, &checkpoint).await?;
+
+    let workflow_execution = build_initial_external_source_sync_execution(
+        &state,
+        &source,
+        sync_run_id,
+        &sync_kind,
+        request.dataset_id,
+        &checkpoint,
+        &connector_context,
+    )?;
+    let initial_event = build_initial_external_source_sync_event(
+        &workflow_execution,
+        &source,
+        sync_run_id,
+        &sync_kind,
+    );
+    state
+        .storage
+        .workflow_executions()
+        .create_with_initial_event(&workflow_execution, &initial_event)
+        .await
+        .map_err(ApiError::from_storage)?;
+    let started = apply_workflow_signal_with_dependencies(
+        &state.storage,
+        &state.workflow_catalog,
+        &state.event_bus,
+        state.tenant_id,
+        workflow_execution.id,
+        WorkflowSignal::Start,
+    )
+    .await?;
+    update_external_sync_run_started(&state, sync_run_id, &started).await?;
+
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(CreateExternalSourceSyncResponse {
+            accepted: true,
+            source_id: source.source_id,
+            sync_run_id: sync_run_id.to_string(),
+            sync_kind,
+            status: "running".to_string(),
+            workflow_execution: started.execution,
+            enqueued_tasks: started.enqueued_tasks,
+        }),
+    ))
+}
+
 async fn ingest_external_channel_event(
     State(state): State<AppState>,
     Path(connection_id): Path<String>,
@@ -6776,6 +6873,144 @@ async fn load_external_channel_connection(
         platform,
         status: row.get("status"),
     })
+}
+
+async fn load_external_source_connection(
+    state: &AppState,
+    source_id: &str,
+) -> std::result::Result<ExternalSourceConnectionSummary, ApiError> {
+    let row = sqlx::query(
+        r#"
+        select id, connector_kind, display_name, sync_mode, permission_mode, health_status, disabled_at
+        from external_source_connections
+        where tenant_id = $1 and id = $2
+        "#,
+    )
+    .bind(state.tenant_id.0)
+    .bind(source_id)
+    .fetch_optional(state.storage.pool())
+    .await
+    .map_err(|error| ApiError::from_storage(anyhow::Error::new(error)))?;
+
+    let Some(row) = row else {
+        return Err(ApiError::not_found(
+            "external_source_connection_not_found",
+            format!("external source connection {source_id} was not found"),
+        ));
+    };
+
+    Ok(ExternalSourceConnectionSummary {
+        source_id: row.get("id"),
+        connector_kind: row.get("connector_kind"),
+        display_name: row.get("display_name"),
+        sync_mode: row.get("sync_mode"),
+        permission_mode: row.get("permission_mode"),
+        health_status: row.get("health_status"),
+        disabled_at: row.get("disabled_at"),
+    })
+}
+
+fn normalize_external_source_sync_kind(
+    sync_kind: Option<&str>,
+) -> std::result::Result<String, ApiError> {
+    let normalized = sync_kind
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("full")
+        .to_ascii_lowercase();
+    match normalized.as_str() {
+        "full" | "incremental" | "users" | "acl" | "metadata" | "content" => Ok(normalized),
+        _ => Err(ApiError::bad_request_with_details(
+            "validation_error",
+            format!("unsupported external source sync kind: {normalized}"),
+            json!({
+                "supported_sync_kinds": ["full", "incremental", "users", "acl", "metadata", "content"]
+            }),
+        )),
+    }
+}
+
+fn normalize_external_source_sync_object(
+    value: Value,
+    field: &str,
+) -> std::result::Result<Value, ApiError> {
+    if value.is_null() {
+        return Ok(json!({}));
+    }
+    if value.is_object() {
+        return Ok(value);
+    }
+    Err(ApiError::bad_request(
+        "validation_error",
+        format!("{field} must be a JSON object"),
+    ))
+}
+
+async fn create_external_sync_run(
+    state: &AppState,
+    sync_run_id: Uuid,
+    source: &ExternalSourceConnectionSummary,
+    sync_kind: &str,
+    checkpoint: &Value,
+) -> std::result::Result<(), ApiError> {
+    sqlx::query(
+        r#"
+        insert into external_sync_runs (
+            id,
+            tenant_id,
+            source_id,
+            sync_kind,
+            status,
+            checkpoint,
+            counts
+        )
+        values ($1, $2, $3, $4, 'queued', $5, $6)
+        "#,
+    )
+    .bind(sync_run_id)
+    .bind(state.tenant_id.0)
+    .bind(&source.source_id)
+    .bind(sync_kind)
+    .bind(checkpoint)
+    .bind(json!({}))
+    .execute(state.storage.pool())
+    .await
+    .map_err(|error| ApiError::from_storage(anyhow::Error::new(error)))?;
+
+    Ok(())
+}
+
+async fn update_external_sync_run_started(
+    state: &AppState,
+    sync_run_id: Uuid,
+    started: &AdvanceWorkflowExecutionResponse,
+) -> std::result::Result<(), ApiError> {
+    let now = Utc::now();
+    sqlx::query(
+        r#"
+        update external_sync_runs
+        set status = 'running',
+            checkpoint = checkpoint || $3,
+            counts = counts || $4,
+            updated_at = $5
+        where tenant_id = $1 and id = $2
+        "#,
+    )
+    .bind(state.tenant_id.0)
+    .bind(sync_run_id)
+    .bind(json!({
+        "workflow_execution_id": started.execution.id,
+        "workflow_stage": started.execution.stage,
+    }))
+    .bind(json!({
+        "enqueued_task_count": started.enqueued_tasks.len(),
+    }))
+    .bind(now)
+    .execute(state.storage.pool())
+    .await
+    .map_err(|error| ApiError::from_storage(anyhow::Error::new(error)))?;
+
+    Ok(())
 }
 
 async fn load_external_message_event_run_id(
@@ -15031,6 +15266,89 @@ fn build_initial_report_plan_execution(
     })
 }
 
+fn build_initial_external_source_sync_execution(
+    state: &AppState,
+    source: &ExternalSourceConnectionSummary,
+    sync_run_id: Uuid,
+    sync_kind: &str,
+    dataset_id: Option<DatasetId>,
+    checkpoint: &Value,
+    connector_context: &Value,
+) -> std::result::Result<WorkflowExecution, ApiError> {
+    let definition = state
+        .workflow_catalog
+        .find_definition(WorkflowKind::ExternalSourceSync)
+        .ok_or_else(|| {
+            ApiError::internal(
+                "workflow_definition_missing",
+                "external_source_sync workflow definition is not registered".to_string(),
+            )
+        })?;
+    let now = Utc::now();
+    let execution_id = WorkflowExecutionId::new();
+    let runtime_state = definition.initial_state(execution_id, now);
+    let mut context = runtime_state.context;
+    context.insert(
+        "retries_remaining".to_string(),
+        Value::Number(runtime_state.retries_remaining.into()),
+    );
+    context.insert(
+        "source_id".to_string(),
+        Value::String(source.source_id.clone()),
+    );
+    context.insert(
+        "external_sync_run_id".to_string(),
+        Value::String(sync_run_id.to_string()),
+    );
+    context.insert(
+        "sync_kind".to_string(),
+        Value::String(sync_kind.to_string()),
+    );
+    context.insert(
+        "connector_kind".to_string(),
+        Value::String(source.connector_kind.clone()),
+    );
+    context.insert(
+        "display_name".to_string(),
+        Value::String(source.display_name.clone()),
+    );
+    context.insert(
+        "sync_mode".to_string(),
+        Value::String(source.sync_mode.clone()),
+    );
+    context.insert(
+        "permission_mode".to_string(),
+        Value::String(source.permission_mode.clone()),
+    );
+    context.insert(
+        "health_status".to_string(),
+        Value::String(source.health_status.clone()),
+    );
+    context.insert("checkpoint".to_string(), checkpoint.clone());
+    context.insert("connector_context".to_string(), connector_context.clone());
+    if let Some(dataset_id) = dataset_id {
+        context.insert(
+            "dataset_id".to_string(),
+            Value::String(dataset_id.to_string()),
+        );
+    }
+
+    Ok(WorkflowExecution {
+        id: execution_id,
+        tenant_id: state.tenant_id,
+        dataset_id,
+        report_plan_id: None,
+        kind: WorkflowKind::ExternalSourceSync,
+        version: runtime_state.version,
+        stage: runtime_state.stage,
+        status: runtime_state.status,
+        attempt: 0,
+        context: Value::Object(context),
+        created_at: now,
+        updated_at: now,
+    })
+}
+
 fn build_initial_memory_directory_execution(
     state: &AppState,
     dataset_id: DatasetId,
@@ -15471,6 +15789,33 @@ fn build_initial_execution_event(
             "status": execution.status.as_str(),
             "stage": execution.stage,
             "report_plan_id": report_plan_id,
+        }),
+        created_at: execution.created_at,
+    }
+}
+
+fn build_initial_external_source_sync_event(
+    execution: &WorkflowExecution,
+    source: &ExternalSourceConnectionSummary,
+    sync_run_id: Uuid,
+    sync_kind: &str,
+) -> WorkflowEventRecord {
+    WorkflowEventRecord {
+        id: domain_model::WorkflowEventId::new(),
+        execution_id: execution.id,
+        sequence_no: 1,
+        event_name: "workflow.execution_created".to_string(),
+        payload: json!({
+            "kind": execution.kind.as_str(),
+            "version": execution.version,
+            "status": execution.status.as_str(),
+            "stage": execution.stage,
+            "source_id": source.source_id,
+            "external_sync_run_id": sync_run_id,
+            "sync_kind": sync_kind,
+            "connector_kind": source.connector_kind,
+            "sync_mode": source.sync_mode,
+            "permission_mode": source.permission_mode,
         }),
         created_at: execution.created_at,
     }
@@ -26523,6 +26868,142 @@ mod tests {
             Some(ExternalChannelPlatformView::GenericChat)
         );
         assert_eq!(external_channel_platform_from_wire_value("wechat"), None);
+    }
+
+    #[test]
+    fn external_source_sync_kind_accepts_narrow_sync_modes() {
+        assert_eq!(
+            normalize_external_source_sync_kind(None).expect("default sync kind"),
+            "full"
+        );
+        assert_eq!(
+            normalize_external_source_sync_kind(Some(" ACL ")).expect("acl sync kind"),
+            "acl"
+        );
+        assert!(normalize_external_source_sync_kind(Some("raw_secret_dump")).is_err());
+        assert!(normalize_external_source_sync_object(json!([]), "checkpoint").is_err());
+    }
+
+    #[tokio::test]
+    async fn external_source_sync_endpoint_enqueues_workflow_and_records_run() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping external source sync endpoint test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("external-source-sync-test-{}", Uuid::new_v4()),
+                "External Source Sync Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage,
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        let dataset = state
+            .storage
+            .datasets()
+            .create(
+                state.tenant_id,
+                NewDataset {
+                    key: format!("external-sync-docs-{}", Uuid::new_v4()),
+                    title: "第三方资料库".to_string(),
+                    description: Some("第三方同步入口测试资料库。".to_string()),
+                    owner_user_id: None,
+                },
+            )
+            .await
+            .expect("dataset should be created");
+        sqlx::query(
+            r#"
+            insert into external_source_connections (
+                id,
+                tenant_id,
+                connector_kind,
+                source_key,
+                display_name,
+                base_url_redacted,
+                config_redacted,
+                sync_mode,
+                permission_mode,
+                health_status
+            )
+            values ($1, $2, 'document', $1, 'Third-party Docs', 'https://docs.example/[redacted]', $3, 'pull', 'source_acl_snapshot', 'healthy')
+            "#,
+        )
+        .bind("src-docs")
+        .bind(state.tenant_id.0)
+        .bind(json!({"token": "[redacted]"}))
+        .execute(state.storage.pool())
+        .await
+        .expect("external source connection should be inserted");
+
+        let (status, Json(response)) = create_external_source_sync(
+            State(state.clone()),
+            HeaderMap::new(),
+            Path("src-docs".to_string()),
+            Json(CreateExternalSourceSyncRequest {
+                sync_kind: Some("full".to_string()),
+                dataset_id: Some(dataset.id),
+                checkpoint: json!({"cursor": "page-1"}),
+                connector_context: json!({"fixture": "mock_https_connector"}),
+            }),
+        )
+        .await
+        .expect("external source sync should be accepted");
+
+        assert_eq!(status, StatusCode::ACCEPTED);
+        assert!(response.accepted);
+        assert_eq!(response.source_id, "src-docs");
+        assert_eq!(response.sync_kind, "full");
+        assert_eq!(response.status, "running");
+        assert_eq!(
+            response.workflow_execution.kind,
+            WorkflowKind::ExternalSourceSync
+        );
+        assert_eq!(response.workflow_execution.status, WorkflowStatus::Running);
+        assert_eq!(response.workflow_execution.stage, "sync_users");
+        assert_eq!(response.enqueued_tasks.len(), 1);
+        assert_eq!(response.enqueued_tasks[0].queue, "external_source");
+        assert_eq!(response.enqueued_tasks[0].task_key, "sync_external_users");
+        assert_eq!(
+            response.enqueued_tasks[0].payload["source_id"],
+            json!("src-docs")
+        );
+
+        let sync_run_id =
+            Uuid::parse_str(&response.sync_run_id).expect("sync run id should be uuid");
+        let row = sqlx::query(
+            r#"
+            select status, checkpoint, counts
+            from external_sync_runs
+            where tenant_id = $1 and id = $2
+            "#,
+        )
+        .bind(state.tenant_id.0)
+        .bind(sync_run_id)
+        .fetch_one(state.storage.pool())
+        .await
+        .expect("external sync run should be persisted");
+        let checkpoint: Value = row.get("checkpoint");
+        let counts: Value = row.get("counts");
+
+        assert_eq!(row.get::<String, _>("status"), "running");
+        assert_eq!(checkpoint["cursor"], json!("page-1"));
+        assert_eq!(
+            checkpoint["workflow_execution_id"],
+            json!(response.workflow_execution.id.to_string())
+        );
+        assert_eq!(counts["enqueued_task_count"], json!(1));
     }
 
     #[test]

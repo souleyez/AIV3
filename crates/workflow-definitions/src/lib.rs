@@ -269,6 +269,341 @@ impl WorkflowDefinition for LinearWorkflowDefinition {
     }
 }
 
+#[derive(Clone)]
+struct ExternalSourceSyncStep {
+    stage: &'static str,
+    queue: &'static str,
+    task_key: &'static str,
+}
+
+struct ExternalSourceSyncWorkflowDefinition;
+
+const EXTERNAL_SOURCE_SYNC_STEPS: &[ExternalSourceSyncStep] = &[
+    ExternalSourceSyncStep {
+        stage: "sync_users",
+        queue: "external_source",
+        task_key: "sync_external_users",
+    },
+    ExternalSourceSyncStep {
+        stage: "sync_acl",
+        queue: "external_source",
+        task_key: "sync_external_acl",
+    },
+    ExternalSourceSyncStep {
+        stage: "sync_metadata",
+        queue: "external_source",
+        task_key: "sync_external_metadata",
+    },
+    ExternalSourceSyncStep {
+        stage: "fetch_content",
+        queue: "external_source",
+        task_key: "fetch_external_content",
+    },
+    ExternalSourceSyncStep {
+        stage: "ingest",
+        queue: "ingest",
+        task_key: "ingest_external_content",
+    },
+    ExternalSourceSyncStep {
+        stage: "index",
+        queue: "retrieval",
+        task_key: "index_external_retrieval",
+    },
+];
+
+impl ExternalSourceSyncWorkflowDefinition {
+    fn pending_state(
+        execution_id: WorkflowExecutionId,
+        now: DateTime<Utc>,
+    ) -> WorkflowRuntimeState {
+        let first_step = Self::first_step();
+        let mut context = Map::new();
+        context.insert(
+            "queue".to_string(),
+            Value::String(first_step.queue.to_string()),
+        );
+        context.insert(
+            "task_key".to_string(),
+            Value::String(first_step.task_key.to_string()),
+        );
+        context.insert(
+            "states".to_string(),
+            json!([
+                "sync_users",
+                "sync_acl",
+                "sync_metadata",
+                "fetch_content",
+                "ingest",
+                "index",
+                "completed",
+                "failed"
+            ]),
+        );
+        context.insert(
+            "permission_boundary".to_string(),
+            Value::String("attach_external_acl_snapshot_before_index".to_string()),
+        );
+
+        WorkflowRuntimeState {
+            execution_id,
+            kind: WorkflowKind::ExternalSourceSync,
+            version: "0.1.0".to_string(),
+            stage: "queued".to_string(),
+            status: WorkflowStatus::Pending,
+            retries_remaining: 3,
+            context,
+            updated_at: now,
+        }
+    }
+
+    fn first_step() -> &'static ExternalSourceSyncStep {
+        EXTERNAL_SOURCE_SYNC_STEPS
+            .first()
+            .expect("external source sync has at least one step")
+    }
+
+    fn stage_after_completed_task(
+        current_stage: &str,
+        task_key: &str,
+    ) -> Result<ExternalSourceSyncStageOutcome, WorkflowTransitionError> {
+        let Some((index, _step)) = EXTERNAL_SOURCE_SYNC_STEPS
+            .iter()
+            .enumerate()
+            .find(|(_, step)| step.stage == current_stage && step.task_key == task_key)
+        else {
+            return Err(WorkflowTransitionError::InvalidTransition(format!(
+                "workflow={} stage={} task_key={task_key}",
+                WorkflowKind::ExternalSourceSync.as_str(),
+                current_stage
+            )));
+        };
+
+        if let Some(next_step) = EXTERNAL_SOURCE_SYNC_STEPS.get(index + 1) {
+            Ok(ExternalSourceSyncStageOutcome::Next(next_step))
+        } else {
+            Ok(ExternalSourceSyncStageOutcome::Completed)
+        }
+    }
+
+    fn task_request(
+        state: &WorkflowRuntimeState,
+        step: &ExternalSourceSyncStep,
+    ) -> WorkflowTaskRequest {
+        let mut payload = Map::new();
+        payload.insert("execution_id".to_string(), json!(state.execution_id));
+        payload.insert(
+            "kind".to_string(),
+            Value::String(WorkflowKind::ExternalSourceSync.as_str().to_string()),
+        );
+        payload.insert("stage".to_string(), Value::String(step.stage.to_string()));
+        for key in [
+            "source_id",
+            "external_sync_run_id",
+            "sync_kind",
+            "dataset_id",
+            "connector_kind",
+            "sync_mode",
+            "permission_mode",
+        ] {
+            if let Some(value) = state.context.get(key) {
+                payload.insert(key.to_string(), value.clone());
+            }
+        }
+
+        WorkflowTaskRequest {
+            queue: step.queue.to_string(),
+            task_key: step.task_key.to_string(),
+            payload: Value::Object(payload),
+        }
+    }
+}
+
+enum ExternalSourceSyncStageOutcome {
+    Next(&'static ExternalSourceSyncStep),
+    Completed,
+}
+
+impl WorkflowDefinition for ExternalSourceSyncWorkflowDefinition {
+    fn kind(&self) -> WorkflowKind {
+        WorkflowKind::ExternalSourceSync
+    }
+
+    fn version(&self) -> &'static str {
+        "0.1.0"
+    }
+
+    fn summary(&self) -> &'static str {
+        "Sync third-party users, ACLs, metadata, content, ingest output, and retrieval indexes."
+    }
+
+    fn accepted_signals(&self) -> &'static [WorkflowSignalKind] {
+        STANDARD_SIGNALS
+    }
+
+    fn initial_state(
+        &self,
+        execution_id: WorkflowExecutionId,
+        now: DateTime<Utc>,
+    ) -> WorkflowRuntimeState {
+        Self::pending_state(execution_id, now)
+    }
+
+    fn transition(
+        &self,
+        state: &WorkflowRuntimeState,
+        signal: WorkflowSignal,
+        now: DateTime<Utc>,
+    ) -> Result<WorkflowTransition, WorkflowTransitionError> {
+        match signal {
+            WorkflowSignal::Start if state.status == WorkflowStatus::Pending => {
+                let first_step = Self::first_step();
+                let mut next_state = state.clone();
+                next_state.stage = first_step.stage.to_string();
+                next_state.status = WorkflowStatus::Running;
+                next_state.updated_at = now;
+
+                Ok(WorkflowTransition {
+                    next_state,
+                    persisted_event: workflow_event(
+                        "workflow.started",
+                        json!({ "task_key": first_step.task_key, "queue": first_step.queue }),
+                        now,
+                    ),
+                    enqueued_tasks: vec![Self::task_request(state, first_step)],
+                })
+            }
+            WorkflowSignal::StepCompleted { task_key, output }
+                if state.status == WorkflowStatus::Running =>
+            {
+                let outcome = Self::stage_after_completed_task(&state.stage, &task_key)?;
+                let mut next_state = state.clone();
+                next_state.updated_at = now;
+                if let Some(output) = output {
+                    next_state.context.insert("last_output".to_string(), output);
+                }
+
+                match outcome {
+                    ExternalSourceSyncStageOutcome::Next(next_step) => {
+                        next_state.stage = next_step.stage.to_string();
+                        next_state.status = WorkflowStatus::Running;
+                        Ok(WorkflowTransition {
+                            next_state,
+                            persisted_event: workflow_event(
+                                "workflow.step_completed",
+                                json!({ "task_key": task_key, "next_stage": next_step.stage }),
+                                now,
+                            ),
+                            enqueued_tasks: vec![Self::task_request(state, next_step)],
+                        })
+                    }
+                    ExternalSourceSyncStageOutcome::Completed => {
+                        next_state.stage = "completed".to_string();
+                        next_state.status = WorkflowStatus::Succeeded;
+                        Ok(WorkflowTransition {
+                            next_state,
+                            persisted_event: workflow_event(
+                                "workflow.completed",
+                                json!({ "task_key": task_key }),
+                                now,
+                            ),
+                            enqueued_tasks: Vec::new(),
+                        })
+                    }
+                }
+            }
+            WorkflowSignal::StepFailed { task_key, error }
+                if state.status == WorkflowStatus::Running =>
+            {
+                let mut next_state = state.clone();
+                next_state.stage = "failed".to_string();
+                next_state.status = WorkflowStatus::Failed;
+                next_state.updated_at = now;
+                next_state
+                    .context
+                    .insert("last_error".to_string(), Value::String(error.clone()));
+                next_state.context.insert(
+                    "failed_task_key".to_string(),
+                    Value::String(task_key.clone()),
+                );
+
+                Ok(WorkflowTransition {
+                    next_state,
+                    persisted_event: workflow_event(
+                        "workflow.step_failed",
+                        json!({ "task_key": task_key, "error": error }),
+                        now,
+                    ),
+                    enqueued_tasks: Vec::new(),
+                })
+            }
+            WorkflowSignal::RetryRequested { reason } if state.status == WorkflowStatus::Failed => {
+                if state.retries_remaining == 0 {
+                    let mut next_state = state.clone();
+                    next_state.stage = "dead_lettered".to_string();
+                    next_state.status = WorkflowStatus::DeadLettered;
+                    next_state.updated_at = now;
+                    return Ok(WorkflowTransition {
+                        next_state,
+                        persisted_event: workflow_event(
+                            "workflow.dead_lettered",
+                            json!({ "reason": reason }),
+                            now,
+                        ),
+                        enqueued_tasks: Vec::new(),
+                    });
+                }
+
+                let mut next_state = state.clone();
+                next_state.stage = "queued".to_string();
+                next_state.status = WorkflowStatus::Pending;
+                next_state.retries_remaining -= 1;
+                next_state.updated_at = now;
+                next_state
+                    .context
+                    .insert("retry_reason".to_string(), Value::String(reason.clone()));
+
+                Ok(WorkflowTransition {
+                    next_state,
+                    persisted_event: workflow_event(
+                        "workflow.retry_requested",
+                        json!({ "reason": reason }),
+                        now,
+                    ),
+                    enqueued_tasks: Vec::new(),
+                })
+            }
+            WorkflowSignal::CancelRequested { reason } => {
+                let mut next_state = state.clone();
+                next_state.stage = "cancelled".to_string();
+                next_state.status = WorkflowStatus::Cancelled;
+                next_state.updated_at = now;
+                next_state
+                    .context
+                    .insert("cancel_reason".to_string(), Value::String(reason.clone()));
+
+                Ok(WorkflowTransition {
+                    next_state,
+                    persisted_event: workflow_event(
+                        "workflow.cancel_requested",
+                        json!({ "reason": reason }),
+                        now,
+                    ),
+                    enqueued_tasks: Vec::new(),
+                })
+            }
+            WorkflowSignal::PublishRequested { .. } => {
+                Err(WorkflowTransitionError::UnsupportedSignal)
+            }
+            _ => Err(WorkflowTransitionError::InvalidTransition(format!(
+                "workflow={} stage={} status={:?}",
+                WorkflowKind::ExternalSourceSync.as_str(),
+                state.stage,
+                state.status
+            ))),
+        }
+    }
+}
+
 struct VideoExtractionWorkflowDefinition;
 
 impl VideoExtractionWorkflowDefinition {
@@ -673,6 +1008,7 @@ pub fn registry() -> Vec<DynWorkflowDefinition> {
             success_stage: "codex_host_task_completed",
             next_step: None,
         }),
+        Arc::new(ExternalSourceSyncWorkflowDefinition),
         Arc::new(VideoExtractionWorkflowDefinition),
     ]
 }
@@ -702,12 +1038,13 @@ mod tests {
         let entries = registry();
         let names: Vec<_> = entries.iter().map(|entry| entry.kind().as_str()).collect();
 
-        assert_eq!(entries.len(), 10);
+        assert_eq!(entries.len(), 11);
         assert!(names.contains(&"chat_session_workflow"));
         assert!(names.contains(&"report_render_workflow"));
         assert!(names.contains(&"static_page_image_generation_workflow"));
         assert!(names.contains(&"static_page_render_workflow"));
         assert!(names.contains(&"codex_host_task_workflow"));
+        assert!(names.contains(&"external_source_sync_workflow"));
         assert!(names.contains(&"video_extraction_workflow"));
     }
 
@@ -773,6 +1110,111 @@ mod tests {
         assert_eq!(done.enqueued_tasks[0].task_key, "index_retrieval_artifacts");
         assert_eq!(finished.next_state.status, WorkflowStatus::Succeeded);
         assert_eq!(finished.next_state.stage, "upload_ingest_completed");
+    }
+
+    #[test]
+    fn external_source_sync_walks_connector_ingest_and_index_stages() {
+        let definition = registry()
+            .into_iter()
+            .find(|entry| entry.kind() == WorkflowKind::ExternalSourceSync)
+            .expect("external source sync workflow exists");
+        let now = Utc::now();
+        let mut pending = definition.initial_state(WorkflowExecutionId::new(), now);
+        pending
+            .context
+            .insert("source_id".to_string(), json!("src-docs"));
+        pending
+            .context
+            .insert("external_sync_run_id".to_string(), json!("sync-run-001"));
+        pending
+            .context
+            .insert("sync_kind".to_string(), json!("full"));
+
+        let sync_users = definition
+            .transition(&pending, WorkflowSignal::Start, now)
+            .expect("external source sync starts");
+        assert_eq!(
+            definition.summary(),
+            "Sync third-party users, ACLs, metadata, content, ingest output, and retrieval indexes."
+        );
+        assert_eq!(sync_users.next_state.status, WorkflowStatus::Running);
+        assert_eq!(sync_users.next_state.stage, "sync_users");
+        assert_eq!(sync_users.enqueued_tasks[0].queue, "external_source");
+        assert_eq!(sync_users.enqueued_tasks[0].task_key, "sync_external_users");
+        assert_eq!(
+            sync_users.enqueued_tasks[0].payload["source_id"],
+            json!("src-docs")
+        );
+
+        let expected_steps = [
+            (
+                "sync_external_users",
+                "sync_acl",
+                "external_source",
+                "sync_external_acl",
+            ),
+            (
+                "sync_external_acl",
+                "sync_metadata",
+                "external_source",
+                "sync_external_metadata",
+            ),
+            (
+                "sync_external_metadata",
+                "fetch_content",
+                "external_source",
+                "fetch_external_content",
+            ),
+            (
+                "fetch_external_content",
+                "ingest",
+                "ingest",
+                "ingest_external_content",
+            ),
+            (
+                "ingest_external_content",
+                "index",
+                "retrieval",
+                "index_external_retrieval",
+            ),
+        ];
+
+        let mut state = sync_users.next_state;
+        for (completed_task, next_stage, next_queue, next_task) in expected_steps {
+            let transition = definition
+                .transition(
+                    &state,
+                    WorkflowSignal::StepCompleted {
+                        task_key: completed_task.to_string(),
+                        output: Some(json!({ "count": 1 })),
+                    },
+                    now,
+                )
+                .expect("external sync step completes");
+            assert_eq!(transition.next_state.status, WorkflowStatus::Running);
+            assert_eq!(transition.next_state.stage, next_stage);
+            assert_eq!(transition.enqueued_tasks[0].queue, next_queue);
+            assert_eq!(transition.enqueued_tasks[0].task_key, next_task);
+            assert_eq!(
+                transition.enqueued_tasks[0].payload["external_sync_run_id"],
+                json!("sync-run-001")
+            );
+            state = transition.next_state;
+        }
+
+        let completed = definition
+            .transition(
+                &state,
+                WorkflowSignal::StepCompleted {
+                    task_key: "index_external_retrieval".to_string(),
+                    output: Some(json!({ "indexed_count": 3 })),
+                },
+                now,
+            )
+            .expect("external sync completes");
+        assert_eq!(completed.next_state.status, WorkflowStatus::Succeeded);
+        assert_eq!(completed.next_state.stage, "completed");
+        assert!(completed.enqueued_tasks.is_empty());
     }
 
     #[test]

@@ -475,6 +475,7 @@ pub enum WorkflowKind {
     StaticPageRender,
     CodexHostTask,
     VideoExtraction,
+    ExternalSourceSync,
 }
 
 impl WorkflowKind {
@@ -490,6 +491,7 @@ impl WorkflowKind {
             Self::StaticPageRender => "static_page_render_workflow",
             Self::CodexHostTask => "codex_host_task_workflow",
             Self::VideoExtraction => "video_extraction_workflow",
+            Self::ExternalSourceSync => "external_source_sync_workflow",
         }
     }
 
@@ -505,6 +507,7 @@ impl WorkflowKind {
             "static_page_render_workflow" => Some(Self::StaticPageRender),
             "codex_host_task_workflow" => Some(Self::CodexHostTask),
             "video_extraction_workflow" => Some(Self::VideoExtraction),
+            "external_source_sync_workflow" => Some(Self::ExternalSourceSync),
             _ => None,
         }
     }
@@ -900,6 +903,14 @@ mod tests {
         assert_eq!(
             WorkflowKind::from_str("video_extraction_workflow"),
             Some(WorkflowKind::VideoExtraction)
+        );
+        assert_eq!(
+            WorkflowKind::ExternalSourceSync.as_str(),
+            "external_source_sync_workflow"
+        );
+        assert_eq!(
+            WorkflowKind::from_str("external_source_sync_workflow"),
+            Some(WorkflowKind::ExternalSourceSync)
         );
     }
 

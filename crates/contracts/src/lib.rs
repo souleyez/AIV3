@@ -271,6 +271,30 @@ pub struct ExternalChannelEventResponse {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CreateExternalSourceSyncRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sync_kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dataset_id: Option<DatasetId>,
+    #[serde(default)]
+    pub checkpoint: Value,
+    #[serde(default)]
+    pub connector_context: Value,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CreateExternalSourceSyncResponse {
+    pub accepted: bool,
+    pub source_id: String,
+    pub sync_run_id: String,
+    pub sync_kind: String,
+    pub status: String,
+    pub workflow_execution: WorkflowExecutionView,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub enqueued_tasks: Vec<WorkflowTaskView>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WorkflowDefinitionView {
     pub kind: WorkflowKind,
     pub version: String,
@@ -3398,6 +3422,49 @@ mod tests {
             decoded.reply.reply_type,
             ExternalBotReplyTypeView::TaskStatus
         );
+    }
+
+    #[test]
+    fn external_source_sync_request_defaults_optional_connector_context() {
+        let dataset_id = DatasetId::new();
+        let request: CreateExternalSourceSyncRequest = serde_json::from_value(json!({
+            "sync_kind": "full",
+            "dataset_id": dataset_id.to_string(),
+            "checkpoint": {
+                "cursor": "page-2"
+            }
+        }))
+        .expect("external source sync request should deserialize");
+
+        assert_eq!(request.sync_kind.as_deref(), Some("full"));
+        assert_eq!(request.dataset_id, Some(dataset_id));
+        assert_eq!(request.checkpoint["cursor"], json!("page-2"));
+        assert_eq!(request.connector_context, Value::Null);
+
+        let response = CreateExternalSourceSyncResponse {
+            accepted: true,
+            source_id: "src-third-docs".to_string(),
+            sync_run_id: "sync-run-001".to_string(),
+            sync_kind: "full".to_string(),
+            status: "running".to_string(),
+            workflow_execution: WorkflowExecutionView {
+                id: WorkflowExecutionId::new(),
+                kind: domain_model::WorkflowKind::ExternalSourceSync,
+                status: domain_model::WorkflowStatus::Running,
+                stage: "sync_users".to_string(),
+                updated_at: Utc::now(),
+            },
+            enqueued_tasks: Vec::new(),
+        };
+        let encoded = serde_json::to_value(&response).expect("response should serialize");
+
+        assert_eq!(encoded["accepted"], json!(true));
+        assert_eq!(encoded["source_id"], json!("src-third-docs"));
+        assert_eq!(
+            encoded["workflow_execution"]["kind"],
+            json!("ExternalSourceSync")
+        );
+        assert!(encoded.get("enqueued_tasks").is_none());
     }
 
     #[test]
