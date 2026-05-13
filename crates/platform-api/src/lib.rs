@@ -6786,7 +6786,28 @@ async fn list_external_integrations(
                    from external_action_runs a
                    where a.tenant_id = c.tenant_id
                      and a.requester_summary ->> 'channel_connection_id' = c.id
-               ) as latest_action_at
+               ) as latest_action_at,
+               coalesce((
+                   select count(*)
+                   from external_principals p
+                   where p.tenant_id = c.tenant_id
+                     and p.platform = c.platform
+                     and p.v3_user_id is null
+                     and p.is_disabled = false
+               ), 0)::bigint as unmapped_principal_count,
+               coalesce((
+                   select count(*)
+                   from external_principals p
+                   where p.tenant_id = c.tenant_id
+                     and p.platform = c.platform
+                     and p.is_disabled = true
+               ), 0)::bigint as disabled_principal_count,
+               (
+                   select max(p.updated_at)
+                   from external_principals p
+                   where p.tenant_id = c.tenant_id
+                     and p.platform = c.platform
+               ) as latest_principal_updated_at
         from external_channel_connections c
         where c.tenant_id = $1
         order by c.updated_at desc
@@ -6817,6 +6838,11 @@ async fn list_external_integrations(
             dispatched_action_count: row.get("dispatched_action_count"),
             latest_action_at: row.get("latest_action_at"),
             config_summary: external_integration_config_summary(&config_redacted),
+            drift_summary: external_channel_drift_summary(
+                row.get("unmapped_principal_count"),
+                row.get("disabled_principal_count"),
+                row.get("latest_principal_updated_at"),
+            ),
         });
     }
 
@@ -6830,7 +6856,41 @@ async fn list_external_integrations(
                s.last_success_at,
                s.last_failure_at,
                s.disabled_at,
-               s.config_redacted
+               s.config_redacted,
+               coalesce((
+                   select count(*)
+                   from external_permission_snapshots ps
+                   where ps.tenant_id = s.tenant_id
+                     and ps.source_id = s.id
+               ), 0)::bigint as acl_snapshot_count,
+               coalesce((
+                   select count(*)
+                   from external_permission_snapshots ps
+                   where ps.tenant_id = s.tenant_id
+                     and ps.source_id = s.id
+                     and ps.captured_at < now() - interval '24 hours'
+               ), 0)::bigint as stale_acl_snapshot_count,
+               (
+                   select max(ps.captured_at)
+                   from external_permission_snapshots ps
+                   where ps.tenant_id = s.tenant_id
+                     and ps.source_id = s.id
+               ) as latest_acl_captured_at,
+               coalesce((
+                   select count(*)
+                   from external_sync_runs r
+                   where r.tenant_id = s.tenant_id
+                     and r.source_id = s.id
+                     and (r.status in ('failed', 'dead_lettered') or r.failure_kind is not null)
+               ), 0)::bigint as failed_sync_count,
+               (
+                   select r.status
+                   from external_sync_runs r
+                   where r.tenant_id = s.tenant_id
+                     and r.source_id = s.id
+                   order by r.updated_at desc
+                   limit 1
+               ) as latest_sync_status
         from external_source_connections s
         where s.tenant_id = $1
         order by s.updated_at desc
@@ -6866,6 +6926,13 @@ async fn list_external_integrations(
             dispatched_action_count: 0,
             latest_action_at: None,
             config_summary: external_integration_config_summary(&config_redacted),
+            drift_summary: external_source_drift_summary(
+                row.get("acl_snapshot_count"),
+                row.get("stale_acl_snapshot_count"),
+                row.get("failed_sync_count"),
+                row.get("latest_sync_status"),
+                row.get("latest_acl_captured_at"),
+            ),
         });
     }
 
@@ -7524,6 +7591,62 @@ fn external_integration_config_summary(config: &Value) -> Value {
             ],
         )
         .is_some(),
+    })
+}
+
+fn external_channel_drift_summary(
+    unmapped_principal_count: i64,
+    disabled_principal_count: i64,
+    latest_principal_updated_at: Option<DateTime<Utc>>,
+) -> Value {
+    let signal = if disabled_principal_count > 0 {
+        "disabled_principals"
+    } else if unmapped_principal_count > 0 {
+        "identity_mapping_gap"
+    } else {
+        "ok"
+    };
+    json!({
+        "signal": signal,
+        "unmapped_principal_count": unmapped_principal_count.max(0),
+        "disabled_principal_count": disabled_principal_count.max(0),
+        "latest_principal_updated_at": latest_principal_updated_at,
+    })
+}
+
+fn external_source_drift_summary(
+    acl_snapshot_count: i64,
+    stale_acl_snapshot_count: i64,
+    failed_sync_count: i64,
+    latest_sync_status: Option<String>,
+    latest_acl_captured_at: Option<DateTime<Utc>>,
+) -> Value {
+    let latest_sync_status_lower = latest_sync_status.as_deref().map(str::to_ascii_lowercase);
+    let signal = if acl_snapshot_count <= 0 {
+        "acl_missing"
+    } else if latest_sync_status_lower
+        .as_deref()
+        .is_some_and(|status| matches!(status, "failed" | "dead_lettered"))
+        || failed_sync_count > 0
+    {
+        "sync_failed"
+    } else if stale_acl_snapshot_count > 0 {
+        "acl_stale"
+    } else if latest_sync_status_lower
+        .as_deref()
+        .is_some_and(|status| matches!(status, "queued" | "running"))
+    {
+        "sync_recovering"
+    } else {
+        "ok"
+    };
+    json!({
+        "signal": signal,
+        "acl_snapshot_count": acl_snapshot_count.max(0),
+        "stale_acl_snapshot_count": stale_acl_snapshot_count.max(0),
+        "failed_sync_count": failed_sync_count.max(0),
+        "latest_sync_status": latest_sync_status,
+        "latest_acl_captured_at": latest_acl_captured_at,
     })
 }
 
@@ -29694,6 +29817,32 @@ mod tests {
         assert!(!summary_text.contains("secret-token"));
         assert!(!summary_text.contains("Bearer secret"));
         assert!(!summary_text.contains("secret-cookie"));
+    }
+
+    #[test]
+    fn external_channel_drift_summary_reports_identity_mapping_gap() {
+        let summary = external_channel_drift_summary(3, 0, None);
+
+        assert_eq!(summary["signal"], json!("identity_mapping_gap"));
+        assert_eq!(summary["unmapped_principal_count"], json!(3));
+        assert_eq!(summary["disabled_principal_count"], json!(0));
+    }
+
+    #[test]
+    fn external_source_drift_summary_reports_acl_and_sync_recovery_state() {
+        let failed = external_source_drift_summary(4, 0, 1, Some("failed".to_string()), None);
+        assert_eq!(failed["signal"], json!("sync_failed"));
+        assert_eq!(failed["failed_sync_count"], json!(1));
+
+        let stale = external_source_drift_summary(4, 2, 0, Some("succeeded".to_string()), None);
+        assert_eq!(stale["signal"], json!("acl_stale"));
+        assert_eq!(stale["stale_acl_snapshot_count"], json!(2));
+
+        let missing = external_source_drift_summary(0, 0, 0, None, None);
+        assert_eq!(missing["signal"], json!("acl_missing"));
+
+        let recovering = external_source_drift_summary(4, 0, 0, Some("running".to_string()), None);
+        assert_eq!(recovering["signal"], json!("sync_recovering"));
     }
 
     #[test]

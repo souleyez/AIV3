@@ -29,12 +29,13 @@ Already implemented:
 - Source sync endpoint: `POST /v1/external/sources/{source_id}/sync`.
 - Observe-first integration list and audit endpoints.
 - Limited management controls: disable, retry, and secret-rotation request markers.
+- Permission-drift and source-recovery observability signals in `GET /v1/external/integrations`.
 - Standalone external integration observability panel on `https://v3.elepcloud.com/`.
 - External action retry requests now enqueue `external_action_dispatch_workflow` tasks on the `external_action` worker queue instead of dispatching synchronously from the management request.
 
 Planned next:
 
-- Add deeper permission-drift and source-sync recovery signals to the observability panel.
+- Add deeper artifact publish/revoke status controls and third-party handoff examples.
 - Extend artifact publishing status and revocation controls.
 
 Default public routing:
@@ -683,7 +684,12 @@ V3 exposes observe-first management endpoints for operators and the V3 console. 
 GET /v1/external/integrations
 ```
 
-The response lists channel and source integrations with health, last activity timestamps, action dispatch counters, and a redacted configuration summary.
+The response lists channel and source integrations with health, last activity timestamps, action dispatch counters, permission/source recovery signals, and a redacted configuration summary.
+
+Each item includes `drift_summary`, an observe-only object that does not include raw document bodies, raw ACL entries, provider payloads, or secret material:
+
+- channel integrations report external identity mapping drift such as `identity_mapping_gap` or `disabled_principals`, with unmapped/disabled principal counts and the latest principal update timestamp;
+- source integrations report ACL and sync recovery states such as `acl_missing`, `acl_stale`, `sync_failed`, or `sync_recovering`, with ACL snapshot counts, stale snapshot counts, failed sync counts, latest ACL timestamp, and latest sync status.
 
 ```http
 GET /v1/external/integrations/{integration_id}/audit

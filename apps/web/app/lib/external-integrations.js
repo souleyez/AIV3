@@ -15,6 +15,8 @@ export function normalizeIntegrationSummary(raw = {}) {
   const blocked = numberOrZero(raw.blocked_action_count);
   const failed = numberOrZero(raw.failed_action_count);
   const dispatched = numberOrZero(raw.dispatched_action_count);
+  const driftSummary = raw.drift_summary && typeof raw.drift_summary === 'object' ? raw.drift_summary : {};
+  const drift = driftSignal(driftSummary);
   return {
     id: String(raw.integration_id || ''),
     kind: String(raw.integration_kind || 'unknown'),
@@ -33,6 +35,8 @@ export function normalizeIntegrationSummary(raw = {}) {
     dispatchedActionCount: dispatched,
     latestActionAt: raw.latest_action_at || null,
     configSummary: raw.config_summary && typeof raw.config_summary === 'object' ? raw.config_summary : {},
+    driftSummary,
+    driftSignal: drift,
     signal: integrationSignal({ pending, blocked, failed, dispatched, healthStatus: raw.health_status, status: raw.status }),
   };
 }
@@ -101,6 +105,31 @@ export function integrationSignal(integration = {}) {
     return 'healthy';
   }
   return 'unknown';
+}
+
+export function driftSignal(driftSummary = {}) {
+  return String(driftSummary.signal || 'unknown').toLowerCase();
+}
+
+export function driftSignalLabel(signal) {
+  switch (signal) {
+    case 'ok':
+      return '治理正常';
+    case 'identity_mapping_gap':
+      return '身份待映射';
+    case 'disabled_principals':
+      return '用户停用';
+    case 'acl_missing':
+      return 'ACL 缺失';
+    case 'acl_stale':
+      return 'ACL 过期';
+    case 'sync_failed':
+      return '同步失败';
+    case 'sync_recovering':
+      return '恢复中';
+    default:
+      return '未知';
+  }
 }
 
 export function numberOrZero(value) {

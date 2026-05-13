@@ -5268,7 +5268,7 @@ body {
 
 .external-hero-metrics {
   display: grid;
-  grid-template-columns: repeat(4, minmax(82px, 1fr));
+  grid-template-columns: repeat(5, minmax(82px, 1fr));
   gap: 8px;
 }
 
@@ -5393,7 +5393,7 @@ body {
 
 .external-table-row {
   display: grid;
-  grid-template-columns: minmax(180px, 1.3fr) minmax(82px, 0.5fr) minmax(96px, 0.5fr) minmax(112px, 0.6fr);
+  grid-template-columns: minmax(180px, 1.3fr) minmax(82px, 0.45fr) minmax(104px, 0.55fr) minmax(96px, 0.45fr) minmax(112px, 0.6fr);
   gap: 10px;
   align-items: center;
   width: 100%;
@@ -5476,6 +5476,48 @@ body {
   color: #596273;
 }
 
+.external-detail-head-signals {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.external-drift-pill {
+  justify-self: start;
+  min-width: 76px;
+  padding: 4px 7px;
+  border-radius: 999px;
+  border: 1px solid #cbd5e1;
+  background: #f8fafc;
+  color: #475569;
+  font-size: 12px;
+  font-weight: 800;
+  text-align: center;
+}
+
+.external-drift-ok {
+  border-color: #8dc7ad;
+  background: #eef8f1;
+  color: #17633a;
+}
+
+.external-drift-identity_mapping_gap,
+.external-drift-acl_stale,
+.external-drift-sync_recovering {
+  border-color: #d9ba67;
+  background: #fff8df;
+  color: #8a5a00;
+}
+
+.external-drift-disabled_principals,
+.external-drift-acl_missing,
+.external-drift-sync_failed {
+  border-color: #e4a093;
+  background: #fff1ed;
+  color: #9f2d18;
+}
+
 .external-action-counts {
   display: flex;
   gap: 5px;
@@ -5532,6 +5574,11 @@ body {
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;
   padding: 14px;
+}
+
+.external-governance-strip {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  padding-top: 0;
 }
 
 .external-detail-strip div {

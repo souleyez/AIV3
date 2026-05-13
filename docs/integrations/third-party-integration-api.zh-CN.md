@@ -673,7 +673,12 @@ V3 提供观测优先的管理接口，供运营人员和 V3 控制台使用。�
 GET /v1/external/integrations
 ```
 
-返回聊天通道和资料源连接摘要，包括健康状态、最近活动时间、动作派发计数和脱敏后的配置摘要。
+返回聊天通道和资料源连接摘要，包括健康状态、最近活动时间、动作派发计数、权限/同步治理信号和脱敏后的配置摘要。
+
+响应中的 `drift_summary` 是观测字段，不包含原始文档正文、原始权限明细或密钥材料：
+
+- 聊天通道会展示外部用户映射漂移，例如 `identity_mapping_gap`、`disabled_principals`，并给出未映射用户数、已停用用户数和最近用户更新时间。
+- 资料源会展示 ACL 与同步恢复状态，例如 `acl_missing`、`acl_stale`、`sync_failed`、`sync_recovering`，并给出 ACL 快照数、过期快照数、失败同步数、最新 ACL 快照时间和最新同步状态。
 
 ```http
 GET /v1/external/integrations/{integration_id}/audit

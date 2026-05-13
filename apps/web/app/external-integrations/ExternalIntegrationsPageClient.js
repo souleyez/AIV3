@@ -4,11 +4,13 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   buildThirdPartyApiUrl,
   controlResultLabel,
+  driftSignalLabel,
   formatObservationTime,
   latestIntegrationActivity,
   normalizeControlResult,
   normalizeAuditItem,
   normalizeIntegrationSummary,
+  numberOrZero,
   signalLabel,
   thirdPartyApiBaseUrl,
 } from '../lib/external-integrations';
@@ -41,6 +43,30 @@ function metricTotal(integrations, key) {
 
 function statusClass(signal) {
   return `external-status external-status-${signal || 'unknown'}`;
+}
+
+function driftClass(signal) {
+  return `external-drift-pill external-drift-${signal || 'unknown'}`;
+}
+
+function governanceMetrics(integration) {
+  const summary = integration?.driftSummary || {};
+  if (integration?.kind === 'source') {
+    return [
+      { label: '治理信号', value: driftSignalLabel(integration.driftSignal) },
+      { label: 'ACL 快照', value: numberOrZero(summary.acl_snapshot_count) },
+      { label: '过期快照', value: numberOrZero(summary.stale_acl_snapshot_count) },
+      { label: '同步失败', value: numberOrZero(summary.failed_sync_count) },
+      { label: '最近 ACL', value: formatObservationTime(summary.latest_acl_captured_at) },
+      { label: '同步状态', value: summary.latest_sync_status || '无记录' },
+    ];
+  }
+  return [
+    { label: '治理信号', value: driftSignalLabel(integration?.driftSignal) },
+    { label: '未映射用户', value: numberOrZero(summary.unmapped_principal_count) },
+    { label: '停用用户', value: numberOrZero(summary.disabled_principal_count) },
+    { label: '最近用户更新', value: formatObservationTime(summary.latest_principal_updated_at) },
+  ];
 }
 
 function JsonPreview({ value }) {
@@ -143,6 +169,7 @@ export default function ExternalIntegrationsPageClient() {
     blocked: metricTotal(integrations, 'blockedActionCount'),
     failed: metricTotal(integrations, 'failedActionCount'),
     dispatched: metricTotal(integrations, 'dispatchedActionCount'),
+    driftIssues: integrations.filter((item) => !['ok', 'unknown'].includes(item.driftSignal)).length,
   };
 
   return (
@@ -172,6 +199,10 @@ export default function ExternalIntegrationsPageClient() {
           <div>
             <strong>{totals.failed}</strong>
             <span>失败</span>
+          </div>
+          <div>
+            <strong>{totals.driftIssues}</strong>
+            <span>治理告警</span>
           </div>
         </div>
       </section>
@@ -210,6 +241,7 @@ export default function ExternalIntegrationsPageClient() {
             <div className="external-table-row external-table-head">
               <span>集成</span>
               <span>状态</span>
+              <span>治理</span>
               <span>动作</span>
               <span>最近活动</span>
             </div>
@@ -225,6 +257,9 @@ export default function ExternalIntegrationsPageClient() {
                   <small>{integration.kind} / {integration.provider}</small>
                 </span>
                 <span className={statusClass(integration.signal)}>{signalLabel(integration.signal)}</span>
+                <span className={driftClass(integration.driftSignal)}>
+                  {driftSignalLabel(integration.driftSignal)}
+                </span>
                 <span className="external-action-counts">
                   <b>{integration.dispatchedActionCount}</b>
                   <b>{integration.blockedActionCount}</b>
@@ -245,7 +280,12 @@ export default function ExternalIntegrationsPageClient() {
               <h2>{selected?.displayName || '集成详情'}</h2>
               <p>{selected ? `${selected.kind} / ${selected.provider}` : '无选中项'}</p>
             </div>
-            {selected ? <span className={statusClass(selected.signal)}>{signalLabel(selected.signal)}</span> : null}
+            {selected ? (
+              <div className="external-detail-head-signals">
+                <span className={statusClass(selected.signal)}>{signalLabel(selected.signal)}</span>
+                <span className={driftClass(selected.driftSignal)}>{driftSignalLabel(selected.driftSignal)}</span>
+              </div>
+            ) : null}
           </div>
 
           {selected ? (
@@ -293,6 +333,14 @@ export default function ExternalIntegrationsPageClient() {
                   <span>最近失败</span>
                   <strong>{formatObservationTime(selected.lastFailureAt)}</strong>
                 </div>
+              </div>
+              <div className="external-detail-strip external-governance-strip">
+                {governanceMetrics(selected).map((metric) => (
+                  <div key={metric.label}>
+                    <span>{metric.label}</span>
+                    <strong>{metric.value}</strong>
+                  </div>
+                ))}
               </div>
               <JsonPreview value={selected.configSummary} />
             </>

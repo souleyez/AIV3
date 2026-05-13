@@ -357,6 +357,8 @@ pub struct ExternalIntegrationSummaryView {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub latest_action_at: Option<DateTime<Utc>>,
     pub config_summary: Value,
+    #[serde(default)]
+    pub drift_summary: Value,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]

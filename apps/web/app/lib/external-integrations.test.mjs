@@ -5,6 +5,7 @@ import path from 'node:path';
 import {
   buildThirdPartyApiUrl,
   controlResultLabel,
+  driftSignalLabel,
   formatObservationTime,
   latestIntegrationActivity,
   normalizeControlResult,
@@ -32,6 +33,11 @@ test('normalizeIntegrationSummary derives operational signal and counts', () => 
     failed_action_count: 0,
     dispatched_action_count: 3,
     latest_action_at: '2026-05-14T09:30:00Z',
+    drift_summary: {
+      signal: 'identity_mapping_gap',
+      unmapped_principal_count: 2,
+      disabled_principal_count: 0,
+    },
   });
 
   assert.equal(integration.id, 'generic-chat-main');
@@ -40,7 +46,17 @@ test('normalizeIntegrationSummary derives operational signal and counts', () => 
   assert.equal(integration.dispatchedActionCount, 3);
   assert.equal(integration.signal, 'blocked');
   assert.equal(signalLabel(integration.signal), '已阻断');
+  assert.equal(integration.driftSignal, 'identity_mapping_gap');
+  assert.equal(driftSignalLabel(integration.driftSignal), '身份待映射');
+  assert.equal(integration.driftSummary.unmapped_principal_count, 2);
   assert.equal(latestIntegrationActivity(integration), '2026-05-14T09:30:00Z');
+});
+
+test('driftSignalLabel covers source recovery states', () => {
+  assert.equal(driftSignalLabel('acl_missing'), 'ACL 缺失');
+  assert.equal(driftSignalLabel('acl_stale'), 'ACL 过期');
+  assert.equal(driftSignalLabel('sync_failed'), '同步失败');
+  assert.equal(driftSignalLabel('sync_recovering'), '恢复中');
 });
 
 test('normalizeAuditItem keeps redacted summary shape stable', () => {
