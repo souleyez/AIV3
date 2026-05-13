@@ -36,6 +36,7 @@ V3 is not a generic file manager and not a standalone page builder. It is a data
 - Generate static-page/report artifacts inside the main assistant workspace.
 - Let users adjust modules by natural language and lightweight direct manipulation.
 - Open safe HTML artifacts for planning handoff, execution reports, code review summaries, and lightweight JSON-patch editors.
+- Expose the same AssistantRun, retrieval, permission, artifact, and action-validation capabilities through external bot and third-party chat surfaces, including Feishu/Lark, WeCom, and customer-hosted pages.
 - Preserve finished outputs and drafts in the right shelf.
 - Keep permissions, memory, and artifacts scoped to user/account/local-key visibility.
 
@@ -56,6 +57,7 @@ V3 is not a generic file manager and not a standalone page builder. It is a data
 - Account/auth work must never store raw local keys, OTP codes, provider tokens, or session cookie values.
 - Codex real execution must not run on this developer workstation. Real execution validation is only for the jump host or later Mac host.
 - OpenClaw is optional and should not distract from the product mainline unless a concrete bug appears.
+- External bot and third-party integrations are surfaces, not new authorities. V3 must still own effective permissions, AssistantRun state, retrieval supply, artifact access, action validation, and audit.
 
 ## Current Baseline
 
@@ -212,7 +214,26 @@ Continue improving supply quality, not UI form complexity:
 - Direct-upload and publicly resolvable video acquisition: the assistant should know it can parse uploaded video files, direct video URLs, or public pages where V3 can safely resolve a video asset URL, then feed that media into the background parsing and PPT/transcript extraction pipeline. Login-gated pages, QR login, cookies, and browser recording bypass are explicitly excluded for now.
 - No foreground parsing beyond save/preclassify/register/enqueue.
 
-### Priority 4: Safe HTML Artifact Layer
+### Priority 4: External Bot And Third-Party Knowledge/Action Integrations
+
+V3 must gain an external integration mainline without becoming a platform-specific chatbot fork.
+
+Detailed implementation plan: `docs/plans/2026-05-13-v3-external-bot-third-party-knowledge-plan.md`.
+
+The product must support:
+
+- Standard Feishu/Lark and WeCom bot/channel adapters for official message, event, card/file reply, callback, signature, replay-protection, and tenant-routing interfaces.
+- Pure third-party interfaces for document APIs, user/directory APIs, artifact APIs, action APIs, and chat-channel APIs, so customers can host their own chat pages or portals on separate servers.
+- Hybrid deployments where the chat surface, document library, artifact store, and business transaction system live on different servers.
+- Third-party document parsing through the existing V3 ingest/retrieval workers, with source document ids, revisions, provenance, and ACL snapshots preserved.
+- Effective permission resolution from external user identity, source users/departments/groups/roles, source document ACLs, V3 tenant/account policy, dataset visibility, and channel policy.
+- Permission-filtered retrieval before model context supply. Hidden documents must not enter model context and must not be left for the model to ignore.
+- V3-validated external transactions with explicit risk levels, confirmation requirements, audit records, and redacted failure summaries.
+- An observe-first V3 management UI for connection health, sync status, permission drift, message/run traces, retrieval quality, transaction status, and retry/disable/resync/secret-rotation controls.
+
+Do not add a second V3 chat surface for this track. External chat pages may live outside V3, while V3's own UI stays focused on observability and governance.
+
+### Priority 5: Safe HTML Artifact Layer
 
 This is a shared product surface, not a replacement for the static-page renderer.
 
@@ -231,7 +252,7 @@ Do not use this layer for:
 - Remote scripts, remote CSS, tracking pixels, provider tokens, or direct database/queue operations.
 - Customer-facing final static-page delivery when the deterministic static-page renderer is the correct product artifact.
 
-### Priority 5: Account/Auth Maintenance Only
+### Priority 6: Account/Auth Maintenance Only
 
 Account work is currently paused after second-round hardening.
 
@@ -244,7 +265,7 @@ Only fix:
 
 Do not start team sharing, robot ownership, admin audit UI, or deep encryption recovery until product mainline is stable.
 
-### Priority 6: OpenClaw Frozen
+### Priority 7: OpenClaw Frozen
 
 OpenClaw optional provider/stubs completed their first useful pass.
 
@@ -267,9 +288,10 @@ The next highest leverage order is:
 3. Improve parsing, retrieval, hidden conversation memory, media understanding, and AssistantRun context supply so the model sees better evidence and current draft state.
 4. Continue direct-upload / publicly resolvable video PPT extraction as a media-quality subtrack: complete the public video URL/page resolver, remote media registration, background media parsing, transcript/PPT extraction artifacts, and no host-composed fallback answers. Uploaded video evidence supply through ReAct already exists.
 5. Build the model-gateway profile system and Codex conversation executor bridge behind feature flags and shadow/dry-run comparison, without changing the visible static-page flow.
-6. Add the safe HTML artifact viewer as a common review/report surface, starting with Codex execution reports, static-page planning handoffs, and video extraction summaries.
-7. Validate real Codex/external-page fetching only on the jump host or later Mac host when browser access is needed.
-8. Resume account expansion only when product workflows need it.
+6. Add the external bot and third-party integration core: generic channel/source contracts, ACL-aware third-party retrieval, Feishu/Lark and WeCom adapters, external artifact/action runtime, and observe-first management UI.
+7. Add the safe HTML artifact viewer as a common review/report surface, starting with Codex execution reports, static-page planning handoffs, and video extraction summaries.
+8. Validate real Codex/external-page fetching only on the jump host or later Mac host when browser access is needed.
+9. Resume account expansion only when product workflows need it.
 
 The main architectural risk is letting four "brains/builders" compete: direct model calls, Codex conversation executor, static-page renderer, and HTML artifact renderer. The boundary is strict: Codex decides conversation/action flow, V3 validates and supplies data, static-page renderer produces customer report pages, HTML artifact renderer displays review/control artifacts, and heavier Codex Host workflow tasks execute external work without owning V3 product state.
 
