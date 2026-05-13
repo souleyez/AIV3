@@ -3,6 +3,10 @@ use assistant_runtime::{
     CodexConversationExecutorOutput, ScopePlannerInput,
 };
 use auth_email::{send_verification_email, EmailOtpService, OtpVerificationStatus};
+use auth_scope::{
+    ExternalDocumentAclSnapshot, ExternalPrincipalContext, ExternalPrincipalTrustLevel,
+    ScopeResolver,
+};
 use axum::{
     extract::{Path, Query, State},
     http::{header, HeaderMap, HeaderValue, StatusCode},
@@ -11513,6 +11517,397 @@ fn normalize_assistant_run_continue_max_steps(value: Option<usize>) -> usize {
         .clamp(1, ASSISTANT_RUN_CONTINUE_MAX_STEPS)
 }
 
+#[derive(Clone, Debug)]
+struct ExternalAclFilterContext {
+    principal: ExternalPrincipalContext,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct ExternalAclDocumentRef {
+    source_id: String,
+    document_external_id: String,
+    revision_external_id: Option<String>,
+}
+
+async fn load_external_acl_filter_context(
+    state: &AppState,
+    selected_scope: &Value,
+) -> std::result::Result<Option<ExternalAclFilterContext>, ApiError> {
+    if selected_scope.get("type").and_then(Value::as_str) != Some("external_channel") {
+        return Ok(None);
+    }
+    let platform = required_scope_string(selected_scope, "platform")?;
+    let external_user_id = selected_scope
+        .get("sender_external_id")
+        .or_else(|| selected_scope.get("sender_external_user_id"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            ApiError::bad_request(
+                "external_principal_missing",
+                "external channel scope requires sender_external_id before retrieval".to_string(),
+            )
+        })?;
+
+    let row = sqlx::query(
+        r#"
+        select v3_user_id,
+               trust_level,
+               is_disabled,
+               external_department_ids,
+               external_group_ids,
+               external_role_ids
+        from external_principals
+        where tenant_id = $1 and platform = $2 and external_user_id = $3
+        "#,
+    )
+    .bind(state.tenant_id.0)
+    .bind(platform)
+    .bind(external_user_id)
+    .fetch_optional(state.storage.pool())
+    .await
+    .map_err(|error| ApiError::from_storage(anyhow::Error::new(error)))?;
+
+    let principal = if let Some(row) = row {
+        ExternalPrincipalContext {
+            tenant_id: state.tenant_id,
+            platform: platform.to_string(),
+            external_user_id: external_user_id.to_string(),
+            external_department_ids: json_string_array(row.get("external_department_ids")),
+            external_group_ids: json_string_array(row.get("external_group_ids")),
+            external_role_ids: json_string_array(row.get("external_role_ids")),
+            v3_user_id: row.get::<Option<Uuid>, _>("v3_user_id").map(UserId),
+            trust_level: ExternalPrincipalTrustLevel::from_str(
+                row.get::<String, _>("trust_level").as_str(),
+            ),
+            is_disabled: row.get("is_disabled"),
+        }
+    } else {
+        ExternalPrincipalContext {
+            tenant_id: state.tenant_id,
+            platform: platform.to_string(),
+            external_user_id: external_user_id.to_string(),
+            external_department_ids: Vec::new(),
+            external_group_ids: Vec::new(),
+            external_role_ids: Vec::new(),
+            v3_user_id: None,
+            trust_level: ExternalPrincipalTrustLevel::Unresolved,
+            is_disabled: false,
+        }
+    };
+
+    Ok(Some(ExternalAclFilterContext { principal }))
+}
+
+fn required_scope_string<'a>(
+    selected_scope: &'a Value,
+    field_name: &str,
+) -> std::result::Result<&'a str, ApiError> {
+    selected_scope
+        .get(field_name)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            ApiError::bad_request(
+                "external_scope_invalid",
+                format!("external channel scope requires {field_name}"),
+            )
+        })
+}
+
+async fn filter_retrieval_evidences_for_external_acl(
+    state: &AppState,
+    context: Option<&ExternalAclFilterContext>,
+    evidences: Vec<RetrievalEvidence>,
+) -> std::result::Result<Vec<RetrievalEvidence>, ApiError> {
+    let Some(context) = context else {
+        return Ok(evidences);
+    };
+    let resolver = ScopeResolver;
+    let mut visible = Vec::new();
+    let mut acl_cache =
+        HashMap::<ExternalAclDocumentRef, Option<ExternalDocumentAclSnapshot>>::new();
+
+    for evidence in evidences {
+        let Some(acl_ref) = external_acl_document_ref_from_value(&evidence.evidence_manifest)
+        else {
+            continue;
+        };
+        let acl = load_external_acl_snapshot_cached(state, &mut acl_cache, &acl_ref).await?;
+        if acl
+            .as_ref()
+            .map(|snapshot| {
+                resolver
+                    .can_access_external_document(&context.principal, snapshot)
+                    .allowed
+            })
+            .unwrap_or(false)
+        {
+            visible.push(evidence);
+        }
+    }
+
+    Ok(visible)
+}
+
+async fn document_is_visible_for_external_acl(
+    state: &AppState,
+    context: Option<&ExternalAclFilterContext>,
+    document: &Document,
+) -> std::result::Result<bool, ApiError> {
+    let Some(context) = context else {
+        return Ok(true);
+    };
+    let metadata = Value::Object(Map::from_iter(document.metadata.clone()));
+    let Some(acl_ref) = external_acl_document_ref_from_value(&metadata) else {
+        return Ok(false);
+    };
+    let mut acl_cache =
+        HashMap::<ExternalAclDocumentRef, Option<ExternalDocumentAclSnapshot>>::new();
+    let Some(acl) = load_external_acl_snapshot_cached(state, &mut acl_cache, &acl_ref).await?
+    else {
+        return Ok(false);
+    };
+    Ok(ScopeResolver
+        .can_access_external_document(&context.principal, &acl)
+        .allowed)
+}
+
+async fn load_external_acl_snapshot_cached(
+    state: &AppState,
+    cache: &mut HashMap<ExternalAclDocumentRef, Option<ExternalDocumentAclSnapshot>>,
+    acl_ref: &ExternalAclDocumentRef,
+) -> std::result::Result<Option<ExternalDocumentAclSnapshot>, ApiError> {
+    if let Some(snapshot) = cache.get(acl_ref) {
+        return Ok(snapshot.clone());
+    }
+    let snapshot = load_external_acl_snapshot(state, acl_ref).await?;
+    cache.insert(acl_ref.clone(), snapshot.clone());
+    Ok(snapshot)
+}
+
+async fn load_external_acl_snapshot(
+    state: &AppState,
+    acl_ref: &ExternalAclDocumentRef,
+) -> std::result::Result<Option<ExternalDocumentAclSnapshot>, ApiError> {
+    let revision_filter = acl_ref.revision_external_id.as_deref().unwrap_or("");
+    let row = sqlx::query(
+        r#"
+        select revision_external_id, acl_snapshot, acl_hash
+        from external_permission_snapshots
+        where tenant_id = $1
+          and source_id = $2
+          and document_external_id = $3
+          and ($4 = '' or coalesce(revision_external_id, '') = $4)
+        order by captured_at desc
+        limit 1
+        "#,
+    )
+    .bind(state.tenant_id.0)
+    .bind(&acl_ref.source_id)
+    .bind(&acl_ref.document_external_id)
+    .bind(revision_filter)
+    .fetch_optional(state.storage.pool())
+    .await
+    .map_err(|error| ApiError::from_storage(anyhow::Error::new(error)))?;
+
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    let acl_snapshot: Value = row.get("acl_snapshot");
+    Ok(Some(ExternalDocumentAclSnapshot {
+        source_id: acl_ref.source_id.clone(),
+        document_external_id: acl_ref.document_external_id.clone(),
+        revision_external_id: row
+            .get::<Option<String>, _>("revision_external_id")
+            .or_else(|| acl_ref.revision_external_id.clone()),
+        allowed_user_external_ids: acl_subject_ids(
+            &acl_snapshot,
+            "allowed_user_external_ids",
+            "user",
+        ),
+        allowed_department_external_ids: acl_subject_ids(
+            &acl_snapshot,
+            "allowed_department_external_ids",
+            "department",
+        ),
+        allowed_group_external_ids: acl_subject_ids(
+            &acl_snapshot,
+            "allowed_group_external_ids",
+            "group",
+        ),
+        allowed_role_external_ids: acl_subject_ids(
+            &acl_snapshot,
+            "allowed_role_external_ids",
+            "role",
+        ),
+        denied_user_external_ids: acl_denied_subject_ids(
+            &acl_snapshot,
+            "denied_user_external_ids",
+            "user",
+        ),
+        denied_department_external_ids: acl_denied_subject_ids(
+            &acl_snapshot,
+            "denied_department_external_ids",
+            "department",
+        ),
+        denied_group_external_ids: acl_denied_subject_ids(
+            &acl_snapshot,
+            "denied_group_external_ids",
+            "group",
+        ),
+        denied_role_external_ids: acl_denied_subject_ids(
+            &acl_snapshot,
+            "denied_role_external_ids",
+            "role",
+        ),
+        acl_hash: row.get("acl_hash"),
+    }))
+}
+
+fn external_acl_document_ref_from_value(value: &Value) -> Option<ExternalAclDocumentRef> {
+    external_acl_document_ref_from_object(value).or_else(|| {
+        let object = value.as_object()?;
+        for key in [
+            "external_acl",
+            "externalAcl",
+            "source_acl_snapshot",
+            "sourceAclSnapshot",
+            "external_source",
+            "externalSource",
+            "evidence",
+        ] {
+            if let Some(found) = object
+                .get(key)
+                .and_then(external_acl_document_ref_from_value)
+            {
+                return Some(found);
+            }
+        }
+        None
+    })
+}
+
+fn external_acl_document_ref_from_object(value: &Value) -> Option<ExternalAclDocumentRef> {
+    let object = value.as_object()?;
+    let source_id = object_string(object, &["source_id", "sourceId"])?;
+    let document_external_id = object_string(
+        object,
+        &[
+            "document_external_id",
+            "documentExternalId",
+            "external_document_id",
+        ],
+    )?;
+    let revision_external_id = object_string(
+        object,
+        &["revision_external_id", "revisionExternalId", "revision"],
+    );
+    Some(ExternalAclDocumentRef {
+        source_id,
+        document_external_id,
+        revision_external_id,
+    })
+}
+
+fn object_string(object: &Map<String, Value>, keys: &[&str]) -> Option<String> {
+    keys.iter()
+        .filter_map(|key| object.get(*key).and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .next()
+}
+
+fn acl_subject_ids(snapshot: &Value, flat_key: &str, subject_type: &str) -> Vec<String> {
+    let mut ids = json_string_array(snapshot.get(flat_key).cloned().unwrap_or(Value::Null));
+    ids.extend(acl_nested_subject_ids(snapshot, "allow", subject_type));
+    dedupe_strings(ids)
+}
+
+fn acl_denied_subject_ids(snapshot: &Value, flat_key: &str, subject_type: &str) -> Vec<String> {
+    let mut ids = json_string_array(snapshot.get(flat_key).cloned().unwrap_or(Value::Null));
+    ids.extend(acl_nested_subject_ids(snapshot, "deny", subject_type));
+    dedupe_strings(ids)
+}
+
+fn acl_nested_subject_ids(
+    snapshot: &Value,
+    collection_key: &str,
+    subject_type: &str,
+) -> Vec<String> {
+    snapshot
+        .get(collection_key)
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|item| {
+            item.get("subject_type")
+                .or_else(|| item.get("subjectType"))
+                .and_then(Value::as_str)
+                == Some(subject_type)
+        })
+        .filter_map(|item| {
+            item.get("subject_external_id")
+                .or_else(|| item.get("subjectExternalId"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+        })
+        .collect()
+}
+
+fn json_string_array(value: Value) -> Vec<String> {
+    value
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+fn dedupe_strings(values: Vec<String>) -> Vec<String> {
+    let mut deduped = Vec::new();
+    for value in values {
+        if !deduped.contains(&value) {
+            deduped.push(value);
+        }
+    }
+    deduped
+}
+
+fn external_acl_supply_filter_summary(context: Option<&ExternalAclFilterContext>) -> Value {
+    context
+        .map(|context| {
+            json!({
+                "status": "enabled",
+                "platform": context.principal.platform,
+                "external_user_id": context.principal.external_user_id,
+                "trust_level": external_principal_trust_level_label(&context.principal.trust_level),
+                "permission_boundary": "source_acl_snapshot_before_model_context",
+            })
+        })
+        .unwrap_or(Value::Null)
+}
+
+fn external_principal_trust_level_label(level: &ExternalPrincipalTrustLevel) -> &'static str {
+    match level {
+        ExternalPrincipalTrustLevel::Unresolved => "unresolved",
+        ExternalPrincipalTrustLevel::Guest => "guest",
+        ExternalPrincipalTrustLevel::ExternalUser => "external_user",
+        ExternalPrincipalTrustLevel::Employee => "employee",
+        ExternalPrincipalTrustLevel::Manager => "manager",
+        ExternalPrincipalTrustLevel::Admin => "admin",
+        ExternalPrincipalTrustLevel::SystemOperator => "system_operator",
+    }
+}
+
 async fn build_assistant_run_evidence_state(
     state: &AppState,
     selected_scope: &Value,
@@ -11550,6 +11945,7 @@ async fn build_assistant_run_evidence_state(
 
     let prefer_detail = assistant_run_scope_prefers_detail(selected_scope);
     let limit = assistant_run_evidence_limit_for_scope(selected_scope);
+    let external_acl_filter = load_external_acl_filter_context(state, selected_scope).await?;
     let mut supplied_items = Vec::new();
     let mut supplied_datasets = Vec::new();
     let mut supplied_memory_items = Vec::new();
@@ -11590,6 +11986,12 @@ async fn build_assistant_run_evidence_state(
             current_user_id,
         )
         .await?;
+        let evidences = filter_retrieval_evidences_for_external_acl(
+            state,
+            external_acl_filter.as_ref(),
+            evidences,
+        )
+        .await?;
 
         let ranked_evidences = rank_retrieval_evidences_for_prompt(&evidences, prompt, limit);
         if ranked_evidences.is_empty() {
@@ -11599,6 +12001,7 @@ async fn build_assistant_run_evidence_state(
                 prompt,
                 limit,
                 current_user_id,
+                external_acl_filter.as_ref(),
                 &mut media_context_by_document,
             )
             .await?;
@@ -11713,6 +12116,7 @@ async fn build_assistant_run_evidence_state(
         "datasets": supplied_datasets,
         "conversation_memory_items": supplied_memory_items,
         "supplied_items": supplied_items,
+        "external_acl_filter": external_acl_supply_filter_summary(external_acl_filter.as_ref()),
         "fallback_supply_count": fallback_supply_count,
         "fallback_supply_policy": if fallback_supply_count > 0 { "visible_document_chunks_when_retrieval_evidence_missing" } else { "not_used" },
         "limit": limit,
@@ -11725,6 +12129,7 @@ async fn build_assistant_run_chunk_fallback_supply(
     prompt: &str,
     limit: usize,
     current_user_id: Option<UserId>,
+    external_acl_filter: Option<&ExternalAclFilterContext>,
     media_context_by_document: &mut HashMap<DocumentId, Option<Value>>,
 ) -> std::result::Result<Vec<Value>, ApiError> {
     if limit == 0 {
@@ -11742,6 +12147,9 @@ async fn build_assistant_run_chunk_fallback_supply(
         .collect::<Vec<_>>();
     let mut sources = Vec::new();
     for document in documents {
+        if !document_is_visible_for_external_acl(state, external_acl_filter, &document).await? {
+            continue;
+        }
         let chunks = state
             .storage
             .document_chunks()
@@ -33425,6 +33833,360 @@ mod tests {
         assert_eq!(
             detail.run.evidence_state["supplied_items"][0]["summary"],
             json!("Order delay risk evidence")
+        );
+    }
+
+    #[tokio::test]
+    async fn external_channel_acl_filters_same_question_by_principal() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_MODE", "placeholder");
+        std::env::remove_var("ASSISTANT_RUN_EVIDENCE_LIMIT");
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping external ACL evidence gate test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("external-acl-evidence-test-{}", Uuid::new_v4()),
+                "External ACL Evidence Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage,
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        let dataset = state
+            .storage
+            .datasets()
+            .create(
+                state.tenant_id,
+                NewDataset {
+                    key: format!("external-acl-docs-{}", Uuid::new_v4()),
+                    title: "第三方制度库".to_string(),
+                    description: Some("第三方文档 ACL 测试资料。".to_string()),
+                    owner_user_id: None,
+                },
+            )
+            .await
+            .expect("dataset should be created");
+        sqlx::query(
+            r#"
+            insert into external_source_connections (
+                id,
+                tenant_id,
+                connector_kind,
+                source_key,
+                display_name,
+                base_url_redacted,
+                config_redacted,
+                sync_mode,
+                permission_mode
+            )
+            values ($1, $2, 'document', $1, 'Third-party Docs', 'https://docs.example/[redacted]', $3, 'pull', 'source_acl_snapshot')
+            "#,
+        )
+        .bind("src-docs")
+        .bind(state.tenant_id.0)
+        .bind(json!({}))
+        .execute(state.storage.pool())
+        .await
+        .expect("external source connection should be inserted");
+        for (external_user_id, groups) in [
+            ("user-alpha", json!([])),
+            ("user-beta", json!(["group-procurement"])),
+            ("user-denied", json!(["group-procurement"])),
+        ] {
+            sqlx::query(
+                r#"
+                insert into external_principals (
+                    tenant_id,
+                    platform,
+                    external_user_id,
+                    trust_level,
+                    is_disabled,
+                    external_department_ids,
+                    external_group_ids,
+                    external_role_ids,
+                    profile_redacted
+                )
+                values ($1, 'generic_chat', $2, 'employee', false, $3, $4, $5, $6)
+                "#,
+            )
+            .bind(state.tenant_id.0)
+            .bind(external_user_id)
+            .bind(json!([]))
+            .bind(groups)
+            .bind(json!([]))
+            .bind(json!({}))
+            .execute(state.storage.pool())
+            .await
+            .expect("external principal should be inserted");
+        }
+
+        for (document_external_id, revision, acl_snapshot) in [
+            (
+                "doc-alpha",
+                "rev-alpha",
+                json!({
+                    "allowed_user_external_ids": ["user-alpha"],
+                    "allowed_group_external_ids": [],
+                    "denied_user_external_ids": []
+                }),
+            ),
+            (
+                "doc-beta",
+                "rev-beta",
+                json!({
+                    "allowed_user_external_ids": [],
+                    "allowed_group_external_ids": ["group-procurement"],
+                    "denied_user_external_ids": ["user-denied"]
+                }),
+            ),
+        ] {
+            sqlx::query(
+                r#"
+                insert into external_permission_snapshots (
+                    tenant_id,
+                    source_id,
+                    document_external_id,
+                    revision_external_id,
+                    acl_snapshot,
+                    acl_hash
+                )
+                values ($1, 'src-docs', $2, $3, $4, $5)
+                "#,
+            )
+            .bind(state.tenant_id.0)
+            .bind(document_external_id)
+            .bind(revision)
+            .bind(acl_snapshot)
+            .bind(format!("hash-{document_external_id}"))
+            .execute(state.storage.pool())
+            .await
+            .expect("external ACL snapshot should be inserted");
+        }
+
+        let now = Utc::now();
+        let alpha_document = state
+            .storage
+            .documents()
+            .create(
+                state.tenant_id,
+                NewDocument {
+                    dataset_id: dataset.id,
+                    title: "Alpha Purchase Rules".to_string(),
+                    object_key: "external/src-docs/doc-alpha.md".to_string(),
+                    content_type: "text/markdown".to_string(),
+                    secret_binding_ids: Vec::new(),
+                    owner_user_id: None,
+                    metadata: json!({}),
+                },
+            )
+            .await
+            .expect("alpha document should be created");
+        let beta_document = state
+            .storage
+            .documents()
+            .create(
+                state.tenant_id,
+                NewDocument {
+                    dataset_id: dataset.id,
+                    title: "Beta Purchase Rules".to_string(),
+                    object_key: "external/src-docs/doc-beta.md".to_string(),
+                    content_type: "text/markdown".to_string(),
+                    secret_binding_ids: Vec::new(),
+                    owner_user_id: None,
+                    metadata: json!({}),
+                },
+            )
+            .await
+            .expect("beta document should be created");
+        let alpha_chunk = state
+            .storage
+            .document_chunks()
+            .replace_for_document(
+                state.tenant_id,
+                alpha_document.id,
+                &[storage::NewDocumentChunk {
+                    dataset_id: dataset.id,
+                    document_id: alpha_document.id,
+                    chunk_index: 0,
+                    content: "Order delay risk for alpha purchase approvals.".to_string(),
+                    token_count: 8,
+                    metadata: json!({}),
+                    created_at: now,
+                }],
+            )
+            .await
+            .expect("alpha chunk should be created")
+            .remove(0);
+        let beta_chunk = state
+            .storage
+            .document_chunks()
+            .replace_for_document(
+                state.tenant_id,
+                beta_document.id,
+                &[storage::NewDocumentChunk {
+                    dataset_id: dataset.id,
+                    document_id: beta_document.id,
+                    chunk_index: 0,
+                    content: "Order delay risk for beta procurement approvals.".to_string(),
+                    token_count: 8,
+                    metadata: json!({}),
+                    created_at: now,
+                }],
+            )
+            .await
+            .expect("beta chunk should be created")
+            .remove(0);
+        let evidence_execution = create_test_workflow_execution(
+            &state.storage,
+            state.tenant_id,
+            dataset.id,
+            WorkflowKind::UploadIngest,
+        )
+        .await;
+        state
+            .storage
+            .retrieval_evidences()
+            .create_many(
+                state.tenant_id,
+                &[
+                    storage::NewRetrievalEvidence {
+                        execution_id: evidence_execution.id,
+                        dataset_id: dataset.id,
+                        document_id: alpha_document.id,
+                        document_chunk_id: alpha_chunk.id,
+                        chunk_index: alpha_chunk.chunk_index,
+                        source_locator: "external/src-docs/doc-alpha.md#chunk=0".to_string(),
+                        content_excerpt: "Order delay risk for alpha purchase approvals."
+                            .to_string(),
+                        summary: "Alpha purchase risk".to_string(),
+                        payload_filter_key: "dataset/external-acl".to_string(),
+                        embedding_model: "local-lexical-v1".to_string(),
+                        recall_score: 0.8,
+                        evidence_manifest: json!({
+                            "external_acl": {
+                                "source_id": "src-docs",
+                                "document_external_id": "doc-alpha",
+                                "revision_external_id": "rev-alpha"
+                            },
+                            "embedding": {
+                                "term_weights": {
+                                    "order": 1.0,
+                                    "delay": 1.0,
+                                    "risk": 1.0,
+                                    "purchase": 1.0
+                                }
+                            }
+                        }),
+                        created_at: now,
+                    },
+                    storage::NewRetrievalEvidence {
+                        execution_id: evidence_execution.id,
+                        dataset_id: dataset.id,
+                        document_id: beta_document.id,
+                        document_chunk_id: beta_chunk.id,
+                        chunk_index: beta_chunk.chunk_index,
+                        source_locator: "external/src-docs/doc-beta.md#chunk=0".to_string(),
+                        content_excerpt: "Order delay risk for beta procurement approvals."
+                            .to_string(),
+                        summary: "Beta procurement risk".to_string(),
+                        payload_filter_key: "dataset/external-acl".to_string(),
+                        embedding_model: "local-lexical-v1".to_string(),
+                        recall_score: 0.8,
+                        evidence_manifest: json!({
+                            "external_acl": {
+                                "source_id": "src-docs",
+                                "document_external_id": "doc-beta",
+                                "revision_external_id": "rev-beta"
+                            },
+                            "embedding": {
+                                "term_weights": {
+                                    "order": 1.0,
+                                    "delay": 1.0,
+                                    "risk": 1.0,
+                                    "procurement": 1.0
+                                }
+                            }
+                        }),
+                        created_at: now,
+                    },
+                ],
+            )
+            .await
+            .expect("external retrieval evidences should be created");
+
+        let selected_scope = |external_user_id: &str| {
+            json!({
+                "type": "external_channel",
+                "platform": "generic_chat",
+                "sender_external_id": external_user_id,
+                "datasets": [dataset.id],
+            })
+        };
+        let alice_evidence = build_assistant_run_evidence_state(
+            &state,
+            &selected_scope("user-alpha"),
+            "order delay risk",
+            None,
+            &[],
+            None,
+        )
+        .await
+        .expect("alice evidence state should be built");
+        let beta_evidence = build_assistant_run_evidence_state(
+            &state,
+            &selected_scope("user-beta"),
+            "order delay risk",
+            None,
+            &[],
+            None,
+        )
+        .await
+        .expect("beta evidence state should be built");
+        let denied_evidence = build_assistant_run_evidence_state(
+            &state,
+            &selected_scope("user-denied"),
+            "order delay risk",
+            None,
+            &[],
+            None,
+        )
+        .await
+        .expect("denied evidence state should be built");
+
+        assert_eq!(alice_evidence["status"], json!("supplied"));
+        assert_eq!(
+            alice_evidence["supplied_items"][0]["summary"],
+            json!("Alpha purchase risk")
+        );
+        assert_eq!(
+            alice_evidence["supplied_items"].as_array().unwrap().len(),
+            1
+        );
+        assert_eq!(beta_evidence["status"], json!("supplied"));
+        assert_eq!(
+            beta_evidence["supplied_items"][0]["summary"],
+            json!("Beta procurement risk")
+        );
+        assert_eq!(beta_evidence["supplied_items"].as_array().unwrap().len(), 1);
+        assert_eq!(denied_evidence["status"], json!("empty"));
+        assert_eq!(
+            denied_evidence["supplied_items"].as_array().unwrap().len(),
+            0
+        );
+        assert_eq!(
+            alice_evidence["external_acl_filter"]["permission_boundary"],
+            json!("source_acl_snapshot_before_model_context")
         );
     }
 

@@ -8,6 +8,7 @@ authors.workspace = true
 [dependencies]
 anyhow.workspace = true
 assistant-runtime = { path = "../assistant-runtime" }
+auth-scope = { path = "../auth-scope" }
 axum.workspace = true
 chrono.workspace = true
 contracts = { path = "../contracts" }
