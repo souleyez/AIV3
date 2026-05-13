@@ -1,3 +1,6 @@
+use aes::Aes256;
+use base64::{engine::general_purpose, Engine as _};
+use cbc::cipher::{block_padding::NoPadding, BlockDecryptMut, KeyIvInit};
 use chrono::{DateTime, Utc};
 use contracts::{
     ExternalAttachmentRefView, ExternalBotMessageView, ExternalBotReplyTypeView,
@@ -169,15 +172,15 @@ pub fn normalize_feishu_callback(
     now: DateTime<Utc>,
     replay_guard: Option<&mut FeishuReplayGuard>,
 ) -> Result<FeishuCallbackOutcome, FeishuAdapterError> {
-    let payload: Value = serde_json::from_str(raw_body).map_err(|error| {
+    let outer_payload: Value = serde_json::from_str(raw_body).map_err(|error| {
         FeishuAdapterError::new(
             "feishu_payload_invalid",
             format!("Feishu callback payload is not valid JSON: {error}"),
         )
     })?;
 
-    if let Some(challenge) = feishu_challenge(&payload) {
-        verify_feishu_token(config, &payload)?;
+    if let Some(challenge) = feishu_challenge(&outer_payload) {
+        verify_feishu_token(config, &outer_payload)?;
         return Ok(FeishuCallbackOutcome::Challenge { challenge });
     }
 
@@ -195,6 +198,8 @@ pub fn normalize_feishu_callback(
         config.max_clock_skew_seconds,
         replay_guard,
     )?;
+
+    let payload = decrypt_feishu_payload_if_needed(&outer_payload, &config.encrypt_key)?;
     verify_feishu_token(config, &payload)?;
 
     let event_type = feishu_event_type(&payload).unwrap_or_else(|| "unknown".to_string());
@@ -205,6 +210,75 @@ pub fn normalize_feishu_callback(
     Ok(FeishuCallbackOutcome::Message(feishu_message_from_payload(
         config, &payload, now,
     )?))
+}
+
+pub fn decrypt_feishu_encrypt(
+    encrypt: &str,
+    encrypt_key: &str,
+) -> Result<String, FeishuAdapterError> {
+    let decoded = general_purpose::STANDARD.decode(encrypt).map_err(|error| {
+        FeishuAdapterError::new(
+            "feishu_encrypt_base64_invalid",
+            format!("Feishu encrypted payload is not valid base64: {error}"),
+        )
+    })?;
+    if decoded.len() < 32 {
+        return Err(FeishuAdapterError::new(
+            "feishu_ciphertext_invalid",
+            "Feishu encrypted payload is too short",
+        ));
+    }
+    let (iv, ciphertext) = decoded.split_at(16);
+    if ciphertext.len() % 16 != 0 {
+        return Err(FeishuAdapterError::new(
+            "feishu_ciphertext_invalid",
+            "Feishu ciphertext length must be a multiple of AES block size",
+        ));
+    }
+
+    let key = Sha256::digest(encrypt_key.as_bytes());
+    let mut ciphertext = ciphertext.to_vec();
+    let plaintext = cbc::Decryptor::<Aes256>::new_from_slices(&key, iv)
+        .map_err(|error| {
+            FeishuAdapterError::new(
+                "feishu_cipher_init_failed",
+                format!("Feishu AES decryptor could not be initialized: {error}"),
+            )
+        })?
+        .decrypt_padded_mut::<NoPadding>(&mut ciphertext)
+        .map_err(|error| {
+            FeishuAdapterError::new(
+                "feishu_decrypt_failed",
+                format!("Feishu encrypted payload could not be decrypted: {error}"),
+            )
+        })?;
+    let start = plaintext
+        .iter()
+        .position(|byte| *byte == b'{')
+        .ok_or_else(|| {
+            FeishuAdapterError::new(
+                "feishu_plaintext_invalid",
+                "Feishu decrypted payload does not contain a JSON object",
+            )
+        })?;
+    let end = plaintext
+        .iter()
+        .rposition(|byte| *byte == b'}')
+        .filter(|end| *end >= start)
+        .ok_or_else(|| {
+            FeishuAdapterError::new(
+                "feishu_plaintext_invalid",
+                "Feishu decrypted payload does not contain a complete JSON object",
+            )
+        })?;
+    std::str::from_utf8(&plaintext[start..=end])
+        .map(str::to_string)
+        .map_err(|error| {
+            FeishuAdapterError::new(
+                "feishu_plaintext_invalid",
+                format!("Feishu decrypted payload is not UTF-8: {error}"),
+            )
+        })
 }
 
 pub fn render_feishu_reply_body(reply: &ExternalBotReplyView) -> Value {
@@ -236,6 +310,22 @@ fn feishu_challenge(payload: &Value) -> Option<String> {
         return None;
     }
     value_string(payload, &["challenge"])
+}
+
+fn decrypt_feishu_payload_if_needed(
+    payload: &Value,
+    encrypt_key: &str,
+) -> Result<Value, FeishuAdapterError> {
+    let Some(encrypt) = value_string(payload, &["encrypt"]) else {
+        return Ok(payload.clone());
+    };
+    let decrypted = decrypt_feishu_encrypt(&encrypt, encrypt_key)?;
+    serde_json::from_str(&decrypted).map_err(|error| {
+        FeishuAdapterError::new(
+            "feishu_decrypted_payload_invalid",
+            format!("Feishu decrypted payload is not valid JSON: {error}"),
+        )
+    })
 }
 
 fn verify_feishu_token(
@@ -460,6 +550,7 @@ fn string_field(value: &Value, field: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cbc::cipher::BlockEncryptMut;
     use chrono::TimeZone;
 
     fn sample_config() -> FeishuAdapterConfig {
@@ -471,6 +562,23 @@ mod tests {
             encrypt_key: "encrypt-key".to_string(),
             max_clock_skew_seconds: 300,
         }
+    }
+
+    fn encrypt_feishu_test_payload(payload: &Value, encrypt_key: &str) -> String {
+        let key = Sha256::digest(encrypt_key.as_bytes());
+        let iv = [0x24u8; 16];
+        let mut plaintext = payload.to_string().into_bytes();
+        let padding = 16 - (plaintext.len() % 16);
+        let padding = if padding == 0 { 16 } else { padding };
+        plaintext.extend(std::iter::repeat_n(padding as u8, padding));
+        let plaintext_len = plaintext.len();
+        let encrypted = cbc::Encryptor::<Aes256>::new_from_slices(&key, &iv)
+            .expect("test AES encryptor should initialize")
+            .encrypt_padded_mut::<NoPadding>(&mut plaintext, plaintext_len)
+            .expect("test plaintext is block aligned");
+        let mut envelope = iv.to_vec();
+        envelope.extend_from_slice(encrypted);
+        general_purpose::STANDARD.encode(envelope)
     }
 
     #[test]
@@ -505,6 +613,38 @@ mod tests {
         )
         .expect_err("duplicate callback should be rejected");
         assert_eq!(replay.code, "feishu_replay_detected");
+    }
+
+    #[test]
+    fn feishu_encrypt_decrypts_to_json_payload() {
+        let payload = json!({
+            "schema": "2.0",
+            "header": {
+                "event_type": "im.message.receive_v1",
+                "token": "verification-token"
+            },
+            "event": {
+                "message": {
+                    "message_id": "om_encrypted",
+                    "chat_id": "oc_room",
+                    "message_type": "text",
+                    "content": "{\"text\":\"encrypted hello\"}"
+                }
+            }
+        });
+        let encrypt = encrypt_feishu_test_payload(&payload, "encrypt-key");
+
+        let decrypted =
+            decrypt_feishu_encrypt(&encrypt, "encrypt-key").expect("payload should decrypt");
+        let decoded: Value = serde_json::from_str(&decrypted).expect("payload should be JSON");
+        assert_eq!(
+            decoded["header"]["event_type"],
+            json!("im.message.receive_v1")
+        );
+        assert_eq!(
+            decoded["event"]["message"]["message_id"],
+            json!("om_encrypted")
+        );
     }
 
     #[test]
@@ -569,6 +709,57 @@ mod tests {
         assert_eq!(
             message.idempotency_key,
             "feishu:tenant-feishu:cli_v3:evt-001"
+        );
+    }
+
+    #[test]
+    fn feishu_event_normalizes_encrypted_message_event() {
+        let config = sample_config();
+        let decrypted_payload = json!({
+            "schema": "2.0",
+            "header": {
+                "event_id": "evt-encrypted-001",
+                "event_type": "im.message.receive_v1",
+                "app_id": "cli_v3",
+                "tenant_key": "tenant-feishu",
+                "create_time": "1700000000123",
+                "token": "verification-token"
+            },
+            "event": {
+                "sender": {
+                    "sender_id": {
+                        "user_id": "user_sender"
+                    }
+                },
+                "message": {
+                    "message_id": "om_encrypted_001",
+                    "chat_id": "oc_room",
+                    "message_type": "text",
+                    "content": "{\"text\":\"encrypted V3\"}"
+                }
+            }
+        });
+        let raw_body = json!({
+            "encrypt": encrypt_feishu_test_payload(&decrypted_payload, "encrypt-key")
+        })
+        .to_string();
+        let signature =
+            feishu_callback_signature("1700000000", "nonce-encrypted", "encrypt-key", &raw_body);
+        let headers = FeishuCallbackHeaders::new("1700000000", "nonce-encrypted", signature);
+        let now = Utc.timestamp_opt(1_700_000_000, 0).single().unwrap();
+
+        let outcome = normalize_feishu_callback(&config, Some(&headers), &raw_body, now, None)
+            .expect("encrypted message should normalize");
+        let FeishuCallbackOutcome::Message(message) = outcome else {
+            panic!("expected encrypted message outcome");
+        };
+        assert_eq!(message.tenant_external_id, "tenant-feishu");
+        assert_eq!(message.sender_external_id, "user_sender");
+        assert_eq!(message.message_external_id, "om_encrypted_001");
+        assert_eq!(message.text.as_deref(), Some("encrypted V3"));
+        assert_eq!(
+            message.idempotency_key,
+            "feishu:tenant-feishu:cli_v3:evt-encrypted-001"
         );
     }
 

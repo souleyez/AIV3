@@ -17,7 +17,8 @@
 - Generic source MVP currently supports mock HTTPS connector fixtures for external users, groups, document metadata, document bodies, and ACL snapshots.
 - Phase 6 thin adapters now cover Feishu/Lark and WeCom callback signature validation, timestamp/replay checks, event normalization, and channel-safe reply payload rendering.
 - Phase 6 platform-specific callback entrypoints now read stored connection config and hand normalized Feishu/Lark and WeCom messages to the unified external channel ingestion endpoint.
-- Next implementation checkpoint: add Feishu encrypted callback body decryption and then move into Phase 7 external artifact/action runtime.
+- Phase 6 now supports Feishu/Lark encrypted `encrypt` callback bodies using the official AES-256-CBC event decryption shape.
+- Next implementation checkpoint: move into Phase 7 external artifact/action runtime.
 
 ---
 

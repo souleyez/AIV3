@@ -27206,6 +27206,27 @@ mod tests {
             .to_string()
     }
 
+    fn encrypt_feishu_test_payload(payload: &Value, encrypt_key: &str) -> String {
+        use aes::Aes256;
+        use base64::{engine::general_purpose, Engine as _};
+        use cbc::cipher::{block_padding::NoPadding, BlockEncryptMut, KeyIvInit};
+
+        let key = Sha256::digest(encrypt_key.as_bytes());
+        let iv = [0x24u8; 16];
+        let mut plaintext = payload.to_string().into_bytes();
+        let padding = 16 - (plaintext.len() % 16);
+        let padding = if padding == 0 { 16 } else { padding };
+        plaintext.extend(std::iter::repeat_n(padding as u8, padding));
+        let plaintext_len = plaintext.len();
+        let encrypted = cbc::Encryptor::<Aes256>::new_from_slices(&key, &iv)
+            .expect("test AES encryptor should initialize")
+            .encrypt_padded_mut::<NoPadding>(&mut plaintext, plaintext_len)
+            .expect("test plaintext is block aligned");
+        let mut envelope = iv.to_vec();
+        envelope.extend_from_slice(encrypted);
+        general_purpose::STANDARD.encode(envelope)
+    }
+
     fn encrypt_wecom_test_xml(xml: &str, receive_id: &str, encoding_aes_key: &str) -> String {
         use aes::Aes256;
         use base64::{engine::general_purpose, Engine as _};
@@ -27322,7 +27343,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn feishu_callback_endpoint_uses_connection_config_and_normalized_ingestion() {
+    async fn feishu_callback_endpoint_decrypts_event_body_and_uses_normalized_ingestion() {
         let _guard = shared_local_postgres_test_lock().lock().await;
         let storage = match local_postgres_storage().await {
             Ok(storage) => storage,
@@ -27373,7 +27394,7 @@ mod tests {
         .expect("external channel connection should be inserted");
 
         let now = Utc::now();
-        let raw_body = json!({
+        let event_body = json!({
             "schema": "2.0",
             "header": {
                 "event_id": "evt-route-001",
@@ -27397,6 +27418,9 @@ mod tests {
                     "content": "{\"text\":\"hello from Feishu\"}"
                 }
             }
+        });
+        let raw_body = json!({
+            "encrypt": encrypt_feishu_test_payload(&event_body, "encrypt-key")
         })
         .to_string();
         let timestamp = now.timestamp().to_string();
