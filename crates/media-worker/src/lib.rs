@@ -4175,6 +4175,17 @@ mod tests {
         }
     }
 
+    fn assert_public_manifest_file_entry(files: &[Value], kind: &str, file_name: &str) {
+        let file = files
+            .iter()
+            .find(|file| file["artifact_kind"] == json!(kind))
+            .unwrap_or_else(|| panic!("missing public manifest file entry {}", kind));
+
+        assert_eq!(file["file_name"], json!(file_name));
+        assert_eq!(file["path"], json!("[redacted]"));
+        assert_eq!(file["path_redacted"], json!(true));
+    }
+
     #[test]
     fn task_kind_accepts_video_workflow_task_keys() {
         assert_eq!(
@@ -5912,6 +5923,90 @@ mod tests {
         assert_eq!(
             output_artifact["completion_audit"]["redaction"]["provider_keys_included"],
             json!(false)
+        );
+
+        let generated_files = output["generated_artifacts"]["files"]
+            .as_array()
+            .expect("generated files");
+        let final_manifest_path = generated_files
+            .iter()
+            .find(|file| file["artifact_kind"] == json!("final_deliverables_manifest"))
+            .and_then(|file| file["path"].as_str())
+            .expect("final deliverables manifest path");
+        let final_manifest_json: Value = serde_json::from_str(
+            &fs::read_to_string(final_manifest_path).expect("final deliverables manifest"),
+        )
+        .expect("final deliverables manifest json");
+        assert_public_manifest_file_entry(
+            final_manifest_json["manifest_outputs"]
+                .as_array()
+                .expect("final manifest outputs"),
+            "final_deliverables_manifest",
+            DEFAULT_FINAL_DELIVERABLES_MANIFEST_FILE_NAME,
+        );
+        assert_public_manifest_file_entry(
+            final_manifest_json["manifest_outputs"]
+                .as_array()
+                .expect("final manifest outputs"),
+            "extraction_artifacts_manifest",
+            DEFAULT_EXTRACTION_ARTIFACTS_MANIFEST_FILE_NAME,
+        );
+        assert_public_manifest_file_entry(
+            final_manifest_json["final_outputs"]
+                .as_array()
+                .expect("final outputs"),
+            "pptx",
+            DEFAULT_VIDEO_SLIDES_PPTX_FILE_NAME,
+        );
+        assert_public_manifest_file_entry(
+            final_manifest_json["review_outputs"]
+                .as_array()
+                .expect("review outputs"),
+            "slide_notes",
+            DEFAULT_SLIDE_NOTES_ARTIFACT_FILE_NAME,
+        );
+        assert_public_manifest_file_entry(
+            final_manifest_json["evidence_outputs"]
+                .as_array()
+                .expect("evidence outputs"),
+            "subtitle_page_map",
+            DEFAULT_SUBTITLE_PAGE_MAP_FILE_NAME,
+        );
+
+        let extraction_manifest_path = output["generated_artifacts"]["manifest_path"]
+            .as_str()
+            .expect("extraction manifest path");
+        let extraction_manifest_json: Value = serde_json::from_str(
+            &fs::read_to_string(extraction_manifest_path).expect("extraction manifest"),
+        )
+        .expect("extraction manifest json");
+        let extraction_files = extraction_manifest_json["files"]
+            .as_array()
+            .expect("extraction files");
+        assert_public_manifest_file_entry(
+            extraction_files,
+            "final_deliverables_manifest",
+            DEFAULT_FINAL_DELIVERABLES_MANIFEST_FILE_NAME,
+        );
+        assert_public_manifest_file_entry(
+            extraction_files,
+            "extraction_artifacts_manifest",
+            DEFAULT_EXTRACTION_ARTIFACTS_MANIFEST_FILE_NAME,
+        );
+        assert_public_manifest_file_entry(
+            extraction_files,
+            "pptx",
+            DEFAULT_VIDEO_SLIDES_PPTX_FILE_NAME,
+        );
+        assert_public_manifest_file_entry(
+            extraction_files,
+            "slide_notes",
+            DEFAULT_SLIDE_NOTES_ARTIFACT_FILE_NAME,
+        );
+        assert_public_manifest_file_entry(
+            extraction_files,
+            "subtitle_page_map",
+            DEFAULT_SUBTITLE_PAGE_MAP_FILE_NAME,
         );
     }
 
