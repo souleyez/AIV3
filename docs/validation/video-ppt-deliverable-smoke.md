@@ -42,16 +42,27 @@ The media-worker test builds a controlled sample path in a temporary directory. 
 
 Real Codex validation belongs on `windows-jump` or the later Mac host. Do not run real `codex exec` on the developer workstation.
 
+First confirm the jump-host validator path itself is healthy:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\run-jump-host-video-deliverable-smoke.ps1 -SelfTest
+```
+
+The self-test sends the local validator to `windows-jump`, creates a tiny temporary fixture there, and validates it on the jump host. It does not require the repository to be checked out on the remote host.
+
 After a jump-host media smoke produces a `video-extraction-<document_id>` session directory, run the validator against that session directory or its `generated_artifacts` child:
 
 ```powershell
-npm run validate:video-deliverables -- "C:\Users\soulz\codex-host\tasks\<task>\video-extraction-<document_id>"
+powershell -ExecutionPolicy Bypass -File .\scripts\run-jump-host-video-deliverable-smoke.ps1 `
+  -RemoteDeliverablesPath "C:\Users\soulz\codex-host\tasks\<task>\video-extraction-<document_id>"
 ```
 
 For machine-readable output:
 
 ```powershell
-npm run validate:video-deliverables -- "C:\Users\soulz\codex-host\tasks\<task>\video-extraction-<document_id>" --json
+powershell -ExecutionPolicy Bypass -File .\scripts\run-jump-host-video-deliverable-smoke.ps1 `
+  -RemoteDeliverablesPath "C:\Users\soulz\codex-host\tasks\<task>\video-extraction-<document_id>" `
+  -Json
 ```
 
 Expected result:
