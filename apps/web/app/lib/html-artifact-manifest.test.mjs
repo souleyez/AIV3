@@ -322,6 +322,32 @@ test('renders video extraction summary template', () => {
           message: 'Speaker notes cannot be aligned yet.',
         }],
       },
+      deliverablePackage: {
+        kind: 'video_extraction_deliverable_package',
+        lifecycleState: 'downloadable_not_published',
+        publishable: true,
+        immutableVersion: false,
+        nextAction: 'persist_video_published_version',
+        readyRequiredFileCount: 5,
+        requiredFileCount: 5,
+        missingRequiredFileKinds: [],
+        requiredFiles: [{
+          artifactKind: 'pptx',
+          fileName: 'video_slides_screenshot_based.pptx',
+        }, {
+          artifactKind: 'final_deliverables_manifest',
+          fileName: 'final_deliverables_manifest.json',
+        }, {
+          artifactKind: 'extraction_artifacts_manifest',
+          fileName: 'extraction_artifacts_manifest.json',
+        }, {
+          artifactKind: 'slide_notes',
+          fileName: 'slide_notes.md',
+        }, {
+          artifactKind: 'subtitle_page_map',
+          fileName: 'subtitle_page_map.json',
+        }],
+      },
       completionFollowUp: {
         kind: 'video_extraction_completion_follow_up',
         status: 'evidence_artifacts_ready',
@@ -435,6 +461,12 @@ test('renders video extraction summary template', () => {
   assert.match(video.html, /完成状态/);
   assert.match(video.html, /后续提醒/);
   assert.match(video.html, /model follow-up required/);
+  assert.match(video.html, /交付包/);
+  assert.match(video.html, /downloadable_not_published/);
+  assert.match(video.html, /not immutable yet/);
+  assert.match(video.html, /persist_video_published_version/);
+  assert.match(video.html, /video_slides_screenshot_based\.pptx/);
+  assert.match(video.html, /final_deliverables_manifest\.json/);
   assert.match(video.html, /用户通知/);
   assert.match(video.html, /视频\/PPT 提取需要复核/);
   assert.match(video.html, /后台任务已更新视频提取摘要/);

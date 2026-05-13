@@ -551,6 +551,33 @@ function renderVideoExtractionSummary(manifest) {
     ].filter(Boolean).join(' · '),
     meta: file.artifactKind || file.artifact_kind || '',
   }));
+  const deliverablePackage = isPlainObject(payload.deliverablePackage || payload.deliverable_package)
+    ? payload.deliverablePackage || payload.deliverable_package
+    : {};
+  const packageFiles = arrayOrEmpty(deliverablePackage.requiredFiles || deliverablePackage.required_files).map((file, index) => ({
+    title: videoArtifactKindLabel(file.artifactKind || file.artifact_kind || `required-${index + 1}`),
+    detail: file.fileName || file.file_name || '',
+    meta: file.artifactKind || file.artifact_kind || '',
+  }));
+  const missingPackageKinds = arrayOrEmpty(
+    deliverablePackage.missingRequiredFileKinds || deliverablePackage.missing_required_file_kinds,
+  );
+  const packageRows = Object.keys(deliverablePackage).length ? [
+    {
+      title: deliverablePackage.publishable ? '可下载交付包' : '交付包未完成',
+      detail: [
+        deliverablePackage.lifecycleState || deliverablePackage.lifecycle_state || 'unknown',
+        deliverablePackage.immutableVersion || deliverablePackage.immutable_version ? 'immutable version' : 'not immutable yet',
+        `required=${deliverablePackage.readyRequiredFileCount ?? deliverablePackage.ready_required_file_count ?? packageFiles.length}/${deliverablePackage.requiredFileCount ?? deliverablePackage.required_file_count ?? '?'}`,
+      ].join(' · '),
+      meta: deliverablePackage.nextAction || deliverablePackage.next_action || '',
+    },
+    ...missingPackageKinds.map((kind) => ({
+      title: `缺失 ${videoArtifactKindLabel(kind)}`,
+      detail: kind,
+      meta: 'missing_required_file',
+    })),
+  ] : [];
   const qualityWarnings = arrayOrEmpty(deliverableStatus.warnings).map((warning, index) => ({
     title: warning.code || `质量提示 ${index + 1}`,
     detail: warning.message || warning.detail || '',
@@ -661,6 +688,7 @@ function renderVideoExtractionSummary(manifest) {
       { label: 'PPTX', value: deliverableStatus.hasPptx || deliverableStatus.has_pptx ? 'ready' : 'not ready' },
       { label: '质量提示', value: String(deliverableStatus.warningCount ?? deliverableStatus.warning_count ?? qualityWarnings.length) },
       { label: '就绪文件', value: String(readyFiles.length || generatedFiles.length) },
+      { label: '交付包', value: deliverablePackage.lifecycleState || deliverablePackage.lifecycle_state || 'not tracked' },
       { label: '后续提醒', value: followUpModel.required ? 'model follow-up required' : 'not requested' },
       { label: '用户通知', value: notificationVisible ? (userNotification.title || userNotification.severity || 'ready') : 'not requested' },
       { label: '原文片段', value: String(summary.transcriptSegmentCount ?? summary.transcript_segment_count ?? transcript.length) },
@@ -675,6 +703,11 @@ function renderVideoExtractionSummary(manifest) {
       <h2>完成状态</h2>
       <p>${escapeHtml(`后台提取状态：${followUpStatus}。${followUpModel.instruction || '下一次模型回复应基于这些结构化状态继续，不补造缺失文件。'}`)}</p>
       ${renderList(readyFiles, '暂无已就绪交付文件。')}
+    </section>
+    <section>
+      <h2>交付包</h2>
+      ${renderList(packageRows, '暂无交付包状态。')}
+      ${renderList(packageFiles, '暂无必需交付文件。')}
     </section>
     <section>
       <h2>用户通知</h2>

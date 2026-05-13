@@ -32,6 +32,13 @@ pub const DEFAULT_SLIDE_NOTES_ARTIFACT_FILE_NAME: &str = "slide_notes.md";
 pub const DEFAULT_PPTX_BUILD_PLAN_FILE_NAME: &str = "pptx_build_plan.json";
 pub const DEFAULT_VIDEO_SLIDES_PPTX_FILE_NAME: &str = "video_slides_screenshot_based.pptx";
 const LOW_CONFIDENCE_VIDEO_EVIDENCE_THRESHOLD: f64 = 0.65;
+const VIDEO_DELIVERABLE_PACKAGE_REQUIRED_KINDS: &[&str] = &[
+    "pptx",
+    "final_deliverables_manifest",
+    "extraction_artifacts_manifest",
+    "slide_notes",
+    "subtitle_page_map",
+];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MediaWorkflowTaskKind {
@@ -1998,6 +2005,11 @@ pub fn video_extraction_html_artifact_from_output(
         .get("generated_artifacts")
         .cloned()
         .unwrap_or_else(|| json!({}));
+    let files = generated_artifacts
+        .get("files")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
     let deliverable_status = output
         .get("deliverable_status")
         .cloned()
@@ -2015,9 +2027,19 @@ pub fn video_extraction_html_artifact_from_output(
         "template_id": "video_extraction_summary",
         "source_type": "video_extraction",
     });
+    let html_artifact_ids = vec![artifact_id.clone()];
     let completion_follow_up = video_extraction_completion_follow_up_from_output(
         output,
         std::slice::from_ref(&artifact_summary),
+    );
+    let deliverable_package = video_deliverable_package_summary(
+        assistant_run_id,
+        document_id,
+        title,
+        output,
+        &files,
+        &deliverable_status,
+        &html_artifact_ids,
     );
 
     Some(json!({
@@ -2069,6 +2091,7 @@ pub fn video_extraction_html_artifact_from_output(
             ],
             "artifacts": output.get("artifacts").cloned().unwrap_or_else(|| json!([])),
             "generated_artifacts": generated_artifacts,
+            "deliverable_package": deliverable_package,
             "completion_follow_up": completion_follow_up,
             "completion_audit": video_extraction_completion_audit_from_output(output),
             "local_thread_id": local_thread_id,
@@ -2118,6 +2141,15 @@ pub fn video_extraction_output_artifact_from_output(
         .filter_map(|artifact| artifact.get("id").and_then(Value::as_str))
         .map(str::to_string)
         .collect::<Vec<_>>();
+    let deliverable_package = video_deliverable_package_summary(
+        assistant_run_id,
+        document_id,
+        title,
+        output,
+        &files,
+        &deliverable_status,
+        &html_artifact_ids,
+    );
 
     Some(json!({
         "type": "video_extraction_artifacts",
@@ -2182,11 +2214,111 @@ pub fn video_extraction_output_artifact_from_output(
             ],
         ),
         "final_deliverables_manifest": final_deliverables_manifest,
+        "deliverable_package": deliverable_package,
         "html_artifacts": html_artifact_summaries,
         "html_artifact_ids": html_artifact_ids,
         "completion_follow_up": video_extraction_completion_follow_up_from_output(output, html_artifacts),
         "completion_audit": video_extraction_completion_audit_from_output(output),
     }))
+}
+
+fn video_deliverable_package_summary(
+    assistant_run_id: &str,
+    document_id: &str,
+    title: &str,
+    output: &Value,
+    files: &[Value],
+    deliverable_status: &Value,
+    html_artifact_ids: &[String],
+) -> Value {
+    let ready_file_kinds = files
+        .iter()
+        .filter_map(|file| file.get("artifact_kind").and_then(Value::as_str))
+        .collect::<BTreeSet<_>>();
+    let required_file_kinds = VIDEO_DELIVERABLE_PACKAGE_REQUIRED_KINDS
+        .iter()
+        .copied()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    let missing_required_file_kinds = VIDEO_DELIVERABLE_PACKAGE_REQUIRED_KINDS
+        .iter()
+        .copied()
+        .filter(|kind| !ready_file_kinds.contains(kind))
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    let required_files = VIDEO_DELIVERABLE_PACKAGE_REQUIRED_KINDS
+        .iter()
+        .filter_map(|kind| {
+            files
+                .iter()
+                .find(|file| file.get("artifact_kind").and_then(Value::as_str) == Some(*kind))
+                .map(|file| {
+                    json!({
+                        "artifact_kind": kind,
+                        "file_name": video_artifact_file_name(file, kind),
+                    })
+                })
+        })
+        .collect::<Vec<_>>();
+    let state = deliverable_status
+        .get("state")
+        .and_then(Value::as_str)
+        .or_else(|| output.get("status").and_then(Value::as_str))
+        .unwrap_or("partial");
+    let publishable = state == "final_pptx_ready" && missing_required_file_kinds.is_empty();
+    let lifecycle_state = if publishable {
+        "downloadable_not_published"
+    } else {
+        "not_ready"
+    };
+    let next_action = if publishable {
+        "persist_video_published_version"
+    } else {
+        "complete_required_deliverables"
+    };
+
+    json!({
+        "kind": "video_extraction_deliverable_package",
+        "version": 1,
+        "package_id": format!("video-deliverable-package-{assistant_run_id}-{document_id}"),
+        "lifecycle_state": lifecycle_state,
+        "publishable": publishable,
+        "immutable_version": false,
+        "version_no": Value::Null,
+        "next_action": next_action,
+        "source_run_id": assistant_run_id,
+        "document_id": document_id,
+        "dataset_id": output.get("dataset_id").cloned().unwrap_or(Value::Null),
+        "title": title,
+        "required_file_kinds": required_file_kinds,
+        "missing_required_file_kinds": missing_required_file_kinds,
+        "ready_required_file_count": required_files.len(),
+        "required_file_count": VIDEO_DELIVERABLE_PACKAGE_REQUIRED_KINDS.len(),
+        "required_files": required_files,
+        "artifact_group_counts": video_artifact_group_counts(files),
+        "html_artifact_ids": html_artifact_ids,
+        "no_host_composed_answer": true,
+    })
+}
+
+fn video_artifact_file_name(file: &Value, fallback_kind: &str) -> String {
+    file.get("file_name")
+        .or_else(|| file.get("fileName"))
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            file.get("path")
+                .or_else(|| file.get("uri"))
+                .and_then(Value::as_str)
+                .and_then(|value| {
+                    Path::new(value)
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .map(str::to_string)
+                })
+        })
+        .unwrap_or_else(|| fallback_kind.to_string())
 }
 
 pub fn video_extraction_completion_follow_up_from_output(
@@ -4660,6 +4792,24 @@ mod tests {
             artifact["payload"]["completion_audit"]["kind"],
             json!("video_extraction_completion_audit")
         );
+        assert_eq!(
+            artifact["payload"]["deliverable_package"]["kind"],
+            json!("video_extraction_deliverable_package")
+        );
+        assert_eq!(
+            artifact["payload"]["deliverable_package"]["lifecycle_state"],
+            json!("not_ready")
+        );
+        assert_eq!(
+            artifact["payload"]["deliverable_package"]["publishable"],
+            json!(false)
+        );
+        assert!(
+            artifact["payload"]["deliverable_package"]["missing_required_file_kinds"]
+                .as_array()
+                .expect("missing required file kinds")
+                .contains(&json!("pptx"))
+        );
     }
 
     #[test]
@@ -4764,6 +4914,46 @@ mod tests {
             output_artifact["completion_audit"]["kind"],
             json!("video_extraction_completion_audit")
         );
+        assert_eq!(
+            html_artifact["payload"]["deliverable_package"]["lifecycle_state"],
+            json!("downloadable_not_published")
+        );
+        assert_eq!(
+            html_artifact["payload"]["deliverable_package"]["next_action"],
+            json!("persist_video_published_version")
+        );
+        assert_eq!(
+            output_artifact["deliverable_package"]["kind"],
+            json!("video_extraction_deliverable_package")
+        );
+        assert_eq!(
+            output_artifact["deliverable_package"]["publishable"],
+            json!(true)
+        );
+        assert_eq!(
+            output_artifact["deliverable_package"]["immutable_version"],
+            json!(false)
+        );
+        assert_eq!(
+            output_artifact["deliverable_package"]["missing_required_file_kinds"],
+            json!([])
+        );
+        assert_eq!(
+            output_artifact["deliverable_package"]["required_file_count"],
+            json!(5)
+        );
+        assert_eq!(
+            output_artifact["deliverable_package"]["ready_required_file_count"],
+            json!(5)
+        );
+        assert!(output_artifact["deliverable_package"]["required_files"]
+            .as_array()
+            .expect("required files")
+            .iter()
+            .any(|file| {
+                file["artifact_kind"] == json!("pptx")
+                    && file["file_name"] == json!("video_slides_screenshot_based.pptx")
+            }));
         assert!(output_artifact["primary_files"]
             .as_array()
             .expect("primary files")
