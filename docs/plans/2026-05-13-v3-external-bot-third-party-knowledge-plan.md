@@ -10,6 +10,8 @@
 
 **Third-party API Guide:** `docs/integrations/third-party-integration-api.md`
 
+**Third-party Sendable Guide (CN):** `docs/integrations/third-party-integration-api.zh-CN.md`
+
 ---
 
 ## Product Positioning
@@ -230,7 +232,7 @@ Secrets must stay outside public API responses. Management endpoints expose reda
 
 ## API Surface
 
-The third-party-facing API guide is maintained in `docs/integrations/third-party-integration-api.md`. This plan remains the implementation roadmap; the integration guide is the external-facing contract narrative and should be updated whenever endpoint shape, auth policy, idempotency, or permission behavior changes.
+The third-party-facing API guide is maintained in `docs/integrations/third-party-integration-api.md`, with a Chinese sendable version in `docs/integrations/third-party-integration-api.zh-CN.md`. This plan remains the implementation roadmap; the integration guide is the external-facing contract narrative and should be updated whenever endpoint shape, auth policy, idempotency, or permission behavior changes.
 
 ### Platform and adapter APIs
 

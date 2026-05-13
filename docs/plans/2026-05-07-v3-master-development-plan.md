@@ -222,6 +222,8 @@ Detailed implementation plan: `docs/plans/2026-05-13-v3-external-bot-third-party
 
 Third-party-facing API guide: `docs/integrations/third-party-integration-api.md`.
 
+Third-party sendable guide (CN): `docs/integrations/third-party-integration-api.zh-CN.md`.
+
 The product must support:
 
 - Standard Feishu/Lark and WeCom bot/channel adapters for official message, event, card/file reply, callback, signature, replay-protection, and tenant-routing interfaces.
