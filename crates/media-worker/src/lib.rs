@@ -2363,6 +2363,30 @@ pub fn video_extraction_completion_follow_up_from_output(
         &deliverable_status,
         &next_actions,
     );
+    let source_run_id = html_artifacts
+        .iter()
+        .find_map(|artifact| {
+            artifact
+                .get("provenance")
+                .and_then(|provenance| provenance.get("source_run_id"))
+                .and_then(Value::as_str)
+                .or_else(|| {
+                    artifact
+                        .get("owner_scope")
+                        .and_then(|scope| scope.get("id"))
+                        .and_then(Value::as_str)
+                })
+        })
+        .unwrap_or("");
+    let deliverable_package = video_deliverable_package_summary(
+        source_run_id,
+        document_id,
+        title,
+        output,
+        &files,
+        &deliverable_status,
+        &html_artifact_ids,
+    );
 
     Some(json!({
         "kind": "video_extraction_completion_follow_up",
@@ -2371,6 +2395,7 @@ pub fn video_extraction_completion_follow_up_from_output(
         "title": title,
         "status": state,
         "deliverable_status": deliverable_status,
+        "deliverable_package": deliverable_package,
         "ready_file_kinds": ready_file_kinds,
         "html_artifact_ids": html_artifact_ids,
         "next_actions": next_actions,
@@ -5053,6 +5078,23 @@ mod tests {
             follow_up["deliverable_status"]["has_slide_notes"],
             json!(true)
         );
+        assert_eq!(
+            follow_up["deliverable_package"]["lifecycle_state"],
+            json!("downloadable_not_published")
+        );
+        assert_eq!(follow_up["deliverable_package"]["publishable"], json!(true));
+        assert_eq!(
+            follow_up["deliverable_package"]["next_action"],
+            json!("persist_video_published_version")
+        );
+        assert_eq!(
+            follow_up["deliverable_package"]["source_run_id"],
+            json!(run_id)
+        );
+        assert_eq!(
+            follow_up["deliverable_package"]["missing_required_file_kinds"],
+            json!([])
+        );
         assert!(follow_up["next_actions"]
             .as_array()
             .expect("next actions")
@@ -5110,6 +5152,18 @@ mod tests {
             video_extraction_completion_follow_up_from_output(&output, &[]).expect("follow up");
         let next_actions = follow_up["next_actions"].as_array().expect("next actions");
 
+        assert_eq!(
+            follow_up["deliverable_package"]["lifecycle_state"],
+            json!("not_ready")
+        );
+        assert_eq!(
+            follow_up["deliverable_package"]["publishable"],
+            json!(false)
+        );
+        assert_eq!(
+            follow_up["deliverable_package"]["next_action"],
+            json!("complete_required_deliverables")
+        );
         assert!(next_actions.contains(&json!("retry_frame_extraction")));
         assert!(next_actions.contains(&json!("retry_generated_artifact_writer")));
         assert!(next_actions.contains(&json!("attach_or_parse_transcript_evidence")));
