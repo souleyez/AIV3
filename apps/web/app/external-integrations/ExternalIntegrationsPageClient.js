@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import {
+  artifactSignalLabel,
   buildThirdPartyApiUrl,
   controlResultLabel,
   driftSignalLabel,
@@ -49,6 +50,10 @@ function driftClass(signal) {
   return `external-drift-pill external-drift-${signal || 'unknown'}`;
 }
 
+function artifactClass(signal) {
+  return `external-artifact-pill external-artifact-${signal || 'none'}`;
+}
+
 function governanceMetrics(integration) {
   const summary = integration?.driftSummary || {};
   if (integration?.kind === 'source') {
@@ -66,6 +71,21 @@ function governanceMetrics(integration) {
     { label: '未映射用户', value: numberOrZero(summary.unmapped_principal_count) },
     { label: '停用用户', value: numberOrZero(summary.disabled_principal_count) },
     { label: '最近用户更新', value: formatObservationTime(summary.latest_principal_updated_at) },
+  ];
+}
+
+function artifactMetrics(integration) {
+  const summary = integration?.artifactSummary || {};
+  return [
+    { label: '产物信号', value: artifactSignalLabel(integration?.artifactSignal) },
+    { label: '状态查询', value: numberOrZero(summary.status_action_count) },
+    { label: '发布动作', value: numberOrZero(summary.publish_action_count) },
+    { label: '撤销动作', value: numberOrZero(summary.revoke_action_count) },
+    { label: '待确认', value: numberOrZero(summary.pending_confirmation_count) },
+    { label: '阻断/失败', value: numberOrZero(summary.blocked_count) + numberOrZero(summary.failed_count) },
+    { label: '已发布', value: numberOrZero(summary.published_count) },
+    { label: '已撤销', value: numberOrZero(summary.revoked_count) },
+    { label: '最近产物动作', value: formatObservationTime(summary.latest_artifact_action_at) },
   ];
 }
 
@@ -170,6 +190,7 @@ export default function ExternalIntegrationsPageClient() {
     failed: metricTotal(integrations, 'failedActionCount'),
     dispatched: metricTotal(integrations, 'dispatchedActionCount'),
     driftIssues: integrations.filter((item) => !['ok', 'unknown'].includes(item.driftSignal)).length,
+    artifactIssues: integrations.filter((item) => ['artifact_confirmation_pending', 'artifact_blocked', 'artifact_failed'].includes(item.artifactSignal)).length,
   };
 
   return (
@@ -203,6 +224,10 @@ export default function ExternalIntegrationsPageClient() {
           <div>
             <strong>{totals.driftIssues}</strong>
             <span>治理告警</span>
+          </div>
+          <div>
+            <strong>{totals.artifactIssues}</strong>
+            <span>产物告警</span>
           </div>
         </div>
       </section>
@@ -284,6 +309,11 @@ export default function ExternalIntegrationsPageClient() {
               <div className="external-detail-head-signals">
                 <span className={statusClass(selected.signal)}>{signalLabel(selected.signal)}</span>
                 <span className={driftClass(selected.driftSignal)}>{driftSignalLabel(selected.driftSignal)}</span>
+                {selected.kind === 'channel' ? (
+                  <span className={artifactClass(selected.artifactSignal)}>
+                    {artifactSignalLabel(selected.artifactSignal)}
+                  </span>
+                ) : null}
               </div>
             ) : null}
           </div>
@@ -342,6 +372,16 @@ export default function ExternalIntegrationsPageClient() {
                   </div>
                 ))}
               </div>
+              {selected.kind === 'channel' ? (
+                <div className="external-detail-strip external-artifact-strip">
+                  {artifactMetrics(selected).map((metric) => (
+                    <div key={metric.label}>
+                      <span>{metric.label}</span>
+                      <strong>{metric.value}</strong>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
               <JsonPreview value={selected.configSummary} />
             </>
           ) : (

@@ -6807,7 +6807,81 @@ async fn list_external_integrations(
                    from external_principals p
                    where p.tenant_id = c.tenant_id
                      and p.platform = c.platform
-               ) as latest_principal_updated_at
+               ) as latest_principal_updated_at,
+               coalesce((
+                   select count(*)
+                   from external_action_runs a
+                   where a.tenant_id = c.tenant_id
+                     and a.requester_summary ->> 'channel_connection_id' = c.id
+                     and a.action_type = 'external_artifact.status'
+               ), 0)::bigint as artifact_status_action_count,
+               coalesce((
+                   select count(*)
+                   from external_action_runs a
+                   where a.tenant_id = c.tenant_id
+                     and a.requester_summary ->> 'channel_connection_id' = c.id
+                     and a.action_type = 'external_artifact.publish'
+               ), 0)::bigint as artifact_publish_action_count,
+               coalesce((
+                   select count(*)
+                   from external_action_runs a
+                   where a.tenant_id = c.tenant_id
+                     and a.requester_summary ->> 'channel_connection_id' = c.id
+                     and a.action_type = 'external_artifact.revoke'
+               ), 0)::bigint as artifact_revoke_action_count,
+               coalesce((
+                   select count(*)
+                   from external_action_runs a
+                   where a.tenant_id = c.tenant_id
+                     and a.requester_summary ->> 'channel_connection_id' = c.id
+                     and a.action_type in ('external_artifact.status', 'external_artifact.publish', 'external_artifact.revoke')
+                     and a.confirmation_state = 'pending'
+               ), 0)::bigint as artifact_pending_confirmation_count,
+               coalesce((
+                   select count(*)
+                   from external_action_runs a
+                   where a.tenant_id = c.tenant_id
+                     and a.requester_summary ->> 'channel_connection_id' = c.id
+                     and a.action_type in ('external_artifact.status', 'external_artifact.publish', 'external_artifact.revoke')
+                     and a.result_summary ->> 'status' = 'dispatch_blocked'
+               ), 0)::bigint as artifact_blocked_count,
+               coalesce((
+                   select count(*)
+                   from external_action_runs a
+                   where a.tenant_id = c.tenant_id
+                     and a.requester_summary ->> 'channel_connection_id' = c.id
+                     and a.action_type in ('external_artifact.status', 'external_artifact.publish', 'external_artifact.revoke')
+                     and (
+                        a.result_summary ->> 'status' = 'dispatch_failed'
+                        or (
+                            a.failure_kind is not null
+                            and coalesce(a.result_summary ->> 'status', '') <> 'dispatch_blocked'
+                        )
+                     )
+               ), 0)::bigint as artifact_failed_count,
+               coalesce((
+                   select count(*)
+                   from external_action_runs a
+                   where a.tenant_id = c.tenant_id
+                     and a.requester_summary ->> 'channel_connection_id' = c.id
+                     and a.action_type = 'external_artifact.publish'
+                     and a.result_summary ->> 'status' = 'dispatched'
+               ), 0)::bigint as artifact_published_count,
+               coalesce((
+                   select count(*)
+                   from external_action_runs a
+                   where a.tenant_id = c.tenant_id
+                     and a.requester_summary ->> 'channel_connection_id' = c.id
+                     and a.action_type = 'external_artifact.revoke'
+                     and a.result_summary ->> 'status' = 'dispatched'
+               ), 0)::bigint as artifact_revoked_count,
+               (
+                   select max(a.updated_at)
+                   from external_action_runs a
+                   where a.tenant_id = c.tenant_id
+                     and a.requester_summary ->> 'channel_connection_id' = c.id
+                     and a.action_type in ('external_artifact.status', 'external_artifact.publish', 'external_artifact.revoke')
+               ) as latest_artifact_action_at
         from external_channel_connections c
         where c.tenant_id = $1
         order by c.updated_at desc
@@ -6842,6 +6916,17 @@ async fn list_external_integrations(
                 row.get("unmapped_principal_count"),
                 row.get("disabled_principal_count"),
                 row.get("latest_principal_updated_at"),
+            ),
+            artifact_summary: external_artifact_summary(
+                row.get("artifact_status_action_count"),
+                row.get("artifact_publish_action_count"),
+                row.get("artifact_revoke_action_count"),
+                row.get("artifact_pending_confirmation_count"),
+                row.get("artifact_blocked_count"),
+                row.get("artifact_failed_count"),
+                row.get("artifact_published_count"),
+                row.get("artifact_revoked_count"),
+                row.get("latest_artifact_action_at"),
             ),
         });
     }
@@ -6933,6 +7018,7 @@ async fn list_external_integrations(
                 row.get("latest_sync_status"),
                 row.get("latest_acl_captured_at"),
             ),
+            artifact_summary: external_artifact_summary(0, 0, 0, 0, 0, 0, 0, 0, None),
         });
     }
 
@@ -7483,6 +7569,9 @@ async fn load_external_channel_audit_items(
         r#"
         select id,
                assistant_run_id,
+               action_type,
+               target_system,
+               arguments_redacted,
                confirmation_state,
                external_request_id,
                result_summary,
@@ -7519,6 +7608,9 @@ async fn load_external_channel_audit_items(
             status: Some(status),
             failure_kind: row.get("failure_kind"),
             summary: external_action_run_audit_summary(
+                &row.get::<String, _>("action_type"),
+                &row.get::<String, _>("target_system"),
+                &row.get::<Value, _>("arguments_redacted"),
                 &confirmation_state,
                 row.get::<Option<String>, _>("external_request_id")
                     .as_deref(),
@@ -7650,13 +7742,60 @@ fn external_source_drift_summary(
     })
 }
 
+fn external_artifact_summary(
+    status_action_count: i64,
+    publish_action_count: i64,
+    revoke_action_count: i64,
+    pending_confirmation_count: i64,
+    blocked_count: i64,
+    failed_count: i64,
+    published_count: i64,
+    revoked_count: i64,
+    latest_artifact_action_at: Option<DateTime<Utc>>,
+) -> Value {
+    let signal = if pending_confirmation_count > 0 {
+        "artifact_confirmation_pending"
+    } else if failed_count > 0 {
+        "artifact_failed"
+    } else if blocked_count > 0 {
+        "artifact_blocked"
+    } else if revoked_count > 0 {
+        "artifact_revoked"
+    } else if published_count > 0 {
+        "artifact_published"
+    } else if status_action_count + publish_action_count + revoke_action_count > 0 {
+        "artifact_observed"
+    } else {
+        "none"
+    };
+    json!({
+        "signal": signal,
+        "status_action_count": status_action_count.max(0),
+        "publish_action_count": publish_action_count.max(0),
+        "revoke_action_count": revoke_action_count.max(0),
+        "pending_confirmation_count": pending_confirmation_count.max(0),
+        "blocked_count": blocked_count.max(0),
+        "failed_count": failed_count.max(0),
+        "published_count": published_count.max(0),
+        "revoked_count": revoked_count.max(0),
+        "latest_artifact_action_at": latest_artifact_action_at,
+    })
+}
+
 fn external_action_run_audit_summary(
+    action_type: &str,
+    target_system: &str,
+    arguments_redacted: &Value,
     confirmation_state: &str,
     external_request_id: Option<&str>,
     result_summary: &Value,
 ) -> Value {
     let dispatch = result_summary.get("dispatch").unwrap_or(&Value::Null);
     json!({
+        "action_type": action_type,
+        "target_system": target_system,
+        "is_external_artifact_action": action_type.starts_with("external_artifact."),
+        "artifact_ref": arguments_redacted.get("artifact_ref").cloned().unwrap_or(Value::Null),
         "confirmation_state": confirmation_state,
         "external_request_recorded": external_request_id.is_some(),
         "dispatch_status": result_summary.get("status").cloned().unwrap_or(Value::Null),
@@ -29843,6 +29982,49 @@ mod tests {
 
         let recovering = external_source_drift_summary(4, 0, 0, Some("running".to_string()), None);
         assert_eq!(recovering["signal"], json!("sync_recovering"));
+    }
+
+    #[test]
+    fn external_artifact_summary_prioritizes_publish_revoke_status() {
+        let pending = external_artifact_summary(1, 1, 1, 1, 0, 0, 1, 0, None);
+        assert_eq!(pending["signal"], json!("artifact_confirmation_pending"));
+        assert_eq!(pending["pending_confirmation_count"], json!(1));
+
+        let blocked = external_artifact_summary(0, 1, 0, 0, 2, 0, 0, 0, None);
+        assert_eq!(blocked["signal"], json!("artifact_blocked"));
+        assert_eq!(blocked["blocked_count"], json!(2));
+
+        let revoked = external_artifact_summary(0, 1, 1, 0, 0, 0, 1, 1, None);
+        assert_eq!(revoked["signal"], json!("artifact_revoked"));
+        assert_eq!(revoked["published_count"], json!(1));
+        assert_eq!(revoked["revoked_count"], json!(1));
+    }
+
+    #[test]
+    fn external_action_run_audit_summary_marks_artifact_actions_without_raw_arguments() {
+        let summary = external_action_run_audit_summary(
+            "external_artifact.revoke",
+            "third_party_artifact_api",
+            &json!({
+                "artifact_ref": "artifact-001",
+                "raw_prompt_redacted": true,
+            }),
+            "confirmed",
+            Some("req-001"),
+            &json!({
+                "status": "dispatched",
+                "dispatch": {
+                    "reason": "accepted",
+                    "response_summary": {"json": {"status": "revoked"}}
+                }
+            }),
+        );
+
+        assert_eq!(summary["is_external_artifact_action"], json!(true));
+        assert_eq!(summary["artifact_ref"], json!("artifact-001"));
+        assert_eq!(summary["external_request_recorded"], json!(true));
+        assert_eq!(summary["dispatch_status"], json!("dispatched"));
+        assert!(!summary.to_string().contains("raw_prompt"));
     }
 
     #[test]

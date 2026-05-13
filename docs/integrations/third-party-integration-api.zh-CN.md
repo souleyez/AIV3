@@ -501,7 +501,9 @@ V3 计算有效权限时会综合：
 
 当 V3 生成报告、页面、文档、表格、图片或其他产物时，可按项目配置发布到第三方系统。
 
-计划接口示例：
+当前实现状态：产物发布、状态查询和撤销已经接入外部动作运行时。V3 会把 `external_artifact.publish`、`external_artifact.status`、`external_artifact.revoke` 作为受控动作保存到审计记录中；撤销属于高风险动作，必须先完成用户确认。确认后或无需确认的动作，会由 V3 派发到第三方配置的产物 endpoint，并在观测接口中形成 `artifact_summary`。
+
+计划中的直接接口示例：
 
 ```http
 POST /v1/external/artifacts/{artifact_id}/publish
@@ -514,6 +516,33 @@ POST /v1/external/artifacts/{artifact_id}/revoke
 POST /artifacts
 POST /artifacts/{artifact_external_id}/revoke
 ```
+
+V3 派发到第三方产物 endpoint 的请求会采用统一外部动作格式，例如：
+
+```json
+{
+  "action_id": "act-artifact-001",
+  "assistant_run_id": "00000000-0000-0000-0000-000000000001",
+  "action_type": "external_artifact.publish",
+  "risk_level": "low_risk_write",
+  "target_system": "third_party_artifact_api",
+  "arguments_redacted": {
+    "artifact_ref": "artifact-001",
+    "target_system": "customer-portal",
+    "visibility": "source_acl"
+  },
+  "confirmation_state": "not_required",
+  "requester_summary": {
+    "platform": "generic_chat",
+    "tenant_external_id": "tenant-ext-001",
+    "conversation_external_id": "chat-risk-room",
+    "sender_external_id": "user-ext-001"
+  },
+  "raw_arguments_included": false
+}
+```
+
+撤销请求的 `action_type` 为 `external_artifact.revoke`，`confirmation_state` 必须已经是 `confirmed`。第三方响应中可返回 `external_request_id`、`externalRequestId`、`request_id` 或 `requestId`，V3 只保存请求 id 和脱敏响应摘要。
 
 发布请求示例：
 
@@ -536,6 +565,7 @@ POST /artifacts/{artifact_external_id}/revoke
 - 下载链接具备有效期或访问校验；
 - 撤销后第三方不可继续访问；
 - 发布、查看、下载、撤销都应可审计。
+- 观测接口会展示发布、撤销、阻断、失败和待确认数量，但不会展示原始产物正文、原始下载地址或密钥。
 
 ## 13. 业务动作接口
 
@@ -679,6 +709,7 @@ GET /v1/external/integrations
 
 - 聊天通道会展示外部用户映射漂移，例如 `identity_mapping_gap`、`disabled_principals`，并给出未映射用户数、已停用用户数和最近用户更新时间。
 - 资料源会展示 ACL 与同步恢复状态，例如 `acl_missing`、`acl_stale`、`sync_failed`、`sync_recovering`，并给出 ACL 快照数、过期快照数、失败同步数、最新 ACL 快照时间和最新同步状态。
+- 聊天通道还会返回 `artifact_summary`，用于展示外部产物动作状态，包括状态查询、发布、撤销、待确认、阻断、失败、已发布、已撤销和最近产物动作时间。该字段仅用于运营观测，不包含原始产物正文、原始下载地址或凭证材料。
 
 ```http
 GET /v1/external/integrations/{integration_id}/audit

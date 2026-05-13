@@ -27,7 +27,8 @@
 - Phase 8 first checkpoint now adds limited management controls to the observe-first panel and API: source retry sync, channel action retry attempts, disable, and secret-rotation request markers, all using redacted responses.
 - Phase 8 second checkpoint now moves channel action retry from synchronous management requests into `external_action_dispatch_workflow`, enqueues retry tasks on the `external_action` worker queue, and adds `external-action-worker` to dispatch validated actions with workflow success/failure transitions.
 - Phase 8 third checkpoint now adds observe-only permission drift and source recovery signals to `GET /v1/external/integrations` and the standalone panel, including external identity mapping gaps, disabled external principals, ACL snapshot freshness, failed sync counts, and recovery status.
-- Next implementation checkpoint: add deeper artifact publish/revoke status controls and third-party handoff examples.
+- Phase 8 fourth checkpoint now adds observe-only external artifact publish/status/revoke summaries to `GET /v1/external/integrations`, marks artifact action audit entries with action type and safe artifact refs, shows artifact state on the standalone panel, and documents the third-party artifact dispatch handoff shape.
+- Next implementation checkpoint: add end-to-end external bot and third-party smoke fixtures.
 
 ---
 

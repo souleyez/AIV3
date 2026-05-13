@@ -5268,12 +5268,12 @@ body {
 
 .external-hero-metrics {
   display: grid;
-  grid-template-columns: repeat(5, minmax(82px, 1fr));
+  grid-template-columns: repeat(6, minmax(78px, 1fr));
   gap: 8px;
 }
 
 .external-hero-metrics div {
-  min-width: 82px;
+  min-width: 78px;
   padding: 12px;
   border: 1px solid #c7c0b4;
   border-radius: 8px;
@@ -5518,6 +5518,40 @@ body {
   color: #9f2d18;
 }
 
+.external-artifact-pill {
+  justify-self: start;
+  min-width: 76px;
+  padding: 4px 7px;
+  border-radius: 999px;
+  border: 1px solid #cbd5e1;
+  background: #f8fafc;
+  color: #475569;
+  font-size: 12px;
+  font-weight: 800;
+  text-align: center;
+}
+
+.external-artifact-artifact_published,
+.external-artifact-artifact_revoked {
+  border-color: #8dc7ad;
+  background: #eef8f1;
+  color: #17633a;
+}
+
+.external-artifact-artifact_observed,
+.external-artifact-artifact_confirmation_pending {
+  border-color: #d9ba67;
+  background: #fff8df;
+  color: #8a5a00;
+}
+
+.external-artifact-artifact_blocked,
+.external-artifact-artifact_failed {
+  border-color: #e4a093;
+  background: #fff1ed;
+  color: #9f2d18;
+}
+
 .external-action-counts {
   display: flex;
   gap: 5px;
@@ -5577,6 +5611,11 @@ body {
 }
 
 .external-governance-strip {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  padding-top: 0;
+}
+
+.external-artifact-strip {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   padding-top: 0;
 }

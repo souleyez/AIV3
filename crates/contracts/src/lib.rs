@@ -359,6 +359,8 @@ pub struct ExternalIntegrationSummaryView {
     pub config_summary: Value,
     #[serde(default)]
     pub drift_summary: Value,
+    #[serde(default)]
+    pub artifact_summary: Value,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]

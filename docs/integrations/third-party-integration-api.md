@@ -506,7 +506,7 @@ If identity mapping is missing or stale, V3 must use the lowest safe trust level
 
 V3 artifacts include reports, static pages, summaries, generated files, HTML review artifacts, and other deliverables.
 
-Implementation status: planned.
+Implementation status: MVP is available through the external action runtime. V3 persists `external_artifact.publish`, `external_artifact.status`, and `external_artifact.revoke` as audited action runs. Revoke is treated as a high-risk action and must be confirmed before dispatch. Confirmed or confirmation-free actions are sent to the configured third-party artifact endpoint, and `GET /v1/external/integrations` exposes an observe-only `artifact_summary`.
 
 ### Publish Artifact
 
@@ -537,6 +537,33 @@ Response:
 }
 ```
 
+When V3 dispatches to a third-party artifact endpoint, the request uses the shared external action shape:
+
+```json
+{
+  "action_id": "act-artifact-001",
+  "assistant_run_id": "00000000-0000-0000-0000-000000000001",
+  "action_type": "external_artifact.publish",
+  "risk_level": "low_risk_write",
+  "target_system": "third_party_artifact_api",
+  "arguments_redacted": {
+    "artifact_ref": "artifact-001",
+    "target_system": "customer-portal",
+    "visibility": "source_acl"
+  },
+  "confirmation_state": "not_required",
+  "requester_summary": {
+    "platform": "generic_chat",
+    "tenant_external_id": "tenant-ext-001",
+    "conversation_external_id": "chat-risk-room",
+    "sender_external_id": "user-ext-001"
+  },
+  "raw_arguments_included": false
+}
+```
+
+Third-party responses may include `external_request_id`, `externalRequestId`, `request_id`, or `requestId`. V3 stores only that request id and a redacted response summary.
+
 ### Revoke Artifact
 
 ```http
@@ -551,6 +578,8 @@ Request body:
   "idempotency_key": "artifact:revoke:artifact-001"
 }
 ```
+
+Revoke dispatch uses `action_type: "external_artifact.revoke"` and must have `confirmation_state: "confirmed"` before V3 sends it to the third-party endpoint.
 
 ## External Action API
 
@@ -690,6 +719,8 @@ Each item includes `drift_summary`, an observe-only object that does not include
 
 - channel integrations report external identity mapping drift such as `identity_mapping_gap` or `disabled_principals`, with unmapped/disabled principal counts and the latest principal update timestamp;
 - source integrations report ACL and sync recovery states such as `acl_missing`, `acl_stale`, `sync_failed`, or `sync_recovering`, with ACL snapshot counts, stale snapshot counts, failed sync counts, latest ACL timestamp, and latest sync status.
+
+Channel integrations also include `artifact_summary` for external artifact action state. It reports status/publish/revoke action counts, pending confirmations, blocked/failed dispatch counts, published/revoked counts, and the latest artifact action timestamp. This is for operations and support visibility only; it does not include raw artifact bodies, raw download URLs, or credential material.
 
 ```http
 GET /v1/external/integrations/{integration_id}/audit

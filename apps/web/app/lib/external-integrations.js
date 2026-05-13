@@ -17,6 +17,8 @@ export function normalizeIntegrationSummary(raw = {}) {
   const dispatched = numberOrZero(raw.dispatched_action_count);
   const driftSummary = raw.drift_summary && typeof raw.drift_summary === 'object' ? raw.drift_summary : {};
   const drift = driftSignal(driftSummary);
+  const artifactSummary = raw.artifact_summary && typeof raw.artifact_summary === 'object' ? raw.artifact_summary : {};
+  const artifact = artifactSignal(artifactSummary);
   return {
     id: String(raw.integration_id || ''),
     kind: String(raw.integration_kind || 'unknown'),
@@ -37,6 +39,8 @@ export function normalizeIntegrationSummary(raw = {}) {
     configSummary: raw.config_summary && typeof raw.config_summary === 'object' ? raw.config_summary : {},
     driftSummary,
     driftSignal: drift,
+    artifactSummary,
+    artifactSignal: artifact,
     signal: integrationSignal({ pending, blocked, failed, dispatched, healthStatus: raw.health_status, status: raw.status }),
   };
 }
@@ -132,6 +136,31 @@ export function driftSignalLabel(signal) {
   }
 }
 
+export function artifactSignal(artifactSummary = {}) {
+  return String(artifactSummary.signal || 'none').toLowerCase();
+}
+
+export function artifactSignalLabel(signal) {
+  switch (signal) {
+    case 'artifact_confirmation_pending':
+      return '撤销待确认';
+    case 'artifact_failed':
+      return '产物失败';
+    case 'artifact_blocked':
+      return '产物阻断';
+    case 'artifact_revoked':
+      return '已撤销';
+    case 'artifact_published':
+      return '已发布';
+    case 'artifact_observed':
+      return '有产物动作';
+    case 'none':
+      return '暂无产物';
+    default:
+      return '未知';
+  }
+}
+
 export function numberOrZero(value) {
   const number = Number(value);
   return Number.isFinite(number) && number > 0 ? number : 0;
@@ -157,6 +186,7 @@ export function formatObservationTime(value) {
 export function latestIntegrationActivity(integration) {
   return integration.lastFailureAt
     || integration.latestActionAt
+    || integration.artifactSummary?.latest_artifact_action_at
     || integration.lastSuccessAt
     || integration.lastEventAt
     || integration.lastSyncAt

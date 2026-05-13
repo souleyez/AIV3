@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import {
+  artifactSignalLabel,
   buildThirdPartyApiUrl,
   controlResultLabel,
   driftSignalLabel,
@@ -38,6 +39,12 @@ test('normalizeIntegrationSummary derives operational signal and counts', () => 
       unmapped_principal_count: 2,
       disabled_principal_count: 0,
     },
+    artifact_summary: {
+      signal: 'artifact_blocked',
+      publish_action_count: 1,
+      blocked_count: 1,
+      latest_artifact_action_at: '2026-05-14T10:00:00Z',
+    },
   });
 
   assert.equal(integration.id, 'generic-chat-main');
@@ -49,6 +56,9 @@ test('normalizeIntegrationSummary derives operational signal and counts', () => 
   assert.equal(integration.driftSignal, 'identity_mapping_gap');
   assert.equal(driftSignalLabel(integration.driftSignal), '身份待映射');
   assert.equal(integration.driftSummary.unmapped_principal_count, 2);
+  assert.equal(integration.artifactSignal, 'artifact_blocked');
+  assert.equal(artifactSignalLabel(integration.artifactSignal), '产物阻断');
+  assert.equal(integration.artifactSummary.publish_action_count, 1);
   assert.equal(latestIntegrationActivity(integration), '2026-05-14T09:30:00Z');
 });
 
@@ -57,6 +67,14 @@ test('driftSignalLabel covers source recovery states', () => {
   assert.equal(driftSignalLabel('acl_stale'), 'ACL 过期');
   assert.equal(driftSignalLabel('sync_failed'), '同步失败');
   assert.equal(driftSignalLabel('sync_recovering'), '恢复中');
+});
+
+test('artifactSignalLabel covers publish and revoke states', () => {
+  assert.equal(artifactSignalLabel('artifact_confirmation_pending'), '撤销待确认');
+  assert.equal(artifactSignalLabel('artifact_failed'), '产物失败');
+  assert.equal(artifactSignalLabel('artifact_blocked'), '产物阻断');
+  assert.equal(artifactSignalLabel('artifact_published'), '已发布');
+  assert.equal(artifactSignalLabel('artifact_revoked'), '已撤销');
 });
 
 test('normalizeAuditItem keeps redacted summary shape stable', () => {
