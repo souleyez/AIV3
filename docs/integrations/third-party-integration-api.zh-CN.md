@@ -308,7 +308,7 @@ GET /v1/external/runs/{assistant_run_id}
 
 ### 9.3 提交用户确认
 
-计划接口：
+已接入接口：
 
 ```http
 POST /v1/external/channels/{connection_id}/confirmations
@@ -321,6 +321,7 @@ POST /v1/external/channels/{connection_id}/confirmations
 ```json
 {
   "assistant_run_id": "arun_01HXEXAMPLE",
+  "action_id": "external-action-001",
   "confirmation_external_id": "confirm-001",
   "sender_external_user_id": "user-10001",
   "decision": "approved",
@@ -329,6 +330,15 @@ POST /v1/external/channels/{connection_id}/confirmations
   "confirmed_at": "2026-05-13T12:03:00Z"
 }
 ```
+
+说明：
+
+| 字段 | 说明 |
+| --- | --- |
+| `assistant_run_id` | V3 返回的 AssistantRun ID |
+| `action_id` | V3 在需要确认的回复中返回的外部动作 ID；如未传，V3 会兼容使用 `confirmation_external_id` 查找 |
+| `decision` | `approved` 或 `rejected` |
+| `idempotency_key` | 第三方确认回调的幂等键 |
 
 ## 10. 第三方文档库接口
 

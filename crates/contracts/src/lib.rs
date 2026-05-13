@@ -263,6 +263,36 @@ pub struct ExternalActionIntentView {
     pub created_at: DateTime<Utc>,
 }
 
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ExternalActionConfirmationDecisionView {
+    Approved,
+    Rejected,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ExternalActionConfirmationRequestView {
+    pub assistant_run_id: AssistantRunId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action_id: Option<String>,
+    pub confirmation_external_id: String,
+    pub sender_external_user_id: String,
+    pub decision: ExternalActionConfirmationDecisionView,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comment: Option<String>,
+    pub idempotency_key: String,
+    pub confirmed_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ExternalActionConfirmationResponseView {
+    pub accepted: bool,
+    pub assistant_run_id: AssistantRunId,
+    pub action_id: String,
+    pub confirmation_state: String,
+    pub idempotency_key: String,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ExternalBotReplyTypeView {
@@ -287,6 +317,10 @@ pub struct ExternalBotReplyView {
     pub task_status: Option<String>,
     #[serde(default)]
     pub requires_confirmation: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confirmation_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -3474,6 +3508,43 @@ mod tests {
     }
 
     #[test]
+    fn external_action_confirmation_contract_serializes_decision_and_action_id() {
+        let run_id = AssistantRunId::new();
+        let confirmed_at = Utc::now();
+        let request = ExternalActionConfirmationRequestView {
+            assistant_run_id: run_id,
+            action_id: Some("external-action-001".to_string()),
+            confirmation_external_id: "confirm-001".to_string(),
+            sender_external_user_id: "user-10001".to_string(),
+            decision: ExternalActionConfirmationDecisionView::Approved,
+            comment: Some("确认提交。".to_string()),
+            idempotency_key: "generic_chat:tenant-ext-001:confirm-001".to_string(),
+            confirmed_at,
+        };
+
+        let encoded = serde_json::to_value(&request).expect("request should serialize");
+
+        assert_eq!(encoded["assistant_run_id"], json!(run_id.to_string()));
+        assert_eq!(encoded["action_id"], json!("external-action-001"));
+        assert_eq!(encoded["decision"], json!("approved"));
+        assert_eq!(encoded["confirmed_at"], json!(confirmed_at));
+
+        let decoded: ExternalActionConfirmationRequestView =
+            serde_json::from_value(encoded).expect("request should deserialize");
+        assert_eq!(decoded, request);
+
+        let response = ExternalActionConfirmationResponseView {
+            accepted: true,
+            assistant_run_id: run_id,
+            action_id: "external-action-001".to_string(),
+            confirmation_state: "confirmed".to_string(),
+            idempotency_key: "generic_chat:tenant-ext-001:confirm-001".to_string(),
+        };
+        let encoded_response = serde_json::to_value(&response).expect("response should serialize");
+        assert_eq!(encoded_response["confirmation_state"], json!("confirmed"));
+    }
+
+    #[test]
     fn external_channel_event_response_uses_task_status_reply_envelope() {
         let run_id = AssistantRunId::new();
         let response = ExternalChannelEventResponse {
@@ -3488,6 +3559,8 @@ mod tests {
                 artifact_links: Vec::new(),
                 task_status: Some("accepted".to_string()),
                 requires_confirmation: false,
+                action_id: None,
+                confirmation_id: None,
             },
         };
 

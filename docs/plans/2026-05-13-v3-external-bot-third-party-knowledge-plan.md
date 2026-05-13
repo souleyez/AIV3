@@ -19,7 +19,8 @@
 - Phase 6 platform-specific callback entrypoints now read stored connection config and hand normalized Feishu/Lark and WeCom messages to the unified external channel ingestion endpoint.
 - Phase 6 now supports Feishu/Lark encrypted `encrypt` callback bodies using the official AES-256-CBC event decryption shape.
 - Phase 7 first checkpoint now defines external action risk/confirmation policy contracts, registers external artifact/action tools, exposes external channel Codex action contracts, and routes Codex plan-only suggestions across read-only, low-risk write, high-risk confirmation, and cross-system confirmation cases.
-- Next implementation checkpoint: persist and execute `external_action_runs` from the normalized channel flow, then wire confirmation callbacks for high-risk and cross-system writes.
+- Phase 7 second checkpoint now persists `external_action_runs` from normalized external channel messages when Codex plan-only selects an external action, returns confirmation-required replies for high-risk/cross-system actions, and accepts normalized confirmation callbacks.
+- Next implementation checkpoint: dispatch confirmed/not-required external action runs to the configured third-party artifact/action API and store external request/result summaries.
 
 ---
 
@@ -406,8 +407,8 @@ It should not ask operators to manually label documents, rewrite permissions, or
 **Steps:**
 1. Done: Define V3 action contracts for external artifact publish/revoke/status and external business actions.
 2. Done: Add tests for read-only, low-risk write, high-risk confirmation, and cross-system confirmation.
-3. Persist external action runs with redacted arguments and external result summaries.
-4. Partial: Codex plan-only policy now marks high-risk and cross-system actions as confirmation-required; runtime persistence/execution still needs to enforce it.
+3. Done: Persist external action runs with redacted arguments and external result summaries.
+4. Done: Codex plan-only policy marks high-risk and cross-system actions as confirmation-required, normalized channel replies carry confirmation IDs, and confirmation callbacks update action runs.
 5. Commit `Add external action runtime`.
 
 ### Phase 8: Observe-first management UI

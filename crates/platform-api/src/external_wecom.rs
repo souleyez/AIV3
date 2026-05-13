@@ -619,6 +619,8 @@ mod tests {
             artifact_links: Vec::new(),
             task_status: Some("accepted".to_string()),
             requires_confirmation: false,
+            action_id: None,
+            confirmation_id: None,
         };
 
         let payload = render_wecom_reply_body(&reply, "1000002");

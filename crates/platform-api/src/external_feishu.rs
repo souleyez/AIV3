@@ -773,6 +773,8 @@ mod tests {
             artifact_links: vec!["https://example.invalid/report".to_string()],
             task_status: None,
             requires_confirmation: false,
+            action_id: None,
+            confirmation_id: None,
         };
 
         let payload = render_feishu_reply_body(&reply);

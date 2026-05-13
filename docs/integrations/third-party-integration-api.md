@@ -309,17 +309,20 @@ Target response:
 
 Use this endpoint when a user confirms or rejects a high-risk action from a third-party page or channel card.
 
-Implementation status: planned.
+Implementation status: available for normalized external action confirmations.
 
 Request body:
 
 ```json
 {
-  "action_id": "act-001",
+  "assistant_run_id": "4fd1b8c0-7d12-49a2-9f4e-5bdce6e2e5a8",
+  "action_id": "external-action-001",
+  "confirmation_external_id": "confirm-001",
+  "sender_external_user_id": "user-ext-001",
   "decision": "approved",
-  "external_user_id": "user-ext-001",
-  "conversation_external_id": "chat-risk-room",
-  "idempotency_key": "confirm:act-001:approved"
+  "comment": "Confirmed in the third-party page.",
+  "idempotency_key": "confirm:external-action-001:approved",
+  "confirmed_at": "2026-05-13T12:03:00Z"
 }
 ```
 

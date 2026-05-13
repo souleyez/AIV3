@@ -40,17 +40,19 @@ use contracts::{
     CreateStaticPageImageJobRequest, CreateStaticPageImageJobResponse,
     CreateStaticPageRenderRequest, CreateStaticPageRenderResponse, DatasetOutputView,
     DatasetSummary, DocumentChunkView, DocumentDetailView, DocumentMediaDetailView,
-    DocumentSummary, ExternalBotMessageView, ExternalBotReplyTypeView, ExternalBotReplyView,
-    ExternalChannelEventResponse, ExternalChannelPlatformView, ExternalMessageTypeView,
-    HealthResponse, HtmlArtifactInteractionModeView, HtmlArtifactManifestView, KeyLoginRequest,
-    KeyLoginResponse, KeyRotateRequest, KeyRotateResponse, LlmInvocationView, LogoutResponse,
-    MemoryDirectoryView, PlanReportRequest, PublishReportRequest, PublishReportResponse,
-    PublishedReportDetailView, PublishedReportVersionView, PublishedReportView,
-    RegisterDocumentRequest, RegisterDocumentResponse, ReportPlanAstVersionView, ReportPlanSummary,
-    ReportRenderOutputView, ResolveDatasetSecretBindingsRequest,
-    ResolveDatasetSecretBindingsResponse, RetrievalEvidenceView, RetrievalSearchHitView,
-    RetrievalSearchResponse, RetryWorkflowExecutionRequest, RetryWorkflowExecutionResponse,
-    StartEmailAuthRequest, StartEmailAuthResponse, StaticPageDraftView, StaticPageImageJobView,
+    DocumentSummary, ExternalActionConfirmationDecisionView, ExternalActionConfirmationRequestView,
+    ExternalActionConfirmationResponseView, ExternalBotMessageView, ExternalBotReplyTypeView,
+    ExternalBotReplyView, ExternalChannelEventResponse, ExternalChannelPlatformView,
+    ExternalMessageTypeView, HealthResponse, HtmlArtifactInteractionModeView,
+    HtmlArtifactManifestView, KeyLoginRequest, KeyLoginResponse, KeyRotateRequest,
+    KeyRotateResponse, LlmInvocationView, LogoutResponse, MemoryDirectoryView, PlanReportRequest,
+    PublishReportRequest, PublishReportResponse, PublishedReportDetailView,
+    PublishedReportVersionView, PublishedReportView, RegisterDocumentRequest,
+    RegisterDocumentResponse, ReportPlanAstVersionView, ReportPlanSummary, ReportRenderOutputView,
+    ResolveDatasetSecretBindingsRequest, ResolveDatasetSecretBindingsResponse,
+    RetrievalEvidenceView, RetrievalSearchHitView, RetrievalSearchResponse,
+    RetryWorkflowExecutionRequest, RetryWorkflowExecutionResponse, StartEmailAuthRequest,
+    StartEmailAuthResponse, StaticPageDraftView, StaticPageImageJobView,
     StaticPageRenderOutputView, SubmitHtmlArtifactEventRequest, SubmitHtmlArtifactEventResponse,
     ToolDefinitionView, ToolExecutionView, UpdateChatSessionReportEntryRequest,
     UpdateChatSessionReportEntryResponse, UpdateChatSessionRequest, UpdateChatSessionResponse,
@@ -441,6 +443,10 @@ pub fn router(
         .route(
             "/v1/external/channels/{connection_id}/events",
             axum::routing::post(ingest_external_channel_event),
+        )
+        .route(
+            "/v1/external/channels/{connection_id}/confirmations",
+            axum::routing::post(confirm_external_channel_action),
         )
         .route(
             "/v1/external/channels/{connection_id}/feishu/callback",
@@ -6642,6 +6648,16 @@ struct ExternalSourceConnectionSummary {
     disabled_at: Option<DateTime<Utc>>,
 }
 
+#[derive(Clone, Debug)]
+struct ExternalActionRunPlan {
+    action_id: String,
+    action_type: String,
+    risk_level: String,
+    confirmation_state: String,
+    requires_confirmation: bool,
+    target_system: String,
+}
+
 async fn create_external_source_sync(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -6797,9 +6813,9 @@ async fn ingest_external_channel_message(
                 user_id: None,
                 local_thread_id: assistant_request.local_thread_id.clone(),
                 user_prompt: assistant_request.prompt.trim().to_string(),
-                startup_briefing,
-                selected_scope,
-                scope_candidates,
+                startup_briefing: startup_briefing.clone(),
+                selected_scope: selected_scope.clone(),
+                scope_candidates: scope_candidates.clone(),
                 context_policy,
                 evidence_state: json!({
                     "status": "pending",
@@ -6855,6 +6871,28 @@ async fn ingest_external_channel_message(
         .await
         .map_err(ApiError::from_storage)?;
     record_external_message_event(state, connection_id, run.id, &message, &payload_summary).await?;
+    let external_action_plan = plan_and_record_external_action_run(
+        state,
+        connection_id,
+        run.id,
+        run.local_thread_id.as_deref(),
+        &assistant_request.prompt,
+        &selected_scope,
+        &scope_candidates,
+        &startup_briefing,
+        &json!({
+            "status": "pending",
+            "source": "external_channel",
+            "supplied_count": 0,
+        }),
+        &message,
+        now,
+    )
+    .await?;
+    let reply = external_action_plan
+        .as_ref()
+        .map(|plan| external_channel_action_plan_reply(&message, plan))
+        .unwrap_or_else(|| external_channel_task_status_reply(&message, "accepted"));
 
     Ok((
         StatusCode::ACCEPTED,
@@ -6862,9 +6900,393 @@ async fn ingest_external_channel_message(
             accepted: true,
             assistant_run_id: Some(run.id),
             idempotency_key: message.idempotency_key.clone(),
-            reply: external_channel_task_status_reply(&message, "accepted"),
+            reply,
         },
     ))
+}
+
+async fn confirm_external_channel_action(
+    State(state): State<AppState>,
+    Path(connection_id): Path<String>,
+    Json(request): Json<ExternalActionConfirmationRequestView>,
+) -> std::result::Result<(StatusCode, Json<ExternalActionConfirmationResponseView>), ApiError> {
+    validate_required("connection_id", &connection_id)?;
+    validate_required(
+        "confirmation_external_id",
+        &request.confirmation_external_id,
+    )?;
+    validate_required("sender_external_user_id", &request.sender_external_user_id)?;
+    validate_required("idempotency_key", &request.idempotency_key)?;
+
+    let connection = load_external_channel_connection(&state, &connection_id).await?;
+    ensure_external_channel_enabled(&connection_id, &connection)?;
+
+    let action_id = request
+        .action_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(request.confirmation_external_id.trim())
+        .to_string();
+    validate_required("action_id", &action_id)?;
+
+    let row = sqlx::query(
+        r#"
+        select assistant_run_id, requester_summary, confirmation_state
+        from external_action_runs
+        where tenant_id = $1 and id = $2
+        "#,
+    )
+    .bind(state.tenant_id.0)
+    .bind(&action_id)
+    .fetch_optional(state.storage.pool())
+    .await
+    .map_err(|error| ApiError::from_storage(anyhow::Error::new(error)))?
+    .ok_or_else(|| {
+        ApiError::not_found(
+            "external_action_run_not_found",
+            format!("external action run {action_id} was not found"),
+        )
+    })?;
+
+    let run_id = row
+        .get::<Option<Uuid>, _>("assistant_run_id")
+        .map(AssistantRunId)
+        .ok_or_else(|| {
+            ApiError::bad_request(
+                "external_action_run_without_assistant_run",
+                "external action run is not linked to an assistant run".to_string(),
+            )
+        })?;
+    if run_id != request.assistant_run_id {
+        return Err(ApiError::bad_request_with_details(
+            "external_action_confirmation_run_mismatch",
+            "confirmation assistant_run_id does not match the action run".to_string(),
+            json!({
+                "request_assistant_run_id": request.assistant_run_id,
+                "action_assistant_run_id": run_id,
+            }),
+        ));
+    }
+
+    let requester_summary = row.get::<Value, _>("requester_summary");
+    if requester_summary
+        .get("channel_connection_id")
+        .and_then(Value::as_str)
+        != Some(connection_id.as_str())
+    {
+        return Err(ApiError::forbidden(
+            "external_action_channel_mismatch",
+            "confirmation channel does not own this external action run".to_string(),
+        ));
+    }
+
+    let current_state = row.get::<String, _>("confirmation_state");
+    let confirmation_state = match request.decision {
+        ExternalActionConfirmationDecisionView::Approved => "confirmed",
+        ExternalActionConfirmationDecisionView::Rejected => "rejected",
+    };
+    if matches!(current_state.as_str(), "confirmed" | "rejected")
+        && current_state != confirmation_state
+    {
+        return Err(ApiError {
+            status: StatusCode::CONFLICT,
+            payload: ApiErrorResponse {
+                code: "external_action_confirmation_conflict".to_string(),
+                message: format!("external action run {action_id} is already {current_state}"),
+                details: None,
+            },
+        });
+    }
+
+    let now = Utc::now();
+    let confirmation_summary = json!({
+        "confirmation": {
+            "confirmation_external_id": request.confirmation_external_id,
+            "sender_external_user_id": request.sender_external_user_id,
+            "decision": match request.decision {
+                ExternalActionConfirmationDecisionView::Approved => "approved",
+                ExternalActionConfirmationDecisionView::Rejected => "rejected",
+            },
+            "comment_present": request.comment.as_ref().is_some_and(|value| !value.trim().is_empty()),
+            "idempotency_key": request.idempotency_key,
+            "confirmed_at": request.confirmed_at,
+            "received_at": now,
+        }
+    });
+    sqlx::query(
+        r#"
+        update external_action_runs
+        set confirmation_state = $3,
+            result_summary = result_summary || $4,
+            updated_at = $5
+        where tenant_id = $1 and id = $2
+        "#,
+    )
+    .bind(state.tenant_id.0)
+    .bind(&action_id)
+    .bind(confirmation_state)
+    .bind(&confirmation_summary)
+    .bind(now)
+    .execute(state.storage.pool())
+    .await
+    .map_err(|error| ApiError::from_storage(anyhow::Error::new(error)))?;
+
+    state
+        .storage
+        .assistant_runs()
+        .append_event(
+            state.tenant_id,
+            run_id,
+            &NewAssistantRunEvent {
+                event_name: "assistant_run.external_action_confirmation_received".to_string(),
+                payload: json!({
+                    "action_id": action_id,
+                    "confirmation_state": confirmation_state,
+                    "confirmation_external_id": confirmation_summary["confirmation"]["confirmation_external_id"],
+                    "sender_external_user_id": confirmation_summary["confirmation"]["sender_external_user_id"],
+                    "comment_present": confirmation_summary["confirmation"]["comment_present"],
+                    "idempotency_key": confirmation_summary["confirmation"]["idempotency_key"],
+                }),
+                created_at: now,
+            },
+        )
+        .await
+        .map_err(ApiError::from_storage)?;
+
+    Ok((
+        StatusCode::OK,
+        Json(ExternalActionConfirmationResponseView {
+            accepted: true,
+            assistant_run_id: run_id,
+            action_id,
+            confirmation_state: confirmation_state.to_string(),
+            idempotency_key: confirmation_summary["confirmation"]["idempotency_key"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string(),
+        }),
+    ))
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn plan_and_record_external_action_run(
+    state: &AppState,
+    connection_id: &str,
+    assistant_run_id: AssistantRunId,
+    local_thread_id: Option<&str>,
+    prompt: &str,
+    selected_scope: &Value,
+    scope_candidates: &Value,
+    startup_briefing: &Value,
+    evidence_state: &Value,
+    message: &ExternalBotMessageView,
+    now: DateTime<Utc>,
+) -> std::result::Result<Option<ExternalActionRunPlan>, ApiError> {
+    let codex_runtime = assistant_run_codex_runtime_selection();
+    let codex_model_gateway = assistant_run_codex_model_gateway_snapshot(&codex_runtime);
+    let codex_scope_candidates = value_array(scope_candidates.clone());
+    let codex_package = build_assistant_run_codex_context_package(
+        assistant_run_id,
+        local_thread_id,
+        prompt,
+        &[],
+        startup_briefing,
+        selected_scope,
+        &codex_scope_candidates,
+        evidence_state,
+        None,
+        &codex_model_gateway,
+        AssistantRunExecutorTransportView::CodexPlanOnly,
+    );
+    let codex_output = execute_codex_conversation_plan(&codex_package);
+    let Some(suggested_action) = codex_output.suggested_action.as_ref() else {
+        return Ok(None);
+    };
+    let action_type = suggested_action
+        .get("action_type")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if !action_type.starts_with("external_") {
+        return Ok(None);
+    }
+
+    let plan = record_external_action_run_from_suggestion(
+        state,
+        connection_id,
+        assistant_run_id,
+        suggested_action,
+        message,
+        now,
+    )
+    .await?;
+    state
+        .storage
+        .assistant_runs()
+        .append_event(
+            state.tenant_id,
+            assistant_run_id,
+            &NewAssistantRunEvent {
+                event_name: "assistant_run.codex_executor_diagnostic".to_string(),
+                payload: assistant_run_codex_event_payload(&codex_output, None, None),
+                created_at: now,
+            },
+        )
+        .await
+        .map_err(ApiError::from_storage)?;
+    state
+        .storage
+        .assistant_runs()
+        .append_event(
+            state.tenant_id,
+            assistant_run_id,
+            &NewAssistantRunEvent {
+                event_name: "assistant_run.external_action_planned".to_string(),
+                payload: json!({
+                    "action_id": plan.action_id,
+                    "action_type": plan.action_type,
+                    "risk_level": plan.risk_level,
+                    "confirmation_state": plan.confirmation_state,
+                    "requires_confirmation": plan.requires_confirmation,
+                    "target_system": plan.target_system,
+                    "source": "codex_plan_only_shadow",
+                }),
+                created_at: now,
+            },
+        )
+        .await
+        .map_err(ApiError::from_storage)?;
+
+    Ok(Some(plan))
+}
+
+async fn record_external_action_run_from_suggestion(
+    state: &AppState,
+    connection_id: &str,
+    assistant_run_id: AssistantRunId,
+    suggested_action: &Value,
+    message: &ExternalBotMessageView,
+    now: DateTime<Utc>,
+) -> std::result::Result<ExternalActionRunPlan, ApiError> {
+    let action_type = suggested_action
+        .get("action_type")
+        .and_then(Value::as_str)
+        .unwrap_or("external_business_action.invoke")
+        .to_string();
+    let arguments = suggested_action
+        .get("arguments")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let policy = suggested_action
+        .get("external_action_policy")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let risk_level = policy
+        .get("risk_level")
+        .or_else(|| arguments.get("risk_level"))
+        .and_then(Value::as_str)
+        .unwrap_or("read_only")
+        .to_string();
+    let requires_confirmation = policy
+        .get("requires_confirmation")
+        .or_else(|| arguments.get("requires_confirmation"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let confirmation_state = if requires_confirmation {
+        "pending"
+    } else {
+        "not_required"
+    }
+    .to_string();
+    let target_system = policy
+        .get("target_system")
+        .or_else(|| arguments.get("target_system"))
+        .and_then(Value::as_str)
+        .unwrap_or("external_channel")
+        .to_string();
+    let idempotency_key = arguments
+        .get("idempotency_key")
+        .and_then(Value::as_str)
+        .unwrap_or(message.idempotency_key.as_str());
+    let digest = sha256_hex([
+        connection_id.as_bytes(),
+        b":",
+        assistant_run_id.to_string().as_bytes(),
+        b":",
+        idempotency_key.as_bytes(),
+    ]);
+    let action_id = format!("external-action-{}", &digest[..16]);
+    let arguments_redacted = arguments
+        .get("arguments_redacted")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let requester_summary = json!({
+        "channel_connection_id": connection_id,
+        "platform": external_channel_platform_wire_value(&message.platform),
+        "tenant_external_id": message.tenant_external_id,
+        "bot_external_id": message.bot_external_id,
+        "conversation_external_id": message.conversation_external_id,
+        "sender_external_id": message.sender_external_id,
+        "message_external_id": message.message_external_id,
+        "message_idempotency_key": message.idempotency_key,
+    });
+    let result_summary = json!({
+        "status": if requires_confirmation {
+            "requires_confirmation"
+        } else {
+            "ready_for_external_dispatch"
+        },
+        "confirmation_mode": policy
+            .get("confirmation_mode")
+            .cloned()
+            .unwrap_or_else(|| json!("not_required")),
+        "no_host_direct_write": true,
+        "source": "codex_plan_only_shadow",
+    });
+
+    sqlx::query(
+        r#"
+        insert into external_action_runs (
+            id,
+            tenant_id,
+            assistant_run_id,
+            requester_summary,
+            risk_level,
+            target_system,
+            action_type,
+            arguments_redacted,
+            confirmation_state,
+            result_summary,
+            created_at,
+            updated_at
+        )
+        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $11)
+        on conflict (tenant_id, id) do nothing
+        "#,
+    )
+    .bind(&action_id)
+    .bind(state.tenant_id.0)
+    .bind(assistant_run_id.0)
+    .bind(&requester_summary)
+    .bind(&risk_level)
+    .bind(&target_system)
+    .bind(&action_type)
+    .bind(&arguments_redacted)
+    .bind(&confirmation_state)
+    .bind(&result_summary)
+    .bind(now)
+    .execute(state.storage.pool())
+    .await
+    .map_err(|error| ApiError::from_storage(anyhow::Error::new(error)))?;
+
+    Ok(ExternalActionRunPlan {
+        action_id,
+        action_type,
+        risk_level,
+        confirmation_state,
+        requires_confirmation,
+        target_system,
+    })
 }
 
 async fn ingest_feishu_channel_callback(
@@ -7560,6 +7982,49 @@ fn external_channel_task_status_reply(
         artifact_links: Vec::new(),
         task_status: Some(task_status.to_string()),
         requires_confirmation: false,
+        action_id: None,
+        confirmation_id: None,
+    }
+}
+
+fn external_channel_action_plan_reply(
+    message: &ExternalBotMessageView,
+    plan: &ExternalActionRunPlan,
+) -> ExternalBotReplyView {
+    if plan.requires_confirmation {
+        ExternalBotReplyView {
+            target_conversation_external_id: message.conversation_external_id.clone(),
+            reply_type: ExternalBotReplyTypeView::RequiresConfirmation,
+            text: Some(format!(
+                "该第三方动作需要确认后执行：{}。",
+                plan.action_type
+            )),
+            card: Some(json!({
+                "type": "external_action_confirmation",
+                "action_id": plan.action_id,
+                "action_type": plan.action_type,
+                "risk_level": plan.risk_level,
+                "target_system": plan.target_system,
+                "confirmation_state": plan.confirmation_state,
+            })),
+            artifact_links: Vec::new(),
+            task_status: Some("requires_confirmation".to_string()),
+            requires_confirmation: true,
+            action_id: Some(plan.action_id.clone()),
+            confirmation_id: Some(plan.action_id.clone()),
+        }
+    } else {
+        ExternalBotReplyView {
+            target_conversation_external_id: message.conversation_external_id.clone(),
+            reply_type: ExternalBotReplyTypeView::TaskStatus,
+            text: None,
+            card: None,
+            artifact_links: Vec::new(),
+            task_status: Some("external_action_planned".to_string()),
+            requires_confirmation: false,
+            action_id: Some(plan.action_id.clone()),
+            confirmation_id: None,
+        }
     }
 }
 
@@ -27428,6 +27893,166 @@ mod tests {
             Some(ExternalChannelPlatformView::GenericChat)
         );
         assert_eq!(external_channel_platform_from_wire_value("wechat"), None);
+    }
+
+    async fn insert_generic_external_channel_connection(state: &AppState, connection_id: &str) {
+        sqlx::query(
+            r#"
+            insert into external_channel_connections (
+                id,
+                tenant_id,
+                platform,
+                connection_key,
+                display_name,
+                config_redacted,
+                status
+            )
+            values ($1, $2, 'generic_chat', $1, 'Generic Chat', $3, 'enabled')
+            "#,
+        )
+        .bind(connection_id)
+        .bind(state.tenant_id.0)
+        .bind(json!({
+            "tenant_external_id": "tenant-ext-001",
+            "bot_external_id": "bot-v3"
+        }))
+        .execute(state.storage.pool())
+        .await
+        .expect("external channel connection should be inserted");
+    }
+
+    #[tokio::test]
+    async fn external_channel_action_message_persists_pending_action_and_confirms_it() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping external action run test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("external-action-test-{}", Uuid::new_v4()),
+                "External Action Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage,
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        insert_generic_external_channel_connection(&state, "generic-chat-main").await;
+
+        let mut message = sample_external_bot_message();
+        message.text = Some("帮用户创建一个售后工单并提交".to_string());
+        message.message_external_id = "msg-action-001".to_string();
+        message.idempotency_key = "generic:tenant-ext-001:msg-action-001".to_string();
+
+        let (status, response) =
+            ingest_external_channel_message(&state, "generic-chat-main", message)
+                .await
+                .expect("external channel message should be accepted");
+
+        assert_eq!(status, StatusCode::ACCEPTED);
+        assert_eq!(
+            response.reply.reply_type,
+            ExternalBotReplyTypeView::RequiresConfirmation
+        );
+        assert!(response.reply.requires_confirmation);
+        let action_id = response
+            .reply
+            .action_id
+            .clone()
+            .expect("reply should include action id");
+        let assistant_run_id = response
+            .assistant_run_id
+            .expect("response should include assistant run id");
+
+        let row = sqlx::query(
+            r#"
+            select action_type,
+                   risk_level,
+                   confirmation_state,
+                   target_system,
+                   arguments_redacted,
+                   requester_summary
+            from external_action_runs
+            where tenant_id = $1 and id = $2
+            "#,
+        )
+        .bind(state.tenant_id.0)
+        .bind(&action_id)
+        .fetch_one(state.storage.pool())
+        .await
+        .expect("external action run should be persisted");
+
+        assert_eq!(
+            row.get::<String, _>("action_type"),
+            "external_business_action.invoke"
+        );
+        assert_eq!(row.get::<String, _>("risk_level"), "cross_system");
+        assert_eq!(row.get::<String, _>("confirmation_state"), "pending");
+        assert_eq!(row.get::<String, _>("target_system"), "external_channel");
+        let arguments_redacted = row.get::<Value, _>("arguments_redacted");
+        assert_eq!(
+            arguments_redacted["raw_prompt_redacted"],
+            json!(true),
+            "raw prompt should not be stored in action arguments"
+        );
+        assert!(!arguments_redacted.to_string().contains("售后工单"));
+        assert_eq!(
+            row.get::<Value, _>("requester_summary")["channel_connection_id"],
+            json!("generic-chat-main")
+        );
+
+        let confirm_request = ExternalActionConfirmationRequestView {
+            assistant_run_id,
+            action_id: Some(action_id.clone()),
+            confirmation_external_id: "confirm-action-001".to_string(),
+            sender_external_user_id: "user-ext-001".to_string(),
+            decision: ExternalActionConfirmationDecisionView::Approved,
+            comment: Some("确认提交。".to_string()),
+            idempotency_key: "generic:tenant-ext-001:confirm-action-001".to_string(),
+            confirmed_at: Utc::now(),
+        };
+        let (confirm_status, Json(confirm_response)) = confirm_external_channel_action(
+            State(state.clone()),
+            Path("generic-chat-main".to_string()),
+            Json(confirm_request),
+        )
+        .await
+        .expect("confirmation should be accepted");
+
+        assert_eq!(confirm_status, StatusCode::OK);
+        assert_eq!(confirm_response.action_id, action_id);
+        assert_eq!(confirm_response.confirmation_state, "confirmed");
+
+        let confirmed_row = sqlx::query(
+            r#"
+            select confirmation_state, result_summary
+            from external_action_runs
+            where tenant_id = $1 and id = $2
+            "#,
+        )
+        .bind(state.tenant_id.0)
+        .bind(&confirm_response.action_id)
+        .fetch_one(state.storage.pool())
+        .await
+        .expect("confirmed action run should exist");
+
+        assert_eq!(
+            confirmed_row.get::<String, _>("confirmation_state"),
+            "confirmed"
+        );
+        assert_eq!(
+            confirmed_row.get::<Value, _>("result_summary")["confirmation"]["decision"],
+            json!("approved")
+        );
     }
 
     #[test]
