@@ -922,7 +922,7 @@ target/external-third-party-handoff
 
 - 中文接口说明和英文接口说明；
 - `handoff/third-party-handoff.sample.json`；
-- `tools/validate-external-handoff.mjs`、`tools/validate-external-handoff-package.mjs` 和 `tools/validate-external-handoff-archive.mjs`；
+- `tools/validate-external-handoff.mjs`、`tools/validate-external-handoff-package.mjs`、`tools/validate-external-handoff-archive.mjs` 和 `tools/validate-external-handoff-release.mjs`；
 - `sandbox/external-third-party-mock-gateway.mjs`；
 - V3 侧 smoke/readiness 参考脚本；
 - `README.zh-CN.md`、`README.md`、`package.json`；
@@ -934,17 +934,19 @@ target/external-third-party-handoff
 npm run validate:handoff
 npm run validate:package
 npm run validate:archive
+npm run validate:release
 ```
 
-这些命令会分别校验包内交接清单样例、包文件完整性，以及包目录同级 `.tar.gz` 归档和 `.sha256` sidecar。第三方正式填写自己的清单后，也应先通过同一类校验，再交给 V3 项目组联调。
+这些命令会分别校验包内交接清单样例、包文件完整性、包目录同级 `.tar.gz` 归档和 `.sha256` sidecar，并输出一份目录、归档、摘要一致性的 release ready/not-ready 汇总。第三方正式填写自己的清单后，也应先通过同一类校验，再交给 V3 项目组联调。
 
 发送 `.tar.gz` 归档前，V3 侧也可以在主仓库里不解压直接校验归档：
 
 ```bash
 node tools/validate-external-handoff-archive.mjs --archive target/external-third-party-handoff/<package>.tar.gz
+node tools/validate-external-handoff-release.mjs --package target/external-third-party-handoff/<package>
 ```
 
-该命令会检查 `.sha256` sidecar、gzip/tar 结构、单一包根目录、路径穿越风险、必备条目、包 manifest 文件摘要，以及交接清单是否可进入客户沙箱联调。
+这些命令会检查 `.sha256` sidecar、gzip/tar 结构、单一包根目录、路径穿越风险、必备条目、包 manifest 文件摘要，以及交接清单是否可进入客户沙箱联调。
 
 ## 20. 版本与变更
 

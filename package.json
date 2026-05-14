@@ -8,7 +8,9 @@
     "test:external-handoff-package": "node --test tools/build-external-handoff-package.test.mjs",
     "test:external-handoff-package-integrity": "node --test tools/validate-external-handoff-package.test.mjs",
     "test:external-handoff-archive": "node --test tools/validate-external-handoff-archive.test.mjs",
+    "test:external-handoff-release": "node --test tools/validate-external-handoff-release.test.mjs",
     "validate:external-handoff": "node tools/validate-external-handoff.mjs --manifest docs/integrations/third-party-handoff.sample.json",
+    "validate:external-handoff-release": "node tools/validate-external-handoff-release.mjs",
     "build:external-handoff-package": "node tools/build-external-handoff-package.mjs",
     "test:video-deliverables": "node --test tools/validate-video-deliverables.test.mjs",
     "validate:video-deliverables": "node tools/validate-video-deliverables.mjs"

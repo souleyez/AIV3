@@ -900,6 +900,7 @@ The generated output includes a package directory, a `.tar.gz` archive, and a ma
 - `tools/validate-external-handoff.mjs`;
 - `tools/validate-external-handoff-package.mjs`;
 - `tools/validate-external-handoff-archive.mjs`;
+- `tools/validate-external-handoff-release.mjs`;
 - `sandbox/external-third-party-mock-gateway.mjs`;
 - operator smoke/readiness references;
 - `README.zh-CN.md`, `README.md`, `package.json`, and `handoff-package-manifest.json`.
@@ -910,14 +911,18 @@ Inside the package, third parties can run:
 npm run validate:handoff
 npm run validate:package
 npm run validate:archive
+npm run validate:release
 ```
 
 `validate:archive` checks the sibling `.tar.gz` archive and `.sha256` sidecar from inside the generated package directory.
+
+`validate:release` emits a combined ready/not-ready report for the package directory, archive, sidecar, and matching archive root.
 
 Before sending the archive, V3 operators can also validate the archive itself from the main repository without extracting it:
 
 ```bash
 node tools/validate-external-handoff-archive.mjs --archive target/external-third-party-handoff/<package>.tar.gz
+node tools/validate-external-handoff-release.mjs --package target/external-third-party-handoff/<package>
 ```
 
 This checks the `.sha256` sidecar, gzip/tar structure, single package root, path traversal safety, required entries, package manifest file hashes, and handoff manifest readiness.
