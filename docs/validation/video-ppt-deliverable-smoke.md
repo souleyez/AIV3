@@ -34,6 +34,7 @@ The media-worker test builds a controlled sample path in a temporary directory. 
 - `extraction_artifacts_manifest.json`
 - `slide_notes.md`
 - `subtitle_page_map.json`
+- PPTX ZIP magic and required OOXML entries such as `[Content_Types].xml`, `ppt/presentation.xml`, and `ppt/slides/slide1.xml`
 - final manifest status flags and output groups
 - extraction manifest file-kind coverage
 - public manifest, JSON, and Markdown redaction for local paths and token-like URLs

@@ -43,6 +43,19 @@ const LOCAL_PATH_PATTERNS = [
   /token=/i,
 ];
 
+const REQUIRED_PPTX_ENTRIES = [
+  "[Content_Types].xml",
+  "_rels/.rels",
+  "ppt/presentation.xml",
+  "ppt/_rels/presentation.xml.rels",
+  "ppt/slides/slide1.xml",
+  "ppt/slides/_rels/slide1.xml.rels",
+  "ppt/notesSlides/notesSlide1.xml",
+];
+
+const ZIP_EOCD_SIGNATURE = 0x06054b50;
+const ZIP_CENTRAL_FILE_HEADER_SIGNATURE = 0x02014b50;
+
 export function resolveVideoDeliverablesPath(inputPath) {
   const absolutePath = path.resolve(inputPath || ".");
   const stat = fs.statSync(absolutePath);
@@ -111,6 +124,18 @@ export function validateVideoDeliverables(inputPath) {
   const pptx = files.find((file) => file.kind === "pptx");
   if (pptx?.exists && !fileStartsWithZipMagic(pptx.path)) {
     errors.push(issue("pptx_zip_magic_missing", "PPTX does not start with ZIP magic bytes", "pptx"));
+  } else if (pptx?.exists) {
+    const { invalidZip, missingEntries } = checkRequiredPptxEntries(pptx.path);
+    if (invalidZip) {
+      errors.push(issue("pptx_central_directory_missing", "PPTX ZIP central directory could not be read", "pptx"));
+    }
+    if (missingEntries.length) {
+      errors.push(issue(
+        "pptx_required_entry_missing",
+        `PPTX is missing required OOXML entries: ${missingEntries.join(", ")}`,
+        "pptx",
+      ));
+    }
   }
 
   if (finalManifest) {
@@ -250,6 +275,64 @@ function fileStartsWithZipMagic(filePath) {
   } finally {
     fs.closeSync(fd);
   }
+}
+
+function checkRequiredPptxEntries(filePath) {
+  const entryNames = readZipCentralDirectoryEntryNames(filePath);
+  if (!entryNames) {
+    return {
+      invalidZip: true,
+      missingEntries: REQUIRED_PPTX_ENTRIES,
+    };
+  }
+  const names = new Set(entryNames);
+  return {
+    invalidZip: false,
+    missingEntries: REQUIRED_PPTX_ENTRIES.filter((entry) => !names.has(entry)),
+  };
+}
+
+function readZipCentralDirectoryEntryNames(filePath) {
+  const bytes = fs.readFileSync(filePath);
+  const eocdOffset = findEndOfCentralDirectory(bytes);
+  if (eocdOffset < 0 || eocdOffset + 22 > bytes.length) {
+    return null;
+  }
+  const entryCount = bytes.readUInt16LE(eocdOffset + 10);
+  const centralDirectorySize = bytes.readUInt32LE(eocdOffset + 12);
+  const centralDirectoryOffset = bytes.readUInt32LE(eocdOffset + 16);
+  if (centralDirectoryOffset + centralDirectorySize > bytes.length) {
+    return null;
+  }
+
+  const names = [];
+  let offset = centralDirectoryOffset;
+  const centralDirectoryEnd = centralDirectoryOffset + centralDirectorySize;
+  for (let index = 0; index < entryCount; index += 1) {
+    if (offset + 46 > centralDirectoryEnd || bytes.readUInt32LE(offset) !== ZIP_CENTRAL_FILE_HEADER_SIGNATURE) {
+      return null;
+    }
+    const fileNameLength = bytes.readUInt16LE(offset + 28);
+    const extraFieldLength = bytes.readUInt16LE(offset + 30);
+    const fileCommentLength = bytes.readUInt16LE(offset + 32);
+    const fileNameStart = offset + 46;
+    const fileNameEnd = fileNameStart + fileNameLength;
+    if (fileNameEnd > centralDirectoryEnd) {
+      return null;
+    }
+    names.push(bytes.toString("utf8", fileNameStart, fileNameEnd));
+    offset = fileNameEnd + extraFieldLength + fileCommentLength;
+  }
+  return names;
+}
+
+function findEndOfCentralDirectory(bytes) {
+  for (let offset = bytes.length - 22; offset >= 0; offset -= 1) {
+    if (bytes.readUInt32LE(offset) === ZIP_EOCD_SIGNATURE) {
+      return offset;
+    }
+  }
+  return -1;
 }
 
 function issue(code, message, kind = "") {

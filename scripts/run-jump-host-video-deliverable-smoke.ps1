@@ -73,7 +73,7 @@ function createJumpHostVideoDeliverablesFixture(tempRoot) {
   const artifactsDir = path.join(root, "generated_artifacts");
   fs.mkdirSync(artifactsDir, { recursive: true });
 
-  fs.writeFileSync(path.join(artifactsDir, "video_slides_screenshot_based.pptx"), Buffer.from([0x50, 0x4b, 0x03, 0x04]));
+  fs.writeFileSync(path.join(artifactsDir, "video_slides_screenshot_based.pptx"), minimalPptxFixtureBytes());
   fs.writeFileSync(path.join(artifactsDir, "slide_notes.md"), "# Slide Notes\n\nAligned transcript is ready.\n");
   fs.writeFileSync(
     path.join(artifactsDir, "subtitle_page_map.json"),
@@ -150,6 +150,71 @@ function fileNameForKind(kind) {
     slide_notes: "slide_notes.md",
     subtitle_page_map: "subtitle_page_map.json",
   }[kind];
+}
+
+function minimalPptxFixtureBytes() {
+  return minimalZipBytes([
+    "[Content_Types].xml",
+    "_rels/.rels",
+    "ppt/presentation.xml",
+    "ppt/_rels/presentation.xml.rels",
+    "ppt/slides/slide1.xml",
+    "ppt/slides/_rels/slide1.xml.rels",
+    "ppt/notesSlides/notesSlide1.xml",
+  ]);
+}
+
+function minimalZipBytes(entryNames) {
+  const localParts = [];
+  const centralParts = [];
+  let offset = 0;
+  for (const entryName of entryNames) {
+    const fileName = Buffer.from(entryName, "utf8");
+    const localHeader = Buffer.alloc(30);
+    localHeader.writeUInt32LE(0x04034b50, 0);
+    localHeader.writeUInt16LE(20, 4);
+    localHeader.writeUInt16LE(0, 6);
+    localHeader.writeUInt16LE(0, 8);
+    localHeader.writeUInt32LE(0, 10);
+    localHeader.writeUInt32LE(0, 14);
+    localHeader.writeUInt32LE(0, 18);
+    localHeader.writeUInt32LE(0, 22);
+    localHeader.writeUInt16LE(fileName.length, 26);
+    localHeader.writeUInt16LE(0, 28);
+    localParts.push(localHeader, fileName);
+
+    const centralHeader = Buffer.alloc(46);
+    centralHeader.writeUInt32LE(0x02014b50, 0);
+    centralHeader.writeUInt16LE(20, 4);
+    centralHeader.writeUInt16LE(20, 6);
+    centralHeader.writeUInt16LE(0, 8);
+    centralHeader.writeUInt16LE(0, 10);
+    centralHeader.writeUInt32LE(0, 12);
+    centralHeader.writeUInt32LE(0, 16);
+    centralHeader.writeUInt32LE(0, 20);
+    centralHeader.writeUInt32LE(0, 24);
+    centralHeader.writeUInt16LE(fileName.length, 28);
+    centralHeader.writeUInt16LE(0, 30);
+    centralHeader.writeUInt16LE(0, 32);
+    centralHeader.writeUInt16LE(0, 34);
+    centralHeader.writeUInt16LE(0, 36);
+    centralHeader.writeUInt32LE(0, 38);
+    centralHeader.writeUInt32LE(offset, 42);
+    centralParts.push(centralHeader, fileName);
+    offset += localHeader.length + fileName.length;
+  }
+
+  const centralDirectory = Buffer.concat(centralParts);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0);
+  end.writeUInt16LE(0, 4);
+  end.writeUInt16LE(0, 6);
+  end.writeUInt16LE(entryNames.length, 8);
+  end.writeUInt16LE(entryNames.length, 10);
+  end.writeUInt32LE(centralDirectory.length, 12);
+  end.writeUInt32LE(offset, 16);
+  end.writeUInt16LE(0, 20);
+  return Buffer.concat([...localParts, centralDirectory, end]);
 }
 '@
 
