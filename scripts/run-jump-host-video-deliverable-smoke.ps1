@@ -101,6 +101,7 @@ function createJumpHostVideoDeliverablesFixture(tempRoot) {
     "final_deliverables_manifest",
     "published_deliverable_manifest",
     "extraction_artifacts_manifest",
+    "slide_rectangles_manifest",
     "slide_notes",
     "subtitle_page_map",
   ].map((kind) => ({
@@ -121,6 +122,7 @@ function createJumpHostVideoDeliverablesFixture(tempRoot) {
           has_final_deliverables_manifest: true,
           has_published_deliverable_manifest: true,
           has_extraction_artifacts_manifest: true,
+          has_slide_rectangles_manifest: true,
           has_slide_notes: true,
           has_subtitle_page_map: true,
         },
@@ -128,8 +130,35 @@ function createJumpHostVideoDeliverablesFixture(tempRoot) {
           ["final_deliverables_manifest", "published_deliverable_manifest", "extraction_artifacts_manifest"].includes(file.artifact_kind),
         ),
         final_outputs: files.filter((file) => file.artifact_kind === "pptx"),
-        review_outputs: files.filter((file) => file.artifact_kind === "slide_notes"),
+        review_outputs: files.filter((file) =>
+          ["slide_rectangles_manifest", "slide_notes"].includes(file.artifact_kind),
+        ),
         evidence_outputs: files.filter((file) => file.artifact_kind === "subtitle_page_map"),
+      },
+      null,
+      2,
+    ),
+  );
+
+  fs.writeFileSync(
+    path.join(artifactsDir, "slide_rectangles_manifest.json"),
+    JSON.stringify(
+      {
+        status: "promoted_full_frame_fallback",
+        rectangle_extraction_status: "promoted_full_frame_fallback",
+        rectangle_extraction_mode: "full_frame_fallback",
+        promoted_rectangle_count: 1,
+        dedupe_status: "selected_keep_list_order_deduped",
+        rectangles: [
+          {
+            slide_number: 1,
+            candidate_index: 2,
+            source_frame: "frame_000002.jpg",
+            rectangle_source: "raw_frame_full_frame_fallback",
+            crop_box: { unit: "relative", x: 0, y: 0, width: 1, height: 1 },
+            review_required: true,
+          },
+        ],
       },
       null,
       2,
@@ -152,6 +181,7 @@ function createJumpHostVideoDeliverablesFixture(tempRoot) {
           has_final_deliverables_manifest: true,
           has_published_deliverable_manifest: true,
           has_extraction_artifacts_manifest: true,
+          has_slide_rectangles_manifest: true,
           has_slide_notes: true,
           has_subtitle_page_map: true,
         },
@@ -176,6 +206,7 @@ function fileNameForKind(kind) {
     final_deliverables_manifest: "final_deliverables_manifest.json",
     published_deliverable_manifest: "published_deliverable_manifest.json",
     extraction_artifacts_manifest: "extraction_artifacts_manifest.json",
+    slide_rectangles_manifest: "slide_rectangles_manifest.json",
     slide_notes: "slide_notes.md",
     subtitle_page_map: "subtitle_page_map.json",
   }[kind];

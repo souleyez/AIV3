@@ -29,6 +29,7 @@ pub const DEFAULT_CONTACT_SHEET_PLAN_FILE_NAME: &str = "contact_sheet_plan.json"
 pub const DEFAULT_CONTACT_SHEET_HTML_FILE_NAME: &str = "raw_contact_sheet.html";
 pub const DEFAULT_PPT_KEEP_LIST_TEMPLATE_FILE_NAME: &str = "ppt_keep_list_template.json";
 pub const DEFAULT_SELECTED_SLIDES_MANIFEST_FILE_NAME: &str = "selected_slides_manifest.json";
+pub const DEFAULT_SLIDE_RECTANGLES_MANIFEST_FILE_NAME: &str = "slide_rectangles_manifest.json";
 pub const DEFAULT_SUBTITLE_PAGE_MAP_FILE_NAME: &str = "subtitle_page_map.json";
 pub const DEFAULT_SLIDE_NOTES_ARTIFACT_FILE_NAME: &str = "slide_notes.md";
 pub const DEFAULT_PPTX_BUILD_PLAN_FILE_NAME: &str = "pptx_build_plan.json";
@@ -38,6 +39,7 @@ const VIDEO_DELIVERABLE_PACKAGE_REQUIRED_KINDS: &[&str] = &[
     "pptx",
     "final_deliverables_manifest",
     "extraction_artifacts_manifest",
+    "slide_rectangles_manifest",
     "slide_notes",
     "subtitle_page_map",
 ];
@@ -634,6 +636,8 @@ fn write_video_slide_candidate_review_files(
 
     let selected_slides_manifest_path =
         artifacts_dir.join(DEFAULT_SELECTED_SLIDES_MANIFEST_FILE_NAME);
+    let slide_rectangles_manifest_path =
+        artifacts_dir.join(DEFAULT_SLIDE_RECTANGLES_MANIFEST_FILE_NAME);
     let selected_slides_manifest = selected_slides_manifest_from_keep_list(
         document,
         &frames,
@@ -647,6 +651,19 @@ fn write_video_slide_candidate_review_files(
     fs::write(
         &selected_slides_manifest_path,
         video_public_json_bytes(&selected_slides_manifest)?,
+    )
+    .map_err(|error| error.to_string())?;
+
+    let slide_rectangles_manifest = video_slide_rectangles_manifest_from_selected_slides(
+        document,
+        &selected_slides_manifest,
+        &candidate_manifest_path,
+        &contact_sheet_html_path,
+        &keep_list_template_path,
+    );
+    fs::write(
+        &slide_rectangles_manifest_path,
+        video_public_json_bytes(&slide_rectangles_manifest)?,
     )
     .map_err(|error| error.to_string())?;
 
@@ -691,6 +708,8 @@ fn write_video_slide_candidate_review_files(
         "keep_list_template_file_name": DEFAULT_PPT_KEEP_LIST_TEMPLATE_FILE_NAME,
         "selected_slides_manifest": selected_slides_manifest_path.display().to_string(),
         "selected_slides_manifest_file_name": DEFAULT_SELECTED_SLIDES_MANIFEST_FILE_NAME,
+        "slide_rectangles_manifest": slide_rectangles_manifest_path.display().to_string(),
+        "slide_rectangles_manifest_file_name": DEFAULT_SLIDE_RECTANGLES_MANIFEST_FILE_NAME,
         "recommended_output": pptx_output_path.display().to_string(),
         "recommended_output_file_name": DEFAULT_VIDEO_SLIDES_PPTX_FILE_NAME,
         "selection": {
@@ -733,6 +752,43 @@ fn write_video_slide_candidate_review_files(
                 .get("selected_count")
                 .cloned()
                 .unwrap_or_else(|| json!(0)),
+        );
+    }
+
+    let mut slide_rectangles_artifact = video_generated_artifact_file(
+        document,
+        "slide_rectangles_manifest",
+        "application/json",
+        &slide_rectangles_manifest_path,
+    );
+    if let Some(object) = slide_rectangles_artifact.as_object_mut() {
+        object.insert(
+            "rectangle_extraction_status".to_string(),
+            slide_rectangles_manifest
+                .get("rectangle_extraction_status")
+                .cloned()
+                .unwrap_or_else(|| json!("waiting_for_selection")),
+        );
+        object.insert(
+            "rectangle_extraction_mode".to_string(),
+            slide_rectangles_manifest
+                .get("rectangle_extraction_mode")
+                .cloned()
+                .unwrap_or_else(|| json!("full_frame_fallback")),
+        );
+        object.insert(
+            "promoted_rectangle_count".to_string(),
+            slide_rectangles_manifest
+                .get("promoted_rectangle_count")
+                .cloned()
+                .unwrap_or_else(|| json!(0)),
+        );
+        object.insert(
+            "dedupe_status".to_string(),
+            slide_rectangles_manifest
+                .get("dedupe_status")
+                .cloned()
+                .unwrap_or_else(|| json!("waiting_for_selection")),
         );
     }
 
@@ -781,6 +837,7 @@ fn write_video_slide_candidate_review_files(
             &keep_list_template_path,
         ),
         selected_slides_artifact,
+        slide_rectangles_artifact,
         video_generated_artifact_file(document, "slide_notes", "text/markdown", &slide_notes_path),
         video_generated_artifact_file(
             document,
@@ -1283,6 +1340,12 @@ fn selected_slides_manifest_from_keep_list(
             } else {
                 "pre_page_mapped"
             };
+            let slide_rectangle = video_full_frame_slide_rectangle(
+                slide_index + 1,
+                *candidate_index,
+                file_name,
+                timestamp_seconds,
+            );
             Some(json!({
                 "candidate_index": candidate_index,
                 "file_name": file_name,
@@ -1296,11 +1359,23 @@ fn selected_slides_manifest_from_keep_list(
                 },
                 "subtitle_alignment_status": subtitle_alignment_status,
                 "transcript_segments": transcript_segments,
+                "rectangle_extraction_status": "promoted_full_frame_fallback",
+                "slide_rectangle": slide_rectangle,
                 "contact_sheet_anchor": format!("candidate-{candidate_index}"),
                 "selection_status": "selected",
             }))
         })
         .collect::<Vec<_>>();
+    let rectangle_extraction_status = if selected_candidates.is_empty() {
+        "waiting_for_selection"
+    } else {
+        "promoted_full_frame_fallback"
+    };
+    let dedupe_status = if selected_candidates.is_empty() {
+        "waiting_for_selection"
+    } else {
+        "selected_keep_list_order_deduped"
+    };
 
     json!({
         "status": if selected_candidates.is_empty() { "waiting_for_selection" } else { "ready_for_pptx_writer" },
@@ -1313,11 +1388,100 @@ fn selected_slides_manifest_from_keep_list(
         "keep_list_template": keep_list_template_path.display().to_string(),
         "selected_candidate_indices": selected_candidate_indices,
         "selected_count": selected_candidates.len(),
+        "rectangle_extraction_status": rectangle_extraction_status,
+        "rectangle_extraction_mode": "full_frame_fallback",
+        "dedupe_status": dedupe_status,
+        "dedupe_policy": "selected candidate indices are range-checked, order-preserved, and de-duplicated before rectangle promotion",
+        "rectangle_policy": "promote selected raw frames as full-frame relative rectangles until a visual detector can replace the fallback crop",
         "selected_candidates": selected_candidates,
         "next_step": if selected_candidates.is_empty() {
             "fill ppt_keep_list_template.json from the numbered contact sheet"
         } else {
-            "build screenshot-based PPTX from selected_candidates only"
+            "review slide_rectangles_manifest.json and build screenshot-based PPTX from selected_candidates only"
+        },
+    })
+}
+
+fn video_full_frame_slide_rectangle(
+    slide_number: usize,
+    candidate_index: usize,
+    file_name: &str,
+    timestamp_seconds: f64,
+) -> Value {
+    json!({
+        "slide_number": slide_number,
+        "candidate_index": candidate_index,
+        "source_frame": file_name,
+        "timestamp_seconds": timestamp_seconds,
+        "rectangle_source": "raw_frame_full_frame_fallback",
+        "rectangle_extraction_status": "promoted_full_frame_fallback",
+        "crop_box": {
+            "unit": "relative",
+            "x": 0.0,
+            "y": 0.0,
+            "width": 1.0,
+            "height": 1.0,
+        },
+        "confidence_label": "fallback_requires_review",
+        "review_required": true,
+    })
+}
+
+fn video_slide_rectangles_manifest_from_selected_slides(
+    document: &Document,
+    selected_slides_manifest: &Value,
+    candidate_manifest_path: &Path,
+    contact_sheet_html_path: &Path,
+    keep_list_template_path: &Path,
+) -> Value {
+    let selected_candidates = selected_slides_manifest
+        .get("selected_candidates")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let rectangles = selected_candidates
+        .iter()
+        .filter_map(|candidate| candidate.get("slide_rectangle").cloned())
+        .collect::<Vec<_>>();
+    let promoted_count = rectangles.len();
+    let rectangle_extraction_status = if promoted_count == 0 {
+        "waiting_for_selection"
+    } else {
+        "promoted_full_frame_fallback"
+    };
+    let dedupe_status = if promoted_count == 0 {
+        "waiting_for_selection"
+    } else {
+        "selected_keep_list_order_deduped"
+    };
+
+    json!({
+        "status": rectangle_extraction_status,
+        "source": "selected_slides_manifest",
+        "document_id": document.id.to_string(),
+        "dataset_id": document.dataset_id.to_string(),
+        "title": document.title,
+        "candidate_manifest": candidate_manifest_path.display().to_string(),
+        "contact_sheet_html": contact_sheet_html_path.display().to_string(),
+        "keep_list_template": keep_list_template_path.display().to_string(),
+        "rectangle_extraction_status": rectangle_extraction_status,
+        "rectangle_extraction_mode": "full_frame_fallback",
+        "promoted_rectangle_count": promoted_count,
+        "dedupe_status": dedupe_status,
+        "dedupe_policy": {
+            "source": "ppt_keep_list_template.selected_candidate_indices",
+            "rule": "range-check candidate numbers, preserve selected order, and keep the first occurrence of each candidate only",
+        },
+        "crop_policy": {
+            "mode": "full_frame_fallback",
+            "unit": "relative",
+            "reason": "no visual rectangle detector is promoted yet; selected raw frames are explicitly marked review_required",
+        },
+        "rectangles": rectangles,
+        "next_step": if promoted_count == 0 {
+            "fill ppt_keep_list_template.json from the numbered contact sheet"
+        } else {
+            "replace full-frame fallback rectangles with detector crops when rectangle extraction is available"
         },
     })
 }
@@ -1509,10 +1673,21 @@ fn video_selected_slide_quality_warnings(selected_slides_manifest: &Value) -> Ve
                 .to_string(),
         );
     }
-    warnings.push(
-        "Slide images are raw frame screenshots until rectangle extraction/dedupe is promoted into the worker."
-            .to_string(),
-    );
+    let rectangle_status = selected_slides_manifest
+        .get("rectangle_extraction_status")
+        .and_then(Value::as_str)
+        .unwrap_or("waiting_for_selection");
+    if rectangle_status == "promoted_full_frame_fallback" {
+        warnings.push(
+            "Slide rectangles are promoted with a full-frame fallback crop and still require visual review."
+                .to_string(),
+        );
+    } else {
+        warnings.push(
+            "Slide images are raw frame screenshots until rectangle extraction/dedupe is promoted into the worker."
+                .to_string(),
+        );
+    }
     warnings
 }
 
@@ -2229,6 +2404,7 @@ pub fn video_extraction_output_artifact_from_output(
                 "contact_sheet_html",
                 "ppt_keep_list_template",
                 "selected_slides_manifest",
+                "slide_rectangles_manifest",
                 "slide_notes",
                 "pptx_build_plan",
             ],
@@ -2776,6 +2952,7 @@ fn video_ready_file_kinds(files: &[Value]) -> Vec<String> {
                     | "final_deliverables_manifest"
                     | "published_deliverable_manifest"
                     | "extraction_artifacts_manifest"
+                    | "slide_rectangles_manifest"
                     | "ppt_outline"
                     | "slide_notes"
                     | "subtitle_page_map"
@@ -2802,6 +2979,7 @@ fn video_artifact_group_counts(files: &[Value]) -> Value {
             "contact_sheet_html",
             "ppt_keep_list_template",
             "selected_slides_manifest",
+            "slide_rectangles_manifest",
             "slide_notes",
             "pptx_build_plan",
         ]).len(),
@@ -2847,6 +3025,9 @@ fn video_extraction_completion_next_actions(
             "review_contact_sheet_or_promote_rectangle_extraction"
         ));
     }
+    if warning_codes.contains("full_frame_rectangle_fallback") {
+        actions.push(json!("review_slide_rectangles_manifest"));
+    }
     if warning_codes.contains("published_version_missing") {
         actions.push(json!("persist_video_published_version"));
     }
@@ -2876,6 +3057,9 @@ fn video_extraction_completion_next_actions(
     }
     if file_kinds.contains("extraction_artifacts_manifest") {
         actions.push(json!("review_extraction_artifacts_manifest"));
+    }
+    if file_kinds.contains("slide_rectangles_manifest") {
+        actions.push(json!("review_slide_rectangles_manifest"));
     }
     if file_kinds.contains("slide_notes") {
         actions.push(json!("review_slide_notes"));
@@ -3193,6 +3377,7 @@ fn video_deliverable_status(generated_artifacts: &Value) -> Value {
     let has_extraction_artifacts_manifest =
         artifact_kinds.contains("extraction_artifacts_manifest");
     let has_slide_notes = artifact_kinds.contains("slide_notes");
+    let has_slide_rectangles_manifest = artifact_kinds.contains("slide_rectangles_manifest");
     let has_subtitle_page_map = artifact_kinds.contains("subtitle_page_map");
     let mut warnings = video_generated_artifact_quality_warnings(
         &files,
@@ -3248,6 +3433,7 @@ fn video_deliverable_status(generated_artifacts: &Value) -> Value {
         "has_final_deliverables_manifest": has_final_deliverables_manifest,
         "has_published_deliverable_manifest": has_published_deliverable_manifest,
         "has_extraction_artifacts_manifest": has_extraction_artifacts_manifest,
+        "has_slide_rectangles_manifest": has_slide_rectangles_manifest,
         "has_slide_notes": has_slide_notes,
         "has_subtitle_page_map": has_subtitle_page_map,
         "has_pptx": has_pptx,
@@ -3370,6 +3556,12 @@ fn video_generated_artifact_quality_warnings(
             "severity": "medium",
             "message": "No promoted slide-rectangle extraction is available yet; current candidates are raw frames/contact-sheet entries and require keep-list review before final delivery."
         }));
+    } else if video_has_full_frame_rectangle_fallback(files) {
+        warnings.push(json!({
+            "code": "full_frame_rectangle_fallback",
+            "severity": "low",
+            "message": "Slide rectangles are promoted as full-frame fallback crops; review or replace them when visual rectangle detection is available."
+        }));
     }
     if has_pptx {
         warnings.push(json!({
@@ -3416,13 +3608,28 @@ fn video_has_raw_frame_candidates(files: &[Value]) -> bool {
 
 fn video_has_promoted_slide_rectangles(files: &[Value]) -> bool {
     files.iter().any(|file| {
-        matches!(
-            file.get("artifact_kind").and_then(Value::as_str),
-            Some("slide_rectangles_manifest" | "rectangle_extraction_manifest")
-        ) || file
-            .get("rectangle_extraction_status")
+        file.get("rectangle_extraction_status")
             .and_then(Value::as_str)
-            .is_some_and(|status| matches!(status, "completed" | "promoted" | "available"))
+            .is_some_and(|status| {
+                matches!(
+                    status,
+                    "completed" | "promoted" | "available" | "promoted_full_frame_fallback"
+                )
+            })
+    })
+}
+
+fn video_has_full_frame_rectangle_fallback(files: &[Value]) -> bool {
+    files.iter().any(|file| {
+        file.get("artifact_kind").and_then(Value::as_str) == Some("slide_rectangles_manifest")
+            && file
+                .get("rectangle_extraction_mode")
+                .and_then(Value::as_str)
+                == Some("full_frame_fallback")
+            && file
+                .get("promoted_rectangle_count")
+                .and_then(Value::as_u64)
+                .is_some_and(|count| count > 0)
     })
 }
 
@@ -3606,6 +3813,7 @@ fn video_final_deliverables_manifest(
             "contact_sheet_html",
             "ppt_keep_list_template",
             "selected_slides_manifest",
+            "slide_rectangles_manifest",
             "slide_notes",
             "pptx_build_plan",
         ]),
@@ -3671,6 +3879,7 @@ fn video_published_deliverable_manifest(
             "final_deliverables_manifest",
             "published_deliverable_manifest",
             "extraction_artifacts_manifest",
+            "slide_rectangles_manifest",
             "slide_notes",
             "subtitle_page_map",
         ]),
@@ -3686,6 +3895,7 @@ fn video_published_deliverable_manifest(
             "contact_sheet_html",
             "ppt_keep_list_template",
             "selected_slides_manifest",
+            "slide_rectangles_manifest",
             "slide_notes",
             "pptx_build_plan",
         ]),
@@ -5028,6 +5238,16 @@ mod tests {
                 "path": "generated_artifacts/extraction_artifacts_manifest.json",
                 "uri": format!("artifact://video-{}-extraction-manifest", document.id)
             }, {
+                "artifact_kind": "slide_rectangles_manifest",
+                "artifact_id": format!("video-{}-slide-rectangles", document.id),
+                "title": "slide rectangles manifest",
+                "format": "application/json",
+                "path": "generated_artifacts/slide_rectangles_manifest.json",
+                "uri": format!("artifact://video-{}-slide-rectangles", document.id),
+                "rectangle_extraction_status": "promoted_full_frame_fallback",
+                "rectangle_extraction_mode": "full_frame_fallback",
+                "promoted_rectangle_count": 1
+            }, {
                 "artifact_kind": "slide_notes",
                 "artifact_id": format!("video-{}-slide-notes", document.id),
                 "title": "slide notes",
@@ -5080,6 +5300,10 @@ mod tests {
         );
         assert_eq!(
             output_artifact["deliverable_status"]["has_extraction_artifacts_manifest"],
+            json!(true)
+        );
+        assert_eq!(
+            output_artifact["deliverable_status"]["has_slide_rectangles_manifest"],
             json!(true)
         );
         assert_eq!(
@@ -5140,11 +5364,11 @@ mod tests {
         );
         assert_eq!(
             output_artifact["deliverable_package"]["required_file_count"],
-            json!(5)
+            json!(6)
         );
         assert_eq!(
             output_artifact["deliverable_package"]["ready_required_file_count"],
-            json!(5)
+            json!(6)
         );
         assert!(output_artifact["deliverable_package"]["required_files"]
             .as_array()
@@ -5174,6 +5398,11 @@ mod tests {
             .expect("final outputs")
             .iter()
             .any(|file| file["artifact_kind"] == json!("pptx")));
+        assert!(output_artifact["review_outputs"]
+            .as_array()
+            .expect("review outputs")
+            .iter()
+            .any(|file| file["artifact_kind"] == json!("slide_rectangles_manifest")));
         assert!(output_artifact["review_outputs"]
             .as_array()
             .expect("review outputs")
@@ -5218,6 +5447,15 @@ mod tests {
                 "format": "application/json",
                 "path": "generated_artifacts/extraction_artifacts_manifest.json"
             }, {
+                "artifact_kind": "slide_rectangles_manifest",
+                "artifact_id": format!("video-{}-slide-rectangles", document.id),
+                "title": "slide rectangles manifest",
+                "format": "application/json",
+                "path": "generated_artifacts/slide_rectangles_manifest.json",
+                "rectangle_extraction_status": "promoted_full_frame_fallback",
+                "rectangle_extraction_mode": "full_frame_fallback",
+                "promoted_rectangle_count": 1
+            }, {
                 "artifact_kind": "slide_notes",
                 "artifact_id": format!("video-{}-slide-notes", document.id),
                 "title": "slide notes",
@@ -5254,6 +5492,10 @@ mod tests {
             .as_array()
             .expect("ready file kinds")
             .contains(&json!("extraction_artifacts_manifest")));
+        assert!(follow_up["ready_file_kinds"]
+            .as_array()
+            .expect("ready file kinds")
+            .contains(&json!("slide_rectangles_manifest")));
         assert_eq!(
             follow_up["deliverable_status"]["has_slide_notes"],
             json!(true)
@@ -5853,6 +6095,9 @@ mod tests {
             .any(|file| file["artifact_kind"] == json!("selected_slides_manifest")));
         assert!(files
             .iter()
+            .any(|file| file["artifact_kind"] == json!("slide_rectangles_manifest")));
+        assert!(files
+            .iter()
             .any(|file| file["artifact_kind"] == json!("pptx_build_plan")));
         assert!(files
             .iter()
@@ -5962,6 +6207,17 @@ mod tests {
             .find(|file| file["artifact_kind"] == json!("selected_slides_manifest"))
             .expect("selected slides artifact ref");
         assert_eq!(selected_slides_ref["selected_count"], json!(0));
+        let slide_rectangles_path = files
+            .iter()
+            .find(|file| file["artifact_kind"] == json!("slide_rectangles_manifest"))
+            .and_then(|file| file["path"].as_str())
+            .expect("slide rectangles manifest path");
+        let slide_rectangles =
+            fs::read_to_string(slide_rectangles_path).expect("slide rectangles manifest");
+        assert!(slide_rectangles.contains("waiting_for_selection"));
+        assert!(slide_rectangles.contains("\"promoted_rectangle_count\": 0"));
+        assert!(slide_rectangles.contains("\"candidate_manifest\": \"[redacted]\""));
+        assert!(!slide_rectangles.contains(&output_root.display().to_string()));
         let slide_notes_path = files
             .iter()
             .find(|file| file["artifact_kind"] == json!("slide_notes"))
@@ -6073,11 +6329,25 @@ mod tests {
         assert!(selected_slides.contains("\"selected_candidate_indices\": [\n    2,\n    1\n  ]"));
         assert!(selected_slides.contains("frame_000002.jpg"));
         assert!(selected_slides.contains("frame_000001.jpg"));
+        assert!(selected_slides.contains("promoted_full_frame_fallback"));
+        assert!(selected_slides.contains("selected_keep_list_order_deduped"));
         let selected_slides_ref = files
             .iter()
             .find(|file| file["artifact_kind"] == json!("selected_slides_manifest"))
             .expect("selected slides artifact ref");
         assert_eq!(selected_slides_ref["selected_count"], json!(2));
+        let slide_rectangles_path = files
+            .iter()
+            .find(|file| file["artifact_kind"] == json!("slide_rectangles_manifest"))
+            .and_then(|file| file["path"].as_str())
+            .expect("slide rectangles manifest path");
+        let slide_rectangles =
+            fs::read_to_string(slide_rectangles_path).expect("slide rectangles manifest");
+        assert!(slide_rectangles.contains("promoted_full_frame_fallback"));
+        assert!(slide_rectangles.contains("\"promoted_rectangle_count\": 2"));
+        assert!(slide_rectangles.contains("\"unit\": \"relative\""));
+        assert!(slide_rectangles.contains("\"review_required\": true"));
+        assert!(!slide_rectangles.contains(&raw_frames_dir.display().to_string()));
         let keep_list = fs::read_to_string(keep_list_path).expect("preserved keep list");
         assert!(keep_list.contains("manual pick"));
         let pptx_plan_path = files
@@ -6088,6 +6358,7 @@ mod tests {
         let pptx_plan = fs::read_to_string(pptx_plan_path).expect("pptx build plan");
         assert!(pptx_plan.contains("completed"));
         assert!(pptx_plan.contains("selected_slides_manifest.json"));
+        assert!(pptx_plan.contains("slide_rectangles_manifest.json"));
         let pptx_path = files
             .iter()
             .find(|file| file["artifact_kind"] == json!("pptx"))
@@ -6141,6 +6412,7 @@ mod tests {
         assert!(final_manifest.contains("slide_notes"));
         assert!(final_manifest.contains(DEFAULT_VIDEO_SLIDES_PPTX_FILE_NAME));
         assert!(final_manifest.contains("speaker_notes_metadata_only"));
+        assert!(final_manifest.contains("full_frame_rectangle_fallback"));
         let slide_notes_path = files
             .iter()
             .find(|file| file["artifact_kind"] == json!("slide_notes"))
@@ -6363,6 +6635,10 @@ mod tests {
             .as_array()
             .expect("next actions")
             .contains(&json!("review_slide_notes")));
+        assert!(output_artifact["completion_follow_up"]["next_actions"]
+            .as_array()
+            .expect("next actions")
+            .contains(&json!("review_slide_rectangles_manifest")));
         assert_eq!(
             html_artifact["payload"]["completion_follow_up"]["html_artifact_ids"][0],
             html_artifact["id"]
@@ -6421,6 +6697,13 @@ mod tests {
             final_manifest_json["review_outputs"]
                 .as_array()
                 .expect("review outputs"),
+            "slide_rectangles_manifest",
+            DEFAULT_SLIDE_RECTANGLES_MANIFEST_FILE_NAME,
+        );
+        assert_public_manifest_file_entry(
+            final_manifest_json["review_outputs"]
+                .as_array()
+                .expect("review outputs"),
             "slide_notes",
             DEFAULT_SLIDE_NOTES_ARTIFACT_FILE_NAME,
         );
@@ -6450,6 +6733,13 @@ mod tests {
         );
         assert_eq!(published_manifest_json["immutable_version"], json!(true));
         assert_eq!(published_manifest_json["version_no"], json!(1));
+        assert_public_manifest_file_entry(
+            published_manifest_json["published_files"]
+                .as_array()
+                .expect("published files"),
+            "slide_rectangles_manifest",
+            DEFAULT_SLIDE_RECTANGLES_MANIFEST_FILE_NAME,
+        );
         assert_public_manifest_file_entry(
             published_manifest_json["published_files"]
                 .as_array()
@@ -6487,6 +6777,11 @@ mod tests {
             extraction_files,
             "pptx",
             DEFAULT_VIDEO_SLIDES_PPTX_FILE_NAME,
+        );
+        assert_public_manifest_file_entry(
+            extraction_files,
+            "slide_rectangles_manifest",
+            DEFAULT_SLIDE_RECTANGLES_MANIFEST_FILE_NAME,
         );
         assert_public_manifest_file_entry(
             extraction_files,

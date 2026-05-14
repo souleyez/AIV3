@@ -33,11 +33,13 @@ The media-worker test builds a controlled sample path in a temporary directory. 
 - `final_deliverables_manifest.json`
 - `published_deliverable_manifest.json`
 - `extraction_artifacts_manifest.json`
+- `slide_rectangles_manifest.json`
 - `slide_notes.md`
 - `subtitle_page_map.json`
 - PPTX ZIP magic and required OOXML entries such as `[Content_Types].xml`, `ppt/presentation.xml`, and `ppt/slides/slide1.xml`
 - final manifest status flags and output groups
 - published manifest type, immutable version metadata, lifecycle state, and redacted file coverage
+- slide rectangle manifest status, full-frame fallback crop boxes, selected keep-list de-duplication status, and `review_required=true`
 - extraction manifest file-kind coverage
 - public manifest, JSON, and Markdown redaction for local paths and token-like URLs
 
@@ -76,6 +78,7 @@ ok pptx video_slides_screenshot_based.pptx ...
 ok final_deliverables_manifest final_deliverables_manifest.json ...
 ok published_deliverable_manifest published_deliverable_manifest.json ...
 ok extraction_artifacts_manifest extraction_artifacts_manifest.json ...
+ok slide_rectangles_manifest slide_rectangles_manifest.json ...
 ok slide_notes slide_notes.md ...
 ok subtitle_page_map subtitle_page_map.json ...
 ```
@@ -116,3 +119,9 @@ npm run test:video-deliverables
 cargo test -p media-worker controlled_video_sample_deliverable_contract_is_complete
 powershell -ExecutionPolicy Bypass -File .\scripts\run-jump-host-video-deliverable-smoke.ps1 -SelfTest
 ```
+
+## Slide Rectangle Manifest Follow-Up
+
+The public deliverable contract now also requires `slide_rectangles_manifest.json` for complete video/PPT packages. The current promoted mode is intentionally conservative: selected keep-list frames are de-duplicated in selection order and exported as relative full-frame fallback crop boxes with `review_required=true`.
+
+This is a data-quality gate and review contract, not a claim that visual slide-boundary detection is complete. A later slice should replace `rectangle_extraction_mode=full_frame_fallback` with real detector crops and stronger duplicate detection after that path has its own evidence and smoke tests.

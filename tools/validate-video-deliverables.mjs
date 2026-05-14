@@ -29,6 +29,12 @@ const REQUIRED_FILES = [
     group: "manifest_outputs",
   },
   {
+    kind: "slide_rectangles_manifest",
+    fileName: "slide_rectangles_manifest.json",
+    statusFlag: "has_slide_rectangles_manifest",
+    group: "review_outputs",
+  },
+  {
     kind: "slide_notes",
     fileName: "slide_notes.md",
     statusFlag: "has_slide_notes",
@@ -131,6 +137,11 @@ export function validateVideoDeliverables(inputPath) {
     "subtitle_page_map",
     errors,
   );
+  const slideRectanglesManifest = readJsonFile(
+    path.join(artifactsDir, "slide_rectangles_manifest.json"),
+    "slide_rectangles_manifest",
+    errors,
+  );
 
   const pptx = files.find((file) => file.kind === "pptx");
   if (pptx?.exists && !fileStartsWithZipMagic(pptx.path)) {
@@ -161,6 +172,10 @@ export function validateVideoDeliverables(inputPath) {
   if (subtitlePageMap) {
     validateSubtitlePageMap(subtitlePageMap, errors);
     validateRedactedJson(subtitlePageMap, "subtitle_page_map", errors);
+  }
+  if (slideRectanglesManifest) {
+    validateSlideRectanglesManifest(slideRectanglesManifest, errors);
+    validateRedactedJson(slideRectanglesManifest, "slide_rectangles_manifest", errors);
   }
   const slideNotes = files.find((file) => file.kind === "slide_notes");
   if (slideNotes?.exists) {
@@ -253,6 +268,32 @@ function validateSubtitlePageMap(map, errors) {
   if (!pages.some((page) => Array.isArray(page?.transcript_segments) && page.transcript_segments.length > 0)) {
     errors.push(issue("subtitle_page_map_transcript_segments_missing", "subtitle_page_map has no transcript segments", "subtitle_page_map"));
   }
+}
+
+function validateSlideRectanglesManifest(manifest, errors) {
+  const rectangles = Array.isArray(manifest.rectangles) ? manifest.rectangles : [];
+  if (manifest.rectangle_extraction_status !== "promoted_full_frame_fallback") {
+    errors.push(issue("slide_rectangles_not_promoted", "slide rectangle manifest is not promoted", "slide_rectangles_manifest"));
+  }
+  if (manifest.rectangle_extraction_mode !== "full_frame_fallback") {
+    errors.push(issue("slide_rectangles_mode_invalid", "slide rectangle extraction mode is invalid", "slide_rectangles_manifest"));
+  }
+  if (!Number.isInteger(manifest.promoted_rectangle_count) || manifest.promoted_rectangle_count < 1 || manifest.promoted_rectangle_count !== rectangles.length) {
+    errors.push(issue("slide_rectangles_count_invalid", "slide rectangle count does not match rectangles", "slide_rectangles_manifest"));
+  }
+  if (!rectangles.every(isRelativeFullFrameRectangle)) {
+    errors.push(issue("slide_rectangles_crop_invalid", "slide rectangles must use the relative full-frame fallback crop", "slide_rectangles_manifest"));
+  }
+}
+
+function isRelativeFullFrameRectangle(rectangle) {
+  const box = rectangle?.crop_box || {};
+  return box.unit === "relative"
+    && box.x === 0
+    && box.y === 0
+    && box.width === 1
+    && box.height === 1
+    && rectangle.review_required === true;
 }
 
 function validateRedactedJson(value, kind, errors) {
