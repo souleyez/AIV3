@@ -790,6 +790,13 @@ fn write_video_slide_candidate_review_files(
                 .cloned()
                 .unwrap_or_else(|| json!("waiting_for_selection")),
         );
+        object.insert(
+            "deduped_candidate_count".to_string(),
+            slide_rectangles_manifest
+                .get("deduped_candidate_count")
+                .cloned()
+                .unwrap_or_else(|| json!(0)),
+        );
     }
 
     let mut slide_candidates_artifact = video_generated_artifact_file(
@@ -1000,6 +1007,16 @@ fn selected_candidate_indices_from_value(value: &Value, candidate_count: usize) 
         .filter(|candidate_index| (1..=candidate_count).contains(candidate_index))
         .filter(|candidate_index| seen.insert(*candidate_index))
         .collect()
+}
+
+fn video_frame_content_fingerprint(path: &Path) -> Option<String> {
+    let bytes = fs::read(path).ok()?;
+    let mut hash = 0xcbf29ce484222325_u64;
+    for byte in bytes {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    Some(format!("fnv1a64:{hash:016x}"))
 }
 
 fn video_candidate_nearby_evidence_refs(
@@ -1304,68 +1321,89 @@ fn selected_slides_manifest_from_keep_list(
     keep_list_template_path: &Path,
 ) -> Value {
     let mut previous_timestamp_seconds = 0.0_f64;
-    let selected_candidates = selected_candidate_indices
-        .iter()
-        .enumerate()
-        .filter_map(|candidate_index| {
-            let slide_index = candidate_index.0;
-            let candidate_index = candidate_index.1;
-            let frame = frames.get(candidate_index.saturating_sub(1))?;
-            let file_name = frame
-                .file_name()
-                .and_then(|value| value.to_str())
-                .unwrap_or("frame");
-            let timestamp_seconds =
-                video_candidate_timestamp_seconds(*candidate_index, frame_extraction);
-            let window_start_seconds = if slide_index == 0 {
-                0.0
-            } else {
-                previous_timestamp_seconds.min(timestamp_seconds)
-            };
-            let window_end_seconds = if timestamp_seconds > window_start_seconds {
-                timestamp_seconds
-            } else {
-                window_start_seconds + video_frame_interval_seconds(frame_extraction)
-            };
-            previous_timestamp_seconds = timestamp_seconds;
-            let transcript_segments = video_transcript_segments_for_window(
-                &evidence.transcript_segments,
-                window_start_seconds,
-                window_end_seconds,
-            );
-            let subtitle_alignment_status = if evidence.transcript_segments.is_empty() {
-                "missing_transcript"
-            } else if transcript_segments.is_empty() {
-                "unmatched"
-            } else {
-                "pre_page_mapped"
-            };
-            let slide_rectangle = video_full_frame_slide_rectangle(
-                slide_index + 1,
-                *candidate_index,
-                file_name,
-                timestamp_seconds,
-            );
-            Some(json!({
-                "candidate_index": candidate_index,
-                "file_name": file_name,
-                "frame_path": frame.display().to_string(),
-                "timestamp_seconds": timestamp_seconds,
-                "timestamp_label": format_seconds(timestamp_seconds),
-                "transcript_window": {
-                    "start_seconds": window_start_seconds,
-                    "end_seconds": window_end_seconds,
-                    "assignment_rule": "pre_page_previous_to_current",
-                },
-                "subtitle_alignment_status": subtitle_alignment_status,
-                "transcript_segments": transcript_segments,
-                "rectangle_extraction_status": "promoted_full_frame_fallback",
-                "slide_rectangle": slide_rectangle,
-                "contact_sheet_anchor": format!("candidate-{candidate_index}"),
-                "selection_status": "selected",
-            }))
-        })
-        .collect::<Vec<_>>();
+    let mut selected_candidates = Vec::<Value>::new();
+    let mut rejected_duplicate_candidates = Vec::<Value>::new();
+    let mut seen_content_fingerprints = BTreeSet::<String>::new();
+    for candidate_index in selected_candidate_indices {
+        let Some(frame) = frames.get(candidate_index.saturating_sub(1)) else {
+            continue;
+        };
+        let file_name = frame
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("frame");
+        let timestamp_seconds =
+            video_candidate_timestamp_seconds(*candidate_index, frame_extraction);
+        let content_fingerprint = video_frame_content_fingerprint(frame);
+        if let Some(fingerprint) = content_fingerprint.as_ref() {
+            if !seen_content_fingerprints.insert(fingerprint.clone()) {
+                rejected_duplicate_candidates.push(json!({
+                    "candidate_index": candidate_index,
+                    "file_name": file_name,
+                    "timestamp_seconds": timestamp_seconds,
+                    "timestamp_label": format_seconds(timestamp_seconds),
+                    "dedupe_reason": "exact_frame_content_duplicate",
+                    "content_fingerprint": fingerprint,
+                }));
+                continue;
+            }
+        }
+        let slide_index = selected_candidates.len();
+        let window_start_seconds = if slide_index == 0 {
+            0.0
+        } else {
+            previous_timestamp_seconds.min(timestamp_seconds)
+        };
+        let window_end_seconds = if timestamp_seconds > window_start_seconds {
+            timestamp_seconds
+        } else {
+            window_start_seconds + video_frame_interval_seconds(frame_extraction)
+        };
+        previous_timestamp_seconds = timestamp_seconds;
+        let transcript_segments = video_transcript_segments_for_window(
+            &evidence.transcript_segments,
+            window_start_seconds,
+            window_end_seconds,
+        );
+        let subtitle_alignment_status = if evidence.transcript_segments.is_empty() {
+            "missing_transcript"
+        } else if transcript_segments.is_empty() {
+            "unmatched"
+        } else {
+            "pre_page_mapped"
+        };
+        let slide_rectangle = video_full_frame_slide_rectangle(
+            slide_index + 1,
+            *candidate_index,
+            file_name,
+            timestamp_seconds,
+        );
+        let dedupe_fingerprint_status = if content_fingerprint.is_some() {
+            "available"
+        } else {
+            "unavailable"
+        };
+        selected_candidates.push(json!({
+            "candidate_index": candidate_index,
+            "file_name": file_name,
+            "frame_path": frame.display().to_string(),
+            "timestamp_seconds": timestamp_seconds,
+            "timestamp_label": format_seconds(timestamp_seconds),
+            "content_fingerprint": content_fingerprint,
+            "dedupe_fingerprint_status": dedupe_fingerprint_status,
+            "transcript_window": {
+                "start_seconds": window_start_seconds,
+                "end_seconds": window_end_seconds,
+                "assignment_rule": "pre_page_previous_to_current",
+            },
+            "subtitle_alignment_status": subtitle_alignment_status,
+            "transcript_segments": transcript_segments,
+            "rectangle_extraction_status": "promoted_full_frame_fallback",
+            "slide_rectangle": slide_rectangle,
+            "contact_sheet_anchor": format!("candidate-{candidate_index}"),
+            "selection_status": "selected",
+        }));
+    }
     let rectangle_extraction_status = if selected_candidates.is_empty() {
         "waiting_for_selection"
     } else {
@@ -1373,8 +1411,10 @@ fn selected_slides_manifest_from_keep_list(
     };
     let dedupe_status = if selected_candidates.is_empty() {
         "waiting_for_selection"
-    } else {
+    } else if rejected_duplicate_candidates.is_empty() {
         "selected_keep_list_order_deduped"
+    } else {
+        "exact_frame_content_deduped"
     };
 
     json!({
@@ -1387,13 +1427,16 @@ fn selected_slides_manifest_from_keep_list(
         "contact_sheet_html": contact_sheet_html_path.display().to_string(),
         "keep_list_template": keep_list_template_path.display().to_string(),
         "selected_candidate_indices": selected_candidate_indices,
+        "requested_selected_count": selected_candidate_indices.len(),
         "selected_count": selected_candidates.len(),
+        "deduped_candidate_count": rejected_duplicate_candidates.len(),
         "rectangle_extraction_status": rectangle_extraction_status,
         "rectangle_extraction_mode": "full_frame_fallback",
         "dedupe_status": dedupe_status,
-        "dedupe_policy": "selected candidate indices are range-checked, order-preserved, and de-duplicated before rectangle promotion",
+        "dedupe_policy": "selected candidate indices are range-checked, order-preserved, de-duplicated by index, and exact duplicate frame bytes are removed before rectangle promotion",
         "rectangle_policy": "promote selected raw frames as full-frame relative rectangles until a visual detector can replace the fallback crop",
         "selected_candidates": selected_candidates,
+        "rejected_duplicate_candidates": rejected_duplicate_candidates,
         "next_step": if selected_candidates.is_empty() {
             "fill ppt_keep_list_template.json from the numbered contact sheet"
         } else {
@@ -1449,11 +1492,23 @@ fn video_slide_rectangles_manifest_from_selected_slides(
     } else {
         "promoted_full_frame_fallback"
     };
-    let dedupe_status = if promoted_count == 0 {
-        "waiting_for_selection"
-    } else {
-        "selected_keep_list_order_deduped"
-    };
+    let dedupe_status = selected_slides_manifest
+        .get("dedupe_status")
+        .and_then(Value::as_str)
+        .unwrap_or(if promoted_count == 0 {
+            "waiting_for_selection"
+        } else {
+            "selected_keep_list_order_deduped"
+        });
+    let deduped_candidate_count = selected_slides_manifest
+        .get("deduped_candidate_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let rejected_duplicate_candidates = selected_slides_manifest
+        .get("rejected_duplicate_candidates")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
 
     json!({
         "status": rectangle_extraction_status,
@@ -1468,9 +1523,10 @@ fn video_slide_rectangles_manifest_from_selected_slides(
         "rectangle_extraction_mode": "full_frame_fallback",
         "promoted_rectangle_count": promoted_count,
         "dedupe_status": dedupe_status,
+        "deduped_candidate_count": deduped_candidate_count,
         "dedupe_policy": {
             "source": "ppt_keep_list_template.selected_candidate_indices",
-            "rule": "range-check candidate numbers, preserve selected order, and keep the first occurrence of each candidate only",
+            "rule": "range-check candidate numbers, preserve selected order, keep the first occurrence of each candidate number, and remove exact duplicate frame bytes",
         },
         "crop_policy": {
             "mode": "full_frame_fallback",
@@ -1478,6 +1534,7 @@ fn video_slide_rectangles_manifest_from_selected_slides(
             "reason": "no visual rectangle detector is promoted yet; selected raw frames are explicitly marked review_required",
         },
         "rectangles": rectangles,
+        "rejected_duplicate_candidates": rejected_duplicate_candidates,
         "next_step": if promoted_count == 0 {
             "fill ppt_keep_list_template.json from the numbered contact sheet"
         } else {
@@ -6286,9 +6343,9 @@ mod tests {
         let raw_frames_dir = session_dir.join(DEFAULT_RAW_FRAMES_DIR_NAME);
         fs::create_dir_all(&raw_frames_dir).expect("raw frames dir");
         fs::create_dir_all(&artifacts_dir).expect("artifacts dir");
-        fs::write(raw_frames_dir.join("frame_000001.jpg"), b"fake").expect("frame 1");
-        fs::write(raw_frames_dir.join("frame_000002.jpg"), b"fake").expect("frame 2");
-        fs::write(raw_frames_dir.join("frame_000003.jpg"), b"fake").expect("frame 3");
+        fs::write(raw_frames_dir.join("frame_000001.jpg"), b"fake-1").expect("frame 1");
+        fs::write(raw_frames_dir.join("frame_000002.jpg"), b"fake-2").expect("frame 2");
+        fs::write(raw_frames_dir.join("frame_000003.jpg"), b"fake-3").expect("frame 3");
         let keep_list_path = artifacts_dir.join(DEFAULT_PPT_KEEP_LIST_TEMPLATE_FILE_NAME);
         fs::write(
             &keep_list_path,
@@ -6423,6 +6480,103 @@ mod tests {
         assert!(slide_notes.contains("candidate 2"));
         assert!(slide_notes.contains("Internal frame path: [redacted]"));
         assert!(!slide_notes.contains(&raw_frames_dir.display().to_string()));
+    }
+
+    #[test]
+    fn dedupes_selected_slide_manifest_by_exact_frame_content() {
+        let document = test_document();
+        let output_root = std::env::temp_dir().join(format!(
+            "aidp-v3-video-selected-dedupe-test-{}",
+            DocumentId::new()
+        ));
+        let session_dir = output_root.join(format!("video-extraction-{}", document.id));
+        let artifacts_dir = session_dir.join(DEFAULT_GENERATED_ARTIFACTS_DIR_NAME);
+        let raw_frames_dir = session_dir.join(DEFAULT_RAW_FRAMES_DIR_NAME);
+        fs::create_dir_all(&raw_frames_dir).expect("raw frames dir");
+        fs::create_dir_all(&artifacts_dir).expect("artifacts dir");
+        fs::write(raw_frames_dir.join("frame_000001.jpg"), b"duplicate-frame").expect("frame 1");
+        fs::write(raw_frames_dir.join("frame_000002.jpg"), b"duplicate-frame").expect("frame 2");
+        fs::write(raw_frames_dir.join("frame_000003.jpg"), b"unique-frame").expect("frame 3");
+        fs::write(
+            artifacts_dir.join(DEFAULT_PPT_KEEP_LIST_TEMPLATE_FILE_NAME),
+            serde_json::to_vec_pretty(&json!({
+                "status": "selected",
+                "selected_candidate_indices": [1, 2, 3]
+            }))
+            .expect("keep list bytes"),
+        )
+        .expect("keep list");
+        let frame_extraction = json!({
+            "status": "completed",
+            "raw_frames_dir": raw_frames_dir.display().to_string(),
+            "frame_count": 3,
+            "manifest_file_name": DEFAULT_FRAME_MANIFEST_FILE_NAME
+        });
+
+        let manifest =
+            write_video_extraction_text_artifacts(&document, &[], &frame_extraction, &output_root)
+                .expect("candidate artifacts");
+
+        let files = manifest["files"].as_array().expect("files");
+        let selected_slides_path = files
+            .iter()
+            .find(|file| file["artifact_kind"] == json!("selected_slides_manifest"))
+            .and_then(|file| file["path"].as_str())
+            .expect("selected slides manifest path");
+        let selected_slides: Value = serde_json::from_str(
+            &fs::read_to_string(selected_slides_path).expect("selected slides manifest"),
+        )
+        .expect("selected slides manifest json");
+        assert_eq!(selected_slides["requested_selected_count"], json!(3));
+        assert_eq!(selected_slides["selected_count"], json!(2));
+        assert_eq!(selected_slides["deduped_candidate_count"], json!(1));
+        assert_eq!(
+            selected_slides["dedupe_status"],
+            json!("exact_frame_content_deduped")
+        );
+        assert_eq!(
+            selected_slides["rejected_duplicate_candidates"][0]["candidate_index"],
+            json!(2)
+        );
+        assert_eq!(
+            selected_slides["selected_candidates"][1]["candidate_index"],
+            json!(3)
+        );
+        let slide_rectangles_path = files
+            .iter()
+            .find(|file| file["artifact_kind"] == json!("slide_rectangles_manifest"))
+            .and_then(|file| file["path"].as_str())
+            .expect("slide rectangles manifest path");
+        let slide_rectangles: Value = serde_json::from_str(
+            &fs::read_to_string(slide_rectangles_path).expect("slide rectangles manifest"),
+        )
+        .expect("slide rectangles manifest json");
+        assert_eq!(slide_rectangles["promoted_rectangle_count"], json!(2));
+        assert_eq!(slide_rectangles["deduped_candidate_count"], json!(1));
+        assert_eq!(
+            slide_rectangles["dedupe_status"],
+            json!("exact_frame_content_deduped")
+        );
+        assert_eq!(
+            slide_rectangles["rejected_duplicate_candidates"][0]["dedupe_reason"],
+            json!("exact_frame_content_duplicate")
+        );
+        let slide_rectangles_ref = files
+            .iter()
+            .find(|file| file["artifact_kind"] == json!("slide_rectangles_manifest"))
+            .expect("slide rectangles artifact ref");
+        assert_eq!(slide_rectangles_ref["deduped_candidate_count"], json!(1));
+
+        let pptx_path = files
+            .iter()
+            .find(|file| file["artifact_kind"] == json!("pptx"))
+            .and_then(|file| file["path"].as_str())
+            .expect("pptx path");
+        let mut archive =
+            ZipArchive::new(File::open(pptx_path).expect("pptx file")).expect("pptx zip");
+        assert!(archive.by_name("ppt/slides/slide1.xml").is_ok());
+        assert!(archive.by_name("ppt/slides/slide2.xml").is_ok());
+        assert!(archive.by_name("ppt/slides/slide3.xml").is_err());
     }
 
     #[test]
