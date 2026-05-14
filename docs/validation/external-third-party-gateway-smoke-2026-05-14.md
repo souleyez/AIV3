@@ -84,3 +84,38 @@ The readiness report marked the run `ready: true` and confirmed:
 - result callback reached V3 and was accepted.
 
 It also lists the remaining real third-party handoff items: public HTTPS endpoint, dispatch credentials, stable identifiers, callback allowlist/network rule, document/ACL fixtures, and operational escalation contact.
+
+## Handoff Manifest Validator Follow-Up
+
+Follow-up validated commit: `67327ab`.
+
+The deployment target pulled `67327ab` and ran:
+
+```text
+npm run test:external-handoff
+npm run validate:external-handoff
+npm run test:external-readiness
+bash scripts/run-external-third-party-gateway-smoke.sh
+```
+
+Result: passed.
+
+The new manifest validator checked `docs/integrations/third-party-handoff.sample.json` and marked the handoff `ready_for_customer_sandbox: true`. The validated checks covered:
+
+- manifest version and required object shape;
+- customer technical contact;
+- HTTPS URLs or explicitly approved loopback URLs;
+- dispatch Bearer/HMAC auth delivery instructions;
+- callback allowlist confirmation;
+- document and ACL fixtures;
+- operations contacts;
+- absence of raw secret material.
+
+The deployment run also regenerated a readiness package:
+
+```text
+target/external-third-party-readiness/external-third-party-readiness-20260514T022330Z.json
+target/external-third-party-readiness/external-third-party-readiness-20260514T022330Z.md
+```
+
+The readiness report stayed `ready: true`, and the standalone gateway smoke again validated signed dispatch plus action-result callback delivery into V3.

@@ -33,10 +33,11 @@ Already implemented:
 - Standalone external integration observability panel on `https://v3.elepcloud.com/`.
 - External action retry requests now enqueue `external_action_dispatch_workflow` tasks on the `external_action` worker queue instead of dispatching synchronously from the management request.
 - Deployment-target third-party gateway smoke now emits JSON and Markdown readiness reports for signed dispatch, result callback acceptance, redaction checks, and remaining customer handoff items.
+- A third-party handoff manifest sample and validator now check customer sandbox readiness before live joint testing, including HTTPS or approved loopback URLs, dispatch credentials, callback allowlisting, document/ACL fixtures, operations contacts, and absence of raw secret material.
 
 Planned next:
 
-- Add deeper artifact publish/revoke status controls and third-party handoff examples.
+- Add deeper artifact publish/revoke status controls and package the self-contained customer sandbox handoff as the default pre-live checklist.
 - Extend artifact publishing status and revocation controls.
 
 Default public routing:
@@ -865,6 +866,24 @@ Before a third party can go live:
 8. High-risk actions require confirmation.
 9. V3 management UI shows connection health, sync state, ACL drift, message/run traces, and redacted failures.
 
+### Handoff Manifest
+
+Before customer sandbox testing, fill a handoff manifest with the third-party environment, chat channel identifiers, dispatch endpoint, callback allowlist, document/ACL fixtures, artifact/action capabilities, and operations contacts.
+
+Reference manifest:
+
+```text
+docs/integrations/third-party-handoff.sample.json
+```
+
+Validation command:
+
+```bash
+npm run validate:external-handoff
+```
+
+The validator is intentionally conservative. It fails public HTTP URLs, missing dispatch auth delivery notes, missing callback allowlist confirmation, missing document ACL fixtures, missing escalation contacts, and raw secrets such as bearer tokens, signing secrets, private keys, passwords, or API keys embedded directly in the manifest. Secrets should be exchanged through the agreed secure delivery channel and referenced by delivery method, not pasted into this file.
+
 ## Versioning
 
 The external API should be versioned by path and contract version.
@@ -888,3 +907,5 @@ Breaking changes require:
 - Contracts: `crates/contracts/src/lib.rs`
 - Storage migration: `crates/storage/migrations/0008_external_integrations.sql`
 - First normalized ingress route: `POST /v1/external/channels/{connection_id}/events`
+- Handoff sample: `docs/integrations/third-party-handoff.sample.json`
+- Handoff validator: `tools/validate-external-handoff.mjs`
