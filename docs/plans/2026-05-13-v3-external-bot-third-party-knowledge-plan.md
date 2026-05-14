@@ -29,7 +29,8 @@
 - Phase 8 third checkpoint now adds observe-only permission drift and source recovery signals to `GET /v1/external/integrations` and the standalone panel, including external identity mapping gaps, disabled external principals, ACL snapshot freshness, failed sync counts, and recovery status.
 - Phase 8 fourth checkpoint now adds observe-only external artifact publish/status/revoke summaries to `GET /v1/external/integrations`, marks artifact action audit entries with action type and safe artifact refs, shows artifact state on the standalone panel, and documents the third-party artifact dispatch handoff shape.
 - Phase 9 first checkpoint now adds `scripts/run-external-bot-third-party-smoke.ps1` and `docs/validation/external-bot-third-party-smoke.md`, collecting deterministic policy checks, database-backed ACL/source/adapter/action tests, and the external panel contract into one repeatable smoke entrypoint.
-- Next implementation checkpoint: run the full smoke with PostgreSQL available on the jump host or deployment target and capture a validation report.
+- Phase 9 deployment checkpoint passed on `8服务器` at commit `fac2178` with PostgreSQL-backed ACL/source/adapter/action checks enabled and the public panel responding at `https://v3.elepcloud.com/external-integrations`; see `docs/validation/external-bot-third-party-deployment-smoke-2026-05-14.md`.
+- Next implementation checkpoint: add a third-party mock or sandbox integration validation layer for signed outbound dispatch and customer-hosted chat page behavior.
 
 ---
 
@@ -447,7 +448,7 @@ It should not ask operators to manually label documents, rewrite permissions, or
 2. Done: include normalized Feishu/Lark and WeCom callback adapter tests.
 3. Done: include source sync workflow and high-risk external channel confirmation tests.
 4. Done: include deterministic low-risk artifact publish, high-risk revoke, cross-system action, artifact observability, and panel contract tests.
-5. Add a jump-host or deployment-target validation report with PostgreSQL available.
+5. Done: Add a deployment-target validation report with PostgreSQL available.
 6. Commit `Add external bot third-party smoke`.
 
 ## Acceptance Criteria

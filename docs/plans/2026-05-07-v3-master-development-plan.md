@@ -224,6 +224,8 @@ Third-party-facing API guide: `docs/integrations/third-party-integration-api.md`
 
 Third-party sendable guide (CN): `docs/integrations/third-party-integration-api.zh-CN.md`.
 
+Current checkpoint: the external bot and third-party integration smoke passed on deployment target `8服务器` at commit `fac2178`, including PostgreSQL-backed ACL/source/adapter/action checks and the public `https://v3.elepcloud.com/external-integrations` panel probe. Validation record: `docs/validation/external-bot-third-party-deployment-smoke-2026-05-14.md`.
+
 The product must support:
 
 - Standard Feishu/Lark and WeCom bot/channel adapters for official message, event, card/file reply, callback, signature, replay-protection, and tenant-routing interfaces.
