@@ -5,10 +5,13 @@ import path from 'node:path';
 import {
   actionSignalLabel,
   artifactSignalLabel,
+  buildExternalActionPermalink,
   buildExternalAuditQuery,
+  buildExternalActionTrace,
   buildThirdPartyApiUrl,
   controlResultLabel,
   driftSignalLabel,
+  externalActionTraceFilename,
   formatObservationTime,
   latestIntegrationActivity,
   normalizeControlResult,
@@ -38,6 +41,62 @@ test('buildExternalAuditQuery encodes fixed audit filters', () => {
     buildExternalAuditQuery({ itemType: 'action', actionId: 'act-001', limit: 1 }),
     '?item_type=action&action_id=act-001&limit=1',
   );
+});
+
+test('buildExternalActionPermalink encodes action drilldown location without home navigation', () => {
+  assert.equal(
+    buildExternalActionPermalink({
+      baseUrl: 'https://v3.elepcloud.com',
+      pathname: '/external-integrations',
+      integrationId: 'generic-chat-main',
+      auditFilterKey: 'callbacks',
+      actionId: 'act-001',
+    }),
+    'https://v3.elepcloud.com/external-integrations?integration_id=generic-chat-main&audit_filter=callbacks&action_id=act-001',
+  );
+  assert.equal(
+    buildExternalActionPermalink({
+      baseUrl: 'https://v3.elepcloud.com',
+      integrationId: 'generic-chat-main',
+      auditFilterKey: 'all',
+    }),
+    'https://v3.elepcloud.com/external-integrations?integration_id=generic-chat-main',
+  );
+});
+
+test('buildExternalActionTrace produces redacted operator export', () => {
+  const trace = buildExternalActionTrace({
+    generatedAt: '2026-05-14T10:00:00.000Z',
+    integration: {
+      id: 'generic-chat-main',
+      kind: 'channel',
+      provider: 'generic_chat',
+      displayName: 'Generic Chat',
+      healthStatus: 'healthy',
+      actionSignal: 'result_succeeded',
+      artifactSignal: 'none',
+      driftSignal: 'ok',
+    },
+    action: {
+      itemType: 'action',
+      actionId: 'act-001',
+      status: 'external_action_succeeded',
+      failureKind: null,
+      assistantRunId: 'run-001',
+      createdAt: '2026-05-14T09:59:00Z',
+      summary: {
+        action_type: 'external_business_action.invoke',
+        result_callback_received: true,
+      },
+    },
+  });
+
+  assert.equal(trace.report_type, 'external_action_trace');
+  assert.equal(trace.integration.id, 'generic-chat-main');
+  assert.equal(trace.action.action_id, 'act-001');
+  assert.equal(trace.redaction.raw_third_party_payload_included, false);
+  assert.equal(trace.action.summary.result_callback_received, true);
+  assert.equal(externalActionTraceFilename({ actionId: 'act/001 secret?' }), 'act-001-secret-trace.json');
 });
 
 test('normalizeIntegrationSummary derives operational signal and counts', () => {

@@ -5716,7 +5716,7 @@ body {
   border-bottom: 1px solid #e5ded2;
 }
 
-.external-action-detail-head div {
+.external-action-detail-head > div:first-child {
   min-width: 0;
   display: grid;
   gap: 4px;
@@ -5745,6 +5745,18 @@ body {
   color: #1f2937;
   font-size: 12px;
   font-weight: 800;
+}
+
+.external-action-detail-head button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.external-action-detail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
 }
 
 .external-action-detail-strip {

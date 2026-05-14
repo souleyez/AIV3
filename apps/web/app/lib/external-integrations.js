@@ -40,6 +40,65 @@ export function buildExternalAuditQuery(filter = {}) {
   return query ? `?${query}` : '';
 }
 
+export function buildExternalActionPermalink({
+  baseUrl = DEFAULT_THIRD_PARTY_API_BASE_URL,
+  pathname = '/external-integrations',
+  integrationId = '',
+  auditFilterKey = '',
+  actionId = '',
+} = {}) {
+  const url = new URL(pathname || '/external-integrations', baseUrl || DEFAULT_THIRD_PARTY_API_BASE_URL);
+  if (integrationId) {
+    url.searchParams.set('integration_id', integrationId);
+  }
+  if (auditFilterKey && auditFilterKey !== 'all') {
+    url.searchParams.set('audit_filter', auditFilterKey);
+  }
+  if (actionId) {
+    url.searchParams.set('action_id', actionId);
+  }
+  return `${url.origin}${url.pathname}${url.search}`;
+}
+
+export function buildExternalActionTrace({ integration = {}, action = {}, generatedAt = new Date().toISOString() } = {}) {
+  return {
+    report_type: 'external_action_trace',
+    generated_at: generatedAt,
+    integration: {
+      id: integration.id || '',
+      kind: integration.kind || '',
+      provider: integration.provider || '',
+      display_name: integration.displayName || '',
+      health_status: integration.healthStatus || '',
+      action_signal: integration.actionSignal || '',
+      artifact_signal: integration.artifactSignal || '',
+      drift_signal: integration.driftSignal || '',
+    },
+    action: {
+      item_type: action.itemType || '',
+      action_id: action.actionId || '',
+      status: action.status || '',
+      failure_kind: action.failureKind || '',
+      assistant_run_id: action.assistantRunId || '',
+      updated_at: action.createdAt || null,
+      summary: action.summary && typeof action.summary === 'object' ? action.summary : {},
+    },
+    redaction: {
+      raw_third_party_payload_included: false,
+      raw_callback_message_included: false,
+      source: 'v3_external_integration_audit_summary',
+    },
+  };
+}
+
+export function externalActionTraceFilename(action = {}) {
+  const actionId = String(action.actionId || action.action_id || 'external-action')
+    .replace(/[^a-zA-Z0-9._-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80) || 'external-action';
+  return `${actionId}-trace.json`;
+}
+
 export function normalizeIntegrationSummary(raw = {}) {
   const pending = numberOrZero(raw.pending_action_count);
   const blocked = numberOrZero(raw.blocked_action_count);

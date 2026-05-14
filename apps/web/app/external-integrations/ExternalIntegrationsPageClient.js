@@ -4,11 +4,14 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   actionSignalLabel,
   artifactSignalLabel,
+  buildExternalActionPermalink,
   buildExternalAuditQuery,
+  buildExternalActionTrace,
   buildThirdPartyApiUrl,
   controlResultLabel,
   driftSignalLabel,
   EXTERNAL_AUDIT_FILTERS,
+  externalActionTraceFilename,
   formatObservationTime,
   latestIntegrationActivity,
   normalizeControlResult,
@@ -111,6 +114,35 @@ function JsonPreview({ value }) {
   return <pre className="external-json-preview">{text}</pre>;
 }
 
+function readInitialUrlState() {
+  if (typeof window === 'undefined') {
+    return {};
+  }
+  const params = new URLSearchParams(window.location.search);
+  const requestedFilter = params.get('audit_filter') || '';
+  return {
+    integrationId: params.get('integration_id') || '',
+    auditFilterKey: EXTERNAL_AUDIT_FILTERS.some((filter) => filter.key === requestedFilter)
+      ? requestedFilter
+      : '',
+    actionId: params.get('action_id') || '',
+  };
+}
+
+function replaceUrlState({ integrationId, auditFilterKey, actionId }) {
+  if (typeof window === 'undefined') {
+    return;
+  }
+  const nextUrl = buildExternalActionPermalink({
+    baseUrl: window.location.origin,
+    pathname: window.location.pathname,
+    integrationId,
+    auditFilterKey,
+    actionId,
+  });
+  window.history.replaceState({}, '', nextUrl);
+}
+
 export default function ExternalIntegrationsPageClient() {
   const [integrations, setIntegrations] = useState([]);
   const [selectedId, setSelectedId] = useState('');
@@ -137,7 +169,12 @@ export default function ExternalIntegrationsPageClient() {
         ? payload.integrations.map(normalizeIntegrationSummary)
         : [];
       setIntegrations(next);
-      setSelectedId((current) => current || next[0]?.id || '');
+      setSelectedId((current) => {
+        if (!current) {
+          return next[0]?.id || '';
+        }
+        return next.some((item) => item.id === current) ? current : next[0]?.id || '';
+      });
       setUpdatedAt(new Date().toISOString());
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : '外部集成观测数据不可用');
@@ -218,7 +255,65 @@ export default function ExternalIntegrationsPageClient() {
     }
   }
 
+  function selectIntegration(integrationId) {
+    setSelectedId(integrationId);
+    setSelectedActionId('');
+    setActionDetail(null);
+  }
+
+  function selectAuditFilter(filterKey) {
+    setAuditFilterKey(filterKey);
+    setSelectedActionId('');
+    setActionDetail(null);
+  }
+
+  async function copyActionPermalink() {
+    if (!selectedActionId || typeof window === 'undefined') {
+      return;
+    }
+    const permalink = buildExternalActionPermalink({
+      baseUrl: window.location.origin,
+      pathname: window.location.pathname,
+      integrationId: selectedId,
+      auditFilterKey,
+      actionId: selectedActionId,
+    });
+    try {
+      await window.navigator.clipboard.writeText(permalink);
+      setNotice('动作定位链接已复制');
+    } catch {
+      setError('复制动作定位链接失败');
+    }
+  }
+
+  function exportActionTrace() {
+    if (!selected || !actionDetail || typeof window === 'undefined') {
+      return;
+    }
+    const trace = buildExternalActionTrace({ integration: selected, action: actionDetail });
+    const blob = new Blob([`${JSON.stringify(trace, null, 2)}\n`], { type: 'application/json' });
+    const url = window.URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = externalActionTraceFilename(actionDetail);
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    window.URL.revokeObjectURL(url);
+    setNotice('脱敏 trace 已导出');
+  }
+
   useEffect(() => {
+    const initialUrlState = readInitialUrlState();
+    if (initialUrlState.integrationId) {
+      setSelectedId(initialUrlState.integrationId);
+    }
+    if (initialUrlState.auditFilterKey) {
+      setAuditFilterKey(initialUrlState.auditFilterKey);
+    }
+    if (initialUrlState.actionId) {
+      setSelectedActionId(initialUrlState.actionId);
+    }
     loadIntegrations();
     const timer = window.setInterval(() => {
       loadIntegrations({ silent: true });
@@ -231,13 +326,12 @@ export default function ExternalIntegrationsPageClient() {
   }, [selectedId, auditFilterKey]);
 
   useEffect(() => {
-    setSelectedActionId('');
-    setActionDetail(null);
-  }, [selectedId, auditFilterKey]);
-
-  useEffect(() => {
     loadActionDetail(selectedId, selectedActionId);
   }, [selectedId, selectedActionId]);
+
+  useEffect(() => {
+    replaceUrlState({ integrationId: selectedId, auditFilterKey, actionId: selectedActionId });
+  }, [selectedId, auditFilterKey, selectedActionId]);
 
   const selected = integrations.find((item) => item.id === selectedId) || integrations[0] || null;
   const totals = {
@@ -337,7 +431,7 @@ export default function ExternalIntegrationsPageClient() {
                 type="button"
                 key={`${integration.kind}:${integration.id}`}
                 className={`external-table-row external-table-button${selected?.id === integration.id ? ' is-selected' : ''}`}
-                onClick={() => setSelectedId(integration.id)}
+                onClick={() => selectIntegration(integration.id)}
               >
                 <span>
                   <strong>{integration.displayName}</strong>
@@ -477,7 +571,7 @@ export default function ExternalIntegrationsPageClient() {
                 type="button"
                 key={filter.key}
                 className={auditFilterKey === filter.key ? 'is-selected' : ''}
-                onClick={() => setAuditFilterKey(filter.key)}
+                onClick={() => selectAuditFilter(filter.key)}
               >
                 {filter.label}
               </button>
@@ -493,6 +587,14 @@ export default function ExternalIntegrationsPageClient() {
                 <button type="button" onClick={() => setSelectedActionId('')}>
                   关闭
                 </button>
+                <div className="external-action-detail-actions">
+                  <button type="button" onClick={copyActionPermalink}>
+                    复制链接
+                  </button>
+                  <button type="button" disabled={!actionDetail} onClick={exportActionTrace}>
+                    导出 trace
+                  </button>
+                </div>
               </div>
               {actionDetailLoading ? (
                 <div className="external-empty-state">读取动作详情</div>
