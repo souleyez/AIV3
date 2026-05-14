@@ -23,6 +23,12 @@ const REQUIRED_FILES = [
     group: "manifest_outputs",
   },
   {
+    kind: "published_version_history",
+    fileName: "published_version_history.json",
+    statusFlag: "has_published_version_history",
+    group: "manifest_outputs",
+  },
+  {
     kind: "extraction_artifacts_manifest",
     fileName: "extraction_artifacts_manifest.json",
     statusFlag: "has_extraction_artifacts_manifest",
@@ -132,6 +138,11 @@ export function validateVideoDeliverables(inputPath) {
     "published_deliverable_manifest",
     errors,
   );
+  const publishedVersionHistory = readJsonFile(
+    path.join(artifactsDir, "published_version_history.json"),
+    "published_version_history",
+    errors,
+  );
   const subtitlePageMap = readJsonFile(
     path.join(artifactsDir, "subtitle_page_map.json"),
     "subtitle_page_map",
@@ -168,6 +179,9 @@ export function validateVideoDeliverables(inputPath) {
   }
   if (publishedManifest) {
     validatePublishedManifest(publishedManifest, errors);
+  }
+  if (publishedVersionHistory) {
+    validatePublishedVersionHistory(publishedVersionHistory, errors);
   }
   if (subtitlePageMap) {
     validateSubtitlePageMap(subtitlePageMap, errors);
@@ -252,6 +266,40 @@ function validatePublishedManifest(manifest, errors) {
     }
   }
   validateRedactedJson(manifest, "published_deliverable_manifest", errors);
+}
+
+function validatePublishedVersionHistory(manifest, errors) {
+  if (manifest.manifest_type !== "v3.video_ppt_published_version_history.v1") {
+    errors.push(issue("published_history_type_invalid", "published version history manifest type is invalid", "published_version_history"));
+  }
+  if (manifest.status !== "history_ready") {
+    errors.push(issue("published_history_not_ready", "published version history status is not history_ready", "published_version_history"));
+  }
+  if (manifest.history_scope !== "generated_artifact_workspace") {
+    errors.push(issue("published_history_scope_invalid", "published version history scope is invalid", "published_version_history"));
+  }
+  if (manifest.latest_version_no !== 1 || !Number.isInteger(manifest.version_count) || manifest.version_count < 1) {
+    errors.push(issue("published_history_version_invalid", "published version history latest version metadata is invalid", "published_version_history"));
+  }
+  const versions = Array.isArray(manifest.versions) ? manifest.versions : [];
+  const latest = versions.find((version) => version?.version_no === 1);
+  if (!latest || latest.immutable_version !== true || latest.published !== true) {
+    errors.push(issue("published_history_latest_missing", "published version history does not include immutable published v1", "published_version_history"));
+  } else {
+    if (latest.published_manifest_file_name !== "published_deliverable_manifest.json") {
+      errors.push(issue("published_history_manifest_pointer_invalid", "published version history does not point to the published manifest", "published_version_history"));
+    }
+    const publishedFiles = Array.isArray(latest.published_files) ? latest.published_files : [];
+    for (const file of REQUIRED_FILES) {
+      const entry = findFileEntry(publishedFiles, file);
+      if (!entry) {
+        errors.push(issue("published_history_missing_file", `published version history does not include ${file.kind} ${file.fileName}`, file.kind));
+      } else {
+        validatePublicManifestFileEntry(entry, file, "published_version_history", errors);
+      }
+    }
+  }
+  validateRedactedJson(manifest, "published_version_history", errors);
 }
 
 function validateSubtitlePageMap(map, errors) {

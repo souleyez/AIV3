@@ -192,6 +192,8 @@ function artifactKindLabel(kind) {
   const labels = {
     pptx: '下载PPTX',
     final_deliverables_manifest: '交付清单',
+    published_deliverable_manifest: '发布清单',
+    published_version_history: '版本历史',
     extraction_artifacts_manifest: '产物索引',
     transcript_text: '原文',
     source_text: '来源文档',
@@ -240,6 +242,8 @@ function preferredHtmlArtifactDownloads(artifact) {
   const priority = [
     'pptx',
     'final_deliverables_manifest',
+    'published_deliverable_manifest',
+    'published_version_history',
     'extraction_artifacts_manifest',
     'slide_notes',
     'subtitle_page_map',
@@ -317,6 +321,7 @@ function htmlArtifactBrief(summary) {
     const parts = [
       status.hasPptx || status.has_pptx ? 'PPTX ready' : 'PPTX waiting',
       status.hasFinalDeliverablesManifest || status.has_final_deliverables_manifest ? 'deliverable manifest ready' : '',
+      status.hasPublishedVersionHistory || status.has_published_version_history ? 'version history ready' : '',
       status.hasExtractionArtifactsManifest || status.has_extraction_artifacts_manifest ? 'artifact index ready' : '',
       status.hasSlideNotes || status.has_slide_notes ? 'slide notes ready' : '',
       status.hasSubtitlePageMap || status.has_subtitle_page_map ? 'subtitle map ready' : '',

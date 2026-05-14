@@ -27,6 +27,8 @@ const MEDIA_EXTRACTION_POLICY = {
     'slide_notes',
     'subtitle_page_map',
     'final_deliverables_manifest',
+    'published_deliverable_manifest',
+    'published_version_history',
     'extraction_artifacts_manifest',
     'video_slides_screenshot_based.pptx',
   ],

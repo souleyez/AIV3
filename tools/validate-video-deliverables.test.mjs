@@ -11,7 +11,7 @@ test("accepts a complete video deliverables directory", () => {
 
   assert.equal(result.ok, true);
   assert.deepEqual(result.errors, []);
-  assert.equal(result.files.length, 7);
+  assert.equal(result.files.length, 8);
   assert.ok(result.files.every((file) => file.exists));
 });
 
@@ -232,6 +232,7 @@ function createCompleteDeliverables() {
     "pptx",
     "final_deliverables_manifest",
     "published_deliverable_manifest",
+    "published_version_history",
     "extraction_artifacts_manifest",
     "slide_rectangles_manifest",
     "slide_notes",
@@ -253,13 +254,14 @@ function createCompleteDeliverables() {
           has_pptx: true,
           has_final_deliverables_manifest: true,
           has_published_deliverable_manifest: true,
+          has_published_version_history: true,
           has_extraction_artifacts_manifest: true,
           has_slide_rectangles_manifest: true,
           has_slide_notes: true,
           has_subtitle_page_map: true,
         },
         manifest_outputs: files.filter((file) =>
-          ["final_deliverables_manifest", "published_deliverable_manifest", "extraction_artifacts_manifest"].includes(file.artifact_kind),
+          ["final_deliverables_manifest", "published_deliverable_manifest", "published_version_history", "extraction_artifacts_manifest"].includes(file.artifact_kind),
         ),
         final_outputs: files.filter((file) => file.artifact_kind === "pptx"),
         review_outputs: files.filter((file) =>
@@ -314,12 +316,43 @@ function createCompleteDeliverables() {
           has_pptx: true,
           has_final_deliverables_manifest: true,
           has_published_deliverable_manifest: true,
+          has_published_version_history: true,
           has_extraction_artifacts_manifest: true,
           has_slide_rectangles_manifest: true,
           has_slide_notes: true,
           has_subtitle_page_map: true,
         },
         published_files: files,
+      },
+      null,
+      2,
+    ),
+  );
+
+  fs.writeFileSync(
+    path.join(artifactsDir, "published_version_history.json"),
+    JSON.stringify(
+      {
+        manifest_type: "v3.video_ppt_published_version_history.v1",
+        status: "history_ready",
+        history_scope: "generated_artifact_workspace",
+        durable_history_status: "pending_storage_promotion",
+        latest_version_no: 1,
+        latest_version_label: "v1",
+        version_count: 1,
+        versions: [
+          {
+            version_no: 1,
+            version_label: "v1",
+            lifecycle_state: "published_version_ready",
+            published: true,
+            immutable_version: true,
+            published_manifest_file_name: "published_deliverable_manifest.json",
+            file_count: files.length,
+            artifact_kinds: files.map((file) => file.artifact_kind),
+            published_files: files,
+          },
+        ],
       },
       null,
       2,
@@ -339,6 +372,7 @@ function fileNameForKind(kind) {
     pptx: "video_slides_screenshot_based.pptx",
     final_deliverables_manifest: "final_deliverables_manifest.json",
     published_deliverable_manifest: "published_deliverable_manifest.json",
+    published_version_history: "published_version_history.json",
     extraction_artifacts_manifest: "extraction_artifacts_manifest.json",
     slide_rectangles_manifest: "slide_rectangles_manifest.json",
     slide_notes: "slide_notes.md",

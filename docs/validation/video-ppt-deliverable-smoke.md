@@ -32,6 +32,7 @@ The media-worker test builds a controlled sample path in a temporary directory. 
 - `video_slides_screenshot_based.pptx`
 - `final_deliverables_manifest.json`
 - `published_deliverable_manifest.json`
+- `published_version_history.json`
 - `extraction_artifacts_manifest.json`
 - `slide_rectangles_manifest.json`
 - `slide_notes.md`
@@ -39,6 +40,7 @@ The media-worker test builds a controlled sample path in a temporary directory. 
 - PPTX ZIP magic and required OOXML entries such as `[Content_Types].xml`, `ppt/presentation.xml`, and `ppt/slides/slide1.xml`
 - final manifest status flags and output groups
 - published manifest type, immutable version metadata, lifecycle state, and redacted file coverage
+- published version history type, package-scoped history status, latest immutable `v1`, published manifest pointer, and redacted version file coverage
 - slide rectangle manifest status, detector or full-frame fallback crop boxes, selected keep-list de-duplication status, exact selected-frame duplicate metadata when present, and `review_required=true`
 - detector crop application in PPTX slide XML through DrawingML `a:srcRect` when a detector crop exists
 - extraction manifest file-kind coverage
@@ -78,6 +80,7 @@ OK video deliverables: ...
 ok pptx video_slides_screenshot_based.pptx ...
 ok final_deliverables_manifest final_deliverables_manifest.json ...
 ok published_deliverable_manifest published_deliverable_manifest.json ...
+ok published_version_history published_version_history.json ...
 ok extraction_artifacts_manifest extraction_artifacts_manifest.json ...
 ok slide_rectangles_manifest slide_rectangles_manifest.json ...
 ok slide_notes slide_notes.md ...
@@ -111,7 +114,9 @@ The validator now rejects PPTX files that only have ZIP magic bytes and rejects 
 
 ## Published Version Manifest Follow-Up
 
-The public deliverable contract now also requires `published_deliverable_manifest.json` for complete video/PPT packages. The manifest records `manifest_type=v3.video_ppt_published_deliverable.v1`, `lifecycle_state=published_version_ready`, `immutable_version=true`, `version_no=1`, and redacted file entries for the PPTX, final manifest, extraction manifest, slide notes, subtitle map, and the published manifest itself.
+The public deliverable contract now also requires `published_deliverable_manifest.json` and `published_version_history.json` for complete video/PPT packages. The published manifest records `manifest_type=v3.video_ppt_published_deliverable.v1`, `lifecycle_state=published_version_ready`, `immutable_version=true`, `version_no=1`, and redacted file entries for the PPTX, final manifest, extraction manifest, slide notes, subtitle map, published manifest, and version history.
+
+`published_version_history.json` records `manifest_type=v3.video_ppt_published_version_history.v1`, `status=history_ready`, `history_scope=generated_artifact_workspace`, latest immutable `v1`, the `published_deliverable_manifest.json` pointer, and redacted file entries for the complete published package. Durable published-version storage promotion remains a later slice; this file gives each generated package a portable history record now.
 
 Run the same local and jump-host checks after changing this contract:
 
