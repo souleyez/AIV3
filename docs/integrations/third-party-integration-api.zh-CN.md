@@ -748,12 +748,17 @@ GET /v1/external/integrations/{integration_id}/audit
 
 - `item_type`：`message`、`action`、`sync` 或 `all`；
 - `action_state`：`result_callback`、`waiting_result`、`failed`、`blocked`、`pending_confirmation` 或 `all`，只适用于动作记录；
+- `action_id`：精确的外部动作运行 ID，通常与 `item_type=action` 一起用于打开单条动作详情；
 - `limit`：返回记录数量，会限制在 `1..100`。
 
 示例：
 
 ```http
 GET /v1/external/integrations/generic-chat-main/audit?item_type=action&action_state=result_callback
+```
+
+```http
+GET /v1/external/integrations/generic-chat-main/audit?item_type=action&action_id=act-001&limit=1
 ```
 
 ```http

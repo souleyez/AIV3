@@ -38,7 +38,8 @@
 - Phase 9 fourth checkpoint passed on `8服务器` at commit `120933a`; the standalone gateway now validates signed dispatch and posts action result callbacks back into a V3 HTTP route. See `docs/validation/external-action-result-callback-smoke-2026-05-14.md`.
 - Current implementation checkpoint adds observe-first action lifecycle visibility at commit `c3f702c`: `GET /v1/external/integrations` now includes `action_summary`, action audit summaries include safe callback state, and the standalone panel shows waiting-result/result-callback counts. Deployment-target gateway smoke and web contract tests passed; see `docs/validation/external-action-result-callback-smoke-2026-05-14.md`.
 - Current implementation follow-up adds explicit audit filtering at commit `15d700a` for action lifecycle views: `item_type=action` plus `action_state=result_callback|waiting_result|failed|blocked|pending_confirmation`, mirrored by fixed filters in the standalone panel. Deployment-target gateway smoke and web contract tests passed; see `docs/validation/external-action-result-callback-smoke-2026-05-14.md`.
-- Next implementation checkpoint: run the callback contract through a real HTTPS customer sandbox or add deeper per-action detail drilldown.
+- Current implementation follow-up adds per-action audit drilldown at commit `a203a54`: audit queries now accept `action_id`, and the standalone panel can open a selected action's redacted lifecycle/detail view. Deployment-target gateway smoke and web contract tests passed; see `docs/validation/external-action-result-callback-smoke-2026-05-14.md`.
+- Next implementation checkpoint: run the callback contract through a real HTTPS customer sandbox or add a thin action-detail permalink/trace export for operators.
 
 ---
 

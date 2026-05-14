@@ -759,12 +759,17 @@ Optional query parameters:
 
 - `item_type`: `message`, `action`, `sync`, or `all`.
 - `action_state`: `result_callback`, `waiting_result`, `failed`, `blocked`, `pending_confirmation`, or `all`. This can only be used with action items.
+- `action_id`: exact external action run id. Use with `item_type=action` when opening one action drilldown.
 - `limit`: number of returned records, clamped to `1..100`.
 
 Example:
 
 ```http
 GET /v1/external/integrations/generic-chat-main/audit?item_type=action&action_state=result_callback
+```
+
+```http
+GET /v1/external/integrations/generic-chat-main/audit?item_type=action&action_id=act-001&limit=1
 ```
 
 ```http

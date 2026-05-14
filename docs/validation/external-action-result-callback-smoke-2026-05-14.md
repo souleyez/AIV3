@@ -115,3 +115,33 @@ This confirms:
 - `GET /v1/external/integrations/{integration_id}/audit` supports fixed `item_type`, `action_state`, and `limit` filters.
 - The standalone panel exposes stable filters for all records, action records, result callbacks, waiting-result actions, and failed/blocked actions.
 - Invalid or conflicting backend filter combinations are covered by focused Rust tests.
+
+## Action Drilldown Follow-Up
+
+Follow-up validated commit: `a203a54`.
+
+Local validation ran:
+
+```text
+cargo test -p platform-api external_integration_audit_filter --lib
+node --test app/lib/external-integrations.test.mjs
+npm run build
+git diff --check
+```
+
+The deployment target pulled `a203a54` and ran:
+
+```text
+bash scripts/run-external-third-party-gateway-smoke.sh
+node --test app/lib/external-integrations.test.mjs
+```
+
+Result: passed.
+
+The gateway smoke still validated signed dispatch plus gateway-to-V3 result callback roundtrip. The web contract test passed 10 checks, including fixed audit query encoding for `item_type=action&action_id=act-001&limit=1`.
+
+This confirms:
+
+- `GET /v1/external/integrations/{integration_id}/audit` can filter action records by exact `action_id`.
+- The standalone panel can open a selected action from the audit timeline and render the redacted lifecycle/detail summary.
+- The drilldown keeps using the same redacted action summary shape; it does not expose raw third-party callback result bodies or arbitrary message text.
