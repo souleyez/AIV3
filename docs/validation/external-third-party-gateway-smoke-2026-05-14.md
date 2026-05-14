@@ -196,3 +196,30 @@ The generated package now contains 11 files, including `tools/validate-external-
 - included file paths stay inside the package;
 - included file byte sizes and SHA256 hashes match;
 - handoff manifest is ready for customer sandbox.
+
+## Handoff Package Archive Follow-Up
+
+Follow-up validated commit: `8ac660c`.
+
+The deployment target pulled `8ac660c` and ran:
+
+```text
+npm run test:external-handoff-package
+npm run build:external-handoff-package -- --basename deployment-package-archive-check --generatedAt 2026-05-14T00:00:00.000Z
+test -s target/external-third-party-handoff/deployment-package-archive-check.tar.gz
+test -s target/external-third-party-handoff/deployment-package-archive-check.tar.gz.sha256
+npm --prefix target/external-third-party-handoff/deployment-package-archive-check run validate:handoff
+npm --prefix target/external-third-party-handoff/deployment-package-archive-check run validate:package
+```
+
+Result: passed.
+
+The package builder wrote:
+
+```text
+target/external-third-party-handoff/deployment-package-archive-check
+target/external-third-party-handoff/deployment-package-archive-check.tar.gz
+target/external-third-party-handoff/deployment-package-archive-check.tar.gz.sha256
+```
+
+The generated archive SHA256 was reported by the builder and persisted in the sidecar file. Package-internal `validate:handoff` and `validate:package` both remained ready after archive generation.
