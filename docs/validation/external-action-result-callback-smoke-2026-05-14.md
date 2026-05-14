@@ -94,3 +94,24 @@ This confirms:
 - `GET /v1/external/integrations` can expose observe-only `action_summary` lifecycle counts without breaking gateway smoke.
 - The standalone panel can normalize and display result callback states.
 - Result failures now surface as operational failures while keeping raw third-party callback content out of UI summaries.
+
+## Audit Filter Follow-Up
+
+Follow-up validated commit: `15d700a`.
+
+The deployment target pulled `15d700a` and ran:
+
+```text
+bash scripts/run-external-third-party-gateway-smoke.sh
+node --test app/lib/external-integrations.test.mjs
+```
+
+Result: passed.
+
+The gateway smoke still validated signed dispatch plus gateway-to-V3 result callback roundtrip. The web contract test passed 10 checks, including fixed audit query encoding for `item_type=action&action_state=result_callback`.
+
+This confirms:
+
+- `GET /v1/external/integrations/{integration_id}/audit` supports fixed `item_type`, `action_state`, and `limit` filters.
+- The standalone panel exposes stable filters for all records, action records, result callbacks, waiting-result actions, and failed/blocked actions.
+- Invalid or conflicting backend filter combinations are covered by focused Rust tests.
