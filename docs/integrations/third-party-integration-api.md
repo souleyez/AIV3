@@ -34,7 +34,7 @@ Already implemented:
 - External action retry requests now enqueue `external_action_dispatch_workflow` tasks on the `external_action` worker queue instead of dispatching synchronously from the management request.
 - Deployment-target third-party gateway smoke now emits JSON and Markdown readiness reports for signed dispatch, result callback acceptance, redaction checks, handoff manifest validation, and remaining customer handoff items.
 - A third-party handoff manifest sample and validator now check customer sandbox readiness before live joint testing, including HTTPS or approved loopback URLs, dispatch credentials, callback allowlisting, document/ACL fixtures, operations contacts, and absence of raw secret material.
-- A self-contained handoff package builder now writes third-party guides, the sample manifest, validator, mock gateway reference, README files, and a SHA256 package manifest under `target/external-third-party-handoff`.
+- A self-contained handoff package builder now writes third-party guides, the sample manifest, validators, mock gateway reference, README files, and a SHA256 package manifest under `target/external-third-party-handoff`.
 
 Planned next:
 
@@ -898,6 +898,7 @@ The generated package includes:
 - this API guide and the Chinese third-party sendable guide;
 - `handoff/third-party-handoff.sample.json`;
 - `tools/validate-external-handoff.mjs`;
+- `tools/validate-external-handoff-package.mjs`;
 - `sandbox/external-third-party-mock-gateway.mjs`;
 - operator smoke/readiness references;
 - `README.zh-CN.md`, `README.md`, `package.json`, and `handoff-package-manifest.json`.
@@ -906,6 +907,7 @@ Inside the package, third parties can run:
 
 ```bash
 npm run validate:handoff
+npm run validate:package
 ```
 
 ## Versioning

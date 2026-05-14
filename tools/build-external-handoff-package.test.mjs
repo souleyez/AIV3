@@ -23,6 +23,7 @@ test('buildPackage creates a third-party handoff directory with manifest and too
   assert.ok(fs.existsSync(path.join(result.packageRoot, 'docs/third-party-integration-api.zh-CN.md')));
   assert.ok(fs.existsSync(path.join(result.packageRoot, 'handoff/third-party-handoff.sample.json')));
   assert.ok(fs.existsSync(path.join(result.packageRoot, 'tools/validate-external-handoff.mjs')));
+  assert.ok(fs.existsSync(path.join(result.packageRoot, 'tools/validate-external-handoff-package.mjs')));
   assert.ok(fs.existsSync(path.join(result.packageRoot, 'sandbox/external-third-party-mock-gateway.mjs')));
 
   const manifest = JSON.parse(fs.readFileSync(result.manifestPath, 'utf8'));
@@ -44,5 +45,6 @@ test('generated package exposes simple npm scripts for third parties', () => {
   const packageJson = JSON.parse(fs.readFileSync(path.join(result.packageRoot, 'package.json'), 'utf8'));
 
   assert.equal(packageJson.scripts['validate:handoff'], 'node tools/validate-external-handoff.mjs --manifest handoff/third-party-handoff.sample.json');
+  assert.equal(packageJson.scripts['validate:package'], 'node tools/validate-external-handoff-package.mjs --package .');
   assert.equal(packageJson.scripts['start:mock-gateway'], 'node sandbox/external-third-party-mock-gateway.mjs');
 });

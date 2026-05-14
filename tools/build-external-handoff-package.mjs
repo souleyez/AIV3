@@ -40,6 +40,11 @@ const SOURCE_FILES = [
     audience: 'third_party',
   },
   {
+    source: 'tools/validate-external-handoff-package.mjs',
+    target: 'tools/validate-external-handoff-package.mjs',
+    audience: 'third_party',
+  },
+  {
     source: 'tools/external-third-party-readiness-report.mjs',
     target: 'tools/external-third-party-readiness-report.mjs',
     audience: 'v3_operator',
@@ -119,6 +124,7 @@ V3 提交：${head || 'unknown'}
 - \`docs/third-party-integration-api.md\`：英文接口说明。
 - \`handoff/third-party-handoff.sample.json\`：第三方沙箱交接清单样例。
 - \`tools/validate-external-handoff.mjs\`：交接清单校验工具。
+- \`tools/validate-external-handoff-package.mjs\`：交接包完整性校验工具。
 - \`sandbox/external-third-party-mock-gateway.mjs\`：第三方动作 endpoint 的本地 mock 示例。
 - \`sandbox/run-external-third-party-gateway-smoke.sh\`：V3 部署目标使用的签名派发、结果回调和交接清单 smoke 入口。
 - \`handoff-package-manifest.json\`：本包文件清单、SHA256 摘要和校验摘要。
@@ -132,6 +138,7 @@ V3 提交：${head || 'unknown'}
 
 \`\`\`bash
 npm run validate:handoff
+npm run validate:package
 \`\`\`
 
 5. 将校验通过的清单、测试文档/权限样例、联调联系人和网络白名单信息交给 V3 项目组。
@@ -163,7 +170,8 @@ Recommended flow:
 2. Copy and fill \`handoff/third-party-handoff.sample.json\` for the customer sandbox.
 3. Do not paste real tokens, signing secrets, passwords, private keys, or API keys into the manifest.
 4. Run \`npm run validate:handoff\`.
-5. Send the validated manifest, document/ACL fixtures, network allowlist details, and operations contacts to the V3 team.
+5. Run \`npm run validate:package\`.
+6. Send the validated manifest, document/ACL fixtures, network allowlist details, and operations contacts to the V3 team.
 
 The V3 operator smoke validates signed dispatch, result callback, redaction, and the handoff manifest before a live customer sandbox run.
 `;
@@ -177,6 +185,7 @@ function packageJson() {
     type: 'module',
     scripts: {
       'validate:handoff': 'node tools/validate-external-handoff.mjs --manifest handoff/third-party-handoff.sample.json',
+      'validate:package': 'node tools/validate-external-handoff-package.mjs --package .',
       'start:mock-gateway': 'node sandbox/external-third-party-mock-gateway.mjs',
     },
   };
