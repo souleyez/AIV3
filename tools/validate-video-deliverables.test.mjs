@@ -18,11 +18,13 @@ test("accepts a complete video deliverables directory", () => {
 test("rejects missing review files", () => {
   const sessionDir = createCompleteDeliverables();
   fs.unlinkSync(path.join(sessionDir, "generated_artifacts", "slide_notes.md"));
+  fs.unlinkSync(path.join(sessionDir, "generated_artifacts", "slide_rectangles_manifest.json"));
 
   const result = validateVideoDeliverables(sessionDir);
 
   assert.equal(result.ok, false);
   assert.ok(result.errors.some((error) => error.code === "missing_required_file" && error.kind === "slide_notes"));
+  assert.ok(result.errors.some((error) => error.code === "missing_required_file" && error.kind === "slide_rectangles_manifest"));
 });
 
 test("rejects inconsistent final manifest status", () => {
@@ -145,6 +147,26 @@ test("rejects unmapped subtitle page maps", () => {
   assert.ok(result.errors.some((error) => error.code === "subtitle_page_map_not_mapped"));
   assert.ok(result.errors.some((error) => error.code === "subtitle_page_map_page_count_invalid"));
   assert.ok(result.errors.some((error) => error.code === "subtitle_page_map_transcript_segments_missing"));
+});
+
+test("rejects malformed slide rectangle manifests", () => {
+  const sessionDir = createCompleteDeliverables();
+  const slideRectanglesPath = path.join(sessionDir, "generated_artifacts", "slide_rectangles_manifest.json");
+  const slideRectangles = JSON.parse(fs.readFileSync(slideRectanglesPath, "utf8"));
+  slideRectangles.rectangle_extraction_status = "waiting_for_selection";
+  slideRectangles.rectangle_extraction_mode = "visual_detector";
+  slideRectangles.promoted_rectangle_count = 2;
+  slideRectangles.rectangles[0].crop_box.width = 0.8;
+  slideRectangles.rectangles[0].review_required = false;
+  fs.writeFileSync(slideRectanglesPath, JSON.stringify(slideRectangles, null, 2));
+
+  const result = validateVideoDeliverables(sessionDir);
+
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.some((error) => error.code === "slide_rectangles_not_promoted"));
+  assert.ok(result.errors.some((error) => error.code === "slide_rectangles_mode_invalid"));
+  assert.ok(result.errors.some((error) => error.code === "slide_rectangles_count_invalid"));
+  assert.ok(result.errors.some((error) => error.code === "slide_rectangles_crop_invalid"));
 });
 
 test("rejects unredacted local paths in slide notes", () => {
