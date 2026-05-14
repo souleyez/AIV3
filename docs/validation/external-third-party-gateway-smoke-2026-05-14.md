@@ -54,3 +54,33 @@ This confirms:
 
 - This gateway smoke uses local HTTP on the deployment host. It validates the customer-gateway boundary shape and request signing semantics without requiring a public HTTPS sandbox certificate.
 - The next layer should run the same contract against a real HTTPS customer sandbox or a packaged mock gateway reachable through the production ingress path.
+
+## Readiness Report Follow-Up
+
+Follow-up validated commit: `36b5c28`.
+
+The deployment target pulled `36b5c28` and ran:
+
+```text
+npm run test:external-readiness
+bash scripts/run-external-third-party-gateway-smoke.sh
+```
+
+Result: passed.
+
+The gateway smoke now writes JSON and Markdown readiness reports under `target/external-third-party-readiness` by default. The validated deployment run generated:
+
+```text
+target/external-third-party-readiness/external-third-party-readiness-20260514T021006Z.json
+target/external-third-party-readiness/external-third-party-readiness-20260514T021006Z.md
+```
+
+The readiness report marked the run `ready: true` and confirmed:
+
+- signed dispatch reached the third-party mock gateway;
+- dispatch Bearer, HMAC signature, and body hash all validated;
+- requester summary was present;
+- dispatch payload and callback response stayed redacted;
+- result callback reached V3 and was accepted.
+
+It also lists the remaining real third-party handoff items: public HTTPS endpoint, dispatch credentials, stable identifiers, callback allowlist/network rule, document/ACL fixtures, and operational escalation contact.

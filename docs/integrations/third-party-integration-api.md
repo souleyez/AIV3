@@ -32,6 +32,7 @@ Already implemented:
 - Permission-drift and source-recovery observability signals in `GET /v1/external/integrations`.
 - Standalone external integration observability panel on `https://v3.elepcloud.com/`.
 - External action retry requests now enqueue `external_action_dispatch_workflow` tasks on the `external_action` worker queue instead of dispatching synchronously from the management request.
+- Deployment-target third-party gateway smoke now emits JSON and Markdown readiness reports for signed dispatch, result callback acceptance, redaction checks, and remaining customer handoff items.
 
 Planned next:
 

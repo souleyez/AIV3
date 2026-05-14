@@ -11,6 +11,7 @@
 - `https://v3.elepcloud.com/` 打开外部集成观测面板；
 - 第三方接口默认使用 `https://v3.elepcloud.com/v1/...`；
 - 该观测域名不提供直接跳回 V3 主工作台的导航入口。
+- 部署目标的第三方 gateway smoke 会生成 JSON/Markdown readiness 报告，用于确认签名派发、结果回调、脱敏检查和剩余客户联调准备项。
 
 ## 1. 接入目标
 
