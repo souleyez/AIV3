@@ -35,6 +35,7 @@
 - Phase 9 third checkpoint adds a standalone Node-based third-party mock gateway and Linux/deployment-target smoke runner so signed outbound dispatch can be validated outside the in-process Rust test harness.
 - Phase 9 third checkpoint passed on `8服务器` at commit `0cfb9c9`; see `docs/validation/external-third-party-gateway-smoke-2026-05-14.md`.
 - Phase 9 fourth checkpoint adds the third-party action result callback contract, `POST /v1/external/channels/{connection_id}/actions/{action_id}/result`, with channel ownership checks, external request id mismatch protection, idempotency-key tracking, and non-verbatim result summaries.
+- Phase 9 fourth checkpoint passed on `8服务器` at commit `7b8dc4a`; see `docs/validation/external-action-result-callback-smoke-2026-05-14.md`.
 - Next implementation checkpoint: run the callback contract through the packaged gateway or a real HTTPS customer sandbox.
 
 ---
