@@ -78,3 +78,26 @@ ok subtitle_page_map subtitle_page_map.json ...
 ```
 
 Do not commit generated smoke artifacts, local task directories, provider keys, `.storage`, or raw logs. If the validator fails, fix the first concrete contract gap in the worker/API/UI path and rerun the smallest relevant tests.
+
+## PPTX Structure Validation Follow-Up
+
+Follow-up validated commit: `e8e5538`.
+
+The local workstation ran:
+
+```text
+npm run test:video-deliverables
+cargo test -p media-worker controlled_video_sample_deliverable_contract_is_complete
+git diff --check
+powershell -ExecutionPolicy Bypass -File .\scripts\run-jump-host-video-deliverable-smoke.ps1 -SelfTest
+```
+
+The deployment target `8服务器` pulled `e8e5538` and ran:
+
+```text
+npm run test:video-deliverables
+```
+
+Result: passed.
+
+The validator now rejects PPTX files that only have ZIP magic bytes and rejects ZIP containers that do not expose the required presentation OOXML entries through the ZIP central directory. The jump-host self-test fixture now creates a tiny structured ZIP instead of a 4-byte placeholder.
