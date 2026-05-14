@@ -6,10 +6,21 @@ repo_root="$(cd "${script_dir}/.." && pwd)"
 cd "${repo_root}"
 
 if [[ -f /etc/aiv3/aiv3.env && -z "${PLATFORM_DATABASE_URL:-}" ]]; then
-  set -a
-  # shellcheck disable=SC1091
-  . /etc/aiv3/aiv3.env
-  set +a
+  echo "Refusing to load /etc/aiv3/aiv3.env for destructive smoke tests." >&2
+  echo "Set PLATFORM_DATABASE_URL to a disposable test database instead." >&2
+  exit 1
+fi
+
+if [[ -z "${PLATFORM_DATABASE_URL:-}" ]]; then
+  echo "PLATFORM_DATABASE_URL is required for this smoke test." >&2
+  echo "Use a disposable test database; this smoke test resets its database." >&2
+  exit 1
+fi
+
+if [[ "${PLATFORM_DATABASE_URL}" == *"/ai_data_platform_v3"* && "${PLATFORM_DATABASE_URL}" != *"test"* ]]; then
+  echo "Refusing to run destructive smoke tests against ai_data_platform_v3." >&2
+  echo "Point PLATFORM_DATABASE_URL at a disposable test database." >&2
+  exit 1
 fi
 
 port="${EXTERNAL_THIRD_PARTY_MOCK_PORT:-43180}"
