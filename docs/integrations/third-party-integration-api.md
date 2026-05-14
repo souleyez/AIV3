@@ -755,6 +755,18 @@ GET /v1/external/integrations/{integration_id}/audit
 
 The audit response returns a newest-first redacted timeline for messages, action runs, and source sync runs related to the integration. Action entries include confirmation state, dispatch status/reason, auth mode, HTTP status, redacted response summary, and safe result callback state such as callback status, idempotency key, completion time, and structural result summary. Sensitive keys such as `token`, `secret`, `authorization`, `cookie`, and `password` are removed from nested summaries.
 
+Optional query parameters:
+
+- `item_type`: `message`, `action`, `sync`, or `all`.
+- `action_state`: `result_callback`, `waiting_result`, `failed`, `blocked`, `pending_confirmation`, or `all`. This can only be used with action items.
+- `limit`: number of returned records, clamped to `1..100`.
+
+Example:
+
+```http
+GET /v1/external/integrations/generic-chat-main/audit?item_type=action&action_state=result_callback
+```
+
 ```http
 POST /v1/external/integrations/{integration_id}/retry
 ```

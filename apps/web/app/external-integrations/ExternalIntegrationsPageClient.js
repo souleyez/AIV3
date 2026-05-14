@@ -4,9 +4,11 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   actionSignalLabel,
   artifactSignalLabel,
+  buildExternalAuditQuery,
   buildThirdPartyApiUrl,
   controlResultLabel,
   driftSignalLabel,
+  EXTERNAL_AUDIT_FILTERS,
   formatObservationTime,
   latestIntegrationActivity,
   normalizeControlResult,
@@ -113,6 +115,7 @@ export default function ExternalIntegrationsPageClient() {
   const [integrations, setIntegrations] = useState([]);
   const [selectedId, setSelectedId] = useState('');
   const [auditItems, setAuditItems] = useState([]);
+  const [auditFilterKey, setAuditFilterKey] = useState('all');
   const [loading, setLoading] = useState(true);
   const [auditLoading, setAuditLoading] = useState(false);
   const [error, setError] = useState('');
@@ -140,14 +143,17 @@ export default function ExternalIntegrationsPageClient() {
     }
   }
 
-  async function loadAudit(integrationId) {
+  async function loadAudit(integrationId, filterKey = auditFilterKey) {
     if (!integrationId) {
       setAuditItems([]);
       return;
     }
     setAuditLoading(true);
     try {
-      const payload = await fetchJson(`/api/v3/external/integrations/${encodeURIComponent(integrationId)}/audit`);
+      const filter = EXTERNAL_AUDIT_FILTERS.find((item) => item.key === filterKey) || EXTERNAL_AUDIT_FILTERS[0];
+      const payload = await fetchJson(
+        `/api/v3/external/integrations/${encodeURIComponent(integrationId)}/audit${buildExternalAuditQuery(filter.params)}`,
+      );
       setAuditItems(Array.isArray(payload?.items) ? payload.items.map(normalizeAuditItem) : []);
     } catch {
       setAuditItems([]);
@@ -178,7 +184,7 @@ export default function ExternalIntegrationsPageClient() {
       ));
       setNotice(controlResultLabel(result));
       await loadIntegrations({ silent: true });
-      await loadAudit(selected.id);
+      await loadAudit(selected.id, auditFilterKey);
     } catch (controlError) {
       setError(controlError instanceof Error ? controlError.message : '外部集成操作失败');
     } finally {
@@ -195,8 +201,8 @@ export default function ExternalIntegrationsPageClient() {
   }, []);
 
   useEffect(() => {
-    loadAudit(selectedId);
-  }, [selectedId]);
+    loadAudit(selectedId, auditFilterKey);
+  }, [selectedId, auditFilterKey]);
 
   const selected = integrations.find((item) => item.id === selectedId) || integrations[0] || null;
   const totals = {
@@ -429,6 +435,18 @@ export default function ExternalIntegrationsPageClient() {
               <h2>审计时间线</h2>
               <p>{auditLoading ? '读取中' : `${auditItems.length} 条记录`}</p>
             </div>
+          </div>
+          <div className="external-audit-filters" aria-label="审计筛选">
+            {EXTERNAL_AUDIT_FILTERS.map((filter) => (
+              <button
+                type="button"
+                key={filter.key}
+                className={auditFilterKey === filter.key ? 'is-selected' : ''}
+                onClick={() => setAuditFilterKey(filter.key)}
+              >
+                {filter.label}
+              </button>
+            ))}
           </div>
           <div className="external-audit-list">
             {auditItems.map((item, index) => (

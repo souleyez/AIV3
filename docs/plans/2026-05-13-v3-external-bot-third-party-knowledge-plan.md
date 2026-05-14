@@ -37,7 +37,8 @@
 - Phase 9 fourth checkpoint adds the third-party action result callback contract, `POST /v1/external/channels/{connection_id}/actions/{action_id}/result`, with channel ownership checks, external request id mismatch protection, idempotency-key tracking, and non-verbatim result summaries.
 - Phase 9 fourth checkpoint passed on `8服务器` at commit `120933a`; the standalone gateway now validates signed dispatch and posts action result callbacks back into a V3 HTTP route. See `docs/validation/external-action-result-callback-smoke-2026-05-14.md`.
 - Current implementation checkpoint adds observe-first action lifecycle visibility at commit `c3f702c`: `GET /v1/external/integrations` now includes `action_summary`, action audit summaries include safe callback state, and the standalone panel shows waiting-result/result-callback counts. Deployment-target gateway smoke and web contract tests passed; see `docs/validation/external-action-result-callback-smoke-2026-05-14.md`.
-- Next implementation checkpoint: run the callback contract through a real HTTPS customer sandbox or add explicit action-result filtering to the audit view.
+- Current implementation follow-up adds explicit audit filtering for action lifecycle views: `item_type=action` plus `action_state=result_callback|waiting_result|failed|blocked|pending_confirmation`, mirrored by fixed filters in the standalone panel.
+- Next implementation checkpoint: run the callback contract through a real HTTPS customer sandbox or add deeper per-action detail drilldown.
 
 ---
 

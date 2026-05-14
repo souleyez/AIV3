@@ -1,5 +1,13 @@
 export const DEFAULT_THIRD_PARTY_API_BASE_URL = 'https://v3.elepcloud.com';
 
+export const EXTERNAL_AUDIT_FILTERS = [
+  { key: 'all', label: '全部', params: {} },
+  { key: 'actions', label: '动作', params: { itemType: 'action' } },
+  { key: 'callbacks', label: '结果回调', params: { itemType: 'action', actionState: 'result_callback' } },
+  { key: 'waiting', label: '待结果', params: { itemType: 'action', actionState: 'waiting_result' } },
+  { key: 'failed', label: '失败/阻断', params: { itemType: 'action', actionState: 'failed' } },
+];
+
 export function thirdPartyApiBaseUrl() {
   const configured = process.env.NEXT_PUBLIC_THIRD_PARTY_API_BASE_URL || DEFAULT_THIRD_PARTY_API_BASE_URL;
   return configured.endsWith('/') ? configured.slice(0, -1) : configured;
@@ -8,6 +16,20 @@ export function thirdPartyApiBaseUrl() {
 export function buildThirdPartyApiUrl(pathname) {
   const path = pathname.startsWith('/') ? pathname : `/${pathname}`;
   return `${thirdPartyApiBaseUrl()}${path}`;
+}
+
+export function buildExternalAuditQuery(filter = {}) {
+  const params = new URLSearchParams();
+  const itemType = filter.itemType || filter.item_type;
+  const actionState = filter.actionState || filter.action_state;
+  if (itemType && itemType !== 'all') {
+    params.set('item_type', itemType);
+  }
+  if (actionState && actionState !== 'all') {
+    params.set('action_state', actionState);
+  }
+  const query = params.toString();
+  return query ? `?${query}` : '';
 }
 
 export function normalizeIntegrationSummary(raw = {}) {

@@ -5,6 +5,7 @@ import path from 'node:path';
 import {
   actionSignalLabel,
   artifactSignalLabel,
+  buildExternalAuditQuery,
   buildThirdPartyApiUrl,
   controlResultLabel,
   driftSignalLabel,
@@ -20,6 +21,18 @@ test('buildThirdPartyApiUrl uses v3.elepcloud.com by default', () => {
   assert.equal(
     buildThirdPartyApiUrl('/v1/external/channels/main/events'),
     'https://v3.elepcloud.com/v1/external/channels/main/events',
+  );
+});
+
+test('buildExternalAuditQuery encodes fixed audit filters', () => {
+  assert.equal(buildExternalAuditQuery({}), '');
+  assert.equal(
+    buildExternalAuditQuery({ itemType: 'action', actionState: 'result_callback' }),
+    '?item_type=action&action_state=result_callback',
+  );
+  assert.equal(
+    buildExternalAuditQuery({ item_type: 'action', action_state: 'waiting_result' }),
+    '?item_type=action&action_state=waiting_result',
   );
 });
 

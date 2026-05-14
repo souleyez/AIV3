@@ -5677,6 +5677,31 @@ body {
   display: grid;
 }
 
+.external-audit-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 0 14px 12px;
+  border-bottom: 1px solid #e5ded2;
+}
+
+.external-audit-filters button {
+  min-height: 32px;
+  padding: 6px 10px;
+  border: 1px solid #c9c2b7;
+  border-radius: 999px;
+  background: #fffaf0;
+  color: #475569;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.external-audit-filters button.is-selected {
+  border-color: #1f2937;
+  background: #1f2937;
+  color: #fffaf0;
+}
+
 .external-audit-item {
   display: grid;
   gap: 8px;

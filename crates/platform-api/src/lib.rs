@@ -6742,6 +6742,20 @@ struct ExternalActionRetrySchedule {
     enqueued_tasks: Vec<WorkflowTaskView>,
 }
 
+#[derive(Clone, Debug, Default, Deserialize)]
+struct ExternalIntegrationAuditQuery {
+    item_type: Option<String>,
+    action_state: Option<String>,
+    limit: Option<usize>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct ExternalIntegrationAuditFilter {
+    item_type: Option<String>,
+    action_state: Option<String>,
+    limit: usize,
+}
+
 async fn list_external_integrations(
     State(state): State<AppState>,
 ) -> std::result::Result<Json<ListExternalIntegrationsResponse>, ApiError> {
@@ -7128,8 +7142,10 @@ async fn list_external_integrations(
 async fn get_external_integration_audit(
     State(state): State<AppState>,
     Path(integration_id): Path<String>,
+    Query(query): Query<ExternalIntegrationAuditQuery>,
 ) -> std::result::Result<Json<ExternalIntegrationAuditResponse>, ApiError> {
     validate_required("integration_id", &integration_id)?;
+    let filter = external_integration_audit_filter(query)?;
     let channel_exists = external_channel_connection_exists(&state, &integration_id).await?;
     let source_exists = external_source_connection_exists(&state, &integration_id).await?;
     if !channel_exists && !source_exists {
@@ -7146,12 +7162,113 @@ async fn get_external_integration_audit(
     if source_exists {
         items.extend(load_external_source_audit_items(&state, &integration_id).await?);
     }
+    items.retain(|item| external_integration_audit_item_matches(item, &filter));
     items.sort_by(|left, right| right.created_at.cmp(&left.created_at));
-    items.truncate(50);
+    items.truncate(filter.limit);
     Ok(Json(ExternalIntegrationAuditResponse {
         integration_id,
         items,
     }))
+}
+
+fn external_integration_audit_filter(
+    query: ExternalIntegrationAuditQuery,
+) -> std::result::Result<ExternalIntegrationAuditFilter, ApiError> {
+    let item_type = query
+        .item_type
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && *value != "all")
+        .map(|value| value.to_ascii_lowercase())
+        .map(|value| match value.as_str() {
+            "message" | "action" | "sync" => Ok(value),
+            _ => Err(ApiError::bad_request_with_details(
+                "external_integration_audit_item_type_invalid",
+                "audit item_type must be one of message, action, sync, or all".to_string(),
+                json!({ "item_type": value }),
+            )),
+        })
+        .transpose()?;
+    let action_state = query
+        .action_state
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && *value != "all")
+        .map(|value| value.to_ascii_lowercase())
+        .map(|value| match value.as_str() {
+            "result_callback"
+            | "waiting_result"
+            | "failed"
+            | "blocked"
+            | "pending_confirmation" => Ok(value),
+            _ => Err(ApiError::bad_request_with_details(
+                "external_integration_audit_action_state_invalid",
+                "audit action_state must be one of result_callback, waiting_result, failed, blocked, pending_confirmation, or all".to_string(),
+                json!({ "action_state": value }),
+            )),
+        })
+        .transpose()?;
+    if action_state.is_some() && item_type.as_deref().is_some_and(|value| value != "action") {
+        return Err(ApiError::bad_request(
+            "external_integration_audit_filter_conflict",
+            "action_state can only be combined with item_type=action or all".to_string(),
+        ));
+    }
+    let limit = query.limit.unwrap_or(50).clamp(1, 100);
+    Ok(ExternalIntegrationAuditFilter {
+        item_type,
+        action_state,
+        limit,
+    })
+}
+
+fn external_integration_audit_item_matches(
+    item: &ExternalIntegrationAuditItemView,
+    filter: &ExternalIntegrationAuditFilter,
+) -> bool {
+    if let Some(item_type) = filter.item_type.as_deref() {
+        if item.item_type != item_type {
+            return false;
+        }
+    }
+    let Some(action_state) = filter.action_state.as_deref() else {
+        return true;
+    };
+    if item.item_type != "action" {
+        return false;
+    }
+    let lifecycle_status = item
+        .summary
+        .get("action_lifecycle_status")
+        .and_then(Value::as_str)
+        .or(item.status.as_deref())
+        .unwrap_or_default();
+    let confirmation_state = item
+        .summary
+        .get("confirmation_state")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    match action_state {
+        "result_callback" => item
+            .summary
+            .get("result_callback_received")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        "waiting_result" => lifecycle_status == "dispatched",
+        "failed" => {
+            item.failure_kind.is_some()
+                || matches!(
+                    lifecycle_status,
+                    "dispatch_failed"
+                        | "external_action_failed"
+                        | "external_action_cancelled"
+                        | "external_action_rejected"
+                )
+        }
+        "blocked" => lifecycle_status == "dispatch_blocked",
+        "pending_confirmation" => confirmation_state == "pending",
+        _ => true,
+    }
 }
 
 async fn disable_external_integration(
@@ -30513,6 +30630,60 @@ mod tests {
         );
         assert!(!summary_text.contains("third-party-secret"));
         assert!(!summary_text.contains("raw_prompt"));
+    }
+
+    #[test]
+    fn external_integration_audit_filter_selects_action_result_callbacks() {
+        let filter = external_integration_audit_filter(ExternalIntegrationAuditQuery {
+            item_type: Some("action".to_string()),
+            action_state: Some("result_callback".to_string()),
+            limit: Some(10),
+        })
+        .expect("filter should parse");
+        let item = ExternalIntegrationAuditItemView {
+            item_type: "action".to_string(),
+            created_at: Utc::now(),
+            assistant_run_id: None,
+            action_id: Some("act-001".to_string()),
+            status: Some("external_action_succeeded".to_string()),
+            failure_kind: None,
+            summary: json!({
+                "action_lifecycle_status": "external_action_succeeded",
+                "result_callback_received": true,
+                "result_status": "succeeded",
+            }),
+        };
+        let waiting = ExternalIntegrationAuditItemView {
+            item_type: "action".to_string(),
+            created_at: Utc::now(),
+            assistant_run_id: None,
+            action_id: Some("act-002".to_string()),
+            status: Some("dispatched".to_string()),
+            failure_kind: None,
+            summary: json!({
+                "action_lifecycle_status": "dispatched",
+                "result_callback_received": false,
+            }),
+        };
+
+        assert_eq!(filter.limit, 10);
+        assert!(external_integration_audit_item_matches(&item, &filter));
+        assert!(!external_integration_audit_item_matches(&waiting, &filter));
+    }
+
+    #[test]
+    fn external_integration_audit_filter_rejects_conflicting_action_state() {
+        let error = external_integration_audit_filter(ExternalIntegrationAuditQuery {
+            item_type: Some("message".to_string()),
+            action_state: Some("failed".to_string()),
+            limit: None,
+        })
+        .expect_err("action_state should only apply to action items");
+
+        assert_eq!(
+            error.payload.code,
+            "external_integration_audit_filter_conflict"
+        );
     }
 
     #[test]
