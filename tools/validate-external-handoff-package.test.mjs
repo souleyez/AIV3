@@ -21,6 +21,8 @@ test('validatePackage accepts a generated package', () => {
   const result = validatePackage(built.packageRoot);
 
   assert.equal(result.package_ready, true);
+  assert.equal(result.generated_at, '2026-05-14T00:00:00.000Z');
+  assert.match(result.repository_head || '', /^[a-f0-9]+$/);
   assert.equal(result.checks.find((check) => check.key === 'included_file_integrity').passed, true);
   assert.equal(result.handoff_validation.ready_for_customer_sandbox, true);
   assert.equal(result.errors.length, 0);

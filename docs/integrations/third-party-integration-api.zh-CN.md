@@ -927,8 +927,8 @@ target/external-third-party-handoff
 - V3 侧 smoke/readiness 参考脚本；
 - `README.zh-CN.md`、`README.md`、`package.json`；
 - `handoff-package-manifest.json`，记录包内文件、来源、用途和 SHA256 摘要。
-- 包目录同级的 `<package>.release.json`，记录本次包目录、归档、摘要和交接清单的一键校验结果。
-- 包目录同级的 `<package>.release.md`，以人工可读形式汇总 ready 状态、归档 SHA256、检查项和错误。
+- 包目录同级的 `<package>.release.json`，记录本次包目录、归档、摘要、V3 提交、生成时间和交接清单的一键校验结果。
+- 包目录同级的 `<package>.release.md`，以人工可读形式汇总 ready 状态、V3 提交、生成时间、归档 SHA256、检查项和错误。
 
 第三方拿到包后，可在包目录内执行：
 

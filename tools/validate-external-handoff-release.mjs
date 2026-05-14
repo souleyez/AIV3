@@ -43,6 +43,9 @@ Status: **${status}**
 
 ## Package
 
+- Package type: \`${report.package_summary?.package_type || 'unknown'}\`
+- Generated at: ${report.package_summary?.generated_at || 'unknown'}
+- Repository head: \`${report.package_summary?.repository_head || 'unknown'}\`
 - Package root: \`${report.package_root}\`
 - Included files: ${report.package_summary?.included_file_count ?? 0}
 - Package ready: ${report.package_summary?.package_ready ? 'yes' : 'no'}
@@ -105,11 +108,17 @@ function validateRelease({ packageRootInput = '.', archivePathInput = '', sideca
   return {
     report_type: 'external_third_party_handoff_release_validation',
     release_ready: errors.length === 0,
+    package_type: packageValidation.package_type || null,
+    generated_at: packageValidation.generated_at || null,
+    repository_head: packageValidation.repository_head || null,
     package_root: packageRoot,
     archive_path: archivePath,
     archive_sha256: archiveValidation.archive_sha256,
     checks,
     package_summary: {
+      package_type: packageValidation.package_type || null,
+      generated_at: packageValidation.generated_at || null,
+      repository_head: packageValidation.repository_head || null,
       package_ready: packageValidation.package_ready === true,
       included_file_count: packageValidation.included_file_count,
       handoff_ready: packageValidation.handoff_validation?.ready_for_customer_sandbox === true,

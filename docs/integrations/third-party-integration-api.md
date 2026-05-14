@@ -905,7 +905,7 @@ The generated output includes a package directory, a `.tar.gz` archive, a matchi
 - operator smoke/readiness references;
 - `README.zh-CN.md`, `README.md`, `package.json`, and `handoff-package-manifest.json`.
 
-The sibling `<package>.release.json` file records the combined validation result for the package directory, archive, sidecar, and handoff manifest. The sibling `<package>.release.md` file summarizes the same release status, archive SHA256, checks, and errors for human review.
+The sibling `<package>.release.json` file records the combined validation result for the package directory, archive, sidecar, generated time, V3 commit, and handoff manifest. The sibling `<package>.release.md` file summarizes the same release status, V3 commit, generated time, archive SHA256, checks, and errors for human review.
 
 Inside the package, third parties can run:
 

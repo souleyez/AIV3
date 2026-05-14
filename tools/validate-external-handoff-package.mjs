@@ -136,6 +136,8 @@ function validatePackage(packageRootInput = '.') {
   return {
     report_type: 'external_third_party_handoff_package_validation',
     package_type: manifest.package_type || null,
+    generated_at: manifest.generated_at || null,
+    repository_head: manifest.repository_head || null,
     package_ready: errors.length === 0,
     package_root: packageRoot,
     checks,

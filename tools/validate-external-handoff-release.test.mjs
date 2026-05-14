@@ -21,6 +21,9 @@ test('validateRelease accepts a generated package, archive, and sidecar', () => 
   const result = validateRelease({ packageRootInput: built.packageRoot });
 
   assert.equal(result.release_ready, true);
+  assert.equal(result.generated_at, '2026-05-14T00:00:00.000Z');
+  assert.match(result.repository_head || '', /^[a-f0-9]+$/);
+  assert.equal(result.package_summary.generated_at, '2026-05-14T00:00:00.000Z');
   assert.equal(result.package_summary.package_ready, true);
   assert.equal(result.archive_summary.archive_ready, true);
   assert.equal(result.archive_summary.root_name, 'release-valid-package');
@@ -41,6 +44,8 @@ test('renderReleaseMarkdown summarizes a ready release for human review', () => 
   const markdown = renderReleaseMarkdown(validateRelease({ packageRootInput: built.packageRoot }));
 
   assert.match(markdown, /Status: \*\*READY\*\*/);
+  assert.match(markdown, /Generated at: 2026-05-14T00:00:00.000Z/);
+  assert.match(markdown, /Repository head:/);
   assert.match(markdown, /Archive SHA256:/);
   assert.match(markdown, /PASS `archive_root_matches_package`/);
   assert.match(markdown, /## Errors/);

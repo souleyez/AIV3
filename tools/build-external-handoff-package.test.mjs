@@ -63,6 +63,8 @@ test('buildPackage creates a third-party handoff directory with manifest and too
   assert.ok(manifest.included_files.every((file) => /^[a-f0-9]{64}$/.test(file.sha256)));
   const releaseReport = JSON.parse(fs.readFileSync(result.releaseReportPath, 'utf8'));
   assert.equal(releaseReport.release_ready, true);
+  assert.equal(releaseReport.generated_at, '2026-05-14T00:00:00.000Z');
+  assert.equal(releaseReport.repository_head, manifest.repository_head);
   assert.equal(releaseReport.archive_sha256, result.archiveSha256);
   assert.equal(releaseReport.package_summary.included_file_count, result.fileCount);
   const releaseMarkdown = fs.readFileSync(result.releaseMarkdownPath, 'utf8');
