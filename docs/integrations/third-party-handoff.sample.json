@@ -1,0 +1,50 @@
+{
+  "manifest_version": "v3.external_handoff.v1",
+  "customer": {
+    "name": "Example Customer",
+    "technical_contact": "integration@example.com"
+  },
+  "environment": {
+    "name": "sandbox",
+    "base_url": "https://customer-sandbox.example.com",
+    "allow_http_loopback": false
+  },
+  "channel": {
+    "mode": "generic_chat",
+    "sample_conversation_id": "chat-risk-room",
+    "sample_user_id": "user-ext-001",
+    "sample_message_id": "msg-001"
+  },
+  "dispatch": {
+    "endpoint_url": "https://customer-sandbox.example.com/v3/actions",
+    "auth_modes": ["bearer", "hmac"],
+    "bearer_token_delivery": "out_of_band",
+    "signing_secret_delivery": "out_of_band"
+  },
+  "callbacks": {
+    "v3_result_callback_allowlisted": true,
+    "allowed_v3_base_url": "https://v3.elepcloud.com",
+    "network_rule_reference": "FW-12345"
+  },
+  "documents": {
+    "fixture_count": 3,
+    "acl_fixture_count": 3,
+    "known_access_cases": [
+      {
+        "user_id": "user-ext-001",
+        "can_access": ["doc-public"],
+        "cannot_access": ["doc-finance"]
+      }
+    ]
+  },
+  "artifacts": {
+    "supports_publish": true,
+    "supports_status": true,
+    "supports_revoke": true
+  },
+  "operations": {
+    "retry_contact": "ops@example.com",
+    "escalation_contact": "support@example.com",
+    "maintenance_window": "UTC+8 02:00-04:00"
+  }
+}
