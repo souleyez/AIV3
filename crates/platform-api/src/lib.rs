@@ -30054,7 +30054,11 @@ mod tests {
         assert_eq!(external_control_integration_kind(0, 0), "unknown");
     }
 
-    async fn insert_generic_external_channel_connection(state: &AppState, connection_id: &str) {
+    async fn insert_generic_external_channel_connection_with_config(
+        state: &AppState,
+        connection_id: &str,
+        config: Value,
+    ) {
         sqlx::query(
             r#"
             insert into external_channel_connections (
@@ -30071,13 +30075,304 @@ mod tests {
         )
         .bind(connection_id)
         .bind(state.tenant_id.0)
-        .bind(json!({
-            "tenant_external_id": "tenant-ext-001",
-            "bot_external_id": "bot-v3"
-        }))
+        .bind(config)
         .execute(state.storage.pool())
         .await
         .expect("external channel connection should be inserted");
+    }
+
+    async fn insert_generic_external_channel_connection(state: &AppState, connection_id: &str) {
+        insert_generic_external_channel_connection_with_config(
+            state,
+            connection_id,
+            json!({
+                "tenant_external_id": "tenant-ext-001",
+                "bot_external_id": "bot-v3"
+            }),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn generic_chat_page_event_endpoint_accepts_idempotent_normalized_messages() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping generic chat page endpoint test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("generic-chat-page-test-{}", Uuid::new_v4()),
+                "Generic Chat Page Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage.clone(),
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        insert_generic_external_channel_connection(&state, "generic-chat-main").await;
+        let app = router(
+            storage.clone(),
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+
+        let message = sample_external_bot_message();
+        let response = post_json_request(
+            app.clone(),
+            "/v1/external/channels/generic-chat-main/events",
+            &message,
+            None,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let first: ExternalChannelEventResponse = read_json_response(response).await;
+        assert!(first.accepted);
+        assert_eq!(first.idempotency_key, message.idempotency_key);
+        assert!(first.assistant_run_id.is_some());
+        assert_eq!(first.reply.reply_type, ExternalBotReplyTypeView::TaskStatus);
+        assert_eq!(first.reply.task_status.as_deref(), Some("accepted"));
+        assert_eq!(
+            first.reply.target_conversation_external_id,
+            "chat-risk-room"
+        );
+
+        let duplicate = post_json_request(
+            app,
+            "/v1/external/channels/generic-chat-main/events",
+            &message,
+            None,
+        )
+        .await;
+        assert_eq!(duplicate.status(), StatusCode::OK);
+        let second: ExternalChannelEventResponse = read_json_response(duplicate).await;
+        assert_eq!(second.assistant_run_id, first.assistant_run_id);
+        assert_eq!(
+            second.reply.task_status.as_deref(),
+            Some("duplicate_accepted")
+        );
+
+        let event_count: i64 = sqlx::query_scalar(
+            r#"
+            select count(*)
+            from external_message_events
+            where tenant_id = $1
+              and idempotency_key = $2
+            "#,
+        )
+        .bind(tenant.id.0)
+        .bind(&message.idempotency_key)
+        .fetch_one(storage.pool())
+        .await
+        .expect("message events should be queryable");
+        assert_eq!(event_count, 1);
+    }
+
+    #[tokio::test]
+    async fn external_action_dispatch_posts_signed_payload_to_mock_endpoint() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping external action mock dispatch test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+        let addr = listener.local_addr().expect("addr");
+        let dispatch_url = format!("http://{addr}/third-party/actions?tenant=tenant-ext-001");
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let request = read_http_request(&mut stream);
+            assert!(request.starts_with("POST /third-party/actions?tenant=tenant-ext-001 HTTP/1.1"));
+            assert!(request
+                .to_ascii_lowercase()
+                .contains("authorization: bearer dispatch-token"));
+
+            let (headers, body) = request
+                .split_once("\r\n\r\n")
+                .expect("request should contain headers and body");
+            let header = |name: &str| {
+                headers.lines().find_map(|line| {
+                    let (key, value) = line.split_once(':')?;
+                    key.eq_ignore_ascii_case(name)
+                        .then(|| value.trim().to_string())
+                })
+            };
+            let body_hash = sha256_hex([body.as_bytes()]);
+            assert_eq!(
+                header("x-v3-connection-id").as_deref(),
+                Some("generic-chat-main")
+            );
+            assert_eq!(
+                header("x-v3-content-sha256").as_deref(),
+                Some(body_hash.as_str())
+            );
+            let timestamp = header("x-v3-timestamp").expect("timestamp header");
+            let nonce = header("x-v3-nonce").expect("nonce header");
+            let canonical = external_action_dispatch_signature_payload(
+                "POST",
+                "/third-party/actions?tenant=tenant-ext-001",
+                &timestamp,
+                &nonce,
+                &body_hash,
+            );
+            let expected_signature =
+                external_action_dispatch_signature_hex("dispatch-secret", &canonical);
+            assert_eq!(
+                header("x-v3-signature").as_deref(),
+                Some(format!("sha256={expected_signature}").as_str())
+            );
+
+            let payload: Value = serde_json::from_str(body).expect("dispatch body should be JSON");
+            assert_eq!(payload["action_id"], json!("act-mock-dispatch-001"));
+            assert_eq!(
+                payload["action_type"],
+                json!("external_business_action.invoke")
+            );
+            assert_eq!(payload["raw_arguments_included"], json!(false));
+            assert_eq!(
+                payload["requester_summary"]["sender_external_id"],
+                json!("user-ext-001")
+            );
+            assert!(!body.contains("raw prompt secret"));
+            assert!(!body.contains("callback-token-should-not-leak"));
+
+            let response = json!({
+                "external_request_id": "mock-req-001",
+                "status": "accepted",
+                "message": "accepted but not stored verbatim",
+                "token": "third-party-secret"
+            })
+            .to_string();
+            write_http_json_response(&mut stream, 200, &response);
+            request
+        });
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("external-action-mock-dispatch-test-{}", Uuid::new_v4()),
+                "External Action Mock Dispatch Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage.clone(),
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        insert_generic_external_channel_connection_with_config(
+            &state,
+            "generic-chat-main",
+            json!({
+                "tenant_external_id": "tenant-ext-001",
+                "bot_external_id": "bot-v3",
+                "token": "callback-token-should-not-leak",
+                "external_action_dispatch_url": dispatch_url,
+                "dispatch_bearer_token": "dispatch-token",
+                "dispatch_signing_secret": "dispatch-secret"
+            }),
+        )
+        .await;
+        sqlx::query(
+            r#"
+            insert into external_action_runs (
+                id,
+                tenant_id,
+                requester_summary,
+                risk_level,
+                target_system,
+                action_type,
+                arguments_redacted,
+                confirmation_state,
+                result_summary
+            )
+            values ($1, $2, $3, 'low_risk_write', 'external_channel', 'external_business_action.invoke', $4, 'confirmed', $5)
+            "#,
+        )
+        .bind("act-mock-dispatch-001")
+        .bind(tenant.id.0)
+        .bind(json!({
+            "platform": "generic_chat",
+            "tenant_external_id": "tenant-ext-001",
+            "conversation_external_id": "chat-risk-room",
+            "sender_external_id": "user-ext-001",
+            "channel_connection_id": "generic-chat-main",
+            "raw_prompt": "raw prompt secret"
+        }))
+        .bind(json!({
+            "operation": "create_ticket",
+            "raw_prompt_redacted": true
+        }))
+        .bind(json!({"status": "ready_for_external_dispatch"}))
+        .execute(storage.pool())
+        .await
+        .expect("external action run should be inserted");
+
+        let outcome = dispatch_external_action_run_if_ready(
+            &state,
+            "generic-chat-main",
+            "act-mock-dispatch-001",
+            Utc::now(),
+        )
+        .await
+        .expect("mock dispatch should succeed");
+        assert_eq!(outcome.status, "dispatched");
+        assert_eq!(outcome.external_request_id.as_deref(), Some("mock-req-001"));
+        server
+            .join()
+            .expect("mock third-party endpoint should finish");
+
+        let row = sqlx::query(
+            r#"
+            select external_request_id, result_summary, failure_kind
+            from external_action_runs
+            where tenant_id = $1 and id = 'act-mock-dispatch-001'
+            "#,
+        )
+        .bind(tenant.id.0)
+        .fetch_one(storage.pool())
+        .await
+        .expect("external action run should remain queryable");
+        assert_eq!(
+            row.get::<Option<String>, _>("external_request_id")
+                .as_deref(),
+            Some("mock-req-001")
+        );
+        assert_eq!(
+            row.get::<Option<String>, _>("failure_kind").as_deref(),
+            None
+        );
+        let result_summary = row.get::<Value, _>("result_summary");
+        let result_text = result_summary.to_string();
+        assert_eq!(result_summary["status"], json!("dispatched"));
+        assert_eq!(
+            result_summary["dispatch"]["auth_mode"],
+            json!("signature_and_bearer")
+        );
+        assert_eq!(result_summary["dispatch"]["http_status"], json!(200));
+        assert_eq!(
+            result_summary["dispatch"]["response_summary"]["json"]["external_request_id"],
+            json!("mock-req-001")
+        );
+        assert_eq!(
+            result_summary["dispatch"]["response_summary"]["json"]["message_present"],
+            json!(true)
+        );
+        assert!(!result_text.contains("third-party-secret"));
+        assert!(!result_text.contains("accepted but not stored verbatim"));
     }
 
     #[tokio::test]

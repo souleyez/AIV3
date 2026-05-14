@@ -67,6 +67,12 @@ if (-not $SkipDatabase) {
         Arguments = @("test", "-p", "platform-api", "external_channel_acl_filters_same_question_by_principal", "--lib", "--", "--nocapture")
     }
     $steps += @{
+        Name = "generic chat page posts normalized idempotent events"
+        WorkingDirectory = $repoRoot
+        Command = "cargo"
+        Arguments = @("test", "-p", "platform-api", "generic_chat_page_event_endpoint_accepts_idempotent_normalized_messages", "--lib", "--", "--nocapture")
+    }
+    $steps += @{
         Name = "generic external source sync records workflow"
         WorkingDirectory = $repoRoot
         Command = "cargo"
@@ -89,6 +95,12 @@ if (-not $SkipDatabase) {
         WorkingDirectory = $repoRoot
         Command = "cargo"
         Arguments = @("test", "-p", "platform-api", "external_channel_action_message_persists_pending_action_and_confirms_it", "--lib", "--", "--nocapture")
+    }
+    $steps += @{
+        Name = "third-party mock receives signed external action dispatch"
+        WorkingDirectory = $repoRoot
+        Command = "cargo"
+        Arguments = @("test", "-p", "platform-api", "external_action_dispatch_posts_signed_payload_to_mock_endpoint", "--lib", "--", "--nocapture")
     }
 }
 

@@ -9,10 +9,12 @@ This smoke covers:
 - external artifact action policy for status, publish, and revoke;
 - external business action confirmation policy;
 - external ACL filtering for the same question from different users;
+- normalized idempotent events from a customer-hosted generic chat page;
 - generic third-party source sync workflow creation;
 - Feishu/Lark encrypted callback normalization;
 - WeCom encrypted callback normalization;
 - high-risk external channel action confirmation flow;
+- signed outbound dispatch to a third-party mock endpoint;
 - external integrations observability panel normalization and no direct home navigation.
 
 It is a contract smoke, not a live customer-system test. It uses deterministic unit tests and local PostgreSQL fixture tests already present in the repo.
@@ -54,10 +56,12 @@ If the fixture database is not available, the relevant Rust tests print a `skipp
 The smoke should prove these product rules:
 
 - the same external question is filtered by external principal and source ACL before evidence enters AssistantRun context;
+- customer-hosted chat pages can submit normalized messages idempotently without bypassing V3 channel validation;
 - Feishu/Lark and WeCom adapters stay thin and route normalized events into the shared channel ingress;
 - low-risk artifact publish is allowed without confirmation;
 - artifact revoke and cross-system business actions require confirmation;
 - high-risk channel actions pause and return a confirmation-required reply;
+- outbound third-party action dispatch sends dispatch-specific Bearer and HMAC headers, records only redacted response summaries, and does not reuse platform callback tokens;
 - external integration observability includes safe management, drift, artifact, and audit summaries;
 - raw secrets, raw provider payloads, raw prompt text, hidden document content, and raw artifact URLs stay out of public summaries.
 
