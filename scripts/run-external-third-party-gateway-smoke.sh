@@ -16,6 +16,7 @@ port="${EXTERNAL_THIRD_PARTY_MOCK_PORT:-43180}"
 host="${EXTERNAL_THIRD_PARTY_MOCK_HOST:-127.0.0.1}"
 base_url="http://${host}:${port}"
 log_file="${TMPDIR:-/tmp}/external-third-party-mock-gateway-${port}.log"
+report_dir="${EXTERNAL_THIRD_PARTY_READINESS_REPORT_DIR:-${repo_root}/target/external-third-party-readiness}"
 
 export EXTERNAL_THIRD_PARTY_MOCK_HOST="${host}"
 export EXTERNAL_THIRD_PARTY_MOCK_PORT="${port}"
@@ -94,5 +95,19 @@ console.log("Mock gateway posted action result callback:", JSON.stringify({
   status: callback.response_summary?.status
 }));
 '
+
+mkdir -p "${report_dir}"
+report_basename="external-third-party-readiness-$(date -u +%Y%m%dT%H%M%SZ)"
+readiness_report="$(
+  EXTERNAL_THIRD_PARTY_REQUESTS_JSON="${requests_json}" \
+  EXTERNAL_THIRD_PARTY_CALLBACKS_JSON="${callbacks_json}" \
+  node "${repo_root}/tools/external-third-party-readiness-report.mjs" \
+    --gateway "${base_url}" \
+    --repository "${repo_root}" \
+    --head "$(git rev-parse --short HEAD)" \
+    --outDir "${report_dir}" \
+    --basename "${report_basename}"
+)"
+printf 'External third-party readiness report: %s\n' "${readiness_report}"
 
 echo "OK external third-party gateway smoke completed."

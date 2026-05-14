@@ -3,6 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "scripts": {
+    "test:external-readiness": "node --test tools/external-third-party-readiness-report.test.mjs",
     "test:video-deliverables": "node --test tools/validate-video-deliverables.test.mjs",
     "validate:video-deliverables": "node tools/validate-video-deliverables.mjs"
   }
