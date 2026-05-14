@@ -31,11 +31,13 @@ The media-worker test builds a controlled sample path in a temporary directory. 
 
 - `video_slides_screenshot_based.pptx`
 - `final_deliverables_manifest.json`
+- `published_deliverable_manifest.json`
 - `extraction_artifacts_manifest.json`
 - `slide_notes.md`
 - `subtitle_page_map.json`
 - PPTX ZIP magic and required OOXML entries such as `[Content_Types].xml`, `ppt/presentation.xml`, and `ppt/slides/slide1.xml`
 - final manifest status flags and output groups
+- published manifest type, immutable version metadata, lifecycle state, and redacted file coverage
 - extraction manifest file-kind coverage
 - public manifest, JSON, and Markdown redaction for local paths and token-like URLs
 
@@ -72,6 +74,7 @@ Expected result:
 OK video deliverables: ...
 ok pptx video_slides_screenshot_based.pptx ...
 ok final_deliverables_manifest final_deliverables_manifest.json ...
+ok published_deliverable_manifest published_deliverable_manifest.json ...
 ok extraction_artifacts_manifest extraction_artifacts_manifest.json ...
 ok slide_notes slide_notes.md ...
 ok subtitle_page_map subtitle_page_map.json ...
@@ -101,3 +104,15 @@ npm run test:video-deliverables
 Result: passed.
 
 The validator now rejects PPTX files that only have ZIP magic bytes and rejects ZIP containers that do not expose the required presentation OOXML entries through the ZIP central directory. The jump-host self-test fixture now creates a tiny structured ZIP instead of a 4-byte placeholder.
+
+## Published Version Manifest Follow-Up
+
+The public deliverable contract now also requires `published_deliverable_manifest.json` for complete video/PPT packages. The manifest records `manifest_type=v3.video_ppt_published_deliverable.v1`, `lifecycle_state=published_version_ready`, `immutable_version=true`, `version_no=1`, and redacted file entries for the PPTX, final manifest, extraction manifest, slide notes, subtitle map, and the published manifest itself.
+
+Run the same local and jump-host checks after changing this contract:
+
+```text
+npm run test:video-deliverables
+cargo test -p media-worker controlled_video_sample_deliverable_contract_is_complete
+powershell -ExecutionPolicy Bypass -File .\scripts\run-jump-host-video-deliverable-smoke.ps1 -SelfTest
+```

@@ -99,6 +99,7 @@ function createJumpHostVideoDeliverablesFixture(tempRoot) {
   const files = [
     "pptx",
     "final_deliverables_manifest",
+    "published_deliverable_manifest",
     "extraction_artifacts_manifest",
     "slide_notes",
     "subtitle_page_map",
@@ -118,16 +119,43 @@ function createJumpHostVideoDeliverablesFixture(tempRoot) {
           state: "final_pptx_ready",
           has_pptx: true,
           has_final_deliverables_manifest: true,
+          has_published_deliverable_manifest: true,
           has_extraction_artifacts_manifest: true,
           has_slide_notes: true,
           has_subtitle_page_map: true,
         },
         manifest_outputs: files.filter((file) =>
-          ["final_deliverables_manifest", "extraction_artifacts_manifest"].includes(file.artifact_kind),
+          ["final_deliverables_manifest", "published_deliverable_manifest", "extraction_artifacts_manifest"].includes(file.artifact_kind),
         ),
         final_outputs: files.filter((file) => file.artifact_kind === "pptx"),
         review_outputs: files.filter((file) => file.artifact_kind === "slide_notes"),
         evidence_outputs: files.filter((file) => file.artifact_kind === "subtitle_page_map"),
+      },
+      null,
+      2,
+    ),
+  );
+
+  fs.writeFileSync(
+    path.join(artifactsDir, "published_deliverable_manifest.json"),
+    JSON.stringify(
+      {
+        manifest_type: "v3.video_ppt_published_deliverable.v1",
+        status: "published_version_ready",
+        lifecycle_state: "published_version_ready",
+        published: true,
+        immutable_version: true,
+        version_no: 1,
+        deliverable_status: {
+          state: "final_pptx_ready",
+          has_pptx: true,
+          has_final_deliverables_manifest: true,
+          has_published_deliverable_manifest: true,
+          has_extraction_artifacts_manifest: true,
+          has_slide_notes: true,
+          has_subtitle_page_map: true,
+        },
+        published_files: files,
       },
       null,
       2,
@@ -146,6 +174,7 @@ function fileNameForKind(kind) {
   return {
     pptx: "video_slides_screenshot_based.pptx",
     final_deliverables_manifest: "final_deliverables_manifest.json",
+    published_deliverable_manifest: "published_deliverable_manifest.json",
     extraction_artifacts_manifest: "extraction_artifacts_manifest.json",
     slide_notes: "slide_notes.md",
     subtitle_page_map: "subtitle_page_map.json",

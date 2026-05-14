@@ -17,6 +17,12 @@ const REQUIRED_FILES = [
     group: "manifest_outputs",
   },
   {
+    kind: "published_deliverable_manifest",
+    fileName: "published_deliverable_manifest.json",
+    statusFlag: "has_published_deliverable_manifest",
+    group: "manifest_outputs",
+  },
+  {
     kind: "extraction_artifacts_manifest",
     fileName: "extraction_artifacts_manifest.json",
     statusFlag: "has_extraction_artifacts_manifest",
@@ -115,6 +121,11 @@ export function validateVideoDeliverables(inputPath) {
     "extraction_artifacts_manifest",
     errors,
   );
+  const publishedManifest = readJsonFile(
+    path.join(artifactsDir, "published_deliverable_manifest.json"),
+    "published_deliverable_manifest",
+    errors,
+  );
   const subtitlePageMap = readJsonFile(
     path.join(artifactsDir, "subtitle_page_map.json"),
     "subtitle_page_map",
@@ -143,6 +154,9 @@ export function validateVideoDeliverables(inputPath) {
   }
   if (extractionManifest) {
     validateExtractionManifest(extractionManifest, errors);
+  }
+  if (publishedManifest) {
+    validatePublishedManifest(publishedManifest, errors);
   }
   if (subtitlePageMap) {
     validateSubtitlePageMap(subtitlePageMap, errors);
@@ -201,6 +215,28 @@ function validateExtractionManifest(manifest, errors) {
     }
   }
   validateRedactedJson(manifest, "extraction_artifacts_manifest", errors);
+}
+
+function validatePublishedManifest(manifest, errors) {
+  if (manifest.manifest_type !== "v3.video_ppt_published_deliverable.v1") {
+    errors.push(issue("published_manifest_type_invalid", "published manifest type is invalid", "published_deliverable_manifest"));
+  }
+  if (manifest.lifecycle_state !== "published_version_ready" || manifest.status !== "published_version_ready") {
+    errors.push(issue("published_manifest_not_ready", "published manifest lifecycle state is not published_version_ready", "published_deliverable_manifest"));
+  }
+  if (manifest.immutable_version !== true || manifest.published !== true || manifest.version_no !== 1) {
+    errors.push(issue("published_manifest_version_invalid", "published manifest immutable version metadata is invalid", "published_deliverable_manifest"));
+  }
+  const publishedFiles = Array.isArray(manifest.published_files) ? manifest.published_files : [];
+  for (const file of REQUIRED_FILES) {
+    const entry = findFileEntry(publishedFiles, file);
+    if (!entry) {
+      errors.push(issue("published_manifest_missing_file", `published manifest does not include ${file.kind} ${file.fileName}`, file.kind));
+    } else {
+      validatePublicManifestFileEntry(entry, file, "published_deliverable_manifest", errors);
+    }
+  }
+  validateRedactedJson(manifest, "published_deliverable_manifest", errors);
 }
 
 function validateSubtitlePageMap(map, errors) {

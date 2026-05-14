@@ -22,6 +22,8 @@ pub const DEFAULT_TIMESTAMP_MAP_ARTIFACT_FILE_NAME: &str = "timestamp_map.json";
 pub const DEFAULT_EXTRACTION_ARTIFACTS_MANIFEST_FILE_NAME: &str =
     "extraction_artifacts_manifest.json";
 pub const DEFAULT_FINAL_DELIVERABLES_MANIFEST_FILE_NAME: &str = "final_deliverables_manifest.json";
+pub const DEFAULT_PUBLISHED_DELIVERABLE_MANIFEST_FILE_NAME: &str =
+    "published_deliverable_manifest.json";
 pub const DEFAULT_SLIDE_CANDIDATES_FILE_NAME: &str = "slide_candidates_manifest.json";
 pub const DEFAULT_CONTACT_SHEET_PLAN_FILE_NAME: &str = "contact_sheet_plan.json";
 pub const DEFAULT_CONTACT_SHEET_HTML_FILE_NAME: &str = "raw_contact_sheet.html";
@@ -432,12 +434,20 @@ pub fn write_video_extraction_text_artifacts(
 
     let final_deliverables_manifest_path =
         artifacts_dir.join(DEFAULT_FINAL_DELIVERABLES_MANIFEST_FILE_NAME);
+    let published_deliverable_manifest_path =
+        artifacts_dir.join(DEFAULT_PUBLISHED_DELIVERABLE_MANIFEST_FILE_NAME);
     let manifest_path = artifacts_dir.join(DEFAULT_EXTRACTION_ARTIFACTS_MANIFEST_FILE_NAME);
     files.push(video_generated_artifact_file(
         document,
         "final_deliverables_manifest",
         "application/json",
         &final_deliverables_manifest_path,
+    ));
+    files.push(video_generated_artifact_file(
+        document,
+        "published_deliverable_manifest",
+        "application/json",
+        &published_deliverable_manifest_path,
     ));
     files.push(video_generated_artifact_file(
         document,
@@ -453,6 +463,17 @@ pub fn write_video_extraction_text_artifacts(
     fs::write(
         &final_deliverables_manifest_path,
         final_deliverables_manifest_bytes,
+    )
+    .map_err(|error| error.to_string())?;
+
+    let published_deliverable_manifest =
+        video_published_deliverable_manifest(document, &files, frame_count);
+    let published_deliverable_manifest_bytes =
+        serde_json::to_vec_pretty(&published_deliverable_manifest)
+            .map_err(|error| error.to_string())?;
+    fs::write(
+        &published_deliverable_manifest_path,
+        published_deliverable_manifest_bytes,
     )
     .map_err(|error| error.to_string())?;
 
@@ -2132,6 +2153,14 @@ pub fn video_extraction_output_artifact_from_output(
         })
         .cloned()
         .unwrap_or(Value::Null);
+    let published_deliverable_manifest = files
+        .iter()
+        .find(|file| {
+            file.get("artifact_kind").and_then(Value::as_str)
+                == Some("published_deliverable_manifest")
+        })
+        .cloned()
+        .unwrap_or(Value::Null);
     let html_artifact_summaries = html_artifacts
         .iter()
         .filter_map(video_extraction_html_artifact_summary)
@@ -2175,6 +2204,7 @@ pub fn video_extraction_output_artifact_from_output(
             &[
                 "pptx",
                 "final_deliverables_manifest",
+                "published_deliverable_manifest",
                 "extraction_artifacts_manifest",
                 "ppt_outline",
                 "slide_notes",
@@ -2186,6 +2216,7 @@ pub fn video_extraction_output_artifact_from_output(
             &files,
             &[
                 "final_deliverables_manifest",
+                "published_deliverable_manifest",
                 "extraction_artifacts_manifest",
             ],
         ),
@@ -2214,6 +2245,7 @@ pub fn video_extraction_output_artifact_from_output(
             ],
         ),
         "final_deliverables_manifest": final_deliverables_manifest,
+        "published_deliverable_manifest": published_deliverable_manifest,
         "deliverable_package": deliverable_package,
         "html_artifacts": html_artifact_summaries,
         "html_artifact_ids": html_artifact_ids,
@@ -2246,6 +2278,15 @@ fn video_deliverable_package_summary(
         .filter(|kind| !ready_file_kinds.contains(kind))
         .map(str::to_string)
         .collect::<Vec<_>>();
+    let published_manifest = files
+        .iter()
+        .find(|file| {
+            file.get("artifact_kind").and_then(Value::as_str)
+                == Some("published_deliverable_manifest")
+        })
+        .cloned()
+        .unwrap_or(Value::Null);
+    let has_published_manifest = !published_manifest.is_null();
     let required_files = VIDEO_DELIVERABLE_PACKAGE_REQUIRED_KINDS
         .iter()
         .filter_map(|kind| {
@@ -2265,13 +2306,18 @@ fn video_deliverable_package_summary(
         .and_then(Value::as_str)
         .or_else(|| output.get("status").and_then(Value::as_str))
         .unwrap_or("partial");
-    let publishable = state == "final_pptx_ready" && missing_required_file_kinds.is_empty();
-    let lifecycle_state = if publishable {
+    let base_publishable = state == "final_pptx_ready" && missing_required_file_kinds.is_empty();
+    let immutable_version = base_publishable && has_published_manifest;
+    let lifecycle_state = if immutable_version {
+        "published_version_ready"
+    } else if base_publishable {
         "downloadable_not_published"
     } else {
         "not_ready"
     };
-    let next_action = if publishable {
+    let next_action = if immutable_version {
+        "review_published_deliverable_manifest"
+    } else if base_publishable {
         "persist_video_published_version"
     } else {
         "complete_required_deliverables"
@@ -2282,9 +2328,11 @@ fn video_deliverable_package_summary(
         "version": 1,
         "package_id": format!("video-deliverable-package-{assistant_run_id}-{document_id}"),
         "lifecycle_state": lifecycle_state,
-        "publishable": publishable,
-        "immutable_version": false,
-        "version_no": Value::Null,
+        "publishable": base_publishable,
+        "published": immutable_version,
+        "immutable_version": immutable_version,
+        "version_no": if immutable_version { json!(1) } else { Value::Null },
+        "published_manifest": published_manifest,
         "next_action": next_action,
         "source_run_id": assistant_run_id,
         "document_id": document_id,
@@ -2726,6 +2774,7 @@ fn video_ready_file_kinds(files: &[Value]) -> Vec<String> {
                 *kind,
                 "pptx"
                     | "final_deliverables_manifest"
+                    | "published_deliverable_manifest"
                     | "extraction_artifacts_manifest"
                     | "ppt_outline"
                     | "slide_notes"
@@ -2743,6 +2792,7 @@ fn video_artifact_group_counts(files: &[Value]) -> Value {
     json!({
         "manifest_outputs": video_artifact_files_by_kinds(files, &[
             "final_deliverables_manifest",
+            "published_deliverable_manifest",
             "extraction_artifacts_manifest",
         ]).len(),
         "final_outputs": video_artifact_files_by_kinds(files, &["pptx"]).len(),
@@ -2797,6 +2847,9 @@ fn video_extraction_completion_next_actions(
             "review_contact_sheet_or_promote_rectangle_extraction"
         ));
     }
+    if warning_codes.contains("published_version_missing") {
+        actions.push(json!("persist_video_published_version"));
+    }
     if warning_codes.contains("keep_list_not_confirmed") {
         actions.push(json!("fill_ppt_keep_list_template"));
     }
@@ -2817,6 +2870,9 @@ fn video_extraction_completion_next_actions(
     }
     if file_kinds.contains("final_deliverables_manifest") {
         actions.push(json!("review_final_deliverables_manifest"));
+    }
+    if file_kinds.contains("published_deliverable_manifest") {
+        actions.push(json!("review_published_deliverable_manifest"));
     }
     if file_kinds.contains("extraction_artifacts_manifest") {
         actions.push(json!("review_extraction_artifacts_manifest"));
@@ -3132,6 +3188,8 @@ fn video_deliverable_status(generated_artifacts: &Value) -> Value {
     let has_transcript = artifact_kinds.contains("transcript_text");
     let has_source_text = artifact_kinds.contains("source_text");
     let has_final_deliverables_manifest = artifact_kinds.contains("final_deliverables_manifest");
+    let has_published_deliverable_manifest =
+        artifact_kinds.contains("published_deliverable_manifest");
     let has_extraction_artifacts_manifest =
         artifact_kinds.contains("extraction_artifacts_manifest");
     let has_slide_notes = artifact_kinds.contains("slide_notes");
@@ -3143,6 +3201,7 @@ fn video_deliverable_status(generated_artifacts: &Value) -> Value {
         has_contact_sheet,
         has_transcript,
         has_subtitle_page_map,
+        has_published_deliverable_manifest,
     );
     let generated_artifacts_status = generated_artifacts
         .get("status")
@@ -3187,6 +3246,7 @@ fn video_deliverable_status(generated_artifacts: &Value) -> Value {
         "has_contact_sheet_html": has_contact_sheet,
         "has_selected_slides_manifest": has_selected_slides,
         "has_final_deliverables_manifest": has_final_deliverables_manifest,
+        "has_published_deliverable_manifest": has_published_deliverable_manifest,
         "has_extraction_artifacts_manifest": has_extraction_artifacts_manifest,
         "has_slide_notes": has_slide_notes,
         "has_subtitle_page_map": has_subtitle_page_map,
@@ -3280,6 +3340,7 @@ fn video_generated_artifact_quality_warnings(
     has_contact_sheet: bool,
     has_transcript: bool,
     has_subtitle_page_map: bool,
+    has_published_deliverable_manifest: bool,
 ) -> Vec<Value> {
     let mut warnings = Vec::new();
     if !has_transcript {
@@ -3316,6 +3377,13 @@ fn video_generated_artifact_quality_warnings(
             "severity": "low",
             "message": "PPTX uses raster screenshots; editable native slide reconstruction is not included in this slice."
         }));
+        if !has_published_deliverable_manifest {
+            warnings.push(json!({
+                "code": "published_version_missing",
+                "severity": "medium",
+                "message": "Final PPTX files are downloadable, but no immutable published deliverable manifest has been persisted yet."
+            }));
+        }
     }
     if has_subtitle_page_map {
         warnings.push(json!({
@@ -3528,6 +3596,7 @@ fn video_final_deliverables_manifest(
         "deliverable_status": deliverable_status,
         "manifest_outputs": video_public_artifact_files_by_kinds(files, &[
             "final_deliverables_manifest",
+            "published_deliverable_manifest",
             "extraction_artifacts_manifest",
         ]),
         "final_outputs": video_public_artifact_files_by_kinds(files, &["pptx"]),
@@ -3549,6 +3618,91 @@ fn video_final_deliverables_manifest(
             "subtitle_page_map",
         ]),
         "next_action": video_final_deliverables_next_action(state),
+    })
+}
+
+fn video_published_deliverable_manifest(
+    document: &Document,
+    files: &[Value],
+    frame_count: u64,
+) -> Value {
+    let generated_artifacts = json!({
+        "status": "completed",
+        "files": files,
+    });
+    let deliverable_status = video_deliverable_status(&generated_artifacts);
+    let ready_file_kinds = files
+        .iter()
+        .filter_map(|file| file.get("artifact_kind").and_then(Value::as_str))
+        .collect::<BTreeSet<_>>();
+    let missing_required_file_kinds = VIDEO_DELIVERABLE_PACKAGE_REQUIRED_KINDS
+        .iter()
+        .copied()
+        .filter(|kind| !ready_file_kinds.contains(kind))
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    let source_ready = deliverable_status.get("state").and_then(Value::as_str)
+        == Some("final_pptx_ready")
+        && missing_required_file_kinds.is_empty();
+    let lifecycle_state = if source_ready {
+        "published_version_ready"
+    } else {
+        "not_ready"
+    };
+
+    json!({
+        "manifest_type": "v3.video_ppt_published_deliverable.v1",
+        "status": lifecycle_state,
+        "source": "media_worker_published_deliverable_manifest",
+        "document_id": document.id.to_string(),
+        "dataset_id": document.dataset_id.to_string(),
+        "title": document.title,
+        "frame_count": frame_count,
+        "lifecycle_state": lifecycle_state,
+        "published": source_ready,
+        "immutable_version": source_ready,
+        "version_no": if source_ready { json!(1) } else { Value::Null },
+        "version_label": if source_ready { "v1" } else { "draft" },
+        "deliverable_status": deliverable_status,
+        "required_file_kinds": VIDEO_DELIVERABLE_PACKAGE_REQUIRED_KINDS,
+        "missing_required_file_kinds": missing_required_file_kinds,
+        "published_files": video_public_artifact_files_by_kinds(files, &[
+            "pptx",
+            "final_deliverables_manifest",
+            "published_deliverable_manifest",
+            "extraction_artifacts_manifest",
+            "slide_notes",
+            "subtitle_page_map",
+        ]),
+        "manifest_outputs": video_public_artifact_files_by_kinds(files, &[
+            "final_deliverables_manifest",
+            "published_deliverable_manifest",
+            "extraction_artifacts_manifest",
+        ]),
+        "final_outputs": video_public_artifact_files_by_kinds(files, &["pptx"]),
+        "review_outputs": video_public_artifact_files_by_kinds(files, &[
+            "slide_image_candidates",
+            "contact_sheet_plan",
+            "contact_sheet_html",
+            "ppt_keep_list_template",
+            "selected_slides_manifest",
+            "slide_notes",
+            "pptx_build_plan",
+        ]),
+        "evidence_outputs": video_public_artifact_files_by_kinds(files, &[
+            "frame_manifest",
+            "transcript_text",
+            "source_text",
+            "ppt_outline",
+            "timestamp_map",
+            "subtitle_page_map",
+        ]),
+        "publish_policy": {
+            "path_policy": "public_manifest_entries_redact_local_paths",
+            "mutation_policy": "create_a_new_version_for_customer_visible_changes",
+            "content_policy": "published_manifest_records_artifact_pointer_metadata_without_copying_private_source_media",
+        },
+        "no_host_composed_answer": true,
     })
 }
 
@@ -3709,7 +3863,9 @@ fn video_artifact_files_by_kinds(files: &[Value], kinds: &[&str]) -> Vec<Value> 
 
 fn video_final_deliverables_next_action(state: &str) -> &'static str {
     match state {
-        "final_pptx_ready" => "persist or expose the final PPTX deliverable for download",
+        "final_pptx_ready" => {
+            "review the immutable published deliverable manifest and expose the final PPTX"
+        }
         "selected_slides_ready" => "run the screenshot PPTX writer for selected slide frames",
         "review_ready" => "review the contact sheet and fill ppt_keep_list_template.json",
         "evidence_artifacts_ready" => "extract raw frames or keyframes before slide review",
@@ -4858,6 +5014,13 @@ mod tests {
                 "path": "generated_artifacts/final_deliverables_manifest.json",
                 "uri": format!("artifact://video-{}-final-deliverables", document.id)
             }, {
+                "artifact_kind": "published_deliverable_manifest",
+                "artifact_id": format!("video-{}-published-deliverable", document.id),
+                "title": "published deliverable manifest",
+                "format": "application/json",
+                "path": "generated_artifacts/published_deliverable_manifest.json",
+                "uri": format!("artifact://video-{}-published-deliverable", document.id)
+            }, {
                 "artifact_kind": "extraction_artifacts_manifest",
                 "artifact_id": format!("video-{}-extraction-manifest", document.id),
                 "title": "extraction artifacts manifest",
@@ -4912,6 +5075,10 @@ mod tests {
             json!(true)
         );
         assert_eq!(
+            output_artifact["deliverable_status"]["has_published_deliverable_manifest"],
+            json!(true)
+        );
+        assert_eq!(
             output_artifact["deliverable_status"]["has_extraction_artifacts_manifest"],
             json!(true)
         );
@@ -4928,6 +5095,10 @@ mod tests {
             json!("generated_artifacts/final_deliverables_manifest.json")
         );
         assert_eq!(
+            output_artifact["published_deliverable_manifest"]["path"],
+            json!("generated_artifacts/published_deliverable_manifest.json")
+        );
+        assert_eq!(
             output_artifact["completion_follow_up"]["kind"],
             json!("video_extraction_completion_follow_up")
         );
@@ -4941,11 +5112,11 @@ mod tests {
         );
         assert_eq!(
             html_artifact["payload"]["deliverable_package"]["lifecycle_state"],
-            json!("downloadable_not_published")
+            json!("published_version_ready")
         );
         assert_eq!(
             html_artifact["payload"]["deliverable_package"]["next_action"],
-            json!("persist_video_published_version")
+            json!("review_published_deliverable_manifest")
         );
         assert_eq!(
             output_artifact["deliverable_package"]["kind"],
@@ -4957,7 +5128,11 @@ mod tests {
         );
         assert_eq!(
             output_artifact["deliverable_package"]["immutable_version"],
-            json!(false)
+            json!(true)
+        );
+        assert_eq!(
+            output_artifact["deliverable_package"]["published"],
+            json!(true)
         );
         assert_eq!(
             output_artifact["deliverable_package"]["missing_required_file_kinds"],
@@ -4984,6 +5159,11 @@ mod tests {
             .expect("primary files")
             .iter()
             .any(|file| file["artifact_kind"] == json!("final_deliverables_manifest")));
+        assert!(output_artifact["manifest_outputs"]
+            .as_array()
+            .expect("manifest outputs")
+            .iter()
+            .any(|file| file["artifact_kind"] == json!("published_deliverable_manifest")));
         assert!(output_artifact["manifest_outputs"]
             .as_array()
             .expect("manifest outputs")
@@ -5436,7 +5616,7 @@ mod tests {
             json!(1)
         );
         assert_eq!(manifest["evidence_counts"]["frame_count"], json!(8));
-        assert_eq!(manifest["files"].as_array().expect("files").len(), 6);
+        assert_eq!(manifest["files"].as_array().expect("files").len(), 7);
         assert!(manifest["files"]
             .as_array()
             .expect("files")
@@ -5519,10 +5699,16 @@ mod tests {
         assert!(final_manifest.contains("manifest_outputs"));
         assert!(final_manifest.contains("evidence_outputs"));
         assert!(final_manifest.contains("final_deliverables_manifest"));
+        assert!(final_manifest.contains("published_deliverable_manifest"));
         assert!(final_manifest.contains("extraction_artifacts_manifest"));
         assert!(final_manifest.contains("\"path\": \"[redacted]\""));
         assert!(final_manifest.contains("\"file_name\""));
         assert!(!final_manifest.contains("aidp-v3-video-artifacts-test"));
+        assert!(final_manifest_json["manifest_outputs"]
+            .as_array()
+            .expect("manifest outputs")
+            .iter()
+            .any(|file| file["artifact_kind"] == json!("published_deliverable_manifest")));
         assert!(final_manifest_json["manifest_outputs"]
             .as_array()
             .expect("manifest outputs")
@@ -5533,9 +5719,26 @@ mod tests {
             json!(true)
         );
         assert_eq!(
+            final_manifest_json["deliverable_status"]["has_published_deliverable_manifest"],
+            json!(true)
+        );
+        assert_eq!(
             final_manifest_json["deliverable_status"]["has_extraction_artifacts_manifest"],
             json!(true)
         );
+        let published_manifest_path = manifest["files"]
+            .as_array()
+            .expect("files")
+            .iter()
+            .find(|file| file["artifact_kind"] == json!("published_deliverable_manifest"))
+            .and_then(|file| file["path"].as_str())
+            .expect("published deliverable manifest path");
+        let published_manifest =
+            fs::read_to_string(published_manifest_path).expect("published deliverable manifest");
+        assert!(published_manifest.contains("v3.video_ppt_published_deliverable.v1"));
+        assert!(published_manifest.contains("not_ready"));
+        assert!(published_manifest.contains("\"path\": \"[redacted]\""));
+        assert!(!published_manifest.contains("aidp-v3-video-artifacts-test"));
         let extraction_manifest_path = manifest["manifest_path"]
             .as_str()
             .expect("extraction manifest path");
@@ -6131,6 +6334,11 @@ mod tests {
             .as_array()
             .expect("manifest outputs")
             .iter()
+            .any(|file| file["artifact_kind"] == json!("published_deliverable_manifest")));
+        assert!(output_artifact["manifest_outputs"]
+            .as_array()
+            .expect("manifest outputs")
+            .iter()
             .any(|file| file["artifact_kind"] == json!("extraction_artifacts_manifest")));
         assert!(output_artifact["final_outputs"]
             .as_array()
@@ -6160,7 +6368,7 @@ mod tests {
             html_artifact["id"]
         );
         let audit_counts = &output_artifact["completion_audit"]["artifact_group_counts"];
-        assert_eq!(audit_counts["manifest_outputs"], json!(2));
+        assert_eq!(audit_counts["manifest_outputs"], json!(3));
         assert_eq!(audit_counts["final_outputs"], json!(1));
         assert!(audit_counts["review_outputs"].as_u64().unwrap_or(0) >= 1);
         assert!(audit_counts["evidence_outputs"].as_u64().unwrap_or(0) >= 1);
@@ -6192,6 +6400,13 @@ mod tests {
             final_manifest_json["manifest_outputs"]
                 .as_array()
                 .expect("final manifest outputs"),
+            "published_deliverable_manifest",
+            DEFAULT_PUBLISHED_DELIVERABLE_MANIFEST_FILE_NAME,
+        );
+        assert_public_manifest_file_entry(
+            final_manifest_json["manifest_outputs"]
+                .as_array()
+                .expect("final manifest outputs"),
             "extraction_artifacts_manifest",
             DEFAULT_EXTRACTION_ARTIFACTS_MANIFEST_FILE_NAME,
         );
@@ -6216,6 +6431,32 @@ mod tests {
             "subtitle_page_map",
             DEFAULT_SUBTITLE_PAGE_MAP_FILE_NAME,
         );
+        let published_manifest_path = generated_files
+            .iter()
+            .find(|file| file["artifact_kind"] == json!("published_deliverable_manifest"))
+            .and_then(|file| file["path"].as_str())
+            .expect("published deliverable manifest path");
+        let published_manifest_json: Value = serde_json::from_str(
+            &fs::read_to_string(published_manifest_path).expect("published deliverable manifest"),
+        )
+        .expect("published deliverable manifest json");
+        assert_eq!(
+            published_manifest_json["manifest_type"],
+            json!("v3.video_ppt_published_deliverable.v1")
+        );
+        assert_eq!(
+            published_manifest_json["lifecycle_state"],
+            json!("published_version_ready")
+        );
+        assert_eq!(published_manifest_json["immutable_version"], json!(true));
+        assert_eq!(published_manifest_json["version_no"], json!(1));
+        assert_public_manifest_file_entry(
+            published_manifest_json["published_files"]
+                .as_array()
+                .expect("published files"),
+            "published_deliverable_manifest",
+            DEFAULT_PUBLISHED_DELIVERABLE_MANIFEST_FILE_NAME,
+        );
 
         let extraction_manifest_path = output["generated_artifacts"]["manifest_path"]
             .as_str()
@@ -6231,6 +6472,11 @@ mod tests {
             extraction_files,
             "final_deliverables_manifest",
             DEFAULT_FINAL_DELIVERABLES_MANIFEST_FILE_NAME,
+        );
+        assert_public_manifest_file_entry(
+            extraction_files,
+            "published_deliverable_manifest",
+            DEFAULT_PUBLISHED_DELIVERABLE_MANIFEST_FILE_NAME,
         );
         assert_public_manifest_file_entry(
             extraction_files,
