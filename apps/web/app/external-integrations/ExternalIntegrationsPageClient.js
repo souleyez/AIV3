@@ -116,8 +116,11 @@ export default function ExternalIntegrationsPageClient() {
   const [selectedId, setSelectedId] = useState('');
   const [auditItems, setAuditItems] = useState([]);
   const [auditFilterKey, setAuditFilterKey] = useState('all');
+  const [selectedActionId, setSelectedActionId] = useState('');
+  const [actionDetail, setActionDetail] = useState(null);
   const [loading, setLoading] = useState(true);
   const [auditLoading, setAuditLoading] = useState(false);
+  const [actionDetailLoading, setActionDetailLoading] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [controlBusy, setControlBusy] = useState('');
@@ -162,6 +165,29 @@ export default function ExternalIntegrationsPageClient() {
     }
   }
 
+  async function loadActionDetail(integrationId, actionId) {
+    if (!integrationId || !actionId) {
+      setActionDetail(null);
+      return;
+    }
+    setActionDetailLoading(true);
+    try {
+      const payload = await fetchJson(
+        `/api/v3/external/integrations/${encodeURIComponent(integrationId)}/audit${buildExternalAuditQuery({
+          itemType: 'action',
+          actionId,
+          limit: 1,
+        })}`,
+      );
+      const next = Array.isArray(payload?.items) ? payload.items.map(normalizeAuditItem) : [];
+      setActionDetail(next[0] || null);
+    } catch {
+      setActionDetail(null);
+    } finally {
+      setActionDetailLoading(false);
+    }
+  }
+
   async function handleControl(action) {
     if (!selected || controlBusy) {
       return;
@@ -203,6 +229,15 @@ export default function ExternalIntegrationsPageClient() {
   useEffect(() => {
     loadAudit(selectedId, auditFilterKey);
   }, [selectedId, auditFilterKey]);
+
+  useEffect(() => {
+    setSelectedActionId('');
+    setActionDetail(null);
+  }, [selectedId, auditFilterKey]);
+
+  useEffect(() => {
+    loadActionDetail(selectedId, selectedActionId);
+  }, [selectedId, selectedActionId]);
 
   const selected = integrations.find((item) => item.id === selectedId) || integrations[0] || null;
   const totals = {
@@ -448,13 +483,65 @@ export default function ExternalIntegrationsPageClient() {
               </button>
             ))}
           </div>
+          {selectedActionId ? (
+            <div className="external-action-detail">
+              <div className="external-action-detail-head">
+                <div>
+                  <span>动作详情</span>
+                  <strong>{selectedActionId}</strong>
+                </div>
+                <button type="button" onClick={() => setSelectedActionId('')}>
+                  关闭
+                </button>
+              </div>
+              {actionDetailLoading ? (
+                <div className="external-empty-state">读取动作详情</div>
+              ) : actionDetail ? (
+                <>
+                  <div className="external-action-detail-strip">
+                    <div>
+                      <span>状态</span>
+                      <strong>{actionDetail.status || 'recorded'}</strong>
+                    </div>
+                    <div>
+                      <span>失败原因</span>
+                      <strong>{actionDetail.failureKind || '无'}</strong>
+                    </div>
+                    <div>
+                      <span>AssistantRun</span>
+                      <strong>{actionDetail.assistantRunId || '无记录'}</strong>
+                    </div>
+                    <div>
+                      <span>更新时间</span>
+                      <strong>{formatObservationTime(actionDetail.createdAt)}</strong>
+                    </div>
+                  </div>
+                  <JsonPreview value={actionDetail.summary} />
+                </>
+              ) : (
+                <div className="external-empty-state">未找到该动作详情</div>
+              )}
+            </div>
+          ) : null}
           <div className="external-audit-list">
             {auditItems.map((item, index) => (
-              <article className="external-audit-item" key={`${item.itemType}:${item.actionId || item.createdAt || index}`}>
+              <article
+                className={`external-audit-item${selectedActionId && selectedActionId === item.actionId ? ' is-selected' : ''}`}
+                key={`${item.itemType}:${item.actionId || item.createdAt || index}`}
+              >
                 <div>
                   <span className="external-audit-type">{item.itemType}</span>
                   <strong>{item.status || item.failureKind || 'recorded'}</strong>
                   <small>{formatObservationTime(item.createdAt)}</small>
+                  {item.itemType === 'action' && item.actionId ? (
+                    <button
+                      type="button"
+                      className="external-audit-detail-button"
+                      onClick={() => setSelectedActionId(item.actionId)}
+                    >
+                      详情
+                    </button>
+                  ) : null}
                 </div>
                 <JsonPreview value={item.summary} />
               </article>

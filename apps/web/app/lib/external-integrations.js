@@ -22,11 +22,19 @@ export function buildExternalAuditQuery(filter = {}) {
   const params = new URLSearchParams();
   const itemType = filter.itemType || filter.item_type;
   const actionState = filter.actionState || filter.action_state;
+  const actionId = filter.actionId || filter.action_id;
+  const limit = filter.limit;
   if (itemType && itemType !== 'all') {
     params.set('item_type', itemType);
   }
   if (actionState && actionState !== 'all') {
     params.set('action_state', actionState);
+  }
+  if (actionId) {
+    params.set('action_id', actionId);
+  }
+  if (Number.isFinite(Number(limit)) && Number(limit) > 0) {
+    params.set('limit', String(Math.floor(Number(limit))));
   }
   const query = params.toString();
   return query ? `?${query}` : '';

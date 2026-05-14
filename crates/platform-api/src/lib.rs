@@ -6746,6 +6746,7 @@ struct ExternalActionRetrySchedule {
 struct ExternalIntegrationAuditQuery {
     item_type: Option<String>,
     action_state: Option<String>,
+    action_id: Option<String>,
     limit: Option<usize>,
 }
 
@@ -6753,6 +6754,7 @@ struct ExternalIntegrationAuditQuery {
 struct ExternalIntegrationAuditFilter {
     item_type: Option<String>,
     action_state: Option<String>,
+    action_id: Option<String>,
     limit: usize,
 }
 
@@ -7214,10 +7216,23 @@ fn external_integration_audit_filter(
             "action_state can only be combined with item_type=action or all".to_string(),
         ));
     }
+    let action_id = query
+        .action_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    if action_id.is_some() && item_type.as_deref().is_some_and(|value| value != "action") {
+        return Err(ApiError::bad_request(
+            "external_integration_audit_filter_conflict",
+            "action_id can only be combined with item_type=action or all".to_string(),
+        ));
+    }
     let limit = query.limit.unwrap_or(50).clamp(1, 100);
     Ok(ExternalIntegrationAuditFilter {
         item_type,
         action_state,
+        action_id,
         limit,
     })
 }
@@ -7228,6 +7243,11 @@ fn external_integration_audit_item_matches(
 ) -> bool {
     if let Some(item_type) = filter.item_type.as_deref() {
         if item.item_type != item_type {
+            return false;
+        }
+    }
+    if let Some(action_id) = filter.action_id.as_deref() {
+        if item.item_type != "action" || item.action_id.as_deref() != Some(action_id) {
             return false;
         }
     }
@@ -30637,6 +30657,7 @@ mod tests {
         let filter = external_integration_audit_filter(ExternalIntegrationAuditQuery {
             item_type: Some("action".to_string()),
             action_state: Some("result_callback".to_string()),
+            action_id: None,
             limit: Some(10),
         })
         .expect("filter should parse");
@@ -30676,6 +30697,7 @@ mod tests {
         let error = external_integration_audit_filter(ExternalIntegrationAuditQuery {
             item_type: Some("message".to_string()),
             action_state: Some("failed".to_string()),
+            action_id: None,
             limit: None,
         })
         .expect_err("action_state should only apply to action items");
@@ -30684,6 +30706,58 @@ mod tests {
             error.payload.code,
             "external_integration_audit_filter_conflict"
         );
+    }
+
+    #[test]
+    fn external_integration_audit_filter_selects_action_id() {
+        let filter = external_integration_audit_filter(ExternalIntegrationAuditQuery {
+            item_type: Some("action".to_string()),
+            action_state: None,
+            action_id: Some(" act-001 ".to_string()),
+            limit: None,
+        })
+        .expect("action_id filter should parse");
+        let matching = ExternalIntegrationAuditItemView {
+            item_type: "action".to_string(),
+            created_at: Utc::now(),
+            assistant_run_id: None,
+            action_id: Some("act-001".to_string()),
+            status: Some("dispatched".to_string()),
+            failure_kind: None,
+            summary: json!({
+                "action_lifecycle_status": "dispatched",
+                "result_callback_received": false,
+            }),
+        };
+        let other_action = ExternalIntegrationAuditItemView {
+            item_type: "action".to_string(),
+            created_at: Utc::now(),
+            assistant_run_id: None,
+            action_id: Some("act-002".to_string()),
+            status: Some("dispatched".to_string()),
+            failure_kind: None,
+            summary: json!({
+                "action_lifecycle_status": "dispatched",
+                "result_callback_received": false,
+            }),
+        };
+        let message = ExternalIntegrationAuditItemView {
+            item_type: "message".to_string(),
+            created_at: Utc::now(),
+            assistant_run_id: None,
+            action_id: None,
+            status: Some("inbound".to_string()),
+            failure_kind: None,
+            summary: json!({}),
+        };
+
+        assert_eq!(filter.action_id.as_deref(), Some("act-001"));
+        assert!(external_integration_audit_item_matches(&matching, &filter));
+        assert!(!external_integration_audit_item_matches(
+            &other_action,
+            &filter
+        ));
+        assert!(!external_integration_audit_item_matches(&message, &filter));
     }
 
     #[test]

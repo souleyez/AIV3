@@ -34,6 +34,10 @@ test('buildExternalAuditQuery encodes fixed audit filters', () => {
     buildExternalAuditQuery({ item_type: 'action', action_state: 'waiting_result' }),
     '?item_type=action&action_state=waiting_result',
   );
+  assert.equal(
+    buildExternalAuditQuery({ itemType: 'action', actionId: 'act-001', limit: 1 }),
+    '?item_type=action&action_id=act-001&limit=1',
+  );
 });
 
 test('normalizeIntegrationSummary derives operational signal and counts', () => {
