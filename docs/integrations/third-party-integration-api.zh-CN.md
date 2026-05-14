@@ -918,7 +918,7 @@ npm run build:external-handoff-package
 target/external-third-party-handoff
 ```
 
-生成结果包含交接包目录、同名 `.tar.gz` 归档、`.sha256` 校验文件、同级 `.release.json` 机器可读交付校验报告，以及同级 `.release.md` 人工审阅摘要。交接包包含：
+生成结果包含交接包目录、同名 `.tar.gz` 归档、`.sha256` 校验文件、同级 `.release.json` 机器可读交付校验报告、同级 `.release.md` 人工审阅摘要，以及同级 `.delivery-manifest.json` 交付文件清单。交接包包含：
 
 - 中文接口说明和英文接口说明；
 - `handoff/third-party-handoff.sample.json`；
@@ -929,6 +929,7 @@ target/external-third-party-handoff
 - `handoff-package-manifest.json`，记录包内文件、来源、用途和 SHA256 摘要。
 - 包目录同级的 `<package>.release.json`，记录本次包目录、归档、摘要、V3 提交、生成时间和交接清单的一键校验结果。
 - 包目录同级的 `<package>.release.md`，以人工可读形式汇总 ready 状态、V3 提交、生成时间、归档 SHA256、检查项和错误。
+- 包目录同级的 `<package>.delivery-manifest.json`，列出本次应交付的包目录、包内清单、归档、`.sha256` sidecar、release JSON 和 release Markdown，并记录各文件 SHA256，方便第三方接收时逐项核对。
 
 第三方拿到包后，可在包目录内执行：
 
@@ -939,7 +940,7 @@ npm run validate:archive
 npm run validate:release
 ```
 
-这些命令会分别校验包内交接清单样例、包文件完整性、包目录同级 `.tar.gz` 归档和 `.sha256` sidecar，并输出一份目录、归档、摘要一致性的 release ready/not-ready 汇总。第三方正式填写自己的清单后，也应先通过同一类校验，再交给 V3 项目组联调。
+这些命令会分别校验包内交接清单样例、包文件完整性、包目录同级 `.tar.gz` 归档和 `.sha256` sidecar，并输出一份目录、归档、摘要一致性的 release ready/not-ready 汇总。第三方正式填写自己的清单后，也应先通过同一类校验，再交给 V3 项目组联调。接收交付文件时，可优先读取 `<package>.delivery-manifest.json`，确认所有应收文件都存在且 SHA256 一致。
 
 发送 `.tar.gz` 归档前，V3 侧也可以在主仓库里不解压直接校验归档：
 

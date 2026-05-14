@@ -97,6 +97,14 @@ function sha256Hex(buffer) {
   return crypto.createHash('sha256').update(buffer).digest('hex');
 }
 
+function fileDigest(filePath) {
+  const bytes = fs.readFileSync(filePath);
+  return {
+    bytes: bytes.length,
+    sha256: sha256Hex(bytes),
+  };
+}
+
 function ensureParentDir(filePath) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
 }
@@ -122,6 +130,17 @@ function copyFileWithDigest(repoRoot, packageRoot, fileSpec) {
 function writeJson(filePath, value) {
   ensureParentDir(filePath);
   fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+function deliveryArtifact({ role, filePath, deliveryRoot, description }) {
+  const digest = fileDigest(filePath);
+  return {
+    role,
+    path: path.relative(deliveryRoot, filePath).replaceAll('\\', '/'),
+    bytes: digest.bytes,
+    sha256: digest.sha256,
+    description,
+  };
 }
 
 function writeTarOctal(header, value, offset, length) {
@@ -208,7 +227,7 @@ V3 提交：${head || 'unknown'}
 - \`sandbox/external-third-party-mock-gateway.mjs\`：第三方动作 endpoint 的本地 mock 示例。
 - \`sandbox/run-external-third-party-gateway-smoke.sh\`：V3 部署目标使用的签名派发、结果回调和交接清单 smoke 入口。
 - \`handoff-package-manifest.json\`：本包文件清单、SHA256 摘要和校验摘要。
-- 包目录同级会生成 \`.tar.gz\` 归档和 \`.sha256\` 校验文件，用于发送和交付前校验。
+- 包目录同级会生成 \`.tar.gz\` 归档、\`.sha256\` 校验文件、\`.release.json\` 校验报告、\`.release.md\` 人工摘要和 \`.delivery-manifest.json\` 交付清单，用于发送和交付前校验。
 
 ## 第三方应先做什么
 
@@ -247,7 +266,7 @@ V3 commit: ${head || 'unknown'}
 
 This package contains third-party-facing API guides, a sandbox handoff manifest sample, validation tooling, and a mock gateway reference for V3 external action dispatch/result callback integration.
 
-The builder also writes a \`.tar.gz\` archive and a matching \`.sha256\` file next to the package directory for delivery.
+The builder also writes a \`.tar.gz\` archive, matching \`.sha256\` sidecar, \`.release.json\` validation report, \`.release.md\` summary, and \`.delivery-manifest.json\` delivery manifest next to the package directory.
 
 Recommended flow:
 
@@ -277,6 +296,68 @@ function packageJson() {
       'validate:release': 'node tools/validate-external-handoff-release.mjs --package .',
       'start:mock-gateway': 'node sandbox/external-third-party-mock-gateway.mjs',
     },
+  };
+}
+
+function buildDeliveryManifest({
+  packageRoot,
+  archivePath,
+  archiveSha256Path,
+  releaseReportPath,
+  releaseMarkdownPath,
+  releaseValidation,
+  generatedAt,
+  head,
+}) {
+  const deliveryRoot = path.dirname(packageRoot);
+  const packageManifestPath = path.join(packageRoot, 'handoff-package-manifest.json');
+  return {
+    manifest_type: 'v3.external_third_party_handoff_delivery_manifest.v1',
+    package_type: PACKAGE_TYPE,
+    generated_at: generatedAt,
+    repository_head: head || null,
+    package_name: path.basename(packageRoot),
+    package_root: path.basename(packageRoot),
+    release_ready: releaseValidation.release_ready === true,
+    delivery_root: '.',
+    artifacts: [
+      {
+        role: 'package_directory',
+        path: path.basename(packageRoot),
+        type: 'directory',
+        description: 'Expanded package directory for review or direct validation.',
+      },
+      deliveryArtifact({
+        role: 'package_manifest',
+        filePath: packageManifestPath,
+        deliveryRoot,
+        description: 'Package file manifest and per-file SHA256 checksums.',
+      }),
+      deliveryArtifact({
+        role: 'archive',
+        filePath: archivePath,
+        deliveryRoot,
+        description: 'Compressed handoff package for transfer.',
+      }),
+      deliveryArtifact({
+        role: 'archive_sha256_sidecar',
+        filePath: archiveSha256Path,
+        deliveryRoot,
+        description: 'SHA256 sidecar used to verify the compressed archive.',
+      }),
+      deliveryArtifact({
+        role: 'release_json',
+        filePath: releaseReportPath,
+        deliveryRoot,
+        description: 'Machine-readable package, archive, and sidecar release validation report.',
+      }),
+      deliveryArtifact({
+        role: 'release_markdown',
+        filePath: releaseMarkdownPath,
+        deliveryRoot,
+        description: 'Human-readable release validation summary.',
+      }),
+    ],
   };
 }
 
@@ -347,6 +428,18 @@ function buildPackage({ repoRoot, outDir, basename, generatedAt = new Date().toI
   const releaseMarkdownPath = path.join(path.dirname(packageRoot), `${path.basename(packageRoot)}.release.md`);
   fs.writeFileSync(releaseMarkdownPath, renderReleaseMarkdown(releaseValidation));
   const releaseMarkdownSha256 = sha256Hex(fs.readFileSync(releaseMarkdownPath));
+  const deliveryManifestPath = path.join(path.dirname(packageRoot), `${path.basename(packageRoot)}.delivery-manifest.json`);
+  writeJson(deliveryManifestPath, buildDeliveryManifest({
+    packageRoot,
+    archivePath,
+    archiveSha256Path,
+    releaseReportPath,
+    releaseMarkdownPath,
+    releaseValidation,
+    generatedAt,
+    head,
+  }));
+  const deliveryManifestSha256 = sha256Hex(fs.readFileSync(deliveryManifestPath));
 
   return {
     packageRoot,
@@ -358,6 +451,8 @@ function buildPackage({ repoRoot, outDir, basename, generatedAt = new Date().toI
     releaseReportSha256,
     releaseMarkdownPath,
     releaseMarkdownSha256,
+    deliveryManifestPath,
+    deliveryManifestSha256,
     releaseReady: releaseValidation.release_ready === true,
     ready: packageManifest.handoff_validation.ready_for_customer_sandbox,
     fileCount: packageManifest.included_files.length,

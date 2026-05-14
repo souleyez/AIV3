@@ -42,9 +42,11 @@ test('buildPackage creates a third-party handoff directory with manifest and too
   assert.ok(fs.existsSync(result.archiveSha256Path));
   assert.ok(fs.existsSync(result.releaseReportPath));
   assert.ok(fs.existsSync(result.releaseMarkdownPath));
+  assert.ok(fs.existsSync(result.deliveryManifestPath));
   assert.match(result.archiveSha256, /^[a-f0-9]{64}$/);
   assert.match(result.releaseReportSha256, /^[a-f0-9]{64}$/);
   assert.match(result.releaseMarkdownSha256, /^[a-f0-9]{64}$/);
+  assert.match(result.deliveryManifestSha256, /^[a-f0-9]{64}$/);
   assert.equal(result.releaseReady, true);
   assert.ok(fs.existsSync(path.join(result.packageRoot, 'README.zh-CN.md')));
   assert.ok(fs.existsSync(path.join(result.packageRoot, 'docs/third-party-integration-api.zh-CN.md')));
@@ -70,6 +72,21 @@ test('buildPackage creates a third-party handoff directory with manifest and too
   const releaseMarkdown = fs.readFileSync(result.releaseMarkdownPath, 'utf8');
   assert.match(releaseMarkdown, /Status: \*\*READY\*\*/);
   assert.match(releaseMarkdown, /Archive SHA256:/);
+  const deliveryManifest = JSON.parse(fs.readFileSync(result.deliveryManifestPath, 'utf8'));
+  assert.equal(deliveryManifest.manifest_type, 'v3.external_third_party_handoff_delivery_manifest.v1');
+  assert.equal(deliveryManifest.package_type, PACKAGE_TYPE);
+  assert.equal(deliveryManifest.generated_at, '2026-05-14T00:00:00.000Z');
+  assert.equal(deliveryManifest.repository_head, manifest.repository_head);
+  assert.equal(deliveryManifest.release_ready, true);
+  assert.equal(deliveryManifest.package_name, 'package-under-test');
+  const artifactsByRole = new Map(deliveryManifest.artifacts.map((artifact) => [artifact.role, artifact]));
+  assert.equal(artifactsByRole.get('package_directory').path, 'package-under-test');
+  assert.equal(artifactsByRole.get('archive').sha256, result.archiveSha256);
+  assert.equal(artifactsByRole.get('archive').path, 'package-under-test.tar.gz');
+  assert.equal(artifactsByRole.get('archive_sha256_sidecar').path, 'package-under-test.tar.gz.sha256');
+  assert.equal(artifactsByRole.get('release_json').sha256, result.releaseReportSha256);
+  assert.equal(artifactsByRole.get('release_markdown').sha256, result.releaseMarkdownSha256);
+  assert.match(artifactsByRole.get('package_manifest').sha256, /^[a-f0-9]{64}$/);
 
   const archiveEntries = listTarEntries(result.archivePath);
   assert.ok(archiveEntries.includes('package-under-test/README.zh-CN.md'));
