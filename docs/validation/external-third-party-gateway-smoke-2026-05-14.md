@@ -290,3 +290,25 @@ The generated package reported `fileCount: 13`. Both the package-internal `valid
 The release report returned SHA256 `2eee082b9b92ee799c328d5c800285d59bb30ee0c88d6b0f13f90560ab99b84f`, archive root `deployment-release-validator-check`, archive `entry_count: 14`, `included_file_count: 13`, and no package/archive error codes.
 
 The deployment target finished at `ab38d8e` with a clean `main...origin/main` status.
+
+## Handoff Release Report Follow-Up
+
+Follow-up validated commit: `bb7ea22`.
+
+The deployment target pulled `bb7ea22` and ran:
+
+```text
+npm run test:external-handoff-package
+npm run test:external-handoff-release
+npm run build:external-handoff-package -- --basename deployment-release-report-check --generatedAt 2026-05-14T00:00:00.000Z
+npm run validate:external-handoff-release -- --package target/external-third-party-handoff/deployment-release-report-check
+test -s target/external-third-party-handoff/deployment-release-report-check.release.json
+```
+
+Result: passed.
+
+The build output included `releaseReportPath`, `releaseReportSha256`, `releaseReady: true`, and `fileCount: 13`.
+
+The generated release report returned `release_ready: true`, SHA256 `bc3265e5416f0e50eef62e3cdf7aa1fd8b5f3f428fed95dce2fd54f3d75f40aa`, `checks: 17`, `included_file_count: 13`, and archive `entry_count: 14`.
+
+The deployment target finished at `bb7ea22` with a clean `main...origin/main` status.
