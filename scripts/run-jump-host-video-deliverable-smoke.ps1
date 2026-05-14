@@ -155,6 +155,8 @@ function createJumpHostVideoDeliverablesFixture(tempRoot) {
             candidate_index: 2,
             source_frame: "frame_000002.jpg",
             rectangle_source: "raw_frame_full_frame_fallback",
+            rectangle_extraction_status: "promoted_full_frame_fallback",
+            rectangle_extraction_mode: "full_frame_fallback",
             crop_box: { unit: "relative", x: 0, y: 0, width: 1, height: 1 },
             review_required: true,
           },

@@ -53,6 +53,7 @@ cbc = "0.1.2"
 chrono = { version = "0.4.42", features = ["clock", "serde"] }
 futures-util = "0.3.31"
 hmac = "0.12.1"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 reqwest = { version = "0.13.2", default-features = false, features = ["blocking", "json", "rustls"] }
 quick-xml = "0.38.3"
 serde = { version = "1.0.228", features = ["derive"] }

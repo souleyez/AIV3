@@ -39,7 +39,7 @@ The media-worker test builds a controlled sample path in a temporary directory. 
 - PPTX ZIP magic and required OOXML entries such as `[Content_Types].xml`, `ppt/presentation.xml`, and `ppt/slides/slide1.xml`
 - final manifest status flags and output groups
 - published manifest type, immutable version metadata, lifecycle state, and redacted file coverage
-- slide rectangle manifest status, full-frame fallback crop boxes, selected keep-list de-duplication status, exact selected-frame duplicate metadata when present, and `review_required=true`
+- slide rectangle manifest status, detector or full-frame fallback crop boxes, selected keep-list de-duplication status, exact selected-frame duplicate metadata when present, and `review_required=true`
 - extraction manifest file-kind coverage
 - public manifest, JSON, and Markdown redaction for local paths and token-like URLs
 
@@ -122,6 +122,6 @@ powershell -ExecutionPolicy Bypass -File .\scripts\run-jump-host-video-deliverab
 
 ## Slide Rectangle Manifest Follow-Up
 
-The public deliverable contract now also requires `slide_rectangles_manifest.json` for complete video/PPT packages. The current promoted mode is intentionally conservative: selected keep-list frames are de-duplicated in selection order, exact duplicate selected frame bytes are removed before PPTX generation, and remaining frames are exported as relative full-frame fallback crop boxes with `review_required=true`.
+The public deliverable contract now also requires `slide_rectangles_manifest.json` for complete video/PPT packages. The current promoted mode is intentionally conservative: selected keep-list frames are de-duplicated in selection order, exact duplicate selected frame bytes are removed before PPTX generation, and remaining JPEG/PNG frames may be exported as `simple_background_contrast_v1` detector crops when a clear non-background rectangle exists. Ambiguous or undecodable frames remain relative full-frame fallback crops. Every crop still requires `review_required=true`.
 
-This is a data-quality gate and review contract, not a claim that visual slide-boundary detection is complete. A later slice should replace `rectangle_extraction_mode=full_frame_fallback` with real detector crops and stronger duplicate detection after that path has its own evidence and smoke tests.
+This is a data-quality gate and review contract, not a claim that visual slide-boundary detection is complete. A later slice should replace the simple background-contrast detector with a stronger visual detector and visual-similarity duplicate detection after that path has its own evidence and smoke tests.

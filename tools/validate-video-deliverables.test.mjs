@@ -15,6 +15,24 @@ test("accepts a complete video deliverables directory", () => {
   assert.ok(result.files.every((file) => file.exists));
 });
 
+test("accepts detector-cropped slide rectangles", () => {
+  const sessionDir = createCompleteDeliverables();
+  const slideRectanglesPath = path.join(sessionDir, "generated_artifacts", "slide_rectangles_manifest.json");
+  const slideRectangles = JSON.parse(fs.readFileSync(slideRectanglesPath, "utf8"));
+  slideRectangles.status = "promoted_detector_crop";
+  slideRectangles.rectangle_extraction_status = "promoted_detector_crop";
+  slideRectangles.rectangle_extraction_mode = "simple_background_contrast_v1";
+  slideRectangles.rectangles[0].rectangle_source = "raw_frame_background_contrast";
+  slideRectangles.rectangles[0].rectangle_extraction_status = "promoted_detector_crop";
+  slideRectangles.rectangles[0].rectangle_extraction_mode = "simple_background_contrast_v1";
+  slideRectangles.rectangles[0].crop_box = { unit: "relative", x: 0.2, y: 0.125, width: 0.6, height: 0.625 };
+  fs.writeFileSync(slideRectanglesPath, JSON.stringify(slideRectangles, null, 2));
+
+  const result = validateVideoDeliverables(sessionDir);
+
+  assert.equal(result.ok, true);
+});
+
 test("rejects missing review files", () => {
   const sessionDir = createCompleteDeliverables();
   fs.unlinkSync(path.join(sessionDir, "generated_artifacts", "slide_notes.md"));
@@ -269,6 +287,8 @@ function createCompleteDeliverables() {
             candidate_index: 2,
             source_frame: "frame_000002.jpg",
             rectangle_source: "raw_frame_full_frame_fallback",
+            rectangle_extraction_status: "promoted_full_frame_fallback",
+            rectangle_extraction_mode: "full_frame_fallback",
             crop_box: { unit: "relative", x: 0, y: 0, width: 1, height: 1 },
             review_required: true,
           },

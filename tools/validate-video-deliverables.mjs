@@ -272,28 +272,54 @@ function validateSubtitlePageMap(map, errors) {
 
 function validateSlideRectanglesManifest(manifest, errors) {
   const rectangles = Array.isArray(manifest.rectangles) ? manifest.rectangles : [];
-  if (manifest.rectangle_extraction_status !== "promoted_full_frame_fallback") {
+  const validStatuses = new Set([
+    "promoted_full_frame_fallback",
+    "promoted_detector_crop",
+    "mixed_detector_and_full_frame_fallback",
+  ]);
+  const validModes = new Set([
+    "full_frame_fallback",
+    "simple_background_contrast_v1",
+    "mixed_detector_and_full_frame_fallback",
+  ]);
+  if (!validStatuses.has(manifest.rectangle_extraction_status)) {
     errors.push(issue("slide_rectangles_not_promoted", "slide rectangle manifest is not promoted", "slide_rectangles_manifest"));
   }
-  if (manifest.rectangle_extraction_mode !== "full_frame_fallback") {
+  if (!validModes.has(manifest.rectangle_extraction_mode)) {
     errors.push(issue("slide_rectangles_mode_invalid", "slide rectangle extraction mode is invalid", "slide_rectangles_manifest"));
   }
   if (!Number.isInteger(manifest.promoted_rectangle_count) || manifest.promoted_rectangle_count < 1 || manifest.promoted_rectangle_count !== rectangles.length) {
     errors.push(issue("slide_rectangles_count_invalid", "slide rectangle count does not match rectangles", "slide_rectangles_manifest"));
   }
-  if (!rectangles.every(isRelativeFullFrameRectangle)) {
-    errors.push(issue("slide_rectangles_crop_invalid", "slide rectangles must use the relative full-frame fallback crop", "slide_rectangles_manifest"));
+  if (!rectangles.every(isValidSlideRectangle)) {
+    errors.push(issue("slide_rectangles_crop_invalid", "slide rectangles must use a valid relative crop and require review", "slide_rectangles_manifest"));
   }
 }
 
-function isRelativeFullFrameRectangle(rectangle) {
+function isValidSlideRectangle(rectangle) {
   const box = rectangle?.crop_box || {};
-  return box.unit === "relative"
-    && box.x === 0
-    && box.y === 0
-    && box.width === 1
-    && box.height === 1
-    && rectangle.review_required === true;
+  if (
+    box.unit !== "relative"
+    || !isRelativeNumber(box.x)
+    || !isRelativeNumber(box.y)
+    || !isRelativeNumber(box.width)
+    || !isRelativeNumber(box.height)
+    || box.width <= 0
+    || box.height <= 0
+    || box.x + box.width > 1.0001
+    || box.y + box.height > 1.0001
+    || rectangle.review_required !== true
+  ) {
+    return false;
+  }
+  if (rectangle.rectangle_extraction_status === "promoted_full_frame_fallback") {
+    return box.x === 0 && box.y === 0 && box.width === 1 && box.height === 1;
+  }
+  return rectangle.rectangle_extraction_status === "promoted_detector_crop";
+}
+
+function isRelativeNumber(value) {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1;
 }
 
 function validateRedactedJson(value, kind, errors) {

@@ -1,5 +1,6 @@
 use chrono::Utc;
 use domain_model::{Document, DocumentChunk, WorkflowTask};
+use image::{GenericImageView, ImageReader, Pixel};
 use serde_json::{json, Value};
 use std::{
     collections::BTreeSet,
@@ -1372,11 +1373,12 @@ fn selected_slides_manifest_from_keep_list(
         } else {
             "pre_page_mapped"
         };
-        let slide_rectangle = video_full_frame_slide_rectangle(
+        let slide_rectangle = video_slide_rectangle_from_frame(
             slide_index + 1,
             *candidate_index,
             file_name,
             timestamp_seconds,
+            frame,
         );
         let dedupe_fingerprint_status = if content_fingerprint.is_some() {
             "available"
@@ -1404,11 +1406,8 @@ fn selected_slides_manifest_from_keep_list(
             "selection_status": "selected",
         }));
     }
-    let rectangle_extraction_status = if selected_candidates.is_empty() {
-        "waiting_for_selection"
-    } else {
-        "promoted_full_frame_fallback"
-    };
+    let rectangle_extraction_status = video_slide_rectangle_aggregate_status(&selected_candidates);
+    let rectangle_extraction_mode = video_slide_rectangle_aggregate_mode(&selected_candidates);
     let dedupe_status = if selected_candidates.is_empty() {
         "waiting_for_selection"
     } else if rejected_duplicate_candidates.is_empty() {
@@ -1431,7 +1430,7 @@ fn selected_slides_manifest_from_keep_list(
         "selected_count": selected_candidates.len(),
         "deduped_candidate_count": rejected_duplicate_candidates.len(),
         "rectangle_extraction_status": rectangle_extraction_status,
-        "rectangle_extraction_mode": "full_frame_fallback",
+        "rectangle_extraction_mode": rectangle_extraction_mode,
         "dedupe_status": dedupe_status,
         "dedupe_policy": "selected candidate indices are range-checked, order-preserved, de-duplicated by index, and exact duplicate frame bytes are removed before rectangle promotion",
         "rectangle_policy": "promote selected raw frames as full-frame relative rectangles until a visual detector can replace the fallback crop",
@@ -1443,6 +1442,51 @@ fn selected_slides_manifest_from_keep_list(
             "review slide_rectangles_manifest.json and build screenshot-based PPTX from selected_candidates only"
         },
     })
+}
+
+fn video_slide_rectangle_from_frame(
+    slide_number: usize,
+    candidate_index: usize,
+    file_name: &str,
+    timestamp_seconds: f64,
+    frame: &Path,
+) -> Value {
+    video_detect_slide_rectangle(frame)
+        .map(|detection| {
+            json!({
+                "slide_number": slide_number,
+                "candidate_index": candidate_index,
+                "source_frame": file_name,
+                "timestamp_seconds": timestamp_seconds,
+                "rectangle_source": "raw_frame_background_contrast",
+                "rectangle_extraction_status": "promoted_detector_crop",
+                "rectangle_extraction_mode": "simple_background_contrast_v1",
+                "crop_box": {
+                    "unit": "relative",
+                    "x": detection.x,
+                    "y": detection.y,
+                    "width": detection.width,
+                    "height": detection.height,
+                },
+                "detector": {
+                    "name": "simple_background_contrast_v1",
+                    "image_width": detection.image_width,
+                    "image_height": detection.image_height,
+                    "foreground_pixel_count": detection.foreground_pixel_count,
+                    "threshold": detection.threshold,
+                },
+                "confidence_label": "detector_candidate_requires_review",
+                "review_required": true,
+            })
+        })
+        .unwrap_or_else(|| {
+            video_full_frame_slide_rectangle(
+                slide_number,
+                candidate_index,
+                file_name,
+                timestamp_seconds,
+            )
+        })
 }
 
 fn video_full_frame_slide_rectangle(
@@ -1458,6 +1502,7 @@ fn video_full_frame_slide_rectangle(
         "timestamp_seconds": timestamp_seconds,
         "rectangle_source": "raw_frame_full_frame_fallback",
         "rectangle_extraction_status": "promoted_full_frame_fallback",
+        "rectangle_extraction_mode": "full_frame_fallback",
         "crop_box": {
             "unit": "relative",
             "x": 0.0,
@@ -1468,6 +1513,126 @@ fn video_full_frame_slide_rectangle(
         "confidence_label": "fallback_requires_review",
         "review_required": true,
     })
+}
+
+struct VideoSlideRectangleDetection {
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    image_width: u32,
+    image_height: u32,
+    foreground_pixel_count: u64,
+    threshold: u8,
+}
+
+fn video_detect_slide_rectangle(frame: &Path) -> Option<VideoSlideRectangleDetection> {
+    let image = ImageReader::open(frame)
+        .ok()?
+        .with_guessed_format()
+        .ok()?
+        .decode()
+        .ok()?;
+    let (width, height) = image.dimensions();
+    if width < 16 || height < 16 {
+        return None;
+    }
+
+    let background = image.get_pixel(0, 0).to_rgb();
+    let threshold = 36_u8;
+    let mut min_x = width;
+    let mut min_y = height;
+    let mut max_x = 0_u32;
+    let mut max_y = 0_u32;
+    let mut foreground_pixel_count = 0_u64;
+
+    for y in 0..height {
+        for x in 0..width {
+            let pixel = image.get_pixel(x, y).to_rgb();
+            if video_pixel_distance_exceeds_threshold(&pixel.0, &background.0, threshold) {
+                min_x = min_x.min(x);
+                min_y = min_y.min(y);
+                max_x = max_x.max(x);
+                max_y = max_y.max(y);
+                foreground_pixel_count += 1;
+            }
+        }
+    }
+
+    let image_area = u64::from(width) * u64::from(height);
+    if foreground_pixel_count < image_area / 100 {
+        return None;
+    }
+    if min_x >= width || min_y >= height || max_x < min_x || max_y < min_y {
+        return None;
+    }
+
+    let box_width = max_x - min_x + 1;
+    let box_height = max_y - min_y + 1;
+    if box_width < width / 4 || box_height < height / 4 {
+        return None;
+    }
+    if box_width >= width.saturating_sub(2) && box_height >= height.saturating_sub(2) {
+        return None;
+    }
+
+    Some(VideoSlideRectangleDetection {
+        x: video_relative_coord(min_x, width),
+        y: video_relative_coord(min_y, height),
+        width: video_relative_coord(box_width, width),
+        height: video_relative_coord(box_height, height),
+        image_width: width,
+        image_height: height,
+        foreground_pixel_count,
+        threshold,
+    })
+}
+
+fn video_pixel_distance_exceeds_threshold(
+    pixel: &[u8; 3],
+    background: &[u8; 3],
+    threshold: u8,
+) -> bool {
+    pixel
+        .iter()
+        .zip(background.iter())
+        .any(|(left, right)| left.abs_diff(*right) > threshold)
+}
+
+fn video_relative_coord(value: u32, total: u32) -> f64 {
+    ((f64::from(value) / f64::from(total)) * 10_000.0).round() / 10_000.0
+}
+
+fn video_slide_rectangle_aggregate_status(selected_candidates: &[Value]) -> &'static str {
+    if selected_candidates.is_empty() {
+        return "waiting_for_selection";
+    }
+    let detector_count = selected_candidates
+        .iter()
+        .filter(|candidate| {
+            candidate
+                .get("slide_rectangle")
+                .and_then(|rectangle| rectangle.get("rectangle_extraction_status"))
+                .and_then(Value::as_str)
+                == Some("promoted_detector_crop")
+        })
+        .count();
+    if detector_count == selected_candidates.len() {
+        "promoted_detector_crop"
+    } else if detector_count > 0 {
+        "mixed_detector_and_full_frame_fallback"
+    } else {
+        "promoted_full_frame_fallback"
+    }
+}
+
+fn video_slide_rectangle_aggregate_mode(selected_candidates: &[Value]) -> &'static str {
+    match video_slide_rectangle_aggregate_status(selected_candidates) {
+        "waiting_for_selection" => "waiting_for_selection",
+        "promoted_detector_crop" => "simple_background_contrast_v1",
+        "mixed_detector_and_full_frame_fallback" => "mixed_detector_and_full_frame_fallback",
+        _ => "full_frame_fallback",
+    }
 }
 
 fn video_slide_rectangles_manifest_from_selected_slides(
@@ -1487,11 +1652,22 @@ fn video_slide_rectangles_manifest_from_selected_slides(
         .filter_map(|candidate| candidate.get("slide_rectangle").cloned())
         .collect::<Vec<_>>();
     let promoted_count = rectangles.len();
-    let rectangle_extraction_status = if promoted_count == 0 {
-        "waiting_for_selection"
-    } else {
-        "promoted_full_frame_fallback"
-    };
+    let rectangle_extraction_status = selected_slides_manifest
+        .get("rectangle_extraction_status")
+        .and_then(Value::as_str)
+        .unwrap_or(if promoted_count == 0 {
+            "waiting_for_selection"
+        } else {
+            "promoted_full_frame_fallback"
+        });
+    let rectangle_extraction_mode = selected_slides_manifest
+        .get("rectangle_extraction_mode")
+        .and_then(Value::as_str)
+        .unwrap_or(if promoted_count == 0 {
+            "waiting_for_selection"
+        } else {
+            "full_frame_fallback"
+        });
     let dedupe_status = selected_slides_manifest
         .get("dedupe_status")
         .and_then(Value::as_str)
@@ -1520,7 +1696,7 @@ fn video_slide_rectangles_manifest_from_selected_slides(
         "contact_sheet_html": contact_sheet_html_path.display().to_string(),
         "keep_list_template": keep_list_template_path.display().to_string(),
         "rectangle_extraction_status": rectangle_extraction_status,
-        "rectangle_extraction_mode": "full_frame_fallback",
+        "rectangle_extraction_mode": rectangle_extraction_mode,
         "promoted_rectangle_count": promoted_count,
         "dedupe_status": dedupe_status,
         "deduped_candidate_count": deduped_candidate_count,
@@ -1734,7 +1910,16 @@ fn video_selected_slide_quality_warnings(selected_slides_manifest: &Value) -> Ve
         .get("rectangle_extraction_status")
         .and_then(Value::as_str)
         .unwrap_or("waiting_for_selection");
-    if rectangle_status == "promoted_full_frame_fallback" {
+    if rectangle_status == "promoted_detector_crop" {
+        warnings.push(
+            "Slide rectangles are detector-cropped and still require visual review.".to_string(),
+        );
+    } else if rectangle_status == "mixed_detector_and_full_frame_fallback" {
+        warnings.push(
+            "Some slide rectangles are detector-cropped and some still use full-frame fallback; review required."
+                .to_string(),
+        );
+    } else if rectangle_status == "promoted_full_frame_fallback" {
         warnings.push(
             "Slide rectangles are promoted with a full-frame fallback crop and still require visual review."
                 .to_string(),
@@ -3670,7 +3855,12 @@ fn video_has_promoted_slide_rectangles(files: &[Value]) -> bool {
             .is_some_and(|status| {
                 matches!(
                     status,
-                    "completed" | "promoted" | "available" | "promoted_full_frame_fallback"
+                    "completed"
+                        | "promoted"
+                        | "available"
+                        | "promoted_full_frame_fallback"
+                        | "promoted_detector_crop"
+                        | "mixed_detector_and_full_frame_fallback"
                 )
             })
     })
@@ -3682,7 +3872,12 @@ fn video_has_full_frame_rectangle_fallback(files: &[Value]) -> bool {
             && file
                 .get("rectangle_extraction_mode")
                 .and_then(Value::as_str)
-                == Some("full_frame_fallback")
+                .is_some_and(|mode| {
+                    matches!(
+                        mode,
+                        "full_frame_fallback" | "mixed_detector_and_full_frame_fallback"
+                    )
+                })
             && file
                 .get("promoted_rectangle_count")
                 .and_then(Value::as_u64)
@@ -4753,6 +4948,16 @@ mod tests {
             created_at: Utc::now(),
             updated_at: Utc::now(),
         }
+    }
+
+    fn write_test_slide_rectangle_png(path: &Path) {
+        let mut image = image::RgbImage::from_pixel(100, 80, image::Rgb([8, 8, 8]));
+        for y in 10..60 {
+            for x in 20..80 {
+                image.put_pixel(x, y, image::Rgb([240, 240, 240]));
+            }
+        }
+        image.save(path).expect("test slide rectangle png");
     }
 
     fn assert_public_manifest_file_entry(files: &[Value], kind: &str, file_name: &str) {
@@ -6577,6 +6782,86 @@ mod tests {
         assert!(archive.by_name("ppt/slides/slide1.xml").is_ok());
         assert!(archive.by_name("ppt/slides/slide2.xml").is_ok());
         assert!(archive.by_name("ppt/slides/slide3.xml").is_err());
+    }
+
+    #[test]
+    fn detects_obvious_slide_rectangle_crop_from_png_frame() {
+        let document = test_document();
+        let output_root = std::env::temp_dir().join(format!(
+            "aidp-v3-video-detected-rectangle-test-{}",
+            DocumentId::new()
+        ));
+        let session_dir = output_root.join(format!("video-extraction-{}", document.id));
+        let artifacts_dir = session_dir.join(DEFAULT_GENERATED_ARTIFACTS_DIR_NAME);
+        let raw_frames_dir = session_dir.join(DEFAULT_RAW_FRAMES_DIR_NAME);
+        fs::create_dir_all(&raw_frames_dir).expect("raw frames dir");
+        fs::create_dir_all(&artifacts_dir).expect("artifacts dir");
+        write_test_slide_rectangle_png(&raw_frames_dir.join("frame_000001.png"));
+        fs::write(
+            artifacts_dir.join(DEFAULT_PPT_KEEP_LIST_TEMPLATE_FILE_NAME),
+            serde_json::to_vec_pretty(&json!({
+                "status": "selected",
+                "selected_candidate_indices": [1]
+            }))
+            .expect("keep list bytes"),
+        )
+        .expect("keep list");
+        let frame_extraction = json!({
+            "status": "completed",
+            "raw_frames_dir": raw_frames_dir.display().to_string(),
+            "frame_count": 1,
+            "manifest_file_name": DEFAULT_FRAME_MANIFEST_FILE_NAME
+        });
+
+        let manifest =
+            write_video_extraction_text_artifacts(&document, &[], &frame_extraction, &output_root)
+                .expect("candidate artifacts");
+
+        let files = manifest["files"].as_array().expect("files");
+        let slide_rectangles_path = files
+            .iter()
+            .find(|file| file["artifact_kind"] == json!("slide_rectangles_manifest"))
+            .and_then(|file| file["path"].as_str())
+            .expect("slide rectangles manifest path");
+        let slide_rectangles: Value = serde_json::from_str(
+            &fs::read_to_string(slide_rectangles_path).expect("slide rectangles manifest"),
+        )
+        .expect("slide rectangles manifest json");
+        assert_eq!(
+            slide_rectangles["rectangle_extraction_status"],
+            json!("promoted_detector_crop")
+        );
+        assert_eq!(
+            slide_rectangles["rectangle_extraction_mode"],
+            json!("simple_background_contrast_v1")
+        );
+        let crop_box = &slide_rectangles["rectangles"][0]["crop_box"];
+        assert_eq!(crop_box["unit"], json!("relative"));
+        assert_eq!(crop_box["x"], json!(0.2));
+        assert_eq!(crop_box["y"], json!(0.125));
+        assert_eq!(crop_box["width"], json!(0.6));
+        assert_eq!(crop_box["height"], json!(0.625));
+        assert_eq!(
+            slide_rectangles["rectangles"][0]["rectangle_source"],
+            json!("raw_frame_background_contrast")
+        );
+        assert_eq!(
+            slide_rectangles["rectangles"][0]["review_required"],
+            json!(true)
+        );
+        let selected_slides_path = files
+            .iter()
+            .find(|file| file["artifact_kind"] == json!("selected_slides_manifest"))
+            .and_then(|file| file["path"].as_str())
+            .expect("selected slides manifest path");
+        let selected_slides: Value = serde_json::from_str(
+            &fs::read_to_string(selected_slides_path).expect("selected slides manifest"),
+        )
+        .expect("selected slides manifest json");
+        assert_eq!(
+            selected_slides["rectangle_extraction_status"],
+            json!("promoted_detector_crop")
+        );
     }
 
     #[test]
