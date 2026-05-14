@@ -223,3 +223,23 @@ target/external-third-party-handoff/deployment-package-archive-check.tar.gz.sha2
 ```
 
 The generated archive SHA256 was reported by the builder and persisted in the sidecar file. Package-internal `validate:handoff` and `validate:package` both remained ready after archive generation.
+
+## Handoff Package Archive Validator Follow-Up
+
+Follow-up validated commit: `37d02c1`.
+
+The deployment target pulled `37d02c1` and ran:
+
+```text
+npm run test:external-handoff-archive
+npm run build:external-handoff-package -- --basename deployment-archive-validator-check --generatedAt 2026-05-14T00:00:00.000Z
+node tools/validate-external-handoff-archive.mjs --archive target/external-third-party-handoff/deployment-archive-validator-check.tar.gz
+npm --prefix target/external-third-party-handoff/deployment-archive-validator-check run validate:handoff
+npm --prefix target/external-third-party-handoff/deployment-archive-validator-check run validate:package
+```
+
+Result: passed.
+
+The archive validator returned `archive_ready: true`, `entry_count: 12`, root `deployment-archive-validator-check`, and SHA256 `46c71a8a9047681ddf23122c259fdbecbe2a93090e87284f1c1722386ae4d70e`.
+
+The validated checks covered archive presence, `.sha256` sidecar presence, sidecar digest match, gzip/tar parsing, path traversal safety, single package root, required entries, package manifest file integrity, and handoff manifest readiness.
