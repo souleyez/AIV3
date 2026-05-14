@@ -756,6 +756,8 @@ GET /v1/external/integrations/{integration_id}/audit
 
 The audit response returns a newest-first redacted timeline for messages, action runs, and source sync runs related to the integration. Action entries include confirmation state, dispatch status/reason, auth mode, HTTP status, redacted response summary, and safe result callback state such as callback status, idempotency key, completion time, and structural result summary. Sensitive keys such as `token`, `secret`, `authorization`, `cookie`, and `password` are removed from nested summaries.
 
+The standalone observability panel can preserve selected `integration_id`, `audit_filter`, and `action_id` in the URL so operators can share a direct action drilldown link. It can also export a redacted action trace JSON built from the same audit summary; the export does not include raw third-party request bodies, raw callback messages, or credentials.
+
 Optional query parameters:
 
 - `item_type`: `message`, `action`, `sync`, or `all`.

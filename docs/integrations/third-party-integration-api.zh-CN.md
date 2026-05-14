@@ -745,6 +745,8 @@ GET /v1/external/integrations/{integration_id}/audit
 
 返回该集成相关的消息、动作和同步记录时间线。动作记录会展示确认状态、派发状态、派发原因、鉴权模式、HTTP 状态、脱敏响应摘要，以及安全的结果回调状态，例如回调状态、幂等键、完成时间和结构化结果摘要。嵌套摘要中的 `token`、`secret`、`authorization`、`cookie`、`password` 等敏感键会被移除。
 
+外部集成观测面板会把当前选中的 `integration_id`、`audit_filter` 和 `action_id` 保存在 URL 中，方便运营人员分享单条动作详情定位链接。面板也可以导出一份脱敏 action trace JSON，内容来自同一份审计摘要，不包含第三方原始请求体、原始回调消息或凭证材料。
+
 可选查询参数：
 
 - `item_type`：`message`、`action`、`sync` 或 `all`；

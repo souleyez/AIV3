@@ -145,3 +145,34 @@ This confirms:
 - `GET /v1/external/integrations/{integration_id}/audit` can filter action records by exact `action_id`.
 - The standalone panel can open a selected action from the audit timeline and render the redacted lifecycle/detail summary.
 - The drilldown keeps using the same redacted action summary shape; it does not expose raw third-party callback result bodies or arbitrary message text.
+
+## Action Permalink And Trace Export Follow-Up
+
+Follow-up validated commit: `c751485`.
+
+Local validation ran:
+
+```text
+node --test app/lib/external-integrations.test.mjs
+npm run build
+git diff --check
+```
+
+The deployment target pulled `c751485` and ran:
+
+```text
+node --test app/lib/external-integrations.test.mjs
+npm run build
+bash scripts/run-external-third-party-gateway-smoke.sh
+```
+
+Result: passed.
+
+The web contract test passed 12 checks, including action drilldown permalink encoding and redacted operator trace export. The deployment smoke also generated a new readiness report with `ready: true`.
+
+This confirms:
+
+- the standalone panel can preserve `integration_id`, `audit_filter`, and `action_id` in the URL;
+- operators can copy a direct action drilldown link;
+- operators can export a redacted action trace JSON from the same audit summary;
+- the external dispatch/result-callback smoke still passes after the panel change.
