@@ -31,7 +31,8 @@
 - Phase 9 first checkpoint now adds `scripts/run-external-bot-third-party-smoke.ps1` and `docs/validation/external-bot-third-party-smoke.md`, collecting deterministic policy checks, database-backed ACL/source/adapter/action tests, and the external panel contract into one repeatable smoke entrypoint.
 - Phase 9 deployment checkpoint passed on `8服务器` at commit `fac2178` with PostgreSQL-backed ACL/source/adapter/action checks enabled and the public panel responding at `https://v3.elepcloud.com/external-integrations`; see `docs/validation/external-bot-third-party-deployment-smoke-2026-05-14.md`.
 - Phase 9 second checkpoint adds database-backed mock/sandbox validation for customer-hosted generic chat page events and signed outbound dispatch to a local third-party mock endpoint, including idempotency, dispatch-specific Bearer/HMAC headers, callback-token non-reuse, and redacted response summaries.
-- Next implementation checkpoint: run the expanded smoke with PostgreSQL available on the deployment target or jump host and capture the new validation report.
+- Phase 9 second checkpoint passed on `8服务器` at commit `aaafd6f`; see `docs/validation/external-third-party-mock-sandbox-smoke-2026-05-14.md`.
+- Next implementation checkpoint: exercise a live third-party sandbox or packaged mock gateway over HTTPS so customer-hosted pages, signed dispatch, and action response callbacks can be validated outside the in-process test harness.
 
 ---
 
