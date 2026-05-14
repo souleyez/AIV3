@@ -893,7 +893,7 @@ V3 can generate a self-contained package for customer sandbox handoff:
 npm run build:external-handoff-package
 ```
 
-The generated package includes:
+The generated output includes a package directory, a `.tar.gz` archive, and a matching `.sha256` file. The package includes:
 
 - this API guide and the Chinese third-party sendable guide;
 - `handoff/third-party-handoff.sample.json`;

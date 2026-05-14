@@ -918,7 +918,7 @@ npm run build:external-handoff-package
 target/external-third-party-handoff
 ```
 
-交接包包含：
+生成结果包含交接包目录、同名 `.tar.gz` 归档和 `.sha256` 校验文件。交接包包含：
 
 - 中文接口说明和英文接口说明；
 - `handoff/third-party-handoff.sample.json`；

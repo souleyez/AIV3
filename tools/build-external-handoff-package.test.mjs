@@ -4,9 +4,28 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import zlib from 'node:zlib';
 import { buildPackage, PACKAGE_TYPE, SOURCE_FILES } from './build-external-handoff-package.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+
+function listTarEntries(tarGzPath) {
+  const tar = zlib.gunzipSync(fs.readFileSync(tarGzPath));
+  const entries = [];
+  let offset = 0;
+  while (offset + 512 <= tar.length) {
+    const header = tar.subarray(offset, offset + 512);
+    if (header.every((byte) => byte === 0)) {
+      break;
+    }
+    const name = header.toString('utf8', 0, 100).replace(/\0.*$/, '');
+    const sizeText = header.toString('ascii', 124, 136).replace(/\0.*$/, '').trim();
+    const size = Number.parseInt(sizeText || '0', 8);
+    entries.push(name);
+    offset += 512 + Math.ceil(size / 512) * 512;
+  }
+  return entries;
+}
 
 test('buildPackage creates a third-party handoff directory with manifest and tooling', () => {
   const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'v3-external-handoff-package-'));
@@ -19,6 +38,9 @@ test('buildPackage creates a third-party handoff directory with manifest and too
 
   assert.equal(result.ready, true);
   assert.equal(result.fileCount, SOURCE_FILES.length + 3);
+  assert.ok(fs.existsSync(result.archivePath));
+  assert.ok(fs.existsSync(result.archiveSha256Path));
+  assert.match(result.archiveSha256, /^[a-f0-9]{64}$/);
   assert.ok(fs.existsSync(path.join(result.packageRoot, 'README.zh-CN.md')));
   assert.ok(fs.existsSync(path.join(result.packageRoot, 'docs/third-party-integration-api.zh-CN.md')));
   assert.ok(fs.existsSync(path.join(result.packageRoot, 'handoff/third-party-handoff.sample.json')));
@@ -32,6 +54,12 @@ test('buildPackage creates a third-party handoff directory with manifest and too
   assert.equal(manifest.handoff_validation.error_codes.length, 0);
   assert.equal(manifest.included_files.length, result.fileCount);
   assert.ok(manifest.included_files.every((file) => /^[a-f0-9]{64}$/.test(file.sha256)));
+
+  const archiveEntries = listTarEntries(result.archivePath);
+  assert.ok(archiveEntries.includes('package-under-test/README.zh-CN.md'));
+  assert.ok(archiveEntries.includes('package-under-test/handoff-package-manifest.json'));
+  assert.ok(archiveEntries.includes('package-under-test/tools/validate-external-handoff-package.mjs'));
+  assert.equal(fs.readFileSync(result.archiveSha256Path, 'utf8').startsWith(result.archiveSha256), true);
 });
 
 test('generated package exposes simple npm scripts for third parties', () => {
