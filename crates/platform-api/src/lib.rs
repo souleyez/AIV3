@@ -41,7 +41,8 @@ use contracts::{
     CreateStaticPageRenderRequest, CreateStaticPageRenderResponse, DatasetOutputView,
     DatasetSummary, DocumentChunkView, DocumentDetailView, DocumentMediaDetailView,
     DocumentSummary, ExternalActionConfirmationDecisionView, ExternalActionConfirmationRequestView,
-    ExternalActionConfirmationResponseView, ExternalBotMessageView, ExternalBotReplyTypeView,
+    ExternalActionConfirmationResponseView, ExternalActionResultCallbackRequestView,
+    ExternalActionResultCallbackResponseView, ExternalBotMessageView, ExternalBotReplyTypeView,
     ExternalBotReplyView, ExternalChannelEventResponse, ExternalChannelPlatformView,
     ExternalIntegrationAuditItemView, ExternalIntegrationAuditResponse,
     ExternalIntegrationControlRequest, ExternalIntegrationControlResponse,
@@ -468,6 +469,10 @@ pub fn router(
         .route(
             "/v1/external/channels/{connection_id}/confirmations",
             axum::routing::post(confirm_external_channel_action),
+        )
+        .route(
+            "/v1/external/channels/{connection_id}/actions/{action_id}/result",
+            axum::routing::post(record_external_action_result_callback),
         )
         .route(
             "/v1/external/channels/{connection_id}/feishu/callback",
@@ -8266,6 +8271,272 @@ async fn confirm_external_channel_action(
                 .to_string(),
         }),
     ))
+}
+
+async fn record_external_action_result_callback(
+    State(state): State<AppState>,
+    Path((connection_id, action_id)): Path<(String, String)>,
+    Json(request): Json<ExternalActionResultCallbackRequestView>,
+) -> std::result::Result<(StatusCode, Json<ExternalActionResultCallbackResponseView>), ApiError> {
+    validate_required("connection_id", &connection_id)?;
+    validate_required("action_id", &action_id)?;
+    validate_required("status", &request.status)?;
+    validate_required("idempotency_key", &request.idempotency_key)?;
+
+    let connection = load_external_channel_connection(&state, &connection_id).await?;
+    ensure_external_channel_enabled(&connection_id, &connection)?;
+
+    let row = sqlx::query(
+        r#"
+        select assistant_run_id, requester_summary, external_request_id
+        from external_action_runs
+        where tenant_id = $1 and id = $2
+        "#,
+    )
+    .bind(state.tenant_id.0)
+    .bind(&action_id)
+    .fetch_optional(state.storage.pool())
+    .await
+    .map_err(|error| ApiError::from_storage(anyhow::Error::new(error)))?
+    .ok_or_else(|| {
+        ApiError::not_found(
+            "external_action_run_not_found",
+            format!("external action run {action_id} was not found"),
+        )
+    })?;
+
+    let requester_summary = row.get::<Value, _>("requester_summary");
+    if requester_summary
+        .get("channel_connection_id")
+        .and_then(Value::as_str)
+        != Some(connection_id.as_str())
+    {
+        return Err(ApiError::forbidden(
+            "external_action_channel_mismatch",
+            "result callback channel does not own this external action run".to_string(),
+        ));
+    }
+
+    let stored_external_request_id = row.get::<Option<String>, _>("external_request_id");
+    let callback_external_request_id = request
+        .external_request_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    if let (Some(stored), Some(callback)) = (
+        stored_external_request_id.as_deref(),
+        callback_external_request_id.as_deref(),
+    ) {
+        if stored != callback {
+            return Err(ApiError::bad_request_with_details(
+                "external_action_result_request_id_mismatch",
+                "result callback external_request_id does not match the dispatched request"
+                    .to_string(),
+                json!({
+                    "action_id": action_id,
+                    "expected_external_request_id": stored,
+                    "received_external_request_id": callback,
+                }),
+            ));
+        }
+    }
+
+    let status = normalize_external_action_result_status(&request.status)?;
+    let response_external_request_id = callback_external_request_id
+        .clone()
+        .or(stored_external_request_id);
+    let now = Utc::now();
+    let result_summary = external_action_result_callback_summary(
+        &request,
+        &status,
+        response_external_request_id.as_deref(),
+        now,
+    );
+    let failure_kind = external_action_result_failure_kind(&status);
+    sqlx::query(
+        r#"
+        update external_action_runs
+        set external_request_id = coalesce($3, external_request_id),
+            result_summary = result_summary || $4,
+            failure_kind = $5,
+            updated_at = $6
+        where tenant_id = $1 and id = $2
+        "#,
+    )
+    .bind(state.tenant_id.0)
+    .bind(&action_id)
+    .bind(&callback_external_request_id)
+    .bind(&result_summary)
+    .bind(&failure_kind)
+    .bind(now)
+    .execute(state.storage.pool())
+    .await
+    .map_err(|error| ApiError::from_storage(anyhow::Error::new(error)))?;
+
+    if let Some(run_id) = row
+        .get::<Option<Uuid>, _>("assistant_run_id")
+        .map(AssistantRunId)
+    {
+        state
+            .storage
+            .assistant_runs()
+            .append_event(
+                state.tenant_id,
+                run_id,
+                &NewAssistantRunEvent {
+                    event_name: "assistant_run.external_action_result_callback_received"
+                        .to_string(),
+                    payload: json!({
+                        "action_id": action_id.as_str(),
+                        "status": status.as_str(),
+                        "external_request_id": response_external_request_id.as_deref(),
+                        "idempotency_key": request.idempotency_key.as_str(),
+                        "code": external_action_result_safe_code(request.code.as_deref()),
+                        "message_present": request.message.as_ref().is_some_and(|value| !value.trim().is_empty()),
+                        "result_present": request.result.is_some(),
+                        "failure_kind": failure_kind,
+                    }),
+                    created_at: now,
+                },
+            )
+            .await
+            .map_err(ApiError::from_storage)?;
+    }
+
+    Ok((
+        StatusCode::OK,
+        Json(ExternalActionResultCallbackResponseView {
+            accepted: true,
+            action_id,
+            external_request_id: response_external_request_id,
+            status,
+            idempotency_key: request.idempotency_key,
+        }),
+    ))
+}
+
+fn normalize_external_action_result_status(status: &str) -> std::result::Result<String, ApiError> {
+    let normalized = status.trim().to_ascii_lowercase().replace('-', "_");
+    let status = match normalized.as_str() {
+        "success" | "succeeded" | "complete" | "completed" => "succeeded",
+        "fail" | "failed" | "error" => "failed",
+        "cancelled" | "canceled" => "cancelled",
+        "rejected" => "rejected",
+        "running" | "processing" => "running",
+        "accepted" => "accepted",
+        _ => {
+            return Err(ApiError::bad_request_with_details(
+                "external_action_result_status_invalid",
+                "result callback status must be one of succeeded, failed, cancelled, rejected, running, or accepted"
+                    .to_string(),
+                json!({
+                    "status": status,
+                }),
+            ))
+        }
+    };
+    Ok(status.to_string())
+}
+
+fn external_action_result_failure_kind(status: &str) -> Option<String> {
+    match status {
+        "failed" | "cancelled" | "rejected" => Some(format!("external_action_{status}")),
+        _ => None,
+    }
+}
+
+fn external_action_result_safe_code(code: Option<&str>) -> Option<String> {
+    let code = code?.trim();
+    if code.is_empty() || code.len() > 80 {
+        return None;
+    }
+    code.chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.'))
+        .then(|| code.to_string())
+}
+
+fn external_action_result_callback_summary(
+    request: &ExternalActionResultCallbackRequestView,
+    status: &str,
+    external_request_id: Option<&str>,
+    received_at: DateTime<Utc>,
+) -> Value {
+    let mut callback = Map::new();
+    callback.insert("status".to_string(), json!(status));
+    callback.insert(
+        "idempotency_key".to_string(),
+        json!(request.idempotency_key.trim()),
+    );
+    callback.insert("received_at".to_string(), json!(received_at));
+    callback.insert(
+        "message_present".to_string(),
+        json!(request
+            .message
+            .as_ref()
+            .is_some_and(|value| !value.trim().is_empty())),
+    );
+    callback.insert(
+        "result_present".to_string(),
+        json!(request.result.is_some()),
+    );
+    if let Some(external_request_id) = external_request_id {
+        callback.insert(
+            "external_request_id".to_string(),
+            json!(external_request_id),
+        );
+    }
+    if let Some(completed_at) = request.completed_at {
+        callback.insert("completed_at".to_string(), json!(completed_at));
+    }
+    if let Some(code) = external_action_result_safe_code(request.code.as_deref()) {
+        callback.insert("code".to_string(), json!(code));
+    }
+    if let Some(result) = request.result.clone() {
+        callback.insert(
+            "result_summary".to_string(),
+            external_action_result_payload_summary(&result),
+        );
+    }
+
+    json!({
+        "status": format!("external_action_{status}"),
+        "external_callback": Value::Object(callback),
+        "updated_at": received_at,
+    })
+}
+
+fn external_action_result_payload_summary(value: &Value) -> Value {
+    match value {
+        Value::Object(map) => {
+            let sensitive_field_count = map
+                .keys()
+                .filter(|key| external_integration_sensitive_key(key))
+                .count();
+            json!({
+                "kind": "object",
+                "field_count": map.len(),
+                "sensitive_field_count": sensitive_field_count,
+            })
+        }
+        Value::Array(items) => json!({
+            "kind": "array",
+            "item_count": items.len(),
+        }),
+        Value::String(text) => json!({
+            "kind": "string",
+            "length_chars": text.chars().count(),
+        }),
+        Value::Number(_) => json!({
+            "kind": "number",
+        }),
+        Value::Bool(_) => json!({
+            "kind": "boolean",
+        }),
+        Value::Null => json!({
+            "kind": "null",
+        }),
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -29959,6 +30230,24 @@ mod tests {
     }
 
     #[test]
+    fn external_action_result_payload_summary_keeps_shape_not_values() {
+        let summary = external_action_result_payload_summary(&json!({
+            "artifact_id": "artifact-001",
+            "status": "completed",
+            "token": "secret-token",
+            "business_note": "do not store this raw result"
+        }));
+        let summary_text = summary.to_string();
+
+        assert_eq!(summary["kind"], json!("object"));
+        assert_eq!(summary["field_count"], json!(4));
+        assert_eq!(summary["sensitive_field_count"], json!(1));
+        assert!(!summary_text.contains("artifact-001"));
+        assert!(!summary_text.contains("do not store"));
+        assert!(!summary_text.contains("secret-token"));
+    }
+
+    #[test]
     fn external_channel_drift_summary_reports_identity_mapping_gap() {
         let summary = external_channel_drift_summary(3, 0, None);
 
@@ -30515,6 +30804,153 @@ mod tests {
         );
         assert!(!result_text.contains("third-party-secret"));
         assert!(!result_text.contains("accepted by external mock gateway"));
+    }
+
+    #[tokio::test]
+    async fn external_action_result_callback_records_redacted_summary() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping external action result callback test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("external-action-result-test-{}", Uuid::new_v4()),
+                "External Action Result Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage.clone(),
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        let app = router(
+            storage.clone(),
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        insert_generic_external_channel_connection(&state, "generic-chat-main").await;
+        sqlx::query(
+            r#"
+            insert into external_action_runs (
+                id,
+                tenant_id,
+                requester_summary,
+                risk_level,
+                target_system,
+                action_type,
+                arguments_redacted,
+                confirmation_state,
+                external_request_id,
+                result_summary
+            )
+            values ($1, $2, $3, 'low_risk_write', 'external_channel', 'external_business_action.invoke', $4, 'confirmed', $5, $6)
+            "#,
+        )
+        .bind("act-result-callback-001")
+        .bind(tenant.id.0)
+        .bind(json!({
+            "platform": "generic_chat",
+            "tenant_external_id": "tenant-ext-001",
+            "conversation_external_id": "chat-risk-room",
+            "sender_external_id": "user-ext-001",
+            "channel_connection_id": "generic-chat-main"
+        }))
+        .bind(json!({
+            "operation": "create_ticket",
+            "raw_prompt_redacted": true
+        }))
+        .bind("gateway-req-001")
+        .bind(json!({"status": "dispatched"}))
+        .execute(storage.pool())
+        .await
+        .expect("external action run should be inserted");
+
+        let request = ExternalActionResultCallbackRequestView {
+            external_request_id: Some("gateway-req-001".to_string()),
+            status: "completed".to_string(),
+            idempotency_key: "generic_chat:tenant-ext-001:result-001".to_string(),
+            completed_at: Some(Utc::now()),
+            code: Some("OK".to_string()),
+            message: Some("ticket contains secret business payload".to_string()),
+            result: Some(json!({
+                "artifact_id": "artifact-secret-001",
+                "status": "created",
+                "token": "third-party-secret-token"
+            })),
+        };
+        let response = post_json_request(
+            app,
+            "/v1/external/channels/generic-chat-main/actions/act-result-callback-001/result",
+            &request,
+            None,
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let response: ExternalActionResultCallbackResponseView = read_json_response(response).await;
+        assert!(response.accepted);
+        assert_eq!(response.action_id, "act-result-callback-001");
+        assert_eq!(response.status, "succeeded");
+        assert_eq!(
+            response.external_request_id.as_deref(),
+            Some("gateway-req-001")
+        );
+
+        let row = sqlx::query(
+            r#"
+            select external_request_id, result_summary, failure_kind
+            from external_action_runs
+            where tenant_id = $1 and id = 'act-result-callback-001'
+            "#,
+        )
+        .bind(tenant.id.0)
+        .fetch_one(storage.pool())
+        .await
+        .expect("external action run should remain queryable");
+        assert_eq!(
+            row.get::<Option<String>, _>("external_request_id")
+                .as_deref(),
+            Some("gateway-req-001")
+        );
+        assert_eq!(
+            row.get::<Option<String>, _>("failure_kind").as_deref(),
+            None
+        );
+        let result_summary = row.get::<Value, _>("result_summary");
+        let result_text = result_summary.to_string();
+        assert_eq!(result_summary["status"], json!("external_action_succeeded"));
+        assert_eq!(
+            result_summary["external_callback"]["status"],
+            json!("succeeded")
+        );
+        assert_eq!(
+            result_summary["external_callback"]["idempotency_key"],
+            json!("generic_chat:tenant-ext-001:result-001")
+        );
+        assert_eq!(
+            result_summary["external_callback"]["message_present"],
+            json!(true)
+        );
+        assert_eq!(
+            result_summary["external_callback"]["result_summary"]["kind"],
+            json!("object")
+        );
+        assert_eq!(
+            result_summary["external_callback"]["result_summary"]["field_count"],
+            json!(3)
+        );
+        assert!(!result_text.contains("ticket contains secret"));
+        assert!(!result_text.contains("artifact-secret-001"));
+        assert!(!result_text.contains("third-party-secret-token"));
     }
 
     #[tokio::test]

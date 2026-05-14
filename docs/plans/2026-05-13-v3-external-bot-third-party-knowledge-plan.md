@@ -34,7 +34,8 @@
 - Phase 9 second checkpoint passed on `8服务器` at commit `aaafd6f`; see `docs/validation/external-third-party-mock-sandbox-smoke-2026-05-14.md`.
 - Phase 9 third checkpoint adds a standalone Node-based third-party mock gateway and Linux/deployment-target smoke runner so signed outbound dispatch can be validated outside the in-process Rust test harness.
 - Phase 9 third checkpoint passed on `8服务器` at commit `0cfb9c9`; see `docs/validation/external-third-party-gateway-smoke-2026-05-14.md`.
-- Next implementation checkpoint: extend the packaged gateway toward action response callbacks or run the same contract through a real HTTPS customer sandbox.
+- Phase 9 fourth checkpoint adds the third-party action result callback contract, `POST /v1/external/channels/{connection_id}/actions/{action_id}/result`, with channel ownership checks, external request id mismatch protection, idempotency-key tracking, and non-verbatim result summaries.
+- Next implementation checkpoint: run the callback contract through the packaged gateway or a real HTTPS customer sandbox.
 
 ---
 
@@ -263,6 +264,7 @@ The third-party-facing API guide is maintained in `docs/integrations/third-party
 - `POST /v1/external/channels/{connection_id}/events`: normalized inbound events from adapters or third-party chat pages.
 - `POST /v1/external/channels/{connection_id}/attachments`: attachment registration and ingest handoff.
 - `POST /v1/external/channels/{connection_id}/confirmations`: confirmation callbacks for pending actions.
+- `POST /v1/external/channels/{connection_id}/actions/{action_id}/result`: third-party callback for async action outcomes; stores status, request id, idempotency key, and structural result summaries without raw business result bodies.
 - `GET /v1/external/runs/{assistant_run_id}`: redacted run status for external pages.
 
 ### Source connector APIs
@@ -454,7 +456,8 @@ It should not ask operators to manually label documents, rewrite permissions, or
 4. Done: include deterministic low-risk artifact publish, high-risk revoke, cross-system action, artifact observability, and panel contract tests.
 5. Done: Add a deployment-target validation report with PostgreSQL available.
 6. Done: Add mock/sandbox coverage for customer-hosted chat page events and signed third-party dispatch.
-7. Commit `Add external bot third-party smoke`.
+7. Done: Add third-party action result callback coverage with redacted, structural result summaries.
+8. Commit `Add external bot third-party smoke`.
 
 ## Acceptance Criteria
 

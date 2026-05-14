@@ -647,6 +647,31 @@ V3 派发给第三方时，只发送脱敏 payload：
 
 第三方响应可返回 `external_request_id`、`externalRequestId`、`request_id` 或 `requestId`。V3 会保存该请求 id 和脱敏后的结果摘要；第三方原始响应正文、令牌、密钥、任意 message 文本不会写入动作摘要。
 
+第三方系统异步执行完成后，可以把动作结果回传给 V3：
+
+```http
+POST /v1/external/channels/{connection_id}/actions/{action_id}/result
+```
+
+请求示例：
+
+```json
+{
+  "external_request_id": "gateway-req-001",
+  "status": "succeeded",
+  "idempotency_key": "generic_chat:tenant-ext-001:result-001",
+  "completed_at": "2026-05-14T10:30:00Z",
+  "code": "OK",
+  "message": "可选说明文本。V3 只记录 message 是否存在。",
+  "result": {
+    "artifact_id": "artifact-001",
+    "status": "created"
+  }
+}
+```
+
+支持的回传状态包括 `succeeded`、`failed`、`cancelled`、`rejected`、`running`、`accepted`。V3 会校验该通道是否拥有对应动作；如果派发时已经记录了 `external_request_id`，回传时不允许传入不一致的请求 ID。`message` 和任意 `result` 值不会原文保存；V3 只保存是否存在、状态/安全错误码，以及对象字段数量等结构化摘要。
+
 V3 出站派发请求头：
 
 ```http

@@ -44,6 +44,7 @@ printf "HEAD: "
 git rev-parse --short HEAD
 
 cargo test -p platform-api external_action_dispatch_posts_to_external_mock_gateway_from_env --lib -- --nocapture
+cargo test -p platform-api external_action_result_callback_records_redacted_summary --lib -- --nocapture
 
 requests_json="$(curl -fsS "${base_url}/__mock/requests")"
 printf '%s' "${requests_json}" | node -e '

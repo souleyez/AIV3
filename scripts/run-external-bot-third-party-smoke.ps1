@@ -102,6 +102,12 @@ if (-not $SkipDatabase) {
         Command = "cargo"
         Arguments = @("test", "-p", "platform-api", "external_action_dispatch_posts_signed_payload_to_mock_endpoint", "--lib", "--", "--nocapture")
     }
+    $steps += @{
+        Name = "third-party action result callback records redacted summary"
+        WorkingDirectory = $repoRoot
+        Command = "cargo"
+        Arguments = @("test", "-p", "platform-api", "external_action_result_callback_records_redacted_summary", "--lib", "--", "--nocapture")
+    }
 }
 
 if (-not $SkipWeb) {

@@ -293,6 +293,32 @@ pub struct ExternalActionConfirmationResponseView {
     pub idempotency_key: String,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct ExternalActionResultCallbackRequestView {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_request_id: Option<String>,
+    pub status: String,
+    pub idempotency_key: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completed_at: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result: Option<Value>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ExternalActionResultCallbackResponseView {
+    pub accepted: bool,
+    pub action_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_request_id: Option<String>,
+    pub status: String,
+    pub idempotency_key: String,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ExternalBotReplyTypeView {
@@ -3624,6 +3650,43 @@ mod tests {
         };
         let encoded_response = serde_json::to_value(&response).expect("response should serialize");
         assert_eq!(encoded_response["confirmation_state"], json!("confirmed"));
+    }
+
+    #[test]
+    fn external_action_result_callback_view_serializes_redacted_envelope() {
+        let completed_at = Utc::now();
+        let request = ExternalActionResultCallbackRequestView {
+            external_request_id: Some("gw-req-001".to_string()),
+            status: "succeeded".to_string(),
+            idempotency_key: "generic_chat:tenant-ext-001:result-001".to_string(),
+            completed_at: Some(completed_at),
+            code: Some("OK".to_string()),
+            message: Some("done".to_string()),
+            result: Some(json!({
+                "artifact_id": "artifact-001"
+            })),
+        };
+
+        let encoded = serde_json::to_value(&request).expect("request should serialize");
+
+        assert_eq!(encoded["external_request_id"], json!("gw-req-001"));
+        assert_eq!(encoded["status"], json!("succeeded"));
+        assert_eq!(encoded["completed_at"], json!(completed_at));
+
+        let decoded: ExternalActionResultCallbackRequestView =
+            serde_json::from_value(encoded).expect("request should deserialize");
+        assert_eq!(decoded, request);
+
+        let response = ExternalActionResultCallbackResponseView {
+            accepted: true,
+            action_id: "external-action-001".to_string(),
+            external_request_id: Some("gw-req-001".to_string()),
+            status: "succeeded".to_string(),
+            idempotency_key: "generic_chat:tenant-ext-001:result-001".to_string(),
+        };
+        let encoded_response = serde_json::to_value(&response).expect("response should serialize");
+        assert_eq!(encoded_response["accepted"], json!(true));
+        assert_eq!(encoded_response["status"], json!("succeeded"));
     }
 
     #[test]

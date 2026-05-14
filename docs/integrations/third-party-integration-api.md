@@ -660,6 +660,31 @@ V3 sends only a redacted dispatch payload:
 
 Dispatch responses may return `external_request_id`, `externalRequestId`, `request_id`, or `requestId`. V3 stores that id and a redacted result summary. Raw third-party response bodies, tokens, secrets, and arbitrary message text are not stored in action summaries.
 
+After a third-party system finishes an asynchronously dispatched action, it can report the outcome back to V3:
+
+```http
+POST /v1/external/channels/{connection_id}/actions/{action_id}/result
+```
+
+Request body:
+
+```json
+{
+  "external_request_id": "gateway-req-001",
+  "status": "succeeded",
+  "idempotency_key": "generic_chat:tenant-ext-001:result-001",
+  "completed_at": "2026-05-14T10:30:00Z",
+  "code": "OK",
+  "message": "Optional human-readable text. V3 only records that a message was present.",
+  "result": {
+    "artifact_id": "artifact-001",
+    "status": "created"
+  }
+}
+```
+
+Supported callback statuses are `succeeded`, `failed`, `cancelled`, `rejected`, `running`, and `accepted`. V3 verifies that the callback channel owns the action run and, when an `external_request_id` was recorded during dispatch, rejects mismatched ids. The `message` field and arbitrary `result` values are not stored verbatim; V3 keeps only message/result presence, safe status/code metadata, and a structural result summary such as object field counts.
+
 Outbound dispatch headers:
 
 ```http
