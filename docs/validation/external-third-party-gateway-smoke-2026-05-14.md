@@ -243,3 +243,27 @@ Result: passed.
 The archive validator returned `archive_ready: true`, `entry_count: 12`, root `deployment-archive-validator-check`, and SHA256 `46c71a8a9047681ddf23122c259fdbecbe2a93090e87284f1c1722386ae4d70e`.
 
 The validated checks covered archive presence, `.sha256` sidecar presence, sidecar digest match, gzip/tar parsing, path traversal safety, single package root, required entries, package manifest file integrity, and handoff manifest readiness.
+
+## Package-Included Archive Validator Follow-Up
+
+Follow-up validated commit: `e48b563`.
+
+The deployment target pulled `e48b563` and ran:
+
+```text
+npm run test:external-handoff-package
+npm run test:external-handoff-package-integrity
+npm run test:external-handoff-archive
+npm run build:external-handoff-package -- --basename deployment-package-archive-script-check --generatedAt 2026-05-14T00:00:00.000Z
+npm --prefix target/external-third-party-handoff/deployment-package-archive-script-check run validate:handoff
+npm --prefix target/external-third-party-handoff/deployment-package-archive-script-check run validate:package
+npm --prefix target/external-third-party-handoff/deployment-package-archive-script-check run validate:archive
+```
+
+Result: passed.
+
+The generated package reported `fileCount: 12`. Package-internal `validate:package` returned `package_ready: true` and `included_file_count: 12`.
+
+Package-internal `validate:archive` inferred the sibling archive path from the package directory, returned `archive_ready: true`, `entry_count: 13`, root `deployment-package-archive-script-check`, and SHA256 `3b0426688224af2ba29443931d57d76059656049f0794118a58b462d28ebd730`.
+
+The deployment target finished at `e48b563` with a clean `main...origin/main` status.
