@@ -756,6 +756,34 @@ fn write_video_slide_candidate_review_files(
                 .cloned()
                 .unwrap_or_else(|| json!(0)),
         );
+        object.insert(
+            "dedupe_status".to_string(),
+            selected_slides_manifest
+                .get("dedupe_status")
+                .cloned()
+                .unwrap_or_else(|| json!("waiting_for_selection")),
+        );
+        object.insert(
+            "deduped_candidate_count".to_string(),
+            selected_slides_manifest
+                .get("deduped_candidate_count")
+                .cloned()
+                .unwrap_or_else(|| json!(0)),
+        );
+        object.insert(
+            "exact_duplicate_count".to_string(),
+            selected_slides_manifest
+                .get("exact_duplicate_count")
+                .cloned()
+                .unwrap_or_else(|| json!(0)),
+        );
+        object.insert(
+            "visual_duplicate_count".to_string(),
+            selected_slides_manifest
+                .get("visual_duplicate_count")
+                .cloned()
+                .unwrap_or_else(|| json!(0)),
+        );
     }
 
     let mut slide_rectangles_artifact = video_generated_artifact_file(
@@ -797,6 +825,20 @@ fn write_video_slide_candidate_review_files(
             "deduped_candidate_count".to_string(),
             slide_rectangles_manifest
                 .get("deduped_candidate_count")
+                .cloned()
+                .unwrap_or_else(|| json!(0)),
+        );
+        object.insert(
+            "exact_duplicate_count".to_string(),
+            slide_rectangles_manifest
+                .get("exact_duplicate_count")
+                .cloned()
+                .unwrap_or_else(|| json!(0)),
+        );
+        object.insert(
+            "visual_duplicate_count".to_string(),
+            slide_rectangles_manifest
+                .get("visual_duplicate_count")
                 .cloned()
                 .unwrap_or_else(|| json!(0)),
         );
@@ -2079,6 +2121,23 @@ fn video_selected_slide_quality_warnings(selected_slides_manifest: &Value) -> Ve
             "Speaker notes currently contain source frame metadata only; transcript/subtitle alignment is not yet verified."
                 .to_string(),
         );
+    }
+    let deduped_candidate_count = selected_slides_manifest
+        .get("deduped_candidate_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    if deduped_candidate_count > 0 {
+        let exact_duplicate_count = selected_slides_manifest
+            .get("exact_duplicate_count")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        let visual_duplicate_count = selected_slides_manifest
+            .get("visual_duplicate_count")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        warnings.push(format!(
+            "Selected slide dedupe removed {deduped_candidate_count} duplicate candidate(s) before PPTX generation ({exact_duplicate_count} exact, {visual_duplicate_count} visual near-duplicate)."
+        ));
     }
     let rectangle_status = selected_slides_manifest
         .get("rectangle_extraction_status")
@@ -3498,6 +3557,9 @@ fn video_extraction_completion_next_actions(
     if warning_codes.contains("full_frame_rectangle_fallback") {
         actions.push(json!("review_slide_rectangles_manifest"));
     }
+    if warning_codes.contains("selected_slide_duplicates_removed") {
+        actions.push(json!("review_slide_dedupe_manifest"));
+    }
     if warning_codes.contains("published_version_missing") {
         actions.push(json!("persist_video_published_version"));
     }
@@ -4033,6 +4095,9 @@ fn video_generated_artifact_quality_warnings(
             "message": "Slide rectangles are promoted as full-frame fallback crops; review or replace them when visual rectangle detection is available."
         }));
     }
+    if let Some(warning) = video_selected_slide_dedupe_warning(files) {
+        warnings.push(warning);
+    }
     if has_pptx {
         warnings.push(json!({
             "code": "screenshot_based_pptx",
@@ -4064,6 +4129,65 @@ fn video_generated_artifact_quality_warnings(
         }));
     }
     warnings
+}
+
+fn video_selected_slide_dedupe_warning(files: &[Value]) -> Option<Value> {
+    let dedupe_manifest = files
+        .iter()
+        .find(|file| {
+            file.get("artifact_kind").and_then(Value::as_str) == Some("slide_rectangles_manifest")
+                && file
+                    .get("deduped_candidate_count")
+                    .and_then(Value::as_u64)
+                    .is_some_and(|count| count > 0)
+        })
+        .or_else(|| {
+            files.iter().find(|file| {
+                file.get("artifact_kind").and_then(Value::as_str)
+                    == Some("selected_slides_manifest")
+                    && file
+                        .get("deduped_candidate_count")
+                        .and_then(Value::as_u64)
+                        .is_some_and(|count| count > 0)
+            })
+        })?;
+    let deduped_candidate_count = dedupe_manifest
+        .get("deduped_candidate_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    if deduped_candidate_count == 0 {
+        return None;
+    }
+    let exact_duplicate_count = dedupe_manifest
+        .get("exact_duplicate_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let visual_duplicate_count = dedupe_manifest
+        .get("visual_duplicate_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let dedupe_status = dedupe_manifest
+        .get("dedupe_status")
+        .and_then(Value::as_str)
+        .unwrap_or("selected_keep_list_order_deduped");
+    let message = if visual_duplicate_count > 0 && exact_duplicate_count > 0 {
+        "Selected slide candidates included exact duplicate frames and conservative visual near-duplicates; V3 removed them before rectangle promotion and PPTX generation."
+    } else if visual_duplicate_count > 0 {
+        "Selected slide candidates included conservative visual near-duplicates; V3 removed them before rectangle promotion and PPTX generation."
+    } else if exact_duplicate_count > 0 {
+        "Selected slide candidates included exact duplicate frame bytes; V3 removed them before rectangle promotion and PPTX generation."
+    } else {
+        "Selected slide candidates included duplicates; V3 removed them before rectangle promotion and PPTX generation."
+    };
+    Some(json!({
+        "code": "selected_slide_duplicates_removed",
+        "severity": "low",
+        "message": message,
+        "dedupe_status": dedupe_status,
+        "deduped_candidate_count": deduped_candidate_count,
+        "exact_duplicate_count": exact_duplicate_count,
+        "visual_duplicate_count": visual_duplicate_count,
+    }))
 }
 
 fn video_has_raw_frame_candidates(files: &[Value]) -> bool {
@@ -7140,6 +7264,47 @@ mod tests {
             slide_rectangles["dedupe_status"],
             json!("visual_similarity_deduped")
         );
+        let slide_rectangles_ref = files
+            .iter()
+            .find(|file| file["artifact_kind"] == json!("slide_rectangles_manifest"))
+            .expect("slide rectangles artifact ref");
+        assert_eq!(slide_rectangles_ref["deduped_candidate_count"], json!(1));
+        assert_eq!(slide_rectangles_ref["exact_duplicate_count"], json!(0));
+        assert_eq!(slide_rectangles_ref["visual_duplicate_count"], json!(1));
+
+        let generated_artifacts = json!({
+            "status": "completed",
+            "files": files.clone(),
+        });
+        let deliverable_status = video_deliverable_status(&generated_artifacts);
+        let warning_codes = deliverable_warning_codes(&deliverable_status);
+        assert!(warning_codes.contains("selected_slide_duplicates_removed"));
+        let dedupe_warning = deliverable_status["warnings"]
+            .as_array()
+            .expect("warnings")
+            .iter()
+            .find(|warning| warning["code"] == json!("selected_slide_duplicates_removed"))
+            .expect("dedupe warning");
+        assert_eq!(dedupe_warning["deduped_candidate_count"], json!(1));
+        assert_eq!(dedupe_warning["visual_duplicate_count"], json!(1));
+        let next_actions = video_extraction_completion_next_actions(
+            deliverable_status["state"]
+                .as_str()
+                .expect("deliverable state"),
+            files,
+            &deliverable_status,
+        );
+        assert!(next_actions
+            .iter()
+            .any(|action| action.as_str() == Some("review_slide_dedupe_manifest")));
+
+        let slide_notes_path = files
+            .iter()
+            .find(|file| file["artifact_kind"] == json!("slide_notes"))
+            .and_then(|file| file["path"].as_str())
+            .expect("slide notes path");
+        let slide_notes = fs::read_to_string(slide_notes_path).expect("slide notes");
+        assert!(slide_notes.contains("Selected slide dedupe removed 1 duplicate"));
 
         let pptx_path = files
             .iter()
