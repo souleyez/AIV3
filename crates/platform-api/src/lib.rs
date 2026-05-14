@@ -30954,6 +30954,164 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn external_action_gateway_posts_result_callback_to_v3_from_env() {
+        let Some(helper_url) = std::env::var("EXTERNAL_THIRD_PARTY_MOCK_RESULT_HELPER_URL")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+        else {
+            eprintln!("skipping external mock gateway callback test: EXTERNAL_THIRD_PARTY_MOCK_RESULT_HELPER_URL is not set");
+            return;
+        };
+        let expected_request_id = std::env::var("EXTERNAL_THIRD_PARTY_MOCK_REQUEST_ID")
+            .unwrap_or_else(|_| "gateway-req-001".to_string());
+
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping external mock gateway callback test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("external-gateway-callback-test-{}", Uuid::new_v4()),
+                "External Gateway Callback Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage.clone(),
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        insert_generic_external_channel_connection(&state, "generic-chat-main").await;
+        sqlx::query(
+            r#"
+            insert into external_action_runs (
+                id,
+                tenant_id,
+                requester_summary,
+                risk_level,
+                target_system,
+                action_type,
+                arguments_redacted,
+                confirmation_state,
+                external_request_id,
+                result_summary
+            )
+            values ($1, $2, $3, 'low_risk_write', 'external_channel', 'external_business_action.invoke', $4, 'confirmed', $5, $6)
+            "#,
+        )
+        .bind("act-gateway-callback-001")
+        .bind(tenant.id.0)
+        .bind(json!({
+            "platform": "generic_chat",
+            "tenant_external_id": "tenant-ext-001",
+            "conversation_external_id": "chat-risk-room",
+            "sender_external_id": "user-ext-001",
+            "channel_connection_id": "generic-chat-main"
+        }))
+        .bind(json!({
+            "operation": "create_ticket",
+            "raw_prompt_redacted": true
+        }))
+        .bind(&expected_request_id)
+        .bind(json!({"status": "dispatched"}))
+        .execute(storage.pool())
+        .await
+        .expect("external action run should be inserted");
+
+        let app = router(
+            storage.clone(),
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("v3 callback listener should bind");
+        let addr = listener
+            .local_addr()
+            .expect("v3 callback listener should have addr");
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("v3 callback listener should serve");
+        });
+        let callback_url = format!(
+            "http://{addr}/v1/external/channels/generic-chat-main/actions/act-gateway-callback-001/result"
+        );
+
+        let helper_response = reqwest::Client::new()
+            .post(&helper_url)
+            .json(&json!({
+                "callback_url": callback_url,
+                "external_request_id": expected_request_id,
+                "status": "succeeded",
+                "idempotency_key": "mock-gateway:tenant-ext-001:result-001",
+                "code": "OK",
+                "message": "result from external mock gateway",
+                "result": {
+                    "artifact_id": "gateway-artifact-secret-001",
+                    "token": "third-party-secret"
+                }
+            }))
+            .send()
+            .await
+            .expect("mock gateway helper should respond");
+        assert!(
+            helper_response.status().is_success(),
+            "mock gateway helper should accept callback request"
+        );
+        let helper_body: Value = helper_response
+            .json()
+            .await
+            .expect("mock gateway helper response should be json");
+        assert_eq!(helper_body["callback_status"], json!(200));
+        assert_eq!(helper_body["response_summary"]["accepted"], json!(true));
+        assert_eq!(
+            helper_body["response_summary"]["action_id"],
+            json!("act-gateway-callback-001")
+        );
+
+        server.abort();
+        let row = sqlx::query(
+            r#"
+            select result_summary, failure_kind
+            from external_action_runs
+            where tenant_id = $1 and id = 'act-gateway-callback-001'
+            "#,
+        )
+        .bind(tenant.id.0)
+        .fetch_one(storage.pool())
+        .await
+        .expect("external action run should remain queryable");
+        assert_eq!(
+            row.get::<Option<String>, _>("failure_kind").as_deref(),
+            None
+        );
+        let result_summary = row.get::<Value, _>("result_summary");
+        let result_text = result_summary.to_string();
+        assert_eq!(result_summary["status"], json!("external_action_succeeded"));
+        assert_eq!(
+            result_summary["external_callback"]["idempotency_key"],
+            json!("mock-gateway:tenant-ext-001:result-001")
+        );
+        assert_eq!(
+            result_summary["external_callback"]["result_summary"]["sensitive_field_count"],
+            json!(1)
+        );
+        assert!(!result_text.contains("result from external mock gateway"));
+        assert!(!result_text.contains("gateway-artifact-secret-001"));
+        assert!(!result_text.contains("third-party-secret"));
+    }
+
+    #[tokio::test]
     async fn external_channel_action_message_persists_pending_action_and_confirms_it() {
         let _guard = shared_local_postgres_test_lock().lock().await;
         let storage = match local_postgres_storage().await {

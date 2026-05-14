@@ -23,6 +23,7 @@ export EXTERNAL_THIRD_PARTY_MOCK_BEARER_TOKEN="${EXTERNAL_THIRD_PARTY_MOCK_BEARE
 export EXTERNAL_THIRD_PARTY_MOCK_SIGNING_SECRET="${EXTERNAL_THIRD_PARTY_MOCK_SIGNING_SECRET:-dispatch-secret}"
 export EXTERNAL_THIRD_PARTY_MOCK_REQUEST_ID="${EXTERNAL_THIRD_PARTY_MOCK_REQUEST_ID:-gateway-req-001}"
 export EXTERNAL_THIRD_PARTY_MOCK_DISPATCH_URL="${base_url}/third-party/actions?tenant=tenant-ext-001"
+export EXTERNAL_THIRD_PARTY_MOCK_RESULT_HELPER_URL="${base_url}/__mock/send-action-result"
 
 node "${script_dir}/external-third-party-mock-gateway.mjs" >"${log_file}" 2>&1 &
 gateway_pid="$!"
@@ -45,6 +46,7 @@ git rev-parse --short HEAD
 
 cargo test -p platform-api external_action_dispatch_posts_to_external_mock_gateway_from_env --lib -- --nocapture
 cargo test -p platform-api external_action_result_callback_records_redacted_summary --lib -- --nocapture
+cargo test -p platform-api external_action_gateway_posts_result_callback_to_v3_from_env --lib -- --nocapture
 
 requests_json="$(curl -fsS "${base_url}/__mock/requests")"
 printf '%s' "${requests_json}" | node -e '
@@ -68,6 +70,28 @@ console.log("Mock gateway accepted signed dispatch:", JSON.stringify({
   bearer_valid: request.bearer_valid,
   signature_valid: request.signature_valid,
   body_hash_valid: request.body_hash_valid
+}));
+'
+
+callbacks_json="$(curl -fsS "${base_url}/__mock/callbacks")"
+printf '%s' "${callbacks_json}" | node -e '
+const fs = require("fs");
+const data = JSON.parse(fs.readFileSync(0, "utf8"));
+if (!Array.isArray(data.callbacks) || data.callbacks.length !== 1) {
+  throw new Error(`expected exactly one mock gateway callback, got ${data.callbacks?.length ?? "none"}`);
+}
+const callback = data.callbacks[0];
+if (callback.callback_status !== 200 || callback.response_accepted !== true) {
+  throw new Error(`mock gateway callback failed: ${JSON.stringify(callback)}`);
+}
+if (callback.contains_forbidden_text) {
+  throw new Error(`mock gateway callback response leaked unsafe text: ${JSON.stringify(callback)}`);
+}
+console.log("Mock gateway posted action result callback:", JSON.stringify({
+  callback_status: callback.callback_status,
+  response_accepted: callback.response_accepted,
+  action_id: callback.response_summary?.action_id,
+  status: callback.response_summary?.status
 }));
 '
 

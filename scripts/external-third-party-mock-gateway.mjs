@@ -8,6 +8,7 @@ const bearerToken = process.env.EXTERNAL_THIRD_PARTY_MOCK_BEARER_TOKEN || 'dispa
 const signingSecret = process.env.EXTERNAL_THIRD_PARTY_MOCK_SIGNING_SECRET || 'dispatch-secret';
 const requestId = process.env.EXTERNAL_THIRD_PARTY_MOCK_REQUEST_ID || 'gateway-req-001';
 const requests = [];
+const callbacks = [];
 
 function sha256Hex(bytes) {
   return crypto.createHash('sha256').update(bytes).digest('hex');
@@ -95,14 +96,110 @@ async function handleDispatch(request, response) {
   });
 }
 
+function parseJsonBody(body) {
+  try {
+    return JSON.parse(body.toString('utf8') || '{}');
+  } catch {
+    return {};
+  }
+}
+
+function loopbackCallbackUrl(urlString) {
+  try {
+    const parsed = new URL(urlString);
+    return (
+      (parsed.protocol === 'http:' || parsed.protocol === 'https:') &&
+      ['127.0.0.1', 'localhost', '::1'].includes(parsed.hostname)
+    );
+  } catch {
+    return false;
+  }
+}
+
+function callbackResponseSummary(responseJson) {
+  return {
+    accepted: responseJson?.accepted === true,
+    action_id: typeof responseJson?.action_id === 'string' ? responseJson.action_id : null,
+    status: typeof responseJson?.status === 'string' ? responseJson.status : null,
+    external_request_id:
+      typeof responseJson?.external_request_id === 'string' ? responseJson.external_request_id : null,
+  };
+}
+
+async function handleActionResultHelper(request, response) {
+  const body = await requestBody(request);
+  const payload = parseJsonBody(body);
+  const callbackUrl = String(payload.callback_url || '');
+  if (!loopbackCallbackUrl(callbackUrl)) {
+    sendJson(response, 400, { status: 'invalid_callback_url' });
+    return;
+  }
+
+  const callbackBody = {
+    external_request_id: String(payload.external_request_id || requestId),
+    status: String(payload.status || 'succeeded'),
+    idempotency_key: String(payload.idempotency_key || 'mock-gateway:result-001'),
+    completed_at: String(payload.completed_at || new Date().toISOString()),
+    code: String(payload.code || 'OK'),
+    message: String(payload.message || 'result from external mock gateway'),
+    result: payload.result ?? {
+      artifact_id: 'mock-artifact-001',
+      token: 'third-party-secret',
+    },
+  };
+
+  const callbackResponse = await fetch(callbackUrl, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(callbackBody),
+  });
+  const responseText = await callbackResponse.text();
+  let responseJson = {};
+  try {
+    responseJson = JSON.parse(responseText || '{}');
+  } catch {
+    responseJson = {};
+  }
+
+  const parsed = new URL(callbackUrl);
+  const record = {
+    callback_url_host: parsed.host,
+    callback_status: callbackResponse.status,
+    response_accepted: responseJson?.accepted === true,
+    response_summary: callbackResponseSummary(responseJson),
+    contains_forbidden_text:
+      responseText.includes('third-party-secret') ||
+      responseText.includes('result from external mock gateway'),
+  };
+  callbacks.push(record);
+
+  sendJson(response, callbackResponse.ok ? 200 : 502, {
+    status: callbackResponse.ok ? 'sent' : 'callback_failed',
+    callback_status: callbackResponse.status,
+    response_summary: record.response_summary,
+  });
+}
+
 const server = http.createServer(async (request, response) => {
   try {
     if (request.method === 'GET' && request.url === '/__mock/health') {
-      sendJson(response, 200, { status: 'ok', request_count: requests.length });
+      sendJson(response, 200, {
+        status: 'ok',
+        request_count: requests.length,
+        callback_count: callbacks.length,
+      });
       return;
     }
     if (request.method === 'GET' && request.url === '/__mock/requests') {
       sendJson(response, 200, { requests });
+      return;
+    }
+    if (request.method === 'GET' && request.url === '/__mock/callbacks') {
+      sendJson(response, 200, { callbacks });
+      return;
+    }
+    if (request.method === 'POST' && request.url === '/__mock/send-action-result') {
+      await handleActionResultHelper(request, response);
       return;
     }
     if (request.url?.startsWith('/third-party/actions')) {
