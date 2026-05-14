@@ -32,7 +32,8 @@
 - Phase 9 deployment checkpoint passed on `8服务器` at commit `fac2178` with PostgreSQL-backed ACL/source/adapter/action checks enabled and the public panel responding at `https://v3.elepcloud.com/external-integrations`; see `docs/validation/external-bot-third-party-deployment-smoke-2026-05-14.md`.
 - Phase 9 second checkpoint adds database-backed mock/sandbox validation for customer-hosted generic chat page events and signed outbound dispatch to a local third-party mock endpoint, including idempotency, dispatch-specific Bearer/HMAC headers, callback-token non-reuse, and redacted response summaries.
 - Phase 9 second checkpoint passed on `8服务器` at commit `aaafd6f`; see `docs/validation/external-third-party-mock-sandbox-smoke-2026-05-14.md`.
-- Next implementation checkpoint: exercise a live third-party sandbox or packaged mock gateway over HTTPS so customer-hosted pages, signed dispatch, and action response callbacks can be validated outside the in-process test harness.
+- Phase 9 third checkpoint adds a standalone Node-based third-party mock gateway and Linux/deployment-target smoke runner so signed outbound dispatch can be validated outside the in-process Rust test harness.
+- Next implementation checkpoint: run the standalone gateway smoke on the deployment target, capture the validation report, then extend the gateway toward action response callbacks or a real HTTPS customer sandbox.
 
 ---
 

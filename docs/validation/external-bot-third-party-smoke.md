@@ -39,6 +39,14 @@ For backend-only policy checks:
 powershell -ExecutionPolicy Bypass -File .\scripts\run-external-bot-third-party-smoke.ps1 -SkipWeb
 ```
 
+For a deployment-target mock gateway pass, run this on a Linux host with Node.js, cargo, and PostgreSQL fixture access:
+
+```bash
+bash scripts/run-external-third-party-gateway-smoke.sh
+```
+
+That script starts `scripts/external-third-party-mock-gateway.mjs`, points V3's dispatch test at the standalone gateway, verifies the gateway received exactly one signed dispatch request, and fails if the database-backed dispatch test silently skips.
+
 The same script can run on `windows-jump` after the repository is checked out there. Prefer the jump host for environment-sensitive Codex or provider validation; keep generated logs and task artifacts out of git.
 
 ## PostgreSQL Fixture

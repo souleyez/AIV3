@@ -30376,6 +30376,148 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn external_action_dispatch_posts_to_external_mock_gateway_from_env() {
+        let Some(dispatch_url) = std::env::var("EXTERNAL_THIRD_PARTY_MOCK_DISPATCH_URL")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+        else {
+            eprintln!("skipping external mock gateway test: EXTERNAL_THIRD_PARTY_MOCK_DISPATCH_URL is not set");
+            return;
+        };
+        let bearer_token = std::env::var("EXTERNAL_THIRD_PARTY_MOCK_BEARER_TOKEN")
+            .unwrap_or_else(|_| "dispatch-token".to_string());
+        let signing_secret = std::env::var("EXTERNAL_THIRD_PARTY_MOCK_SIGNING_SECRET")
+            .unwrap_or_else(|_| "dispatch-secret".to_string());
+        let expected_request_id = std::env::var("EXTERNAL_THIRD_PARTY_MOCK_REQUEST_ID")
+            .unwrap_or_else(|_| "gateway-req-001".to_string());
+
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping external mock gateway test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("external-mock-gateway-test-{}", Uuid::new_v4()),
+                "External Mock Gateway Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage.clone(),
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        insert_generic_external_channel_connection_with_config(
+            &state,
+            "generic-chat-main",
+            json!({
+                "tenant_external_id": "tenant-ext-001",
+                "bot_external_id": "bot-v3",
+                "token": "callback-token-should-not-leak",
+                "external_action_dispatch_url": dispatch_url,
+                "dispatch_bearer_token": bearer_token,
+                "dispatch_signing_secret": signing_secret
+            }),
+        )
+        .await;
+        sqlx::query(
+            r#"
+            insert into external_action_runs (
+                id,
+                tenant_id,
+                requester_summary,
+                risk_level,
+                target_system,
+                action_type,
+                arguments_redacted,
+                confirmation_state,
+                result_summary
+            )
+            values ($1, $2, $3, 'low_risk_write', 'external_channel', 'external_business_action.invoke', $4, 'confirmed', $5)
+            "#,
+        )
+        .bind("act-external-gateway-001")
+        .bind(tenant.id.0)
+        .bind(json!({
+            "platform": "generic_chat",
+            "tenant_external_id": "tenant-ext-001",
+            "conversation_external_id": "chat-risk-room",
+            "sender_external_id": "user-ext-001",
+            "channel_connection_id": "generic-chat-main",
+            "raw_prompt": "raw prompt secret"
+        }))
+        .bind(json!({
+            "operation": "create_ticket",
+            "raw_prompt_redacted": true
+        }))
+        .bind(json!({"status": "ready_for_external_dispatch"}))
+        .execute(storage.pool())
+        .await
+        .expect("external action run should be inserted");
+
+        let outcome = dispatch_external_action_run_if_ready(
+            &state,
+            "generic-chat-main",
+            "act-external-gateway-001",
+            Utc::now(),
+        )
+        .await
+        .expect("external mock gateway dispatch should succeed");
+        assert_eq!(outcome.status, "dispatched");
+        assert_eq!(
+            outcome.external_request_id.as_deref(),
+            Some(expected_request_id.as_str())
+        );
+
+        let row = sqlx::query(
+            r#"
+            select external_request_id, result_summary, failure_kind
+            from external_action_runs
+            where tenant_id = $1 and id = 'act-external-gateway-001'
+            "#,
+        )
+        .bind(tenant.id.0)
+        .fetch_one(storage.pool())
+        .await
+        .expect("external action run should remain queryable");
+        assert_eq!(
+            row.get::<Option<String>, _>("external_request_id")
+                .as_deref(),
+            Some(expected_request_id.as_str())
+        );
+        assert_eq!(
+            row.get::<Option<String>, _>("failure_kind").as_deref(),
+            None
+        );
+        let result_summary = row.get::<Value, _>("result_summary");
+        let result_text = result_summary.to_string();
+        assert_eq!(result_summary["status"], json!("dispatched"));
+        assert_eq!(
+            result_summary["dispatch"]["auth_mode"],
+            json!("signature_and_bearer")
+        );
+        assert_eq!(result_summary["dispatch"]["http_status"], json!(200));
+        assert_eq!(
+            result_summary["dispatch"]["response_summary"]["json"]["external_request_id"],
+            json!(expected_request_id)
+        );
+        assert_eq!(
+            result_summary["dispatch"]["response_summary"]["json"]["message_present"],
+            json!(true)
+        );
+        assert!(!result_text.contains("third-party-secret"));
+        assert!(!result_text.contains("accepted by external mock gateway"));
+    }
+
+    #[tokio::test]
     async fn external_channel_action_message_persists_pending_action_and_confirms_it() {
         let _guard = shared_local_postgres_test_lock().lock().await;
         let storage = match local_postgres_storage().await {
