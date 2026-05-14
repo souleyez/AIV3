@@ -119,3 +119,33 @@ target/external-third-party-readiness/external-third-party-readiness-20260514T02
 ```
 
 The readiness report stayed `ready: true`, and the standalone gateway smoke again validated signed dispatch plus action-result callback delivery into V3.
+
+## Readiness Report Manifest Check Follow-Up
+
+Follow-up validated commit: `51c6329`.
+
+The deployment target pulled `51c6329` and ran:
+
+```text
+npm run test:external-readiness
+npm run test:external-handoff
+npm run validate:external-handoff
+bash scripts/run-external-third-party-gateway-smoke.sh
+```
+
+Result: passed.
+
+The gateway smoke now passes the handoff manifest into the readiness report generator by default:
+
+```text
+Handoff manifest: /srv/aiv3/repo/docs/integrations/third-party-handoff.sample.json
+```
+
+The validated deployment run generated:
+
+```text
+target/external-third-party-readiness/external-third-party-readiness-20260514T022922Z.json
+target/external-third-party-readiness/external-third-party-readiness-20260514T022922Z.md
+```
+
+The JSON report included `handoff_manifest_ready` and a redacted `handoff_manifest_summary`, with `ready_for_customer_sandbox: true`. This makes the deployment smoke prove both sides of the pre-live package: the signed action/callback roundtrip and the third-party handoff manifest.
