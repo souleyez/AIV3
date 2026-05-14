@@ -19,6 +19,8 @@ export function normalizeIntegrationSummary(raw = {}) {
   const drift = driftSignal(driftSummary);
   const artifactSummary = raw.artifact_summary && typeof raw.artifact_summary === 'object' ? raw.artifact_summary : {};
   const artifact = artifactSignal(artifactSummary);
+  const actionSummary = raw.action_summary && typeof raw.action_summary === 'object' ? raw.action_summary : {};
+  const action = actionSignal(actionSummary);
   return {
     id: String(raw.integration_id || ''),
     kind: String(raw.integration_kind || 'unknown'),
@@ -36,12 +38,22 @@ export function normalizeIntegrationSummary(raw = {}) {
     failedActionCount: failed,
     dispatchedActionCount: dispatched,
     latestActionAt: raw.latest_action_at || null,
+    actionSummary,
+    actionSignal: action,
     configSummary: raw.config_summary && typeof raw.config_summary === 'object' ? raw.config_summary : {},
     driftSummary,
     driftSignal: drift,
     artifactSummary,
     artifactSignal: artifact,
-    signal: integrationSignal({ pending, blocked, failed, dispatched, healthStatus: raw.health_status, status: raw.status }),
+    signal: integrationSignal({
+      pending,
+      blocked,
+      failed,
+      dispatched,
+      actionSignal: action,
+      healthStatus: raw.health_status,
+      status: raw.status,
+    }),
   };
 }
 
@@ -95,6 +107,9 @@ export function controlResultLabel(result) {
 export function integrationSignal(integration = {}) {
   if (String(integration.status || '').toLowerCase() === 'disabled') {
     return 'disabled';
+  }
+  if (integration.actionSignal === 'result_failed') {
+    return 'failed';
   }
   if (numberOrZero(integration.failed) > 0 || String(integration.healthStatus || '').toLowerCase() === 'failed') {
     return 'failed';
@@ -156,6 +171,35 @@ export function artifactSignalLabel(signal) {
       return '有产物动作';
     case 'none':
       return '暂无产物';
+    default:
+      return '未知';
+  }
+}
+
+export function actionSignal(actionSummary = {}) {
+  return String(actionSummary.signal || 'none').toLowerCase();
+}
+
+export function actionSignalLabel(signal) {
+  switch (signal) {
+    case 'result_failed':
+      return '结果失败';
+    case 'dispatch_blocked':
+      return '派发阻断';
+    case 'dispatch_failed':
+      return '派发失败';
+    case 'confirmation_pending':
+      return '确认待处理';
+    case 'waiting_result':
+      return '等待结果';
+    case 'result_running':
+      return '结果处理中';
+    case 'result_succeeded':
+      return '结果成功';
+    case 'action_observed':
+      return '有动作记录';
+    case 'none':
+      return '暂无动作';
     default:
       return '未知';
   }

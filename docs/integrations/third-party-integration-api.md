@@ -738,7 +738,9 @@ V3 exposes observe-first management endpoints for operators and the V3 console. 
 GET /v1/external/integrations
 ```
 
-The response lists channel and source integrations with health, last activity timestamps, action dispatch counters, permission/source recovery signals, and a redacted configuration summary.
+The response lists channel and source integrations with health, last activity timestamps, action dispatch counters, action lifecycle summaries, permission/source recovery signals, and a redacted configuration summary.
+
+Channel integrations include `action_summary`, an observe-only lifecycle object for external actions. It reports total actions, pending confirmations, blocked/failed dispatches, actions waiting for third-party results, received result callbacks, succeeded/failed/running result callbacks, the latest action timestamp, and the latest result callback timestamp. It does not include raw third-party result bodies or arbitrary callback message text.
 
 Each item includes `drift_summary`, an observe-only object that does not include raw document bodies, raw ACL entries, provider payloads, or secret material:
 
@@ -751,7 +753,7 @@ Channel integrations also include `artifact_summary` for external artifact actio
 GET /v1/external/integrations/{integration_id}/audit
 ```
 
-The audit response returns a newest-first redacted timeline for messages, action runs, and source sync runs related to the integration. Action entries include confirmation state, dispatch status/reason, auth mode, HTTP status, and redacted response summary. Sensitive keys such as `token`, `secret`, `authorization`, `cookie`, and `password` are removed from nested summaries.
+The audit response returns a newest-first redacted timeline for messages, action runs, and source sync runs related to the integration. Action entries include confirmation state, dispatch status/reason, auth mode, HTTP status, redacted response summary, and safe result callback state such as callback status, idempotency key, completion time, and structural result summary. Sensitive keys such as `token`, `secret`, `authorization`, `cookie`, and `password` are removed from nested summaries.
 
 ```http
 POST /v1/external/integrations/{integration_id}/retry

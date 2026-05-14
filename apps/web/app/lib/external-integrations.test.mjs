@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import {
+  actionSignalLabel,
   artifactSignalLabel,
   buildThirdPartyApiUrl,
   controlResultLabel,
@@ -34,6 +35,14 @@ test('normalizeIntegrationSummary derives operational signal and counts', () => 
     failed_action_count: 0,
     dispatched_action_count: 3,
     latest_action_at: '2026-05-14T09:30:00Z',
+    action_summary: {
+      signal: 'result_succeeded',
+      total_action_count: 4,
+      waiting_result_count: 0,
+      result_callback_count: 2,
+      result_succeeded_count: 2,
+      latest_result_callback_at: '2026-05-14T10:30:00Z',
+    },
     drift_summary: {
       signal: 'identity_mapping_gap',
       unmapped_principal_count: 2,
@@ -52,6 +61,9 @@ test('normalizeIntegrationSummary derives operational signal and counts', () => 
   assert.equal(integration.blockedActionCount, 1);
   assert.equal(integration.dispatchedActionCount, 3);
   assert.equal(integration.signal, 'blocked');
+  assert.equal(integration.actionSignal, 'result_succeeded');
+  assert.equal(actionSignalLabel(integration.actionSignal), '结果成功');
+  assert.equal(integration.actionSummary.result_callback_count, 2);
   assert.equal(signalLabel(integration.signal), '已阻断');
   assert.equal(integration.driftSignal, 'identity_mapping_gap');
   assert.equal(driftSignalLabel(integration.driftSignal), '身份待映射');
@@ -60,6 +72,23 @@ test('normalizeIntegrationSummary derives operational signal and counts', () => 
   assert.equal(artifactSignalLabel(integration.artifactSignal), '产物阻断');
   assert.equal(integration.artifactSummary.publish_action_count, 1);
   assert.equal(latestIntegrationActivity(integration), '2026-05-14T09:30:00Z');
+});
+
+test('normalizeIntegrationSummary marks result failures as operational failures', () => {
+  const integration = normalizeIntegrationSummary({
+    integration_id: 'generic-chat-main',
+    status: 'enabled',
+    health_status: 'healthy',
+    action_summary: {
+      signal: 'result_failed',
+      result_failed_count: 1,
+      result_callback_count: 1,
+    },
+  });
+
+  assert.equal(integration.signal, 'failed');
+  assert.equal(integration.actionSignal, 'result_failed');
+  assert.equal(actionSignalLabel(integration.actionSignal), '结果失败');
 });
 
 test('driftSignalLabel covers source recovery states', () => {
@@ -75,6 +104,13 @@ test('artifactSignalLabel covers publish and revoke states', () => {
   assert.equal(artifactSignalLabel('artifact_blocked'), '产物阻断');
   assert.equal(artifactSignalLabel('artifact_published'), '已发布');
   assert.equal(artifactSignalLabel('artifact_revoked'), '已撤销');
+});
+
+test('actionSignalLabel covers callback lifecycle states', () => {
+  assert.equal(actionSignalLabel('waiting_result'), '等待结果');
+  assert.equal(actionSignalLabel('result_running'), '结果处理中');
+  assert.equal(actionSignalLabel('result_succeeded'), '结果成功');
+  assert.equal(actionSignalLabel('result_failed'), '结果失败');
 });
 
 test('normalizeAuditItem keeps redacted summary shape stable', () => {

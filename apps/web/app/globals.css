@@ -5297,7 +5297,7 @@ body {
 
 .external-api-band {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px;
   padding: 14px 0;
 }
@@ -5457,14 +5457,31 @@ body {
   color: #17633a;
 }
 
+.external-status-result_succeeded {
+  border-color: #86c49a;
+  background: #edf8ef;
+  color: #17633a;
+}
+
 .external-status-pending {
   border-color: #d9ba67;
   background: #fff8df;
   color: #8a5a00;
 }
 
+.external-status-waiting_result,
+.external-status-result_running,
+.external-status-confirmation_pending {
+  border-color: #d9ba67;
+  background: #fff8df;
+  color: #8a5a00;
+}
+
 .external-status-blocked,
-.external-status-failed {
+.external-status-failed,
+.external-status-result_failed,
+.external-status-dispatch_blocked,
+.external-status-dispatch_failed {
   border-color: #e4a093;
   background: #fff1ed;
   color: #9f2d18;
@@ -5617,6 +5634,11 @@ body {
 
 .external-artifact-strip {
   grid-template-columns: repeat(3, minmax(0, 1fr));
+  padding-top: 0;
+}
+
+.external-action-strip {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   padding-top: 0;
 }
 

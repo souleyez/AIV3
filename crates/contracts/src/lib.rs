@@ -382,6 +382,8 @@ pub struct ExternalIntegrationSummaryView {
     pub dispatched_action_count: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub latest_action_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub action_summary: Value,
     pub config_summary: Value,
     #[serde(default)]
     pub drift_summary: Value,

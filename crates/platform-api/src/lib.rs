@@ -6777,7 +6777,14 @@ async fn list_external_integrations(
                    from external_action_runs a
                    where a.tenant_id = c.tenant_id
                      and a.requester_summary ->> 'channel_connection_id' = c.id
-                     and a.result_summary ->> 'status' = 'dispatch_failed'
+                     and (
+                        a.result_summary ->> 'status' = 'dispatch_failed'
+                        or a.result_summary ->> 'status' in (
+                            'external_action_failed',
+                            'external_action_cancelled',
+                            'external_action_rejected'
+                        )
+                     )
                ), 0)::bigint as failed_action_count,
                coalesce((
                    select count(*)
@@ -6792,6 +6799,61 @@ async fn list_external_integrations(
                    where a.tenant_id = c.tenant_id
                      and a.requester_summary ->> 'channel_connection_id' = c.id
                ) as latest_action_at,
+               coalesce((
+                   select count(*)
+                   from external_action_runs a
+                   where a.tenant_id = c.tenant_id
+                     and a.requester_summary ->> 'channel_connection_id' = c.id
+               ), 0)::bigint as total_action_count,
+               coalesce((
+                   select count(*)
+                   from external_action_runs a
+                   where a.tenant_id = c.tenant_id
+                     and a.requester_summary ->> 'channel_connection_id' = c.id
+                     and a.result_summary ? 'external_callback'
+               ), 0)::bigint as result_callback_count,
+               coalesce((
+                   select count(*)
+                   from external_action_runs a
+                   where a.tenant_id = c.tenant_id
+                     and a.requester_summary ->> 'channel_connection_id' = c.id
+                     and a.result_summary ->> 'status' = 'dispatched'
+               ), 0)::bigint as waiting_result_count,
+               coalesce((
+                   select count(*)
+                   from external_action_runs a
+                   where a.tenant_id = c.tenant_id
+                     and a.requester_summary ->> 'channel_connection_id' = c.id
+                     and a.result_summary ->> 'status' = 'external_action_succeeded'
+               ), 0)::bigint as result_succeeded_count,
+               coalesce((
+                   select count(*)
+                   from external_action_runs a
+                   where a.tenant_id = c.tenant_id
+                     and a.requester_summary ->> 'channel_connection_id' = c.id
+                     and a.result_summary ->> 'status' in (
+                        'external_action_failed',
+                        'external_action_cancelled',
+                        'external_action_rejected'
+                     )
+               ), 0)::bigint as result_failed_count,
+               coalesce((
+                   select count(*)
+                   from external_action_runs a
+                   where a.tenant_id = c.tenant_id
+                     and a.requester_summary ->> 'channel_connection_id' = c.id
+                     and a.result_summary ->> 'status' in (
+                        'external_action_running',
+                        'external_action_accepted'
+                     )
+               ), 0)::bigint as result_running_count,
+               (
+                   select max(a.updated_at)
+                   from external_action_runs a
+                   where a.tenant_id = c.tenant_id
+                     and a.requester_summary ->> 'channel_connection_id' = c.id
+                     and a.result_summary ? 'external_callback'
+               ) as latest_result_callback_at,
                coalesce((
                    select count(*)
                    from external_principals p
@@ -6916,6 +6978,19 @@ async fn list_external_integrations(
             failed_action_count: row.get("failed_action_count"),
             dispatched_action_count: row.get("dispatched_action_count"),
             latest_action_at: row.get("latest_action_at"),
+            action_summary: external_action_lifecycle_summary(
+                row.get("total_action_count"),
+                row.get("pending_action_count"),
+                row.get("blocked_action_count"),
+                row.get("failed_action_count"),
+                row.get("waiting_result_count"),
+                row.get("result_callback_count"),
+                row.get("result_succeeded_count"),
+                row.get("result_failed_count"),
+                row.get("result_running_count"),
+                row.get("latest_action_at"),
+                row.get("latest_result_callback_at"),
+            ),
             config_summary: external_integration_config_summary(&config_redacted),
             drift_summary: external_channel_drift_summary(
                 row.get("unmapped_principal_count"),
@@ -7015,6 +7090,9 @@ async fn list_external_integrations(
             failed_action_count: 0,
             dispatched_action_count: 0,
             latest_action_at: None,
+            action_summary: external_action_lifecycle_summary(
+                0, 0, 0, 0, 0, 0, 0, 0, 0, None, None,
+            ),
             config_summary: external_integration_config_summary(&config_redacted),
             drift_summary: external_source_drift_summary(
                 row.get("acl_snapshot_count"),
@@ -7787,6 +7865,55 @@ fn external_artifact_summary(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
+fn external_action_lifecycle_summary(
+    total_action_count: i64,
+    pending_confirmation_count: i64,
+    blocked_count: i64,
+    failed_count: i64,
+    waiting_result_count: i64,
+    result_callback_count: i64,
+    result_succeeded_count: i64,
+    result_failed_count: i64,
+    result_running_count: i64,
+    latest_action_at: Option<DateTime<Utc>>,
+    latest_result_callback_at: Option<DateTime<Utc>>,
+) -> Value {
+    let signal = if result_failed_count > 0 {
+        "result_failed"
+    } else if blocked_count > 0 {
+        "dispatch_blocked"
+    } else if failed_count > 0 {
+        "dispatch_failed"
+    } else if pending_confirmation_count > 0 {
+        "confirmation_pending"
+    } else if waiting_result_count > 0 {
+        "waiting_result"
+    } else if result_running_count > 0 {
+        "result_running"
+    } else if result_succeeded_count > 0 {
+        "result_succeeded"
+    } else if total_action_count > 0 {
+        "action_observed"
+    } else {
+        "none"
+    };
+    json!({
+        "signal": signal,
+        "total_action_count": total_action_count.max(0),
+        "pending_confirmation_count": pending_confirmation_count.max(0),
+        "blocked_count": blocked_count.max(0),
+        "failed_count": failed_count.max(0),
+        "waiting_result_count": waiting_result_count.max(0),
+        "result_callback_count": result_callback_count.max(0),
+        "result_succeeded_count": result_succeeded_count.max(0),
+        "result_failed_count": result_failed_count.max(0),
+        "result_running_count": result_running_count.max(0),
+        "latest_action_at": latest_action_at,
+        "latest_result_callback_at": latest_result_callback_at,
+    })
+}
+
 fn external_action_run_audit_summary(
     action_type: &str,
     target_system: &str,
@@ -7796,18 +7923,27 @@ fn external_action_run_audit_summary(
     result_summary: &Value,
 ) -> Value {
     let dispatch = result_summary.get("dispatch").unwrap_or(&Value::Null);
+    let callback = result_summary
+        .get("external_callback")
+        .unwrap_or(&Value::Null);
     json!({
         "action_type": action_type,
         "target_system": target_system,
         "is_external_artifact_action": action_type.starts_with("external_artifact."),
         "artifact_ref": arguments_redacted.get("artifact_ref").cloned().unwrap_or(Value::Null),
         "confirmation_state": confirmation_state,
+        "action_lifecycle_status": result_summary.get("status").cloned().unwrap_or(Value::Null),
         "external_request_recorded": external_request_id.is_some(),
         "dispatch_status": result_summary.get("status").cloned().unwrap_or(Value::Null),
         "dispatch_reason": dispatch.get("reason").cloned().unwrap_or(Value::Null),
         "dispatch_auth_mode": dispatch.get("auth_mode").cloned().unwrap_or(Value::Null),
         "http_status": dispatch.get("http_status").cloned().unwrap_or(Value::Null),
         "response_summary": dispatch.get("response_summary").cloned().unwrap_or(Value::Null),
+        "result_callback_received": callback.is_object(),
+        "result_status": callback.get("status").cloned().unwrap_or(Value::Null),
+        "callback_idempotency_key": callback.get("idempotency_key").cloned().unwrap_or(Value::Null),
+        "callback_completed_at": callback.get("completed_at").cloned().unwrap_or(Value::Null),
+        "callback_result_summary": callback.get("result_summary").cloned().unwrap_or(Value::Null),
     })
 }
 
@@ -30290,6 +30426,25 @@ mod tests {
     }
 
     #[test]
+    fn external_action_lifecycle_summary_prioritizes_callback_state() {
+        let now = Utc::now();
+        let waiting = external_action_lifecycle_summary(3, 0, 0, 0, 2, 0, 0, 0, 0, Some(now), None);
+        assert_eq!(waiting["signal"], json!("waiting_result"));
+        assert_eq!(waiting["waiting_result_count"], json!(2));
+
+        let succeeded =
+            external_action_lifecycle_summary(3, 0, 0, 0, 0, 2, 2, 0, 0, Some(now), Some(now));
+        assert_eq!(succeeded["signal"], json!("result_succeeded"));
+        assert_eq!(succeeded["result_callback_count"], json!(2));
+        assert_eq!(succeeded["latest_result_callback_at"], json!(now));
+
+        let failed =
+            external_action_lifecycle_summary(3, 0, 0, 0, 0, 2, 1, 1, 0, Some(now), Some(now));
+        assert_eq!(failed["signal"], json!("result_failed"));
+        assert_eq!(failed["result_failed_count"], json!(1));
+    }
+
+    #[test]
     fn external_action_run_audit_summary_marks_artifact_actions_without_raw_arguments() {
         let summary = external_action_run_audit_summary(
             "external_artifact.revoke",
@@ -30314,6 +30469,50 @@ mod tests {
         assert_eq!(summary["external_request_recorded"], json!(true));
         assert_eq!(summary["dispatch_status"], json!("dispatched"));
         assert!(!summary.to_string().contains("raw_prompt"));
+    }
+
+    #[test]
+    fn external_action_run_audit_summary_includes_safe_callback_state() {
+        let summary = external_action_run_audit_summary(
+            "external_business_action.invoke",
+            "third_party_action_api",
+            &json!({
+                "operation": "create_ticket"
+            }),
+            "confirmed",
+            Some("gateway-req-001"),
+            &json!({
+                "status": "external_action_succeeded",
+                "external_callback": {
+                    "status": "succeeded",
+                    "idempotency_key": "mock-gateway:result-001",
+                    "message_present": true,
+                    "result_summary": {
+                        "kind": "object",
+                        "field_count": 3,
+                        "sensitive_field_count": 1
+                    }
+                }
+            }),
+        );
+        let summary_text = summary.to_string();
+
+        assert_eq!(
+            summary["action_lifecycle_status"],
+            json!("external_action_succeeded")
+        );
+        assert_eq!(summary["result_callback_received"], json!(true));
+        assert_eq!(summary["result_status"], json!("succeeded"));
+        assert_eq!(
+            summary["callback_idempotency_key"],
+            json!("mock-gateway:result-001")
+        );
+        assert_eq!(
+            summary["callback_result_summary"]["sensitive_field_count"],
+            json!(1)
+        );
+        assert!(!summary_text.contains("third-party-secret"));
+        assert!(!summary_text.contains("raw_prompt"));
     }
 
     #[test]

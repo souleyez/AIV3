@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import {
+  actionSignalLabel,
   artifactSignalLabel,
   buildThirdPartyApiUrl,
   controlResultLabel,
@@ -86,6 +87,20 @@ function artifactMetrics(integration) {
     { label: '已发布', value: numberOrZero(summary.published_count) },
     { label: '已撤销', value: numberOrZero(summary.revoked_count) },
     { label: '最近产物动作', value: formatObservationTime(summary.latest_artifact_action_at) },
+  ];
+}
+
+function actionLifecycleMetrics(integration) {
+  const summary = integration?.actionSummary || {};
+  return [
+    { label: '动作信号', value: actionSignalLabel(integration?.actionSignal) },
+    { label: '总动作', value: numberOrZero(summary.total_action_count) },
+    { label: '待结果', value: numberOrZero(summary.waiting_result_count) },
+    { label: '已回调', value: numberOrZero(summary.result_callback_count) },
+    { label: '成功结果', value: numberOrZero(summary.result_succeeded_count) },
+    { label: '失败结果', value: numberOrZero(summary.result_failed_count) },
+    { label: '最近回调', value: formatObservationTime(summary.latest_result_callback_at) },
+    { label: '最近动作', value: formatObservationTime(summary.latest_action_at) },
   ];
 }
 
@@ -191,6 +206,8 @@ export default function ExternalIntegrationsPageClient() {
     dispatched: metricTotal(integrations, 'dispatchedActionCount'),
     driftIssues: integrations.filter((item) => !['ok', 'unknown'].includes(item.driftSignal)).length,
     artifactIssues: integrations.filter((item) => ['artifact_confirmation_pending', 'artifact_blocked', 'artifact_failed'].includes(item.artifactSignal)).length,
+    resultCallbacks: integrations.reduce((sum, item) => sum + numberOrZero(item.actionSummary?.result_callback_count), 0),
+    waitingResults: integrations.reduce((sum, item) => sum + numberOrZero(item.actionSummary?.waiting_result_count), 0),
   };
 
   return (
@@ -222,12 +239,12 @@ export default function ExternalIntegrationsPageClient() {
             <span>失败</span>
           </div>
           <div>
-            <strong>{totals.driftIssues}</strong>
-            <span>治理告警</span>
+            <strong>{totals.waitingResults}</strong>
+            <span>待结果</span>
           </div>
           <div>
-            <strong>{totals.artifactIssues}</strong>
-            <span>产物告警</span>
+            <strong>{totals.resultCallbacks}</strong>
+            <span>已回调</span>
           </div>
         </div>
       </section>
@@ -240,6 +257,10 @@ export default function ExternalIntegrationsPageClient() {
         <div>
           <span>动作确认</span>
           <code>{buildThirdPartyApiUrl('/v1/external/channels/{connection_id}/confirmations')}</code>
+        </div>
+        <div>
+          <span>结果回调</span>
+          <code>{buildThirdPartyApiUrl('/v1/external/channels/{connection_id}/actions/{action_id}/result')}</code>
         </div>
         <div>
           <span>观测列表</span>
@@ -310,9 +331,12 @@ export default function ExternalIntegrationsPageClient() {
                 <span className={statusClass(selected.signal)}>{signalLabel(selected.signal)}</span>
                 <span className={driftClass(selected.driftSignal)}>{driftSignalLabel(selected.driftSignal)}</span>
                 {selected.kind === 'channel' ? (
-                  <span className={artifactClass(selected.artifactSignal)}>
-                    {artifactSignalLabel(selected.artifactSignal)}
-                  </span>
+                  <>
+                    <span className={statusClass(selected.actionSignal)}>{actionSignalLabel(selected.actionSignal)}</span>
+                    <span className={artifactClass(selected.artifactSignal)}>
+                      {artifactSignalLabel(selected.artifactSignal)}
+                    </span>
+                  </>
                 ) : null}
               </div>
             ) : null}
@@ -373,14 +397,24 @@ export default function ExternalIntegrationsPageClient() {
                 ))}
               </div>
               {selected.kind === 'channel' ? (
-                <div className="external-detail-strip external-artifact-strip">
-                  {artifactMetrics(selected).map((metric) => (
-                    <div key={metric.label}>
-                      <span>{metric.label}</span>
-                      <strong>{metric.value}</strong>
-                    </div>
-                  ))}
-                </div>
+                <>
+                  <div className="external-detail-strip external-action-strip">
+                    {actionLifecycleMetrics(selected).map((metric) => (
+                      <div key={metric.label}>
+                        <span>{metric.label}</span>
+                        <strong>{metric.value}</strong>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="external-detail-strip external-artifact-strip">
+                    {artifactMetrics(selected).map((metric) => (
+                      <div key={metric.label}>
+                        <span>{metric.label}</span>
+                        <strong>{metric.value}</strong>
+                      </div>
+                    ))}
+                  </div>
+                </>
               ) : null}
               <JsonPreview value={selected.configSummary} />
             </>

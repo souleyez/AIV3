@@ -728,7 +728,9 @@ V3 提供观测优先的管理接口，供运营人员和 V3 控制台使用。�
 GET /v1/external/integrations
 ```
 
-返回聊天通道和资料源连接摘要，包括健康状态、最近活动时间、动作派发计数、权限/同步治理信号和脱敏后的配置摘要。
+返回聊天通道和资料源连接摘要，包括健康状态、最近活动时间、动作派发计数、动作生命周期摘要、权限/同步治理信号和脱敏后的配置摘要。
+
+聊天通道会返回 `action_summary`，用于观测外部动作生命周期，包括总动作数、待确认、派发阻断/失败、已派发待结果、已收到结果回调、成功/失败/处理中结果、最近动作时间和最近结果回调时间。该字段不包含第三方原始结果正文或任意回调 message 文本。
 
 响应中的 `drift_summary` 是观测字段，不包含原始文档正文、原始权限明细或密钥材料：
 
@@ -740,7 +742,7 @@ GET /v1/external/integrations
 GET /v1/external/integrations/{integration_id}/audit
 ```
 
-返回该集成相关的消息、动作和同步记录时间线。动作记录会展示确认状态、派发状态、派发原因、鉴权模式、HTTP 状态和脱敏响应摘要。嵌套摘要中的 `token`、`secret`、`authorization`、`cookie`、`password` 等敏感键会被移除。
+返回该集成相关的消息、动作和同步记录时间线。动作记录会展示确认状态、派发状态、派发原因、鉴权模式、HTTP 状态、脱敏响应摘要，以及安全的结果回调状态，例如回调状态、幂等键、完成时间和结构化结果摘要。嵌套摘要中的 `token`、`secret`、`authorization`、`cookie`、`password` 等敏感键会被移除。
 
 ```http
 POST /v1/external/integrations/{integration_id}/retry
