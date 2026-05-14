@@ -1662,9 +1662,9 @@ fn video_slide_rectangle_from_frame(
                 "candidate_index": candidate_index,
                 "source_frame": file_name,
                 "timestamp_seconds": timestamp_seconds,
-                "rectangle_source": "raw_frame_background_contrast",
+                "rectangle_source": "raw_frame_border_background_contrast",
                 "rectangle_extraction_status": "promoted_detector_crop",
-                "rectangle_extraction_mode": "simple_background_contrast_v1",
+                "rectangle_extraction_mode": "border_background_contrast_v2",
                 "crop_box": {
                     "unit": "relative",
                     "x": detection.x,
@@ -1673,10 +1673,12 @@ fn video_slide_rectangle_from_frame(
                     "height": detection.height,
                 },
                 "detector": {
-                    "name": "simple_background_contrast_v1",
+                    "name": "border_background_contrast_v2",
                     "image_width": detection.image_width,
                     "image_height": detection.image_height,
                     "foreground_pixel_count": detection.foreground_pixel_count,
+                    "background_sample_count": detection.background_sample_count,
+                    "background_source": detection.background_source,
                     "threshold": detection.threshold,
                 },
                 "confidence_label": "detector_candidate_requires_review",
@@ -1727,6 +1729,8 @@ struct VideoSlideRectangleDetection {
     image_width: u32,
     image_height: u32,
     foreground_pixel_count: u64,
+    background_sample_count: u64,
+    background_source: &'static str,
     threshold: u8,
 }
 
@@ -1742,22 +1746,19 @@ fn video_detect_slide_rectangle(frame: &Path) -> Option<VideoSlideRectangleDetec
         return None;
     }
 
-    let background = image.get_pixel(0, 0).to_rgb();
+    let (background, background_sample_count) =
+        video_border_median_background_rgb(&image, width, height)?;
     let threshold = 36_u8;
-    let mut min_x = width;
-    let mut min_y = height;
-    let mut max_x = 0_u32;
-    let mut max_y = 0_u32;
+    let mut column_foreground_counts = vec![0_u32; width as usize];
+    let mut row_foreground_counts = vec![0_u32; height as usize];
     let mut foreground_pixel_count = 0_u64;
 
     for y in 0..height {
         for x in 0..width {
             let pixel = image.get_pixel(x, y).to_rgb();
-            if video_pixel_distance_exceeds_threshold(&pixel.0, &background.0, threshold) {
-                min_x = min_x.min(x);
-                min_y = min_y.min(y);
-                max_x = max_x.max(x);
-                max_y = max_y.max(y);
+            if video_pixel_distance_exceeds_threshold(&pixel.0, &background, threshold) {
+                column_foreground_counts[x as usize] += 1;
+                row_foreground_counts[y as usize] += 1;
                 foreground_pixel_count += 1;
             }
         }
@@ -1767,9 +1768,20 @@ fn video_detect_slide_rectangle(frame: &Path) -> Option<VideoSlideRectangleDetec
     if foreground_pixel_count < image_area / 100 {
         return None;
     }
-    if min_x >= width || min_y >= height || max_x < min_x || max_y < min_y {
-        return None;
-    }
+    let column_threshold = (height / 10).max(4);
+    let row_threshold = (width / 10).max(4);
+    let min_x = column_foreground_counts
+        .iter()
+        .position(|count| *count >= column_threshold)? as u32;
+    let max_x = column_foreground_counts
+        .iter()
+        .rposition(|count| *count >= column_threshold)? as u32;
+    let min_y = row_foreground_counts
+        .iter()
+        .position(|count| *count >= row_threshold)? as u32;
+    let max_y = row_foreground_counts
+        .iter()
+        .rposition(|count| *count >= row_threshold)? as u32;
 
     let box_width = max_x - min_x + 1;
     let box_height = max_y - min_y + 1;
@@ -1788,8 +1800,58 @@ fn video_detect_slide_rectangle(frame: &Path) -> Option<VideoSlideRectangleDetec
         image_width: width,
         image_height: height,
         foreground_pixel_count,
+        background_sample_count,
+        background_source: "border_median_rgb",
         threshold,
     })
+}
+
+fn video_border_median_background_rgb(
+    image: &image::DynamicImage,
+    width: u32,
+    height: u32,
+) -> Option<([u8; 3], u64)> {
+    let sample_capacity = (u64::from(width) * 2 + u64::from(height) * 2) as usize;
+    let mut red = Vec::with_capacity(sample_capacity);
+    let mut green = Vec::with_capacity(sample_capacity);
+    let mut blue = Vec::with_capacity(sample_capacity);
+    for x in 0..width {
+        video_push_background_sample(image, x, 0, &mut red, &mut green, &mut blue);
+        if height > 1 {
+            video_push_background_sample(image, x, height - 1, &mut red, &mut green, &mut blue);
+        }
+    }
+    for y in 1..height.saturating_sub(1) {
+        video_push_background_sample(image, 0, y, &mut red, &mut green, &mut blue);
+        if width > 1 {
+            video_push_background_sample(image, width - 1, y, &mut red, &mut green, &mut blue);
+        }
+    }
+    if red.is_empty() {
+        return None;
+    }
+    red.sort_unstable();
+    green.sort_unstable();
+    blue.sort_unstable();
+    let median_index = red.len() / 2;
+    Some((
+        [red[median_index], green[median_index], blue[median_index]],
+        red.len() as u64,
+    ))
+}
+
+fn video_push_background_sample(
+    image: &image::DynamicImage,
+    x: u32,
+    y: u32,
+    red: &mut Vec<u8>,
+    green: &mut Vec<u8>,
+    blue: &mut Vec<u8>,
+) {
+    let pixel = image.get_pixel(x, y).to_rgb();
+    red.push(pixel.0[0]);
+    green.push(pixel.0[1]);
+    blue.push(pixel.0[2]);
 }
 
 fn video_pixel_distance_exceeds_threshold(
@@ -1833,7 +1895,7 @@ fn video_slide_rectangle_aggregate_status(selected_candidates: &[Value]) -> &'st
 fn video_slide_rectangle_aggregate_mode(selected_candidates: &[Value]) -> &'static str {
     match video_slide_rectangle_aggregate_status(selected_candidates) {
         "waiting_for_selection" => "waiting_for_selection",
-        "promoted_detector_crop" => "simple_background_contrast_v1",
+        "promoted_detector_crop" => "border_background_contrast_v2",
         "mixed_detector_and_full_frame_fallback" => "mixed_detector_and_full_frame_fallback",
         _ => "full_frame_fallback",
     }
@@ -5312,6 +5374,21 @@ mod tests {
         image.save(path).expect("test slide rectangle png");
     }
 
+    fn write_test_noisy_top_left_slide_rectangle_png(path: &Path) {
+        let mut image = image::RgbImage::from_pixel(100, 80, image::Rgb([8, 8, 8]));
+        for y in 0..6 {
+            for x in 0..6 {
+                image.put_pixel(x, y, image::Rgb([160, 20, 20]));
+            }
+        }
+        for y in 10..60 {
+            for x in 20..80 {
+                image.put_pixel(x, y, image::Rgb([240, 240, 240]));
+            }
+        }
+        image.save(path).expect("test noisy slide rectangle png");
+    }
+
     fn write_test_visual_slide_png(
         path: &Path,
         background: [u8; 3],
@@ -7367,7 +7444,7 @@ mod tests {
         );
         assert_eq!(
             slide_rectangles["rectangle_extraction_mode"],
-            json!("simple_background_contrast_v1")
+            json!("border_background_contrast_v2")
         );
         let crop_box = &slide_rectangles["rectangles"][0]["crop_box"];
         assert_eq!(crop_box["unit"], json!("relative"));
@@ -7377,7 +7454,11 @@ mod tests {
         assert_eq!(crop_box["height"], json!(0.625));
         assert_eq!(
             slide_rectangles["rectangles"][0]["rectangle_source"],
-            json!("raw_frame_background_contrast")
+            json!("raw_frame_border_background_contrast")
+        );
+        assert_eq!(
+            slide_rectangles["rectangles"][0]["detector"]["background_source"],
+            json!("border_median_rgb")
         );
         assert_eq!(
             slide_rectangles["rectangles"][0]["review_required"],
@@ -7410,6 +7491,27 @@ mod tests {
             .read_to_string(&mut slide_xml)
             .expect("slide xml text");
         assert!(slide_xml.contains(r#"<a:srcRect l="20000" r="20000" t="12500" b="25000"/>"#));
+    }
+
+    #[test]
+    fn detects_slide_rectangle_when_top_left_background_is_noisy() {
+        let output_root = std::env::temp_dir().join(format!(
+            "aidp-v3-video-noisy-background-test-{}",
+            DocumentId::new()
+        ));
+        fs::create_dir_all(&output_root).expect("output root");
+        let frame_path = output_root.join("frame_000001.png");
+        write_test_noisy_top_left_slide_rectangle_png(&frame_path);
+
+        let detection =
+            video_detect_slide_rectangle(&frame_path).expect("border-median detector crop");
+
+        assert_eq!(detection.x, 0.2);
+        assert_eq!(detection.y, 0.125);
+        assert_eq!(detection.width, 0.6);
+        assert_eq!(detection.height, 0.625);
+        assert_eq!(detection.background_source, "border_median_rgb");
+        assert!(detection.background_sample_count > 0);
     }
 
     #[test]

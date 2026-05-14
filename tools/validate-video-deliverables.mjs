@@ -280,6 +280,7 @@ function validateSlideRectanglesManifest(manifest, errors) {
   const validModes = new Set([
     "full_frame_fallback",
     "simple_background_contrast_v1",
+    "border_background_contrast_v2",
     "mixed_detector_and_full_frame_fallback",
   ]);
   if (!validStatuses.has(manifest.rectangle_extraction_status)) {
