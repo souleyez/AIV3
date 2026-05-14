@@ -910,6 +910,14 @@ npm run validate:handoff
 npm run validate:package
 ```
 
+Before sending the archive, V3 operators can validate the archive itself without extracting it:
+
+```bash
+node tools/validate-external-handoff-archive.mjs --archive target/external-third-party-handoff/<package>.tar.gz
+```
+
+This checks the `.sha256` sidecar, gzip/tar structure, single package root, path traversal safety, required entries, package manifest file hashes, and handoff manifest readiness.
+
 ## Versioning
 
 The external API should be versioned by path and contract version.

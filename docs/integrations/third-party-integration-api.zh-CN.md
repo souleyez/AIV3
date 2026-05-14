@@ -937,6 +937,14 @@ npm run validate:package
 
 这两个命令会分别校验包内交接清单样例和包文件完整性。第三方正式填写自己的清单后，也应先通过同一类校验，再交给 V3 项目组联调。
 
+发送 `.tar.gz` 归档前，V3 侧还可以不解压直接校验归档：
+
+```bash
+node tools/validate-external-handoff-archive.mjs --archive target/external-third-party-handoff/<package>.tar.gz
+```
+
+该命令会检查 `.sha256` sidecar、gzip/tar 结构、单一包根目录、路径穿越风险、必备条目、包 manifest 文件摘要，以及交接清单是否可进入客户沙箱联调。
+
 ## 20. 版本与变更
 
 本文为 v0.1 对外草案。后续如接口路径、字段、鉴权、幂等、权限模型、回复格式或部署方式发生变化，应同步更新文档版本。
