@@ -171,3 +171,28 @@ target/external-third-party-handoff/deployment-package-check
 ```
 
 The package contains 10 files, including the Chinese/English third-party guides, sample handoff manifest, handoff validator, mock gateway reference, V3 operator smoke reference, generated README files, generated package scripts, and `handoff-package-manifest.json`. The package manifest reported `ready: true`, `package_root: "."`, and no handoff validation errors or warnings. Running `validate:handoff` from inside the package also returned `ready_for_customer_sandbox: true`.
+
+## Handoff Package Integrity Follow-Up
+
+Follow-up validated commit: `b9b89e0`.
+
+The deployment target pulled `b9b89e0` and ran:
+
+```text
+npm run test:external-handoff-package
+npm run test:external-handoff-package-integrity
+npm run build:external-handoff-package -- --basename deployment-package-integrity-check --generatedAt 2026-05-14T00:00:00.000Z
+npm --prefix target/external-third-party-handoff/deployment-package-integrity-check run validate:handoff
+npm --prefix target/external-third-party-handoff/deployment-package-integrity-check run validate:package
+```
+
+Result: passed.
+
+The generated package now contains 11 files, including `tools/validate-external-handoff-package.mjs`. The package-internal `validate:package` report returned `package_ready: true`, `included_file_count: 11`, and passed all checks:
+
+- package manifest present;
+- package type valid;
+- package root relative;
+- included file paths stay inside the package;
+- included file byte sizes and SHA256 hashes match;
+- handoff manifest is ready for customer sandbox.
