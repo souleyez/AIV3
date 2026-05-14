@@ -15,6 +15,7 @@ const REQUIRED_ENTRIES = [
   'handoff/third-party-handoff.sample.json',
   'tools/validate-external-handoff.mjs',
   'tools/validate-external-handoff-package.mjs',
+  'tools/validate-external-handoff-archive.mjs',
   'sandbox/external-third-party-mock-gateway.mjs',
 ];
 
@@ -254,7 +255,8 @@ function validateArchive(archivePathInput, sidecarPathInput = '') {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
-  const result = validateArchive(args.archive, args.sha256);
+  const inferredArchivePath = path.resolve(process.cwd(), '..', `${path.basename(process.cwd())}.tar.gz`);
+  const result = validateArchive(args.archive || inferredArchivePath, args.sha256);
   console.log(JSON.stringify(result, null, 2));
   if (!result.archive_ready) {
     process.exitCode = 1;

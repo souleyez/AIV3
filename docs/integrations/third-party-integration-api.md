@@ -899,6 +899,7 @@ The generated output includes a package directory, a `.tar.gz` archive, and a ma
 - `handoff/third-party-handoff.sample.json`;
 - `tools/validate-external-handoff.mjs`;
 - `tools/validate-external-handoff-package.mjs`;
+- `tools/validate-external-handoff-archive.mjs`;
 - `sandbox/external-third-party-mock-gateway.mjs`;
 - operator smoke/readiness references;
 - `README.zh-CN.md`, `README.md`, `package.json`, and `handoff-package-manifest.json`.
@@ -908,9 +909,12 @@ Inside the package, third parties can run:
 ```bash
 npm run validate:handoff
 npm run validate:package
+npm run validate:archive
 ```
 
-Before sending the archive, V3 operators can validate the archive itself without extracting it:
+`validate:archive` checks the sibling `.tar.gz` archive and `.sha256` sidecar from inside the generated package directory.
+
+Before sending the archive, V3 operators can also validate the archive itself from the main repository without extracting it:
 
 ```bash
 node tools/validate-external-handoff-archive.mjs --archive target/external-third-party-handoff/<package>.tar.gz
