@@ -33,7 +33,8 @@
 - Phase 9 second checkpoint adds database-backed mock/sandbox validation for customer-hosted generic chat page events and signed outbound dispatch to a local third-party mock endpoint, including idempotency, dispatch-specific Bearer/HMAC headers, callback-token non-reuse, and redacted response summaries.
 - Phase 9 second checkpoint passed on `8服务器` at commit `aaafd6f`; see `docs/validation/external-third-party-mock-sandbox-smoke-2026-05-14.md`.
 - Phase 9 third checkpoint adds a standalone Node-based third-party mock gateway and Linux/deployment-target smoke runner so signed outbound dispatch can be validated outside the in-process Rust test harness.
-- Next implementation checkpoint: run the standalone gateway smoke on the deployment target, capture the validation report, then extend the gateway toward action response callbacks or a real HTTPS customer sandbox.
+- Phase 9 third checkpoint passed on `8服务器` at commit `0cfb9c9`; see `docs/validation/external-third-party-gateway-smoke-2026-05-14.md`.
+- Next implementation checkpoint: extend the packaged gateway toward action response callbacks or run the same contract through a real HTTPS customer sandbox.
 
 ---
 
