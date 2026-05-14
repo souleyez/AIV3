@@ -11,6 +11,7 @@
   --danger: #b91c1c;
   --shadow: 0 18px 48px rgba(15, 23, 42, 0.08);
   --assistant-composer-width: 720px;
+  --mobile-form-control-font-size: 16px;
 }
 
 * {
@@ -38,7 +39,8 @@ body {
 
 button,
 textarea,
-input {
+input,
+select {
   font: inherit;
 }
 
@@ -5879,5 +5881,29 @@ body {
 
   .external-audit-item small {
     margin-left: 0;
+  }
+}
+
+@media (max-width: 768px) {
+  .assistant-shell input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]):not([type="file"]):not([type="hidden"]),
+  .assistant-shell textarea,
+  .assistant-shell select,
+  .mobile-home-shell input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]):not([type="file"]):not([type="hidden"]),
+  .mobile-home-shell textarea,
+  .mobile-home-shell select,
+  .external-observability-shell input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]):not([type="file"]):not([type="hidden"]),
+  .external-observability-shell textarea,
+  .external-observability-shell select {
+    font-size: var(--mobile-form-control-font-size);
+    line-height: 1.45;
+  }
+
+  .assistant-shell input::placeholder,
+  .assistant-shell textarea::placeholder,
+  .mobile-home-shell input::placeholder,
+  .mobile-home-shell textarea::placeholder,
+  .external-observability-shell input::placeholder,
+  .external-observability-shell textarea::placeholder {
+    font-size: var(--mobile-form-control-font-size);
   }
 }

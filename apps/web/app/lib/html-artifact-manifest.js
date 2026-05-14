@@ -923,6 +923,7 @@ export function renderHtmlArtifactDocument(input = {}) {
     .qr-box { margin-top: 14px; display: inline-grid; padding: 12px; border-radius: 18px; background: #fff; }
     .qr-box img { width: min(220px, 56vw); height: auto; display: block; }
     textarea { width: 100%; box-sizing: border-box; resize: vertical; margin-top: 12px; border: 0; border-radius: 16px; padding: 12px; background: #f1f5f9; color: #0f172a; font: inherit; line-height: 1.5; outline: 2px solid transparent; }
+    @media (max-width: 768px) { textarea, input, select { font-size: 16px; } }
     textarea:focus { outline-color: #94a3b8; background: #fff; }
     .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 16px; }
     button { border: 0; border-radius: 999px; padding: 9px 12px; background: #0f172a; color: #fff; cursor: pointer; }
