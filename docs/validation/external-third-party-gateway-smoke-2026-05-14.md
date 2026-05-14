@@ -336,3 +336,25 @@ The build output included `releaseMarkdownPath`, `releaseMarkdownSha256`, `relea
 The generated release report returned `release_ready: true`, SHA256 `fddb4eb6595fbd9954020aa5ff413d7cc3f91b190eacd47654c3d3c2994ddc7b`, `checks: 17`, `included_file_count: 13`, and archive `entry_count: 14`.
 
 The deployment target finished at `a29428a` with a clean `main...origin/main` status.
+
+## Handoff Release Provenance Follow-Up
+
+Follow-up validated commit: `63c4e05`.
+
+The deployment target pulled `63c4e05` and ran:
+
+```text
+npm run test:external-handoff-package
+npm run test:external-handoff-release
+npm run test:external-handoff-package-integrity
+npm run build:external-handoff-package -- --basename deployment-release-provenance-check --generatedAt 2026-05-14T00:00:00.000Z
+npm run validate:external-handoff-release -- --package target/external-third-party-handoff/deployment-release-provenance-check
+```
+
+Result: passed.
+
+The release JSON exposed `package_type: v3.external_third_party_handoff_package.v1`, `generated_at: 2026-05-14T00:00:00.000Z`, `repository_head: 63c4e05`, `release_ready: true`, and archive SHA256 `84df6197b2083599b0d3be3817a4daccffed7c9a7a6c045f44da608d283a9953`.
+
+The generated Markdown receipt also included `Generated at: 2026-05-14T00:00:00.000Z` and `Repository head:`.
+
+The deployment target finished at `63c4e05` with a clean `main...origin/main` status.
