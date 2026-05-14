@@ -123,7 +123,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\run-jump-host-video-deliverab
 
 ## Slide Rectangle Manifest Follow-Up
 
-The public deliverable contract now also requires `slide_rectangles_manifest.json` for complete video/PPT packages. The current promoted mode is intentionally conservative: selected keep-list frames are de-duplicated in selection order, exact duplicate selected frame bytes are removed before PPTX generation, and remaining JPEG/PNG frames may be exported as `simple_background_contrast_v1` detector crops when a clear non-background rectangle exists. Ambiguous or undecodable frames remain relative full-frame fallback crops. Every crop still requires `review_required=true`.
+The public deliverable contract now also requires `slide_rectangles_manifest.json` for complete video/PPT packages. The current promoted mode is intentionally conservative: selected keep-list frames are de-duplicated in selection order, exact duplicate selected frame bytes are removed before PPTX generation, and decodable JPEG/PNG frames also pass through a conservative visual-similarity dedupe to reject near-identical selected frames caused by compression or tiny capture differences. Remaining JPEG/PNG frames may be exported as `simple_background_contrast_v1` detector crops when a clear non-background rectangle exists. Ambiguous or undecodable frames remain relative full-frame fallback crops. Every crop still requires `review_required=true`.
 
 Generated PPTX slides apply detector crop boxes through DrawingML `a:srcRect`. Full-frame fallback crops intentionally omit `a:srcRect` and keep the previous whole-frame rendering behavior.
 

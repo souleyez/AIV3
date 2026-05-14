@@ -36,6 +36,8 @@ pub const DEFAULT_SLIDE_NOTES_ARTIFACT_FILE_NAME: &str = "slide_notes.md";
 pub const DEFAULT_PPTX_BUILD_PLAN_FILE_NAME: &str = "pptx_build_plan.json";
 pub const DEFAULT_VIDEO_SLIDES_PPTX_FILE_NAME: &str = "video_slides_screenshot_based.pptx";
 const LOW_CONFIDENCE_VIDEO_EVIDENCE_THRESHOLD: f64 = 0.65;
+const VIDEO_VISUAL_SIGNATURE_GRID_SIZE: u32 = 16;
+const VIDEO_VISUAL_NEAR_DUPLICATE_MAX_AVG_DIFF: f64 = 3.0;
 const VIDEO_DELIVERABLE_PACKAGE_REQUIRED_KINDS: &[&str] = &[
     "pptx",
     "final_deliverables_manifest",
@@ -1020,6 +1022,108 @@ fn video_frame_content_fingerprint(path: &Path) -> Option<String> {
     Some(format!("fnv1a64:{hash:016x}"))
 }
 
+#[derive(Clone, Debug)]
+struct VideoFrameVisualSignature {
+    fingerprint: String,
+    samples: Vec<u8>,
+}
+
+#[derive(Clone, Debug)]
+struct AcceptedVideoFrameVisualSignature {
+    candidate_index: usize,
+    file_name: String,
+    signature: VideoFrameVisualSignature,
+}
+
+fn video_frame_visual_signature(path: &Path) -> Option<VideoFrameVisualSignature> {
+    let image = ImageReader::open(path)
+        .ok()?
+        .with_guessed_format()
+        .ok()?
+        .decode()
+        .ok()?;
+    let (width, height) = image.dimensions();
+    if width == 0 || height == 0 {
+        return None;
+    }
+
+    let mut samples = Vec::with_capacity(
+        (VIDEO_VISUAL_SIGNATURE_GRID_SIZE * VIDEO_VISUAL_SIGNATURE_GRID_SIZE) as usize,
+    );
+    for grid_y in 0..VIDEO_VISUAL_SIGNATURE_GRID_SIZE {
+        for grid_x in 0..VIDEO_VISUAL_SIGNATURE_GRID_SIZE {
+            let x = ((u64::from(grid_x) * u64::from(width))
+                / u64::from(VIDEO_VISUAL_SIGNATURE_GRID_SIZE))
+            .min(u64::from(width.saturating_sub(1))) as u32;
+            let y = ((u64::from(grid_y) * u64::from(height))
+                / u64::from(VIDEO_VISUAL_SIGNATURE_GRID_SIZE))
+            .min(u64::from(height.saturating_sub(1))) as u32;
+            let pixel = image.get_pixel(x, y).to_rgb();
+            samples.push(video_luma_from_rgb(&pixel.0));
+        }
+    }
+
+    Some(VideoFrameVisualSignature {
+        fingerprint: video_visual_fingerprint_from_samples(&samples),
+        samples,
+    })
+}
+
+fn video_luma_from_rgb(pixel: &[u8; 3]) -> u8 {
+    ((u32::from(pixel[0]) * 299 + u32::from(pixel[1]) * 587 + u32::from(pixel[2]) * 114) / 1000)
+        as u8
+}
+
+fn video_visual_fingerprint_from_samples(samples: &[u8]) -> String {
+    let mut hash = 0xcbf29ce484222325_u64;
+    for sample in samples {
+        hash ^= u64::from(*sample / 4);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!(
+        "luma{}x{}-fnv1a64:{hash:016x}",
+        VIDEO_VISUAL_SIGNATURE_GRID_SIZE, VIDEO_VISUAL_SIGNATURE_GRID_SIZE
+    )
+}
+
+fn video_visual_signature_avg_diff(
+    left: &VideoFrameVisualSignature,
+    right: &VideoFrameVisualSignature,
+) -> Option<f64> {
+    if left.samples.len() != right.samples.len() || left.samples.is_empty() {
+        return None;
+    }
+    let total: u64 = left
+        .samples
+        .iter()
+        .zip(right.samples.iter())
+        .map(|(left, right)| u64::from(left.abs_diff(*right)))
+        .sum();
+    Some(total as f64 / left.samples.len() as f64)
+}
+
+fn video_visual_near_duplicate_match<'a>(
+    signature: &VideoFrameVisualSignature,
+    accepted: &'a [AcceptedVideoFrameVisualSignature],
+) -> Option<(&'a AcceptedVideoFrameVisualSignature, f64)> {
+    accepted
+        .iter()
+        .filter_map(|candidate| {
+            video_visual_signature_avg_diff(signature, &candidate.signature)
+                .map(|score| (candidate, score))
+        })
+        .filter(|(_, score)| *score <= VIDEO_VISUAL_NEAR_DUPLICATE_MAX_AVG_DIFF)
+        .min_by(|left, right| {
+            left.1
+                .partial_cmp(&right.1)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+}
+
+fn video_round_similarity_score(value: f64) -> f64 {
+    (value * 100.0).round() / 100.0
+}
+
 fn video_candidate_nearby_evidence_refs(
     timestamp_seconds: f64,
     evidence: &VideoMediaEvidenceItems,
@@ -1325,6 +1429,7 @@ fn selected_slides_manifest_from_keep_list(
     let mut selected_candidates = Vec::<Value>::new();
     let mut rejected_duplicate_candidates = Vec::<Value>::new();
     let mut seen_content_fingerprints = BTreeSet::<String>::new();
+    let mut seen_visual_signatures = Vec::<AcceptedVideoFrameVisualSignature>::new();
     for candidate_index in selected_candidate_indices {
         let Some(frame) = frames.get(candidate_index.saturating_sub(1)) else {
             continue;
@@ -1337,7 +1442,7 @@ fn selected_slides_manifest_from_keep_list(
             video_candidate_timestamp_seconds(*candidate_index, frame_extraction);
         let content_fingerprint = video_frame_content_fingerprint(frame);
         if let Some(fingerprint) = content_fingerprint.as_ref() {
-            if !seen_content_fingerprints.insert(fingerprint.clone()) {
+            if seen_content_fingerprints.contains(fingerprint) {
                 rejected_duplicate_candidates.push(json!({
                     "candidate_index": candidate_index,
                     "file_name": file_name,
@@ -1345,6 +1450,27 @@ fn selected_slides_manifest_from_keep_list(
                     "timestamp_label": format_seconds(timestamp_seconds),
                     "dedupe_reason": "exact_frame_content_duplicate",
                     "content_fingerprint": fingerprint,
+                }));
+                continue;
+            }
+        }
+        let visual_signature = video_frame_visual_signature(frame);
+        if let Some(signature) = visual_signature.as_ref() {
+            if let Some((matched, score)) =
+                video_visual_near_duplicate_match(signature, &seen_visual_signatures)
+            {
+                rejected_duplicate_candidates.push(json!({
+                    "candidate_index": candidate_index,
+                    "file_name": file_name,
+                    "timestamp_seconds": timestamp_seconds,
+                    "timestamp_label": format_seconds(timestamp_seconds),
+                    "dedupe_reason": "visual_near_duplicate",
+                    "visual_fingerprint": signature.fingerprint,
+                    "matched_candidate_index": matched.candidate_index,
+                    "matched_file_name": matched.file_name,
+                    "matched_visual_fingerprint": matched.signature.fingerprint,
+                    "visual_similarity_score": video_round_similarity_score(score),
+                    "visual_similarity_threshold": VIDEO_VISUAL_NEAR_DUPLICATE_MAX_AVG_DIFF,
                 }));
                 continue;
             }
@@ -1385,6 +1511,21 @@ fn selected_slides_manifest_from_keep_list(
         } else {
             "unavailable"
         };
+        if let Some(fingerprint) = content_fingerprint.as_ref() {
+            seen_content_fingerprints.insert(fingerprint.clone());
+        }
+        let visual_fingerprint_status = if visual_signature.is_some() {
+            "available"
+        } else {
+            "unavailable"
+        };
+        if let Some(signature) = visual_signature.as_ref() {
+            seen_visual_signatures.push(AcceptedVideoFrameVisualSignature {
+                candidate_index: *candidate_index,
+                file_name: file_name.to_string(),
+                signature: signature.clone(),
+            });
+        }
         selected_candidates.push(json!({
             "candidate_index": candidate_index,
             "file_name": file_name,
@@ -1393,6 +1534,8 @@ fn selected_slides_manifest_from_keep_list(
             "timestamp_label": format_seconds(timestamp_seconds),
             "content_fingerprint": content_fingerprint,
             "dedupe_fingerprint_status": dedupe_fingerprint_status,
+            "visual_fingerprint": visual_signature.as_ref().map(|signature| signature.fingerprint.clone()),
+            "visual_fingerprint_status": visual_fingerprint_status,
             "transcript_window": {
                 "start_seconds": window_start_seconds,
                 "end_seconds": window_end_seconds,
@@ -1408,12 +1551,29 @@ fn selected_slides_manifest_from_keep_list(
     }
     let rectangle_extraction_status = video_slide_rectangle_aggregate_status(&selected_candidates);
     let rectangle_extraction_mode = video_slide_rectangle_aggregate_mode(&selected_candidates);
+    let exact_duplicate_count = rejected_duplicate_candidates
+        .iter()
+        .filter(|candidate| {
+            candidate.get("dedupe_reason").and_then(Value::as_str)
+                == Some("exact_frame_content_duplicate")
+        })
+        .count();
+    let visual_duplicate_count = rejected_duplicate_candidates
+        .iter()
+        .filter(|candidate| {
+            candidate.get("dedupe_reason").and_then(Value::as_str) == Some("visual_near_duplicate")
+        })
+        .count();
     let dedupe_status = if selected_candidates.is_empty() {
         "waiting_for_selection"
-    } else if rejected_duplicate_candidates.is_empty() {
-        "selected_keep_list_order_deduped"
-    } else {
+    } else if visual_duplicate_count > 0 && exact_duplicate_count > 0 {
+        "exact_and_visual_similarity_deduped"
+    } else if visual_duplicate_count > 0 {
+        "visual_similarity_deduped"
+    } else if exact_duplicate_count > 0 {
         "exact_frame_content_deduped"
+    } else {
+        "selected_keep_list_order_deduped"
     };
 
     json!({
@@ -1429,10 +1589,12 @@ fn selected_slides_manifest_from_keep_list(
         "requested_selected_count": selected_candidate_indices.len(),
         "selected_count": selected_candidates.len(),
         "deduped_candidate_count": rejected_duplicate_candidates.len(),
+        "exact_duplicate_count": exact_duplicate_count,
+        "visual_duplicate_count": visual_duplicate_count,
         "rectangle_extraction_status": rectangle_extraction_status,
         "rectangle_extraction_mode": rectangle_extraction_mode,
         "dedupe_status": dedupe_status,
-        "dedupe_policy": "selected candidate indices are range-checked, order-preserved, de-duplicated by index, and exact duplicate frame bytes are removed before rectangle promotion",
+        "dedupe_policy": "selected candidate indices are range-checked, order-preserved, de-duplicated by index; exact duplicate frame bytes and conservative visual near-duplicates are removed before rectangle promotion",
         "rectangle_policy": "promote selected raw frames as full-frame relative rectangles until a visual detector can replace the fallback crop",
         "selected_candidates": selected_candidates,
         "rejected_duplicate_candidates": rejected_duplicate_candidates,
@@ -1680,6 +1842,14 @@ fn video_slide_rectangles_manifest_from_selected_slides(
         .get("deduped_candidate_count")
         .and_then(Value::as_u64)
         .unwrap_or(0);
+    let exact_duplicate_count = selected_slides_manifest
+        .get("exact_duplicate_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let visual_duplicate_count = selected_slides_manifest
+        .get("visual_duplicate_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
     let rejected_duplicate_candidates = selected_slides_manifest
         .get("rejected_duplicate_candidates")
         .and_then(Value::as_array)
@@ -1700,9 +1870,13 @@ fn video_slide_rectangles_manifest_from_selected_slides(
         "promoted_rectangle_count": promoted_count,
         "dedupe_status": dedupe_status,
         "deduped_candidate_count": deduped_candidate_count,
+        "exact_duplicate_count": exact_duplicate_count,
+        "visual_duplicate_count": visual_duplicate_count,
         "dedupe_policy": {
             "source": "ppt_keep_list_template.selected_candidate_indices",
-            "rule": "range-check candidate numbers, preserve selected order, keep the first occurrence of each candidate number, and remove exact duplicate frame bytes",
+            "rule": "range-check candidate numbers, preserve selected order, keep the first occurrence of each candidate number, remove exact duplicate frame bytes, and remove conservative visual near-duplicates",
+            "visual_signature_grid": format!("{}x{}", VIDEO_VISUAL_SIGNATURE_GRID_SIZE, VIDEO_VISUAL_SIGNATURE_GRID_SIZE),
+            "visual_near_duplicate_max_avg_diff": VIDEO_VISUAL_NEAR_DUPLICATE_MAX_AVG_DIFF,
         },
         "crop_policy": {
             "mode": "full_frame_fallback",
@@ -5014,6 +5188,22 @@ mod tests {
         image.save(path).expect("test slide rectangle png");
     }
 
+    fn write_test_visual_slide_png(
+        path: &Path,
+        background: [u8; 3],
+        foreground: [u8; 3],
+        rect_x: std::ops::Range<u32>,
+        rect_y: std::ops::Range<u32>,
+    ) {
+        let mut image = image::RgbImage::from_pixel(100, 80, image::Rgb(background));
+        for y in rect_y {
+            for x in rect_x.clone() {
+                image.put_pixel(x, y, image::Rgb(foreground));
+            }
+        }
+        image.save(path).expect("test visual slide png");
+    }
+
     fn assert_public_manifest_file_entry(files: &[Value], kind: &str, file_name: &str) {
         let file = files
             .iter()
@@ -6832,6 +7022,124 @@ mod tests {
             .find(|file| file["artifact_kind"] == json!("slide_rectangles_manifest"))
             .expect("slide rectangles artifact ref");
         assert_eq!(slide_rectangles_ref["deduped_candidate_count"], json!(1));
+
+        let pptx_path = files
+            .iter()
+            .find(|file| file["artifact_kind"] == json!("pptx"))
+            .and_then(|file| file["path"].as_str())
+            .expect("pptx path");
+        let mut archive =
+            ZipArchive::new(File::open(pptx_path).expect("pptx file")).expect("pptx zip");
+        assert!(archive.by_name("ppt/slides/slide1.xml").is_ok());
+        assert!(archive.by_name("ppt/slides/slide2.xml").is_ok());
+        assert!(archive.by_name("ppt/slides/slide3.xml").is_err());
+    }
+
+    #[test]
+    fn dedupes_selected_slide_manifest_by_visual_similarity() {
+        let document = test_document();
+        let output_root = std::env::temp_dir().join(format!(
+            "aidp-v3-video-selected-visual-dedupe-test-{}",
+            DocumentId::new()
+        ));
+        let session_dir = output_root.join(format!("video-extraction-{}", document.id));
+        let artifacts_dir = session_dir.join(DEFAULT_GENERATED_ARTIFACTS_DIR_NAME);
+        let raw_frames_dir = session_dir.join(DEFAULT_RAW_FRAMES_DIR_NAME);
+        fs::create_dir_all(&raw_frames_dir).expect("raw frames dir");
+        fs::create_dir_all(&artifacts_dir).expect("artifacts dir");
+        write_test_visual_slide_png(
+            &raw_frames_dir.join("frame_000001.png"),
+            [8, 8, 8],
+            [240, 240, 240],
+            20..80,
+            10..60,
+        );
+        write_test_visual_slide_png(
+            &raw_frames_dir.join("frame_000002.png"),
+            [9, 9, 9],
+            [242, 242, 242],
+            20..80,
+            10..60,
+        );
+        write_test_visual_slide_png(
+            &raw_frames_dir.join("frame_000003.png"),
+            [8, 8, 8],
+            [120, 180, 240],
+            5..45,
+            10..60,
+        );
+        fs::write(
+            artifacts_dir.join(DEFAULT_PPT_KEEP_LIST_TEMPLATE_FILE_NAME),
+            serde_json::to_vec_pretty(&json!({
+                "status": "selected",
+                "selected_candidate_indices": [1, 2, 3]
+            }))
+            .expect("keep list bytes"),
+        )
+        .expect("keep list");
+        let frame_extraction = json!({
+            "status": "completed",
+            "raw_frames_dir": raw_frames_dir.display().to_string(),
+            "frame_count": 3,
+            "manifest_file_name": DEFAULT_FRAME_MANIFEST_FILE_NAME
+        });
+
+        let manifest =
+            write_video_extraction_text_artifacts(&document, &[], &frame_extraction, &output_root)
+                .expect("candidate artifacts");
+
+        let files = manifest["files"].as_array().expect("files");
+        let selected_slides_path = files
+            .iter()
+            .find(|file| file["artifact_kind"] == json!("selected_slides_manifest"))
+            .and_then(|file| file["path"].as_str())
+            .expect("selected slides manifest path");
+        let selected_slides: Value = serde_json::from_str(
+            &fs::read_to_string(selected_slides_path).expect("selected slides manifest"),
+        )
+        .expect("selected slides manifest json");
+        assert_eq!(selected_slides["requested_selected_count"], json!(3));
+        assert_eq!(selected_slides["selected_count"], json!(2));
+        assert_eq!(selected_slides["deduped_candidate_count"], json!(1));
+        assert_eq!(selected_slides["exact_duplicate_count"], json!(0));
+        assert_eq!(selected_slides["visual_duplicate_count"], json!(1));
+        assert_eq!(
+            selected_slides["dedupe_status"],
+            json!("visual_similarity_deduped")
+        );
+        assert_eq!(
+            selected_slides["rejected_duplicate_candidates"][0]["dedupe_reason"],
+            json!("visual_near_duplicate")
+        );
+        assert_eq!(
+            selected_slides["rejected_duplicate_candidates"][0]["matched_candidate_index"],
+            json!(1)
+        );
+        assert_eq!(
+            selected_slides["selected_candidates"][1]["candidate_index"],
+            json!(3)
+        );
+        assert_eq!(
+            selected_slides["selected_candidates"][0]["visual_fingerprint_status"],
+            json!("available")
+        );
+
+        let slide_rectangles_path = files
+            .iter()
+            .find(|file| file["artifact_kind"] == json!("slide_rectangles_manifest"))
+            .and_then(|file| file["path"].as_str())
+            .expect("slide rectangles manifest path");
+        let slide_rectangles: Value = serde_json::from_str(
+            &fs::read_to_string(slide_rectangles_path).expect("slide rectangles manifest"),
+        )
+        .expect("slide rectangles manifest json");
+        assert_eq!(slide_rectangles["promoted_rectangle_count"], json!(2));
+        assert_eq!(slide_rectangles["deduped_candidate_count"], json!(1));
+        assert_eq!(slide_rectangles["visual_duplicate_count"], json!(1));
+        assert_eq!(
+            slide_rectangles["dedupe_status"],
+            json!("visual_similarity_deduped")
+        );
 
         let pptx_path = files
             .iter()
