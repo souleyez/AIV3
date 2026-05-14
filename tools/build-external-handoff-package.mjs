@@ -6,7 +6,7 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import zlib from 'node:zlib';
 import { validateExternalHandoffManifest } from './validate-external-handoff.mjs';
-import { validateRelease } from './validate-external-handoff-release.mjs';
+import { renderReleaseMarkdown, validateRelease } from './validate-external-handoff-release.mjs';
 
 const PACKAGE_TYPE = 'v3.external_third_party_handoff_package.v1';
 
@@ -344,6 +344,9 @@ function buildPackage({ repoRoot, outDir, basename, generatedAt = new Date().toI
   const releaseReportPath = path.join(path.dirname(packageRoot), `${path.basename(packageRoot)}.release.json`);
   writeJson(releaseReportPath, releaseValidation);
   const releaseReportSha256 = sha256Hex(fs.readFileSync(releaseReportPath));
+  const releaseMarkdownPath = path.join(path.dirname(packageRoot), `${path.basename(packageRoot)}.release.md`);
+  fs.writeFileSync(releaseMarkdownPath, renderReleaseMarkdown(releaseValidation));
+  const releaseMarkdownSha256 = sha256Hex(fs.readFileSync(releaseMarkdownPath));
 
   return {
     packageRoot,
@@ -353,6 +356,8 @@ function buildPackage({ repoRoot, outDir, basename, generatedAt = new Date().toI
     archiveSha256: archive.sha256,
     releaseReportPath,
     releaseReportSha256,
+    releaseMarkdownPath,
+    releaseMarkdownSha256,
     releaseReady: releaseValidation.release_ready === true,
     ready: packageManifest.handoff_validation.ready_for_customer_sandbox,
     fileCount: packageManifest.included_files.length,

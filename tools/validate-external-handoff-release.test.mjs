@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildPackage } from './build-external-handoff-package.mjs';
-import { validateRelease } from './validate-external-handoff-release.mjs';
+import { renderReleaseMarkdown, validateRelease } from './validate-external-handoff-release.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -27,6 +27,23 @@ test('validateRelease accepts a generated package, archive, and sidecar', () => 
   assert.equal(result.archive_sha256, built.archiveSha256);
   assert.equal(result.errors.length, 0);
   assert.equal(result.checks.find((check) => check.key === 'archive_root_matches_package').passed, true);
+});
+
+test('renderReleaseMarkdown summarizes a ready release for human review', () => {
+  const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'v3-external-handoff-release-'));
+  const built = buildPackage({
+    repoRoot,
+    outDir,
+    basename: 'release-markdown-package',
+    generatedAt: '2026-05-14T00:00:00.000Z',
+  });
+
+  const markdown = renderReleaseMarkdown(validateRelease({ packageRootInput: built.packageRoot }));
+
+  assert.match(markdown, /Status: \*\*READY\*\*/);
+  assert.match(markdown, /Archive SHA256:/);
+  assert.match(markdown, /PASS `archive_root_matches_package`/);
+  assert.match(markdown, /## Errors/);
 });
 
 test('validateRelease rejects an archive that belongs to a different package directory', () => {

@@ -28,6 +28,44 @@ function summarizeChecks(prefix, checks = []) {
   }));
 }
 
+function renderReleaseMarkdown(report) {
+  const status = report.release_ready ? 'READY' : 'NOT READY';
+  const checks = (report.checks || [])
+    .map((check) => `- ${check.passed ? 'PASS' : 'FAIL'} \`${check.key}\``)
+    .join('\n');
+  const errors = (report.errors || []).length
+    ? report.errors.map((error) => `- \`${error.code}\`: ${error.message}${error.path ? ` (${error.path})` : ''}`).join('\n')
+    : '- None';
+
+  return `# External Third-Party Handoff Release Report
+
+Status: **${status}**
+
+## Package
+
+- Package root: \`${report.package_root}\`
+- Included files: ${report.package_summary?.included_file_count ?? 0}
+- Package ready: ${report.package_summary?.package_ready ? 'yes' : 'no'}
+- Handoff ready: ${report.package_summary?.handoff_ready ? 'yes' : 'no'}
+
+## Archive
+
+- Archive path: \`${report.archive_path}\`
+- Archive SHA256: \`${report.archive_sha256 || 'unknown'}\`
+- Archive root: \`${report.archive_summary?.root_name || 'unknown'}\`
+- Archive entries: ${report.archive_summary?.entry_count ?? 0}
+- Archive ready: ${report.archive_summary?.archive_ready ? 'yes' : 'no'}
+
+## Checks
+
+${checks}
+
+## Errors
+
+${errors}
+`;
+}
+
 function validateRelease({ packageRootInput = '.', archivePathInput = '', sidecarPathInput = '' } = {}) {
   const errors = [];
   const packageRoot = path.resolve(packageRootInput || '.');
@@ -95,6 +133,11 @@ async function main() {
     archivePathInput: args.archive || '',
     sidecarPathInput: args.sha256 || '',
   });
+  if (args.markdown) {
+    await import('node:fs').then((fs) => {
+      fs.writeFileSync(path.resolve(args.markdown), renderReleaseMarkdown(result));
+    });
+  }
   console.log(JSON.stringify(result, null, 2));
   if (!result.release_ready) {
     process.exitCode = 1;
@@ -107,4 +150,4 @@ if (invokedPath === modulePath) {
   await main();
 }
 
-export { validateRelease };
+export { renderReleaseMarkdown, validateRelease };

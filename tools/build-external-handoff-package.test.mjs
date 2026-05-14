@@ -41,8 +41,10 @@ test('buildPackage creates a third-party handoff directory with manifest and too
   assert.ok(fs.existsSync(result.archivePath));
   assert.ok(fs.existsSync(result.archiveSha256Path));
   assert.ok(fs.existsSync(result.releaseReportPath));
+  assert.ok(fs.existsSync(result.releaseMarkdownPath));
   assert.match(result.archiveSha256, /^[a-f0-9]{64}$/);
   assert.match(result.releaseReportSha256, /^[a-f0-9]{64}$/);
+  assert.match(result.releaseMarkdownSha256, /^[a-f0-9]{64}$/);
   assert.equal(result.releaseReady, true);
   assert.ok(fs.existsSync(path.join(result.packageRoot, 'README.zh-CN.md')));
   assert.ok(fs.existsSync(path.join(result.packageRoot, 'docs/third-party-integration-api.zh-CN.md')));
@@ -63,6 +65,9 @@ test('buildPackage creates a third-party handoff directory with manifest and too
   assert.equal(releaseReport.release_ready, true);
   assert.equal(releaseReport.archive_sha256, result.archiveSha256);
   assert.equal(releaseReport.package_summary.included_file_count, result.fileCount);
+  const releaseMarkdown = fs.readFileSync(result.releaseMarkdownPath, 'utf8');
+  assert.match(releaseMarkdown, /Status: \*\*READY\*\*/);
+  assert.match(releaseMarkdown, /Archive SHA256:/);
 
   const archiveEntries = listTarEntries(result.archivePath);
   assert.ok(archiveEntries.includes('package-under-test/README.zh-CN.md'));

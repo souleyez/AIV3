@@ -918,7 +918,7 @@ npm run build:external-handoff-package
 target/external-third-party-handoff
 ```
 
-生成结果包含交接包目录、同名 `.tar.gz` 归档、`.sha256` 校验文件，以及同级 `.release.json` 交付校验报告。交接包包含：
+生成结果包含交接包目录、同名 `.tar.gz` 归档、`.sha256` 校验文件、同级 `.release.json` 机器可读交付校验报告，以及同级 `.release.md` 人工审阅摘要。交接包包含：
 
 - 中文接口说明和英文接口说明；
 - `handoff/third-party-handoff.sample.json`；
@@ -928,6 +928,7 @@ target/external-third-party-handoff
 - `README.zh-CN.md`、`README.md`、`package.json`；
 - `handoff-package-manifest.json`，记录包内文件、来源、用途和 SHA256 摘要。
 - 包目录同级的 `<package>.release.json`，记录本次包目录、归档、摘要和交接清单的一键校验结果。
+- 包目录同级的 `<package>.release.md`，以人工可读形式汇总 ready 状态、归档 SHA256、检查项和错误。
 
 第三方拿到包后，可在包目录内执行：
 

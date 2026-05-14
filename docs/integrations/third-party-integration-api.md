@@ -893,7 +893,7 @@ V3 can generate a self-contained package for customer sandbox handoff:
 npm run build:external-handoff-package
 ```
 
-The generated output includes a package directory, a `.tar.gz` archive, a matching `.sha256` file, and a sibling `.release.json` validation report. The package includes:
+The generated output includes a package directory, a `.tar.gz` archive, a matching `.sha256` file, a sibling machine-readable `.release.json` validation report, and a sibling human-readable `.release.md` summary. The package includes:
 
 - this API guide and the Chinese third-party sendable guide;
 - `handoff/third-party-handoff.sample.json`;
@@ -905,7 +905,7 @@ The generated output includes a package directory, a `.tar.gz` archive, a matchi
 - operator smoke/readiness references;
 - `README.zh-CN.md`, `README.md`, `package.json`, and `handoff-package-manifest.json`.
 
-The sibling `<package>.release.json` file records the combined validation result for the package directory, archive, sidecar, and handoff manifest.
+The sibling `<package>.release.json` file records the combined validation result for the package directory, archive, sidecar, and handoff manifest. The sibling `<package>.release.md` file summarizes the same release status, archive SHA256, checks, and errors for human review.
 
 Inside the package, third parties can run:
 
