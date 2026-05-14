@@ -6,6 +6,7 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import zlib from 'node:zlib';
 import { validateExternalHandoffManifest } from './validate-external-handoff.mjs';
+import { validateRelease } from './validate-external-handoff-release.mjs';
 
 const PACKAGE_TYPE = 'v3.external_third_party_handoff_package.v1';
 
@@ -335,6 +336,14 @@ function buildPackage({ repoRoot, outDir, basename, generatedAt = new Date().toI
   });
   const archiveSha256Path = `${archivePath}.sha256`;
   fs.writeFileSync(archiveSha256Path, `${archive.sha256}  ${archiveFileName}\n`);
+  const releaseValidation = validateRelease({
+    packageRootInput: packageRoot,
+    archivePathInput: archivePath,
+    sidecarPathInput: archiveSha256Path,
+  });
+  const releaseReportPath = path.join(path.dirname(packageRoot), `${path.basename(packageRoot)}.release.json`);
+  writeJson(releaseReportPath, releaseValidation);
+  const releaseReportSha256 = sha256Hex(fs.readFileSync(releaseReportPath));
 
   return {
     packageRoot,
@@ -342,6 +351,9 @@ function buildPackage({ repoRoot, outDir, basename, generatedAt = new Date().toI
     archivePath,
     archiveSha256Path,
     archiveSha256: archive.sha256,
+    releaseReportPath,
+    releaseReportSha256,
+    releaseReady: releaseValidation.release_ready === true,
     ready: packageManifest.handoff_validation.ready_for_customer_sandbox,
     fileCount: packageManifest.included_files.length,
   };
@@ -358,7 +370,7 @@ async function main() {
     generatedAt: args.generatedAt || new Date().toISOString(),
   });
   console.log(JSON.stringify(result, null, 2));
-  if (!result.ready) {
+  if (!result.releaseReady) {
     process.exitCode = 1;
   }
 }
