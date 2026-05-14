@@ -13,6 +13,7 @@
 - 该观测域名不提供直接跳回 V3 主工作台的导航入口。
 - 部署目标的第三方 gateway smoke 会生成 JSON/Markdown readiness 报告，用于确认签名派发、结果回调、脱敏检查、交接清单校验和剩余客户联调准备项。
 - V3 提供第三方交接清单样例和自动校验命令，用于在客户沙箱联调前检查 HTTPS 或已批准的本机回环地址、派发鉴权、回调白名单、文档/权限样例、运维联系人，以及是否误填了明文密钥。
+- V3 可以生成一份自包含交接包，包含中英文接口说明、交接清单样例、校验工具、mock gateway 参考、README 和 SHA256 文件清单。
 
 ## 1. 接入目标
 
@@ -902,6 +903,38 @@ npm run validate:external-handoff
 - 清单中是否误写入明文 token、signing secret、password、private key、API key 等敏感材料。
 
 清单里只应写凭证交付方式和配置引用，不应粘贴真实密钥。真实凭证应通过双方确认的安全通道单独交付。
+
+### 19.2 交接包生成
+
+V3 侧可以生成一份第三方沙箱交接包：
+
+```bash
+npm run build:external-handoff-package
+```
+
+生成目录默认位于：
+
+```text
+target/external-third-party-handoff
+```
+
+交接包包含：
+
+- 中文接口说明和英文接口说明；
+- `handoff/third-party-handoff.sample.json`；
+- `tools/validate-external-handoff.mjs`；
+- `sandbox/external-third-party-mock-gateway.mjs`；
+- V3 侧 smoke/readiness 参考脚本；
+- `README.zh-CN.md`、`README.md`、`package.json`；
+- `handoff-package-manifest.json`，记录包内文件、来源、用途和 SHA256 摘要。
+
+第三方拿到包后，可在包目录内执行：
+
+```bash
+npm run validate:handoff
+```
+
+该命令会校验包内的交接清单样例。第三方正式填写自己的清单后，也应先通过同一类校验，再交给 V3 项目组联调。
 
 ## 20. 版本与变更
 

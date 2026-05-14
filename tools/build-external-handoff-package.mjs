@@ -1,0 +1,257 @@
+#!/usr/bin/env node
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { validateExternalHandoffManifest } from './validate-external-handoff.mjs';
+
+const PACKAGE_TYPE = 'v3.external_third_party_handoff_package.v1';
+
+const SOURCE_FILES = [
+  {
+    source: 'docs/integrations/third-party-integration-api.zh-CN.md',
+    target: 'docs/third-party-integration-api.zh-CN.md',
+    audience: 'third_party',
+  },
+  {
+    source: 'docs/integrations/third-party-integration-api.md',
+    target: 'docs/third-party-integration-api.md',
+    audience: 'third_party',
+  },
+  {
+    source: 'docs/integrations/third-party-handoff.sample.json',
+    target: 'handoff/third-party-handoff.sample.json',
+    audience: 'third_party',
+  },
+  {
+    source: 'scripts/external-third-party-mock-gateway.mjs',
+    target: 'sandbox/external-third-party-mock-gateway.mjs',
+    audience: 'third_party',
+  },
+  {
+    source: 'scripts/run-external-third-party-gateway-smoke.sh',
+    target: 'sandbox/run-external-third-party-gateway-smoke.sh',
+    audience: 'v3_operator',
+  },
+  {
+    source: 'tools/validate-external-handoff.mjs',
+    target: 'tools/validate-external-handoff.mjs',
+    audience: 'third_party',
+  },
+  {
+    source: 'tools/external-third-party-readiness-report.mjs',
+    target: 'tools/external-third-party-readiness-report.mjs',
+    audience: 'v3_operator',
+  },
+];
+
+function parseArgs(argv) {
+  const parsed = {};
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (!arg.startsWith('--')) {
+      continue;
+    }
+    parsed[arg.slice(2)] = argv[index + 1];
+    index += 1;
+  }
+  return parsed;
+}
+
+function repoRootFromModule() {
+  const currentFile = fileURLToPath(import.meta.url);
+  return path.resolve(path.dirname(currentFile), '..');
+}
+
+function timestampForPath(date = new Date()) {
+  return date.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
+}
+
+function gitHead(repoRoot) {
+  try {
+    return execFileSync('git', ['-C', repoRoot, 'rev-parse', '--short', 'HEAD'], { encoding: 'utf8' }).trim();
+  } catch {
+    return '';
+  }
+}
+
+function sha256Hex(buffer) {
+  return crypto.createHash('sha256').update(buffer).digest('hex');
+}
+
+function ensureParentDir(filePath) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+}
+
+function copyFileWithDigest(repoRoot, packageRoot, fileSpec) {
+  const sourcePath = path.join(repoRoot, fileSpec.source);
+  const targetPath = path.join(packageRoot, fileSpec.target);
+  const bytes = fs.readFileSync(sourcePath);
+  ensureParentDir(targetPath);
+  fs.writeFileSync(targetPath, bytes);
+  if (fileSpec.target.endsWith('.sh') || fileSpec.target.endsWith('.mjs')) {
+    fs.chmodSync(targetPath, 0o755);
+  }
+  return {
+    path: fileSpec.target.replaceAll('\\', '/'),
+    source: fileSpec.source.replaceAll('\\', '/'),
+    audience: fileSpec.audience,
+    bytes: bytes.length,
+    sha256: sha256Hex(bytes),
+  };
+}
+
+function writeJson(filePath, value) {
+  ensureParentDir(filePath);
+  fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+function renderChineseReadme({ generatedAt, head }) {
+  return `# V3 第三方沙箱交接包
+
+生成时间：${generatedAt}
+V3 提交：${head || 'unknown'}
+
+## 这个包包含什么
+
+- \`docs/third-party-integration-api.zh-CN.md\`：可发给第三方的中文接口说明。
+- \`docs/third-party-integration-api.md\`：英文接口说明。
+- \`handoff/third-party-handoff.sample.json\`：第三方沙箱交接清单样例。
+- \`tools/validate-external-handoff.mjs\`：交接清单校验工具。
+- \`sandbox/external-third-party-mock-gateway.mjs\`：第三方动作 endpoint 的本地 mock 示例。
+- \`sandbox/run-external-third-party-gateway-smoke.sh\`：V3 部署目标使用的签名派发、结果回调和交接清单 smoke 入口。
+- \`handoff-package-manifest.json\`：本包文件清单、SHA256 摘要和校验摘要。
+
+## 第三方应先做什么
+
+1. 阅读 \`docs/third-party-integration-api.zh-CN.md\`。
+2. 复制 \`handoff/third-party-handoff.sample.json\`，按自己的测试环境填写。
+3. 不要把真实 token、signing secret、password、private key 或 API key 写入清单。
+4. 运行校验：
+
+\`\`\`bash
+npm run validate:handoff
+\`\`\`
+
+5. 将校验通过的清单、测试文档/权限样例、联调联系人和网络白名单信息交给 V3 项目组。
+
+## V3 侧如何验收
+
+V3 部署目标会运行 gateway smoke，验证签名派发、第三方结果回调、脱敏摘要和交接清单：
+
+\`\`\`bash
+EXTERNAL_THIRD_PARTY_HANDOFF_MANIFEST=/path/to/third-party-handoff.json \\
+  bash sandbox/run-external-third-party-gateway-smoke.sh
+\`\`\`
+
+真实客户 HTTPS 沙箱可用后，V3 项目组会把同一套动作/回调契约切到客户 endpoint 进行联调。
+`;
+}
+
+function renderEnglishReadme({ generatedAt, head }) {
+  return `# V3 Third-Party Sandbox Handoff Package
+
+Generated at: ${generatedAt}
+V3 commit: ${head || 'unknown'}
+
+This package contains third-party-facing API guides, a sandbox handoff manifest sample, validation tooling, and a mock gateway reference for V3 external action dispatch/result callback integration.
+
+Recommended flow:
+
+1. Read \`docs/third-party-integration-api.zh-CN.md\` or \`docs/third-party-integration-api.md\`.
+2. Copy and fill \`handoff/third-party-handoff.sample.json\` for the customer sandbox.
+3. Do not paste real tokens, signing secrets, passwords, private keys, or API keys into the manifest.
+4. Run \`npm run validate:handoff\`.
+5. Send the validated manifest, document/ACL fixtures, network allowlist details, and operations contacts to the V3 team.
+
+The V3 operator smoke validates signed dispatch, result callback, redaction, and the handoff manifest before a live customer sandbox run.
+`;
+}
+
+function packageJson() {
+  return {
+    private: true,
+    name: 'v3-external-third-party-handoff-package',
+    version: '0.1.0',
+    type: 'module',
+    scripts: {
+      'validate:handoff': 'node tools/validate-external-handoff.mjs --manifest handoff/third-party-handoff.sample.json',
+      'start:mock-gateway': 'node sandbox/external-third-party-mock-gateway.mjs',
+    },
+  };
+}
+
+function buildPackage({ repoRoot, outDir, basename, generatedAt = new Date().toISOString() }) {
+  const head = gitHead(repoRoot);
+  const packageRoot = path.resolve(outDir, basename || `external-third-party-handoff-package-${timestampForPath(new Date(generatedAt))}`);
+  fs.mkdirSync(packageRoot, { recursive: true });
+
+  const includedFiles = SOURCE_FILES.map((fileSpec) => copyFileWithDigest(repoRoot, packageRoot, fileSpec));
+  const readmeCnPath = path.join(packageRoot, 'README.zh-CN.md');
+  const readmeEnPath = path.join(packageRoot, 'README.md');
+  const packageJsonPath = path.join(packageRoot, 'package.json');
+  fs.writeFileSync(readmeCnPath, renderChineseReadme({ generatedAt, head }));
+  fs.writeFileSync(readmeEnPath, renderEnglishReadme({ generatedAt, head }));
+  writeJson(packageJsonPath, packageJson());
+
+  for (const filePath of ['README.zh-CN.md', 'README.md', 'package.json']) {
+    const bytes = fs.readFileSync(path.join(packageRoot, filePath));
+    includedFiles.push({
+      path: filePath,
+      source: 'generated',
+      audience: filePath === 'package.json' ? 'tooling' : 'third_party',
+      bytes: bytes.length,
+      sha256: sha256Hex(bytes),
+    });
+  }
+
+  const sampleManifestPath = path.join(packageRoot, 'handoff/third-party-handoff.sample.json');
+  const handoffValidation = validateExternalHandoffManifest(JSON.parse(fs.readFileSync(sampleManifestPath, 'utf8')));
+  const packageManifest = {
+    package_type: PACKAGE_TYPE,
+    generated_at: generatedAt,
+    repository_head: head || null,
+    package_root: '.',
+    handoff_validation: {
+      ready_for_customer_sandbox: handoffValidation.ready_for_customer_sandbox === true,
+      check_count: handoffValidation.checks.length,
+      error_codes: handoffValidation.errors.map((error) => error.code),
+      warning_codes: handoffValidation.warnings.map((warning) => warning.code),
+    },
+    included_files: includedFiles,
+  };
+  const packageManifestPath = path.join(packageRoot, 'handoff-package-manifest.json');
+  writeJson(packageManifestPath, packageManifest);
+
+  return {
+    packageRoot,
+    manifestPath: packageManifestPath,
+    ready: packageManifest.handoff_validation.ready_for_customer_sandbox,
+    fileCount: packageManifest.included_files.length,
+  };
+}
+
+async function main() {
+  const args = parseArgs(process.argv.slice(2));
+  const repoRoot = path.resolve(args.repoRoot || repoRootFromModule());
+  const outDir = path.resolve(args.outDir || path.join(repoRoot, 'target', 'external-third-party-handoff'));
+  const result = buildPackage({
+    repoRoot,
+    outDir,
+    basename: args.basename,
+    generatedAt: args.generatedAt || new Date().toISOString(),
+  });
+  console.log(JSON.stringify(result, null, 2));
+  if (!result.ready) {
+    process.exitCode = 1;
+  }
+}
+
+const invokedPath = process.argv[1] ? path.resolve(process.argv[1]) : '';
+const modulePath = fileURLToPath(import.meta.url);
+if (invokedPath === modulePath) {
+  await main();
+}
+
+export { PACKAGE_TYPE, SOURCE_FILES, buildPackage };

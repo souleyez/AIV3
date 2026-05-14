@@ -13,3 +13,5 @@ External third-party handoff checks:
 
 - `npm run test:external-handoff`: unit coverage for the customer sandbox handoff manifest validator.
 - `npm run validate:external-handoff`: validates `docs/integrations/third-party-handoff.sample.json` for URL safety, dispatch auth delivery notes, callback allowlist confirmation, document/ACL fixtures, operations contacts, and raw-secret exclusion.
+- `npm run test:external-handoff-package`: unit coverage for the self-contained third-party handoff package builder.
+- `npm run build:external-handoff-package`: writes a third-party handoff package under `target/external-third-party-handoff`, including public guides, the manifest sample, validation tooling, mock gateway reference, README files, and a SHA256 package manifest.

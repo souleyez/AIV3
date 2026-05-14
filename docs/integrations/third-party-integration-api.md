@@ -34,6 +34,7 @@ Already implemented:
 - External action retry requests now enqueue `external_action_dispatch_workflow` tasks on the `external_action` worker queue instead of dispatching synchronously from the management request.
 - Deployment-target third-party gateway smoke now emits JSON and Markdown readiness reports for signed dispatch, result callback acceptance, redaction checks, handoff manifest validation, and remaining customer handoff items.
 - A third-party handoff manifest sample and validator now check customer sandbox readiness before live joint testing, including HTTPS or approved loopback URLs, dispatch credentials, callback allowlisting, document/ACL fixtures, operations contacts, and absence of raw secret material.
+- A self-contained handoff package builder now writes third-party guides, the sample manifest, validator, mock gateway reference, README files, and a SHA256 package manifest under `target/external-third-party-handoff`.
 
 Planned next:
 
@@ -884,6 +885,29 @@ npm run validate:external-handoff
 
 The validator is intentionally conservative. It fails public HTTP URLs, missing dispatch auth delivery notes, missing callback allowlist confirmation, missing document ACL fixtures, missing escalation contacts, and raw secrets such as bearer tokens, signing secrets, private keys, passwords, or API keys embedded directly in the manifest. Secrets should be exchanged through the agreed secure delivery channel and referenced by delivery method, not pasted into this file.
 
+### Handoff Package
+
+V3 can generate a self-contained package for customer sandbox handoff:
+
+```bash
+npm run build:external-handoff-package
+```
+
+The generated package includes:
+
+- this API guide and the Chinese third-party sendable guide;
+- `handoff/third-party-handoff.sample.json`;
+- `tools/validate-external-handoff.mjs`;
+- `sandbox/external-third-party-mock-gateway.mjs`;
+- operator smoke/readiness references;
+- `README.zh-CN.md`, `README.md`, `package.json`, and `handoff-package-manifest.json`.
+
+Inside the package, third parties can run:
+
+```bash
+npm run validate:handoff
+```
+
 ## Versioning
 
 The external API should be versioned by path and contract version.
@@ -909,3 +933,4 @@ Breaking changes require:
 - First normalized ingress route: `POST /v1/external/channels/{connection_id}/events`
 - Handoff sample: `docs/integrations/third-party-handoff.sample.json`
 - Handoff validator: `tools/validate-external-handoff.mjs`
+- Handoff package builder: `tools/build-external-handoff-package.mjs`
