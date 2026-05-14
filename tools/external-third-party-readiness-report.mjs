@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { validateExternalHandoffManifest } from './validate-external-handoff.mjs';
 
 export const DEFAULT_READINESS_CHECKS = [
   {
@@ -66,6 +67,8 @@ export function buildReadinessReport({
   head = '',
   requests = [],
   callbacks = [],
+  handoffManifestPath = '',
+  handoffManifestValidation = null,
 } = {}) {
   const request = Array.isArray(requests) ? requests[0] : null;
   const callback = Array.isArray(callbacks) ? callbacks[0] : null;
@@ -75,6 +78,17 @@ export function buildReadinessReport({
     label: check.label,
     passed: Boolean(check.pass(context)),
   }));
+  const handoffManifestSummary = summarizeHandoffManifestValidation(
+    handoffManifestValidation,
+    handoffManifestPath,
+  );
+  if (handoffManifestSummary) {
+    checks.push({
+      key: 'handoff_manifest_ready',
+      label: 'Handoff manifest is ready for customer sandbox',
+      passed: handoffManifestSummary.ready_for_customer_sandbox,
+    });
+  }
   return {
     report_type: 'external_third_party_readiness',
     generated_at: generatedAt,
@@ -103,7 +117,31 @@ export function buildReadinessReport({
           external_request_id: callback.response_summary?.external_request_id || null,
         }
       : null,
+    handoff_manifest_summary: handoffManifestSummary,
     third_party_handoff_items: THIRD_PARTY_HANDOFF_ITEMS,
+  };
+}
+
+function summarizeHandoffManifestValidation(validation, manifestPath) {
+  if (!validation) {
+    return null;
+  }
+  return {
+    manifest_path: manifestPath || null,
+    manifest_version: validation.manifest_version || null,
+    ready_for_customer_sandbox: validation.ready_for_customer_sandbox === true,
+    checks: Array.isArray(validation.checks)
+      ? validation.checks.map((check) => ({
+          key: check.key,
+          passed: check.passed === true,
+        }))
+      : [],
+    error_codes: Array.isArray(validation.errors)
+      ? [...new Set(validation.errors.map((error) => error.code).filter(Boolean))]
+      : [],
+    warning_codes: Array.isArray(validation.warnings)
+      ? [...new Set(validation.warnings.map((warning) => warning.code).filter(Boolean))]
+      : [],
   };
 }
 
@@ -134,6 +172,14 @@ export function renderReadinessMarkdown(report) {
         `- Result status: \`${report.callback_summary.status || 'unknown'}\``,
       ].join('\n')
     : '- No callback summary.';
+  const handoffManifest = report.handoff_manifest_summary
+    ? [
+        `- Manifest: \`${report.handoff_manifest_summary.manifest_path || 'unknown'}\``,
+        `- Ready: ${report.handoff_manifest_summary.ready_for_customer_sandbox ? 'yes' : 'no'}`,
+        `- Errors: ${report.handoff_manifest_summary.error_codes.length || 0}`,
+        `- Warnings: ${report.handoff_manifest_summary.warning_codes.length || 0}`,
+      ].join('\n')
+    : '- No handoff manifest validation attached.';
 
   return `# External Third-Party Readiness Report
 
@@ -154,6 +200,10 @@ ${dispatch}
 ## Result Callback Summary
 
 ${callback}
+
+## Handoff Manifest Summary
+
+${handoffManifest}
 
 ## Third-Party Handoff Items
 
@@ -199,6 +249,10 @@ function writeReportFiles(report, outDir, basename = 'external-third-party-readi
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
+  const handoffManifestPath = args.handoffManifest || process.env.EXTERNAL_THIRD_PARTY_HANDOFF_MANIFEST || '';
+  const handoffManifestValidation = handoffManifestPath
+    ? validateExternalHandoffManifest(readJsonFile(handoffManifestPath, null))
+    : null;
   const requestsPayload = args.requests
     ? readJsonFile(args.requests, { requests: [] })
     : readJsonText(process.env.EXTERNAL_THIRD_PARTY_REQUESTS_JSON, { requests: [] });
@@ -212,6 +266,8 @@ async function main() {
     head: args.head || '',
     requests: Array.isArray(requestsPayload.requests) ? requestsPayload.requests : [],
     callbacks: Array.isArray(callbacksPayload.callbacks) ? callbacksPayload.callbacks : [],
+    handoffManifestPath,
+    handoffManifestValidation,
   });
   const outDir = args.outDir || path.join('target', 'external-third-party-readiness');
   const basename = args.basename || 'external-third-party-readiness-report';

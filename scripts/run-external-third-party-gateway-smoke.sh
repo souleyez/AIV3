@@ -17,6 +17,7 @@ host="${EXTERNAL_THIRD_PARTY_MOCK_HOST:-127.0.0.1}"
 base_url="http://${host}:${port}"
 log_file="${TMPDIR:-/tmp}/external-third-party-mock-gateway-${port}.log"
 report_dir="${EXTERNAL_THIRD_PARTY_READINESS_REPORT_DIR:-${repo_root}/target/external-third-party-readiness}"
+handoff_manifest="${EXTERNAL_THIRD_PARTY_HANDOFF_MANIFEST:-${repo_root}/docs/integrations/third-party-handoff.sample.json}"
 
 export EXTERNAL_THIRD_PARTY_MOCK_HOST="${host}"
 export EXTERNAL_THIRD_PARTY_MOCK_PORT="${port}"
@@ -42,6 +43,7 @@ curl -fsS "${base_url}/__mock/health" >/dev/null
 echo "External third-party gateway smoke started"
 echo "Gateway: ${base_url}"
 echo "Repository: ${repo_root}"
+echo "Handoff manifest: ${handoff_manifest}"
 printf "HEAD: "
 git rev-parse --short HEAD
 
@@ -105,6 +107,7 @@ readiness_report="$(
     --gateway "${base_url}" \
     --repository "${repo_root}" \
     --head "$(git rev-parse --short HEAD)" \
+    --handoffManifest "${handoff_manifest}" \
     --outDir "${report_dir}" \
     --basename "${report_basename}"
 )"
