@@ -2098,7 +2098,35 @@ fn render_selected_slide_notes_markdown(
         .cloned()
         .unwrap_or_default();
     let mut output = format!("# Slide Notes: {}\n\n", document.title);
-    output.push_str("This file is deterministic evidence for the screenshot-based PPTX. It contains only source frame/candidate metadata and review warnings; narration alignment is a later enhancement.\n\n");
+    output.push_str("This file is deterministic evidence for the screenshot-based PPTX. It contains source frame, selection, rectangle, transcript-window, and review metadata without exposing local paths.\n\n");
+    output.push_str("## Deck Summary\n\n");
+    let requested_selected_count = selected_slides_manifest
+        .get("requested_selected_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(selected_candidates.len() as u64);
+    let selected_count = selected_slides_manifest
+        .get("selected_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(selected_candidates.len() as u64);
+    let deduped_candidate_count = selected_slides_manifest
+        .get("deduped_candidate_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let dedupe_status = selected_slides_manifest
+        .get("dedupe_status")
+        .and_then(Value::as_str)
+        .unwrap_or("waiting_for_selection");
+    let rectangle_status = selected_slides_manifest
+        .get("rectangle_extraction_status")
+        .and_then(Value::as_str)
+        .unwrap_or("waiting_for_selection");
+    let rectangle_mode = selected_slides_manifest
+        .get("rectangle_extraction_mode")
+        .and_then(Value::as_str)
+        .unwrap_or("waiting_for_selection");
+    output.push_str(&format!(
+        "- Requested keep-list entries: {requested_selected_count}\n- Selected slides: {selected_count}\n- Removed duplicate candidates: {deduped_candidate_count}\n- Dedupe status: {dedupe_status}\n- Rectangle status: {rectangle_status}\n- Rectangle mode: {rectangle_mode}\n\n"
+    ));
     output.push_str("## Quality Warnings\n\n");
     let warnings = video_selected_slide_quality_warnings(selected_slides_manifest);
     for warning in warnings {
@@ -2124,10 +2152,71 @@ fn render_selected_slide_notes_markdown(
             .get("timestamp_label")
             .and_then(Value::as_str)
             .unwrap_or("");
+        let contact_sheet_anchor = candidate
+            .get("contact_sheet_anchor")
+            .and_then(Value::as_str)
+            .unwrap_or("");
         output.push_str(&format!(
             "### Slide {slide_number}\n\n- Candidate: {candidate_index}\n- Source frame: {file_name}\n- Frame timestamp: {}\n- Internal frame path: [redacted]\n",
             if timestamp.is_empty() { "unknown" } else { timestamp }
         ));
+        if !contact_sheet_anchor.is_empty() {
+            output.push_str(&format!(
+                "- Contact sheet anchor: `{contact_sheet_anchor}`\n"
+            ));
+        }
+        if let Some(window) = candidate.get("transcript_window") {
+            let start = window.get("start_seconds").and_then(Value::as_f64);
+            let end = window.get("end_seconds").and_then(Value::as_f64);
+            let assignment_rule = window
+                .get("assignment_rule")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
+            output.push_str(&format!(
+                "- Transcript window: {} -> {} ({assignment_rule})\n",
+                start
+                    .map(format_seconds)
+                    .unwrap_or_else(|| "unknown".to_string()),
+                end.map(format_seconds)
+                    .unwrap_or_else(|| "unknown".to_string())
+            ));
+        }
+        if let Some(rectangle) = candidate.get("slide_rectangle") {
+            let status = rectangle
+                .get("rectangle_extraction_status")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
+            let mode = rectangle
+                .get("rectangle_extraction_mode")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
+            let source = rectangle
+                .get("rectangle_source")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
+            output.push_str(&format!("- Rectangle: {status} / {mode} ({source})\n"));
+            if let Some(crop_box) = rectangle.get("crop_box") {
+                let unit = crop_box
+                    .get("unit")
+                    .and_then(Value::as_str)
+                    .unwrap_or("relative");
+                output.push_str(&format!(
+                    "- Crop box: x={}, y={}, width={}, height={} ({unit})\n",
+                    video_crop_box_value_label(crop_box, "x"),
+                    video_crop_box_value_label(crop_box, "y"),
+                    video_crop_box_value_label(crop_box, "width"),
+                    video_crop_box_value_label(crop_box, "height")
+                ));
+            }
+            let review_required = rectangle
+                .get("review_required")
+                .and_then(Value::as_bool)
+                .unwrap_or(true);
+            output.push_str(&format!(
+                "- Review required: {}\n",
+                if review_required { "yes" } else { "no" }
+            ));
+        }
         let transcript_segments = candidate
             .get("transcript_segments")
             .and_then(Value::as_array)
@@ -2148,6 +2237,24 @@ fn render_selected_slide_notes_markdown(
         }
     }
     output
+}
+
+fn video_crop_box_value_label(crop_box: &Value, key: &str) -> String {
+    crop_box
+        .get(key)
+        .and_then(Value::as_f64)
+        .map(|value| {
+            let rounded = (value * 10_000.0).round() / 10_000.0;
+            if (rounded.fract()).abs() < f64::EPSILON {
+                format!("{rounded:.0}")
+            } else {
+                format!("{rounded:.4}")
+                    .trim_end_matches('0')
+                    .trim_end_matches('.')
+                    .to_string()
+            }
+        })
+        .unwrap_or_else(|| "unknown".to_string())
 }
 
 fn video_selected_slide_quality_warnings(selected_slides_manifest: &Value) -> Vec<String> {
@@ -7133,8 +7240,21 @@ mod tests {
             .and_then(|file| file["path"].as_str())
             .expect("slide notes path");
         let slide_notes = fs::read_to_string(slide_notes_path).expect("slide notes");
+        assert!(slide_notes.contains("Deck Summary"));
+        assert!(slide_notes.contains("Selected slides: 2"));
+        assert!(slide_notes.contains("Dedupe status: selected_keep_list_order_deduped"));
+        assert!(slide_notes.contains("Rectangle mode: full_frame_fallback"));
         assert!(slide_notes.contains("Slide 1"));
         assert!(slide_notes.contains("candidate 2"));
+        assert!(slide_notes.contains("Contact sheet anchor: `candidate-2`"));
+        assert!(
+            slide_notes.contains("Transcript window: 0:00 -> 0:00 (pre_page_previous_to_current)")
+        );
+        assert!(
+            slide_notes.contains("Rectangle: promoted_full_frame_fallback / full_frame_fallback")
+        );
+        assert!(slide_notes.contains("Crop box: x=0, y=0, width=1, height=1 (relative)"));
+        assert!(slide_notes.contains("Review required: yes"));
         assert!(slide_notes.contains("Internal frame path: [redacted]"));
         assert!(!slide_notes.contains(&raw_frames_dir.display().to_string()));
     }
