@@ -73,3 +73,24 @@ git diff --check
 ```
 
 The local Rust checks compiled and passed. The deployment target provided the PostgreSQL-backed verification path for the callback route.
+
+## Observability Follow-Up
+
+Follow-up validated commit: `c3f702c`.
+
+The deployment target pulled `c3f702c` and ran:
+
+```text
+bash scripts/run-external-third-party-gateway-smoke.sh
+node --test app/lib/external-integrations.test.mjs
+```
+
+Result: passed.
+
+The gateway smoke still validated signed dispatch plus gateway-to-V3 result callback roundtrip. The web contract test passed 9 checks, including action lifecycle normalization for `waiting_result`, `result_succeeded`, and `result_failed`.
+
+This confirms:
+
+- `GET /v1/external/integrations` can expose observe-only `action_summary` lifecycle counts without breaking gateway smoke.
+- The standalone panel can normalize and display result callback states.
+- Result failures now surface as operational failures while keeping raw third-party callback content out of UI summaries.
