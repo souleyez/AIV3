@@ -267,3 +267,26 @@ The generated package reported `fileCount: 12`. Package-internal `validate:packa
 Package-internal `validate:archive` inferred the sibling archive path from the package directory, returned `archive_ready: true`, `entry_count: 13`, root `deployment-package-archive-script-check`, and SHA256 `3b0426688224af2ba29443931d57d76059656049f0794118a58b462d28ebd730`.
 
 The deployment target finished at `e48b563` with a clean `main...origin/main` status.
+
+## Handoff Release Validator Follow-Up
+
+Follow-up validated commit: `ab38d8e`.
+
+The deployment target pulled `ab38d8e` and ran:
+
+```text
+npm run test:external-handoff-release
+npm run test:external-handoff-package
+npm run test:external-handoff-archive
+npm run build:external-handoff-package -- --basename deployment-release-validator-check --generatedAt 2026-05-14T00:00:00.000Z
+npm --prefix target/external-third-party-handoff/deployment-release-validator-check run validate:release
+npm run validate:external-handoff-release -- --package target/external-third-party-handoff/deployment-release-validator-check
+```
+
+Result: passed.
+
+The generated package reported `fileCount: 13`. Both the package-internal `validate:release` script and root `validate:external-handoff-release` returned `release_ready: true`.
+
+The release report returned SHA256 `2eee082b9b92ee799c328d5c800285d59bb30ee0c88d6b0f13f90560ab99b84f`, archive root `deployment-release-validator-check`, archive `entry_count: 14`, `included_file_count: 13`, and no package/archive error codes.
+
+The deployment target finished at `ab38d8e` with a clean `main...origin/main` status.
