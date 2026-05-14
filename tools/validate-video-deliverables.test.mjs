@@ -21,10 +21,10 @@ test("accepts detector-cropped slide rectangles", () => {
   const slideRectangles = JSON.parse(fs.readFileSync(slideRectanglesPath, "utf8"));
   slideRectangles.status = "promoted_detector_crop";
   slideRectangles.rectangle_extraction_status = "promoted_detector_crop";
-  slideRectangles.rectangle_extraction_mode = "border_background_contrast_v2";
-  slideRectangles.rectangles[0].rectangle_source = "raw_frame_border_background_contrast";
+  slideRectangles.rectangle_extraction_mode = "edge_projection_v1";
+  slideRectangles.rectangles[0].rectangle_source = "raw_frame_edge_projection";
   slideRectangles.rectangles[0].rectangle_extraction_status = "promoted_detector_crop";
-  slideRectangles.rectangles[0].rectangle_extraction_mode = "border_background_contrast_v2";
+  slideRectangles.rectangles[0].rectangle_extraction_mode = "edge_projection_v1";
   slideRectangles.rectangles[0].crop_box = { unit: "relative", x: 0.2, y: 0.125, width: 0.6, height: 0.625 };
   fs.writeFileSync(slideRectanglesPath, JSON.stringify(slideRectangles, null, 2));
 

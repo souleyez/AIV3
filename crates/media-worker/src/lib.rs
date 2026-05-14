@@ -1666,7 +1666,7 @@ fn selected_slides_manifest_from_keep_list(
         "rectangle_extraction_mode": rectangle_extraction_mode,
         "dedupe_status": dedupe_status,
         "dedupe_policy": "selected candidate indices are range-checked, order-preserved, de-duplicated by index; exact duplicate frame bytes and conservative visual near-duplicates are removed before rectangle promotion",
-        "rectangle_policy": "promote selected raw frames as full-frame relative rectangles until a visual detector can replace the fallback crop",
+        "rectangle_policy": "promote selected raw frames with conservative visual detectors when possible; otherwise use full-frame relative rectangles that require review",
         "selected_candidates": selected_candidates,
         "rejected_duplicate_candidates": rejected_duplicate_candidates,
         "next_step": if selected_candidates.is_empty() {
@@ -1691,9 +1691,9 @@ fn video_slide_rectangle_from_frame(
                 "candidate_index": candidate_index,
                 "source_frame": file_name,
                 "timestamp_seconds": timestamp_seconds,
-                "rectangle_source": "raw_frame_border_background_contrast",
+                "rectangle_source": detection.rectangle_source,
                 "rectangle_extraction_status": "promoted_detector_crop",
-                "rectangle_extraction_mode": "border_background_contrast_v2",
+                "rectangle_extraction_mode": detection.rectangle_extraction_mode,
                 "crop_box": {
                     "unit": "relative",
                     "x": detection.x,
@@ -1702,12 +1702,15 @@ fn video_slide_rectangle_from_frame(
                     "height": detection.height,
                 },
                 "detector": {
-                    "name": "border_background_contrast_v2",
+                    "name": detection.detector_name,
                     "image_width": detection.image_width,
                     "image_height": detection.image_height,
-                    "foreground_pixel_count": detection.foreground_pixel_count,
-                    "background_sample_count": detection.background_sample_count,
-                    "background_source": detection.background_source,
+                    "foreground_pixel_count": detection.signal_pixel_count,
+                    "background_sample_count": detection.sample_count,
+                    "background_source": detection.signal_source,
+                    "signal_pixel_count": detection.signal_pixel_count,
+                    "sample_count": detection.sample_count,
+                    "signal_source": detection.signal_source,
                     "threshold": detection.threshold,
                 },
                 "confidence_label": "detector_candidate_requires_review",
@@ -1757,9 +1760,12 @@ struct VideoSlideRectangleDetection {
     height: f64,
     image_width: u32,
     image_height: u32,
-    foreground_pixel_count: u64,
-    background_sample_count: u64,
-    background_source: &'static str,
+    signal_pixel_count: u64,
+    sample_count: u64,
+    signal_source: &'static str,
+    detector_name: &'static str,
+    rectangle_source: &'static str,
+    rectangle_extraction_mode: &'static str,
     threshold: u8,
 }
 
@@ -1775,8 +1781,17 @@ fn video_detect_slide_rectangle(frame: &Path) -> Option<VideoSlideRectangleDetec
         return None;
     }
 
+    video_detect_slide_rectangle_by_background_contrast(&image, width, height)
+        .or_else(|| video_detect_slide_rectangle_by_edge_projection(&image, width, height))
+}
+
+fn video_detect_slide_rectangle_by_background_contrast(
+    image: &image::DynamicImage,
+    width: u32,
+    height: u32,
+) -> Option<VideoSlideRectangleDetection> {
     let (background, background_sample_count) =
-        video_border_median_background_rgb(&image, width, height)?;
+        video_border_median_background_rgb(image, width, height)?;
     let threshold = 36_u8;
     let mut column_foreground_counts = vec![0_u32; width as usize];
     let mut row_foreground_counts = vec![0_u32; height as usize];
@@ -1828,11 +1843,123 @@ fn video_detect_slide_rectangle(frame: &Path) -> Option<VideoSlideRectangleDetec
         height: video_relative_coord(box_height, height),
         image_width: width,
         image_height: height,
-        foreground_pixel_count,
-        background_sample_count,
-        background_source: "border_median_rgb",
+        signal_pixel_count: foreground_pixel_count,
+        sample_count: background_sample_count,
+        signal_source: "border_median_rgb",
+        detector_name: "border_background_contrast_v2",
+        rectangle_source: "raw_frame_border_background_contrast",
+        rectangle_extraction_mode: "border_background_contrast_v2",
         threshold,
     })
+}
+
+fn video_detect_slide_rectangle_by_edge_projection(
+    image: &image::DynamicImage,
+    width: u32,
+    height: u32,
+) -> Option<VideoSlideRectangleDetection> {
+    if width < 32 || height < 32 {
+        return None;
+    }
+
+    let threshold = 54_u8;
+    let mut column_edge_counts = vec![0_u32; width as usize];
+    let mut row_edge_counts = vec![0_u32; height as usize];
+    let mut edge_pixel_count = 0_u64;
+
+    for y in 0..height {
+        for x in 1..width {
+            let left = image.get_pixel(x - 1, y).to_rgb();
+            let right = image.get_pixel(x, y).to_rgb();
+            if video_pixel_distance_exceeds_threshold(&left.0, &right.0, threshold) {
+                column_edge_counts[x as usize] += 1;
+                edge_pixel_count += 1;
+            }
+        }
+    }
+    for y in 1..height {
+        for x in 0..width {
+            let top = image.get_pixel(x, y - 1).to_rgb();
+            let bottom = image.get_pixel(x, y).to_rgb();
+            if video_pixel_distance_exceeds_threshold(&top.0, &bottom.0, threshold) {
+                row_edge_counts[y as usize] += 1;
+                edge_pixel_count += 1;
+            }
+        }
+    }
+
+    let column_threshold = (height.saturating_mul(2) / 5).max(10);
+    let row_threshold = (width.saturating_mul(2) / 5).max(10);
+    let columns = video_projection_line_centers(&column_edge_counts, column_threshold);
+    let rows = video_projection_line_centers(&row_edge_counts, row_threshold);
+    let (Some(min_x), Some(max_x), Some(min_y), Some(max_y)) = (
+        columns.first().copied(),
+        columns.last().copied(),
+        rows.first().copied(),
+        rows.last().copied(),
+    ) else {
+        return None;
+    };
+    if min_x >= max_x || min_y >= max_y {
+        return None;
+    }
+
+    let box_width = max_x - min_x + 1;
+    let box_height = max_y - min_y + 1;
+    if box_width < width / 4 || box_height < height / 4 {
+        return None;
+    }
+    if min_x <= 1
+        || min_y <= 1
+        || max_x >= width.saturating_sub(2)
+        || max_y >= height.saturating_sub(2)
+    {
+        return None;
+    }
+    if box_width >= width.saturating_mul(19) / 20 && box_height >= height.saturating_mul(19) / 20 {
+        return None;
+    }
+
+    Some(VideoSlideRectangleDetection {
+        x: video_relative_coord(min_x, width),
+        y: video_relative_coord(min_y, height),
+        width: video_relative_coord(box_width, width),
+        height: video_relative_coord(box_height, height),
+        image_width: width,
+        image_height: height,
+        signal_pixel_count: edge_pixel_count,
+        sample_count: (columns.len() + rows.len()) as u64,
+        signal_source: "projection_edge_lines",
+        detector_name: "edge_projection_v1",
+        rectangle_source: "raw_frame_edge_projection",
+        rectangle_extraction_mode: "edge_projection_v1",
+        threshold,
+    })
+}
+
+fn video_projection_line_centers(counts: &[u32], threshold: u32) -> Vec<u32> {
+    let mut centers = Vec::new();
+    let mut index = 0_usize;
+    while index < counts.len() {
+        if counts[index] < threshold {
+            index += 1;
+            continue;
+        }
+        let start = index;
+        let mut best_index = index;
+        let mut best_count = counts[index];
+        while index + 1 < counts.len() && counts[index + 1] >= threshold {
+            index += 1;
+            if counts[index] > best_count {
+                best_count = counts[index];
+                best_index = index;
+            }
+        }
+        let end = index;
+        centers.push(((start + best_index + end) / 3) as u32);
+        index += 1;
+    }
+    centers
 }
 
 fn video_border_median_background_rgb(
@@ -1924,7 +2051,28 @@ fn video_slide_rectangle_aggregate_status(selected_candidates: &[Value]) -> &'st
 fn video_slide_rectangle_aggregate_mode(selected_candidates: &[Value]) -> &'static str {
     match video_slide_rectangle_aggregate_status(selected_candidates) {
         "waiting_for_selection" => "waiting_for_selection",
-        "promoted_detector_crop" => "border_background_contrast_v2",
+        "promoted_detector_crop" => {
+            let detector_modes = selected_candidates
+                .iter()
+                .filter_map(|candidate| {
+                    candidate
+                        .get("slide_rectangle")
+                        .and_then(|rectangle| rectangle.get("rectangle_extraction_mode"))
+                        .and_then(Value::as_str)
+                })
+                .collect::<BTreeSet<_>>();
+            if detector_modes.len() == 1 {
+                if detector_modes.contains("edge_projection_v1") {
+                    "edge_projection_v1"
+                } else if detector_modes.contains("border_background_contrast_v2") {
+                    "border_background_contrast_v2"
+                } else {
+                    "simple_background_contrast_v1"
+                }
+            } else {
+                "mixed_detector_modes"
+            }
+        }
         "mixed_detector_and_full_frame_fallback" => "mixed_detector_and_full_frame_fallback",
         _ => "full_frame_fallback",
     }
@@ -2012,9 +2160,13 @@ fn video_slide_rectangles_manifest_from_selected_slides(
             "visual_near_duplicate_max_avg_diff": VIDEO_VISUAL_NEAR_DUPLICATE_MAX_AVG_DIFF,
         },
         "crop_policy": {
-            "mode": "full_frame_fallback",
+            "mode": rectangle_extraction_mode,
             "unit": "relative",
-            "reason": "no visual rectangle detector is promoted yet; selected raw frames are explicitly marked review_required",
+            "reason": if rectangle_extraction_mode == "full_frame_fallback" {
+                "no conservative visual rectangle detector was confident enough; selected raw frames are explicitly marked review_required"
+            } else {
+                "conservative visual detector crops are promoted but still require review"
+            },
         },
         "rectangles": rectangles,
         "rejected_duplicate_candidates": rejected_duplicate_candidates,
@@ -5638,6 +5790,32 @@ mod tests {
         image.save(path).expect("test noisy slide rectangle png");
     }
 
+    fn write_test_gradient_edge_slide_rectangle_png(path: &Path) {
+        let mut image = image::RgbImage::new(100, 80);
+        for y in 0..80 {
+            for x in 0..100 {
+                let tone = 70 + ((x + y) % 120) as u8;
+                image.put_pixel(x, y, image::Rgb([tone, tone, tone]));
+            }
+        }
+        for y in 10..60 {
+            for x in 20..80 {
+                image.put_pixel(x, y, image::Rgb([244, 244, 244]));
+            }
+        }
+        for y in 10..60 {
+            image.put_pixel(20, y, image::Rgb([12, 12, 12]));
+            image.put_pixel(79, y, image::Rgb([12, 12, 12]));
+        }
+        for x in 20..80 {
+            image.put_pixel(x, 10, image::Rgb([12, 12, 12]));
+            image.put_pixel(x, 59, image::Rgb([12, 12, 12]));
+        }
+        image
+            .save(path)
+            .expect("test gradient edge slide rectangle png");
+    }
+
     fn write_test_visual_slide_png(
         path: &Path,
         background: [u8; 3],
@@ -7815,8 +7993,44 @@ mod tests {
         assert_eq!(detection.y, 0.125);
         assert_eq!(detection.width, 0.6);
         assert_eq!(detection.height, 0.625);
-        assert_eq!(detection.background_source, "border_median_rgb");
-        assert!(detection.background_sample_count > 0);
+        assert_eq!(detection.signal_source, "border_median_rgb");
+        assert!(detection.sample_count > 0);
+    }
+
+    #[test]
+    fn detects_slide_rectangle_from_edges_when_background_is_not_uniform() {
+        let output_root = std::env::temp_dir().join(format!(
+            "aidp-v3-video-edge-projection-test-{}",
+            DocumentId::new()
+        ));
+        fs::create_dir_all(&output_root).expect("output root");
+        let frame_path = output_root.join("frame_000001.png");
+        write_test_gradient_edge_slide_rectangle_png(&frame_path);
+
+        let detection =
+            video_detect_slide_rectangle(&frame_path).expect("edge projection detector crop");
+
+        assert_eq!(detection.detector_name, "edge_projection_v1");
+        assert_eq!(detection.rectangle_source, "raw_frame_edge_projection");
+        assert_eq!(detection.rectangle_extraction_mode, "edge_projection_v1");
+        assert!(detection.x >= 0.19 && detection.x <= 0.21);
+        assert!(detection.y >= 0.12 && detection.y <= 0.14);
+        assert!(detection.width >= 0.59 && detection.width <= 0.62);
+        assert!(detection.height >= 0.62 && detection.height <= 0.65);
+        assert!(detection.signal_pixel_count > 0);
+        assert!(detection.sample_count >= 4);
+
+        let rectangle =
+            video_slide_rectangle_from_frame(1, 1, "frame_000001.png", 0.0, &frame_path);
+        assert_eq!(
+            rectangle["rectangle_source"],
+            json!("raw_frame_edge_projection")
+        );
+        assert_eq!(
+            rectangle["rectangle_extraction_mode"],
+            json!("edge_projection_v1")
+        );
+        assert_eq!(rectangle["detector"]["name"], json!("edge_projection_v1"));
     }
 
     #[test]
