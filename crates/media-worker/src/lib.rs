@@ -2213,6 +2213,7 @@ fn render_pptx_slide(slide_number: usize, candidate: &Value) -> String {
         .get("file_name")
         .and_then(Value::as_str)
         .unwrap_or("frame");
+    let source_rect = render_pptx_source_rect(candidate);
     format!(
         r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
@@ -2222,7 +2223,7 @@ fn render_pptx_slide(slide_number: usize, candidate: &Value) -> String {
 <p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr>
 <p:pic>
 <p:nvPicPr><p:cNvPr id="2" name="Candidate {candidate_index}: {}"/><p:cNvPicPr><a:picLocks noChangeAspect="1"/></p:cNvPicPr><p:nvPr/></p:nvPicPr>
-<p:blipFill><a:blip r:embed="rId1"/><a:stretch><a:fillRect/></a:stretch></p:blipFill>
+<p:blipFill><a:blip r:embed="rId1"/>{source_rect}<a:stretch><a:fillRect/></a:stretch></p:blipFill>
 <p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="12192000" cy="6858000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr>
 </p:pic>
 </p:spTree>
@@ -2232,6 +2233,59 @@ fn render_pptx_slide(slide_number: usize, candidate: &Value) -> String {
 "#,
         html_escape_attr(file_name)
     )
+}
+
+fn render_pptx_source_rect(candidate: &Value) -> String {
+    let Some(crop_box) = candidate
+        .get("slide_rectangle")
+        .and_then(|rectangle| rectangle.get("crop_box"))
+    else {
+        return String::new();
+    };
+    if crop_box.get("unit").and_then(Value::as_str) != Some("relative") {
+        return String::new();
+    }
+    let Some(x) = crop_box.get("x").and_then(Value::as_f64) else {
+        return String::new();
+    };
+    let Some(y) = crop_box.get("y").and_then(Value::as_f64) else {
+        return String::new();
+    };
+    let Some(width) = crop_box.get("width").and_then(Value::as_f64) else {
+        return String::new();
+    };
+    let Some(height) = crop_box.get("height").and_then(Value::as_f64) else {
+        return String::new();
+    };
+    if !video_relative_crop_box_is_valid(x, y, width, height) {
+        return String::new();
+    }
+    let right = 1.0 - x - width;
+    let bottom = 1.0 - y - height;
+    if x <= 0.0 && y <= 0.0 && right <= 0.0 && bottom <= 0.0 {
+        return String::new();
+    }
+    format!(
+        r#"<a:srcRect l="{}" r="{}" t="{}" b="{}"/>"#,
+        pptx_crop_percent(x),
+        pptx_crop_percent(right),
+        pptx_crop_percent(y),
+        pptx_crop_percent(bottom)
+    )
+}
+
+fn video_relative_crop_box_is_valid(x: f64, y: f64, width: f64, height: f64) -> bool {
+    [x, y, width, height].iter().all(|value| value.is_finite())
+        && x >= 0.0
+        && y >= 0.0
+        && width > 0.0
+        && height > 0.0
+        && x + width <= 1.0001
+        && y + height <= 1.0001
+}
+
+fn pptx_crop_percent(value: f64) -> i64 {
+    (value.clamp(0.0, 1.0) * 100_000.0).round() as i64
 }
 
 fn render_pptx_slide_rels(slide_number: usize, extension: &str) -> String {
@@ -6652,6 +6706,13 @@ mod tests {
             .read_to_string(&mut slide_rels)
             .expect("slide relationships text");
         assert!(slide_rels.contains("notesSlide1.xml"));
+        let mut slide_xml = String::new();
+        archive
+            .by_name("ppt/slides/slide1.xml")
+            .expect("slide xml")
+            .read_to_string(&mut slide_xml)
+            .expect("slide xml text");
+        assert!(!slide_xml.contains("srcRect"));
         let mut notes = String::new();
         archive
             .by_name("ppt/notesSlides/notesSlide1.xml")
@@ -6862,6 +6923,20 @@ mod tests {
             selected_slides["rectangle_extraction_status"],
             json!("promoted_detector_crop")
         );
+        let pptx_path = files
+            .iter()
+            .find(|file| file["artifact_kind"] == json!("pptx"))
+            .and_then(|file| file["path"].as_str())
+            .expect("pptx path");
+        let mut archive =
+            ZipArchive::new(File::open(pptx_path).expect("pptx file")).expect("pptx zip");
+        let mut slide_xml = String::new();
+        archive
+            .by_name("ppt/slides/slide1.xml")
+            .expect("slide xml")
+            .read_to_string(&mut slide_xml)
+            .expect("slide xml text");
+        assert!(slide_xml.contains(r#"<a:srcRect l="20000" r="20000" t="12500" b="25000"/>"#));
     }
 
     #[test]

@@ -40,6 +40,7 @@ The media-worker test builds a controlled sample path in a temporary directory. 
 - final manifest status flags and output groups
 - published manifest type, immutable version metadata, lifecycle state, and redacted file coverage
 - slide rectangle manifest status, detector or full-frame fallback crop boxes, selected keep-list de-duplication status, exact selected-frame duplicate metadata when present, and `review_required=true`
+- detector crop application in PPTX slide XML through DrawingML `a:srcRect` when a detector crop exists
 - extraction manifest file-kind coverage
 - public manifest, JSON, and Markdown redaction for local paths and token-like URLs
 
@@ -123,5 +124,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\run-jump-host-video-deliverab
 ## Slide Rectangle Manifest Follow-Up
 
 The public deliverable contract now also requires `slide_rectangles_manifest.json` for complete video/PPT packages. The current promoted mode is intentionally conservative: selected keep-list frames are de-duplicated in selection order, exact duplicate selected frame bytes are removed before PPTX generation, and remaining JPEG/PNG frames may be exported as `simple_background_contrast_v1` detector crops when a clear non-background rectangle exists. Ambiguous or undecodable frames remain relative full-frame fallback crops. Every crop still requires `review_required=true`.
+
+Generated PPTX slides apply detector crop boxes through DrawingML `a:srcRect`. Full-frame fallback crops intentionally omit `a:srcRect` and keep the previous whole-frame rendering behavior.
 
 This is a data-quality gate and review contract, not a claim that visual slide-boundary detection is complete. A later slice should replace the simple background-contrast detector with a stronger visual detector and visual-similarity duplicate detection after that path has its own evidence and smoke tests.
