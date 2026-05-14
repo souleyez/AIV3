@@ -149,3 +149,25 @@ target/external-third-party-readiness/external-third-party-readiness-20260514T02
 ```
 
 The JSON report included `handoff_manifest_ready` and a redacted `handoff_manifest_summary`, with `ready_for_customer_sandbox: true`. This makes the deployment smoke prove both sides of the pre-live package: the signed action/callback roundtrip and the third-party handoff manifest.
+
+## Handoff Package Builder Follow-Up
+
+Follow-up validated commit: `86f6aca`.
+
+The deployment target pulled `86f6aca` and ran:
+
+```text
+npm run test:external-handoff-package
+npm run build:external-handoff-package -- --basename deployment-package-check --generatedAt 2026-05-14T00:00:00.000Z
+npm --prefix target/external-third-party-handoff/deployment-package-check run validate:handoff
+```
+
+Result: passed.
+
+The generated package was written to:
+
+```text
+target/external-third-party-handoff/deployment-package-check
+```
+
+The package contains 10 files, including the Chinese/English third-party guides, sample handoff manifest, handoff validator, mock gateway reference, V3 operator smoke reference, generated README files, generated package scripts, and `handoff-package-manifest.json`. The package manifest reported `ready: true`, `package_root: "."`, and no handoff validation errors or warnings. Running `validate:handoff` from inside the package also returned `ready_for_customer_sandbox: true`.
