@@ -312,3 +312,27 @@ The build output included `releaseReportPath`, `releaseReportSha256`, `releaseRe
 The generated release report returned `release_ready: true`, SHA256 `bc3265e5416f0e50eef62e3cdf7aa1fd8b5f3f428fed95dce2fd54f3d75f40aa`, `checks: 17`, `included_file_count: 13`, and archive `entry_count: 14`.
 
 The deployment target finished at `bb7ea22` with a clean `main...origin/main` status.
+
+## Handoff Release Markdown Follow-Up
+
+Follow-up validated commit: `a29428a`.
+
+The deployment target pulled `a29428a` and ran:
+
+```text
+npm run test:external-handoff-package
+npm run test:external-handoff-release
+npm run build:external-handoff-package -- --basename deployment-release-markdown-check --generatedAt 2026-05-14T00:00:00.000Z
+npm run validate:external-handoff-release -- --package target/external-third-party-handoff/deployment-release-markdown-check
+test -s target/external-third-party-handoff/deployment-release-markdown-check.release.md
+grep -q 'Status: \*\*READY\*\*' target/external-third-party-handoff/deployment-release-markdown-check.release.md
+grep -q 'Archive SHA256:' target/external-third-party-handoff/deployment-release-markdown-check.release.md
+```
+
+Result: passed.
+
+The build output included `releaseMarkdownPath`, `releaseMarkdownSha256`, `releaseReportPath`, `releaseReportSha256`, `releaseReady: true`, and `fileCount: 13`.
+
+The generated release report returned `release_ready: true`, SHA256 `fddb4eb6595fbd9954020aa5ff413d7cc3f91b190eacd47654c3d3c2994ddc7b`, `checks: 17`, `included_file_count: 13`, and archive `entry_count: 14`.
+
+The deployment target finished at `a29428a` with a clean `main...origin/main` status.
