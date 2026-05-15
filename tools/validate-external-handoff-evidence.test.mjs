@@ -25,6 +25,10 @@ test('validateEvidence accepts generated final evidence manifests', () => {
   assert.equal(result.package_name, 'evidence-valid-package');
   assert.equal(result.artifact_count, 9);
   assert.equal(result.evidence_manifest_sha256, built.evidenceManifestSha256);
+  assert.equal(result.html_artifact_summary.package_ready, true);
+  assert.equal(result.html_artifact_summary.package_template_id, 'third_party_handoff_document');
+  assert.equal(result.html_artifact_summary.archive_ready, true);
+  assert.equal(result.html_artifact_summary.archive_template_id, 'third_party_handoff_document');
   assert.deepEqual(result.error_codes, []);
 });
 
@@ -62,4 +66,27 @@ test('validateEvidence rejects not-ready aggregate JSON receipts', () => {
   assert.equal(result.evidence_manifest_ready, false);
   assert.ok(result.errors.some((error) => error.code === 'evidence_aggregate_json_sha256_mismatch'));
   assert.ok(result.errors.some((error) => error.code === 'evidence_aggregate_json_not_ready'));
+});
+
+test('validateEvidence rejects aggregate JSON receipts without HTML artifact readiness', () => {
+  const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'v3-external-handoff-evidence-'));
+  const built = buildPackage({
+    repoRoot,
+    outDir,
+    basename: 'evidence-html-artifact-not-ready-package',
+    generatedAt: '2026-05-15T00:00:00.000Z',
+  });
+  const allReport = JSON.parse(fs.readFileSync(built.allReportPath, 'utf8'));
+  allReport.summaries.package.html_artifact_ready = false;
+  delete allReport.summaries.archive.html_artifact_ready;
+  fs.writeFileSync(built.allReportPath, `${JSON.stringify(allReport, null, 2)}\n`);
+
+  const result = validateEvidence({ packageRootInput: built.packageRoot });
+
+  assert.equal(result.evidence_manifest_ready, false);
+  assert.equal(result.html_artifact_summary.package_ready, false);
+  assert.equal(result.html_artifact_summary.archive_ready, false);
+  assert.ok(result.errors.some((error) => error.code === 'evidence_aggregate_json_sha256_mismatch'));
+  assert.ok(result.errors.some((error) => error.code === 'evidence_aggregate_package_html_artifact_not_ready'));
+  assert.ok(result.errors.some((error) => error.code === 'evidence_aggregate_archive_html_artifact_not_ready'));
 });

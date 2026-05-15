@@ -254,6 +254,12 @@ function validateEvidence({
   if (allReport && allReport.summaries?.release?.release_ready !== true) {
     addError(errors, 'evidence_aggregate_release_not_ready', 'aggregate JSON must report release ready', allReportPath);
   }
+  if (allReport && allReport.summaries?.package?.html_artifact_ready !== true) {
+    addError(errors, 'evidence_aggregate_package_html_artifact_not_ready', 'aggregate JSON must report package HTML artifact ready', allReportPath);
+  }
+  if (allReport && allReport.summaries?.archive?.html_artifact_ready !== true) {
+    addError(errors, 'evidence_aggregate_archive_html_artifact_not_ready', 'aggregate JSON must report archived HTML artifact ready', allReportPath);
+  }
 
   return {
     report_type: 'external_third_party_handoff_evidence_validation',
@@ -263,6 +269,12 @@ function validateEvidence({
     manifest_type: manifest.manifest_type || null,
     package_name: manifest.package_name || packageName,
     artifact_count: artifacts.length,
+    html_artifact_summary: {
+      package_ready: allReport?.summaries?.package?.html_artifact_ready === true,
+      package_template_id: allReport?.summaries?.package?.html_artifact_template_id || null,
+      archive_ready: allReport?.summaries?.archive?.html_artifact_ready === true,
+      archive_template_id: allReport?.summaries?.archive?.html_artifact_template_id || null,
+    },
     error_codes: errors.map((error) => error.code),
     errors,
   };

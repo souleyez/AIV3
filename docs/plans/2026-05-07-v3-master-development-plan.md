@@ -159,7 +159,7 @@ This is the next active development direction.
 
 Current evidence-manifest follow-up: the third-party handoff package now writes a final `<package>.evidence-manifest.json` after aggregate evidence, and `validate:evidence` verifies every final delivery artifact plus `.all.json`/`.all.md` without introducing a circular delivery-manifest hash dependency.
 
-Current readiness follow-up: deployment readiness reports that receive `--releasePackage` now also validate the final evidence manifest and expose `handoff_evidence_ready` plus a redacted `handoff_evidence_summary`.
+Current readiness follow-up: deployment readiness reports that receive `--releasePackage` now also validate the final evidence manifest and expose `handoff_evidence_ready` plus a redacted `handoff_evidence_summary`. The final evidence gate also requires the aggregate `.all.json` receipt to prove package/archive `html_artifact_ready`, and readiness summaries surface those HTML artifact signals for operators.
 
 The product must support:
 

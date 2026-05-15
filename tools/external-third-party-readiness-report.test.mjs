@@ -146,8 +146,16 @@ test('buildReadinessReport includes aggregate handoff validation when provided',
         { key: 'release_ready', passed: true },
       ],
       summaries: {
-        package: { error_codes: [] },
-        archive: { error_codes: [] },
+        package: {
+          html_artifact_ready: true,
+          html_artifact_template_id: 'third_party_handoff_document',
+          error_codes: [],
+        },
+        archive: {
+          html_artifact_ready: true,
+          html_artifact_template_id: 'third_party_handoff_document',
+          error_codes: [],
+        },
         delivery: { error_codes: [] },
         release: { error_codes: [] },
       },
@@ -158,6 +166,10 @@ test('buildReadinessReport includes aggregate handoff validation when provided',
   assert.equal(report.ready_for_customer_sandbox, true);
   assert.equal(report.checks.find((check) => check.key === 'handoff_all_ready').passed, true);
   assert.equal(report.handoff_all_summary.all_ready, true);
+  assert.equal(report.handoff_all_summary.package_html_artifact_ready, true);
+  assert.equal(report.handoff_all_summary.package_html_artifact_template_id, 'third_party_handoff_document');
+  assert.equal(report.handoff_all_summary.archive_html_artifact_ready, true);
+  assert.equal(report.handoff_all_summary.archive_html_artifact_template_id, 'third_party_handoff_document');
   assert.deepEqual(report.handoff_all_summary.error_codes, []);
 });
 
@@ -188,6 +200,12 @@ test('buildReadinessReport includes final evidence manifest validation when prov
       manifest_type: 'v3.external_third_party_handoff_evidence_manifest.v1',
       package_name: 'package',
       artifact_count: 9,
+      html_artifact_summary: {
+        package_ready: true,
+        package_template_id: 'third_party_handoff_document',
+        archive_ready: true,
+        archive_template_id: 'third_party_handoff_document',
+      },
       errors: [],
     },
   });
@@ -197,6 +215,10 @@ test('buildReadinessReport includes final evidence manifest validation when prov
   assert.equal(report.handoff_evidence_summary.evidence_manifest_ready, true);
   assert.equal(report.handoff_evidence_summary.evidence_manifest_sha256, 'c'.repeat(64));
   assert.equal(report.handoff_evidence_summary.artifact_count, 9);
+  assert.equal(report.handoff_evidence_summary.html_artifact_summary.package_ready, true);
+  assert.equal(report.handoff_evidence_summary.html_artifact_summary.package_template_id, 'third_party_handoff_document');
+  assert.equal(report.handoff_evidence_summary.html_artifact_summary.archive_ready, true);
+  assert.equal(report.handoff_evidence_summary.html_artifact_summary.archive_template_id, 'third_party_handoff_document');
 });
 
 test('buildReadinessReport fails closed when handoff release validation fails', () => {
@@ -274,6 +296,8 @@ test('buildReadinessReport fails closed when aggregate handoff validation fails'
 
   assert.equal(report.ready_for_customer_sandbox, false);
   assert.equal(report.checks.find((check) => check.key === 'handoff_all_ready').passed, false);
+  assert.equal(report.handoff_all_summary.package_html_artifact_ready, false);
+  assert.equal(report.handoff_all_summary.archive_html_artifact_ready, false);
   assert.deepEqual(report.handoff_all_summary.error_codes, ['delivery_release_markdown_sha256_mismatch']);
   assert.deepEqual(report.handoff_all_summary.scoped_error_codes, ['delivery:delivery_release_markdown_sha256_mismatch']);
 });
@@ -316,6 +340,8 @@ test('buildReadinessReport fails closed when final evidence manifest validation 
 
   assert.equal(report.ready_for_customer_sandbox, false);
   assert.equal(report.checks.find((check) => check.key === 'handoff_evidence_ready').passed, false);
+  assert.equal(report.handoff_evidence_summary.html_artifact_summary.package_ready, false);
+  assert.equal(report.handoff_evidence_summary.html_artifact_summary.archive_ready, false);
   assert.deepEqual(report.handoff_evidence_summary.error_codes, ['evidence_aggregate_markdown_sha256_mismatch']);
 });
 
@@ -399,6 +425,37 @@ test('renderReadinessMarkdown renders operator-facing checklist without raw payl
         response_summary: { action_id: 'act-001', status: 'succeeded' },
       },
     ],
+    handoffAllValidation: {
+      all_ready: true,
+      checks: [{ key: 'release_ready', passed: true }],
+      summaries: {
+        package: {
+          html_artifact_ready: true,
+          html_artifact_template_id: 'third_party_handoff_document',
+          error_codes: [],
+        },
+        archive: {
+          html_artifact_ready: true,
+          html_artifact_template_id: 'third_party_handoff_document',
+          error_codes: [],
+        },
+        delivery: { error_codes: [] },
+        release: { error_codes: [] },
+      },
+      errors: [],
+    },
+    handoffEvidenceValidation: {
+      evidence_manifest_ready: true,
+      evidence_manifest_sha256: 'c'.repeat(64),
+      artifact_count: 9,
+      html_artifact_summary: {
+        package_ready: true,
+        package_template_id: 'third_party_handoff_document',
+        archive_ready: true,
+        archive_template_id: 'third_party_handoff_document',
+      },
+      errors: [],
+    },
   });
 
   const markdown = renderReadinessMarkdown(report);
@@ -408,6 +465,8 @@ test('renderReadinessMarkdown renders operator-facing checklist without raw payl
   assert.match(markdown, /Handoff Release Summary/);
   assert.match(markdown, /Aggregate Handoff Summary/);
   assert.match(markdown, /Final Evidence Manifest Summary/);
+  assert.match(markdown, /Package HTML artifact/);
+  assert.match(markdown, /Archive HTML artifact/);
   assert.match(markdown, /Third-Party Handoff Items/);
   assert.doesNotMatch(markdown, /third-party-secret|raw prompt secret|callback-token-should-not-leak/);
 });

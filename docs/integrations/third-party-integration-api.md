@@ -973,7 +973,7 @@ node tools/validate-external-handoff-all.mjs --package target/external-third-par
 node tools/validate-external-handoff-evidence.mjs --package target/external-third-party-handoff/<package>
 ```
 
-This checks the `.sha256` sidecar, gzip/tar structure, single package root, path traversal safety, required entries, package manifest file hashes, archived V3 safe HTML artifact manifest contract, and handoff manifest readiness.
+This checks the `.sha256` sidecar, gzip/tar structure, single package root, path traversal safety, required entries, package manifest file hashes, archived V3 safe HTML artifact manifest contract, handoff manifest readiness, and the final aggregate receipt signals that prove the package and archive both kept the review-friendly HTML artifact ready.
 
 ## Versioning
 

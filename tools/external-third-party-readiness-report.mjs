@@ -228,7 +228,11 @@ function summarizeHandoffAllValidation(validation, packagePath) {
           .map((error) => `${error.scope}:${error.code}`)
       : [],
     package_error_codes: validation.summaries?.package?.error_codes || [],
+    package_html_artifact_ready: validation.summaries?.package?.html_artifact_ready === true,
+    package_html_artifact_template_id: validation.summaries?.package?.html_artifact_template_id || null,
     archive_error_codes: validation.summaries?.archive?.error_codes || [],
+    archive_html_artifact_ready: validation.summaries?.archive?.html_artifact_ready === true,
+    archive_html_artifact_template_id: validation.summaries?.archive?.html_artifact_template_id || null,
     delivery_error_codes: validation.summaries?.delivery?.error_codes || [],
     release_error_codes: validation.summaries?.release?.error_codes || [],
   };
@@ -246,6 +250,12 @@ function summarizeHandoffEvidenceValidation(validation, packagePath) {
     manifest_type: validation.manifest_type || null,
     package_name: validation.package_name || null,
     artifact_count: validation.artifact_count || 0,
+    html_artifact_summary: validation.html_artifact_summary || {
+      package_ready: false,
+      package_template_id: null,
+      archive_ready: false,
+      archive_template_id: null,
+    },
     error_codes: Array.isArray(validation.errors)
       ? [...new Set(validation.errors.map((error) => error.code).filter(Boolean))]
       : [],
@@ -300,6 +310,8 @@ export function renderReadinessMarkdown(report) {
     ? [
         `- Package: \`${report.handoff_all_summary.package_root || 'unknown'}\``,
         `- Ready: ${report.handoff_all_summary.all_ready ? 'yes' : 'no'}`,
+        `- Package HTML artifact: ${report.handoff_all_summary.package_html_artifact_ready ? 'yes' : 'no'}`,
+        `- Archive HTML artifact: ${report.handoff_all_summary.archive_html_artifact_ready ? 'yes' : 'no'}`,
         `- Checks: ${report.handoff_all_summary.checks.length || 0}`,
         `- Errors: ${report.handoff_all_summary.error_codes.length || 0}`,
       ].join('\n')
@@ -310,6 +322,8 @@ export function renderReadinessMarkdown(report) {
         `- Ready: ${report.handoff_evidence_summary.evidence_manifest_ready ? 'yes' : 'no'}`,
         `- Evidence manifest SHA256: \`${report.handoff_evidence_summary.evidence_manifest_sha256 || 'unknown'}\``,
         `- Final artifacts: ${report.handoff_evidence_summary.artifact_count || 0}`,
+        `- Package HTML artifact: ${report.handoff_evidence_summary.html_artifact_summary?.package_ready ? 'yes' : 'no'}`,
+        `- Archive HTML artifact: ${report.handoff_evidence_summary.html_artifact_summary?.archive_ready ? 'yes' : 'no'}`,
         `- Errors: ${report.handoff_evidence_summary.error_codes.length || 0}`,
       ].join('\n')
     : '- No final evidence manifest validation attached.';
