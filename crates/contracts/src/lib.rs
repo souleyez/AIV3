@@ -386,6 +386,8 @@ pub struct ExternalIntegrationSummaryView {
     pub action_summary: Value,
     pub config_summary: Value,
     #[serde(default)]
+    pub search_summary: Value,
+    #[serde(default)]
     pub drift_summary: Value,
     #[serde(default)]
     pub artifact_summary: Value,

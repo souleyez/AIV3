@@ -18,6 +18,7 @@ import {
   normalizeControlResult,
   normalizeAuditItem,
   normalizeIntegrationSummary,
+  searchEvidenceSignalLabel,
   signalLabel,
 } from './external-integrations.js';
 
@@ -135,6 +136,11 @@ test('normalizeIntegrationSummary derives operational signal and counts', () => 
       blocked_count: 1,
       latest_artifact_action_at: '2026-05-14T10:00:00Z',
     },
+    search_summary: {
+      signal: 'search_evidence_required',
+      required_count: 2,
+      latest_required_at: '2026-05-14T11:00:00Z',
+    },
   });
 
   assert.equal(integration.id, 'generic-chat-main');
@@ -152,6 +158,9 @@ test('normalizeIntegrationSummary derives operational signal and counts', () => 
   assert.equal(integration.artifactSignal, 'artifact_blocked');
   assert.equal(artifactSignalLabel(integration.artifactSignal), '产物阻断');
   assert.equal(integration.artifactSummary.publish_action_count, 1);
+  assert.equal(integration.searchSignal, 'search_evidence_required');
+  assert.equal(integration.searchEvidenceRequiredCount, 2);
+  assert.equal(searchEvidenceSignalLabel(integration.searchSignal), '搜索待供料');
   assert.equal(latestIntegrationActivity(integration), '2026-05-14T09:30:00Z');
 });
 

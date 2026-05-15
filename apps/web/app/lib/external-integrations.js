@@ -109,6 +109,8 @@ export function normalizeIntegrationSummary(raw = {}) {
   const drift = driftSignal(driftSummary);
   const artifactSummary = raw.artifact_summary && typeof raw.artifact_summary === 'object' ? raw.artifact_summary : {};
   const artifact = artifactSignal(artifactSummary);
+  const searchSummary = raw.search_summary && typeof raw.search_summary === 'object' ? raw.search_summary : {};
+  const search = searchEvidenceSignal(searchSummary);
   const actionSummary = raw.action_summary && typeof raw.action_summary === 'object' ? raw.action_summary : {};
   const action = actionSignal(actionSummary);
   return {
@@ -131,6 +133,9 @@ export function normalizeIntegrationSummary(raw = {}) {
     actionSummary,
     actionSignal: action,
     configSummary: raw.config_summary && typeof raw.config_summary === 'object' ? raw.config_summary : {},
+    searchSummary,
+    searchSignal: search,
+    searchEvidenceRequiredCount: numberOrZero(searchSummary.required_count),
     driftSummary,
     driftSignal: drift,
     artifactSummary,
@@ -260,6 +265,21 @@ export function artifactSignal(artifactSummary = {}) {
   return String(artifactSummary.signal || 'none').toLowerCase();
 }
 
+export function searchEvidenceSignal(searchSummary = {}) {
+  return String(searchSummary.signal || 'none').toLowerCase();
+}
+
+export function searchEvidenceSignalLabel(signal) {
+  switch (signal) {
+    case 'search_evidence_required':
+      return '搜索待供料';
+    case 'none':
+      return '无需搜索';
+    default:
+      return '未知';
+  }
+}
+
 export function artifactSignalLabel(signal) {
   switch (signal) {
     case 'artifact_confirmation_pending':
@@ -335,6 +355,7 @@ export function formatObservationTime(value) {
 export function latestIntegrationActivity(integration) {
   return integration.lastFailureAt
     || integration.latestActionAt
+    || integration.searchSummary?.latest_required_at
     || integration.artifactSummary?.latest_artifact_action_at
     || integration.lastSuccessAt
     || integration.lastEventAt

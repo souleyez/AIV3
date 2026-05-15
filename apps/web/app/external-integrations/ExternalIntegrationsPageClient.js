@@ -19,6 +19,7 @@ import {
   normalizeAuditItem,
   normalizeIntegrationSummary,
   numberOrZero,
+  searchEvidenceSignalLabel,
   signalLabel,
   thirdPartyApiBaseUrl,
 } from '../lib/external-integrations';
@@ -107,6 +108,15 @@ function actionLifecycleMetrics(integration) {
     { label: '失败结果', value: numberOrZero(summary.result_failed_count) },
     { label: '最近回调', value: formatObservationTime(summary.latest_result_callback_at) },
     { label: '最近动作', value: formatObservationTime(summary.latest_action_at) },
+  ];
+}
+
+function searchEvidenceMetrics(integration) {
+  const summary = integration?.searchSummary || {};
+  return [
+    { label: '搜索信号', value: searchEvidenceSignalLabel(integration?.searchSignal) },
+    { label: '待供料', value: numberOrZero(summary.required_count) },
+    { label: '最近搜索请求', value: formatObservationTime(summary.latest_required_at) },
   ];
 }
 
@@ -344,6 +354,7 @@ export default function ExternalIntegrationsPageClient() {
     artifactIssues: integrations.filter((item) => ['artifact_confirmation_pending', 'artifact_blocked', 'artifact_failed'].includes(item.artifactSignal)).length,
     resultCallbacks: integrations.reduce((sum, item) => sum + numberOrZero(item.actionSummary?.result_callback_count), 0),
     waitingResults: integrations.reduce((sum, item) => sum + numberOrZero(item.actionSummary?.waiting_result_count), 0),
+    searchEvidenceRequired: integrations.reduce((sum, item) => sum + numberOrZero(item.searchSummary?.required_count), 0),
   };
 
   return (
@@ -381,6 +392,10 @@ export default function ExternalIntegrationsPageClient() {
           <div>
             <strong>{totals.resultCallbacks}</strong>
             <span>已回调</span>
+          </div>
+          <div>
+            <strong>{totals.searchEvidenceRequired}</strong>
+            <span>搜索待供料</span>
           </div>
         </div>
       </section>
@@ -536,6 +551,14 @@ export default function ExternalIntegrationsPageClient() {
                 <>
                   <div className="external-detail-strip external-action-strip">
                     {actionLifecycleMetrics(selected).map((metric) => (
+                      <div key={metric.label}>
+                        <span>{metric.label}</span>
+                        <strong>{metric.value}</strong>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="external-detail-strip external-search-strip">
+                    {searchEvidenceMetrics(selected).map((metric) => (
                       <div key={metric.label}>
                         <span>{metric.label}</span>
                         <strong>{metric.value}</strong>

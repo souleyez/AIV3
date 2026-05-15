@@ -6884,6 +6884,21 @@ async fn list_external_integrations(
                ) as latest_result_callback_at,
                coalesce((
                    select count(*)
+                   from assistant_run_events e
+                   where e.tenant_id = c.tenant_id
+                     and e.event_name = 'assistant_run.external_search_evidence_required'
+                     and e.payload ->> 'channel_connection_id' = c.id
+                     and coalesce(e.payload ->> 'search_evidence_required', 'false') = 'true'
+               ), 0)::bigint as search_evidence_required_count,
+               (
+                   select max(e.created_at)
+                   from assistant_run_events e
+                   where e.tenant_id = c.tenant_id
+                     and e.event_name = 'assistant_run.external_search_evidence_required'
+                     and e.payload ->> 'channel_connection_id' = c.id
+               ) as latest_search_evidence_required_at,
+               coalesce((
+                   select count(*)
                    from external_principals p
                    where p.tenant_id = c.tenant_id
                      and p.platform = c.platform
@@ -7020,6 +7035,10 @@ async fn list_external_integrations(
                 row.get("latest_result_callback_at"),
             ),
             config_summary: external_integration_config_summary(&config_redacted),
+            search_summary: external_search_evidence_summary(
+                row.get("search_evidence_required_count"),
+                row.get("latest_search_evidence_required_at"),
+            ),
             drift_summary: external_channel_drift_summary(
                 row.get("unmapped_principal_count"),
                 row.get("disabled_principal_count"),
@@ -7122,6 +7141,7 @@ async fn list_external_integrations(
                 0, 0, 0, 0, 0, 0, 0, 0, 0, None, None,
             ),
             config_summary: external_integration_config_summary(&config_redacted),
+            search_summary: external_search_evidence_summary(0, None),
             drift_summary: external_source_drift_summary(
                 row.get("acl_snapshot_count"),
                 row.get("stale_acl_snapshot_count"),
@@ -8068,6 +8088,22 @@ fn external_artifact_summary(
         "published_count": published_count.max(0),
         "revoked_count": revoked_count.max(0),
         "latest_artifact_action_at": latest_artifact_action_at,
+    })
+}
+
+fn external_search_evidence_summary(
+    required_count: i64,
+    latest_required_at: Option<DateTime<Utc>>,
+) -> Value {
+    let signal = if required_count > 0 {
+        "search_evidence_required"
+    } else {
+        "none"
+    };
+    json!({
+        "signal": signal,
+        "required_count": required_count.max(0),
+        "latest_required_at": latest_required_at,
     })
 }
 
@@ -31202,6 +31238,19 @@ mod tests {
     }
 
     #[test]
+    fn external_search_evidence_summary_reports_pending_supply() {
+        let now = Utc::now();
+        let pending = external_search_evidence_summary(2, Some(now));
+        assert_eq!(pending["signal"], json!("search_evidence_required"));
+        assert_eq!(pending["required_count"], json!(2));
+        assert_eq!(pending["latest_required_at"], json!(now));
+
+        let empty = external_search_evidence_summary(0, None);
+        assert_eq!(empty["signal"], json!("none"));
+        assert_eq!(empty["required_count"], json!(0));
+    }
+
+    #[test]
     fn external_action_lifecycle_summary_prioritizes_callback_state() {
         let now = Utc::now();
         let waiting = external_action_lifecycle_summary(3, 0, 0, 0, 2, 0, 0, 0, 0, Some(now), None);
@@ -32511,6 +32560,20 @@ mod tests {
             search_audit_item,
             &search_filter
         ));
+        let Json(integration_response) = list_external_integrations(State(state.clone()))
+            .await
+            .expect("external integrations should list");
+        let integration = integration_response
+            .integrations
+            .iter()
+            .find(|item| item.integration_id == "generic-chat-main")
+            .expect("generic channel should be listed");
+        assert_eq!(
+            integration.search_summary["signal"],
+            json!("search_evidence_required")
+        );
+        assert_eq!(integration.search_summary["required_count"], json!(1));
+        assert!(integration.search_summary["latest_required_at"].is_string());
         let serialized_events =
             serde_json::to_string(&events).expect("events should serialize for redaction check");
         assert!(!serialized_events.contains("今天这个行业"));

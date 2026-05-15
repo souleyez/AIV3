@@ -37,6 +37,7 @@ Already implemented:
 - A self-contained handoff package builder now writes third-party guides, the sample manifest, validators, mock gateway reference, README files, and a SHA256 package manifest under `target/external-third-party-handoff`.
 - AssistantRun startup briefing and backend model input now include the additive V3 model-awareness policy: V3 identity, visible-scope discipline, unavailable-evidence wording, and no-fake-live-search behavior.
 - External chat messages that require live web information now return `task_status=v3_search_evidence_required` until V3 supplies audited search evidence; this is a read-only pending-evidence state, not a third-party action run.
+- `GET /v1/external/integrations` now includes a redacted `search_summary` for channel integrations, and the standalone panel shows search-evidence pending counts in the overview.
 
 Planned next:
 
@@ -758,9 +759,11 @@ V3 exposes observe-first management endpoints for operators and the V3 console. 
 GET /v1/external/integrations
 ```
 
-The response lists channel and source integrations with health, last activity timestamps, action dispatch counters, action lifecycle summaries, permission/source recovery signals, and a redacted configuration summary.
+The response lists channel and source integrations with health, last activity timestamps, action dispatch counters, action lifecycle summaries, search-evidence pending summaries, permission/source recovery signals, and a redacted configuration summary.
 
 Channel integrations include `action_summary`, an observe-only lifecycle object for external actions. It reports total actions, pending confirmations, blocked/failed dispatches, actions waiting for third-party results, received result callbacks, succeeded/failed/running result callbacks, the latest action timestamp, and the latest result callback timestamp. It does not include raw third-party result bodies or arbitrary callback message text.
+
+Channel integrations also include `search_summary`, an observe-only object for V3-controlled web/search evidence states. It reports `required_count`, `latest_required_at`, and a signal such as `search_evidence_required`. It does not include raw user query text or search result bodies.
 
 Each item includes `drift_summary`, an observe-only object that does not include raw document bodies, raw ACL entries, provider payloads, or secret material:
 
