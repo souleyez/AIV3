@@ -160,6 +160,8 @@ After the release build, `aiv3-media-worker.service` was restarted and confirmed
 
 Generated PPTX slides apply detector crop boxes through DrawingML `a:srcRect`. Full-frame fallback crops intentionally omit `a:srcRect` and keep the previous whole-frame rendering behavior.
 
+Generated PPTX slides also include redacted native picture alt text. The alt text records slide number, candidate number, source frame file name, timestamp, crop mode, transcript segment count, and `paths redacted`; it must not contain raw local frame paths, source URLs, cookies, tokens, or provider payloads.
+
 This is a data-quality gate and review contract, not a claim that visual slide-boundary detection is complete. A later slice should replace the simple background-contrast detector with a stronger visual detector. Exact/visual duplicate removal is already part of the public review contract: when selected candidates are removed, summaries now surface `selected_slide_duplicates_removed` and a `review_slide_dedupe_manifest` follow-up action.
 
 ## Markdown Deck Follow-Up

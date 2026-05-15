@@ -764,6 +764,13 @@ fn write_video_slide_candidate_review_files(
             "include_timestamp_when_available": true,
             "include_transcript_pre_page_map": has_subtitle_page_map,
         },
+        "native_metadata": {
+            "picture_alt_text": true,
+            "include_source_frame": true,
+            "include_timestamp": true,
+            "include_crop_mode": true,
+            "redact_internal_paths": true,
+        },
         "build_policy": "one_raster_image_per_slide_after_keep_list",
         "skill_reference": "wechat-video-ppt-extract/build-selected",
     });
@@ -3128,6 +3135,8 @@ fn render_pptx_slide(slide_number: usize, candidate: &Value) -> String {
         .and_then(Value::as_str)
         .unwrap_or("frame");
     let source_rect = render_pptx_source_rect(candidate);
+    let file_name_attr = html_escape_attr(file_name);
+    let picture_alt_text = html_escape_attr(&render_pptx_picture_alt_text(slide_number, candidate));
     format!(
         r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
@@ -3136,7 +3145,7 @@ fn render_pptx_slide(slide_number: usize, candidate: &Value) -> String {
 <p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>
 <p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr>
 <p:pic>
-<p:nvPicPr><p:cNvPr id="2" name="Candidate {candidate_index}: {}"/><p:cNvPicPr><a:picLocks noChangeAspect="1"/></p:cNvPicPr><p:nvPr/></p:nvPicPr>
+<p:nvPicPr><p:cNvPr id="2" name="Candidate {candidate_index}: {file_name_attr}" descr="{picture_alt_text}"/><p:cNvPicPr><a:picLocks noChangeAspect="1"/></p:cNvPicPr><p:nvPr/></p:nvPicPr>
 <p:blipFill><a:blip r:embed="rId1"/>{source_rect}<a:stretch><a:fillRect/></a:stretch></p:blipFill>
 <p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="12192000" cy="6858000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr>
 </p:pic>
@@ -3144,8 +3153,45 @@ fn render_pptx_slide(slide_number: usize, candidate: &Value) -> String {
 </p:cSld>
 <p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr>
 </p:sld>
-"#,
-        html_escape_attr(file_name)
+"#
+    )
+}
+
+fn render_pptx_picture_alt_text(slide_number: usize, candidate: &Value) -> String {
+    let candidate_index = candidate
+        .get("candidate_index")
+        .and_then(Value::as_u64)
+        .unwrap_or(slide_number as u64);
+    let file_name = candidate
+        .get("file_name")
+        .and_then(Value::as_str)
+        .map(video_safe_evidence_text)
+        .unwrap_or_else(|| "frame".to_string());
+    let timestamp = candidate
+        .get("timestamp_label")
+        .and_then(Value::as_str)
+        .map(video_safe_evidence_text)
+        .unwrap_or_else(|| "unknown".to_string());
+    let crop_status = candidate
+        .get("slide_rectangle")
+        .and_then(|rectangle| rectangle.get("rectangle_extraction_status"))
+        .and_then(Value::as_str)
+        .map(video_safe_evidence_text)
+        .unwrap_or_else(|| "unknown".to_string());
+    let crop_mode = candidate
+        .get("slide_rectangle")
+        .and_then(|rectangle| rectangle.get("rectangle_extraction_mode"))
+        .and_then(Value::as_str)
+        .map(video_safe_evidence_text)
+        .unwrap_or_else(|| "unknown".to_string());
+    let transcript_segment_count = candidate
+        .get("transcript_segments")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0);
+
+    format!(
+        "Slide {slide_number}; candidate {candidate_index}; source frame {file_name}; timestamp {timestamp}; crop {crop_status}/{crop_mode}; transcript segments {transcript_segment_count}; paths redacted"
     )
 }
 
@@ -8951,6 +8997,8 @@ mod tests {
             .read_to_string(&mut slide_xml)
             .expect("slide xml text");
         assert!(slide_xml.contains(r#"<a:srcRect l="20000" r="20000" t="12500" b="25000"/>"#));
+        assert!(slide_xml.contains(r#"descr="Slide 1; candidate 1; source frame frame_000001.png; timestamp 0:00; crop promoted_detector_crop/border_background_contrast_v2; transcript segments 0; paths redacted""#));
+        assert!(!slide_xml.contains(&raw_frames_dir.display().to_string()));
     }
 
     #[test]
