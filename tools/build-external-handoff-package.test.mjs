@@ -137,10 +137,16 @@ test('buildPackage creates a third-party handoff directory with manifest and too
   assert.match(artifactsByRole.get('package_manifest').sha256, /^[a-f0-9]{64}$/);
   const allReport = JSON.parse(fs.readFileSync(result.allReportPath, 'utf8'));
   assert.equal(allReport.all_ready, true);
+  assert.equal(allReport.package_type, PACKAGE_TYPE);
+  assert.equal(allReport.generated_at, '2026-05-14T00:00:00.000Z');
+  assert.equal(allReport.repository_head, manifest.repository_head);
   assert.equal(allReport.summaries.delivery.delivery_manifest_ready, true);
   assert.equal(allReport.summaries.release.release_ready, true);
   const allMarkdown = fs.readFileSync(result.allMarkdownPath, 'utf8');
   assert.match(allMarkdown, /Status: \*\*READY\*\*/);
+  assert.match(allMarkdown, /Package type: `v3\.external_third_party_handoff_package\.v1`/);
+  assert.match(allMarkdown, /Generated at: 2026-05-14T00:00:00\.000Z/);
+  assert.match(allMarkdown, /Repository head: `[a-f0-9]+`/);
   assert.match(allMarkdown, /Delivery manifest ready: yes/);
   const evidenceManifest = JSON.parse(fs.readFileSync(result.evidenceManifestPath, 'utf8'));
   assert.equal(evidenceManifest.manifest_type, 'v3.external_third_party_handoff_evidence_manifest.v1');

@@ -69,6 +69,9 @@ Status: **${status}**
 
 ## Package
 
+- Package type: \`${report.package_type || 'unknown'}\`
+- Generated at: ${report.generated_at || 'unknown'}
+- Repository head: \`${report.repository_head || 'unknown'}\`
 - Package root: \`${report.package_root || 'unknown'}\`
 - Handoff manifest: \`${report.manifest_path || 'unknown'}\`
 - Archive: \`${report.archive_path || 'unknown'}\`
@@ -162,6 +165,9 @@ function validateAll({
   return {
     report_type: 'external_third_party_handoff_all_validation',
     all_ready: checks.every((check) => check.passed),
+    package_type: packageReport.package_type || null,
+    generated_at: packageReport.generated_at || null,
+    repository_head: packageReport.repository_head || null,
     package_root: packageRoot,
     manifest_path: manifestPath,
     archive_path: archivePath,
@@ -174,6 +180,9 @@ function validateAll({
         warning_codes: (handoff.warnings || []).map((warning) => warning.code),
       },
       package: {
+        package_type: packageReport.package_type || null,
+        generated_at: packageReport.generated_at || null,
+        repository_head: packageReport.repository_head || null,
         package_ready: packageReport.package_ready === true,
         included_file_count: packageReport.included_file_count,
         html_artifact_ready: packageReport.html_artifact_validation?.artifact_ready === true,

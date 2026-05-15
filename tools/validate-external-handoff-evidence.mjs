@@ -325,6 +325,13 @@ function validateEvidence({
   });
 
   const allReport = fs.existsSync(allReportPath) ? parseJsonFile(allReportPath, errors, 'evidence_aggregate_json') : null;
+  validateProvenanceSource({
+    errors,
+    manifest,
+    source: allReport,
+    sourceName: 'aggregate_json',
+    sourcePath: allReportPath,
+  });
   if (allReport && allReport.all_ready !== true) {
     addError(errors, 'evidence_aggregate_json_not_ready', 'aggregate JSON must report all_ready=true', allReportPath);
   }

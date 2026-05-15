@@ -21,9 +21,15 @@ test('validateAll accepts a generated handoff package and siblings', () => {
   const result = validateAll({ packageRootInput: built.packageRoot });
 
   assert.equal(result.all_ready, true);
+  assert.equal(result.package_type, 'v3.external_third_party_handoff_package.v1');
+  assert.equal(result.generated_at, '2026-05-15T00:00:00.000Z');
+  assert.match(result.repository_head || '', /^[a-f0-9]+$/);
   assert.equal(result.checks.every((check) => check.passed), true);
   assert.equal(result.summaries.handoff.ready_for_customer_sandbox, true);
   assert.equal(result.summaries.package.package_ready, true);
+  assert.equal(result.summaries.package.package_type, result.package_type);
+  assert.equal(result.summaries.package.generated_at, result.generated_at);
+  assert.equal(result.summaries.package.repository_head, result.repository_head);
   assert.equal(result.summaries.package.html_artifact_ready, true);
   assert.equal(result.summaries.package.html_artifact_template_id, 'third_party_handoff_document');
   assert.equal(result.summaries.archive.archive_ready, true);
@@ -65,6 +71,9 @@ test('renderAllMarkdown summarizes aggregate validation without raw payloads', (
   const markdown = renderAllMarkdown(validateAll({ packageRootInput: built.packageRoot }));
 
   assert.match(markdown, /Status: \*\*READY\*\*/);
+  assert.match(markdown, /Package type: `v3\.external_third_party_handoff_package\.v1`/);
+  assert.match(markdown, /Generated at: 2026-05-15T00:00:00\.000Z/);
+  assert.match(markdown, /Repository head: `[a-f0-9]+`/);
   assert.match(markdown, /PASS `handoff_manifest_ready`/);
   assert.match(markdown, /HTML artifact ready: yes/);
   assert.match(markdown, /Delivery manifest ready: yes/);
