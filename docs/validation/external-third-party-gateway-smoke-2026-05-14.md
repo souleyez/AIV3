@@ -402,3 +402,23 @@ npm run test:external-handoff-package
 npm run test:external-handoff-package-integrity
 npm run test:external-handoff-archive
 ```
+
+## Readiness Report Release Package Follow-Up
+
+The deployment-target gateway smoke now builds and validates a temporary sendable handoff release package before writing its readiness report:
+
+```text
+node tools/build-external-handoff-package.mjs --basename <readiness-basename>-handoff-package
+node tools/external-third-party-readiness-report.mjs --releasePackage target/external-third-party-handoff/<readiness-basename>-handoff-package
+```
+
+The readiness report includes a redacted `handoff_release_summary` with package root, release readiness, package type, generated time, repository head, archive SHA256, delivery manifest SHA256, compact check results, and error codes only. The new `handoff_release_ready` check participates in `ready_for_customer_sandbox`, so signed dispatch/result callback can no longer appear fully ready if the sendable third-party package is missing or has a broken delivery manifest.
+
+Local validation passed:
+
+```text
+npm run test:external-readiness
+npm run test:external-handoff-release
+npm run test:external-handoff-package
+bash -n scripts/run-external-third-party-gateway-smoke.sh
+```

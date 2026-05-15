@@ -111,6 +111,12 @@ console.log("Mock gateway posted action result callback:", JSON.stringify({
 
 mkdir -p "${report_dir}"
 report_basename="external-third-party-readiness-$(date -u +%Y%m%dT%H%M%SZ)"
+handoff_package_basename="${EXTERNAL_THIRD_PARTY_HANDOFF_PACKAGE_BASENAME:-${report_basename}-handoff-package}"
+handoff_package_root="${repo_root}/target/external-third-party-handoff/${handoff_package_basename}"
+node "${repo_root}/tools/build-external-handoff-package.mjs" \
+  --basename "${handoff_package_basename}" \
+  --generatedAt "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" >/dev/null
+printf 'External third-party handoff release package: %s\n' "${handoff_package_root}"
 readiness_report="$(
   EXTERNAL_THIRD_PARTY_REQUESTS_JSON="${requests_json}" \
   EXTERNAL_THIRD_PARTY_CALLBACKS_JSON="${callbacks_json}" \
@@ -119,6 +125,7 @@ readiness_report="$(
     --repository "${repo_root}" \
     --head "$(git rev-parse --short HEAD)" \
     --handoffManifest "${handoff_manifest}" \
+    --releasePackage "${handoff_package_root}" \
     --outDir "${report_dir}" \
     --basename "${report_basename}"
 )"

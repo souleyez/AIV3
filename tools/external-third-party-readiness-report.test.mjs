@@ -78,6 +78,81 @@ test('buildReadinessReport includes handoff manifest validation when provided', 
   assert.deepEqual(report.handoff_manifest_summary.error_codes, []);
 });
 
+test('buildReadinessReport includes handoff release validation when provided', () => {
+  const report = buildReadinessReport({
+    requests: [
+      {
+        bearer_valid: true,
+        signature_valid: true,
+        body_hash_valid: true,
+        requester_sender_present: true,
+        raw_arguments_included: false,
+        contains_forbidden_text: false,
+      },
+    ],
+    callbacks: [
+      {
+        callback_status: 200,
+        response_accepted: true,
+        contains_forbidden_text: false,
+      },
+    ],
+    releasePackagePath: 'target/external-third-party-handoff/package',
+    releaseValidation: {
+      release_ready: true,
+      package_type: 'v3.external_third_party_handoff_package.v1',
+      generated_at: '2026-05-15T00:00:00.000Z',
+      repository_head: 'abc1234',
+      archive_sha256: 'a'.repeat(64),
+      delivery_manifest_sha256: 'b'.repeat(64),
+      checks: [{ key: 'delivery_manifest_ready', passed: true }],
+      errors: [],
+      package_summary: { error_codes: [] },
+      archive_summary: { error_codes: [] },
+      delivery_manifest_summary: { error_codes: [] },
+    },
+  });
+
+  assert.equal(report.ready_for_customer_sandbox, true);
+  assert.equal(report.checks.find((check) => check.key === 'handoff_release_ready').passed, true);
+  assert.equal(report.handoff_release_summary.release_ready, true);
+  assert.equal(report.handoff_release_summary.delivery_manifest_sha256, 'b'.repeat(64));
+});
+
+test('buildReadinessReport fails closed when handoff release validation fails', () => {
+  const report = buildReadinessReport({
+    requests: [
+      {
+        bearer_valid: true,
+        signature_valid: true,
+        body_hash_valid: true,
+        requester_sender_present: true,
+        raw_arguments_included: false,
+        contains_forbidden_text: false,
+      },
+    ],
+    callbacks: [
+      {
+        callback_status: 200,
+        response_accepted: true,
+        contains_forbidden_text: false,
+      },
+    ],
+    releaseValidation: {
+      release_ready: false,
+      checks: [{ key: 'delivery_manifest_ready', passed: false }],
+      errors: [{ code: 'delivery_archive_sha256_mismatch' }],
+      package_summary: { error_codes: [] },
+      archive_summary: { error_codes: [] },
+      delivery_manifest_summary: { error_codes: ['delivery_archive_sha256_mismatch'] },
+    },
+  });
+
+  assert.equal(report.ready_for_customer_sandbox, false);
+  assert.equal(report.checks.find((check) => check.key === 'handoff_release_ready').passed, false);
+  assert.deepEqual(report.handoff_release_summary.error_codes, ['delivery_archive_sha256_mismatch']);
+});
+
 test('buildReadinessReport fails closed when handoff manifest validation fails', () => {
   const report = buildReadinessReport({
     requests: [
@@ -164,6 +239,7 @@ test('renderReadinessMarkdown renders operator-facing checklist without raw payl
 
   assert.match(markdown, /Status: passed/);
   assert.match(markdown, /Handoff Manifest Summary/);
+  assert.match(markdown, /Handoff Release Summary/);
   assert.match(markdown, /Third-Party Handoff Items/);
   assert.doesNotMatch(markdown, /third-party-secret|raw prompt secret|callback-token-should-not-leak/);
 });
