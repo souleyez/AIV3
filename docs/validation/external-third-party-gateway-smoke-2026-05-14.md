@@ -514,3 +514,25 @@ node tools/external-third-party-readiness-report.mjs --releasePackage target/ext
 ```
 
 The generated readiness report returned `ready: true` and contained both `handoff_all_ready` and `handoff_all_summary.all_ready: true`.
+
+## Aggregate Handoff Evidence Output Follow-Up
+
+The aggregate handoff validator can now persist both machine-readable and human-readable review evidence:
+
+```text
+npm run validate:external-handoff-all -- --package target/external-third-party-handoff/<package> --out target/external-third-party-handoff/<package>.all.json --markdown target/external-third-party-handoff/<package>.all.md
+npm --prefix target/external-third-party-handoff/<package> run validate:all -- --out aggregate.json --markdown aggregate.md
+```
+
+Local validation passed:
+
+```text
+npm run test:external-handoff-all
+npm run test:external-handoff-package
+npm run test:external-readiness
+npm run build:external-handoff-package -- --basename all-evidence-check --generatedAt 2026-05-15T00:00:00.000Z
+npm run validate:external-handoff-all -- --package target/external-third-party-handoff/all-evidence-check --out target/external-third-party-handoff/all-evidence-check.all.json --markdown target/external-third-party-handoff/all-evidence-check.all.md
+npm --prefix target/external-third-party-handoff/all-evidence-check run validate:all -- --out aggregate.json --markdown aggregate.md
+```
+
+The generated root and package-internal evidence files both returned `all_ready: true`, and both Markdown receipts included `Status: **READY**`.

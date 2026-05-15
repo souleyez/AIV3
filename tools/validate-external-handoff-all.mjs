@@ -52,6 +52,69 @@ function summarizeErrorCodes(report) {
   return (report.errors || []).map((error) => error.code);
 }
 
+function renderAllMarkdown(report) {
+  const status = report.all_ready ? 'READY' : 'NOT READY';
+  const checks = (report.checks || [])
+    .map((check) => `- ${check.passed ? 'PASS' : 'FAIL'} \`${check.key}\``)
+    .join('\n');
+  const errors = (report.errors || []).length
+    ? report.errors
+        .map((error) => `- \`${error.scope}:${error.code}\`: ${error.message}${error.path ? ` (${error.path})` : ''}`)
+        .join('\n')
+    : '- None';
+
+  return `# External Third-Party Handoff Aggregate Validation
+
+Status: **${status}**
+
+## Package
+
+- Package root: \`${report.package_root || 'unknown'}\`
+- Handoff manifest: \`${report.manifest_path || 'unknown'}\`
+- Archive: \`${report.archive_path || 'unknown'}\`
+- SHA256 sidecar: \`${report.sidecar_path || 'unknown'}\`
+
+## Checks
+
+${checks}
+
+## Summaries
+
+- Handoff ready: ${report.summaries?.handoff?.ready_for_customer_sandbox ? 'yes' : 'no'}
+- Package ready: ${report.summaries?.package?.package_ready ? 'yes' : 'no'}
+- Included files: ${report.summaries?.package?.included_file_count ?? 0}
+- Archive ready: ${report.summaries?.archive?.archive_ready ? 'yes' : 'no'}
+- Archive root: \`${report.summaries?.archive?.root_name || 'unknown'}\`
+- Archive entries: ${report.summaries?.archive?.entry_count ?? 0}
+- Delivery manifest ready: ${report.summaries?.delivery?.delivery_manifest_ready ? 'yes' : 'no'}
+- Delivery artifacts: ${report.summaries?.delivery?.artifact_count ?? 0}
+- Release ready: ${report.summaries?.release?.release_ready ? 'yes' : 'no'}
+- Archive SHA256: \`${report.summaries?.release?.archive_sha256 || 'unknown'}\`
+- Delivery manifest SHA256: \`${report.summaries?.release?.delivery_manifest_sha256 || 'unknown'}\`
+
+## Errors
+
+${errors}
+`;
+}
+
+function writeOutputFile(filePath, contents) {
+  if (!filePath) {
+    return '';
+  }
+  const resolved = path.resolve(filePath);
+  fs.mkdirSync(path.dirname(resolved), { recursive: true });
+  fs.writeFileSync(resolved, contents);
+  return resolved;
+}
+
+function writeAllReportFiles(report, { out = '', markdown = '' } = {}) {
+  return {
+    jsonPath: writeOutputFile(out, `${JSON.stringify(report, null, 2)}\n`),
+    markdownPath: writeOutputFile(markdown, renderAllMarkdown(report)),
+  };
+}
+
 function validateAll({
   packageRootInput = '.',
   manifestPathInput = '',
@@ -143,6 +206,10 @@ async function main() {
     archivePathInput: args.archive || '',
     sidecarPathInput: args.sha256 || '',
   });
+  writeAllReportFiles(result, {
+    out: args.out || '',
+    markdown: args.markdown || '',
+  });
   console.log(JSON.stringify(result, null, 2));
   if (!result.all_ready) {
     process.exitCode = 1;
@@ -155,4 +222,4 @@ if (invokedPath === modulePath) {
   await main();
 }
 
-export { validateAll };
+export { renderAllMarkdown, validateAll, writeAllReportFiles };

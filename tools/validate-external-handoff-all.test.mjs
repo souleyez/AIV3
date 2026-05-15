@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildPackage } from './build-external-handoff-package.mjs';
-import { validateAll } from './validate-external-handoff-all.mjs';
+import { renderAllMarkdown, validateAll, writeAllReportFiles } from './validate-external-handoff-all.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -47,4 +47,42 @@ test('validateAll reports scoped failures when a sibling artifact changes', () =
   assert.equal(result.checks.find((check) => check.key === 'release_ready').passed, false);
   assert.ok(result.errors.some((error) => error.scope === 'delivery' && error.code === 'delivery_release_markdown_sha256_mismatch'));
   assert.ok(result.errors.some((error) => error.scope === 'release' && error.code === 'delivery_release_markdown_sha256_mismatch'));
+});
+
+test('renderAllMarkdown summarizes aggregate validation without raw payloads', () => {
+  const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'v3-external-handoff-all-'));
+  const built = buildPackage({
+    repoRoot,
+    outDir,
+    basename: 'all-markdown-package',
+    generatedAt: '2026-05-15T00:00:00.000Z',
+  });
+
+  const markdown = renderAllMarkdown(validateAll({ packageRootInput: built.packageRoot }));
+
+  assert.match(markdown, /Status: \*\*READY\*\*/);
+  assert.match(markdown, /PASS `handoff_manifest_ready`/);
+  assert.match(markdown, /Delivery manifest ready: yes/);
+  assert.match(markdown, /Release ready: yes/);
+  assert.doesNotMatch(markdown, /dispatch-token|dispatch-secret|Bearer /);
+});
+
+test('writeAllReportFiles writes JSON and Markdown evidence files', () => {
+  const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'v3-external-handoff-all-'));
+  const built = buildPackage({
+    repoRoot,
+    outDir,
+    basename: 'all-output-package',
+    generatedAt: '2026-05-15T00:00:00.000Z',
+  });
+  const report = validateAll({ packageRootInput: built.packageRoot });
+  const jsonPath = path.join(outDir, 'aggregate.json');
+  const markdownPath = path.join(outDir, 'aggregate.md');
+
+  const written = writeAllReportFiles(report, { out: jsonPath, markdown: markdownPath });
+
+  assert.equal(written.jsonPath, jsonPath);
+  assert.equal(written.markdownPath, markdownPath);
+  assert.equal(JSON.parse(fs.readFileSync(jsonPath, 'utf8')).all_ready, true);
+  assert.match(fs.readFileSync(markdownPath, 'utf8'), /External Third-Party Handoff Aggregate Validation/);
 });

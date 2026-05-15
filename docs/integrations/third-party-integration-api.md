@@ -928,13 +928,19 @@ npm run validate:all
 
 `validate:all` emits one JSON report covering the handoff manifest, package, archive, delivery manifest, and release gates.
 
+For review evidence, run:
+
+```bash
+npm run validate:all -- --out aggregate.json --markdown aggregate.md
+```
+
 Before sending the archive, V3 operators can also validate the archive itself from the main repository without extracting it:
 
 ```bash
 node tools/validate-external-handoff-archive.mjs --archive target/external-third-party-handoff/<package>.tar.gz
 node tools/validate-external-handoff-delivery.mjs --package target/external-third-party-handoff/<package>
 node tools/validate-external-handoff-release.mjs --package target/external-third-party-handoff/<package>
-node tools/validate-external-handoff-all.mjs --package target/external-third-party-handoff/<package>
+node tools/validate-external-handoff-all.mjs --package target/external-third-party-handoff/<package> --out target/external-third-party-handoff/<package>.all.json --markdown target/external-third-party-handoff/<package>.all.md
 ```
 
 This checks the `.sha256` sidecar, gzip/tar structure, single package root, path traversal safety, required entries, package manifest file hashes, and handoff manifest readiness.
