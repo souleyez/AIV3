@@ -261,6 +261,11 @@ async fn append_video_extraction_assistant_event(
             .collect::<Vec<_>>();
     let completion_follow_up =
         video_extraction_completion_follow_up_from_output(output, &html_artifacts);
+    let model_completion_turn_request = completion_follow_up
+        .as_ref()
+        .and_then(|follow_up| follow_up.get("model_follow_up"))
+        .cloned()
+        .unwrap_or(Value::Null);
     let completion_audit = video_extraction_completion_audit_from_output(output);
 
     storage
@@ -279,6 +284,7 @@ async fn append_video_extraction_assistant_event(
                     "output": output,
                     "html_artifacts": html_artifacts,
                     "completion_follow_up": completion_follow_up,
+                    "model_completion_turn_request": model_completion_turn_request,
                     "completion_audit": completion_audit,
                     "no_host_composed_answer": true,
                 }),

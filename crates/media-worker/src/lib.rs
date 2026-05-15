@@ -3362,6 +3362,13 @@ pub fn video_extraction_output_artifact_from_output(
         &deliverable_status,
         &html_artifact_ids,
     );
+    let completion_follow_up =
+        video_extraction_completion_follow_up_from_output(output, html_artifacts);
+    let model_completion_turn_request = completion_follow_up
+        .as_ref()
+        .and_then(|follow_up| follow_up.get("model_follow_up"))
+        .cloned()
+        .unwrap_or(Value::Null);
 
     Some(json!({
         "type": "video_extraction_artifacts",
@@ -3437,7 +3444,8 @@ pub fn video_extraction_output_artifact_from_output(
         "deliverable_package": deliverable_package,
         "html_artifacts": html_artifact_summaries,
         "html_artifact_ids": html_artifact_ids,
-        "completion_follow_up": video_extraction_completion_follow_up_from_output(output, html_artifacts),
+        "completion_follow_up": completion_follow_up,
+        "model_completion_turn_request": model_completion_turn_request,
         "completion_audit": video_extraction_completion_audit_from_output(output),
     }))
 }
@@ -3633,6 +3641,15 @@ pub fn video_extraction_completion_follow_up_from_output(
         &deliverable_status,
         &html_artifact_ids,
     );
+    let model_follow_up = video_extraction_model_completion_follow_up(
+        title,
+        state,
+        &ready_file_kinds,
+        &html_artifact_ids,
+        &deliverable_status,
+        &deliverable_package,
+        &next_actions,
+    );
 
     Some(json!({
         "kind": "video_extraction_completion_follow_up",
@@ -3645,13 +3662,81 @@ pub fn video_extraction_completion_follow_up_from_output(
         "ready_file_kinds": ready_file_kinds,
         "html_artifact_ids": html_artifact_ids,
         "next_actions": next_actions,
-        "model_follow_up": {
-            "required": true,
-            "instruction": "Use this structured completion status to notify the user in the next model-authored turn; do not claim missing files are available.",
-        },
+        "model_follow_up": model_follow_up,
         "user_notification": user_notification,
         "no_host_composed_answer": true,
     }))
+}
+
+fn video_extraction_model_completion_follow_up(
+    title: &str,
+    state: &str,
+    ready_file_kinds: &[String],
+    html_artifact_ids: &[String],
+    deliverable_status: &Value,
+    deliverable_package: &Value,
+    next_actions: &[Value],
+) -> Value {
+    let warnings = deliverable_status
+        .get("warnings")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let warning_count = deliverable_status
+        .get("warning_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(warnings.len() as u64);
+    let warning_codes = warnings
+        .iter()
+        .filter_map(|warning| warning.get("code").and_then(Value::as_str))
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    let missing_required_file_kinds = deliverable_package
+        .get("missing_required_file_kinds")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let primary_next_action = next_actions.first().cloned().unwrap_or(Value::Null);
+
+    json!({
+        "kind": "video_extraction_model_completion_turn_request",
+        "version": 1,
+        "required": true,
+        "turn_owner": "model",
+        "source_event": "video_extraction.workflow_completed",
+        "instruction": "Use this structured completion status to write the next assistant message in the model's own words. Mention only ready files and explicit missing/review items from the observation; do not claim missing files are available.",
+        "completion_context": {
+            "title": title,
+            "status": state,
+            "ready_file_kinds": ready_file_kinds,
+            "html_artifact_ids": html_artifact_ids,
+            "warning_count": warning_count,
+            "warning_codes": warning_codes,
+            "primary_next_action": primary_next_action,
+            "missing_required_file_kinds": missing_required_file_kinds,
+            "has_pptx": deliverable_status
+                .get("has_pptx")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            "has_video_slides_markdown": deliverable_status
+                .get("has_video_slides_markdown")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            "has_subtitle_page_map": deliverable_status
+                .get("has_subtitle_page_map")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+        },
+        "answer_contract": {
+            "must_write_in_model_voice": true,
+            "must_reference_observation_only": true,
+            "must_not_claim_missing_files": true,
+            "must_not_include_private_paths_or_urls": true,
+            "must_not_request_login_cookie_or_recording_bypass": true,
+            "must_keep_missing_items_explicit": true,
+            "no_host_composed_answer": true,
+        },
+    })
 }
 
 pub fn video_extraction_completion_audit_from_output(output: &Value) -> Value {
@@ -6621,6 +6706,19 @@ mod tests {
             json!(true)
         );
         assert_eq!(
+            output_artifact["model_completion_turn_request"]["kind"],
+            json!("video_extraction_model_completion_turn_request")
+        );
+        assert_eq!(
+            output_artifact["model_completion_turn_request"]["turn_owner"],
+            json!("model")
+        );
+        assert_eq!(
+            output_artifact["model_completion_turn_request"]["answer_contract"]
+                ["no_host_composed_answer"],
+            json!(true)
+        );
+        assert_eq!(
             output_artifact["completion_audit"]["kind"],
             json!("video_extraction_completion_audit")
         );
@@ -6853,6 +6951,27 @@ mod tests {
             .expect("next actions")
             .contains(&json!("review_subtitle_page_map")));
         assert_eq!(follow_up["model_follow_up"]["required"], json!(true));
+        assert_eq!(
+            follow_up["model_follow_up"]["kind"],
+            json!("video_extraction_model_completion_turn_request")
+        );
+        assert_eq!(
+            follow_up["model_follow_up"]["completion_context"]["status"],
+            json!("final_pptx_ready")
+        );
+        assert_eq!(
+            follow_up["model_follow_up"]["completion_context"]["has_video_slides_markdown"],
+            json!(true)
+        );
+        assert_eq!(
+            follow_up["model_follow_up"]["answer_contract"]["must_not_claim_missing_files"],
+            json!(true)
+        );
+        assert_eq!(
+            follow_up["model_follow_up"]["answer_contract"]
+                ["must_not_include_private_paths_or_urls"],
+            json!(true)
+        );
         assert_eq!(
             follow_up["user_notification"]["kind"],
             json!("video_extraction_status_notification")
