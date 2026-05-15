@@ -13,7 +13,7 @@ Current smoke entrypoints:
 External third-party handoff checks:
 
 - `npm run test:external-handoff`: unit coverage for the customer sandbox handoff manifest validator.
-- `npm run test:external-readiness`: unit coverage for the third-party gateway readiness report generator, including optional handoff manifest, handoff release package, aggregate validation, final evidence manifest summaries, and evidence Markdown receipt freshness.
+- `npm run test:external-readiness`: unit coverage for the third-party gateway readiness report generator, including optional handoff manifest, handoff release package, aggregate validation provenance, final evidence manifest provenance summaries, and evidence Markdown receipt freshness.
 - `npm run validate:external-handoff`: validates `docs/integrations/third-party-handoff.sample.json` for URL safety, dispatch auth delivery notes, callback allowlist confirmation, document/ACL fixtures, operations contacts, and raw-secret exclusion.
 - `npm run test:external-handoff-package`: unit coverage for the self-contained third-party handoff package builder.
 - `npm run test:external-handoff-package-integrity`: unit coverage for the generated package integrity validator, including package provenance and the V3 safe HTML artifact manifest contract.

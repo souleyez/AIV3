@@ -141,6 +141,9 @@ test('buildReadinessReport includes aggregate handoff validation when provided',
     releasePackagePath: 'target/external-third-party-handoff/package',
     handoffAllValidation: {
       all_ready: true,
+      package_type: 'v3.external_third_party_handoff_package.v1',
+      generated_at: '2026-05-15T00:00:00.000Z',
+      repository_head: 'abc1234',
       checks: [
         { key: 'handoff_manifest_ready', passed: true },
         { key: 'release_ready', passed: true },
@@ -166,6 +169,9 @@ test('buildReadinessReport includes aggregate handoff validation when provided',
   assert.equal(report.ready_for_customer_sandbox, true);
   assert.equal(report.checks.find((check) => check.key === 'handoff_all_ready').passed, true);
   assert.equal(report.handoff_all_summary.all_ready, true);
+  assert.equal(report.handoff_all_summary.package_type, 'v3.external_third_party_handoff_package.v1');
+  assert.equal(report.handoff_all_summary.generated_at, '2026-05-15T00:00:00.000Z');
+  assert.equal(report.handoff_all_summary.repository_head, 'abc1234');
   assert.equal(report.handoff_all_summary.package_html_artifact_ready, true);
   assert.equal(report.handoff_all_summary.package_html_artifact_template_id, 'third_party_handoff_document');
   assert.equal(report.handoff_all_summary.archive_html_artifact_ready, true);
@@ -197,6 +203,9 @@ test('buildReadinessReport includes final evidence manifest validation when prov
       evidence_manifest_ready: true,
       evidence_manifest_path: 'target/external-third-party-handoff/package.evidence-manifest.json',
       evidence_manifest_sha256: 'c'.repeat(64),
+      package_type: 'v3.external_third_party_handoff_package.v1',
+      generated_at: '2026-05-15T00:00:00.000Z',
+      repository_head: 'abc1234',
       evidence_markdown_receipt: {
         receipt_ready: true,
         receipt_path: 'target/external-third-party-handoff/package.evidence-manifest.md',
@@ -220,6 +229,9 @@ test('buildReadinessReport includes final evidence manifest validation when prov
   assert.equal(report.checks.find((check) => check.key === 'handoff_evidence_ready').passed, true);
   assert.equal(report.handoff_evidence_summary.evidence_manifest_ready, true);
   assert.equal(report.handoff_evidence_summary.evidence_manifest_sha256, 'c'.repeat(64));
+  assert.equal(report.handoff_evidence_summary.package_type, 'v3.external_third_party_handoff_package.v1');
+  assert.equal(report.handoff_evidence_summary.generated_at, '2026-05-15T00:00:00.000Z');
+  assert.equal(report.handoff_evidence_summary.repository_head, 'abc1234');
   assert.equal(report.handoff_evidence_summary.evidence_markdown_receipt_ready, true);
   assert.equal(report.handoff_evidence_summary.evidence_markdown_receipt_sha256, 'd'.repeat(64));
   assert.equal(report.handoff_evidence_summary.artifact_count, 9);
@@ -490,6 +502,9 @@ test('renderReadinessMarkdown renders operator-facing checklist without raw payl
     ],
     handoffAllValidation: {
       all_ready: true,
+      package_type: 'v3.external_third_party_handoff_package.v1',
+      generated_at: '2026-05-15T00:00:00.000Z',
+      repository_head: 'abc1234',
       checks: [{ key: 'release_ready', passed: true }],
       summaries: {
         package: {
@@ -510,6 +525,9 @@ test('renderReadinessMarkdown renders operator-facing checklist without raw payl
     handoffEvidenceValidation: {
       evidence_manifest_ready: true,
       evidence_manifest_sha256: 'c'.repeat(64),
+      package_type: 'v3.external_third_party_handoff_package.v1',
+      generated_at: '2026-05-15T00:00:00.000Z',
+      repository_head: 'abc1234',
       evidence_markdown_receipt: {
         receipt_ready: true,
         receipt_sha256: 'd'.repeat(64),
@@ -533,6 +551,9 @@ test('renderReadinessMarkdown renders operator-facing checklist without raw payl
   assert.match(markdown, /Handoff Release Summary/);
   assert.match(markdown, /Aggregate Handoff Summary/);
   assert.match(markdown, /Final Evidence Manifest Summary/);
+  assert.match(markdown, /Package type: `v3\.external_third_party_handoff_package\.v1`/);
+  assert.match(markdown, /Generated at: 2026-05-15T00:00:00\.000Z/);
+  assert.match(markdown, /Repository head: `abc1234`/);
   assert.match(markdown, /Evidence Markdown receipt/);
   assert.match(markdown, /Package HTML artifact/);
   assert.match(markdown, /Archive HTML artifact/);

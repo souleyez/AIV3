@@ -213,6 +213,9 @@ function summarizeHandoffAllValidation(validation, packagePath) {
   return {
     package_root: packagePath || validation.package_root || null,
     all_ready: validation.all_ready === true,
+    package_type: validation.package_type || validation.summaries?.package?.package_type || null,
+    generated_at: validation.generated_at || validation.summaries?.package?.generated_at || null,
+    repository_head: validation.repository_head || validation.summaries?.package?.repository_head || null,
     checks: Array.isArray(validation.checks)
       ? validation.checks.map((check) => ({
           key: check.key,
@@ -259,6 +262,9 @@ function summarizeHandoffEvidenceValidation(validation, packagePath) {
     evidence_markdown_receipt_path: receipt?.receipt_path || null,
     evidence_markdown_receipt_sha256: receipt?.receipt_sha256 || null,
     manifest_type: validation.manifest_type || null,
+    package_type: validation.package_type || null,
+    generated_at: validation.generated_at || null,
+    repository_head: validation.repository_head || null,
     package_name: validation.package_name || null,
     artifact_count: validation.artifact_count || 0,
     html_artifact_summary: validation.html_artifact_summary || {
@@ -318,6 +324,9 @@ export function renderReadinessMarkdown(report) {
   const handoffAll = report.handoff_all_summary
     ? [
         `- Package: \`${report.handoff_all_summary.package_root || 'unknown'}\``,
+        `- Package type: \`${report.handoff_all_summary.package_type || 'unknown'}\``,
+        `- Generated at: ${report.handoff_all_summary.generated_at || 'unknown'}`,
+        `- Repository head: \`${report.handoff_all_summary.repository_head || 'unknown'}\``,
         `- Ready: ${report.handoff_all_summary.all_ready ? 'yes' : 'no'}`,
         `- Package HTML artifact: ${report.handoff_all_summary.package_html_artifact_ready ? 'yes' : 'no'}`,
         `- Archive HTML artifact: ${report.handoff_all_summary.archive_html_artifact_ready ? 'yes' : 'no'}`,
@@ -328,6 +337,9 @@ export function renderReadinessMarkdown(report) {
   const handoffEvidence = report.handoff_evidence_summary
     ? [
         `- Package: \`${report.handoff_evidence_summary.package_root || 'unknown'}\``,
+        `- Package type: \`${report.handoff_evidence_summary.package_type || 'unknown'}\``,
+        `- Generated at: ${report.handoff_evidence_summary.generated_at || 'unknown'}`,
+        `- Repository head: \`${report.handoff_evidence_summary.repository_head || 'unknown'}\``,
         `- Ready: ${report.handoff_evidence_summary.evidence_manifest_ready ? 'yes' : 'no'}`,
         `- Evidence manifest SHA256: \`${report.handoff_evidence_summary.evidence_manifest_sha256 || 'unknown'}\``,
         `- Evidence Markdown receipt: ${
