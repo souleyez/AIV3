@@ -199,6 +199,7 @@ function artifactKindLabel(kind) {
     source_text: '来源文档',
     ppt_outline: 'PPT大纲',
     slide_notes: '讲稿备注',
+    video_slides_markdown: 'Markdown讲义',
     subtitle_page_map: '字幕对页',
     timestamp_map: '时间映射',
     contact_sheet_html: '接触表',
@@ -241,6 +242,7 @@ function htmlArtifactGeneratedFiles(artifact) {
 function preferredHtmlArtifactDownloads(artifact) {
   const priority = [
     'pptx',
+    'video_slides_markdown',
     'final_deliverables_manifest',
     'published_deliverable_manifest',
     'published_version_history',
@@ -320,6 +322,7 @@ function htmlArtifactBrief(summary) {
     }
     const parts = [
       status.hasPptx || status.has_pptx ? 'PPTX ready' : 'PPTX waiting',
+      status.hasVideoSlidesMarkdown || status.has_video_slides_markdown ? 'Markdown deck ready' : '',
       status.hasFinalDeliverablesManifest || status.has_final_deliverables_manifest ? 'deliverable manifest ready' : '',
       status.hasPublishedVersionHistory || status.has_published_version_history ? 'version history ready' : '',
       status.hasExtractionArtifactsManifest || status.has_extraction_artifacts_manifest ? 'artifact index ready' : '',

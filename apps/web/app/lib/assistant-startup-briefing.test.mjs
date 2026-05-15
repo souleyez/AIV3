@@ -52,6 +52,7 @@ test('startup briefing summarizes visible datasets and system capability', () =>
   assert.match(briefing.productCapabilities.media, /partial/);
   assert.match(briefing.productCapabilities.media, /视频 URL/);
   assert.match(briefing.productCapabilities.media, /PPT\/原文提取/);
+  assert.match(briefing.productCapabilities.media, /video_slides\.md/);
   assert.match(briefing.productCapabilities.media, /登录态、扫码、Cookie/);
   assert.ok(briefing.mediaExtractionPolicy.supportedSources.includes('上传视频文件'));
   assert.ok(briefing.mediaExtractionPolicy.supportedSources.includes('直接视频 URL'));
@@ -67,6 +68,8 @@ test('startup briefing summarizes visible datasets and system capability', () =>
     'media.extract_ppt_transcript',
   ]);
   assert.ok(briefing.mediaExtractionPolicy.outputArtifacts.includes('subtitle_page_map'));
+  assert.ok(briefing.mediaExtractionPolicy.outputArtifacts.includes('video_slides_markdown'));
+  assert.ok(briefing.mediaExtractionPolicy.outputArtifacts.includes('video_slides.md'));
   assert.ok(briefing.mediaExtractionPolicy.outputArtifacts.includes('final_deliverables_manifest'));
   assert.ok(briefing.mediaExtractionPolicy.outputArtifacts.includes('published_version_history'));
   assert.ok(briefing.mediaExtractionPolicy.outputArtifacts.includes('extraction_artifacts_manifest'));
@@ -92,6 +95,8 @@ test('formatted briefing tells model when no dataset is selected', () => {
   assert.match(formatted, /Cookie\/Session 复用/);
   assert.match(formatted, /不要声称已访问视频/);
   assert.match(formatted, /subtitle_page_map/);
+  assert.match(formatted, /video_slides_markdown/);
+  assert.match(formatted, /video_slides\.md/);
   assert.match(formatted, /final_deliverables_manifest/);
   assert.match(formatted, /published_version_history/);
   assert.match(formatted, /extraction_artifacts_manifest/);

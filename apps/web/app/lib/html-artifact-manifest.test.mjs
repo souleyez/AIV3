@@ -311,10 +311,16 @@ test('renders video extraction summary template', () => {
           title: '课程视频 - pptx',
           format: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
           path: 'C:\\Users\\soulzyn\\private\\video_slides_screenshot_based.pptx',
+        }, {
+          artifactKind: 'video_slides_markdown',
+          title: '课程视频 - video_slides_markdown',
+          format: 'text/markdown',
+          path: 'generated_artifacts/video_slides.md',
         }],
       },
       deliverableStatus: {
         state: 'evidence_artifacts_ready',
+        hasVideoSlidesMarkdown: true,
         warningCount: 1,
         warnings: [{
           code: 'missing_transcript_alignment',
@@ -328,12 +334,15 @@ test('renders video extraction summary template', () => {
         publishable: true,
         immutableVersion: false,
         nextAction: 'persist_video_published_version',
-        readyRequiredFileCount: 5,
-        requiredFileCount: 5,
+        readyRequiredFileCount: 6,
+        requiredFileCount: 6,
         missingRequiredFileKinds: [],
         requiredFiles: [{
           artifactKind: 'pptx',
           fileName: 'video_slides_screenshot_based.pptx',
+        }, {
+          artifactKind: 'video_slides_markdown',
+          fileName: 'video_slides.md',
         }, {
           artifactKind: 'final_deliverables_manifest',
           fileName: 'final_deliverables_manifest.json',
@@ -351,7 +360,7 @@ test('renders video extraction summary template', () => {
       completionFollowUp: {
         kind: 'video_extraction_completion_follow_up',
         status: 'evidence_artifacts_ready',
-        readyFileKinds: ['transcript_text', 'ppt_outline'],
+        readyFileKinds: ['transcript_text', 'ppt_outline', 'video_slides_markdown'],
         nextActions: [
           'open_video_extraction_summary',
           'retry_frame_extraction',
@@ -367,6 +376,7 @@ test('renders video extraction summary template', () => {
           'check_video_provider_configuration',
           'review_extraction_artifacts_manifest',
           'review_slide_notes',
+          'review_video_slides_markdown',
           'review_subtitle_page_map',
           'complete_keep_list_or_review_missing_inputs',
         ],
@@ -443,6 +453,8 @@ test('renders video extraction summary template', () => {
   assert.doesNotMatch(video.html, /generated_artifacts\/transcript\.txt/);
   assert.match(video.html, /ppt_outline/);
   assert.match(video.html, /video_slides_screenshot_based\.pptx/);
+  assert.match(video.html, /video_slides\.md/);
+  assert.match(video.html, /Markdown 讲义/);
   assert.doesNotMatch(video.html, /C:\\Users\\soulzyn/);
   assert.match(video.html, /质量提示/);
   assert.match(video.html, /Speaker notes cannot be aligned yet/);
@@ -466,12 +478,14 @@ test('renders video extraction summary template', () => {
   assert.match(video.html, /not immutable yet/);
   assert.match(video.html, /persist_video_published_version/);
   assert.match(video.html, /video_slides_screenshot_based\.pptx/);
+  assert.match(video.html, /required=6\/6/);
   assert.match(video.html, /final_deliverables_manifest\.json/);
   assert.match(video.html, /用户通知/);
   assert.match(video.html, /视频\/PPT 提取需要复核/);
   assert.match(video.html, /后台任务已更新视频提取摘要/);
   assert.match(video.html, /status_only/);
   assert.match(video.html, /PPT 大纲/);
+  assert.match(video.html, /复核 Markdown 讲义/);
   assert.match(video.html, /重试原始帧提取/);
   assert.match(video.html, /提供本地视频或已解析帧/);
   assert.match(video.html, /重试生成文件写入/);

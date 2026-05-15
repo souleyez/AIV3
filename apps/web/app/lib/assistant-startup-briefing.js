@@ -25,11 +25,13 @@ const MEDIA_EXTRACTION_POLICY = {
     'slide_candidates_manifest',
     'selected_slides_manifest',
     'slide_notes',
+    'video_slides_markdown',
     'subtitle_page_map',
     'final_deliverables_manifest',
     'published_deliverable_manifest',
     'published_version_history',
     'extraction_artifacts_manifest',
+    'video_slides.md',
     'video_slides_screenshot_based.pptx',
   ],
   accessRule: '未收到 V3 observation 确认视频源解析、转写、抽帧或 PPT 产物前，不要声称已访问视频或看过视频内容。',
@@ -104,7 +106,7 @@ export function buildAssistantStartupBriefing({
       staticPage: '可以在主对话区发起静态页规划、效果图排队、模块编辑、最终静态页渲染，并导出 index.html 与包含 manifest/data/modules/render-spec/runtime/README 的 ZIP 交付包。',
       report: '可以让模型主动发起报表/看板创建，但必须先通过工具列出选项并由宿主执行。',
       retrieval: '选中或预选数据集时，宿主会尽量检索相关证据；静态页/报表意图优先深度供料。',
-      media: '音视频上传按后台任务解析；支持上传视频文件、直接视频 URL、公开页面可解析视频地址后的 PPT/原文提取；有本地转写、场景或关键帧 OCR 时会以可引用证据供料，缺失时保持 partial 而不编造；登录态、扫码、Cookie 或录屏绕过不在当前自动能力范围。',
+      media: '音视频上传按后台任务解析；支持上传视频文件、直接视频 URL、公开页面可解析视频地址后的 PPT/原文提取；完整视频/PPT 包应输出截图型 PPTX、video_slides.md、讲稿备注、字幕对页和清单类文件；有本地转写、场景或关键帧 OCR 时会以可引用证据供料，缺失时保持 partial 而不编造；登录态、扫码、Cookie 或录屏绕过不在当前自动能力范围。',
       memory: '本轮对话历史是隐藏数据集，只有用户语义需要上下文时才进入供料。',
       continuousExecution: '模型可以连续提出检索、细读、静态页规划/修改、报表规划、渲染或导出等受控动作；宿主负责校验权限、执行动作并把简要步骤回写到对话。',
     },
@@ -160,7 +162,7 @@ function formatMediaExtractionPolicyForModel(policy) {
     ? policy.controlledPipeline.join(' -> ')
     : '';
   const outputArtifacts = Array.isArray(policy.outputArtifacts)
-    ? policy.outputArtifacts.slice(0, 12).join('、')
+    ? policy.outputArtifacts.slice(0, 16).join('、')
     : '';
   return [
     `媒体提取边界：支持 ${supportedSources || '无'}；不支持 ${unsupportedSources || '无'}。`,
