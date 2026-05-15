@@ -48,6 +48,24 @@ Checks completed on the target host:
 
 The optional DB-backed consumer check was intentionally skipped because it requires an explicitly supplied disposable test database.
 
+## Deployment Service Enablement
+
+2026-05-15 deployment target service evidence:
+
+- Service: `aiv3-assistant-run-worker.service`
+- Unit path: `/etc/systemd/system/aiv3-assistant-run-worker.service`
+- Build command: `CC=clang CXX=clang++ cargo build -p assistant-run-worker --release`
+- Binary: `/srv/aiv3/repo/target/release/assistant-run-worker`
+- Status: enabled and active
+- Working directory: `/srv/aiv3/repo`
+- Environment files: `/etc/aiv3/aiv3.env`, `/etc/aiv3/minimax.env`
+- Queue: `assistant_run`
+- Task key: `consume_model_completion_turn`
+- Poll interval: `1000ms`
+- Wake path: NATS event bus plus database polling fallback
+
+The target host's default GCC 10 compiler is rejected by `aws-lc-sys` for release builds because of a known memcmp compiler bug. Use clang for release builds on that host unless the system compiler is upgraded.
+
 ## Optional DB-Backed Check
 
 Only enable this against a disposable test database:
