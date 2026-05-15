@@ -12965,6 +12965,8 @@ fn build_assistant_run_react_continue_provider_input(
             serde_json::to_string(&planning_catalog).unwrap_or_else(|_| "{}".to_string())
         ),
     ];
+    let pending_model_completion_requests =
+        assistant_run_pending_model_completion_requests(&run.output_artifacts);
     if let Some(evidence_state) = evidence_state {
         if evidence_state.get("status").and_then(Value::as_str) != Some("not_requested") {
             if let Some(brief) = build_assistant_run_model_supply_brief(evidence_state) {
@@ -12982,6 +12984,15 @@ fn build_assistant_run_react_continue_provider_input(
         sections.push(format!(
             "当前打开产物：{}",
             serde_json::to_string(&current_artifact_brief).unwrap_or_else(|_| "{}".to_string())
+        ));
+    }
+
+    if !pending_model_completion_requests.is_empty() {
+        sections.push("后台产物完成后存在模型接手请求：如果用户要求继续、查看结果、生成最终说明或确认视频/PPT任务状态，优先基于这些请求和已完成 observation 使用 final_answer，由模型自己写下一条助手消息。只能引用 ready_file_kinds、html_artifact_ids、warning_codes、missing_required_file_kinds、status 和 answer_contract 里的信息；不要声称缺失文件已就绪；不要展示私有路径、内部 URL、Cookie、Token、provider 原始载荷或本地文件系统路径；不要请求扫码、Cookie、登录态页面或录屏绕过。".to_string());
+        sections.push(format!(
+            "待模型接手的后台完成请求：{}",
+            serde_json::to_string(&pending_model_completion_requests)
+                .unwrap_or_else(|_| "[]".to_string())
         ));
     }
 
@@ -13006,6 +13017,182 @@ fn build_assistant_run_react_continue_provider_input(
     }
 
     sections.join("\n\n")
+}
+
+fn assistant_run_pending_model_completion_requests(output_artifacts: &Value) -> Vec<Value> {
+    value_array(output_artifacts.clone())
+        .into_iter()
+        .rev()
+        .filter_map(|artifact| assistant_run_safe_model_completion_request(&artifact))
+        .take(3)
+        .collect()
+}
+
+fn assistant_run_safe_model_completion_request(artifact: &Value) -> Option<Value> {
+    let request = assistant_run_model_completion_request_candidate(artifact)?;
+    if request.get("kind").and_then(Value::as_str)
+        != Some("video_extraction_model_completion_turn_request")
+    {
+        return None;
+    }
+    if request.get("required").and_then(Value::as_bool) != Some(true) {
+        return None;
+    }
+
+    let mut safe = Map::new();
+    assistant_run_copy_safe_scalar_fields(
+        &mut safe,
+        request,
+        &[
+            "kind",
+            "version",
+            "required",
+            "turn_owner",
+            "source_event",
+            "instruction",
+        ],
+    );
+
+    if let Some(context) = request.get("completion_context") {
+        let mut safe_context = Map::new();
+        assistant_run_copy_safe_scalar_fields(
+            &mut safe_context,
+            context,
+            &[
+                "title",
+                "status",
+                "warning_count",
+                "has_pptx",
+                "has_video_slides_markdown",
+                "has_subtitle_page_map",
+            ],
+        );
+        for key in [
+            "ready_file_kinds",
+            "html_artifact_ids",
+            "warning_codes",
+            "missing_required_file_kinds",
+        ] {
+            assistant_run_insert_safe_scalar_array_field(&mut safe_context, context, key, key, 20);
+        }
+        if let Some(primary_next_action) = context.get("primary_next_action") {
+            if let Some(safe_action) =
+                assistant_run_safe_model_completion_action(primary_next_action)
+            {
+                safe_context.insert("primary_next_action".to_string(), safe_action);
+            }
+        }
+        if !safe_context.is_empty() {
+            safe.insert(
+                "completion_context".to_string(),
+                Value::Object(safe_context),
+            );
+        }
+    }
+
+    if let Some(answer_contract) = request.get("answer_contract") {
+        let mut safe_contract = Map::new();
+        assistant_run_copy_safe_scalar_fields(
+            &mut safe_contract,
+            answer_contract,
+            &[
+                "must_write_in_model_voice",
+                "must_reference_observation_only",
+                "must_not_claim_missing_files",
+                "must_not_include_private_paths_or_urls",
+                "must_not_request_login_cookie_or_recording_bypass",
+                "must_keep_missing_items_explicit",
+                "no_host_composed_answer",
+            ],
+        );
+        if !safe_contract.is_empty() {
+            safe.insert("answer_contract".to_string(), Value::Object(safe_contract));
+        }
+    }
+
+    let mut source_artifact = Map::new();
+    assistant_run_copy_safe_scalar_fields(
+        &mut source_artifact,
+        artifact,
+        &[
+            "type",
+            "id",
+            "title",
+            "assistant_run_id",
+            "document_id",
+            "dataset_id",
+            "status",
+        ],
+    );
+    if !source_artifact.is_empty() {
+        safe.insert(
+            "source_artifact".to_string(),
+            Value::Object(source_artifact),
+        );
+    }
+
+    (!safe.is_empty()).then_some(Value::Object(safe))
+}
+
+fn assistant_run_model_completion_request_candidate<'a>(artifact: &'a Value) -> Option<&'a Value> {
+    for candidate in [
+        artifact.get("model_completion_turn_request"),
+        artifact.pointer("/completion_follow_up/model_follow_up"),
+        artifact.pointer("/completionFollowUp/modelFollowUp"),
+        artifact.pointer("/payload/model_completion_turn_request"),
+        artifact.pointer("/payload/completion_follow_up/model_follow_up"),
+        artifact.pointer("/payload/completionFollowUp/modelFollowUp"),
+    ] {
+        if candidate
+            .and_then(|value| value.get("kind"))
+            .and_then(Value::as_str)
+            == Some("video_extraction_model_completion_turn_request")
+        {
+            return candidate;
+        }
+    }
+    None
+}
+
+fn assistant_run_copy_safe_scalar_fields(
+    target: &mut Map<String, Value>,
+    source: &Value,
+    keys: &[&str],
+) {
+    for key in keys {
+        assistant_run_insert_safe_scalar_field(target, source, key, key);
+    }
+}
+
+fn assistant_run_insert_safe_scalar_array_field(
+    target: &mut Map<String, Value>,
+    source: &Value,
+    source_key: &str,
+    target_key: &str,
+    limit: usize,
+) {
+    if let Some(items) = source.get(source_key).and_then(Value::as_array) {
+        let safe_items = items
+            .iter()
+            .take(limit)
+            .filter_map(assistant_run_safe_artifact_scalar)
+            .collect::<Vec<_>>();
+        target.insert(target_key.to_string(), Value::Array(safe_items));
+    }
+}
+
+fn assistant_run_safe_model_completion_action(action: &Value) -> Option<Value> {
+    if let Some(value) = assistant_run_safe_artifact_scalar(action) {
+        return Some(value);
+    }
+
+    let mut safe_action = Map::new();
+    assistant_run_copy_safe_scalar_fields(
+        &mut safe_action,
+        action,
+        &["kind", "action", "code", "label", "summary"],
+    );
+    (!safe_action.is_empty()).then_some(Value::Object(safe_action))
 }
 
 fn assistant_run_react_enabled(runtime_mode: &str) -> bool {
@@ -35258,6 +35445,104 @@ mod tests {
         assert!(input.contains("\"id\":\"trend\""));
         assert!(!input.contains("继续执行提示不应该携带完整模块正文"));
         assert!(!input.contains("continue-current-artifact-row-should-not-leak"));
+    }
+
+    #[test]
+    fn assistant_run_react_continue_provider_input_includes_video_model_completion_request() {
+        let now = Utc::now();
+        let run = AssistantRun {
+            id: AssistantRunId::new(),
+            tenant_id: TenantId::new(),
+            user_id: None,
+            local_thread_id: Some("browser-thread-1".to_string()),
+            user_prompt: "帮我从课程视频里提取 PPT 和原文".to_string(),
+            startup_briefing: json!({"visibleDatasetCount": 0}),
+            selected_scope: json!({"mode": "ordinary_chat"}),
+            scope_candidates: json!([]),
+            context_policy: json!({}),
+            evidence_state: json!({"status": "not_requested"}),
+            service_lane: "assistant_run".to_string(),
+            execution_trail: json!([]),
+            output_artifacts: json!([{
+                "type": "video_extraction_artifacts",
+                "id": "video-extraction-1",
+                "assistant_run_id": "run-1",
+                "document_id": "doc-1",
+                "status": "final_pptx_ready",
+                "title": "课程视频 - 视频/PPT交付物",
+                "generated_artifacts": {
+                    "files": [{
+                        "artifact_kind": "pptx",
+                        "path": "C:\\Users\\soulzyn\\secret\\video_slides.pptx",
+                        "url": "https://internal.example.local/private/video_slides.pptx"
+                    }]
+                },
+                "model_completion_turn_request": {
+                    "kind": "video_extraction_model_completion_turn_request",
+                    "version": 1,
+                    "required": true,
+                    "turn_owner": "model",
+                    "source_event": "video_extraction.workflow_completed",
+                    "instruction": "Use this structured completion status to write the next assistant message in the model's own words. Mention only ready files and explicit missing/review items from the observation; do not claim missing files are available.",
+                    "completion_context": {
+                        "title": "课程视频",
+                        "status": "final_pptx_ready",
+                        "ready_file_kinds": ["pptx", "video_slides_markdown"],
+                        "html_artifact_ids": ["html-artifact-video"],
+                        "warning_count": 0,
+                        "warning_codes": [],
+                        "primary_next_action": "open_video_extraction_summary",
+                        "missing_required_file_kinds": [],
+                        "has_pptx": true,
+                        "has_video_slides_markdown": true,
+                        "has_subtitle_page_map": true
+                    },
+                    "answer_contract": {
+                        "must_write_in_model_voice": true,
+                        "must_reference_observation_only": true,
+                        "must_not_claim_missing_files": true,
+                        "must_not_include_private_paths_or_urls": true,
+                        "must_not_request_login_cookie_or_recording_bypass": true,
+                        "must_keep_missing_items_explicit": true,
+                        "no_host_composed_answer": true
+                    }
+                }
+            }]),
+            runtime_manifest: json!({}),
+            created_at: now,
+            updated_at: now,
+        };
+        let request = ContinueAssistantRunRequest {
+            prompt: Some("继续，把结果告诉我".to_string()),
+            max_steps: Some(2),
+            current_artifact: None,
+            messages: Vec::new(),
+        };
+
+        let input = build_assistant_run_react_continue_provider_input(
+            &run,
+            &request,
+            "继续，把结果告诉我",
+            &run.selected_scope,
+            Some(&json!({"status": "not_requested"})),
+            &[],
+            1,
+            2,
+        );
+
+        assert!(input.contains("待模型接手的后台完成请求"));
+        assert!(input.contains("video_extraction_model_completion_turn_request"));
+        assert!(input.contains("final_pptx_ready"));
+        assert!(input.contains("video_slides_markdown"));
+        assert!(input.contains("html-artifact-video"));
+        assert!(input.contains("final_answer"));
+        assert!(input.contains("不要声称缺失文件已就绪"));
+        assert!(input.contains("\"must_write_in_model_voice\":true"));
+        assert!(input.contains("\"no_host_composed_answer\":true"));
+        assert!(!input.contains("soulzyn"));
+        assert!(!input.contains("secret"));
+        assert!(!input.contains("video_slides.pptx"));
+        assert!(!input.contains("internal.example.local"));
     }
 
     #[test]
