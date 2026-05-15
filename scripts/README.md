@@ -6,14 +6,14 @@ Current smoke entrypoints:
 
 - `run-assistant-run-worker-smoke.sh`: non-destructive Linux/deployment-target smoke for the AssistantRun background completion worker queue, workflow registration, and redacted video completion dispatch contract.
 - `run-external-bot-third-party-smoke.ps1`: contract smoke for external bots, third-party knowledge, ACL filtering, adapters, customer-hosted chat events, signed third-party mock dispatch/result callback, external actions, and the observe-first panel.
-- `run-external-third-party-gateway-smoke.sh`: Linux/deployment-target smoke that starts a standalone third-party mock gateway, validates signed outbound dispatch against it, verifies the result callback contract, validates the handoff manifest, builds and validates a sendable handoff release package, runs the aggregate handoff gate inside the readiness report, fails if no external request reaches the gateway, and writes JSON/Markdown readiness reports under `target/external-third-party-readiness` by default.
+- `run-external-third-party-gateway-smoke.sh`: Linux/deployment-target smoke that starts a standalone third-party mock gateway, validates signed outbound dispatch against it, verifies the result callback contract, validates the handoff manifest, builds and validates a sendable handoff release package, runs aggregate and final-evidence handoff gates inside the readiness report, fails if no external request reaches the gateway, and writes JSON/Markdown readiness reports under `target/external-third-party-readiness` by default.
 - `run-jump-host-codex-shim-smoke.ps1`: jump-host smoke for the Codex host shim.
 - `run-jump-host-video-deliverable-smoke.ps1`: jump-host smoke for video/PPT deliverable validation.
 
 External third-party handoff checks:
 
 - `npm run test:external-handoff`: unit coverage for the customer sandbox handoff manifest validator.
-- `npm run test:external-readiness`: unit coverage for the third-party gateway readiness report generator, including optional handoff manifest and handoff release package summaries.
+- `npm run test:external-readiness`: unit coverage for the third-party gateway readiness report generator, including optional handoff manifest, handoff release package, aggregate validation, and final evidence manifest summaries.
 - `npm run validate:external-handoff`: validates `docs/integrations/third-party-handoff.sample.json` for URL safety, dispatch auth delivery notes, callback allowlist confirmation, document/ACL fixtures, operations contacts, and raw-secret exclusion.
 - `npm run test:external-handoff-package`: unit coverage for the self-contained third-party handoff package builder.
 - `npm run test:external-handoff-package-integrity`: unit coverage for the generated package integrity validator.

@@ -584,3 +584,22 @@ npm --prefix target/external-third-party-handoff/evidence-manifest-check run val
 ```
 
 The generated evidence manifest returned `evidence_manifest_ready: true`, listed nine final artifacts, and failed closed when aggregate evidence was changed after manifest generation.
+
+## Readiness Evidence Manifest Gate Follow-Up
+
+The third-party readiness report now validates the final evidence manifest whenever `--releasePackage` is provided. Reports include:
+
+- `handoff_evidence_ready` in the top-level readiness checklist;
+- `handoff_evidence_summary.evidence_manifest_ready`;
+- the evidence manifest SHA256 and artifact count;
+- evidence-manifest error codes only, without artifact file contents or raw payloads.
+
+Local validation passed:
+
+```text
+npm run test:external-readiness
+npm run build:external-handoff-package -- --basename readiness-evidence-gate-check --generatedAt 2026-05-15T00:00:00.000Z
+node tools/external-third-party-readiness-report.mjs --releasePackage target/external-third-party-handoff/readiness-evidence-gate-check ...
+```
+
+The generated readiness report returned `ready: true`, contained `handoff_evidence_ready: true`, and its Markdown output included `Final Evidence Manifest Summary`.

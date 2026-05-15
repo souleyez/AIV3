@@ -155,6 +155,8 @@ This is the next active development direction.
 
 Current evidence-manifest follow-up: the third-party handoff package now writes a final `<package>.evidence-manifest.json` after aggregate evidence, and `validate:evidence` verifies every final delivery artifact plus `.all.json`/`.all.md` without introducing a circular delivery-manifest hash dependency.
 
+Current readiness follow-up: deployment readiness reports that receive `--releasePackage` now also validate the final evidence manifest and expose `handoff_evidence_ready` plus a redacted `handoff_evidence_summary`.
+
 The product must support:
 
 - Model-driven static-page planning in the main workspace.

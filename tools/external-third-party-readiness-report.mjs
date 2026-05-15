@@ -3,6 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { validateExternalHandoffManifest } from './validate-external-handoff.mjs';
 import { validateAll } from './validate-external-handoff-all.mjs';
+import { validateEvidence } from './validate-external-handoff-evidence.mjs';
 import { validateRelease } from './validate-external-handoff-release.mjs';
 
 export const DEFAULT_READINESS_CHECKS = [
@@ -74,6 +75,7 @@ export function buildReadinessReport({
   releasePackagePath = '',
   releaseValidation = null,
   handoffAllValidation = null,
+  handoffEvidenceValidation = null,
 } = {}) {
   const request = Array.isArray(requests) ? requests[0] : null;
   const callback = Array.isArray(callbacks) ? callbacks[0] : null;
@@ -110,6 +112,14 @@ export function buildReadinessReport({
       passed: handoffAllSummary.all_ready,
     });
   }
+  const handoffEvidenceSummary = summarizeHandoffEvidenceValidation(handoffEvidenceValidation, releasePackagePath);
+  if (handoffEvidenceSummary) {
+    checks.push({
+      key: 'handoff_evidence_ready',
+      label: 'Final handoff evidence manifest is ready',
+      passed: handoffEvidenceSummary.evidence_manifest_ready,
+    });
+  }
   return {
     report_type: 'external_third_party_readiness',
     generated_at: generatedAt,
@@ -141,6 +151,7 @@ export function buildReadinessReport({
     handoff_manifest_summary: handoffManifestSummary,
     handoff_release_summary: releaseSummary,
     handoff_all_summary: handoffAllSummary,
+    handoff_evidence_summary: handoffEvidenceSummary,
     third_party_handoff_items: THIRD_PARTY_HANDOFF_ITEMS,
   };
 }
@@ -223,6 +234,24 @@ function summarizeHandoffAllValidation(validation, packagePath) {
   };
 }
 
+function summarizeHandoffEvidenceValidation(validation, packagePath) {
+  if (!validation) {
+    return null;
+  }
+  return {
+    package_root: packagePath || null,
+    evidence_manifest_ready: validation.evidence_manifest_ready === true,
+    evidence_manifest_path: validation.evidence_manifest_path || null,
+    evidence_manifest_sha256: validation.evidence_manifest_sha256 || null,
+    manifest_type: validation.manifest_type || null,
+    package_name: validation.package_name || null,
+    artifact_count: validation.artifact_count || 0,
+    error_codes: Array.isArray(validation.errors)
+      ? [...new Set(validation.errors.map((error) => error.code).filter(Boolean))]
+      : [],
+  };
+}
+
 export function renderReadinessMarkdown(report) {
   const status = report.ready_for_customer_sandbox ? 'passed' : 'failed';
   const checks = report.checks
@@ -275,6 +304,15 @@ export function renderReadinessMarkdown(report) {
         `- Errors: ${report.handoff_all_summary.error_codes.length || 0}`,
       ].join('\n')
     : '- No aggregate handoff validation attached.';
+  const handoffEvidence = report.handoff_evidence_summary
+    ? [
+        `- Package: \`${report.handoff_evidence_summary.package_root || 'unknown'}\``,
+        `- Ready: ${report.handoff_evidence_summary.evidence_manifest_ready ? 'yes' : 'no'}`,
+        `- Evidence manifest SHA256: \`${report.handoff_evidence_summary.evidence_manifest_sha256 || 'unknown'}\``,
+        `- Final artifacts: ${report.handoff_evidence_summary.artifact_count || 0}`,
+        `- Errors: ${report.handoff_evidence_summary.error_codes.length || 0}`,
+      ].join('\n')
+    : '- No final evidence manifest validation attached.';
 
   return `# External Third-Party Readiness Report
 
@@ -307,6 +345,10 @@ ${handoffRelease}
 ## Aggregate Handoff Summary
 
 ${handoffAll}
+
+## Final Evidence Manifest Summary
+
+${handoffEvidence}
 
 ## Third-Party Handoff Items
 
@@ -363,6 +405,9 @@ async function main() {
   const handoffAllValidation = releasePackagePath
     ? validateAll({ packageRootInput: releasePackagePath })
     : null;
+  const handoffEvidenceValidation = releasePackagePath
+    ? validateEvidence({ packageRootInput: releasePackagePath })
+    : null;
   const requestsPayload = args.requests
     ? readJsonFile(args.requests, { requests: [] })
     : readJsonText(process.env.EXTERNAL_THIRD_PARTY_REQUESTS_JSON, { requests: [] });
@@ -381,6 +426,7 @@ async function main() {
     releasePackagePath,
     releaseValidation,
     handoffAllValidation,
+    handoffEvidenceValidation,
   });
   const outDir = args.outDir || path.join('target', 'external-third-party-readiness');
   const basename = args.basename || 'external-third-party-readiness-report';

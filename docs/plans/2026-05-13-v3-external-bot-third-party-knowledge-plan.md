@@ -61,6 +61,7 @@
 - Current implementation follow-up adds persistent aggregate validation evidence: `validate:all` accepts `--out <file>.json --markdown <file>.md` from both the main repository and generated handoff packages, giving V3 operators and third-party recipients a machine-readable gate plus a human-readable review receipt.
 - Current implementation follow-up makes package builds produce aggregate validation evidence by default: `npm run build:external-handoff-package` now writes sibling `<package>.all.json` and `<package>.all.md` files after the delivery manifest, and includes their SHA256 values plus `allReady` in the build output.
 - Current implementation follow-up adds final evidence-manifest validation: package builds now write sibling `<package>.evidence-manifest.json` after aggregate evidence, and `validate:evidence` verifies every final delivery artifact plus the `.all.json`/`.all.md` receipts without introducing a circular delivery-manifest hash dependency.
+- Current implementation follow-up gates readiness on final evidence manifests: readiness reports generated with `--releasePackage` now run `validate:evidence`, add `handoff_evidence_ready`, and include a redacted `handoff_evidence_summary` plus Markdown summary section.
 - Next implementation checkpoint: run the callback contract through a real HTTPS customer sandbox once a third-party endpoint is available, while continuing smaller hardening work that does not require customer cooperation.
 
 ---

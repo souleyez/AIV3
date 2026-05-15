@@ -161,6 +161,44 @@ test('buildReadinessReport includes aggregate handoff validation when provided',
   assert.deepEqual(report.handoff_all_summary.error_codes, []);
 });
 
+test('buildReadinessReport includes final evidence manifest validation when provided', () => {
+  const report = buildReadinessReport({
+    requests: [
+      {
+        bearer_valid: true,
+        signature_valid: true,
+        body_hash_valid: true,
+        requester_sender_present: true,
+        raw_arguments_included: false,
+        contains_forbidden_text: false,
+      },
+    ],
+    callbacks: [
+      {
+        callback_status: 200,
+        response_accepted: true,
+        contains_forbidden_text: false,
+      },
+    ],
+    releasePackagePath: 'target/external-third-party-handoff/package',
+    handoffEvidenceValidation: {
+      evidence_manifest_ready: true,
+      evidence_manifest_path: 'target/external-third-party-handoff/package.evidence-manifest.json',
+      evidence_manifest_sha256: 'c'.repeat(64),
+      manifest_type: 'v3.external_third_party_handoff_evidence_manifest.v1',
+      package_name: 'package',
+      artifact_count: 9,
+      errors: [],
+    },
+  });
+
+  assert.equal(report.ready_for_customer_sandbox, true);
+  assert.equal(report.checks.find((check) => check.key === 'handoff_evidence_ready').passed, true);
+  assert.equal(report.handoff_evidence_summary.evidence_manifest_ready, true);
+  assert.equal(report.handoff_evidence_summary.evidence_manifest_sha256, 'c'.repeat(64));
+  assert.equal(report.handoff_evidence_summary.artifact_count, 9);
+});
+
 test('buildReadinessReport fails closed when handoff release validation fails', () => {
   const report = buildReadinessReport({
     requests: [
@@ -238,6 +276,47 @@ test('buildReadinessReport fails closed when aggregate handoff validation fails'
   assert.equal(report.checks.find((check) => check.key === 'handoff_all_ready').passed, false);
   assert.deepEqual(report.handoff_all_summary.error_codes, ['delivery_release_markdown_sha256_mismatch']);
   assert.deepEqual(report.handoff_all_summary.scoped_error_codes, ['delivery:delivery_release_markdown_sha256_mismatch']);
+});
+
+test('buildReadinessReport fails closed when final evidence manifest validation fails', () => {
+  const report = buildReadinessReport({
+    requests: [
+      {
+        bearer_valid: true,
+        signature_valid: true,
+        body_hash_valid: true,
+        requester_sender_present: true,
+        raw_arguments_included: false,
+        contains_forbidden_text: false,
+      },
+    ],
+    callbacks: [
+      {
+        callback_status: 200,
+        response_accepted: true,
+        contains_forbidden_text: false,
+      },
+    ],
+    handoffEvidenceValidation: {
+      evidence_manifest_ready: false,
+      evidence_manifest_path: 'target/external-third-party-handoff/package.evidence-manifest.json',
+      evidence_manifest_sha256: null,
+      manifest_type: 'v3.external_third_party_handoff_evidence_manifest.v1',
+      package_name: 'package',
+      artifact_count: 9,
+      errors: [
+        {
+          code: 'evidence_aggregate_markdown_sha256_mismatch',
+          message: 'aggregate markdown SHA256 mismatch',
+          path: 'package.all.md',
+        },
+      ],
+    },
+  });
+
+  assert.equal(report.ready_for_customer_sandbox, false);
+  assert.equal(report.checks.find((check) => check.key === 'handoff_evidence_ready').passed, false);
+  assert.deepEqual(report.handoff_evidence_summary.error_codes, ['evidence_aggregate_markdown_sha256_mismatch']);
 });
 
 test('buildReadinessReport fails closed when handoff manifest validation fails', () => {
@@ -328,6 +407,7 @@ test('renderReadinessMarkdown renders operator-facing checklist without raw payl
   assert.match(markdown, /Handoff Manifest Summary/);
   assert.match(markdown, /Handoff Release Summary/);
   assert.match(markdown, /Aggregate Handoff Summary/);
+  assert.match(markdown, /Final Evidence Manifest Summary/);
   assert.match(markdown, /Third-Party Handoff Items/);
   assert.doesNotMatch(markdown, /third-party-secret|raw prompt secret|callback-token-should-not-leak/);
 });
