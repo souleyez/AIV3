@@ -34,7 +34,7 @@ Already implemented:
 - External action retry requests now enqueue `external_action_dispatch_workflow` tasks on the `external_action` worker queue instead of dispatching synchronously from the management request.
 - Deployment-target third-party gateway smoke now emits JSON and Markdown readiness reports for signed dispatch, result callback acceptance, redaction checks, handoff manifest validation, and remaining customer handoff items.
 - A third-party handoff manifest sample and validator now check customer sandbox readiness before live joint testing, including HTTPS or approved loopback URLs, dispatch credentials, callback allowlisting, document/ACL fixtures, operations contacts, and absence of raw secret material.
-- A self-contained handoff package builder now writes third-party guides, the sample manifest, validators, mock gateway reference, README files, and a SHA256 package manifest under `target/external-third-party-handoff`.
+- A self-contained handoff package builder now writes third-party guides, the V3 safe HTML artifact manifest, the sample manifest, validators, mock gateway reference, README files, and a SHA256 package manifest under `target/external-third-party-handoff`.
 - AssistantRun startup briefing and backend model input now include the additive V3 model-awareness policy: V3 identity, visible-scope discipline, unavailable-evidence wording, and no-fake-live-search behavior.
 - External chat messages that require live web information now return `task_status=v3_search_evidence_required` until V3 supplies audited search evidence; this is a read-only pending-evidence state, not a third-party action run.
 - `GET /v1/external/integrations` now includes a redacted `search_summary` for channel integrations, and the standalone panel shows search-evidence pending counts in the overview.
@@ -920,6 +920,7 @@ npm run build:external-handoff-package
 The generated output includes a package directory, a `.tar.gz` archive, a matching `.sha256` file, a sibling machine-readable `.release.json` validation report, a sibling human-readable `.release.md` summary, a sibling `.delivery-manifest.json` delivery manifest, a sibling `.all.json` aggregate validation receipt, a sibling `.all.md` aggregate summary, and a sibling `.evidence-manifest.json` final evidence manifest. The package includes:
 
 - this API guide and the Chinese third-party sendable guide;
+- `docs/pure-third-party-integration-guide.zh-CN.html` and `html-artifacts/third-party-handoff-document.json` for human review and V3 trusted-template rendering;
 - `handoff/third-party-handoff.sample.json`;
 - `tools/validate-external-handoff.mjs`;
 - `tools/validate-external-handoff-package.mjs`;

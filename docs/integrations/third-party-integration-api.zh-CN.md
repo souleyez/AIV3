@@ -947,6 +947,7 @@ target/external-third-party-handoff
 生成结果包含交接包目录、同名 `.tar.gz` 归档、`.sha256` 校验文件、同级 `.release.json` 机器可读交付校验报告、同级 `.release.md` 人工审阅摘要、同级 `.delivery-manifest.json` 交付文件清单、同级 `.all.json` 聚合校验证据、同级 `.all.md` 聚合人工摘要，以及同级 `.evidence-manifest.json` 最终证据清单。交接包包含：
 
 - 中文接口说明和英文接口说明；
+- `docs/pure-third-party-integration-guide.zh-CN.html` 和 `html-artifacts/third-party-handoff-document.json`，分别用于人工阅读评审和 V3 受信模板渲染；
 - `handoff/third-party-handoff.sample.json`；
 - `tools/validate-external-handoff.mjs`、`tools/validate-external-handoff-package.mjs`、`tools/validate-external-handoff-archive.mjs`、`tools/validate-external-handoff-delivery.mjs`、`tools/validate-external-handoff-release.mjs`、`tools/validate-external-handoff-all.mjs` 和 `tools/validate-external-handoff-evidence.mjs`；
 - `sandbox/external-third-party-mock-gateway.mjs`；

@@ -673,7 +673,7 @@ V3 错误格式：
 - 动作生命周期观测和审计筛选；
 - action detail permalink 和脱敏 trace export；
 - 搜索证据待供料状态观测；
-- 第三方交接清单、mock gateway、交接包和校验工具。
+- 第三方交接清单、mock gateway、交接包、V3 安全 HTML artifact manifest 和校验工具。
 
 仍需按项目配置或后续联调确认：
 
@@ -703,5 +703,5 @@ V3 错误格式：
 - 总接口说明：`docs/integrations/third-party-integration-api.zh-CN.md`
 - 英文接口草案：`docs/integrations/third-party-integration-api.md`
 - 交接清单样例：`docs/integrations/third-party-handoff.sample.json`
+- 交接包内安全 HTML artifact manifest：`html-artifacts/third-party-handoff-document.json`
 - 第三方集成计划：`docs/plans/2026-05-13-v3-external-bot-third-party-knowledge-plan.md`
-

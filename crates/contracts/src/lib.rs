@@ -655,6 +655,7 @@ pub enum HtmlArtifactSourceTypeView {
     Report,
     CodeReview,
     VideoExtraction,
+    ExternalIntegration,
     Manual,
 }
 
@@ -668,6 +669,7 @@ pub enum HtmlArtifactTemplateIdView {
     CodeReviewSummary,
     VideoExtractionSummary,
     WechatVideoLoginHandoff,
+    ThirdPartyHandoffDocument,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -4384,6 +4386,60 @@ mod tests {
         assert_eq!(
             decoded.source_type,
             HtmlArtifactSourceTypeView::VideoExtraction
+        );
+    }
+
+    #[test]
+    fn html_artifact_third_party_handoff_document_uses_safe_wire_shape() {
+        let manifest = HtmlArtifactManifestView {
+            kind: "html_artifact".to_string(),
+            version: 1,
+            id: "html-artifact-third-party-handoff-document".to_string(),
+            title: "V3 纯第三方模式对接文档".to_string(),
+            source_type: HtmlArtifactSourceTypeView::ExternalIntegration,
+            template_id: HtmlArtifactTemplateIdView::ThirdPartyHandoffDocument,
+            owner_scope: HtmlArtifactOwnerScopeView {
+                scope_type: "external_integration_handoff".to_string(),
+                id: "pure-third-party".to_string(),
+            },
+            data_refs: vec![HtmlArtifactDataRefView {
+                kind: "source_document".to_string(),
+                id: "docs/pure-third-party-integration-guide.zh-CN.md".to_string(),
+                label: "纯第三方模式 Markdown 源文档".to_string(),
+            }],
+            provenance: HtmlArtifactProvenanceView {
+                producer: "v3-handoff-package-builder".to_string(),
+                reason: "third-party handoff review artifact".to_string(),
+                source_run_id: Some("abc1234".to_string()),
+            },
+            interaction_mode: HtmlArtifactInteractionModeView::ReadOnly,
+            created_at: Utc::now(),
+            payload: json!({
+                "handoff": {
+                    "status": "review_ready",
+                    "defaultDomain": "v3.elepcloud.com"
+                }
+            }),
+        };
+
+        let encoded = serde_json::to_value(&manifest).expect("manifest should serialize");
+
+        assert_eq!(encoded["source_type"], json!("external_integration"));
+        assert_eq!(encoded["template_id"], json!("third_party_handoff_document"));
+        assert_eq!(
+            encoded["owner_scope"]["type"],
+            json!("external_integration_handoff")
+        );
+
+        let decoded: HtmlArtifactManifestView =
+            serde_json::from_value(encoded).expect("manifest should deserialize");
+        assert_eq!(
+            decoded.template_id,
+            HtmlArtifactTemplateIdView::ThirdPartyHandoffDocument
+        );
+        assert_eq!(
+            decoded.source_type,
+            HtmlArtifactSourceTypeView::ExternalIntegration
         );
     }
 

@@ -8,6 +8,7 @@ import zlib from 'node:zlib';
 import { validateExternalHandoffManifest } from './validate-external-handoff.mjs';
 import { validateAll, writeAllReportFiles } from './validate-external-handoff-all.mjs';
 import { EVIDENCE_MANIFEST_TYPE, validateEvidence } from './validate-external-handoff-evidence.mjs';
+import { writeThirdPartyHandoffHtmlArtifact } from './render-third-party-handoff-html-artifact.mjs';
 import { renderReleaseMarkdown, validateRelease } from './validate-external-handoff-release.mjs';
 
 const PACKAGE_TYPE = 'v3.external_third_party_handoff_package.v1';
@@ -263,6 +264,7 @@ V3 提交：${head || 'unknown'}
 - \`docs/pure-third-party-integration-guide.zh-CN.md\`：纯第三方模式专用对接文档。
 - \`docs/pure-third-party-integration-guide.zh-CN.html\`：纯第三方模式专用 HTML 阅读版，适合先发给技术/业务评审。
 - \`docs/third-party-integration-api.md\`：英文接口说明。
+- \`html-artifacts/third-party-handoff-document.json\`：V3 安全 HTML artifact manifest，可由 \`third_party_handoff_document\` 受信模板渲染。
 - \`handoff/third-party-handoff.sample.json\`：第三方沙箱交接清单样例。
 - \`tools/validate-external-handoff.mjs\`：交接清单校验工具。
 - \`tools/validate-external-handoff-package.mjs\`：交接包完整性校验工具。
@@ -315,13 +317,13 @@ function renderEnglishReadme({ generatedAt, head }) {
 Generated at: ${generatedAt}
 V3 commit: ${head || 'unknown'}
 
-This package contains third-party-facing API guides, a sandbox handoff manifest sample, validation tooling, and a mock gateway reference for V3 external action dispatch/result callback integration.
+This package contains third-party-facing API guides, a V3 safe HTML artifact manifest, a sandbox handoff manifest sample, validation tooling, and a mock gateway reference for V3 external action dispatch/result callback integration.
 
 The builder also writes a \`.tar.gz\` archive, matching \`.sha256\` sidecar, \`.release.json\` validation report, \`.release.md\` summary, \`.delivery-manifest.json\` delivery manifest, \`.all.json\` aggregate validation evidence, \`.all.md\` aggregate summary, and \`.evidence-manifest.json\` final evidence manifest next to the package directory.
 
 Recommended flow:
 
-1. Open \`docs/pure-third-party-integration-guide.zh-CN.html\` for the review-friendly Chinese guide, then read \`docs/pure-third-party-integration-guide.zh-CN.md\`, \`docs/third-party-integration-api.zh-CN.md\`, or \`docs/third-party-integration-api.md\` for full interface details.
+1. Open \`docs/pure-third-party-integration-guide.zh-CN.html\` for the review-friendly Chinese guide, then read \`docs/pure-third-party-integration-guide.zh-CN.md\`, \`docs/third-party-integration-api.zh-CN.md\`, or \`docs/third-party-integration-api.md\` for full interface details. V3 can also render \`html-artifacts/third-party-handoff-document.json\` through its trusted \`third_party_handoff_document\` template.
 2. Copy and fill \`handoff/third-party-handoff.sample.json\` for the customer sandbox.
 3. Do not paste real tokens, signing secrets, passwords, private keys, or API keys into the manifest.
 4. Run \`npm run validate:handoff\`.
@@ -512,11 +514,13 @@ function buildPackage({ repoRoot, outDir, basename, generatedAt = new Date().toI
   const readmeCnPath = path.join(packageRoot, 'README.zh-CN.md');
   const readmeEnPath = path.join(packageRoot, 'README.md');
   const packageJsonPath = path.join(packageRoot, 'package.json');
+  const htmlArtifactPath = path.join(packageRoot, 'html-artifacts/third-party-handoff-document.json');
   fs.writeFileSync(readmeCnPath, renderChineseReadme({ generatedAt, head }));
   fs.writeFileSync(readmeEnPath, renderEnglishReadme({ generatedAt, head }));
   writeJson(packageJsonPath, packageJson());
+  writeThirdPartyHandoffHtmlArtifact({ outputPath: htmlArtifactPath, generatedAt, head });
 
-  for (const filePath of ['README.zh-CN.md', 'README.md', 'package.json']) {
+  for (const filePath of ['README.zh-CN.md', 'README.md', 'package.json', 'html-artifacts/third-party-handoff-document.json']) {
     const bytes = fs.readFileSync(path.join(packageRoot, filePath));
     includedFiles.push({
       path: filePath,

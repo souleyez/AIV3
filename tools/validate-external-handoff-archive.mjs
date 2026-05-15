@@ -14,6 +14,7 @@ const REQUIRED_ENTRIES = [
   'handoff-package-manifest.json',
   'docs/pure-third-party-integration-guide.zh-CN.md',
   'docs/pure-third-party-integration-guide.zh-CN.html',
+  'html-artifacts/third-party-handoff-document.json',
   'handoff/third-party-handoff.sample.json',
   'tools/validate-external-handoff.mjs',
   'tools/validate-external-handoff-package.mjs',

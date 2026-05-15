@@ -38,7 +38,7 @@ test('buildPackage creates a third-party handoff directory with manifest and too
   });
 
   assert.equal(result.ready, true);
-  assert.equal(result.fileCount, SOURCE_FILES.length + 3);
+  assert.equal(result.fileCount, SOURCE_FILES.length + 4);
   assert.ok(fs.existsSync(result.archivePath));
   assert.ok(fs.existsSync(result.archiveSha256Path));
   assert.ok(fs.existsSync(result.releaseReportPath));
@@ -61,6 +61,7 @@ test('buildPackage creates a third-party handoff directory with manifest and too
   assert.ok(fs.existsSync(path.join(result.packageRoot, 'docs/third-party-integration-api.zh-CN.md')));
   assert.ok(fs.existsSync(path.join(result.packageRoot, 'docs/pure-third-party-integration-guide.zh-CN.md')));
   assert.ok(fs.existsSync(path.join(result.packageRoot, 'docs/pure-third-party-integration-guide.zh-CN.html')));
+  assert.ok(fs.existsSync(path.join(result.packageRoot, 'html-artifacts/third-party-handoff-document.json')));
   assert.ok(fs.existsSync(path.join(result.packageRoot, 'handoff/third-party-handoff.sample.json')));
   assert.ok(fs.existsSync(path.join(result.packageRoot, 'tools/validate-external-handoff.mjs')));
   assert.ok(fs.existsSync(path.join(result.packageRoot, 'tools/validate-external-handoff-package.mjs')));
@@ -73,6 +74,7 @@ test('buildPackage creates a third-party handoff directory with manifest and too
   const cnGuide = fs.readFileSync(path.join(result.packageRoot, 'docs/third-party-integration-api.zh-CN.md'), 'utf8');
   const pureGuide = fs.readFileSync(path.join(result.packageRoot, 'docs/pure-third-party-integration-guide.zh-CN.md'), 'utf8');
   const pureGuideHtml = fs.readFileSync(path.join(result.packageRoot, 'docs/pure-third-party-integration-guide.zh-CN.html'), 'utf8');
+  const htmlArtifactManifest = JSON.parse(fs.readFileSync(path.join(result.packageRoot, 'html-artifacts/third-party-handoff-document.json'), 'utf8'));
   const enGuide = fs.readFileSync(path.join(result.packageRoot, 'docs/third-party-integration-api.md'), 'utf8');
   assert.match(cnGuide, /AI Data Platform V3/);
   assert.match(cnGuide, /当前不可见\/未供料/);
@@ -83,6 +85,17 @@ test('buildPackage creates a third-party handoff directory with manifest and too
   assert.match(pureGuideHtml, /<title>V3 纯第三方模式对接文档<\/title>/);
   assert.match(pureGuideHtml, /flow-board/);
   assert.match(pureGuideHtml, /copy-code/);
+  assert.equal(htmlArtifactManifest.kind, 'html_artifact');
+  assert.equal(htmlArtifactManifest.source_type, 'external_integration');
+  assert.equal(htmlArtifactManifest.template_id, 'third_party_handoff_document');
+  assert.equal(htmlArtifactManifest.interaction_mode, 'read_only');
+  assert.equal(htmlArtifactManifest.payload.handoff.defaultDomain, 'v3.elepcloud.com');
+  assert.ok(
+    htmlArtifactManifest.payload.endpoints.some((endpoint) => endpoint.path === '/v1/external/channels/{connection_id}/events'),
+  );
+  assert.ok(
+    htmlArtifactManifest.payload.deliveryArtifacts.some((artifact) => artifact.path === 'html-artifacts/third-party-handoff-document.json'),
+  );
   assert.match(enGuide, /AI Data Platform V3/);
   assert.match(enGuide, /currently not visible or not supplied by V3/);
   assert.match(enGuide, /must not claim live search/);
@@ -138,6 +151,7 @@ test('buildPackage creates a third-party handoff directory with manifest and too
   assert.ok(archiveEntries.includes('package-under-test/README.zh-CN.md'));
   assert.ok(archiveEntries.includes('package-under-test/docs/pure-third-party-integration-guide.zh-CN.md'));
   assert.ok(archiveEntries.includes('package-under-test/docs/pure-third-party-integration-guide.zh-CN.html'));
+  assert.ok(archiveEntries.includes('package-under-test/html-artifacts/third-party-handoff-document.json'));
   assert.ok(archiveEntries.includes('package-under-test/handoff-package-manifest.json'));
   assert.ok(archiveEntries.includes('package-under-test/tools/validate-external-handoff-package.mjs'));
   assert.ok(archiveEntries.includes('package-under-test/tools/validate-external-handoff-archive.mjs'));
