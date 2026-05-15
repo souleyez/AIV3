@@ -918,11 +918,11 @@ npm run build:external-handoff-package
 target/external-third-party-handoff
 ```
 
-生成结果包含交接包目录、同名 `.tar.gz` 归档、`.sha256` 校验文件、同级 `.release.json` 机器可读交付校验报告、同级 `.release.md` 人工审阅摘要、同级 `.delivery-manifest.json` 交付文件清单、同级 `.all.json` 聚合校验证据，以及同级 `.all.md` 聚合人工摘要。交接包包含：
+生成结果包含交接包目录、同名 `.tar.gz` 归档、`.sha256` 校验文件、同级 `.release.json` 机器可读交付校验报告、同级 `.release.md` 人工审阅摘要、同级 `.delivery-manifest.json` 交付文件清单、同级 `.all.json` 聚合校验证据、同级 `.all.md` 聚合人工摘要，以及同级 `.evidence-manifest.json` 最终证据清单。交接包包含：
 
 - 中文接口说明和英文接口说明；
 - `handoff/third-party-handoff.sample.json`；
-- `tools/validate-external-handoff.mjs`、`tools/validate-external-handoff-package.mjs`、`tools/validate-external-handoff-archive.mjs`、`tools/validate-external-handoff-delivery.mjs`、`tools/validate-external-handoff-release.mjs` 和 `tools/validate-external-handoff-all.mjs`；
+- `tools/validate-external-handoff.mjs`、`tools/validate-external-handoff-package.mjs`、`tools/validate-external-handoff-archive.mjs`、`tools/validate-external-handoff-delivery.mjs`、`tools/validate-external-handoff-release.mjs`、`tools/validate-external-handoff-all.mjs` 和 `tools/validate-external-handoff-evidence.mjs`；
 - `sandbox/external-third-party-mock-gateway.mjs`；
 - V3 侧 smoke/readiness 参考脚本；
 - `README.zh-CN.md`、`README.md`、`package.json`；
@@ -931,6 +931,7 @@ target/external-third-party-handoff
 - 包目录同级的 `<package>.release.md`，以人工可读形式汇总 ready 状态、V3 提交、生成时间、归档 SHA256、检查项和错误。
 - 包目录同级的 `<package>.delivery-manifest.json`，列出本次应交付的包目录、包内清单、归档、`.sha256` sidecar、release JSON 和 release Markdown，并记录各文件 SHA256，方便第三方接收时逐项核对。
 - 包目录同级的 `<package>.all.json` 和 `<package>.all.md`，在交付清单生成后记录交接清单、包完整性、归档、交付清单和 release gate 的完整聚合校验证据。
+- 包目录同级的 `<package>.evidence-manifest.json`，最后生成，用于列出最终交付物和聚合证据文件，避免把 `.all.json` 反写进 delivery manifest 造成循环 hash。
 
 第三方拿到包后，可在包目录内执行：
 
@@ -941,9 +942,10 @@ npm run validate:archive
 npm run validate:delivery
 npm run validate:release
 npm run validate:all
+npm run validate:evidence
 ```
 
-这些命令会分别校验包内交接清单样例、包文件完整性、包目录同级 `.tar.gz` 归档和 `.sha256` sidecar、交付清单列出的应收文件，以及目录、归档、摘要一致性的 release ready/not-ready 汇总。`validate:all` 会输出一份覆盖全部 gate 的 JSON 汇总。第三方正式填写自己的清单后，也应先通过同一类校验，再交给 V3 项目组联调。接收交付文件时，应保留包目录、`.tar.gz`、`.sha256`、`.release.json`、`.release.md` 和 `.delivery-manifest.json` 在同一目录，运行 `validate:delivery` 或 `validate:all` 确认所有应收文件都存在且 SHA256 一致。
+这些命令会分别校验包内交接清单样例、包文件完整性、包目录同级 `.tar.gz` 归档和 `.sha256` sidecar、交付清单列出的应收文件、目录/归档/摘要一致性的 release ready/not-ready 汇总、覆盖全部 gate 的聚合报告，以及最终证据清单。第三方正式填写自己的清单后，也应先通过同一类校验，再交给 V3 项目组联调。接收交付文件时，应保留包目录、`.tar.gz`、`.sha256`、`.release.json`、`.release.md`、`.delivery-manifest.json`、`.all.json`、`.all.md` 和 `.evidence-manifest.json` 在同一目录，运行 `validate:delivery`、`validate:all` 或 `validate:evidence` 确认所有应收文件都存在且 SHA256 一致。
 
 如需留存交接校验证据，可运行：
 
@@ -958,6 +960,7 @@ node tools/validate-external-handoff-archive.mjs --archive target/external-third
 node tools/validate-external-handoff-delivery.mjs --package target/external-third-party-handoff/<package>
 node tools/validate-external-handoff-release.mjs --package target/external-third-party-handoff/<package>
 node tools/validate-external-handoff-all.mjs --package target/external-third-party-handoff/<package> --out target/external-third-party-handoff/<package>.all.json --markdown target/external-third-party-handoff/<package>.all.md
+node tools/validate-external-handoff-evidence.mjs --package target/external-third-party-handoff/<package>
 ```
 
 这些命令会检查 `.sha256` sidecar、gzip/tar 结构、单一包根目录、路径穿越风险、必备条目、包 manifest 文件摘要，以及交接清单是否可进入客户沙箱联调。

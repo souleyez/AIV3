@@ -45,14 +45,17 @@ test('buildPackage creates a third-party handoff directory with manifest and too
   assert.ok(fs.existsSync(result.deliveryManifestPath));
   assert.ok(fs.existsSync(result.allReportPath));
   assert.ok(fs.existsSync(result.allMarkdownPath));
+  assert.ok(fs.existsSync(result.evidenceManifestPath));
   assert.match(result.archiveSha256, /^[a-f0-9]{64}$/);
   assert.match(result.releaseReportSha256, /^[a-f0-9]{64}$/);
   assert.match(result.releaseMarkdownSha256, /^[a-f0-9]{64}$/);
   assert.match(result.deliveryManifestSha256, /^[a-f0-9]{64}$/);
   assert.match(result.allReportSha256, /^[a-f0-9]{64}$/);
   assert.match(result.allMarkdownSha256, /^[a-f0-9]{64}$/);
+  assert.match(result.evidenceManifestSha256, /^[a-f0-9]{64}$/);
   assert.equal(result.releaseReady, true);
   assert.equal(result.allReady, true);
+  assert.equal(result.evidenceReady, true);
   assert.ok(fs.existsSync(path.join(result.packageRoot, 'README.zh-CN.md')));
   assert.ok(fs.existsSync(path.join(result.packageRoot, 'docs/third-party-integration-api.zh-CN.md')));
   assert.ok(fs.existsSync(path.join(result.packageRoot, 'handoff/third-party-handoff.sample.json')));
@@ -101,6 +104,15 @@ test('buildPackage creates a third-party handoff directory with manifest and too
   const allMarkdown = fs.readFileSync(result.allMarkdownPath, 'utf8');
   assert.match(allMarkdown, /Status: \*\*READY\*\*/);
   assert.match(allMarkdown, /Delivery manifest ready: yes/);
+  const evidenceManifest = JSON.parse(fs.readFileSync(result.evidenceManifestPath, 'utf8'));
+  assert.equal(evidenceManifest.manifest_type, 'v3.external_third_party_handoff_evidence_manifest.v1');
+  assert.equal(evidenceManifest.release_ready, true);
+  assert.equal(evidenceManifest.all_ready, true);
+  assert.equal(evidenceManifest.artifacts.length, 9);
+  const evidenceArtifactsByRole = new Map(evidenceManifest.artifacts.map((artifact) => [artifact.role, artifact]));
+  assert.equal(evidenceArtifactsByRole.get('delivery_manifest').sha256, result.deliveryManifestSha256);
+  assert.equal(evidenceArtifactsByRole.get('aggregate_json').sha256, result.allReportSha256);
+  assert.equal(evidenceArtifactsByRole.get('aggregate_markdown').sha256, result.allMarkdownSha256);
 
   const archiveEntries = listTarEntries(result.archivePath);
   assert.ok(archiveEntries.includes('package-under-test/README.zh-CN.md'));
@@ -129,5 +141,6 @@ test('generated package exposes simple npm scripts for third parties', () => {
   assert.equal(packageJson.scripts['validate:delivery'], 'node tools/validate-external-handoff-delivery.mjs --package .');
   assert.equal(packageJson.scripts['validate:release'], 'node tools/validate-external-handoff-release.mjs --package .');
   assert.equal(packageJson.scripts['validate:all'], 'node tools/validate-external-handoff-all.mjs --package .');
+  assert.equal(packageJson.scripts['validate:evidence'], 'node tools/validate-external-handoff-evidence.mjs --package .');
   assert.equal(packageJson.scripts['start:mock-gateway'], 'node sandbox/external-third-party-mock-gateway.mjs');
 });

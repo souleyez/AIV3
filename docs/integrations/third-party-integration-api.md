@@ -893,7 +893,7 @@ V3 can generate a self-contained package for customer sandbox handoff:
 npm run build:external-handoff-package
 ```
 
-The generated output includes a package directory, a `.tar.gz` archive, a matching `.sha256` file, a sibling machine-readable `.release.json` validation report, a sibling human-readable `.release.md` summary, a sibling `.delivery-manifest.json` delivery manifest, a sibling `.all.json` aggregate validation receipt, and a sibling `.all.md` aggregate summary. The package includes:
+The generated output includes a package directory, a `.tar.gz` archive, a matching `.sha256` file, a sibling machine-readable `.release.json` validation report, a sibling human-readable `.release.md` summary, a sibling `.delivery-manifest.json` delivery manifest, a sibling `.all.json` aggregate validation receipt, a sibling `.all.md` aggregate summary, and a sibling `.evidence-manifest.json` final evidence manifest. The package includes:
 
 - this API guide and the Chinese third-party sendable guide;
 - `handoff/third-party-handoff.sample.json`;
@@ -903,11 +903,12 @@ The generated output includes a package directory, a `.tar.gz` archive, a matchi
 - `tools/validate-external-handoff-delivery.mjs`;
 - `tools/validate-external-handoff-release.mjs`;
 - `tools/validate-external-handoff-all.mjs`;
+- `tools/validate-external-handoff-evidence.mjs`;
 - `sandbox/external-third-party-mock-gateway.mjs`;
 - operator smoke/readiness references;
 - `README.zh-CN.md`, `README.md`, `package.json`, and `handoff-package-manifest.json`.
 
-The sibling `<package>.release.json` file records the combined validation result for the package directory, archive, sidecar, generated time, V3 commit, and handoff manifest. The sibling `<package>.release.md` file summarizes the same release status, V3 commit, generated time, archive SHA256, checks, and errors for human review. The sibling `<package>.delivery-manifest.json` file lists the expected delivery artifacts, including the expanded package directory, package manifest, archive, `.sha256` sidecar, release JSON report, and release Markdown summary with SHA256 values for receive-side verification. The sibling `<package>.all.json` and `<package>.all.md` files are generated after the delivery manifest and capture the full handoff, package, archive, delivery, and release gate result for review records.
+The sibling `<package>.release.json` file records the combined validation result for the package directory, archive, sidecar, generated time, V3 commit, and handoff manifest. The sibling `<package>.release.md` file summarizes the same release status, V3 commit, generated time, archive SHA256, checks, and errors for human review. The sibling `<package>.delivery-manifest.json` file lists the expected delivery artifacts, including the expanded package directory, package manifest, archive, `.sha256` sidecar, release JSON report, and release Markdown summary with SHA256 values for receive-side verification. The sibling `<package>.all.json` and `<package>.all.md` files are generated after the delivery manifest and capture the full handoff, package, archive, delivery, and release gate result for review records. The sibling `<package>.evidence-manifest.json` file is generated last and records every final handoff artifact plus the aggregate evidence sidecars without creating a circular delivery-manifest hash dependency.
 
 Inside the package, third parties can run:
 
@@ -918,6 +919,7 @@ npm run validate:archive
 npm run validate:delivery
 npm run validate:release
 npm run validate:all
+npm run validate:evidence
 ```
 
 `validate:archive` checks the sibling `.tar.gz` archive and `.sha256` sidecar from inside the generated package directory.
@@ -927,6 +929,8 @@ npm run validate:all
 `validate:release` emits a combined ready/not-ready report for the package directory, archive, sidecar, and matching archive root.
 
 `validate:all` emits one JSON report covering the handoff manifest, package, archive, delivery manifest, and release gates.
+
+`validate:evidence` verifies the final evidence manifest, including the package directory, archive, sidecar, release reports, delivery manifest, and aggregate JSON/Markdown evidence.
 
 For review evidence, run:
 
@@ -941,6 +945,7 @@ node tools/validate-external-handoff-archive.mjs --archive target/external-third
 node tools/validate-external-handoff-delivery.mjs --package target/external-third-party-handoff/<package>
 node tools/validate-external-handoff-release.mjs --package target/external-third-party-handoff/<package>
 node tools/validate-external-handoff-all.mjs --package target/external-third-party-handoff/<package> --out target/external-third-party-handoff/<package>.all.json --markdown target/external-third-party-handoff/<package>.all.md
+node tools/validate-external-handoff-evidence.mjs --package target/external-third-party-handoff/<package>
 ```
 
 This checks the `.sha256` sidecar, gzip/tar structure, single package root, path traversal safety, required entries, package manifest file hashes, and handoff manifest readiness.

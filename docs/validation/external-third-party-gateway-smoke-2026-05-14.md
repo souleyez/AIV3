@@ -562,3 +562,25 @@ npm run build:external-handoff-package -- --basename all-evidence-build-check --
 ```
 
 The generated build output returned `allReady: true`, both aggregate evidence SHA256 values matched 64-character lowercase hex digests, and the generated Markdown receipt included `Status: **READY**`.
+
+## Final Evidence Manifest Follow-Up
+
+The handoff package builder now writes a final evidence manifest after aggregate evidence:
+
+```text
+target/external-third-party-handoff/<package>.evidence-manifest.json
+```
+
+This manifest lists the package directory, package manifest, archive, archive sidecar, release JSON/Markdown, delivery manifest, and aggregate JSON/Markdown evidence. It is generated last so `.all.json` and `.all.md` can be checksummed without adding a circular reference to the delivery manifest.
+
+Local validation passed:
+
+```text
+npm run test:external-handoff-evidence
+npm run test:external-handoff-package
+npm run build:external-handoff-package -- --basename evidence-manifest-check --generatedAt 2026-05-15T00:00:00.000Z
+npm run validate:external-handoff-evidence -- --package target/external-third-party-handoff/evidence-manifest-check
+npm --prefix target/external-third-party-handoff/evidence-manifest-check run validate:evidence
+```
+
+The generated evidence manifest returned `evidence_manifest_ready: true`, listed nine final artifacts, and failed closed when aggregate evidence was changed after manifest generation.
