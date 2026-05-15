@@ -118,13 +118,14 @@ The validator now rejects PPTX files that only have ZIP magic bytes and rejects 
 
 The public deliverable contract now also requires `published_deliverable_manifest.json` and `published_version_history.json` for complete video/PPT packages. The published manifest records `manifest_type=v3.video_ppt_published_deliverable.v1`, `lifecycle_state=published_version_ready`, `immutable_version=true`, `version_no=1`, and redacted file entries for the PPTX, final manifest, extraction manifest, slide notes, `video_slides.md`, subtitle map, published manifest, and version history.
 
-`published_version_history.json` records `manifest_type=v3.video_ppt_published_version_history.v1`, `status=history_ready`, `history_scope=generated_artifact_workspace`, latest immutable `v1`, the `published_deliverable_manifest.json` pointer, and redacted file entries for the complete published package. Durable published-version storage promotion remains a later slice; this file gives each generated package a portable history record now.
+`published_version_history.json` records `manifest_type=v3.video_ppt_published_version_history.v1`, `status=history_ready`, `history_scope=generated_artifact_workspace`, latest immutable `v1`, the `published_deliverable_manifest.json` pointer, and redacted file entries for the complete published package. Complete packages are now also promoted into durable storage through `published_video_ppt_packages` and `published_video_ppt_versions`; the stored manifest keeps redacted artifact pointer metadata and does not copy private source media, local paths, provider payloads, cookies, or tokens.
 
 Run the same local and jump-host checks after changing this contract:
 
 ```text
 npm run test:video-deliverables
 cargo test -p media-worker controlled_video_sample_deliverable_contract_is_complete
+cargo test -p storage auth_migrations_are_registered_in_order
 powershell -ExecutionPolicy Bypass -File .\scripts\run-jump-host-video-deliverable-smoke.ps1 -SelfTest
 ```
 

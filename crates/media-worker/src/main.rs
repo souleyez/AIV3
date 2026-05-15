@@ -1,22 +1,26 @@
 use anyhow::{anyhow, Result};
 use chrono::Utc;
 use domain_model::{
-    AssistantRunId, WorkflowEventId, WorkflowEventRecord, WorkflowExecution, WorkflowExecutionId,
-    WorkflowKind, WorkflowTask,
+    AssistantRunId, DatasetId, DocumentId, WorkflowEventId, WorkflowEventRecord, WorkflowExecution,
+    WorkflowExecutionId, WorkflowKind, WorkflowTask,
 };
 use event_bus::{workflow_task_enqueued_subject, EventBus, EventSubscription};
 use media_worker::{
     extract_video_ppt_output_with_artifacts, frame_extraction_config_from_env,
-    merge_video_extraction_output_artifacts, register_video_asset_output,
-    resolve_video_source_output, run_video_frame_extraction_if_enabled,
-    video_extraction_completion_audit_from_output,
-    video_extraction_completion_follow_up_from_output, video_extraction_html_artifact_from_output,
-    video_extraction_model_completion_dispatch_request,
+    merge_video_extraction_durable_published_version_ref, merge_video_extraction_output_artifacts,
+    register_video_asset_output, resolve_video_source_output,
+    run_video_frame_extraction_if_enabled, video_extraction_completion_audit_from_output,
+    video_extraction_completion_follow_up_from_output,
+    video_extraction_durable_published_version_manifest,
+    video_extraction_html_artifact_from_output, video_extraction_model_completion_dispatch_request,
     write_video_extraction_text_artifacts_if_available, FrameExtractionConfig,
     MediaWorkflowTaskKind,
 };
 use serde_json::{json, Value};
-use storage::{NewAssistantRunEvent, NewHtmlArtifact, PgStorage, DEFAULT_LOCAL_DATABASE_URL};
+use storage::{
+    NewAssistantRunEvent, NewHtmlArtifact, NewPublishedVideoPptVersion, PgStorage,
+    DEFAULT_LOCAL_DATABASE_URL,
+};
 use tokio::time::Duration;
 use uuid::Uuid;
 use workflow_engine::{WorkflowCatalog, WorkflowSignal};
@@ -330,13 +334,48 @@ async fn append_video_extraction_assistant_event(
             .await?;
     }
     persist_video_extraction_html_artifacts(storage, &run, &html_artifacts).await?;
-    let output_artifacts = merge_video_extraction_output_artifacts(
+    let durable_published_version = persist_video_ppt_published_version(
+        storage,
+        execution,
+        run_id,
+        &workflow_execution_id,
+        output,
+    )
+    .await?;
+    let mut output_artifacts = merge_video_extraction_output_artifacts(
         &run.output_artifacts,
         &run_id.to_string(),
         local_thread_id,
         output,
         &html_artifacts,
     );
+    if let Some(durable_published_version) = durable_published_version.as_ref() {
+        if let Some(document_id) = output.get("document_id").and_then(Value::as_str) {
+            output_artifacts = merge_video_extraction_durable_published_version_ref(
+                &output_artifacts,
+                &run_id.to_string(),
+                document_id,
+                durable_published_version,
+            );
+        }
+        storage
+            .assistant_runs()
+            .append_event(
+                execution.tenant_id,
+                run_id,
+                &NewAssistantRunEvent {
+                    event_name: "video_extraction.published_version_persisted".to_string(),
+                    payload: json!({
+                        "durable_published_version": durable_published_version,
+                        "workflow_execution_id": execution.id.to_string(),
+                        "workflow_kind": execution.kind.as_str(),
+                        "no_host_composed_answer": true,
+                    }),
+                    created_at: Utc::now(),
+                },
+            )
+            .await?;
+    }
     storage
         .assistant_runs()
         .attach_output_artifacts(execution.tenant_id, run_id, &output_artifacts)
@@ -369,6 +408,83 @@ async fn append_video_extraction_assistant_event(
     }
 
     Ok(())
+}
+
+async fn persist_video_ppt_published_version(
+    storage: &PgStorage,
+    execution: &WorkflowExecution,
+    run_id: AssistantRunId,
+    workflow_execution_id: &str,
+    output: &Value,
+) -> Result<Option<Value>> {
+    let Some(manifest) = video_extraction_durable_published_version_manifest(
+        &run_id.to_string(),
+        workflow_execution_id,
+        output,
+    ) else {
+        return Ok(None);
+    };
+    let document_id = manifest_uuid(&manifest, "document_id")?;
+    let dataset_id = manifest_uuid(&manifest, "dataset_id")?;
+    let package_key = manifest
+        .get("package_key")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| anyhow!("durable video PPT manifest missing package_key"))?
+        .to_string();
+    let version_fingerprint = manifest
+        .get("version_fingerprint")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| anyhow!("durable video PPT manifest missing version_fingerprint"))?
+        .to_string();
+    let lifecycle_state = manifest
+        .get("lifecycle_state")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("published_version_ready")
+        .to_string();
+    let (package, version) = storage
+        .published_video_ppt_versions()
+        .create_next_version(
+            execution.tenant_id,
+            &NewPublishedVideoPptVersion {
+                assistant_run_id: run_id,
+                document_id: DocumentId(document_id),
+                dataset_id: DatasetId(dataset_id),
+                package_key,
+                version_fingerprint,
+                lifecycle_state,
+                artifact_manifest: manifest,
+                created_at: Utc::now(),
+            },
+        )
+        .await?;
+
+    Ok(Some(json!({
+        "type": "video_ppt_published_version",
+        "package_id": package.id.to_string(),
+        "version_id": version.id.to_string(),
+        "version_no": version.version_no,
+        "version_fingerprint": version.version_fingerprint,
+        "lifecycle_state": version.lifecycle_state,
+        "package_key": package.package_key,
+        "assistant_run_id": package.assistant_run_id.to_string(),
+        "document_id": package.document_id.to_string(),
+        "dataset_id": package.dataset_id.to_string(),
+        "current_version_id": package.current_version_id.map(|id| id.to_string()),
+        "manifest_type": version
+            .artifact_manifest
+            .get("manifest_type")
+            .and_then(Value::as_str)
+            .unwrap_or("v3.video_ppt_durable_published_version.v1"),
+        "durable_history_status": "promoted_to_storage",
+        "created_at": version.created_at.to_rfc3339(),
+        "no_host_composed_answer": true,
+    })))
 }
 
 async fn enqueue_assistant_run_model_completion_turn(
@@ -600,6 +716,15 @@ fn context_uuid(value: &Value, key: &str) -> Result<Uuid> {
         .ok_or_else(|| anyhow!("workflow context missing {key}"))?
         .parse::<Uuid>()
         .map_err(|error| anyhow!("invalid workflow context {key}: {error}"))
+}
+
+fn manifest_uuid(value: &Value, key: &str) -> Result<Uuid> {
+    value
+        .get(key)
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("durable video PPT manifest missing {key}"))?
+        .parse::<Uuid>()
+        .map_err(|error| anyhow!("invalid durable video PPT manifest {key}: {error}"))
 }
 
 fn optional_env(key: &str) -> Option<String> {

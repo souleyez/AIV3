@@ -4135,6 +4135,140 @@ pub fn merge_video_extraction_output_artifacts(
     Value::Array(artifacts)
 }
 
+pub fn video_extraction_durable_published_version_manifest(
+    assistant_run_id: &str,
+    workflow_execution_id: &str,
+    output: &Value,
+) -> Option<Value> {
+    let document_id = output.get("document_id").and_then(Value::as_str)?;
+    let dataset_id = output.get("dataset_id").and_then(Value::as_str)?;
+    let title = output
+        .get("title")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("视频 PPT 提取");
+    let generated_artifacts = output
+        .get("generated_artifacts")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let files = generated_artifacts
+        .get("files")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let deliverable_status = output
+        .get("deliverable_status")
+        .cloned()
+        .unwrap_or_else(|| video_deliverable_status(&generated_artifacts));
+    let ready_file_kinds = files
+        .iter()
+        .filter_map(|file| file.get("artifact_kind").and_then(Value::as_str))
+        .collect::<BTreeSet<_>>();
+    let missing_required_file_kinds = VIDEO_PUBLISHED_DELIVERABLE_REQUIRED_KINDS
+        .iter()
+        .copied()
+        .filter(|kind| !ready_file_kinds.contains(kind))
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    let source_ready = deliverable_status.get("state").and_then(Value::as_str)
+        == Some("final_pptx_ready")
+        && missing_required_file_kinds.is_empty();
+    if !source_ready {
+        return None;
+    }
+
+    let package_key = format!("video-ppt-{assistant_run_id}-{document_id}");
+    let published_files =
+        video_public_artifact_files_by_kinds(&files, VIDEO_PUBLISHED_DELIVERABLE_REQUIRED_KINDS);
+    let version_fingerprint =
+        video_durable_published_version_fingerprint(document_id, dataset_id, &published_files);
+    Some(json!({
+        "manifest_type": "v3.video_ppt_durable_published_version.v1",
+        "source": "media_worker_durable_published_version",
+        "assistant_run_id": assistant_run_id,
+        "workflow_execution_id": workflow_execution_id,
+        "document_id": document_id,
+        "dataset_id": dataset_id,
+        "package_key": package_key,
+        "version_fingerprint": version_fingerprint,
+        "title": video_safe_evidence_text(title),
+        "lifecycle_state": "published_version_ready",
+        "generated_history_scope": "generated_artifact_workspace",
+        "durable_history_status": "promoted_to_storage",
+        "source_history_file_name": DEFAULT_PUBLISHED_VERSION_HISTORY_FILE_NAME,
+        "published_manifest_file_name": DEFAULT_PUBLISHED_DELIVERABLE_MANIFEST_FILE_NAME,
+        "ready_file_kinds": video_ready_file_kinds(&files),
+        "required_file_kinds": VIDEO_PUBLISHED_DELIVERABLE_REQUIRED_KINDS,
+        "missing_required_file_kinds": missing_required_file_kinds,
+        "deliverable_status": deliverable_status,
+        "published_files": published_files,
+        "publish_policy": {
+            "path_policy": "public_manifest_entries_redact_local_paths",
+            "mutation_policy": "append_new_durable_version_for_customer_visible_changes",
+            "storage_policy": "database_history_keeps_redacted_artifact_pointer_metadata_without_copying_private_source_media",
+        },
+        "no_host_composed_answer": true,
+    }))
+}
+
+pub fn merge_video_extraction_durable_published_version_ref(
+    output_artifacts: &Value,
+    assistant_run_id: &str,
+    document_id: &str,
+    durable_ref: &Value,
+) -> Value {
+    if durable_ref.is_null() {
+        return output_artifacts
+            .as_array()
+            .cloned()
+            .map(Value::Array)
+            .unwrap_or_else(|| json!([]));
+    }
+    let target_id = format!("video-extraction-{assistant_run_id}-{document_id}");
+    let mut artifacts = output_artifacts.as_array().cloned().unwrap_or_default();
+    for artifact in &mut artifacts {
+        if artifact.get("id").and_then(Value::as_str) != Some(target_id.as_str()) {
+            continue;
+        }
+        let Some(object) = artifact.as_object_mut() else {
+            continue;
+        };
+        object.insert("durable_published_version".to_string(), durable_ref.clone());
+        if let Some(package) = object
+            .get_mut("deliverable_package")
+            .and_then(Value::as_object_mut)
+        {
+            package.insert(
+                "durable_history_status".to_string(),
+                json!("promoted_to_storage"),
+            );
+            package.insert("durable_published_version".to_string(), durable_ref.clone());
+        }
+    }
+    Value::Array(artifacts)
+}
+
+fn video_durable_published_version_fingerprint(
+    document_id: &str,
+    dataset_id: &str,
+    published_files: &[Value],
+) -> String {
+    let mut parts = published_files
+        .iter()
+        .filter_map(|file| {
+            let kind = file.get("artifact_kind").and_then(Value::as_str)?;
+            let file_name = file.get("file_name").and_then(Value::as_str).unwrap_or("");
+            let uri = file.get("uri").and_then(Value::as_str).unwrap_or("");
+            Some(format!("{kind}:{file_name}:{uri}"))
+        })
+        .collect::<Vec<_>>();
+    parts.sort();
+    format!(
+        "video-ppt:v1:{document_id}:{dataset_id}:{}",
+        parts.join("|")
+    )
+}
+
 fn video_extraction_html_artifact_summary(artifact: &Value) -> Option<Value> {
     let id = artifact.get("id").and_then(Value::as_str)?;
     Some(json!({
@@ -6943,6 +7077,140 @@ mod tests {
             .iter()
             .any(|file| file["artifact_kind"] == json!("subtitle_page_map")));
         assert_eq!(output_artifact["html_artifact_ids"][0], html_artifact["id"]);
+    }
+
+    #[test]
+    fn durable_published_version_manifest_redacts_artifact_paths() {
+        let document = test_document();
+        let run_id = "00000000-0000-0000-0000-000000000001";
+        let files = VIDEO_PUBLISHED_DELIVERABLE_REQUIRED_KINDS
+            .iter()
+            .map(|kind| {
+                let file_name = match *kind {
+                    "pptx" => DEFAULT_VIDEO_SLIDES_PPTX_FILE_NAME,
+                    "published_deliverable_manifest" => {
+                        DEFAULT_PUBLISHED_DELIVERABLE_MANIFEST_FILE_NAME
+                    }
+                    "published_version_history" => DEFAULT_PUBLISHED_VERSION_HISTORY_FILE_NAME,
+                    "final_deliverables_manifest" => DEFAULT_FINAL_DELIVERABLES_MANIFEST_FILE_NAME,
+                    "extraction_artifacts_manifest" => {
+                        DEFAULT_EXTRACTION_ARTIFACTS_MANIFEST_FILE_NAME
+                    }
+                    "slide_rectangles_manifest" => DEFAULT_SLIDE_RECTANGLES_MANIFEST_FILE_NAME,
+                    "slide_notes" => DEFAULT_SLIDE_NOTES_ARTIFACT_FILE_NAME,
+                    "video_slides_markdown" => DEFAULT_VIDEO_SLIDES_MARKDOWN_FILE_NAME,
+                    "subtitle_page_map" => DEFAULT_SUBTITLE_PAGE_MAP_FILE_NAME,
+                    _ => "artifact.json",
+                };
+                json!({
+                    "artifact_kind": kind,
+                    "artifact_id": format!("video-{}-{kind}", document.id),
+                    "title": format!("artifact {kind}"),
+                    "format": "application/json",
+                    "path": format!("/private/video-extraction/{file_name}"),
+                    "uri": format!("artifact://video-{}-{kind}", document.id),
+                })
+            })
+            .collect::<Vec<_>>();
+        let output = json!({
+            "status": "completed",
+            "document_id": document.id.to_string(),
+            "dataset_id": document.dataset_id.to_string(),
+            "title": "Published lesson",
+            "generated_artifacts": {
+                "status": "completed",
+                "files": files,
+            }
+        });
+
+        let manifest =
+            video_extraction_durable_published_version_manifest(run_id, "workflow-1", &output)
+                .expect("durable version manifest");
+        let serialized = serde_json::to_string(&manifest).expect("manifest serializes");
+
+        assert_eq!(
+            manifest["manifest_type"],
+            json!("v3.video_ppt_durable_published_version.v1")
+        );
+        assert_eq!(
+            manifest["lifecycle_state"],
+            json!("published_version_ready")
+        );
+        assert_eq!(
+            manifest["durable_history_status"],
+            json!("promoted_to_storage")
+        );
+        assert_eq!(
+            manifest["package_key"],
+            json!(format!("video-ppt-{run_id}-{}", document.id))
+        );
+        assert!(manifest["version_fingerprint"]
+            .as_str()
+            .expect("version fingerprint")
+            .starts_with("video-ppt:v1:"));
+        assert!(manifest["published_files"]
+            .as_array()
+            .expect("published files")
+            .iter()
+            .all(|file| file["path"] == json!("[redacted]")));
+        assert!(!serialized.contains("/private/video-extraction"));
+        assert!(!serialized.contains("token"));
+
+        let incomplete = json!({
+            "document_id": document.id.to_string(),
+            "dataset_id": document.dataset_id.to_string(),
+            "generated_artifacts": {
+                "status": "completed",
+                "files": [{
+                    "artifact_kind": "pptx",
+                    "path": "/private/video-extraction/video_slides_screenshot_based.pptx"
+                }]
+            }
+        });
+        assert!(video_extraction_durable_published_version_manifest(
+            run_id,
+            "workflow-1",
+            &incomplete
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn merge_durable_published_version_ref_updates_video_output_artifact() {
+        let run_id = "00000000-0000-0000-0000-000000000001";
+        let document_id = "11111111-1111-1111-1111-111111111111";
+        let output_artifacts = json!([{
+            "id": format!("video-extraction-{run_id}-{document_id}"),
+            "type": "video_extraction_artifacts",
+            "deliverable_package": {
+                "kind": "video_extraction_deliverable_package",
+                "lifecycle_state": "published_version_ready"
+            }
+        }]);
+        let durable_ref = json!({
+            "type": "video_ppt_published_version",
+            "package_id": "package-1",
+            "version_id": "version-1",
+            "version_no": 2,
+            "lifecycle_state": "published_version_ready"
+        });
+
+        let merged = merge_video_extraction_durable_published_version_ref(
+            &output_artifacts,
+            run_id,
+            document_id,
+            &durable_ref,
+        );
+
+        assert_eq!(merged[0]["durable_published_version"], durable_ref);
+        assert_eq!(
+            merged[0]["deliverable_package"]["durable_history_status"],
+            json!("promoted_to_storage")
+        );
+        assert_eq!(
+            merged[0]["deliverable_package"]["durable_published_version"]["version_no"],
+            json!(2)
+        );
     }
 
     #[test]

@@ -65,6 +65,8 @@ id_type!(ChatMessageId);
 id_type!(ReportModuleId);
 id_type!(PublishedReportId);
 id_type!(PublishedReportVersionId);
+id_type!(PublishedVideoPptPackageId);
+id_type!(PublishedVideoPptVersionId);
 id_type!(RetrievalEvidenceId);
 id_type!(LlmInvocationId);
 id_type!(ToolExecutionId);
@@ -1424,5 +1426,29 @@ pub struct PublishedReportVersion {
     pub version_no: i32,
     pub surface: PublishedSurface,
     pub asset_manifest: Value,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PublishedVideoPptPackage {
+    pub id: PublishedVideoPptPackageId,
+    pub tenant_id: TenantId,
+    pub assistant_run_id: AssistantRunId,
+    pub document_id: DocumentId,
+    pub dataset_id: DatasetId,
+    pub package_key: String,
+    pub current_version_id: Option<PublishedVideoPptVersionId>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PublishedVideoPptVersion {
+    pub id: PublishedVideoPptVersionId,
+    pub package_id: PublishedVideoPptPackageId,
+    pub version_no: i32,
+    pub version_fingerprint: String,
+    pub lifecycle_state: String,
+    pub artifact_manifest: Value,
     pub created_at: DateTime<Utc>,
 }

@@ -9,7 +9,8 @@ use domain_model::{
     DocumentLifecycle, EmailVerificationChallenge, EmailVerificationChallengeId, HtmlArtifact,
     LlmInvocation, LlmInvocationFinishReason, LlmInvocationId, LlmInvocationMode,
     LlmInvocationSourceKind, LlmTokenUsage, MemoryDirectory, MemoryDirectoryId, PublishedReport,
-    PublishedReportId, PublishedReportVersion, PublishedReportVersionId, ReportPlan,
+    PublishedReportId, PublishedReportVersion, PublishedReportVersionId, PublishedVideoPptPackage,
+    PublishedVideoPptPackageId, PublishedVideoPptVersion, PublishedVideoPptVersionId, ReportPlan,
     ReportPlanAstVersion, ReportPlanAstVersionId, ReportPlanId, ReportPlanStatus,
     ReportRenderOutput, ReportRenderOutputId, ReportRenderOutputStatus, RetrievalEvidence,
     RetrievalEvidenceId, SecretBinding, SecretBindingId, SecretScopeLevel, StaticPageDraft,
@@ -76,6 +77,12 @@ pub const EXTERNAL_INTEGRATIONS_SCHEMA: Migration = Migration {
     sql: include_str!("../migrations/0008_external_integrations.sql"),
 };
 
+pub const VIDEO_PPT_PUBLISHED_VERSIONS_SCHEMA: Migration = Migration {
+    version: "0009",
+    description: "video ppt published version history",
+    sql: include_str!("../migrations/0009_video_ppt_published_versions.sql"),
+};
+
 pub const MIGRATIONS: &[Migration] = &[
     INITIAL_SCHEMA,
     WORKFLOW_RUNTIME_RECORDS_SCHEMA,
@@ -84,6 +91,7 @@ pub const MIGRATIONS: &[Migration] = &[
     MEMORY_DIRECTORY_SCOPE_HARDENING_SCHEMA,
     HTML_ARTIFACTS_SCHEMA,
     EXTERNAL_INTEGRATIONS_SCHEMA,
+    VIDEO_PPT_PUBLISHED_VERSIONS_SCHEMA,
 ];
 
 pub const TABLES: &[&str] = &[
@@ -122,6 +130,8 @@ pub const TABLES: &[&str] = &[
     "external_message_events",
     "external_action_runs",
     "external_sync_runs",
+    "published_video_ppt_packages",
+    "published_video_ppt_versions",
     "static_page_drafts",
     "static_page_image_jobs",
     "static_page_render_outputs",
@@ -262,6 +272,18 @@ pub struct NewPublishedReport {
 pub struct NewPublishedReportVersion {
     pub surface: domain_model::PublishedSurface,
     pub asset_manifest: Value,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug)]
+pub struct NewPublishedVideoPptVersion {
+    pub assistant_run_id: AssistantRunId,
+    pub document_id: DocumentId,
+    pub dataset_id: DatasetId,
+    pub package_key: String,
+    pub version_fingerprint: String,
+    pub lifecycle_state: String,
+    pub artifact_manifest: Value,
     pub created_at: DateTime<Utc>,
 }
 
@@ -625,6 +647,12 @@ impl PgStorage {
 
     pub fn published_report_versions(&self) -> PgPublishedReportVersionRepository {
         PgPublishedReportVersionRepository {
+            pool: self.pool.clone(),
+        }
+    }
+
+    pub fn published_video_ppt_versions(&self) -> PgPublishedVideoPptVersionRepository {
+        PgPublishedVideoPptVersionRepository {
             pool: self.pool.clone(),
         }
     }
@@ -2175,6 +2203,186 @@ impl PgPublishedReportVersionRepository {
         .await?;
 
         rows.iter().map(map_published_report_version_row).collect()
+    }
+}
+
+#[derive(Clone)]
+pub struct PgPublishedVideoPptVersionRepository {
+    pool: PgPool,
+}
+
+impl PgPublishedVideoPptVersionRepository {
+    pub async fn create_next_version(
+        &self,
+        tenant_id: TenantId,
+        new_version: &NewPublishedVideoPptVersion,
+    ) -> Result<(PublishedVideoPptPackage, PublishedVideoPptVersion)> {
+        let mut tx = self.pool.begin().await?;
+        let row = sqlx::query(
+            r#"
+            insert into published_video_ppt_packages (
+                id,
+                tenant_id,
+                assistant_run_id,
+                document_id,
+                dataset_id,
+                package_key,
+                current_version_id,
+                created_at,
+                updated_at
+            )
+            values ($1, $2, $3, $4, $5, $6, null, $7, $8)
+            on conflict (tenant_id, assistant_run_id, document_id, package_key)
+            do update set
+                dataset_id = excluded.dataset_id,
+                updated_at = excluded.updated_at
+            returning id, tenant_id, assistant_run_id, document_id, dataset_id, package_key,
+                      current_version_id, created_at, updated_at
+            "#,
+        )
+        .bind(PublishedVideoPptPackageId::new().0)
+        .bind(tenant_id.0)
+        .bind(new_version.assistant_run_id.0)
+        .bind(new_version.document_id.0)
+        .bind(new_version.dataset_id.0)
+        .bind(&new_version.package_key)
+        .bind(new_version.created_at)
+        .bind(new_version.created_at)
+        .fetch_one(&mut *tx)
+        .await?;
+        let mut package = map_published_video_ppt_package_row(&row)?;
+
+        if let Some(row) = sqlx::query(
+            r#"
+            select id, package_id, version_no, version_fingerprint, lifecycle_state, artifact_manifest, created_at
+            from published_video_ppt_versions
+            where package_id = $1 and version_fingerprint = $2
+            "#,
+        )
+        .bind(package.id.0)
+        .bind(&new_version.version_fingerprint)
+        .fetch_optional(&mut *tx)
+        .await?
+        {
+            let version = map_published_video_ppt_version_row(&row)?;
+            let row = sqlx::query(
+                r#"
+                update published_video_ppt_packages
+                set current_version_id = $3,
+                    updated_at = $4
+                where tenant_id = $1 and id = $2
+                returning id, tenant_id, assistant_run_id, document_id, dataset_id, package_key,
+                          current_version_id, created_at, updated_at
+                "#,
+            )
+            .bind(tenant_id.0)
+            .bind(package.id.0)
+            .bind(version.id.0)
+            .bind(new_version.created_at)
+            .fetch_one(&mut *tx)
+            .await?;
+            package = map_published_video_ppt_package_row(&row)?;
+            tx.commit().await?;
+            return Ok((package, version));
+        }
+
+        let next_version_no = sqlx::query_scalar::<_, i32>(
+            r#"
+            select coalesce(max(version_no), 0) + 1
+            from published_video_ppt_versions
+            where package_id = $1
+            "#,
+        )
+        .bind(package.id.0)
+        .fetch_one(&mut *tx)
+        .await?;
+
+        let version = PublishedVideoPptVersion {
+            id: PublishedVideoPptVersionId::new(),
+            package_id: package.id,
+            version_no: next_version_no,
+            version_fingerprint: new_version.version_fingerprint.clone(),
+            lifecycle_state: new_version.lifecycle_state.clone(),
+            artifact_manifest: new_version.artifact_manifest.clone(),
+            created_at: new_version.created_at,
+        };
+
+        sqlx::query(
+            r#"
+            insert into published_video_ppt_versions (
+                id,
+                package_id,
+                version_no,
+                version_fingerprint,
+                lifecycle_state,
+                artifact_manifest,
+                created_at
+            )
+            values ($1, $2, $3, $4, $5, $6, $7)
+            "#,
+        )
+        .bind(version.id.0)
+        .bind(version.package_id.0)
+        .bind(version.version_no)
+        .bind(&version.version_fingerprint)
+        .bind(&version.lifecycle_state)
+        .bind(&version.artifact_manifest)
+        .bind(version.created_at)
+        .execute(&mut *tx)
+        .await?;
+
+        let row = sqlx::query(
+            r#"
+            update published_video_ppt_packages
+            set current_version_id = $3,
+                updated_at = $4
+            where tenant_id = $1 and id = $2
+            returning id, tenant_id, assistant_run_id, document_id, dataset_id, package_key,
+                      current_version_id, created_at, updated_at
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(package.id.0)
+        .bind(version.id.0)
+        .bind(new_version.created_at)
+        .fetch_one(&mut *tx)
+        .await?;
+        package = map_published_video_ppt_package_row(&row)?;
+
+        tx.commit().await?;
+        Ok((package, version))
+    }
+
+    pub async fn list_by_package_key(
+        &self,
+        tenant_id: TenantId,
+        assistant_run_id: AssistantRunId,
+        document_id: DocumentId,
+        package_key: &str,
+    ) -> Result<Vec<PublishedVideoPptVersion>> {
+        let rows = sqlx::query(
+            r#"
+            select v.id, v.package_id, v.version_no, v.version_fingerprint, v.lifecycle_state,
+                   v.artifact_manifest, v.created_at
+            from published_video_ppt_versions v
+            join published_video_ppt_packages p on p.id = v.package_id
+            where p.tenant_id = $1
+              and p.assistant_run_id = $2
+              and p.document_id = $3
+              and p.package_key = $4
+            order by v.version_no desc, v.created_at desc
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(assistant_run_id.0)
+        .bind(document_id.0)
+        .bind(package_key)
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.iter()
+            .map(map_published_video_ppt_version_row)
+            .collect()
     }
 }
 
@@ -5026,6 +5234,38 @@ fn map_published_report_version_row(row: &sqlx::postgres::PgRow) -> Result<Publi
     })
 }
 
+fn map_published_video_ppt_package_row(
+    row: &sqlx::postgres::PgRow,
+) -> Result<PublishedVideoPptPackage> {
+    Ok(PublishedVideoPptPackage {
+        id: PublishedVideoPptPackageId(row.get::<Uuid, _>("id")),
+        tenant_id: TenantId(row.get::<Uuid, _>("tenant_id")),
+        assistant_run_id: AssistantRunId(row.get::<Uuid, _>("assistant_run_id")),
+        document_id: DocumentId(row.get::<Uuid, _>("document_id")),
+        dataset_id: DatasetId(row.get::<Uuid, _>("dataset_id")),
+        package_key: row.get("package_key"),
+        current_version_id: row
+            .get::<Option<Uuid>, _>("current_version_id")
+            .map(PublishedVideoPptVersionId),
+        created_at: row.get("created_at"),
+        updated_at: row.get("updated_at"),
+    })
+}
+
+fn map_published_video_ppt_version_row(
+    row: &sqlx::postgres::PgRow,
+) -> Result<PublishedVideoPptVersion> {
+    Ok(PublishedVideoPptVersion {
+        id: PublishedVideoPptVersionId(row.get::<Uuid, _>("id")),
+        package_id: PublishedVideoPptPackageId(row.get::<Uuid, _>("package_id")),
+        version_no: row.get("version_no"),
+        version_fingerprint: row.get("version_fingerprint"),
+        lifecycle_state: row.get("lifecycle_state"),
+        artifact_manifest: row.get("artifact_manifest"),
+        created_at: row.get("created_at"),
+    })
+}
+
 fn map_memory_directory_row(row: &sqlx::postgres::PgRow) -> Result<MemoryDirectory> {
     Ok(MemoryDirectory {
         id: MemoryDirectoryId(row.get::<Uuid, _>("id")),
@@ -6033,7 +6273,7 @@ mod tests {
                 .iter()
                 .map(|migration| migration.version)
                 .collect::<Vec<_>>(),
-            vec!["0001", "0002", "0004", "0005", "0006", "0007", "0008"]
+            vec!["0001", "0002", "0004", "0005", "0006", "0007", "0008", "0009"]
         );
         assert!(MIGRATIONS
             .iter()
@@ -6050,6 +6290,20 @@ mod tests {
         assert!(MIGRATIONS
             .iter()
             .any(|migration| migration.description == "external bot and third-party integrations"));
+        assert!(MIGRATIONS
+            .iter()
+            .any(|migration| migration.description == "video ppt published version history"));
+        assert!(TABLES.contains(&"published_video_ppt_packages"));
+        assert!(TABLES.contains(&"published_video_ppt_versions"));
+        assert!(VIDEO_PPT_PUBLISHED_VERSIONS_SCHEMA
+            .sql
+            .contains("create table if not exists published_video_ppt_packages"));
+        assert!(VIDEO_PPT_PUBLISHED_VERSIONS_SCHEMA
+            .sql
+            .contains("create table if not exists published_video_ppt_versions"));
+        assert!(VIDEO_PPT_PUBLISHED_VERSIONS_SCHEMA
+            .sql
+            .contains("unique (package_id, version_fingerprint)"));
     }
 
     #[test]
