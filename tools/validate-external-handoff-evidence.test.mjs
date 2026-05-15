@@ -141,6 +141,30 @@ test('validateEvidence rejects final evidence manifests with invalid provenance 
   assert.ok(result.errors.some((error) => error.code === 'evidence_repository_head_invalid'));
 });
 
+test('validateEvidence rejects final evidence provenance that does not match source manifests', () => {
+  const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'v3-external-handoff-evidence-'));
+  const built = buildPackage({
+    repoRoot,
+    outDir,
+    basename: 'evidence-mismatched-provenance',
+    generatedAt: '2026-05-15T00:00:00.000Z',
+  });
+  const manifest = JSON.parse(fs.readFileSync(built.evidenceManifestPath, 'utf8'));
+  manifest.generated_at = '2026-05-16T00:00:00.000Z';
+  manifest.repository_head = manifest.repository_head === '0000000' ? '1111111' : '0000000';
+  fs.writeFileSync(built.evidenceManifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+  const result = validateEvidence({ packageRootInput: built.packageRoot });
+
+  assert.equal(result.evidence_manifest_ready, false);
+  assert.ok(result.errors.some((error) => error.code === 'evidence_package_manifest_generated_at_mismatch'));
+  assert.ok(result.errors.some((error) => error.code === 'evidence_package_manifest_repository_head_mismatch'));
+  assert.ok(result.errors.some((error) => error.code === 'evidence_release_json_generated_at_mismatch'));
+  assert.ok(result.errors.some((error) => error.code === 'evidence_release_json_repository_head_mismatch'));
+  assert.ok(result.errors.some((error) => error.code === 'evidence_delivery_manifest_generated_at_mismatch'));
+  assert.ok(result.errors.some((error) => error.code === 'evidence_delivery_manifest_repository_head_mismatch'));
+});
+
 test('validateEvidence rejects aggregate JSON receipts without HTML artifact readiness', () => {
   const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'v3-external-handoff-evidence-'));
   const built = buildPackage({

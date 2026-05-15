@@ -68,6 +68,24 @@ function isGitHead(value) {
   return typeof value === 'string' && /^[a-f0-9]{7,40}$/iu.test(value);
 }
 
+function validateProvenanceSource({ errors, manifest, source, sourceName, sourcePath }) {
+  if (!source) {
+    return;
+  }
+  for (const field of ['package_type', 'generated_at', 'repository_head']) {
+    const evidenceValue = manifest[field] || null;
+    const sourceValue = source[field] || null;
+    if (sourceValue !== evidenceValue) {
+      addError(
+        errors,
+        `evidence_${sourceName}_${field}_mismatch`,
+        `evidence manifest ${field} must match ${sourceName}`,
+        sourcePath,
+      );
+    }
+  }
+}
+
 function validateEvidenceFileArtifact({
   artifactsByRole,
   role,
@@ -271,10 +289,40 @@ function validateEvidence({
     errors,
   });
 
+  const packageManifestPath = path.join(packageRoot, 'handoff-package-manifest.json');
+  const packageManifest = fs.existsSync(packageManifestPath)
+    ? parseJsonFile(packageManifestPath, errors, 'evidence_package_manifest')
+    : null;
+  validateProvenanceSource({
+    errors,
+    manifest,
+    source: packageManifest,
+    sourceName: 'package_manifest',
+    sourcePath: packageManifestPath,
+  });
+
   const releaseReport = fs.existsSync(releaseReportPath) ? parseJsonFile(releaseReportPath, errors, 'evidence_release_json') : null;
+  validateProvenanceSource({
+    errors,
+    manifest,
+    source: releaseReport,
+    sourceName: 'release_json',
+    sourcePath: releaseReportPath,
+  });
   if (releaseReport && releaseReport.release_ready !== true) {
     addError(errors, 'evidence_release_json_not_ready', 'release JSON must report release_ready=true', releaseReportPath);
   }
+
+  const deliveryManifest = fs.existsSync(deliveryManifestPath)
+    ? parseJsonFile(deliveryManifestPath, errors, 'evidence_delivery_manifest')
+    : null;
+  validateProvenanceSource({
+    errors,
+    manifest,
+    source: deliveryManifest,
+    sourceName: 'delivery_manifest',
+    sourcePath: deliveryManifestPath,
+  });
 
   const allReport = fs.existsSync(allReportPath) ? parseJsonFile(allReportPath, errors, 'evidence_aggregate_json') : null;
   if (allReport && allReport.all_ready !== true) {
