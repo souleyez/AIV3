@@ -39,6 +39,7 @@ test('third-party handoff HTML artifact manifest uses the safe V3 template contr
   assert.match(rendered.html, /POST \/v1\/external\/channels\/\{connection_id\}\/events/);
   assert.match(rendered.html, /安全 HTML artifact manifest/);
   assert.match(rendered.html, /npm run validate:all/);
+  assert.match(rendered.html, /npm run validate:evidence/);
   assert.match(rendered.html, /不搬迁整库/);
 });
 

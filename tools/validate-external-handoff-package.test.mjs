@@ -92,6 +92,32 @@ test('validatePackage rejects unsafe third-party handoff HTML artifact manifests
   assert.ok(result.errors.some((error) => error.code === 'html_artifact_payload_unsafe'));
 });
 
+test('validatePackage requires final evidence validation in the HTML artifact manifest', () => {
+  const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'v3-external-handoff-package-'));
+  const built = buildPackage({
+    repoRoot,
+    outDir,
+    basename: 'missing-evidence-command-package',
+    generatedAt: '2026-05-14T00:00:00.000Z',
+  });
+  const relativePath = 'html-artifacts/third-party-handoff-document.json';
+  const artifactPath = path.join(built.packageRoot, relativePath);
+  const artifact = JSON.parse(fs.readFileSync(artifactPath, 'utf8'));
+  artifact.payload.validationCommands = artifact.payload.validationCommands.filter(
+    (command) => command.command !== 'npm run validate:evidence',
+  );
+  fs.writeFileSync(artifactPath, `${JSON.stringify(artifact, null, 2)}\n`);
+  refreshPackageManifestDigest(built.packageRoot, relativePath);
+
+  const result = validatePackage(built.packageRoot);
+
+  assert.equal(result.package_ready, false);
+  assert.equal(result.checks.find((check) => check.key === 'included_file_integrity').passed, true);
+  assert.equal(result.checks.find((check) => check.key === 'third_party_html_artifact_manifest').passed, false);
+  assert.equal(result.html_artifact_validation.artifact_ready, false);
+  assert.ok(result.errors.some((error) => error.code === 'html_artifact_evidence_validation_missing'));
+});
+
 test('validatePackage rejects path escapes in package manifest', () => {
   const packageRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'v3-external-handoff-package-'));
   fs.mkdirSync(path.join(packageRoot, 'handoff'), { recursive: true });

@@ -173,6 +173,9 @@ function validateThirdPartyHtmlArtifactManifest(artifact, errors, { artifactPath
   if (!validationCommands.some((command) => command.command === 'npm run validate:all')) {
     addHtmlArtifactError(errors, summary, 'html_artifact_all_validation_missing', 'validate:all command must be listed', 'payload.validationCommands', artifactPath);
   }
+  if (!validationCommands.some((command) => command.command === 'npm run validate:evidence')) {
+    addHtmlArtifactError(errors, summary, 'html_artifact_evidence_validation_missing', 'validate:evidence command must be listed', 'payload.validationCommands', artifactPath);
+  }
   const unsafePayloadPath = findUnsafeHtmlArtifactPayloadPath(payload);
   if (unsafePayloadPath) {
     addHtmlArtifactError(errors, summary, 'html_artifact_payload_unsafe', unsafePayloadPath, 'payload', artifactPath);
