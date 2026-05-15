@@ -33,6 +33,9 @@ test('validateRelease accepts a generated package, archive, and sidecar', () => 
   assert.equal(result.archive_summary.root_name, 'release-valid-package');
   assert.equal(result.archive_sha256, built.archiveSha256);
   assert.equal(result.delivery_manifest_summary.delivery_manifest_ready, true);
+  assert.equal(result.delivery_manifest_summary.package_type, 'v3.external_third_party_handoff_package.v1');
+  assert.equal(result.delivery_manifest_summary.generated_at, '2026-05-14T00:00:00.000Z');
+  assert.equal(result.delivery_manifest_summary.repository_head, result.repository_head);
   assert.equal(result.delivery_manifest_summary.artifact_count, 6);
   assert.equal(result.delivery_manifest_sha256, built.deliveryManifestSha256);
   assert.equal(result.checks.find((check) => check.key === 'delivery_manifest_ready').passed, true);
@@ -55,6 +58,8 @@ test('renderReleaseMarkdown summarizes a ready release for human review', () => 
   assert.match(markdown, /Generated at: 2026-05-14T00:00:00.000Z/);
   assert.match(markdown, /Repository head:/);
   assert.match(markdown, /Archive SHA256:/);
+  assert.match(markdown, /Delivery generated at: 2026-05-14T00:00:00.000Z/);
+  assert.match(markdown, /Delivery repository head:/);
   assert.match(markdown, /HTML artifact ready: yes/);
   assert.match(markdown, /Archive HTML artifact ready: yes/);
   assert.match(markdown, /Delivery manifest ready: yes/);

@@ -7,6 +7,7 @@ import { validatePackage } from './validate-external-handoff-package.mjs';
 import { validateArchive } from './validate-external-handoff-archive.mjs';
 
 const DELIVERY_MANIFEST_TYPE = 'v3.external_third_party_handoff_delivery_manifest.v1';
+const PACKAGE_TYPE = 'v3.external_third_party_handoff_package.v1';
 const DELIVERY_ARTIFACT_ROLES = [
   'package_directory',
   'package_manifest',
@@ -58,6 +59,24 @@ function parseJsonFile(filePath, errors, codePrefix) {
   } catch (error) {
     addError(errors, `${codePrefix}_invalid_json`, `failed to parse JSON: ${error.message}`, filePath);
     return null;
+  }
+}
+
+function validateDeliveryProvenanceSource({ errors, manifest, source, sourceName, sourcePath }) {
+  if (!source) {
+    return;
+  }
+  for (const field of ['package_type', 'generated_at', 'repository_head']) {
+    const deliveryValue = manifest[field] || null;
+    const sourceValue = source[field] || null;
+    if (sourceValue !== deliveryValue) {
+      addError(
+        errors,
+        `delivery_${sourceName}_${field}_mismatch`,
+        `delivery manifest ${field} must match ${sourceName}`,
+        sourcePath,
+      );
+    }
   }
 }
 
@@ -118,6 +137,9 @@ function validateDeliveryManifest({
       delivery_manifest_path: manifestPath,
       delivery_manifest_sha256: null,
       manifest_type: null,
+      package_type: null,
+      generated_at: null,
+      repository_head: null,
       artifact_count: 0,
       required: required === true,
       error_codes: errors.map((error) => error.code),
@@ -132,6 +154,9 @@ function validateDeliveryManifest({
       delivery_manifest_path: manifestPath,
       delivery_manifest_sha256: null,
       manifest_type: null,
+      package_type: null,
+      generated_at: null,
+      repository_head: null,
       artifact_count: 0,
       required: required === true,
       error_codes: errors.map((error) => error.code),
@@ -141,6 +166,9 @@ function validateDeliveryManifest({
 
   if (manifest.manifest_type !== DELIVERY_MANIFEST_TYPE) {
     addError(errors, 'delivery_manifest_type_invalid', `delivery manifest type must be ${DELIVERY_MANIFEST_TYPE}`, manifestPath);
+  }
+  if (manifest.package_type !== PACKAGE_TYPE) {
+    addError(errors, 'delivery_package_type_invalid', `delivery manifest package_type must be ${PACKAGE_TYPE}`, manifest.package_type || '');
   }
   if (manifest.package_name !== packageName) {
     addError(errors, 'delivery_package_name_mismatch', 'delivery manifest package_name must match package directory', manifest.package_name || '');
@@ -212,11 +240,37 @@ function validateDeliveryManifest({
     errors,
   });
 
+  const packageManifestPath = path.join(packageRoot, 'handoff-package-manifest.json');
+  const packageManifest = fs.existsSync(packageManifestPath)
+    ? parseJsonFile(packageManifestPath, errors, 'delivery_package_manifest')
+    : null;
+  validateDeliveryProvenanceSource({
+    errors,
+    manifest,
+    source: packageManifest,
+    sourceName: 'package_manifest',
+    sourcePath: packageManifestPath,
+  });
+
+  const releaseReport = fs.existsSync(releaseReportPath)
+    ? parseJsonFile(releaseReportPath, errors, 'delivery_release_json')
+    : null;
+  validateDeliveryProvenanceSource({
+    errors,
+    manifest,
+    source: releaseReport,
+    sourceName: 'release_json',
+    sourcePath: releaseReportPath,
+  });
+
   return {
     delivery_manifest_ready: errors.length === 0,
     delivery_manifest_path: manifestPath,
     delivery_manifest_sha256: fileDigest(manifestPath).sha256,
     manifest_type: manifest.manifest_type || null,
+    package_type: manifest.package_type || null,
+    generated_at: manifest.generated_at || null,
+    repository_head: manifest.repository_head || null,
     package_name: manifest.package_name || null,
     artifact_count: artifacts.length,
     required: required === true,
@@ -268,6 +322,9 @@ Status: **${status}**
 
 - Delivery manifest path: \`${report.delivery_manifest_path || 'unknown'}\`
 - Delivery manifest SHA256: \`${report.delivery_manifest_sha256 || 'unknown'}\`
+- Delivery package type: \`${report.delivery_manifest_summary?.package_type || 'unknown'}\`
+- Delivery generated at: ${report.delivery_manifest_summary?.generated_at || 'unknown'}
+- Delivery repository head: \`${report.delivery_manifest_summary?.repository_head || 'unknown'}\`
 - Delivery manifest ready: ${deliveryReady}
 - Delivery artifacts: ${report.delivery_manifest_summary?.artifact_count ?? 0}
 
@@ -379,6 +436,9 @@ function validateRelease({
     delivery_manifest_summary: {
       delivery_manifest_ready: deliveryValidation.delivery_manifest_ready,
       manifest_type: deliveryValidation.manifest_type,
+      package_type: deliveryValidation.package_type,
+      generated_at: deliveryValidation.generated_at,
+      repository_head: deliveryValidation.repository_head,
       package_name: deliveryValidation.package_name,
       artifact_count: deliveryValidation.artifact_count,
       required: deliveryValidation.required,
