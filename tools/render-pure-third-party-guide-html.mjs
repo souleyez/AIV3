@@ -4,8 +4,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const sourcePath = path.join(repoRoot, 'docs/integrations/pure-third-party-integration-guide.zh-CN.md');
-const outputPath = path.join(repoRoot, 'docs/integrations/pure-third-party-integration-guide.zh-CN.html');
+const defaultSourcePath = path.join(repoRoot, 'docs/integrations/pure-third-party-integration-guide.zh-CN.md');
+const defaultOutputPath = path.join(repoRoot, 'docs/integrations/pure-third-party-integration-guide.zh-CN.html');
 
 function escapeHtml(value) {
   return String(value)
@@ -609,8 +609,39 @@ function renderDocument({ body, nav }) {
 `;
 }
 
-const markdown = fs.readFileSync(sourcePath, 'utf8');
-const rendered = renderDocument(markdownToHtml(markdown));
-fs.writeFileSync(outputPath, rendered);
-console.log(`Rendered ${path.relative(repoRoot, outputPath)}`);
+function renderPureThirdPartyGuideHtml({
+  source = defaultSourcePath,
+  output = defaultOutputPath,
+  check = false,
+} = {}) {
+  const markdown = fs.readFileSync(source, 'utf8');
+  const rendered = renderDocument(markdownToHtml(markdown));
+  if (check) {
+    const current = fs.existsSync(output) ? fs.readFileSync(output, 'utf8') : '';
+    if (current !== rendered) {
+      throw new Error(
+        `HTML guide is stale: ${path.relative(repoRoot, output)}. Run npm run build:pure-third-party-guide-html.`,
+      );
+    }
+    return { outputPath: output, bytes: Buffer.byteLength(rendered), checked: true };
+  }
+  fs.writeFileSync(output, rendered);
+  return { outputPath: output, bytes: Buffer.byteLength(rendered), checked: false };
+}
 
+function main(argv = process.argv.slice(2)) {
+  const check = argv.includes('--check');
+  const result = renderPureThirdPartyGuideHtml({ check });
+  const relativeOutput = path.relative(repoRoot, result.outputPath);
+  console.log(check ? `HTML guide is up to date: ${relativeOutput}` : `Rendered ${relativeOutput}`);
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main();
+}
+
+export {
+  markdownToHtml,
+  renderDocument,
+  renderPureThirdPartyGuideHtml,
+};

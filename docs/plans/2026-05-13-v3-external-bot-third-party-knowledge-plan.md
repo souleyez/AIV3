@@ -69,6 +69,7 @@
 - Current implementation follow-up adds channel-level `search_summary` to `GET /v1/external/integrations` and the standalone panel overview/detail metrics, so pending V3 search-evidence supply is visible without opening the audit timeline.
 - Current documentation follow-up adds a standalone pure third-party mode guide at `docs/integrations/pure-third-party-integration-guide.zh-CN.md`, covering customer-hosted chat pages, third-party document/user/ACL APIs, artifact/action endpoints, result callbacks, observability, and the no-full-document-migration design.
 - Current documentation follow-up adds a review-friendly HTML version at `docs/integrations/pure-third-party-integration-guide.zh-CN.html`, generated from the Markdown source and included in the third-party handoff package for business/technical review.
+- Current documentation hardening follow-up adds `tools/render-pure-third-party-guide-html.mjs --check`, a package script for HTML freshness checks, and automatic HTML regeneration before handoff package builds so the sendable review page does not drift from the Markdown source.
 - Next implementation checkpoint: run the callback contract through a real HTTPS customer sandbox once a third-party endpoint is available, while continuing smaller hardening work that does not require customer cooperation.
 
 ---
