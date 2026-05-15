@@ -69,6 +69,18 @@ function isPlainObject(value) {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
+function isIsoUtcTimestamp(value) {
+  return (
+    typeof value === 'string'
+    && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/u.test(value)
+    && !Number.isNaN(Date.parse(value))
+  );
+}
+
+function isGitHead(value) {
+  return typeof value === 'string' && /^[a-f0-9]{7,40}$/iu.test(value);
+}
+
 function unsafeHtmlArtifactStringReason(value) {
   if (typeof value !== 'string') {
     return '';
@@ -264,6 +276,16 @@ function validatePackage(packageRootInput = '.') {
   if (manifest.package_type !== PACKAGE_TYPE) {
     addError(errors, 'package_type_invalid', `package_type must be ${PACKAGE_TYPE}`, 'package_type');
   }
+  if (!manifest.generated_at) {
+    addError(errors, 'package_generated_at_missing', 'generated_at is required', 'generated_at');
+  } else if (!isIsoUtcTimestamp(manifest.generated_at)) {
+    addError(errors, 'package_generated_at_invalid', 'generated_at must be an ISO UTC timestamp', 'generated_at');
+  }
+  if (!manifest.repository_head) {
+    addError(errors, 'package_repository_head_missing', 'repository_head is required', 'repository_head');
+  } else if (!isGitHead(manifest.repository_head)) {
+    addError(errors, 'package_repository_head_invalid', 'repository_head must be a short or full git SHA', 'repository_head');
+  }
   if (manifest.package_root && manifest.package_root !== '.') {
     addError(errors, 'package_root_not_relative', 'package_root must be "." for sendable packages', 'package_root');
   }
@@ -284,6 +306,14 @@ function validatePackage(packageRootInput = '.') {
   const checks = [
     { key: 'package_manifest_present', passed: errors.every((error) => error.code !== 'package_manifest_missing') },
     { key: 'package_type', passed: errors.every((error) => error.code !== 'package_type_invalid') },
+    {
+      key: 'package_generated_at',
+      passed: errors.every((error) => !['package_generated_at_missing', 'package_generated_at_invalid'].includes(error.code)),
+    },
+    {
+      key: 'package_repository_head',
+      passed: errors.every((error) => !['package_repository_head_missing', 'package_repository_head_invalid'].includes(error.code)),
+    },
     { key: 'package_root_relative', passed: errors.every((error) => error.code !== 'package_root_not_relative') },
     {
       key: 'included_file_paths',

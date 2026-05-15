@@ -39,6 +39,8 @@ test('validatePackage accepts a generated package', () => {
   assert.equal(result.package_ready, true);
   assert.equal(result.generated_at, '2026-05-14T00:00:00.000Z');
   assert.match(result.repository_head || '', /^[a-f0-9]+$/);
+  assert.equal(result.checks.find((check) => check.key === 'package_generated_at').passed, true);
+  assert.equal(result.checks.find((check) => check.key === 'package_repository_head').passed, true);
   assert.equal(result.checks.find((check) => check.key === 'included_file_integrity').passed, true);
   assert.equal(result.checks.find((check) => check.key === 'third_party_html_artifact_manifest').passed, true);
   assert.equal(result.html_artifact_validation.artifact_ready, true);
@@ -64,6 +66,56 @@ test('validatePackage rejects changed files', () => {
   assert.equal(result.package_ready, false);
   assert.ok(result.errors.some((error) => error.code === 'included_file_size_mismatch'));
   assert.ok(result.errors.some((error) => error.code === 'included_file_sha256_mismatch'));
+});
+
+test('validatePackage rejects missing package provenance fields', () => {
+  const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'v3-external-handoff-package-'));
+  const built = buildPackage({
+    repoRoot,
+    outDir,
+    basename: 'missing-package-provenance',
+    generatedAt: '2026-05-14T00:00:00.000Z',
+  });
+  const manifestPath = path.join(built.packageRoot, 'handoff-package-manifest.json');
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  delete manifest.generated_at;
+  delete manifest.repository_head;
+  fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+  const result = validatePackage(built.packageRoot);
+
+  assert.equal(result.package_ready, false);
+  assert.equal(result.generated_at, null);
+  assert.equal(result.repository_head, null);
+  assert.equal(result.checks.find((check) => check.key === 'package_generated_at').passed, false);
+  assert.equal(result.checks.find((check) => check.key === 'package_repository_head').passed, false);
+  assert.ok(result.errors.some((error) => error.code === 'package_generated_at_missing'));
+  assert.ok(result.errors.some((error) => error.code === 'package_repository_head_missing'));
+});
+
+test('validatePackage rejects invalid package provenance fields', () => {
+  const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'v3-external-handoff-package-'));
+  const built = buildPackage({
+    repoRoot,
+    outDir,
+    basename: 'invalid-package-provenance',
+    generatedAt: '2026-05-14T00:00:00.000Z',
+  });
+  const manifestPath = path.join(built.packageRoot, 'handoff-package-manifest.json');
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  manifest.generated_at = '2026-05-14 00:00:00';
+  manifest.repository_head = 'not-a-git-head';
+  fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+  const result = validatePackage(built.packageRoot);
+
+  assert.equal(result.package_ready, false);
+  assert.equal(result.generated_at, '2026-05-14 00:00:00');
+  assert.equal(result.repository_head, 'not-a-git-head');
+  assert.equal(result.checks.find((check) => check.key === 'package_generated_at').passed, false);
+  assert.equal(result.checks.find((check) => check.key === 'package_repository_head').passed, false);
+  assert.ok(result.errors.some((error) => error.code === 'package_generated_at_invalid'));
+  assert.ok(result.errors.some((error) => error.code === 'package_repository_head_invalid'));
 });
 
 test('validatePackage rejects unsafe third-party handoff HTML artifact manifests', () => {

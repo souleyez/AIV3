@@ -947,6 +947,8 @@ npm run validate:all
 npm run validate:evidence
 ```
 
+`validate:package` checks the package manifest, package type, generated time, V3 commit, relative-root safety, file SHA256 values, handoff manifest readiness, and the V3 safe HTML artifact manifest contract.
+
 `validate:archive` checks the sibling `.tar.gz` archive and `.sha256` sidecar from inside the generated package directory.
 
 `validate:delivery` verifies `<package>.delivery-manifest.json` against the sibling package directory, package manifest, archive, `.sha256` sidecar, release JSON report, and release Markdown summary, including package type, generated time, and V3 commit consistency with the package manifest and release JSON.
