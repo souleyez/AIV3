@@ -161,7 +161,7 @@ Current evidence-manifest follow-up: the third-party handoff package now writes 
 
 Current package-build semantics follow-up: handoff package build output now separates `handoffReady` and `evidenceMarkdownReady` from top-level `ready`; `ready` only passes when handoff, release, aggregate, final evidence, and human-readable evidence receipt gates are all ready.
 
-Current readiness follow-up: deployment readiness reports that receive `--releasePackage` now also validate the final evidence manifest and expose `handoff_evidence_ready` plus a redacted `handoff_evidence_summary`. The final evidence gate also requires the aggregate `.all.json` receipt to prove package/archive `html_artifact_ready`, and readiness summaries surface those HTML artifact signals for operators.
+Current readiness follow-up: deployment readiness reports that receive `--releasePackage` now also validate the final evidence manifest and verify the sibling human-readable evidence receipt, then expose `handoff_evidence_ready` plus a redacted `handoff_evidence_summary`. The final evidence gate also requires the aggregate `.all.json` receipt to prove package/archive `html_artifact_ready`, and readiness summaries surface those HTML artifact plus evidence-receipt signals for operators.
 
 The product must support:
 

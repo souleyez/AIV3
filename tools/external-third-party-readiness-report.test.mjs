@@ -197,6 +197,12 @@ test('buildReadinessReport includes final evidence manifest validation when prov
       evidence_manifest_ready: true,
       evidence_manifest_path: 'target/external-third-party-handoff/package.evidence-manifest.json',
       evidence_manifest_sha256: 'c'.repeat(64),
+      evidence_markdown_receipt: {
+        receipt_ready: true,
+        receipt_path: 'target/external-third-party-handoff/package.evidence-manifest.md',
+        receipt_sha256: 'd'.repeat(64),
+        errors: [],
+      },
       manifest_type: 'v3.external_third_party_handoff_evidence_manifest.v1',
       package_name: 'package',
       artifact_count: 9,
@@ -214,11 +220,68 @@ test('buildReadinessReport includes final evidence manifest validation when prov
   assert.equal(report.checks.find((check) => check.key === 'handoff_evidence_ready').passed, true);
   assert.equal(report.handoff_evidence_summary.evidence_manifest_ready, true);
   assert.equal(report.handoff_evidence_summary.evidence_manifest_sha256, 'c'.repeat(64));
+  assert.equal(report.handoff_evidence_summary.evidence_markdown_receipt_ready, true);
+  assert.equal(report.handoff_evidence_summary.evidence_markdown_receipt_sha256, 'd'.repeat(64));
   assert.equal(report.handoff_evidence_summary.artifact_count, 9);
   assert.equal(report.handoff_evidence_summary.html_artifact_summary.package_ready, true);
   assert.equal(report.handoff_evidence_summary.html_artifact_summary.package_template_id, 'third_party_handoff_document');
   assert.equal(report.handoff_evidence_summary.html_artifact_summary.archive_ready, true);
   assert.equal(report.handoff_evidence_summary.html_artifact_summary.archive_template_id, 'third_party_handoff_document');
+});
+
+test('buildReadinessReport fails closed when final evidence markdown receipt is stale', () => {
+  const report = buildReadinessReport({
+    requests: [
+      {
+        bearer_valid: true,
+        signature_valid: true,
+        body_hash_valid: true,
+        requester_sender_present: true,
+        raw_arguments_included: false,
+        contains_forbidden_text: false,
+      },
+    ],
+    callbacks: [
+      {
+        callback_status: 200,
+        response_accepted: true,
+        contains_forbidden_text: false,
+      },
+    ],
+    releasePackagePath: 'target/external-third-party-handoff/package',
+    handoffEvidenceValidation: {
+      evidence_manifest_ready: true,
+      evidence_manifest_path: 'target/external-third-party-handoff/package.evidence-manifest.json',
+      evidence_manifest_sha256: 'c'.repeat(64),
+      manifest_type: 'v3.external_third_party_handoff_evidence_manifest.v1',
+      package_name: 'package',
+      artifact_count: 9,
+      html_artifact_summary: {
+        package_ready: true,
+        package_template_id: 'third_party_handoff_document',
+        archive_ready: true,
+        archive_template_id: 'third_party_handoff_document',
+      },
+      evidence_markdown_receipt: {
+        receipt_ready: false,
+        receipt_path: 'target/external-third-party-handoff/package.evidence-manifest.md',
+        receipt_sha256: 'd'.repeat(64),
+        errors: [
+          {
+            code: 'evidence_markdown_receipt_sha256_mismatch',
+            message: 'evidence markdown receipt SHA256 does not match validation output',
+            path: 'target/external-third-party-handoff/package.evidence-manifest.md',
+          },
+        ],
+      },
+      errors: [],
+    },
+  });
+
+  assert.equal(report.ready_for_customer_sandbox, false);
+  assert.equal(report.checks.find((check) => check.key === 'handoff_evidence_ready').passed, false);
+  assert.equal(report.handoff_evidence_summary.evidence_markdown_receipt_ready, false);
+  assert.deepEqual(report.handoff_evidence_summary.error_codes, ['evidence_markdown_receipt_sha256_mismatch']);
 });
 
 test('buildReadinessReport fails closed when handoff release validation fails', () => {
@@ -447,6 +510,11 @@ test('renderReadinessMarkdown renders operator-facing checklist without raw payl
     handoffEvidenceValidation: {
       evidence_manifest_ready: true,
       evidence_manifest_sha256: 'c'.repeat(64),
+      evidence_markdown_receipt: {
+        receipt_ready: true,
+        receipt_sha256: 'd'.repeat(64),
+        errors: [],
+      },
       artifact_count: 9,
       html_artifact_summary: {
         package_ready: true,
@@ -465,6 +533,7 @@ test('renderReadinessMarkdown renders operator-facing checklist without raw payl
   assert.match(markdown, /Handoff Release Summary/);
   assert.match(markdown, /Aggregate Handoff Summary/);
   assert.match(markdown, /Final Evidence Manifest Summary/);
+  assert.match(markdown, /Evidence Markdown receipt/);
   assert.match(markdown, /Package HTML artifact/);
   assert.match(markdown, /Archive HTML artifact/);
   assert.match(markdown, /Third-Party Handoff Items/);

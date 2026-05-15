@@ -3,7 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { validateExternalHandoffManifest } from './validate-external-handoff.mjs';
 import { validateAll } from './validate-external-handoff-all.mjs';
-import { validateEvidence } from './validate-external-handoff-evidence.mjs';
+import { validateEvidence, validateEvidenceMarkdownReceipt } from './validate-external-handoff-evidence.mjs';
 import { validateRelease } from './validate-external-handoff-release.mjs';
 
 export const DEFAULT_READINESS_CHECKS = [
@@ -242,11 +242,22 @@ function summarizeHandoffEvidenceValidation(validation, packagePath) {
   if (!validation) {
     return null;
   }
+  const receipt = validation.evidence_markdown_receipt || null;
+  const receiptReady = receipt ? receipt.receipt_ready === true : null;
+  const validationErrorCodes = Array.isArray(validation.errors)
+    ? validation.errors.map((error) => error.code).filter(Boolean)
+    : [];
+  const receiptErrorCodes = Array.isArray(receipt?.errors)
+    ? receipt.errors.map((error) => error.code).filter(Boolean)
+    : [];
   return {
     package_root: packagePath || null,
-    evidence_manifest_ready: validation.evidence_manifest_ready === true,
+    evidence_manifest_ready: validation.evidence_manifest_ready === true && receiptReady !== false,
     evidence_manifest_path: validation.evidence_manifest_path || null,
     evidence_manifest_sha256: validation.evidence_manifest_sha256 || null,
+    evidence_markdown_receipt_ready: receiptReady,
+    evidence_markdown_receipt_path: receipt?.receipt_path || null,
+    evidence_markdown_receipt_sha256: receipt?.receipt_sha256 || null,
     manifest_type: validation.manifest_type || null,
     package_name: validation.package_name || null,
     artifact_count: validation.artifact_count || 0,
@@ -256,9 +267,7 @@ function summarizeHandoffEvidenceValidation(validation, packagePath) {
       archive_ready: false,
       archive_template_id: null,
     },
-    error_codes: Array.isArray(validation.errors)
-      ? [...new Set(validation.errors.map((error) => error.code).filter(Boolean))]
-      : [],
+    error_codes: [...new Set([...validationErrorCodes, ...receiptErrorCodes])],
   };
 }
 
@@ -321,6 +330,14 @@ export function renderReadinessMarkdown(report) {
         `- Package: \`${report.handoff_evidence_summary.package_root || 'unknown'}\``,
         `- Ready: ${report.handoff_evidence_summary.evidence_manifest_ready ? 'yes' : 'no'}`,
         `- Evidence manifest SHA256: \`${report.handoff_evidence_summary.evidence_manifest_sha256 || 'unknown'}\``,
+        `- Evidence Markdown receipt: ${
+          report.handoff_evidence_summary.evidence_markdown_receipt_ready === null
+            ? 'not checked'
+            : report.handoff_evidence_summary.evidence_markdown_receipt_ready
+              ? 'yes'
+              : 'no'
+        }`,
+        `- Evidence Markdown SHA256: \`${report.handoff_evidence_summary.evidence_markdown_receipt_sha256 || 'unknown'}\``,
         `- Final artifacts: ${report.handoff_evidence_summary.artifact_count || 0}`,
         `- Package HTML artifact: ${report.handoff_evidence_summary.html_artifact_summary?.package_ready ? 'yes' : 'no'}`,
         `- Archive HTML artifact: ${report.handoff_evidence_summary.html_artifact_summary?.archive_ready ? 'yes' : 'no'}`,
@@ -419,9 +436,24 @@ async function main() {
   const handoffAllValidation = releasePackagePath
     ? validateAll({ packageRootInput: releasePackagePath })
     : null;
-  const handoffEvidenceValidation = releasePackagePath
+  let handoffEvidenceValidation = releasePackagePath
     ? validateEvidence({ packageRootInput: releasePackagePath })
     : null;
+  if (handoffEvidenceValidation) {
+    const evidenceMarkdownPath = args.evidenceMarkdown
+      || path.join(path.dirname(path.resolve(releasePackagePath)), `${path.basename(path.resolve(releasePackagePath))}.evidence-manifest.md`);
+    const evidenceMarkdownReceipt = validateEvidenceMarkdownReceipt({
+      validation: handoffEvidenceValidation,
+      markdownPathInput: evidenceMarkdownPath,
+    });
+    handoffEvidenceValidation = {
+      ...handoffEvidenceValidation,
+      evidence_manifest_ready: handoffEvidenceValidation.evidence_manifest_ready === true && evidenceMarkdownReceipt.receipt_ready === true,
+      evidence_markdown_receipt: evidenceMarkdownReceipt,
+      error_codes: [...handoffEvidenceValidation.error_codes, ...evidenceMarkdownReceipt.error_codes],
+      errors: [...handoffEvidenceValidation.errors, ...evidenceMarkdownReceipt.errors],
+    };
+  }
   const requestsPayload = args.requests
     ? readJsonFile(args.requests, { requests: [] })
     : readJsonText(process.env.EXTERNAL_THIRD_PARTY_REQUESTS_JSON, { requests: [] });
