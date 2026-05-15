@@ -34,6 +34,7 @@ pub const DEFAULT_SELECTED_SLIDES_MANIFEST_FILE_NAME: &str = "selected_slides_ma
 pub const DEFAULT_SLIDE_RECTANGLES_MANIFEST_FILE_NAME: &str = "slide_rectangles_manifest.json";
 pub const DEFAULT_SUBTITLE_PAGE_MAP_FILE_NAME: &str = "subtitle_page_map.json";
 pub const DEFAULT_SLIDE_NOTES_ARTIFACT_FILE_NAME: &str = "slide_notes.md";
+pub const DEFAULT_VIDEO_SLIDES_MARKDOWN_FILE_NAME: &str = "video_slides.md";
 pub const DEFAULT_PPTX_BUILD_PLAN_FILE_NAME: &str = "pptx_build_plan.json";
 pub const DEFAULT_VIDEO_SLIDES_PPTX_FILE_NAME: &str = "video_slides_screenshot_based.pptx";
 const LOW_CONFIDENCE_VIDEO_EVIDENCE_THRESHOLD: f64 = 0.65;
@@ -45,6 +46,7 @@ const VIDEO_DELIVERABLE_PACKAGE_REQUIRED_KINDS: &[&str] = &[
     "extraction_artifacts_manifest",
     "slide_rectangles_manifest",
     "slide_notes",
+    "video_slides_markdown",
     "subtitle_page_map",
 ];
 const VIDEO_PUBLISHED_DELIVERABLE_REQUIRED_KINDS: &[&str] = &[
@@ -55,6 +57,7 @@ const VIDEO_PUBLISHED_DELIVERABLE_REQUIRED_KINDS: &[&str] = &[
     "extraction_artifacts_manifest",
     "slide_rectangles_manifest",
     "slide_notes",
+    "video_slides_markdown",
     "subtitle_page_map",
 ];
 
@@ -717,6 +720,12 @@ fn write_video_slide_candidate_review_files(
         render_selected_slide_notes_markdown(document, &selected_slides_manifest),
     )
     .map_err(|error| error.to_string())?;
+    let video_slides_markdown_path = artifacts_dir.join(DEFAULT_VIDEO_SLIDES_MARKDOWN_FILE_NAME);
+    fs::write(
+        &video_slides_markdown_path,
+        render_video_slides_markdown(document, &selected_slides_manifest),
+    )
+    .map_err(|error| error.to_string())?;
 
     let pptx_build_plan_path = artifacts_dir.join(DEFAULT_PPTX_BUILD_PLAN_FILE_NAME);
     let pptx_output_path = artifacts_dir.join(DEFAULT_VIDEO_SLIDES_PPTX_FILE_NAME);
@@ -920,6 +929,12 @@ fn write_video_slide_candidate_review_files(
         selected_slides_artifact,
         slide_rectangles_artifact,
         video_generated_artifact_file(document, "slide_notes", "text/markdown", &slide_notes_path),
+        video_generated_artifact_file(
+            document,
+            "video_slides_markdown",
+            "text/markdown",
+            &video_slides_markdown_path,
+        ),
         video_generated_artifact_file(
             document,
             "pptx_build_plan",
@@ -2420,6 +2435,113 @@ fn render_selected_slide_notes_markdown(
     output
 }
 
+fn render_video_slides_markdown(document: &Document, selected_slides_manifest: &Value) -> String {
+    let selected_candidates = selected_slides_manifest
+        .get("selected_candidates")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut output = format!("# Video Slides: {}\n\n", document.title);
+    output.push_str("This Markdown deck mirrors the screenshot-based PPTX using only V3-observed evidence. It is safe to share for review because local frame paths, source URLs, tokens, and provider secrets are not included.\n\n");
+    output.push_str("## Package Summary\n\n");
+    let selected_count = selected_slides_manifest
+        .get("selected_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(selected_candidates.len() as u64);
+    let rectangle_mode = selected_slides_manifest
+        .get("rectangle_extraction_mode")
+        .and_then(Value::as_str)
+        .unwrap_or("waiting_for_selection");
+    let dedupe_status = selected_slides_manifest
+        .get("dedupe_status")
+        .and_then(Value::as_str)
+        .unwrap_or("waiting_for_selection");
+    output.push_str(&format!(
+        "- Selected slides: {selected_count}\n- Markdown source: selected slide manifest\n- PPTX companion: `{}`\n- Rectangle mode: {rectangle_mode}\n- Dedupe status: {dedupe_status}\n- Review policy: every generated slide still requires human or model-assisted review before customer delivery.\n\n",
+        DEFAULT_VIDEO_SLIDES_PPTX_FILE_NAME
+    ));
+
+    output.push_str("## Slides\n\n");
+    if selected_candidates.is_empty() {
+        output.push_str("- No selected slides yet. Fill `ppt_keep_list_template.json` from the numbered contact sheet before generating the final Markdown/PPTX deck.\n");
+        return output;
+    }
+
+    for (index, candidate) in selected_candidates.iter().enumerate() {
+        let slide_number = index + 1;
+        let candidate_index = candidate
+            .get("candidate_index")
+            .and_then(Value::as_u64)
+            .unwrap_or(slide_number as u64);
+        let file_name = candidate
+            .get("file_name")
+            .and_then(Value::as_str)
+            .map(video_safe_evidence_text)
+            .unwrap_or_else(|| "frame".to_string());
+        let timestamp = candidate
+            .get("timestamp_label")
+            .and_then(Value::as_str)
+            .map(video_safe_evidence_text)
+            .unwrap_or_else(|| "unknown".to_string());
+        output.push_str(&format!(
+            "### Slide {slide_number}: candidate {candidate_index}\n\n"
+        ));
+        output.push_str(&format!(
+            "- Source frame: `{file_name}`\n- Frame timestamp: {timestamp}\n"
+        ));
+        if let Some(anchor) = candidate
+            .get("contact_sheet_anchor")
+            .and_then(Value::as_str)
+            .map(video_safe_evidence_text)
+        {
+            output.push_str(&format!("- Contact sheet anchor: `{anchor}`\n"));
+        }
+        if let Some(rectangle) = candidate.get("slide_rectangle") {
+            let status = rectangle
+                .get("rectangle_extraction_status")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
+            let mode = rectangle
+                .get("rectangle_extraction_mode")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
+            output.push_str(&format!("- Crop status: {status} / {mode}\n"));
+            if let Some(crop_box) = rectangle.get("crop_box") {
+                output.push_str(&format!(
+                    "- Crop box: x={}, y={}, width={}, height={} (relative)\n",
+                    video_crop_box_value_label(crop_box, "x"),
+                    video_crop_box_value_label(crop_box, "y"),
+                    video_crop_box_value_label(crop_box, "width"),
+                    video_crop_box_value_label(crop_box, "height")
+                ));
+            }
+        }
+
+        let transcript_segments = candidate
+            .get("transcript_segments")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        if transcript_segments.is_empty() {
+            output.push_str(
+                "- Narration: no aligned transcript segment is available for this slide yet.\n\n",
+            );
+        } else {
+            output.push_str("\nNarration evidence:\n\n");
+            for segment in transcript_segments {
+                let text = video_item_text(&segment, &["text", "content", "summary"])
+                    .map(|text| video_safe_evidence_text(&text))
+                    .unwrap_or_else(|| "unknown".to_string());
+                let range = video_time_range_label(&segment);
+                output.push_str(&format!("- {}{}\n", optional_time_prefix(&range), text));
+            }
+            output.push('\n');
+        }
+    }
+
+    output
+}
+
 fn video_crop_box_value_label(crop_box: &Value, key: &str) -> String {
     crop_box
         .get(key)
@@ -3270,6 +3392,7 @@ pub fn video_extraction_output_artifact_from_output(
                 "extraction_artifacts_manifest",
                 "ppt_outline",
                 "slide_notes",
+                "video_slides_markdown",
                 "subtitle_page_map",
                 "transcript_text",
             ],
@@ -3283,7 +3406,7 @@ pub fn video_extraction_output_artifact_from_output(
                 "extraction_artifacts_manifest",
             ],
         ),
-        "final_outputs": video_artifact_files_by_kinds(&files, &["pptx"]),
+        "final_outputs": video_artifact_files_by_kinds(&files, &["pptx", "video_slides_markdown"]),
         "review_outputs": video_artifact_files_by_kinds(
             &files,
             &[
@@ -3855,6 +3978,7 @@ fn video_ready_file_kinds(files: &[Value]) -> Vec<String> {
                     | "slide_rectangles_manifest"
                     | "ppt_outline"
                     | "slide_notes"
+                    | "video_slides_markdown"
                     | "subtitle_page_map"
                     | "transcript_text"
                     | "source_text"
@@ -3873,7 +3997,7 @@ fn video_artifact_group_counts(files: &[Value]) -> Value {
             "published_version_history",
             "extraction_artifacts_manifest",
         ]).len(),
-        "final_outputs": video_artifact_files_by_kinds(files, &["pptx"]).len(),
+        "final_outputs": video_artifact_files_by_kinds(files, &["pptx", "video_slides_markdown"]).len(),
         "review_outputs": video_artifact_files_by_kinds(files, &[
             "slide_image_candidates",
             "contact_sheet_plan",
@@ -3970,6 +4094,9 @@ fn video_extraction_completion_next_actions(
     }
     if file_kinds.contains("slide_notes") {
         actions.push(json!("review_slide_notes"));
+    }
+    if file_kinds.contains("video_slides_markdown") {
+        actions.push(json!("review_video_slides_markdown"));
     }
     if file_kinds.contains("subtitle_page_map") {
         actions.push(json!("review_subtitle_page_map"));
@@ -4285,6 +4412,7 @@ fn video_deliverable_status(generated_artifacts: &Value) -> Value {
     let has_extraction_artifacts_manifest =
         artifact_kinds.contains("extraction_artifacts_manifest");
     let has_slide_notes = artifact_kinds.contains("slide_notes");
+    let has_video_slides_markdown = artifact_kinds.contains("video_slides_markdown");
     let has_slide_rectangles_manifest = artifact_kinds.contains("slide_rectangles_manifest");
     let has_subtitle_page_map = artifact_kinds.contains("subtitle_page_map");
     let mut warnings = video_generated_artifact_quality_warnings(
@@ -4345,6 +4473,7 @@ fn video_deliverable_status(generated_artifacts: &Value) -> Value {
         "has_extraction_artifacts_manifest": has_extraction_artifacts_manifest,
         "has_slide_rectangles_manifest": has_slide_rectangles_manifest,
         "has_slide_notes": has_slide_notes,
+        "has_video_slides_markdown": has_video_slides_markdown,
         "has_subtitle_page_map": has_subtitle_page_map,
         "has_pptx": has_pptx,
         "generated_artifacts_status": generated_artifacts_status,
@@ -4790,7 +4919,7 @@ fn video_final_deliverables_manifest(
             "published_version_history",
             "extraction_artifacts_manifest",
         ]),
-        "final_outputs": video_public_artifact_files_by_kinds(files, &["pptx"]),
+        "final_outputs": video_public_artifact_files_by_kinds(files, &["pptx", "video_slides_markdown"]),
         "review_outputs": video_public_artifact_files_by_kinds(files, &[
             "slide_image_candidates",
             "contact_sheet_plan",
@@ -4866,6 +4995,7 @@ fn video_published_deliverable_manifest(
             "extraction_artifacts_manifest",
             "slide_rectangles_manifest",
             "slide_notes",
+            "video_slides_markdown",
             "subtitle_page_map",
         ]),
         "manifest_outputs": video_public_artifact_files_by_kinds(files, &[
@@ -4874,7 +5004,7 @@ fn video_published_deliverable_manifest(
             "published_version_history",
             "extraction_artifacts_manifest",
         ]),
-        "final_outputs": video_public_artifact_files_by_kinds(files, &["pptx"]),
+        "final_outputs": video_public_artifact_files_by_kinds(files, &["pptx", "video_slides_markdown"]),
         "review_outputs": video_public_artifact_files_by_kinds(files, &[
             "slide_image_candidates",
             "contact_sheet_plan",
@@ -6396,6 +6526,13 @@ mod tests {
                 "path": "generated_artifacts/slide_notes.md",
                 "uri": format!("artifact://video-{}-slide-notes", document.id)
             }, {
+                "artifact_kind": "video_slides_markdown",
+                "artifact_id": format!("video-{}-video-slides-markdown", document.id),
+                "title": "video slides markdown",
+                "format": "text/markdown",
+                "path": "generated_artifacts/video_slides.md",
+                "uri": format!("artifact://video-{}-video-slides-markdown", document.id)
+            }, {
                 "artifact_kind": "subtitle_page_map",
                 "artifact_id": format!("video-{}-subtitle-page-map", document.id),
                 "title": "subtitle page map",
@@ -6456,6 +6593,10 @@ mod tests {
             json!(true)
         );
         assert_eq!(
+            output_artifact["deliverable_status"]["has_video_slides_markdown"],
+            json!(true)
+        );
+        assert_eq!(
             output_artifact["deliverable_status"]["has_subtitle_page_map"],
             json!(true)
         );
@@ -6513,11 +6654,11 @@ mod tests {
         );
         assert_eq!(
             output_artifact["deliverable_package"]["required_file_count"],
-            json!(6)
+            json!(7)
         );
         assert_eq!(
             output_artifact["deliverable_package"]["ready_required_file_count"],
-            json!(6)
+            json!(7)
         );
         assert!(output_artifact["deliverable_package"]["required_files"]
             .as_array()
@@ -6552,6 +6693,16 @@ mod tests {
             .expect("final outputs")
             .iter()
             .any(|file| file["artifact_kind"] == json!("pptx")));
+        assert!(output_artifact["final_outputs"]
+            .as_array()
+            .expect("final outputs")
+            .iter()
+            .any(|file| file["artifact_kind"] == json!("video_slides_markdown")));
+        assert!(output_artifact["final_outputs"]
+            .as_array()
+            .expect("final outputs")
+            .iter()
+            .any(|file| file["artifact_kind"] == json!("video_slides_markdown")));
         assert!(output_artifact["review_outputs"]
             .as_array()
             .expect("review outputs")
@@ -6615,6 +6766,12 @@ mod tests {
                 "title": "slide notes",
                 "format": "text/markdown",
                 "path": "generated_artifacts/slide_notes.md"
+            }, {
+                "artifact_kind": "video_slides_markdown",
+                "artifact_id": format!("video-{}-video-slides-markdown", document.id),
+                "title": "video slides markdown",
+                "format": "text/markdown",
+                "path": "generated_artifacts/video_slides.md"
             }]
         });
         let output = extract_video_ppt_output_with_artifacts(
@@ -6655,6 +6812,10 @@ mod tests {
             json!(true)
         );
         assert_eq!(
+            follow_up["deliverable_status"]["has_video_slides_markdown"],
+            json!(true)
+        );
+        assert_eq!(
             follow_up["deliverable_package"]["lifecycle_state"],
             json!("downloadable_not_published")
         );
@@ -6683,6 +6844,10 @@ mod tests {
             .as_array()
             .expect("next actions")
             .contains(&json!("review_slide_notes")));
+        assert!(follow_up["next_actions"]
+            .as_array()
+            .expect("next actions")
+            .contains(&json!("review_video_slides_markdown")));
         assert!(follow_up["next_actions"]
             .as_array()
             .expect("next actions")
@@ -7425,6 +7590,7 @@ mod tests {
         assert!(final_manifest.contains("review_ready"));
         assert!(final_manifest.contains("review_outputs"));
         assert!(final_manifest.contains("slide_notes"));
+        assert!(final_manifest.contains("video_slides_markdown"));
         let generated_artifacts = json!({
             "status": "completed",
             "files": files.clone()
@@ -7594,6 +7760,8 @@ mod tests {
         assert!(final_manifest.contains("manifest_outputs"));
         assert!(final_manifest.contains("final_outputs"));
         assert!(final_manifest.contains("slide_notes"));
+        assert!(final_manifest.contains("video_slides_markdown"));
+        assert!(final_manifest.contains(DEFAULT_VIDEO_SLIDES_MARKDOWN_FILE_NAME));
         assert!(final_manifest.contains(DEFAULT_VIDEO_SLIDES_PPTX_FILE_NAME));
         assert!(final_manifest.contains("speaker_notes_metadata_only"));
         assert!(final_manifest.contains("full_frame_rectangle_fallback"));
@@ -7620,6 +7788,19 @@ mod tests {
         assert!(slide_notes.contains("Review required: yes"));
         assert!(slide_notes.contains("Internal frame path: [redacted]"));
         assert!(!slide_notes.contains(&raw_frames_dir.display().to_string()));
+        let video_slides_markdown_path = files
+            .iter()
+            .find(|file| file["artifact_kind"] == json!("video_slides_markdown"))
+            .and_then(|file| file["path"].as_str())
+            .expect("video slides markdown path");
+        let video_slides_markdown =
+            fs::read_to_string(video_slides_markdown_path).expect("video slides markdown");
+        assert!(video_slides_markdown.contains("Video Slides"));
+        assert!(video_slides_markdown.contains("PPTX companion"));
+        assert!(video_slides_markdown.contains("candidate 2"));
+        assert!(video_slides_markdown.contains("Source frame: `frame_000002.jpg`"));
+        assert!(video_slides_markdown.contains("Crop status: promoted_full_frame_fallback"));
+        assert!(!video_slides_markdown.contains(&raw_frames_dir.display().to_string()));
     }
 
     #[test]
@@ -8258,7 +8439,7 @@ mod tests {
         );
         let audit_counts = &output_artifact["completion_audit"]["artifact_group_counts"];
         assert_eq!(audit_counts["manifest_outputs"], json!(4));
-        assert_eq!(audit_counts["final_outputs"], json!(1));
+        assert_eq!(audit_counts["final_outputs"], json!(2));
         assert!(audit_counts["review_outputs"].as_u64().unwrap_or(0) >= 1);
         assert!(audit_counts["evidence_outputs"].as_u64().unwrap_or(0) >= 1);
         assert_eq!(
@@ -8314,6 +8495,13 @@ mod tests {
             DEFAULT_VIDEO_SLIDES_PPTX_FILE_NAME,
         );
         assert_public_manifest_file_entry(
+            final_manifest_json["final_outputs"]
+                .as_array()
+                .expect("final outputs"),
+            "video_slides_markdown",
+            DEFAULT_VIDEO_SLIDES_MARKDOWN_FILE_NAME,
+        );
+        assert_public_manifest_file_entry(
             final_manifest_json["review_outputs"]
                 .as_array()
                 .expect("review outputs"),
@@ -8366,6 +8554,13 @@ mod tests {
                 .expect("published files"),
             "slide_rectangles_manifest",
             DEFAULT_SLIDE_RECTANGLES_MANIFEST_FILE_NAME,
+        );
+        assert_public_manifest_file_entry(
+            published_manifest_json["published_files"]
+                .as_array()
+                .expect("published files"),
+            "video_slides_markdown",
+            DEFAULT_VIDEO_SLIDES_MARKDOWN_FILE_NAME,
         );
         assert_public_manifest_file_entry(
             published_manifest_json["published_files"]
@@ -8439,6 +8634,11 @@ mod tests {
             extraction_files,
             "slide_notes",
             DEFAULT_SLIDE_NOTES_ARTIFACT_FILE_NAME,
+        );
+        assert_public_manifest_file_entry(
+            extraction_files,
+            "video_slides_markdown",
+            DEFAULT_VIDEO_SLIDES_MARKDOWN_FILE_NAME,
         );
         assert_public_manifest_file_entry(
             extraction_files,

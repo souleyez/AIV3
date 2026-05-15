@@ -47,6 +47,12 @@ const REQUIRED_FILES = [
     group: "review_outputs",
   },
   {
+    kind: "video_slides_markdown",
+    fileName: "video_slides.md",
+    statusFlag: "has_video_slides_markdown",
+    group: "final_outputs",
+  },
+  {
     kind: "subtitle_page_map",
     fileName: "subtitle_page_map.json",
     statusFlag: "has_subtitle_page_map",
@@ -194,6 +200,10 @@ export function validateVideoDeliverables(inputPath) {
   const slideNotes = files.find((file) => file.kind === "slide_notes");
   if (slideNotes?.exists) {
     validateRedactedTextFile(slideNotes.path, "slide_notes", errors);
+  }
+  const videoSlidesMarkdown = files.find((file) => file.kind === "video_slides_markdown");
+  if (videoSlidesMarkdown?.exists) {
+    validateRedactedTextFile(videoSlidesMarkdown.path, "video_slides_markdown", errors);
   }
 
   return {

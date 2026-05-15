@@ -75,6 +75,7 @@ function createJumpHostVideoDeliverablesFixture(tempRoot) {
 
   fs.writeFileSync(path.join(artifactsDir, "video_slides_screenshot_based.pptx"), minimalPptxFixtureBytes());
   fs.writeFileSync(path.join(artifactsDir, "slide_notes.md"), "# Slide Notes\n\nAligned transcript is ready.\n");
+  fs.writeFileSync(path.join(artifactsDir, "video_slides.md"), "# Video Slides\n\n## Slide 1\n\nAligned transcript is ready.\n");
   fs.writeFileSync(
     path.join(artifactsDir, "subtitle_page_map.json"),
     JSON.stringify(
@@ -104,6 +105,7 @@ function createJumpHostVideoDeliverablesFixture(tempRoot) {
     "extraction_artifacts_manifest",
     "slide_rectangles_manifest",
     "slide_notes",
+    "video_slides_markdown",
     "subtitle_page_map",
   ].map((kind) => ({
     artifact_kind: kind,
@@ -126,12 +128,13 @@ function createJumpHostVideoDeliverablesFixture(tempRoot) {
           has_extraction_artifacts_manifest: true,
           has_slide_rectangles_manifest: true,
           has_slide_notes: true,
+          has_video_slides_markdown: true,
           has_subtitle_page_map: true,
         },
         manifest_outputs: files.filter((file) =>
           ["final_deliverables_manifest", "published_deliverable_manifest", "published_version_history", "extraction_artifacts_manifest"].includes(file.artifact_kind),
         ),
-        final_outputs: files.filter((file) => file.artifact_kind === "pptx"),
+        final_outputs: files.filter((file) => ["pptx", "video_slides_markdown"].includes(file.artifact_kind)),
         review_outputs: files.filter((file) =>
           ["slide_rectangles_manifest", "slide_notes"].includes(file.artifact_kind),
         ),
@@ -188,6 +191,7 @@ function createJumpHostVideoDeliverablesFixture(tempRoot) {
           has_extraction_artifacts_manifest: true,
           has_slide_rectangles_manifest: true,
           has_slide_notes: true,
+          has_video_slides_markdown: true,
           has_subtitle_page_map: true,
         },
         published_files: files,
@@ -244,6 +248,7 @@ function fileNameForKind(kind) {
     extraction_artifacts_manifest: "extraction_artifacts_manifest.json",
     slide_rectangles_manifest: "slide_rectangles_manifest.json",
     slide_notes: "slide_notes.md",
+    video_slides_markdown: "video_slides.md",
     subtitle_page_map: "subtitle_page_map.json",
   }[kind];
 }

@@ -36,6 +36,7 @@ The media-worker test builds a controlled sample path in a temporary directory. 
 - `extraction_artifacts_manifest.json`
 - `slide_rectangles_manifest.json`
 - `slide_notes.md`
+- `video_slides.md`
 - `subtitle_page_map.json`
 - PPTX ZIP magic and required OOXML entries such as `[Content_Types].xml`, `ppt/presentation.xml`, and `ppt/slides/slide1.xml`
 - final manifest status flags and output groups
@@ -84,6 +85,7 @@ ok published_version_history published_version_history.json ...
 ok extraction_artifacts_manifest extraction_artifacts_manifest.json ...
 ok slide_rectangles_manifest slide_rectangles_manifest.json ...
 ok slide_notes slide_notes.md ...
+ok video_slides_markdown video_slides.md ...
 ok subtitle_page_map subtitle_page_map.json ...
 ```
 
@@ -114,7 +116,7 @@ The validator now rejects PPTX files that only have ZIP magic bytes and rejects 
 
 ## Published Version Manifest Follow-Up
 
-The public deliverable contract now also requires `published_deliverable_manifest.json` and `published_version_history.json` for complete video/PPT packages. The published manifest records `manifest_type=v3.video_ppt_published_deliverable.v1`, `lifecycle_state=published_version_ready`, `immutable_version=true`, `version_no=1`, and redacted file entries for the PPTX, final manifest, extraction manifest, slide notes, subtitle map, published manifest, and version history.
+The public deliverable contract now also requires `published_deliverable_manifest.json` and `published_version_history.json` for complete video/PPT packages. The published manifest records `manifest_type=v3.video_ppt_published_deliverable.v1`, `lifecycle_state=published_version_ready`, `immutable_version=true`, `version_no=1`, and redacted file entries for the PPTX, final manifest, extraction manifest, slide notes, `video_slides.md`, subtitle map, published manifest, and version history.
 
 `published_version_history.json` records `manifest_type=v3.video_ppt_published_version_history.v1`, `status=history_ready`, `history_scope=generated_artifact_workspace`, latest immutable `v1`, the `published_deliverable_manifest.json` pointer, and redacted file entries for the complete published package. Durable published-version storage promotion remains a later slice; this file gives each generated package a portable history record now.
 
@@ -133,3 +135,7 @@ The public deliverable contract now also requires `slide_rectangles_manifest.jso
 Generated PPTX slides apply detector crop boxes through DrawingML `a:srcRect`. Full-frame fallback crops intentionally omit `a:srcRect` and keep the previous whole-frame rendering behavior.
 
 This is a data-quality gate and review contract, not a claim that visual slide-boundary detection is complete. A later slice should replace the simple background-contrast detector with a stronger visual detector. Exact/visual duplicate removal is already part of the public review contract: when selected candidates are removed, summaries now surface `selected_slide_duplicates_removed` and a `review_slide_dedupe_manifest` follow-up action.
+
+## Markdown Deck Follow-Up
+
+Complete video/PPT packages now also include `video_slides.md` as a final-output Markdown deck next to the screenshot PPTX. It mirrors the selected slide order, source frame file names, contact-sheet anchors, crop status, relative crop box, and available aligned narration without exposing local paths or source URLs. The validator treats this file as a required redacted Markdown deliverable so third parties can inspect the package without opening PPTX first.

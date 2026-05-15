@@ -11,7 +11,7 @@ test("accepts a complete video deliverables directory", () => {
 
   assert.equal(result.ok, true);
   assert.deepEqual(result.errors, []);
-  assert.equal(result.files.length, 8);
+  assert.equal(result.files.length, 9);
   assert.ok(result.files.every((file) => file.exists));
 });
 
@@ -200,6 +200,19 @@ test("rejects unredacted local paths in slide notes", () => {
   assert.ok(result.errors.some((error) => error.code === "unredacted_local_path_or_token" && error.kind === "slide_notes"));
 });
 
+test("rejects unredacted local paths in video slides markdown", () => {
+  const sessionDir = createCompleteDeliverables();
+  fs.writeFileSync(
+    path.join(sessionDir, "generated_artifacts", "video_slides.md"),
+    "Source frame: C:\\private\\video\\frame_000001.jpg",
+  );
+
+  const result = validateVideoDeliverables(sessionDir);
+
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.some((error) => error.code === "unredacted_local_path_or_token" && error.kind === "video_slides_markdown"));
+});
+
 function createCompleteDeliverables() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "aidp-v3-video-deliverables-test-"));
   const artifactsDir = path.join(root, "generated_artifacts");
@@ -207,6 +220,7 @@ function createCompleteDeliverables() {
 
   fs.writeFileSync(path.join(artifactsDir, "video_slides_screenshot_based.pptx"), minimalPptxFixtureBytes());
   fs.writeFileSync(path.join(artifactsDir, "slide_notes.md"), "# Slide Notes\n\nAligned transcript is ready.\n");
+  fs.writeFileSync(path.join(artifactsDir, "video_slides.md"), "# Video Slides\n\n## Slide 1\n\nAligned transcript is ready.\n");
   fs.writeFileSync(
     path.join(artifactsDir, "subtitle_page_map.json"),
     JSON.stringify(
@@ -236,6 +250,7 @@ function createCompleteDeliverables() {
     "extraction_artifacts_manifest",
     "slide_rectangles_manifest",
     "slide_notes",
+    "video_slides_markdown",
     "subtitle_page_map",
   ].map((kind) => ({
     artifact_kind: kind,
@@ -258,12 +273,13 @@ function createCompleteDeliverables() {
           has_extraction_artifacts_manifest: true,
           has_slide_rectangles_manifest: true,
           has_slide_notes: true,
+          has_video_slides_markdown: true,
           has_subtitle_page_map: true,
         },
         manifest_outputs: files.filter((file) =>
           ["final_deliverables_manifest", "published_deliverable_manifest", "published_version_history", "extraction_artifacts_manifest"].includes(file.artifact_kind),
         ),
-        final_outputs: files.filter((file) => file.artifact_kind === "pptx"),
+        final_outputs: files.filter((file) => ["pptx", "video_slides_markdown"].includes(file.artifact_kind)),
         review_outputs: files.filter((file) =>
           ["slide_rectangles_manifest", "slide_notes"].includes(file.artifact_kind),
         ),
@@ -320,6 +336,7 @@ function createCompleteDeliverables() {
           has_extraction_artifacts_manifest: true,
           has_slide_rectangles_manifest: true,
           has_slide_notes: true,
+          has_video_slides_markdown: true,
           has_subtitle_page_map: true,
         },
         published_files: files,
@@ -376,6 +393,7 @@ function fileNameForKind(kind) {
     extraction_artifacts_manifest: "extraction_artifacts_manifest.json",
     slide_rectangles_manifest: "slide_rectangles_manifest.json",
     slide_notes: "slide_notes.md",
+    video_slides_markdown: "video_slides.md",
     subtitle_page_map: "subtitle_page_map.json",
   }[kind];
 }
