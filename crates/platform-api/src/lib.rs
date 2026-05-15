@@ -10508,6 +10508,27 @@ async fn continue_assistant_run(
     let current_user_id = current_auth_user_id(&state, &headers).await?;
     let run = load_visible_assistant_run_for_user(&state, run_id, current_user_id).await?;
 
+    let response = continue_assistant_run_loaded(
+        &state,
+        run_id,
+        run,
+        request,
+        &active_secret_binding_ids,
+        current_user_id,
+    )
+    .await?;
+
+    Ok((StatusCode::CREATED, Json(response)))
+}
+
+async fn continue_assistant_run_loaded(
+    state: &AppState,
+    run_id: AssistantRunId,
+    run: AssistantRun,
+    request: ContinueAssistantRunRequest,
+    active_secret_binding_ids: &[SecretBindingId],
+    current_user_id: Option<UserId>,
+) -> std::result::Result<ContinueAssistantRunResponse, ApiError> {
     let continue_prompt = request
         .prompt
         .as_deref()
@@ -10535,7 +10556,7 @@ async fn continue_assistant_run(
         run.evidence_state.clone()
     } else {
         build_assistant_run_evidence_state(
-            &state,
+            state,
             &selected_scope,
             &continue_prompt,
             run.local_thread_id.as_deref(),
@@ -10567,7 +10588,7 @@ async fn continue_assistant_run(
     let react_outcome = if react_enabled {
         Some(
             run_assistant_run_react_for_continue(
-                &state,
+                state,
                 &run,
                 &request,
                 &continue_prompt,
@@ -10804,20 +10825,212 @@ async fn continue_assistant_run(
     let evidence_state = updated_run.evidence_state.clone();
     let run_view = to_assistant_run_view(updated_run);
 
-    Ok((
-        StatusCode::CREATED,
-        Json(ContinueAssistantRunResponse {
-            run: run_view,
-            assistant_message,
-            runtime: runtime_manifest,
-            event: to_assistant_run_event_view(event),
-            selected_scope,
-            evidence_state,
-            execution_trail,
-            output_artifacts,
-            required_confirmations: Vec::new(),
-        }),
-    ))
+    Ok(ContinueAssistantRunResponse {
+        run: run_view,
+        assistant_message,
+        runtime: runtime_manifest,
+        event: to_assistant_run_event_view(event),
+        selected_scope,
+        evidence_state,
+        execution_trail,
+        output_artifacts,
+        required_confirmations: Vec::new(),
+    })
+}
+
+pub async fn consume_assistant_run_model_completion_turn_dispatch(
+    state: &AppState,
+    dispatch_request: &Value,
+) -> std::result::Result<Value, ApiError> {
+    if dispatch_request.get("kind").and_then(Value::as_str)
+        != Some("assistant_run_model_completion_turn_dispatch_request")
+    {
+        return Err(ApiError::bad_request(
+            "invalid_model_completion_turn_dispatch",
+            "dispatch request kind is not supported".to_string(),
+        ));
+    }
+    if dispatch_request
+        .get("dispatch_target")
+        .and_then(Value::as_str)
+        != Some("continue_assistant_run")
+    {
+        return Err(ApiError::bad_request(
+            "invalid_model_completion_turn_dispatch_target",
+            "dispatch request target must be continue_assistant_run".to_string(),
+        ));
+    }
+    let idempotency_key = dispatch_request
+        .get("idempotency_key")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            ApiError::bad_request(
+                "missing_model_completion_turn_idempotency_key",
+                "dispatch request requires idempotency_key".to_string(),
+            )
+        })?;
+    let run_id = dispatch_request
+        .get("assistant_run_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            ApiError::bad_request(
+                "missing_model_completion_turn_assistant_run_id",
+                "dispatch request requires assistant_run_id".to_string(),
+            )
+        })
+        .and_then(parse_assistant_run_id)?;
+
+    let events = state
+        .storage
+        .assistant_runs()
+        .list_events(state.tenant_id, run_id)
+        .await
+        .map_err(ApiError::from_storage)?;
+    if let Some(consumed_event) =
+        assistant_run_model_completion_turn_consumed_event(&events, idempotency_key)
+    {
+        return Ok(json!({
+            "status": "already_consumed",
+            "assistant_run_id": run_id,
+            "idempotency_key": idempotency_key,
+            "consumed_event_id": consumed_event.id,
+            "consumed_sequence_no": consumed_event.sequence_no,
+            "no_host_composed_answer": true,
+        }));
+    }
+
+    let run = state
+        .storage
+        .assistant_runs()
+        .get_by_id(state.tenant_id, run_id)
+        .await
+        .map_err(ApiError::from_storage)?
+        .ok_or_else(|| assistant_run_not_found_error(run_id))?;
+    let current_user_id = run.user_id;
+    let continue_request =
+        assistant_run_continue_request_from_completion_dispatch(dispatch_request)?;
+    let now = Utc::now();
+    state
+        .storage
+        .assistant_runs()
+        .append_event(
+            state.tenant_id,
+            run_id,
+            &NewAssistantRunEvent {
+                event_name: "assistant_run.model_completion_turn_consuming".to_string(),
+                payload: json!({
+                    "idempotency_key": idempotency_key,
+                    "dispatch_target": "continue_assistant_run",
+                    "entrypoint": dispatch_request
+                        .get("entrypoint")
+                        .cloned()
+                        .unwrap_or_else(|| json!("assistant_run_background_completion")),
+                    "source_event": dispatch_request
+                        .get("source_event")
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                    "document_id": dispatch_request
+                        .get("document_id")
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                    "no_host_composed_answer": true,
+                }),
+                created_at: now,
+            },
+        )
+        .await
+        .map_err(ApiError::from_storage)?;
+
+    let response =
+        continue_assistant_run_loaded(state, run_id, run, continue_request, &[], current_user_id)
+            .await?;
+
+    let consumed_event = state
+        .storage
+        .assistant_runs()
+        .append_event(
+            state.tenant_id,
+            run_id,
+            &NewAssistantRunEvent {
+                event_name: "assistant_run.model_completion_turn_consumed".to_string(),
+                payload: json!({
+                    "status": "consumed",
+                    "idempotency_key": idempotency_key,
+                    "dispatch_target": "continue_assistant_run",
+                    "assistant_run_id": run_id,
+                    "continued_event_id": response.event.id,
+                    "continued_sequence_no": response.event.sequence_no,
+                    "assistant_message_chars": response.assistant_message.content.chars().count(),
+                    "no_host_composed_answer": true,
+                }),
+                created_at: Utc::now(),
+            },
+        )
+        .await
+        .map_err(ApiError::from_storage)?;
+
+    Ok(json!({
+        "status": "consumed",
+        "assistant_run_id": run_id,
+        "idempotency_key": idempotency_key,
+        "continued_event_id": response.event.id,
+        "continued_sequence_no": response.event.sequence_no,
+        "consumed_event_id": consumed_event.id,
+        "consumed_sequence_no": consumed_event.sequence_no,
+        "assistant_message_chars": response.assistant_message.content.chars().count(),
+        "no_host_composed_answer": true,
+    }))
+}
+
+fn assistant_run_continue_request_from_completion_dispatch(
+    dispatch_request: &Value,
+) -> std::result::Result<ContinueAssistantRunRequest, ApiError> {
+    let continue_request = dispatch_request
+        .get("continue_request")
+        .filter(|value| value.is_object())
+        .ok_or_else(|| {
+            ApiError::bad_request(
+                "missing_model_completion_turn_continue_request",
+                "dispatch request requires continue_request".to_string(),
+            )
+        })?;
+    let prompt = continue_request
+        .get("prompt")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+        .or_else(|| {
+            Some("后台视频/PPT提取已完成，请基于待模型接手请求和已完成 observation，用模型自己的口吻输出下一条结果说明。".to_string())
+        });
+    let max_steps = continue_request
+        .get("max_steps")
+        .and_then(Value::as_u64)
+        .and_then(|value| usize::try_from(value).ok())
+        .or(Some(1));
+    let current_artifact = continue_request
+        .get("current_artifact")
+        .filter(|value| !value.is_null())
+        .cloned();
+
+    Ok(ContinueAssistantRunRequest {
+        prompt,
+        max_steps,
+        current_artifact,
+        messages: Vec::new(),
+    })
+}
+
+fn assistant_run_model_completion_turn_consumed_event<'a>(
+    events: &'a [AssistantRunEvent],
+    idempotency_key: &str,
+) -> Option<&'a AssistantRunEvent> {
+    events.iter().rev().find(|event| {
+        event.event_name == "assistant_run.model_completion_turn_consumed"
+            && event.payload.get("idempotency_key").and_then(Value::as_str) == Some(idempotency_key)
+    })
 }
 
 async fn create_conversation_memory_item(
@@ -36702,6 +36915,135 @@ mod tests {
         assert!(event_names.contains(&"assistant_run.react.action_requested"));
         assert!(event_names.contains(&"assistant_run.react.final_answer"));
         assert!(event_names.contains(&"assistant_run.continued"));
+    }
+
+    #[tokio::test]
+    async fn assistant_run_model_completion_dispatch_consumes_continue_once() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        clear_assistant_openclaw_env();
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_MODE", "placeholder");
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping assistant run model completion dispatch test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!(
+                    "assistant-run-model-completion-dispatch-test-{}",
+                    Uuid::new_v4()
+                ),
+                "Assistant Run Model Completion Dispatch Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage,
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+
+        let (_, Json(run_response)) = create_assistant_run(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(CreateAssistantRunRequest {
+                prompt: "帮我从课程视频里提取 PPT 和原文".to_string(),
+                local_thread_id: Some("assistant-run-model-completion-thread".to_string()),
+                startup_briefing: Some(json!({"visibleDatasetCount": 0})),
+                selected_scope: Some(json!({"mode": "ordinary_chat"})),
+                scope_candidates: Vec::new(),
+                context_policy_hint: None,
+                current_artifact: None,
+                messages: Vec::new(),
+            }),
+        )
+        .await
+        .expect("assistant run should be created");
+
+        let dispatch = json!({
+            "kind": "assistant_run_model_completion_turn_dispatch_request",
+            "version": 1,
+            "status": "queued",
+            "turn_owner": "model",
+            "dispatch_target": "continue_assistant_run",
+            "entrypoint": "assistant_run_background_completion",
+            "idempotency_key": "video-completion-turn:test-run:workflow-1:doc-1:v1",
+            "assistant_run_id": run_response.assistant_run_id.to_string(),
+            "source_event": "video_extraction.workflow_completed",
+            "document_id": "doc-1",
+            "continue_request": {
+                "prompt": "后台视频/PPT提取已完成，请基于待模型接手请求和已完成 observation，用模型自己的口吻输出下一条结果说明。",
+                "max_steps": 1,
+                "current_artifact": null
+            },
+            "model_completion_turn_request": {
+                "kind": "video_extraction_model_completion_turn_request",
+                "required": true,
+                "turn_owner": "model",
+                "completion_context": {
+                    "status": "final_pptx_ready",
+                    "ready_file_kinds": ["pptx", "video_slides_markdown"],
+                    "html_artifact_ids": ["html-artifact-video"]
+                },
+                "answer_contract": {
+                    "must_write_in_model_voice": true,
+                    "no_host_composed_answer": true
+                }
+            },
+            "no_host_composed_answer": true
+        });
+
+        let consumed = consume_assistant_run_model_completion_turn_dispatch(&state, &dispatch)
+            .await
+            .expect("dispatch should consume");
+        assert_eq!(consumed["status"], json!("consumed"));
+        assert_eq!(
+            consumed["idempotency_key"],
+            json!("video-completion-turn:test-run:workflow-1:doc-1:v1")
+        );
+        assert_eq!(consumed["no_host_composed_answer"], json!(true));
+        assert!(consumed["assistant_message_chars"].as_u64().unwrap_or(0) > 0);
+
+        let duplicate = consume_assistant_run_model_completion_turn_dispatch(&state, &dispatch)
+            .await
+            .expect("duplicate dispatch should be idempotent");
+        assert_eq!(duplicate["status"], json!("already_consumed"));
+        assert_eq!(
+            duplicate["consumed_sequence_no"],
+            consumed["consumed_sequence_no"]
+        );
+
+        let Json(detail) = get_assistant_run(
+            State(state),
+            HeaderMap::new(),
+            Path(run_response.assistant_run_id.to_string()),
+        )
+        .await
+        .expect("assistant run detail should load");
+        let event_names = detail
+            .events
+            .iter()
+            .map(|event| event.event_name.as_str())
+            .collect::<Vec<_>>();
+        assert!(event_names.contains(&"assistant_run.model_completion_turn_consuming"));
+        assert!(event_names.contains(&"assistant_run.continued"));
+        assert_eq!(
+            detail
+                .events
+                .iter()
+                .filter(|event| event.event_name == "assistant_run.model_completion_turn_consumed")
+                .count(),
+            1
+        );
+        assert!(detail.run.output_artifacts.iter().any(|artifact| {
+            artifact.get("source").and_then(Value::as_str) == Some("assistant_run_continue")
+        }));
+        clear_assistant_openclaw_env();
     }
 
     #[tokio::test]
