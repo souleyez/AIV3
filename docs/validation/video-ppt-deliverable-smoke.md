@@ -129,6 +129,20 @@ cargo test -p storage auth_migrations_are_registered_in_order
 powershell -ExecutionPolicy Bypass -File .\scripts\run-jump-host-video-deliverable-smoke.ps1 -SelfTest
 ```
 
+### 2026-05-15 Target Durable History Enablement
+
+Deployment target `8服务器` pulled commit `5707747` at `/srv/aiv3/repo` and ran:
+
+```text
+cargo test -p storage auth_migrations_are_registered_in_order --lib
+cargo test -p media-worker durable_published_version --lib
+CC=clang CXX=clang++ cargo build -p platform-api -p media-worker --release
+```
+
+After the release build, `aiv3-platform-api.service` and `aiv3-media-worker.service` were restarted and confirmed active. The target database now exposes both durable published-version tables: `published_video_ppt_packages` and `published_video_ppt_versions`.
+
+The target host still needs `CC=clang CXX=clang++` for release builds because its default GCC 10 toolchain hits the known `aws-lc-sys` compiler issue.
+
 ## Slide Rectangle Manifest Follow-Up
 
 The public deliverable contract now also requires `slide_rectangles_manifest.json` for complete video/PPT packages. The current promoted mode is intentionally conservative: selected keep-list frames are de-duplicated in selection order, exact duplicate selected frame bytes are removed before PPTX generation, and decodable JPEG/PNG frames also pass through a conservative visual-similarity dedupe to reject near-identical selected frames caused by compression or tiny capture differences. Remaining JPEG/PNG frames may be exported as `border_background_contrast_v2` detector crops when a clear non-background rectangle exists, or `edge_projection_v1` crops when a non-uniform background makes the border-median detector unsafe but strong rectangular edge lines remain. The public validator still accepts older `simple_background_contrast_v1` manifests. Ambiguous or undecodable frames remain relative full-frame fallback crops. Every crop still requires `review_required=true`.
