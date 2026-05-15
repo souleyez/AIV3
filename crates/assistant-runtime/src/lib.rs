@@ -664,6 +664,11 @@ fn codex_executor_suggest_action_type(
     if let Some(action_type) = codex_executor_external_action_type(package, &available) {
         return Some(action_type);
     }
+    if codex_executor_prompt_requests_web_search(&package.user_prompt)
+        && available.contains("web_search")
+    {
+        return Some("web_search".to_string());
+    }
     if available.contains("final_answer") {
         return Some("final_answer".to_string());
     }
@@ -784,6 +789,20 @@ fn codex_executor_suggestion_arguments(
             "query": package.user_prompt,
             "selected_scope": package.selected_scope,
             "reason": "selected scope has missing supply",
+        }),
+        "web_search" => json!({
+            "query": package.user_prompt,
+            "reason": "user requested current, live, or web-sourced information outside supplied V3 evidence",
+            "freshness": codex_executor_web_search_freshness(&package.user_prompt),
+            "language": "auto",
+            "evidence_contract": {
+                "requires_source_url": true,
+                "requires_source_title": true,
+                "requires_retrieved_at": true,
+                "requires_query_metadata": true,
+                "must_enter_v3_search_evidence_before_citation": true
+            },
+            "source": "codex_plan_only_shadow",
         }),
         "create_static_page_draft" => json!({
             "prompt": package.user_prompt,
@@ -1035,6 +1054,9 @@ fn codex_executor_suggestion_reason(action_type: &str) -> &'static str {
             "partial supply prefers detail read before high-confidence claims"
         }
         "retrieve_evidence" => "selected scope needs V3 retrieval before grounded answer",
+        "web_search" => {
+            "user requested live or web-sourced information; V3 search evidence is required before citation"
+        }
         "create_static_page_draft" => "static-page intent has no current draft in context",
         "submit_static_page_image_preview" => {
             "user prompt asks for effect preview from current draft"
@@ -1281,6 +1303,42 @@ fn codex_executor_prompt_requests_artifact_edit(prompt: &str) -> bool {
     ]
     .iter()
     .any(|hint| prompt.contains(hint))
+}
+
+fn codex_executor_prompt_requests_web_search(prompt: &str) -> bool {
+    let lower = prompt.to_ascii_lowercase();
+    [
+        "联网",
+        "网页搜索",
+        "搜索一下",
+        "上网查",
+        "查最新",
+        "最新消息",
+        "实时",
+        "今天",
+        "新闻",
+        "web search",
+        "search the web",
+        "browse",
+        "latest",
+        "current",
+        "today",
+        "news",
+    ]
+    .iter()
+    .any(|hint| lower.contains(hint))
+}
+
+fn codex_executor_web_search_freshness(prompt: &str) -> &'static str {
+    let lower = prompt.to_ascii_lowercase();
+    if ["最新", "实时", "今天", "latest", "current", "today", "news"]
+        .iter()
+        .any(|hint| lower.contains(hint))
+    {
+        "latest"
+    } else {
+        "unspecified"
+    }
 }
 
 fn codex_executor_prompt_requests_external_status(prompt: &str) -> bool {
@@ -2551,6 +2609,49 @@ mod tests {
         assert_eq!(
             suggested_action["arguments"]["business_action_type"],
             json!("business_action")
+        );
+    }
+
+    #[test]
+    fn codex_executor_plan_only_suggests_web_search_as_read_only_v3_tool() {
+        let mut package = codex_context_package();
+        package.executor_transport = AssistantRunExecutorTransportView::CodexPlanOnly;
+        package.user_prompt = "联网搜索一下今天这个行业的最新消息".to_string();
+        package.current_artifact = None;
+        package.selected_scope = json!({"intent": "ordinary_chat"});
+        package.context_budget.selected_dataset_count = 0;
+        package.supply_quality = json!({"status": "not_requested"});
+        package.available_actions = vec![
+            AssistantRunCodexActionContractView::new(
+                "web_search",
+                "请求外部/网页搜索",
+                "只读请求 V3 搜索证据",
+                json!({"type": "object"}),
+                false,
+            ),
+            AssistantRunCodexActionContractView::new(
+                "final_answer",
+                "模型回答",
+                "直接回答",
+                json!({"type": "object"}),
+                false,
+            ),
+        ];
+
+        let output = execute_codex_conversation_plan(&package);
+        let suggested_action = output
+            .suggested_action
+            .as_ref()
+            .expect("web search should be suggested");
+
+        assert_eq!(suggested_action["action_type"], json!("web_search"));
+        assert_eq!(suggested_action["mutates_state"], json!(false));
+        assert_eq!(suggested_action["mutation_allowed"], json!(false));
+        assert_eq!(suggested_action["arguments"]["freshness"], json!("latest"));
+        assert_eq!(
+            suggested_action["arguments"]["evidence_contract"]
+                ["must_enter_v3_search_evidence_before_citation"],
+            json!(true)
         );
     }
 

@@ -14868,6 +14868,13 @@ fn assistant_run_codex_action_contracts(
             false,
         ),
         AssistantRunCodexActionContractView::new(
+            "web_search",
+            "请求外部/网页搜索",
+            "请求 V3 执行受控只读外部/网页搜索；只有 V3 返回带来源和时间的 search evidence 后，模型才可引用搜索结果。",
+            assistant_run_codex_web_search_schema(),
+            false,
+        ),
+        AssistantRunCodexActionContractView::new(
             "read_document_detail",
             "读取文档详情",
             "读取已选中或已命中供料范围内的文档详情。",
@@ -15046,6 +15053,31 @@ fn assistant_run_codex_action_contracts(
     }
 
     actions
+}
+
+fn assistant_run_codex_web_search_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "query": {"type": "string"},
+            "reason": {"type": "string"},
+            "freshness": {
+                "type": "string",
+                "enum": ["latest", "recent", "historical", "unspecified"]
+            },
+            "language": {"type": "string"},
+            "evidence_contract": {
+                "type": "object",
+                "properties": {
+                    "requires_source_url": {"type": "boolean", "const": true},
+                    "requires_source_title": {"type": "boolean", "const": true},
+                    "requires_retrieved_at": {"type": "boolean", "const": true},
+                    "requires_query_metadata": {"type": "boolean", "const": true}
+                }
+            }
+        },
+        "required": ["query", "reason"]
+    })
 }
 
 fn assistant_run_codex_external_action_schema(
@@ -33019,6 +33051,7 @@ mod tests {
         assert!(package
             .action_types()
             .contains(&"update_static_page_module".to_string()));
+        assert!(package.action_types().contains(&"web_search".to_string()));
         assert!(package
             .action_types()
             .contains(&"submit_html_artifact_event".to_string()));
@@ -33038,6 +33071,18 @@ mod tests {
         assert_eq!(
             html_artifact_action.input_schema["properties"]["event_type"]["enum"],
             json!(["html_artifact.patch", "html_artifact.action_intent"])
+        );
+        let web_search_action = package
+            .available_actions
+            .iter()
+            .find(|action| action.action_type == "web_search")
+            .expect("web search action contract should exist");
+        assert!(web_search_action.requires_v3_validation);
+        assert!(!web_search_action.mutates_state);
+        assert_eq!(
+            web_search_action.input_schema["properties"]["evidence_contract"]["properties"]
+                ["requires_retrieved_at"]["const"],
+            json!(true)
         );
         let video_resolver_action = package
             .available_actions
