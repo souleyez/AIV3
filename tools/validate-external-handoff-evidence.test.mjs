@@ -97,6 +97,50 @@ test('validateEvidence rejects final evidence manifests for the wrong package ty
   assert.ok(result.errors.some((error) => error.code === 'evidence_package_type_invalid'));
 });
 
+test('validateEvidence rejects final evidence manifests without provenance fields', () => {
+  const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'v3-external-handoff-evidence-'));
+  const built = buildPackage({
+    repoRoot,
+    outDir,
+    basename: 'evidence-missing-provenance',
+    generatedAt: '2026-05-15T00:00:00.000Z',
+  });
+  const manifest = JSON.parse(fs.readFileSync(built.evidenceManifestPath, 'utf8'));
+  delete manifest.generated_at;
+  delete manifest.repository_head;
+  fs.writeFileSync(built.evidenceManifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+  const result = validateEvidence({ packageRootInput: built.packageRoot });
+
+  assert.equal(result.evidence_manifest_ready, false);
+  assert.equal(result.generated_at, null);
+  assert.equal(result.repository_head, null);
+  assert.ok(result.errors.some((error) => error.code === 'evidence_generated_at_missing'));
+  assert.ok(result.errors.some((error) => error.code === 'evidence_repository_head_missing'));
+});
+
+test('validateEvidence rejects final evidence manifests with invalid provenance fields', () => {
+  const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'v3-external-handoff-evidence-'));
+  const built = buildPackage({
+    repoRoot,
+    outDir,
+    basename: 'evidence-invalid-provenance',
+    generatedAt: '2026-05-15T00:00:00.000Z',
+  });
+  const manifest = JSON.parse(fs.readFileSync(built.evidenceManifestPath, 'utf8'));
+  manifest.generated_at = '2026-05-15 00:00:00';
+  manifest.repository_head = 'not-a-git-head';
+  fs.writeFileSync(built.evidenceManifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+  const result = validateEvidence({ packageRootInput: built.packageRoot });
+
+  assert.equal(result.evidence_manifest_ready, false);
+  assert.equal(result.generated_at, '2026-05-15 00:00:00');
+  assert.equal(result.repository_head, 'not-a-git-head');
+  assert.ok(result.errors.some((error) => error.code === 'evidence_generated_at_invalid'));
+  assert.ok(result.errors.some((error) => error.code === 'evidence_repository_head_invalid'));
+});
+
 test('validateEvidence rejects aggregate JSON receipts without HTML artifact readiness', () => {
   const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'v3-external-handoff-evidence-'));
   const built = buildPackage({

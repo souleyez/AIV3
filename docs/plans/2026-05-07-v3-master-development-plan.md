@@ -157,7 +157,7 @@ Fresh production-like environments target PostgreSQL 17.9.
 
 This is the next active development direction.
 
-Current evidence-manifest follow-up: the third-party handoff package now writes a final `<package>.evidence-manifest.json` after aggregate evidence, and `validate:evidence` verifies every final delivery artifact plus `.all.json`/`.all.md` without introducing a circular delivery-manifest hash dependency. The final evidence manifest gate also locks the package type to `v3.external_third_party_handoff_package.v1`, writes `<package>.evidence-manifest.md` with package type, generated time, and repository head surfaced for human review, and supports `validate:evidence --markdown <file>.md` for a human-readable final evidence receipt.
+Current evidence-manifest follow-up: the third-party handoff package now writes a final `<package>.evidence-manifest.json` after aggregate evidence, and `validate:evidence` verifies every final delivery artifact plus `.all.json`/`.all.md` without introducing a circular delivery-manifest hash dependency. The final evidence manifest gate locks the package type to `v3.external_third_party_handoff_package.v1`, requires valid generated-time and repository-head provenance, writes `<package>.evidence-manifest.md` with package type, generated time, and repository head surfaced for human review, and supports `validate:evidence --markdown <file>.md` for a human-readable final evidence receipt.
 
 Current package-build semantics follow-up: handoff package build output now separates `handoffReady` and `evidenceMarkdownReady` from top-level `ready`; `ready` only passes when handoff, release, aggregate, final evidence, and human-readable evidence receipt gates are all ready.
 

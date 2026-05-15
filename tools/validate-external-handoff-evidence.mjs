@@ -56,6 +56,18 @@ function parseJsonFile(filePath, errors, codePrefix) {
   }
 }
 
+function isIsoUtcTimestamp(value) {
+  return (
+    typeof value === 'string'
+    && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/u.test(value)
+    && !Number.isNaN(Date.parse(value))
+  );
+}
+
+function isGitHead(value) {
+  return typeof value === 'string' && /^[a-f0-9]{7,40}$/iu.test(value);
+}
+
 function validateEvidenceFileArtifact({
   artifactsByRole,
   role,
@@ -121,6 +133,9 @@ function validateEvidence({
       evidence_manifest_path: evidenceManifestPath,
       evidence_manifest_sha256: null,
       manifest_type: null,
+      package_type: null,
+      generated_at: null,
+      repository_head: null,
       package_name: packageName,
       artifact_count: 0,
       error_codes: errors.map((error) => error.code),
@@ -136,6 +151,9 @@ function validateEvidence({
       evidence_manifest_path: evidenceManifestPath,
       evidence_manifest_sha256: null,
       manifest_type: null,
+      package_type: null,
+      generated_at: null,
+      repository_head: null,
       package_name: packageName,
       artifact_count: 0,
       error_codes: errors.map((error) => error.code),
@@ -148,6 +166,16 @@ function validateEvidence({
   }
   if (manifest.package_type !== PACKAGE_TYPE) {
     addError(errors, 'evidence_package_type_invalid', `evidence manifest package_type must be ${PACKAGE_TYPE}`, manifest.package_type || '');
+  }
+  if (!manifest.generated_at) {
+    addError(errors, 'evidence_generated_at_missing', 'evidence manifest generated_at is required', evidenceManifestPath);
+  } else if (!isIsoUtcTimestamp(manifest.generated_at)) {
+    addError(errors, 'evidence_generated_at_invalid', 'evidence manifest generated_at must be an ISO UTC timestamp', manifest.generated_at);
+  }
+  if (!manifest.repository_head) {
+    addError(errors, 'evidence_repository_head_missing', 'evidence manifest repository_head is required', evidenceManifestPath);
+  } else if (!isGitHead(manifest.repository_head)) {
+    addError(errors, 'evidence_repository_head_invalid', 'evidence manifest repository_head must be a short or full git SHA', manifest.repository_head);
   }
   if (manifest.package_name !== packageName) {
     addError(errors, 'evidence_package_name_mismatch', 'evidence manifest package_name must match package directory', manifest.package_name || '');
