@@ -384,6 +384,8 @@ The deployment target finished at `d50d282` with a clean `main...origin/main` st
 
 ## Handoff Delivery Manifest Release Validation Follow-Up
 
+Follow-up validated commit: `7e03b4e`.
+
 The release validator now checks the sibling `<package>.delivery-manifest.json` during post-build release validation. It verifies:
 
 - delivery manifest type and package name/root;
@@ -405,6 +407,8 @@ npm run test:external-handoff-archive
 
 ## Readiness Report Release Package Follow-Up
 
+Follow-up validated commit: `3ea49bf`.
+
 The deployment-target gateway smoke now builds and validates a temporary sendable handoff release package before writing its readiness report:
 
 ```text
@@ -422,3 +426,16 @@ npm run test:external-handoff-release
 npm run test:external-handoff-package
 bash -n scripts/run-external-third-party-gateway-smoke.sh
 ```
+
+The deployment target pulled `3ea49bf` and ran:
+
+```text
+npm run test:external-readiness
+npm run test:external-handoff-release
+npm run build:external-handoff-package -- --basename readiness-release-target-check --generatedAt 2026-05-15T00:00:00.000Z
+node tools/external-third-party-readiness-report.mjs --releasePackage target/external-third-party-handoff/readiness-release-target-check ...
+```
+
+Result: passed.
+
+The target readiness report used synthetic redacted request/callback evidence, returned `ready: true`, and wrote `target/external-third-party-readiness/readiness-release-target-check-valid.json` plus `.md`. The deployment target finished at `3ea49bf` with a clean `main...origin/main` status.
