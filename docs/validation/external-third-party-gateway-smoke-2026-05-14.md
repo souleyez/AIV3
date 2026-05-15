@@ -464,3 +464,32 @@ npm --prefix target/external-third-party-handoff/delivery-validator-check run va
 ```
 
 The generated package reported `fileCount: 14`, and both root and package-internal delivery validation returned `delivery_manifest_ready: true`.
+
+## One-Command Handoff Validation Follow-Up
+
+The generated third-party handoff package now includes a single aggregate validator:
+
+```text
+tools/validate-external-handoff-all.mjs
+npm run validate:external-handoff-all -- --package target/external-third-party-handoff/<package>
+npm --prefix target/external-third-party-handoff/<package> run validate:all
+```
+
+The aggregate report checks the handoff manifest, package integrity, archive, delivery manifest, and release readiness in one JSON payload. It returns top-level `all_ready`, fixed gate checks, redacted per-scope summaries, and scoped error codes so third-party recipients and V3 operators can see the failing gate without running multiple commands by hand.
+
+Local validation passed:
+
+```text
+npm run test:external-handoff-all
+npm run test:external-handoff-package
+npm run test:external-handoff-delivery
+npm run test:external-handoff-release
+npm run test:external-handoff-package-integrity
+npm run test:external-handoff-archive
+npm run test:external-readiness
+npm run build:external-handoff-package -- --basename all-validator-check --generatedAt 2026-05-15T00:00:00.000Z
+npm run validate:external-handoff-all -- --package target/external-third-party-handoff/all-validator-check
+npm --prefix target/external-third-party-handoff/all-validator-check run validate:all
+```
+
+The generated package reported `fileCount: 15`, and both root and package-internal aggregate validation returned `all_ready: true`.

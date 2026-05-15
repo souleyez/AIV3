@@ -922,7 +922,7 @@ target/external-third-party-handoff
 
 - 中文接口说明和英文接口说明；
 - `handoff/third-party-handoff.sample.json`；
-- `tools/validate-external-handoff.mjs`、`tools/validate-external-handoff-package.mjs`、`tools/validate-external-handoff-archive.mjs`、`tools/validate-external-handoff-delivery.mjs` 和 `tools/validate-external-handoff-release.mjs`；
+- `tools/validate-external-handoff.mjs`、`tools/validate-external-handoff-package.mjs`、`tools/validate-external-handoff-archive.mjs`、`tools/validate-external-handoff-delivery.mjs`、`tools/validate-external-handoff-release.mjs` 和 `tools/validate-external-handoff-all.mjs`；
 - `sandbox/external-third-party-mock-gateway.mjs`；
 - V3 侧 smoke/readiness 参考脚本；
 - `README.zh-CN.md`、`README.md`、`package.json`；
@@ -939,9 +939,10 @@ npm run validate:package
 npm run validate:archive
 npm run validate:delivery
 npm run validate:release
+npm run validate:all
 ```
 
-这些命令会分别校验包内交接清单样例、包文件完整性、包目录同级 `.tar.gz` 归档和 `.sha256` sidecar、交付清单列出的应收文件，以及目录、归档、摘要一致性的 release ready/not-ready 汇总。第三方正式填写自己的清单后，也应先通过同一类校验，再交给 V3 项目组联调。接收交付文件时，应保留包目录、`.tar.gz`、`.sha256`、`.release.json`、`.release.md` 和 `.delivery-manifest.json` 在同一目录，运行 `validate:delivery` 确认所有应收文件都存在且 SHA256 一致。
+这些命令会分别校验包内交接清单样例、包文件完整性、包目录同级 `.tar.gz` 归档和 `.sha256` sidecar、交付清单列出的应收文件，以及目录、归档、摘要一致性的 release ready/not-ready 汇总。`validate:all` 会输出一份覆盖全部 gate 的 JSON 汇总。第三方正式填写自己的清单后，也应先通过同一类校验，再交给 V3 项目组联调。接收交付文件时，应保留包目录、`.tar.gz`、`.sha256`、`.release.json`、`.release.md` 和 `.delivery-manifest.json` 在同一目录，运行 `validate:delivery` 或 `validate:all` 确认所有应收文件都存在且 SHA256 一致。
 
 发送 `.tar.gz` 归档前，V3 侧也可以在主仓库里不解压直接校验归档：
 
@@ -949,6 +950,7 @@ npm run validate:release
 node tools/validate-external-handoff-archive.mjs --archive target/external-third-party-handoff/<package>.tar.gz
 node tools/validate-external-handoff-delivery.mjs --package target/external-third-party-handoff/<package>
 node tools/validate-external-handoff-release.mjs --package target/external-third-party-handoff/<package>
+node tools/validate-external-handoff-all.mjs --package target/external-third-party-handoff/<package>
 ```
 
 这些命令会检查 `.sha256` sidecar、gzip/tar 结构、单一包根目录、路径穿越风险、必备条目、包 manifest 文件摘要，以及交接清单是否可进入客户沙箱联调。

@@ -56,6 +56,7 @@ test('buildPackage creates a third-party handoff directory with manifest and too
   assert.ok(fs.existsSync(path.join(result.packageRoot, 'tools/validate-external-handoff-archive.mjs')));
   assert.ok(fs.existsSync(path.join(result.packageRoot, 'tools/validate-external-handoff-delivery.mjs')));
   assert.ok(fs.existsSync(path.join(result.packageRoot, 'tools/validate-external-handoff-release.mjs')));
+  assert.ok(fs.existsSync(path.join(result.packageRoot, 'tools/validate-external-handoff-all.mjs')));
   assert.ok(fs.existsSync(path.join(result.packageRoot, 'sandbox/external-third-party-mock-gateway.mjs')));
 
   const manifest = JSON.parse(fs.readFileSync(result.manifestPath, 'utf8'));
@@ -96,6 +97,7 @@ test('buildPackage creates a third-party handoff directory with manifest and too
   assert.ok(archiveEntries.includes('package-under-test/tools/validate-external-handoff-archive.mjs'));
   assert.ok(archiveEntries.includes('package-under-test/tools/validate-external-handoff-delivery.mjs'));
   assert.ok(archiveEntries.includes('package-under-test/tools/validate-external-handoff-release.mjs'));
+  assert.ok(archiveEntries.includes('package-under-test/tools/validate-external-handoff-all.mjs'));
   assert.equal(fs.readFileSync(result.archiveSha256Path, 'utf8').startsWith(result.archiveSha256), true);
 });
 
@@ -114,5 +116,6 @@ test('generated package exposes simple npm scripts for third parties', () => {
   assert.equal(packageJson.scripts['validate:archive'], 'node tools/validate-external-handoff-archive.mjs');
   assert.equal(packageJson.scripts['validate:delivery'], 'node tools/validate-external-handoff-delivery.mjs --package .');
   assert.equal(packageJson.scripts['validate:release'], 'node tools/validate-external-handoff-release.mjs --package .');
+  assert.equal(packageJson.scripts['validate:all'], 'node tools/validate-external-handoff-all.mjs --package .');
   assert.equal(packageJson.scripts['start:mock-gateway'], 'node sandbox/external-third-party-mock-gateway.mjs');
 });
