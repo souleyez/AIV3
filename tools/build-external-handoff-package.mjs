@@ -57,6 +57,11 @@ const SOURCE_FILES = [
     audience: 'third_party',
   },
   {
+    source: 'tools/validate-external-handoff-delivery.mjs',
+    target: 'tools/validate-external-handoff-delivery.mjs',
+    audience: 'third_party',
+  },
+  {
     source: 'tools/external-third-party-readiness-report.mjs',
     target: 'tools/external-third-party-readiness-report.mjs',
     audience: 'v3_operator',
@@ -223,6 +228,7 @@ V3 提交：${head || 'unknown'}
 - \`tools/validate-external-handoff.mjs\`：交接清单校验工具。
 - \`tools/validate-external-handoff-package.mjs\`：交接包完整性校验工具。
 - \`tools/validate-external-handoff-archive.mjs\`：交接归档包和 \`.sha256\` 校验工具。
+- \`tools/validate-external-handoff-delivery.mjs\`：接收侧交付清单校验工具。
 - \`tools/validate-external-handoff-release.mjs\`：目录、归档、摘要的一键 release 校验工具。
 - \`sandbox/external-third-party-mock-gateway.mjs\`：第三方动作 endpoint 的本地 mock 示例。
 - \`sandbox/run-external-third-party-gateway-smoke.sh\`：V3 部署目标使用的签名派发、结果回调和交接清单 smoke 入口。
@@ -240,10 +246,12 @@ V3 提交：${head || 'unknown'}
 npm run validate:handoff
 npm run validate:package
 npm run validate:archive
+npm run validate:delivery
 npm run validate:release
 \`\`\`
 
-5. 将校验通过的清单、测试文档/权限样例、联调联系人和网络白名单信息交给 V3 项目组。
+5. 收到正式交付文件时，优先保留包目录、\`.tar.gz\`、\`.sha256\`、\`.release.json\`、\`.release.md\` 和 \`.delivery-manifest.json\` 在同一目录，再运行 \`validate:delivery\` 核对交付清单。
+6. 将校验通过的清单、测试文档/权限样例、联调联系人和网络白名单信息交给 V3 项目组。
 
 ## V3 侧如何验收
 
@@ -276,8 +284,9 @@ Recommended flow:
 4. Run \`npm run validate:handoff\`.
 5. Run \`npm run validate:package\`.
 6. Run \`npm run validate:archive\` while the package directory, \`.tar.gz\` archive, and \`.sha256\` sidecar remain siblings.
-7. Run \`npm run validate:release\` for the combined ready/not-ready report.
-8. Send the validated manifest, document/ACL fixtures, network allowlist details, and operations contacts to the V3 team.
+7. Run \`npm run validate:delivery\` to verify the sibling delivery manifest against every expected delivery artifact.
+8. Run \`npm run validate:release\` for the combined ready/not-ready report.
+9. Send the validated manifest, document/ACL fixtures, network allowlist details, and operations contacts to the V3 team.
 
 The V3 operator smoke validates signed dispatch, result callback, redaction, and the handoff manifest before a live customer sandbox run.
 `;
@@ -293,6 +302,7 @@ function packageJson() {
       'validate:handoff': 'node tools/validate-external-handoff.mjs --manifest handoff/third-party-handoff.sample.json',
       'validate:package': 'node tools/validate-external-handoff-package.mjs --package .',
       'validate:archive': 'node tools/validate-external-handoff-archive.mjs',
+      'validate:delivery': 'node tools/validate-external-handoff-delivery.mjs --package .',
       'validate:release': 'node tools/validate-external-handoff-release.mjs --package .',
       'start:mock-gateway': 'node sandbox/external-third-party-mock-gateway.mjs',
     },

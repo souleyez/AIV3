@@ -439,3 +439,28 @@ node tools/external-third-party-readiness-report.mjs --releasePackage target/ext
 Result: passed.
 
 The target readiness report used synthetic redacted request/callback evidence, returned `ready: true`, and wrote `target/external-third-party-readiness/readiness-release-target-check-valid.json` plus `.md`. The deployment target finished at `3ea49bf` with a clean `main...origin/main` status.
+
+## Receive-Side Delivery Manifest Validator Follow-Up
+
+The generated third-party handoff package now includes a dedicated receive-side delivery manifest validator:
+
+```text
+tools/validate-external-handoff-delivery.mjs
+npm run validate:external-handoff-delivery -- --package target/external-third-party-handoff/<package>
+npm --prefix target/external-third-party-handoff/<package> run validate:delivery
+```
+
+The validator checks `<package>.delivery-manifest.json` against the sibling package directory, package manifest, `.tar.gz` archive, `.sha256` sidecar, release JSON, and release Markdown. This gives third-party recipients a direct checksum gate for the files they received, while `validate:release` remains the combined package/archive/handoff readiness gate.
+
+Local validation passed:
+
+```text
+npm run test:external-handoff-delivery
+npm run test:external-handoff-package
+npm run test:external-handoff-release
+npm run build:external-handoff-package -- --basename delivery-validator-check --generatedAt 2026-05-15T00:00:00.000Z
+npm run validate:external-handoff-delivery -- --package target/external-third-party-handoff/delivery-validator-check
+npm --prefix target/external-third-party-handoff/delivery-validator-check run validate:delivery
+```
+
+The generated package reported `fileCount: 14`, and both root and package-internal delivery validation returned `delivery_manifest_ready: true`.
