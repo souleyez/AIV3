@@ -64,6 +64,7 @@
 - Current implementation follow-up adds final evidence-manifest validation: package builds now write sibling `<package>.evidence-manifest.json` after aggregate evidence, and `validate:evidence` verifies every final delivery artifact plus the `.all.json`/`.all.md` receipts without introducing a circular delivery-manifest hash dependency.
 - Current implementation follow-up gates readiness on final evidence manifests: readiness reports generated with `--releasePackage` now run `validate:evidence`, add `handoff_evidence_ready`, and include a redacted `handoff_evidence_summary` plus Markdown summary section.
 - Current implementation follow-up connects external-channel `web_search` plan-only suggestions to safe channel behavior: V3 returns `task_status=v3_search_evidence_required`, records redacted Codex diagnostics plus `assistant_run.external_search_evidence_required`, and does not create an `external_action_runs` row or claim live search before audited evidence exists.
+- Current implementation follow-up surfaces those pending search-evidence states in observe-first audit: `GET /v1/external/integrations/{id}/audit?item_type=search_evidence` returns redacted `web_search` evidence-required rows, and the standalone panel adds a `搜索证据` filter without exposing raw user queries.
 - Next implementation checkpoint: run the callback contract through a real HTTPS customer sandbox once a third-party endpoint is available, while continuing smaller hardening work that does not require customer cooperation.
 
 ---

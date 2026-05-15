@@ -5,6 +5,7 @@ import path from 'node:path';
 import {
   actionSignalLabel,
   artifactSignalLabel,
+  auditItemTypeLabel,
   buildExternalActionPermalink,
   buildExternalAuditQuery,
   buildExternalActionTrace,
@@ -36,6 +37,10 @@ test('buildExternalAuditQuery encodes fixed audit filters', () => {
   assert.equal(
     buildExternalAuditQuery({ item_type: 'action', action_state: 'waiting_result' }),
     '?item_type=action&action_state=waiting_result',
+  );
+  assert.equal(
+    buildExternalAuditQuery({ itemType: 'search_evidence' }),
+    '?item_type=search_evidence',
   );
   assert.equal(
     buildExternalAuditQuery({ itemType: 'action', actionId: 'act-001', limit: 1 }),
@@ -203,6 +208,13 @@ test('normalizeAuditItem keeps redacted summary shape stable', () => {
   assert.equal(item.actionId, 'act-001');
   assert.equal(item.summary.dispatch_reason, 'dispatch_auth_missing');
   assert.notEqual(formatObservationTime(item.createdAt), '无记录');
+});
+
+test('auditItemTypeLabel covers search evidence items', () => {
+  assert.equal(auditItemTypeLabel('message'), '消息');
+  assert.equal(auditItemTypeLabel('action'), '动作');
+  assert.equal(auditItemTypeLabel('search_evidence'), '搜索证据');
+  assert.equal(auditItemTypeLabel('sync'), '同步');
 });
 
 test('normalizeControlResult summarizes management control responses', () => {

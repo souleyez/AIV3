@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   actionSignalLabel,
   artifactSignalLabel,
+  auditItemTypeLabel,
   buildExternalActionPermalink,
   buildExternalAuditQuery,
   buildExternalActionTrace,
@@ -632,7 +633,7 @@ export default function ExternalIntegrationsPageClient() {
                 key={`${item.itemType}:${item.actionId || item.createdAt || index}`}
               >
                 <div>
-                  <span className="external-audit-type">{item.itemType}</span>
+                  <span className="external-audit-type">{auditItemTypeLabel(item.itemType)}</span>
                   <strong>{item.status || item.failureKind || 'recorded'}</strong>
                   <small>{formatObservationTime(item.createdAt)}</small>
                   {item.itemType === 'action' && item.actionId ? (

@@ -7195,10 +7195,11 @@ fn external_integration_audit_filter(
         .filter(|value| !value.is_empty() && *value != "all")
         .map(|value| value.to_ascii_lowercase())
         .map(|value| match value.as_str() {
-            "message" | "action" | "sync" => Ok(value),
+            "message" | "action" | "sync" | "search_evidence" => Ok(value),
             _ => Err(ApiError::bad_request_with_details(
                 "external_integration_audit_item_type_invalid",
-                "audit item_type must be one of message, action, sync, or all".to_string(),
+                "audit item_type must be one of message, action, search_evidence, sync, or all"
+                    .to_string(),
                 json!({ "item_type": value }),
             )),
         })
@@ -7793,6 +7794,62 @@ async fn load_external_channel_audit_items(
                 "conversation_external_id": row.get::<String, _>("conversation_external_id"),
                 "message_external_id": row.get::<String, _>("message_external_id"),
                 "payload_summary": external_integration_redacted_summary(payload_summary),
+            }),
+        });
+    }
+
+    let search_rows = sqlx::query(
+        r#"
+        select run_id,
+               payload,
+               created_at
+        from assistant_run_events
+        where tenant_id = $1
+          and event_name = 'assistant_run.external_search_evidence_required'
+          and payload ->> 'channel_connection_id' = $2
+        order by created_at desc
+        limit 25
+        "#,
+    )
+    .bind(state.tenant_id.0)
+    .bind(integration_id)
+    .fetch_all(state.storage.pool())
+    .await
+    .map_err(|error| ApiError::from_storage(anyhow::Error::new(error)))?;
+
+    for row in search_rows {
+        let payload = row.get::<Value, _>("payload");
+        items.push(ExternalIntegrationAuditItemView {
+            item_type: "search_evidence".to_string(),
+            created_at: row.get("created_at"),
+            assistant_run_id: Some(AssistantRunId(row.get("run_id"))),
+            action_id: None,
+            status: Some("v3_search_evidence_required".to_string()),
+            failure_kind: None,
+            summary: json!({
+                "action_type": "web_search",
+                "freshness": payload
+                    .get("freshness")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unspecified"),
+                "requires_v3_validation": payload
+                    .get("requires_v3_validation")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(true),
+                "search_evidence_required": true,
+                "no_live_search_claim": payload
+                    .get("no_live_search_claim")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(true),
+                "query_chars": payload
+                    .get("query_chars")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0),
+                "message_external_id": payload
+                    .get("message_external_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+                "source": "assistant_run.external_search_evidence_required",
             }),
         });
     }
@@ -31275,6 +31332,42 @@ mod tests {
     }
 
     #[test]
+    fn external_integration_audit_filter_selects_search_evidence_items() {
+        let filter = external_integration_audit_filter(ExternalIntegrationAuditQuery {
+            item_type: Some("search_evidence".to_string()),
+            action_state: None,
+            action_id: None,
+            limit: Some(10),
+        })
+        .expect("search evidence filter should parse");
+        let item = ExternalIntegrationAuditItemView {
+            item_type: "search_evidence".to_string(),
+            created_at: Utc::now(),
+            assistant_run_id: Some(AssistantRunId::new()),
+            action_id: None,
+            status: Some("v3_search_evidence_required".to_string()),
+            failure_kind: None,
+            summary: json!({
+                "action_type": "web_search",
+                "search_evidence_required": true,
+            }),
+        };
+        let message = ExternalIntegrationAuditItemView {
+            item_type: "message".to_string(),
+            created_at: Utc::now(),
+            assistant_run_id: Some(AssistantRunId::new()),
+            action_id: None,
+            status: Some("inbound".to_string()),
+            failure_kind: None,
+            summary: json!({}),
+        };
+
+        assert_eq!(filter.item_type.as_deref(), Some("search_evidence"));
+        assert!(external_integration_audit_item_matches(&item, &filter));
+        assert!(!external_integration_audit_item_matches(&message, &filter));
+    }
+
+    #[test]
     fn external_integration_audit_filter_rejects_conflicting_action_state() {
         let error = external_integration_audit_filter(ExternalIntegrationAuditQuery {
             item_type: Some("message".to_string()),
@@ -32391,9 +32484,39 @@ mod tests {
         assert_eq!(search_event.payload["freshness"], json!("latest"));
         assert_eq!(search_event.payload["requires_v3_validation"], json!(true));
         assert_eq!(search_event.payload["no_live_search_claim"], json!(true));
+        let audit_items = load_external_channel_audit_items(&state, "generic-chat-main")
+            .await
+            .expect("external channel audit items should load");
+        let search_audit_item = audit_items
+            .iter()
+            .find(|item| item.item_type == "search_evidence")
+            .expect("search evidence audit item should be visible");
+        assert_eq!(
+            search_audit_item.status.as_deref(),
+            Some("v3_search_evidence_required")
+        );
+        assert_eq!(
+            search_audit_item.summary["search_evidence_required"],
+            json!(true)
+        );
+        assert_eq!(search_audit_item.summary["freshness"], json!("latest"));
+        let search_filter = external_integration_audit_filter(ExternalIntegrationAuditQuery {
+            item_type: Some("search_evidence".to_string()),
+            action_state: None,
+            action_id: None,
+            limit: None,
+        })
+        .expect("search evidence audit filter should parse");
+        assert!(external_integration_audit_item_matches(
+            search_audit_item,
+            &search_filter
+        ));
         let serialized_events =
             serde_json::to_string(&events).expect("events should serialize for redaction check");
         assert!(!serialized_events.contains("今天这个行业"));
+        let serialized_audit =
+            serde_json::to_string(&audit_items).expect("audit items should serialize");
+        assert!(!serialized_audit.contains("今天这个行业"));
     }
 
     #[tokio::test]

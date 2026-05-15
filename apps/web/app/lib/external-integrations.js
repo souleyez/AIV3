@@ -3,6 +3,7 @@ export const DEFAULT_THIRD_PARTY_API_BASE_URL = 'https://v3.elepcloud.com';
 export const EXTERNAL_AUDIT_FILTERS = [
   { key: 'all', label: '全部', params: {} },
   { key: 'actions', label: '动作', params: { itemType: 'action' } },
+  { key: 'search', label: '搜索证据', params: { itemType: 'search_evidence' } },
   { key: 'callbacks', label: '结果回调', params: { itemType: 'action', actionState: 'result_callback' } },
   { key: 'waiting', label: '待结果', params: { itemType: 'action', actionState: 'waiting_result' } },
   { key: 'failed', label: '失败/阻断', params: { itemType: 'action', actionState: 'failed' } },
@@ -156,6 +157,21 @@ export function normalizeAuditItem(raw = {}) {
     failureKind: raw.failure_kind || null,
     summary: raw.summary && typeof raw.summary === 'object' ? raw.summary : {},
   };
+}
+
+export function auditItemTypeLabel(itemType) {
+  switch (String(itemType || '').toLowerCase()) {
+    case 'message':
+      return '消息';
+    case 'action':
+      return '动作';
+    case 'search_evidence':
+      return '搜索证据';
+    case 'sync':
+      return '同步';
+    default:
+      return '事件';
+  }
 }
 
 export function normalizeControlResult(raw = {}) {
