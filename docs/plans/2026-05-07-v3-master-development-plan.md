@@ -257,6 +257,8 @@ This is a shared product surface, not a replacement for the static-page renderer
 
 Use the idea behind [HTML Effectiveness](https://thariqs.github.io/html-effectiveness/#code-review) as a pattern reference: self-contained HTML can be an excellent review/report medium when it is generated from trusted templates, sandboxed, and paired with structured data.
 
+Current skillization decision: `docs/architecture/html-artifact-skill-evaluation.md` records the decision to turn this into a reusable V3 safe-HTML artifact capability first, with a possible local Codex skill later. The external `dogum/html-artifacts` project is a useful Apache-2.0 reference for recognition heuristics, but V3 should not vendor or install it directly until the product template rules and license review are settled.
+
 V3 should use this layer for:
 
 - Codex Host execution reports and step summaries.
