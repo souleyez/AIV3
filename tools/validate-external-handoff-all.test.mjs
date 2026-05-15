@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -126,4 +127,33 @@ test('validateAllMarkdownReceipt rejects stale aggregate receipts', () => {
   assert.equal(receipt.receipt_ready, false);
   assert.ok(receipt.errors.some((error) => error.code === 'aggregate_markdown_receipt_bytes_mismatch'));
   assert.ok(receipt.errors.some((error) => error.code === 'aggregate_markdown_receipt_sha256_mismatch'));
+});
+
+test('CLI --verifyMarkdown auto verifies the sibling aggregate receipt', () => {
+  const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'v3-external-handoff-all-'));
+  const built = buildPackage({
+    repoRoot,
+    outDir,
+    basename: 'all-cli-auto-receipt-package',
+    generatedAt: '2026-05-15T00:00:00.000Z',
+  });
+
+  const stdout = execFileSync(
+    process.execPath,
+    [
+      path.join(repoRoot, 'tools', 'validate-external-handoff-all.mjs'),
+      '--package',
+      built.packageRoot,
+      '--verifyMarkdown',
+      'auto',
+    ],
+    { encoding: 'utf8' },
+  );
+  const result = JSON.parse(stdout);
+
+  assert.equal(result.all_ready, true);
+  assert.equal(result.aggregate_markdown_receipt.receipt_ready, true);
+  assert.equal(path.resolve(result.aggregate_markdown_receipt.receipt_path), built.allMarkdownPath);
+  assert.ok(result.checks.some((check) => check.key === 'aggregate_markdown_receipt_ready' && check.passed));
+  assert.deepEqual(result.errors, []);
 });

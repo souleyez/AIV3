@@ -336,7 +336,7 @@ Recommended flow:
 6. Run \`npm run validate:archive\` while the package directory, \`.tar.gz\` archive, and \`.sha256\` sidecar remain siblings.
 7. Run \`npm run validate:delivery\` to verify the sibling delivery manifest against every expected delivery artifact.
 8. Run \`npm run validate:release\` for the combined ready/not-ready report.
-9. Run \`npm run validate:all\` when you want one JSON report covering every handoff gate. Add \`-- --out aggregate.json --markdown aggregate.md\` to keep evidence files.
+9. Run \`npm run validate:all\` when you want one JSON report covering every handoff gate and the packaged aggregate Markdown receipt. Add \`-- --out aggregate.json --markdown aggregate.md\` to keep fresh evidence files.
 10. Run \`npm run validate:evidence\` to verify the final evidence manifest that covers every delivery artifact plus aggregate evidence and the packaged human-readable receipt. Add \`-- --markdown evidence.md\` when you want a fresh receipt.
 11. Send the validated manifest, document/ACL fixtures, network allowlist details, and operations contacts to the V3 team.
 
@@ -356,7 +356,7 @@ function packageJson() {
       'validate:archive': 'node tools/validate-external-handoff-archive.mjs',
       'validate:delivery': 'node tools/validate-external-handoff-delivery.mjs --package .',
       'validate:release': 'node tools/validate-external-handoff-release.mjs --package .',
-      'validate:all': 'node tools/validate-external-handoff-all.mjs --package .',
+      'validate:all': 'node tools/validate-external-handoff-all.mjs --package . --verifyMarkdown auto',
       'validate:evidence': 'node tools/validate-external-handoff-evidence.mjs --package . --verifyMarkdown auto',
       'start:mock-gateway': 'node sandbox/external-third-party-mock-gateway.mjs',
     },

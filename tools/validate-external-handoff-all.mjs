@@ -283,12 +283,29 @@ function validateAll({
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
-  const result = validateAll({
+  let result = validateAll({
     packageRootInput: args.package || '.',
     manifestPathInput: args.manifest || '',
     archivePathInput: args.archive || '',
     sidecarPathInput: args.sha256 || '',
   });
+  if (args.verifyMarkdown) {
+    const verifyMarkdownPath = args.verifyMarkdown === 'auto' ? '' : args.verifyMarkdown;
+    const receipt = validateAllMarkdownReceipt({
+      validation: result,
+      markdownPathInput: verifyMarkdownPath,
+    });
+    result = {
+      ...result,
+      all_ready: result.all_ready === true && receipt.receipt_ready === true,
+      checks: [
+        ...result.checks,
+        { key: 'aggregate_markdown_receipt_ready', passed: receipt.receipt_ready === true },
+      ],
+      aggregate_markdown_receipt: receipt,
+      errors: [...result.errors, ...scopedErrors('aggregate_markdown', receipt.errors)],
+    };
+  }
   writeAllReportFiles(result, {
     out: args.out || '',
     markdown: args.markdown || '',

@@ -955,7 +955,7 @@ npm run validate:evidence
 
 `validate:release` emits a combined ready/not-ready report for the package directory, archive, sidecar, and matching archive root.
 
-`validate:all` emits one JSON report covering the handoff manifest, package, archive, delivery manifest, and release gates, and surfaces package type, generated time, and V3 commit provenance in both JSON and Markdown receipts.
+`validate:all` emits one JSON report covering the handoff manifest, package, archive, delivery manifest, and release gates, surfaces package type, generated time, and V3 commit provenance in both JSON and Markdown receipts, and in generated packages automatically checks the sibling aggregate Markdown receipt with `--verifyMarkdown auto`.
 
 `validate:evidence` verifies the final evidence manifest, including the package directory, archive, sidecar, release reports, delivery manifest, aggregate JSON/Markdown evidence, aggregate JSON provenance consistency, aggregate Markdown receipt freshness, and the packaged human-readable evidence receipt. Add `-- --markdown evidence.md` when a fresh receipt is needed.
 
