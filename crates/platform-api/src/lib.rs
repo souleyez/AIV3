@@ -10247,7 +10247,15 @@ fn external_bot_message_to_assistant_run_request(
             "surface": "external_channel",
             "platform": platform,
             "channel_connection_id": connection_id,
-            "policy": "V3 owns external identity resolution, permission supply, action validation, and audit before replying."
+            "policy": "V3 owns external identity resolution, permission supply, action validation, and audit before replying.",
+            "modelAwarenessPolicy": assistant_run_v3_awareness_policy_value(),
+            "visibleScopePolicy": {
+                "tenant_external_id": message.tenant_external_id,
+                "conversation_external_id": message.conversation_external_id,
+                "sender_external_id": message.sender_external_id,
+                "permission_filtering": "before_model_context",
+                "hidden_documents_supplied": false
+            }
         })),
         selected_scope: Some(selected_scope.clone()),
         scope_candidates: vec![json!({
@@ -12197,6 +12205,18 @@ fn assistant_run_v3_awareness_lines() -> Vec<String> {
         "V3 证据规则：涉及 V3 数据、文档、权限、工具结果或产物状态时，只能把已供给的 observation/证据当作事实；未供料时先说明“当前不可见/未供料”，再区分通用知识或推断。".to_string(),
         "V3 搜索规则：外部/网页搜索是计划中的 V3 受控只读能力；没有带来源和时间的 V3 search evidence 时，不要声称已联网搜索或引用实时网页结果。".to_string(),
     ]
+}
+
+fn assistant_run_v3_awareness_policy_value() -> Value {
+    json!({
+        "identity": "你正在服务 AI Data Platform V3。V3 是数据集、第三方知识库、权限、检索供料、受控动作、报表和静态页产物的统一工作台。",
+        "additiveContextRule": "V3 上下文是附加能力，不是能力限制。即使当前没有可见数据集或供料，也可以保持通用模型水准回答普通问题。",
+        "unavailableEvidenceRule": "涉及 V3 数据、文档、权限、工具结果或产物状态时，只有收到 V3 observation/供料才能当作事实。未供料时先说明“当前不可见/未供料”，再区分通用判断。",
+        "externalSearchPolicy": {
+            "status": "planned_v3_controlled_read_only",
+            "modelRule": "外部/网页搜索是计划中的 V3 受控只读能力；未收到带来源和时间的 V3 search evidence 前，不要声称已联网搜索或引用实时网页结果。"
+        }
+    })
 }
 
 fn build_assistant_run_provider_input_with_evidence(
@@ -30639,6 +30659,34 @@ mod tests {
                 .and_then(|value| value.get("surface"))
                 .and_then(Value::as_str),
             Some("external_channel")
+        );
+        let startup_briefing = request
+            .startup_briefing
+            .as_ref()
+            .expect("external request should include startup briefing");
+        assert_eq!(
+            startup_briefing["modelAwarenessPolicy"]["externalSearchPolicy"]["status"],
+            json!("planned_v3_controlled_read_only")
+        );
+        assert!(
+            startup_briefing["modelAwarenessPolicy"]["additiveContextRule"]
+                .as_str()
+                .expect("additive context rule")
+                .contains("不是能力限制")
+        );
+        assert!(
+            startup_briefing["modelAwarenessPolicy"]["unavailableEvidenceRule"]
+                .as_str()
+                .expect("unavailable evidence rule")
+                .contains("当前不可见/未供料")
+        );
+        assert_eq!(
+            startup_briefing["visibleScopePolicy"]["permission_filtering"],
+            json!("before_model_context")
+        );
+        assert_eq!(
+            startup_briefing["visibleScopePolicy"]["hidden_documents_supplied"],
+            json!(false)
         );
         assert_eq!(
             request
