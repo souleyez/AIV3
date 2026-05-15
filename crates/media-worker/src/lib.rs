@@ -1784,6 +1784,15 @@ struct VideoSlideRectangleDetection {
     threshold: u8,
 }
 
+#[derive(Clone, Copy)]
+struct VideoForegroundComponent {
+    min_x: u32,
+    max_x: u32,
+    min_y: u32,
+    max_y: u32,
+    pixel_count: u64,
+}
+
 fn video_detect_slide_rectangle(frame: &Path) -> Option<VideoSlideRectangleDetection> {
     let image = ImageReader::open(frame)
         .ok()?
@@ -1851,6 +1860,22 @@ fn video_detect_slide_rectangle_by_background_contrast(
         return None;
     }
 
+    if let Some(component_detection) = video_refine_slide_rectangle_by_foreground_component(
+        image,
+        width,
+        height,
+        &background,
+        threshold,
+        min_x,
+        max_x,
+        min_y,
+        max_y,
+        foreground_pixel_count,
+        background_sample_count,
+    ) {
+        return Some(component_detection);
+    }
+
     Some(VideoSlideRectangleDetection {
         x: video_relative_coord(min_x, width),
         y: video_relative_coord(min_y, height),
@@ -1866,6 +1891,188 @@ fn video_detect_slide_rectangle_by_background_contrast(
         rectangle_extraction_mode: "border_background_contrast_v2",
         threshold,
     })
+}
+
+fn video_refine_slide_rectangle_by_foreground_component(
+    image: &image::DynamicImage,
+    width: u32,
+    height: u32,
+    background: &[u8; 3],
+    threshold: u8,
+    aggregate_min_x: u32,
+    aggregate_max_x: u32,
+    aggregate_min_y: u32,
+    aggregate_max_y: u32,
+    foreground_pixel_count: u64,
+    background_sample_count: u64,
+) -> Option<VideoSlideRectangleDetection> {
+    let pixel_len = usize::try_from(u64::from(width) * u64::from(height)).ok()?;
+    let mut visited = vec![false; pixel_len];
+    let mut stack = Vec::new();
+    let mut meaningful_component_count = 0_u32;
+    let mut largest_component: Option<VideoForegroundComponent> = None;
+
+    for y in 0..height {
+        for x in 0..width {
+            let index = video_image_index(x, y, width)?;
+            if visited[index] {
+                continue;
+            }
+            visited[index] = true;
+
+            let pixel = image.get_pixel(x, y).to_rgb();
+            if !video_pixel_distance_exceeds_threshold(&pixel.0, background, threshold) {
+                continue;
+            }
+
+            let mut component = VideoForegroundComponent {
+                min_x: x,
+                max_x: x,
+                min_y: y,
+                max_y: y,
+                pixel_count: 0,
+            };
+            stack.push((x, y));
+
+            while let Some((current_x, current_y)) = stack.pop() {
+                component.min_x = component.min_x.min(current_x);
+                component.max_x = component.max_x.max(current_x);
+                component.min_y = component.min_y.min(current_y);
+                component.max_y = component.max_y.max(current_y);
+                component.pixel_count += 1;
+
+                if current_x > 0 {
+                    video_push_foreground_neighbor(
+                        image,
+                        width,
+                        background,
+                        threshold,
+                        current_x - 1,
+                        current_y,
+                        &mut visited,
+                        &mut stack,
+                    )?;
+                }
+                if current_x + 1 < width {
+                    video_push_foreground_neighbor(
+                        image,
+                        width,
+                        background,
+                        threshold,
+                        current_x + 1,
+                        current_y,
+                        &mut visited,
+                        &mut stack,
+                    )?;
+                }
+                if current_y > 0 {
+                    video_push_foreground_neighbor(
+                        image,
+                        width,
+                        background,
+                        threshold,
+                        current_x,
+                        current_y - 1,
+                        &mut visited,
+                        &mut stack,
+                    )?;
+                }
+                if current_y + 1 < height {
+                    video_push_foreground_neighbor(
+                        image,
+                        width,
+                        background,
+                        threshold,
+                        current_x,
+                        current_y + 1,
+                        &mut visited,
+                        &mut stack,
+                    )?;
+                }
+            }
+
+            if component.pixel_count >= 4 {
+                meaningful_component_count += 1;
+            }
+            if largest_component
+                .map(|largest| component.pixel_count > largest.pixel_count)
+                .unwrap_or(true)
+            {
+                largest_component = Some(component);
+            }
+        }
+    }
+
+    if meaningful_component_count <= 1 {
+        return None;
+    }
+
+    let largest = largest_component?;
+    let box_width = largest.max_x - largest.min_x + 1;
+    let box_height = largest.max_y - largest.min_y + 1;
+    if box_width < width / 4 || box_height < height / 4 {
+        return None;
+    }
+    if box_width >= width.saturating_sub(2) && box_height >= height.saturating_sub(2) {
+        return None;
+    }
+    let aspect_ratio = f64::from(box_width) / f64::from(box_height);
+    if !(0.9..=2.4).contains(&aspect_ratio) {
+        return None;
+    }
+    if largest.pixel_count.saturating_mul(100) < foreground_pixel_count.saturating_mul(70) {
+        return None;
+    }
+
+    let aggregate_width = aggregate_max_x - aggregate_min_x + 1;
+    let aggregate_height = aggregate_max_y - aggregate_min_y + 1;
+    let aggregate_area = u64::from(aggregate_width) * u64::from(aggregate_height);
+    let largest_area = u64::from(box_width) * u64::from(box_height);
+    if aggregate_area.saturating_mul(100) <= largest_area.saturating_mul(110) {
+        return None;
+    }
+
+    Some(VideoSlideRectangleDetection {
+        x: video_relative_coord(largest.min_x, width),
+        y: video_relative_coord(largest.min_y, height),
+        width: video_relative_coord(box_width, width),
+        height: video_relative_coord(box_height, height),
+        image_width: width,
+        image_height: height,
+        signal_pixel_count: largest.pixel_count,
+        sample_count: background_sample_count,
+        signal_source: "border_median_component",
+        detector_name: "foreground_component_v1",
+        rectangle_source: "raw_frame_foreground_component",
+        rectangle_extraction_mode: "foreground_component_v1",
+        threshold,
+    })
+}
+
+fn video_push_foreground_neighbor(
+    image: &image::DynamicImage,
+    width: u32,
+    background: &[u8; 3],
+    threshold: u8,
+    x: u32,
+    y: u32,
+    visited: &mut [bool],
+    stack: &mut Vec<(u32, u32)>,
+) -> Option<()> {
+    let index = video_image_index(x, y, width)?;
+    if visited[index] {
+        return Some(());
+    }
+    visited[index] = true;
+    let pixel = image.get_pixel(x, y).to_rgb();
+    if video_pixel_distance_exceeds_threshold(&pixel.0, background, threshold) {
+        stack.push((x, y));
+    }
+    Some(())
+}
+
+fn video_image_index(x: u32, y: u32, width: u32) -> Option<usize> {
+    usize::try_from(u64::from(y) * u64::from(width) + u64::from(x)).ok()
 }
 
 fn video_detect_slide_rectangle_by_edge_projection(
@@ -2077,7 +2284,9 @@ fn video_slide_rectangle_aggregate_mode(selected_candidates: &[Value]) -> &'stat
                 })
                 .collect::<BTreeSet<_>>();
             if detector_modes.len() == 1 {
-                if detector_modes.contains("edge_projection_v1") {
+                if detector_modes.contains("foreground_component_v1") {
+                    "foreground_component_v1"
+                } else if detector_modes.contains("edge_projection_v1") {
                     "edge_projection_v1"
                 } else if detector_modes.contains("border_background_contrast_v2") {
                     "border_background_contrast_v2"
@@ -6243,6 +6452,21 @@ mod tests {
         image.save(path).expect("test noisy slide rectangle png");
     }
 
+    fn write_test_slide_with_external_foreground_png(path: &Path) {
+        let mut image = image::RgbImage::from_pixel(100, 80, image::Rgb([8, 8, 8]));
+        for y in 10..60 {
+            for x in 20..80 {
+                image.put_pixel(x, y, image::Rgb([240, 240, 240]));
+            }
+        }
+        for y in 5..75 {
+            for x in 90..96 {
+                image.put_pixel(x, y, image::Rgb([230, 230, 230]));
+            }
+        }
+        image.save(path).expect("test external foreground png");
+    }
+
     fn write_test_gradient_edge_slide_rectangle_png(path: &Path) {
         let mut image = image::RgbImage::new(100, 80);
         for y in 0..80 {
@@ -8748,6 +8972,47 @@ mod tests {
         assert_eq!(detection.height, 0.625);
         assert_eq!(detection.signal_source, "border_median_rgb");
         assert!(detection.sample_count > 0);
+    }
+
+    #[test]
+    fn detects_slide_rectangle_ignoring_external_foreground_component() {
+        let output_root = std::env::temp_dir().join(format!(
+            "aidp-v3-video-foreground-component-test-{}",
+            DocumentId::new()
+        ));
+        fs::create_dir_all(&output_root).expect("output root");
+        let frame_path = output_root.join("frame_000001.png");
+        write_test_slide_with_external_foreground_png(&frame_path);
+
+        let detection =
+            video_detect_slide_rectangle(&frame_path).expect("foreground component detector crop");
+
+        assert_eq!(detection.detector_name, "foreground_component_v1");
+        assert_eq!(detection.rectangle_source, "raw_frame_foreground_component");
+        assert_eq!(
+            detection.rectangle_extraction_mode,
+            "foreground_component_v1"
+        );
+        assert_eq!(detection.signal_source, "border_median_component");
+        assert_eq!(detection.x, 0.2);
+        assert_eq!(detection.y, 0.125);
+        assert_eq!(detection.width, 0.6);
+        assert_eq!(detection.height, 0.625);
+
+        let rectangle =
+            video_slide_rectangle_from_frame(1, 1, "frame_000001.png", 0.0, &frame_path);
+        assert_eq!(
+            rectangle["rectangle_source"],
+            json!("raw_frame_foreground_component")
+        );
+        assert_eq!(
+            rectangle["rectangle_extraction_mode"],
+            json!("foreground_component_v1")
+        );
+        assert_eq!(
+            rectangle["detector"]["name"],
+            json!("foreground_component_v1")
+        );
     }
 
     #[test]
