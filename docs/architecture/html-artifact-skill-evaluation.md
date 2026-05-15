@@ -87,5 +87,5 @@ Recommended path:
 
 - Add HTML freshness checks for every committed generated HTML document.
 - Extend the handoff package builder pattern to future external reports.
-- Define the first V3 HTML artifact template registry entry for third-party handoff documents.
+- Define the first V3 HTML artifact template registry entry for third-party handoff documents. Completed first slice: the web safe artifact template allowlist now includes `third_party_handoff_document` with `external_integration` source type.
 - Later, create a local `v3-html-artifacts` Codex skill that points to this architecture note and the safe HTML artifact rules.

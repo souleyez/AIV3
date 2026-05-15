@@ -9,6 +9,7 @@ export const HTML_ARTIFACT_TEMPLATE_IDS = Object.freeze([
   'code_review_summary',
   'video_extraction_summary',
   'wechat_video_login_handoff',
+  'third_party_handoff_document',
 ]);
 
 export const HTML_ARTIFACT_SOURCE_TYPES = Object.freeze([
@@ -17,6 +18,7 @@ export const HTML_ARTIFACT_SOURCE_TYPES = Object.freeze([
   'report',
   'code_review',
   'video_extraction',
+  'external_integration',
   'manual',
 ]);
 
@@ -34,6 +36,7 @@ const TEMPLATE_LABELS = {
   code_review_summary: '代码审查摘要',
   video_extraction_summary: '视频提取摘要',
   wechat_video_login_handoff: '视频来源受限',
+  third_party_handoff_document: '第三方交接文档',
 };
 
 const SOURCE_LABELS = {
@@ -42,6 +45,7 @@ const SOURCE_LABELS = {
   report: '报告',
   code_review: '代码审查',
   video_extraction: '视频提取',
+  external_integration: '外部集成',
   manual: '手动产物',
 };
 
@@ -442,6 +446,79 @@ function renderCodeReviewSummary(manifest) {
     <section>
       <h2>发现</h2>
       ${renderList(findings, '暂无发现。')}
+    </section>
+  `;
+}
+
+function renderThirdPartyHandoffDocument(manifest) {
+  const payload = manifest.payload || {};
+  const handoff = isPlainObject(payload.handoff) ? payload.handoff : {};
+  const integrationModes = arrayOrEmpty(payload.integrationModes || payload.integration_modes).map((mode) => ({
+    title: mode.title || mode.name || mode.id || '未命名模式',
+    detail: mode.detail || mode.description || '',
+    meta: mode.status || mode.meta || '',
+  }));
+  const endpoints = arrayOrEmpty(payload.endpoints).map((endpoint) => ({
+    title: [endpoint.method, endpoint.path || endpoint.route].filter(Boolean).join(' ') || endpoint.title || '未命名接口',
+    detail: endpoint.description || endpoint.detail || '',
+    meta: endpoint.auth || endpoint.authMode || endpoint.auth_mode || endpoint.state || '',
+  }));
+  const validationCommands = arrayOrEmpty(payload.validationCommands || payload.validation_commands).map((command, index) => ({
+    title: command.title || command.name || `校验 ${index + 1}`,
+    detail: command.command || command.detail || '',
+    meta: command.when || command.meta || '',
+  }));
+  const deliveryArtifacts = arrayOrEmpty(payload.deliveryArtifacts || payload.delivery_artifacts).map((artifact) => ({
+    title: artifact.title || artifact.name || artifact.path || '交付物',
+    detail: artifact.description || artifact.detail || '',
+    meta: artifact.path || artifact.role || artifact.kind || '',
+  }));
+  const reviewChecklist = arrayOrEmpty(payload.reviewChecklist || payload.review_checklist).map((item, index) => ({
+    title: item.title || item.label || `检查项 ${index + 1}`,
+    detail: item.detail || item.description || '',
+    meta: item.owner || item.status || item.meta || '',
+  }));
+  const safetyRules = arrayOrEmpty(payload.safetyRules || payload.safety_rules).map((rule, index) => ({
+    title: rule.title || rule.label || `边界 ${index + 1}`,
+    detail: rule.detail || rule.description || rule,
+    meta: rule.level || rule.meta || '',
+  }));
+  return `
+    ${renderKeyValueGrid([
+      { label: '文档状态', value: handoff.status || payload.status || 'draft' },
+      { label: '默认域名', value: handoff.defaultDomain || handoff.default_domain || payload.defaultDomain || payload.default_domain || 'v3.elepcloud.com' },
+      { label: '版本', value: handoff.version || payload.versionLabel || payload.version_label || '未标注' },
+      { label: '适用对象', value: handoff.audience || payload.audience || '第三方技术/业务对接团队' },
+      { label: '源文档', value: handoff.sourceDocument || handoff.source_document || payload.sourceDocument || payload.source_document || 'Markdown source' },
+      { label: '阅读版', value: handoff.reviewDocument || handoff.review_document || payload.reviewDocument || payload.review_document || 'HTML review page' },
+    ])}
+    <section>
+      <h2>说明</h2>
+      <p>${escapeHtml(payload.summary || '该 HTML artifact 来自 V3 受信模板，用于把第三方对接文档、接口清单和交付检查项集中成可审阅页面。Markdown 或结构化 JSON 仍是源数据。')}</p>
+    </section>
+    <section>
+      <h2>接入模式</h2>
+      ${renderList(integrationModes, '暂无接入模式。')}
+    </section>
+    <section>
+      <h2>接口清单</h2>
+      ${renderList(endpoints, '暂无接口清单。')}
+    </section>
+    <section>
+      <h2>交付物</h2>
+      ${renderList(deliveryArtifacts, '暂无交付物。')}
+    </section>
+    <section>
+      <h2>校验命令</h2>
+      ${renderList(validationCommands, '暂无校验命令。')}
+    </section>
+    <section>
+      <h2>评审检查项</h2>
+      ${renderList(reviewChecklist, '暂无检查项。')}
+    </section>
+    <section>
+      <h2>安全边界</h2>
+      ${renderList(safetyRules, '暂无安全边界。')}
     </section>
   `;
 }
@@ -951,7 +1028,9 @@ export function renderHtmlArtifactDocument(input = {}) {
           ? renderCodeReviewSummary(manifest)
           : manifest.templateId === 'video_extraction_summary'
             ? renderVideoExtractionSummary(manifest)
-            : renderWechatVideoLoginHandoff(manifest);
+            : manifest.templateId === 'third_party_handoff_document'
+              ? renderThirdPartyHandoffDocument(manifest)
+              : renderWechatVideoLoginHandoff(manifest);
   const allowScripts = manifest.interactionMode !== 'read_only';
   const script = renderInteractionScript(manifest);
   const canSubmit = hasSubmittableArtifactAction(manifest);

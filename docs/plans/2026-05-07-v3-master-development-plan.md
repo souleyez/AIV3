@@ -259,6 +259,8 @@ Use the idea behind [HTML Effectiveness](https://thariqs.github.io/html-effectiv
 
 Current skillization decision: `docs/architecture/html-artifact-skill-evaluation.md` records the decision to turn this into a reusable V3 safe-HTML artifact capability first, with a possible local Codex skill later. The external `dogum/html-artifacts` project is a useful Apache-2.0 reference for recognition heuristics, but V3 should not vendor or install it directly until the product template rules and license review are settled.
 
+Current template registry follow-up: the safe artifact allowlist now includes `third_party_handoff_document` with source type `external_integration`, giving third-party handoff/API guides a V3-owned template slot before any local Codex skill is introduced.
+
 V3 should use this layer for:
 
 - Codex Host execution reports and step summaries.
