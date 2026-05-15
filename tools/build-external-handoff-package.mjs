@@ -620,6 +620,10 @@ function buildPackage({ repoRoot, outDir, basename, generatedAt = new Date().toI
   const evidenceMarkdownPath = path.join(path.dirname(packageRoot), `${path.basename(packageRoot)}.evidence-manifest.md`);
   fs.writeFileSync(evidenceMarkdownPath, renderEvidenceMarkdown(evidenceValidation));
   const evidenceMarkdownSha256 = sha256Hex(fs.readFileSync(evidenceMarkdownPath));
+  const handoffReady = packageManifest.handoff_validation.ready_for_customer_sandbox === true;
+  const releaseReady = releaseValidation.release_ready === true;
+  const allReady = allValidation.all_ready === true;
+  const evidenceReady = evidenceValidation.evidence_manifest_ready === true;
 
   return {
     packageRoot,
@@ -637,14 +641,15 @@ function buildPackage({ repoRoot, outDir, basename, generatedAt = new Date().toI
     allReportSha256,
     allMarkdownPath,
     allMarkdownSha256,
-    allReady: allValidation.all_ready === true,
+    handoffReady,
+    allReady,
     evidenceManifestPath,
     evidenceManifestSha256,
     evidenceMarkdownPath,
     evidenceMarkdownSha256,
-    evidenceReady: evidenceValidation.evidence_manifest_ready === true,
-    releaseReady: releaseValidation.release_ready === true,
-    ready: packageManifest.handoff_validation.ready_for_customer_sandbox,
+    evidenceReady,
+    releaseReady,
+    ready: handoffReady && releaseReady && allReady && evidenceReady,
     fileCount: packageManifest.included_files.length,
   };
 }
@@ -660,7 +665,7 @@ async function main() {
     generatedAt: args.generatedAt || new Date().toISOString(),
   });
   console.log(JSON.stringify(result, null, 2));
-  if (!result.releaseReady || !result.allReady || !result.evidenceReady) {
+  if (!result.ready) {
     process.exitCode = 1;
   }
 }

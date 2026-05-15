@@ -38,6 +38,7 @@ test('buildPackage creates a third-party handoff directory with manifest and too
   });
 
   assert.equal(result.ready, true);
+  assert.equal(result.handoffReady, true);
   assert.equal(result.fileCount, SOURCE_FILES.length + 4);
   assert.ok(fs.existsSync(result.archivePath));
   assert.ok(fs.existsSync(result.archiveSha256Path));
@@ -59,6 +60,7 @@ test('buildPackage creates a third-party handoff directory with manifest and too
   assert.equal(result.releaseReady, true);
   assert.equal(result.allReady, true);
   assert.equal(result.evidenceReady, true);
+  assert.equal(result.ready, result.handoffReady && result.releaseReady && result.allReady && result.evidenceReady);
   assert.ok(fs.existsSync(path.join(result.packageRoot, 'README.zh-CN.md')));
   assert.ok(fs.existsSync(path.join(result.packageRoot, 'docs/third-party-integration-api.zh-CN.md')));
   assert.ok(fs.existsSync(path.join(result.packageRoot, 'docs/pure-third-party-integration-guide.zh-CN.md')));
