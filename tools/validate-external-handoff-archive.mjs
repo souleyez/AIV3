@@ -12,6 +12,8 @@ const REQUIRED_ENTRIES = [
   'README.md',
   'package.json',
   'handoff-package-manifest.json',
+  'docs/pure-third-party-integration-guide.zh-CN.md',
+  'docs/pure-third-party-integration-guide.zh-CN.html',
   'handoff/third-party-handoff.sample.json',
   'tools/validate-external-handoff.mjs',
   'tools/validate-external-handoff-package.mjs',
@@ -49,6 +51,12 @@ function tarNumber(buffer, start, end) {
   return Number.parseInt(text || '0', 8);
 }
 
+function tarEntryName(header) {
+  const name = tarString(header, 0, 100);
+  const prefix = tarString(header, 345, 500);
+  return prefix ? `${prefix}/${name}` : name;
+}
+
 function safeArchiveEntry(name) {
   if (!name || path.isAbsolute(name)) {
     return false;
@@ -69,7 +77,7 @@ function parseTarEntries(tarBytes, errors) {
     if (header.every((byte) => byte === 0)) {
       break;
     }
-    const name = tarString(header, 0, 100);
+    const name = tarEntryName(header);
     const size = tarNumber(header, 124, 136);
     const typeflag = tarString(header, 156, 157) || '0';
     if (!safeArchiveEntry(name)) {

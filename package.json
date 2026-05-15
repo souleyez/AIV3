@@ -18,6 +18,7 @@
     "validate:external-handoff-evidence": "node tools/validate-external-handoff-evidence.mjs",
     "validate:external-handoff-release": "node tools/validate-external-handoff-release.mjs",
     "build:external-handoff-package": "node tools/build-external-handoff-package.mjs",
+    "build:pure-third-party-guide-html": "node tools/render-pure-third-party-guide-html.mjs",
     "test:video-deliverables": "node --test tools/validate-video-deliverables.test.mjs",
     "validate:video-deliverables": "node tools/validate-video-deliverables.mjs"
   }

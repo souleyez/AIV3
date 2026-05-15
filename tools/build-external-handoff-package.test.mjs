@@ -19,9 +19,10 @@ function listTarEntries(tarGzPath) {
       break;
     }
     const name = header.toString('utf8', 0, 100).replace(/\0.*$/, '');
+    const prefix = header.toString('utf8', 345, 500).replace(/\0.*$/, '');
     const sizeText = header.toString('ascii', 124, 136).replace(/\0.*$/, '').trim();
     const size = Number.parseInt(sizeText || '0', 8);
-    entries.push(name);
+    entries.push(prefix ? `${prefix}/${name}` : name);
     offset += 512 + Math.ceil(size / 512) * 512;
   }
   return entries;
@@ -59,6 +60,7 @@ test('buildPackage creates a third-party handoff directory with manifest and too
   assert.ok(fs.existsSync(path.join(result.packageRoot, 'README.zh-CN.md')));
   assert.ok(fs.existsSync(path.join(result.packageRoot, 'docs/third-party-integration-api.zh-CN.md')));
   assert.ok(fs.existsSync(path.join(result.packageRoot, 'docs/pure-third-party-integration-guide.zh-CN.md')));
+  assert.ok(fs.existsSync(path.join(result.packageRoot, 'docs/pure-third-party-integration-guide.zh-CN.html')));
   assert.ok(fs.existsSync(path.join(result.packageRoot, 'handoff/third-party-handoff.sample.json')));
   assert.ok(fs.existsSync(path.join(result.packageRoot, 'tools/validate-external-handoff.mjs')));
   assert.ok(fs.existsSync(path.join(result.packageRoot, 'tools/validate-external-handoff-package.mjs')));
@@ -70,6 +72,7 @@ test('buildPackage creates a third-party handoff directory with manifest and too
 
   const cnGuide = fs.readFileSync(path.join(result.packageRoot, 'docs/third-party-integration-api.zh-CN.md'), 'utf8');
   const pureGuide = fs.readFileSync(path.join(result.packageRoot, 'docs/pure-third-party-integration-guide.zh-CN.md'), 'utf8');
+  const pureGuideHtml = fs.readFileSync(path.join(result.packageRoot, 'docs/pure-third-party-integration-guide.zh-CN.html'), 'utf8');
   const enGuide = fs.readFileSync(path.join(result.packageRoot, 'docs/third-party-integration-api.md'), 'utf8');
   assert.match(cnGuide, /AI Data Platform V3/);
   assert.match(cnGuide, /当前不可见\/未供料/);
@@ -77,6 +80,9 @@ test('buildPackage creates a third-party handoff directory with manifest and too
   assert.match(pureGuide, /V3 纯第三方模式对接文档/);
   assert.match(pureGuide, /不需要把第三方服务器上的所有文档一次性拷贝到 V3/);
   assert.match(pureGuide, /POST \/v1\/external\/channels\/\{connection_id\}\/events/);
+  assert.match(pureGuideHtml, /<title>V3 纯第三方模式对接文档<\/title>/);
+  assert.match(pureGuideHtml, /flow-board/);
+  assert.match(pureGuideHtml, /copy-code/);
   assert.match(enGuide, /AI Data Platform V3/);
   assert.match(enGuide, /currently not visible or not supplied by V3/);
   assert.match(enGuide, /must not claim live search/);
@@ -131,6 +137,7 @@ test('buildPackage creates a third-party handoff directory with manifest and too
   const archiveEntries = listTarEntries(result.archivePath);
   assert.ok(archiveEntries.includes('package-under-test/README.zh-CN.md'));
   assert.ok(archiveEntries.includes('package-under-test/docs/pure-third-party-integration-guide.zh-CN.md'));
+  assert.ok(archiveEntries.includes('package-under-test/docs/pure-third-party-integration-guide.zh-CN.html'));
   assert.ok(archiveEntries.includes('package-under-test/handoff-package-manifest.json'));
   assert.ok(archiveEntries.includes('package-under-test/tools/validate-external-handoff-package.mjs'));
   assert.ok(archiveEntries.includes('package-under-test/tools/validate-external-handoff-archive.mjs'));
@@ -138,6 +145,28 @@ test('buildPackage creates a third-party handoff directory with manifest and too
   assert.ok(archiveEntries.includes('package-under-test/tools/validate-external-handoff-release.mjs'));
   assert.ok(archiveEntries.includes('package-under-test/tools/validate-external-handoff-all.mjs'));
   assert.equal(fs.readFileSync(result.archiveSha256Path, 'utf8').startsWith(result.archiveSha256), true);
+});
+
+test('buildPackage writes archives for timestamped package names with long document paths', () => {
+  const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'v3-external-handoff-package-'));
+  const result = buildPackage({
+    repoRoot,
+    outDir,
+    basename: 'external-third-party-handoff-package-20260515T000000Z',
+    generatedAt: '2026-05-15T00:00:00.000Z',
+  });
+
+  const archiveEntries = listTarEntries(result.archivePath);
+  assert.ok(
+    archiveEntries.includes(
+      'external-third-party-handoff-package-20260515T000000Z/docs/pure-third-party-integration-guide.zh-CN.md',
+    ),
+  );
+  assert.ok(
+    archiveEntries.includes(
+      'external-third-party-handoff-package-20260515T000000Z/docs/pure-third-party-integration-guide.zh-CN.html',
+    ),
+  );
 });
 
 test('generated package exposes simple npm scripts for third parties', () => {

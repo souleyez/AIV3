@@ -1,0 +1,1023 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>V3 纯第三方模式对接文档</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #17211f;
+      --muted: #66726e;
+      --line: #d8e2de;
+      --paper: #fbfcf8;
+      --panel: #ffffff;
+      --deep: #0c2f33;
+      --teal: #0f766e;
+      --green: #1f9d6e;
+      --amber: #d9912b;
+      --coral: #c84d3c;
+      --code: #0e1b1d;
+      --shadow: 0 18px 50px rgba(20, 42, 41, 0.12);
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        linear-gradient(90deg, rgba(15, 118, 110, 0.08) 1px, transparent 1px),
+        linear-gradient(180deg, rgba(15, 118, 110, 0.06) 1px, transparent 1px),
+        var(--paper);
+      background-size: 36px 36px;
+      font-family: "Noto Serif SC", "Source Han Serif SC", "Songti SC", Georgia, serif;
+      font-size: 17px;
+      line-height: 1.78;
+    }
+
+    a { color: var(--teal); text-decoration-thickness: 0.08em; text-underline-offset: 0.18em; }
+    code {
+      border: 1px solid rgba(15, 118, 110, 0.22);
+      border-radius: 6px;
+      padding: 0.08rem 0.34rem;
+      background: rgba(15, 118, 110, 0.08);
+      font-family: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+      font-size: 0.9em;
+    }
+
+    .shell {
+      display: grid;
+      grid-template-columns: minmax(220px, 300px) minmax(0, 1fr);
+      min-height: 100vh;
+    }
+
+    aside {
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      padding: 28px 22px;
+      overflow: auto;
+      background: rgba(255, 255, 255, 0.78);
+      border-right: 1px solid var(--line);
+      backdrop-filter: blur(18px);
+    }
+
+    .brand {
+      display: grid;
+      gap: 8px;
+      margin-bottom: 26px;
+      padding-bottom: 22px;
+      border-bottom: 1px solid var(--line);
+    }
+    .brand span {
+      display: inline-flex;
+      width: fit-content;
+      padding: 3px 9px;
+      border-radius: 999px;
+      color: #fff;
+      background: var(--deep);
+      font: 700 12px/1.5 "Cascadia Code", monospace;
+      letter-spacing: 0;
+    }
+    .brand strong {
+      font-size: 22px;
+      line-height: 1.2;
+    }
+    .brand small { color: var(--muted); }
+
+    nav {
+      display: grid;
+      gap: 2px;
+    }
+    nav a {
+      display: block;
+      padding: 8px 10px;
+      border-radius: 8px;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.35;
+      text-decoration: none;
+    }
+    nav a:hover {
+      color: var(--ink);
+      background: rgba(15, 118, 110, 0.09);
+    }
+
+    main {
+      min-width: 0;
+      padding: 38px clamp(22px, 5vw, 68px) 72px;
+    }
+    .hero {
+      display: grid;
+      gap: 24px;
+      margin: 0 auto 38px;
+      max-width: 1120px;
+      padding: 42px clamp(24px, 4vw, 54px);
+      color: #f5fffb;
+      background: linear-gradient(135deg, #0c2f33 0%, #124b4c 48%, #22513c 100%);
+      box-shadow: var(--shadow);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+    }
+    .hero h1 {
+      margin: 0;
+      max-width: 780px;
+      font-size: clamp(36px, 7vw, 76px);
+      line-height: 1.02;
+      letter-spacing: 0;
+    }
+    .hero p {
+      margin: 0;
+      max-width: 820px;
+      color: rgba(245, 255, 251, 0.82);
+      font-size: 19px;
+    }
+    .hero-metrics {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+    }
+    .metric {
+      border: 1px solid rgba(255,255,255,0.18);
+      padding: 15px;
+      min-height: 96px;
+      background: rgba(255,255,255,0.08);
+    }
+    .metric strong {
+      display: block;
+      font-size: 27px;
+      line-height: 1.15;
+    }
+    .metric span {
+      color: rgba(245,255,251,0.74);
+      font-size: 13px;
+    }
+
+    article {
+      max-width: 1120px;
+      margin: 0 auto;
+      padding: 32px clamp(20px, 4vw, 56px);
+      background: rgba(255,255,255,0.9);
+      border: 1px solid var(--line);
+      box-shadow: var(--shadow);
+    }
+    article > h1 { display: none; }
+    h2 {
+      margin: 54px 0 14px;
+      padding-top: 12px;
+      border-top: 3px solid var(--deep);
+      font-size: clamp(25px, 3.6vw, 38px);
+      line-height: 1.2;
+      letter-spacing: 0;
+    }
+    h3 {
+      margin: 34px 0 10px;
+      color: var(--deep);
+      font-size: 23px;
+      line-height: 1.3;
+    }
+    h4, h5, h6 {
+      margin: 24px 0 8px;
+      color: var(--deep);
+    }
+    p { margin: 0 0 16px; }
+    ul, ol {
+      margin: 0 0 18px;
+      padding-left: 1.3rem;
+    }
+    li { margin: 6px 0; }
+    li::marker { color: var(--teal); font-weight: 700; }
+
+    .table-shell {
+      width: 100%;
+      overflow-x: auto;
+      margin: 18px 0 26px;
+      border: 1px solid var(--line);
+      background: var(--panel);
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      min-width: 680px;
+      font-size: 15px;
+      line-height: 1.55;
+    }
+    th, td {
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+      vertical-align: top;
+      text-align: left;
+    }
+    th {
+      color: #fff;
+      background: var(--deep);
+      font-weight: 700;
+    }
+    tr:nth-child(even) td { background: rgba(15, 118, 110, 0.045); }
+
+    .code-card {
+      margin: 20px 0 28px;
+      overflow: hidden;
+      border: 1px solid #23393a;
+      background: var(--code);
+      color: #e8fffb;
+    }
+    .code-card figcaption {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      padding: 9px 12px;
+      border-bottom: 1px solid rgba(255,255,255,0.12);
+      color: #b9d9d4;
+      font: 700 12px/1.4 "Cascadia Code", monospace;
+    }
+    .copy-code {
+      min-height: 32px;
+      border: 1px solid rgba(255,255,255,0.18);
+      border-radius: 8px;
+      padding: 0 10px;
+      color: #e8fffb;
+      background: rgba(255,255,255,0.08);
+      cursor: pointer;
+      font: inherit;
+    }
+    pre {
+      margin: 0;
+      padding: 18px;
+      overflow-x: auto;
+      white-space: pre;
+      font: 14px/1.65 "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+    }
+    pre code {
+      border: 0;
+      padding: 0;
+      background: transparent;
+      color: inherit;
+      font-size: inherit;
+    }
+
+    .flow-board {
+      display: grid;
+      grid-template-columns: repeat(7, minmax(120px, 1fr));
+      align-items: stretch;
+      gap: 8px;
+      margin: 22px 0 32px;
+      overflow-x: auto;
+      padding: 4px 0 14px;
+    }
+    .flow-arrow {
+      display: none;
+    }
+    .flow-node {
+      position: relative;
+      min-height: 142px;
+      padding: 18px 14px;
+      border: 1px solid var(--line);
+      border-top: 5px solid var(--teal);
+      background: #fff;
+    }
+    .flow-node:nth-child(4n) { border-top-color: var(--amber); }
+    .flow-node:nth-child(4n + 2) { border-top-color: var(--green); }
+    .flow-node:nth-child(4n + 3) { border-top-color: var(--coral); }
+    .flow-index {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 28px;
+      height: 28px;
+      margin-bottom: 12px;
+      color: #fff;
+      background: var(--deep);
+      border-radius: 50%;
+      font: 700 13px/1 "Cascadia Code", monospace;
+    }
+    .flow-node strong {
+      display: block;
+      line-height: 1.25;
+      margin-bottom: 8px;
+    }
+    .flow-node small {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .doc-footer {
+      max-width: 1120px;
+      margin: 22px auto 0;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    @media (max-width: 920px) {
+      .shell { display: block; }
+      aside {
+        position: static;
+        height: auto;
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
+      }
+      nav {
+        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      }
+      main { padding: 20px 14px 46px; }
+      .hero { padding: 30px 20px; }
+      .hero-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      article { padding: 24px 18px; }
+      .flow-board { grid-template-columns: repeat(7, 180px); }
+    }
+
+    @media (max-width: 560px) {
+      body { font-size: 16px; }
+      .hero h1 { font-size: 34px; }
+      .hero-metrics { grid-template-columns: 1fr; }
+      table { min-width: 620px; }
+    }
+
+    @media print {
+      body { background: #fff; }
+      .shell { display: block; }
+      aside, .copy-code { display: none; }
+      main { padding: 0; }
+      .hero, article { box-shadow: none; }
+      article { border: 0; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <aside>
+      <div class="brand">
+        <span>V3 / PURE THIRD PARTY</span>
+        <strong>纯第三方模式</strong>
+        <small>自建页面、文档库、用户权限、产物与业务动作的对接说明。</small>
+      </div>
+      <nav aria-label="文档目录">
+        <a href="#section-01">对接目标</a>
+<a href="#section-02">总体架构</a>
+<a href="#section-03">最小接入范围</a>
+<a href="#section-04">文档是否必须搬到 V3</a>
+<a href="#section-05">V3 入站聊天接口</a>
+<a href="#section-06">用户与组织接口</a>
+<a href="#section-07">文档接口</a>
+<a href="#section-11">V3 触发资料源同步</a>
+<a href="#section-12">用户确认接口</a>
+<a href="#section-13">产物接口</a>
+<a href="#section-14">业务动作接口</a>
+<a href="#section-15">动作结果回传</a>
+<a href="#section-16">V3 出站派发签名</a>
+<a href="#section-17">观测接口</a>
+<a href="#section-18">错误返回</a>
+<a href="#section-19">联调前第三方准备清单</a>
+<a href="#section-20">安全与合规要求</a>
+<a href="#section-21">当前实现状态</a>
+<a href="#section-22">推荐联调顺序</a>
+<a href="#section-23">相关文档</a>
+      </nav>
+    </aside>
+    <main>
+      <section class="hero">
+        <h1>V3 纯第三方模式对接文档</h1>
+        <p>把原来的长 Markdown 拆成可浏览的交付页面：左侧目录快速定位，正文保留完整接口细节，代码块可复制，表格和流程更适合发给第三方技术团队评审。</p>
+        <div class="hero-metrics">
+          <div class="metric"><strong>4</strong><span>核心闭环：问答、权限、产物、事务</span></div>
+          <div class="metric"><strong>6</strong><span>第三方接口面：聊天、文档、用户、ACL、产物、动作</span></div>
+          <div class="metric"><strong>0</strong><span>无需整库搬迁，支持按需读取与增量索引</span></div>
+          <div class="metric"><strong>V3</strong><span>统一控制权限、供料、风控和审计</span></div>
+        </div>
+      </section>
+      <article>
+        <h1>V3 纯第三方模式对接文档</h1>
+<p><strong>文档状态：</strong> 对外草案 v0.1 <strong>最后更新：</strong> 2026-05-15 <strong>适用对象：</strong> 第三方自建门户、文档库、用户中心、产物系统、业务系统和客户 IT 对接团队 <strong>默认 V3 对外域名：</strong> <code>https://v3.elepcloud.com</code></p>
+<p>本文只描述“纯第三方模式”。飞书、Lark、企业微信等标准机器人平台不在本文展开；这些平台走各自官方事件和机器人接口，再由 V3 转为统一通道事件。</p>
+<p>纯第三方模式适用于：第三方自己搭建聊天页面或业务入口，文档库、用户权限、产物系统、业务系统也可以都在第三方服务器上；V3 作为统一智能处理、权限过滤、动作风控和审计中心。</p>
+<h2 id="section-01">1. 对接目标</h2>
+<p>纯第三方模式要完成四类闭环：</p>
+<ul>
+<li>用户在第三方页面或系统里向 V3 提问；</li>
+<li>V3 按第三方用户身份和文档权限，只检索该用户可访问的资料；</li>
+<li>V3 生成回答、报告、静态页或其他产物，并可发布回第三方系统；</li>
+<li>V3 在用户确认后，调用第三方业务接口处理事务，并接收异步结果回传。</li>
+</ul>
+<p>V3 不要求第三方放弃自己的页面、文档库或业务系统。第三方页面仍由第三方控制，V3 负责背后的问答、资料供料、权限治理、动作确认和审计。</p>
+<h2 id="section-02">2. 总体架构</h2>
+<div class="flow-board" aria-label="纯第三方模式总体流程">
+    
+          <div class="flow-node">
+            <span class="flow-index">1</span>
+            <strong>外部用户</strong>
+            <small>输入问题或操作请求</small>
+          </div>
+        <span class="flow-arrow">→</span>
+          <div class="flow-node">
+            <span class="flow-index">2</span>
+            <strong>第三方聊天页面/门户</strong>
+            <small>提交标准化消息事件</small>
+          </div>
+        <span class="flow-arrow">→</span>
+          <div class="flow-node">
+            <span class="flow-index">3</span>
+            <strong>V3 对外接入网关</strong>
+            <small>校验连接、幂等、通道策略</small>
+          </div>
+        <span class="flow-arrow">→</span>
+          <div class="flow-node">
+            <span class="flow-index">4</span>
+            <strong>第三方用户/权限系统</strong>
+            <small>解析身份、部门、组、角色</small>
+          </div>
+        <span class="flow-arrow">→</span>
+          <div class="flow-node">
+            <span class="flow-index">5</span>
+            <strong>第三方文档库</strong>
+            <small>按版本和 ACL 获取可见证据</small>
+          </div>
+        <span class="flow-arrow">→</span>
+          <div class="flow-node">
+            <span class="flow-index">6</span>
+            <strong>V3 助手运行时</strong>
+            <small>权限过滤后供料给模型</small>
+          </div>
+        <span class="flow-arrow">→</span>
+          <div class="flow-node">
+            <span class="flow-index">7</span>
+            <strong>第三方产物/业务系统</strong>
+            <small>执行已确认动作并回传结果</small>
+          </div>
+        
+  </div>
+<p>关键边界：</p>
+<ul>
+<li>第三方页面只负责交互展示，不负责最终权限判断；</li>
+<li>V3 不把未授权文档交给模型；</li>
+<li>模型可以回答普通问题，但涉及 V3 文档、权限、产物和工具结果时，只能基于 V3 已供给证据；</li>
+<li>高风险或跨系统写入必须经过 V3 确认流程。</li>
+</ul>
+<h2 id="section-03">3. 最小接入范围</h2>
+<p>最小可联调版本建议先准备：</p>
+<div class="table-shell"><table><thead><tr><th>模块</th><th>第三方需要提供</th><th>V3 使用方式</th></tr></thead><tbody><tr><td>聊天入口</td><td>自建页面或网关调用 V3 消息接口</td><td>创建 AssistantRun 并返回回复对象</td></tr><tr><td>用户身份</td><td>外部用户 ID、状态、部门/组/角色</td><td>解析当前提问用户的有效身份</td></tr><tr><td>文档库</td><td>文档列表、版本、正文或正文读取地址</td><td>建立索引或按需读取证据</td></tr><tr><td>文档权限</td><td>文档 ACL 快照或可访问主体列表</td><td>检索前过滤不可见文档</td></tr><tr><td>产物接口</td><td>接收报告、页面、文件或链接</td><td>发布/查询/撤销 V3 产物</td></tr><tr><td>业务动作</td><td>接收 V3 派发的动作请求</td><td>执行业务事务并回传结果</td></tr></tbody></table></div>
+<p>如果项目早期只做问答，可以先接聊天入口、用户身份、文档库和文档权限；产物和业务动作可以后续接入。</p>
+<h2 id="section-04">4. 文档是否必须搬到 V3</h2>
+<p>不需要把第三方服务器上的所有文档一次性拷贝到 V3 才能问答。</p>
+<p>V3 需要的是“可验证、可权限过滤、可追溯版本”的证据供料。第三方可以根据安全要求选择以下方式：</p>
+<div class="table-shell"><table><thead><tr><th>方式</th><th>说明</th><th>适用场景</th></tr></thead><tbody><tr><td>增量索引</td><td>V3 拉取发生变化的文档正文或解析文本，生成检索索引和证据片段</td><td>常规知识库问答，体验最好</td></tr><tr><td>按需读取</td><td>V3 先同步文档元数据、版本和 ACL，需要深读时再调用正文接口</td><td>原文敏感、文档量大、只允许按需访问</td></tr><tr><td>第三方预解析</td><td>第三方提供已解析 Markdown/HTML/段落/结构化表格，V3 不下载原文件</td><td>第三方已有解析管线</td></tr><tr><td>推送供料</td><td>第三方主动推送变更文档、片段或索引包</td><td>内网隔离或第三方主动控制同步</td></tr></tbody></table></div>
+<p>无论哪种方式，都建议提供：</p>
+<ul>
+<li>稳定的 <code>document_external_id</code>；</li>
+<li>单调变化或可比较的 <code>revision</code>；</li>
+<li><code>updated_at</code>；</li>
+<li><code>content_hash</code> 或文件哈希；</li>
+<li>文档 ACL 快照；</li>
+<li>文档删除或权限撤销信号。</li>
+</ul>
+<p>V3 可以保存文档元数据、权限快照、解析后的文本片段、索引和来源定位信息。文档原件可以继续留在第三方服务器上。若项目要求 V3 不长期保存正文，可在实施阶段约定缓存周期、删除策略和只读按需读取策略。</p>
+<p>问答时的基本过程是：</p>
+<ol>
+<li>第三方页面把用户消息和 <code>sender_external_id</code> 发给 V3；</li>
+<li>V3 解析该用户在第三方系统里的部门、用户组、角色和状态；</li>
+<li>V3 根据文档 ACL 计算该用户可访问的文档集合；</li>
+<li>V3 只在可访问集合内检索或按需读取；</li>
+<li>V3 把证据片段、来源和版本供给模型；</li>
+<li>模型基于这些证据回答，并保留 <code>当前不可见/未供料</code> 的边界说明。</li>
+</ol>
+<h2 id="section-05">5. V3 入站聊天接口</h2>
+<p>第三方自建页面或网关将用户消息提交给 V3：</p>
+<figure class="code-card">
+    <figcaption><span>http</span><button type="button" class="copy-code">复制</button></figcaption>
+    <pre><code>POST /v1/external/channels/{connection_id}/events
+Host: v3.elepcloud.com
+Content-Type: application/json</code></pre>
+  </figure>
+<p>请求示例：</p>
+<figure class="code-card">
+    <figcaption><span>json</span><button type="button" class="copy-code">复制</button></figcaption>
+    <pre><code>{
+  &quot;platform&quot;: &quot;third_party&quot;,
+  &quot;tenant_external_id&quot;: &quot;tenant-ext-001&quot;,
+  &quot;bot_external_id&quot;: &quot;bot-v3&quot;,
+  &quot;conversation_external_id&quot;: &quot;chat-risk-room&quot;,
+  &quot;thread_external_id&quot;: &quot;thread-optional&quot;,
+  &quot;sender_external_id&quot;: &quot;user-10001&quot;,
+  &quot;message_external_id&quot;: &quot;msg-20260515-0001&quot;,
+  &quot;message_type&quot;: &quot;text&quot;,
+  &quot;text&quot;: &quot;帮我总结我能看的采购审批制度，并指出本周需要处理的风险。&quot;,
+  &quot;mention_external_user_ids&quot;: [],
+  &quot;attachment_refs&quot;: [],
+  &quot;idempotency_key&quot;: &quot;third_party:tenant-ext-001:msg-20260515-0001&quot;,
+  &quot;received_at&quot;: &quot;2026-05-15T10:00:00Z&quot;
+}</code></pre>
+  </figure>
+<p>字段要求：</p>
+<div class="table-shell"><table><thead><tr><th>字段</th><th>必填</th><th>说明</th></tr></thead><tbody><tr><td><code>platform</code></td><td>是</td><td>纯第三方建议使用 <code>third_party</code>；自建聊天也可按项目配置使用 <code>generic_chat</code></td></tr><tr><td><code>tenant_external_id</code></td><td>是</td><td>第三方租户、空间或客户 ID</td></tr><tr><td><code>bot_external_id</code></td><td>是</td><td>第三方侧机器人或应用 ID</td></tr><tr><td><code>conversation_external_id</code></td><td>是</td><td>会话、群、房间或页面上下文 ID</td></tr><tr><td><code>sender_external_id</code></td><td>是</td><td>当前提问用户在第三方系统中的稳定 ID</td></tr><tr><td><code>message_external_id</code></td><td>是</td><td>第三方消息 ID，必须稳定</td></tr><tr><td><code>message_type</code></td><td>是</td><td><code>text</code>、<code>image</code>、<code>file</code>、<code>audio</code>、<code>video</code>、<code>card</code>、<code>event</code> 或 <code>unknown</code></td></tr><tr><td><code>text</code></td><td>文本消息必填</td><td>用户输入文本</td></tr><tr><td><code>attachment_refs</code></td><td>否</td><td>附件引用，文件下载需按项目配置权限和有效期</td></tr><tr><td><code>idempotency_key</code></td><td>是</td><td>防重放和重复投递</td></tr><tr><td><code>received_at</code></td><td>是</td><td>第三方收到消息的时间</td></tr></tbody></table></div>
+<p>响应示例：</p>
+<figure class="code-card">
+    <figcaption><span>json</span><button type="button" class="copy-code">复制</button></figcaption>
+    <pre><code>{
+  &quot;connection_id&quot;: &quot;generic-chat-main&quot;,
+  &quot;assistant_run_id&quot;: &quot;00000000-0000-0000-0000-000000000001&quot;,
+  &quot;idempotency_key&quot;: &quot;third_party:tenant-ext-001:msg-20260515-0001&quot;,
+  &quot;reply&quot;: {
+    &quot;reply_type&quot;: &quot;task_status&quot;,
+    &quot;task_status&quot;: &quot;accepted&quot;,
+    &quot;text&quot;: &quot;V3 已接收请求，正在处理。&quot;
+  }
+}</code></pre>
+  </figure>
+<p>常见 <code>reply_type</code>：</p>
+<ul>
+<li><code>task_status</code>：已接收、处理中、失败、等待证据；</li>
+<li><code>text</code>：普通文本回答；</li>
+<li><code>card</code>：结构化卡片；</li>
+<li><code>artifact_link</code>：产物链接；</li>
+<li><code>requires_confirmation</code>：需要用户确认；</li>
+<li><code>error</code>：错误或无法完成。</li>
+</ul>
+<p>如果消息需要外部/网页搜索，而 V3 尚未供给搜索证据，可能返回：</p>
+<figure class="code-card">
+    <figcaption><span>json</span><button type="button" class="copy-code">复制</button></figcaption>
+    <pre><code>{
+  &quot;reply_type&quot;: &quot;task_status&quot;,
+  &quot;task_status&quot;: &quot;v3_search_evidence_required&quot;,
+  &quot;card&quot;: {
+    &quot;type&quot;: &quot;v3_search_evidence_required&quot;,
+    &quot;search_evidence_required&quot;: true
+  }
+}</code></pre>
+  </figure>
+<p>这表示 V3 正等待只读搜索证据供料，不表示已经完成联网搜索。</p>
+<h2 id="section-06">6. 用户与组织接口</h2>
+<p>第三方需要让 V3 能够识别外部用户是谁，以及该用户属于哪些部门、用户组和角色。</p>
+<p>建议第三方提供：</p>
+<figure class="code-card">
+    <figcaption><span>http</span><button type="button" class="copy-code">复制</button></figcaption>
+    <pre><code>GET /users
+GET /departments
+GET /groups
+GET /roles
+GET /users/{user_external_id}/memberships</code></pre>
+  </figure>
+<p>用户列表响应示例：</p>
+<figure class="code-card">
+    <figcaption><span>json</span><button type="button" class="copy-code">复制</button></figcaption>
+    <pre><code>{
+  &quot;items&quot;: [
+    {
+      &quot;user_external_id&quot;: &quot;user-10001&quot;,
+      &quot;display_name&quot;: &quot;张三&quot;,
+      &quot;email&quot;: &quot;zhangsan@example.com&quot;,
+      &quot;mobile&quot;: &quot;+86-13800000000&quot;,
+      &quot;status&quot;: &quot;active&quot;,
+      &quot;department_external_ids&quot;: [&quot;dept-finance&quot;],
+      &quot;group_external_ids&quot;: [&quot;group-procurement&quot;],
+      &quot;role_external_ids&quot;: [&quot;role-requester&quot;],
+      &quot;updated_at&quot;: &quot;2026-05-15T09:00:00Z&quot;
+    }
+  ],
+  &quot;next_cursor&quot;: null
+}</code></pre>
+  </figure>
+<p>V3 计算有效权限时会综合：</p>
+<ul>
+<li>用户直接权限；</li>
+<li>部门权限；</li>
+<li>用户组权限；</li>
+<li>角色权限；</li>
+<li>租户、空间或连接默认策略；</li>
+<li>明确拒绝规则；</li>
+<li>用户是否停用；</li>
+<li>文档版本和权限快照时间。</li>
+</ul>
+<p>用户停用、部门调整、角色变更后，应尽快让 V3 同步最新状态。</p>
+<h2 id="section-07">7. 文档接口</h2>
+<h3 id="section-08">7.1 文档列表</h3>
+<p>建议第三方提供：</p>
+<figure class="code-card">
+    <figcaption><span>http</span><button type="button" class="copy-code">复制</button></figcaption>
+    <pre><code>GET /documents?cursor=&lt;cursor&gt;&amp;updated_after=&lt;iso_time&gt;&amp;limit=100</code></pre>
+  </figure>
+<p>响应示例：</p>
+<figure class="code-card">
+    <figcaption><span>json</span><button type="button" class="copy-code">复制</button></figcaption>
+    <pre><code>{
+  &quot;items&quot;: [
+    {
+      &quot;document_external_id&quot;: &quot;doc-001&quot;,
+      &quot;title&quot;: &quot;采购审批制度&quot;,
+      &quot;document_type&quot;: &quot;pdf&quot;,
+      &quot;revision&quot;: &quot;rev-20260515-01&quot;,
+      &quot;updated_at&quot;: &quot;2026-05-15T09:20:00Z&quot;,
+      &quot;deleted&quot;: false,
+      &quot;content_url&quot;: &quot;https://third-party.example.com/documents/doc-001/content&quot;,
+      &quot;acl_url&quot;: &quot;https://third-party.example.com/documents/doc-001/acl&quot;,
+      &quot;content_hash&quot;: &quot;sha256:...&quot;
+    }
+  ],
+  &quot;next_cursor&quot;: &quot;cursor-002&quot;
+}</code></pre>
+  </figure>
+<h3 id="section-09">7.2 文档正文</h3>
+<p>建议第三方提供：</p>
+<figure class="code-card">
+    <figcaption><span>http</span><button type="button" class="copy-code">复制</button></figcaption>
+    <pre><code>GET /documents/{document_external_id}/content?revision=rev-20260515-01</code></pre>
+  </figure>
+<p>可返回：</p>
+<ul>
+<li>原始文件下载流；</li>
+<li>已解析文本；</li>
+<li>Markdown；</li>
+<li>HTML；</li>
+<li>结构化段落；</li>
+<li>表格数据；</li>
+<li>附件列表；</li>
+<li>文件哈希、版本号和更新时间。</li>
+</ul>
+<p>正文必须与 <code>revision</code> 对应。文档更新后，应生成新的版本标识。</p>
+<h3 id="section-10">7.3 文档权限快照</h3>
+<p>建议第三方提供：</p>
+<figure class="code-card">
+    <figcaption><span>http</span><button type="button" class="copy-code">复制</button></figcaption>
+    <pre><code>GET /documents/{document_external_id}/acl?revision=rev-20260515-01</code></pre>
+  </figure>
+<p>响应示例：</p>
+<figure class="code-card">
+    <figcaption><span>json</span><button type="button" class="copy-code">复制</button></figcaption>
+    <pre><code>{
+  &quot;document_external_id&quot;: &quot;doc-001&quot;,
+  &quot;revision&quot;: &quot;rev-20260515-01&quot;,
+  &quot;acl_hash&quot;: &quot;sha256:...&quot;,
+  &quot;captured_at&quot;: &quot;2026-05-15T09:21:00Z&quot;,
+  &quot;allow&quot;: [
+    { &quot;subject_type&quot;: &quot;user&quot;, &quot;subject_external_id&quot;: &quot;user-10001&quot;, &quot;level&quot;: &quot;read&quot; },
+    { &quot;subject_type&quot;: &quot;department&quot;, &quot;subject_external_id&quot;: &quot;dept-finance&quot;, &quot;level&quot;: &quot;read&quot; },
+    { &quot;subject_type&quot;: &quot;role&quot;, &quot;subject_external_id&quot;: &quot;role-procurement-admin&quot;, &quot;level&quot;: &quot;manage&quot; }
+  ],
+  &quot;deny&quot;: [
+    { &quot;subject_type&quot;: &quot;user&quot;, &quot;subject_external_id&quot;: &quot;user-99999&quot;, &quot;reason&quot;: &quot;restricted&quot; }
+  ]
+}</code></pre>
+  </figure>
+<p>ACL 说明：</p>
+<ul>
+<li><code>allow</code> 表示可访问主体；</li>
+<li><code>deny</code> 表示明确拒绝主体；</li>
+<li>主体可以是 <code>user</code>、<code>department</code>、<code>group</code>、<code>role</code>、<code>tenant</code>；</li>
+<li><code>deny</code> 优先级应高于 <code>allow</code>；</li>
+<li>文档权限变化后，应尽快触发 V3 同步。</li>
+</ul>
+<h2 id="section-11">8. V3 触发资料源同步</h2>
+<p>V3 可通过连接配置中的第三方文档接口进行增量同步。运营或系统可触发：</p>
+<figure class="code-card">
+    <figcaption><span>http</span><button type="button" class="copy-code">复制</button></figcaption>
+    <pre><code>POST /v1/external/sources/{source_id}/sync
+Host: v3.elepcloud.com</code></pre>
+  </figure>
+<p>V3 会把同步任务放入后台队列。同步任务应记录：</p>
+<ul>
+<li>本次同步的 source；</li>
+<li>增量游标；</li>
+<li>文档数量；</li>
+<li>新增、更新、删除、失败数量；</li>
+<li>ACL 快照状态；</li>
+<li>错误摘要。</li>
+</ul>
+<p>同步日志和观测摘要不会展示原始文档正文和密钥。</p>
+<h2 id="section-12">9. 用户确认接口</h2>
+<p>当 V3 判断某个动作需要确认时，会返回 <code>requires_confirmation</code>。第三方页面应把动作摘要展示给用户，再把确认结果提交给 V3：</p>
+<figure class="code-card">
+    <figcaption><span>http</span><button type="button" class="copy-code">复制</button></figcaption>
+    <pre><code>POST /v1/external/channels/{connection_id}/confirmations
+Host: v3.elepcloud.com
+Content-Type: application/json</code></pre>
+  </figure>
+<p>请求示例：</p>
+<figure class="code-card">
+    <figcaption><span>json</span><button type="button" class="copy-code">复制</button></figcaption>
+    <pre><code>{
+  &quot;assistant_run_id&quot;: &quot;00000000-0000-0000-0000-000000000001&quot;,
+  &quot;action_id&quot;: &quot;act-001&quot;,
+  &quot;confirmation_external_id&quot;: &quot;confirm-001&quot;,
+  &quot;sender_external_user_id&quot;: &quot;user-10001&quot;,
+  &quot;decision&quot;: &quot;approved&quot;,
+  &quot;comment&quot;: &quot;确认提交审批。&quot;,
+  &quot;idempotency_key&quot;: &quot;third_party:tenant-ext-001:confirm-001&quot;,
+  &quot;confirmed_at&quot;: &quot;2026-05-15T10:03:00Z&quot;
+}</code></pre>
+  </figure>
+<p><code>decision</code> 支持：</p>
+<ul>
+<li><code>approved</code>；</li>
+<li><code>rejected</code>。</li>
+</ul>
+<p>第三方页面必须展示 V3 返回的动作摘要，不应自行拼接高风险动作内容。</p>
+<h2 id="section-13">10. 产物接口</h2>
+<p>V3 可以生成报告、页面、文档、表格、图片、压缩包或链接，并按项目配置发布到第三方系统。</p>
+<p>当前主链路采用“V3 外部动作派发”方式：V3 把 <code>external_artifact.publish</code>、<code>external_artifact.status</code>、<code>external_artifact.revoke</code> 作为受控动作保存到审计记录中，再派发到第三方配置的 HTTPS endpoint。</p>
+<p>第三方建议提供：</p>
+<figure class="code-card">
+    <figcaption><span>http</span><button type="button" class="copy-code">复制</button></figcaption>
+    <pre><code>POST /artifacts
+GET /artifacts/{artifact_external_id}
+POST /artifacts/{artifact_external_id}/revoke</code></pre>
+  </figure>
+<p>V3 派发示例：</p>
+<figure class="code-card">
+    <figcaption><span>json</span><button type="button" class="copy-code">复制</button></figcaption>
+    <pre><code>{
+  &quot;action_id&quot;: &quot;act-artifact-001&quot;,
+  &quot;assistant_run_id&quot;: &quot;00000000-0000-0000-0000-000000000001&quot;,
+  &quot;action_type&quot;: &quot;external_artifact.publish&quot;,
+  &quot;risk_level&quot;: &quot;low_risk_write&quot;,
+  &quot;target_system&quot;: &quot;third_party_artifact_api&quot;,
+  &quot;arguments_redacted&quot;: {
+    &quot;artifact_ref&quot;: &quot;artifact-001&quot;,
+    &quot;target_system&quot;: &quot;customer-portal&quot;,
+    &quot;visibility&quot;: &quot;source_acl&quot;
+  },
+  &quot;confirmation_state&quot;: &quot;not_required&quot;,
+  &quot;requester_summary&quot;: {
+    &quot;platform&quot;: &quot;third_party&quot;,
+    &quot;tenant_external_id&quot;: &quot;tenant-ext-001&quot;,
+    &quot;conversation_external_id&quot;: &quot;chat-risk-room&quot;,
+    &quot;sender_external_id&quot;: &quot;user-10001&quot;
+  },
+  &quot;raw_arguments_included&quot;: false
+}</code></pre>
+  </figure>
+<p>第三方响应可返回：</p>
+<figure class="code-card">
+    <figcaption><span>json</span><button type="button" class="copy-code">复制</button></figcaption>
+    <pre><code>{
+  &quot;external_request_id&quot;: &quot;artifact-publish-001&quot;,
+  &quot;status&quot;: &quot;accepted&quot;,
+  &quot;artifact_external_id&quot;: &quot;tp-artifact-001&quot;
+}</code></pre>
+  </figure>
+<p>产物发布要求：</p>
+<ul>
+<li>产物权限不高于来源文档权限；</li>
+<li>下载链接应短期有效或带权限校验；</li>
+<li>撤销后第三方不可继续访问；</li>
+<li>发布、查看、下载、撤销都应可审计；</li>
+<li>V3 观测接口不展示原始产物正文、原始下载地址或凭证。</li>
+</ul>
+<h2 id="section-14">11. 业务动作接口</h2>
+<p>V3 可在用户授权和系统校验后调用第三方业务接口，例如：</p>
+<ul>
+<li>创建或更新工单；</li>
+<li>发起审批；</li>
+<li>写入 CRM 跟进记录；</li>
+<li>创建项目任务；</li>
+<li>提交结构化表单；</li>
+<li>调用客户内部流程。</li>
+</ul>
+<p>第三方建议提供一个统一动作接收 endpoint：</p>
+<figure class="code-card">
+    <figcaption><span>http</span><button type="button" class="copy-code">复制</button></figcaption>
+    <pre><code>POST /actions</code></pre>
+  </figure>
+<p>V3 派发请求示例：</p>
+<figure class="code-card">
+    <figcaption><span>json</span><button type="button" class="copy-code">复制</button></figcaption>
+    <pre><code>{
+  &quot;action_id&quot;: &quot;act-001&quot;,
+  &quot;assistant_run_id&quot;: &quot;00000000-0000-0000-0000-000000000001&quot;,
+  &quot;action_type&quot;: &quot;ticket.update_priority&quot;,
+  &quot;risk_level&quot;: &quot;high_risk_write&quot;,
+  &quot;target_system&quot;: &quot;ticketing&quot;,
+  &quot;confirmation_state&quot;: &quot;confirmed&quot;,
+  &quot;arguments_redacted&quot;: {
+    &quot;ticket_id&quot;: &quot;T-1001&quot;,
+    &quot;priority&quot;: &quot;high&quot;
+  },
+  &quot;requester_summary&quot;: {
+    &quot;platform&quot;: &quot;third_party&quot;,
+    &quot;tenant_external_id&quot;: &quot;tenant-ext-001&quot;,
+    &quot;conversation_external_id&quot;: &quot;chat-risk-room&quot;,
+    &quot;sender_external_id&quot;: &quot;user-10001&quot;
+  },
+  &quot;raw_arguments_included&quot;: false
+}</code></pre>
+  </figure>
+<p>风险等级建议：</p>
+<div class="table-shell"><table><thead><tr><th>风险等级</th><th>示例</th><th>处理要求</th></tr></thead><tbody><tr><td><code>read_only</code></td><td>查询状态</td><td>不写入第三方系统</td></tr><tr><td><code>low_risk_write</code></td><td>发布草稿、创建低风险记录</td><td>可直接执行或轻量确认</td></tr><tr><td><code>high_risk_write</code></td><td>对外发布、变更权限、提交审批</td><td>必须用户确认</td></tr><tr><td><code>cross_system</code></td><td>跨系统事务、影响多个系统</td><td>必须确认并重点审计</td></tr></tbody></table></div>
+<p>V3 不会把飞书、企微或第三方入站回调用的通用 token 当作动作派发凭证复用。派发 endpoint 必须配置派发专用 Bearer Token 或签名密钥之一；否则 V3 会记录 <code>dispatch_blocked</code> 和 <code>dispatch_auth_missing</code>。</p>
+<h2 id="section-15">12. 动作结果回传</h2>
+<p>第三方异步执行完成后，把结果回传给 V3：</p>
+<figure class="code-card">
+    <figcaption><span>http</span><button type="button" class="copy-code">复制</button></figcaption>
+    <pre><code>POST /v1/external/channels/{connection_id}/actions/{action_id}/result
+Host: v3.elepcloud.com
+Content-Type: application/json</code></pre>
+  </figure>
+<p>请求示例：</p>
+<figure class="code-card">
+    <figcaption><span>json</span><button type="button" class="copy-code">复制</button></figcaption>
+    <pre><code>{
+  &quot;external_request_id&quot;: &quot;gateway-req-001&quot;,
+  &quot;status&quot;: &quot;succeeded&quot;,
+  &quot;idempotency_key&quot;: &quot;third_party:tenant-ext-001:result-001&quot;,
+  &quot;completed_at&quot;: &quot;2026-05-15T10:30:00Z&quot;,
+  &quot;code&quot;: &quot;OK&quot;,
+  &quot;message&quot;: &quot;可选说明文本。V3 只记录 message 是否存在。&quot;,
+  &quot;result&quot;: {
+    &quot;artifact_id&quot;: &quot;artifact-001&quot;,
+    &quot;status&quot;: &quot;created&quot;
+  }
+}</code></pre>
+  </figure>
+<p>支持的 <code>status</code>：</p>
+<ul>
+<li><code>accepted</code>；</li>
+<li><code>running</code>；</li>
+<li><code>succeeded</code>；</li>
+<li><code>failed</code>；</li>
+<li><code>cancelled</code>；</li>
+<li><code>rejected</code>。</li>
+</ul>
+<p>V3 会校验该通道是否拥有对应动作。如果派发时已经记录 <code>external_request_id</code>，回传时不允许传入不一致的请求 ID。<code>message</code> 和任意 <code>result</code> 值不会原文保存；V3 只保存是否存在、状态、安全错误码、字段数量等结构化摘要。</p>
+<h2 id="section-16">13. V3 出站派发签名</h2>
+<p>V3 调用第三方产物或业务动作 endpoint 时，建议第三方校验以下请求头：</p>
+<figure class="code-card">
+    <figcaption><span>http</span><button type="button" class="copy-code">复制</button></figcaption>
+    <pre><code>Authorization: Bearer &lt;dispatch token&gt;
+X-V3-Connection-Id: generic-chat-main
+X-V3-Timestamp: 2026-05-15T10:00:00Z
+X-V3-Nonce: 01HX...
+X-V3-Content-SHA256: &lt;JSON 原始请求体 sha256 hex&gt;
+X-V3-Signature: sha256=&lt;HMAC-SHA256 hex&gt;</code></pre>
+  </figure>
+<p>只有配置派发 Bearer Token 时才发送 <code>Authorization</code>。只有配置派发签名密钥时才发送 <code>X-V3-Signature</code>。两者都配置时，V3 会同时发送。</p>
+<p>推荐签名原文：</p>
+<figure class="code-card">
+    <figcaption><span>text</span><button type="button" class="copy-code">复制</button></figcaption>
+    <pre><code>method + &quot;\n&quot; + path + &quot;\n&quot; + timestamp + &quot;\n&quot; + nonce + &quot;\n&quot; + raw_body_sha256</code></pre>
+  </figure>
+<p>第三方应校验：</p>
+<ul>
+<li>HTTPS；</li>
+<li>时间戳窗口；</li>
+<li>nonce 不重复；</li>
+<li>body hash 一致；</li>
+<li>HMAC 签名一致；</li>
+<li>token 未过期；</li>
+<li>来源 IP 或网络白名单符合项目约定。</li>
+</ul>
+<h2 id="section-17">14. 观测接口</h2>
+<p>V3 提供观测优先的管理接口，供 V3 控制台和运营人员使用。第三方自建聊天页面不需要直接暴露这些接口给普通用户。</p>
+<figure class="code-card">
+    <figcaption><span>http</span><button type="button" class="copy-code">复制</button></figcaption>
+    <pre><code>GET /v1/external/integrations
+GET /v1/external/integrations/{integration_id}/audit
+POST /v1/external/integrations/{integration_id}/retry
+POST /v1/external/integrations/{integration_id}/disable
+POST /v1/external/integrations/{integration_id}/rotate-secret</code></pre>
+  </figure>
+<p>观测摘要包括：</p>
+<ul>
+<li>通道健康状态；</li>
+<li>最近活动时间；</li>
+<li>文档同步状态；</li>
+<li>用户映射和权限漂移；</li>
+<li>动作总数、待确认、派发阻断、派发失败、等待结果、结果成功/失败；</li>
+<li>搜索证据待供料数量；</li>
+<li>产物发布、撤销和状态查询摘要。</li>
+</ul>
+<p>观测接口不会返回：</p>
+<ul>
+<li>第三方原始密钥；</li>
+<li>原始 provider payload；</li>
+<li>未授权文档正文；</li>
+<li>原始用户查询全文；</li>
+<li>原始动作结果正文；</li>
+<li>原始下载地址或长期凭证。</li>
+</ul>
+<p>审计筛选示例：</p>
+<figure class="code-card">
+    <figcaption><span>http</span><button type="button" class="copy-code">复制</button></figcaption>
+    <pre><code>GET /v1/external/integrations/generic-chat-main/audit?item_type=action&amp;action_state=result_callback
+GET /v1/external/integrations/generic-chat-main/audit?item_type=search_evidence
+GET /v1/external/integrations/generic-chat-main/audit?item_type=action&amp;action_id=act-001&amp;limit=1</code></pre>
+  </figure>
+<h2 id="section-18">15. 错误返回</h2>
+<p>V3 错误格式：</p>
+<figure class="code-card">
+    <figcaption><span>json</span><button type="button" class="copy-code">复制</button></figcaption>
+    <pre><code>{
+  &quot;code&quot;: &quot;external_channel_connection_not_found&quot;,
+  &quot;message&quot;: &quot;未找到对应的第三方聊天通道连接。&quot;,
+  &quot;details&quot;: {}
+}</code></pre>
+  </figure>
+<p>常见错误码：</p>
+<div class="table-shell"><table><thead><tr><th>错误码</th><th>说明</th></tr></thead><tbody><tr><td><code>external_channel_connection_not_found</code></td><td>未找到聊天通道连接</td></tr><tr><td><code>external_channel_disabled</code></td><td>连接已停用</td></tr><tr><td><code>external_channel_platform_mismatch</code></td><td>请求平台与连接配置不一致</td></tr><tr><td><code>external_message_invalid</code></td><td>消息结构不合法</td></tr><tr><td><code>external_action_not_found</code></td><td>未找到动作</td></tr><tr><td><code>external_action_result_request_mismatch</code></td><td>回传请求 ID 不一致</td></tr><tr><td><code>external_action_dispatch_blocked</code></td><td>动作派发被阻断</td></tr><tr><td><code>react_dataset_not_selected</code></td><td>请求的数据集不在当前可见范围</td></tr></tbody></table></div>
+<p>第三方错误返回也应使用稳定 <code>code</code>，不要在 <code>message</code> 中返回密钥、token、完整 SQL、堆栈或敏感业务正文。</p>
+<h2 id="section-19">16. 联调前第三方准备清单</h2>
+<p>请第三方在联调前准备：</p>
+<ul>
+<li>测试环境域名和网络访问方式；</li>
+<li>V3 可调用的文档列表接口；</li>
+<li>V3 可调用的文档正文或解析文本接口；</li>
+<li>V3 可调用的文档 ACL 接口；</li>
+<li>用户、部门、用户组、角色样例；</li>
+<li>至少 3 个不同权限等级的测试用户；</li>
+<li>至少 5 份测试文档，包括有权、无权、部门可见、角色可见、权限撤销样例；</li>
+<li>自建聊天页面或消息网关；</li>
+<li>产物接收 endpoint；</li>
+<li>业务动作接收 endpoint；</li>
+<li>动作结果回传测试数据；</li>
+<li>Bearer Token 或签名密钥；</li>
+<li>IP 白名单、证书和 HTTPS 配置；</li>
+<li>运维联系人和失败重试策略。</li>
+</ul>
+<p>推荐测试用例：</p>
+<ol>
+<li>同一问题，不同权限用户得到不同可见范围回答；</li>
+<li>用户无权访问的文档不进入回答证据；</li>
+<li>文档更新后，V3 使用新 revision；</li>
+<li>文档权限撤销后，原用户无法继续引用该文档；</li>
+<li>高风险动作必须先返回确认请求；</li>
+<li>用户拒绝确认后，V3 不派发动作；</li>
+<li>已确认动作派发到第三方 endpoint；</li>
+<li>第三方回传 <code>succeeded</code> 后，V3 观测面板展示结果回调；</li>
+<li>重复消息和重复结果回调不会重复创建任务；</li>
+<li>未配置派发凭证时，V3 记录 <code>dispatch_auth_missing</code>，不静默失败。</li>
+</ol>
+<h2 id="section-20">17. 安全与合规要求</h2>
+<ul>
+<li>生产环境必须使用 HTTPS；</li>
+<li>所有连接必须有明确租户和连接 ID；</li>
+<li>所有写入动作必须可审计；</li>
+<li>高风险动作必须确认；</li>
+<li>第三方下载地址应短期有效或带权限校验；</li>
+<li>文档权限撤销后，应尽快同步到 V3；</li>
+<li>V3 和第三方都不应在日志中保存明文 token、密钥、Cookie 或未授权正文；</li>
+<li>第三方页面不得把 V3 管理接口开放给普通用户；</li>
+<li>内网部署、专线、代理、网关和证书策略需在项目实施阶段确认。</li>
+</ul>
+<h2 id="section-21">18. 当前实现状态</h2>
+<p>当前 V3 已具备的纯第三方主链路能力：</p>
+<ul>
+<li>统一外部聊天通道事件：<code>POST /v1/external/channels/{connection_id}/events</code>；</li>
+<li>统一用户确认回调：<code>POST /v1/external/channels/{connection_id}/confirmations</code>；</li>
+<li>外部动作结果回传：<code>POST /v1/external/channels/{connection_id}/actions/{action_id}/result</code>；</li>
+<li>资料源同步触发：<code>POST /v1/external/sources/{source_id}/sync</code>；</li>
+<li>外部动作派发到第三方 HTTPS endpoint；</li>
+<li>派发 Bearer Token 和 HMAC 签名；</li>
+<li>动作生命周期观测和审计筛选；</li>
+<li>action detail permalink 和脱敏 trace export；</li>
+<li>搜索证据待供料状态观测；</li>
+<li>第三方交接清单、mock gateway、交接包和校验工具。</li>
+</ul>
+<p>仍需按项目配置或后续联调确认：</p>
+<ul>
+<li>具体第三方文档 API 字段映射；</li>
+<li>用户目录和 ACL 规则映射；</li>
+<li>产物 endpoint 和业务动作 endpoint；</li>
+<li>生产级入站签名、白名单、重放窗口和密钥轮换策略；</li>
+<li>客户真实沙箱环境的端到端验证。</li>
+</ul>
+<h2 id="section-22">19. 推荐联调顺序</h2>
+<ol>
+<li>创建 V3 第三方连接和 <code>connection_id</code>；</li>
+<li>配置第三方测试环境、网络和凭证；</li>
+<li>第三方消息网关调用 V3 events 接口；</li>
+<li>同步测试用户和组织关系；</li>
+<li>同步测试文档元数据、正文和 ACL；</li>
+<li>验证不同权限用户问答；</li>
+<li>接入产物发布 endpoint；</li>
+<li>接入业务动作 endpoint；</li>
+<li>验证用户确认、动作派发和结果回传；</li>
+<li>查看 V3 外部集成观测面板和审计筛选；</li>
+<li>生成并校验第三方交接包；</li>
+<li>进入真实客户沙箱联调。</li>
+</ol>
+<h2 id="section-23">20. 相关文档</h2>
+<ul>
+<li>总接口说明：<code>docs/integrations/third-party-integration-api.zh-CN.md</code></li>
+<li>英文接口草案：<code>docs/integrations/third-party-integration-api.md</code></li>
+<li>交接清单样例：<code>docs/integrations/third-party-handoff.sample.json</code></li>
+<li>第三方集成计划：<code>docs/plans/2026-05-13-v3-external-bot-third-party-knowledge-plan.md</code></li>
+</ul>
+      </article>
+      <p class="doc-footer">Generated from <code>docs/integrations/pure-third-party-integration-guide.zh-CN.md</code>. Keep Markdown as the editable source and HTML as the human-facing review surface.</p>
+    </main>
+  </div>
+  <script>
+    document.querySelectorAll('.copy-code').forEach((button) => {
+      button.addEventListener('click', async () => {
+        const code = button.closest('.code-card').querySelector('code').innerText;
+        try {
+          await navigator.clipboard.writeText(code);
+          button.textContent = '已复制';
+          setTimeout(() => { button.textContent = '复制'; }, 1200);
+        } catch {
+          button.textContent = '复制失败';
+          setTimeout(() => { button.textContent = '复制'; }, 1200);
+        }
+      });
+    });
+  </script>
+</body>
+</html>

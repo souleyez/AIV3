@@ -85,6 +85,22 @@ test('validateArchive accepts a generated archive and sidecar', () => {
   assert.equal(result.errors.length, 0);
 });
 
+test('validateArchive accepts ustar-prefixed long document paths', () => {
+  const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'v3-external-handoff-archive-'));
+  const built = buildPackage({
+    repoRoot,
+    outDir,
+    basename: 'external-third-party-handoff-package-20260515T000000Z',
+    generatedAt: '2026-05-15T00:00:00.000Z',
+  });
+
+  const result = validateArchive(built.archivePath);
+
+  assert.equal(result.archive_ready, true);
+  assert.equal(result.root_name, 'external-third-party-handoff-package-20260515T000000Z');
+  assert.equal(result.errors.length, 0);
+});
+
 test('validateArchive rejects a sidecar digest mismatch', () => {
   const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'v3-external-handoff-archive-'));
   const built = buildPackage({
