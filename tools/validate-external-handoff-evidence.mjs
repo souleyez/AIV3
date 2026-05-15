@@ -272,6 +272,8 @@ function validateEvidence({
     evidence_manifest_sha256: fileDigest(evidenceManifestPath).sha256,
     manifest_type: manifest.manifest_type || null,
     package_type: manifest.package_type || null,
+    generated_at: manifest.generated_at || null,
+    repository_head: manifest.repository_head || null,
     package_name: manifest.package_name || packageName,
     artifact_count: artifacts.length,
     html_artifact_summary: {
@@ -302,6 +304,8 @@ Status: **${status}**
 - Manifest SHA256: \`${report.evidence_manifest_sha256 || 'unknown'}\`
 - Manifest type: \`${report.manifest_type || 'unknown'}\`
 - Package type: \`${report.package_type || 'unknown'}\`
+- Generated at: ${report.generated_at || 'unknown'}
+- Repository head: \`${report.repository_head || 'unknown'}\`
 - Package name: \`${report.package_name || 'unknown'}\`
 - Final artifacts: ${report.artifact_count || 0}
 

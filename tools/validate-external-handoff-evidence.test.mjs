@@ -30,6 +30,8 @@ test('validateEvidence accepts generated final evidence manifests', () => {
   assert.equal(result.evidence_manifest_ready, true);
   assert.equal(result.manifest_type, EVIDENCE_MANIFEST_TYPE);
   assert.equal(result.package_type, 'v3.external_third_party_handoff_package.v1');
+  assert.equal(result.generated_at, '2026-05-15T00:00:00.000Z');
+  assert.match(result.repository_head || '', /^[a-f0-9]+$/);
   assert.equal(result.package_name, 'evidence-valid-package');
   assert.equal(result.artifact_count, 9);
   assert.equal(result.evidence_manifest_sha256, built.evidenceManifestSha256);
@@ -132,6 +134,8 @@ test('renderEvidenceMarkdown summarizes final evidence without raw payloads', ()
   assert.match(markdown, /Status: \*\*READY\*\*/);
   assert.match(markdown, /Manifest SHA256:/);
   assert.match(markdown, /Package type: `v3\.external_third_party_handoff_package\.v1`/);
+  assert.match(markdown, /Generated at: 2026-05-15T00:00:00\.000Z/);
+  assert.match(markdown, /Repository head: `[a-f0-9]+`/);
   assert.match(markdown, /Package HTML artifact ready: yes/);
   assert.match(markdown, /Archive HTML artifact ready: yes/);
   assert.doesNotMatch(markdown, /third-party-secret|raw prompt secret|callback-token-should-not-leak/);
