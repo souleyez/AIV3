@@ -6,6 +6,8 @@
 **默认对外域名：** `https://v3.elepcloud.com`
 **说明：** 本文可作为第三方联调前的接口说明材料。默认第三方接口使用 `https://v3.elepcloud.com/v1/...`；具体凭证、白名单、回调地址和开放接口，以项目交付环境和双方确认的联调配置为准。
 
+如果第三方采用自建聊天页面、自建文档库、自建用户/权限系统、自建产物或业务接口的“纯第三方模式”，可优先阅读独立对接文档：`docs/integrations/pure-third-party-integration-guide.zh-CN.md`。
+
 默认访问规则：
 
 - `https://v3.elepcloud.com/` 打开外部集成观测面板；

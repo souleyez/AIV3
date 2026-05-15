@@ -58,6 +58,7 @@ test('buildPackage creates a third-party handoff directory with manifest and too
   assert.equal(result.evidenceReady, true);
   assert.ok(fs.existsSync(path.join(result.packageRoot, 'README.zh-CN.md')));
   assert.ok(fs.existsSync(path.join(result.packageRoot, 'docs/third-party-integration-api.zh-CN.md')));
+  assert.ok(fs.existsSync(path.join(result.packageRoot, 'docs/pure-third-party-integration-guide.zh-CN.md')));
   assert.ok(fs.existsSync(path.join(result.packageRoot, 'handoff/third-party-handoff.sample.json')));
   assert.ok(fs.existsSync(path.join(result.packageRoot, 'tools/validate-external-handoff.mjs')));
   assert.ok(fs.existsSync(path.join(result.packageRoot, 'tools/validate-external-handoff-package.mjs')));
@@ -68,10 +69,14 @@ test('buildPackage creates a third-party handoff directory with manifest and too
   assert.ok(fs.existsSync(path.join(result.packageRoot, 'sandbox/external-third-party-mock-gateway.mjs')));
 
   const cnGuide = fs.readFileSync(path.join(result.packageRoot, 'docs/third-party-integration-api.zh-CN.md'), 'utf8');
+  const pureGuide = fs.readFileSync(path.join(result.packageRoot, 'docs/pure-third-party-integration-guide.zh-CN.md'), 'utf8');
   const enGuide = fs.readFileSync(path.join(result.packageRoot, 'docs/third-party-integration-api.md'), 'utf8');
   assert.match(cnGuide, /AI Data Platform V3/);
   assert.match(cnGuide, /当前不可见\/未供料/);
   assert.match(cnGuide, /不能声称已经联网搜索/);
+  assert.match(pureGuide, /V3 纯第三方模式对接文档/);
+  assert.match(pureGuide, /不需要把第三方服务器上的所有文档一次性拷贝到 V3/);
+  assert.match(pureGuide, /POST \/v1\/external\/channels\/\{connection_id\}\/events/);
   assert.match(enGuide, /AI Data Platform V3/);
   assert.match(enGuide, /currently not visible or not supplied by V3/);
   assert.match(enGuide, /must not claim live search/);
@@ -125,6 +130,7 @@ test('buildPackage creates a third-party handoff directory with manifest and too
 
   const archiveEntries = listTarEntries(result.archivePath);
   assert.ok(archiveEntries.includes('package-under-test/README.zh-CN.md'));
+  assert.ok(archiveEntries.includes('package-under-test/docs/pure-third-party-integration-guide.zh-CN.md'));
   assert.ok(archiveEntries.includes('package-under-test/handoff-package-manifest.json'));
   assert.ok(archiveEntries.includes('package-under-test/tools/validate-external-handoff-package.mjs'));
   assert.ok(archiveEntries.includes('package-under-test/tools/validate-external-handoff-archive.mjs'));

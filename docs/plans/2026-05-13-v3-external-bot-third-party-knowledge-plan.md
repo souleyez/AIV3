@@ -67,6 +67,7 @@
 - Current implementation follow-up surfaces those pending search-evidence states in observe-first audit: `GET /v1/external/integrations/{id}/audit?item_type=search_evidence` returns redacted `web_search` evidence-required rows, and the standalone panel adds a `搜索证据` filter without exposing raw user queries.
 - Current implementation follow-up also closes the normal AssistantRun/ReAct side: `web_search` is a parsed Host-Controlled ReAct action and returns a sanitized `v3_search_evidence_required` observation, so the model sees that V3 search evidence is pending and may continue only with clearly labeled general knowledge until source/time-backed evidence is supplied.
 - Current implementation follow-up adds channel-level `search_summary` to `GET /v1/external/integrations` and the standalone panel overview/detail metrics, so pending V3 search-evidence supply is visible without opening the audit timeline.
+- Current documentation follow-up adds a standalone pure third-party mode guide at `docs/integrations/pure-third-party-integration-guide.zh-CN.md`, covering customer-hosted chat pages, third-party document/user/ACL APIs, artifact/action endpoints, result callbacks, observability, and the no-full-document-migration design.
 - Next implementation checkpoint: run the callback contract through a real HTTPS customer sandbox once a third-party endpoint is available, while continuing smaller hardening work that does not require customer cooperation.
 
 ---

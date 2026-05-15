@@ -19,6 +19,11 @@ const SOURCE_FILES = [
     audience: 'third_party',
   },
   {
+    source: 'docs/integrations/pure-third-party-integration-guide.zh-CN.md',
+    target: 'docs/pure-third-party-integration-guide.zh-CN.md',
+    audience: 'third_party',
+  },
+  {
     source: 'docs/integrations/third-party-integration-api.md',
     target: 'docs/third-party-integration-api.md',
     audience: 'third_party',
@@ -235,6 +240,7 @@ V3 提交：${head || 'unknown'}
 ## 这个包包含什么
 
 - \`docs/third-party-integration-api.zh-CN.md\`：可发给第三方的中文接口说明。
+- \`docs/pure-third-party-integration-guide.zh-CN.md\`：纯第三方模式专用对接文档。
 - \`docs/third-party-integration-api.md\`：英文接口说明。
 - \`handoff/third-party-handoff.sample.json\`：第三方沙箱交接清单样例。
 - \`tools/validate-external-handoff.mjs\`：交接清单校验工具。
@@ -251,7 +257,7 @@ V3 提交：${head || 'unknown'}
 
 ## 第三方应先做什么
 
-1. 阅读 \`docs/third-party-integration-api.zh-CN.md\`。
+1. 阅读 \`docs/pure-third-party-integration-guide.zh-CN.md\` 和 \`docs/third-party-integration-api.zh-CN.md\`。
 2. 复制 \`handoff/third-party-handoff.sample.json\`，按自己的测试环境填写。
 3. 不要把真实 token、signing secret、password、private key 或 API key 写入清单。
 4. 运行校验：
@@ -294,7 +300,7 @@ The builder also writes a \`.tar.gz\` archive, matching \`.sha256\` sidecar, \`.
 
 Recommended flow:
 
-1. Read \`docs/third-party-integration-api.zh-CN.md\` or \`docs/third-party-integration-api.md\`.
+1. Read \`docs/pure-third-party-integration-guide.zh-CN.md\`, \`docs/third-party-integration-api.zh-CN.md\`, or \`docs/third-party-integration-api.md\`.
 2. Copy and fill \`handoff/third-party-handoff.sample.json\` for the customer sandbox.
 3. Do not paste real tokens, signing secrets, passwords, private keys, or API keys into the manifest.
 4. Run \`npm run validate:handoff\`.
