@@ -246,18 +246,32 @@ function summarizeHandoffEvidenceValidation(validation, packagePath) {
     return null;
   }
   const receipt = validation.evidence_markdown_receipt || null;
+  const aggregateReceipt = validation.aggregate_markdown_receipt || null;
   const receiptReady = receipt ? receipt.receipt_ready === true : null;
+  const aggregateReceiptReady = aggregateReceipt ? aggregateReceipt.receipt_ready === true : null;
   const validationErrorCodes = Array.isArray(validation.errors)
     ? validation.errors.map((error) => error.code).filter(Boolean)
     : [];
   const receiptErrorCodes = Array.isArray(receipt?.errors)
     ? receipt.errors.map((error) => error.code).filter(Boolean)
     : [];
+  const aggregateReceiptErrorCodes = Array.isArray(aggregateReceipt?.errors)
+    ? aggregateReceipt.errors
+        .map((error) => error.code)
+        .filter(Boolean)
+        .map((code) => (code.startsWith('evidence_') ? code : `evidence_${code}`))
+    : [];
   return {
     package_root: packagePath || null,
-    evidence_manifest_ready: validation.evidence_manifest_ready === true && receiptReady !== false,
+    evidence_manifest_ready:
+      validation.evidence_manifest_ready === true
+      && receiptReady !== false
+      && aggregateReceiptReady !== false,
     evidence_manifest_path: validation.evidence_manifest_path || null,
     evidence_manifest_sha256: validation.evidence_manifest_sha256 || null,
+    aggregate_markdown_receipt_ready: aggregateReceiptReady,
+    aggregate_markdown_receipt_path: aggregateReceipt?.receipt_path || null,
+    aggregate_markdown_receipt_sha256: aggregateReceipt?.receipt_sha256 || null,
     evidence_markdown_receipt_ready: receiptReady,
     evidence_markdown_receipt_path: receipt?.receipt_path || null,
     evidence_markdown_receipt_sha256: receipt?.receipt_sha256 || null,
@@ -273,7 +287,7 @@ function summarizeHandoffEvidenceValidation(validation, packagePath) {
       archive_ready: false,
       archive_template_id: null,
     },
-    error_codes: [...new Set([...validationErrorCodes, ...receiptErrorCodes])],
+    error_codes: [...new Set([...validationErrorCodes, ...receiptErrorCodes, ...aggregateReceiptErrorCodes])],
   };
 }
 
@@ -342,6 +356,14 @@ export function renderReadinessMarkdown(report) {
         `- Repository head: \`${report.handoff_evidence_summary.repository_head || 'unknown'}\``,
         `- Ready: ${report.handoff_evidence_summary.evidence_manifest_ready ? 'yes' : 'no'}`,
         `- Evidence manifest SHA256: \`${report.handoff_evidence_summary.evidence_manifest_sha256 || 'unknown'}\``,
+        `- Aggregate Markdown receipt: ${
+          report.handoff_evidence_summary.aggregate_markdown_receipt_ready === null
+            ? 'not checked'
+            : report.handoff_evidence_summary.aggregate_markdown_receipt_ready
+              ? 'yes'
+              : 'no'
+        }`,
+        `- Aggregate Markdown SHA256: \`${report.handoff_evidence_summary.aggregate_markdown_receipt_sha256 || 'unknown'}\``,
         `- Evidence Markdown receipt: ${
           report.handoff_evidence_summary.evidence_markdown_receipt_ready === null
             ? 'not checked'

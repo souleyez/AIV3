@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -50,6 +51,14 @@ function scopedErrors(scope, errors = []) {
 
 function summarizeErrorCodes(report) {
   return (report.errors || []).map((error) => error.code);
+}
+
+function addError(errors, code, message, location = '') {
+  errors.push({ code, message, path: location });
+}
+
+function sha256Hex(bytes) {
+  return crypto.createHash('sha256').update(bytes).digest('hex');
 }
 
 function renderAllMarkdown(report) {
@@ -117,6 +126,65 @@ function writeAllReportFiles(report, { out = '', markdown = '' } = {}) {
   return {
     jsonPath: writeOutputFile(out, `${JSON.stringify(report, null, 2)}\n`),
     markdownPath: writeOutputFile(markdown, renderAllMarkdown(report)),
+  };
+}
+
+function validateAllMarkdownReceipt({ validation, markdownPathInput = '' } = {}) {
+  const errors = [];
+  const packageRoot = validation?.package_root || '';
+  const markdownPath = path.resolve(
+    markdownPathInput
+      || (packageRoot
+        ? path.join(path.dirname(packageRoot), `${path.basename(packageRoot)}.all.md`)
+        : 'handoff-all.md'),
+  );
+  const expected = renderAllMarkdown(validation || {});
+  const expectedDigest = {
+    bytes: Buffer.byteLength(expected),
+    sha256: sha256Hex(Buffer.from(expected)),
+  };
+
+  if (!fs.existsSync(markdownPath)) {
+    addError(errors, 'aggregate_markdown_receipt_missing', 'aggregate markdown receipt is missing', markdownPath);
+    return {
+      receipt_ready: false,
+      receipt_path: markdownPath,
+      receipt_sha256: null,
+      expected_sha256: expectedDigest.sha256,
+      error_codes: errors.map((error) => error.code),
+      errors,
+    };
+  }
+
+  const actual = fs.readFileSync(markdownPath);
+  const actualDigest = {
+    bytes: actual.length,
+    sha256: sha256Hex(actual),
+  };
+  if (actualDigest.bytes !== expectedDigest.bytes) {
+    addError(
+      errors,
+      'aggregate_markdown_receipt_bytes_mismatch',
+      'aggregate markdown receipt byte size does not match validation output',
+      markdownPath,
+    );
+  }
+  if (actualDigest.sha256 !== expectedDigest.sha256) {
+    addError(
+      errors,
+      'aggregate_markdown_receipt_sha256_mismatch',
+      'aggregate markdown receipt SHA256 does not match validation output',
+      markdownPath,
+    );
+  }
+
+  return {
+    receipt_ready: errors.length === 0,
+    receipt_path: markdownPath,
+    receipt_sha256: actualDigest.sha256,
+    expected_sha256: expectedDigest.sha256,
+    error_codes: errors.map((error) => error.code),
+    errors,
   };
 }
 
@@ -237,4 +305,4 @@ if (invokedPath === modulePath) {
   await main();
 }
 
-export { renderAllMarkdown, validateAll, writeAllReportFiles };
+export { renderAllMarkdown, validateAll, validateAllMarkdownReceipt, writeAllReportFiles };

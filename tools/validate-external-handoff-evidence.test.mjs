@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -15,6 +16,10 @@ import {
 } from './validate-external-handoff-evidence.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+
+function sha256Hex(bytes) {
+  return crypto.createHash('sha256').update(bytes).digest('hex');
+}
 
 test('validateEvidence accepts generated final evidence manifests', () => {
   const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'v3-external-handoff-evidence-'));
@@ -39,6 +44,8 @@ test('validateEvidence accepts generated final evidence manifests', () => {
   assert.equal(result.html_artifact_summary.package_template_id, 'third_party_handoff_document');
   assert.equal(result.html_artifact_summary.archive_ready, true);
   assert.equal(result.html_artifact_summary.archive_template_id, 'third_party_handoff_document');
+  assert.equal(result.aggregate_markdown_receipt.receipt_ready, true);
+  assert.equal(result.aggregate_markdown_receipt.receipt_path, built.allMarkdownPath);
   assert.deepEqual(result.error_codes, []);
 });
 
@@ -57,6 +64,29 @@ test('validateEvidence rejects changed aggregate evidence artifacts', () => {
   assert.equal(result.evidence_manifest_ready, false);
   assert.ok(result.errors.some((error) => error.code === 'evidence_aggregate_markdown_bytes_mismatch'));
   assert.ok(result.errors.some((error) => error.code === 'evidence_aggregate_markdown_sha256_mismatch'));
+});
+
+test('validateEvidence rejects stale aggregate Markdown receipts even when manifest hash matches', () => {
+  const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'v3-external-handoff-evidence-'));
+  const built = buildPackage({
+    repoRoot,
+    outDir,
+    basename: 'evidence-stale-aggregate-receipt',
+    generatedAt: '2026-05-15T00:00:00.000Z',
+  });
+  fs.appendFileSync(built.allMarkdownPath, '\nstale aggregate receipt but matching manifest hash\n');
+  const markdownBytes = fs.readFileSync(built.allMarkdownPath);
+  const manifest = JSON.parse(fs.readFileSync(built.evidenceManifestPath, 'utf8'));
+  const artifact = manifest.artifacts.find((item) => item.role === 'aggregate_markdown');
+  artifact.bytes = markdownBytes.length;
+  artifact.sha256 = sha256Hex(markdownBytes);
+  fs.writeFileSync(built.evidenceManifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+  const result = validateEvidence({ packageRootInput: built.packageRoot });
+
+  assert.equal(result.evidence_manifest_ready, false);
+  assert.equal(result.aggregate_markdown_receipt.receipt_ready, false);
+  assert.ok(result.errors.some((error) => error.code === 'evidence_aggregate_markdown_receipt_sha256_mismatch'));
 });
 
 test('validateEvidence rejects not-ready aggregate JSON receipts', () => {
@@ -229,6 +259,8 @@ test('renderEvidenceMarkdown summarizes final evidence without raw payloads', ()
   assert.match(markdown, /Repository head: `[a-f0-9]+`/);
   assert.match(markdown, /Package HTML artifact ready: yes/);
   assert.match(markdown, /Archive HTML artifact ready: yes/);
+  assert.match(markdown, /Aggregate Markdown Receipt/);
+  assert.match(markdown, /Receipt ready: yes/);
   assert.doesNotMatch(markdown, /third-party-secret|raw prompt secret|callback-token-should-not-leak/);
 });
 

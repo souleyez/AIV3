@@ -3,6 +3,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { validateAllMarkdownReceipt } from './validate-external-handoff-all.mjs';
 
 const EVIDENCE_MANIFEST_TYPE = 'v3.external_third_party_handoff_evidence_manifest.v1';
 const PACKAGE_TYPE = 'v3.external_third_party_handoff_package.v1';
@@ -347,6 +348,17 @@ function validateEvidence({
   if (allReport && allReport.summaries?.archive?.html_artifact_ready !== true) {
     addError(errors, 'evidence_aggregate_archive_html_artifact_not_ready', 'aggregate JSON must report archived HTML artifact ready', allReportPath);
   }
+  const aggregateMarkdownReceipt = allReport
+    ? validateAllMarkdownReceipt({
+        validation: allReport,
+        markdownPathInput: allMarkdownPath,
+      })
+    : null;
+  if (aggregateMarkdownReceipt && !aggregateMarkdownReceipt.receipt_ready) {
+    for (const error of aggregateMarkdownReceipt.errors) {
+      addError(errors, `evidence_${error.code}`, error.message, error.path);
+    }
+  }
 
   return {
     report_type: 'external_third_party_handoff_evidence_validation',
@@ -365,6 +377,7 @@ function validateEvidence({
       archive_ready: allReport?.summaries?.archive?.html_artifact_ready === true,
       archive_template_id: allReport?.summaries?.archive?.html_artifact_template_id || null,
     },
+    aggregate_markdown_receipt: aggregateMarkdownReceipt,
     error_codes: errors.map((error) => error.code),
     errors,
   };
@@ -373,6 +386,7 @@ function validateEvidence({
 function renderEvidenceMarkdown(report) {
   const status = report.evidence_manifest_ready ? 'READY' : 'NOT READY';
   const htmlArtifactSummary = report.html_artifact_summary || {};
+  const aggregateReceipt = report.aggregate_markdown_receipt || null;
   const errors = (report.errors || []).length
     ? report.errors.map((error) => `- \`${error.code}\`: ${error.message}${error.path ? ` (${error.path})` : ''}`).join('\n')
     : '- None';
@@ -398,6 +412,19 @@ Status: **${status}**
 - Package HTML artifact template: \`${htmlArtifactSummary.package_template_id || 'unknown'}\`
 - Archive HTML artifact ready: ${htmlArtifactSummary.archive_ready ? 'yes' : 'no'}
 - Archive HTML artifact template: \`${htmlArtifactSummary.archive_template_id || 'unknown'}\`
+
+## Aggregate Markdown Receipt
+
+- Receipt checked: ${aggregateReceipt ? 'yes' : 'no'}
+- Receipt ready: ${
+  aggregateReceipt
+    ? aggregateReceipt.receipt_ready
+      ? 'yes'
+      : 'no'
+    : 'not checked'
+}
+- Receipt path: \`${aggregateReceipt?.receipt_path || 'unknown'}\`
+- Receipt SHA256: \`${aggregateReceipt?.receipt_sha256 || 'unknown'}\`
 
 ## Errors
 

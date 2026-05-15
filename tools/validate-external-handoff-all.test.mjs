@@ -5,7 +5,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildPackage } from './build-external-handoff-package.mjs';
-import { renderAllMarkdown, validateAll, writeAllReportFiles } from './validate-external-handoff-all.mjs';
+import {
+  renderAllMarkdown,
+  validateAll,
+  validateAllMarkdownReceipt,
+  writeAllReportFiles,
+} from './validate-external-handoff-all.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -100,4 +105,25 @@ test('writeAllReportFiles writes JSON and Markdown evidence files', () => {
   assert.equal(written.markdownPath, markdownPath);
   assert.equal(JSON.parse(fs.readFileSync(jsonPath, 'utf8')).all_ready, true);
   assert.match(fs.readFileSync(markdownPath, 'utf8'), /External Third-Party Handoff Aggregate Validation/);
+});
+
+test('validateAllMarkdownReceipt rejects stale aggregate receipts', () => {
+  const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'v3-external-handoff-all-'));
+  const built = buildPackage({
+    repoRoot,
+    outDir,
+    basename: 'all-stale-receipt-package',
+    generatedAt: '2026-05-15T00:00:00.000Z',
+  });
+  const report = validateAll({ packageRootInput: built.packageRoot });
+  fs.appendFileSync(built.allMarkdownPath, '\nchanged after aggregate validation\n');
+
+  const receipt = validateAllMarkdownReceipt({
+    validation: report,
+    markdownPathInput: built.allMarkdownPath,
+  });
+
+  assert.equal(receipt.receipt_ready, false);
+  assert.ok(receipt.errors.some((error) => error.code === 'aggregate_markdown_receipt_bytes_mismatch'));
+  assert.ok(receipt.errors.some((error) => error.code === 'aggregate_markdown_receipt_sha256_mismatch'));
 });
