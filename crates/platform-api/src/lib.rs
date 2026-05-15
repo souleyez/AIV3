@@ -6711,6 +6711,17 @@ struct ExternalActionRunPlan {
 }
 
 #[derive(Clone, Debug)]
+enum ExternalChannelPlanOutcome {
+    Action(ExternalActionRunPlan),
+    SearchEvidenceRequired(ExternalSearchEvidenceRequiredPlan),
+}
+
+#[derive(Clone, Debug)]
+struct ExternalSearchEvidenceRequiredPlan {
+    freshness: String,
+}
+
+#[derive(Clone, Debug)]
 struct ExternalActionDispatchRecord {
     action_id: String,
     assistant_run_id: Option<AssistantRunId>,
@@ -8359,10 +8370,15 @@ async fn ingest_external_channel_message(
         now,
     )
     .await?;
-    let reply = external_action_plan
-        .as_ref()
-        .map(|plan| external_channel_action_plan_reply(&message, plan))
-        .unwrap_or_else(|| external_channel_task_status_reply(&message, "accepted"));
+    let reply = match external_action_plan.as_ref() {
+        Some(ExternalChannelPlanOutcome::Action(plan)) => {
+            external_channel_action_plan_reply(&message, plan)
+        }
+        Some(ExternalChannelPlanOutcome::SearchEvidenceRequired(plan)) => {
+            external_channel_search_evidence_required_reply(&message, plan)
+        }
+        None => external_channel_task_status_reply(&message, "accepted"),
+    };
 
     Ok((
         StatusCode::ACCEPTED,
@@ -8826,7 +8842,7 @@ async fn plan_and_record_external_action_run(
     evidence_state: &Value,
     message: &ExternalBotMessageView,
     now: DateTime<Utc>,
-) -> std::result::Result<Option<ExternalActionRunPlan>, ApiError> {
+) -> std::result::Result<Option<ExternalChannelPlanOutcome>, ApiError> {
     let codex_runtime = assistant_run_codex_runtime_selection();
     let codex_model_gateway = assistant_run_codex_model_gateway_snapshot(&codex_runtime);
     let codex_scope_candidates = value_array(scope_candidates.clone());
@@ -8851,6 +8867,54 @@ async fn plan_and_record_external_action_run(
         .get("action_type")
         .and_then(Value::as_str)
         .unwrap_or_default();
+    if action_type == "web_search" {
+        state
+            .storage
+            .assistant_runs()
+            .append_event(
+                state.tenant_id,
+                assistant_run_id,
+                &NewAssistantRunEvent {
+                    event_name: "assistant_run.codex_executor_diagnostic".to_string(),
+                    payload: assistant_run_codex_event_payload(&codex_output, None, None),
+                    created_at: now,
+                },
+            )
+            .await
+            .map_err(ApiError::from_storage)?;
+        let freshness = suggested_action["arguments"]["freshness"]
+            .as_str()
+            .unwrap_or("unspecified")
+            .to_string();
+        state
+            .storage
+            .assistant_runs()
+            .append_event(
+                state.tenant_id,
+                assistant_run_id,
+                &NewAssistantRunEvent {
+                    event_name: "assistant_run.external_search_evidence_required".to_string(),
+                    payload: json!({
+                        "channel_connection_id": connection_id,
+                        "platform": external_channel_platform_wire_value(&message.platform),
+                        "message_external_id": message.message_external_id.clone(),
+                        "action_type": action_type,
+                        "freshness": freshness.clone(),
+                        "requires_v3_validation": true,
+                        "search_evidence_required": true,
+                        "source": "codex_plan_only_shadow",
+                        "no_live_search_claim": true,
+                        "query_chars": prompt.chars().count(),
+                    }),
+                    created_at: now,
+                },
+            )
+            .await
+            .map_err(ApiError::from_storage)?;
+        return Ok(Some(ExternalChannelPlanOutcome::SearchEvidenceRequired(
+            ExternalSearchEvidenceRequiredPlan { freshness },
+        )));
+    }
     if !action_type.starts_with("external_") {
         return Ok(None);
     }
@@ -8905,7 +8969,7 @@ async fn plan_and_record_external_action_run(
         .await
         .map_err(ApiError::from_storage)?;
 
-    Ok(Some(plan))
+    Ok(Some(ExternalChannelPlanOutcome::Action(plan)))
 }
 
 async fn record_external_action_run_from_suggestion(
@@ -10354,6 +10418,32 @@ fn external_channel_action_plan_reply(
             action_id: Some(plan.action_id.clone()),
             confirmation_id: None,
         }
+    }
+}
+
+fn external_channel_search_evidence_required_reply(
+    message: &ExternalBotMessageView,
+    plan: &ExternalSearchEvidenceRequiredPlan,
+) -> ExternalBotReplyView {
+    ExternalBotReplyView {
+        target_conversation_external_id: message.conversation_external_id.clone(),
+        reply_type: ExternalBotReplyTypeView::TaskStatus,
+        text: Some(
+            "当前不可见/未供料：该问题需要 V3 外部/网页搜索证据。V3 已记录只读搜索请求，收到带来源和时间的 search evidence 后再回答。"
+                .to_string(),
+        ),
+        card: Some(json!({
+            "type": "v3_search_evidence_required",
+            "freshness": plan.freshness.clone(),
+            "requires_v3_validation": true,
+            "search_evidence_required": true,
+            "no_live_search_claim": true,
+        })),
+        artifact_links: Vec::new(),
+        task_status: Some("v3_search_evidence_required".to_string()),
+        requires_confirmation: false,
+        action_id: None,
+        confirmation_id: None,
     }
 }
 
@@ -32194,6 +32284,116 @@ mod tests {
             confirmed_result_summary["dispatch"]["reason"],
             json!("dispatch_endpoint_missing")
         );
+    }
+
+    #[tokio::test]
+    async fn external_channel_web_search_message_records_evidence_required_without_action_run() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping external web search evidence test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("external-web-search-test-{}", Uuid::new_v4()),
+                "External Web Search Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage,
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        insert_generic_external_channel_connection(&state, "generic-chat-main").await;
+
+        let mut message = sample_external_bot_message();
+        message.text = Some("联网搜索一下今天这个行业的最新消息".to_string());
+        message.message_external_id = "msg-web-search-001".to_string();
+        message.idempotency_key = "generic:tenant-ext-001:msg-web-search-001".to_string();
+
+        let (status, response) =
+            ingest_external_channel_message(&state, "generic-chat-main", message)
+                .await
+                .expect("external channel web search message should be accepted");
+
+        assert_eq!(status, StatusCode::ACCEPTED);
+        assert_eq!(
+            response.reply.reply_type,
+            ExternalBotReplyTypeView::TaskStatus
+        );
+        assert_eq!(
+            response.reply.task_status.as_deref(),
+            Some("v3_search_evidence_required")
+        );
+        assert!(!response.reply.requires_confirmation);
+        assert_eq!(response.reply.action_id, None);
+        assert!(response
+            .reply
+            .text
+            .as_deref()
+            .is_some_and(|text| text.contains("当前不可见/未供料")));
+        let reply_card = response
+            .reply
+            .card
+            .as_ref()
+            .expect("search evidence reply should include a safe card");
+        assert_eq!(reply_card["type"], json!("v3_search_evidence_required"));
+        assert_eq!(reply_card["freshness"], json!("latest"));
+
+        let assistant_run_id = response
+            .assistant_run_id
+            .expect("response should include assistant run id");
+        let action_count = sqlx::query(
+            r#"
+            select count(*)::bigint as count
+            from external_action_runs
+            where tenant_id = $1 and assistant_run_id = $2
+            "#,
+        )
+        .bind(state.tenant_id.0)
+        .bind(assistant_run_id.0)
+        .fetch_one(state.storage.pool())
+        .await
+        .expect("action count should be queryable");
+        assert_eq!(action_count.get::<i64, _>("count"), 0);
+
+        let events = state
+            .storage
+            .assistant_runs()
+            .list_events(state.tenant_id, assistant_run_id)
+            .await
+            .expect("assistant run events should be listed");
+        let diagnostic = events
+            .iter()
+            .find(|event| event.event_name == "assistant_run.codex_executor_diagnostic")
+            .expect("codex diagnostic event should be recorded");
+        assert_eq!(
+            diagnostic.payload["suggested_action"]["action_type"],
+            json!("web_search")
+        );
+        assert_eq!(
+            diagnostic.payload["suggested_action"]["arguments"],
+            Value::Null
+        );
+
+        let search_event = events
+            .iter()
+            .find(|event| event.event_name == "assistant_run.external_search_evidence_required")
+            .expect("search evidence requirement should be recorded");
+        assert_eq!(search_event.payload["action_type"], json!("web_search"));
+        assert_eq!(search_event.payload["freshness"], json!("latest"));
+        assert_eq!(search_event.payload["requires_v3_validation"], json!(true));
+        assert_eq!(search_event.payload["no_live_search_claim"], json!(true));
+        let serialized_events =
+            serde_json::to_string(&events).expect("events should serialize for redaction check");
+        assert!(!serialized_events.contains("今天这个行业"));
     }
 
     #[tokio::test]

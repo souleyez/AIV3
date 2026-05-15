@@ -36,6 +36,7 @@ Already implemented:
 - A third-party handoff manifest sample and validator now check customer sandbox readiness before live joint testing, including HTTPS or approved loopback URLs, dispatch credentials, callback allowlisting, document/ACL fixtures, operations contacts, and absence of raw secret material.
 - A self-contained handoff package builder now writes third-party guides, the sample manifest, validators, mock gateway reference, README files, and a SHA256 package manifest under `target/external-third-party-handoff`.
 - AssistantRun startup briefing and backend model input now include the additive V3 model-awareness policy: V3 identity, visible-scope discipline, unavailable-evidence wording, and no-fake-live-search behavior.
+- External chat messages that require live web information now return `task_status=v3_search_evidence_required` until V3 supplies audited search evidence; this is a read-only pending-evidence state, not a third-party action run.
 
 Planned next:
 
@@ -135,6 +136,8 @@ This does not make V3 a closed-domain bot. When a user asks a normal question ou
 If evidence is missing, stale, denied, or not yet supplied, the channel reply should make that visible. Chinese-facing replies may use wording such as `当前不可见/未供料`; English-facing replies may say `currently not visible or not supplied by V3`. After that, the model may continue with general guidance if it is useful and clearly separated from V3 evidence.
 
 Live external/web search must be treated as a V3 tool, not as an assumption. Until V3 provides audited search evidence with source URL/title, timestamp, requester/channel, and query metadata, replies should not say that V3 has searched the web or cite time-sensitive web results.
+
+When a normalized chat message clearly asks for live or web-sourced information and V3 has not supplied search evidence yet, the channel response may use `reply_type=task_status`, `task_status=v3_search_evidence_required`, and a card with `type=v3_search_evidence_required`. Third-party chat pages should display this as a pending V3 evidence state. It does not mean that external search has already completed.
 
 ## Connection Model
 
