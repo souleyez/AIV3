@@ -4,6 +4,7 @@ Place workflow replay fixtures, API contract checks, and system validation repor
 
 Current operator-facing references:
 
+- [assistant-run-worker-smoke.md](</C:/Users/soulzyn/Desktop/codex/ai-data-platform-v3/docs/validation/assistant-run-worker-smoke.md>)
 - [external-bot-third-party-deployment-smoke-2026-05-14.md](</C:/Users/soulzyn/Desktop/codex/ai-data-platform-v3/docs/validation/external-bot-third-party-deployment-smoke-2026-05-14.md>)
 - [external-bot-third-party-smoke.md](</C:/Users/soulzyn/Desktop/codex/ai-data-platform-v3/docs/validation/external-bot-third-party-smoke.md>)
 - [external-third-party-gateway-smoke-2026-05-14.md](</C:/Users/soulzyn/Desktop/codex/ai-data-platform-v3/docs/validation/external-third-party-gateway-smoke-2026-05-14.md>)

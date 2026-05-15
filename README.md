@@ -135,7 +135,12 @@ wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo
 wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo run -p dataset-output-worker"
 wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo run -p report-planner-worker"
 wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo run -p report-render-worker"
+wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo run -p assistant-run-worker"
 ```
+
+`assistant-run-worker` consumes the `assistant_run / consume_model_completion_turn`
+queue for background model-authored completion turns, such as video/PPT extraction
+finishing after the original chat request has already returned.
 
 ## Verification
 
@@ -151,6 +156,12 @@ Web build:
 
 ```powershell
 pnpm --filter @ai-data-platform-v3/web build
+```
+
+Deployment-target smoke for the AssistantRun background completion worker:
+
+```bash
+bash scripts/run-assistant-run-worker-smoke.sh
 ```
 
 ## Key Host Surfaces
