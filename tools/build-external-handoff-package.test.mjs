@@ -47,6 +47,7 @@ test('buildPackage creates a third-party handoff directory with manifest and too
   assert.ok(fs.existsSync(result.allReportPath));
   assert.ok(fs.existsSync(result.allMarkdownPath));
   assert.ok(fs.existsSync(result.evidenceManifestPath));
+  assert.ok(fs.existsSync(result.evidenceMarkdownPath));
   assert.match(result.archiveSha256, /^[a-f0-9]{64}$/);
   assert.match(result.releaseReportSha256, /^[a-f0-9]{64}$/);
   assert.match(result.releaseMarkdownSha256, /^[a-f0-9]{64}$/);
@@ -54,6 +55,7 @@ test('buildPackage creates a third-party handoff directory with manifest and too
   assert.match(result.allReportSha256, /^[a-f0-9]{64}$/);
   assert.match(result.allMarkdownSha256, /^[a-f0-9]{64}$/);
   assert.match(result.evidenceManifestSha256, /^[a-f0-9]{64}$/);
+  assert.match(result.evidenceMarkdownSha256, /^[a-f0-9]{64}$/);
   assert.equal(result.releaseReady, true);
   assert.equal(result.allReady, true);
   assert.equal(result.evidenceReady, true);
@@ -146,6 +148,10 @@ test('buildPackage creates a third-party handoff directory with manifest and too
   assert.equal(evidenceArtifactsByRole.get('delivery_manifest').sha256, result.deliveryManifestSha256);
   assert.equal(evidenceArtifactsByRole.get('aggregate_json').sha256, result.allReportSha256);
   assert.equal(evidenceArtifactsByRole.get('aggregate_markdown').sha256, result.allMarkdownSha256);
+  const evidenceMarkdown = fs.readFileSync(result.evidenceMarkdownPath, 'utf8');
+  assert.match(evidenceMarkdown, /Status: \*\*READY\*\*/);
+  assert.match(evidenceMarkdown, /Package HTML artifact ready: yes/);
+  assert.match(evidenceMarkdown, /Archive HTML artifact ready: yes/);
 
   const archiveEntries = listTarEntries(result.archivePath);
   assert.ok(archiveEntries.includes('package-under-test/README.zh-CN.md'));

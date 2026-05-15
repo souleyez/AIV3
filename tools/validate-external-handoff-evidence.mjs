@@ -280,6 +280,55 @@ function validateEvidence({
   };
 }
 
+function renderEvidenceMarkdown(report) {
+  const status = report.evidence_manifest_ready ? 'READY' : 'NOT READY';
+  const htmlArtifactSummary = report.html_artifact_summary || {};
+  const errors = (report.errors || []).length
+    ? report.errors.map((error) => `- \`${error.code}\`: ${error.message}${error.path ? ` (${error.path})` : ''}`).join('\n')
+    : '- None';
+
+  return `# External Third-Party Handoff Final Evidence
+
+Status: **${status}**
+
+## Evidence Manifest
+
+- Manifest path: \`${report.evidence_manifest_path || 'unknown'}\`
+- Manifest SHA256: \`${report.evidence_manifest_sha256 || 'unknown'}\`
+- Manifest type: \`${report.manifest_type || 'unknown'}\`
+- Package name: \`${report.package_name || 'unknown'}\`
+- Final artifacts: ${report.artifact_count || 0}
+
+## HTML Artifact Readiness
+
+- Package HTML artifact ready: ${htmlArtifactSummary.package_ready ? 'yes' : 'no'}
+- Package HTML artifact template: \`${htmlArtifactSummary.package_template_id || 'unknown'}\`
+- Archive HTML artifact ready: ${htmlArtifactSummary.archive_ready ? 'yes' : 'no'}
+- Archive HTML artifact template: \`${htmlArtifactSummary.archive_template_id || 'unknown'}\`
+
+## Errors
+
+${errors}
+`;
+}
+
+function writeOutputFile(filePath, contents) {
+  if (!filePath) {
+    return '';
+  }
+  const resolved = path.resolve(filePath);
+  fs.mkdirSync(path.dirname(resolved), { recursive: true });
+  fs.writeFileSync(resolved, contents);
+  return resolved;
+}
+
+function writeEvidenceReportFiles(report, { out = '', markdown = '' } = {}) {
+  return {
+    jsonPath: writeOutputFile(out, `${JSON.stringify(report, null, 2)}\n`),
+    markdownPath: writeOutputFile(markdown, renderEvidenceMarkdown(report)),
+  };
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const result = validateEvidence({
@@ -293,6 +342,10 @@ async function main() {
     allMarkdownPathInput: args.allMarkdown || '',
     evidenceManifestInput: args.manifest || '',
   });
+  writeEvidenceReportFiles(result, {
+    out: args.out || '',
+    markdown: args.markdown || '',
+  });
   console.log(JSON.stringify(result, null, 2));
   if (!result.evidence_manifest_ready) {
     process.exitCode = 1;
@@ -305,4 +358,4 @@ if (invokedPath === modulePath) {
   await main();
 }
 
-export { EVIDENCE_MANIFEST_TYPE, validateEvidence };
+export { EVIDENCE_MANIFEST_TYPE, renderEvidenceMarkdown, validateEvidence, writeEvidenceReportFiles };

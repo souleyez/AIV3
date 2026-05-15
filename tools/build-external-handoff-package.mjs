@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import zlib from 'node:zlib';
 import { validateExternalHandoffManifest } from './validate-external-handoff.mjs';
 import { validateAll, writeAllReportFiles } from './validate-external-handoff-all.mjs';
-import { EVIDENCE_MANIFEST_TYPE, validateEvidence } from './validate-external-handoff-evidence.mjs';
+import { EVIDENCE_MANIFEST_TYPE, renderEvidenceMarkdown, validateEvidence } from './validate-external-handoff-evidence.mjs';
 import { writeThirdPartyHandoffHtmlArtifact } from './render-third-party-handoff-html-artifact.mjs';
 import { renderReleaseMarkdown, validateRelease } from './validate-external-handoff-release.mjs';
 
@@ -276,7 +276,7 @@ V3 提交：${head || 'unknown'}
 - \`sandbox/external-third-party-mock-gateway.mjs\`：第三方动作 endpoint 的本地 mock 示例。
 - \`sandbox/run-external-third-party-gateway-smoke.sh\`：V3 部署目标使用的签名派发、结果回调和交接清单 smoke 入口。
 - \`handoff-package-manifest.json\`：本包文件清单、SHA256 摘要和校验摘要。
-- 包目录同级会生成 \`.tar.gz\` 归档、\`.sha256\` 校验文件、\`.release.json\` 校验报告、\`.release.md\` 人工摘要、\`.delivery-manifest.json\` 交付清单、\`.all.json\` 聚合校验证据、\`.all.md\` 人工聚合摘要和 \`.evidence-manifest.json\` 最终证据清单，用于发送和交付前校验。
+- 包目录同级会生成 \`.tar.gz\` 归档、\`.sha256\` 校验文件、\`.release.json\` 校验报告、\`.release.md\` 人工摘要、\`.delivery-manifest.json\` 交付清单、\`.all.json\` 聚合校验证据、\`.all.md\` 人工聚合摘要、\`.evidence-manifest.json\` 最终证据清单和 \`.evidence-manifest.md\` 人工证据摘要，用于发送和交付前校验。
 
 ## 第三方应先做什么
 
@@ -295,7 +295,7 @@ npm run validate:all
 npm run validate:evidence
 \`\`\`
 
-5. 收到正式交付文件时，优先保留包目录、\`.tar.gz\`、\`.sha256\`、\`.release.json\`、\`.release.md\`、\`.delivery-manifest.json\`、\`.all.json\`、\`.all.md\` 和 \`.evidence-manifest.json\` 在同一目录，再运行 \`validate:delivery\`、\`validate:all\` 或 \`validate:evidence\` 核对交付清单。需要留档时可运行：\`npm run validate:all -- --out aggregate.json --markdown aggregate.md\`。
+5. 收到正式交付文件时，优先保留包目录、\`.tar.gz\`、\`.sha256\`、\`.release.json\`、\`.release.md\`、\`.delivery-manifest.json\`、\`.all.json\`、\`.all.md\`、\`.evidence-manifest.json\` 和 \`.evidence-manifest.md\` 在同一目录，再运行 \`validate:delivery\`、\`validate:all\` 或 \`validate:evidence\` 核对交付清单。需要留档时可运行：\`npm run validate:all -- --out aggregate.json --markdown aggregate.md\` 或 \`npm run validate:evidence -- --markdown evidence.md\`。
 6. 将校验通过的清单、测试文档/权限样例、联调联系人和网络白名单信息交给 V3 项目组。
 
 ## V3 侧如何验收
@@ -319,7 +319,7 @@ V3 commit: ${head || 'unknown'}
 
 This package contains third-party-facing API guides, a V3 safe HTML artifact manifest, a sandbox handoff manifest sample, validation tooling, and a mock gateway reference for V3 external action dispatch/result callback integration.
 
-The builder also writes a \`.tar.gz\` archive, matching \`.sha256\` sidecar, \`.release.json\` validation report, \`.release.md\` summary, \`.delivery-manifest.json\` delivery manifest, \`.all.json\` aggregate validation evidence, \`.all.md\` aggregate summary, and \`.evidence-manifest.json\` final evidence manifest next to the package directory.
+The builder also writes a \`.tar.gz\` archive, matching \`.sha256\` sidecar, \`.release.json\` validation report, \`.release.md\` summary, \`.delivery-manifest.json\` delivery manifest, \`.all.json\` aggregate validation evidence, \`.all.md\` aggregate summary, \`.evidence-manifest.json\` final evidence manifest, and \`.evidence-manifest.md\` human-readable evidence summary next to the package directory.
 
 Recommended flow:
 
@@ -332,7 +332,7 @@ Recommended flow:
 7. Run \`npm run validate:delivery\` to verify the sibling delivery manifest against every expected delivery artifact.
 8. Run \`npm run validate:release\` for the combined ready/not-ready report.
 9. Run \`npm run validate:all\` when you want one JSON report covering every handoff gate. Add \`-- --out aggregate.json --markdown aggregate.md\` to keep evidence files.
-10. Run \`npm run validate:evidence\` to verify the final evidence manifest that covers every delivery artifact plus aggregate evidence.
+10. Run \`npm run validate:evidence\` to verify the final evidence manifest that covers every delivery artifact plus aggregate evidence. Add \`-- --markdown evidence.md\` when you want a fresh human-readable evidence receipt.
 11. Send the validated manifest, document/ACL fixtures, network allowlist details, and operations contacts to the V3 team.
 
 The V3 operator smoke validates signed dispatch, result callback, redaction, and the handoff manifest before a live customer sandbox run.
@@ -617,6 +617,9 @@ function buildPackage({ repoRoot, outDir, basename, generatedAt = new Date().toI
   }));
   const evidenceManifestSha256 = sha256Hex(fs.readFileSync(evidenceManifestPath));
   const evidenceValidation = validateEvidence({ packageRootInput: packageRoot });
+  const evidenceMarkdownPath = path.join(path.dirname(packageRoot), `${path.basename(packageRoot)}.evidence-manifest.md`);
+  fs.writeFileSync(evidenceMarkdownPath, renderEvidenceMarkdown(evidenceValidation));
+  const evidenceMarkdownSha256 = sha256Hex(fs.readFileSync(evidenceMarkdownPath));
 
   return {
     packageRoot,
@@ -637,6 +640,8 @@ function buildPackage({ repoRoot, outDir, basename, generatedAt = new Date().toI
     allReady: allValidation.all_ready === true,
     evidenceManifestPath,
     evidenceManifestSha256,
+    evidenceMarkdownPath,
+    evidenceMarkdownSha256,
     evidenceReady: evidenceValidation.evidence_manifest_ready === true,
     releaseReady: releaseValidation.release_ready === true,
     ready: packageManifest.handoff_validation.ready_for_customer_sandbox,

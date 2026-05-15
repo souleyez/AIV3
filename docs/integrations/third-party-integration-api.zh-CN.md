@@ -944,7 +944,7 @@ npm run build:external-handoff-package
 target/external-third-party-handoff
 ```
 
-生成结果包含交接包目录、同名 `.tar.gz` 归档、`.sha256` 校验文件、同级 `.release.json` 机器可读交付校验报告、同级 `.release.md` 人工审阅摘要、同级 `.delivery-manifest.json` 交付文件清单、同级 `.all.json` 聚合校验证据、同级 `.all.md` 聚合人工摘要，以及同级 `.evidence-manifest.json` 最终证据清单。交接包包含：
+生成结果包含交接包目录、同名 `.tar.gz` 归档、`.sha256` 校验文件、同级 `.release.json` 机器可读交付校验报告、同级 `.release.md` 人工审阅摘要、同级 `.delivery-manifest.json` 交付文件清单、同级 `.all.json` 聚合校验证据、同级 `.all.md` 聚合人工摘要、同级 `.evidence-manifest.json` 最终证据清单，以及同级 `.evidence-manifest.md` 人工证据摘要。交接包包含：
 
 - 中文接口说明和英文接口说明；
 - `docs/pure-third-party-integration-guide.zh-CN.html` 和 `html-artifacts/third-party-handoff-document.json`，分别用于人工阅读评审和 V3 受信模板渲染；
@@ -959,6 +959,7 @@ target/external-third-party-handoff
 - 包目录同级的 `<package>.delivery-manifest.json`，列出本次应交付的包目录、包内清单、归档、`.sha256` sidecar、release JSON 和 release Markdown，并记录各文件 SHA256，方便第三方接收时逐项核对。
 - 包目录同级的 `<package>.all.json` 和 `<package>.all.md`，在交付清单生成后记录交接清单、包完整性、归档、交付清单和 release gate 的完整聚合校验证据。
 - 包目录同级的 `<package>.evidence-manifest.json`，最后生成，用于列出最终交付物和聚合证据文件，避免把 `.all.json` 反写进 delivery manifest 造成循环 hash。
+- 包目录同级的 `<package>.evidence-manifest.md`，由最终 evidence 校验结果渲染，方便人工审阅最终证据状态、artifact 数量、manifest SHA256、包目录/归档 HTML artifact readiness 和错误码。
 
 第三方拿到包后，可在包目录内执行：
 
@@ -972,7 +973,7 @@ npm run validate:all
 npm run validate:evidence
 ```
 
-这些命令会分别校验包内交接清单样例、包文件完整性、V3 安全 HTML artifact manifest 契约、包目录同级 `.tar.gz` 归档和 `.sha256` sidecar、归档内 HTML artifact manifest 契约、交付清单列出的应收文件、目录/归档/摘要一致性的 release ready/not-ready 汇总、覆盖全部 gate 的聚合报告，以及最终证据清单。最终证据清单还会确认 `.all.json` 中同时包含包目录和归档的 `html_artifact_ready` 信号，避免发送包缺少可审阅 HTML 对接页。第三方正式填写自己的清单后，也应先通过同一类校验，再交给 V3 项目组联调。接收交付文件时，应保留包目录、`.tar.gz`、`.sha256`、`.release.json`、`.release.md`、`.delivery-manifest.json`、`.all.json`、`.all.md` 和 `.evidence-manifest.json` 在同一目录，运行 `validate:delivery`、`validate:all` 或 `validate:evidence` 确认所有应收文件都存在且 SHA256 一致。
+这些命令会分别校验包内交接清单样例、包文件完整性、V3 安全 HTML artifact manifest 契约、包目录同级 `.tar.gz` 归档和 `.sha256` sidecar、归档内 HTML artifact manifest 契约、交付清单列出的应收文件、目录/归档/摘要一致性的 release ready/not-ready 汇总、覆盖全部 gate 的聚合报告，以及最终证据清单。最终证据清单还会确认 `.all.json` 中同时包含包目录和归档的 `html_artifact_ready` 信号，避免发送包缺少可审阅 HTML 对接页。第三方正式填写自己的清单后，也应先通过同一类校验，再交给 V3 项目组联调。接收交付文件时，应保留包目录、`.tar.gz`、`.sha256`、`.release.json`、`.release.md`、`.delivery-manifest.json`、`.all.json`、`.all.md`、`.evidence-manifest.json` 和 `.evidence-manifest.md` 在同一目录，运行 `validate:delivery`、`validate:all` 或 `validate:evidence` 确认所有应收文件都存在且 SHA256 一致。
 
 如需留存交接校验证据，可运行：
 

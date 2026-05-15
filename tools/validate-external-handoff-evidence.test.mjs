@@ -5,7 +5,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildPackage } from './build-external-handoff-package.mjs';
-import { EVIDENCE_MANIFEST_TYPE, validateEvidence } from './validate-external-handoff-evidence.mjs';
+import {
+  EVIDENCE_MANIFEST_TYPE,
+  renderEvidenceMarkdown,
+  validateEvidence,
+  writeEvidenceReportFiles,
+} from './validate-external-handoff-evidence.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -89,4 +94,44 @@ test('validateEvidence rejects aggregate JSON receipts without HTML artifact rea
   assert.ok(result.errors.some((error) => error.code === 'evidence_aggregate_json_sha256_mismatch'));
   assert.ok(result.errors.some((error) => error.code === 'evidence_aggregate_package_html_artifact_not_ready'));
   assert.ok(result.errors.some((error) => error.code === 'evidence_aggregate_archive_html_artifact_not_ready'));
+});
+
+test('renderEvidenceMarkdown summarizes final evidence without raw payloads', () => {
+  const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'v3-external-handoff-evidence-'));
+  const built = buildPackage({
+    repoRoot,
+    outDir,
+    basename: 'evidence-markdown-package',
+    generatedAt: '2026-05-15T00:00:00.000Z',
+  });
+  const result = validateEvidence({ packageRootInput: built.packageRoot });
+  const markdown = renderEvidenceMarkdown(result);
+
+  assert.match(markdown, /Status: \*\*READY\*\*/);
+  assert.match(markdown, /Manifest SHA256:/);
+  assert.match(markdown, /Package HTML artifact ready: yes/);
+  assert.match(markdown, /Archive HTML artifact ready: yes/);
+  assert.doesNotMatch(markdown, /third-party-secret|raw prompt secret|callback-token-should-not-leak/);
+});
+
+test('writeEvidenceReportFiles writes JSON and Markdown validation receipts', () => {
+  const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'v3-external-handoff-evidence-'));
+  const built = buildPackage({
+    repoRoot,
+    outDir,
+    basename: 'evidence-write-files-package',
+    generatedAt: '2026-05-15T00:00:00.000Z',
+  });
+  const result = validateEvidence({ packageRootInput: built.packageRoot });
+  const jsonPath = path.join(outDir, 'evidence-validation.json');
+  const markdownPath = path.join(outDir, 'evidence-validation.md');
+  const written = writeEvidenceReportFiles(result, {
+    out: jsonPath,
+    markdown: markdownPath,
+  });
+
+  assert.equal(written.jsonPath, jsonPath);
+  assert.equal(written.markdownPath, markdownPath);
+  assert.equal(JSON.parse(fs.readFileSync(jsonPath, 'utf8')).evidence_manifest_ready, true);
+  assert.match(fs.readFileSync(markdownPath, 'utf8'), /External Third-Party Handoff Final Evidence/);
 });
