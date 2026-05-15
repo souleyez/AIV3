@@ -38,6 +38,16 @@ const MEDIA_EXTRACTION_POLICY = {
   evidenceRule: '转写、OCR、场景切片、时间戳或 subtitle_page_map 缺失时，保持 partial 并说明缺失项。',
 };
 
+const MODEL_AWARENESS_POLICY = {
+  identity: '你正在服务 AI Data Platform V3。V3 是数据集、第三方知识库、权限、检索供料、受控动作、报表和静态页产物的统一工作台。',
+  additiveContextRule: 'V3 上下文是附加能力，不是能力限制。即使当前没有可见数据集或供料，也可以保持通用模型水准回答普通问题。',
+  unavailableEvidenceRule: '涉及 V3 数据、文档、权限、工具结果或产物状态时，只有收到 V3 observation/供料才能当作事实。未供料时先说明“当前不可见/未供料”，再区分通用判断。',
+  externalSearchPolicy: {
+    status: 'planned_v3_controlled_read_only',
+    modelRule: '外部/网页搜索是计划中的 V3 受控只读能力；未收到带来源和时间的 V3 search evidence 前，不要声称已联网搜索或引用实时网页结果。',
+  },
+};
+
 export function buildAssistantStartupBriefing({
   datasets = [],
   reportPlans = [],
@@ -110,6 +120,7 @@ export function buildAssistantStartupBriefing({
       memory: '本轮对话历史是隐藏数据集，只有用户语义需要上下文时才进入供料。',
       continuousExecution: '模型可以连续提出检索、细读、静态页规划/修改、报表规划、渲染或导出等受控动作；宿主负责校验权限、执行动作并把简要步骤回写到对话。',
     },
+    modelAwarenessPolicy: buildModelAwarenessPolicy(),
   };
 }
 
@@ -117,6 +128,7 @@ export function formatStartupBriefingForModel(briefing) {
   const source = briefing || {};
   const parts = [
     source.productTruth,
+    formatModelAwarenessPolicyForModel(source.modelAwarenessPolicy),
     `可见数据集 ${Number(source.visibleDatasetCount || 0)} 个，文档 ${Number(source.visibleDocumentCount || 0)} 份，估算字数 ${Number(source.estimatedWordCount || 0)}。`,
     `报表草稿 ${Number(source.reportPlanCount || 0)} 个，已发布 ${Number(source.publishedReportCount || 0)} 个；静态页草稿/成品 ${Number(source.staticPageDraftCount || 0)} 个。`,
     source.selectedScopeLabel ? `当前供料范围：${source.selectedScopeLabel}` : '当前未选数据集，可按普通模型聊天回答。',
@@ -132,6 +144,25 @@ export function formatStartupBriefingForModel(briefing) {
       : '',
   ];
   return parts.filter(Boolean).join('\n');
+}
+
+function buildModelAwarenessPolicy() {
+  return {
+    ...MODEL_AWARENESS_POLICY,
+    externalSearchPolicy: { ...MODEL_AWARENESS_POLICY.externalSearchPolicy },
+  };
+}
+
+function formatModelAwarenessPolicyForModel(policy) {
+  if (!policy || typeof policy !== 'object') {
+    return '';
+  }
+  return [
+    policy.identity || '',
+    policy.additiveContextRule || '',
+    policy.unavailableEvidenceRule || '',
+    policy.externalSearchPolicy?.modelRule || '',
+  ].filter(Boolean).join(' ');
 }
 
 function buildMediaExtractionPolicy() {

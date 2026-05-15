@@ -1,7 +1,7 @@
 # V3 Third-Party Integration API
 
 **Document status:** Draft v0.1
-**Last updated:** 2026-05-14
+**Last updated:** 2026-05-15
 **Audience:** third-party system owners, customer IT teams, V3 integration developers
 **Canonical plan:** `docs/plans/2026-05-13-v3-external-bot-third-party-knowledge-plan.md`
 **Default public base URL:** `https://v3.elepcloud.com`
@@ -35,6 +35,7 @@ Already implemented:
 - Deployment-target third-party gateway smoke now emits JSON and Markdown readiness reports for signed dispatch, result callback acceptance, redaction checks, handoff manifest validation, and remaining customer handoff items.
 - A third-party handoff manifest sample and validator now check customer sandbox readiness before live joint testing, including HTTPS or approved loopback URLs, dispatch credentials, callback allowlisting, document/ACL fixtures, operations contacts, and absence of raw secret material.
 - A self-contained handoff package builder now writes third-party guides, the sample manifest, validators, mock gateway reference, README files, and a SHA256 package manifest under `target/external-third-party-handoff`.
+- AssistantRun startup briefing and backend model input now include the additive V3 model-awareness policy: V3 identity, visible-scope discipline, unavailable-evidence wording, and no-fake-live-search behavior.
 
 Planned next:
 
@@ -119,8 +120,21 @@ sequenceDiagram
 - Every external document chunk must be tied to a source document, revision, and ACL snapshot.
 - Permission filtering happens before evidence enters the model context.
 - V3 never asks the model to ignore inaccessible documents; inaccessible documents are not supplied.
+- V3 briefs the model with V3 identity, visible capabilities, visible permission-scoped datasets/tools, and unavailable-evidence state. This is additive context, not a restriction on normal model Q&A.
+- If V3 has not supplied visible permission, evidence, or tool results for a V3-related topic, the answer should say the relevant V3 scope is currently not visible or not supplied before continuing with clearly labeled general knowledge.
+- External/web search is a planned V3-controlled read-only capability. Replies must not claim live search or cite real-time web results unless V3 supplied audited search evidence with source and timestamp metadata.
 - High-risk writes require explicit confirmation.
 - Public API responses, logs, management UI, and event summaries must not expose raw secrets, tokens, document bodies outside authorized context, or raw provider payloads.
+
+## Model Awareness And Answer Boundaries
+
+Third-party chat pages, Feishu/Lark adapters, WeCom adapters, and customer-hosted gateways all use V3's normal AssistantRun path. The model is told that it is serving through AI Data Platform V3 and receives only permission-scoped summaries, evidence, tools, and artifact state for the current tenant, channel, conversation, and user.
+
+This does not make V3 a closed-domain bot. When a user asks a normal question outside the supplied V3 data, the model may answer with its general reasoning and knowledge. The boundary is attribution: V3-provided facts, document claims, artifact states, permission conclusions, and tool results must come from supplied V3 evidence.
+
+If evidence is missing, stale, denied, or not yet supplied, the channel reply should make that visible. Chinese-facing replies may use wording such as `当前不可见/未供料`; English-facing replies may say `currently not visible or not supplied by V3`. After that, the model may continue with general guidance if it is useful and clearly separated from V3 evidence.
+
+Live external/web search must be treated as a V3 tool, not as an assumption. Until V3 provides audited search evidence with source URL/title, timestamp, requester/channel, and query metadata, replies should not say that V3 has searched the web or cite time-sensitive web results.
 
 ## Connection Model
 

@@ -44,6 +44,9 @@ V3 is not a generic file manager and not a standalone page builder. It is a data
 
 - No fake data. If evidence is missing, the UI and generated artifact must say data is missing or partial.
 - No local answer composition. V3 supplies context and actions; the model writes the answer.
+- V3 model awareness is global and additive, not restrictive. Every AssistantRun surface must brief the model that it is serving through V3, what V3 can do, what permission-filtered datasets/tools are visible, and that the model may still answer general questions outside V3 when useful.
+- If V3 has not supplied permission, evidence, or tool results for a topic, the answer must say the relevant V3 scope is currently not visible or not supplied (`当前不可见/未供料`) before continuing with clearly labeled general model knowledge or judgment.
+- External/web search should become a default V3-controlled read-only capability. Until live search evidence is actually supplied, no answer may imply that V3 searched the web; when implemented, search results must enter context as audited evidence with source and timestamp metadata.
 - Codex may decide reasoning and action steps, but V3 remains the authority for permissions, visible datasets, memory scope, workflow state, queue submission, and artifact ownership.
 - The model gateway must support multiple provider APIs through explicit profiles, redacted credentials, provider capability manifests, and per-lane fallback policy.
 - Dataset selection is supply preference, not a separate chat mode.
@@ -83,6 +86,7 @@ Completed and preserved:
 - Static-page render/export manifests classify module data quality as confirmed, partial, or missing; the handoff README, main workspace, and right shelf expose those counts.
 - Background static-page render now preserves queued/rendering/failed/cancelled workflow state in the output and manifest so the main workspace and right shelf stay consistent.
 - Assistant startup briefing and scope planning expose product capability, controlled action policy, quality-first context budget, recommended tool actions, and minimal UI intent chips.
+- Current V3 awareness slice: startup briefing now carries an additive model-awareness policy, and backend AssistantRun provider input/continue input always includes V3 identity, V3 capability scope, unavailable-evidence wording (`当前不可见/未供料`), and the rule that external/web search cannot be claimed without audited V3 search evidence.
 - Codex plan-only action suggestions, the real static-page preview queue, and final static-page render now consume static-page `bindingQuality` summaries: if chart/module data still needs attention, the executor or backend gate suggests module repair or retrieval instead of submitting an effect-image preview or final render; confirmed data quality still allows the normal `效果图——生成页面` path. The web request layer preserves structured gate details so module-level repair hints are not lost before reaching the UI.
 - Home UI shell is now close to fixed: homepage keeps the conversation composer, directory pages remove the composer, the left rail remains dataset-only, the top toolbar owns page navigation/login/model status, the right shelf owns drafts/results, and members shows an explicit login-required overlay instead of looking broken.
 - Java 8 parity audit is complete: Java/Vue used `gridstack` plus `echarts`; V3 keeps `react-grid-layout` and adds ECharts as advanced chart runtime.
@@ -891,6 +895,8 @@ Keep the current overall UI shell stable. Do not redesign the left dataset rail,
 Product mainline is static-page generation quality: module editing correctness, data snapshots, ECharts advanced runtime, Cloudflare/Codex preview, durable final render/export, planning quality, parsing quality, retrieval/context quality, and generation quality.
 The model-gateway/Codex conversation executor is now a core architecture track, not a distant sidecar. Build toward routing normal assistant turns through Codex behind feature flags and shadow/dry-run comparison, with V3 supplying context/evidence/tool contracts and validating every requested action.
 Gateway model profiles must support multiple provider APIs such as GPT-family and MiniMax-compatible providers through explicit capability manifests, redacted credentials, and fallback policy.
+Every model-facing turn must receive V3 awareness as additive context: V3 identity, product capabilities, visible permission-scoped datasets/tools, and unavailable evidence state. This must not restrict normal model ability; if V3 has no visible evidence or permission for a topic, the answer should say it is `当前不可见/未供料` and may then continue with clearly labeled general knowledge.
+Treat external/web search as a planned default read-only V3 tool. Do not claim search results unless V3 supplied audited search evidence with source and timestamp metadata.
 Safe HTML artifacts are a shared review/control surface for Codex reports, planning handoffs, and lightweight JSON-patch editors; do not confuse them with final customer static-page delivery.
 Video/PPT extraction is temporarily frozen as of 2026-05-15 unless the operator explicitly resumes it. Do not continue richer PPTX/OCR reconstruction or related media work while frozen.
 Do not resume account expansion unless fixing a security/access regression.

@@ -33,6 +33,7 @@
 - Phase 9 second checkpoint adds database-backed mock/sandbox validation for customer-hosted generic chat page events and signed outbound dispatch to a local third-party mock endpoint, including idempotency, dispatch-specific Bearer/HMAC headers, callback-token non-reuse, and redacted response summaries.
 - Phase 9 second checkpoint passed on `8服务器` at commit `aaafd6f`; see `docs/validation/external-third-party-mock-sandbox-smoke-2026-05-14.md`.
 - Phase 9 third checkpoint adds a standalone Node-based third-party mock gateway and Linux/deployment-target smoke runner so signed outbound dispatch can be validated outside the in-process Rust test harness.
+- V3 awareness checkpoint now adds a shared additive model-awareness policy to the startup briefing and backend AssistantRun provider input/continue input, so external chat surfaces that use the normal AssistantRun path inherit V3 identity, visible-scope discipline, `当前不可见/未供料` wording, and no-fake-live-search behavior.
 - Phase 9 third checkpoint passed on `8服务器` at commit `0cfb9c9`; see `docs/validation/external-third-party-gateway-smoke-2026-05-14.md`.
 - Phase 9 fourth checkpoint adds the third-party action result callback contract, `POST /v1/external/channels/{connection_id}/actions/{action_id}/result`, with channel ownership checks, external request id mismatch protection, idempotency-key tracking, and non-verbatim result summaries.
 - Phase 9 fourth checkpoint passed on `8服务器` at commit `120933a`; the standalone gateway now validates signed dispatch and posts action result callbacks back into a V3 HTTP route. See `docs/validation/external-action-result-callback-smoke-2026-05-14.md`.
@@ -80,11 +81,20 @@ The product must support three integration modes:
 
 The V3 management UI should not require frequent human operation. It is primarily an observability and governance console: connection health, sync status, permission drift, message/run traces, retrieval evidence quality, transaction audit, and failure recovery.
 
+## Model Awareness And Answer Policy
+
+Every external channel must use the same additive V3 awareness envelope as the main AssistantRun path. The model should know that it is serving through V3, what V3 capabilities are available, which tenant/channel/user is active, which permission-scoped datasets/tools are visible, and what evidence or tools are currently unavailable.
+
+This awareness must not limit the model to V3-only topics. For non-V3 questions, the model should remain generally helpful. When V3 has not supplied visible permission, evidence, or tool results for a topic, the answer should first state that the relevant V3 scope is currently not visible or not supplied (`当前不可见/未供料`), then continue with clearly labeled general model knowledge or judgment when that is useful.
+
+External/web search is a planned default read-only capability for these channels, but it must be V3-controlled and audited. Until search evidence is actually supplied, replies must not claim live search results. Once implemented, search results should enter the AssistantRun context as evidence with source, timestamp, query, requester, channel, and permission metadata.
+
 ## Non-Negotiable Rules
 
 - V3 owns tenant, account, external identity mapping, effective permissions, AssistantRun state, memory scope, workflow state, action approval, and audit.
 - External systems may provide source permissions, but V3 must snapshot and enforce them before retrieval, answer generation, artifact access, or transaction execution.
 - Third-party chat pages may exist outside V3, but they do not bypass V3 permission checks or action validation.
+- V3 awareness summaries must be permission-scoped too: they may describe available capabilities and visible dataset names, but must not leak hidden document titles, hidden tool outputs, raw external ids, raw provider payloads, or unavailable tenant data.
 - No answer may cite or summarize a document that the external user cannot access through the effective permission graph.
 - No cross-tenant, cross-chat, or cross-document leakage through cache, embedding index, artifact links, or conversation memory.
 - High-risk external transactions require explicit confirmation through the originating channel or an approved customer page.
@@ -186,6 +196,8 @@ Source connectors feed V3's existing ingest/retrieval path:
 9. Persist cited evidence refs in AssistantRun audit.
 
 Permission filtering must happen before evidence enters the model context. The model must never be asked to ignore hidden documents; hidden documents should simply not be supplied.
+
+The same rule applies to the V3 awareness envelope. The model can be told that V3 has a document source connector or artifact tool, but only visible datasets, safe tool descriptions, and permission-filtered summaries may be included for the current external user.
 
 ### 4. External transactions
 
@@ -495,6 +507,8 @@ It should not ask operators to manually label documents, rewrite permissions, or
 - External artifacts can be published or revoked through a third-party artifact API with audit records.
 - Low-risk external actions can run after V3 validation; high-risk actions require confirmation.
 - The V3 management UI shows connection health, sync state, ACL drift, AssistantRun links, and redacted audit traces with minimal manual operation.
+- External-channel answers can identify V3, explain visible V3 capabilities and current permission-scoped data availability, and still answer non-V3 questions normally when useful.
+- Replies do not claim live external/web search unless V3 supplied audited search evidence with source and timestamp metadata.
 - No hidden document content, raw secrets, raw provider payloads, or unauthorized artifact links appear in API responses, model context, management UI, logs, or generated artifacts.
 
 ## Risks And Mitigations

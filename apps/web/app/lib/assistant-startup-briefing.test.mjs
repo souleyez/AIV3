@@ -46,6 +46,10 @@ test('startup briefing summarizes visible datasets and system capability', () =>
   assert.ok(briefing.capabilities.includes('video_url_resolve'));
   assert.ok(briefing.capabilities.includes('video_ppt_extract'));
   assert.ok(briefing.capabilities.includes('continuous_execution'));
+  assert.match(briefing.modelAwarenessPolicy.identity, /AI Data Platform V3/);
+  assert.match(briefing.modelAwarenessPolicy.additiveContextRule, /不是能力限制/);
+  assert.match(briefing.modelAwarenessPolicy.unavailableEvidenceRule, /当前不可见\/未供料/);
+  assert.match(briefing.modelAwarenessPolicy.externalSearchPolicy.modelRule, /不要声称已联网搜索/);
   assert.match(briefing.productCapabilities.staticPage, /静态页规划/);
   assert.match(briefing.productCapabilities.staticPage, /index\.html/);
   assert.match(briefing.productCapabilities.staticPage, /ZIP 交付包/);
@@ -85,6 +89,10 @@ test('formatted briefing tells model when no dataset is selected', () => {
 
   assert.match(formatted, /当前未选数据集/);
   assert.match(formatted, /普通模型聊天/);
+  assert.match(formatted, /AI Data Platform V3/);
+  assert.match(formatted, /V3 上下文是附加能力/);
+  assert.match(formatted, /当前不可见\/未供料/);
+  assert.match(formatted, /不要声称已联网搜索/);
   assert.match(formatted, /创建报表/);
   assert.match(formatted, /媒体细节/);
   assert.match(formatted, /视频转 PPT\/原文提取/);

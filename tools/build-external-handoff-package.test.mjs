@@ -67,6 +67,15 @@ test('buildPackage creates a third-party handoff directory with manifest and too
   assert.ok(fs.existsSync(path.join(result.packageRoot, 'tools/validate-external-handoff-all.mjs')));
   assert.ok(fs.existsSync(path.join(result.packageRoot, 'sandbox/external-third-party-mock-gateway.mjs')));
 
+  const cnGuide = fs.readFileSync(path.join(result.packageRoot, 'docs/third-party-integration-api.zh-CN.md'), 'utf8');
+  const enGuide = fs.readFileSync(path.join(result.packageRoot, 'docs/third-party-integration-api.md'), 'utf8');
+  assert.match(cnGuide, /AI Data Platform V3/);
+  assert.match(cnGuide, /当前不可见\/未供料/);
+  assert.match(cnGuide, /不能声称已经联网搜索/);
+  assert.match(enGuide, /AI Data Platform V3/);
+  assert.match(enGuide, /currently not visible or not supplied by V3/);
+  assert.match(enGuide, /must not claim live search/);
+
   const manifest = JSON.parse(fs.readFileSync(result.manifestPath, 'utf8'));
   assert.equal(manifest.package_type, PACKAGE_TYPE);
   assert.equal(manifest.handoff_validation.ready_for_customer_sandbox, true);

@@ -12190,6 +12190,15 @@ fn build_assistant_run_provider_input(request: &CreateAssistantRunRequest) -> St
     build_assistant_run_provider_input_with_evidence(request, None)
 }
 
+fn assistant_run_v3_awareness_lines() -> Vec<String> {
+    vec![
+        "V3 认知：你正在 AI Data Platform V3 中服务用户。V3 提供数据集、第三方知识库、权限、检索供料、受控动作、报表和静态页产物上下文。".to_string(),
+        "V3 上下文是附加能力，不是能力限制；没有可见数据集或供料时，仍可保持通用模型水准回答普通问题。".to_string(),
+        "V3 证据规则：涉及 V3 数据、文档、权限、工具结果或产物状态时，只能把已供给的 observation/证据当作事实；未供料时先说明“当前不可见/未供料”，再区分通用知识或推断。".to_string(),
+        "V3 搜索规则：外部/网页搜索是计划中的 V3 受控只读能力；没有带来源和时间的 V3 search evidence 时，不要声称已联网搜索或引用实时网页结果。".to_string(),
+    ]
+}
+
 fn build_assistant_run_provider_input_with_evidence(
     request: &CreateAssistantRunRequest,
     evidence_state: Option<&Value>,
@@ -12213,6 +12222,7 @@ fn build_assistant_run_provider_input_with_evidence(
             "系统能力背景：可普通聊天、检索供料、读取文档细节、读取音视频转写/场景等媒体细节、创建报表、规划/渲染/修改静态页、导出静态页 ZIP 交付包。涉及供料中的数据、指标、文档事实或产物状态时，不要编造；普通常识和开放问答仍可使用模型通用能力。".to_string(),
         ]
     };
+    sections.extend(assistant_run_v3_awareness_lines());
 
     if !plain_ordinary_chat {
         if let Some(briefing) = request.startup_briefing.as_ref() {
@@ -12311,6 +12321,7 @@ fn build_assistant_run_continue_provider_input(
             ),
         ]
     };
+    sections.extend(assistant_run_v3_awareness_lines());
     if let Some(brief) = build_assistant_run_model_supply_brief(evidence_state) {
         sections.push(format!("供料提示（供你参考，不是回答模板）：\n{brief}"));
     }
@@ -35241,6 +35252,10 @@ mod tests {
         });
 
         assert!(input.contains("智能数据工作台"));
+        assert!(input.contains("AI Data Platform V3"));
+        assert!(input.contains("V3 上下文是附加能力"));
+        assert!(input.contains("当前不可见/未供料"));
+        assert!(input.contains("不要声称已联网搜索"));
         assert!(input.contains("规划/渲染/修改静态页"));
         assert!(input.contains("范围候选"));
         assert!(input.contains("当前选中范围"));
@@ -35278,6 +35293,10 @@ mod tests {
         assert!(input.contains("通用模型助手"));
         assert!(input.contains("可以使用你的通用知识、推理和表达能力"));
         assert!(input.contains("不要因为缺少数据集而拒答"));
+        assert!(input.contains("AI Data Platform V3"));
+        assert!(input.contains("不是能力限制"));
+        assert!(input.contains("当前不可见/未供料"));
+        assert!(input.contains("不要声称已联网搜索"));
         assert!(input.contains("用户问题：猫为什么喜欢晒太阳？"));
         assert!(!input.contains("启动简报"));
         assert!(!input.contains("范围候选"));
@@ -35583,6 +35602,8 @@ mod tests {
         );
 
         assert!(input.contains("previewStale=true"));
+        assert!(input.contains("AI Data Platform V3"));
+        assert!(input.contains("当前不可见/未供料"));
         assert!(input.contains("禁止直接 render_static_page"));
         assert!(input.contains("submit_static_page_image_preview"));
         assert!(input.contains("\"previewStale\":true"));
