@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const EVIDENCE_MANIFEST_TYPE = 'v3.external_third_party_handoff_evidence_manifest.v1';
+const PACKAGE_TYPE = 'v3.external_third_party_handoff_package.v1';
 const EVIDENCE_ARTIFACT_ROLES = [
   'package_directory',
   'package_manifest',
@@ -145,6 +146,9 @@ function validateEvidence({
   if (manifest.manifest_type !== EVIDENCE_MANIFEST_TYPE) {
     addError(errors, 'evidence_manifest_type_invalid', `evidence manifest type must be ${EVIDENCE_MANIFEST_TYPE}`, evidenceManifestPath);
   }
+  if (manifest.package_type !== PACKAGE_TYPE) {
+    addError(errors, 'evidence_package_type_invalid', `evidence manifest package_type must be ${PACKAGE_TYPE}`, manifest.package_type || '');
+  }
   if (manifest.package_name !== packageName) {
     addError(errors, 'evidence_package_name_mismatch', 'evidence manifest package_name must match package directory', manifest.package_name || '');
   }
@@ -267,6 +271,7 @@ function validateEvidence({
     evidence_manifest_path: evidenceManifestPath,
     evidence_manifest_sha256: fileDigest(evidenceManifestPath).sha256,
     manifest_type: manifest.manifest_type || null,
+    package_type: manifest.package_type || null,
     package_name: manifest.package_name || packageName,
     artifact_count: artifacts.length,
     html_artifact_summary: {

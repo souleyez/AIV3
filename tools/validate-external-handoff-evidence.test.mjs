@@ -29,6 +29,7 @@ test('validateEvidence accepts generated final evidence manifests', () => {
 
   assert.equal(result.evidence_manifest_ready, true);
   assert.equal(result.manifest_type, EVIDENCE_MANIFEST_TYPE);
+  assert.equal(result.package_type, 'v3.external_third_party_handoff_package.v1');
   assert.equal(result.package_name, 'evidence-valid-package');
   assert.equal(result.artifact_count, 9);
   assert.equal(result.evidence_manifest_sha256, built.evidenceManifestSha256);
@@ -73,6 +74,25 @@ test('validateEvidence rejects not-ready aggregate JSON receipts', () => {
   assert.equal(result.evidence_manifest_ready, false);
   assert.ok(result.errors.some((error) => error.code === 'evidence_aggregate_json_sha256_mismatch'));
   assert.ok(result.errors.some((error) => error.code === 'evidence_aggregate_json_not_ready'));
+});
+
+test('validateEvidence rejects final evidence manifests for the wrong package type', () => {
+  const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'v3-external-handoff-evidence-'));
+  const built = buildPackage({
+    repoRoot,
+    outDir,
+    basename: 'evidence-wrong-package-type',
+    generatedAt: '2026-05-15T00:00:00.000Z',
+  });
+  const manifest = JSON.parse(fs.readFileSync(built.evidenceManifestPath, 'utf8'));
+  manifest.package_type = 'v3.other_package.v1';
+  fs.writeFileSync(built.evidenceManifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+  const result = validateEvidence({ packageRootInput: built.packageRoot });
+
+  assert.equal(result.evidence_manifest_ready, false);
+  assert.equal(result.package_type, 'v3.other_package.v1');
+  assert.ok(result.errors.some((error) => error.code === 'evidence_package_type_invalid'));
 });
 
 test('validateEvidence rejects aggregate JSON receipts without HTML artifact readiness', () => {
