@@ -421,6 +421,7 @@ function buildPackage({ repoRoot, outDir, basename, generatedAt = new Date().toI
     packageRootInput: packageRoot,
     archivePathInput: archivePath,
     sidecarPathInput: archiveSha256Path,
+    deliveryManifestRequired: false,
   });
   const releaseReportPath = path.join(path.dirname(packageRoot), `${path.basename(packageRoot)}.release.json`);
   writeJson(releaseReportPath, releaseValidation);

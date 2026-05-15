@@ -28,6 +28,10 @@ test('validateRelease accepts a generated package, archive, and sidecar', () => 
   assert.equal(result.archive_summary.archive_ready, true);
   assert.equal(result.archive_summary.root_name, 'release-valid-package');
   assert.equal(result.archive_sha256, built.archiveSha256);
+  assert.equal(result.delivery_manifest_summary.delivery_manifest_ready, true);
+  assert.equal(result.delivery_manifest_summary.artifact_count, 6);
+  assert.equal(result.delivery_manifest_sha256, built.deliveryManifestSha256);
+  assert.equal(result.checks.find((check) => check.key === 'delivery_manifest_ready').passed, true);
   assert.equal(result.errors.length, 0);
   assert.equal(result.checks.find((check) => check.key === 'archive_root_matches_package').passed, true);
 });
@@ -47,7 +51,9 @@ test('renderReleaseMarkdown summarizes a ready release for human review', () => 
   assert.match(markdown, /Generated at: 2026-05-14T00:00:00.000Z/);
   assert.match(markdown, /Repository head:/);
   assert.match(markdown, /Archive SHA256:/);
+  assert.match(markdown, /Delivery manifest ready: yes/);
   assert.match(markdown, /PASS `archive_root_matches_package`/);
+  assert.match(markdown, /PASS `delivery_manifest_ready`/);
   assert.match(markdown, /## Errors/);
 });
 
@@ -74,4 +80,24 @@ test('validateRelease rejects an archive that belongs to a different package dir
 
   assert.equal(result.release_ready, false);
   assert.ok(result.errors.some((error) => error.code === 'archive_root_package_mismatch'));
+});
+
+test('validateRelease rejects tampered delivery manifest artifact checksums', () => {
+  const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'v3-external-handoff-release-'));
+  const built = buildPackage({
+    repoRoot,
+    outDir,
+    basename: 'release-delivery-tamper-package',
+    generatedAt: '2026-05-14T00:00:00.000Z',
+  });
+  const deliveryManifest = JSON.parse(fs.readFileSync(built.deliveryManifestPath, 'utf8'));
+  const archiveArtifact = deliveryManifest.artifacts.find((artifact) => artifact.role === 'archive');
+  archiveArtifact.sha256 = '0'.repeat(64);
+  fs.writeFileSync(built.deliveryManifestPath, `${JSON.stringify(deliveryManifest, null, 2)}\n`);
+
+  const result = validateRelease({ packageRootInput: built.packageRoot });
+
+  assert.equal(result.release_ready, false);
+  assert.equal(result.delivery_manifest_summary.delivery_manifest_ready, false);
+  assert.ok(result.errors.some((error) => error.code === 'delivery_archive_sha256_mismatch'));
 });

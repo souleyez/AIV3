@@ -381,3 +381,24 @@ The build output included `deliveryManifestPath`, `deliveryManifestSha256`, `rel
 The generated delivery manifest returned `manifest_type: v3.external_third_party_handoff_delivery_manifest.v1`, `release_ready: true`, `package_name: deployment-delivery-manifest-check`, `repository_head: d50d282`, and six delivery artifacts: package directory, package manifest, archive, archive SHA256 sidecar, release JSON, and release Markdown.
 
 The deployment target finished at `d50d282` with a clean `main...origin/main` status.
+
+## Handoff Delivery Manifest Release Validation Follow-Up
+
+The release validator now checks the sibling `<package>.delivery-manifest.json` during post-build release validation. It verifies:
+
+- delivery manifest type and package name/root;
+- required delivery artifact roles;
+- expected relative paths for the package directory, package manifest, archive, `.sha256` sidecar, release JSON, and release Markdown;
+- byte size and SHA256 match for each file artifact;
+- tampered delivery manifest artifact checksums are rejected.
+
+The package builder intentionally runs its first release validation before writing the delivery manifest, then writes the delivery manifest as the final sibling artifact. Post-build `npm run validate:external-handoff-release -- --package <package>` and package-internal `npm run validate:release` perform the full delivery-manifest check without creating a circular hash dependency.
+
+Local validation passed:
+
+```text
+npm run test:external-handoff-release
+npm run test:external-handoff-package
+npm run test:external-handoff-package-integrity
+npm run test:external-handoff-archive
+```
