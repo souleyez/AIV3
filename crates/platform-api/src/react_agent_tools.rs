@@ -110,6 +110,7 @@ pub(crate) async fn execute_assistant_run_react_action(
                 final_answer: None,
             })
         }
+        AssistantRunReactActionType::WebSearch => Ok(web_search_evidence_required_result(action)),
         AssistantRunReactActionType::RecallConversationMemory => {
             let memory_scope = ensure_scope_requests_conversation_memory(selected_scope.clone());
             let refreshed = build_assistant_run_evidence_state(
@@ -236,6 +237,7 @@ pub(crate) fn assistant_run_react_action_label(
 ) -> &'static str {
     match action_type {
         AssistantRunReactActionType::RetrieveEvidence => "检索供料证据",
+        AssistantRunReactActionType::WebSearch => "请求外部/网页搜索证据",
         AssistantRunReactActionType::ReadDocumentDetail => "读取文档详情",
         AssistantRunReactActionType::RecallConversationMemory => "召回对话记忆",
         AssistantRunReactActionType::ListReportOptions => "列出报表选项",
@@ -251,6 +253,71 @@ pub(crate) fn assistant_run_react_action_label(
         AssistantRunReactActionType::OpenClawReadonlyExecution => "调用 OpenClaw 只读执行",
         AssistantRunReactActionType::CodexHostTask => "调用 Codex Host 任务",
         AssistantRunReactActionType::FinalAnswer => "模型生成最终回答",
+    }
+}
+
+fn web_search_evidence_required_result(
+    action: &AssistantRunNextAction,
+) -> AssistantRunReactToolResult {
+    let query_chars = action
+        .arguments
+        .get("query")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.chars().count())
+        .unwrap_or(0);
+    let freshness = action
+        .arguments
+        .get("freshness")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("unspecified");
+    let language_present = action
+        .arguments
+        .get("language")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .is_some_and(|value| !value.is_empty());
+
+    AssistantRunReactToolResult {
+        observation: json!({
+            "status": "completed",
+            "action_type": action.action_type.as_str(),
+            "actionType": action.action_type.as_str(),
+            "task_status": "v3_search_evidence_required",
+            "message": "v3_search_evidence_required",
+            "items": [],
+            "limits": {},
+            "search_evidence_required": true,
+            "query_present": query_chars > 0,
+            "query_chars": query_chars,
+            "freshness": freshness,
+            "language_present": language_present,
+            "evidence_contract": {
+                "requires_source_url": true,
+                "requires_source_title": true,
+                "requires_retrieved_at": true,
+                "requires_query_metadata": true
+            },
+            "no_live_search_claim": true,
+            "allow_general_model_answer": true,
+            "next_step": "等待 V3 搜索证据供料；未收到 search evidence 前，回答需说明当前不可见/未供料，并把通用知识或判断清楚标注为非 V3 搜索证据。",
+        }),
+        trail_step: json!({
+            "status": "completed",
+            "label": "等待 V3 搜索证据",
+            "react_action": action.action_type.as_str(),
+            "task_status": "v3_search_evidence_required",
+            "search_evidence_required": true,
+            "query_present": query_chars > 0,
+            "query_chars": query_chars,
+            "freshness": freshness,
+            "language_present": language_present,
+            "at": Utc::now(),
+        }),
+        final_answer: None,
     }
 }
 
@@ -3613,6 +3680,39 @@ mod tests {
         assert_eq!(result.observation["items"], json!([]));
         assert_eq!(result.observation["limits"], json!({}));
         assert!(result.final_answer.is_none());
+    }
+
+    #[test]
+    fn web_search_returns_pending_evidence_without_raw_query() {
+        let mut action = test_action(AssistantRunReactActionType::WebSearch);
+        action.arguments = json!({
+            "query": "2026 年 V3 对外集成最新状态",
+            "reason": "用户询问最新进展",
+            "freshness": "latest",
+            "language": "zh-CN"
+        });
+
+        let result = web_search_evidence_required_result(&action);
+        let serialized = serde_json::to_string(&result.observation).expect("observation");
+
+        assert_eq!(result.observation["status"], json!("completed"));
+        assert_eq!(result.observation["actionType"], json!("web_search"));
+        assert_eq!(
+            result.observation["task_status"],
+            json!("v3_search_evidence_required")
+        );
+        assert_eq!(result.observation["search_evidence_required"], json!(true));
+        assert_eq!(result.observation["no_live_search_claim"], json!(true));
+        assert_eq!(
+            result.observation["allow_general_model_answer"],
+            json!(true)
+        );
+        assert_eq!(result.observation["query_present"], json!(true));
+        assert!(result.observation["query_chars"].as_u64().unwrap_or(0) > 0);
+        assert_eq!(result.trail_step["label"], json!("等待 V3 搜索证据"));
+        assert!(result.final_answer.is_none());
+        assert!(!serialized.contains("对外集成最新状态"));
+        assert!(!serialized.contains("用户询问最新进展"));
     }
 
     #[test]

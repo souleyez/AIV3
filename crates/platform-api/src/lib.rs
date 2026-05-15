@@ -12386,7 +12386,7 @@ fn assistant_run_v3_awareness_lines() -> Vec<String> {
         "V3 认知：你正在 AI Data Platform V3 中服务用户。V3 提供数据集、第三方知识库、权限、检索供料、受控动作、报表和静态页产物上下文。".to_string(),
         "V3 上下文是附加能力，不是能力限制；没有可见数据集或供料时，仍可保持通用模型水准回答普通问题。".to_string(),
         "V3 证据规则：涉及 V3 数据、文档、权限、工具结果或产物状态时，只能把已供给的 observation/证据当作事实；未供料时先说明“当前不可见/未供料”，再区分通用知识或推断。".to_string(),
-        "V3 搜索规则：外部/网页搜索是计划中的 V3 受控只读能力；没有带来源和时间的 V3 search evidence 时，不要声称已联网搜索或引用实时网页结果。".to_string(),
+        "V3 搜索规则：外部/网页搜索（web_search）是计划中的 V3 受控只读能力；没有带来源和时间的 V3 search evidence 时，不要声称已联网搜索或引用实时网页结果。".to_string(),
     ]
 }
 
@@ -13290,10 +13290,10 @@ fn build_assistant_run_react_provider_input(
         "你是智能数据工作台里的 Host-Controlled ReAct 运行时。".to_string(),
         "你只能提出下一步动作，不能假装已经执行平台动作。V3 Host 会验证、执行、记录并返回 observation。".to_string(),
         "只返回一个 JSON 对象，禁止 Markdown，禁止解释 JSON 外的文字。".to_string(),
-        "JSON Schema: {\"action_type\":\"retrieve_evidence|read_document_detail|recall_conversation_memory|list_report_options|report_choice|resolve_video_url|extract_video_ppt_transcript|create_static_page_draft|update_static_page_module|submit_static_page_image_preview|render_static_page|create_report_draft|openclaw_memory_recall|openclaw_readonly_execution|codex_host_task|final_answer\",\"reason_summary\":\"给用户看的简短原因\",\"arguments\":{},\"requires_confirmation\":false}".to_string(),
+        "JSON Schema: {\"action_type\":\"retrieve_evidence|web_search|read_document_detail|recall_conversation_memory|list_report_options|report_choice|resolve_video_url|extract_video_ppt_transcript|create_static_page_draft|update_static_page_module|submit_static_page_image_preview|render_static_page|create_report_draft|openclaw_memory_recall|openclaw_readonly_execution|codex_host_task|final_answer\",\"reason_summary\":\"给用户看的简短原因\",\"arguments\":{},\"requires_confirmation\":false}".to_string(),
         "目录、候选列表和系统说明只用于规划下一步，不是可引用证据。".to_string(),
         "选中数据集或对话记忆时，final_answer 必须基于已返回的 observation；否则先选择 retrieve_evidence、read_document_detail 或 recall_conversation_memory。".to_string(),
-        "工具选择：retrieve_evidence 用于发现候选证据；read_document_detail 用于需要原文措辞、OCR、表格、音视频转写/场景或画像字段等细节时，document_id 必须来自选中范围或已返回 observation；最终引用只能来自 observation。".to_string(),
+        "工具选择：retrieve_evidence 用于发现 V3 可见范围内的候选证据；web_search 用于请求 V3 受控外部/网页搜索证据，arguments 至少包含 query 和 reason；未收到带来源和时间的 V3 search evidence 前，不得声称已联网搜索或引用实时网页结果；read_document_detail 用于需要原文措辞、OCR、表格、音视频转写/场景或画像字段等细节时，document_id 必须来自选中范围或已返回 observation；最终引用只能来自 observation。".to_string(),
         "如果弱规划目录或供料证据里出现 detailTargets，优先用其中的 document_id 调 read_document_detail；detailTargets 只是深读目标，不是可引用证据。".to_string(),
         "静态页或报表意图且存在数据集时，优先 retrieve_evidence；若需要模块数据、字段、表格/OCR 或原文措辞，继续 read_document_detail，再创建静态页/报表动作。".to_string(),
         "视频 PPT/原文提取：仅支持上传视频文件、直接视频 URL 或公开页面可解析视频地址；先用 resolve_video_url，已有登记视频素材后才用 extract_video_ppt_transcript；不要请求扫码、Cookie、登录态页面或录屏绕过。".to_string(),
@@ -13372,10 +13372,10 @@ fn build_assistant_run_react_continue_provider_input(
         "你是智能数据工作台里的 Host-Controlled ReAct 继续执行运行时。".to_string(),
         "你只能提出下一步动作，不能假装已经执行平台动作。V3 Host 会验证、执行、记录并返回 observation。".to_string(),
         "只返回一个 JSON 对象，禁止 Markdown，禁止解释 JSON 外的文字。".to_string(),
-        "JSON Schema: {\"action_type\":\"retrieve_evidence|read_document_detail|recall_conversation_memory|list_report_options|report_choice|resolve_video_url|extract_video_ppt_transcript|create_static_page_draft|update_static_page_module|submit_static_page_image_preview|render_static_page|create_report_draft|openclaw_memory_recall|openclaw_readonly_execution|codex_host_task|final_answer\",\"reason_summary\":\"给用户看的简短原因\",\"arguments\":{},\"requires_confirmation\":false}".to_string(),
+        "JSON Schema: {\"action_type\":\"retrieve_evidence|web_search|read_document_detail|recall_conversation_memory|list_report_options|report_choice|resolve_video_url|extract_video_ppt_transcript|create_static_page_draft|update_static_page_module|submit_static_page_image_preview|render_static_page|create_report_draft|openclaw_memory_recall|openclaw_readonly_execution|codex_host_task|final_answer\",\"reason_summary\":\"给用户看的简短原因\",\"arguments\":{},\"requires_confirmation\":false}".to_string(),
         "目录、候选列表和系统说明只用于规划下一步，不是可引用证据。".to_string(),
         "选中数据集或对话记忆时，final_answer 必须基于已返回的 observation；否则先选择 retrieve_evidence、read_document_detail 或 recall_conversation_memory。".to_string(),
-        "工具选择：retrieve_evidence 用于发现候选证据；read_document_detail 用于需要原文措辞、OCR、表格、音视频转写/场景或画像字段等细节时，document_id 必须来自选中范围或已返回 observation；最终引用只能来自 observation。".to_string(),
+        "工具选择：retrieve_evidence 用于发现 V3 可见范围内的候选证据；web_search 用于请求 V3 受控外部/网页搜索证据，arguments 至少包含 query 和 reason；未收到带来源和时间的 V3 search evidence 前，不得声称已联网搜索或引用实时网页结果；read_document_detail 用于需要原文措辞、OCR、表格、音视频转写/场景或画像字段等细节时，document_id 必须来自选中范围或已返回 observation；最终引用只能来自 observation。".to_string(),
         "如果弱规划目录或供料证据里出现 detailTargets，优先用其中的 document_id 调 read_document_detail；detailTargets 只是深读目标，不是可引用证据。".to_string(),
         "静态页或报表意图且存在数据集时，优先 retrieve_evidence；若需要模块数据、字段、表格/OCR 或原文措辞，继续 read_document_detail，再创建静态页/报表动作。".to_string(),
         "视频 PPT/原文提取：仅支持上传视频文件、直接视频 URL 或公开页面可解析视频地址；先用 resolve_video_url，已有登记视频素材后才用 extract_video_ppt_transcript；不要请求扫码、Cookie、登录态页面或录屏绕过。".to_string(),
@@ -35735,6 +35735,7 @@ mod tests {
         assert!(input.contains("V3 上下文是附加能力"));
         assert!(input.contains("当前不可见/未供料"));
         assert!(input.contains("不要声称已联网搜索"));
+        assert!(input.contains("web_search"));
         assert!(input.contains("规划/渲染/修改静态页"));
         assert!(input.contains("范围候选"));
         assert!(input.contains("当前选中范围"));
@@ -36007,6 +36008,8 @@ mod tests {
         assert!(input.contains("doc-orders"));
         assert!(input.contains("tool_selection_only"));
         assert!(input.contains("read_document_detail 用于需要原文措辞"));
+        assert!(input.contains("web_search 用于请求 V3 受控外部/网页搜索证据"));
+        assert!(input.contains("V3 search evidence"));
         assert!(input.contains("detailTargets 只是深读目标"));
         assert!(input.contains("静态页或报表意图"));
         assert!(input.contains("resolve_video_url"));
@@ -36588,6 +36591,13 @@ mod tests {
 
         assert_eq!(action.action_type, AssistantRunReactActionType::FinalAnswer);
         assert_eq!(action.arguments["content"], json!("可以回答"));
+
+        let search = parse_assistant_run_next_action(
+            r#"{"action_type":"web_search","reason_summary":"请求 V3 搜索证据","arguments":{"query":"外部集成最新状态","reason":"用户询问最新进展","freshness":"latest"},"requires_confirmation":false}"#,
+        )
+        .expect("web search action should parse");
+        assert_eq!(search.action_type, AssistantRunReactActionType::WebSearch);
+        assert_eq!(search.arguments["freshness"], json!("latest"));
 
         let unknown = parse_assistant_run_next_action(
             r#"{"action_type":"run_shell","reason_summary":"执行命令","arguments":{},"requires_confirmation":false}"#,

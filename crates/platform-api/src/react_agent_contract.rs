@@ -28,6 +28,7 @@ impl AssistantRunReActStatus {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AssistantRunReActActionType {
     RetrieveEvidence,
+    WebSearch,
     ReadDocumentDetail,
     RecallConversationMemory,
     ListReportOptions,
@@ -49,6 +50,7 @@ impl AssistantRunReActActionType {
     pub(crate) fn from_str(value: &str) -> Option<Self> {
         match value.trim() {
             "retrieve_evidence" => Some(Self::RetrieveEvidence),
+            "web_search" => Some(Self::WebSearch),
             "read_document_detail" => Some(Self::ReadDocumentDetail),
             "recall_conversation_memory" => Some(Self::RecallConversationMemory),
             "list_report_options" => Some(Self::ListReportOptions),
@@ -71,6 +73,7 @@ impl AssistantRunReActActionType {
     pub(crate) fn as_str(&self) -> &'static str {
         match self {
             Self::RetrieveEvidence => "retrieve_evidence",
+            Self::WebSearch => "web_search",
             Self::ReadDocumentDetail => "read_document_detail",
             Self::RecallConversationMemory => "recall_conversation_memory",
             Self::ListReportOptions => "list_report_options",
@@ -446,6 +449,19 @@ mod tests {
             AssistantRunReActActionType::RetrieveEvidence
         );
         assert_eq!(decision.arguments["query"], json!("订单风险"));
+    }
+
+    #[test]
+    fn parses_web_search_action() {
+        let decision = parse_assistant_run_react_decision(
+            r#"{"status":"act","intent":"current_info","reason":"需要外部搜索证据","action":{"type":"web_search","arguments":{"query":"V3 最新发布状态","reason":"用户询问最新情况","freshness":"latest"}}}"#,
+        )
+        .expect("web search action should parse");
+
+        assert_eq!(decision.status, AssistantRunReActStatus::Act);
+        assert_eq!(decision.action_type, AssistantRunReActActionType::WebSearch);
+        assert_eq!(decision.arguments["query"], json!("V3 最新发布状态"));
+        assert_eq!(decision.arguments["freshness"], json!("latest"));
     }
 
     #[test]
