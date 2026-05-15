@@ -15,6 +15,7 @@ members = [
     "crates/external-source-worker",
     "crates/ingest-worker",
     "crates/media-worker",
+    "crates/assistant-run-worker",
     "crates/retrieval-worker",
     "crates/memory-worker",
     "crates/dataset-output-worker",

@@ -1,6 +1,9 @@
 use anyhow::{anyhow, Result};
 use chrono::Utc;
-use domain_model::{AssistantRunId, WorkflowExecution, WorkflowKind, WorkflowTask};
+use domain_model::{
+    AssistantRunId, WorkflowEventId, WorkflowEventRecord, WorkflowExecution, WorkflowExecutionId,
+    WorkflowKind, WorkflowTask,
+};
 use event_bus::{workflow_task_enqueued_subject, EventBus, EventSubscription};
 use media_worker::{
     extract_video_ppt_output_with_artifacts, frame_extraction_config_from_env,
@@ -12,7 +15,7 @@ use media_worker::{
     write_video_extraction_text_artifacts_if_available, FrameExtractionConfig,
     MediaWorkflowTaskKind,
 };
-use serde_json::Value;
+use serde_json::{json, Value};
 use storage::{NewAssistantRunEvent, NewHtmlArtifact, PgStorage, DEFAULT_LOCAL_DATABASE_URL};
 use tokio::time::Duration;
 use uuid::Uuid;
@@ -169,8 +172,14 @@ async fn process_task(
         .await?;
 
         if task_kind == MediaWorkflowTaskKind::ExtractVideoPpt {
-            if let Err(error) =
-                append_video_extraction_assistant_event(storage, &execution, &output).await
+            if let Err(error) = append_video_extraction_assistant_event(
+                storage,
+                workflow_catalog,
+                event_bus,
+                &execution,
+                &output,
+            )
+            .await
             {
                 tracing::warn!(
                     error = ?error,
@@ -230,6 +239,8 @@ async fn process_task(
 
 async fn append_video_extraction_assistant_event(
     storage: &PgStorage,
+    workflow_catalog: &WorkflowCatalog,
+    event_bus: &EventBus,
     execution: &WorkflowExecution,
     output: &Value,
 ) -> Result<()> {
@@ -312,7 +323,7 @@ async fn append_video_extraction_assistant_event(
                 run_id,
                 &NewAssistantRunEvent {
                     event_name: "assistant_run.model_completion_turn_requested".to_string(),
-                    payload: model_completion_turn_dispatch_request,
+                    payload: model_completion_turn_dispatch_request.clone(),
                     created_at: Utc::now(),
                 },
             )
@@ -330,8 +341,213 @@ async fn append_video_extraction_assistant_event(
         .assistant_runs()
         .attach_output_artifacts(execution.tenant_id, run_id, &output_artifacts)
         .await?;
+    if !model_completion_turn_dispatch_request.is_null() {
+        if let Some(enqueued) = enqueue_assistant_run_model_completion_turn(
+            storage,
+            workflow_catalog,
+            event_bus,
+            execution,
+            run_id,
+            local_thread_id,
+            &model_completion_turn_dispatch_request,
+        )
+        .await?
+        {
+            storage
+                .assistant_runs()
+                .append_event(
+                    execution.tenant_id,
+                    run_id,
+                    &NewAssistantRunEvent {
+                        event_name: "assistant_run.model_completion_turn_enqueued".to_string(),
+                        payload: enqueued,
+                        created_at: Utc::now(),
+                    },
+                )
+                .await?;
+        }
+    }
 
     Ok(())
+}
+
+async fn enqueue_assistant_run_model_completion_turn(
+    storage: &PgStorage,
+    workflow_catalog: &WorkflowCatalog,
+    event_bus: &EventBus,
+    source_execution: &WorkflowExecution,
+    run_id: AssistantRunId,
+    local_thread_id: Option<&str>,
+    dispatch_request: &Value,
+) -> Result<Option<Value>> {
+    let idempotency_key = dispatch_request
+        .get("idempotency_key")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| anyhow!("model completion dispatch request missing idempotency_key"))?;
+    if existing_model_completion_turn_queue_event(
+        storage,
+        source_execution.tenant_id,
+        run_id,
+        idempotency_key,
+    )
+    .await?
+    .is_some()
+    {
+        tracing::info!(
+            assistant_run_id = %run_id,
+            %idempotency_key,
+            "assistant run model-completion turn is already queued or consumed"
+        );
+        return Ok(None);
+    }
+
+    let definition = workflow_catalog
+        .find_definition(WorkflowKind::AssistantRunModelCompletion)
+        .ok_or_else(|| anyhow!("assistant run model-completion workflow is not registered"))?;
+    let now = Utc::now();
+    let execution_id = WorkflowExecutionId::new();
+    let runtime_state = definition.initial_state(execution_id, now);
+    let mut context = runtime_state.context;
+    context.insert("assistant_run_id".to_string(), json!(run_id.to_string()));
+    if let Some(local_thread_id) = local_thread_id {
+        context.insert("local_thread_id".to_string(), json!(local_thread_id));
+    }
+    context.insert(
+        "source_workflow_execution_id".to_string(),
+        json!(source_execution.id.to_string()),
+    );
+    context.insert(
+        "source_workflow_kind".to_string(),
+        json!(source_execution.kind.as_str()),
+    );
+    context.insert("idempotency_key".to_string(), json!(idempotency_key));
+    context.insert(
+        "entrypoint".to_string(),
+        dispatch_request
+            .get("entrypoint")
+            .cloned()
+            .unwrap_or_else(|| json!("assistant_run_background_completion")),
+    );
+    context.insert(
+        "document_id".to_string(),
+        dispatch_request
+            .get("document_id")
+            .cloned()
+            .unwrap_or(Value::Null),
+    );
+    context.insert("dispatch_request".to_string(), dispatch_request.clone());
+    context.insert("no_host_composed_answer".to_string(), json!(true));
+    context.insert(
+        "retries_remaining".to_string(),
+        json!(runtime_state.retries_remaining),
+    );
+
+    let workflow_execution = WorkflowExecution {
+        id: execution_id,
+        tenant_id: source_execution.tenant_id,
+        dataset_id: source_execution.dataset_id,
+        report_plan_id: source_execution.report_plan_id,
+        kind: runtime_state.kind,
+        version: runtime_state.version,
+        stage: runtime_state.stage,
+        status: runtime_state.status,
+        attempt: 0,
+        context: Value::Object(context),
+        created_at: now,
+        updated_at: runtime_state.updated_at,
+    };
+    let initial_event = WorkflowEventRecord {
+        id: WorkflowEventId::new(),
+        execution_id,
+        sequence_no: 1,
+        event_name: "workflow.created".to_string(),
+        payload: json!({
+            "reason": "assistant_run_model_completion_turn_requested",
+            "assistant_run_id": run_id,
+            "idempotency_key": idempotency_key,
+            "source_workflow_execution_id": source_execution.id,
+            "source_workflow_kind": source_execution.kind.as_str(),
+            "no_host_composed_answer": true,
+        }),
+        created_at: now,
+    };
+    storage
+        .workflow_executions()
+        .create_with_initial_event(&workflow_execution, &initial_event)
+        .await?;
+    let started = platform_api::apply_workflow_signal_with_dependencies(
+        storage,
+        workflow_catalog,
+        event_bus,
+        source_execution.tenant_id,
+        workflow_execution.id,
+        WorkflowSignal::Start,
+    )
+    .await
+    .map_err(|error| anyhow!(error.to_string()))?;
+
+    Ok(Some(json!({
+        "status": "enqueued",
+        "assistant_run_id": run_id,
+        "idempotency_key": idempotency_key,
+        "workflow_execution_id": workflow_execution.id,
+        "workflow_kind": WorkflowKind::AssistantRunModelCompletion.as_str(),
+        "workflow_task_id": started.enqueued_tasks.first().map(|task| task.id),
+        "queue": started
+            .enqueued_tasks
+            .first()
+            .map(|task| task.queue.clone())
+            .unwrap_or_else(|| "assistant_run".to_string()),
+        "task_key": started
+            .enqueued_tasks
+            .first()
+            .map(|task| task.task_key.clone())
+            .unwrap_or_else(|| "consume_model_completion_turn".to_string()),
+        "source_workflow_execution_id": source_execution.id,
+        "source_workflow_kind": source_execution.kind.as_str(),
+        "no_host_composed_answer": true,
+    })))
+}
+
+async fn existing_model_completion_turn_queue_event(
+    storage: &PgStorage,
+    tenant_id: domain_model::TenantId,
+    run_id: AssistantRunId,
+    idempotency_key: &str,
+) -> Result<Option<Value>> {
+    let events = storage
+        .assistant_runs()
+        .list_events(tenant_id, run_id)
+        .await?;
+    Ok(events.iter().rev().find_map(|event| {
+        let event_key = event
+            .payload
+            .get("idempotency_key")
+            .and_then(Value::as_str)?;
+        if event_key != idempotency_key {
+            return None;
+        }
+        match event.event_name.as_str() {
+            "assistant_run.model_completion_turn_enqueued"
+            | "assistant_run.model_completion_turn_consumed" => Some(json!({
+                "status": "already_enqueued",
+                "assistant_run_id": run_id,
+                "idempotency_key": idempotency_key,
+                "existing_event_id": event.id,
+                "existing_sequence_no": event.sequence_no,
+                "existing_event_name": event.event_name.clone(),
+                "existing_workflow_execution_id": event
+                    .payload
+                    .get("workflow_execution_id")
+                    .cloned()
+                    .unwrap_or(Value::Null),
+                "no_host_composed_answer": true,
+            })),
+            _ => None,
+        }
+    }))
 }
 
 async fn persist_video_extraction_html_artifacts(

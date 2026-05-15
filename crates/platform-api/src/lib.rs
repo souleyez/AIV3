@@ -3133,6 +3133,7 @@ fn infer_model_facing_capability_class(
             contracts::ModelFacingCapabilityClassView::ReportGenerationAndEditing
         }
         WorkflowKind::UploadIngest
+        | WorkflowKind::AssistantRunModelCompletion
         | WorkflowKind::CodexHostTask
         | WorkflowKind::VideoExtraction
         | WorkflowKind::ExternalSourceSync

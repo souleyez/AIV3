@@ -1009,6 +1009,14 @@ pub fn registry() -> Vec<DynWorkflowDefinition> {
             next_step: None,
         }),
         Arc::new(LinearWorkflowDefinition {
+            kind: WorkflowKind::AssistantRunModelCompletion,
+            summary: "Consume queued AssistantRun model-completion turn dispatch requests.",
+            queue: "assistant_run",
+            task_key: "consume_model_completion_turn",
+            success_stage: "assistant_run_model_completion_consumed",
+            next_step: None,
+        }),
+        Arc::new(LinearWorkflowDefinition {
             kind: WorkflowKind::ExternalActionDispatch,
             summary: "Dispatch validated external action runs through a retryable worker queue.",
             queue: "external_action",
@@ -1046,12 +1054,13 @@ mod tests {
         let entries = registry();
         let names: Vec<_> = entries.iter().map(|entry| entry.kind().as_str()).collect();
 
-        assert_eq!(entries.len(), 12);
+        assert_eq!(entries.len(), 13);
         assert!(names.contains(&"chat_session_workflow"));
         assert!(names.contains(&"report_render_workflow"));
         assert!(names.contains(&"static_page_image_generation_workflow"));
         assert!(names.contains(&"static_page_render_workflow"));
         assert!(names.contains(&"codex_host_task_workflow"));
+        assert!(names.contains(&"assistant_run_model_completion_workflow"));
         assert!(names.contains(&"external_source_sync_workflow"));
         assert!(names.contains(&"external_action_dispatch_workflow"));
         assert!(names.contains(&"video_extraction_workflow"));
@@ -1103,6 +1112,32 @@ mod tests {
         assert_eq!(
             running.enqueued_tasks[0].task_key,
             "dispatch_external_action"
+        );
+    }
+
+    #[test]
+    fn assistant_run_model_completion_starts_on_dedicated_queue() {
+        let definition = registry()
+            .into_iter()
+            .find(|entry| entry.kind() == WorkflowKind::AssistantRunModelCompletion)
+            .expect("assistant run model completion workflow exists");
+        let now = Utc::now();
+        let pending = definition.initial_state(WorkflowExecutionId::new(), now);
+        let running = definition
+            .transition(&pending, WorkflowSignal::Start, now)
+            .expect("start");
+
+        assert_eq!(
+            definition.summary(),
+            "Consume queued AssistantRun model-completion turn dispatch requests."
+        );
+        assert_eq!(running.next_state.status, WorkflowStatus::Running);
+        assert_eq!(running.next_state.stage, "consume_model_completion_turn");
+        assert_eq!(running.enqueued_tasks.len(), 1);
+        assert_eq!(running.enqueued_tasks[0].queue, "assistant_run");
+        assert_eq!(
+            running.enqueued_tasks[0].task_key,
+            "consume_model_completion_turn"
         );
     }
 

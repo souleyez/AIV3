@@ -475,6 +475,7 @@ pub enum WorkflowKind {
     StaticPageRender,
     CodexHostTask,
     VideoExtraction,
+    AssistantRunModelCompletion,
     ExternalSourceSync,
     ExternalActionDispatch,
 }
@@ -492,6 +493,7 @@ impl WorkflowKind {
             Self::StaticPageRender => "static_page_render_workflow",
             Self::CodexHostTask => "codex_host_task_workflow",
             Self::VideoExtraction => "video_extraction_workflow",
+            Self::AssistantRunModelCompletion => "assistant_run_model_completion_workflow",
             Self::ExternalSourceSync => "external_source_sync_workflow",
             Self::ExternalActionDispatch => "external_action_dispatch_workflow",
         }
@@ -509,6 +511,7 @@ impl WorkflowKind {
             "static_page_render_workflow" => Some(Self::StaticPageRender),
             "codex_host_task_workflow" => Some(Self::CodexHostTask),
             "video_extraction_workflow" => Some(Self::VideoExtraction),
+            "assistant_run_model_completion_workflow" => Some(Self::AssistantRunModelCompletion),
             "external_source_sync_workflow" => Some(Self::ExternalSourceSync),
             "external_action_dispatch_workflow" => Some(Self::ExternalActionDispatch),
             _ => None,
@@ -906,6 +909,14 @@ mod tests {
         assert_eq!(
             WorkflowKind::from_str("video_extraction_workflow"),
             Some(WorkflowKind::VideoExtraction)
+        );
+        assert_eq!(
+            WorkflowKind::AssistantRunModelCompletion.as_str(),
+            "assistant_run_model_completion_workflow"
+        );
+        assert_eq!(
+            WorkflowKind::from_str("assistant_run_model_completion_workflow"),
+            Some(WorkflowKind::AssistantRunModelCompletion)
         );
         assert_eq!(
             WorkflowKind::ExternalSourceSync.as_str(),
