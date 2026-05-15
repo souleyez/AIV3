@@ -6,6 +6,7 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import zlib from 'node:zlib';
 import { validateExternalHandoffManifest } from './validate-external-handoff.mjs';
+import { validateAll, writeAllReportFiles } from './validate-external-handoff-all.mjs';
 import { renderReleaseMarkdown, validateRelease } from './validate-external-handoff-release.mjs';
 
 const PACKAGE_TYPE = 'v3.external_third_party_handoff_package.v1';
@@ -239,7 +240,7 @@ V3 提交：${head || 'unknown'}
 - \`sandbox/external-third-party-mock-gateway.mjs\`：第三方动作 endpoint 的本地 mock 示例。
 - \`sandbox/run-external-third-party-gateway-smoke.sh\`：V3 部署目标使用的签名派发、结果回调和交接清单 smoke 入口。
 - \`handoff-package-manifest.json\`：本包文件清单、SHA256 摘要和校验摘要。
-- 包目录同级会生成 \`.tar.gz\` 归档、\`.sha256\` 校验文件、\`.release.json\` 校验报告、\`.release.md\` 人工摘要和 \`.delivery-manifest.json\` 交付清单，用于发送和交付前校验。
+- 包目录同级会生成 \`.tar.gz\` 归档、\`.sha256\` 校验文件、\`.release.json\` 校验报告、\`.release.md\` 人工摘要、\`.delivery-manifest.json\` 交付清单、\`.all.json\` 聚合校验证据和 \`.all.md\` 人工聚合摘要，用于发送和交付前校验。
 
 ## 第三方应先做什么
 
@@ -281,7 +282,7 @@ V3 commit: ${head || 'unknown'}
 
 This package contains third-party-facing API guides, a sandbox handoff manifest sample, validation tooling, and a mock gateway reference for V3 external action dispatch/result callback integration.
 
-The builder also writes a \`.tar.gz\` archive, matching \`.sha256\` sidecar, \`.release.json\` validation report, \`.release.md\` summary, and \`.delivery-manifest.json\` delivery manifest next to the package directory.
+The builder also writes a \`.tar.gz\` archive, matching \`.sha256\` sidecar, \`.release.json\` validation report, \`.release.md\` summary, \`.delivery-manifest.json\` delivery manifest, \`.all.json\` aggregate validation evidence, and \`.all.md\` aggregate summary next to the package directory.
 
 Recommended flow:
 
@@ -460,6 +461,19 @@ function buildPackage({ repoRoot, outDir, basename, generatedAt = new Date().toI
     head,
   }));
   const deliveryManifestSha256 = sha256Hex(fs.readFileSync(deliveryManifestPath));
+  const allValidation = validateAll({
+    packageRootInput: packageRoot,
+    archivePathInput: archivePath,
+    sidecarPathInput: archiveSha256Path,
+  });
+  const allReportPath = path.join(path.dirname(packageRoot), `${path.basename(packageRoot)}.all.json`);
+  const allMarkdownPath = path.join(path.dirname(packageRoot), `${path.basename(packageRoot)}.all.md`);
+  writeAllReportFiles(allValidation, {
+    out: allReportPath,
+    markdown: allMarkdownPath,
+  });
+  const allReportSha256 = sha256Hex(fs.readFileSync(allReportPath));
+  const allMarkdownSha256 = sha256Hex(fs.readFileSync(allMarkdownPath));
 
   return {
     packageRoot,
@@ -473,6 +487,11 @@ function buildPackage({ repoRoot, outDir, basename, generatedAt = new Date().toI
     releaseMarkdownSha256,
     deliveryManifestPath,
     deliveryManifestSha256,
+    allReportPath,
+    allReportSha256,
+    allMarkdownPath,
+    allMarkdownSha256,
+    allReady: allValidation.all_ready === true,
     releaseReady: releaseValidation.release_ready === true,
     ready: packageManifest.handoff_validation.ready_for_customer_sandbox,
     fileCount: packageManifest.included_files.length,
@@ -490,7 +509,7 @@ async function main() {
     generatedAt: args.generatedAt || new Date().toISOString(),
   });
   console.log(JSON.stringify(result, null, 2));
-  if (!result.releaseReady) {
+  if (!result.releaseReady || !result.allReady) {
     process.exitCode = 1;
   }
 }

@@ -536,3 +536,29 @@ npm --prefix target/external-third-party-handoff/all-evidence-check run validate
 ```
 
 The generated root and package-internal evidence files both returned `all_ready: true`, and both Markdown receipts included `Status: **READY**`.
+
+## Build-Time Aggregate Evidence Follow-Up
+
+The handoff package builder now writes aggregate evidence sidecars automatically after the delivery manifest:
+
+```text
+target/external-third-party-handoff/<package>.all.json
+target/external-third-party-handoff/<package>.all.md
+```
+
+The build output includes `allReportPath`, `allReportSha256`, `allMarkdownPath`, `allMarkdownSha256`, and `allReady`. These files are generated after the delivery manifest so the aggregate report can validate the full handoff, package, archive, delivery, and release gate without creating a circular delivery-manifest hash dependency.
+
+Local validation passed:
+
+```text
+npm run test:external-handoff-package
+npm run test:external-handoff-all
+npm run test:external-handoff-release
+npm run test:external-handoff-delivery
+npm run test:external-handoff-package-integrity
+npm run test:external-handoff-archive
+npm run test:external-readiness
+npm run build:external-handoff-package -- --basename all-evidence-build-check --generatedAt 2026-05-15T00:00:00.000Z
+```
+
+The generated build output returned `allReady: true`, both aggregate evidence SHA256 values matched 64-character lowercase hex digests, and the generated Markdown receipt included `Status: **READY**`.

@@ -59,6 +59,7 @@
 - Current implementation follow-up adds one-command handoff validation: `tools/validate-external-handoff-all.mjs`, root script `validate:external-handoff-all`, and package-internal `validate:all` now produce a single JSON gate for the handoff manifest, package integrity, archive, delivery manifest, and release readiness.
 - Current implementation follow-up wires aggregate handoff validation into the third-party readiness report: any readiness run with `--releasePackage` now includes `handoff_all_ready` and a redacted `handoff_all_summary`, so the deployment-target gateway smoke records the one-command handoff gate alongside signed dispatch/result callback evidence.
 - Current implementation follow-up adds persistent aggregate validation evidence: `validate:all` accepts `--out <file>.json --markdown <file>.md` from both the main repository and generated handoff packages, giving V3 operators and third-party recipients a machine-readable gate plus a human-readable review receipt.
+- Current implementation follow-up makes package builds produce aggregate validation evidence by default: `npm run build:external-handoff-package` now writes sibling `<package>.all.json` and `<package>.all.md` files after the delivery manifest, and includes their SHA256 values plus `allReady` in the build output.
 - Next implementation checkpoint: run the callback contract through a real HTTPS customer sandbox once a third-party endpoint is available, while continuing smaller hardening work that does not require customer cooperation.
 
 ---

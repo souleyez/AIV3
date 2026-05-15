@@ -918,7 +918,7 @@ npm run build:external-handoff-package
 target/external-third-party-handoff
 ```
 
-生成结果包含交接包目录、同名 `.tar.gz` 归档、`.sha256` 校验文件、同级 `.release.json` 机器可读交付校验报告、同级 `.release.md` 人工审阅摘要，以及同级 `.delivery-manifest.json` 交付文件清单。交接包包含：
+生成结果包含交接包目录、同名 `.tar.gz` 归档、`.sha256` 校验文件、同级 `.release.json` 机器可读交付校验报告、同级 `.release.md` 人工审阅摘要、同级 `.delivery-manifest.json` 交付文件清单、同级 `.all.json` 聚合校验证据，以及同级 `.all.md` 聚合人工摘要。交接包包含：
 
 - 中文接口说明和英文接口说明；
 - `handoff/third-party-handoff.sample.json`；
@@ -930,6 +930,7 @@ target/external-third-party-handoff
 - 包目录同级的 `<package>.release.json`，记录本次包目录、归档、摘要、V3 提交、生成时间和交接清单的一键校验结果。
 - 包目录同级的 `<package>.release.md`，以人工可读形式汇总 ready 状态、V3 提交、生成时间、归档 SHA256、检查项和错误。
 - 包目录同级的 `<package>.delivery-manifest.json`，列出本次应交付的包目录、包内清单、归档、`.sha256` sidecar、release JSON 和 release Markdown，并记录各文件 SHA256，方便第三方接收时逐项核对。
+- 包目录同级的 `<package>.all.json` 和 `<package>.all.md`，在交付清单生成后记录交接清单、包完整性、归档、交付清单和 release gate 的完整聚合校验证据。
 
 第三方拿到包后，可在包目录内执行：
 

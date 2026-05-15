@@ -43,11 +43,16 @@ test('buildPackage creates a third-party handoff directory with manifest and too
   assert.ok(fs.existsSync(result.releaseReportPath));
   assert.ok(fs.existsSync(result.releaseMarkdownPath));
   assert.ok(fs.existsSync(result.deliveryManifestPath));
+  assert.ok(fs.existsSync(result.allReportPath));
+  assert.ok(fs.existsSync(result.allMarkdownPath));
   assert.match(result.archiveSha256, /^[a-f0-9]{64}$/);
   assert.match(result.releaseReportSha256, /^[a-f0-9]{64}$/);
   assert.match(result.releaseMarkdownSha256, /^[a-f0-9]{64}$/);
   assert.match(result.deliveryManifestSha256, /^[a-f0-9]{64}$/);
+  assert.match(result.allReportSha256, /^[a-f0-9]{64}$/);
+  assert.match(result.allMarkdownSha256, /^[a-f0-9]{64}$/);
   assert.equal(result.releaseReady, true);
+  assert.equal(result.allReady, true);
   assert.ok(fs.existsSync(path.join(result.packageRoot, 'README.zh-CN.md')));
   assert.ok(fs.existsSync(path.join(result.packageRoot, 'docs/third-party-integration-api.zh-CN.md')));
   assert.ok(fs.existsSync(path.join(result.packageRoot, 'handoff/third-party-handoff.sample.json')));
@@ -89,6 +94,13 @@ test('buildPackage creates a third-party handoff directory with manifest and too
   assert.equal(artifactsByRole.get('release_json').sha256, result.releaseReportSha256);
   assert.equal(artifactsByRole.get('release_markdown').sha256, result.releaseMarkdownSha256);
   assert.match(artifactsByRole.get('package_manifest').sha256, /^[a-f0-9]{64}$/);
+  const allReport = JSON.parse(fs.readFileSync(result.allReportPath, 'utf8'));
+  assert.equal(allReport.all_ready, true);
+  assert.equal(allReport.summaries.delivery.delivery_manifest_ready, true);
+  assert.equal(allReport.summaries.release.release_ready, true);
+  const allMarkdown = fs.readFileSync(result.allMarkdownPath, 'utf8');
+  assert.match(allMarkdown, /Status: \*\*READY\*\*/);
+  assert.match(allMarkdown, /Delivery manifest ready: yes/);
 
   const archiveEntries = listTarEntries(result.archivePath);
   assert.ok(archiveEntries.includes('package-under-test/README.zh-CN.md'));
