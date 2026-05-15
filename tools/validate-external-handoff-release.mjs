@@ -262,6 +262,7 @@ Status: **${status}**
 - Archive root: \`${report.archive_summary?.root_name || 'unknown'}\`
 - Archive entries: ${report.archive_summary?.entry_count ?? 0}
 - Archive ready: ${report.archive_summary?.archive_ready ? 'yes' : 'no'}
+- Archive HTML artifact ready: ${report.archive_summary?.html_artifact_ready ? 'yes' : 'no'}
 
 ## Delivery Manifest
 
@@ -371,6 +372,8 @@ function validateRelease({
       root_name: archiveValidation.root_name,
       entry_count: archiveValidation.entry_count,
       handoff_ready: archiveValidation.handoff_validation?.ready_for_customer_sandbox === true,
+      html_artifact_ready: archiveValidation.html_artifact_validation?.artifact_ready === true,
+      html_artifact_template_id: archiveValidation.html_artifact_validation?.template_id || null,
       error_codes: (archiveValidation.errors || []).map((error) => error.code),
     },
     delivery_manifest_summary: {

@@ -85,6 +85,7 @@ ${checks}
 - Included files: ${report.summaries?.package?.included_file_count ?? 0}
 - HTML artifact ready: ${report.summaries?.package?.html_artifact_ready ? 'yes' : 'no'}
 - Archive ready: ${report.summaries?.archive?.archive_ready ? 'yes' : 'no'}
+- Archive HTML artifact ready: ${report.summaries?.archive?.html_artifact_ready ? 'yes' : 'no'}
 - Archive root: \`${report.summaries?.archive?.root_name || 'unknown'}\`
 - Archive entries: ${report.summaries?.archive?.entry_count ?? 0}
 - Delivery manifest ready: ${report.summaries?.delivery?.delivery_manifest_ready ? 'yes' : 'no'}
@@ -183,6 +184,8 @@ function validateAll({
         archive_ready: archive.archive_ready === true,
         root_name: archive.root_name,
         entry_count: archive.entry_count,
+        html_artifact_ready: archive.html_artifact_validation?.artifact_ready === true,
+        html_artifact_template_id: archive.html_artifact_validation?.template_id || null,
         error_codes: summarizeErrorCodes(archive),
       },
       delivery: {

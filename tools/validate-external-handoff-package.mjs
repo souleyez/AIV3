@@ -105,21 +105,87 @@ function findUnsafeHtmlArtifactPayloadPath(value, payloadPath = '$') {
   return '';
 }
 
-function addHtmlArtifactError(errors, summary, code, message, payloadPath = '') {
+function addHtmlArtifactError(errors, summary, code, message, payloadPath = '', artifactPath = THIRD_PARTY_HTML_ARTIFACT_PATH) {
   summary.error_codes.push(code);
-  addError(errors, code, message, payloadPath ? `${THIRD_PARTY_HTML_ARTIFACT_PATH}:${payloadPath}` : THIRD_PARTY_HTML_ARTIFACT_PATH);
+  addError(errors, code, message, payloadPath ? `${artifactPath}:${payloadPath}` : artifactPath);
 }
 
-function validateThirdPartyHtmlArtifact(packageRoot, errors) {
-  const summary = {
+function emptyHtmlArtifactValidation(artifactPath = THIRD_PARTY_HTML_ARTIFACT_PATH) {
+  return {
     artifact_ready: false,
-    path: THIRD_PARTY_HTML_ARTIFACT_PATH,
+    path: artifactPath,
     template_id: null,
     source_type: null,
     interaction_mode: null,
     endpoint_count: 0,
     validation_command_count: 0,
     error_codes: [],
+  };
+}
+
+function validateThirdPartyHtmlArtifactManifest(artifact, errors, { artifactPath = THIRD_PARTY_HTML_ARTIFACT_PATH } = {}) {
+  const summary = emptyHtmlArtifactValidation(artifactPath);
+  const safeArtifact = isPlainObject(artifact) ? artifact : {};
+  summary.template_id = safeArtifact.template_id || safeArtifact.templateId || null;
+  summary.source_type = safeArtifact.source_type || safeArtifact.sourceType || null;
+  summary.interaction_mode = safeArtifact.interaction_mode || safeArtifact.interactionMode || null;
+  const ownerScope = safeArtifact.owner_scope || safeArtifact.ownerScope || {};
+  const dataRefs = Array.isArray(safeArtifact.data_refs || safeArtifact.dataRefs) ? safeArtifact.data_refs || safeArtifact.dataRefs : [];
+  const payload = isPlainObject(safeArtifact.payload) ? safeArtifact.payload : {};
+  const handoff = isPlainObject(payload.handoff) ? payload.handoff : {};
+  const endpoints = Array.isArray(payload.endpoints) ? payload.endpoints : [];
+  const validationCommands = Array.isArray(payload.validationCommands || payload.validation_commands)
+    ? payload.validationCommands || payload.validation_commands
+    : [];
+  summary.endpoint_count = endpoints.length;
+  summary.validation_command_count = validationCommands.length;
+
+  if (!isPlainObject(artifact)) {
+    addHtmlArtifactError(errors, summary, 'html_artifact_manifest_invalid_shape', 'HTML artifact manifest must be an object', '', artifactPath);
+  }
+  if (safeArtifact.kind !== 'html_artifact') {
+    addHtmlArtifactError(errors, summary, 'html_artifact_kind_invalid', 'HTML artifact kind must be html_artifact', 'kind', artifactPath);
+  }
+  if (safeArtifact.version !== 1) {
+    addHtmlArtifactError(errors, summary, 'html_artifact_version_invalid', 'HTML artifact version must be 1', 'version', artifactPath);
+  }
+  if (summary.source_type !== 'external_integration') {
+    addHtmlArtifactError(errors, summary, 'html_artifact_source_type_invalid', 'HTML artifact source_type must be external_integration', 'source_type', artifactPath);
+  }
+  if (summary.template_id !== 'third_party_handoff_document') {
+    addHtmlArtifactError(errors, summary, 'html_artifact_template_invalid', 'HTML artifact template_id must be third_party_handoff_document', 'template_id', artifactPath);
+  }
+  if (summary.interaction_mode !== 'read_only') {
+    addHtmlArtifactError(errors, summary, 'html_artifact_interaction_mode_invalid', 'third-party handoff HTML artifact must be read_only', 'interaction_mode', artifactPath);
+  }
+  if ((ownerScope.type || ownerScope.scope_type) !== 'external_integration_handoff') {
+    addHtmlArtifactError(errors, summary, 'html_artifact_owner_scope_invalid', 'owner scope must describe an external integration handoff', 'owner_scope.type', artifactPath);
+  }
+  if (!dataRefs.some((ref) => ref.kind === 'source_document' && ref.id === 'docs/pure-third-party-integration-guide.zh-CN.md')) {
+    addHtmlArtifactError(errors, summary, 'html_artifact_source_document_ref_missing', 'source document data_ref is required', 'data_refs', artifactPath);
+  }
+  if (handoff.defaultDomain !== 'v3.elepcloud.com') {
+    addHtmlArtifactError(errors, summary, 'html_artifact_default_domain_invalid', 'default domain must be v3.elepcloud.com', 'payload.handoff.defaultDomain', artifactPath);
+  }
+  if (!endpoints.some((endpoint) => endpoint.method === 'POST' && endpoint.path === REQUIRED_THIRD_PARTY_EVENT_ENDPOINT)) {
+    addHtmlArtifactError(errors, summary, 'html_artifact_event_endpoint_missing', 'standard third-party event endpoint is required', 'payload.endpoints', artifactPath);
+  }
+  if (!validationCommands.some((command) => command.command === 'npm run validate:all')) {
+    addHtmlArtifactError(errors, summary, 'html_artifact_all_validation_missing', 'validate:all command must be listed', 'payload.validationCommands', artifactPath);
+  }
+  const unsafePayloadPath = findUnsafeHtmlArtifactPayloadPath(payload);
+  if (unsafePayloadPath) {
+    addHtmlArtifactError(errors, summary, 'html_artifact_payload_unsafe', unsafePayloadPath, 'payload', artifactPath);
+  }
+
+  summary.artifact_ready = summary.error_codes.length === 0;
+  return summary;
+}
+
+function validateThirdPartyHtmlArtifact(packageRoot, errors) {
+  const summary = {
+    ...emptyHtmlArtifactValidation(),
+    path: THIRD_PARTY_HTML_ARTIFACT_PATH,
   };
   const artifactPath = path.join(packageRoot, THIRD_PARTY_HTML_ARTIFACT_PATH);
   let artifact = {};
@@ -136,57 +202,7 @@ function validateThirdPartyHtmlArtifact(packageRoot, errors) {
     return summary;
   }
 
-  summary.template_id = artifact.template_id || artifact.templateId || null;
-  summary.source_type = artifact.source_type || artifact.sourceType || null;
-  summary.interaction_mode = artifact.interaction_mode || artifact.interactionMode || null;
-  const ownerScope = artifact.owner_scope || artifact.ownerScope || {};
-  const dataRefs = Array.isArray(artifact.data_refs || artifact.dataRefs) ? artifact.data_refs || artifact.dataRefs : [];
-  const payload = isPlainObject(artifact.payload) ? artifact.payload : {};
-  const handoff = isPlainObject(payload.handoff) ? payload.handoff : {};
-  const endpoints = Array.isArray(payload.endpoints) ? payload.endpoints : [];
-  const validationCommands = Array.isArray(payload.validationCommands || payload.validation_commands)
-    ? payload.validationCommands || payload.validation_commands
-    : [];
-  summary.endpoint_count = endpoints.length;
-  summary.validation_command_count = validationCommands.length;
-
-  if (artifact.kind !== 'html_artifact') {
-    addHtmlArtifactError(errors, summary, 'html_artifact_kind_invalid', 'HTML artifact kind must be html_artifact', 'kind');
-  }
-  if (artifact.version !== 1) {
-    addHtmlArtifactError(errors, summary, 'html_artifact_version_invalid', 'HTML artifact version must be 1', 'version');
-  }
-  if (summary.source_type !== 'external_integration') {
-    addHtmlArtifactError(errors, summary, 'html_artifact_source_type_invalid', 'HTML artifact source_type must be external_integration', 'source_type');
-  }
-  if (summary.template_id !== 'third_party_handoff_document') {
-    addHtmlArtifactError(errors, summary, 'html_artifact_template_invalid', 'HTML artifact template_id must be third_party_handoff_document', 'template_id');
-  }
-  if (summary.interaction_mode !== 'read_only') {
-    addHtmlArtifactError(errors, summary, 'html_artifact_interaction_mode_invalid', 'third-party handoff HTML artifact must be read_only', 'interaction_mode');
-  }
-  if ((ownerScope.type || ownerScope.scope_type) !== 'external_integration_handoff') {
-    addHtmlArtifactError(errors, summary, 'html_artifact_owner_scope_invalid', 'owner scope must describe an external integration handoff', 'owner_scope.type');
-  }
-  if (!dataRefs.some((ref) => ref.kind === 'source_document' && ref.id === 'docs/pure-third-party-integration-guide.zh-CN.md')) {
-    addHtmlArtifactError(errors, summary, 'html_artifact_source_document_ref_missing', 'source document data_ref is required', 'data_refs');
-  }
-  if (handoff.defaultDomain !== 'v3.elepcloud.com') {
-    addHtmlArtifactError(errors, summary, 'html_artifact_default_domain_invalid', 'default domain must be v3.elepcloud.com', 'payload.handoff.defaultDomain');
-  }
-  if (!endpoints.some((endpoint) => endpoint.method === 'POST' && endpoint.path === REQUIRED_THIRD_PARTY_EVENT_ENDPOINT)) {
-    addHtmlArtifactError(errors, summary, 'html_artifact_event_endpoint_missing', 'standard third-party event endpoint is required', 'payload.endpoints');
-  }
-  if (!validationCommands.some((command) => command.command === 'npm run validate:all')) {
-    addHtmlArtifactError(errors, summary, 'html_artifact_all_validation_missing', 'validate:all command must be listed', 'payload.validationCommands');
-  }
-  const unsafePayloadPath = findUnsafeHtmlArtifactPayloadPath(payload);
-  if (unsafePayloadPath) {
-    addHtmlArtifactError(errors, summary, 'html_artifact_payload_unsafe', unsafePayloadPath, 'payload');
-  }
-
-  summary.artifact_ready = summary.error_codes.length === 0;
-  return summary;
+  return validateThirdPartyHtmlArtifactManifest(artifact, errors);
 }
 
 function validateIncludedFiles(packageRoot, manifest, errors) {
@@ -320,4 +336,4 @@ if (invokedPath === modulePath) {
   await main();
 }
 
-export { validatePackage };
+export { THIRD_PARTY_HTML_ARTIFACT_PATH, validatePackage, validateThirdPartyHtmlArtifactManifest };

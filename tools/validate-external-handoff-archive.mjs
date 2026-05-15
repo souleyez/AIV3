@@ -5,6 +5,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import zlib from 'node:zlib';
 import { validateExternalHandoffManifest } from './validate-external-handoff.mjs';
+import {
+  THIRD_PARTY_HTML_ARTIFACT_PATH,
+  validateThirdPartyHtmlArtifactManifest,
+} from './validate-external-handoff-package.mjs';
 
 const PACKAGE_TYPE = 'v3.external_third_party_handoff_package.v1';
 const REQUIRED_ENTRIES = [
@@ -14,7 +18,7 @@ const REQUIRED_ENTRIES = [
   'handoff-package-manifest.json',
   'docs/pure-third-party-integration-guide.zh-CN.md',
   'docs/pure-third-party-integration-guide.zh-CN.html',
-  'html-artifacts/third-party-handoff-document.json',
+  THIRD_PARTY_HTML_ARTIFACT_PATH,
   'handoff/third-party-handoff.sample.json',
   'tools/validate-external-handoff.mjs',
   'tools/validate-external-handoff-package.mjs',
@@ -174,6 +178,16 @@ function validateArchive(archivePathInput, sidecarPathInput = '') {
   let rootName = null;
   let manifest = {};
   let handoffValidation = null;
+  let htmlArtifactValidation = {
+    artifact_ready: false,
+    path: THIRD_PARTY_HTML_ARTIFACT_PATH,
+    template_id: null,
+    source_type: null,
+    interaction_mode: null,
+    endpoint_count: 0,
+    validation_command_count: 0,
+    error_codes: [],
+  };
 
   if (!archivePathInput || !fs.existsSync(archivePath)) {
     addError(errors, 'archive_missing', 'archive file is required', archivePathInput || '');
@@ -228,6 +242,22 @@ function validateArchive(archivePathInput, sidecarPathInput = '') {
     }
   }
 
+  if (files.has(THIRD_PARTY_HTML_ARTIFACT_PATH)) {
+    try {
+      htmlArtifactValidation = validateThirdPartyHtmlArtifactManifest(
+        JSON.parse(files.get(THIRD_PARTY_HTML_ARTIFACT_PATH).toString('utf8')),
+        errors,
+        { artifactPath: THIRD_PARTY_HTML_ARTIFACT_PATH },
+      );
+    } catch (error) {
+      htmlArtifactValidation.error_codes.push('html_artifact_manifest_invalid_json');
+      addError(errors, 'html_artifact_manifest_invalid_json', String(error?.message || error), THIRD_PARTY_HTML_ARTIFACT_PATH);
+    }
+  } else {
+    htmlArtifactValidation.error_codes.push('html_artifact_manifest_missing');
+    addError(errors, 'html_artifact_manifest_missing', 'third-party handoff HTML artifact manifest is required', THIRD_PARTY_HTML_ARTIFACT_PATH);
+  }
+
   const checks = [
     { key: 'archive_present', passed: errors.every((error) => error.code !== 'archive_missing') },
     { key: 'archive_sha256_sidecar', passed: errors.every((error) => !error.code.startsWith('archive_sha256')) },
@@ -240,6 +270,7 @@ function validateArchive(archivePathInput, sidecarPathInput = '') {
       passed: errors.every((error) => !['included_file_missing', 'included_file_size_mismatch', 'included_file_sha256_mismatch'].includes(error.code)),
     },
     { key: 'handoff_manifest', passed: handoffValidation?.ready_for_customer_sandbox === true },
+    { key: 'third_party_html_artifact_manifest', passed: htmlArtifactValidation.artifact_ready === true },
   ];
 
   return {
@@ -251,6 +282,7 @@ function validateArchive(archivePathInput, sidecarPathInput = '') {
     root_name: rootName,
     entry_count: entries.length,
     checks,
+    html_artifact_validation: htmlArtifactValidation,
     handoff_validation: handoffValidation
       ? {
           ready_for_customer_sandbox: handoffValidation.ready_for_customer_sandbox === true,

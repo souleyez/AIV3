@@ -972,7 +972,7 @@ npm run validate:all
 npm run validate:evidence
 ```
 
-这些命令会分别校验包内交接清单样例、包文件完整性、V3 安全 HTML artifact manifest 契约、包目录同级 `.tar.gz` 归档和 `.sha256` sidecar、交付清单列出的应收文件、目录/归档/摘要一致性的 release ready/not-ready 汇总、覆盖全部 gate 的聚合报告，以及最终证据清单。第三方正式填写自己的清单后，也应先通过同一类校验，再交给 V3 项目组联调。接收交付文件时，应保留包目录、`.tar.gz`、`.sha256`、`.release.json`、`.release.md`、`.delivery-manifest.json`、`.all.json`、`.all.md` 和 `.evidence-manifest.json` 在同一目录，运行 `validate:delivery`、`validate:all` 或 `validate:evidence` 确认所有应收文件都存在且 SHA256 一致。
+这些命令会分别校验包内交接清单样例、包文件完整性、V3 安全 HTML artifact manifest 契约、包目录同级 `.tar.gz` 归档和 `.sha256` sidecar、归档内 HTML artifact manifest 契约、交付清单列出的应收文件、目录/归档/摘要一致性的 release ready/not-ready 汇总、覆盖全部 gate 的聚合报告，以及最终证据清单。第三方正式填写自己的清单后，也应先通过同一类校验，再交给 V3 项目组联调。接收交付文件时，应保留包目录、`.tar.gz`、`.sha256`、`.release.json`、`.release.md`、`.delivery-manifest.json`、`.all.json`、`.all.md` 和 `.evidence-manifest.json` 在同一目录，运行 `validate:delivery`、`validate:all` 或 `validate:evidence` 确认所有应收文件都存在且 SHA256 一致。
 
 如需留存交接校验证据，可运行：
 

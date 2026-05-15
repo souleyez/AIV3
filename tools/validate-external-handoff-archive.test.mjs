@@ -51,6 +51,56 @@ function tarPadding(size) {
   return remainder === 0 ? Buffer.alloc(0) : Buffer.alloc(512 - remainder, 0);
 }
 
+function tarString(buffer, start, end) {
+  return buffer.toString('utf8', start, end).replace(/\0.*$/, '');
+}
+
+function tarNumber(buffer, start, end) {
+  const text = buffer.toString('ascii', start, end).replace(/\0.*$/, '').trim();
+  return Number.parseInt(text || '0', 8);
+}
+
+function parseTarEntries(tarBytes) {
+  const entries = [];
+  let offset = 0;
+  while (offset + 512 <= tarBytes.length) {
+    const header = tarBytes.subarray(offset, offset + 512);
+    if (header.every((byte) => byte === 0)) {
+      break;
+    }
+    const name = tarString(header, 0, 100);
+    const prefix = tarString(header, 345, 500);
+    const size = tarNumber(header, 124, 136);
+    const bodyStart = offset + 512;
+    const bodyEnd = bodyStart + size;
+    entries.push({
+      name: prefix ? `${prefix}/${name}` : name,
+      body: tarBytes.subarray(bodyStart, bodyEnd),
+    });
+    offset = bodyStart + Math.ceil(size / 512) * 512;
+  }
+  return entries;
+}
+
+function writeTarEntries(entries) {
+  return Buffer.concat([
+    ...entries.flatMap((entry) => [
+      tarHeader(entry.name, entry.body.length),
+      entry.body,
+      tarPadding(entry.body.length),
+    ]),
+    Buffer.alloc(1024, 0),
+  ]);
+}
+
+function rewriteArchiveEntries(archivePath, rewrite) {
+  const entries = parseTarEntries(zlib.gunzipSync(fs.readFileSync(archivePath)));
+  const rewritten = rewrite(entries);
+  const archiveBytes = zlib.gzipSync(writeTarEntries(rewritten), { level: 9, mtime: 0 });
+  fs.writeFileSync(archivePath, archiveBytes);
+  fs.writeFileSync(`${archivePath}.sha256`, `${sha256Hex(archiveBytes)}  ${path.basename(archivePath)}\n`);
+}
+
 function writeTinyArchive({ outDir, name, entryName, body = 'x\n' }) {
   const bodyBytes = Buffer.from(body);
   const tarBytes = Buffer.concat([
@@ -81,6 +131,9 @@ test('validateArchive accepts a generated archive and sidecar', () => {
   assert.equal(result.archive_sha256, built.archiveSha256);
   assert.equal(result.root_name, 'archive-valid-package');
   assert.equal(result.checks.find((check) => check.key === 'included_file_integrity').passed, true);
+  assert.equal(result.checks.find((check) => check.key === 'third_party_html_artifact_manifest').passed, true);
+  assert.equal(result.html_artifact_validation.artifact_ready, true);
+  assert.equal(result.html_artifact_validation.template_id, 'third_party_handoff_document');
   assert.equal(result.handoff_validation.ready_for_customer_sandbox, true);
   assert.equal(result.errors.length, 0);
 });
@@ -115,6 +168,44 @@ test('validateArchive rejects a sidecar digest mismatch', () => {
 
   assert.equal(result.archive_ready, false);
   assert.ok(result.errors.some((error) => error.code === 'archive_sha256_mismatch'));
+});
+
+test('validateArchive rejects unsafe third-party handoff HTML artifact manifests', () => {
+  const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'v3-external-handoff-archive-'));
+  const built = buildPackage({
+    repoRoot,
+    outDir,
+    basename: 'archive-html-artifact-tamper',
+    generatedAt: '2026-05-15T00:00:00.000Z',
+  });
+  rewriteArchiveEntries(built.archivePath, (entries) => {
+    const artifactName = 'archive-html-artifact-tamper/html-artifacts/third-party-handoff-document.json';
+    const manifestName = 'archive-html-artifact-tamper/handoff-package-manifest.json';
+    const artifactEntry = entries.find((entry) => entry.name === artifactName);
+    const manifestEntry = entries.find((entry) => entry.name === manifestName);
+    assert.ok(artifactEntry, 'HTML artifact entry should exist in archive');
+    assert.ok(manifestEntry, 'package manifest entry should exist in archive');
+    const artifact = JSON.parse(artifactEntry.body.toString('utf8'));
+    artifact.template_id = 'codex_execution_report';
+    artifact.payload.summary = 'unsafe source https://example.com/internal';
+    artifactEntry.body = Buffer.from(`${JSON.stringify(artifact, null, 2)}\n`);
+    const manifest = JSON.parse(manifestEntry.body.toString('utf8'));
+    const included = manifest.included_files.find((file) => file.path === 'html-artifacts/third-party-handoff-document.json');
+    assert.ok(included, 'HTML artifact should be listed in package manifest');
+    included.bytes = artifactEntry.body.length;
+    included.sha256 = sha256Hex(artifactEntry.body);
+    manifestEntry.body = Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`);
+    return entries;
+  });
+
+  const result = validateArchive(built.archivePath);
+
+  assert.equal(result.archive_ready, false);
+  assert.equal(result.checks.find((check) => check.key === 'included_file_integrity').passed, true);
+  assert.equal(result.checks.find((check) => check.key === 'third_party_html_artifact_manifest').passed, false);
+  assert.equal(result.html_artifact_validation.artifact_ready, false);
+  assert.ok(result.errors.some((error) => error.code === 'html_artifact_template_invalid'));
+  assert.ok(result.errors.some((error) => error.code === 'html_artifact_payload_unsafe'));
 });
 
 test('validateArchive rejects path traversal entries', () => {
