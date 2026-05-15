@@ -3369,6 +3369,15 @@ pub fn video_extraction_output_artifact_from_output(
         .and_then(|follow_up| follow_up.get("model_follow_up"))
         .cloned()
         .unwrap_or(Value::Null);
+    let model_completion_turn_dispatch_request =
+        video_extraction_model_completion_dispatch_request(
+            assistant_run_id,
+            None,
+            None,
+            output,
+            completion_follow_up.as_ref(),
+        )
+        .unwrap_or(Value::Null);
 
     Some(json!({
         "type": "video_extraction_artifacts",
@@ -3446,6 +3455,7 @@ pub fn video_extraction_output_artifact_from_output(
         "html_artifact_ids": html_artifact_ids,
         "completion_follow_up": completion_follow_up,
         "model_completion_turn_request": model_completion_turn_request,
+        "model_completion_turn_dispatch_request": model_completion_turn_dispatch_request,
         "completion_audit": video_extraction_completion_audit_from_output(output),
     }))
 }
@@ -3664,6 +3674,100 @@ pub fn video_extraction_completion_follow_up_from_output(
         "next_actions": next_actions,
         "model_follow_up": model_follow_up,
         "user_notification": user_notification,
+        "no_host_composed_answer": true,
+    }))
+}
+
+pub fn video_extraction_model_completion_dispatch_request(
+    assistant_run_id: &str,
+    workflow_execution_id: Option<&str>,
+    workflow_kind: Option<&str>,
+    output: &Value,
+    completion_follow_up: Option<&Value>,
+) -> Option<Value> {
+    let assistant_run_id = assistant_run_id.trim();
+    if assistant_run_id.is_empty() {
+        return None;
+    }
+    let document_id = output
+        .get("document_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    let completion_follow_up = completion_follow_up?;
+    let model_request = completion_follow_up.get("model_follow_up")?;
+    if model_request.get("kind").and_then(Value::as_str)
+        != Some("video_extraction_model_completion_turn_request")
+    {
+        return None;
+    }
+    if model_request.get("required").and_then(Value::as_bool) != Some(true) {
+        return None;
+    }
+
+    let workflow_execution_id = workflow_execution_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let workflow_kind = workflow_kind
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("video_extraction_workflow");
+    let idempotency_key = workflow_execution_id
+        .map(|workflow_execution_id| {
+            format!(
+                "video-completion-turn:{assistant_run_id}:{workflow_execution_id}:{document_id}:v1"
+            )
+        })
+        .unwrap_or_else(|| format!("video-completion-turn:{assistant_run_id}:{document_id}:v1"));
+    let status = completion_follow_up
+        .get("status")
+        .and_then(Value::as_str)
+        .or_else(|| output.get("status").and_then(Value::as_str))
+        .unwrap_or("partial");
+    let title = completion_follow_up
+        .get("title")
+        .and_then(Value::as_str)
+        .or_else(|| output.get("title").and_then(Value::as_str))
+        .unwrap_or("视频 PPT 提取");
+
+    Some(json!({
+        "kind": "assistant_run_model_completion_turn_dispatch_request",
+        "version": 1,
+        "status": "queued",
+        "turn_owner": "model",
+        "dispatch_target": "continue_assistant_run",
+        "entrypoint": "assistant_run_background_completion",
+        "idempotency_key": idempotency_key,
+        "assistant_run_id": assistant_run_id,
+        "workflow_execution_id": workflow_execution_id,
+        "workflow_kind": workflow_kind,
+        "source_event": "video_extraction.workflow_completed",
+        "document_id": document_id,
+        "dataset_id": output.get("dataset_id").cloned().unwrap_or(Value::Null),
+        "title": title,
+        "completion_status": status,
+        "continue_request": {
+            "prompt": "后台视频/PPT提取已完成，请基于待模型接手请求和已完成 observation，用模型自己的口吻输出下一条结果说明。",
+            "max_steps": 1,
+            "current_artifact": Value::Null,
+        },
+        "model_completion_turn_request": model_request.clone(),
+        "completion_context": model_request
+            .get("completion_context")
+            .cloned()
+            .unwrap_or_else(|| json!({})),
+        "answer_contract": model_request
+            .get("answer_contract")
+            .cloned()
+            .unwrap_or_else(|| json!({})),
+        "privacy_contract": {
+            "no_host_composed_answer": true,
+            "must_write_in_model_voice": true,
+            "must_reference_observation_only": true,
+            "must_not_claim_missing_files": true,
+            "must_not_include_private_paths_or_urls": true,
+            "must_not_request_login_cookie_or_recording_bypass": true,
+        },
         "no_host_composed_answer": true,
     }))
 }
@@ -6719,6 +6823,28 @@ mod tests {
             json!(true)
         );
         assert_eq!(
+            output_artifact["model_completion_turn_dispatch_request"]["kind"],
+            json!("assistant_run_model_completion_turn_dispatch_request")
+        );
+        assert_eq!(
+            output_artifact["model_completion_turn_dispatch_request"]["dispatch_target"],
+            json!("continue_assistant_run")
+        );
+        assert_eq!(
+            output_artifact["model_completion_turn_dispatch_request"]["continue_request"]
+                ["max_steps"],
+            json!(1)
+        );
+        assert_eq!(
+            output_artifact["model_completion_turn_dispatch_request"]["idempotency_key"],
+            json!(format!("video-completion-turn:{run_id}:{}:v1", document.id))
+        );
+        assert_eq!(
+            output_artifact["model_completion_turn_dispatch_request"]["privacy_contract"]
+                ["must_not_include_private_paths_or_urls"],
+            json!(true)
+        );
+        assert_eq!(
             output_artifact["completion_audit"]["kind"],
             json!("video_extraction_completion_audit")
         );
@@ -6985,6 +7111,65 @@ mod tests {
             follow_up["user_notification"]["html_artifact_ids"][0],
             html_artifact["id"]
         );
+    }
+
+    #[test]
+    fn video_extraction_model_completion_dispatch_request_is_redacted_and_idempotent() {
+        let output = json!({
+            "document_id": "doc-1",
+            "dataset_id": "dataset-1",
+            "title": "客户课程视频",
+            "status": "completed",
+            "generated_artifacts": {
+                "files": [{
+                    "artifact_kind": "pptx",
+                    "path": "C:\\Users\\soulzyn\\secret\\video_slides.pptx",
+                    "uri": "https://internal.example.local/private/video_slides.pptx"
+                }]
+            }
+        });
+        let html_artifact = json!({"id": "html-artifact-video"});
+        let follow_up =
+            video_extraction_completion_follow_up_from_output(&output, &[html_artifact])
+                .expect("follow up");
+
+        let dispatch = video_extraction_model_completion_dispatch_request(
+            "run-1",
+            Some("workflow-1"),
+            Some("video_extraction_workflow"),
+            &output,
+            Some(&follow_up),
+        )
+        .expect("dispatch request");
+
+        assert_eq!(
+            dispatch["kind"],
+            json!("assistant_run_model_completion_turn_dispatch_request")
+        );
+        assert_eq!(dispatch["status"], json!("queued"));
+        assert_eq!(dispatch["dispatch_target"], json!("continue_assistant_run"));
+        assert_eq!(
+            dispatch["idempotency_key"],
+            json!("video-completion-turn:run-1:workflow-1:doc-1:v1")
+        );
+        assert_eq!(dispatch["continue_request"]["max_steps"], json!(1));
+        assert_eq!(
+            dispatch["model_completion_turn_request"]["kind"],
+            json!("video_extraction_model_completion_turn_request")
+        );
+        assert_eq!(
+            dispatch["privacy_contract"]["no_host_composed_answer"],
+            json!(true)
+        );
+        assert_eq!(
+            dispatch["privacy_contract"]["must_write_in_model_voice"],
+            json!(true)
+        );
+        let serialized = dispatch.to_string();
+        assert!(!serialized.contains("soulzyn"));
+        assert!(!serialized.contains("secret"));
+        assert!(!serialized.contains("video_slides.pptx"));
+        assert!(!serialized.contains("internal.example.local"));
     }
 
     #[test]

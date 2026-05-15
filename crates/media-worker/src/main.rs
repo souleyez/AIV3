@@ -8,6 +8,7 @@ use media_worker::{
     resolve_video_source_output, run_video_frame_extraction_if_enabled,
     video_extraction_completion_audit_from_output,
     video_extraction_completion_follow_up_from_output, video_extraction_html_artifact_from_output,
+    video_extraction_model_completion_dispatch_request,
     write_video_extraction_text_artifacts_if_available, FrameExtractionConfig,
     MediaWorkflowTaskKind,
 };
@@ -267,6 +268,16 @@ async fn append_video_extraction_assistant_event(
         .cloned()
         .unwrap_or(Value::Null);
     let completion_audit = video_extraction_completion_audit_from_output(output);
+    let workflow_execution_id = execution.id.to_string();
+    let model_completion_turn_dispatch_request =
+        video_extraction_model_completion_dispatch_request(
+            &run_id.to_string(),
+            Some(&workflow_execution_id),
+            Some(execution.kind.as_str()),
+            output,
+            completion_follow_up.as_ref(),
+        )
+        .unwrap_or(Value::Null);
 
     storage
         .assistant_runs()
@@ -285,6 +296,7 @@ async fn append_video_extraction_assistant_event(
                     "html_artifacts": html_artifacts,
                     "completion_follow_up": completion_follow_up,
                     "model_completion_turn_request": model_completion_turn_request,
+                    "model_completion_turn_dispatch_request": model_completion_turn_dispatch_request.clone(),
                     "completion_audit": completion_audit,
                     "no_host_composed_answer": true,
                 }),
@@ -292,6 +304,20 @@ async fn append_video_extraction_assistant_event(
             },
         )
         .await?;
+    if !model_completion_turn_dispatch_request.is_null() {
+        storage
+            .assistant_runs()
+            .append_event(
+                execution.tenant_id,
+                run_id,
+                &NewAssistantRunEvent {
+                    event_name: "assistant_run.model_completion_turn_requested".to_string(),
+                    payload: model_completion_turn_dispatch_request,
+                    created_at: Utc::now(),
+                },
+            )
+            .await?;
+    }
     persist_video_extraction_html_artifacts(storage, &run, &html_artifacts).await?;
     let output_artifacts = merge_video_extraction_output_artifacts(
         &run.output_artifacts,
