@@ -955,7 +955,7 @@ npm run validate:evidence
 
 `validate:all` emits one JSON report covering the handoff manifest, package, archive, delivery manifest, and release gates.
 
-`validate:evidence` verifies the final evidence manifest, including the package directory, archive, sidecar, release reports, delivery manifest, and aggregate JSON/Markdown evidence. Add `-- --verifyMarkdown ../<package>.evidence-manifest.md` to check the packaged human-readable receipt, or `-- --markdown evidence.md` when a fresh receipt is needed.
+`validate:evidence` verifies the final evidence manifest, including the package directory, archive, sidecar, release reports, delivery manifest, aggregate JSON/Markdown evidence, and the packaged human-readable evidence receipt. Add `-- --markdown evidence.md` when a fresh receipt is needed.
 
 For review evidence, run:
 

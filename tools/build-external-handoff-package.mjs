@@ -300,7 +300,7 @@ npm run validate:all
 npm run validate:evidence
 \`\`\`
 
-5. 收到正式交付文件时，优先保留包目录、\`.tar.gz\`、\`.sha256\`、\`.release.json\`、\`.release.md\`、\`.delivery-manifest.json\`、\`.all.json\`、\`.all.md\`、\`.evidence-manifest.json\` 和 \`.evidence-manifest.md\` 在同一目录，再运行 \`validate:delivery\`、\`validate:all\` 或 \`validate:evidence\` 核对交付清单。需要留档时可运行：\`npm run validate:all -- --out aggregate.json --markdown aggregate.md\` 或 \`npm run validate:evidence -- --verifyMarkdown ../<package>.evidence-manifest.md --markdown evidence.md\`。
+5. 收到正式交付文件时，优先保留包目录、\`.tar.gz\`、\`.sha256\`、\`.release.json\`、\`.release.md\`、\`.delivery-manifest.json\`、\`.all.json\`、\`.all.md\`、\`.evidence-manifest.json\` 和 \`.evidence-manifest.md\` 在同一目录，再运行 \`validate:delivery\`、\`validate:all\` 或 \`validate:evidence\` 核对交付清单。需要留档时可运行：\`npm run validate:all -- --out aggregate.json --markdown aggregate.md\` 或 \`npm run validate:evidence -- --markdown evidence.md\`。
 6. 将校验通过的清单、测试文档/权限样例、联调联系人和网络白名单信息交给 V3 项目组。
 
 ## V3 侧如何验收
@@ -337,7 +337,7 @@ Recommended flow:
 7. Run \`npm run validate:delivery\` to verify the sibling delivery manifest against every expected delivery artifact.
 8. Run \`npm run validate:release\` for the combined ready/not-ready report.
 9. Run \`npm run validate:all\` when you want one JSON report covering every handoff gate. Add \`-- --out aggregate.json --markdown aggregate.md\` to keep evidence files.
-10. Run \`npm run validate:evidence\` to verify the final evidence manifest that covers every delivery artifact plus aggregate evidence. Add \`-- --verifyMarkdown ../<package>.evidence-manifest.md\` to check the packaged human-readable receipt, or \`-- --markdown evidence.md\` when you want a fresh receipt.
+10. Run \`npm run validate:evidence\` to verify the final evidence manifest that covers every delivery artifact plus aggregate evidence and the packaged human-readable receipt. Add \`-- --markdown evidence.md\` when you want a fresh receipt.
 11. Send the validated manifest, document/ACL fixtures, network allowlist details, and operations contacts to the V3 team.
 
 The V3 operator smoke validates signed dispatch, result callback, redaction, and the handoff manifest before a live customer sandbox run.
@@ -357,7 +357,7 @@ function packageJson() {
       'validate:delivery': 'node tools/validate-external-handoff-delivery.mjs --package .',
       'validate:release': 'node tools/validate-external-handoff-release.mjs --package .',
       'validate:all': 'node tools/validate-external-handoff-all.mjs --package .',
-      'validate:evidence': 'node tools/validate-external-handoff-evidence.mjs --package .',
+      'validate:evidence': 'node tools/validate-external-handoff-evidence.mjs --package . --verifyMarkdown auto',
       'start:mock-gateway': 'node sandbox/external-third-party-mock-gateway.mjs',
     },
   };

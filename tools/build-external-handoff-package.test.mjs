@@ -208,6 +208,6 @@ test('generated package exposes simple npm scripts for third parties', () => {
   assert.equal(packageJson.scripts['validate:delivery'], 'node tools/validate-external-handoff-delivery.mjs --package .');
   assert.equal(packageJson.scripts['validate:release'], 'node tools/validate-external-handoff-release.mjs --package .');
   assert.equal(packageJson.scripts['validate:all'], 'node tools/validate-external-handoff-all.mjs --package .');
-  assert.equal(packageJson.scripts['validate:evidence'], 'node tools/validate-external-handoff-evidence.mjs --package .');
+  assert.equal(packageJson.scripts['validate:evidence'], 'node tools/validate-external-handoff-evidence.mjs --package . --verifyMarkdown auto');
   assert.equal(packageJson.scripts['start:mock-gateway'], 'node sandbox/external-third-party-mock-gateway.mjs');
 });

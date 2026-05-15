@@ -389,9 +389,10 @@ async function main() {
     evidenceManifestInput: args.manifest || '',
   });
   if (args.verifyMarkdown) {
+    const verifyMarkdownPath = args.verifyMarkdown === 'auto' ? '' : args.verifyMarkdown;
     const receipt = validateEvidenceMarkdownReceipt({
       validation: result,
-      markdownPathInput: args.verifyMarkdown,
+      markdownPathInput: verifyMarkdownPath,
     });
     result = {
       ...result,
