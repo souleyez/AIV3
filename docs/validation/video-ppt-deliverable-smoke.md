@@ -147,6 +147,17 @@ The target host still needs `CC=clang CXX=clang++` for release builds because it
 
 The public deliverable contract now also requires `slide_rectangles_manifest.json` for complete video/PPT packages. The current promoted mode is intentionally conservative: selected keep-list frames are de-duplicated in selection order, exact duplicate selected frame bytes are removed before PPTX generation, and decodable JPEG/PNG frames also pass through a conservative visual-similarity dedupe to reject near-identical selected frames caused by compression or tiny capture differences. Remaining JPEG/PNG frames may be exported as `border_background_contrast_v2` detector crops when a clear non-background rectangle exists, refined as `foreground_component_v1` crops when a dominant connected slide component should exclude external foreground overlays, or `edge_projection_v1` crops when a non-uniform background makes the median-background crop unsafe but strong rectangular edge lines remain. The public validator still accepts older `simple_background_contrast_v1` manifests. Ambiguous or undecodable frames remain relative full-frame fallback crops. Every crop still requires `review_required=true`.
 
+### 2026-05-15 Target Foreground Component Crop Enablement
+
+Deployment target `8服务器` pulled commit `afb5a4d` at `/srv/aiv3/repo` and ran:
+
+```text
+cargo test -p media-worker slide_rectangle --lib
+CC=clang CXX=clang++ cargo build -p media-worker --release
+```
+
+After the release build, `aiv3-media-worker.service` was restarted and confirmed active. The service log showed a fresh NATS connection and `media` queue polling startup.
+
 Generated PPTX slides apply detector crop boxes through DrawingML `a:srcRect`. Full-frame fallback crops intentionally omit `a:srcRect` and keep the previous whole-frame rendering behavior.
 
 This is a data-quality gate and review contract, not a claim that visual slide-boundary detection is complete. A later slice should replace the simple background-contrast detector with a stronger visual detector. Exact/visual duplicate removal is already part of the public review contract: when selected candidates are removed, summaries now surface `selected_slide_duplicates_removed` and a `review_slide_dedupe_manifest` follow-up action.
