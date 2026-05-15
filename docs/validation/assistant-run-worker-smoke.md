@@ -26,6 +26,28 @@ target/assistant-run-worker-smoke/<timestamp>.json
 target/assistant-run-worker-smoke/<timestamp>.md
 ```
 
+## Deployment Target Run
+
+2026-05-15 deployment target evidence:
+
+- Host: 8-server deployment target
+- Repository: `/srv/aiv3/repo`
+- Commit: `0d5f268`
+- Command: `bash scripts/run-assistant-run-worker-smoke.sh`
+- Result: passed
+- JSON report: `/srv/aiv3/repo/target/assistant-run-worker-smoke/assistant-run-worker-smoke-20260515T025647Z.json`
+- Markdown summary: `/srv/aiv3/repo/target/assistant-run-worker-smoke/assistant-run-worker-smoke-20260515T025647Z.md`
+
+Checks completed on the target host:
+
+- `cargo check -p assistant-run-worker`
+- `cargo test -p assistant-run-worker`
+- `cargo test -p workflow-definitions assistant_run_model_completion_starts_on_dedicated_queue`
+- `cargo test -p domain-model workflow_kind_roundtrips_video_extraction`
+- `cargo test -p media-worker model_completion`
+
+The optional DB-backed consumer check was intentionally skipped because it requires an explicitly supplied disposable test database.
+
 ## Optional DB-Backed Check
 
 Only enable this against a disposable test database:
