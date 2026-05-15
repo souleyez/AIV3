@@ -131,6 +131,7 @@ test('renderEvidenceMarkdown summarizes final evidence without raw payloads', ()
 
   assert.match(markdown, /Status: \*\*READY\*\*/);
   assert.match(markdown, /Manifest SHA256:/);
+  assert.match(markdown, /Package type: `v3\.external_third_party_handoff_package\.v1`/);
   assert.match(markdown, /Package HTML artifact ready: yes/);
   assert.match(markdown, /Archive HTML artifact ready: yes/);
   assert.doesNotMatch(markdown, /third-party-secret|raw prompt secret|callback-token-should-not-leak/);

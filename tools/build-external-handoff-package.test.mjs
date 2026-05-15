@@ -153,6 +153,7 @@ test('buildPackage creates a third-party handoff directory with manifest and too
   assert.equal(evidenceArtifactsByRole.get('aggregate_markdown').sha256, result.allMarkdownSha256);
   const evidenceMarkdown = fs.readFileSync(result.evidenceMarkdownPath, 'utf8');
   assert.match(evidenceMarkdown, /Status: \*\*READY\*\*/);
+  assert.match(evidenceMarkdown, /Package type: `v3\.external_third_party_handoff_package\.v1`/);
   assert.match(evidenceMarkdown, /Package HTML artifact ready: yes/);
   assert.match(evidenceMarkdown, /Archive HTML artifact ready: yes/);
 

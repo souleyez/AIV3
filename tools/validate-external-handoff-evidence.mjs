@@ -301,6 +301,7 @@ Status: **${status}**
 - Manifest path: \`${report.evidence_manifest_path || 'unknown'}\`
 - Manifest SHA256: \`${report.evidence_manifest_sha256 || 'unknown'}\`
 - Manifest type: \`${report.manifest_type || 'unknown'}\`
+- Package type: \`${report.package_type || 'unknown'}\`
 - Package name: \`${report.package_name || 'unknown'}\`
 - Final artifacts: ${report.artifact_count || 0}
 
