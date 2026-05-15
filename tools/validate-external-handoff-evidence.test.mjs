@@ -9,6 +9,7 @@ import {
   EVIDENCE_MANIFEST_TYPE,
   renderEvidenceMarkdown,
   validateEvidence,
+  validateEvidenceMarkdownReceipt,
   writeEvidenceReportFiles,
 } from './validate-external-handoff-evidence.mjs';
 
@@ -112,6 +113,27 @@ test('renderEvidenceMarkdown summarizes final evidence without raw payloads', ()
   assert.match(markdown, /Package HTML artifact ready: yes/);
   assert.match(markdown, /Archive HTML artifact ready: yes/);
   assert.doesNotMatch(markdown, /third-party-secret|raw prompt secret|callback-token-should-not-leak/);
+});
+
+test('validateEvidenceMarkdownReceipt rejects stale final evidence receipts', () => {
+  const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'v3-external-handoff-evidence-'));
+  const built = buildPackage({
+    repoRoot,
+    outDir,
+    basename: 'evidence-stale-receipt-package',
+    generatedAt: '2026-05-15T00:00:00.000Z',
+  });
+  const result = validateEvidence({ packageRootInput: built.packageRoot });
+  fs.appendFileSync(built.evidenceMarkdownPath, '\nchanged after evidence validation\n');
+
+  const receipt = validateEvidenceMarkdownReceipt({
+    validation: result,
+    markdownPathInput: built.evidenceMarkdownPath,
+  });
+
+  assert.equal(receipt.receipt_ready, false);
+  assert.ok(receipt.errors.some((error) => error.code === 'evidence_markdown_receipt_bytes_mismatch'));
+  assert.ok(receipt.errors.some((error) => error.code === 'evidence_markdown_receipt_sha256_mismatch'));
 });
 
 test('writeEvidenceReportFiles writes JSON and Markdown validation receipts', () => {

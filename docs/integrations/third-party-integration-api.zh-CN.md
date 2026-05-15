@@ -959,7 +959,7 @@ target/external-third-party-handoff
 - 包目录同级的 `<package>.delivery-manifest.json`，列出本次应交付的包目录、包内清单、归档、`.sha256` sidecar、release JSON 和 release Markdown，并记录各文件 SHA256，方便第三方接收时逐项核对。
 - 包目录同级的 `<package>.all.json` 和 `<package>.all.md`，在交付清单生成后记录交接清单、包完整性、归档、交付清单和 release gate 的完整聚合校验证据。
 - 包目录同级的 `<package>.evidence-manifest.json`，最后生成，用于列出最终交付物和聚合证据文件，避免把 `.all.json` 反写进 delivery manifest 造成循环 hash。
-- 包目录同级的 `<package>.evidence-manifest.md`，由最终 evidence 校验结果渲染，方便人工审阅最终证据状态、artifact 数量、manifest SHA256、包目录/归档 HTML artifact readiness 和错误码。
+- 包目录同级的 `<package>.evidence-manifest.md`，由最终 evidence 校验结果渲染，方便人工审阅最终证据状态、artifact 数量、manifest SHA256、包目录/归档 HTML artifact readiness 和错误码；构建器会校验它与当前 evidence validation 输出一致，并在构建输出中给出 `evidenceMarkdownReady`。
 
 第三方拿到包后，可在包目录内执行：
 

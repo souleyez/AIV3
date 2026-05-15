@@ -312,6 +312,52 @@ ${errors}
 `;
 }
 
+function validateEvidenceMarkdownReceipt({ validation, markdownPathInput = '' } = {}) {
+  const errors = [];
+  const evidenceManifestPath = validation?.evidence_manifest_path || '';
+  const markdownPath = path.resolve(
+    markdownPathInput || (evidenceManifestPath ? evidenceManifestPath.replace(/\.json$/u, '.md') : 'evidence-manifest.md'),
+  );
+  const expected = renderEvidenceMarkdown(validation || {});
+  const expectedDigest = {
+    bytes: Buffer.byteLength(expected),
+    sha256: sha256Hex(Buffer.from(expected)),
+  };
+
+  if (!fs.existsSync(markdownPath)) {
+    addError(errors, 'evidence_markdown_receipt_missing', 'evidence markdown receipt is missing', markdownPath);
+    return {
+      receipt_ready: false,
+      receipt_path: markdownPath,
+      receipt_sha256: null,
+      expected_sha256: expectedDigest.sha256,
+      error_codes: errors.map((error) => error.code),
+      errors,
+    };
+  }
+
+  const actual = fs.readFileSync(markdownPath);
+  const actualDigest = {
+    bytes: actual.length,
+    sha256: sha256Hex(actual),
+  };
+  if (actualDigest.bytes !== expectedDigest.bytes) {
+    addError(errors, 'evidence_markdown_receipt_bytes_mismatch', 'evidence markdown receipt byte size does not match validation output', markdownPath);
+  }
+  if (actualDigest.sha256 !== expectedDigest.sha256) {
+    addError(errors, 'evidence_markdown_receipt_sha256_mismatch', 'evidence markdown receipt SHA256 does not match validation output', markdownPath);
+  }
+
+  return {
+    receipt_ready: errors.length === 0,
+    receipt_path: markdownPath,
+    receipt_sha256: actualDigest.sha256,
+    expected_sha256: expectedDigest.sha256,
+    error_codes: errors.map((error) => error.code),
+    errors,
+  };
+}
+
 function writeOutputFile(filePath, contents) {
   if (!filePath) {
     return '';
@@ -331,7 +377,7 @@ function writeEvidenceReportFiles(report, { out = '', markdown = '' } = {}) {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
-  const result = validateEvidence({
+  let result = validateEvidence({
     packageRootInput: args.package || '.',
     archivePathInput: args.archive || '',
     sidecarPathInput: args.sha256 || '',
@@ -342,6 +388,19 @@ async function main() {
     allMarkdownPathInput: args.allMarkdown || '',
     evidenceManifestInput: args.manifest || '',
   });
+  if (args.verifyMarkdown) {
+    const receipt = validateEvidenceMarkdownReceipt({
+      validation: result,
+      markdownPathInput: args.verifyMarkdown,
+    });
+    result = {
+      ...result,
+      evidence_manifest_ready: result.evidence_manifest_ready === true && receipt.receipt_ready === true,
+      evidence_markdown_receipt: receipt,
+      error_codes: [...result.error_codes, ...receipt.error_codes],
+      errors: [...result.errors, ...receipt.errors],
+    };
+  }
   writeEvidenceReportFiles(result, {
     out: args.out || '',
     markdown: args.markdown || '',
@@ -358,4 +417,10 @@ if (invokedPath === modulePath) {
   await main();
 }
 
-export { EVIDENCE_MANIFEST_TYPE, renderEvidenceMarkdown, validateEvidence, writeEvidenceReportFiles };
+export {
+  EVIDENCE_MANIFEST_TYPE,
+  renderEvidenceMarkdown,
+  validateEvidence,
+  validateEvidenceMarkdownReceipt,
+  writeEvidenceReportFiles,
+};
