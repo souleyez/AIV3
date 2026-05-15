@@ -253,6 +253,7 @@ Status: **${status}**
 - Included files: ${report.package_summary?.included_file_count ?? 0}
 - Package ready: ${report.package_summary?.package_ready ? 'yes' : 'no'}
 - Handoff ready: ${report.package_summary?.handoff_ready ? 'yes' : 'no'}
+- HTML artifact ready: ${report.package_summary?.html_artifact_ready ? 'yes' : 'no'}
 
 ## Archive
 
@@ -361,6 +362,8 @@ function validateRelease({
       package_ready: packageValidation.package_ready === true,
       included_file_count: packageValidation.included_file_count,
       handoff_ready: packageValidation.handoff_validation?.ready_for_customer_sandbox === true,
+      html_artifact_ready: packageValidation.html_artifact_validation?.artifact_ready === true,
+      html_artifact_template_id: packageValidation.html_artifact_validation?.template_id || null,
       error_codes: (packageValidation.errors || []).map((error) => error.code),
     },
     archive_summary: {

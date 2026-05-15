@@ -83,6 +83,7 @@ ${checks}
 - Handoff ready: ${report.summaries?.handoff?.ready_for_customer_sandbox ? 'yes' : 'no'}
 - Package ready: ${report.summaries?.package?.package_ready ? 'yes' : 'no'}
 - Included files: ${report.summaries?.package?.included_file_count ?? 0}
+- HTML artifact ready: ${report.summaries?.package?.html_artifact_ready ? 'yes' : 'no'}
 - Archive ready: ${report.summaries?.archive?.archive_ready ? 'yes' : 'no'}
 - Archive root: \`${report.summaries?.archive?.root_name || 'unknown'}\`
 - Archive entries: ${report.summaries?.archive?.entry_count ?? 0}
@@ -174,6 +175,8 @@ function validateAll({
       package: {
         package_ready: packageReport.package_ready === true,
         included_file_count: packageReport.included_file_count,
+        html_artifact_ready: packageReport.html_artifact_validation?.artifact_ready === true,
+        html_artifact_template_id: packageReport.html_artifact_validation?.template_id || null,
         error_codes: summarizeErrorCodes(packageReport),
       },
       archive: {

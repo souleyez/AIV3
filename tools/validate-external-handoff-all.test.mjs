@@ -24,6 +24,8 @@ test('validateAll accepts a generated handoff package and siblings', () => {
   assert.equal(result.checks.every((check) => check.passed), true);
   assert.equal(result.summaries.handoff.ready_for_customer_sandbox, true);
   assert.equal(result.summaries.package.package_ready, true);
+  assert.equal(result.summaries.package.html_artifact_ready, true);
+  assert.equal(result.summaries.package.html_artifact_template_id, 'third_party_handoff_document');
   assert.equal(result.summaries.archive.archive_ready, true);
   assert.equal(result.summaries.delivery.delivery_manifest_ready, true);
   assert.equal(result.summaries.release.release_ready, true);
@@ -62,6 +64,7 @@ test('renderAllMarkdown summarizes aggregate validation without raw payloads', (
 
   assert.match(markdown, /Status: \*\*READY\*\*/);
   assert.match(markdown, /PASS `handoff_manifest_ready`/);
+  assert.match(markdown, /HTML artifact ready: yes/);
   assert.match(markdown, /Delivery manifest ready: yes/);
   assert.match(markdown, /Release ready: yes/);
   assert.doesNotMatch(markdown, /dispatch-token|dispatch-secret|Bearer /);

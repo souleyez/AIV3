@@ -72,6 +72,7 @@
 - Current documentation hardening follow-up adds `tools/render-pure-third-party-guide-html.mjs --check`, a package script for HTML freshness checks, and automatic HTML regeneration before handoff package builds so the sendable review page does not drift from the Markdown source.
 - Current safe-HTML skillization decision is captured in `docs/architecture/html-artifact-skill-evaluation.md`: V3 should generalize the pattern into trusted artifact templates first, and only create/adopt a local Codex skill after the product-side template rules are stable.
 - Current safe-HTML template registry follow-up adds `third_party_handoff_document` and `external_integration` to the web-side safe artifact manifest renderer, and the handoff package now emits `html-artifacts/third-party-handoff-document.json`, so external handoff/API guide summaries have a V3-owned artifact template slot plus a concrete package artifact.
+- Current package-validation follow-up gates that HTML artifact manifest inside `validate:package`, `validate:release`, and `validate:all`, checking the V3 template/source contract, read-only mode, default domain, required event endpoint, validation command listing, and unsafe payload strings.
 - Next implementation checkpoint: run the callback contract through a real HTTPS customer sandbox once a third-party endpoint is available, while continuing smaller hardening work that does not require customer cooperation.
 
 ---

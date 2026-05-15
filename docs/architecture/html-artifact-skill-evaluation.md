@@ -86,6 +86,6 @@ Recommended path:
 ## Immediate Follow-Up
 
 - Add HTML freshness checks for every committed generated HTML document.
-- Extend the handoff package builder pattern to future external reports.
+- Extend the handoff package builder pattern to future external reports. Current handoff package validation now checks the third-party HTML artifact manifest contract and unsafe payload strings, instead of only checking file presence and SHA256.
 - Define the first V3 HTML artifact template registry entry for third-party handoff documents. Completed slices: the web safe artifact template allowlist now includes `third_party_handoff_document` with `external_integration` source type, and the third-party handoff package now emits `html-artifacts/third-party-handoff-document.json` as a V3 safe artifact manifest.
 - Later, create a local `v3-html-artifacts` Codex skill that points to this architecture note and the safe HTML artifact rules.
