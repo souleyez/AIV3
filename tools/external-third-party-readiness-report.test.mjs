@@ -119,6 +119,48 @@ test('buildReadinessReport includes handoff release validation when provided', (
   assert.equal(report.handoff_release_summary.delivery_manifest_sha256, 'b'.repeat(64));
 });
 
+test('buildReadinessReport includes aggregate handoff validation when provided', () => {
+  const report = buildReadinessReport({
+    requests: [
+      {
+        bearer_valid: true,
+        signature_valid: true,
+        body_hash_valid: true,
+        requester_sender_present: true,
+        raw_arguments_included: false,
+        contains_forbidden_text: false,
+      },
+    ],
+    callbacks: [
+      {
+        callback_status: 200,
+        response_accepted: true,
+        contains_forbidden_text: false,
+      },
+    ],
+    releasePackagePath: 'target/external-third-party-handoff/package',
+    handoffAllValidation: {
+      all_ready: true,
+      checks: [
+        { key: 'handoff_manifest_ready', passed: true },
+        { key: 'release_ready', passed: true },
+      ],
+      summaries: {
+        package: { error_codes: [] },
+        archive: { error_codes: [] },
+        delivery: { error_codes: [] },
+        release: { error_codes: [] },
+      },
+      errors: [],
+    },
+  });
+
+  assert.equal(report.ready_for_customer_sandbox, true);
+  assert.equal(report.checks.find((check) => check.key === 'handoff_all_ready').passed, true);
+  assert.equal(report.handoff_all_summary.all_ready, true);
+  assert.deepEqual(report.handoff_all_summary.error_codes, []);
+});
+
 test('buildReadinessReport fails closed when handoff release validation fails', () => {
   const report = buildReadinessReport({
     requests: [
@@ -151,6 +193,51 @@ test('buildReadinessReport fails closed when handoff release validation fails', 
   assert.equal(report.ready_for_customer_sandbox, false);
   assert.equal(report.checks.find((check) => check.key === 'handoff_release_ready').passed, false);
   assert.deepEqual(report.handoff_release_summary.error_codes, ['delivery_archive_sha256_mismatch']);
+});
+
+test('buildReadinessReport fails closed when aggregate handoff validation fails', () => {
+  const report = buildReadinessReport({
+    requests: [
+      {
+        bearer_valid: true,
+        signature_valid: true,
+        body_hash_valid: true,
+        requester_sender_present: true,
+        raw_arguments_included: false,
+        contains_forbidden_text: false,
+      },
+    ],
+    callbacks: [
+      {
+        callback_status: 200,
+        response_accepted: true,
+        contains_forbidden_text: false,
+      },
+    ],
+    handoffAllValidation: {
+      all_ready: false,
+      checks: [{ key: 'delivery_manifest_ready', passed: false }],
+      summaries: {
+        package: { error_codes: [] },
+        archive: { error_codes: [] },
+        delivery: { error_codes: ['delivery_release_markdown_sha256_mismatch'] },
+        release: { error_codes: ['delivery_release_markdown_sha256_mismatch'] },
+      },
+      errors: [
+        {
+          scope: 'delivery',
+          code: 'delivery_release_markdown_sha256_mismatch',
+          message: 'release markdown SHA256 mismatch',
+          path: 'package.release.md',
+        },
+      ],
+    },
+  });
+
+  assert.equal(report.ready_for_customer_sandbox, false);
+  assert.equal(report.checks.find((check) => check.key === 'handoff_all_ready').passed, false);
+  assert.deepEqual(report.handoff_all_summary.error_codes, ['delivery_release_markdown_sha256_mismatch']);
+  assert.deepEqual(report.handoff_all_summary.scoped_error_codes, ['delivery:delivery_release_markdown_sha256_mismatch']);
 });
 
 test('buildReadinessReport fails closed when handoff manifest validation fails', () => {
@@ -240,6 +327,7 @@ test('renderReadinessMarkdown renders operator-facing checklist without raw payl
   assert.match(markdown, /Status: passed/);
   assert.match(markdown, /Handoff Manifest Summary/);
   assert.match(markdown, /Handoff Release Summary/);
+  assert.match(markdown, /Aggregate Handoff Summary/);
   assert.match(markdown, /Third-Party Handoff Items/);
   assert.doesNotMatch(markdown, /third-party-secret|raw prompt secret|callback-token-should-not-leak/);
 });

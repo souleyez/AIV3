@@ -493,3 +493,24 @@ npm --prefix target/external-third-party-handoff/all-validator-check run validat
 ```
 
 The generated package reported `fileCount: 15`, and both root and package-internal aggregate validation returned `all_ready: true`.
+
+## Readiness Aggregate Handoff Gate Follow-Up
+
+The third-party readiness report now runs aggregate handoff validation whenever a `--releasePackage` is provided. Reports include:
+
+- `handoff_all_ready` in the top-level checklist;
+- `handoff_all_summary.all_ready`;
+- redacted aggregate check keys;
+- scoped error codes without raw payloads, secrets, or package file contents.
+
+Local validation passed:
+
+```text
+npm run test:external-readiness
+npm run test:external-handoff-all
+npm run test:external-handoff-release
+npm run build:external-handoff-package -- --basename readiness-all-gate-check --generatedAt 2026-05-15T00:00:00.000Z
+node tools/external-third-party-readiness-report.mjs --releasePackage target/external-third-party-handoff/readiness-all-gate-check ...
+```
+
+The generated readiness report returned `ready: true` and contained both `handoff_all_ready` and `handoff_all_summary.all_ready: true`.

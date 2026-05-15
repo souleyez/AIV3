@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { validateExternalHandoffManifest } from './validate-external-handoff.mjs';
+import { validateAll } from './validate-external-handoff-all.mjs';
 import { validateRelease } from './validate-external-handoff-release.mjs';
 
 export const DEFAULT_READINESS_CHECKS = [
@@ -72,6 +73,7 @@ export function buildReadinessReport({
   handoffManifestValidation = null,
   releasePackagePath = '',
   releaseValidation = null,
+  handoffAllValidation = null,
 } = {}) {
   const request = Array.isArray(requests) ? requests[0] : null;
   const callback = Array.isArray(callbacks) ? callbacks[0] : null;
@@ -98,6 +100,14 @@ export function buildReadinessReport({
       key: 'handoff_release_ready',
       label: 'Handoff release package is ready for delivery',
       passed: releaseSummary.release_ready,
+    });
+  }
+  const handoffAllSummary = summarizeHandoffAllValidation(handoffAllValidation, releasePackagePath);
+  if (handoffAllSummary) {
+    checks.push({
+      key: 'handoff_all_ready',
+      label: 'All handoff package validation gates passed',
+      passed: handoffAllSummary.all_ready,
     });
   }
   return {
@@ -130,6 +140,7 @@ export function buildReadinessReport({
       : null,
     handoff_manifest_summary: handoffManifestSummary,
     handoff_release_summary: releaseSummary,
+    handoff_all_summary: handoffAllSummary,
     third_party_handoff_items: THIRD_PARTY_HANDOFF_ITEMS,
   };
 }
@@ -184,6 +195,34 @@ function summarizeReleaseValidation(validation, packagePath) {
   };
 }
 
+function summarizeHandoffAllValidation(validation, packagePath) {
+  if (!validation) {
+    return null;
+  }
+  return {
+    package_root: packagePath || validation.package_root || null,
+    all_ready: validation.all_ready === true,
+    checks: Array.isArray(validation.checks)
+      ? validation.checks.map((check) => ({
+          key: check.key,
+          passed: check.passed === true,
+        }))
+      : [],
+    error_codes: Array.isArray(validation.errors)
+      ? [...new Set(validation.errors.map((error) => error.code).filter(Boolean))]
+      : [],
+    scoped_error_codes: Array.isArray(validation.errors)
+      ? validation.errors
+          .filter((error) => error?.scope && error?.code)
+          .map((error) => `${error.scope}:${error.code}`)
+      : [],
+    package_error_codes: validation.summaries?.package?.error_codes || [],
+    archive_error_codes: validation.summaries?.archive?.error_codes || [],
+    delivery_error_codes: validation.summaries?.delivery?.error_codes || [],
+    release_error_codes: validation.summaries?.release?.error_codes || [],
+  };
+}
+
 export function renderReadinessMarkdown(report) {
   const status = report.ready_for_customer_sandbox ? 'passed' : 'failed';
   const checks = report.checks
@@ -228,6 +267,14 @@ export function renderReadinessMarkdown(report) {
         `- Errors: ${report.handoff_release_summary.error_codes.length || 0}`,
       ].join('\n')
     : '- No handoff release validation attached.';
+  const handoffAll = report.handoff_all_summary
+    ? [
+        `- Package: \`${report.handoff_all_summary.package_root || 'unknown'}\``,
+        `- Ready: ${report.handoff_all_summary.all_ready ? 'yes' : 'no'}`,
+        `- Checks: ${report.handoff_all_summary.checks.length || 0}`,
+        `- Errors: ${report.handoff_all_summary.error_codes.length || 0}`,
+      ].join('\n')
+    : '- No aggregate handoff validation attached.';
 
   return `# External Third-Party Readiness Report
 
@@ -256,6 +303,10 @@ ${handoffManifest}
 ## Handoff Release Summary
 
 ${handoffRelease}
+
+## Aggregate Handoff Summary
+
+${handoffAll}
 
 ## Third-Party Handoff Items
 
@@ -309,6 +360,9 @@ async function main() {
   const releaseValidation = releasePackagePath
     ? validateRelease({ packageRootInput: releasePackagePath })
     : null;
+  const handoffAllValidation = releasePackagePath
+    ? validateAll({ packageRootInput: releasePackagePath })
+    : null;
   const requestsPayload = args.requests
     ? readJsonFile(args.requests, { requests: [] })
     : readJsonText(process.env.EXTERNAL_THIRD_PARTY_REQUESTS_JSON, { requests: [] });
@@ -326,6 +380,7 @@ async function main() {
     handoffManifestValidation,
     releasePackagePath,
     releaseValidation,
+    handoffAllValidation,
   });
   const outDir = args.outDir || path.join('target', 'external-third-party-readiness');
   const basename = args.basename || 'external-third-party-readiness-report';
