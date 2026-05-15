@@ -502,6 +502,54 @@ function videoFollowUpActionLabel(action) {
   return VIDEO_FOLLOW_UP_ACTION_LABELS[action] || action || '后续动作';
 }
 
+function videoModelCompletionRows(followUpModel = {}) {
+  if (!isPlainObject(followUpModel) || !followUpModel.required) return [];
+  const context = isPlainObject(followUpModel.completionContext || followUpModel.completion_context)
+    ? followUpModel.completionContext || followUpModel.completion_context
+    : {};
+  const answerContract = isPlainObject(followUpModel.answerContract || followUpModel.answer_contract)
+    ? followUpModel.answerContract || followUpModel.answer_contract
+    : {};
+  const readyKinds = arrayOrEmpty(context.readyFileKinds || context.ready_file_kinds);
+  const warningCodes = arrayOrEmpty(context.warningCodes || context.warning_codes);
+  const missingKinds = arrayOrEmpty(context.missingRequiredFileKinds || context.missing_required_file_kinds);
+  const rows = [{
+    title: followUpModel.turnOwner || followUpModel.turn_owner || 'model',
+    detail: followUpModel.instruction || '下一次用户可见说明应由模型基于 observation 生成。',
+    meta: [
+      followUpModel.sourceEvent || followUpModel.source_event || '',
+      followUpModel.kind || 'model_completion_turn_request',
+    ].filter(Boolean).join(' · '),
+  }];
+  rows.push({
+    title: '可引用就绪文件',
+    detail: readyKinds.length ? readyKinds.map(videoArtifactKindLabel).join('、') : '暂无就绪文件',
+    meta: `status=${context.status || 'unknown'}`,
+  });
+  if (warningCodes.length || missingKinds.length) {
+    rows.push({
+      title: '缺失或复核项',
+      detail: [
+        warningCodes.length ? `warnings=${warningCodes.join(', ')}` : '',
+        missingKinds.length ? `missing=${missingKinds.join(', ')}` : '',
+      ].filter(Boolean).join(' · '),
+      meta: `warning_count=${context.warningCount ?? context.warning_count ?? warningCodes.length}`,
+    });
+  }
+  rows.push({
+    title: '回答边界',
+    detail: [
+      answerContract.mustWriteInModelVoice || answerContract.must_write_in_model_voice ? '模型口吻' : '',
+      answerContract.mustReferenceObservationOnly || answerContract.must_reference_observation_only ? '只引用 observation' : '',
+      answerContract.mustNotClaimMissingFiles || answerContract.must_not_claim_missing_files ? '不声称缺失文件已就绪' : '',
+      answerContract.mustNotIncludePrivatePathsOrUrls || answerContract.must_not_include_private_paths_or_urls ? '不展示私有路径或 URL' : '',
+      answerContract.mustNotRequestLoginCookieOrRecordingBypass || answerContract.must_not_request_login_cookie_or_recording_bypass ? '不请求登录/Cookie/录屏绕过' : '',
+    ].filter(Boolean).join('；') || '遵守结构化 completion follow-up',
+    meta: answerContract.noHostComposedAnswer || answerContract.no_host_composed_answer ? 'no_host_composed_answer' : '',
+  });
+  return rows;
+}
+
 function yesNo(value) {
   return value ? 'yes' : 'no';
 }
@@ -608,6 +656,7 @@ function renderVideoExtractionSummary(manifest) {
   const followUpModel = isPlainObject(completionFollowUp.modelFollowUp || completionFollowUp.model_follow_up)
     ? completionFollowUp.modelFollowUp || completionFollowUp.model_follow_up
     : {};
+  const modelCompletionRows = videoModelCompletionRows(followUpModel);
   const userNotification = isPlainObject(completionFollowUp.userNotification || completionFollowUp.user_notification)
     ? completionFollowUp.userNotification || completionFollowUp.user_notification
     : {};
@@ -712,6 +761,10 @@ function renderVideoExtractionSummary(manifest) {
       <h2>完成状态</h2>
       <p>${escapeHtml(`后台提取状态：${followUpStatus}。${followUpModel.instruction || '下一次模型回复应基于这些结构化状态继续，不补造缺失文件。'}`)}</p>
       ${renderList(readyFiles, '暂无已就绪交付文件。')}
+    </section>
+    <section>
+      <h2>模型接手</h2>
+      ${renderList(modelCompletionRows, '暂无模型接手请求。')}
     </section>
     <section>
       <h2>交付包</h2>

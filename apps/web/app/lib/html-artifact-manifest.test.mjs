@@ -381,8 +381,33 @@ test('renders video extraction summary template', () => {
           'complete_keep_list_or_review_missing_inputs',
         ],
         modelFollowUp: {
+          kind: 'video_extraction_model_completion_turn_request',
+          version: 1,
           required: true,
+          turnOwner: 'model',
+          sourceEvent: 'video_extraction.workflow_completed',
           instruction: 'Use this structured completion status to notify the user.',
+          completionContext: {
+            title: '课程视频',
+            status: 'evidence_artifacts_ready',
+            readyFileKinds: ['pptx', 'video_slides_markdown', 'slide_notes'],
+            warningCount: 2,
+            warningCodes: ['missing_transcript_alignment', 'provider_failure'],
+            primaryNextAction: 'open_video_extraction_summary',
+            missingRequiredFileKinds: ['published_version_history'],
+            hasPptx: true,
+            hasVideoSlidesMarkdown: true,
+            hasSubtitlePageMap: true,
+          },
+          answerContract: {
+            mustWriteInModelVoice: true,
+            mustReferenceObservationOnly: true,
+            mustNotClaimMissingFiles: true,
+            mustNotIncludePrivatePathsOrUrls: true,
+            mustNotRequestLoginCookieOrRecordingBypass: true,
+            mustKeepMissingItemsExplicit: true,
+            noHostComposedAnswer: true,
+          },
         },
         userNotification: {
           kind: 'video_extraction_status_notification',
@@ -473,6 +498,15 @@ test('renders video extraction summary template', () => {
   assert.match(video.html, /完成状态/);
   assert.match(video.html, /后续提醒/);
   assert.match(video.html, /model follow-up required/);
+  assert.match(video.html, /模型接手/);
+  assert.match(video.html, /video_extraction_model_completion_turn_request/);
+  assert.match(video.html, /可引用就绪文件/);
+  assert.match(video.html, /PPTX、Markdown 讲义、讲稿备注/);
+  assert.match(video.html, /warnings=missing_transcript_alignment, provider_failure/);
+  assert.match(video.html, /missing=published_version_history/);
+  assert.match(video.html, /只引用 observation/);
+  assert.match(video.html, /不声称缺失文件已就绪/);
+  assert.match(video.html, /no_host_composed_answer/);
   assert.match(video.html, /交付包/);
   assert.match(video.html, /downloadable_not_published/);
   assert.match(video.html, /not immutable yet/);

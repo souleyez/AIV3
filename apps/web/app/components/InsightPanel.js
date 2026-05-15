@@ -318,10 +318,14 @@ function htmlArtifactBrief(summary) {
           ? ' · 审计已脱敏'
           : '';
     if (notification.userVisible || notification.user_visible) {
-      return `${notification.title || notification.message || summary.subtitle || summary.meta}${packageSuffix}${auditSuffix}`;
+      const modelSuffix = (completionFollowUp.modelFollowUp || completionFollowUp.model_follow_up)?.required
+        ? ' · 模型接手待回复'
+        : '';
+      return `${notification.title || notification.message || summary.subtitle || summary.meta}${modelSuffix}${packageSuffix}${auditSuffix}`;
     }
     const parts = [
       status.hasPptx || status.has_pptx ? 'PPTX ready' : 'PPTX waiting',
+      (completionFollowUp.modelFollowUp || completionFollowUp.model_follow_up)?.required ? 'model turn requested' : '',
       status.hasVideoSlidesMarkdown || status.has_video_slides_markdown ? 'Markdown deck ready' : '',
       status.hasFinalDeliverablesManifest || status.has_final_deliverables_manifest ? 'deliverable manifest ready' : '',
       status.hasPublishedVersionHistory || status.has_published_version_history ? 'version history ready' : '',
