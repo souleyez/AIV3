@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -134,6 +135,34 @@ test('validateEvidenceMarkdownReceipt rejects stale final evidence receipts', ()
   assert.equal(receipt.receipt_ready, false);
   assert.ok(receipt.errors.some((error) => error.code === 'evidence_markdown_receipt_bytes_mismatch'));
   assert.ok(receipt.errors.some((error) => error.code === 'evidence_markdown_receipt_sha256_mismatch'));
+});
+
+test('CLI --verifyMarkdown auto verifies the sibling final evidence receipt', () => {
+  const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'v3-external-handoff-evidence-'));
+  const built = buildPackage({
+    repoRoot,
+    outDir,
+    basename: 'evidence-cli-auto-receipt-package',
+    generatedAt: '2026-05-15T00:00:00.000Z',
+  });
+
+  const stdout = execFileSync(
+    process.execPath,
+    [
+      path.join(repoRoot, 'tools', 'validate-external-handoff-evidence.mjs'),
+      '--package',
+      built.packageRoot,
+      '--verifyMarkdown',
+      'auto',
+    ],
+    { encoding: 'utf8' },
+  );
+  const result = JSON.parse(stdout);
+
+  assert.equal(result.evidence_manifest_ready, true);
+  assert.equal(result.evidence_markdown_receipt.receipt_ready, true);
+  assert.equal(path.resolve(result.evidence_markdown_receipt.receipt_path), built.evidenceMarkdownPath);
+  assert.deepEqual(result.error_codes, []);
 });
 
 test('writeEvidenceReportFiles writes JSON and Markdown validation receipts', () => {

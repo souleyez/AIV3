@@ -163,7 +163,7 @@ Current package-build semantics follow-up: handoff package build output now sepa
 
 Current readiness follow-up: deployment readiness reports that receive `--releasePackage` now also validate the final evidence manifest and verify the sibling human-readable evidence receipt, then expose `handoff_evidence_ready` plus a redacted `handoff_evidence_summary`. The final evidence gate also requires the aggregate `.all.json` receipt to prove package/archive `html_artifact_ready`, and readiness summaries surface those HTML artifact plus evidence-receipt signals for operators.
 
-Current package-recipient validation follow-up: generated package-internal `npm run validate:evidence` now uses `--verifyMarkdown auto`, so recipients verify the sibling human-readable evidence receipt by default when all delivery files remain together.
+Current package-recipient validation follow-up: generated package-internal `npm run validate:evidence` now uses `--verifyMarkdown auto`, so recipients verify the sibling human-readable evidence receipt by default when all delivery files remain together. The evidence validator test suite includes a CLI-level regression check for this auto-discovery path.
 
 The product must support:
 
