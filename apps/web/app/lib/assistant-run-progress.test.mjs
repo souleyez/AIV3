@@ -366,6 +366,34 @@ test('buildAssistantRunProgress reads continue responses from nested run fields'
           steps: [{ action_type: 'web_search', status: 'rejected', denied_count: 1 }],
         },
       },
+      diagnostics: {
+        codex_executor: {
+          promotion_gate: {
+            status: 'blocked_by_host_validation',
+            readiness_checks: {
+              shadow_gate: { ready: true, status: 'stable' },
+              host_validation: { ready: false, status: 'not_run' },
+              model_gateway: { ready: true, status: 'ready' },
+              all_ready: false,
+            },
+          },
+          latest: {
+            context_budget: {
+              estimated_prompt_chars: 2400,
+              budget_pressure: 'normal',
+            },
+          },
+        },
+        provider_usage: {
+          recent_events: [{
+            provider: 'codex-shim',
+            model: 'assistant-run-continue',
+            request_id: 'resp_continue_1',
+            status: 'responded',
+            total_tokens: 33,
+          }],
+        },
+      },
     },
   }, true);
 
@@ -374,8 +402,10 @@ test('buildAssistantRunProgress reads continue responses from nested run fields'
   assert.equal(progress.steps[0].label, '继续执行');
   assert.equal(progress.traceSteps[0].actionType, 'web_search');
   assert.equal(progress.traceSteps[0].deniedCount, 1);
-  assert.equal(progress.codexReadiness, null);
-  assert.equal(progress.codexBudget, null);
+  assert.equal(progress.codexReadiness.status, 'blocked_by_host_validation');
+  assert.equal(progress.codexBudget.budgetPressure, 'normal');
+  assert.equal(progress.providerUsage.requestCount, 1);
+  assert.equal(progress.providerUsage.totalTokens, 33);
   assert.equal(progress.codexLiveness, null);
 });
 

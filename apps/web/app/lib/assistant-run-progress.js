@@ -254,10 +254,11 @@ export function buildAssistantRunProgress(response, continued = false) {
     .map(sanitizeAssistantRunTraceStep)
     .filter(Boolean)
     .slice(-ASSISTANT_RUN_TRACE_LIMIT);
-  const codexReadiness = assistantRunCodexReadinessFromDiagnostics(response?.diagnostics);
-  const providerUsage = assistantRunProviderUsageFromDiagnostics(response?.diagnostics);
-  const codexBudget = assistantRunCodexBudgetFromDiagnostics(response?.diagnostics);
-  const codexLiveness = assistantRunCodexLivenessFromDiagnostics(response?.diagnostics);
+  const diagnostics = response?.diagnostics || run.diagnostics || {};
+  const codexReadiness = assistantRunCodexReadinessFromDiagnostics(diagnostics);
+  const providerUsage = assistantRunProviderUsageFromDiagnostics(diagnostics);
+  const codexBudget = assistantRunCodexBudgetFromDiagnostics(diagnostics);
+  const codexLiveness = assistantRunCodexLivenessFromDiagnostics(diagnostics);
 
   if (
     !steps.length
