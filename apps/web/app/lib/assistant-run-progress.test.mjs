@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   assistantRunCodexBudgetFromDiagnostics,
+  assistantRunCodexLivenessFromDiagnostics,
   assistantRunCodexReadinessFromDiagnostics,
   assistantRunProviderUsageFromDiagnostics,
   buildAssistantRunProgress,
@@ -216,6 +217,51 @@ test('assistantRunCodexBudgetFromDiagnostics does not expose raw context budget 
   assert.doesNotMatch(JSON.stringify(budget), /raw prompt|do-not-copy|retrieval_evidence/);
 });
 
+test('assistantRunCodexLivenessFromDiagnostics summarizes retry decisions safely', () => {
+  const liveness = assistantRunCodexLivenessFromDiagnostics({
+    codex_executor: {
+      latest: {
+        provider_shim_observability: {
+          liveness_events: {
+            event_count: 2,
+            latest: {
+              event_type: 'tool_call_liveness_stall',
+              status: 'recovered',
+              retry_count: 1,
+              action: 'continue',
+              occurred_at: '2026-05-11T02:22:00Z',
+              has_note: true,
+              note: 'raw liveness note should not render',
+            },
+          },
+        },
+      },
+    },
+  });
+
+  assert.equal(liveness.eventCount, 2);
+  assert.equal(liveness.eventType, 'tool_call_liveness_stall');
+  assert.equal(liveness.status, 'recovered');
+  assert.equal(liveness.retryCount, 1);
+  assert.equal(liveness.action, 'continue');
+  assert.equal(liveness.occurredAt, '2026-05-11T02:22:00Z');
+  assert.equal(liveness.hasNote, true);
+  assert.doesNotMatch(JSON.stringify(liveness), /raw liveness note|should not render/);
+});
+
+test('assistantRunCodexLivenessFromDiagnostics stays quiet without liveness events', () => {
+  assert.equal(assistantRunCodexLivenessFromDiagnostics({
+    codex_executor: {
+      latest: {
+        provider_shim_observability: {
+          liveness_events: { event_count: 0, latest: null },
+        },
+      },
+    },
+  }), null);
+  assert.equal(assistantRunCodexLivenessFromDiagnostics(null), null);
+});
+
 test('buildAssistantRunProgress preserves create-response diagnostics and latest trail windows', () => {
   const response = {
     assistant_run_id: 'run-create-1',
@@ -246,6 +292,16 @@ test('buildAssistantRunProgress preserves create-response diagnostics and latest
             tool_output_budget: {
               trimmed_output_count: 1,
               preserved_evidence_ref_count: 3,
+            },
+            liveness_events: {
+              event_count: 1,
+              latest: {
+                event_type: 'tool_call_liveness_stall',
+                status: 'recovered',
+                retry_count: 1,
+                action: 'continue',
+                has_note: true,
+              },
             },
           },
         },
@@ -295,6 +351,9 @@ test('buildAssistantRunProgress preserves create-response diagnostics and latest
   assert.equal(progress.codexBudget.budgetPressure, 'normal');
   assert.equal(progress.codexBudget.trimmedOutputCount, 1);
   assert.equal(progress.codexBudget.preservedEvidenceRefCount, 3);
+  assert.equal(progress.codexLiveness.eventType, 'tool_call_liveness_stall');
+  assert.equal(progress.codexLiveness.status, 'recovered');
+  assert.equal(progress.codexLiveness.retryCount, 1);
 });
 
 test('buildAssistantRunProgress reads continue responses from nested run fields', () => {
@@ -317,6 +376,7 @@ test('buildAssistantRunProgress reads continue responses from nested run fields'
   assert.equal(progress.traceSteps[0].deniedCount, 1);
   assert.equal(progress.codexReadiness, null);
   assert.equal(progress.codexBudget, null);
+  assert.equal(progress.codexLiveness, null);
 });
 
 test('sanitizeAssistantRunTrailStep rejects empty or invalid trail entries', () => {

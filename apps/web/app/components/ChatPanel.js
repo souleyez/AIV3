@@ -136,8 +136,8 @@ function buildMessageChips(message) {
 
 function runtimeTone(value) {
   if (value === 'failed') return 'danger';
-  if (value === 'pending' || value === 'not_ready') return 'warn';
-  if (value === 'completed' || value === 'responded') return 'green';
+  if (value === 'pending' || value === 'not_ready' || value === 'retrying' || value === 'stalled') return 'warn';
+  if (value === 'completed' || value === 'responded' || value === 'recovered' || value === 'ok') return 'green';
   return 'neutral';
 }
 
@@ -316,6 +316,7 @@ function AssistantRunProgressPanel({ progress }) {
       && !progress.codexReadiness
       && !progress.providerUsage
       && !progress.codexBudget
+      && !progress.codexLiveness
     )
   ) {
     return null;
@@ -325,6 +326,7 @@ function AssistantRunProgressPanel({ progress }) {
   const codexReadiness = progress.codexReadiness;
   const providerUsage = progress.providerUsage;
   const codexBudget = progress.codexBudget;
+  const codexLiveness = progress.codexLiveness;
   return (
     <div className="assistant-run-progress-panel" aria-label="AssistantRun 安全进度">
       <div className="assistant-run-progress-head">
@@ -338,6 +340,8 @@ function AssistantRunProgressPanel({ progress }) {
           <em>模型请求 {providerUsage.requestCount}</em>
         ) : codexBudget?.budgetPressure ? (
           <em>预算 {formatSnakeCaseLabel(codexBudget.budgetPressure)}</em>
+        ) : codexLiveness?.status ? (
+          <em>Liveness {formatSnakeCaseLabel(codexLiveness.status)}</em>
         ) : progress.traceSteps?.length ? <em>{progress.traceSteps.length} 个模型动作</em> : null}
       </div>
       {codexReadiness ? (
@@ -395,6 +399,30 @@ function AssistantRunProgressPanel({ progress }) {
           ) : null}
           {codexBudget.largestOutputChars ? (
             <span className="message-chip neutral">最大输出 {codexBudget.largestOutputChars}</span>
+          ) : null}
+        </div>
+      ) : null}
+      {codexLiveness ? (
+        <div className="assistant-run-trace-row" aria-label="Codex liveness retry summary">
+          <span className={`message-chip ${runtimeTone(codexLiveness.status)}`}>
+            Liveness {codexLiveness.status ? formatSnakeCaseLabel(codexLiveness.status) : 'Observed'}
+          </span>
+          {codexLiveness.eventCount ? (
+            <span className="message-chip neutral">事件 {codexLiveness.eventCount}</span>
+          ) : null}
+          {codexLiveness.eventType ? (
+            <span className="message-chip neutral">类型 {formatSnakeCaseLabel(codexLiveness.eventType)}</span>
+          ) : null}
+          {codexLiveness.retryCount !== null ? (
+            <span className={codexLiveness.retryCount ? 'message-chip warn' : 'message-chip neutral'}>
+              Retry {codexLiveness.retryCount}
+            </span>
+          ) : null}
+          {codexLiveness.action ? (
+            <span className="message-chip neutral">动作 {formatSnakeCaseLabel(codexLiveness.action)}</span>
+          ) : null}
+          {codexLiveness.hasNote ? (
+            <span className="message-chip neutral">内部备注已隐藏</span>
           ) : null}
         </div>
       ) : null}

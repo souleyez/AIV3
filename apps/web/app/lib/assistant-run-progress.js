@@ -197,6 +197,46 @@ export function assistantRunCodexBudgetFromDiagnostics(diagnostics) {
   };
 }
 
+export function assistantRunCodexLivenessFromDiagnostics(diagnostics) {
+  const latest = diagnostics?.codex_executor?.latest || {};
+  const shimObservability = latest.provider_shim_observability
+    || diagnostics?.codex_executor?.provider_shim_observability
+    || {};
+  const livenessEvents = shimObservability.liveness_events || latest.liveness_events || {};
+  const latestEvent = livenessEvents.latest && typeof livenessEvents.latest === 'object'
+    ? livenessEvents.latest
+    : {};
+  const eventCount = assistantRunDiagnosticNumber(livenessEvents.event_count);
+  const retryCount = assistantRunDiagnosticNumber(latestEvent.retry_count);
+  const eventType = limitAssistantRunText(latestEvent.event_type || '', 40);
+  const status = limitAssistantRunText(latestEvent.status || '', 28);
+  const action = limitAssistantRunText(latestEvent.action || '', 32);
+  const occurredAt = limitAssistantRunText(latestEvent.occurred_at || '', 40);
+  const hasNote = latestEvent.has_note === true;
+
+  if (
+    (eventCount === null || eventCount <= 0)
+    && retryCount === null
+    && !eventType
+    && !status
+    && !action
+    && !occurredAt
+    && !hasNote
+  ) {
+    return null;
+  }
+
+  return {
+    eventCount: eventCount ?? 0,
+    eventType,
+    status,
+    retryCount,
+    action,
+    occurredAt,
+    hasNote,
+  };
+}
+
 export function buildAssistantRunProgress(response, continued = false) {
   const run = response?.run || {};
   const runtime = response?.runtime || run.runtime || {};
@@ -217,8 +257,16 @@ export function buildAssistantRunProgress(response, continued = false) {
   const codexReadiness = assistantRunCodexReadinessFromDiagnostics(response?.diagnostics);
   const providerUsage = assistantRunProviderUsageFromDiagnostics(response?.diagnostics);
   const codexBudget = assistantRunCodexBudgetFromDiagnostics(response?.diagnostics);
+  const codexLiveness = assistantRunCodexLivenessFromDiagnostics(response?.diagnostics);
 
-  if (!steps.length && !traceSteps.length && !codexReadiness && !providerUsage && !codexBudget) {
+  if (
+    !steps.length
+    && !traceSteps.length
+    && !codexReadiness
+    && !providerUsage
+    && !codexBudget
+    && !codexLiveness
+  ) {
     return null;
   }
   return {
@@ -229,5 +277,6 @@ export function buildAssistantRunProgress(response, continued = false) {
     codexReadiness,
     providerUsage,
     codexBudget,
+    codexLiveness,
   };
 }
