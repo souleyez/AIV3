@@ -48,6 +48,12 @@ const MODEL_AWARENESS_POLICY = {
   },
 };
 
+const SUPPLY_EVIDENCE_POLICY = {
+  citableEvidenceRule: '只有 V3 supplied_items、observation、retrieval evidence、document detail 或 search evidence 可以作为可引用事实。',
+  planningOnlyRule: 'scope candidates、dataset briefs、startup briefing、detail_targets 只用于规划检索或细读，不是引用依据。',
+  detailTargetRule: 'detail_targets 代表建议深读目标；未调用 read_document_detail 或收到 observation 前，不要把目标文档内容当作事实。',
+};
+
 export function buildAssistantStartupBriefing({
   datasets = [],
   reportPlans = [],
@@ -121,6 +127,7 @@ export function buildAssistantStartupBriefing({
       continuousExecution: '模型可以连续提出检索、细读、静态页规划/修改、报表规划、渲染或导出等受控动作；宿主负责校验权限、执行动作并把简要步骤回写到对话。',
     },
     modelAwarenessPolicy: buildModelAwarenessPolicy(),
+    supplyEvidencePolicy: buildSupplyEvidencePolicy(),
   };
 }
 
@@ -129,6 +136,7 @@ export function formatStartupBriefingForModel(briefing) {
   const parts = [
     source.productTruth,
     formatModelAwarenessPolicyForModel(source.modelAwarenessPolicy),
+    formatSupplyEvidencePolicyForModel(source.supplyEvidencePolicy),
     `可见数据集 ${Number(source.visibleDatasetCount || 0)} 个，文档 ${Number(source.visibleDocumentCount || 0)} 份，估算字数 ${Number(source.estimatedWordCount || 0)}。`,
     `报表草稿 ${Number(source.reportPlanCount || 0)} 个，已发布 ${Number(source.publishedReportCount || 0)} 个；静态页草稿/成品 ${Number(source.staticPageDraftCount || 0)} 个。`,
     source.selectedScopeLabel ? `当前供料范围：${source.selectedScopeLabel}` : '当前未选数据集，可按普通模型聊天回答。',
@@ -151,6 +159,21 @@ function buildModelAwarenessPolicy() {
     ...MODEL_AWARENESS_POLICY,
     externalSearchPolicy: { ...MODEL_AWARENESS_POLICY.externalSearchPolicy },
   };
+}
+
+function buildSupplyEvidencePolicy() {
+  return { ...SUPPLY_EVIDENCE_POLICY };
+}
+
+function formatSupplyEvidencePolicyForModel(policy) {
+  if (!policy || typeof policy !== 'object') {
+    return '';
+  }
+  return [
+    policy.citableEvidenceRule || '',
+    policy.planningOnlyRule || '',
+    policy.detailTargetRule || '',
+  ].filter(Boolean).join(' ');
 }
 
 function formatModelAwarenessPolicyForModel(policy) {

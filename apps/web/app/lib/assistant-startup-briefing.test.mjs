@@ -50,6 +50,11 @@ test('startup briefing summarizes visible datasets and system capability', () =>
   assert.match(briefing.modelAwarenessPolicy.additiveContextRule, /不是能力限制/);
   assert.match(briefing.modelAwarenessPolicy.unavailableEvidenceRule, /当前不可见\/未供料/);
   assert.match(briefing.modelAwarenessPolicy.externalSearchPolicy.modelRule, /不要声称已联网搜索/);
+  assert.match(briefing.supplyEvidencePolicy.citableEvidenceRule, /supplied_items/);
+  assert.match(briefing.supplyEvidencePolicy.citableEvidenceRule, /observation/);
+  assert.match(briefing.supplyEvidencePolicy.planningOnlyRule, /scope candidates/);
+  assert.match(briefing.supplyEvidencePolicy.planningOnlyRule, /startup briefing/);
+  assert.match(briefing.supplyEvidencePolicy.detailTargetRule, /detail_targets/);
   assert.match(briefing.productCapabilities.staticPage, /静态页规划/);
   assert.match(briefing.productCapabilities.staticPage, /index\.html/);
   assert.match(briefing.productCapabilities.staticPage, /ZIP 交付包/);
@@ -93,6 +98,10 @@ test('formatted briefing tells model when no dataset is selected', () => {
   assert.match(formatted, /V3 上下文是附加能力/);
   assert.match(formatted, /当前不可见\/未供料/);
   assert.match(formatted, /不要声称已联网搜索/);
+  assert.match(formatted, /只有 V3 supplied_items、observation/);
+  assert.match(formatted, /scope candidates、dataset briefs、startup briefing、detail_targets/);
+  assert.match(formatted, /不是引用依据/);
+  assert.match(formatted, /detail_targets 代表建议深读目标/);
   assert.match(formatted, /创建报表/);
   assert.match(formatted, /媒体细节/);
   assert.match(formatted, /视频转 PPT\/原文提取/);
