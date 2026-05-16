@@ -156,6 +156,13 @@ function hostValidationTone(summary) {
   return 'neutral';
 }
 
+function transportPolicyTone(policy) {
+  if (!policy) return 'neutral';
+  if (policy.downgraded || policy.realTransportFeatureGateEnabled === false || policy.realTransportPromotionReviewApproved === false) return 'warn';
+  if (policy.realTransportRequested && policy.codexMutationAllowed) return 'green';
+  return 'neutral';
+}
+
 function renderRuntimePhaseRail(turn) {
   if (!turn) {
     return null;
@@ -334,6 +341,7 @@ function AssistantRunProgressPanel({ progress }) {
       && !progress.codexLiveness
       && !progress.codexModelGateway
       && !progress.codexHostValidation
+      && !progress.codexTransportPolicy
       && !progress.supplyQuality
     )
   ) {
@@ -347,6 +355,7 @@ function AssistantRunProgressPanel({ progress }) {
   const codexLiveness = progress.codexLiveness;
   const codexModelGateway = progress.codexModelGateway;
   const codexHostValidation = progress.codexHostValidation;
+  const codexTransportPolicy = progress.codexTransportPolicy;
   const supplyQuality = progress.supplyQuality;
   return (
     <div className="assistant-run-progress-panel" aria-label="AssistantRun 安全进度">
@@ -357,6 +366,8 @@ function AssistantRunProgressPanel({ progress }) {
         </div>
         {codexReadiness ? (
           <em>{codexReadiness.allReady ? 'Codex 三门已就绪' : 'Codex 三门观测中'}</em>
+        ) : codexTransportPolicy ? (
+          <em>Transport {codexTransportPolicy.downgraded ? '降级中' : '观测中'}</em>
         ) : codexHostValidation ? (
           <em>Host {formatSnakeCaseLabel(codexHostValidation.status || 'observed')}</em>
         ) : codexModelGateway ? (
@@ -395,6 +406,58 @@ function AssistantRunProgressPanel({ progress }) {
           {codexReadiness.nextStep ? (
             <span className="message-chip neutral">
               下一步 {formatSnakeCaseLabel(codexReadiness.nextStep)}
+            </span>
+          ) : null}
+        </div>
+      ) : null}
+      {codexTransportPolicy ? (
+        <div className="assistant-run-trace-row" aria-label="Codex transport policy summary">
+          <span className={`message-chip ${transportPolicyTone(codexTransportPolicy)}`}>
+            Transport {codexTransportPolicy.downgraded ? '降级' : '观测'}
+          </span>
+          {codexTransportPolicy.requestedTransport ? (
+            <span className="message-chip neutral">
+              请求 {formatSnakeCaseLabel(codexTransportPolicy.requestedTransport)}
+            </span>
+          ) : null}
+          {codexTransportPolicy.effectiveTransport ? (
+            <span className="message-chip neutral">
+              生效 {formatSnakeCaseLabel(codexTransportPolicy.effectiveTransport)}
+            </span>
+          ) : null}
+          {codexTransportPolicy.downgradeReason ? (
+            <span className="message-chip warn">
+              原因 {formatSnakeCaseLabel(codexTransportPolicy.downgradeReason)}
+            </span>
+          ) : null}
+          {codexTransportPolicy.realTransportRequested ? (
+            <span className="message-chip neutral">请求真实 Transport</span>
+          ) : null}
+          {codexTransportPolicy.realTransportFeatureGateEnabled === false ? (
+            <span className="message-chip warn">真实开关未开</span>
+          ) : codexTransportPolicy.realTransportFeatureGateEnabled === true ? (
+            <span className="message-chip green">真实开关已开</span>
+          ) : null}
+          {codexTransportPolicy.realTransportPromotionReviewApproved === false ? (
+            <span className="message-chip warn">推广复核未批</span>
+          ) : codexTransportPolicy.realTransportPromotionReviewApproved === true ? (
+            <span className="message-chip green">推广复核已批</span>
+          ) : null}
+          {codexTransportPolicy.hostValidationRequired ? (
+            <span className="message-chip neutral">需宿主验证</span>
+          ) : null}
+          {codexTransportPolicy.directExecutionAuthoritative ? (
+            <span className="message-chip neutral">Direct 仍权威</span>
+          ) : null}
+          {codexTransportPolicy.codexMutationAllowed === false ? (
+            <span className="message-chip neutral">Codex 变更关闭</span>
+          ) : null}
+          {codexTransportPolicy.queueAllowed === false ? (
+            <span className="message-chip neutral">队列提交关闭</span>
+          ) : null}
+          {codexTransportPolicy.nextStep ? (
+            <span className="message-chip neutral">
+              下一步 {formatSnakeCaseLabel(codexTransportPolicy.nextStep)}
             </span>
           ) : null}
         </div>

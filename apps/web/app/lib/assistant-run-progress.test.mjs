@@ -6,6 +6,7 @@ import {
   assistantRunCodexLivenessFromDiagnostics,
   assistantRunCodexModelGatewayFromDiagnostics,
   assistantRunCodexReadinessFromDiagnostics,
+  assistantRunCodexTransportPolicyFromDiagnostics,
   assistantRunProviderUsageFromDiagnostics,
   assistantRunSupplyQualityFromDiagnostics,
   buildAssistantRunProgress,
@@ -393,6 +394,58 @@ test('assistantRunCodexHostValidationFromDiagnostics stays quiet without host su
   assert.equal(assistantRunCodexHostValidationFromDiagnostics(null), null);
 });
 
+test('assistantRunCodexTransportPolicyFromDiagnostics summarizes safe real-transport gates', () => {
+  const transportPolicy = assistantRunCodexTransportPolicyFromDiagnostics({
+    codex_executor: {
+      latest: {
+        transport_policy: {
+          requested_transport: 'codex_exec_schema',
+          effective_transport: 'codex_plan_only',
+          real_transport_requested: true,
+          real_transport_feature_gate_enabled: false,
+          real_transport_promotion_review_approved: false,
+          downgraded: true,
+          downgrade_reason: 'feature_gate_disabled',
+          direct_execution_authoritative: true,
+          codex_mutation_allowed: false,
+          queue_allowed: false,
+          manual_feature_gate_required_for_real_transport: true,
+          promotion_review_required_for_real_transport: true,
+          host_validation_required_for_real_transport: true,
+          next_step: 'keep_codex_in_shadow_plan_only_until_promotion_gate_review',
+          debug_token: 'debug-token-should-not-render',
+          env_key: 'ASSISTANT_RUN_CODEX_REAL_TRANSPORT_FEATURE_GATE',
+          raw_prompt: 'raw prompt should not render',
+        },
+      },
+    },
+  });
+
+  assert.equal(transportPolicy.requestedTransport, 'codex_exec_schema');
+  assert.equal(transportPolicy.effectiveTransport, 'codex_plan_only');
+  assert.equal(transportPolicy.realTransportRequested, true);
+  assert.equal(transportPolicy.realTransportFeatureGateEnabled, false);
+  assert.equal(transportPolicy.realTransportPromotionReviewApproved, false);
+  assert.equal(transportPolicy.downgraded, true);
+  assert.equal(transportPolicy.downgradeReason, 'feature_gate_disabled');
+  assert.equal(transportPolicy.directExecutionAuthoritative, true);
+  assert.equal(transportPolicy.codexMutationAllowed, false);
+  assert.equal(transportPolicy.queueAllowed, false);
+  assert.equal(transportPolicy.manualFeatureGateRequired, true);
+  assert.equal(transportPolicy.promotionReviewRequired, true);
+  assert.equal(transportPolicy.hostValidationRequired, true);
+  assert.equal(transportPolicy.nextStep, 'keep_codex_in_shadow_plan_only_until_promotion_gate_review');
+  assert.doesNotMatch(
+    JSON.stringify(transportPolicy),
+    /debug-token|ASSISTANT_RUN_CODEX_REAL_TRANSPORT_FEATURE_GATE|raw prompt/,
+  );
+});
+
+test('assistantRunCodexTransportPolicyFromDiagnostics stays quiet without transport policy', () => {
+  assert.equal(assistantRunCodexTransportPolicyFromDiagnostics({ codex_executor: {} }), null);
+  assert.equal(assistantRunCodexTransportPolicyFromDiagnostics(null), null);
+});
+
 test('assistantRunSupplyQualityFromDiagnostics summarizes counts without raw locators or notes', () => {
   const supply = assistantRunSupplyQualityFromDiagnostics({
     codex_executor: {
@@ -519,6 +572,22 @@ test('buildAssistantRunProgress preserves create-response diagnostics and latest
               },
             },
           },
+          transport_policy: {
+            requested_transport: 'codex_exec_schema',
+            effective_transport: 'codex_plan_only',
+            real_transport_requested: true,
+            real_transport_feature_gate_enabled: false,
+            real_transport_promotion_review_approved: false,
+            downgraded: true,
+            downgrade_reason: 'promotion_review_required',
+            direct_execution_authoritative: true,
+            codex_mutation_allowed: false,
+            queue_allowed: false,
+            manual_feature_gate_required_for_real_transport: true,
+            promotion_review_required_for_real_transport: true,
+            host_validation_required_for_real_transport: true,
+            debug_token: 'debug-token-should-not-render',
+          },
           model_gateway: {
             lane: 'codex_conversation',
             selected_model: {
@@ -622,6 +691,11 @@ test('buildAssistantRunProgress preserves create-response diagnostics and latest
   assert.equal(progress.codexHostValidation.latestHostKind, 'windows_jump');
   assert.equal(progress.codexHostValidation.validationRequirementsMet, true);
   assert.doesNotMatch(JSON.stringify(progress.codexHostValidation), /raw prompt/);
+  assert.equal(progress.codexTransportPolicy.requestedTransport, 'codex_exec_schema');
+  assert.equal(progress.codexTransportPolicy.effectiveTransport, 'codex_plan_only');
+  assert.equal(progress.codexTransportPolicy.downgraded, true);
+  assert.equal(progress.codexTransportPolicy.directExecutionAuthoritative, true);
+  assert.doesNotMatch(JSON.stringify(progress.codexTransportPolicy), /debug-token/);
   assert.equal(progress.supplyQuality.status, 'partial');
   assert.equal(progress.supplyQuality.suppliedItemCount, 2);
   assert.equal(progress.supplyQuality.citationLocatorCount, 1);

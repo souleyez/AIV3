@@ -383,6 +383,86 @@ export function assistantRunCodexHostValidationFromDiagnostics(diagnostics) {
   };
 }
 
+export function assistantRunCodexTransportPolicyFromDiagnostics(diagnostics) {
+  const latestPolicy = diagnostics?.codex_executor?.latest?.transport_policy;
+  const fallbackPolicy = diagnostics?.codex_executor?.transport_policy;
+  const policy = latestPolicy && typeof latestPolicy === 'object'
+    ? latestPolicy
+    : fallbackPolicy && typeof fallbackPolicy === 'object'
+      ? fallbackPolicy
+      : {};
+  if (!Object.keys(policy).length) {
+    return null;
+  }
+
+  const requestedTransport = limitAssistantRunText(policy.requested_transport || '', 36);
+  const effectiveTransport = limitAssistantRunText(policy.effective_transport || '', 36);
+  const downgradeReason = assistantRunDiagnosticText(policy.downgrade_reason, 44);
+  const nextStep = assistantRunDiagnosticText(policy.next_step, 64);
+  const realTransportRequested = typeof policy.real_transport_requested === 'boolean'
+    ? policy.real_transport_requested
+    : null;
+  const realTransportFeatureGateEnabled = typeof policy.real_transport_feature_gate_enabled === 'boolean'
+    ? policy.real_transport_feature_gate_enabled
+    : null;
+  const realTransportPromotionReviewApproved = typeof policy.real_transport_promotion_review_approved === 'boolean'
+    ? policy.real_transport_promotion_review_approved
+    : null;
+  const downgraded = typeof policy.downgraded === 'boolean' ? policy.downgraded : null;
+  const directExecutionAuthoritative = typeof policy.direct_execution_authoritative === 'boolean'
+    ? policy.direct_execution_authoritative
+    : null;
+  const codexMutationAllowed = typeof policy.codex_mutation_allowed === 'boolean'
+    ? policy.codex_mutation_allowed
+    : null;
+  const queueAllowed = typeof policy.queue_allowed === 'boolean' ? policy.queue_allowed : null;
+  const manualFeatureGateRequired = typeof policy.manual_feature_gate_required_for_real_transport === 'boolean'
+    ? policy.manual_feature_gate_required_for_real_transport
+    : null;
+  const promotionReviewRequired = typeof policy.promotion_review_required_for_real_transport === 'boolean'
+    ? policy.promotion_review_required_for_real_transport
+    : null;
+  const hostValidationRequired = typeof policy.host_validation_required_for_real_transport === 'boolean'
+    ? policy.host_validation_required_for_real_transport
+    : null;
+
+  if (
+    !requestedTransport
+    && !effectiveTransport
+    && !downgradeReason
+    && !nextStep
+    && realTransportRequested === null
+    && realTransportFeatureGateEnabled === null
+    && realTransportPromotionReviewApproved === null
+    && downgraded === null
+    && directExecutionAuthoritative === null
+    && codexMutationAllowed === null
+    && queueAllowed === null
+    && manualFeatureGateRequired === null
+    && promotionReviewRequired === null
+    && hostValidationRequired === null
+  ) {
+    return null;
+  }
+
+  return {
+    requestedTransport,
+    effectiveTransport,
+    realTransportRequested,
+    realTransportFeatureGateEnabled,
+    realTransportPromotionReviewApproved,
+    downgraded,
+    downgradeReason,
+    directExecutionAuthoritative,
+    codexMutationAllowed,
+    queueAllowed,
+    manualFeatureGateRequired,
+    promotionReviewRequired,
+    hostValidationRequired,
+    nextStep,
+  };
+}
+
 export function assistantRunSupplyQualityFromDiagnostics(diagnostics, evidenceState = null) {
   const latest = diagnostics?.codex_executor?.latest || {};
   const latestTrailSupply = Array.isArray(latest.execution_trail)
@@ -482,6 +562,7 @@ export function buildAssistantRunProgress(response, continued = false) {
   const codexLiveness = assistantRunCodexLivenessFromDiagnostics(diagnostics);
   const codexModelGateway = assistantRunCodexModelGatewayFromDiagnostics(diagnostics);
   const codexHostValidation = assistantRunCodexHostValidationFromDiagnostics(diagnostics);
+  const codexTransportPolicy = assistantRunCodexTransportPolicyFromDiagnostics(diagnostics);
   const supplyQuality = assistantRunSupplyQualityFromDiagnostics(diagnostics, evidenceState);
 
   if (
@@ -493,6 +574,7 @@ export function buildAssistantRunProgress(response, continued = false) {
     && !codexLiveness
     && !codexModelGateway
     && !codexHostValidation
+    && !codexTransportPolicy
     && !supplyQuality
   ) {
     return null;
@@ -508,6 +590,7 @@ export function buildAssistantRunProgress(response, continued = false) {
     codexLiveness,
     codexModelGateway,
     codexHostValidation,
+    codexTransportPolicy,
     supplyQuality,
   };
 }
