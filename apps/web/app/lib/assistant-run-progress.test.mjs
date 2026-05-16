@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   assistantRunCodexBudgetFromDiagnostics,
+  assistantRunCodexHostInvocationFromDiagnostics,
   assistantRunCodexHostValidationFromDiagnostics,
   assistantRunCodexLivenessFromDiagnostics,
   assistantRunCodexModelGatewayFromDiagnostics,
@@ -500,6 +501,64 @@ test('assistantRunCodexSuggestedActionFromDiagnostics stays quiet without sugges
   assert.equal(assistantRunCodexSuggestedActionFromDiagnostics(null), null);
 });
 
+test('assistantRunCodexHostInvocationFromDiagnostics summarizes safe host invocation boundaries', () => {
+  const hostInvocation = assistantRunCodexHostInvocationFromDiagnostics({
+    codex_executor: {
+      latest: {
+        host_invocation: {
+          kind: 'codex_executor.plan_only',
+          transport: 'codex_exec_schema',
+          host_required: true,
+          local_execution_allowed: false,
+          mutation_allowed: false,
+          queue_allowed: false,
+          input_contract: 'AssistantRunCodexContextPackageView',
+          output_schema_title: 'AssistantRunCodexSuggestedAction',
+          output_schema_required: ['assistant_message', 'suggested_action'],
+          command_blueprint: {
+            program: 'codex',
+            args: ['exec', '--hidden', 'sk-command-should-not-render'],
+            stdin: 'raw stdin prompt should not render',
+            workspace: 'C:/Users/soulzyn/Desktop/codex/ai-data-platform-v3',
+          },
+          model_gateway: {
+            profile_env_prefix: 'MINIMAX_API_KEY_SHOULD_NOT_RENDER',
+          },
+          safety: {
+            v3_validates_all_actions: true,
+            direct_database_access_allowed: false,
+            direct_queue_access_allowed: false,
+            real_host_validation_required: true,
+          },
+        },
+      },
+    },
+  });
+
+  assert.equal(hostInvocation.kind, 'codex_executor.plan_only');
+  assert.equal(hostInvocation.transport, 'codex_exec_schema');
+  assert.equal(hostInvocation.hostRequired, true);
+  assert.equal(hostInvocation.localExecutionAllowed, false);
+  assert.equal(hostInvocation.mutationAllowed, false);
+  assert.equal(hostInvocation.queueAllowed, false);
+  assert.equal(hostInvocation.inputContract, 'AssistantRunCodexContextPackageView');
+  assert.equal(hostInvocation.outputSchemaTitle, 'AssistantRunCodexSuggestedAction');
+  assert.equal(hostInvocation.outputSchemaRequiredCount, 2);
+  assert.equal(hostInvocation.v3ValidatesAllActions, true);
+  assert.equal(hostInvocation.directDatabaseAccessAllowed, false);
+  assert.equal(hostInvocation.directQueueAccessAllowed, false);
+  assert.equal(hostInvocation.realHostValidationRequired, true);
+  assert.doesNotMatch(
+    JSON.stringify(hostInvocation),
+    /sk-command|raw stdin|workspace|MINIMAX_API_KEY|command_blueprint|args/,
+  );
+});
+
+test('assistantRunCodexHostInvocationFromDiagnostics stays quiet without host invocation', () => {
+  assert.equal(assistantRunCodexHostInvocationFromDiagnostics({ codex_executor: {} }), null);
+  assert.equal(assistantRunCodexHostInvocationFromDiagnostics(null), null);
+});
+
 test('assistantRunSupplyQualityFromDiagnostics summarizes counts without raw locators or notes', () => {
   const supply = assistantRunSupplyQualityFromDiagnostics({
     codex_executor: {
@@ -663,6 +722,28 @@ test('buildAssistantRunProgress preserves create-response diagnostics and latest
               suggested_action_allowed: true,
             },
           },
+          host_invocation: {
+            kind: 'codex_executor.plan_only',
+            transport: 'codex_exec_schema',
+            host_required: true,
+            local_execution_allowed: false,
+            mutation_allowed: false,
+            queue_allowed: false,
+            input_contract: 'AssistantRunCodexContextPackageView',
+            output_schema_title: 'AssistantRunCodexSuggestedAction',
+            output_schema_required: ['assistant_message', 'suggested_action'],
+            command_blueprint: {
+              args: ['exec', 'raw host invocation arg should not render'],
+              stdin: 'raw host invocation stdin should not render',
+              workspace: 'C:/Users/soulzyn/Desktop/codex/ai-data-platform-v3',
+            },
+            safety: {
+              v3_validates_all_actions: true,
+              direct_database_access_allowed: false,
+              direct_queue_access_allowed: false,
+              real_host_validation_required: true,
+            },
+          },
           model_gateway: {
             lane: 'codex_conversation',
             selected_model: {
@@ -775,6 +856,11 @@ test('buildAssistantRunProgress preserves create-response diagnostics and latest
   assert.equal(progress.codexSuggestedAction.mutationAllowed, false);
   assert.equal(progress.codexSuggestedAction.actionAllowed, true);
   assert.doesNotMatch(JSON.stringify(progress.codexSuggestedAction), /raw suggested action prompt/);
+  assert.equal(progress.codexHostInvocation.kind, 'codex_executor.plan_only');
+  assert.equal(progress.codexHostInvocation.localExecutionAllowed, false);
+  assert.equal(progress.codexHostInvocation.outputSchemaRequiredCount, 2);
+  assert.equal(progress.codexHostInvocation.v3ValidatesAllActions, true);
+  assert.doesNotMatch(JSON.stringify(progress.codexHostInvocation), /raw host invocation|workspace/);
   assert.equal(progress.supplyQuality.status, 'partial');
   assert.equal(progress.supplyQuality.suppliedItemCount, 2);
   assert.equal(progress.supplyQuality.citationLocatorCount, 1);

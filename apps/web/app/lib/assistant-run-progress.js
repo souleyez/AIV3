@@ -534,6 +534,83 @@ export function assistantRunCodexSuggestedActionFromDiagnostics(diagnostics) {
   };
 }
 
+export function assistantRunCodexHostInvocationFromDiagnostics(diagnostics) {
+  const latestInvocation = diagnostics?.codex_executor?.latest?.host_invocation;
+  const fallbackInvocation = diagnostics?.codex_executor?.host_invocation;
+  const invocation = latestInvocation && typeof latestInvocation === 'object'
+    ? latestInvocation
+    : fallbackInvocation && typeof fallbackInvocation === 'object'
+      ? fallbackInvocation
+      : {};
+  if (!Object.keys(invocation).length) {
+    return null;
+  }
+
+  const safety = invocation.safety && typeof invocation.safety === 'object'
+    ? invocation.safety
+    : {};
+  const outputSchemaRequired = Array.isArray(invocation.output_schema_required)
+    ? invocation.output_schema_required
+    : [];
+  const kind = limitAssistantRunText(invocation.kind || '', 48);
+  const transport = limitAssistantRunText(invocation.transport || '', 36);
+  const inputContract = limitAssistantRunText(invocation.input_contract || '', 48);
+  const outputSchemaTitle = limitAssistantRunText(invocation.output_schema_title || '', 48);
+  const outputSchemaRequiredCount = outputSchemaRequired.length;
+  const hostRequired = typeof invocation.host_required === 'boolean' ? invocation.host_required : null;
+  const localExecutionAllowed = typeof invocation.local_execution_allowed === 'boolean'
+    ? invocation.local_execution_allowed
+    : null;
+  const mutationAllowed = typeof invocation.mutation_allowed === 'boolean' ? invocation.mutation_allowed : null;
+  const queueAllowed = typeof invocation.queue_allowed === 'boolean' ? invocation.queue_allowed : null;
+  const v3ValidatesAllActions = typeof safety.v3_validates_all_actions === 'boolean'
+    ? safety.v3_validates_all_actions
+    : null;
+  const directDatabaseAccessAllowed = typeof safety.direct_database_access_allowed === 'boolean'
+    ? safety.direct_database_access_allowed
+    : null;
+  const directQueueAccessAllowed = typeof safety.direct_queue_access_allowed === 'boolean'
+    ? safety.direct_queue_access_allowed
+    : null;
+  const realHostValidationRequired = typeof safety.real_host_validation_required === 'boolean'
+    ? safety.real_host_validation_required
+    : null;
+
+  if (
+    !kind
+    && !transport
+    && !inputContract
+    && !outputSchemaTitle
+    && outputSchemaRequiredCount <= 0
+    && hostRequired === null
+    && localExecutionAllowed === null
+    && mutationAllowed === null
+    && queueAllowed === null
+    && v3ValidatesAllActions === null
+    && directDatabaseAccessAllowed === null
+    && directQueueAccessAllowed === null
+    && realHostValidationRequired === null
+  ) {
+    return null;
+  }
+
+  return {
+    kind,
+    transport,
+    hostRequired,
+    localExecutionAllowed,
+    mutationAllowed,
+    queueAllowed,
+    inputContract,
+    outputSchemaTitle,
+    outputSchemaRequiredCount,
+    v3ValidatesAllActions,
+    directDatabaseAccessAllowed,
+    directQueueAccessAllowed,
+    realHostValidationRequired,
+  };
+}
+
 export function assistantRunSupplyQualityFromDiagnostics(diagnostics, evidenceState = null) {
   const latest = diagnostics?.codex_executor?.latest || {};
   const latestTrailSupply = Array.isArray(latest.execution_trail)
@@ -635,6 +712,7 @@ export function buildAssistantRunProgress(response, continued = false) {
   const codexHostValidation = assistantRunCodexHostValidationFromDiagnostics(diagnostics);
   const codexTransportPolicy = assistantRunCodexTransportPolicyFromDiagnostics(diagnostics);
   const codexSuggestedAction = assistantRunCodexSuggestedActionFromDiagnostics(diagnostics);
+  const codexHostInvocation = assistantRunCodexHostInvocationFromDiagnostics(diagnostics);
   const supplyQuality = assistantRunSupplyQualityFromDiagnostics(diagnostics, evidenceState);
 
   if (
@@ -648,6 +726,7 @@ export function buildAssistantRunProgress(response, continued = false) {
     && !codexHostValidation
     && !codexTransportPolicy
     && !codexSuggestedAction
+    && !codexHostInvocation
     && !supplyQuality
   ) {
     return null;
@@ -665,6 +744,7 @@ export function buildAssistantRunProgress(response, continued = false) {
     codexHostValidation,
     codexTransportPolicy,
     codexSuggestedAction,
+    codexHostInvocation,
     supplyQuality,
   };
 }

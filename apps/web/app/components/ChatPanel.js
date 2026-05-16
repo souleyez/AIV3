@@ -171,6 +171,14 @@ function suggestedActionTone(action) {
   return 'green';
 }
 
+function hostInvocationTone(invocation) {
+  if (!invocation) return 'neutral';
+  if (invocation.localExecutionAllowed || invocation.directDatabaseAccessAllowed || invocation.directQueueAccessAllowed) return 'danger';
+  if (invocation.mutationAllowed || invocation.queueAllowed) return 'warn';
+  if (invocation.hostRequired && invocation.v3ValidatesAllActions) return 'green';
+  return 'neutral';
+}
+
 function renderRuntimePhaseRail(turn) {
   if (!turn) {
     return null;
@@ -351,6 +359,7 @@ function AssistantRunProgressPanel({ progress }) {
       && !progress.codexHostValidation
       && !progress.codexTransportPolicy
       && !progress.codexSuggestedAction
+      && !progress.codexHostInvocation
       && !progress.supplyQuality
     )
   ) {
@@ -366,6 +375,7 @@ function AssistantRunProgressPanel({ progress }) {
   const codexHostValidation = progress.codexHostValidation;
   const codexTransportPolicy = progress.codexTransportPolicy;
   const codexSuggestedAction = progress.codexSuggestedAction;
+  const codexHostInvocation = progress.codexHostInvocation;
   const supplyQuality = progress.supplyQuality;
   return (
     <div className="assistant-run-progress-panel" aria-label="AssistantRun 安全进度">
@@ -376,6 +386,8 @@ function AssistantRunProgressPanel({ progress }) {
         </div>
         {codexReadiness ? (
           <em>{codexReadiness.allReady ? 'Codex 三门已就绪' : 'Codex 三门观测中'}</em>
+        ) : codexHostInvocation ? (
+          <em>Host 调用 {formatSnakeCaseLabel(codexHostInvocation.kind || 'observed')}</em>
         ) : codexSuggestedAction ? (
           <em>Codex 建议 {formatSnakeCaseLabel(codexSuggestedAction.actionType || 'action')}</em>
         ) : codexTransportPolicy ? (
@@ -419,6 +431,65 @@ function AssistantRunProgressPanel({ progress }) {
             <span className="message-chip neutral">
               下一步 {formatSnakeCaseLabel(codexReadiness.nextStep)}
             </span>
+          ) : null}
+        </div>
+      ) : null}
+      {codexHostInvocation ? (
+        <div className="assistant-run-trace-row" aria-label="Codex host invocation summary">
+          <span className={`message-chip ${hostInvocationTone(codexHostInvocation)}`}>
+            Host 调用 {codexHostInvocation.kind ? formatSnakeCaseLabel(codexHostInvocation.kind) : 'Observed'}
+          </span>
+          {codexHostInvocation.transport ? (
+            <span className="message-chip neutral">
+              Transport {formatSnakeCaseLabel(codexHostInvocation.transport)}
+            </span>
+          ) : null}
+          {codexHostInvocation.hostRequired ? (
+            <span className="message-chip neutral">需宿主</span>
+          ) : null}
+          {codexHostInvocation.localExecutionAllowed === false ? (
+            <span className="message-chip neutral">本机执行关闭</span>
+          ) : codexHostInvocation.localExecutionAllowed === true ? (
+            <span className="message-chip danger">本机执行开启</span>
+          ) : null}
+          {codexHostInvocation.inputContract ? (
+            <span className="message-chip neutral">
+              输入 {truncateText(codexHostInvocation.inputContract, 24)}
+            </span>
+          ) : null}
+          {codexHostInvocation.outputSchemaTitle ? (
+            <span className="message-chip neutral">
+              输出 {truncateText(codexHostInvocation.outputSchemaTitle, 24)}
+            </span>
+          ) : null}
+          {codexHostInvocation.outputSchemaRequiredCount ? (
+            <span className="message-chip neutral">Schema 必填 {codexHostInvocation.outputSchemaRequiredCount}</span>
+          ) : null}
+          {codexHostInvocation.v3ValidatesAllActions ? (
+            <span className="message-chip green">V3 校验动作</span>
+          ) : null}
+          {codexHostInvocation.mutationAllowed === false ? (
+            <span className="message-chip neutral">变更关闭</span>
+          ) : codexHostInvocation.mutationAllowed === true ? (
+            <span className="message-chip warn">变更开启</span>
+          ) : null}
+          {codexHostInvocation.queueAllowed === false ? (
+            <span className="message-chip neutral">队列关闭</span>
+          ) : codexHostInvocation.queueAllowed === true ? (
+            <span className="message-chip warn">队列开启</span>
+          ) : null}
+          {codexHostInvocation.directDatabaseAccessAllowed === false ? (
+            <span className="message-chip neutral">直连库关闭</span>
+          ) : codexHostInvocation.directDatabaseAccessAllowed === true ? (
+            <span className="message-chip danger">直连库开启</span>
+          ) : null}
+          {codexHostInvocation.directQueueAccessAllowed === false ? (
+            <span className="message-chip neutral">直连队列关闭</span>
+          ) : codexHostInvocation.directQueueAccessAllowed === true ? (
+            <span className="message-chip danger">直连队列开启</span>
+          ) : null}
+          {codexHostInvocation.realHostValidationRequired ? (
+            <span className="message-chip neutral">需真实宿主验证</span>
           ) : null}
         </div>
       ) : null}
