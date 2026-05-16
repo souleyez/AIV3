@@ -308,12 +308,21 @@ function formatRecommendedActionLabel(action) {
 }
 
 function AssistantRunProgressPanel({ progress }) {
-  if (!progress || (!progress.steps?.length && !progress.traceSteps?.length && !progress.codexReadiness)) {
+  if (
+    !progress
+    || (
+      !progress.steps?.length
+      && !progress.traceSteps?.length
+      && !progress.codexReadiness
+      && !progress.providerUsage
+    )
+  ) {
     return null;
   }
 
   const title = progress.continued ? '连续执行进度' : '本轮执行进度';
   const codexReadiness = progress.codexReadiness;
+  const providerUsage = progress.providerUsage;
   return (
     <div className="assistant-run-progress-panel" aria-label="AssistantRun 安全进度">
       <div className="assistant-run-progress-head">
@@ -323,6 +332,8 @@ function AssistantRunProgressPanel({ progress }) {
         </div>
         {codexReadiness ? (
           <em>{codexReadiness.allReady ? 'Codex 三门已就绪' : 'Codex 三门观测中'}</em>
+        ) : providerUsage ? (
+          <em>模型请求 {providerUsage.requestCount}</em>
         ) : progress.traceSteps?.length ? <em>{progress.traceSteps.length} 个模型动作</em> : null}
       </div>
       {codexReadiness ? (
@@ -337,6 +348,26 @@ function AssistantRunProgressPanel({ progress }) {
             <span>Gate</span>
             <strong>{formatSnakeCaseLabel(codexReadiness.status)}</strong>
           </div>
+        </div>
+      ) : null}
+      {providerUsage ? (
+        <div className="assistant-run-trace-row" aria-label="模型请求摘要">
+          <span className={`message-chip ${providerUsage.failedRequestCount ? 'warn' : 'green'}`}>
+            模型请求 {providerUsage.requestCount}
+            {providerUsage.failedRequestCount ? ` · 失败 ${providerUsage.failedRequestCount}` : ''}
+          </span>
+          {providerUsage.totalTokens ? (
+            <span className="message-chip neutral">Token {providerUsage.totalTokens}</span>
+          ) : null}
+          {providerUsage.lastProvider ? (
+            <span className="message-chip neutral">Provider {providerUsage.lastProvider}</span>
+          ) : null}
+          {providerUsage.lastModel ? (
+            <span className="message-chip neutral">Model {truncateText(providerUsage.lastModel, 22)}</span>
+          ) : null}
+          {providerUsage.lastRequestId ? (
+            <span className="message-chip neutral">Req {truncateText(providerUsage.lastRequestId, 18)}</span>
+          ) : null}
         </div>
       ) : null}
       {progress.steps?.length ? (

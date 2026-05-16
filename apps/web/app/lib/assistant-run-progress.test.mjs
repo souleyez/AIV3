@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   assistantRunCodexReadinessFromDiagnostics,
+  assistantRunProviderUsageFromDiagnostics,
   buildAssistantRunProgress,
   sanitizeAssistantRunTrailStep,
 } from './assistant-run-progress.js';
@@ -40,6 +41,50 @@ test('assistantRunCodexReadinessFromDiagnostics returns null without readiness c
   assert.equal(assistantRunCodexReadinessFromDiagnostics(null), null);
 });
 
+test('assistantRunProviderUsageFromDiagnostics summarizes safe provider usage metadata', () => {
+  const usage = assistantRunProviderUsageFromDiagnostics({
+    provider_usage: {
+      summary: {
+        request_count: 2,
+        failed_request_count: 1,
+        input_tokens: 120,
+        output_tokens: 80,
+        total_tokens: 200,
+        last_request_id: 'resp_provider_usage_1234567890',
+      },
+      recent_events: [
+        {
+          provider: 'openclaw',
+          model: 'legacy-model',
+          request_id: 'resp_old',
+          status: 'responded',
+        },
+        {
+          provider: 'codex-shim',
+          model: 'codex-compatible-profile-for-v3-shadow-validation',
+          request_id: 'resp_provider_usage_1234567890',
+          status: 'failed',
+        },
+      ],
+    },
+  });
+
+  assert.equal(usage.requestCount, 2);
+  assert.equal(usage.failedRequestCount, 1);
+  assert.equal(usage.inputTokens, 120);
+  assert.equal(usage.outputTokens, 80);
+  assert.equal(usage.totalTokens, 200);
+  assert.equal(usage.lastRequestId, 'resp_provider_usage_1234567890');
+  assert.equal(usage.lastProvider, 'codex-shim');
+  assert.equal(usage.lastModel, 'codex-compatible-profile-for-v3-shad...');
+  assert.equal(usage.lastStatus, 'failed');
+});
+
+test('assistantRunProviderUsageFromDiagnostics stays quiet without provider requests', () => {
+  assert.equal(assistantRunProviderUsageFromDiagnostics({ provider_usage: { summary: { request_count: 0 } } }), null);
+  assert.equal(assistantRunProviderUsageFromDiagnostics(null), null);
+});
+
 test('buildAssistantRunProgress preserves create-response diagnostics and latest trail windows', () => {
   const response = {
     assistant_run_id: 'run-create-1',
@@ -69,6 +114,22 @@ test('buildAssistantRunProgress preserves create-response diagnostics and latest
           },
         },
       },
+      provider_usage: {
+        summary: {
+          request_count: 1,
+          failed_request_count: 0,
+          total_tokens: 42,
+          last_request_id: 'resp_create_1',
+        },
+        recent_events: [
+          {
+            provider: 'openclaw',
+            model: 'assistant-chat',
+            request_id: 'resp_create_1',
+            status: 'responded',
+          },
+        ],
+      },
     },
   };
 
@@ -83,6 +144,9 @@ test('buildAssistantRunProgress preserves create-response diagnostics and latest
   assert.equal(progress.traceSteps[0].actionType, 'tool_1');
   assert.equal(progress.codexReadiness.status, 'blocked_by_shadow_gate');
   assert.equal(progress.codexReadiness.allReady, false);
+  assert.equal(progress.providerUsage.requestCount, 1);
+  assert.equal(progress.providerUsage.totalTokens, 42);
+  assert.equal(progress.providerUsage.lastProvider, 'openclaw');
 });
 
 test('buildAssistantRunProgress reads continue responses from nested run fields', () => {

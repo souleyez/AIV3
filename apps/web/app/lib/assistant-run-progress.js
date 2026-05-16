@@ -79,6 +79,39 @@ export function assistantRunCodexReadinessFromDiagnostics(diagnostics) {
   };
 }
 
+export function assistantRunProviderUsageFromDiagnostics(diagnostics) {
+  const providerUsage = diagnostics?.provider_usage || {};
+  const summary = providerUsage.summary || {};
+  const recentEvents = Array.isArray(providerUsage.recent_events)
+    ? providerUsage.recent_events
+    : [];
+  const requestCount = Number(summary.request_count);
+  const failedRequestCount = Number(summary.failed_request_count);
+  const inputTokens = Number(summary.input_tokens);
+  const outputTokens = Number(summary.output_tokens);
+  const totalTokens = Number(summary.total_tokens);
+  const latestEvent = [...recentEvents]
+    .reverse()
+    .find((event) => event && typeof event === 'object') || null;
+  const safeRequestCount = Number.isFinite(requestCount) ? requestCount : 0;
+
+  if (safeRequestCount <= 0 && !latestEvent) {
+    return null;
+  }
+
+  return {
+    requestCount: safeRequestCount,
+    failedRequestCount: Number.isFinite(failedRequestCount) ? failedRequestCount : 0,
+    inputTokens: Number.isFinite(inputTokens) ? inputTokens : 0,
+    outputTokens: Number.isFinite(outputTokens) ? outputTokens : 0,
+    totalTokens: Number.isFinite(totalTokens) ? totalTokens : 0,
+    lastRequestId: limitAssistantRunText(summary.last_request_id || latestEvent?.request_id || '', 32),
+    lastProvider: limitAssistantRunText(latestEvent?.provider || '', 28),
+    lastModel: limitAssistantRunText(latestEvent?.model || '', 36),
+    lastStatus: limitAssistantRunText(latestEvent?.status || '', 24),
+  };
+}
+
 export function buildAssistantRunProgress(response, continued = false) {
   const run = response?.run || {};
   const runtime = response?.runtime || run.runtime || {};
@@ -97,8 +130,9 @@ export function buildAssistantRunProgress(response, continued = false) {
     .filter(Boolean)
     .slice(-ASSISTANT_RUN_TRACE_LIMIT);
   const codexReadiness = assistantRunCodexReadinessFromDiagnostics(response?.diagnostics);
+  const providerUsage = assistantRunProviderUsageFromDiagnostics(response?.diagnostics);
 
-  if (!steps.length && !traceSteps.length && !codexReadiness) {
+  if (!steps.length && !traceSteps.length && !codexReadiness && !providerUsage) {
     return null;
   }
   return {
@@ -107,5 +141,6 @@ export function buildAssistantRunProgress(response, continued = false) {
     steps,
     traceSteps,
     codexReadiness,
+    providerUsage,
   };
 }
