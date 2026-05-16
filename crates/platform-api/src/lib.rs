@@ -38109,6 +38109,37 @@ mod tests {
         assert_eq!(response.selected_scope["mode"], json!("ordinary_chat"));
         assert!(response.scope_candidates.is_empty());
         assert_eq!(response.execution_trail.len(), 4);
+        assert_eq!(
+            response.diagnostics["codex_executor"]["promotion_gate"]["status"],
+            json!("blocked_by_shadow_gate")
+        );
+        assert_eq!(
+            response.diagnostics["codex_executor"]["promotion_gate"]["readiness_checks"]
+                ["shadow_gate"]["ready"],
+            json!(false)
+        );
+        assert_eq!(
+            response.diagnostics["codex_executor"]["promotion_gate"]["readiness_checks"]
+                ["model_gateway"]["status"],
+            json!("not_run")
+        );
+        assert_eq!(
+            response.diagnostics["codex_executor"]["promotion_gate"]["readiness_checks"]
+                ["all_ready"],
+            json!(false)
+        );
+        assert_eq!(
+            response.diagnostics["provider_usage"]["summary"]["request_count"],
+            json!(1)
+        );
+        assert_eq!(
+            response.diagnostics["provider_usage"]["summary"]["failed_request_count"],
+            json!(0)
+        );
+        assert_eq!(
+            response.diagnostics["provider_usage"]["recent_events"][0]["event_name"],
+            json!("assistant_run.completed")
+        );
 
         let Json(detail) = get_assistant_run(
             State(state.clone()),
@@ -38125,6 +38156,14 @@ mod tests {
         assert_eq!(detail.run.service_lane, "ordinary_chat");
         assert_eq!(detail.events.len(), 1);
         assert_eq!(detail.events[0].event_name, "assistant_run.completed");
+        assert_eq!(
+            detail.diagnostics["codex_executor"]["promotion_gate"],
+            response.diagnostics["codex_executor"]["promotion_gate"]
+        );
+        assert_eq!(
+            detail.diagnostics["provider_usage"]["summary"],
+            response.diagnostics["provider_usage"]["summary"]
+        );
 
         let (event_status, Json(event_response)) = append_assistant_run_event(
             State(state),
@@ -38348,6 +38387,38 @@ mod tests {
                 && step.get("max_steps") == Some(&json!(5))
         }));
         assert_eq!(continue_response.output_artifacts.len(), 2);
+        assert_eq!(
+            continue_response.diagnostics["codex_executor"]["promotion_gate"]["status"],
+            json!("blocked_by_shadow_gate")
+        );
+        assert_eq!(
+            continue_response.diagnostics["codex_executor"]["promotion_gate"]["readiness_checks"]
+                ["all_ready"],
+            json!(false)
+        );
+        assert_eq!(
+            continue_response.diagnostics["codex_executor"]["promotion_gate"]["readiness_checks"]
+                ["model_gateway"]["status"],
+            json!("not_run")
+        );
+        assert_eq!(
+            continue_response.diagnostics["provider_usage"]["summary"]["request_count"],
+            json!(2)
+        );
+        assert_eq!(
+            continue_response.diagnostics["provider_usage"]["summary"]["failed_request_count"],
+            json!(0)
+        );
+        assert_eq!(
+            continue_response.diagnostics["provider_usage"]["recent_events"]
+                .as_array()
+                .map(Vec::len),
+            Some(2)
+        );
+        assert_eq!(
+            continue_response.diagnostics["provider_usage"]["recent_events"][1]["event_name"],
+            json!("assistant_run.continued")
+        );
 
         let Json(detail) = get_assistant_run(
             State(state),
@@ -38362,6 +38433,14 @@ mod tests {
             step.get("label") == Some(&json!("继续执行"))
                 && step.get("max_steps") == Some(&json!(5))
         }));
+        assert_eq!(
+            detail.diagnostics["codex_executor"]["promotion_gate"],
+            continue_response.diagnostics["codex_executor"]["promotion_gate"]
+        );
+        assert_eq!(
+            detail.diagnostics["provider_usage"]["summary"],
+            continue_response.diagnostics["provider_usage"]["summary"]
+        );
     }
 
     #[test]
