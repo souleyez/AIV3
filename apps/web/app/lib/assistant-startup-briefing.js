@@ -54,6 +54,18 @@ const SUPPLY_EVIDENCE_POLICY = {
   detailTargetRule: 'detail_targets 代表建议深读目标；未调用 read_document_detail 或收到 observation 前，不要把目标文档内容当作事实。',
 };
 
+const STATIC_PAGE_VISUALIZATIONS_REQUIRING_SAMPLE_ROWS = new Set([
+  'kpi-cards',
+  'bar-chart',
+  'line-chart',
+  'donut-chart',
+  'table',
+  'risk-matrix',
+]);
+
+const STATIC_PAGE_READY_BINDING_STATUSES = new Set(['confirmed', 'ready', 'non_chart']);
+const STATIC_PAGE_READY_CHART_FITS = new Set(['ready', 'not_required', 'non_chart_ready']);
+
 export function buildAssistantStartupBriefing({
   datasets = [],
   reportPlans = [],
@@ -373,6 +385,7 @@ function summarizeStaticPageWorkspace(activeDraft, drafts) {
   const finalStatus = active?.finalPage?.status || '';
   const previewStatus = active?.previewContract?.status || active?.imageJob?.status || '';
   const previewStale = previewStatus === 'stale' || active?.imageJob?.status === 'stale';
+  const dataQuality = summarizeStaticPageDataQuality(active);
   return {
     activeDraftId: active?.backendDraftId || active?.id || '',
     activeDraftStatus: active?.status || '',
@@ -386,6 +399,7 @@ function summarizeStaticPageWorkspace(activeDraft, drafts) {
     finalRenderStatus: finalStatus,
     canEditModules: Boolean(active && activeModules.length),
     canExportFinal: finalStatus === 'rendered' && !previewStale,
+    dataQuality,
     latestDrafts: draftList.slice(0, 5).map((draft) => ({
       id: draft?.backendDraftId || draft?.id || '',
       title: String(draft?.objective || draft?.title || '静态页草稿').slice(0, 80),
@@ -418,9 +432,160 @@ function formatStaticPageWorkspaceForModel(workspace) {
     if (workspace.canExportFinal) {
       parts.push('当前静态页已可导出 index.html 和 ZIP 交付包。');
     }
+    const dataQualityText = formatStaticPageDataQualityForModel(workspace.dataQuality);
+    if (dataQualityText) {
+      parts.push(dataQualityText);
+    }
   }
   if (workspace.latestDrafts?.length) {
     parts.push(`最近静态页：${workspace.latestDrafts.map((draft) => `${draft.title}(${draft.status})`).join('；')}`);
   }
   return `静态页工作区：${parts.join(' ')}`;
+}
+
+function summarizeStaticPageDataQuality(draft) {
+  if (!draft || typeof draft !== 'object') {
+    return null;
+  }
+  const snapshot = draft.dataSnapshot || draft.data_snapshot || {};
+  const bindings = Array.isArray(snapshot.moduleBindings)
+    ? snapshot.moduleBindings
+    : Array.isArray(snapshot.module_bindings)
+      ? snapshot.module_bindings
+      : [];
+  const moduleCount = Array.isArray(draft.modules) && draft.modules.length
+    ? draft.modules.length
+    : bindings.length;
+  if (!moduleCount && !bindings.length) {
+    return {
+      status: 'not_available',
+      moduleCount: 0,
+      bindingCount: 0,
+      attentionModuleCount: 0,
+      readyModuleCount: 0,
+      unknownBindingCount: 0,
+      attentionModules: [],
+      recommendedActions: [],
+    };
+  }
+  if (!bindings.length) {
+    return {
+      status: 'unknown',
+      moduleCount,
+      bindingCount: 0,
+      attentionModuleCount: 0,
+      readyModuleCount: 0,
+      unknownBindingCount: moduleCount,
+      attentionModules: [],
+      recommendedActions: ['static_page.update_draft'],
+    };
+  }
+
+  const attentionModules = bindings
+    .filter(staticPageBindingNeedsAttention)
+    .map(staticPageBindingAttentionSummary)
+    .slice(0, 5);
+  const readyModuleCount = bindings.length - attentionModules.length;
+  return {
+    status: attentionModules.length ? 'attention_required' : 'ready',
+    moduleCount,
+    bindingCount: bindings.length,
+    attentionModuleCount: attentionModules.length,
+    readyModuleCount,
+    unknownBindingCount: Math.max(0, moduleCount - bindings.length),
+    attentionModules,
+    recommendedActions: attentionModules.length
+      ? ['retrieval.search', 'retrieval.read_detail', 'static_page.update_draft']
+      : ['submit_static_page_image_preview'],
+  };
+}
+
+function staticPageBindingNeedsAttention(binding = {}) {
+  const status = staticPageBindingStatus(binding);
+  if (status && !STATIC_PAGE_READY_BINDING_STATUSES.has(status)) return true;
+
+  const chartDataFit = staticPageBindingChartDataFit(binding);
+  if (chartDataFit && !STATIC_PAGE_READY_CHART_FITS.has(chartDataFit)) return true;
+
+  const visualizationType = String(binding.visualizationType || binding.visualization_type || '').trim();
+  return STATIC_PAGE_VISUALIZATIONS_REQUIRING_SAMPLE_ROWS.has(visualizationType)
+    && staticPageBindingSampleRows(binding) === 0;
+}
+
+function staticPageBindingAttentionSummary(binding = {}) {
+  return {
+    moduleId: String(binding.moduleId || binding.module_id || binding.id || '').slice(0, 80),
+    title: String(binding.title || binding.moduleTitle || binding.module_title || binding.moduleId || binding.module_id || '未命名模块').slice(0, 80),
+    bindingQualityStatus: staticPageBindingStatus(binding) || 'unknown',
+    chartDataFit: staticPageBindingChartDataFit(binding) || 'unknown',
+    visualizationType: String(binding.visualizationType || binding.visualization_type || '').slice(0, 60),
+    sampleRows: staticPageBindingSampleRows(binding),
+    recommendedAction: String(
+      binding.recommendedAction
+        || binding.recommended_action
+        || binding.bindingQuality?.recommendedAction
+        || binding.binding_quality?.recommended_action
+        || 'repair_module_data',
+    ).slice(0, 80),
+  };
+}
+
+function staticPageBindingStatus(binding = {}) {
+  return String(
+    binding.bindingQualityStatus
+      || binding.binding_quality_status
+      || binding.bindingQuality?.status
+      || binding.binding_quality?.status
+      || '',
+  ).trim();
+}
+
+function staticPageBindingChartDataFit(binding = {}) {
+  return String(
+    binding.chartDataFit
+      || binding.chart_data_fit
+      || binding.bindingQuality?.chartDataFit
+      || binding.binding_quality?.chart_data_fit
+      || '',
+  ).trim();
+}
+
+function staticPageBindingSampleRows(binding = {}) {
+  const qualityRows = Number(binding.bindingQuality?.sampleRows ?? binding.binding_quality?.sample_rows);
+  if (Number.isFinite(qualityRows)) return qualityRows;
+  const rows = binding.sampleData || binding.sample_data;
+  return Array.isArray(rows) ? rows.length : 0;
+}
+
+function formatStaticPageDataQualityForModel(quality) {
+  if (!quality || typeof quality !== 'object') {
+    return '';
+  }
+  if (quality.status === 'attention_required') {
+    const modules = Array.isArray(quality.attentionModules)
+      ? quality.attentionModules.slice(0, 3).map(formatStaticPageAttentionModule).filter(Boolean)
+      : [];
+    return [
+      `静态页数据质量：${quality.attentionModuleCount || 0}/${quality.bindingCount || quality.moduleCount || 0} 个模块需要先补证据或修复绑定`,
+      modules.length ? `重点模块：${modules.join('、')}` : '',
+      '在提交效果图或最终渲染前，应优先让 V3 检索/细读/修复模块数据；没有 V3 供料时必须说明当前不可见/未供料，不能编造图表数据。',
+    ].filter(Boolean).join('。');
+  }
+  if (quality.status === 'unknown') {
+    return `静态页数据质量：当前有 ${quality.moduleCount || 0} 个模块，但没有模块绑定质量快照；提交效果图前应先刷新 dataSnapshot 或补齐模块数据。`;
+  }
+  if (quality.status === 'ready') {
+    return `静态页数据质量：当前 ${quality.readyModuleCount || 0} 个模块绑定未发现阻塞，可继续效果图或最终渲染；仍需按 V3 已供料证据回答。`;
+  }
+  return '';
+}
+
+function formatStaticPageAttentionModule(module = {}) {
+  const markers = [
+    module.bindingQualityStatus && module.bindingQualityStatus !== 'unknown' ? module.bindingQualityStatus : '',
+    module.chartDataFit && module.chartDataFit !== 'unknown' ? module.chartDataFit : '',
+    Number.isFinite(Number(module.sampleRows)) ? `样本${Number(module.sampleRows)}` : '',
+    module.recommendedAction ? `建议${module.recommendedAction}` : '',
+  ].filter(Boolean);
+  return `${module.title || module.moduleId || '未命名模块'}${markers.length ? `(${markers.join('/')})` : ''}`;
 }

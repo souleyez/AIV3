@@ -218,6 +218,73 @@ test('startup briefing includes compact static page workspace context', () => {
   assert.doesNotMatch(formatted, /不应该完整依赖 content/);
 });
 
+test('startup briefing surfaces static page data-quality attention without module body', () => {
+  const briefing = buildAssistantStartupBriefing({
+    activeStaticPageDraft: {
+      id: 'local-draft-quality',
+      backendDraftId: 'draft-quality',
+      objective: '客户经营分析静态页',
+      status: 'planning',
+      modules: [
+        {
+          id: 'trend',
+          title: '趋势',
+          content: '这里的正文不能进入模型启动简报',
+          visualization: { chartRuntime: 'echarts' },
+        },
+        {
+          id: 'summary',
+          title: '总结',
+          content: '总结正文也不能泄漏进简报',
+          visualization: { chartRuntime: 'deterministic' },
+        },
+      ],
+      dataSnapshot: {
+        moduleBindings: [
+          {
+            moduleId: 'trend',
+            title: '趋势模块',
+            visualizationType: 'line-chart',
+            bindingQualityStatus: 'matched_field_candidate',
+            chartDataFit: 'needs_sample_rows',
+            bindingQuality: {
+              sampleRows: 0,
+              recommendedAction: 'repair_module_data',
+              reason: 'raw reason should stay out of formatted briefing',
+            },
+          },
+          {
+            moduleId: 'summary',
+            title: '总结模块',
+            visualizationType: 'text-insight',
+            bindingQualityStatus: 'confirmed',
+            chartDataFit: 'not_required',
+            bindingQuality: { sampleRows: 0 },
+          },
+        ],
+      },
+    },
+  });
+  const formatted = formatStartupBriefingForModel(briefing);
+
+  assert.equal(briefing.staticPageWorkspace.dataQuality.status, 'attention_required');
+  assert.equal(briefing.staticPageWorkspace.dataQuality.attentionModuleCount, 1);
+  assert.equal(briefing.staticPageWorkspace.dataQuality.readyModuleCount, 1);
+  assert.equal(briefing.staticPageWorkspace.dataQuality.attentionModules[0].title, '趋势模块');
+  assert.deepEqual(briefing.staticPageWorkspace.dataQuality.recommendedActions, [
+    'retrieval.search',
+    'retrieval.read_detail',
+    'static_page.update_draft',
+  ]);
+  assert.match(formatted, /静态页数据质量：1\/2 个模块需要先补证据或修复绑定/);
+  assert.match(formatted, /趋势模块\(matched_field_candidate\/needs_sample_rows\/样本0\/建议repair_module_data\)/);
+  assert.match(formatted, /优先让 V3 检索\/细读\/修复模块数据/);
+  assert.match(formatted, /当前不可见\/未供料/);
+  assert.doesNotMatch(formatted, /这里的正文不能进入模型启动简报/);
+  assert.doesNotMatch(formatted, /总结正文也不能泄漏/);
+  assert.doesNotMatch(formatted, /raw reason should stay out/);
+});
+
 test('startup briefing marks stale static page preview as non-exportable', () => {
   const briefing = buildAssistantStartupBriefing({
     activeStaticPageDraft: {
