@@ -6,7 +6,7 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import zlib from 'node:zlib';
 import { validateExternalHandoffManifest } from './validate-external-handoff.mjs';
-import { validateAll, writeAllReportFiles } from './validate-external-handoff-all.mjs';
+import { validateAll, validateAllMarkdownReceipt, writeAllReportFiles } from './validate-external-handoff-all.mjs';
 import {
   EVIDENCE_MANIFEST_TYPE,
   renderEvidenceMarkdown,
@@ -631,6 +631,11 @@ function buildPackage({ repoRoot, outDir, basename, generatedAt = new Date().toI
   const handoffReady = packageManifest.handoff_validation.ready_for_customer_sandbox === true;
   const releaseReady = releaseValidation.release_ready === true;
   const allReady = allValidation.all_ready === true;
+  const allMarkdownValidation = validateAllMarkdownReceipt({
+    validation: allValidation,
+    markdownPathInput: allMarkdownPath,
+  });
+  const allMarkdownReady = allMarkdownValidation.receipt_ready === true;
   const evidenceReady = evidenceValidation.evidence_manifest_ready === true;
   const evidenceMarkdownReady = evidenceMarkdownValidation.receipt_ready === true;
 
@@ -652,6 +657,7 @@ function buildPackage({ repoRoot, outDir, basename, generatedAt = new Date().toI
     allMarkdownSha256,
     handoffReady,
     allReady,
+    allMarkdownReady,
     evidenceManifestPath,
     evidenceManifestSha256,
     evidenceMarkdownPath,
@@ -659,7 +665,7 @@ function buildPackage({ repoRoot, outDir, basename, generatedAt = new Date().toI
     evidenceMarkdownReady,
     evidenceReady,
     releaseReady,
-    ready: handoffReady && releaseReady && allReady && evidenceReady && evidenceMarkdownReady,
+    ready: handoffReady && releaseReady && allReady && allMarkdownReady && evidenceReady && evidenceMarkdownReady,
     fileCount: packageManifest.included_files.length,
   };
 }
