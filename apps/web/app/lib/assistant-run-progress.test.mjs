@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   assistantRunCodexBudgetFromDiagnostics,
+  assistantRunCodexHostValidationFromDiagnostics,
   assistantRunCodexLivenessFromDiagnostics,
   assistantRunCodexModelGatewayFromDiagnostics,
   assistantRunCodexReadinessFromDiagnostics,
@@ -333,6 +334,65 @@ test('assistantRunCodexModelGatewayFromDiagnostics stays quiet without gateway d
   assert.equal(assistantRunCodexModelGatewayFromDiagnostics(null), null);
 });
 
+test('assistantRunCodexHostValidationFromDiagnostics summarizes safe jump-host validation', () => {
+  const hostValidation = assistantRunCodexHostValidationFromDiagnostics({
+    codex_executor: {
+      host_validation_summary: {
+        status: 'validated',
+        completed_count: 1,
+        failed_count: 0,
+        guard_failed_count: 0,
+        pending_count: 0,
+        codex_mutation_allowed: false,
+        next_step: 'review_host_report_then_consider_feature_gate_promotion',
+        latest: {
+          mode: 'codex_exec',
+          host_kind: 'windows_jump',
+          host_kind_allowed: true,
+          profile_kind: 'codex-compatible-shim',
+          workspace_configured: true,
+          prompt_redacted: true,
+          task_memory_isolated: true,
+          task_memory_space_configured: true,
+          validation_requirements_met: true,
+          command_plan: { args_without_prompt: ['exec', '--secret', 'sk-command-should-not-render'] },
+          process: {
+            stdout_excerpt: 'raw stdout should not render',
+            stderr_excerpt: 'raw stderr should not render',
+          },
+          profile: { env_key: 'MINIMAX_API_KEY' },
+        },
+      },
+    },
+  });
+
+  assert.equal(hostValidation.status, 'validated');
+  assert.equal(hostValidation.completedCount, 1);
+  assert.equal(hostValidation.failedCount, 0);
+  assert.equal(hostValidation.guardFailedCount, 0);
+  assert.equal(hostValidation.pendingCount, 0);
+  assert.equal(hostValidation.codexMutationAllowed, false);
+  assert.equal(hostValidation.latestMode, 'codex_exec');
+  assert.equal(hostValidation.latestHostKind, 'windows_jump');
+  assert.equal(hostValidation.hostKindAllowed, true);
+  assert.equal(hostValidation.latestProfileKind, 'codex-compatible-shim');
+  assert.equal(hostValidation.workspaceConfigured, true);
+  assert.equal(hostValidation.promptRedacted, true);
+  assert.equal(hostValidation.taskMemoryIsolated, true);
+  assert.equal(hostValidation.taskMemorySpaceConfigured, true);
+  assert.equal(hostValidation.validationRequirementsMet, true);
+  assert.equal(hostValidation.nextStep, 'review_host_report_then_consider_feature_gate_promotion');
+  assert.doesNotMatch(
+    JSON.stringify(hostValidation),
+    /sk-command|raw stdout|raw stderr|MINIMAX_API_KEY|args_without_prompt/,
+  );
+});
+
+test('assistantRunCodexHostValidationFromDiagnostics stays quiet without host summary', () => {
+  assert.equal(assistantRunCodexHostValidationFromDiagnostics({ codex_executor: {} }), null);
+  assert.equal(assistantRunCodexHostValidationFromDiagnostics(null), null);
+});
+
 test('assistantRunSupplyQualityFromDiagnostics summarizes counts without raw locators or notes', () => {
   const supply = assistantRunSupplyQualityFromDiagnostics({
     codex_executor: {
@@ -487,6 +547,25 @@ test('buildAssistantRunProgress preserves create-response diagnostics and latest
           ready_for_promotion_review: true,
           profile_available: true,
         },
+        host_validation_summary: {
+          status: 'validated',
+          completed_count: 1,
+          failed_count: 0,
+          guard_failed_count: 0,
+          pending_count: 0,
+          latest: {
+            mode: 'codex_exec',
+            host_kind: 'windows_jump',
+            host_kind_allowed: true,
+            profile_kind: 'codex-compatible-shim',
+            workspace_configured: true,
+            prompt_redacted: true,
+            task_memory_isolated: true,
+            task_memory_space_configured: true,
+            validation_requirements_met: true,
+            command_plan: { args_without_prompt: ['exec', 'raw prompt should not render'] },
+          },
+        },
         promotion_gate: {
           status: 'blocked_by_shadow_gate',
           readiness_checks: {
@@ -539,6 +618,10 @@ test('buildAssistantRunProgress preserves create-response diagnostics and latest
   assert.equal(progress.codexModelGateway.status, 'ready');
   assert.equal(progress.codexModelGateway.profileId, 'minimax-codex-shadow');
   assert.equal(progress.codexModelGateway.readyForPromotion, true);
+  assert.equal(progress.codexHostValidation.status, 'validated');
+  assert.equal(progress.codexHostValidation.latestHostKind, 'windows_jump');
+  assert.equal(progress.codexHostValidation.validationRequirementsMet, true);
+  assert.doesNotMatch(JSON.stringify(progress.codexHostValidation), /raw prompt/);
   assert.equal(progress.supplyQuality.status, 'partial');
   assert.equal(progress.supplyQuality.suppliedItemCount, 2);
   assert.equal(progress.supplyQuality.citationLocatorCount, 1);

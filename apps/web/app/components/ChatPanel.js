@@ -148,6 +148,14 @@ function supplyQualityTone(value) {
   return 'neutral';
 }
 
+function hostValidationTone(summary) {
+  if (!summary) return 'neutral';
+  if (summary.status === 'validated' && summary.validationRequirementsMet) return 'green';
+  if (summary.failedCount || summary.guardFailedCount || summary.status === 'failed') return 'danger';
+  if (summary.pendingCount || summary.status === 'pending' || summary.status === 'not_run') return 'warn';
+  return 'neutral';
+}
+
 function renderRuntimePhaseRail(turn) {
   if (!turn) {
     return null;
@@ -325,6 +333,7 @@ function AssistantRunProgressPanel({ progress }) {
       && !progress.codexBudget
       && !progress.codexLiveness
       && !progress.codexModelGateway
+      && !progress.codexHostValidation
       && !progress.supplyQuality
     )
   ) {
@@ -337,6 +346,7 @@ function AssistantRunProgressPanel({ progress }) {
   const codexBudget = progress.codexBudget;
   const codexLiveness = progress.codexLiveness;
   const codexModelGateway = progress.codexModelGateway;
+  const codexHostValidation = progress.codexHostValidation;
   const supplyQuality = progress.supplyQuality;
   return (
     <div className="assistant-run-progress-panel" aria-label="AssistantRun 安全进度">
@@ -347,6 +357,8 @@ function AssistantRunProgressPanel({ progress }) {
         </div>
         {codexReadiness ? (
           <em>{codexReadiness.allReady ? 'Codex 三门已就绪' : 'Codex 三门观测中'}</em>
+        ) : codexHostValidation ? (
+          <em>Host {formatSnakeCaseLabel(codexHostValidation.status || 'observed')}</em>
         ) : codexModelGateway ? (
           <em>Gateway {formatSnakeCaseLabel(codexModelGateway.status || 'observed')}</em>
         ) : supplyQuality ? (
@@ -383,6 +395,68 @@ function AssistantRunProgressPanel({ progress }) {
           {codexReadiness.nextStep ? (
             <span className="message-chip neutral">
               下一步 {formatSnakeCaseLabel(codexReadiness.nextStep)}
+            </span>
+          ) : null}
+        </div>
+      ) : null}
+      {codexHostValidation ? (
+        <div className="assistant-run-trace-row" aria-label="Codex host validation summary">
+          <span className={`message-chip ${hostValidationTone(codexHostValidation)}`}>
+            Host {codexHostValidation.status ? formatSnakeCaseLabel(codexHostValidation.status) : 'Observed'}
+          </span>
+          {codexHostValidation.latestHostKind ? (
+            <span className="message-chip neutral">
+              Host {formatSnakeCaseLabel(codexHostValidation.latestHostKind)}
+            </span>
+          ) : null}
+          {codexHostValidation.latestProfileKind ? (
+            <span className="message-chip neutral">
+              Profile {formatSnakeCaseLabel(codexHostValidation.latestProfileKind)}
+            </span>
+          ) : null}
+          {codexHostValidation.latestMode ? (
+            <span className="message-chip neutral">
+              Mode {formatSnakeCaseLabel(codexHostValidation.latestMode)}
+            </span>
+          ) : null}
+          {codexHostValidation.completedCount !== null ? (
+            <span className={codexHostValidation.completedCount ? 'message-chip green' : 'message-chip neutral'}>
+              完成 {codexHostValidation.completedCount}
+            </span>
+          ) : null}
+          {codexHostValidation.pendingCount ? (
+            <span className="message-chip warn">待验证 {codexHostValidation.pendingCount}</span>
+          ) : null}
+          {codexHostValidation.failedCount ? (
+            <span className="message-chip danger">失败 {codexHostValidation.failedCount}</span>
+          ) : null}
+          {codexHostValidation.guardFailedCount ? (
+            <span className="message-chip danger">守卫失败 {codexHostValidation.guardFailedCount}</span>
+          ) : null}
+          {codexHostValidation.validationRequirementsMet ? (
+            <span className="message-chip green">验证要求已满足</span>
+          ) : null}
+          {codexHostValidation.hostKindAllowed === false ? (
+            <span className="message-chip danger">宿主不允许</span>
+          ) : null}
+          {codexHostValidation.workspaceConfigured === false ? (
+            <span className="message-chip warn">任务工作区未配置</span>
+          ) : null}
+          {codexHostValidation.promptRedacted ? (
+            <span className="message-chip green">Prompt 已脱敏</span>
+          ) : null}
+          {codexHostValidation.taskMemoryIsolated ? (
+            <span className="message-chip green">任务记忆隔离</span>
+          ) : null}
+          {codexHostValidation.taskMemorySpaceConfigured ? (
+            <span className="message-chip green">任务记忆空间</span>
+          ) : null}
+          {codexHostValidation.codexMutationAllowed === false ? (
+            <span className="message-chip neutral">变更仍关闭</span>
+          ) : null}
+          {codexHostValidation.nextStep ? (
+            <span className="message-chip neutral">
+              下一步 {formatSnakeCaseLabel(codexHostValidation.nextStep)}
             </span>
           ) : null}
         </div>

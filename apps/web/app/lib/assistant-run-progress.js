@@ -313,6 +313,76 @@ export function assistantRunCodexModelGatewayFromDiagnostics(diagnostics) {
   };
 }
 
+export function assistantRunCodexHostValidationFromDiagnostics(diagnostics) {
+  const summary = diagnostics?.codex_executor?.host_validation_summary;
+  if (!summary || typeof summary !== 'object') {
+    return null;
+  }
+  const latest = summary.latest && typeof summary.latest === 'object' ? summary.latest : {};
+  const status = limitAssistantRunText(summary.status || '', 32);
+  const completedCount = assistantRunDiagnosticCount(summary, ['completed_count']);
+  const failedCount = assistantRunDiagnosticCount(summary, ['failed_count']);
+  const guardFailedCount = assistantRunDiagnosticCount(summary, ['guard_failed_count']);
+  const pendingCount = assistantRunDiagnosticCount(summary, ['pending_count']);
+  const latestHostKind = limitAssistantRunText(latest.host_kind || '', 32);
+  const latestProfileKind = limitAssistantRunText(latest.profile_kind || '', 36);
+  const latestMode = limitAssistantRunText(latest.mode || '', 32);
+  const hostKindAllowed = typeof latest.host_kind_allowed === 'boolean' ? latest.host_kind_allowed : null;
+  const workspaceConfigured = typeof latest.workspace_configured === 'boolean' ? latest.workspace_configured : null;
+  const promptRedacted = typeof latest.prompt_redacted === 'boolean' ? latest.prompt_redacted : null;
+  const taskMemoryIsolated = typeof latest.task_memory_isolated === 'boolean' ? latest.task_memory_isolated : null;
+  const taskMemorySpaceConfigured = typeof latest.task_memory_space_configured === 'boolean'
+    ? latest.task_memory_space_configured
+    : null;
+  const validationRequirementsMet = typeof latest.validation_requirements_met === 'boolean'
+    ? latest.validation_requirements_met
+    : null;
+  const codexMutationAllowed = typeof summary.codex_mutation_allowed === 'boolean'
+    ? summary.codex_mutation_allowed
+    : null;
+  const nextStep = assistantRunDiagnosticText(summary.next_step, 64);
+
+  if (
+    !status
+    && completedCount === null
+    && failedCount === null
+    && guardFailedCount === null
+    && pendingCount === null
+    && !latestHostKind
+    && !latestProfileKind
+    && !latestMode
+    && hostKindAllowed === null
+    && workspaceConfigured === null
+    && promptRedacted === null
+    && taskMemoryIsolated === null
+    && taskMemorySpaceConfigured === null
+    && validationRequirementsMet === null
+    && codexMutationAllowed === null
+    && !nextStep
+  ) {
+    return null;
+  }
+
+  return {
+    status,
+    completedCount,
+    failedCount,
+    guardFailedCount,
+    pendingCount,
+    latestHostKind,
+    latestProfileKind,
+    latestMode,
+    hostKindAllowed,
+    workspaceConfigured,
+    promptRedacted,
+    taskMemoryIsolated,
+    taskMemorySpaceConfigured,
+    validationRequirementsMet,
+    codexMutationAllowed,
+    nextStep,
+  };
+}
+
 export function assistantRunSupplyQualityFromDiagnostics(diagnostics, evidenceState = null) {
   const latest = diagnostics?.codex_executor?.latest || {};
   const latestTrailSupply = Array.isArray(latest.execution_trail)
@@ -411,6 +481,7 @@ export function buildAssistantRunProgress(response, continued = false) {
   const codexBudget = assistantRunCodexBudgetFromDiagnostics(diagnostics);
   const codexLiveness = assistantRunCodexLivenessFromDiagnostics(diagnostics);
   const codexModelGateway = assistantRunCodexModelGatewayFromDiagnostics(diagnostics);
+  const codexHostValidation = assistantRunCodexHostValidationFromDiagnostics(diagnostics);
   const supplyQuality = assistantRunSupplyQualityFromDiagnostics(diagnostics, evidenceState);
 
   if (
@@ -421,6 +492,7 @@ export function buildAssistantRunProgress(response, continued = false) {
     && !codexBudget
     && !codexLiveness
     && !codexModelGateway
+    && !codexHostValidation
     && !supplyQuality
   ) {
     return null;
@@ -435,6 +507,7 @@ export function buildAssistantRunProgress(response, continued = false) {
     codexBudget,
     codexLiveness,
     codexModelGateway,
+    codexHostValidation,
     supplyQuality,
   };
 }
