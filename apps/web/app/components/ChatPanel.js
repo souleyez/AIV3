@@ -163,6 +163,14 @@ function transportPolicyTone(policy) {
   return 'neutral';
 }
 
+function suggestedActionTone(action) {
+  if (!action) return 'neutral';
+  if (action.actionAllowed === false) return 'danger';
+  if (action.mutatesState && !action.mutationAllowed) return 'warn';
+  if (action.queueAllowed === false) return 'neutral';
+  return 'green';
+}
+
 function renderRuntimePhaseRail(turn) {
   if (!turn) {
     return null;
@@ -342,6 +350,7 @@ function AssistantRunProgressPanel({ progress }) {
       && !progress.codexModelGateway
       && !progress.codexHostValidation
       && !progress.codexTransportPolicy
+      && !progress.codexSuggestedAction
       && !progress.supplyQuality
     )
   ) {
@@ -356,6 +365,7 @@ function AssistantRunProgressPanel({ progress }) {
   const codexModelGateway = progress.codexModelGateway;
   const codexHostValidation = progress.codexHostValidation;
   const codexTransportPolicy = progress.codexTransportPolicy;
+  const codexSuggestedAction = progress.codexSuggestedAction;
   const supplyQuality = progress.supplyQuality;
   return (
     <div className="assistant-run-progress-panel" aria-label="AssistantRun 安全进度">
@@ -366,6 +376,8 @@ function AssistantRunProgressPanel({ progress }) {
         </div>
         {codexReadiness ? (
           <em>{codexReadiness.allReady ? 'Codex 三门已就绪' : 'Codex 三门观测中'}</em>
+        ) : codexSuggestedAction ? (
+          <em>Codex 建议 {formatSnakeCaseLabel(codexSuggestedAction.actionType || 'action')}</em>
         ) : codexTransportPolicy ? (
           <em>Transport {codexTransportPolicy.downgraded ? '降级中' : '观测中'}</em>
         ) : codexHostValidation ? (
@@ -407,6 +419,54 @@ function AssistantRunProgressPanel({ progress }) {
             <span className="message-chip neutral">
               下一步 {formatSnakeCaseLabel(codexReadiness.nextStep)}
             </span>
+          ) : null}
+        </div>
+      ) : null}
+      {codexSuggestedAction ? (
+        <div className="assistant-run-trace-row" aria-label="Codex suggested action summary">
+          <span className={`message-chip ${suggestedActionTone(codexSuggestedAction)}`}>
+            建议动作 {codexSuggestedAction.actionType ? formatSnakeCaseLabel(codexSuggestedAction.actionType) : 'Observed'}
+          </span>
+          {codexSuggestedAction.title ? (
+            <span className="message-chip neutral">{truncateText(codexSuggestedAction.title, 28)}</span>
+          ) : null}
+          {codexSuggestedAction.source ? (
+            <span className="message-chip neutral">来源 {formatSnakeCaseLabel(codexSuggestedAction.source)}</span>
+          ) : null}
+          {codexSuggestedAction.confidence !== null ? (
+            <span className="message-chip neutral">
+              置信 {Math.round(codexSuggestedAction.confidence * 100)}%
+            </span>
+          ) : null}
+          {codexSuggestedAction.actionAllowed === false ? (
+            <span className="message-chip danger">动作不在白名单</span>
+          ) : codexSuggestedAction.actionAllowed === true ? (
+            <span className="message-chip green">动作已识别</span>
+          ) : null}
+          {codexSuggestedAction.requiresV3Validation ? (
+            <span className="message-chip neutral">需 V3 校验</span>
+          ) : null}
+          {codexSuggestedAction.mutatesState ? (
+            <span className="message-chip warn">会变更状态</span>
+          ) : null}
+          {codexSuggestedAction.mutationAllowed === false ? (
+            <span className="message-chip neutral">变更未放行</span>
+          ) : codexSuggestedAction.mutationAllowed === true ? (
+            <span className="message-chip green">变更可执行</span>
+          ) : null}
+          {codexSuggestedAction.queueAllowed === false ? (
+            <span className="message-chip neutral">队列未放行</span>
+          ) : codexSuggestedAction.queueAllowed === true ? (
+            <span className="message-chip green">队列可提交</span>
+          ) : null}
+          {codexSuggestedAction.requiresConfirmation ? (
+            <span className="message-chip neutral">需确认</span>
+          ) : null}
+          {codexSuggestedAction.hasArguments ? (
+            <span className="message-chip neutral">参数已隐藏</span>
+          ) : null}
+          {codexSuggestedAction.hasInputSchema ? (
+            <span className="message-chip neutral">有输入 Schema</span>
           ) : null}
         </div>
       ) : null}

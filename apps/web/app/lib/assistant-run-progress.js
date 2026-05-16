@@ -463,6 +463,77 @@ export function assistantRunCodexTransportPolicyFromDiagnostics(diagnostics) {
   };
 }
 
+export function assistantRunCodexSuggestedActionFromDiagnostics(diagnostics) {
+  const latestAction = diagnostics?.codex_executor?.latest?.suggested_action;
+  const fallbackAction = diagnostics?.codex_executor?.suggested_action;
+  const action = latestAction && typeof latestAction === 'object'
+    ? latestAction
+    : fallbackAction && typeof fallbackAction === 'object'
+      ? fallbackAction
+      : {};
+  if (!Object.keys(action).length) {
+    return null;
+  }
+
+  const shadowComparison = diagnostics?.codex_executor?.latest?.shadow_comparison || {};
+  const shadowCodex = shadowComparison?.codex && typeof shadowComparison.codex === 'object'
+    ? shadowComparison.codex
+    : {};
+  const actionType = limitAssistantRunText(
+    action.action_type || shadowCodex.suggested_action_type || '',
+    48,
+  );
+  const title = assistantRunDiagnosticText(action.title, 64);
+  const source = assistantRunDiagnosticText(action.source, 40);
+  const confidence = assistantRunDiagnosticNumber(action.confidence);
+  const requiresV3Validation = typeof action.requires_v3_validation === 'boolean'
+    ? action.requires_v3_validation
+    : null;
+  const mutatesState = typeof action.mutates_state === 'boolean' ? action.mutates_state : null;
+  const mutationAllowed = typeof action.mutation_allowed === 'boolean' ? action.mutation_allowed : null;
+  const queueAllowed = typeof action.queue_allowed === 'boolean' ? action.queue_allowed : null;
+  const requiresConfirmation = typeof action.requires_confirmation === 'boolean'
+    ? action.requires_confirmation
+    : null;
+  const hasArguments = typeof action.has_arguments === 'boolean' ? action.has_arguments : null;
+  const hasInputSchema = typeof action.has_input_schema === 'boolean' ? action.has_input_schema : null;
+  const actionAllowed = typeof shadowCodex.suggested_action_allowed === 'boolean'
+    ? shadowCodex.suggested_action_allowed
+    : null;
+
+  if (
+    !actionType
+    && !title
+    && !source
+    && confidence === null
+    && requiresV3Validation === null
+    && mutatesState === null
+    && mutationAllowed === null
+    && queueAllowed === null
+    && requiresConfirmation === null
+    && hasArguments === null
+    && hasInputSchema === null
+    && actionAllowed === null
+  ) {
+    return null;
+  }
+
+  return {
+    actionType,
+    title,
+    source,
+    confidence,
+    requiresV3Validation,
+    mutatesState,
+    mutationAllowed,
+    queueAllowed,
+    requiresConfirmation,
+    hasArguments,
+    hasInputSchema,
+    actionAllowed,
+  };
+}
+
 export function assistantRunSupplyQualityFromDiagnostics(diagnostics, evidenceState = null) {
   const latest = diagnostics?.codex_executor?.latest || {};
   const latestTrailSupply = Array.isArray(latest.execution_trail)
@@ -563,6 +634,7 @@ export function buildAssistantRunProgress(response, continued = false) {
   const codexModelGateway = assistantRunCodexModelGatewayFromDiagnostics(diagnostics);
   const codexHostValidation = assistantRunCodexHostValidationFromDiagnostics(diagnostics);
   const codexTransportPolicy = assistantRunCodexTransportPolicyFromDiagnostics(diagnostics);
+  const codexSuggestedAction = assistantRunCodexSuggestedActionFromDiagnostics(diagnostics);
   const supplyQuality = assistantRunSupplyQualityFromDiagnostics(diagnostics, evidenceState);
 
   if (
@@ -575,6 +647,7 @@ export function buildAssistantRunProgress(response, continued = false) {
     && !codexModelGateway
     && !codexHostValidation
     && !codexTransportPolicy
+    && !codexSuggestedAction
     && !supplyQuality
   ) {
     return null;
@@ -591,6 +664,7 @@ export function buildAssistantRunProgress(response, continued = false) {
     codexModelGateway,
     codexHostValidation,
     codexTransportPolicy,
+    codexSuggestedAction,
     supplyQuality,
   };
 }

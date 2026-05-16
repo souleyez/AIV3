@@ -6,6 +6,7 @@ import {
   assistantRunCodexLivenessFromDiagnostics,
   assistantRunCodexModelGatewayFromDiagnostics,
   assistantRunCodexReadinessFromDiagnostics,
+  assistantRunCodexSuggestedActionFromDiagnostics,
   assistantRunCodexTransportPolicyFromDiagnostics,
   assistantRunProviderUsageFromDiagnostics,
   assistantRunSupplyQualityFromDiagnostics,
@@ -446,6 +447,59 @@ test('assistantRunCodexTransportPolicyFromDiagnostics stays quiet without transp
   assert.equal(assistantRunCodexTransportPolicyFromDiagnostics(null), null);
 });
 
+test('assistantRunCodexSuggestedActionFromDiagnostics summarizes action intent without arguments', () => {
+  const suggestedAction = assistantRunCodexSuggestedActionFromDiagnostics({
+    codex_executor: {
+      latest: {
+        suggested_action: {
+          action_type: 'create_static_page_draft',
+          title: 'Create static page draft',
+          source: 'codex_shadow',
+          confidence: 0.82,
+          requires_v3_validation: true,
+          mutates_state: true,
+          mutation_allowed: false,
+          queue_allowed: false,
+          requires_confirmation: true,
+          has_arguments: true,
+          has_input_schema: true,
+          arguments: {
+            prompt: 'raw suggested action prompt should not render',
+            provider_key: 'sk-suggested-action-should-not-render',
+          },
+        },
+        shadow_comparison: {
+          codex: {
+            suggested_action_allowed: true,
+          },
+        },
+      },
+    },
+  });
+
+  assert.equal(suggestedAction.actionType, 'create_static_page_draft');
+  assert.equal(suggestedAction.title, 'Create static page draft');
+  assert.equal(suggestedAction.source, 'codex_shadow');
+  assert.equal(suggestedAction.confidence, 0.82);
+  assert.equal(suggestedAction.requiresV3Validation, true);
+  assert.equal(suggestedAction.mutatesState, true);
+  assert.equal(suggestedAction.mutationAllowed, false);
+  assert.equal(suggestedAction.queueAllowed, false);
+  assert.equal(suggestedAction.requiresConfirmation, true);
+  assert.equal(suggestedAction.hasArguments, true);
+  assert.equal(suggestedAction.hasInputSchema, true);
+  assert.equal(suggestedAction.actionAllowed, true);
+  assert.doesNotMatch(
+    JSON.stringify(suggestedAction),
+    /raw suggested action prompt|sk-suggested-action|provider_key|arguments/,
+  );
+});
+
+test('assistantRunCodexSuggestedActionFromDiagnostics stays quiet without suggested action', () => {
+  assert.equal(assistantRunCodexSuggestedActionFromDiagnostics({ codex_executor: {} }), null);
+  assert.equal(assistantRunCodexSuggestedActionFromDiagnostics(null), null);
+});
+
 test('assistantRunSupplyQualityFromDiagnostics summarizes counts without raw locators or notes', () => {
   const supply = assistantRunSupplyQualityFromDiagnostics({
     codex_executor: {
@@ -588,6 +642,27 @@ test('buildAssistantRunProgress preserves create-response diagnostics and latest
             host_validation_required_for_real_transport: true,
             debug_token: 'debug-token-should-not-render',
           },
+          suggested_action: {
+            action_type: 'create_static_page_draft',
+            title: 'Create static page draft',
+            source: 'codex_shadow',
+            confidence: 0.82,
+            requires_v3_validation: true,
+            mutates_state: true,
+            mutation_allowed: false,
+            queue_allowed: false,
+            requires_confirmation: true,
+            has_arguments: true,
+            has_input_schema: true,
+            arguments: {
+              prompt: 'raw suggested action prompt should not render',
+            },
+          },
+          shadow_comparison: {
+            codex: {
+              suggested_action_allowed: true,
+            },
+          },
           model_gateway: {
             lane: 'codex_conversation',
             selected_model: {
@@ -696,6 +771,10 @@ test('buildAssistantRunProgress preserves create-response diagnostics and latest
   assert.equal(progress.codexTransportPolicy.downgraded, true);
   assert.equal(progress.codexTransportPolicy.directExecutionAuthoritative, true);
   assert.doesNotMatch(JSON.stringify(progress.codexTransportPolicy), /debug-token/);
+  assert.equal(progress.codexSuggestedAction.actionType, 'create_static_page_draft');
+  assert.equal(progress.codexSuggestedAction.mutationAllowed, false);
+  assert.equal(progress.codexSuggestedAction.actionAllowed, true);
+  assert.doesNotMatch(JSON.stringify(progress.codexSuggestedAction), /raw suggested action prompt/);
   assert.equal(progress.supplyQuality.status, 'partial');
   assert.equal(progress.supplyQuality.suppliedItemCount, 2);
   assert.equal(progress.supplyQuality.citationLocatorCount, 1);
