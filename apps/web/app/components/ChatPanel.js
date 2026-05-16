@@ -141,6 +141,13 @@ function runtimeTone(value) {
   return 'neutral';
 }
 
+function supplyQualityTone(value) {
+  if (value === 'grounded' || value === 'supplied' || value === 'ready') return 'green';
+  if (value === 'missing' || value === 'degraded' || value === 'failed') return 'danger';
+  if (value === 'partial' || value === 'fallback' || value === 'attention') return 'warn';
+  return 'neutral';
+}
+
 function renderRuntimePhaseRail(turn) {
   if (!turn) {
     return null;
@@ -318,6 +325,7 @@ function AssistantRunProgressPanel({ progress }) {
       && !progress.codexBudget
       && !progress.codexLiveness
       && !progress.codexModelGateway
+      && !progress.supplyQuality
     )
   ) {
     return null;
@@ -329,6 +337,7 @@ function AssistantRunProgressPanel({ progress }) {
   const codexBudget = progress.codexBudget;
   const codexLiveness = progress.codexLiveness;
   const codexModelGateway = progress.codexModelGateway;
+  const supplyQuality = progress.supplyQuality;
   return (
     <div className="assistant-run-progress-panel" aria-label="AssistantRun 安全进度">
       <div className="assistant-run-progress-head">
@@ -340,6 +349,8 @@ function AssistantRunProgressPanel({ progress }) {
           <em>{codexReadiness.allReady ? 'Codex 三门已就绪' : 'Codex 三门观测中'}</em>
         ) : codexModelGateway ? (
           <em>Gateway {formatSnakeCaseLabel(codexModelGateway.status || 'observed')}</em>
+        ) : supplyQuality ? (
+          <em>供料 {formatSnakeCaseLabel(supplyQuality.status || 'observed')}</em>
         ) : providerUsage ? (
           <em>模型请求 {providerUsage.requestCount}</em>
         ) : codexBudget?.budgetPressure ? (
@@ -410,6 +421,45 @@ function AssistantRunProgressPanel({ progress }) {
           ) : null}
           {codexModelGateway.rawProviderPayloadsAllowed ? (
             <span className="message-chip danger">Raw payload enabled</span>
+          ) : null}
+        </div>
+      ) : null}
+      {supplyQuality ? (
+        <div className="assistant-run-trace-row" aria-label="AssistantRun supply quality summary">
+          <span className={`message-chip ${supplyQualityTone(supplyQuality.status)}`}>
+            供料质量 {supplyQuality.status ? formatSnakeCaseLabel(supplyQuality.status) : 'Observed'}
+          </span>
+          {supplyQuality.suppliedItemCount !== null ? (
+            <span className={supplyQuality.suppliedItemCount ? 'message-chip green' : 'message-chip warn'}>
+              可引用 {supplyQuality.suppliedItemCount}
+            </span>
+          ) : null}
+          {supplyQuality.indexedEvidenceCount ? (
+            <span className="message-chip green">索引证据 {supplyQuality.indexedEvidenceCount}</span>
+          ) : null}
+          {supplyQuality.citationLocatorCount ? (
+            <span className="message-chip green">来源定位 {supplyQuality.citationLocatorCount}</span>
+          ) : null}
+          {supplyQuality.fallbackChunkCount ? (
+            <span className="message-chip warn">Fallback {supplyQuality.fallbackChunkCount}</span>
+          ) : null}
+          {supplyQuality.detailTargetCount ? (
+            <span className="message-chip warn">建议深读 {supplyQuality.detailTargetCount}</span>
+          ) : null}
+          {supplyQuality.mediaContextCount ? (
+            <span className="message-chip green">媒体上下文 {supplyQuality.mediaContextCount}</span>
+          ) : null}
+          {supplyQuality.conversationMemoryItemCount ? (
+            <span className="message-chip neutral">记忆 {supplyQuality.conversationMemoryItemCount}</span>
+          ) : null}
+          {supplyQuality.selectedDatasetCount ? (
+            <span className="message-chip neutral">数据集 {supplyQuality.selectedDatasetCount}</span>
+          ) : null}
+          {supplyQuality.supplyRequested === false ? (
+            <span className="message-chip neutral">普通聊天未强制供料</span>
+          ) : null}
+          {supplyQuality.qualityFirst ? (
+            <span className="message-chip neutral">质量优先</span>
           ) : null}
         </div>
       ) : null}

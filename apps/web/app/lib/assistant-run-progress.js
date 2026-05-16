@@ -34,6 +34,19 @@ function assistantRunDiagnosticNumber(value) {
   return Number.isFinite(number) ? number : null;
 }
 
+function assistantRunDiagnosticField(source, fieldNames) {
+  if (!source || typeof source !== 'object') {
+    return undefined;
+  }
+  return fieldNames
+    .map((fieldName) => source[fieldName])
+    .find((value) => value !== undefined && value !== null);
+}
+
+function assistantRunDiagnosticCount(source, fieldNames) {
+  return assistantRunDiagnosticNumber(assistantRunDiagnosticField(source, fieldNames));
+}
+
 export function sanitizeAssistantRunTrailStep(step) {
   if (!step || typeof step !== 'object') {
     return null;
@@ -300,6 +313,80 @@ export function assistantRunCodexModelGatewayFromDiagnostics(diagnostics) {
   };
 }
 
+export function assistantRunSupplyQualityFromDiagnostics(diagnostics, evidenceState = null) {
+  const latest = diagnostics?.codex_executor?.latest || {};
+  const latestTrailSupply = Array.isArray(latest.execution_trail)
+    ? latest.execution_trail
+      .map((step) => step?.supply_quality)
+      .find((supplyQuality) => supplyQuality && typeof supplyQuality === 'object')
+    : null;
+  const source = latest.supply_quality && typeof latest.supply_quality === 'object'
+    ? latest.supply_quality
+    : diagnostics?.codex_executor?.supply_quality && typeof diagnostics.codex_executor.supply_quality === 'object'
+      ? diagnostics.codex_executor.supply_quality
+      : latestTrailSupply
+        ? latestTrailSupply
+        : evidenceState?.supply_quality && typeof evidenceState.supply_quality === 'object'
+          ? evidenceState.supply_quality
+          : {};
+  const contextBudget = latest.context_budget || diagnostics?.codex_executor?.context_budget || {};
+  const status = limitAssistantRunText(source.status || evidenceState?.status || '', 28);
+  const suppliedItemCount = assistantRunDiagnosticCount(source, ['suppliedItemCount', 'supplied_item_count'])
+    ?? assistantRunDiagnosticCount(contextBudget, ['evidence_item_count']);
+  const selectedDatasetCount = assistantRunDiagnosticCount(source, ['selectedDatasetCount', 'selected_dataset_count'])
+    ?? assistantRunDiagnosticCount(contextBudget, ['selected_dataset_count']);
+  const conversationMemoryItemCount = assistantRunDiagnosticCount(source, ['conversationMemoryItemCount', 'conversation_memory_item_count'])
+    ?? assistantRunDiagnosticCount(contextBudget, ['hidden_memory_item_count']);
+  const indexedEvidenceCount = assistantRunDiagnosticCount(source, ['indexedEvidenceCount', 'indexed_evidence_count']);
+  const fallbackChunkCount = assistantRunDiagnosticCount(source, ['fallbackChunkCount', 'fallback_chunk_count']);
+  const citationLocatorCount = assistantRunDiagnosticCount(source, ['citationLocatorCount', 'citation_locator_count']);
+  const mediaContextCount = assistantRunDiagnosticCount(source, ['mediaContextCount', 'media_context_count']);
+  const detailTargetCount = assistantRunDiagnosticCount(source, ['detailTargetCount', 'detail_target_count']);
+  const limit = assistantRunDiagnosticCount(source, ['limit']);
+  const supplyRequested = typeof source.supplyRequested === 'boolean'
+    ? source.supplyRequested
+    : typeof source.supply_requested === 'boolean'
+      ? source.supply_requested
+      : null;
+  const qualityFirst = typeof source.qualityFirst === 'boolean'
+    ? source.qualityFirst
+    : typeof source.quality_first === 'boolean'
+      ? source.quality_first
+      : null;
+
+  if (
+    !status
+    && suppliedItemCount === null
+    && selectedDatasetCount === null
+    && conversationMemoryItemCount === null
+    && indexedEvidenceCount === null
+    && fallbackChunkCount === null
+    && citationLocatorCount === null
+    && mediaContextCount === null
+    && detailTargetCount === null
+    && limit === null
+    && supplyRequested === null
+    && qualityFirst === null
+  ) {
+    return null;
+  }
+
+  return {
+    status,
+    suppliedItemCount,
+    selectedDatasetCount,
+    conversationMemoryItemCount,
+    indexedEvidenceCount,
+    fallbackChunkCount,
+    citationLocatorCount,
+    mediaContextCount,
+    detailTargetCount,
+    limit,
+    supplyRequested,
+    qualityFirst,
+  };
+}
+
 export function buildAssistantRunProgress(response, continued = false) {
   const run = response?.run || {};
   const runtime = response?.runtime || run.runtime || {};
@@ -318,11 +405,13 @@ export function buildAssistantRunProgress(response, continued = false) {
     .filter(Boolean)
     .slice(-ASSISTANT_RUN_TRACE_LIMIT);
   const diagnostics = response?.diagnostics || run.diagnostics || {};
+  const evidenceState = response?.evidence_state || run.evidence_state || null;
   const codexReadiness = assistantRunCodexReadinessFromDiagnostics(diagnostics);
   const providerUsage = assistantRunProviderUsageFromDiagnostics(diagnostics);
   const codexBudget = assistantRunCodexBudgetFromDiagnostics(diagnostics);
   const codexLiveness = assistantRunCodexLivenessFromDiagnostics(diagnostics);
   const codexModelGateway = assistantRunCodexModelGatewayFromDiagnostics(diagnostics);
+  const supplyQuality = assistantRunSupplyQualityFromDiagnostics(diagnostics, evidenceState);
 
   if (
     !steps.length
@@ -332,6 +421,7 @@ export function buildAssistantRunProgress(response, continued = false) {
     && !codexBudget
     && !codexLiveness
     && !codexModelGateway
+    && !supplyQuality
   ) {
     return null;
   }
@@ -345,5 +435,6 @@ export function buildAssistantRunProgress(response, continued = false) {
     codexBudget,
     codexLiveness,
     codexModelGateway,
+    supplyQuality,
   };
 }

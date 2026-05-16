@@ -6,6 +6,7 @@ import {
   assistantRunCodexModelGatewayFromDiagnostics,
   assistantRunCodexReadinessFromDiagnostics,
   assistantRunProviderUsageFromDiagnostics,
+  assistantRunSupplyQualityFromDiagnostics,
   buildAssistantRunProgress,
   sanitizeAssistantRunTrailStep,
 } from './assistant-run-progress.js';
@@ -332,9 +333,93 @@ test('assistantRunCodexModelGatewayFromDiagnostics stays quiet without gateway d
   assert.equal(assistantRunCodexModelGatewayFromDiagnostics(null), null);
 });
 
+test('assistantRunSupplyQualityFromDiagnostics summarizes counts without raw locators or notes', () => {
+  const supply = assistantRunSupplyQualityFromDiagnostics({
+    codex_executor: {
+      latest: {
+        supply_quality: {
+          status: 'partial',
+          supplyRequested: true,
+          qualityFirst: true,
+          selectedDatasetCount: 2,
+          suppliedItemCount: 3,
+          indexedEvidenceCount: 2,
+          fallbackChunkCount: 1,
+          conversationMemoryItemCount: 1,
+          mediaContextCount: 1,
+          detailTargetCount: 2,
+          limit: 8,
+          citationLocatorCount: 2,
+          citationLocators: ['dataset://raw/source/should/not/render'],
+          notes: ['raw supply note should not render'],
+          modelGuidance: ['raw model guidance should not render'],
+        },
+      },
+    },
+  });
+
+  assert.equal(supply.status, 'partial');
+  assert.equal(supply.supplyRequested, true);
+  assert.equal(supply.qualityFirst, true);
+  assert.equal(supply.selectedDatasetCount, 2);
+  assert.equal(supply.suppliedItemCount, 3);
+  assert.equal(supply.indexedEvidenceCount, 2);
+  assert.equal(supply.fallbackChunkCount, 1);
+  assert.equal(supply.conversationMemoryItemCount, 1);
+  assert.equal(supply.mediaContextCount, 1);
+  assert.equal(supply.detailTargetCount, 2);
+  assert.equal(supply.limit, 8);
+  assert.equal(supply.citationLocatorCount, 2);
+  assert.doesNotMatch(JSON.stringify(supply), /raw\/source|raw supply note|raw model guidance/);
+});
+
+test('assistantRunSupplyQualityFromDiagnostics falls back to evidence state and budget counts', () => {
+  const supply = assistantRunSupplyQualityFromDiagnostics({
+    codex_executor: {
+      latest: {
+        context_budget: {
+          evidence_item_count: 4,
+          selected_dataset_count: 1,
+          hidden_memory_item_count: 2,
+        },
+      },
+    },
+  }, {
+    status: 'supplied',
+    supply_quality: {
+      status: 'grounded',
+      citation_locator_count: 1,
+      fallback_chunk_count: 0,
+      media_context_count: 0,
+    },
+  });
+
+  assert.equal(supply.status, 'grounded');
+  assert.equal(supply.suppliedItemCount, 4);
+  assert.equal(supply.selectedDatasetCount, 1);
+  assert.equal(supply.conversationMemoryItemCount, 2);
+  assert.equal(supply.citationLocatorCount, 1);
+  assert.equal(supply.fallbackChunkCount, 0);
+});
+
+test('assistantRunSupplyQualityFromDiagnostics stays quiet without supply diagnostics', () => {
+  assert.equal(assistantRunSupplyQualityFromDiagnostics({ codex_executor: {} }), null);
+  assert.equal(assistantRunSupplyQualityFromDiagnostics(null), null);
+});
+
 test('buildAssistantRunProgress preserves create-response diagnostics and latest trail windows', () => {
   const response = {
     assistant_run_id: 'run-create-1',
+    evidence_state: {
+      status: 'supplied',
+      supply_quality: {
+        status: 'partial',
+        suppliedItemCount: 2,
+        citationLocatorCount: 1,
+        fallbackChunkCount: 1,
+        notes: ['raw evidence note should not render'],
+      },
+    },
     execution_trail: Array.from({ length: 10 }, (_, index) => ({
       label: `step-${index}`,
       status: 'completed',
@@ -454,6 +539,11 @@ test('buildAssistantRunProgress preserves create-response diagnostics and latest
   assert.equal(progress.codexModelGateway.status, 'ready');
   assert.equal(progress.codexModelGateway.profileId, 'minimax-codex-shadow');
   assert.equal(progress.codexModelGateway.readyForPromotion, true);
+  assert.equal(progress.supplyQuality.status, 'partial');
+  assert.equal(progress.supplyQuality.suppliedItemCount, 2);
+  assert.equal(progress.supplyQuality.citationLocatorCount, 1);
+  assert.equal(progress.supplyQuality.fallbackChunkCount, 1);
+  assert.doesNotMatch(JSON.stringify(progress.supplyQuality), /raw evidence note/);
 });
 
 test('buildAssistantRunProgress reads continue responses from nested run fields', () => {
