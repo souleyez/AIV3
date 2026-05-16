@@ -15395,6 +15395,7 @@ fn assistant_run_codex_event_payload(
         "output_schema": output.output_schema.clone(),
         "host_invocation": assistant_run_codex_host_invocation_summary(output.host_invocation.as_ref()),
         "context_budget": output.context_budget.clone(),
+        "supply_quality": assistant_run_codex_output_supply_quality_summary(output),
         "execution_trail": assistant_run_codex_runtime_execution_trail_summary(&output.execution_trail),
         "shadow_comparison": shadow_comparison.cloned(),
     })
@@ -25893,6 +25894,11 @@ fn assistant_run_codex_detail_diagnostics(events: &[AssistantRunEvent]) -> Value
                     })
                     .unwrap_or(Value::Null),
                 "context_budget": context_budget.unwrap_or(Value::Null),
+                "supply_quality": assistant_run_codex_supply_quality_diagnostics_summary(
+                    payload
+                        .get("supply_quality")
+                        .or_else(|| payload.pointer("/execution_trail/0/supply_quality")),
+                ),
                 "shadow_comparison": shadow_summary.unwrap_or(Value::Null),
             })
         })
@@ -26080,6 +26086,48 @@ fn assistant_run_codex_runtime_execution_trail_summary(items: &[Value]) -> Vec<V
             item
         })
         .collect()
+}
+
+fn assistant_run_codex_output_supply_quality_summary(
+    output: &CodexConversationExecutorOutput,
+) -> Value {
+    output
+        .execution_trail
+        .iter()
+        .find_map(|item| item.get("supply_quality"))
+        .map(|supply_quality| {
+            assistant_run_codex_supply_quality_diagnostics_summary(Some(supply_quality))
+        })
+        .unwrap_or(Value::Null)
+}
+
+fn assistant_run_codex_supply_quality_diagnostics_summary(supply_quality: Option<&Value>) -> Value {
+    let Some(source) = supply_quality.filter(|value| value.is_object()) else {
+        return Value::Null;
+    };
+    let field = |names: &[&str]| -> Value {
+        names
+            .iter()
+            .find_map(|name| source.get(*name).cloned())
+            .unwrap_or(Value::Null)
+    };
+
+    json!({
+        "status": field(&["status"]),
+        "intent": field(&["intent"]),
+        "supplyRequested": field(&["supplyRequested", "supply_requested"]),
+        "qualityFirst": field(&["qualityFirst", "quality_first"]),
+        "selectedDatasetCount": field(&["selectedDatasetCount", "selected_dataset_count"]),
+        "suppliedItemCount": field(&["suppliedItemCount", "supplied_item_count"]),
+        "indexedEvidenceCount": field(&["indexedEvidenceCount", "indexed_evidence_count"]),
+        "fallbackChunkCount": field(&["fallbackChunkCount", "fallback_chunk_count"]),
+        "conversationMemoryItemCount": field(&["conversationMemoryItemCount", "conversation_memory_item_count"]),
+        "hiddenMemoryItemCount": field(&["hiddenMemoryItemCount", "hidden_memory_item_count"]),
+        "mediaContextCount": field(&["mediaContextCount", "media_context_count"]),
+        "detailTargetCount": field(&["detailTargetCount", "detail_target_count"]),
+        "limit": field(&["limit"]),
+        "citationLocatorCount": field(&["citationLocatorCount", "citation_locator_count"]),
+    })
 }
 
 fn assistant_run_codex_suggested_action_summary(
@@ -33551,7 +33599,10 @@ mod tests {
             "supply_quality": {
                 "status": "partial",
                 "citationLocatorCount": 1,
-                "mediaContextCount": 1
+                "mediaContextCount": 1,
+                "citationLocators": ["dataset://raw/source/should/not/leak"],
+                "notes": ["raw supply quality note should not leak"],
+                "modelGuidance": ["raw model guidance should not leak"]
             },
             "supplied_items": [{
                 "type": "retrieval_evidence",
@@ -33712,6 +33763,12 @@ mod tests {
             payload["provider_shim_observability"]["profile"]["provider_id"],
             json!("minimax")
         );
+        assert_eq!(payload["supply_quality"]["status"], json!("partial"));
+        assert_eq!(payload["supply_quality"]["citationLocatorCount"], json!(1));
+        assert_eq!(payload["supply_quality"]["mediaContextCount"], json!(1));
+        assert_eq!(payload["supply_quality"]["citationLocators"], Value::Null);
+        assert_eq!(payload["supply_quality"]["notes"], Value::Null);
+        assert_eq!(payload["supply_quality"]["modelGuidance"], Value::Null);
         assert_eq!(
             payload["model_gateway"]["profile_id"],
             json!("minimax-codex-shadow")
@@ -33757,6 +33814,9 @@ mod tests {
             trail[0]["provider_shim_observability"]["profile"]["provider_id"],
             json!("minimax")
         );
+        assert!(!payload_serialized.contains("dataset://raw/source/should/not/leak"));
+        assert!(!payload_serialized.contains("raw supply quality note should not leak"));
+        assert!(!payload_serialized.contains("raw model guidance should not leak"));
         assert!(!payload_serialized.contains("MINIMAX_API_KEY"));
         assert!(!trail_serialized.contains("MINIMAX_API_KEY"));
     }
@@ -34346,6 +34406,18 @@ mod tests {
                         "budget_pressure": "normal",
                         "items": [{"category": "retrieval_evidence"}]
                     },
+                    "supply_quality": {
+                        "status": "partial",
+                        "suppliedItemCount": 2,
+                        "indexedEvidenceCount": 1,
+                        "fallbackChunkCount": 1,
+                        "citationLocatorCount": 1,
+                        "mediaContextCount": 1,
+                        "detailTargetCount": 1,
+                        "citationLocators": ["dataset://detail/raw-source-should-not-leak"],
+                        "notes": ["raw supply note should not leak"],
+                        "modelGuidance": ["raw supply guidance should not leak"]
+                    },
                     "shadow_comparison": {
                         "codex_mutation_allowed": false,
                         "static_page_flow_preserved": true,
@@ -34420,6 +34492,34 @@ mod tests {
         assert_eq!(
             diagnostics["codex_executor"]["latest"]["context_budget"]["budget_pressure"],
             json!("normal")
+        );
+        assert_eq!(
+            diagnostics["codex_executor"]["latest"]["supply_quality"]["status"],
+            json!("partial")
+        );
+        assert_eq!(
+            diagnostics["codex_executor"]["latest"]["supply_quality"]["suppliedItemCount"],
+            json!(2)
+        );
+        assert_eq!(
+            diagnostics["codex_executor"]["latest"]["supply_quality"]["citationLocatorCount"],
+            json!(1)
+        );
+        assert_eq!(
+            diagnostics["codex_executor"]["latest"]["supply_quality"]["fallbackChunkCount"],
+            json!(1)
+        );
+        assert_eq!(
+            diagnostics["codex_executor"]["latest"]["supply_quality"]["mediaContextCount"],
+            json!(1)
+        );
+        assert_eq!(
+            diagnostics["codex_executor"]["latest"]["supply_quality"]["citationLocators"],
+            Value::Null
+        );
+        assert_eq!(
+            diagnostics["codex_executor"]["latest"]["supply_quality"]["notes"],
+            Value::Null
         );
         assert_eq!(
             diagnostics["codex_executor"]["latest"]["transport_policy"]["requested_transport"],
@@ -34818,6 +34918,9 @@ mod tests {
         assert!(!serialized.contains("trace note should not leak"));
         assert!(!serialized.contains("tool note should not leak"));
         assert!(!serialized.contains("liveness note should not leak"));
+        assert!(!serialized.contains("dataset://detail/raw-source-should-not-leak"));
+        assert!(!serialized.contains("raw supply note should not leak"));
+        assert!(!serialized.contains("raw supply guidance should not leak"));
     }
 
     #[test]
