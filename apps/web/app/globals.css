@@ -972,6 +972,55 @@ button {
   line-height: 1.45;
 }
 
+.assistant-run-readiness-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(104px, 1fr));
+  gap: 8px;
+}
+
+.assistant-run-readiness-pill {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+  padding: 8px 9px;
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  background: rgba(255, 255, 255, 0.7);
+}
+
+.assistant-run-readiness-pill span {
+  color: var(--subtle);
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.assistant-run-readiness-pill strong {
+  min-width: 0;
+  color: #0f172a;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.assistant-run-readiness-pill.green {
+  border-color: rgba(21, 128, 61, 0.16);
+  background: #f0fdf4;
+}
+
+.assistant-run-readiness-pill.green strong {
+  color: #166534;
+}
+
+.assistant-run-readiness-pill.warn {
+  border-color: rgba(180, 83, 9, 0.18);
+  background: #fffbeb;
+}
+
+.assistant-run-readiness-pill.warn strong {
+  color: #92400e;
+}
+
 .assistant-run-trace-row {
   display: flex;
   flex-wrap: wrap;

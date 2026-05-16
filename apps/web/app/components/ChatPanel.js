@@ -308,11 +308,12 @@ function formatRecommendedActionLabel(action) {
 }
 
 function AssistantRunProgressPanel({ progress }) {
-  if (!progress || (!progress.steps?.length && !progress.traceSteps?.length)) {
+  if (!progress || (!progress.steps?.length && !progress.traceSteps?.length && !progress.codexReadiness)) {
     return null;
   }
 
   const title = progress.continued ? '连续执行进度' : '本轮执行进度';
+  const codexReadiness = progress.codexReadiness;
   return (
     <div className="assistant-run-progress-panel" aria-label="AssistantRun 安全进度">
       <div className="assistant-run-progress-head">
@@ -320,8 +321,24 @@ function AssistantRunProgressPanel({ progress }) {
           <span>{title}</span>
           <strong>{progress.runId ? truncateText(progress.runId, 18) : 'AssistantRun'}</strong>
         </div>
-        {progress.traceSteps?.length ? <em>{progress.traceSteps.length} 个模型动作</em> : null}
+        {codexReadiness ? (
+          <em>{codexReadiness.allReady ? 'Codex 三门已就绪' : 'Codex 三门观测中'}</em>
+        ) : progress.traceSteps?.length ? <em>{progress.traceSteps.length} 个模型动作</em> : null}
       </div>
+      {codexReadiness ? (
+        <div className="assistant-run-readiness-row" aria-label="Codex promotion readiness">
+          {codexReadiness.checks.map((check) => (
+            <div className={`assistant-run-readiness-pill ${check.ready ? 'green' : 'warn'}`} key={check.key}>
+              <span>{check.label}</span>
+              <strong>{check.ready ? 'ready' : formatSnakeCaseLabel(check.status)}</strong>
+            </div>
+          ))}
+          <div className={`assistant-run-readiness-pill ${codexReadiness.allReady ? 'green' : 'warn'}`}>
+            <span>Gate</span>
+            <strong>{formatSnakeCaseLabel(codexReadiness.status)}</strong>
+          </div>
+        </div>
+      ) : null}
       {progress.steps?.length ? (
         <div className="assistant-run-progress-steps">
           {progress.steps.map((step, index) => (

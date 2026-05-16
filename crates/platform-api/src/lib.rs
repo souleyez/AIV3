@@ -6657,6 +6657,13 @@ async fn create_assistant_run(
             "template_id": "wechat_video_login_handoff",
         }));
     }
+    let events = state
+        .storage
+        .assistant_runs()
+        .list_events(state.tenant_id, run.id)
+        .await
+        .map_err(ApiError::from_storage)?;
+    let diagnostics = assistant_run_detail_diagnostics(&run, &events);
 
     Ok((
         StatusCode::CREATED,
@@ -6678,6 +6685,7 @@ async fn create_assistant_run(
             execution_trail,
             output_artifacts,
             required_confirmations: Vec::new(),
+            diagnostics,
         }),
     ))
 }
@@ -11015,6 +11023,13 @@ async fn continue_assistant_run_loaded(
     };
     let selected_scope = updated_run.selected_scope.clone();
     let evidence_state = updated_run.evidence_state.clone();
+    let events = state
+        .storage
+        .assistant_runs()
+        .list_events(state.tenant_id, run_id)
+        .await
+        .map_err(ApiError::from_storage)?;
+    let diagnostics = assistant_run_detail_diagnostics(&updated_run, &events);
     let run_view = to_assistant_run_view(updated_run);
 
     Ok(ContinueAssistantRunResponse {
@@ -11027,6 +11042,7 @@ async fn continue_assistant_run_loaded(
         execution_trail,
         output_artifacts,
         required_confirmations: Vec::new(),
+        diagnostics,
     })
 }
 

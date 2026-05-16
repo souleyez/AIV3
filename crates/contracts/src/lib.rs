@@ -2762,6 +2762,8 @@ pub struct CreateAssistantRunResponse {
     pub execution_trail: Vec<Value>,
     pub output_artifacts: Vec<Value>,
     pub required_confirmations: Vec<Value>,
+    #[serde(default)]
+    pub diagnostics: Value,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -2787,6 +2789,8 @@ pub struct ContinueAssistantRunResponse {
     pub execution_trail: Vec<Value>,
     pub output_artifacts: Vec<Value>,
     pub required_confirmations: Vec<Value>,
+    #[serde(default)]
+    pub diagnostics: Value,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -4425,7 +4429,10 @@ mod tests {
         let encoded = serde_json::to_value(&manifest).expect("manifest should serialize");
 
         assert_eq!(encoded["source_type"], json!("external_integration"));
-        assert_eq!(encoded["template_id"], json!("third_party_handoff_document"));
+        assert_eq!(
+            encoded["template_id"],
+            json!("third_party_handoff_document")
+        );
         assert_eq!(
             encoded["owner_scope"]["type"],
             json!("external_integration_handoff")

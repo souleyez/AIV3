@@ -132,6 +132,36 @@ function sanitizeAssistantRunTraceStep(step) {
   };
 }
 
+function assistantRunCodexReadinessFromDiagnostics(diagnostics) {
+  const promotionGate = diagnostics?.codex_executor?.promotion_gate || {};
+  const readinessChecks = promotionGate?.readiness_checks || {};
+  if (!readinessChecks || typeof readinessChecks !== 'object' || !Object.keys(readinessChecks).length) {
+    return null;
+  }
+  const labels = {
+    shadow_gate: 'Shadow',
+    host_validation: 'Host',
+    model_gateway: 'Model',
+  };
+  const checks = ['shadow_gate', 'host_validation', 'model_gateway']
+    .map((key) => {
+      const check = readinessChecks[key] || {};
+      const status = limitAssistantRunText(check.status || 'unknown', 28);
+      return {
+        key,
+        label: labels[key],
+        ready: check.ready === true,
+        status,
+      };
+    });
+  return {
+    status: limitAssistantRunText(promotionGate.status || 'unknown', 36),
+    blockedBy: limitAssistantRunText(promotionGate.blocked_by || '', 32),
+    allReady: readinessChecks.all_ready === true,
+    checks,
+  };
+}
+
 function buildAssistantRunProgress(response, continued = false) {
   const run = response?.run || {};
   const runtime = response?.runtime || run.runtime || {};
@@ -149,8 +179,9 @@ function buildAssistantRunProgress(response, continued = false) {
     .map(sanitizeAssistantRunTraceStep)
     .filter(Boolean)
     .slice(-ASSISTANT_RUN_TRACE_LIMIT);
+  const codexReadiness = assistantRunCodexReadinessFromDiagnostics(response?.diagnostics);
 
-  if (!steps.length && !traceSteps.length) {
+  if (!steps.length && !traceSteps.length && !codexReadiness) {
     return null;
   }
   return {
@@ -158,6 +189,7 @@ function buildAssistantRunProgress(response, continued = false) {
     continued,
     steps,
     traceSteps,
+    codexReadiness,
   };
 }
 
