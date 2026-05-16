@@ -90,6 +90,7 @@
 - Current aggregate-command follow-up makes generated package-internal `npm run validate:all` use `--verifyMarkdown auto`, so third-party recipients can catch a stale `<package>.all.md` even before running the final evidence gate.
 - Current package-build output follow-up adds `allMarkdownReady` and gates top-level build `ready` on it, aligning build output with `validate:all --verifyMarkdown auto` and final evidence receipt freshness.
 - Current evidence-manifest follow-up records `all_markdown_ready` in `<package>.evidence-manifest.json` and requires it in `validate:evidence`, so aggregate Markdown receipt readiness is visible in the final machine-readable evidence manifest itself.
+- Current readiness fail-closed follow-up now also gates `handoff_evidence_ready` on `all_markdown_ready`, so observability cannot mark final handoff evidence ready if the final manifest omits or falsifies aggregate Markdown receipt readiness.
 - Current readiness-observability follow-up surfaces that same package provenance in deployment readiness JSON/Markdown summaries for both `handoff_all_summary` and `handoff_evidence_summary`, so operators can see which V3 package version the aggregate and final evidence gates refer to.
 - Next implementation checkpoint: run the callback contract through a real HTTPS customer sandbox once a third-party endpoint is available, while continuing smaller hardening work that does not require customer cooperation.
 

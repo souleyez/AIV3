@@ -249,6 +249,7 @@ function summarizeHandoffEvidenceValidation(validation, packagePath) {
   const aggregateReceipt = validation.aggregate_markdown_receipt || null;
   const receiptReady = receipt ? receipt.receipt_ready === true : null;
   const aggregateReceiptReady = aggregateReceipt ? aggregateReceipt.receipt_ready === true : null;
+  const allMarkdownReady = validation.all_markdown_ready === true;
   const validationErrorCodes = Array.isArray(validation.errors)
     ? validation.errors.map((error) => error.code).filter(Boolean)
     : [];
@@ -261,15 +262,19 @@ function summarizeHandoffEvidenceValidation(validation, packagePath) {
         .filter(Boolean)
         .map((code) => (code.startsWith('evidence_') ? code : `evidence_${code}`))
     : [];
+  const manifestStateErrorCodes = validation.evidence_manifest_ready === true && !allMarkdownReady
+    ? ['evidence_aggregate_markdown_not_ready']
+    : [];
   return {
     package_root: packagePath || null,
     evidence_manifest_ready:
       validation.evidence_manifest_ready === true
+      && allMarkdownReady
       && receiptReady !== false
       && aggregateReceiptReady !== false,
     evidence_manifest_path: validation.evidence_manifest_path || null,
     evidence_manifest_sha256: validation.evidence_manifest_sha256 || null,
-    all_markdown_ready: validation.all_markdown_ready === true,
+    all_markdown_ready: allMarkdownReady,
     aggregate_markdown_receipt_ready: aggregateReceiptReady,
     aggregate_markdown_receipt_path: aggregateReceipt?.receipt_path || null,
     aggregate_markdown_receipt_sha256: aggregateReceipt?.receipt_sha256 || null,
@@ -288,7 +293,12 @@ function summarizeHandoffEvidenceValidation(validation, packagePath) {
       archive_ready: false,
       archive_template_id: null,
     },
-    error_codes: [...new Set([...validationErrorCodes, ...receiptErrorCodes, ...aggregateReceiptErrorCodes])],
+    error_codes: [...new Set([
+      ...validationErrorCodes,
+      ...receiptErrorCodes,
+      ...aggregateReceiptErrorCodes,
+      ...manifestStateErrorCodes,
+    ])],
   };
 }
 

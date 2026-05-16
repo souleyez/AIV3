@@ -277,6 +277,7 @@ test('buildReadinessReport fails closed when final evidence markdown receipt is 
       evidence_manifest_sha256: 'c'.repeat(64),
       manifest_type: 'v3.external_third_party_handoff_evidence_manifest.v1',
       package_name: 'package',
+      all_markdown_ready: true,
       artifact_count: 9,
       html_artifact_summary: {
         package_ready: true,
@@ -332,6 +333,7 @@ test('buildReadinessReport fails closed when aggregate markdown receipt is stale
       evidence_manifest_sha256: 'c'.repeat(64),
       manifest_type: 'v3.external_third_party_handoff_evidence_manifest.v1',
       package_name: 'package',
+      all_markdown_ready: true,
       artifact_count: 9,
       aggregate_markdown_receipt: {
         receipt_ready: false,
@@ -359,6 +361,62 @@ test('buildReadinessReport fails closed when aggregate markdown receipt is stale
   assert.equal(report.checks.find((check) => check.key === 'handoff_evidence_ready').passed, false);
   assert.equal(report.handoff_evidence_summary.aggregate_markdown_receipt_ready, false);
   assert.deepEqual(report.handoff_evidence_summary.error_codes, ['evidence_aggregate_markdown_receipt_sha256_mismatch']);
+});
+
+test('buildReadinessReport fails closed when evidence manifest lacks aggregate markdown readiness', () => {
+  const report = buildReadinessReport({
+    requests: [
+      {
+        bearer_valid: true,
+        signature_valid: true,
+        body_hash_valid: true,
+        requester_sender_present: true,
+        raw_arguments_included: false,
+        contains_forbidden_text: false,
+      },
+    ],
+    callbacks: [
+      {
+        callback_status: 200,
+        response_accepted: true,
+        contains_forbidden_text: false,
+      },
+    ],
+    releasePackagePath: 'target/external-third-party-handoff/package',
+    handoffEvidenceValidation: {
+      evidence_manifest_ready: true,
+      evidence_manifest_path: 'target/external-third-party-handoff/package.evidence-manifest.json',
+      evidence_manifest_sha256: 'c'.repeat(64),
+      manifest_type: 'v3.external_third_party_handoff_evidence_manifest.v1',
+      package_name: 'package',
+      all_markdown_ready: false,
+      artifact_count: 9,
+      aggregate_markdown_receipt: {
+        receipt_ready: true,
+        receipt_path: 'target/external-third-party-handoff/package.all.md',
+        receipt_sha256: 'b'.repeat(64),
+        errors: [],
+      },
+      evidence_markdown_receipt: {
+        receipt_ready: true,
+        receipt_path: 'target/external-third-party-handoff/package.evidence-manifest.md',
+        receipt_sha256: 'd'.repeat(64),
+        errors: [],
+      },
+      html_artifact_summary: {
+        package_ready: true,
+        package_template_id: 'third_party_handoff_document',
+        archive_ready: true,
+        archive_template_id: 'third_party_handoff_document',
+      },
+      errors: [],
+    },
+  });
+
+  assert.equal(report.ready_for_customer_sandbox, false);
+  assert.equal(report.checks.find((check) => check.key === 'handoff_evidence_ready').passed, false);
+  assert.equal(report.handoff_evidence_summary.all_markdown_ready, false);
+  assert.deepEqual(report.handoff_evidence_summary.error_codes, ['evidence_aggregate_markdown_not_ready']);
 });
 
 test('buildReadinessReport fails closed when handoff release validation fails', () => {
