@@ -26980,15 +26980,36 @@ fn assistant_run_codex_promotion_gate_summary_with_model_gateway(
         "blocked_by_model_gateway" => "fix_codex_model_gateway_profile_before_promotion",
         _ => "inspect_codex_executor_diagnostics",
     };
+    let shadow_gate_status = shadow_gate.get("status").cloned().unwrap_or(Value::Null);
+    let host_validation_status = host_validation
+        .get("status")
+        .cloned()
+        .unwrap_or(Value::Null);
+    let model_gateway_status = model_gateway_gate
+        .get("status")
+        .cloned()
+        .unwrap_or(Value::Null);
 
     json!({
         "status": status,
-        "shadow_gate_status": shadow_gate.get("status").cloned().unwrap_or(Value::Null),
-        "host_validation_status": host_validation.get("status").cloned().unwrap_or(Value::Null),
-        "model_gateway_status": model_gateway_gate
-            .get("status")
-            .cloned()
-            .unwrap_or(Value::Null),
+        "shadow_gate_status": shadow_gate_status,
+        "host_validation_status": host_validation_status,
+        "model_gateway_status": model_gateway_status,
+        "readiness_checks": {
+            "shadow_gate": {
+                "ready": shadow_ready,
+                "status": shadow_gate_status,
+            },
+            "host_validation": {
+                "ready": host_validated,
+                "status": host_validation_status,
+            },
+            "model_gateway": {
+                "ready": model_gateway_ready,
+                "status": model_gateway_status,
+            },
+            "all_ready": shadow_ready && host_validated && model_gateway_ready,
+        },
         "eligible_for_feature_gate_review": status == "eligible_for_feature_gate_review",
         "blocked_by": blocked_by,
         "direct_execution_authoritative": true,
@@ -34684,6 +34705,25 @@ mod tests {
             json!("ready")
         );
         assert_eq!(
+            diagnostics["codex_executor"]["promotion_gate"]["readiness_checks"]["shadow_gate"]
+                ["ready"],
+            json!(false)
+        );
+        assert_eq!(
+            diagnostics["codex_executor"]["promotion_gate"]["readiness_checks"]["host_validation"]
+                ["ready"],
+            json!(true)
+        );
+        assert_eq!(
+            diagnostics["codex_executor"]["promotion_gate"]["readiness_checks"]["model_gateway"]
+                ["ready"],
+            json!(true)
+        );
+        assert_eq!(
+            diagnostics["codex_executor"]["promotion_gate"]["readiness_checks"]["all_ready"],
+            json!(false)
+        );
+        assert_eq!(
             diagnostics["codex_executor"]["promotion_gate"]["codex_mutation_allowed"],
             json!(false)
         );
@@ -34842,6 +34882,19 @@ mod tests {
             promotion_gate["eligible_for_feature_gate_review"],
             json!(true)
         );
+        assert_eq!(
+            promotion_gate["readiness_checks"]["shadow_gate"]["ready"],
+            json!(true)
+        );
+        assert_eq!(
+            promotion_gate["readiness_checks"]["host_validation"]["ready"],
+            json!(true)
+        );
+        assert_eq!(
+            promotion_gate["readiness_checks"]["model_gateway"]["ready"],
+            json!(true)
+        );
+        assert_eq!(promotion_gate["readiness_checks"]["all_ready"], json!(true));
         assert_eq!(promotion_gate["codex_mutation_allowed"], json!(false));
         assert_eq!(promotion_gate["queue_allowed"], json!(false));
         assert_eq!(
@@ -34867,6 +34920,18 @@ mod tests {
         );
         assert_eq!(
             blocked_model_gateway_promotion_gate["eligible_for_feature_gate_review"],
+            json!(false)
+        );
+        assert_eq!(
+            blocked_model_gateway_promotion_gate["readiness_checks"]["model_gateway"]["ready"],
+            json!(false)
+        );
+        assert_eq!(
+            blocked_model_gateway_promotion_gate["readiness_checks"]["model_gateway"]["status"],
+            json!("auth_not_configured")
+        );
+        assert_eq!(
+            blocked_model_gateway_promotion_gate["readiness_checks"]["all_ready"],
             json!(false)
         );
         assert_eq!(
@@ -34901,6 +34966,14 @@ mod tests {
         assert_eq!(
             failed_host_promotion_gate["eligible_for_feature_gate_review"],
             json!(false)
+        );
+        assert_eq!(
+            failed_host_promotion_gate["readiness_checks"]["host_validation"]["ready"],
+            json!(false)
+        );
+        assert_eq!(
+            failed_host_promotion_gate["readiness_checks"]["host_validation"]["status"],
+            json!("failed")
         );
         assert_eq!(
             failed_host_promotion_gate["codex_mutation_allowed"],

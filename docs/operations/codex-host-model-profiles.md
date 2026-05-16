@@ -233,7 +233,7 @@ codex_executor.host_validation_summary.status -> validated
 codex_executor.model_gateway_gate.status      -> ready
 ```
 
-If any of the three is not ready, keep direct execution authoritative and leave Codex mutation plus queue submission disabled. Do not treat a healthy provider shim alone as approval to enable real transport; it only satisfies the model/profile side of the promotion review.
+The same states are also exposed in `codex_executor.promotion_gate.readiness_checks` so runtime and observability panels can render the three required checks without inferring readiness from free-form statuses. If any of the three is not ready, keep direct execution authoritative and leave Codex mutation plus queue submission disabled. Do not treat a healthy provider shim alone as approval to enable real transport; it only satisfies the model/profile side of the promotion review.
 
 ## Contract Boundary
 
