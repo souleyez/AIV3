@@ -206,6 +206,7 @@ test('buildReadinessReport includes final evidence manifest validation when prov
       package_type: 'v3.external_third_party_handoff_package.v1',
       generated_at: '2026-05-15T00:00:00.000Z',
       repository_head: 'abc1234',
+      all_markdown_ready: true,
       aggregate_markdown_receipt: {
         receipt_ready: true,
         receipt_path: 'target/external-third-party-handoff/package.all.md',
@@ -238,6 +239,7 @@ test('buildReadinessReport includes final evidence manifest validation when prov
   assert.equal(report.handoff_evidence_summary.package_type, 'v3.external_third_party_handoff_package.v1');
   assert.equal(report.handoff_evidence_summary.generated_at, '2026-05-15T00:00:00.000Z');
   assert.equal(report.handoff_evidence_summary.repository_head, 'abc1234');
+  assert.equal(report.handoff_evidence_summary.all_markdown_ready, true);
   assert.equal(report.handoff_evidence_summary.aggregate_markdown_receipt_ready, true);
   assert.equal(report.handoff_evidence_summary.aggregate_markdown_receipt_sha256, 'b'.repeat(64));
   assert.equal(report.handoff_evidence_summary.evidence_markdown_receipt_ready, true);
@@ -591,6 +593,7 @@ test('renderReadinessMarkdown renders operator-facing checklist without raw payl
       package_type: 'v3.external_third_party_handoff_package.v1',
       generated_at: '2026-05-15T00:00:00.000Z',
       repository_head: 'abc1234',
+      all_markdown_ready: true,
       aggregate_markdown_receipt: {
         receipt_ready: true,
         receipt_sha256: 'b'.repeat(64),
@@ -622,6 +625,7 @@ test('renderReadinessMarkdown renders operator-facing checklist without raw payl
   assert.match(markdown, /Package type: `v3\.external_third_party_handoff_package\.v1`/);
   assert.match(markdown, /Generated at: 2026-05-15T00:00:00\.000Z/);
   assert.match(markdown, /Repository head: `abc1234`/);
+  assert.match(markdown, /Evidence manifest aggregate Markdown ready: yes/);
   assert.match(markdown, /Aggregate Markdown receipt/);
   assert.match(markdown, /Evidence Markdown receipt/);
   assert.match(markdown, /Package HTML artifact/);

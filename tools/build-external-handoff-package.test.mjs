@@ -163,6 +163,7 @@ test('buildPackage creates a third-party handoff directory with manifest and too
   assert.equal(evidenceManifest.repository_head, manifest.repository_head);
   assert.equal(evidenceManifest.release_ready, true);
   assert.equal(evidenceManifest.all_ready, true);
+  assert.equal(evidenceManifest.all_markdown_ready, true);
   assert.equal(evidenceManifest.artifacts.length, 9);
   const evidenceArtifactsByRole = new Map(evidenceManifest.artifacts.map((artifact) => [artifact.role, artifact]));
   assert.equal(evidenceArtifactsByRole.get('delivery_manifest').sha256, result.deliveryManifestSha256);

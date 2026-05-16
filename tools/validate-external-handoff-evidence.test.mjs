@@ -38,6 +38,7 @@ test('validateEvidence accepts generated final evidence manifests', () => {
   assert.equal(result.generated_at, '2026-05-15T00:00:00.000Z');
   assert.match(result.repository_head || '', /^[a-f0-9]+$/);
   assert.equal(result.package_name, 'evidence-valid-package');
+  assert.equal(result.all_markdown_ready, true);
   assert.equal(result.artifact_count, 9);
   assert.equal(result.evidence_manifest_sha256, built.evidenceManifestSha256);
   assert.equal(result.html_artifact_summary.package_ready, true);
@@ -106,6 +107,25 @@ test('validateEvidence rejects not-ready aggregate JSON receipts', () => {
   assert.equal(result.evidence_manifest_ready, false);
   assert.ok(result.errors.some((error) => error.code === 'evidence_aggregate_json_sha256_mismatch'));
   assert.ok(result.errors.some((error) => error.code === 'evidence_aggregate_json_not_ready'));
+});
+
+test('validateEvidence rejects final evidence manifests without aggregate Markdown readiness', () => {
+  const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'v3-external-handoff-evidence-'));
+  const built = buildPackage({
+    repoRoot,
+    outDir,
+    basename: 'evidence-aggregate-markdown-not-ready',
+    generatedAt: '2026-05-15T00:00:00.000Z',
+  });
+  const manifest = JSON.parse(fs.readFileSync(built.evidenceManifestPath, 'utf8'));
+  manifest.all_markdown_ready = false;
+  fs.writeFileSync(built.evidenceManifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+  const result = validateEvidence({ packageRootInput: built.packageRoot });
+
+  assert.equal(result.evidence_manifest_ready, false);
+  assert.equal(result.all_markdown_ready, false);
+  assert.ok(result.errors.some((error) => error.code === 'evidence_aggregate_markdown_not_ready'));
 });
 
 test('validateEvidence rejects final evidence manifests for the wrong package type', () => {
@@ -257,6 +277,7 @@ test('renderEvidenceMarkdown summarizes final evidence without raw payloads', ()
   assert.match(markdown, /Package type: `v3\.external_third_party_handoff_package\.v1`/);
   assert.match(markdown, /Generated at: 2026-05-15T00:00:00\.000Z/);
   assert.match(markdown, /Repository head: `[a-f0-9]+`/);
+  assert.match(markdown, /Aggregate Markdown ready: yes/);
   assert.match(markdown, /Package HTML artifact ready: yes/);
   assert.match(markdown, /Archive HTML artifact ready: yes/);
   assert.match(markdown, /Aggregate Markdown Receipt/);

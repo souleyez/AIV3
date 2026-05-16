@@ -269,6 +269,7 @@ function summarizeHandoffEvidenceValidation(validation, packagePath) {
       && aggregateReceiptReady !== false,
     evidence_manifest_path: validation.evidence_manifest_path || null,
     evidence_manifest_sha256: validation.evidence_manifest_sha256 || null,
+    all_markdown_ready: validation.all_markdown_ready === true,
     aggregate_markdown_receipt_ready: aggregateReceiptReady,
     aggregate_markdown_receipt_path: aggregateReceipt?.receipt_path || null,
     aggregate_markdown_receipt_sha256: aggregateReceipt?.receipt_sha256 || null,
@@ -356,6 +357,7 @@ export function renderReadinessMarkdown(report) {
         `- Repository head: \`${report.handoff_evidence_summary.repository_head || 'unknown'}\``,
         `- Ready: ${report.handoff_evidence_summary.evidence_manifest_ready ? 'yes' : 'no'}`,
         `- Evidence manifest SHA256: \`${report.handoff_evidence_summary.evidence_manifest_sha256 || 'unknown'}\``,
+        `- Evidence manifest aggregate Markdown ready: ${report.handoff_evidence_summary.all_markdown_ready ? 'yes' : 'no'}`,
         `- Aggregate Markdown receipt: ${
           report.handoff_evidence_summary.aggregate_markdown_receipt_ready === null
             ? 'not checked'

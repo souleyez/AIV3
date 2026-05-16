@@ -211,6 +211,14 @@ function validateEvidence({
   if (manifest.all_ready !== true) {
     addError(errors, 'evidence_aggregate_not_ready', 'evidence manifest must mark all_ready=true', evidenceManifestPath);
   }
+  if (manifest.all_markdown_ready !== true) {
+    addError(
+      errors,
+      'evidence_aggregate_markdown_not_ready',
+      'evidence manifest must mark all_markdown_ready=true',
+      evidenceManifestPath,
+    );
+  }
 
   const artifacts = Array.isArray(manifest.artifacts) ? manifest.artifacts : [];
   if (!Array.isArray(manifest.artifacts)) {
@@ -370,6 +378,7 @@ function validateEvidence({
     generated_at: manifest.generated_at || null,
     repository_head: manifest.repository_head || null,
     package_name: manifest.package_name || packageName,
+    all_markdown_ready: manifest.all_markdown_ready === true,
     artifact_count: artifacts.length,
     html_artifact_summary: {
       package_ready: allReport?.summaries?.package?.html_artifact_ready === true,
@@ -404,6 +413,7 @@ Status: **${status}**
 - Generated at: ${report.generated_at || 'unknown'}
 - Repository head: \`${report.repository_head || 'unknown'}\`
 - Package name: \`${report.package_name || 'unknown'}\`
+- Aggregate Markdown ready: ${report.all_markdown_ready ? 'yes' : 'no'}
 - Final artifacts: ${report.artifact_count || 0}
 
 ## HTML Artifact Readiness
