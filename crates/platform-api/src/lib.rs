@@ -15415,6 +15415,21 @@ fn assistant_run_codex_provider_shim_observability_from_output(
         .get("auth_configured")
         .cloned()
         .unwrap_or(Value::Bool(false));
+    let profile_id = output
+        .model_gateway
+        .get("profile_id")
+        .cloned()
+        .unwrap_or(Value::Null);
+    let capabilities = output
+        .model_gateway
+        .get("capabilities")
+        .cloned()
+        .unwrap_or_else(|| json!([]));
+    let capability_manifest = output
+        .model_gateway
+        .get("capability_manifest")
+        .cloned()
+        .unwrap_or(Value::Null);
 
     json!({
         "schema_version": 1,
@@ -15426,7 +15441,7 @@ fn assistant_run_codex_provider_shim_observability_from_output(
             "checked_at": Value::Null,
         },
         "profile": {
-            "profile_id": Value::Null,
+            "profile_id": profile_id,
             "provider_id": provider_id,
             "model_id": model_id,
             "wire_api": wire_api,
@@ -15435,7 +15450,8 @@ fn assistant_run_codex_provider_shim_observability_from_output(
             "api_path": Value::Null,
             "auth_configured": auth_configured,
             "timeout_ms": Value::Null,
-            "capabilities": [],
+            "capabilities": capabilities,
+            "capability_manifest": capability_manifest,
             "rate_limit": {
                 "requests_per_minute": Value::Null,
                 "tokens_per_minute": Value::Null,
@@ -26113,12 +26129,47 @@ fn assistant_run_codex_model_gateway_diagnostics_summary(model_gateway: Option<&
             .cloned()
             .unwrap_or(Value::Null),
         "profile_available": model_gateway.get("profile").is_some(),
+        "profile_id": model_gateway
+            .get("profile_id")
+            .or_else(|| model_gateway.pointer("/profile/profile_id"))
+            .cloned()
+            .unwrap_or(Value::Null),
+        "provider_id": model_gateway
+            .get("provider_id")
+            .or_else(|| model_gateway.pointer("/profile/provider_id"))
+            .cloned()
+            .unwrap_or(Value::Null),
+        "model_id": model_gateway
+            .get("model_id")
+            .or_else(|| model_gateway.pointer("/profile/model_id"))
+            .cloned()
+            .unwrap_or(Value::Null),
         "wire_api": model_gateway
-            .pointer("/profile/wire_api")
+            .get("wire_api")
+            .or_else(|| model_gateway.pointer("/profile/wire_api"))
             .cloned()
             .unwrap_or(Value::Null),
         "auth_configured": model_gateway
-            .pointer("/profile/auth/configured")
+            .get("auth_configured")
+            .or_else(|| model_gateway.pointer("/profile/auth/configured"))
+            .cloned()
+            .unwrap_or(Value::Bool(false)),
+        "capabilities": model_gateway
+            .get("capabilities")
+            .or_else(|| model_gateway.pointer("/profile/capabilities"))
+            .cloned()
+            .unwrap_or_else(|| json!([])),
+        "capability_manifest": model_gateway
+            .get("capability_manifest")
+            .or_else(|| model_gateway.pointer("/profile/capability_flags"))
+            .cloned()
+            .unwrap_or(Value::Null),
+        "codex_surface": model_gateway
+            .get("codex_surface")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "codex_real_execution_allowed": model_gateway
+            .get("codex_real_execution_allowed")
             .cloned()
             .unwrap_or(Value::Bool(false)),
         "secrets_redacted": model_gateway
@@ -33378,10 +33429,20 @@ mod tests {
             },
             "profile": {
                 "profile_id": "minimax-codex-shadow",
+                "provider_id": "minimax",
+                "model_id": "MiniMax-M2.7",
                 "wire_api": "codex_compatible_shim",
                 "auth": {
                     "configured": true,
                     "env_key_name": "MINIMAX_API_KEY"
+                },
+                "capabilities": ["chat", "json_mode", "tool_calling", "codex_compatible"],
+                "capability_flags": {
+                    "chat": true,
+                    "json_mode": true,
+                    "tool_calling": true,
+                    "codex_compatible": true,
+                    "extra": []
                 }
             }
         });
@@ -33497,6 +33558,22 @@ mod tests {
             json!("minimax")
         );
         assert_eq!(
+            payload["model_gateway"]["profile_id"],
+            json!("minimax-codex-shadow")
+        );
+        assert_eq!(
+            payload["model_gateway"]["capability_manifest"]["codex_compatible"],
+            json!(true)
+        );
+        assert_eq!(
+            payload["provider_shim_observability"]["profile"]["profile_id"],
+            json!("minimax-codex-shadow")
+        );
+        assert_eq!(
+            payload["provider_shim_observability"]["profile"]["capabilities"],
+            json!(["chat", "json_mode", "tool_calling", "codex_compatible"])
+        );
+        assert_eq!(
             payload["provider_shim_observability"]["profile"]["model_id"],
             json!("MiniMax-M2.7")
         );
@@ -33526,7 +33603,6 @@ mod tests {
             json!("minimax")
         );
         assert!(!payload_serialized.contains("MINIMAX_API_KEY"));
-        assert!(!payload_serialized.contains("minimax-codex-shadow"));
         assert!(!trail_serialized.contains("MINIMAX_API_KEY"));
     }
 
@@ -33988,10 +34064,21 @@ mod tests {
                         "profile_status": "profile_loaded",
                         "profile_env_prefix": "ASSISTANT_RUN_CODEX_TEST_PROFILE",
                         "profile": {
+                            "profile_id": "minimax-codex-shadow",
+                            "provider_id": "minimax",
+                            "model_id": "MiniMax-M2.7",
                             "wire_api": "codex_compatible_shim",
                             "auth": {
                                 "env_key_name": "MINIMAX_API_KEY",
                                 "configured": true
+                            },
+                            "capabilities": ["chat", "json_mode", "tool_calling", "codex_compatible"],
+                            "capability_flags": {
+                                "chat": true,
+                                "json_mode": true,
+                                "tool_calling": true,
+                                "codex_compatible": true,
+                                "extra": []
                             },
                             "debug": "sk-profile-should-not-leak"
                         },
@@ -34233,6 +34320,19 @@ mod tests {
         );
         assert_eq!(
             diagnostics["codex_executor"]["latest"]["model_gateway"]["auth_configured"],
+            json!(true)
+        );
+        assert_eq!(
+            diagnostics["codex_executor"]["latest"]["model_gateway"]["profile_id"],
+            json!("minimax-codex-shadow")
+        );
+        assert_eq!(
+            diagnostics["codex_executor"]["latest"]["model_gateway"]["capabilities"],
+            json!(["chat", "json_mode", "tool_calling", "codex_compatible"])
+        );
+        assert_eq!(
+            diagnostics["codex_executor"]["latest"]["model_gateway"]["capability_manifest"]
+                ["codex_compatible"],
             json!(true)
         );
         assert_eq!(

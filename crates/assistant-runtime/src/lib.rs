@@ -438,10 +438,22 @@ fn codex_executor_supply_quality_summary(package: &AssistantRunCodexContextPacka
 
 fn codex_executor_model_gateway_summary(package: &AssistantRunCodexContextPackageView) -> Value {
     if package.model_gateway.is_null() {
+        let capability_manifest = codex_executor_empty_capability_manifest();
         return json!({
             "lane": "unknown",
             "selected_model": Value::Null,
             "profile_available": false,
+            "profile_id": Value::Null,
+            "capabilities": [],
+            "capability_manifest": capability_manifest,
+            "codex_surface": {
+                "wire_api": "unknown",
+                "codex_compatible": false,
+                "json_actions_supported": false,
+                "tool_calls_supported": false,
+                "real_execution_allowed_on_this_host": false,
+                "real_execution_block_reason": "model_gateway_unknown",
+            },
             "codex_real_execution_allowed": false,
         });
     }
@@ -450,6 +462,43 @@ fn codex_executor_model_gateway_summary(package: &AssistantRunCodexContextPackag
         .get("selected_model")
         .cloned()
         .unwrap_or(Value::Null);
+    let profile = package.model_gateway.get("profile").unwrap_or(&Value::Null);
+    let profile_id = profile.get("profile_id").cloned().unwrap_or(Value::Null);
+    let capabilities = codex_executor_profile_capabilities(profile);
+    let capability_manifest =
+        codex_executor_capability_manifest_from_profile(profile, &capabilities);
+    let wire_api = package
+        .model_gateway
+        .pointer("/profile/wire_api")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let auth_configured = package
+        .model_gateway
+        .pointer("/profile/auth/configured")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let real_execution_allowed_on_this_host = package
+        .model_gateway
+        .pointer("/safety/codex_real_execution_allowed_on_this_host")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let codex_compatible =
+        codex_executor_capability_enabled(&capability_manifest, "codex_compatible")
+            || matches!(
+                wire_api,
+                "codex_compatible_shim" | "codex-compatible-shim" | "codex_shim" | "provider_shim"
+            );
+    let json_actions_supported =
+        codex_executor_capability_enabled(&capability_manifest, "json_mode")
+            || matches!(wire_api, "responses" | "codex_compatible_shim");
+    let tool_calls_supported =
+        codex_executor_capability_enabled(&capability_manifest, "tool_calling");
+    let real_execution_block_reason = codex_executor_real_execution_block_reason(
+        real_execution_allowed_on_this_host,
+        auth_configured,
+        codex_compatible || json_actions_supported,
+    );
+    let codex_real_execution_allowed = real_execution_block_reason == "none";
     json!({
         "lane": package
             .model_gateway
@@ -458,18 +507,177 @@ fn codex_executor_model_gateway_summary(package: &AssistantRunCodexContextPackag
             .unwrap_or("unknown"),
         "selected_model": selected_model,
         "profile_available": package.model_gateway.get("profile").is_some(),
-        "wire_api": package
+        "profile_source": package
             .model_gateway
-            .pointer("/profile/wire_api")
-            .and_then(Value::as_str)
-            .unwrap_or("unknown"),
-        "auth_configured": package
+            .get("profile_source")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "profile_status": package
             .model_gateway
-            .pointer("/profile/auth/configured")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
-        "codex_real_execution_allowed": false,
+            .get("profile_status")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "profile_id": profile_id,
+        "provider_id": profile.get("provider_id").cloned().unwrap_or(Value::Null),
+        "model_id": profile.get("model_id").cloned().unwrap_or(Value::Null),
+        "wire_api": wire_api,
+        "auth_configured": auth_configured,
+        "capabilities": capabilities,
+        "capability_manifest": capability_manifest,
+        "codex_surface": {
+            "wire_api": wire_api,
+            "codex_compatible": codex_compatible,
+            "json_actions_supported": json_actions_supported,
+            "tool_calls_supported": tool_calls_supported,
+            "real_execution_allowed_on_this_host": real_execution_allowed_on_this_host,
+            "real_execution_block_reason": real_execution_block_reason,
+        },
+        "codex_real_execution_allowed": codex_real_execution_allowed,
     })
+}
+
+fn codex_executor_profile_capabilities(profile: &Value) -> Vec<String> {
+    profile
+        .get("capabilities")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|item| !item.is_empty())
+                .map(ToString::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn codex_executor_empty_capability_manifest() -> Value {
+    json!({
+        "chat": false,
+        "reasoning": false,
+        "vision": false,
+        "audio": false,
+        "video": false,
+        "json_mode": false,
+        "tool_calling": false,
+        "image_prompt": false,
+        "static_page": false,
+        "codex_compatible": false,
+        "extra": [],
+    })
+}
+
+fn codex_executor_capability_manifest_from_profile(
+    profile: &Value,
+    capabilities: &[String],
+) -> Value {
+    json!({
+        "chat": codex_executor_capability_present(profile, capabilities, "chat", &["chat", "conversation"]),
+        "reasoning": codex_executor_capability_present(profile, capabilities, "reasoning", &["reasoning", "think", "thinking"]),
+        "vision": codex_executor_capability_present(profile, capabilities, "vision", &["vision", "document", "vlm"]),
+        "audio": codex_executor_capability_present(profile, capabilities, "audio", &["audio", "transcript"]),
+        "video": codex_executor_capability_present(profile, capabilities, "video", &["video", "scene"]),
+        "json_mode": codex_executor_capability_present(profile, capabilities, "json_mode", &["json", "json_mode", "structured_output"]),
+        "tool_calling": codex_executor_capability_present(profile, capabilities, "tool_calling", &["tool", "tools", "tool_calling", "tool_control"]),
+        "image_prompt": codex_executor_capability_present(profile, capabilities, "image_prompt", &["image_prompt", "visual_prompt"]),
+        "static_page": codex_executor_capability_present(profile, capabilities, "static_page", &["static_page", "static_page_plan", "static_page_edit"]),
+        "codex_compatible": codex_executor_capability_present(profile, capabilities, "codex_compatible", &["codex", "codex_compatible", "codex_executor"]),
+        "extra": codex_executor_extra_capabilities(profile, capabilities),
+    })
+}
+
+fn codex_executor_capability_present(
+    profile: &Value,
+    capabilities: &[String],
+    flag_key: &str,
+    aliases: &[&str],
+) -> bool {
+    if profile
+        .pointer(&format!("/capability_flags/{flag_key}"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return true;
+    }
+    capabilities.iter().any(|capability| {
+        aliases
+            .iter()
+            .any(|alias| capability.eq_ignore_ascii_case(alias))
+    })
+}
+
+fn codex_executor_extra_capabilities(profile: &Value, capabilities: &[String]) -> Vec<String> {
+    if let Some(extra) = profile
+        .pointer("/capability_flags/extra")
+        .and_then(Value::as_array)
+    {
+        return extra
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::trim)
+            .filter(|item| !item.is_empty())
+            .map(ToString::to_string)
+            .collect();
+    }
+
+    capabilities
+        .iter()
+        .filter(|capability| {
+            !matches!(
+                capability.to_ascii_lowercase().as_str(),
+                "chat"
+                    | "conversation"
+                    | "reasoning"
+                    | "think"
+                    | "thinking"
+                    | "vision"
+                    | "document"
+                    | "vlm"
+                    | "audio"
+                    | "transcript"
+                    | "video"
+                    | "scene"
+                    | "json"
+                    | "json_mode"
+                    | "structured_output"
+                    | "tool"
+                    | "tools"
+                    | "tool_calling"
+                    | "tool_control"
+                    | "image_prompt"
+                    | "visual_prompt"
+                    | "static_page"
+                    | "static_page_plan"
+                    | "static_page_edit"
+                    | "codex"
+                    | "codex_compatible"
+                    | "codex_executor"
+            )
+        })
+        .cloned()
+        .collect()
+}
+
+fn codex_executor_capability_enabled(manifest: &Value, key: &str) -> bool {
+    manifest.get(key).and_then(Value::as_bool).unwrap_or(false)
+}
+
+fn codex_executor_real_execution_block_reason(
+    real_execution_allowed_on_this_host: bool,
+    auth_configured: bool,
+    codex_surface_supported: bool,
+) -> &'static str {
+    if !real_execution_allowed_on_this_host {
+        return "disabled_on_this_host";
+    }
+    if !auth_configured {
+        return "auth_not_configured";
+    }
+    if !codex_surface_supported {
+        return "unsupported_codex_surface";
+    }
+    "none"
 }
 
 fn codex_executor_host_invocation_blueprint(
@@ -2010,8 +2218,23 @@ mod tests {
                 "model": "MiniMax-M2.7"
             },
             "profile": {
+                "profile_id": "minimax-codex-shadow",
+                "provider_id": "minimax",
+                "model_id": "MiniMax-M2.7",
                 "wire_api": "codex_compatible_shim",
-                "auth": {"configured": true}
+                "auth": {"configured": true},
+                "capabilities": ["chat", "json", "tool_calling", "codex_compatible", "static_page"],
+                "capability_flags": {
+                    "chat": true,
+                    "json_mode": true,
+                    "tool_calling": true,
+                    "static_page": true,
+                    "codex_compatible": true,
+                    "extra": []
+                }
+            },
+            "safety": {
+                "codex_real_execution_allowed_on_this_host": false
             }
         });
         package
@@ -2184,6 +2407,30 @@ mod tests {
             json!("codex_compatible_shim")
         );
         assert_eq!(output.model_gateway["auth_configured"], json!(true));
+        assert_eq!(
+            output.model_gateway["profile_id"],
+            json!("minimax-codex-shadow")
+        );
+        assert_eq!(
+            output.model_gateway["capability_manifest"]["json_mode"],
+            json!(true)
+        );
+        assert_eq!(
+            output.model_gateway["capability_manifest"]["static_page"],
+            json!(true)
+        );
+        assert_eq!(
+            output.model_gateway["codex_surface"]["codex_compatible"],
+            json!(true)
+        );
+        assert_eq!(
+            output.model_gateway["codex_surface"]["real_execution_block_reason"],
+            json!("disabled_on_this_host")
+        );
+        assert_eq!(
+            output.model_gateway["codex_real_execution_allowed"],
+            json!(false)
+        );
         assert_eq!(output.context_budget.selected_dataset_count, 1);
     }
 
