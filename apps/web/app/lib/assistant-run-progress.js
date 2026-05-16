@@ -9,6 +9,26 @@ export function limitAssistantRunText(value, maxLength = 80) {
   return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text;
 }
 
+function assistantRunDiagnosticText(value, maxLength = 80) {
+  if (value === null || value === undefined) {
+    return '';
+  }
+  if (['string', 'number', 'boolean'].includes(typeof value)) {
+    return limitAssistantRunText(value, maxLength);
+  }
+  if (typeof value !== 'object') {
+    return '';
+  }
+  const candidate = value.status
+    || value.comparison_status
+    || value.kind
+    || value.reason
+    || value.blocked_by;
+  return ['string', 'number', 'boolean'].includes(typeof candidate)
+    ? limitAssistantRunText(candidate, maxLength)
+    : '';
+}
+
 export function sanitizeAssistantRunTrailStep(step) {
   if (!step || typeof step !== 'object') {
     return null;
@@ -73,7 +93,8 @@ export function assistantRunCodexReadinessFromDiagnostics(diagnostics) {
     });
   return {
     status: limitAssistantRunText(promotionGate.status || 'unknown', 36),
-    blockedBy: limitAssistantRunText(promotionGate.blocked_by || '', 32),
+    blockedBy: assistantRunDiagnosticText(promotionGate.blocked_by, 36),
+    nextStep: assistantRunDiagnosticText(promotionGate.next_step, 54),
     allReady: readinessChecks.all_ready === true,
     checks,
   };

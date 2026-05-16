@@ -350,6 +350,20 @@ function AssistantRunProgressPanel({ progress }) {
           </div>
         </div>
       ) : null}
+      {codexReadiness?.blockedBy || codexReadiness?.nextStep ? (
+        <div className="assistant-run-trace-row" aria-label="Codex promotion gate detail">
+          {codexReadiness.blockedBy ? (
+            <span className="message-chip warn">
+              阻塞 {formatSnakeCaseLabel(codexReadiness.blockedBy)}
+            </span>
+          ) : null}
+          {codexReadiness.nextStep ? (
+            <span className="message-chip neutral">
+              下一步 {formatSnakeCaseLabel(codexReadiness.nextStep)}
+            </span>
+          ) : null}
+        </div>
+      ) : null}
       {providerUsage ? (
         <div className="assistant-run-trace-row" aria-label="模型请求摘要">
           <span className={`message-chip ${providerUsage.failedRequestCount ? 'warn' : 'green'}`}>

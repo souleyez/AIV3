@@ -13,6 +13,7 @@ test('assistantRunCodexReadinessFromDiagnostics maps promotion checks for the pr
       promotion_gate: {
         status: 'blocked_by_model_gateway',
         blocked_by: 'unsupported_codex_surface',
+        next_step: 'fix_codex_model_gateway_profile_before_promotion',
         readiness_checks: {
           shadow_gate: { ready: true, status: 'eligible_for_host_validation' },
           host_validation: { ready: true, status: 'validated' },
@@ -25,6 +26,7 @@ test('assistantRunCodexReadinessFromDiagnostics maps promotion checks for the pr
 
   assert.equal(readiness.status, 'blocked_by_model_gateway');
   assert.equal(readiness.blockedBy, 'unsupported_codex_surface');
+  assert.equal(readiness.nextStep, 'fix_codex_model_gateway_profile_before_promotion');
   assert.equal(readiness.allReady, false);
   assert.deepEqual(
     readiness.checks.map((check) => [check.key, check.label, check.ready, check.status]),
@@ -34,6 +36,32 @@ test('assistantRunCodexReadinessFromDiagnostics maps promotion checks for the pr
       ['model_gateway', 'Model', false, 'unsupported_codex_surface'],
     ],
   );
+});
+
+test('assistantRunCodexReadinessFromDiagnostics summarizes structured blockers safely', () => {
+  const readiness = assistantRunCodexReadinessFromDiagnostics({
+    codex_executor: {
+      promotion_gate: {
+        status: 'blocked_by_shadow_gate',
+        blocked_by: {
+          comparison_status: 'invalid_suggestion',
+          prompt: 'raw prompt should not render',
+          arguments: { secret: 'should not render' },
+        },
+        next_step: 'continue_shadow_comparison_until_stable',
+        readiness_checks: {
+          shadow_gate: { ready: false, status: 'blocked' },
+          host_validation: { ready: false, status: 'not_run' },
+          model_gateway: { ready: true, status: 'ready' },
+          all_ready: false,
+        },
+      },
+    },
+  });
+
+  assert.equal(readiness.blockedBy, 'invalid_suggestion');
+  assert.equal(readiness.nextStep, 'continue_shadow_comparison_until_stable');
+  assert.doesNotMatch(JSON.stringify(readiness), /raw prompt|secret|should not render/);
 });
 
 test('assistantRunCodexReadinessFromDiagnostics returns null without readiness checks', () => {
