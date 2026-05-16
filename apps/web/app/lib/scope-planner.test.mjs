@@ -211,6 +211,59 @@ test('scope planner treats active static page edits as artifact context', () => 
   assert.match(plan.hint, /当前静态页：订单经营分析页\(规划已变更\)/);
 });
 
+test('scope planner reuses draft dataset when active static page data quality needs repair', () => {
+  const plan = planAssistantScope({
+    prompt: '继续刚才那版，把趋势数据补扎实再出效果图',
+    datasets,
+    activeStaticPageDraft: {
+      backendDraftId: 'static-draft-quality',
+      objective: '订单经营分析页',
+      status: 'planning',
+      modules: [{ id: 'trend' }, { id: 'summary' }],
+      dataSnapshot: {
+        selectedDatasetId: 'dataset-orders',
+        moduleBindings: [
+          {
+            moduleId: 'trend',
+            title: '趋势模块',
+            visualizationType: 'line-chart',
+            bindingQualityStatus: 'matched_field_candidate',
+            chartDataFit: 'needs_sample_rows',
+            bindingQuality: { sampleRows: 0 },
+          },
+          {
+            moduleId: 'summary',
+            title: '总结模块',
+            visualizationType: 'text-insight',
+            bindingQualityStatus: 'confirmed',
+            chartDataFit: 'not_required',
+          },
+        ],
+      },
+    },
+  });
+
+  const datasetCandidate = plan.candidates.find((candidate) => candidate.type === 'dataset');
+  const draftCandidate = plan.candidates.find((candidate) => candidate.type === 'static_page_draft');
+  assert.equal(plan.intent, 'static_page');
+  assert.equal(selectPlannerDatasetId(plan), 'dataset-orders');
+  assert.equal(datasetCandidate?.source, 'active_artifact_data_quality');
+  assert.equal(draftCandidate?.dataQualityStatus, 'attention_required');
+  assert.equal(draftCandidate?.dataQualityAttentionCount, 1);
+  assert.equal(draftCandidate?.dataQualityBindingCount, 2);
+  assert.equal(draftCandidate?.dataQualityAttentionModules[0].title, '趋势模块');
+  assert.equal(plan.supplyStrategy.retrievalPolicy, 'detail_first');
+  assert.equal(plan.supplyStrategy.preferDetail, true);
+  assert.equal(plan.supplyStrategy.contextBudgetPolicy, 'quality_first_token_tolerant');
+  assert.equal(plan.supplyStrategy.artifactDataQualityPolicy, 'repair_before_preview_or_render');
+  assert.deepEqual(plan.supplyStrategy.recommendedActions, [
+    'retrieval.search',
+    'retrieval.read_detail',
+    'static_page.update_draft',
+  ]);
+  assert.match(plan.hint, /需修复数据1/);
+});
+
 test('scope planner treats vague follow-up as static page edit when draft is active', () => {
   const plan = planAssistantScope({
     prompt: '继续刚才那版改一下',

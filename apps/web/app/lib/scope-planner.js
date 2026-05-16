@@ -19,6 +19,18 @@ const STATIC_PAGE_EDIT_HINT = /继续|接着|下一步|刚才|上面|之前|这�
 const REPORT_HINT = /报表|报告|周报|月报|经营分析|汇报|可视化|看板|dashboard/i;
 const DATA_QUESTION_HINT = /分析|总结|趋势|原因|风险|机会|对比|明细|指标|数据|检索|查找|引用|音视频|音频|视频|录音|转写|字幕|会议|访谈|关键帧|ocr/i;
 
+const STATIC_PAGE_VISUALIZATIONS_REQUIRING_SAMPLE_ROWS = new Set([
+  'kpi-cards',
+  'bar-chart',
+  'line-chart',
+  'donut-chart',
+  'table',
+  'risk-matrix',
+]);
+
+const STATIC_PAGE_READY_BINDING_STATUSES = new Set(['confirmed', 'ready', 'non_chart']);
+const STATIC_PAGE_READY_CHART_FITS = new Set(['ready', 'not_required', 'non_chart_ready']);
+
 const INTENT_LABELS = {
   static_page: '静态页规划',
   report: '报表/看板',
@@ -61,6 +73,17 @@ export function planAssistantScope({
     }));
   }
 
+  if (staticDraftReference?.dataQualityStatus === 'attention_required' && staticDraftReference.selectedDatasetId) {
+    const draftDataset = visibleDatasets.find((dataset) => dataset.id === staticDraftReference.selectedDatasetId);
+    if (draftDataset) {
+      candidates.push(buildDatasetCandidate(draftDataset, {
+        confidence: 'high',
+        reason: '当前静态页数据绑定需要修复，沿用草稿供料范围',
+        source: 'active_artifact_data_quality',
+      }));
+    }
+  }
+
   for (const dataset of visibleDatasets) {
     if (!dataset?.id || userSelectedDatasetIds.includes(dataset.id)) continue;
     const haystack = `${dataset.title || ''} ${dataset.key || ''} ${dataset.description || ''}`;
@@ -97,6 +120,11 @@ export function planAssistantScope({
       previewStatus: staticDraftReference.previewStatus,
       finalRenderStatus: staticDraftReference.finalRenderStatus,
       previewStale: staticDraftReference.previewStale,
+      selectedDatasetId: staticDraftReference.selectedDatasetId,
+      dataQualityStatus: staticDraftReference.dataQualityStatus,
+      dataQualityAttentionCount: staticDraftReference.dataQualityAttentionCount,
+      dataQualityBindingCount: staticDraftReference.dataQualityBindingCount,
+      dataQualityAttentionModules: staticDraftReference.dataQualityAttentionModules,
       confidence: promptTouchesActiveStaticDraft ? 'high' : 'medium',
       reason: promptTouchesActiveStaticDraft ? '用户正在调整当前打开的静态页草稿' : '当前主区域打开了静态页草稿',
       source: 'active_artifact',
@@ -226,6 +254,7 @@ function buildStaticDraftReference(draft) {
   const objective = String(draft.objective || draft.title || '').trim();
   const previewStatus = draft.previewContract?.status || draft.imageJob?.status || '';
   const finalRenderStatus = draft.finalPage?.status || '';
+  const dataQuality = summarizeStaticDraftDataQuality(draft);
   return {
     id,
     label: objective ? `当前静态页：${objective}` : '当前静态页草稿',
@@ -235,6 +264,11 @@ function buildStaticDraftReference(draft) {
     previewStatus,
     finalRenderStatus,
     previewStale: previewStatus === 'stale' || draft.imageJob?.status === 'stale',
+    selectedDatasetId: draft.dataSnapshot?.selectedDatasetId || draft.data_snapshot?.selected_dataset_id || draft.datasetId || '',
+    dataQualityStatus: dataQuality.status,
+    dataQualityAttentionCount: dataQuality.attentionModuleCount,
+    dataQualityBindingCount: dataQuality.bindingCount,
+    dataQualityAttentionModules: dataQuality.attentionModules,
   };
 }
 
@@ -260,7 +294,12 @@ function formatCandidateHint(candidate) {
     const status = candidate.previewStale
       ? '规划已变更'
       : candidate.finalRenderStatus || candidate.previewStatus || candidate.status || '';
-    return status ? `${candidate.label}(${status})` : candidate.label;
+    const details = [];
+    if (status) details.push(status);
+    if (candidate.dataQualityStatus === 'attention_required') {
+      details.push(`需修复数据${candidate.dataQualityAttentionCount || 0}`);
+    }
+    return details.length ? `${candidate.label}(${details.join('/')})` : candidate.label;
   }
   if (candidate.type !== 'dataset') return candidate.label;
   const details = [];
@@ -284,12 +323,30 @@ function buildSupplyStrategy(intent, candidates, prompt = '') {
   const hasDataset = candidates.some((candidate) => candidate.type === 'dataset');
   const hasStaticPageDraft = candidates.some((candidate) => candidate.type === 'static_page_draft');
   const hasConversationMemory = candidates.some((candidate) => candidate.type === 'conversation_memory');
+  const staticPageNeedsDataRepair = candidates.some((candidate) => (
+    candidate.type === 'static_page_draft' && candidate.dataQualityStatus === 'attention_required'
+  ));
+  const staticPageMissingBindingSnapshot = candidates.some((candidate) => (
+    candidate.type === 'static_page_draft' && candidate.dataQualityStatus === 'unknown'
+  ));
   const wantsVideoPptExtraction = VIDEO_PPT_EXTRACTION_PATTERN.test(prompt);
-  const needsDetail = hasDataset && (['static_page', 'report'].includes(intent) || MEDIA_DATASET_PATTERN.test(prompt) || wantsVideoPptExtraction);
+  const needsDetail = hasDataset && (
+    ['static_page', 'report'].includes(intent)
+    || MEDIA_DATASET_PATTERN.test(prompt)
+    || wantsVideoPptExtraction
+    || staticPageNeedsDataRepair
+  );
   return {
     intent,
     answerPolicy: 'model_authored_host_supplied',
     currentArtifactPolicy: hasStaticPageDraft ? 'active_static_page_draft' : 'none',
+    artifactDataQualityPolicy: staticPageNeedsDataRepair
+      ? 'repair_before_preview_or_render'
+      : staticPageMissingBindingSnapshot
+        ? 'refresh_binding_snapshot'
+        : hasStaticPageDraft
+          ? 'respect_current_binding_quality'
+          : 'none',
     actionPolicy: 'model_may_request_controlled_actions_host_validates',
     contextBudgetPolicy: needsDetail || hasConversationMemory
       ? 'quality_first_token_tolerant'
@@ -305,6 +362,7 @@ function buildSupplyStrategy(intent, candidates, prompt = '') {
     recommendedActions: buildRecommendedActions(intent, {
       hasDataset,
       hasStaticPageDraft,
+      staticPageNeedsDataRepair,
       wantsVideoPptExtraction,
       prompt,
     }),
@@ -312,12 +370,12 @@ function buildSupplyStrategy(intent, candidates, prompt = '') {
   };
 }
 
-function buildRecommendedActions(intent, { hasDataset, hasStaticPageDraft, wantsVideoPptExtraction, prompt }) {
+function buildRecommendedActions(intent, { hasDataset, hasStaticPageDraft, staticPageNeedsDataRepair, wantsVideoPptExtraction, prompt }) {
   const actions = [];
   if (hasDataset) {
     actions.push('retrieval.search');
   }
-  if (hasDataset && (intent === 'static_page' || intent === 'report' || MEDIA_DATASET_PATTERN.test(prompt))) {
+  if (hasDataset && (intent === 'static_page' || intent === 'report' || MEDIA_DATASET_PATTERN.test(prompt) || staticPageNeedsDataRepair)) {
     actions.push('retrieval.read_detail');
   }
   if (MEDIA_DATASET_PATTERN.test(prompt) && (!wantsVideoPptExtraction || hasDataset)) {
@@ -339,4 +397,80 @@ function buildRecommendedActions(intent, { hasDataset, hasStaticPageDraft, wants
     actions.push('ordinary_chat.answer');
   }
   return actions.slice(0, 5);
+}
+
+function summarizeStaticDraftDataQuality(draft) {
+  const snapshot = draft?.dataSnapshot || draft?.data_snapshot || {};
+  const bindings = Array.isArray(snapshot.moduleBindings)
+    ? snapshot.moduleBindings
+    : Array.isArray(snapshot.module_bindings)
+      ? snapshot.module_bindings
+      : [];
+  if (!bindings.length) {
+    return {
+      status: Array.isArray(draft?.modules) && draft.modules.length ? 'unknown' : 'not_available',
+      attentionModuleCount: 0,
+      bindingCount: 0,
+      attentionModules: [],
+    };
+  }
+  const attentionModules = bindings
+    .filter(staticPageBindingNeedsAttention)
+    .map(staticPageBindingAttentionSummary)
+    .slice(0, 5);
+  return {
+    status: attentionModules.length ? 'attention_required' : 'ready',
+    attentionModuleCount: attentionModules.length,
+    bindingCount: bindings.length,
+    attentionModules,
+  };
+}
+
+function staticPageBindingNeedsAttention(binding = {}) {
+  const status = staticPageBindingStatus(binding);
+  if (status && !STATIC_PAGE_READY_BINDING_STATUSES.has(status)) return true;
+
+  const chartDataFit = staticPageBindingChartDataFit(binding);
+  if (chartDataFit && !STATIC_PAGE_READY_CHART_FITS.has(chartDataFit)) return true;
+
+  const visualizationType = String(binding.visualizationType || binding.visualization_type || '').trim();
+  return STATIC_PAGE_VISUALIZATIONS_REQUIRING_SAMPLE_ROWS.has(visualizationType)
+    && staticPageBindingSampleRows(binding) === 0;
+}
+
+function staticPageBindingAttentionSummary(binding = {}) {
+  return {
+    moduleId: String(binding.moduleId || binding.module_id || binding.id || '').slice(0, 80),
+    title: String(binding.title || binding.moduleTitle || binding.module_title || binding.moduleId || binding.module_id || '未命名模块').slice(0, 80),
+    bindingQualityStatus: staticPageBindingStatus(binding) || 'unknown',
+    chartDataFit: staticPageBindingChartDataFit(binding) || 'unknown',
+    sampleRows: staticPageBindingSampleRows(binding),
+  };
+}
+
+function staticPageBindingStatus(binding = {}) {
+  return String(
+    binding.bindingQualityStatus
+      || binding.binding_quality_status
+      || binding.bindingQuality?.status
+      || binding.binding_quality?.status
+      || '',
+  ).trim();
+}
+
+function staticPageBindingChartDataFit(binding = {}) {
+  return String(
+    binding.chartDataFit
+      || binding.chart_data_fit
+      || binding.bindingQuality?.chartDataFit
+      || binding.binding_quality?.chart_data_fit
+      || '',
+  ).trim();
+}
+
+function staticPageBindingSampleRows(binding = {}) {
+  const qualityRows = Number(binding.bindingQuality?.sampleRows ?? binding.binding_quality?.sample_rows);
+  if (Number.isFinite(qualityRows)) return qualityRows;
+  const rows = binding.sampleData || binding.sample_data;
+  return Array.isArray(rows) ? rows.length : 0;
 }
