@@ -373,6 +373,11 @@ function AssistantRunProgressPanel({ progress }) {
           {providerUsage.totalTokens ? (
             <span className="message-chip neutral">Token {providerUsage.totalTokens}</span>
           ) : null}
+          {providerUsage.lastStatus ? (
+            <span className={`message-chip ${runtimeTone(providerUsage.lastStatus)}`}>
+              Status {formatSnakeCaseLabel(providerUsage.lastStatus)}
+            </span>
+          ) : null}
           {providerUsage.lastProvider ? (
             <span className="message-chip neutral">Provider {providerUsage.lastProvider}</span>
           ) : null}

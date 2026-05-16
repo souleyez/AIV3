@@ -113,6 +113,41 @@ test('assistantRunProviderUsageFromDiagnostics stays quiet without provider requ
   assert.equal(assistantRunProviderUsageFromDiagnostics(null), null);
 });
 
+test('assistantRunProviderUsageFromDiagnostics infers counts from recent events when summary is sparse', () => {
+  const usage = assistantRunProviderUsageFromDiagnostics({
+    provider_usage: {
+      recent_events: [
+        {
+          provider: 'gpt',
+          model: 'assistant-chat',
+          request_id: 'resp_1',
+          status: 'responded',
+          input_tokens: 10,
+          output_tokens: 20,
+          total_tokens: 30,
+        },
+        {
+          provider: 'gpt',
+          model: 'assistant-chat',
+          request_id: 'resp_2',
+          status: 'failed',
+          input_tokens: 4,
+          output_tokens: 0,
+          total_tokens: 4,
+        },
+      ],
+    },
+  });
+
+  assert.equal(usage.requestCount, 2);
+  assert.equal(usage.failedRequestCount, 1);
+  assert.equal(usage.inputTokens, 14);
+  assert.equal(usage.outputTokens, 20);
+  assert.equal(usage.totalTokens, 34);
+  assert.equal(usage.lastRequestId, 'resp_2');
+  assert.equal(usage.lastStatus, 'failed');
+});
+
 test('buildAssistantRunProgress preserves create-response diagnostics and latest trail windows', () => {
   const response = {
     assistant_run_id: 'run-create-1',

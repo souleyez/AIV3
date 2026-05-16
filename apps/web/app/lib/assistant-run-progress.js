@@ -104,17 +104,21 @@ export function assistantRunProviderUsageFromDiagnostics(diagnostics) {
   const providerUsage = diagnostics?.provider_usage || {};
   const summary = providerUsage.summary || {};
   const recentEvents = Array.isArray(providerUsage.recent_events)
-    ? providerUsage.recent_events
+    ? providerUsage.recent_events.filter((event) => event && typeof event === 'object')
     : [];
   const requestCount = Number(summary.request_count);
   const failedRequestCount = Number(summary.failed_request_count);
   const inputTokens = Number(summary.input_tokens);
   const outputTokens = Number(summary.output_tokens);
   const totalTokens = Number(summary.total_tokens);
-  const latestEvent = [...recentEvents]
-    .reverse()
-    .find((event) => event && typeof event === 'object') || null;
-  const safeRequestCount = Number.isFinite(requestCount) ? requestCount : 0;
+  const latestEvent = recentEvents.at(-1) || null;
+  const safeRequestCount = Number.isFinite(requestCount) ? requestCount : recentEvents.length;
+  const safeFailedRequestCount = Number.isFinite(failedRequestCount)
+    ? failedRequestCount
+    : recentEvents.filter((event) => event.status === 'failed').length;
+  const inferredInputTokens = recentEvents.reduce((total, event) => total + (Number(event.input_tokens) || 0), 0);
+  const inferredOutputTokens = recentEvents.reduce((total, event) => total + (Number(event.output_tokens) || 0), 0);
+  const inferredTotalTokens = recentEvents.reduce((total, event) => total + (Number(event.total_tokens) || 0), 0);
 
   if (safeRequestCount <= 0 && !latestEvent) {
     return null;
@@ -122,10 +126,10 @@ export function assistantRunProviderUsageFromDiagnostics(diagnostics) {
 
   return {
     requestCount: safeRequestCount,
-    failedRequestCount: Number.isFinite(failedRequestCount) ? failedRequestCount : 0,
-    inputTokens: Number.isFinite(inputTokens) ? inputTokens : 0,
-    outputTokens: Number.isFinite(outputTokens) ? outputTokens : 0,
-    totalTokens: Number.isFinite(totalTokens) ? totalTokens : 0,
+    failedRequestCount: safeFailedRequestCount,
+    inputTokens: Number.isFinite(inputTokens) ? inputTokens : inferredInputTokens,
+    outputTokens: Number.isFinite(outputTokens) ? outputTokens : inferredOutputTokens,
+    totalTokens: Number.isFinite(totalTokens) ? totalTokens : inferredTotalTokens,
     lastRequestId: limitAssistantRunText(summary.last_request_id || latestEvent?.request_id || '', 32),
     lastProvider: limitAssistantRunText(latestEvent?.provider || '', 28),
     lastModel: limitAssistantRunText(latestEvent?.model || '', 36),
