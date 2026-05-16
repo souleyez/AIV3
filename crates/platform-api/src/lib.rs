@@ -25773,8 +25773,12 @@ fn assistant_run_codex_detail_diagnostics(events: &[AssistantRunEvent]) -> Value
     let host_validation_summary =
         assistant_run_codex_host_validation_summary(&host_validation_results);
     let shadow_gate = assistant_run_codex_shadow_gate_summary(&codex_events);
-    let promotion_gate =
-        assistant_run_codex_promotion_gate_summary(&shadow_gate, &host_validation_summary);
+    let model_gateway_gate = assistant_run_codex_model_gateway_gate_summary(latest);
+    let promotion_gate = assistant_run_codex_promotion_gate_summary_with_model_gateway(
+        &shadow_gate,
+        &host_validation_summary,
+        &model_gateway_gate,
+    );
     let latest_summary = latest
         .map(|event| {
             let payload = &event.payload;
@@ -25883,6 +25887,7 @@ fn assistant_run_codex_detail_diagnostics(events: &[AssistantRunEvent]) -> Value
         "latest": latest_summary,
         "recent_shadow_events": assistant_run_codex_recent_shadow_events(&codex_events, 8),
         "shadow_gate": shadow_gate,
+        "model_gateway_gate": model_gateway_gate,
         "host_validation_summary": host_validation_summary,
         "host_validation_results": host_validation_results,
         "promotion_gate": promotion_gate,
@@ -26539,6 +26544,103 @@ fn assistant_run_codex_shadow_event_summary(event: &AssistantRunEvent) -> Value 
     })
 }
 
+fn assistant_run_codex_model_gateway_gate_summary(latest: Option<&AssistantRunEvent>) -> Value {
+    let Some(event) = latest else {
+        return json!({
+            "status": "not_run",
+            "ready_for_promotion_review": false,
+            "profile_available": false,
+            "auth_configured": false,
+            "codex_surface_supported": false,
+            "next_step": "run_codex_shadow_diagnostics_with_model_gateway_snapshot",
+        });
+    };
+    let model_gateway = event.payload.get("model_gateway").unwrap_or(&Value::Null);
+    let summary = assistant_run_codex_model_gateway_diagnostics_summary(Some(model_gateway));
+    let profile_available = summary
+        .get("profile_available")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let auth_configured = summary
+        .get("auth_configured")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let codex_surface = summary.get("codex_surface").unwrap_or(&Value::Null);
+    let wire_api = summary
+        .get("wire_api")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let codex_compatible = codex_surface
+        .get("codex_compatible")
+        .and_then(Value::as_bool)
+        .unwrap_or_else(|| {
+            matches!(
+                wire_api,
+                "codex_compatible_shim" | "codex-compatible-shim" | "codex_shim" | "provider_shim"
+            )
+        });
+    let json_actions_supported = codex_surface
+        .get("json_actions_supported")
+        .and_then(Value::as_bool)
+        .unwrap_or_else(|| matches!(wire_api, "responses" | "codex_compatible_shim"));
+    let tool_calls_supported = codex_surface
+        .get("tool_calls_supported")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let codex_surface_supported = codex_compatible || json_actions_supported;
+    let status = if !profile_available {
+        "profile_missing"
+    } else if !auth_configured {
+        "auth_not_configured"
+    } else if !codex_surface_supported {
+        "unsupported_codex_surface"
+    } else {
+        "ready"
+    };
+    let next_step = match status {
+        "ready" => "continue_shadow_and_host_gate_review",
+        "profile_missing" => "configure_codex_conversation_model_profile",
+        "auth_not_configured" => "configure_codex_model_profile_auth",
+        "unsupported_codex_surface" => "select_codex_compatible_or_json_action_profile",
+        _ => "inspect_model_gateway_diagnostics",
+    };
+
+    json!({
+        "status": status,
+        "ready_for_promotion_review": status == "ready",
+        "profile_available": profile_available,
+        "profile_source": summary.get("profile_source").cloned().unwrap_or(Value::Null),
+        "profile_status": summary.get("profile_status").cloned().unwrap_or(Value::Null),
+        "profile_id": summary.get("profile_id").cloned().unwrap_or(Value::Null),
+        "provider_id": summary.get("provider_id").cloned().unwrap_or(Value::Null),
+        "model_id": summary.get("model_id").cloned().unwrap_or(Value::Null),
+        "wire_api": summary.get("wire_api").cloned().unwrap_or(Value::Null),
+        "auth_configured": auth_configured,
+        "capabilities": summary
+            .get("capabilities")
+            .cloned()
+            .unwrap_or_else(|| json!([])),
+        "capability_manifest": summary
+            .get("capability_manifest")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "codex_surface": {
+            "codex_compatible": codex_compatible,
+            "json_actions_supported": json_actions_supported,
+            "tool_calls_supported": tool_calls_supported,
+            "real_execution_block_reason": codex_surface
+                .get("real_execution_block_reason")
+                .cloned()
+                .unwrap_or(Value::Null),
+        },
+        "direct_execution_authoritative": true,
+        "local_execution_allowed": false,
+        "codex_mutation_allowed": false,
+        "queue_allowed": false,
+        "next_step": next_step,
+    })
+}
+
 fn assistant_run_codex_shadow_gate_summary(events: &[&AssistantRunEvent]) -> Value {
     const MIN_STABLE_SHADOW_EVENTS: usize = 3;
     const SHADOW_GATE_WINDOW: usize = 20;
@@ -26830,21 +26932,28 @@ fn assistant_run_codex_host_validation_summary(results: &[Value]) -> Value {
     })
 }
 
-fn assistant_run_codex_promotion_gate_summary(
+fn assistant_run_codex_promotion_gate_summary_with_model_gateway(
     shadow_gate: &Value,
     host_validation: &Value,
+    model_gateway_gate: &Value,
 ) -> Value {
     let shadow_ready = shadow_gate
         .get("host_validation_allowed")
         .and_then(Value::as_bool)
         .unwrap_or(false);
     let host_validated = host_validation.get("status").and_then(Value::as_str) == Some("validated");
-    let status = if shadow_ready && host_validated {
+    let model_gateway_ready = model_gateway_gate
+        .get("ready_for_promotion_review")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let status = if shadow_ready && host_validated && model_gateway_ready {
         "eligible_for_feature_gate_review"
     } else if !shadow_ready {
         "blocked_by_shadow_gate"
-    } else {
+    } else if !host_validated {
         "blocked_by_host_validation"
+    } else {
+        "blocked_by_model_gateway"
     };
     let blocked_by = match status {
         "eligible_for_feature_gate_review" => Value::Null,
@@ -26856,6 +26965,10 @@ fn assistant_run_codex_promotion_gate_summary(
             .get("status")
             .cloned()
             .unwrap_or_else(|| json!("host_validation_not_run")),
+        "blocked_by_model_gateway" => model_gateway_gate
+            .get("status")
+            .cloned()
+            .unwrap_or_else(|| json!("model_gateway_not_ready")),
         _ => json!("unknown"),
     };
     let next_step = match status {
@@ -26864,6 +26977,7 @@ fn assistant_run_codex_promotion_gate_summary(
         }
         "blocked_by_shadow_gate" => "continue_shadow_comparison_until_stable",
         "blocked_by_host_validation" => "run_or_fix_jump_host_validation",
+        "blocked_by_model_gateway" => "fix_codex_model_gateway_profile_before_promotion",
         _ => "inspect_codex_executor_diagnostics",
     };
 
@@ -26871,6 +26985,10 @@ fn assistant_run_codex_promotion_gate_summary(
         "status": status,
         "shadow_gate_status": shadow_gate.get("status").cloned().unwrap_or(Value::Null),
         "host_validation_status": host_validation.get("status").cloned().unwrap_or(Value::Null),
+        "model_gateway_status": model_gateway_gate
+            .get("status")
+            .cloned()
+            .unwrap_or(Value::Null),
         "eligible_for_feature_gate_review": status == "eligible_for_feature_gate_review",
         "blocked_by": blocked_by,
         "direct_execution_authoritative": true,
@@ -34336,6 +34454,23 @@ mod tests {
             json!(true)
         );
         assert_eq!(
+            diagnostics["codex_executor"]["model_gateway_gate"]["status"],
+            json!("ready")
+        );
+        assert_eq!(
+            diagnostics["codex_executor"]["model_gateway_gate"]["ready_for_promotion_review"],
+            json!(true)
+        );
+        assert_eq!(
+            diagnostics["codex_executor"]["model_gateway_gate"]["profile_id"],
+            json!("minimax-codex-shadow")
+        );
+        assert_eq!(
+            diagnostics["codex_executor"]["model_gateway_gate"]["codex_surface"]
+                ["codex_compatible"],
+            json!(true)
+        );
+        assert_eq!(
             diagnostics["codex_executor"]["latest"]["model_gateway"]["profile"],
             Value::Null
         );
@@ -34545,6 +34680,10 @@ mod tests {
             json!(false)
         );
         assert_eq!(
+            diagnostics["codex_executor"]["promotion_gate"]["model_gateway_status"],
+            json!("ready")
+        );
+        assert_eq!(
             diagnostics["codex_executor"]["promotion_gate"]["codex_mutation_allowed"],
             json!(false)
         );
@@ -34690,8 +34829,11 @@ mod tests {
             "task_memory_space_configured": true,
             "html_artifact_count": 1,
         })]);
-        let promotion_gate =
-            assistant_run_codex_promotion_gate_summary(&stable_gate, &validated_host_summary);
+        let promotion_gate = assistant_run_codex_promotion_gate_summary_with_model_gateway(
+            &stable_gate,
+            &validated_host_summary,
+            &json!({"status": "ready", "ready_for_promotion_review": true}),
+        );
         assert_eq!(
             promotion_gate["status"],
             json!("eligible_for_feature_gate_review")
@@ -34705,6 +34847,31 @@ mod tests {
         assert_eq!(
             promotion_gate["requires_manual_feature_gate_change"],
             json!(true)
+        );
+        let blocked_model_gateway_promotion_gate =
+            assistant_run_codex_promotion_gate_summary_with_model_gateway(
+                &stable_gate,
+                &validated_host_summary,
+                &json!({
+                    "status": "auth_not_configured",
+                    "ready_for_promotion_review": false
+                }),
+            );
+        assert_eq!(
+            blocked_model_gateway_promotion_gate["status"],
+            json!("blocked_by_model_gateway")
+        );
+        assert_eq!(
+            blocked_model_gateway_promotion_gate["blocked_by"],
+            json!("auth_not_configured")
+        );
+        assert_eq!(
+            blocked_model_gateway_promotion_gate["eligible_for_feature_gate_review"],
+            json!(false)
+        );
+        assert_eq!(
+            blocked_model_gateway_promotion_gate["next_step"],
+            json!("fix_codex_model_gateway_profile_before_promotion")
         );
         let failed_host_summary = assistant_run_codex_host_validation_summary(&[json!({
             "mode": "codex_exec",
@@ -34721,7 +34888,11 @@ mod tests {
             "html_artifact_count": 1,
         })]);
         let failed_host_promotion_gate =
-            assistant_run_codex_promotion_gate_summary(&stable_gate, &failed_host_summary);
+            assistant_run_codex_promotion_gate_summary_with_model_gateway(
+                &stable_gate,
+                &failed_host_summary,
+                &json!({"status": "ready", "ready_for_promotion_review": true}),
+            );
         assert_eq!(
             failed_host_promotion_gate["status"],
             json!("blocked_by_host_validation")
@@ -34802,8 +34973,11 @@ mod tests {
             blocked_gate["host_validation"]["next_step"],
             json!("continue_shadow_comparison_until_stable")
         );
-        let blocked_promotion_gate =
-            assistant_run_codex_promotion_gate_summary(&blocked_gate, &validated_host_summary);
+        let blocked_promotion_gate = assistant_run_codex_promotion_gate_summary_with_model_gateway(
+            &blocked_gate,
+            &validated_host_summary,
+            &json!({"status": "ready", "ready_for_promotion_review": true}),
+        );
         assert_eq!(
             blocked_promotion_gate["status"],
             json!("blocked_by_shadow_gate")
@@ -34871,9 +35045,10 @@ mod tests {
             "html_artifact_count": 1,
         })];
         let invalid_host = assistant_run_codex_host_validation_summary(&invalid_host_results);
-        let invalid_promotion_gate = assistant_run_codex_promotion_gate_summary(
+        let invalid_promotion_gate = assistant_run_codex_promotion_gate_summary_with_model_gateway(
             &json!({"host_validation_allowed": true, "status": "eligible_for_host_validation"}),
             &invalid_host,
+            &json!({"status": "ready", "ready_for_promotion_review": true}),
         );
 
         assert_eq!(invalid_host["status"], json!("invalid_host"));
