@@ -97,7 +97,7 @@ function stripThinkingBlocks(content) {
   return withoutThinking || raw;
 }
 
-function buildMessageChips(message) {
+function buildMessageChips(message, { showExecutionObservability = false } = {}) {
   const chips = [];
   const modelFacing = message.model_facing;
   const evidenceCount = (message.message_manifest_view?.output?.sections || []).reduce(
@@ -119,15 +119,15 @@ function buildMessageChips(message) {
     });
   }
 
-  if (message.llm_invocations?.length) {
+  if (showExecutionObservability && message.llm_invocations?.length) {
     chips.push({ tone: 'blue', label: `LLM ${message.llm_invocations.length}` });
   }
 
-  if (message.tool_executions?.length) {
+  if (showExecutionObservability && message.tool_executions?.length) {
     chips.push({ tone: 'blue', label: `工具 ${message.tool_executions.length}` });
   }
 
-  if (evidenceCount) {
+  if (showExecutionObservability && evidenceCount) {
     chips.push({ tone: 'green', label: `证据 ${evidenceCount}` });
   }
 
@@ -976,6 +976,7 @@ export default function ChatPanel({
   startupBriefing,
   scopePlan,
   assistantRunProgress,
+  showExecutionObservability = false,
   htmlArtifact = null,
   onCloseHtmlArtifact,
   onHtmlArtifactEvent,
@@ -990,6 +991,7 @@ export default function ChatPanel({
   const staticPageEntryOnly = shouldOfferStaticPageWorkspaceEntry(staticPageDraft);
   const selectedScope = selectedDatasets.length ? selectedDatasets : dataset ? [dataset] : [];
   const selectedScopeLabel = selectedScope.map((item) => item.title || item.key).filter(Boolean).join('、');
+  const showRuntimeObservability = showExecutionObservability === true;
   const chatMessagesRef = useRef(null);
   const chatEndRef = useRef(null);
   const staticPageNotice = staticPageDraft && !showingHtmlArtifactWorkspace && !showingStaticPageWorkspace ? (
@@ -1054,7 +1056,7 @@ export default function ChatPanel({
             <span className="badge">
               {REPORT_ENTRY_LABELS[reportEntry?.state] || REPORT_ENTRY_LABELS.not_applicable}
             </span>
-            {session.model_facing?.recommended_tool_key ? (
+            {showRuntimeObservability && session.model_facing?.recommended_tool_key ? (
               <span className="badge badge-soft">
                 推荐工具 {session.model_facing.recommended_tool_key}
               </span>
@@ -1088,7 +1090,7 @@ export default function ChatPanel({
         onResolve={onResolveReportEntry}
       />
 
-      <SessionRuntimeSummary turn={latestTurn} />
+      {showRuntimeObservability ? <SessionRuntimeSummary turn={latestTurn} /> : null}
 
       {showingHtmlArtifactWorkspace ? (
         <div className="chat-static-page-workspace">
@@ -1150,7 +1152,7 @@ export default function ChatPanel({
             {messages.length ? (
               messages.map((message) => {
                 const assistant = message.role === 'assistant';
-                const chips = buildMessageChips(message);
+                const chips = buildMessageChips(message, { showExecutionObservability: showRuntimeObservability });
                 return (
                   <article className={`message ${assistant ? 'assistant' : 'user'}`} key={message.id}>
                     {assistant ? <div className="avatar">AI</div> : null}
@@ -1165,8 +1167,8 @@ export default function ChatPanel({
                           ))}
                         </div>
                       ) : null}
-                      {assistant ? renderRuntimePhaseRail(message.message_manifest_view?.turn) : null}
-                      {assistant ? (
+                      {assistant && showRuntimeObservability ? renderRuntimePhaseRail(message.message_manifest_view?.turn) : null}
+                      {assistant && showRuntimeObservability ? (
                         <RuntimeProviderFailure failure={message.message_manifest_view?.turn?.provider_failure} />
                       ) : null}
                       <div className="message-meta">

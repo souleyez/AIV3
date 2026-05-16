@@ -925,6 +925,7 @@ export default function InsightPanel({
   onRefreshStaticPageDrafts,
   staticPageEditorOpen = false,
   assistantRunProgress,
+  showExecutionObservability = false,
   htmlArtifacts = [],
   activeHtmlArtifactId,
   onSelectHtmlArtifact,
@@ -952,7 +953,7 @@ export default function InsightPanel({
 
   return (
     <aside className="insight-panel">
-      <ExecutionObservationCard progress={assistantRunProgress} />
+      {showExecutionObservability ? <ExecutionObservationCard progress={assistantRunProgress} /> : null}
 
       <section className="card insight-card right-results-card">
         <SectionHeader
