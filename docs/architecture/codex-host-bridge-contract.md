@@ -115,7 +115,8 @@ AssistantRun diagnostics may summarize this output as `codex_executor.host_valid
 - include mode, status, capability, profile kind/model/provider, workspace configured/label, exit code, and log character counts
 - exclude raw command arguments, provider auth env names, stdout/stderr excerpts, provider keys, and raw prompts
 - include `host_kind` and count a completed `codex_exec` smoke as valid only when it comes from `windows_jump` or `mac_host`
-- keep `direct` execution authoritative until shadow comparison and allowed jump-host/Mac-host validation both pass
+- expose model readiness separately as `codex_executor.model_gateway_gate`; promotion review stays blocked unless the Codex conversation profile is present, authenticated, and supports a Codex-compatible or JSON-action surface
+- keep `direct` execution authoritative until shadow comparison, model readiness, and allowed jump-host/Mac-host validation all pass
 
 All worker modes must serialize their successful output through `CodexHostTaskOutputView`. This includes `codex_exec`; real process output is represented only by safe profile, command-plan, process summaries, and sandboxable HTML artifact manifests.
 

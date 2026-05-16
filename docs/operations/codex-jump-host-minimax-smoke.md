@@ -166,9 +166,11 @@ Expected V3 diagnostic closure:
 - Completed jump-host output should appear under `codex_executor.host_validation_results`.
 - A successful smoke result should have `mode=codex_exec`, `status=completed`, `host_kind=windows_jump` or `host_kind=mac_host`, `host_validation_completed=true`, `codex_invoked=true`, `command_plan.workspace_configured=true`, and `process.exit_code=0`.
 - V3 now treats the following as required validation guards, not optional diagnostics: `codex_invoked=true`, `command_plan.workspace_configured=true`, `command_plan.prompt_redacted=true`, `process.exit_code=0`, `task_memory_isolated=true`, and `task_memory_space_configured=true`.
+- Even when shadow comparison and jump-host smoke pass, `codex_executor.model_gateway_gate.status` must be `ready` before `codex_executor.promotion_gate.status` can become `eligible_for_feature_gate_review`. If the latest diagnostics show `profile_missing`, `auth_not_configured`, or `unsupported_codex_surface`, fix the Codex conversation model profile before requesting promotion review.
 - A `codex_exec` output that says `status=completed` but misses any required validation guard must remain `failed` with `guard_failed_count > 0`; it must not make `promotion_gate.status=eligible_for_feature_gate_review`.
 - A completed `codex_exec` result from `developer_workstation` or an unknown host kind must be treated as `invalid_host`, not as a valid promotion signal.
 - If shadow comparison is stable but the latest `codex_exec` smoke fails, `codex_executor.promotion_gate.status` must remain `blocked_by_host_validation`; mutation and queue submission must still be `false`.
+- If shadow comparison and host validation pass but model readiness fails, `codex_executor.promotion_gate.status` must remain `blocked_by_model_gateway`; mutation and queue submission must still be `false`.
 - The diagnostics must not expose command arguments, provider auth env names, raw stdout/stderr excerpts, provider keys, or raw prompts.
 
 If `host_validation_results` is empty, first check whether the Codex Host task completed as `codex_host_task.exec_completed` or a workflow completion event containing a `CodexHostTaskOutputView` shaped `output`.

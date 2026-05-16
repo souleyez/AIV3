@@ -219,10 +219,21 @@ Current V3-side foundation:
 - `llm-gateway` can also convert provider runtime metadata into redacted Provider Shim usage events and summaries, ready for V3 runtime inspect or future PostgreSQL audit persistence.
 - AssistantRun detail responses now include safe diagnostics for the latest Codex shadow comparison, context-budget pressure, jump-host/Mac-host validation readiness, completed Codex Host validation output summaries with `host_kind`, and redacted provider usage events. V3 treats completed host validation as valid only when it comes from `windows_jump` or `mac_host`, giving audit/runtime views a stable read path without scanning raw event payloads in the browser.
 - Real Codex conversation transports are now triple-gated in practice: without `ASSISTANT_RUN_CODEX_REAL_TRANSPORT_FEATURE_GATE=enabled`, V3 records the requested transport but runs the effective Codex executor in `codex_plan_only`; even with that feature gate enabled, V3 still requires `ASSISTANT_RUN_CODEX_REAL_TRANSPORT_PROMOTION_REVIEW_APPROVED=approved` before the requested real transport can reach `assistant-runtime`. Current runtime behavior still returns an unsupported-transport blueprint with `codex_invoked=false` until host validation and real transport wiring are implemented. The separate promotion-review gate is intentionally manual and should only be enabled after the `promotion_gate` diagnostics show stable shadow comparison plus valid jump-host/Mac-host smoke output.
+- Promotion review also depends on the read-only `codex_executor.model_gateway_gate`. This gate must report `status=ready` before `promotion_gate.status` can become `eligible_for_feature_gate_review`; otherwise V3 blocks with `blocked_by_model_gateway`. The gate checks that the Codex conversation model profile is present, auth is configured, and the wire/capability surface supports either Codex-compatible execution or JSON action output. Typical blocking statuses are `profile_missing`, `auth_not_configured`, and `unsupported_codex_surface`.
 - AssistantRun Codex context packages now carry a tool-output budget policy; V3 only trims oversized `tool_outputs` payload fields and preserves evidence refs, source locators, media timestamps, and error/status details.
 - AssistantRun Codex diagnostics can now summarize a supplied provider-shim observability snapshot through a fixed safe field set: health status, profile/model/wire API, usage counts, context-budget pressure, tool-output trimming counts, and liveness event status. It intentionally does not expose auth env names, raw provider errors, raw request ids, trace ids, raw balance amounts, debug notes, or raw request/response payloads.
 - For `codex_compatible_shim` profiles, V3 also synthesizes a conservative provider-shim observability snapshot inside Codex diagnostic event payloads and execution trail entries before a real shim process reports health. This gives runtime inspect a stable field shape while keeping health `unknown`, usage zeroed, and profile/auth details redacted.
 - The snapshot remains a contract for local shim/host diagnostics and does not grant the shim access to V3 tools, datasets, queues, or memory.
+
+Before enabling any real Codex conversation transport, confirm the three diagnostics together:
+
+```text
+codex_executor.shadow_gate.status            -> eligible_for_host_validation
+codex_executor.host_validation_summary.status -> validated
+codex_executor.model_gateway_gate.status      -> ready
+```
+
+If any of the three is not ready, keep direct execution authoritative and leave Codex mutation plus queue submission disabled. Do not treat a healthy provider shim alone as approval to enable real transport; it only satisfies the model/profile side of the promotion review.
 
 ## Contract Boundary
 
