@@ -29,6 +29,11 @@ function assistantRunDiagnosticText(value, maxLength = 80) {
     : '';
 }
 
+function assistantRunDiagnosticNumber(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
 export function sanitizeAssistantRunTrailStep(step) {
   if (!step || typeof step !== 'object') {
     return null;
@@ -137,6 +142,61 @@ export function assistantRunProviderUsageFromDiagnostics(diagnostics) {
   };
 }
 
+export function assistantRunCodexBudgetFromDiagnostics(diagnostics) {
+  const latest = diagnostics?.codex_executor?.latest || {};
+  const contextBudget = latest.context_budget || diagnostics?.codex_executor?.context_budget || {};
+  const shimObservability = latest.provider_shim_observability
+    || diagnostics?.codex_executor?.provider_shim_observability
+    || {};
+  const shimContextBudget = shimObservability.context_budget_report || {};
+  const toolOutputBudget = shimObservability.tool_output_budget || {};
+  const budgetPressure = limitAssistantRunText(
+    contextBudget.budget_pressure || shimContextBudget.budget_pressure || '',
+    28,
+  );
+  const estimatedPromptChars = assistantRunDiagnosticNumber(
+    contextBudget.estimated_prompt_chars ?? shimContextBudget.estimated_prompt_chars,
+  );
+  const maxPromptChars = assistantRunDiagnosticNumber(
+    contextBudget.max_prompt_chars ?? shimContextBudget.max_prompt_chars,
+  );
+  const itemCount = assistantRunDiagnosticNumber(
+    contextBudget.item_count ?? shimContextBudget.item_count,
+  );
+  const trimmedItemCount = assistantRunDiagnosticNumber(
+    contextBudget.trimmed_item_count ?? shimContextBudget.trimmed_item_count,
+  );
+  const trimmedOutputCount = assistantRunDiagnosticNumber(toolOutputBudget.trimmed_output_count);
+  const preservedEvidenceRefCount = assistantRunDiagnosticNumber(
+    toolOutputBudget.preserved_evidence_ref_count,
+  );
+  const largestOutputChars = assistantRunDiagnosticNumber(toolOutputBudget.largest_output_chars);
+
+  if (
+    !budgetPressure
+    && estimatedPromptChars === null
+    && maxPromptChars === null
+    && itemCount === null
+    && trimmedItemCount === null
+    && trimmedOutputCount === null
+    && preservedEvidenceRefCount === null
+    && largestOutputChars === null
+  ) {
+    return null;
+  }
+
+  return {
+    budgetPressure,
+    estimatedPromptChars,
+    maxPromptChars,
+    itemCount,
+    trimmedItemCount,
+    trimmedOutputCount,
+    preservedEvidenceRefCount,
+    largestOutputChars,
+  };
+}
+
 export function buildAssistantRunProgress(response, continued = false) {
   const run = response?.run || {};
   const runtime = response?.runtime || run.runtime || {};
@@ -156,8 +216,9 @@ export function buildAssistantRunProgress(response, continued = false) {
     .slice(-ASSISTANT_RUN_TRACE_LIMIT);
   const codexReadiness = assistantRunCodexReadinessFromDiagnostics(response?.diagnostics);
   const providerUsage = assistantRunProviderUsageFromDiagnostics(response?.diagnostics);
+  const codexBudget = assistantRunCodexBudgetFromDiagnostics(response?.diagnostics);
 
-  if (!steps.length && !traceSteps.length && !codexReadiness && !providerUsage) {
+  if (!steps.length && !traceSteps.length && !codexReadiness && !providerUsage && !codexBudget) {
     return null;
   }
   return {
@@ -167,5 +228,6 @@ export function buildAssistantRunProgress(response, continued = false) {
     traceSteps,
     codexReadiness,
     providerUsage,
+    codexBudget,
   };
 }

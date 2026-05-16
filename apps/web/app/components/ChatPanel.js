@@ -315,6 +315,7 @@ function AssistantRunProgressPanel({ progress }) {
       && !progress.traceSteps?.length
       && !progress.codexReadiness
       && !progress.providerUsage
+      && !progress.codexBudget
     )
   ) {
     return null;
@@ -323,6 +324,7 @@ function AssistantRunProgressPanel({ progress }) {
   const title = progress.continued ? '连续执行进度' : '本轮执行进度';
   const codexReadiness = progress.codexReadiness;
   const providerUsage = progress.providerUsage;
+  const codexBudget = progress.codexBudget;
   return (
     <div className="assistant-run-progress-panel" aria-label="AssistantRun 安全进度">
       <div className="assistant-run-progress-head">
@@ -334,6 +336,8 @@ function AssistantRunProgressPanel({ progress }) {
           <em>{codexReadiness.allReady ? 'Codex 三门已就绪' : 'Codex 三门观测中'}</em>
         ) : providerUsage ? (
           <em>模型请求 {providerUsage.requestCount}</em>
+        ) : codexBudget?.budgetPressure ? (
+          <em>预算 {formatSnakeCaseLabel(codexBudget.budgetPressure)}</em>
         ) : progress.traceSteps?.length ? <em>{progress.traceSteps.length} 个模型动作</em> : null}
       </div>
       {codexReadiness ? (
@@ -361,6 +365,36 @@ function AssistantRunProgressPanel({ progress }) {
             <span className="message-chip neutral">
               下一步 {formatSnakeCaseLabel(codexReadiness.nextStep)}
             </span>
+          ) : null}
+        </div>
+      ) : null}
+      {codexBudget ? (
+        <div className="assistant-run-trace-row" aria-label="Codex context budget summary">
+          {codexBudget.budgetPressure ? (
+            <span className={`message-chip ${['attention', 'high', 'critical', 'over_limit'].includes(codexBudget.budgetPressure) ? 'warn' : 'neutral'}`}>
+              预算压力 {formatSnakeCaseLabel(codexBudget.budgetPressure)}
+            </span>
+          ) : null}
+          {codexBudget.estimatedPromptChars !== null ? (
+            <span className="message-chip neutral">
+              Prompt {codexBudget.estimatedPromptChars}
+              {codexBudget.maxPromptChars !== null ? ` / ${codexBudget.maxPromptChars}` : ''}
+            </span>
+          ) : null}
+          {codexBudget.itemCount !== null ? (
+            <span className="message-chip neutral">上下文项 {codexBudget.itemCount}</span>
+          ) : null}
+          {codexBudget.trimmedItemCount ? (
+            <span className="message-chip warn">上下文裁剪 {codexBudget.trimmedItemCount}</span>
+          ) : null}
+          {codexBudget.trimmedOutputCount ? (
+            <span className="message-chip warn">工具输出裁剪 {codexBudget.trimmedOutputCount}</span>
+          ) : null}
+          {codexBudget.preservedEvidenceRefCount ? (
+            <span className="message-chip green">证据引用保留 {codexBudget.preservedEvidenceRefCount}</span>
+          ) : null}
+          {codexBudget.largestOutputChars ? (
+            <span className="message-chip neutral">最大输出 {codexBudget.largestOutputChars}</span>
           ) : null}
         </div>
       ) : null}

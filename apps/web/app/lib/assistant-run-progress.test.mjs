@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  assistantRunCodexBudgetFromDiagnostics,
   assistantRunCodexReadinessFromDiagnostics,
   assistantRunProviderUsageFromDiagnostics,
   buildAssistantRunProgress,
@@ -148,6 +149,73 @@ test('assistantRunProviderUsageFromDiagnostics infers counts from recent events 
   assert.equal(usage.lastStatus, 'failed');
 });
 
+test('assistantRunCodexBudgetFromDiagnostics summarizes context budget and tool trimming safely', () => {
+  const budget = assistantRunCodexBudgetFromDiagnostics({
+    codex_executor: {
+      latest: {
+        context_budget: {
+          estimated_prompt_chars: 4096,
+          max_prompt_chars: 12000,
+          budget_pressure: 'normal',
+          item_count: 8,
+        },
+        provider_shim_observability: {
+          context_budget_report: {
+            estimated_prompt_chars: 5000,
+            max_prompt_chars: 15000,
+            budget_pressure: 'attention',
+            trimmed_item_count: 1,
+          },
+          tool_output_budget: {
+            largest_output_chars: 2048,
+            trimmed_output_count: 2,
+            preserved_evidence_ref_count: 5,
+          },
+        },
+      },
+    },
+  });
+
+  assert.equal(budget.budgetPressure, 'normal');
+  assert.equal(budget.estimatedPromptChars, 4096);
+  assert.equal(budget.maxPromptChars, 12000);
+  assert.equal(budget.itemCount, 8);
+  assert.equal(budget.trimmedItemCount, 1);
+  assert.equal(budget.trimmedOutputCount, 2);
+  assert.equal(budget.preservedEvidenceRefCount, 5);
+  assert.equal(budget.largestOutputChars, 2048);
+});
+
+test('assistantRunCodexBudgetFromDiagnostics does not expose raw context budget items', () => {
+  const budget = assistantRunCodexBudgetFromDiagnostics({
+    codex_executor: {
+      latest: {
+        provider_shim_observability: {
+          context_budget_report: {
+            estimated_prompt_chars: 5000,
+            budget_pressure: 'attention',
+            trimmed_item_count: 1,
+            item_count: 2,
+            items: [
+              {
+                category: 'retrieval_evidence',
+                text: 'raw prompt evidence should not render',
+                secret: 'do-not-copy',
+              },
+            ],
+          },
+        },
+      },
+    },
+  });
+
+  assert.equal(budget.budgetPressure, 'attention');
+  assert.equal(budget.estimatedPromptChars, 5000);
+  assert.equal(budget.itemCount, 2);
+  assert.equal(budget.trimmedItemCount, 1);
+  assert.doesNotMatch(JSON.stringify(budget), /raw prompt|do-not-copy|retrieval_evidence/);
+});
+
 test('buildAssistantRunProgress preserves create-response diagnostics and latest trail windows', () => {
   const response = {
     assistant_run_id: 'run-create-1',
@@ -167,6 +235,20 @@ test('buildAssistantRunProgress preserves create-response diagnostics and latest
     },
     diagnostics: {
       codex_executor: {
+        latest: {
+          context_budget: {
+            estimated_prompt_chars: 4096,
+            max_prompt_chars: 12000,
+            budget_pressure: 'normal',
+            item_count: 6,
+          },
+          provider_shim_observability: {
+            tool_output_budget: {
+              trimmed_output_count: 1,
+              preserved_evidence_ref_count: 3,
+            },
+          },
+        },
         promotion_gate: {
           status: 'blocked_by_shadow_gate',
           readiness_checks: {
@@ -210,6 +292,9 @@ test('buildAssistantRunProgress preserves create-response diagnostics and latest
   assert.equal(progress.providerUsage.requestCount, 1);
   assert.equal(progress.providerUsage.totalTokens, 42);
   assert.equal(progress.providerUsage.lastProvider, 'openclaw');
+  assert.equal(progress.codexBudget.budgetPressure, 'normal');
+  assert.equal(progress.codexBudget.trimmedOutputCount, 1);
+  assert.equal(progress.codexBudget.preservedEvidenceRefCount, 3);
 });
 
 test('buildAssistantRunProgress reads continue responses from nested run fields', () => {
@@ -231,6 +316,7 @@ test('buildAssistantRunProgress reads continue responses from nested run fields'
   assert.equal(progress.traceSteps[0].actionType, 'web_search');
   assert.equal(progress.traceSteps[0].deniedCount, 1);
   assert.equal(progress.codexReadiness, null);
+  assert.equal(progress.codexBudget, null);
 });
 
 test('sanitizeAssistantRunTrailStep rejects empty or invalid trail entries', () => {
