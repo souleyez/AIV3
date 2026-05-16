@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   assistantRunCodexBudgetFromDiagnostics,
   assistantRunCodexLivenessFromDiagnostics,
+  assistantRunCodexModelGatewayFromDiagnostics,
   assistantRunCodexReadinessFromDiagnostics,
   assistantRunProviderUsageFromDiagnostics,
   buildAssistantRunProgress,
@@ -262,6 +263,75 @@ test('assistantRunCodexLivenessFromDiagnostics stays quiet without liveness even
   assert.equal(assistantRunCodexLivenessFromDiagnostics(null), null);
 });
 
+test('assistantRunCodexModelGatewayFromDiagnostics summarizes safe gateway readiness', () => {
+  const gateway = assistantRunCodexModelGatewayFromDiagnostics({
+    codex_executor: {
+      latest: {
+        model_gateway: {
+          lane: 'codex_conversation',
+          selected_model: {
+            provider: 'minimax',
+            model: 'codex-compatible-profile-for-v3-shadow-validation',
+          },
+          profile_id: 'minimax-codex-shadow',
+          provider_id: 'minimax',
+          model_id: 'abab6.5',
+          wire_api: 'codex_compatible_shim',
+          auth_configured: true,
+          capability_manifest: {
+            codex_compatible: true,
+            json_mode: true,
+            tool_calling: true,
+          },
+          codex_surface: {
+            wire_api: 'codex_compatible_shim',
+            codex_compatible: true,
+            json_actions_supported: true,
+            tool_calls_supported: true,
+            real_execution_block_reason: 'disabled_on_this_host',
+          },
+          codex_real_execution_allowed: false,
+          secrets_redacted: true,
+          raw_provider_payloads_allowed: false,
+          profile_env_prefix: 'SHOULD_NOT_RENDER',
+          api_key: 'sk-should-not-render',
+          raw_provider_payload: { prompt: 'raw prompt should not render' },
+        },
+      },
+      model_gateway_gate: {
+        status: 'ready',
+        ready_for_promotion_review: true,
+        profile_available: true,
+        profile_id: 'minimax-codex-shadow',
+      },
+    },
+  });
+
+  assert.equal(gateway.status, 'ready');
+  assert.equal(gateway.readyForPromotion, true);
+  assert.equal(gateway.lane, 'codex_conversation');
+  assert.equal(gateway.profileAvailable, true);
+  assert.equal(gateway.profileId, 'minimax-codex-shadow');
+  assert.equal(gateway.provider, 'minimax');
+  assert.equal(gateway.model, 'codex-compatible-profile-for-v3-shad...');
+  assert.equal(gateway.wireApi, 'codex_compatible_shim');
+  assert.equal(gateway.authConfigured, true);
+  assert.equal(gateway.codexCompatible, true);
+  assert.equal(gateway.jsonActionsSupported, true);
+  assert.equal(gateway.toolCallsSupported, true);
+  assert.deepEqual(gateway.capabilities, ['codex', 'json', 'tools']);
+  assert.equal(gateway.realExecutionAllowed, false);
+  assert.equal(gateway.realExecutionBlockReason, 'disabled_on_this_host');
+  assert.equal(gateway.secretsRedacted, true);
+  assert.equal(gateway.rawProviderPayloadsAllowed, false);
+  assert.doesNotMatch(JSON.stringify(gateway), /SHOULD_NOT_RENDER|sk-should|raw prompt/);
+});
+
+test('assistantRunCodexModelGatewayFromDiagnostics stays quiet without gateway diagnostics', () => {
+  assert.equal(assistantRunCodexModelGatewayFromDiagnostics({ codex_executor: {} }), null);
+  assert.equal(assistantRunCodexModelGatewayFromDiagnostics(null), null);
+});
+
 test('buildAssistantRunProgress preserves create-response diagnostics and latest trail windows', () => {
   const response = {
     assistant_run_id: 'run-create-1',
@@ -304,6 +374,33 @@ test('buildAssistantRunProgress preserves create-response diagnostics and latest
               },
             },
           },
+          model_gateway: {
+            lane: 'codex_conversation',
+            selected_model: {
+              provider: 'minimax',
+              model: 'assistant-codex-shadow',
+            },
+            profile_id: 'minimax-codex-shadow',
+            wire_api: 'codex_compatible_shim',
+            auth_configured: true,
+            capability_manifest: {
+              codex_compatible: true,
+              json_mode: true,
+              tool_calling: true,
+            },
+            codex_surface: {
+              codex_compatible: true,
+              json_actions_supported: true,
+              tool_calls_supported: true,
+              real_execution_block_reason: 'disabled_on_this_host',
+            },
+            codex_real_execution_allowed: false,
+          },
+        },
+        model_gateway_gate: {
+          status: 'ready',
+          ready_for_promotion_review: true,
+          profile_available: true,
         },
         promotion_gate: {
           status: 'blocked_by_shadow_gate',
@@ -354,6 +451,9 @@ test('buildAssistantRunProgress preserves create-response diagnostics and latest
   assert.equal(progress.codexLiveness.eventType, 'tool_call_liveness_stall');
   assert.equal(progress.codexLiveness.status, 'recovered');
   assert.equal(progress.codexLiveness.retryCount, 1);
+  assert.equal(progress.codexModelGateway.status, 'ready');
+  assert.equal(progress.codexModelGateway.profileId, 'minimax-codex-shadow');
+  assert.equal(progress.codexModelGateway.readyForPromotion, true);
 });
 
 test('buildAssistantRunProgress reads continue responses from nested run fields', () => {

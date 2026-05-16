@@ -237,6 +237,69 @@ export function assistantRunCodexLivenessFromDiagnostics(diagnostics) {
   };
 }
 
+export function assistantRunCodexModelGatewayFromDiagnostics(diagnostics) {
+  const latestGateway = diagnostics?.codex_executor?.latest?.model_gateway;
+  const fallbackGateway = diagnostics?.codex_executor?.model_gateway;
+  const gateway = latestGateway && typeof latestGateway === 'object'
+    ? latestGateway
+    : fallbackGateway && typeof fallbackGateway === 'object'
+      ? fallbackGateway
+      : {};
+  const gate = diagnostics?.codex_executor?.model_gateway_gate || {};
+  const hasGateway = Object.keys(gateway).length > 0;
+  const hasGate = gate && typeof gate === 'object' && Object.keys(gate).length > 0;
+  if (!hasGateway && !hasGate) {
+    return null;
+  }
+
+  const selectedModel = gateway.selected_model && typeof gateway.selected_model === 'object'
+    ? gateway.selected_model
+    : {};
+  const codexSurface = gateway.codex_surface && typeof gateway.codex_surface === 'object'
+    ? gateway.codex_surface
+    : gate.codex_surface && typeof gate.codex_surface === 'object'
+      ? gate.codex_surface
+      : {};
+  const capabilityManifest = gateway.capability_manifest && typeof gateway.capability_manifest === 'object'
+    ? gateway.capability_manifest
+    : {};
+  const profileAvailable = gate.profile_available ?? gateway.profile_available;
+  const authConfigured = typeof gateway.auth_configured === 'boolean'
+    ? gateway.auth_configured
+    : null;
+  const codexCompatible = codexSurface.codex_compatible === true
+    || capabilityManifest.codex_compatible === true;
+  const jsonActionsSupported = codexSurface.json_actions_supported === true
+    || capabilityManifest.json_mode === true;
+  const toolCallsSupported = codexSurface.tool_calls_supported === true
+    || capabilityManifest.tool_calling === true;
+  const capabilities = [
+    codexCompatible ? 'codex' : '',
+    jsonActionsSupported ? 'json' : '',
+    toolCallsSupported ? 'tools' : '',
+  ].filter(Boolean);
+
+  return {
+    status: limitAssistantRunText(gate.status || gateway.profile_status || '', 32),
+    readyForPromotion: gate.ready_for_promotion_review === true,
+    lane: limitAssistantRunText(gateway.lane || gate.lane || '', 36),
+    profileAvailable: profileAvailable === true,
+    profileId: limitAssistantRunText(gateway.profile_id || gate.profile_id || '', 36),
+    provider: limitAssistantRunText(selectedModel.provider || gateway.provider_id || '', 28),
+    model: limitAssistantRunText(selectedModel.model || gateway.model_id || '', 36),
+    wireApi: limitAssistantRunText(gateway.wire_api || codexSurface.wire_api || '', 32),
+    authConfigured,
+    codexCompatible,
+    jsonActionsSupported,
+    toolCallsSupported,
+    capabilities,
+    realExecutionAllowed: gateway.codex_real_execution_allowed === true,
+    realExecutionBlockReason: limitAssistantRunText(codexSurface.real_execution_block_reason || '', 36),
+    secretsRedacted: gateway.secrets_redacted !== false,
+    rawProviderPayloadsAllowed: gateway.raw_provider_payloads_allowed === true,
+  };
+}
+
 export function buildAssistantRunProgress(response, continued = false) {
   const run = response?.run || {};
   const runtime = response?.runtime || run.runtime || {};
@@ -259,6 +322,7 @@ export function buildAssistantRunProgress(response, continued = false) {
   const providerUsage = assistantRunProviderUsageFromDiagnostics(diagnostics);
   const codexBudget = assistantRunCodexBudgetFromDiagnostics(diagnostics);
   const codexLiveness = assistantRunCodexLivenessFromDiagnostics(diagnostics);
+  const codexModelGateway = assistantRunCodexModelGatewayFromDiagnostics(diagnostics);
 
   if (
     !steps.length
@@ -267,6 +331,7 @@ export function buildAssistantRunProgress(response, continued = false) {
     && !providerUsage
     && !codexBudget
     && !codexLiveness
+    && !codexModelGateway
   ) {
     return null;
   }
@@ -279,5 +344,6 @@ export function buildAssistantRunProgress(response, continued = false) {
     providerUsage,
     codexBudget,
     codexLiveness,
+    codexModelGateway,
   };
 }

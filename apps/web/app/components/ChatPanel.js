@@ -317,6 +317,7 @@ function AssistantRunProgressPanel({ progress }) {
       && !progress.providerUsage
       && !progress.codexBudget
       && !progress.codexLiveness
+      && !progress.codexModelGateway
     )
   ) {
     return null;
@@ -327,6 +328,7 @@ function AssistantRunProgressPanel({ progress }) {
   const providerUsage = progress.providerUsage;
   const codexBudget = progress.codexBudget;
   const codexLiveness = progress.codexLiveness;
+  const codexModelGateway = progress.codexModelGateway;
   return (
     <div className="assistant-run-progress-panel" aria-label="AssistantRun 安全进度">
       <div className="assistant-run-progress-head">
@@ -336,6 +338,8 @@ function AssistantRunProgressPanel({ progress }) {
         </div>
         {codexReadiness ? (
           <em>{codexReadiness.allReady ? 'Codex 三门已就绪' : 'Codex 三门观测中'}</em>
+        ) : codexModelGateway ? (
+          <em>Gateway {formatSnakeCaseLabel(codexModelGateway.status || 'observed')}</em>
         ) : providerUsage ? (
           <em>模型请求 {providerUsage.requestCount}</em>
         ) : codexBudget?.budgetPressure ? (
@@ -369,6 +373,43 @@ function AssistantRunProgressPanel({ progress }) {
             <span className="message-chip neutral">
               下一步 {formatSnakeCaseLabel(codexReadiness.nextStep)}
             </span>
+          ) : null}
+        </div>
+      ) : null}
+      {codexModelGateway ? (
+        <div className="assistant-run-trace-row" aria-label="Codex model gateway summary">
+          <span className={`message-chip ${codexModelGateway.readyForPromotion ? 'green' : 'neutral'}`}>
+            Gateway {codexModelGateway.status ? formatSnakeCaseLabel(codexModelGateway.status) : 'Observed'}
+          </span>
+          {codexModelGateway.profileId ? (
+            <span className="message-chip neutral">Profile {truncateText(codexModelGateway.profileId, 24)}</span>
+          ) : null}
+          {codexModelGateway.provider ? (
+            <span className="message-chip neutral">Provider {codexModelGateway.provider}</span>
+          ) : null}
+          {codexModelGateway.model ? (
+            <span className="message-chip neutral">Model {truncateText(codexModelGateway.model, 24)}</span>
+          ) : null}
+          {codexModelGateway.wireApi ? (
+            <span className="message-chip neutral">Wire {formatSnakeCaseLabel(codexModelGateway.wireApi)}</span>
+          ) : null}
+          {codexModelGateway.capabilities?.length ? (
+            <span className="message-chip green">Surface {codexModelGateway.capabilities.join(' / ')}</span>
+          ) : null}
+          {codexModelGateway.authConfigured !== null ? (
+            <span className={`message-chip ${codexModelGateway.authConfigured ? 'green' : 'warn'}`}>
+              Auth {codexModelGateway.authConfigured ? 'ready' : 'missing'}
+            </span>
+          ) : null}
+          {codexModelGateway.realExecutionAllowed ? (
+            <span className="message-chip green">Real exec allowed</span>
+          ) : codexModelGateway.realExecutionBlockReason ? (
+            <span className="message-chip neutral">
+              Real exec {formatSnakeCaseLabel(codexModelGateway.realExecutionBlockReason)}
+            </span>
+          ) : null}
+          {codexModelGateway.rawProviderPayloadsAllowed ? (
+            <span className="message-chip danger">Raw payload enabled</span>
           ) : null}
         </div>
       ) : null}
