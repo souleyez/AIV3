@@ -164,6 +164,7 @@ test('buildPackage creates a third-party handoff directory with manifest and too
   assert.equal(evidenceManifest.release_ready, true);
   assert.equal(evidenceManifest.all_ready, true);
   assert.equal(evidenceManifest.all_markdown_ready, true);
+  assert.equal(evidenceManifest.html_artifact_command_contract_ready, true);
   assert.equal(evidenceManifest.artifacts.length, 9);
   const evidenceArtifactsByRole = new Map(evidenceManifest.artifacts.map((artifact) => [artifact.role, artifact]));
   assert.equal(evidenceArtifactsByRole.get('delivery_manifest').sha256, result.deliveryManifestSha256);
@@ -175,7 +176,9 @@ test('buildPackage creates a third-party handoff directory with manifest and too
   assert.match(evidenceMarkdown, /Generated at: 2026-05-14T00:00:00\.000Z/);
   assert.match(evidenceMarkdown, /Repository head: `[a-f0-9]+`/);
   assert.match(evidenceMarkdown, /Package HTML artifact ready: yes/);
+  assert.match(evidenceMarkdown, /Package HTML command contract ready: yes/);
   assert.match(evidenceMarkdown, /Archive HTML artifact ready: yes/);
+  assert.match(evidenceMarkdown, /Archive HTML command contract ready: yes/);
 
   const archiveEntries = listTarEntries(result.archivePath);
   assert.ok(archiveEntries.includes('package-under-test/README.zh-CN.md'));

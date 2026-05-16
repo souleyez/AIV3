@@ -39,12 +39,17 @@ test('validateEvidence accepts generated final evidence manifests', () => {
   assert.match(result.repository_head || '', /^[a-f0-9]+$/);
   assert.equal(result.package_name, 'evidence-valid-package');
   assert.equal(result.all_markdown_ready, true);
+  assert.equal(result.html_artifact_command_contract_ready, true);
   assert.equal(result.artifact_count, 9);
   assert.equal(result.evidence_manifest_sha256, built.evidenceManifestSha256);
   assert.equal(result.html_artifact_summary.package_ready, true);
   assert.equal(result.html_artifact_summary.package_template_id, 'third_party_handoff_document');
+  assert.equal(result.html_artifact_summary.package_command_contract_ready, true);
+  assert.equal(result.html_artifact_summary.package_validation_command_count, 6);
   assert.equal(result.html_artifact_summary.archive_ready, true);
   assert.equal(result.html_artifact_summary.archive_template_id, 'third_party_handoff_document');
+  assert.equal(result.html_artifact_summary.archive_command_contract_ready, true);
+  assert.equal(result.html_artifact_summary.archive_validation_command_count, 6);
   assert.equal(result.aggregate_markdown_receipt.receipt_ready, true);
   assert.equal(result.aggregate_markdown_receipt.receipt_path, built.allMarkdownPath);
   assert.deepEqual(result.error_codes, []);
@@ -261,6 +266,30 @@ test('validateEvidence rejects aggregate JSON receipts without HTML artifact rea
   assert.ok(result.errors.some((error) => error.code === 'evidence_aggregate_archive_html_artifact_not_ready'));
 });
 
+test('validateEvidence rejects aggregate JSON receipts without HTML command-contract readiness', () => {
+  const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'v3-external-handoff-evidence-'));
+  const built = buildPackage({
+    repoRoot,
+    outDir,
+    basename: 'evidence-html-command-contract-not-ready-package',
+    generatedAt: '2026-05-15T00:00:00.000Z',
+  });
+  const allReport = JSON.parse(fs.readFileSync(built.allReportPath, 'utf8'));
+  allReport.summaries.package.html_artifact_command_contract_ready = false;
+  delete allReport.summaries.archive.html_artifact_command_contract_ready;
+  fs.writeFileSync(built.allReportPath, `${JSON.stringify(allReport, null, 2)}\n`);
+
+  const result = validateEvidence({ packageRootInput: built.packageRoot });
+
+  assert.equal(result.evidence_manifest_ready, false);
+  assert.equal(result.html_artifact_command_contract_ready, true);
+  assert.equal(result.html_artifact_summary.package_command_contract_ready, false);
+  assert.equal(result.html_artifact_summary.archive_command_contract_ready, false);
+  assert.ok(result.errors.some((error) => error.code === 'evidence_aggregate_json_sha256_mismatch'));
+  assert.ok(result.errors.some((error) => error.code === 'evidence_aggregate_package_html_command_contract_not_ready'));
+  assert.ok(result.errors.some((error) => error.code === 'evidence_aggregate_archive_html_command_contract_not_ready'));
+});
+
 test('renderEvidenceMarkdown summarizes final evidence without raw payloads', () => {
   const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'v3-external-handoff-evidence-'));
   const built = buildPackage({
@@ -278,8 +307,11 @@ test('renderEvidenceMarkdown summarizes final evidence without raw payloads', ()
   assert.match(markdown, /Generated at: 2026-05-15T00:00:00\.000Z/);
   assert.match(markdown, /Repository head: `[a-f0-9]+`/);
   assert.match(markdown, /Aggregate Markdown ready: yes/);
+  assert.match(markdown, /HTML command contract ready: yes/);
   assert.match(markdown, /Package HTML artifact ready: yes/);
+  assert.match(markdown, /Package HTML command contract ready: yes/);
   assert.match(markdown, /Archive HTML artifact ready: yes/);
+  assert.match(markdown, /Archive HTML command contract ready: yes/);
   assert.match(markdown, /Aggregate Markdown Receipt/);
   assert.match(markdown, /Receipt ready: yes/);
   assert.doesNotMatch(markdown, /third-party-secret|raw prompt secret|callback-token-should-not-leak/);

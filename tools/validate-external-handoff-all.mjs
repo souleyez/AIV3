@@ -53,6 +53,26 @@ function summarizeErrorCodes(report) {
   return (report.errors || []).map((error) => error.code);
 }
 
+const HTML_ARTIFACT_COMMAND_CONTRACT_ERROR_CODES = new Set([
+  'html_artifact_all_validation_missing',
+  'html_artifact_all_validation_receipt_check_missing',
+  'html_artifact_all_validation_verify_markdown_missing',
+  'html_artifact_evidence_validation_missing',
+  'html_artifact_evidence_validation_receipt_check_missing',
+  'html_artifact_evidence_validation_verify_markdown_missing',
+]);
+
+function summarizeHtmlArtifactCommandContract(validation) {
+  const errorCodes = Array.isArray(validation?.error_codes) ? validation.error_codes : [];
+  const commandErrorCodes = errorCodes.filter((code) => HTML_ARTIFACT_COMMAND_CONTRACT_ERROR_CODES.has(code));
+  const validationCommandCount = Number(validation?.validation_command_count || 0);
+  return {
+    validation_command_count: validationCommandCount,
+    command_contract_ready: validationCommandCount > 0 && commandErrorCodes.length === 0,
+    command_contract_error_codes: commandErrorCodes,
+  };
+}
+
 function addError(errors, code, message, location = '') {
   errors.push({ code, message, path: location });
 }
@@ -96,8 +116,12 @@ ${checks}
 - Package ready: ${report.summaries?.package?.package_ready ? 'yes' : 'no'}
 - Included files: ${report.summaries?.package?.included_file_count ?? 0}
 - HTML artifact ready: ${report.summaries?.package?.html_artifact_ready ? 'yes' : 'no'}
+- HTML command contract ready: ${report.summaries?.package?.html_artifact_command_contract_ready ? 'yes' : 'no'}
+- HTML validation commands: ${report.summaries?.package?.html_artifact_validation_command_count ?? 0}
 - Archive ready: ${report.summaries?.archive?.archive_ready ? 'yes' : 'no'}
 - Archive HTML artifact ready: ${report.summaries?.archive?.html_artifact_ready ? 'yes' : 'no'}
+- Archive HTML command contract ready: ${report.summaries?.archive?.html_artifact_command_contract_ready ? 'yes' : 'no'}
+- Archive HTML validation commands: ${report.summaries?.archive?.html_artifact_validation_command_count ?? 0}
 - Archive root: \`${report.summaries?.archive?.root_name || 'unknown'}\`
 - Archive entries: ${report.summaries?.archive?.entry_count ?? 0}
 - Delivery manifest ready: ${report.summaries?.delivery?.delivery_manifest_ready ? 'yes' : 'no'}
@@ -214,6 +238,8 @@ function validateAll({
     archivePathInput: archivePath,
     sidecarPathInput: sidecarPath,
   });
+  const packageHtmlCommandContract = summarizeHtmlArtifactCommandContract(packageReport.html_artifact_validation);
+  const archiveHtmlCommandContract = summarizeHtmlArtifactCommandContract(archive.html_artifact_validation);
 
   const checks = [
     { key: 'handoff_manifest_ready', passed: handoff.ready_for_customer_sandbox === true },
@@ -255,6 +281,9 @@ function validateAll({
         included_file_count: packageReport.included_file_count,
         html_artifact_ready: packageReport.html_artifact_validation?.artifact_ready === true,
         html_artifact_template_id: packageReport.html_artifact_validation?.template_id || null,
+        html_artifact_validation_command_count: packageHtmlCommandContract.validation_command_count,
+        html_artifact_command_contract_ready: packageHtmlCommandContract.command_contract_ready,
+        html_artifact_command_contract_error_codes: packageHtmlCommandContract.command_contract_error_codes,
         error_codes: summarizeErrorCodes(packageReport),
       },
       archive: {
@@ -263,6 +292,9 @@ function validateAll({
         entry_count: archive.entry_count,
         html_artifact_ready: archive.html_artifact_validation?.artifact_ready === true,
         html_artifact_template_id: archive.html_artifact_validation?.template_id || null,
+        html_artifact_validation_command_count: archiveHtmlCommandContract.validation_command_count,
+        html_artifact_command_contract_ready: archiveHtmlCommandContract.command_contract_ready,
+        html_artifact_command_contract_error_codes: archiveHtmlCommandContract.command_contract_error_codes,
         error_codes: summarizeErrorCodes(archive),
       },
       delivery: {

@@ -281,7 +281,7 @@ V3 提交：${head || 'unknown'}
 - \`sandbox/external-third-party-mock-gateway.mjs\`：第三方动作 endpoint 的本地 mock 示例。
 - \`sandbox/run-external-third-party-gateway-smoke.sh\`：V3 部署目标使用的签名派发、结果回调和交接清单 smoke 入口。
 - \`handoff-package-manifest.json\`：本包文件清单、SHA256 摘要和校验摘要。
-- 包目录同级会生成 \`.tar.gz\` 归档、\`.sha256\` 校验文件、\`.release.json\` 校验报告、\`.release.md\` 人工摘要、\`.delivery-manifest.json\` 交付清单、\`.all.json\` 聚合校验证据、\`.all.md\` 人工聚合摘要、\`.evidence-manifest.json\` 最终证据清单和 \`.evidence-manifest.md\` 人工证据摘要，用于发送和交付前校验；最终证据清单会显式记录 \`all_markdown_ready\`。
+- 包目录同级会生成 \`.tar.gz\` 归档、\`.sha256\` 校验文件、\`.release.json\` 校验报告、\`.release.md\` 人工摘要、\`.delivery-manifest.json\` 交付清单、\`.all.json\` 聚合校验证据、\`.all.md\` 人工聚合摘要、\`.evidence-manifest.json\` 最终证据清单和 \`.evidence-manifest.md\` 人工证据摘要，用于发送和交付前校验；最终证据清单会显式记录 \`all_markdown_ready\` 和 HTML artifact 命令契约 ready 状态。
 
 ## 第三方应先做什么
 
@@ -324,7 +324,7 @@ V3 commit: ${head || 'unknown'}
 
 This package contains third-party-facing API guides, a V3 safe HTML artifact manifest, a sandbox handoff manifest sample, validation tooling, and a mock gateway reference for V3 external action dispatch/result callback integration.
 
-The builder also writes a \`.tar.gz\` archive, matching \`.sha256\` sidecar, \`.release.json\` validation report, \`.release.md\` summary, \`.delivery-manifest.json\` delivery manifest, \`.all.json\` aggregate validation evidence, \`.all.md\` aggregate summary, \`.evidence-manifest.json\` final evidence manifest with \`all_markdown_ready\`, and \`.evidence-manifest.md\` human-readable evidence summary next to the package directory.
+The builder also writes a \`.tar.gz\` archive, matching \`.sha256\` sidecar, \`.release.json\` validation report, \`.release.md\` summary, \`.delivery-manifest.json\` delivery manifest, \`.all.json\` aggregate validation evidence, \`.all.md\` aggregate summary, \`.evidence-manifest.json\` final evidence manifest with \`all_markdown_ready\` and HTML artifact command-contract readiness, and \`.evidence-manifest.md\` human-readable evidence summary next to the package directory.
 
 Recommended flow:
 
@@ -452,6 +452,10 @@ function buildEvidenceManifest({
     release_ready: releaseValidation.release_ready === true,
     all_ready: allValidation.all_ready === true,
     all_markdown_ready: allMarkdownReady === true,
+    html_artifact_command_contract_ready: (
+      allValidation.summaries?.package?.html_artifact_command_contract_ready === true
+      && allValidation.summaries?.archive?.html_artifact_command_contract_ready === true
+    ),
     delivery_root: '.',
     artifacts: [
       {

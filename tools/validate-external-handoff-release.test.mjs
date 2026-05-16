@@ -27,9 +27,13 @@ test('validateRelease accepts a generated package, archive, and sidecar', () => 
   assert.equal(result.package_summary.package_ready, true);
   assert.equal(result.package_summary.html_artifact_ready, true);
   assert.equal(result.package_summary.html_artifact_template_id, 'third_party_handoff_document');
+  assert.equal(result.package_summary.html_artifact_command_contract_ready, true);
+  assert.equal(result.package_summary.html_artifact_validation_command_count, 6);
   assert.equal(result.archive_summary.archive_ready, true);
   assert.equal(result.archive_summary.html_artifact_ready, true);
   assert.equal(result.archive_summary.html_artifact_template_id, 'third_party_handoff_document');
+  assert.equal(result.archive_summary.html_artifact_command_contract_ready, true);
+  assert.equal(result.archive_summary.html_artifact_validation_command_count, 6);
   assert.equal(result.archive_summary.root_name, 'release-valid-package');
   assert.equal(result.archive_sha256, built.archiveSha256);
   assert.equal(result.delivery_manifest_summary.delivery_manifest_ready, true);
@@ -61,7 +65,9 @@ test('renderReleaseMarkdown summarizes a ready release for human review', () => 
   assert.match(markdown, /Delivery generated at: 2026-05-14T00:00:00.000Z/);
   assert.match(markdown, /Delivery repository head:/);
   assert.match(markdown, /HTML artifact ready: yes/);
+  assert.match(markdown, /HTML command contract ready: yes/);
   assert.match(markdown, /Archive HTML artifact ready: yes/);
+  assert.match(markdown, /Archive HTML command contract ready: yes/);
   assert.match(markdown, /Delivery manifest ready: yes/);
   assert.match(markdown, /PASS `archive_root_matches_package`/);
   assert.match(markdown, /PASS `delivery_manifest_ready`/);

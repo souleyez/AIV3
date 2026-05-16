@@ -93,6 +93,7 @@
 - Current readiness fail-closed follow-up now also gates `handoff_evidence_ready` on `all_markdown_ready`, so observability cannot mark final handoff evidence ready if the final manifest omits or falsifies aggregate Markdown receipt readiness.
 - Current readiness-observability follow-up surfaces that same package provenance in deployment readiness JSON/Markdown summaries for both `handoff_all_summary` and `handoff_evidence_summary`, so operators can see which V3 package version the aggregate and final evidence gates refer to.
 - Current HTML artifact command-contract follow-up records the `validate:all` / `validate:evidence` package scripts, `--verifyMarkdown auto`, and Markdown receipt coverage directly in `html-artifacts/third-party-handoff-document.json`, and `validate:package` rejects manifests that omit those receipt-freshness declarations.
+- Current command-contract evidence follow-up propagates that HTML artifact command-contract readiness into `validate:all`, `validate:release`, `<package>.evidence-manifest.json`, and `validate:evidence` Markdown/JSON summaries, so final handoff evidence fails closed if aggregate reports omit the package/archive command-contract readiness signals.
 - Next implementation checkpoint: run the callback contract through a real HTTPS customer sandbox once a third-party endpoint is available, while continuing smaller hardening work that does not require customer cooperation.
 
 ---

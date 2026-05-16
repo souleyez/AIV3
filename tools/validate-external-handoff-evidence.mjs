@@ -219,6 +219,14 @@ function validateEvidence({
       evidenceManifestPath,
     );
   }
+  if (manifest.html_artifact_command_contract_ready !== true) {
+    addError(
+      errors,
+      'evidence_html_artifact_command_contract_not_ready',
+      'evidence manifest must mark html_artifact_command_contract_ready=true',
+      evidenceManifestPath,
+    );
+  }
 
   const artifacts = Array.isArray(manifest.artifacts) ? manifest.artifacts : [];
   if (!Array.isArray(manifest.artifacts)) {
@@ -356,6 +364,22 @@ function validateEvidence({
   if (allReport && allReport.summaries?.archive?.html_artifact_ready !== true) {
     addError(errors, 'evidence_aggregate_archive_html_artifact_not_ready', 'aggregate JSON must report archived HTML artifact ready', allReportPath);
   }
+  if (allReport && allReport.summaries?.package?.html_artifact_command_contract_ready !== true) {
+    addError(
+      errors,
+      'evidence_aggregate_package_html_command_contract_not_ready',
+      'aggregate JSON must report package HTML artifact command contract ready',
+      allReportPath,
+    );
+  }
+  if (allReport && allReport.summaries?.archive?.html_artifact_command_contract_ready !== true) {
+    addError(
+      errors,
+      'evidence_aggregate_archive_html_command_contract_not_ready',
+      'aggregate JSON must report archived HTML artifact command contract ready',
+      allReportPath,
+    );
+  }
   const aggregateMarkdownReceipt = allReport
     ? validateAllMarkdownReceipt({
         validation: allReport,
@@ -379,12 +403,17 @@ function validateEvidence({
     repository_head: manifest.repository_head || null,
     package_name: manifest.package_name || packageName,
     all_markdown_ready: manifest.all_markdown_ready === true,
+    html_artifact_command_contract_ready: manifest.html_artifact_command_contract_ready === true,
     artifact_count: artifacts.length,
     html_artifact_summary: {
       package_ready: allReport?.summaries?.package?.html_artifact_ready === true,
       package_template_id: allReport?.summaries?.package?.html_artifact_template_id || null,
+      package_command_contract_ready: allReport?.summaries?.package?.html_artifact_command_contract_ready === true,
+      package_validation_command_count: allReport?.summaries?.package?.html_artifact_validation_command_count || 0,
       archive_ready: allReport?.summaries?.archive?.html_artifact_ready === true,
       archive_template_id: allReport?.summaries?.archive?.html_artifact_template_id || null,
+      archive_command_contract_ready: allReport?.summaries?.archive?.html_artifact_command_contract_ready === true,
+      archive_validation_command_count: allReport?.summaries?.archive?.html_artifact_validation_command_count || 0,
     },
     aggregate_markdown_receipt: aggregateMarkdownReceipt,
     error_codes: errors.map((error) => error.code),
@@ -414,14 +443,19 @@ Status: **${status}**
 - Repository head: \`${report.repository_head || 'unknown'}\`
 - Package name: \`${report.package_name || 'unknown'}\`
 - Aggregate Markdown ready: ${report.all_markdown_ready ? 'yes' : 'no'}
+- HTML command contract ready: ${report.html_artifact_command_contract_ready ? 'yes' : 'no'}
 - Final artifacts: ${report.artifact_count || 0}
 
 ## HTML Artifact Readiness
 
 - Package HTML artifact ready: ${htmlArtifactSummary.package_ready ? 'yes' : 'no'}
 - Package HTML artifact template: \`${htmlArtifactSummary.package_template_id || 'unknown'}\`
+- Package HTML command contract ready: ${htmlArtifactSummary.package_command_contract_ready ? 'yes' : 'no'}
+- Package HTML validation commands: ${htmlArtifactSummary.package_validation_command_count ?? 0}
 - Archive HTML artifact ready: ${htmlArtifactSummary.archive_ready ? 'yes' : 'no'}
 - Archive HTML artifact template: \`${htmlArtifactSummary.archive_template_id || 'unknown'}\`
+- Archive HTML command contract ready: ${htmlArtifactSummary.archive_command_contract_ready ? 'yes' : 'no'}
+- Archive HTML validation commands: ${htmlArtifactSummary.archive_validation_command_count ?? 0}
 
 ## Aggregate Markdown Receipt
 
