@@ -26,6 +26,13 @@ test('third-party handoff HTML artifact manifest uses the safe V3 template contr
   assert.equal(manifest.payload.handoff.defaultDomain, 'v3.elepcloud.com');
   assert.ok(manifest.payload.endpoints.some((endpoint) => endpoint.path === '/v1/external/channels/{connection_id}/events'));
   assert.ok(manifest.payload.deliveryArtifacts.some((artifact) => artifact.path === 'html-artifacts/third-party-handoff-document.json'));
+  const validateAll = manifest.payload.validationCommands.find((command) => command.command === 'npm run validate:all');
+  const validateEvidence = manifest.payload.validationCommands.find((command) => command.command === 'npm run validate:evidence');
+  assert.ok(validateAll.packageScript.includes('--verifyMarkdown auto'));
+  assert.ok(validateAll.checks.includes('aggregate_markdown_receipt'));
+  assert.ok(validateEvidence.packageScript.includes('--verifyMarkdown auto'));
+  assert.ok(validateEvidence.checks.includes('aggregate_markdown_receipt'));
+  assert.ok(validateEvidence.checks.includes('evidence_markdown_receipt'));
 
   const normalized = normalizeHtmlArtifactManifest(manifest);
   assert.equal(normalized.rejected, false, normalized.reason);
@@ -40,6 +47,8 @@ test('third-party handoff HTML artifact manifest uses the safe V3 template contr
   assert.match(rendered.html, /安全 HTML artifact manifest/);
   assert.match(rendered.html, /npm run validate:all/);
   assert.match(rendered.html, /npm run validate:evidence/);
+  assert.match(rendered.html, /aggregate_markdown_receipt/);
+  assert.match(rendered.html, /--verifyMarkdown auto/);
   assert.match(rendered.html, /不搬迁整库/);
 });
 

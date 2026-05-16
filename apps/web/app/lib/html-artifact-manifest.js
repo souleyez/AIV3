@@ -465,8 +465,14 @@ function renderThirdPartyHandoffDocument(manifest) {
   }));
   const validationCommands = arrayOrEmpty(payload.validationCommands || payload.validation_commands).map((command, index) => ({
     title: command.title || command.name || `校验 ${index + 1}`,
-    detail: command.command || command.detail || '',
-    meta: command.when || command.meta || '',
+    detail: [
+      command.command || command.detail || '',
+      Array.isArray(command.checks) && command.checks.length ? `覆盖：${command.checks.join(', ')}` : '',
+    ].filter(Boolean).join('\n'),
+    meta: [
+      command.when || command.meta || '',
+      command.packageScript ? `包内脚本：${command.packageScript}` : '',
+    ].filter(Boolean).join(' · '),
   }));
   const deliveryArtifacts = arrayOrEmpty(payload.deliveryArtifacts || payload.delivery_artifacts).map((artifact) => ({
     title: artifact.title || artifact.name || artifact.path || '交付物',

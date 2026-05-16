@@ -175,12 +175,29 @@ function thirdPartyHandoffHtmlArtifactManifest({ generatedAt = new Date().toISOS
         {
           title: '一键聚合校验',
           command: 'npm run validate:all',
+          packageScript: 'node tools/validate-external-handoff-all.mjs --package . --verifyMarkdown auto',
           when: '需要生成统一交接 gate 时',
+          checks: [
+            'handoff_manifest',
+            'package_integrity',
+            'archive_integrity',
+            'delivery_manifest',
+            'release_report',
+            'aggregate_markdown_receipt',
+          ],
         },
         {
           title: '最终证据校验',
           command: 'npm run validate:evidence',
+          packageScript: 'node tools/validate-external-handoff-evidence.mjs --package . --verifyMarkdown auto',
           when: '需要归档最终交接证据时',
+          checks: [
+            'final_evidence_manifest',
+            'aggregate_json_provenance',
+            'aggregate_markdown_receipt',
+            'evidence_markdown_receipt',
+            'html_artifact_readiness',
+          ],
         },
       ],
       reviewChecklist: [

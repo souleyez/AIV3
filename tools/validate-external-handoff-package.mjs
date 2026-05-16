@@ -135,6 +135,58 @@ function emptyHtmlArtifactValidation(artifactPath = THIRD_PARTY_HTML_ARTIFACT_PA
   };
 }
 
+function findValidationCommand(validationCommands, commandName) {
+  return validationCommands.find((command) => isPlainObject(command) && command.command === commandName) || null;
+}
+
+function validationCommandMissingChecks(command, requiredChecks) {
+  const checks = Array.isArray(command?.checks) ? command.checks : [];
+  return requiredChecks.filter((check) => !checks.includes(check));
+}
+
+function validationCommandUsesMarkdownAuto(command) {
+  return (
+    typeof command?.packageScript === 'string'
+    && /(?:^|\s)--verifyMarkdown\s+auto(?:\s|$)/u.test(command.packageScript)
+  );
+}
+
+function validateHtmlArtifactValidationCommand({
+  commandName,
+  missingCommandCode,
+  missingChecksCode,
+  missingMarkdownAutoCode,
+  requiredChecks,
+}, validationCommands, errors, summary, artifactPath) {
+  const command = findValidationCommand(validationCommands, commandName);
+  if (!command) {
+    addHtmlArtifactError(errors, summary, missingCommandCode, `${commandName} command must be listed`, 'payload.validationCommands', artifactPath);
+    return;
+  }
+
+  const missingChecks = validationCommandMissingChecks(command, requiredChecks);
+  if (missingChecks.length > 0) {
+    addHtmlArtifactError(
+      errors,
+      summary,
+      missingChecksCode,
+      `${commandName} command must declare checks: ${missingChecks.join(', ')}`,
+      'payload.validationCommands',
+      artifactPath,
+    );
+  }
+  if (!validationCommandUsesMarkdownAuto(command)) {
+    addHtmlArtifactError(
+      errors,
+      summary,
+      missingMarkdownAutoCode,
+      `${commandName} packageScript must include --verifyMarkdown auto`,
+      'payload.validationCommands',
+      artifactPath,
+    );
+  }
+}
+
 function validateThirdPartyHtmlArtifactManifest(artifact, errors, { artifactPath = THIRD_PARTY_HTML_ARTIFACT_PATH } = {}) {
   const summary = emptyHtmlArtifactValidation(artifactPath);
   const safeArtifact = isPlainObject(artifact) ? artifact : {};
@@ -182,12 +234,20 @@ function validateThirdPartyHtmlArtifactManifest(artifact, errors, { artifactPath
   if (!endpoints.some((endpoint) => endpoint.method === 'POST' && endpoint.path === REQUIRED_THIRD_PARTY_EVENT_ENDPOINT)) {
     addHtmlArtifactError(errors, summary, 'html_artifact_event_endpoint_missing', 'standard third-party event endpoint is required', 'payload.endpoints', artifactPath);
   }
-  if (!validationCommands.some((command) => command.command === 'npm run validate:all')) {
-    addHtmlArtifactError(errors, summary, 'html_artifact_all_validation_missing', 'validate:all command must be listed', 'payload.validationCommands', artifactPath);
-  }
-  if (!validationCommands.some((command) => command.command === 'npm run validate:evidence')) {
-    addHtmlArtifactError(errors, summary, 'html_artifact_evidence_validation_missing', 'validate:evidence command must be listed', 'payload.validationCommands', artifactPath);
-  }
+  validateHtmlArtifactValidationCommand({
+    commandName: 'npm run validate:all',
+    missingCommandCode: 'html_artifact_all_validation_missing',
+    missingChecksCode: 'html_artifact_all_validation_receipt_check_missing',
+    missingMarkdownAutoCode: 'html_artifact_all_validation_verify_markdown_missing',
+    requiredChecks: ['aggregate_markdown_receipt'],
+  }, validationCommands, errors, summary, artifactPath);
+  validateHtmlArtifactValidationCommand({
+    commandName: 'npm run validate:evidence',
+    missingCommandCode: 'html_artifact_evidence_validation_missing',
+    missingChecksCode: 'html_artifact_evidence_validation_receipt_check_missing',
+    missingMarkdownAutoCode: 'html_artifact_evidence_validation_verify_markdown_missing',
+    requiredChecks: ['aggregate_markdown_receipt', 'evidence_markdown_receipt'],
+  }, validationCommands, errors, summary, artifactPath);
   const unsafePayloadPath = findUnsafeHtmlArtifactPayloadPath(payload);
   if (unsafePayloadPath) {
     addHtmlArtifactError(errors, summary, 'html_artifact_payload_unsafe', unsafePayloadPath, 'payload', artifactPath);

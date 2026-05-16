@@ -47,6 +47,7 @@ test('validatePackage accepts a generated package', () => {
   assert.equal(result.html_artifact_validation.template_id, 'third_party_handoff_document');
   assert.equal(result.html_artifact_validation.source_type, 'external_integration');
   assert.equal(result.html_artifact_validation.endpoint_count > 0, true);
+  assert.equal(result.html_artifact_validation.validation_command_count > 0, true);
   assert.equal(result.handoff_validation.ready_for_customer_sandbox, true);
   assert.equal(result.errors.length, 0);
 });
@@ -168,6 +169,42 @@ test('validatePackage requires final evidence validation in the HTML artifact ma
   assert.equal(result.checks.find((check) => check.key === 'third_party_html_artifact_manifest').passed, false);
   assert.equal(result.html_artifact_validation.artifact_ready, false);
   assert.ok(result.errors.some((error) => error.code === 'html_artifact_evidence_validation_missing'));
+});
+
+test('validatePackage requires receipt-freshness metadata in the HTML artifact manifest commands', () => {
+  const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'v3-external-handoff-package-'));
+  const built = buildPackage({
+    repoRoot,
+    outDir,
+    basename: 'missing-receipt-metadata-package',
+    generatedAt: '2026-05-14T00:00:00.000Z',
+  });
+  const relativePath = 'html-artifacts/third-party-handoff-document.json';
+  const artifactPath = path.join(built.packageRoot, relativePath);
+  const artifact = JSON.parse(fs.readFileSync(artifactPath, 'utf8'));
+  for (const command of artifact.payload.validationCommands) {
+    if (command.command === 'npm run validate:all') {
+      command.checks = command.checks.filter((check) => check !== 'aggregate_markdown_receipt');
+      command.packageScript = 'node tools/validate-external-handoff-all.mjs --package .';
+    }
+    if (command.command === 'npm run validate:evidence') {
+      command.checks = command.checks.filter((check) => check !== 'evidence_markdown_receipt');
+      command.packageScript = 'node tools/validate-external-handoff-evidence.mjs --package .';
+    }
+  }
+  fs.writeFileSync(artifactPath, `${JSON.stringify(artifact, null, 2)}\n`);
+  refreshPackageManifestDigest(built.packageRoot, relativePath);
+
+  const result = validatePackage(built.packageRoot);
+
+  assert.equal(result.package_ready, false);
+  assert.equal(result.checks.find((check) => check.key === 'included_file_integrity').passed, true);
+  assert.equal(result.checks.find((check) => check.key === 'third_party_html_artifact_manifest').passed, false);
+  assert.equal(result.html_artifact_validation.artifact_ready, false);
+  assert.ok(result.errors.some((error) => error.code === 'html_artifact_all_validation_receipt_check_missing'));
+  assert.ok(result.errors.some((error) => error.code === 'html_artifact_all_validation_verify_markdown_missing'));
+  assert.ok(result.errors.some((error) => error.code === 'html_artifact_evidence_validation_receipt_check_missing'));
+  assert.ok(result.errors.some((error) => error.code === 'html_artifact_evidence_validation_verify_markdown_missing'));
 });
 
 test('validatePackage rejects path escapes in package manifest', () => {
