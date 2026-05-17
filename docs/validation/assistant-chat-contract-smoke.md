@@ -8,6 +8,7 @@ The contract is:
 - V3-only facts require supplied V3 evidence. When that evidence is absent, answers should mark the V3 fact boundary as currently invisible or unsupplied.
 - ReAct invalid-action and step-limit paths must not surface observation JSON, execution trails, runtime manifests, tool traces, provider raw payloads, or similar internal observability fields as the final user answer.
 - External-channel callbacks expose task/action/search status through public redacted fields only.
+- Ordinary external chat events can return provider model-authored text when the AssistantRun runtime is configured, while placeholder deployments keep a safe acceptance reply.
 
 ## Command
 

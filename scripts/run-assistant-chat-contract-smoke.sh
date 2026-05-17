@@ -66,6 +66,8 @@ run_check "external task callbacks hide internal observability fields" \
   "${cargo_bin}" test -p platform-api external_platform_task_status_callback_hides_internal_observability_fields
 run_check "external action/search callbacks hide internal observability fields" \
   "${cargo_bin}" test -p platform-api external_channel_action_and_search_replies_hide_internal_observability_fields
+run_check "external generic chat returns provider model text when configured" \
+  "${cargo_bin}" test -p platform-api generic_chat_page_event_returns_provider_model_text_when_configured
 
 finished_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 checks_json="$(
@@ -94,7 +96,7 @@ const report = {
     ordinary_chat: "V3 context is additive; plain chat can use general model ability.",
     evidence_boundary: "V3 facts require supplied evidence; unavailable V3 evidence must be called out as currently invisible or unsupplied.",
     user_answer_surface: "Assistant-visible answers must be natural language and must not expose observation, trace, runtime manifest, provider payloads, or execution trail fields.",
-    external_channel_surface: "External callbacks carry task/action/search status only through public redacted fields."
+    external_channel_surface: "External callbacks carry task/action/search status only through public redacted fields; ordinary external chat can return provider model-authored text when the runtime is configured."
   },
   checks: JSON.parse(process.env.SMOKE_CHECKS_JSON || "[]"),
   notes: [
