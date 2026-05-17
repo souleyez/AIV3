@@ -8539,7 +8539,7 @@ async fn ingest_external_channel_message(
         Some(ExternalChannelPlanOutcome::SearchEvidenceRequired(plan)) => {
             external_channel_search_evidence_required_reply(&message, plan)
         }
-        None => external_channel_task_status_reply(&message, "accepted"),
+        None => external_channel_chat_acceptance_reply(&message),
     };
 
     Ok((
@@ -10536,6 +10536,25 @@ fn external_channel_task_status_reply(
         card: None,
         artifact_links: Vec::new(),
         task_status: Some(task_status.to_string()),
+        requires_confirmation: false,
+        action_id: None,
+        confirmation_id: None,
+    }
+}
+
+fn external_channel_chat_acceptance_reply(
+    message: &ExternalBotMessageView,
+) -> ExternalBotReplyView {
+    ExternalBotReplyView {
+        target_conversation_external_id: message.conversation_external_id.clone(),
+        reply_type: ExternalBotReplyTypeView::Text,
+        text: Some(
+            "我已收到你的问题，正在按当前外部身份和资料权限进入 V3 对话处理。普通问题会按通用模型能力自然回答；涉及 V3 数据、第三方文档、权限或产物状态时，只基于可见供料回答，未供料会说明“当前不可见/未供料”。"
+                .to_string(),
+        ),
+        card: None,
+        artifact_links: Vec::new(),
+        task_status: Some("accepted".to_string()),
         requires_confirmation: false,
         action_id: None,
         confirmation_id: None,
@@ -31853,6 +31872,20 @@ mod tests {
         assert!(!reply.requires_confirmation);
     }
 
+    #[test]
+    fn external_channel_chat_acceptance_reply_is_user_facing() {
+        let message = sample_external_bot_message();
+        let reply = external_channel_chat_acceptance_reply(&message);
+
+        assert_eq!(reply.reply_type, ExternalBotReplyTypeView::Text);
+        assert_eq!(reply.task_status.as_deref(), Some("accepted"));
+        let text = reply.text.as_deref().expect("text reply");
+        assert!(text.contains("V3 对话处理"));
+        assert!(text.contains("通用模型能力自然回答"));
+        assert!(text.contains("当前不可见/未供料"));
+        assert!(!reply.requires_confirmation);
+    }
+
     fn assert_public_external_channel_payload_hides_internal_observability(payload: &Value) {
         let serialized = payload.to_string();
         for forbidden in [
@@ -32613,8 +32646,11 @@ mod tests {
         assert!(first.accepted);
         assert_eq!(first.idempotency_key, message.idempotency_key);
         assert!(first.assistant_run_id.is_some());
-        assert_eq!(first.reply.reply_type, ExternalBotReplyTypeView::TaskStatus);
+        assert_eq!(first.reply.reply_type, ExternalBotReplyTypeView::Text);
         assert_eq!(first.reply.task_status.as_deref(), Some("accepted"));
+        let first_reply_text = first.reply.text.as_deref().expect("text reply");
+        assert!(first_reply_text.contains("V3 对话处理"));
+        assert!(first_reply_text.contains("当前不可见/未供料"));
         assert_eq!(
             first.reply.target_conversation_external_id,
             "chat-risk-room"
