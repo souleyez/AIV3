@@ -42012,6 +42012,188 @@ mod tests {
             .contains("供料状态: 已供料 2 条，其中 2 条来自可见文档切片兜底"));
     }
 
+    #[tokio::test]
+    async fn assistant_run_ioa_supply_smoke_surfaces_expected_document_section() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_MODE", "placeholder");
+        std::env::remove_var("ASSISTANT_RUN_EVIDENCE_LIMIT");
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping assistant run IOA supply smoke: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("assistant-ioa-supply-smoke-{}", Uuid::new_v4()),
+                "Assistant IOA Supply Smoke",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage,
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        let dataset = state
+            .storage
+            .datasets()
+            .create(
+                state.tenant_id,
+                NewDataset {
+                    key: format!("xinshijie-ioa-supply-smoke-{}", Uuid::new_v4()),
+                    title: "新世界 IOA 问答测试集".to_string(),
+                    description: Some(
+                        "用于验证 IOA 问答切片、段落标题和助手供料链路。".to_string(),
+                    ),
+                    owner_user_id: None,
+                },
+            )
+            .await
+            .expect("dataset should be created");
+
+        let now = Utc::now();
+        let fixtures = [
+            (
+                "用户手册3-固定资产",
+                "documents/xinshijie/ioa/user-manual-3-fixed-asset.md",
+                "提交固定资产申请单后，部门负责人审批，行政登记资产编号。",
+                "固定资产申请",
+            ),
+            (
+                "IOA系统Q&A",
+                "documents/xinshijie/ioa/system-qa.md",
+                "账号被锁定时先在登录页重置密码，再联系管理员确认账号状态。",
+                "账号登录问题",
+            ),
+            (
+                "iOA应用技巧",
+                "documents/xinshijie/ioa/tips.md",
+                "首页工作台可以查看待办、已办、抄送和常用应用入口。",
+                "待办入口",
+            ),
+            (
+                "行政制度汇编",
+                "documents/xinshijie/admin/policy.md",
+                "资产盘点和办公用品领用记录由行政定期复核。",
+                "资产盘点",
+            ),
+        ];
+        let mut fixed_asset_document_id = None;
+        let mut fixed_asset_chunk_id = None;
+        for (index, (title, object_key, content, section_title)) in fixtures.into_iter().enumerate()
+        {
+            let document = state
+                .storage
+                .documents()
+                .create(
+                    state.tenant_id,
+                    NewDocument {
+                        dataset_id: dataset.id,
+                        title: title.to_string(),
+                        object_key: object_key.to_string(),
+                        content_type: "text/markdown".to_string(),
+                        secret_binding_ids: Vec::new(),
+                        owner_user_id: None,
+                        metadata: json!({}),
+                    },
+                )
+                .await
+                .expect("IOA smoke document should be created");
+            let chunks = state
+                .storage
+                .document_chunks()
+                .replace_for_document(
+                    state.tenant_id,
+                    document.id,
+                    &[storage::NewDocumentChunk {
+                        dataset_id: dataset.id,
+                        document_id: document.id,
+                        chunk_index: index as i32,
+                        content: content.to_string(),
+                        token_count: 24,
+                        metadata: json!({"section_title_hints": [section_title]}),
+                        created_at: now,
+                    }],
+                )
+                .await
+                .expect("IOA smoke document chunk should be created");
+            if index == 0 {
+                fixed_asset_document_id = Some(document.id);
+                fixed_asset_chunk_id = Some(chunks[0].id);
+            }
+        }
+        let fixed_asset_document_id =
+            fixed_asset_document_id.expect("fixed asset document should be tracked");
+        let fixed_asset_chunk_id =
+            fixed_asset_chunk_id.expect("fixed asset chunk should be tracked");
+
+        let (status, Json(response)) = create_assistant_run(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(CreateAssistantRunRequest {
+                prompt: "固定资产申请怎么提交，需要走什么流程".to_string(),
+                local_thread_id: Some("assistant-ioa-rag-smoke-thread".to_string()),
+                startup_briefing: Some(json!({"visibleDatasetCount": 1})),
+                selected_scope: Some(json!({
+                    "mode": "user_selected",
+                    "intent": "data_question",
+                    "datasets": [dataset.id],
+                    "supply_policy": {
+                        "retrievalPolicy": "standard",
+                        "preferDetail": false
+                    }
+                })),
+                scope_candidates: Vec::new(),
+                context_policy_hint: None,
+                current_artifact: None,
+                messages: Vec::new(),
+            }),
+        )
+        .await
+        .expect("assistant run should be created");
+
+        assert_eq!(status, StatusCode::CREATED);
+        assert_eq!(response.evidence_state["status"], json!("supplied"));
+        assert_eq!(response.evidence_state["fallback_supply_count"], json!(4));
+        assert_eq!(
+            response.evidence_state["supply_quality"]["fallbackChunkCount"],
+            json!(4)
+        );
+        let supplied_items = response.evidence_state["supplied_items"]
+            .as_array()
+            .expect("supplied items should be present");
+        assert_eq!(supplied_items.len(), 4);
+        let first_item = &supplied_items[0];
+        assert_eq!(first_item["source"], json!("document_chunk_fallback"));
+        assert_eq!(first_item["document_id"], json!(fixed_asset_document_id));
+        assert_eq!(first_item["document_chunk_id"], json!(fixed_asset_chunk_id));
+        assert_eq!(
+            first_item["evidence_manifest"]["evidence"]["section_title_hints"],
+            json!(["固定资产申请"])
+        );
+        assert!(first_item["summary"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("固定资产申请"));
+        assert!(first_item["content_excerpt"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("提交固定资产申请单"));
+        assert_eq!(
+            response.evidence_state["detail_targets"][0]["document_id"],
+            json!(fixed_asset_document_id)
+        );
+        assert_eq!(
+            response.evidence_state["detail_targets"][0]["document_chunk_id"],
+            json!(fixed_asset_chunk_id)
+        );
+    }
+
     fn test_dataset(
         visibility: DatasetVisibility,
         secret_binding_ids: Vec<SecretBindingId>,
