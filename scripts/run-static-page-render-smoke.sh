@@ -64,9 +64,41 @@ const html = fs.readFileSync(htmlPath, "utf8");
 const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
 const summary = JSON.parse(fs.readFileSync(summaryPath, "utf8"));
 const checks = [];
+const packageFiles = Array.isArray(manifest.export_package?.files)
+  ? manifest.export_package.files
+  : [];
+const dataQualityReport = readJsonArtifact("data-quality-report.json");
+const dataSnapshot = readJsonArtifact("data-snapshot.json");
+const visualBridge = readJsonArtifact("visual-bridge.json");
+const runtimeRequirements = readJsonArtifact("runtime-requirements.json");
+const renderSpec = readJsonArtifact("render-spec.json");
+const handoffReadme = readTextArtifact("README.md");
 
 function hasExportFile(filePath) {
-  return (manifest.export_package?.files || []).some((file) => file.path === filePath);
+  return packageFiles.some((file) => file.path === filePath);
+}
+
+function artifactPath(filePath) {
+  return path.join(artifactDir, filePath);
+}
+
+function hasArtifactFile(filePath) {
+  const resolved = artifactPath(filePath);
+  return fs.existsSync(resolved) && fs.statSync(resolved).isFile();
+}
+
+function readTextArtifact(filePath) {
+  return hasArtifactFile(filePath) ? fs.readFileSync(artifactPath(filePath), "utf8") : "";
+}
+
+function readJsonArtifact(filePath) {
+  const text = readTextArtifact(filePath);
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
 }
 
 function check(name, passed, details) {
@@ -141,6 +173,38 @@ check(
   "The render manifest exposes the expected export package files."
 );
 check(
+  "export package writes declared handoff files",
+  packageFiles.length >= 8 &&
+    packageFiles.every((file) => file?.path && hasArtifactFile(file.path)),
+  `${packageFiles.filter((file) => file?.path && hasArtifactFile(file.path)).length}/${packageFiles.length} declared package files are present.`
+);
+check(
+  "data quality report mirrors manifest",
+  dataQualityReport?.kind === "static-page-data-quality-report" &&
+    dataQualityReport?.summary?.attentionModules === manifest.chart_runtime?.dataQualitySummary?.attentionModules &&
+    Array.isArray(dataQualityReport?.modules) &&
+    dataQualityReport.modules.length === manifest.chart_runtime?.modules?.length,
+  "data-quality-report.json must be parseable and carry the same module-level quality summary."
+);
+check(
+  "supporting handoff JSON files are parseable",
+  dataSnapshot?.source === "static-page-render-smoke-fixture" &&
+    visualBridge?.kind === "static-page-visual-bridge" &&
+    visualBridge?.status === "confirmed" &&
+    Array.isArray(runtimeRequirements) &&
+    runtimeRequirements.some((item) => item?.license === "Apache-2.0") &&
+    renderSpec?.componentModel === "dom-text-svg-chart",
+  "data-snapshot, visual-bridge, runtime-requirements, and render-spec files must be usable without reading the main manifest."
+);
+check(
+  "handoff README summarizes delivery contract",
+  handoffReadme.includes("新世界 IOA 问答运营静态页") &&
+    handoffReadme.includes("index.html 可直接打开") &&
+    handoffReadme.includes("data-quality-report.json") &&
+    handoffReadme.includes("visual-bridge.json"),
+  "README.md should name the page and the key review files for handoff."
+);
+check(
   "export package records browser delivery contract",
   manifest.export_package?.browser_delivery_contract?.entry === "index.html" &&
     manifest.export_package?.browser_delivery_contract?.remote_scripts_allowed === false &&
@@ -175,7 +239,7 @@ const report = {
     generated_html: "Renderer smoke generates an actual index.html artifact from a representative static-page draft.",
     chart_runtime: "Deterministic SVG chart output remains available, and ECharts modules expose only safe JSON hydration islands without remote scripts.",
     data_quality: "Confirmed sample rows render without missing-data placeholders; manifest attentionModules must be zero for this fixture.",
-    export_handoff: "The asset manifest must list the expected static-page export package files and preserve the browser delivery contract."
+    export_handoff: "The asset manifest must list and the smoke artifact must write the expected static-page export package files while preserving the browser delivery contract."
   },
   checks,
 };

@@ -3,7 +3,7 @@ use static_page_renderer::{render_static_page, StaticPageRenderRequest, STATIC_P
 use std::env;
 use std::error::Error;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 fn main() -> Result<(), Box<dyn Error>> {
     let output_dir = env::args()
@@ -171,10 +171,51 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     });
 
-    fs::write(output_dir.join("index.html"), result.html)?;
+    let data_quality_report = json!({
+        "kind": "static-page-data-quality-report",
+        "version": 1,
+        "summary": result.asset_manifest["chart_runtime"]["dataQualitySummary"],
+        "modules": result.asset_manifest["chart_runtime"]["modules"]
+    });
+
+    fs::write(output_dir.join("index.html"), &result.html)?;
     fs::write(
         output_dir.join("asset-manifest.json"),
         serde_json::to_string_pretty(&result.asset_manifest)?,
+    )?;
+    write_json_file(
+        &output_dir,
+        "data-snapshot.json",
+        &result.asset_manifest["data_snapshot"],
+    )?;
+    write_json_file(
+        &output_dir,
+        "data-quality-report.json",
+        &data_quality_report,
+    )?;
+    write_json_file(
+        &output_dir,
+        "visual-bridge.json",
+        &result.asset_manifest["visual_bridge"],
+    )?;
+    write_json_file(
+        &output_dir,
+        "modules.json",
+        &result.asset_manifest["modules"],
+    )?;
+    write_json_file(
+        &output_dir,
+        "runtime-requirements.json",
+        &result.asset_manifest["export_package"]["runtime_requirements"],
+    )?;
+    write_json_file(
+        &output_dir,
+        "render-spec.json",
+        &result.asset_manifest["render_spec"],
+    )?;
+    fs::write(
+        output_dir.join("README.md"),
+        render_smoke_readme(&request, &result.asset_manifest),
     )?;
     fs::write(
         output_dir.join("render-request.json"),
@@ -190,4 +231,56 @@ fn main() -> Result<(), Box<dyn Error>> {
         output_dir.display()
     );
     Ok(())
+}
+
+fn write_json_file(
+    output_dir: &Path,
+    file_name: &str,
+    value: &serde_json::Value,
+) -> Result<(), Box<dyn Error>> {
+    fs::write(
+        output_dir.join(file_name),
+        serde_json::to_string_pretty(value)?,
+    )?;
+    Ok(())
+}
+
+fn render_smoke_readme(request: &StaticPageRenderRequest, manifest: &serde_json::Value) -> String {
+    let quality = &manifest["chart_runtime"]["dataQualitySummary"];
+    let confirmed = quality["confirmedModules"].as_u64().unwrap_or(0);
+    let partial = quality["partialModules"].as_u64().unwrap_or(0);
+    let missing = quality["missingModules"].as_u64().unwrap_or(0);
+    let echarts_requested = manifest["chart_runtime"]["echartsRequestedModules"]
+        .as_u64()
+        .unwrap_or(0);
+    let visual_status = manifest["visual_bridge"]["status"]
+        .as_str()
+        .unwrap_or("unknown");
+    let preview_asset = manifest["visual_bridge"]["previewAssetKey"]
+        .as_str()
+        .unwrap_or("no-preview");
+    format!(
+        concat!(
+            "# {}\n\n",
+            "这个目录是静态页 renderer smoke 生成的代表性交付包，用于验证最终 HTML、数据快照、模块质量报告和浏览器交付合同。\n\n",
+            "- 草稿 ID：{}\n",
+            "- 渲染器：{}\n",
+            "- 数据质量：已确认 {} / 部分 {} / 缺失 {}\n",
+            "- ECharts 可选增强模块：{}\n",
+            "- 视觉合同：{} / {}\n",
+            "- 浏览器交付：index.html 可直接打开；无远程脚本；图表保留 deterministic DOM/SVG 回退。\n",
+            "- 模块级数据质量报告：data-quality-report.json\n",
+            "- 视觉合同桥：visual-bridge.json\n",
+            "- 运行要求：runtime-requirements.json\n"
+        ),
+        request.title,
+        request.draft_id,
+        STATIC_PAGE_RENDERER_ID,
+        confirmed,
+        partial,
+        missing,
+        echarts_requested,
+        visual_status,
+        preview_asset,
+    )
 }
