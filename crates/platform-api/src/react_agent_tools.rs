@@ -2890,11 +2890,13 @@ fn document_detail_item(
         let remaining = max_chars.saturating_sub(*returned_chars);
         let content = truncate_chars(&chunk.content, remaining);
         *returned_chars += content.chars().count();
+        let section_title_hints = bounded_section_title_hints(&chunk.metadata);
         chunk_items.push(json!({
             "chunk_id": chunk.id.to_string(),
             "chunk_index": chunk.chunk_index,
             "state": chunk.state.as_str(),
             "token_count": chunk.token_count,
+            "section_title_hints": section_title_hints,
             "content": content,
             "fields": bounded_chunk_fields(&chunk.metadata),
         }));
@@ -2908,6 +2910,49 @@ fn document_detail_item(
         "lifecycle": document.lifecycle.as_str(),
         "chunks": chunk_items,
     })
+}
+
+fn bounded_section_title_hints(metadata: &BTreeMap<String, Value>) -> Vec<String> {
+    let mut hints = Vec::new();
+    for key in [
+        "section_title_hints",
+        "sectionTitleHints",
+        "section_titles",
+        "sectionTitles",
+        "heading_hints",
+        "headingHints",
+    ] {
+        if let Some(value) = metadata.get(key) {
+            collect_bounded_string_list(value, &mut hints);
+        }
+    }
+    if let Some(value) = metadata
+        .get("parse_metadata")
+        .and_then(|value| value.get("section_title_hints"))
+    {
+        collect_bounded_string_list(value, &mut hints);
+    }
+    hints.truncate(6);
+    hints
+}
+
+fn collect_bounded_string_list(value: &Value, output: &mut Vec<String>) {
+    match value {
+        Value::String(text) => push_bounded_string(output, text),
+        Value::Array(items) => {
+            for item in items {
+                collect_bounded_string_list(item, output);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn push_bounded_string(output: &mut Vec<String>, text: &str) {
+    let value = truncate_chars(text.trim(), 80);
+    if !value.is_empty() && !output.iter().any(|existing| existing == &value) {
+        output.push(value);
+    }
 }
 
 fn bounded_chunk_fields(metadata: &BTreeMap<String, Value>) -> Value {
@@ -3780,6 +3825,10 @@ mod tests {
                     metadata.insert("ocrText".to_string(), json!("OCR".repeat(700)));
                     metadata.insert("tableText".to_string(), json!({"rows": ["A", "B"]}));
                     metadata.insert("profileValues".to_string(), json!({"amount": "number"}));
+                    metadata.insert(
+                        "section_title_hints".to_string(),
+                        json!(["固定资产申请", "审批流程", "固定资产申请"]),
+                    );
                 }
                 DocumentChunk {
                     id: DocumentChunkId::new(),
@@ -3815,6 +3864,10 @@ mod tests {
         );
         assert!(item["chunks"][0]["fields"].get("table").is_some());
         assert!(item["chunks"][0]["fields"].get("profile").is_some());
+        assert_eq!(
+            item["chunks"][0]["section_title_hints"],
+            json!(["固定资产申请", "审批流程"])
+        );
     }
 
     #[test]
