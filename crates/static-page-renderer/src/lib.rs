@@ -217,6 +217,14 @@ fn build_export_package_manifest(
             "role": "optional_advanced_chart_hydration",
             "note": "index.html keeps deterministic DOM/SVG chart fallback and does not inject remote scripts; approved hosts can provide ECharts to hydrate safe JSON option islands."
         }],
+        "browser_delivery_contract": {
+            "entry": "index.html",
+            "layout": "responsive_static_html",
+            "remote_scripts_allowed": false,
+            "deterministic_chart_fallback": true,
+            "optional_echarts_hydration": "safe_json_option_islands",
+            "mobile_viewport": "responsive_no_horizontal_overflow_expected"
+        },
         "debug": {
             "renderer": STATIC_PAGE_RENDERER_ID,
             "module_count": module_count,
@@ -1733,6 +1741,20 @@ mod tests {
         assert_eq!(
             result.asset_manifest["export_package"]["runtime_requirements"][0]["required"],
             false
+        );
+        assert_eq!(
+            result.asset_manifest["export_package"]["browser_delivery_contract"]["entry"],
+            "index.html"
+        );
+        assert_eq!(
+            result.asset_manifest["export_package"]["browser_delivery_contract"]
+                ["remote_scripts_allowed"],
+            false
+        );
+        assert_eq!(
+            result.asset_manifest["export_package"]["browser_delivery_contract"]
+                ["deterministic_chart_fallback"],
+            true
         );
     }
 

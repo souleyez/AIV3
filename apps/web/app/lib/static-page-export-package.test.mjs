@@ -4,6 +4,7 @@ import {
   buildStaticPageExportPackage,
   buildStaticPageExportZipBlob,
   buildStaticPageStandaloneHtml,
+  browserDeliveryContractFromManifest,
   dataQualityModulesFromManifest,
   dataQualitySummaryFromManifest,
   hasDataQualitySummary,
@@ -127,10 +128,13 @@ test('static page export package includes html manifest data modules and readme'
   assert.match(files.get('README.md').content, /数据质量：已确认 1 \/ 部分 0 \/ 缺失 0/);
   assert.match(files.get('README.md').content, /模块级数据质量报告：data-quality-report\.json/);
   assert.match(files.get('README.md').content, /视觉合同：confirmed/);
+  assert.match(files.get('README.md').content, /浏览器交付：index\.html 可直接打开/);
   assert.match(files.get('README.md').content, /Apache ECharts（可选）/);
   assert.match(files.get('export-package.json').content, /"confirmedModules": 1/);
   assert.match(files.get('export-package.json').content, /"visual_bridge"/);
   assert.match(files.get('export-package.json').content, /"data_quality_modules"/);
+  assert.match(files.get('export-package.json').content, /"browser_delivery_contract"/);
+  assert.match(files.get('export-package.json').content, /"README\.md"/);
   assert.ok(artifact.packageManifest.files.some((file) => file.path === 'README.md'));
   assert.ok(artifact.packageManifest.files.some((file) => file.path === 'export-package.json'));
   assert.ok(artifact.packageManifest.files.some((file) => file.path === 'data-quality-report.json'));
@@ -139,6 +143,55 @@ test('static page export package includes html manifest data modules and readme'
   assert.ok(artifact.packageManifest.files.some((file) => file.path === 'runtime-requirements.json'));
   assert.equal(artifact.packageManifest.runtime_requirements[0].required, false);
   assert.deepEqual(artifact.warnings, []);
+});
+
+test('static page export package preserves browser-ready final html contract', () => {
+  const browserReadyHtml = [
+    '<!doctype html>',
+    '<html lang="zh-CN">',
+    '<head>',
+    '<meta name="viewport" content="width=device-width, initial-scale=1">',
+    '<title>客户经营静态页</title>',
+    '</head>',
+    '<body>',
+    '<main class="static-page">',
+    '<section class="module-grid" aria-label="静态页模块">',
+    '<article class="module"><h2>趋势图</h2><svg class="chart-svg line-chart" role="img"></svg></article>',
+    '<script type="application/json" class="static-page-echarts-option" data-module-id="trend">{"series":[]}</script>',
+    '<div class="echarts-hydration-target" data-module-id="trend"></div>',
+    '</section>',
+    '</main>',
+    '</body>',
+    '</html>',
+  ].join('');
+  const draft = testDraft({
+    finalPage: {
+      ...testDraft().finalPage,
+      html: browserReadyHtml,
+    },
+  });
+
+  const artifact = buildStaticPageExportPackage(draft, {}, draft.finalPage.html);
+  const files = new Map(artifact.files.map((file) => [file.path, file]));
+  const indexHtml = files.get('index.html').content;
+  const packageJson = JSON.parse(files.get('export-package.json').content);
+
+  assert.match(indexHtml, /<meta name="viewport" content="width=device-width, initial-scale=1">/);
+  assert.match(indexHtml, /class="module-grid"/);
+  assert.match(indexHtml, /class="chart-svg line-chart"/);
+  assert.match(indexHtml, /class="static-page-echarts-option"/);
+  assert.match(indexHtml, /class="echarts-hydration-target"/);
+  assert.doesNotMatch(indexHtml, /<script[^>]+src=/i);
+  assert.deepEqual(packageJson.browser_delivery_contract, {
+    entry: 'index.html',
+    layout: 'responsive_static_html',
+    remote_scripts_allowed: false,
+    deterministic_chart_fallback: true,
+    optional_echarts_hydration: 'safe_json_option_islands',
+    mobile_viewport: 'responsive_no_horizontal_overflow_expected',
+  });
+  assert.equal(packageJson.files.some((file) => file.path === 'README.md'), true);
+  assert.equal(packageJson.files.some((file) => file.path === 'render-spec.json'), true);
 });
 
 test('static page export package can be written as a real zip file', async () => {
@@ -207,4 +260,12 @@ test('static page export helpers expose data quality summary for UI surfaces', (
   });
   assert.equal(dataQualityModulesFromManifest(testDraft().finalPage.assetManifest)[0].moduleId, 'trend');
   assert.equal(hasDataQualitySummary(dataQualitySummaryFromManifest({})), false);
+  assert.deepEqual(browserDeliveryContractFromManifest({}), {
+    entry: 'index.html',
+    layout: 'responsive_static_html',
+    remote_scripts_allowed: false,
+    deterministic_chart_fallback: true,
+    optional_echarts_hydration: 'safe_json_option_islands',
+    mobile_viewport: 'responsive_no_horizontal_overflow_expected',
+  });
 });

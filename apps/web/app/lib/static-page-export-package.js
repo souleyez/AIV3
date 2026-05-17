@@ -19,6 +19,17 @@ function fallbackRuntimeRequirements() {
   }];
 }
 
+function fallbackBrowserDeliveryContract() {
+  return {
+    entry: 'index.html',
+    layout: 'responsive_static_html',
+    remote_scripts_allowed: false,
+    deterministic_chart_fallback: true,
+    optional_echarts_hydration: 'safe_json_option_islands',
+    mobile_viewport: 'responsive_no_horizontal_overflow_expected',
+  };
+}
+
 function numberOrZero(value) {
   return Number.isFinite(Number(value)) ? Number(value) : 0;
 }
@@ -48,6 +59,16 @@ export function dataQualityModulesFromManifest(manifest) {
   return Array.isArray(modules) ? modules : [];
 }
 
+export function browserDeliveryContractFromManifest(manifest) {
+  const contract = manifest.export_package?.browser_delivery_contract
+    || manifest.browser_delivery_contract
+    || {};
+  return {
+    ...fallbackBrowserDeliveryContract(),
+    ...(contract && typeof contract === 'object' ? contract : {}),
+  };
+}
+
 function fallbackPackageManifest(draft) {
   return {
     kind: 'static-page-export-package',
@@ -65,6 +86,7 @@ function fallbackPackageManifest(draft) {
       { path: 'README.md', role: 'human_handoff_note', mime: 'text/markdown' },
     ],
     runtime_requirements: fallbackRuntimeRequirements(),
+    browser_delivery_contract: fallbackBrowserDeliveryContract(),
   };
 }
 
@@ -93,6 +115,7 @@ function normalizePackageManifest(draft, manifest) {
       : Array.isArray(manifest.runtime_requirements)
         ? manifest.runtime_requirements
         : fallbackRuntimeRequirements(),
+    browser_delivery_contract: browserDeliveryContractFromManifest(manifest),
     files,
   };
 }
@@ -102,6 +125,7 @@ function buildReadme({ draft, manifest, backendHtml, warnings }) {
   const dataQualitySummary = dataQualitySummaryFromManifest(manifest);
   const dataQualityModules = dataQualityModulesFromManifest(manifest);
   const visualBridge = visualBridgeFromContext(draft, manifest);
+  const browserDeliveryContract = browserDeliveryContractFromManifest(manifest);
   const runtimeRequirements = Array.isArray(manifest.export_package?.runtime_requirements)
     ? manifest.export_package.runtime_requirements
     : Array.isArray(manifest.runtime_requirements)
@@ -118,6 +142,11 @@ function buildReadme({ draft, manifest, backendHtml, warnings }) {
     `- 后端 HTML：${backendHtml ? '已包含' : '未返回，需重新刷新或等待 worker 写回'}`,
     `- 视觉合同：${visualBridge.status || 'unknown'} / ${visualBridge.previewAssetKey || 'no-preview'}（详见 visual-bridge.json）`,
   ];
+  if (browserDeliveryContract.entry) {
+    lines.push(
+      `- 浏览器交付：${browserDeliveryContract.entry} 可直接打开；无远程脚本；图表保留 deterministic DOM/SVG 回退，ECharts 仅作为可选安全 JSON 增强。`,
+    );
+  }
   if (hasDataQualitySummary(dataQualitySummary)) {
     lines.push(
       `- 数据质量：已确认 ${dataQualitySummary.confirmedModules} / 部分 ${dataQualitySummary.partialModules} / 缺失 ${dataQualitySummary.missingModules}`,
@@ -138,7 +167,7 @@ function buildReadme({ draft, manifest, backendHtml, warnings }) {
   return `${lines.join('\n')}\n`;
 }
 
-function contentForPath(path, { draft, payload, manifest, backendHtml, warnings }) {
+function contentForPath(path, { draft, payload, manifest, backendHtml, warnings, packageManifest }) {
   if (path === 'export-package.json') {
     const visualBridge = visualBridgeFromContext(draft, manifest);
     return safeJson({
@@ -152,8 +181,9 @@ function contentForPath(path, { draft, payload, manifest, backendHtml, warnings 
       chart_runtime: manifest.chart_runtime || null,
       data_quality_summary: dataQualitySummaryFromManifest(manifest),
       data_quality_modules: dataQualityModulesFromManifest(manifest),
-      runtime_requirements: contextRuntimeRequirements({ manifest }),
-      files: Array.isArray(manifest.export_package?.files) ? manifest.export_package.files : fallbackPackageManifest(draft).files,
+      runtime_requirements: contextRuntimeRequirements({ manifest, packageManifest }),
+      browser_delivery_contract: browserDeliveryContractFromManifest(manifest),
+      files: Array.isArray(packageManifest?.files) ? packageManifest.files : fallbackPackageManifest(draft).files,
     });
   }
   if (path === 'index.html') {
@@ -184,7 +214,7 @@ function contentForPath(path, { draft, payload, manifest, backendHtml, warnings 
   }
   if (path === 'runtime-requirements.json') {
     return safeJson(
-      contextRuntimeRequirements({ manifest }),
+      contextRuntimeRequirements({ manifest, packageManifest }),
     );
   }
   if (path === 'README.md') {
@@ -220,12 +250,17 @@ function visualBridgeFromContext(draft = {}, manifest = {}) {
   };
 }
 
-function contextRuntimeRequirements({ manifest }) {
-  return Array.isArray(manifest.export_package?.runtime_requirements)
-    ? manifest.export_package.runtime_requirements
-    : Array.isArray(manifest.runtime_requirements)
-      ? manifest.runtime_requirements
-      : fallbackRuntimeRequirements();
+function contextRuntimeRequirements({ manifest, packageManifest }) {
+  if (Array.isArray(packageManifest?.runtime_requirements)) {
+    return packageManifest.runtime_requirements;
+  }
+  if (Array.isArray(manifest.export_package?.runtime_requirements)) {
+    return manifest.export_package.runtime_requirements;
+  }
+  if (Array.isArray(manifest.runtime_requirements)) {
+    return manifest.runtime_requirements;
+  }
+  return fallbackRuntimeRequirements();
 }
 
 function normalizeFiles(packageManifest, context) {
@@ -240,7 +275,7 @@ function normalizeFiles(packageManifest, context) {
       path,
       role: file.role || 'supporting_file',
       mime: file.mime || 'text/plain',
-      content: contentForPath(path, context),
+      content: contentForPath(path, { ...context, packageManifest }),
     });
   });
   return files;
