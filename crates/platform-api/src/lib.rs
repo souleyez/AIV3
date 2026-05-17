@@ -47244,6 +47244,138 @@ mod tests {
     }
 
     #[test]
+    fn xinshijie_ioa_rag_smoke_routes_questions_to_expected_documents_and_sections() {
+        let now = Utc::now();
+        let tenant_id = TenantId::new();
+        let dataset_id = DatasetId::new();
+        let fixed_asset_document_id = DocumentId::new();
+        let qa_document_id = DocumentId::new();
+        let tips_document_id = DocumentId::new();
+        let policy_document_id = DocumentId::new();
+        let fixed_asset_chunk_id = DocumentChunkId::new();
+        let qa_chunk_id = DocumentChunkId::new();
+        let tips_chunk_id = DocumentChunkId::new();
+        let policy_chunk_id = DocumentChunkId::new();
+
+        let document = |id: DocumentId, title: &str, object_key: &str| Document {
+            id,
+            tenant_id,
+            dataset_id,
+            owner_user_id: None,
+            title: title.to_string(),
+            object_key: object_key.to_string(),
+            content_type: "text/markdown".to_string(),
+            lifecycle: domain_model::DocumentLifecycle::Extracted,
+            secret_binding_ids: Vec::new(),
+            metadata: BTreeMap::new(),
+            created_at: now,
+            updated_at: now,
+        };
+        let chunk = |id: DocumentChunkId,
+                     document_id: DocumentId,
+                     index: i32,
+                     content: &str,
+                     section_title: &str| {
+            let mut metadata = BTreeMap::new();
+            metadata.insert("section_title_hints".to_string(), json!([section_title]));
+            DocumentChunk {
+                id,
+                tenant_id,
+                dataset_id,
+                document_id,
+                chunk_index: index,
+                content: content.to_string(),
+                token_count: 24,
+                state: DocumentChunkState::Extracted,
+                metadata,
+                created_at: now,
+                updated_at: now,
+            }
+        };
+
+        let sources = vec![
+            (
+                document(
+                    fixed_asset_document_id,
+                    "用户手册3-固定资产",
+                    "documents/xinshijie/ioa/user-manual-3-fixed-asset.md",
+                ),
+                chunk(
+                    fixed_asset_chunk_id,
+                    fixed_asset_document_id,
+                    0,
+                    "提交申请单后，部门负责人审批，行政登记资产编号。",
+                    "固定资产申请",
+                ),
+            ),
+            (
+                document(
+                    qa_document_id,
+                    "IOA系统Q&A",
+                    "documents/xinshijie/ioa/system-qa.md",
+                ),
+                chunk(
+                    qa_chunk_id,
+                    qa_document_id,
+                    1,
+                    "账号被锁定时先在登录页重置密码，再联系管理员确认账号状态。",
+                    "账号登录问题",
+                ),
+            ),
+            (
+                document(
+                    tips_document_id,
+                    "iOA应用技巧",
+                    "documents/xinshijie/ioa/tips.md",
+                ),
+                chunk(
+                    tips_chunk_id,
+                    tips_document_id,
+                    2,
+                    "首页工作台可以查看待办、已办、抄送和常用应用入口。",
+                    "待办入口",
+                ),
+            ),
+            (
+                document(
+                    policy_document_id,
+                    "行政制度汇编",
+                    "documents/xinshijie/admin/policy.md",
+                ),
+                chunk(
+                    policy_chunk_id,
+                    policy_document_id,
+                    3,
+                    "资产盘点和办公用品领用记录由行政定期复核。",
+                    "资产盘点",
+                ),
+            ),
+        ];
+
+        for (prompt, expected_chunk_id, expected_section) in [
+            ("固定资产怎么申请", fixed_asset_chunk_id, "固定资产申请"),
+            ("IOA Q&A 账号锁定怎么办", qa_chunk_id, "账号登录问题"),
+            ("iOA 待办在哪里看", tips_chunk_id, "待办入口"),
+        ] {
+            let ranked = rank_document_chunks_for_prompt(sources.clone(), prompt, 4);
+
+            assert_eq!(
+                ranked[0].chunk.id, expected_chunk_id,
+                "prompt `{prompt}` should route to expected IOA fixture chunk"
+            );
+            assert!(
+                ranked[0].search_text.contains(expected_section),
+                "prompt `{prompt}` should preserve section title in search text"
+            );
+            assert!(
+                document_chunk_fallback_summary(&ranked[0].document, &ranked[0].chunk)
+                    .contains(expected_section),
+                "prompt `{prompt}` should surface section title in fallback summary"
+            );
+        }
+    }
+
+    #[test]
     fn to_report_render_output_view_exposes_typed_status() {
         let now = Utc::now();
         let output = ReportRenderOutput {
