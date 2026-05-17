@@ -747,7 +747,7 @@ fn current_static_page_draft_id(current_artifact: Option<&Value>) -> Option<Stat
     })
 }
 
-fn react_final_answer_content_is_raw_observation(content: &str) -> bool {
+pub(crate) fn react_final_answer_content_is_raw_observation(content: &str) -> bool {
     let Some(candidate) = react_final_answer_json_candidate(content) else {
         return false;
     };

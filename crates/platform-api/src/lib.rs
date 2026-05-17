@@ -133,7 +133,7 @@ use react_agent_contract::{
 };
 use react_agent_tools::{
     assistant_run_react_action_label, assistant_run_react_policy_observation,
-    execute_assistant_run_react_action,
+    execute_assistant_run_react_action, react_final_answer_content_is_raw_observation,
     AssistantRunReactToolResult as AssistantRunReactActionResult,
 };
 
@@ -6466,6 +6466,7 @@ async fn create_assistant_run(
                 &react_runtime.mode,
                 &react_runtime.provider,
                 &react_runtime.model,
+                &chat_runtime,
             )
             .await?,
         )
@@ -10864,6 +10865,7 @@ async fn continue_assistant_run_loaded(
                 &react_runtime.mode,
                 &react_runtime.provider,
                 &react_runtime.model,
+                &chat_runtime,
             )
             .await?,
         )
@@ -12909,6 +12911,134 @@ async fn complete_assistant_run_provider(
     .map_err(|error| ApiError::internal("assistant_run_provider_failed", error.to_string()))
 }
 
+fn assistant_run_react_direct_natural_answer_from_invalid_output(
+    output_text: &str,
+) -> Option<String> {
+    let trimmed = output_text.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if react_final_answer_content_is_raw_observation(trimmed)
+        || assistant_run_react_output_is_json_payload(trimmed)
+        || assistant_run_react_output_contains_internal_marker(trimmed)
+    {
+        return None;
+    }
+    Some(trimmed.to_string())
+}
+
+fn assistant_run_react_output_is_json_payload(output_text: &str) -> bool {
+    let Some(candidate) = assistant_run_react_json_payload_candidate(output_text) else {
+        return false;
+    };
+    serde_json::from_str::<Value>(&candidate).is_ok()
+}
+
+fn assistant_run_react_json_payload_candidate(output_text: &str) -> Option<String> {
+    let trimmed = output_text.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let fenced = trimmed
+        .strip_prefix("```json")
+        .or_else(|| trimmed.strip_prefix("```JSON"))
+        .or_else(|| trimmed.strip_prefix("```"));
+    if let Some(fenced) = fenced {
+        let inner = fenced.trim();
+        let inner = inner.strip_suffix("```").unwrap_or(inner).trim();
+        return Some(inner.to_string());
+    }
+    if trimmed.starts_with('{') || trimmed.starts_with('[') {
+        return Some(trimmed.to_string());
+    }
+    None
+}
+
+fn assistant_run_react_output_contains_internal_marker(output_text: &str) -> bool {
+    let normalized = output_text.to_ascii_lowercase();
+    [
+        "observation",
+        "execution_trail",
+        "react_trace",
+        "tool_trace",
+        "runtime_manifest",
+        "provider_raw",
+        "safe_error_code",
+        "requires_confirmation",
+        "\"action_type\"",
+        "\"actiontype\"",
+    ]
+    .iter()
+    .any(|marker| normalized.contains(marker))
+}
+
+fn build_assistant_run_react_natural_fallback_input(
+    base_input: String,
+    observations: &[Value],
+    reason: &str,
+) -> String {
+    let mut sections = vec![
+        base_input,
+        "ReAct 自然回答兜底要求：上一轮工具规划没有产出可直接展示给用户的最终回答。请改为面向用户直接自然语言作答；不要输出 JSON、observation、execution_trail、react_trace、tool_trace、runtime_manifest 或 provider 原始载荷。".to_string(),
+        "如果当前没有拿到 V3 可见证据，只在涉及 V3 数据/文档/权限/产物状态时说明“当前不可见/未供料”；普通问题继续用你的通用能力回答。".to_string(),
+        format!("兜底原因：{reason}"),
+    ];
+    if !observations.is_empty() {
+        let summaries = observations
+            .iter()
+            .map(assistant_run_react_observation_summary)
+            .collect::<Vec<_>>();
+        sections.push(format!(
+            "已执行动作摘要（仅用于判断下一句回答，不要原样输出）：{}",
+            serde_json::to_string(&summaries).unwrap_or_else(|_| "[]".to_string())
+        ));
+    }
+    sections.join("\n\n")
+}
+
+async fn complete_assistant_run_react_natural_answer_fallback(
+    chat_runtime: &LlmRuntimeSelection,
+    provider_input: String,
+) -> Option<(String, Value)> {
+    if chat_runtime.mode == "placeholder" {
+        return None;
+    }
+    let response = complete_assistant_run_provider(
+        MODEL_LANE_ASSISTANT_CHAT,
+        chat_runtime.mode.clone(),
+        chat_runtime.provider.clone(),
+        chat_runtime.model.clone(),
+        provider_input,
+    )
+    .await
+    .ok()?;
+    let answer = response.output_text.trim().to_string();
+    if answer.is_empty() {
+        return None;
+    }
+    Some((answer, render_runtime_manifest(&response.runtime)))
+}
+
+fn assistant_run_react_attach_natural_fallback_runtime(
+    runtime_manifest: &mut Value,
+    reason: &str,
+    fallback_runtime_manifest: Value,
+) {
+    if let Some(object) = runtime_manifest.as_object_mut() {
+        object.insert(
+            "natural_answer_fallback".to_string(),
+            json!({
+                "reason": reason,
+                "runtime": fallback_runtime_manifest,
+            }),
+        );
+    }
+}
+
+fn assistant_run_react_unavailable_natural_answer_message() -> String {
+    "模型暂时没有返回可展示的自然语言回答，请稍后重试或换一种问法。".to_string()
+}
+
 async fn run_assistant_run_react_for_create(
     state: &AppState,
     request: &CreateAssistantRunRequest,
@@ -12920,6 +13050,7 @@ async fn run_assistant_run_react_for_create(
     runtime_mode: &str,
     runtime_provider: &str,
     runtime_model: &str,
+    chat_runtime: &LlmRuntimeSelection,
 ) -> std::result::Result<AssistantRunReactOutcome, ApiError> {
     let max_steps = assistant_run_react_max_steps();
     let mut evidence_state = initial_evidence_state;
@@ -12961,16 +13092,64 @@ async fn run_assistant_run_react_for_create(
         let action = match parse_assistant_run_next_action(&response.output_text) {
             Ok(action) => action,
             Err(error) => {
-                assistant_message = response.output_text.trim().to_string();
-                if assistant_message.is_empty() {
-                    assistant_message = format!("模型未返回有效 ReAct 动作：{error}");
+                let fallback_reason = "invalid_action";
+                let mut fallback = "safe_status_message";
+                if let Some(answer) = assistant_run_react_direct_natural_answer_from_invalid_output(
+                    &response.output_text,
+                ) {
+                    assistant_message = answer;
+                    fallback = "direct_natural_model_text";
+                } else {
+                    let provider_input = build_assistant_run_react_natural_fallback_input(
+                        build_assistant_run_provider_input_with_evidence(
+                            request,
+                            Some(&evidence_state),
+                        ),
+                        &observations,
+                        fallback_reason,
+                    );
+                    if let Some((answer, fallback_runtime_manifest)) =
+                        complete_assistant_run_react_natural_answer_fallback(
+                            chat_runtime,
+                            provider_input,
+                        )
+                        .await
+                    {
+                        assistant_message = answer;
+                        fallback = "external_model_natural_answer";
+                        assistant_run_react_attach_natural_fallback_runtime(
+                            &mut runtime_manifest,
+                            fallback_reason,
+                            fallback_runtime_manifest,
+                        );
+                        events.push(AssistantRunReactEvent {
+                            event_name: "assistant_run.react.natural_answer_fallback".to_string(),
+                            payload: json!({
+                                "step": step_index,
+                                "reason": fallback_reason,
+                                "fallback": fallback,
+                            }),
+                        });
+                        execution_trail_steps.push(json!({
+                            "status": "completed",
+                            "label": "外部模型自然回答兜底",
+                            "react_step": step_index,
+                            "fallback": fallback,
+                            "reason": fallback_reason,
+                            "at": Utc::now(),
+                        }));
+                    }
+                }
+                if assistant_message.trim().is_empty() {
+                    let _ = error;
+                    assistant_message = assistant_run_react_unavailable_natural_answer_message();
                 }
                 events.push(AssistantRunReactEvent {
                     event_name: "assistant_run.react.invalid_action".to_string(),
                     payload: json!({
                         "step": step_index,
                         "safe_error_code": "invalid_action",
-                        "fallback": "final_answer",
+                        "fallback": fallback,
                     }),
                 });
                 react_trace_steps.push(assistant_run_react_invalid_trace_step(
@@ -12982,9 +13161,9 @@ async fn run_assistant_run_react_for_create(
                 ));
                 execution_trail_steps.push(json!({
                     "status": "completed",
-                    "label": "模型直接回答",
+                    "label": "模型自然回答兜底",
                     "react_step": step_index,
-                    "fallback": "invalid_action",
+                    "fallback": fallback,
                     "at": Utc::now(),
                 }));
                 break;
@@ -13077,10 +13256,6 @@ async fn run_assistant_run_react_for_create(
     }
 
     if assistant_message.trim().is_empty() {
-        assistant_message = format!(
-            "已达到连续执行步数上限（{} 步）。请确认是否继续，或补充下一步要求。",
-            max_steps
-        );
         events.push(AssistantRunReactEvent {
             event_name: "assistant_run.react.step_limit_reached".to_string(),
             payload: json!({
@@ -13094,6 +13269,42 @@ async fn run_assistant_run_react_for_create(
             "max_steps": max_steps,
             "at": Utc::now(),
         }));
+        let fallback_reason = "react_step_limit";
+        let provider_input = build_assistant_run_react_natural_fallback_input(
+            build_assistant_run_provider_input_with_evidence(request, Some(&evidence_state)),
+            &observations,
+            fallback_reason,
+        );
+        if let Some((answer, fallback_runtime_manifest)) =
+            complete_assistant_run_react_natural_answer_fallback(chat_runtime, provider_input).await
+        {
+            assistant_message = answer;
+            assistant_run_react_attach_natural_fallback_runtime(
+                &mut runtime_manifest,
+                fallback_reason,
+                fallback_runtime_manifest,
+            );
+            events.push(AssistantRunReactEvent {
+                event_name: "assistant_run.react.natural_answer_fallback".to_string(),
+                payload: json!({
+                    "reason": fallback_reason,
+                    "fallback": "external_model_natural_answer",
+                    "max_steps": max_steps,
+                }),
+            });
+            execution_trail_steps.push(json!({
+                "status": "completed",
+                "label": "外部模型自然回答兜底",
+                "fallback": "external_model_natural_answer",
+                "reason": fallback_reason,
+                "at": Utc::now(),
+            }));
+        } else {
+            assistant_message = format!(
+                "已达到连续执行步数上限（{} 步）。请补充下一步要求，我会继续处理。",
+                max_steps
+            );
+        }
     }
     assistant_run_react_attach_trace(&mut runtime_manifest, trace_id, None, &react_trace_steps);
     execution_trail_steps.push(assistant_run_react_trace_trail_step(
@@ -13134,6 +13345,7 @@ async fn run_assistant_run_react_for_continue(
     runtime_mode: &str,
     runtime_provider: &str,
     runtime_model: &str,
+    chat_runtime: &LlmRuntimeSelection,
 ) -> std::result::Result<AssistantRunReactOutcome, ApiError> {
     let max_steps = max_steps.clamp(1, ASSISTANT_RUN_REACT_MAX_STEPS);
     let mut evidence_state = initial_evidence_state.clone();
@@ -13179,16 +13391,69 @@ async fn run_assistant_run_react_for_continue(
         let action = match parse_assistant_run_next_action(&response.output_text) {
             Ok(action) => action,
             Err(error) => {
-                assistant_message = response.output_text.trim().to_string();
-                if assistant_message.is_empty() {
-                    assistant_message = format!("模型未返回有效 ReAct 动作：{error}");
+                let fallback_reason = "invalid_action";
+                let mut fallback = "safe_status_message";
+                if let Some(answer) = assistant_run_react_direct_natural_answer_from_invalid_output(
+                    &response.output_text,
+                ) {
+                    assistant_message = answer;
+                    fallback = "direct_natural_model_text";
+                } else {
+                    let provider_input = build_assistant_run_react_natural_fallback_input(
+                        build_assistant_run_continue_provider_input(
+                            run,
+                            request,
+                            continue_prompt,
+                            selected_scope,
+                            &evidence_state,
+                            max_steps,
+                        ),
+                        &observations,
+                        fallback_reason,
+                    );
+                    if let Some((answer, fallback_runtime_manifest)) =
+                        complete_assistant_run_react_natural_answer_fallback(
+                            chat_runtime,
+                            provider_input,
+                        )
+                        .await
+                    {
+                        assistant_message = answer;
+                        fallback = "external_model_natural_answer";
+                        assistant_run_react_attach_natural_fallback_runtime(
+                            &mut runtime_manifest,
+                            fallback_reason,
+                            fallback_runtime_manifest,
+                        );
+                        events.push(AssistantRunReactEvent {
+                            event_name: "assistant_run.react.natural_answer_fallback".to_string(),
+                            payload: json!({
+                                "step": step_index,
+                                "reason": fallback_reason,
+                                "fallback": fallback,
+                                "entrypoint": "continue_assistant_run",
+                            }),
+                        });
+                        execution_trail_steps.push(json!({
+                            "status": "completed",
+                            "label": "外部模型自然回答兜底",
+                            "react_step": step_index,
+                            "fallback": fallback,
+                            "reason": fallback_reason,
+                            "at": Utc::now(),
+                        }));
+                    }
+                }
+                if assistant_message.trim().is_empty() {
+                    let _ = error;
+                    assistant_message = assistant_run_react_unavailable_natural_answer_message();
                 }
                 events.push(AssistantRunReactEvent {
                     event_name: "assistant_run.react.invalid_action".to_string(),
                     payload: json!({
                         "step": step_index,
                         "safe_error_code": "invalid_action",
-                        "fallback": "final_answer",
+                        "fallback": fallback,
                         "entrypoint": "continue_assistant_run",
                     }),
                 });
@@ -13201,9 +13466,9 @@ async fn run_assistant_run_react_for_continue(
                 ));
                 execution_trail_steps.push(json!({
                     "status": "completed",
-                    "label": "模型直接回答",
+                    "label": "模型自然回答兜底",
                     "react_step": step_index,
-                    "fallback": "invalid_action",
+                    "fallback": fallback,
                     "at": Utc::now(),
                 }));
                 break;
@@ -13297,10 +13562,6 @@ async fn run_assistant_run_react_for_continue(
     }
 
     if assistant_message.trim().is_empty() {
-        assistant_message = format!(
-            "已达到连续执行步数上限（{} 步）。请确认是否继续，或补充下一步要求。",
-            max_steps
-        );
         events.push(AssistantRunReactEvent {
             event_name: "assistant_run.react.step_limit_reached".to_string(),
             payload: json!({
@@ -13315,6 +13576,50 @@ async fn run_assistant_run_react_for_continue(
             "max_steps": max_steps,
             "at": Utc::now(),
         }));
+        let fallback_reason = "react_step_limit";
+        let provider_input = build_assistant_run_react_natural_fallback_input(
+            build_assistant_run_continue_provider_input(
+                run,
+                request,
+                continue_prompt,
+                selected_scope,
+                &evidence_state,
+                max_steps,
+            ),
+            &observations,
+            fallback_reason,
+        );
+        if let Some((answer, fallback_runtime_manifest)) =
+            complete_assistant_run_react_natural_answer_fallback(chat_runtime, provider_input).await
+        {
+            assistant_message = answer;
+            assistant_run_react_attach_natural_fallback_runtime(
+                &mut runtime_manifest,
+                fallback_reason,
+                fallback_runtime_manifest,
+            );
+            events.push(AssistantRunReactEvent {
+                event_name: "assistant_run.react.natural_answer_fallback".to_string(),
+                payload: json!({
+                    "reason": fallback_reason,
+                    "fallback": "external_model_natural_answer",
+                    "max_steps": max_steps,
+                    "entrypoint": "continue_assistant_run",
+                }),
+            });
+            execution_trail_steps.push(json!({
+                "status": "completed",
+                "label": "外部模型自然回答兜底",
+                "fallback": "external_model_natural_answer",
+                "reason": fallback_reason,
+                "at": Utc::now(),
+            }));
+        } else {
+            assistant_message = format!(
+                "已达到连续执行步数上限（{} 步）。请补充下一步要求，我会继续处理。",
+                max_steps
+            );
+        }
     }
 
     assistant_run_react_attach_trace(
@@ -36713,6 +37018,52 @@ mod tests {
         assert!(!input.contains("供料状态"));
         assert!(!input.contains("供料证据"));
         assert!(!input.contains("规划/渲染/修改静态页"));
+    }
+
+    #[test]
+    fn assistant_run_react_invalid_output_keeps_only_natural_direct_answers() {
+        let answer = assistant_run_react_direct_natural_answer_from_invalid_output(
+            "可以，先按普通问答回答。",
+        )
+        .expect("plain natural text can be shown");
+        assert_eq!(answer, "可以，先按普通问答回答。");
+
+        assert!(
+            assistant_run_react_direct_natural_answer_from_invalid_output(
+                r#"{"status":"ok","action_type":"retrieve_evidence","items":[]}"#,
+            )
+            .is_none()
+        );
+        assert!(assistant_run_react_direct_natural_answer_from_invalid_output(
+            "```json\n{\"status\":\"ok\",\"action_type\":\"retrieve_evidence\",\"items\":[]}\n```",
+        )
+        .is_none());
+        assert!(
+            assistant_run_react_direct_natural_answer_from_invalid_output(
+                "runtime_manifest: {\"provider_raw\": true}",
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn assistant_run_react_natural_fallback_prompt_blocks_internal_payloads() {
+        let input = build_assistant_run_react_natural_fallback_input(
+            "用户问题：最近流程怎么走？".to_string(),
+            &[json!({
+                "status": "ok",
+                "action_type": "retrieve_evidence",
+                "items": [{"id": "doc-1"}]
+            })],
+            "react_step_limit",
+        );
+
+        assert!(input.contains("自然回答兜底"));
+        assert!(input.contains("不要输出 JSON"));
+        assert!(input.contains("不要原样输出"));
+        assert!(input.contains("当前不可见/未供料"));
+        assert!(input.contains("兜底原因：react_step_limit"));
+        assert!(input.contains("returned_count"));
     }
 
     #[test]
