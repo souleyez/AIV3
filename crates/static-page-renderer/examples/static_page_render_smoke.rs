@@ -1,0 +1,193 @@
+use serde_json::json;
+use static_page_renderer::{render_static_page, StaticPageRenderRequest, STATIC_PAGE_RENDERER_ID};
+use std::env;
+use std::error::Error;
+use std::fs;
+use std::path::PathBuf;
+
+fn main() -> Result<(), Box<dyn Error>> {
+    let output_dir = env::args()
+        .nth(1)
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("target/static-page-render-smoke/artifact"));
+    fs::create_dir_all(&output_dir)?;
+
+    let request = StaticPageRenderRequest {
+        draft_id: "smoke-static-page-draft".to_string(),
+        assistant_run_id: "smoke-assistant-run".to_string(),
+        title: "新世界 IOA 问答运营静态页".to_string(),
+        draft_payload: json!({
+            "styleDirection": "client-delivery",
+            "modelSummary": "基于已确认数据生成可交付静态页，最终 HTML 保留 DOM/SVG 回退与安全 ECharts JSON 岛。",
+            "visualSpec": {
+                "palette": {
+                    "background": "#f8fafc",
+                    "surface": "#ffffff",
+                    "text": "#0f172a",
+                    "muted": "#475569",
+                    "accent": "#2563eb",
+                    "chart": "#0ea5e9"
+                }
+            },
+            "renderSpec": {
+                "componentModel": "dom-text-svg-chart",
+                "responsive": true
+            },
+            "previewContract": {
+                "status": "confirmed",
+                "imageJobId": "smoke-image-job",
+                "assetKey": "previews/smoke-static-page.png",
+                "draftFingerprint": "smoke-fingerprint",
+                "confirmedAt": "2026-05-17T00:00:00Z"
+            },
+            "mobileOrder": ["overview", "answer-trend", "topic-share"],
+            "modules": [{
+                "id": "overview",
+                "title": "问答服务总览",
+                "content": "展示第三方资料库接入后的问答覆盖、命中和待补料状态。",
+                "dataBinding": {
+                    "label": "IOA 问答样本统计",
+                    "sourceId": "dataset-ioa-qa",
+                    "fieldPath": "qa.summary"
+                },
+                "visualization": {
+                    "type": "kpi-cards",
+                    "data": [
+                        { "label": "知识段落", "value": "128" },
+                        { "label": "权限命中", "value": "96%" },
+                        { "label": "可回答问题", "value": "42" },
+                        { "label": "需补料", "value": "3" }
+                    ]
+                },
+                "layout": { "x": 0, "y": 0, "w": 4, "h": 3 }
+            }, {
+                "id": "answer-trend",
+                "title": "最近问答命中趋势",
+                "content": "按最近三轮测试样本展示模型基于 V3 资料回答的命中变化。",
+                "dataBinding": {
+                    "label": "问答命中率",
+                    "sourceId": "dataset-ioa-qa",
+                    "fieldPath": "qa.hit_rate",
+                    "evidenceIds": ["ev-qa-1", "ev-qa-2", "ev-qa-3"]
+                },
+                "visualization": {
+                    "type": "line-chart",
+                    "label": "命中趋势"
+                },
+                "layout": { "x": 4, "y": 0, "w": 4, "h": 3 }
+            }, {
+                "id": "topic-share",
+                "title": "问题主题分布",
+                "content": "高级图表使用安全 ECharts JSON 岛，同时最终 HTML 保留确定性 SVG 回退。",
+                "dataBinding": {
+                    "label": "主题分布",
+                    "sourceId": "dataset-ioa-qa",
+                    "fieldPath": "qa.topic_share",
+                    "evidenceIds": ["ev-topic-1", "ev-topic-2", "ev-topic-3"]
+                },
+                "visualization": {
+                    "type": "bar-chart",
+                    "label": "主题分布柱图",
+                    "chartRuntime": "echarts",
+                    "chartOptions": {
+                        "title": { "text": "主题分布" },
+                        "xAxis": { "type": "category" },
+                        "yAxis": { "type": "value" },
+                        "series": [{
+                            "type": "bar",
+                            "data": [36, 24, 18]
+                        }]
+                    }
+                },
+                "layout": { "x": 8, "y": 0, "w": 4, "h": 3 }
+            }],
+            "dataSnapshot": {
+                "source": "static-page-render-smoke-fixture",
+                "module_bindings": [{
+                    "moduleId": "overview",
+                    "sampleData": [
+                        { "label": "知识段落", "value": 128, "kind": "module_data" },
+                        { "label": "权限命中", "value": 96, "kind": "module_data" }
+                    ],
+                    "dataQuality": "module_data",
+                    "bindingQuality": {
+                        "status": "confirmed",
+                        "chartDataFit": "ready",
+                        "reason": "renderable_data_rows"
+                    }
+                }, {
+                    "moduleId": "answer-trend",
+                    "sampleData": [
+                        { "label": "第一轮", "value": 82, "kind": "evidence_value" },
+                        { "label": "第二轮", "value": 89, "kind": "evidence_value" },
+                        { "label": "第三轮", "value": 94, "kind": "evidence_value" }
+                    ],
+                    "dataQuality": "evidence_value",
+                    "bindingQuality": {
+                        "status": "confirmed",
+                        "chartDataFit": "ready",
+                        "reason": "renderable_data_rows"
+                    }
+                }, {
+                    "moduleId": "topic-share",
+                    "sampleData": [
+                        { "label": "权限问题", "value": 36, "kind": "evidence_value" },
+                        { "label": "流程问题", "value": 24, "kind": "evidence_value" },
+                        { "label": "资料问题", "value": 18, "kind": "evidence_value" }
+                    ],
+                    "dataQuality": "evidence_value",
+                    "bindingQuality": {
+                        "status": "confirmed",
+                        "chartDataFit": "ready",
+                        "reason": "renderable_data_rows"
+                    }
+                }]
+            }
+        }),
+        selected_scope: json!({
+            "mode": "selected_datasets",
+            "datasetIds": ["dataset-ioa-qa"]
+        }),
+        visibility_snapshot: json!({
+            "policy": "assistant_run_scope_snapshot",
+            "userRole": "dataset_tester"
+        }),
+        preview_asset_key: Some("previews/smoke-static-page.png".to_string()),
+        image_job_id: Some("smoke-image-job".to_string()),
+    };
+
+    let result = render_static_page(&request);
+    let summary = json!({
+        "renderer": STATIC_PAGE_RENDERER_ID,
+        "title": request.title,
+        "module_count": result.asset_manifest["module_count"],
+        "chart_runtime": result.asset_manifest["chart_runtime"],
+        "export_package": result.asset_manifest["export_package"],
+        "files": {
+            "html": "index.html",
+            "manifest": "asset-manifest.json",
+            "request": "render-request.json",
+            "summary": "smoke-summary.json"
+        }
+    });
+
+    fs::write(output_dir.join("index.html"), result.html)?;
+    fs::write(
+        output_dir.join("asset-manifest.json"),
+        serde_json::to_string_pretty(&result.asset_manifest)?,
+    )?;
+    fs::write(
+        output_dir.join("render-request.json"),
+        serde_json::to_string_pretty(&request)?,
+    )?;
+    fs::write(
+        output_dir.join("smoke-summary.json"),
+        serde_json::to_string_pretty(&summary)?,
+    )?;
+
+    println!(
+        "static page render smoke artifact: {}",
+        output_dir.display()
+    );
+    Ok(())
+}

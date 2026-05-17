@@ -10,4 +10,6 @@ Current operator-facing references:
 - [external-third-party-gateway-smoke-2026-05-14.md](</C:/Users/soulzyn/Desktop/codex/ai-data-platform-v3/docs/validation/external-third-party-gateway-smoke-2026-05-14.md>)
 - [external-third-party-mock-sandbox-smoke-2026-05-14.md](</C:/Users/soulzyn/Desktop/codex/ai-data-platform-v3/docs/validation/external-third-party-mock-sandbox-smoke-2026-05-14.md>)
 - [runtime-inspect-pretty.md](</C:/Users/soulzyn/Desktop/codex/ai-data-platform-v3/docs/validation/runtime-inspect-pretty.md>)
+- [static-page-quality-smoke.md](</C:/Users/soulzyn/Desktop/codex/ai-data-platform-v3/docs/validation/static-page-quality-smoke.md>)
+- [static-page-render-smoke.md](</C:/Users/soulzyn/Desktop/codex/ai-data-platform-v3/docs/validation/static-page-render-smoke.md>)
 - [video-ppt-deliverable-smoke.md](</C:/Users/soulzyn/Desktop/codex/ai-data-platform-v3/docs/validation/video-ppt-deliverable-smoke.md>)
