@@ -10,6 +10,7 @@ report_basename="static-page-render-smoke-$(date -u +%Y%m%dT%H%M%SZ)"
 artifact_dir="${report_dir}/${report_basename}-artifact"
 report_json="${report_dir}/${report_basename}.json"
 report_md="${report_dir}/${report_basename}.md"
+export_validation_json="${report_dir}/${report_basename}-export-validation.json"
 cargo_bin="${CARGO_BIN:-cargo}"
 
 if ! command -v "${cargo_bin}" >/dev/null 2>&1; then
@@ -42,6 +43,9 @@ echo "Report directory: ${report_dir}"
 echo "Cargo: ${cargo_bin}"
 
 "${cargo_bin}" run -p static-page-renderer --example static_page_render_smoke -- "${artifact_dir}"
+node tools/validate-static-page-export-artifact.mjs \
+  --artifact "${artifact_dir}" \
+  --out "${export_validation_json}"
 
 finished_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
@@ -50,6 +54,7 @@ SMOKE_HEAD="${head_short}" \
 SMOKE_STARTED_AT="${started_at}" \
 SMOKE_FINISHED_AT="${finished_at}" \
 SMOKE_ARTIFACT_DIR="${artifact_dir}" \
+SMOKE_EXPORT_VALIDATION_JSON="${export_validation_json}" \
 SMOKE_REPORT_JSON="${report_json}" \
 SMOKE_REPORT_MD="${report_md}" \
 node <<'NODE'
@@ -63,6 +68,7 @@ const summaryPath = path.join(artifactDir, "smoke-summary.json");
 const html = fs.readFileSync(htmlPath, "utf8");
 const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
 const summary = JSON.parse(fs.readFileSync(summaryPath, "utf8"));
+const exportValidation = JSON.parse(fs.readFileSync(process.env.SMOKE_EXPORT_VALIDATION_JSON, "utf8"));
 const checks = [];
 const packageFiles = Array.isArray(manifest.export_package?.files)
   ? manifest.export_package.files
@@ -231,6 +237,13 @@ check(
     summary.chart_runtime?.dataQualitySummary?.attentionModules === 0,
   "Smoke summary mirrors the generated asset manifest."
 );
+check(
+  "standalone export artifact validator passes",
+  exportValidation.ready === true &&
+    exportValidation.summary?.failed === 0 &&
+    exportValidation.summary?.passed >= 8,
+  `validator=${exportValidation.ready ? "ready" : "not_ready"}, passed=${exportValidation.summary?.passed || 0}, failed=${exportValidation.summary?.failed || 0}.`
+);
 
 const ready = checks.every((item) => item.status === "passed");
 const report = {
@@ -245,6 +258,7 @@ const report = {
     html: htmlPath,
     manifest: manifestPath,
     summary: summaryPath,
+    export_validation: process.env.SMOKE_EXPORT_VALIDATION_JSON,
   },
   contract: {
     generated_html: "Renderer smoke generates an actual index.html artifact from a representative static-page draft.",
@@ -291,4 +305,5 @@ echo ""
 echo "Static page render smoke artifact: ${artifact_dir}"
 echo "Static page render smoke report: ${report_json}"
 echo "Static page render smoke summary: ${report_md}"
+echo "Static page export validation report: ${export_validation_json}"
 echo "OK static-page-render smoke completed."
