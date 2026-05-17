@@ -173,6 +173,11 @@ fn build_export_package_manifest(
                 "mime": "application/json"
             },
             {
+                "path": "export-package.json",
+                "role": "export_package_manifest",
+                "mime": "application/json"
+            },
+            {
                 "path": "data-snapshot.json",
                 "role": "render_data_snapshot",
                 "mime": "application/json"
@@ -1673,6 +1678,11 @@ mod tests {
             result.asset_manifest["export_package"]["files"][0]["path"],
             "index.html"
         );
+        assert!(result.asset_manifest["export_package"]["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|file| file["path"] == json!("export-package.json")));
         assert!(result.asset_manifest["export_package"]["files"]
             .as_array()
             .unwrap()

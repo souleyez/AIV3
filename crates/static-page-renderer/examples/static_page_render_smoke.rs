@@ -185,6 +185,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     )?;
     write_json_file(
         &output_dir,
+        "export-package.json",
+        &result.asset_manifest["export_package"],
+    )?;
+    write_json_file(
+        &output_dir,
         "data-snapshot.json",
         &result.asset_manifest["data_snapshot"],
     )?;

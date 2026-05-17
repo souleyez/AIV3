@@ -67,6 +67,7 @@ const checks = [];
 const packageFiles = Array.isArray(manifest.export_package?.files)
   ? manifest.export_package.files
   : [];
+const exportPackage = readJsonArtifact("export-package.json");
 const dataQualityReport = readJsonArtifact("data-quality-report.json");
 const dataSnapshot = readJsonArtifact("data-snapshot.json");
 const visualBridge = readJsonArtifact("visual-bridge.json");
@@ -166,6 +167,7 @@ check(
   manifest.export_package?.status === "rendered" &&
     hasExportFile("index.html") &&
     hasExportFile("asset-manifest.json") &&
+    hasExportFile("export-package.json") &&
     hasExportFile("data-quality-report.json") &&
     hasExportFile("visual-bridge.json") &&
     hasExportFile("runtime-requirements.json") &&
@@ -177,6 +179,15 @@ check(
   packageFiles.length >= 8 &&
     packageFiles.every((file) => file?.path && hasArtifactFile(file.path)),
   `${packageFiles.filter((file) => file?.path && hasArtifactFile(file.path)).length}/${packageFiles.length} declared package files are present.`
+);
+check(
+  "export package manifest file mirrors manifest",
+  exportPackage?.kind === manifest.export_package?.kind &&
+    exportPackage?.status === manifest.export_package?.status &&
+    Array.isArray(exportPackage?.files) &&
+    exportPackage.files.length === packageFiles.length &&
+    exportPackage.files.some((file) => file?.path === "README.md"),
+  "export-package.json must be a parseable standalone package manifest."
 );
 check(
   "data quality report mirrors manifest",

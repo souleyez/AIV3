@@ -10,7 +10,7 @@ The contract is:
 - Advanced ECharts modules expose only safe JSON hydration islands and do not inject remote scripts.
 - Confirmed sample rows render without missing-data placeholders.
 - The asset manifest records the renderer contract, zero attention modules for the fixture, expected export package files, and the browser delivery contract.
-- The smoke artifact writes the declared handoff files, including `data-snapshot.json`, `data-quality-report.json`, `visual-bridge.json`, `runtime-requirements.json`, `render-spec.json`, and `README.md`.
+- The smoke artifact writes the declared handoff files, including `export-package.json`, `data-snapshot.json`, `data-quality-report.json`, `visual-bridge.json`, `runtime-requirements.json`, `render-spec.json`, and `README.md`.
 
 ## Command
 
