@@ -24,6 +24,20 @@ function writeJson(filePath, value) {
 
 function makeArtifact(overrides = {}) {
   const artifact = fs.mkdtempSync(path.join(os.tmpdir(), 'v3-static-page-export-artifact-'));
+  const modules = [
+    {
+      id: 'overview',
+      title: '总览',
+      content: '测试静态页模块',
+      dataBinding: { sourceId: 'dataset-test', fieldPath: 'qa.summary' },
+      visualization: {
+        type: 'kpi-cards',
+        data: [{ label: '可回答问题', value: '42' }],
+      },
+      layout: { x: 0, y: 0, w: 4, h: 3 },
+    },
+  ];
+  const renderSpec = { componentModel: 'dom-text-svg-chart', responsive: true };
   const exportPackage = {
     kind: 'static-page-export-package',
     version: 1,
@@ -51,6 +65,8 @@ function makeArtifact(overrides = {}) {
       modules: [{ moduleId: 'overview', title: '总览', dataQualityStatus: 'confirmed' }],
     },
     export_package: exportPackage,
+    modules,
+    render_spec: renderSpec,
   };
   const html = [
     '<!doctype html>',
@@ -70,9 +86,9 @@ function makeArtifact(overrides = {}) {
       modules: manifest.chart_runtime.modules,
     },
     'visual-bridge.json': { kind: 'static-page-visual-bridge', status: 'confirmed' },
-    'modules.json': [{ id: 'overview', title: '总览' }],
+    'modules.json': modules,
     'runtime-requirements.json': [{ name: 'Apache ECharts', license: 'Apache-2.0', required: false }],
-    'render-spec.json': { componentModel: 'dom-text-svg-chart' },
+    'render-spec.json': renderSpec,
     'README.md': '打开 index.html。检查 data-quality-report.json、visual-bridge.json 和 runtime-requirements.json。\n',
     ...overrides.files,
   };
@@ -161,4 +177,30 @@ test('validateStaticPageExportArtifact rejects browser delivery contract drift',
 
   assert.equal(report.ready, false);
   assert.ok(report.errors.some((error) => error.code === 'browser_delivery_contract_invalid'));
+});
+
+test('validateStaticPageExportArtifact rejects module plan drift', () => {
+  const artifact = makeArtifact();
+  const modulesPath = path.join(artifact, 'modules.json');
+  const modules = JSON.parse(fs.readFileSync(modulesPath, 'utf8'));
+  modules[0].title = '漂移后的模块标题';
+  writeJson(modulesPath, modules);
+
+  const report = validateStaticPageExportArtifact(artifact);
+
+  assert.equal(report.ready, false);
+  assert.ok(report.errors.some((error) => error.code === 'modules_manifest_mismatch'));
+});
+
+test('validateStaticPageExportArtifact rejects render spec drift', () => {
+  const artifact = makeArtifact();
+  const renderSpecPath = path.join(artifact, 'render-spec.json');
+  const renderSpec = JSON.parse(fs.readFileSync(renderSpecPath, 'utf8'));
+  renderSpec.responsive = false;
+  writeJson(renderSpecPath, renderSpec);
+
+  const report = validateStaticPageExportArtifact(artifact);
+
+  assert.equal(report.ready, false);
+  assert.ok(report.errors.some((error) => error.code === 'render_spec_manifest_mismatch'));
 });

@@ -84,6 +84,21 @@ function flatObjectsEqual(left, right) {
   return stringListsEqual(leftKeys, rightKeys) && leftKeys.every((key) => left[key] === right[key]);
 }
 
+function canonicalJson(value) {
+  if (Array.isArray(value)) return value.map(canonicalJson);
+  if (!value || typeof value !== 'object') return value;
+  return Object.keys(value)
+    .sort()
+    .reduce((acc, key) => {
+      acc[key] = canonicalJson(value[key]);
+      return acc;
+    }, {});
+}
+
+function jsonValuesEqual(left, right) {
+  return JSON.stringify(canonicalJson(left)) === JSON.stringify(canonicalJson(right));
+}
+
 function browserDeliveryContractReady(contract) {
   return contract?.entry === 'index.html'
     && contract?.remote_scripts_allowed === false
@@ -112,6 +127,7 @@ export function validateStaticPageExportArtifact(artifactDir) {
   const dataQualityReport = readJson(path.join(artifact, 'data-quality-report.json'), errors, 'data_quality_report_missing', 'data-quality-report.json');
   const dataSnapshot = readJson(path.join(artifact, 'data-snapshot.json'), errors, 'data_snapshot_missing', 'data-snapshot.json');
   const visualBridge = readJson(path.join(artifact, 'visual-bridge.json'), errors, 'visual_bridge_missing', 'visual-bridge.json');
+  const modules = readJson(path.join(artifact, 'modules.json'), errors, 'modules_missing', 'modules.json');
   const runtimeRequirements = readJson(path.join(artifact, 'runtime-requirements.json'), errors, 'runtime_requirements_missing', 'runtime-requirements.json');
   const renderSpec = readJson(path.join(artifact, 'render-spec.json'), errors, 'render_spec_missing', 'render-spec.json');
   const readme = readText(path.join(artifact, 'README.md'), errors, 'readme_missing', 'README.md');
@@ -215,9 +231,35 @@ export function validateStaticPageExportArtifact(artifactDir) {
   addCheck(
     checks,
     errors,
+    'module plan mirrors renderer manifest',
+    Array.isArray(modules)
+      && Array.isArray(manifest?.modules)
+      && jsonValuesEqual(modules, manifest.modules),
+    'modules.json must mirror the editable module plan embedded in asset-manifest.json.',
+    'modules_manifest_mismatch',
+    path.join(artifact, 'modules.json'),
+  );
+
+  addCheck(
+    checks,
+    errors,
+    'render spec mirrors renderer manifest',
+    renderSpec?.componentModel === 'dom-text-svg-chart'
+      && renderSpec?.responsive === true
+      && manifest?.render_spec
+      && jsonValuesEqual(renderSpec, manifest.render_spec),
+    'render-spec.json must mirror asset-manifest.json render_spec and preserve the responsive DOM/SVG chart renderer contract.',
+    'render_spec_manifest_mismatch',
+    path.join(artifact, 'render-spec.json'),
+  );
+
+  addCheck(
+    checks,
+    errors,
     'supporting JSON files are self-contained',
     typeof dataSnapshot?.source === 'string'
       && visualBridge?.kind === 'static-page-visual-bridge'
+      && Array.isArray(modules)
       && Array.isArray(runtimeRequirements)
       && runtimeRequirements.some((item) => item?.license === 'Apache-2.0')
       && typeof renderSpec === 'object'
