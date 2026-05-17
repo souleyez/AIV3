@@ -1128,14 +1128,34 @@ fn codex_executor_suggestion_arguments(
             "external_business_action.invoke",
             "business_action",
         ),
-        "final_answer" => json!({
-            "mode": "model_authored_answer",
-            "source": "codex_plan_only_shadow",
-        }),
+        "final_answer" => codex_executor_final_answer_arguments(package),
         _ => json!({
             "source": "codex_plan_only_shadow",
         }),
     }
+}
+
+fn codex_executor_final_answer_arguments(package: &AssistantRunCodexContextPackageView) -> Value {
+    json!({
+        "mode": "model_authored_answer",
+        "source": "codex_plan_only_shadow",
+        "v3_context_contract": {
+            "identity": "AI Data Platform V3 supplies product, permission, dataset, evidence, tool, report, and static-page context.",
+            "additive_context_not_capability_limit": true,
+            "ordinary_chat_allowed_without_v3_evidence": true,
+            "unavailable_evidence_phrase": "当前不可见/未供料",
+            "unavailable_evidence_rule": "Use the phrase only when the answer depends on V3 data, documents, permissions, tool results, artifact state, or live/search evidence that V3 has not supplied; after that, the model may continue with clearly labeled general knowledge or assumptions.",
+            "external_search_rule": "Do not claim web search, current news, or cite live web results unless V3 supplied audited search evidence with source and retrieved_at metadata.",
+            "no_host_composed_answer": true,
+        },
+        "v3_context_state": {
+            "intent": codex_executor_scope_intent(package),
+            "selected_dataset_count": package.context_budget.selected_dataset_count,
+            "evidence_status": codex_executor_evidence_status(package),
+            "supply_quality_status": codex_executor_supply_status(package),
+            "search_evidence_supplied": codex_executor_search_evidence_supplied(package),
+        },
+    })
 }
 
 fn codex_executor_external_action_arguments(
@@ -1298,6 +1318,45 @@ fn codex_executor_external_source_evidence_refs(
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default()
+}
+
+fn codex_executor_evidence_status(package: &AssistantRunCodexContextPackageView) -> String {
+    if let Some(status) = package.evidence_state.get("status").and_then(Value::as_str) {
+        return status.to_string();
+    }
+    let supply_status = codex_executor_supply_status(package);
+    match supply_status.as_str() {
+        "not_requested" => "not_requested".to_string(),
+        "grounded" | "supplied" | "partial" => "supplied".to_string(),
+        "missing" => "missing".to_string(),
+        _ => "unknown".to_string(),
+    }
+}
+
+fn codex_executor_search_evidence_supplied(package: &AssistantRunCodexContextPackageView) -> bool {
+    package
+        .evidence_state
+        .get("supplied_items")
+        .and_then(Value::as_array)
+        .is_some_and(|items| {
+            items.iter().any(|item| {
+                let item_type = item
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_ascii_lowercase();
+                let source = item
+                    .get("source")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_ascii_lowercase();
+                item_type.contains("search")
+                    || source.contains("web_search")
+                    || source.contains("search")
+                    || item.get("search_evidence_id").is_some()
+                    || item.get("searchEvidenceId").is_some()
+            })
+        })
 }
 
 fn codex_executor_suggestion_reason(action_type: &str) -> &'static str {
@@ -2926,6 +2985,7 @@ mod tests {
         package.current_artifact = None;
         package.selected_scope = json!({"intent": "ordinary_chat"});
         package.context_budget.selected_dataset_count = 0;
+        package.evidence_state = json!({"status": "not_requested", "supplied_items": []});
         package.supply_quality = json!({"status": "not_requested"});
         package.available_actions = vec![
             AssistantRunCodexActionContractView::new(
@@ -2969,6 +3029,7 @@ mod tests {
         package.current_artifact = None;
         package.selected_scope = json!({"intent": "ordinary_chat"});
         package.context_budget.selected_dataset_count = 0;
+        package.evidence_state = json!({"status": "not_requested", "supplied_items": []});
         package.supply_quality = json!({"status": "not_requested"});
         package.available_actions = vec![
             AssistantRunCodexActionContractView::new(
@@ -3011,6 +3072,96 @@ mod tests {
         assert_eq!(
             output.execution_trail[0]["suggested_action"]["arguments"]["mode"],
             json!("model_authored_answer")
+        );
+        assert_eq!(
+            output.execution_trail[0]["suggested_action"]["arguments"]["v3_context_contract"]
+                ["additive_context_not_capability_limit"],
+            json!(true)
+        );
+        assert_eq!(
+            output.execution_trail[0]["suggested_action"]["arguments"]["v3_context_contract"]
+                ["ordinary_chat_allowed_without_v3_evidence"],
+            json!(true)
+        );
+        assert_eq!(
+            output.execution_trail[0]["suggested_action"]["arguments"]["v3_context_contract"]
+                ["unavailable_evidence_phrase"],
+            json!("当前不可见/未供料")
+        );
+        assert!(
+            output.execution_trail[0]["suggested_action"]["arguments"]["v3_context_contract"]
+                ["external_search_rule"]
+                .as_str()
+                .expect("external search rule")
+                .contains("Do not claim web search")
+        );
+        assert_eq!(
+            output.execution_trail[0]["suggested_action"]["arguments"]["v3_context_state"]
+                ["intent"],
+            json!("ordinary_chat")
+        );
+        assert_eq!(
+            output.execution_trail[0]["suggested_action"]["arguments"]["v3_context_state"]
+                ["evidence_status"],
+            json!("not_requested")
+        );
+        assert_eq!(
+            output.execution_trail[0]["suggested_action"]["arguments"]["v3_context_state"]
+                ["search_evidence_supplied"],
+            json!(false)
+        );
+    }
+
+    #[test]
+    fn codex_executor_final_answer_marks_supplied_search_evidence() {
+        let mut package = codex_context_package();
+        package.executor_transport = AssistantRunExecutorTransportView::CodexPlanOnly;
+        package.user_prompt = "基于刚才搜索结果，总结要点".to_string();
+        package.current_artifact = None;
+        package.selected_scope = json!({"intent": "ordinary_chat"});
+        package.context_budget.selected_dataset_count = 0;
+        package.evidence_state = json!({
+            "status": "supplied",
+            "supplied_items": [{
+                "type": "web_search_result",
+                "source": "web_search",
+                "summary": "公开来源摘要",
+                "search_evidence_id": "search-1"
+            }]
+        });
+        package.supply_quality = json!({"status": "grounded"});
+        package.available_actions = vec![AssistantRunCodexActionContractView::new(
+            "final_answer",
+            "模型回答",
+            "普通问答直接由模型回答",
+            json!({"type": "object"}),
+            false,
+        )];
+
+        let output = execute_codex_conversation_plan(&package);
+
+        assert_eq!(
+            output
+                .suggested_action
+                .as_ref()
+                .and_then(|action| action.get("action_type"))
+                .and_then(Value::as_str),
+            Some("final_answer")
+        );
+        assert_eq!(
+            output.execution_trail[0]["suggested_action"]["arguments"]["v3_context_state"]
+                ["evidence_status"],
+            json!("supplied")
+        );
+        assert_eq!(
+            output.execution_trail[0]["suggested_action"]["arguments"]["v3_context_state"]
+                ["supply_quality_status"],
+            json!("grounded")
+        );
+        assert_eq!(
+            output.execution_trail[0]["suggested_action"]["arguments"]["v3_context_state"]
+                ["search_evidence_supplied"],
+            json!(true)
         );
     }
 
