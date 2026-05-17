@@ -145,6 +145,10 @@ const DATA_QUESTION_HINTS: &[&str] = &[
     "检索",
     "查找",
     "引用",
+    "怎么操作",
+    "申请",
+    "审批",
+    "入口",
     "音视频",
     "音频",
     "视频",
@@ -156,6 +160,46 @@ const DATA_QUESTION_HINTS: &[&str] = &[
     "关键帧",
     "ocr",
     "OCR",
+];
+
+const PLAIN_GENERATION_HINTS: &[&str] = &[
+    "写一句",
+    "写一段",
+    "写个",
+    "写一个",
+    "帮我写",
+    "润色",
+    "改写",
+    "翻译",
+    "起名",
+    "欢迎语",
+    "文案",
+    "话术",
+    "怎么说",
+    "表达",
+];
+
+const EXPLICIT_DATA_NEED_HINTS: &[&str] = &[
+    "基于",
+    "根据",
+    "结合",
+    "引用",
+    "检索",
+    "查找",
+    "资料",
+    "数据",
+    "文档",
+    "知识库",
+    "证据",
+    "来源",
+    "原文",
+    "明细",
+    "指标",
+    "趋势",
+    "风险",
+    "分析",
+    "总结",
+    "对比",
 ];
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -1607,6 +1651,7 @@ pub fn plan_scope(input: ScopePlannerInput<'_>) -> ScopePlan {
     let prompt = input.prompt.trim();
     let mut candidates = Vec::new();
     let intent = infer_assistant_intent(prompt);
+    let should_match_datasets = intent != "ordinary_chat";
 
     if let Some(selected_dataset_id) = input.selected_dataset_id {
         if let Some(dataset) = input
@@ -1623,30 +1668,32 @@ pub fn plan_scope(input: ScopePlannerInput<'_>) -> ScopePlan {
         }
     }
 
-    for dataset in input.visible_datasets {
-        if input.selected_dataset_id == Some(dataset.id) {
-            continue;
-        }
-        let haystack = dataset_haystack(dataset);
-        let matched_by_name = text_matches(prompt, &haystack);
-        let matched_by_hint = BUSINESS_HINTS.iter().any(|(label, hints)| {
-            haystack.contains(label) && hints.iter().any(|hint| prompt.contains(hint))
-        });
-        if matched_by_name || matched_by_hint {
-            candidates.push(dataset_scope_candidate(
-                dataset,
-                if matched_by_name {
-                    ScopeConfidence::High
-                } else {
-                    ScopeConfidence::Medium
-                },
-                if matched_by_name {
-                    "用户提到数据集名称或关键字"
-                } else {
-                    "用户问题命中常用业务主题"
-                },
-                "scope_planner",
-            ));
+    if should_match_datasets {
+        for dataset in input.visible_datasets {
+            if input.selected_dataset_id == Some(dataset.id) {
+                continue;
+            }
+            let haystack = dataset_haystack(dataset);
+            let matched_by_name = text_matches(prompt, &haystack);
+            let matched_by_hint = BUSINESS_HINTS.iter().any(|(label, hints)| {
+                haystack.contains(label) && hints.iter().any(|hint| prompt.contains(hint))
+            });
+            if matched_by_name || matched_by_hint {
+                candidates.push(dataset_scope_candidate(
+                    dataset,
+                    if matched_by_name {
+                        ScopeConfidence::High
+                    } else {
+                        ScopeConfidence::Medium
+                    },
+                    if matched_by_name {
+                        "用户提到数据集名称或关键字"
+                    } else {
+                        "用户问题命中常用业务主题"
+                    },
+                    "scope_planner",
+                ));
+            }
         }
     }
 
@@ -2021,6 +2068,9 @@ fn infer_assistant_intent(prompt: &str) -> &'static str {
     if prompt_has_any(prompt, &lower_prompt, REPORT_HINTS) {
         return "report";
     }
+    if prompt_is_plain_generation_without_data_need(prompt, &lower_prompt) {
+        return "ordinary_chat";
+    }
     if prompt_wants_video_ppt_extraction(prompt)
         || prompt_has_any(prompt, &lower_prompt, DATA_QUESTION_HINTS)
         || BUSINESS_HINTS
@@ -2031,6 +2081,11 @@ fn infer_assistant_intent(prompt: &str) -> &'static str {
         return "data_question";
     }
     "ordinary_chat"
+}
+
+fn prompt_is_plain_generation_without_data_need(prompt: &str, lower_prompt: &str) -> bool {
+    prompt_has_any(prompt, lower_prompt, PLAIN_GENERATION_HINTS)
+        && !prompt_has_any(prompt, lower_prompt, EXPLICIT_DATA_NEED_HINTS)
 }
 
 fn prompt_has_any(prompt: &str, lower_prompt: &str, hints: &[&str]) -> bool {
@@ -3316,6 +3371,54 @@ mod tests {
         assert_eq!(
             plan.selected_scope["supply_policy"]["recommendedActions"],
             json!(["ordinary_chat.answer"])
+        );
+    }
+
+    #[test]
+    fn plain_generation_with_business_terms_does_not_force_dataset_scope() {
+        let plan = plan_scope(ScopePlannerInput {
+            prompt: "帮我给订单客户写一句温和的欢迎语",
+            visible_datasets: &[dataset("订单经营资料", "orders")],
+            selected_dataset_id: None,
+            conversation_memory_available: true,
+        });
+
+        assert!(plan.candidates.is_empty());
+        assert_eq!(plan.intent, "ordinary_chat");
+        assert_eq!(plan.selected_scope["mode"], json!("ordinary_chat"));
+        assert_eq!(plan.selected_scope["datasets"], json!([]));
+        assert_eq!(plan.selected_scope["conversation_memory"], json!([]));
+        assert_eq!(
+            plan.selected_scope["supply_policy"]["retrievalPolicy"],
+            json!("not_requested")
+        );
+        assert_eq!(
+            plan.selected_scope["supply_policy"]["candidatePolicy"],
+            json!("ordinary_chat_without_forced_dataset")
+        );
+        assert_eq!(
+            plan.selected_scope["supply_policy"]["recommendedActions"],
+            json!(["ordinary_chat.answer"])
+        );
+    }
+
+    #[test]
+    fn explicit_data_need_in_generation_prompt_still_preselects_dataset() {
+        let orders = dataset("订单经营资料", "orders");
+        let plan = plan_scope(ScopePlannerInput {
+            prompt: "基于订单数据写一句客户欢迎语",
+            visible_datasets: &[orders.clone()],
+            selected_dataset_id: None,
+            conversation_memory_available: false,
+        });
+
+        assert_eq!(plan.candidates.len(), 1);
+        assert_eq!(plan.candidates[0].id, orders.id.to_string());
+        assert_eq!(plan.intent, "data_question");
+        assert_eq!(plan.selected_scope["mode"], json!("preselected"));
+        assert_eq!(
+            plan.selected_scope["supply_policy"]["retrievalPolicy"],
+            json!("standard")
         );
     }
 
