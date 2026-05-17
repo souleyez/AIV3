@@ -24,3 +24,16 @@ target/static-page-render-smoke/
 ```
 
 This smoke complements `run-static-page-quality-smoke.sh`: quality smoke checks whether a draft is allowed to proceed, while render smoke checks the generated HTML/manifest contract for a confirmed draft.
+
+## 2026-05-17 Deployment Target Evidence
+
+- Host: `8服务器`
+- Repository: `/srv/aiv3/repo`
+- HEAD: `7421232`
+- Command: `bash scripts/run-static-page-render-smoke.sh`
+- Result: passed
+- Artifact directory: `/srv/aiv3/repo/target/static-page-render-smoke/static-page-render-smoke-20260517T045223Z-artifact`
+- JSON report: `/srv/aiv3/repo/target/static-page-render-smoke/static-page-render-smoke-20260517T045223Z.json`
+- Markdown summary: `/srv/aiv3/repo/target/static-page-render-smoke/static-page-render-smoke-20260517T045223Z.md`
+
+The deployment target generated a representative `index.html` artifact and passed all generated HTML, DOM/SVG fallback, safe ECharts hydration, data placeholder, manifest, and export package checks after a fast-forward pull from `e9326b5` to `7421232`.
