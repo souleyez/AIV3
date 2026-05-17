@@ -137,7 +137,7 @@ async fn process_task(
                 .iter()
                 .map(|chunk| RetrievalChunkInput {
                     chunk_index: chunk.chunk_index,
-                    content: chunk.content.clone(),
+                    content: retrieval_index_text(&document, chunk),
                     token_count: chunk.token_count.max(0) as usize,
                 })
                 .collect(),
@@ -161,6 +161,7 @@ async fn process_task(
                 )
             })?;
             let source_locator = retrieval_source_locator(document_id, chunk);
+            let section_title_hints = document_chunk_section_title_hints(chunk);
             let mut evidence_manifest = json!({
                 "schema_version": "0.4.0",
                 "generator": "retrieval-worker",
@@ -187,6 +188,7 @@ async fn process_task(
                     "document_chunk_id": chunk.id,
                     "payload_filter_key": &payload_filter_key,
                     "source_locator": source_locator.clone(),
+                    "section_title_hints": &section_title_hints,
                 },
             });
             if let Some(media_manifest) = retrieval_media_manifest(chunk) {
@@ -207,9 +209,11 @@ async fn process_task(
                 chunk_index: chunk.chunk_index,
                 source_locator,
                 content_excerpt: excerpt(&chunk.content, 240),
-                summary: format!(
-                    "{} chunk {} indexed for lexical retrieval recall.",
-                    document.title, chunk.chunk_index
+                summary: retrieval_evidence_summary(
+                    &document,
+                    chunk,
+                    &section_title_hints,
+                    "lexical retrieval recall",
                 ),
                 payload_filter_key: payload_filter_key.clone(),
                 embedding_model: embedding_model.clone(),
@@ -491,7 +495,7 @@ async fn index_external_document(
             .iter()
             .map(|chunk| RetrievalChunkInput {
                 chunk_index: chunk.chunk_index,
-                content: chunk.content.clone(),
+                content: retrieval_index_text(&document, chunk),
                 token_count: chunk.token_count.max(0) as usize,
             })
             .collect(),
@@ -515,6 +519,7 @@ async fn index_external_document(
             )
         })?;
         let source_locator = retrieval_source_locator(document_id, chunk);
+        let section_title_hints = document_chunk_section_title_hints(chunk);
         let mut evidence_manifest = json!({
             "schema_version": "0.4.0",
             "generator": "retrieval-worker",
@@ -541,6 +546,7 @@ async fn index_external_document(
                 "document_chunk_id": chunk.id,
                 "payload_filter_key": &payload_filter_key,
                 "source_locator": source_locator.clone(),
+                "section_title_hints": &section_title_hints,
             },
         });
         if let Some(media_manifest) = retrieval_media_manifest(chunk) {
@@ -561,9 +567,11 @@ async fn index_external_document(
             chunk_index: chunk.chunk_index,
             source_locator,
             content_excerpt: excerpt(&chunk.content, 240),
-            summary: format!(
-                "{} chunk {} indexed for external source retrieval recall.",
-                document.title, chunk.chunk_index
+            summary: retrieval_evidence_summary(
+                &document,
+                chunk,
+                &section_title_hints,
+                "external source retrieval recall",
             ),
             payload_filter_key: payload_filter_key.clone(),
             embedding_model: embedding_model.clone(),
@@ -630,6 +638,167 @@ fn excerpt(content: &str, max_chars: usize) -> String {
         value.push_str("...");
     }
     value
+}
+
+fn retrieval_index_text(document: &Document, chunk: &DocumentChunk) -> String {
+    let section_title_hints = document_chunk_section_title_hints(chunk).join("\n");
+    [
+        document.title.trim(),
+        document.object_key.trim(),
+        section_title_hints.trim(),
+        chunk.content.trim(),
+    ]
+    .into_iter()
+    .filter(|value| !value.is_empty())
+    .collect::<Vec<_>>()
+    .join("\n")
+}
+
+fn retrieval_evidence_summary(
+    document: &Document,
+    chunk: &DocumentChunk,
+    section_title_hints: &[String],
+    recall_kind: &str,
+) -> String {
+    let section = section_title_hints
+        .first()
+        .map(|title| format!(" section {title}"))
+        .unwrap_or_default();
+    format!(
+        "{} chunk {}{} indexed for {}.",
+        document.title, chunk.chunk_index, section, recall_kind
+    )
+}
+
+fn document_chunk_section_title_hints(chunk: &DocumentChunk) -> Vec<String> {
+    let mut hints = Vec::new();
+    for key in [
+        "section_title_hints",
+        "sectionTitleHints",
+        "section_titles",
+        "sectionTitles",
+        "heading_hints",
+        "headingHints",
+    ] {
+        if let Some(value) = chunk.metadata.get(key) {
+            collect_string_list(value, &mut hints);
+        }
+    }
+    if let Some(value) = chunk
+        .metadata
+        .get("parse_metadata")
+        .and_then(|value| value.get("section_title_hints"))
+    {
+        collect_string_list(value, &mut hints);
+    }
+    if hints.is_empty() {
+        for hint in infer_section_title_hints_from_text(&chunk.content, 6) {
+            push_string_hint(&mut hints, hint);
+        }
+    }
+    hints.truncate(6);
+    hints
+}
+
+fn collect_string_list(value: &Value, output: &mut Vec<String>) {
+    match value {
+        Value::String(text) => {
+            push_string_hint(output, text);
+        }
+        Value::Array(items) => {
+            for item in items {
+                collect_string_list(item, output);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn push_string_hint(output: &mut Vec<String>, text: impl AsRef<str>) {
+    let normalized = text.as_ref().trim().chars().take(80).collect::<String>();
+    if !normalized.is_empty() && !output.iter().any(|existing| existing == &normalized) {
+        output.push(normalized);
+    }
+}
+
+fn infer_section_title_hints_from_text(text: &str, limit: usize) -> Vec<String> {
+    let mut hints = Vec::new();
+    for line in text.lines().map(str::trim).filter(|line| !line.is_empty()) {
+        if let Some(title) = normalize_section_title_hint(line) {
+            if !hints.contains(&title) {
+                hints.push(title);
+            }
+            if hints.len() >= limit {
+                break;
+            }
+        }
+    }
+    hints
+}
+
+fn normalize_section_title_hint(line: &str) -> Option<String> {
+    let trimmed = line.trim().trim_matches(|ch: char| ch == '*' || ch == '`');
+    if trimmed.is_empty() {
+        return None;
+    }
+    let candidate = trimmed
+        .strip_prefix('#')
+        .map(|value| value.trim_start_matches('#').trim())
+        .or_else(|| {
+            if let Some((index, _)) = trimmed
+                .char_indices()
+                .find(|(_, value)| value.is_whitespace())
+            {
+                let marker = trimmed[..index].trim();
+                if marker.chars().count() <= 12 && looks_like_heading_marker(marker) {
+                    return Some(trimmed[index..].trim());
+                }
+            }
+            let marker_end = trimmed
+                .char_indices()
+                .find_map(|(index, value)| {
+                    if matches!(value, '、' | '.' | '．' | ')' | '）' | ':' | '：') {
+                        Some(index + value.len_utf8())
+                    } else {
+                        None
+                    }
+                })
+                .filter(|index| *index <= 12)?;
+            let marker = trimmed[..marker_end].trim();
+            looks_like_heading_marker(marker).then(|| trimmed[marker_end..].trim())
+        })
+        .or_else(|| {
+            (trimmed.starts_with('第')
+                && trimmed
+                    .chars()
+                    .take(8)
+                    .any(|value| value == '章' || value == '节'))
+            .then_some(trimmed)
+        })
+        .or_else(|| looks_like_standalone_heading(trimmed).then_some(trimmed))?;
+    let normalized = candidate
+        .trim_matches(|ch: char| ch.is_whitespace() || "#*-_".contains(ch))
+        .chars()
+        .take(80)
+        .collect::<String>();
+    (!normalized.is_empty()).then_some(normalized)
+}
+
+fn looks_like_heading_marker(value: &str) -> bool {
+    value.chars().any(|ch| ch.is_ascii_digit())
+        || value.chars().any(|ch| "一二三四五六七八九十".contains(ch))
+}
+
+fn looks_like_standalone_heading(value: &str) -> bool {
+    let char_count = value.chars().count();
+    char_count >= 2
+        && char_count <= 32
+        && !value.ends_with('。')
+        && !value.ends_with('！')
+        && !value.ends_with('？')
+        && !value.ends_with(';')
+        && !value.ends_with('；')
+        && !value.contains('|')
 }
 
 fn retrieval_source_locator(
@@ -981,6 +1150,38 @@ mod tests {
         assert_eq!(manifest["scene_count"], json!(1));
         assert_eq!(manifest["keyframe_ocr_snippet_count"], json!(1));
         assert_eq!(manifest["provider_evidence_count"], json!(1));
+    }
+
+    #[test]
+    fn retrieval_index_text_includes_section_title_hints() {
+        let document = document_with_metadata(json!({}));
+        let mut chunk = media_chunk(json!({}));
+        chunk.content = "审批正文说明。".to_string();
+        chunk.metadata.insert(
+            "section_title_hints".to_string(),
+            json!(["固定资产申请", "审批流程"]),
+        );
+
+        let indexed_text = retrieval_index_text(&document, &chunk);
+
+        assert!(indexed_text.contains("External Doc"));
+        assert!(indexed_text.contains("固定资产申请"));
+        assert!(indexed_text.contains("审批正文说明"));
+    }
+
+    #[test]
+    fn retrieval_evidence_summary_names_first_section_title_hint() {
+        let document = document_with_metadata(json!({}));
+        let mut chunk = media_chunk(json!({}));
+        chunk
+            .metadata
+            .insert("section_title_hints".to_string(), json!(["固定资产申请"]));
+        let hints = document_chunk_section_title_hints(&chunk);
+
+        let summary =
+            retrieval_evidence_summary(&document, &chunk, &hints, "lexical retrieval recall");
+
+        assert!(summary.contains("section 固定资产申请"));
     }
 
     #[test]

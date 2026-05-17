@@ -16443,6 +16443,7 @@ async fn build_assistant_run_chunk_fallback_supply(
             media_context_by_document,
         )
         .await?;
+        let section_title_hints = document_chunk_section_title_hints(&ranked.chunk);
         let mut supplied_item = json!({
             "type": "retrieval_evidence",
             "source": "document_chunk_fallback",
@@ -16462,6 +16463,9 @@ async fn build_assistant_run_chunk_fallback_supply(
                 "fallback": {
                     "source": "document_chunk",
                     "reason": "retrieval_evidence_unavailable"
+                },
+                "evidence": {
+                    "section_title_hints": &section_title_hints
                 },
                 "embedding": {
                     "term_weights": limited_lexical_term_weights(&ranked.search_text, 40)
@@ -16665,12 +16669,161 @@ fn document_chunk_fallback_summary(document: &Document, chunk: &DocumentChunk) -
     } else {
         document.title.trim()
     };
+    let section = document_chunk_section_title_hints(chunk)
+        .first()
+        .map(|value| format!(" / {value}"))
+        .unwrap_or_default();
     let excerpt = truncate_assistant_supply_text(&chunk.content, 180);
     if excerpt.is_empty() {
-        format!("{title} chunk {}", chunk.chunk_index)
+        format!("{title} chunk {}{section}", chunk.chunk_index)
     } else {
-        format!("{title} chunk {}: {excerpt}", chunk.chunk_index)
+        format!("{title} chunk {}{section}: {excerpt}", chunk.chunk_index)
     }
+}
+
+fn document_chunk_search_text(document: &Document, chunk: &DocumentChunk) -> String {
+    let section_title_hints = document_chunk_section_title_hints(chunk).join("\n");
+    [
+        document.title.trim(),
+        document.object_key.trim(),
+        section_title_hints.trim(),
+        chunk.content.trim(),
+    ]
+    .into_iter()
+    .filter(|value| !value.is_empty())
+    .collect::<Vec<_>>()
+    .join("\n")
+}
+
+fn document_chunk_section_title_hints(chunk: &DocumentChunk) -> Vec<String> {
+    let mut hints = Vec::new();
+    for key in [
+        "section_title_hints",
+        "sectionTitleHints",
+        "section_titles",
+        "sectionTitles",
+        "heading_hints",
+        "headingHints",
+    ] {
+        if let Some(value) = chunk.metadata.get(key) {
+            collect_string_list(value, &mut hints);
+        }
+    }
+    if let Some(value) = chunk
+        .metadata
+        .get("parse_metadata")
+        .and_then(|value| value.get("section_title_hints"))
+    {
+        collect_string_list(value, &mut hints);
+    }
+    if hints.is_empty() {
+        for hint in infer_section_title_hints_from_text(&chunk.content, 6) {
+            push_string_hint(&mut hints, hint);
+        }
+    }
+    hints.truncate(6);
+    hints
+}
+
+fn collect_string_list(value: &Value, output: &mut Vec<String>) {
+    match value {
+        Value::String(text) => {
+            push_string_hint(output, text);
+        }
+        Value::Array(items) => {
+            for item in items {
+                collect_string_list(item, output);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn push_string_hint(output: &mut Vec<String>, text: impl AsRef<str>) {
+    let normalized = text.as_ref().trim().chars().take(80).collect::<String>();
+    if !normalized.is_empty() && !output.iter().any(|existing| existing == &normalized) {
+        output.push(normalized);
+    }
+}
+
+fn infer_section_title_hints_from_text(text: &str, limit: usize) -> Vec<String> {
+    let mut hints = Vec::new();
+    for line in text.lines().map(str::trim).filter(|line| !line.is_empty()) {
+        if let Some(title) = normalize_section_title_hint(line) {
+            if !hints.contains(&title) {
+                hints.push(title);
+            }
+            if hints.len() >= limit {
+                break;
+            }
+        }
+    }
+    hints
+}
+
+fn normalize_section_title_hint(line: &str) -> Option<String> {
+    let trimmed = line.trim().trim_matches(|ch: char| ch == '*' || ch == '`');
+    if trimmed.is_empty() {
+        return None;
+    }
+    let candidate = trimmed
+        .strip_prefix('#')
+        .map(|value| value.trim_start_matches('#').trim())
+        .or_else(|| {
+            if let Some((index, _)) = trimmed
+                .char_indices()
+                .find(|(_, value)| value.is_whitespace())
+            {
+                let marker = trimmed[..index].trim();
+                if marker.chars().count() <= 12 && looks_like_heading_marker(marker) {
+                    return Some(trimmed[index..].trim());
+                }
+            }
+            let marker_end = trimmed
+                .char_indices()
+                .find_map(|(index, value)| {
+                    if matches!(value, '、' | '.' | '．' | ')' | '）' | ':' | '：') {
+                        Some(index + value.len_utf8())
+                    } else {
+                        None
+                    }
+                })
+                .filter(|index| *index <= 12)?;
+            let marker = trimmed[..marker_end].trim();
+            looks_like_heading_marker(marker).then(|| trimmed[marker_end..].trim())
+        })
+        .or_else(|| {
+            (trimmed.starts_with('第')
+                && trimmed
+                    .chars()
+                    .take(8)
+                    .any(|value| value == '章' || value == '节'))
+            .then_some(trimmed)
+        })
+        .or_else(|| looks_like_standalone_heading(trimmed).then_some(trimmed))?;
+    let normalized = candidate
+        .trim_matches(|ch: char| ch.is_whitespace() || "#*-_".contains(ch))
+        .chars()
+        .take(80)
+        .collect::<String>();
+    (!normalized.is_empty()).then_some(normalized)
+}
+
+fn looks_like_heading_marker(value: &str) -> bool {
+    value.chars().any(|ch| ch.is_ascii_digit())
+        || value.chars().any(|ch| "一二三四五六七八九十".contains(ch))
+}
+
+fn looks_like_standalone_heading(value: &str) -> bool {
+    let char_count = value.chars().count();
+    char_count >= 2
+        && char_count <= 32
+        && !value.ends_with('。')
+        && !value.ends_with('！')
+        && !value.ends_with('？')
+        && !value.ends_with(';')
+        && !value.ends_with('；')
+        && !value.contains('|')
 }
 
 fn truncate_assistant_supply_text(value: &str, max_chars: usize) -> String {
@@ -20948,7 +21101,12 @@ fn rank_retrieval_evidences_for_prompt<'a>(
     let mut ranked = evidences
         .iter()
         .map(|evidence| {
-            let lexical_score = lexical_query_score(evidence, &query_weights, query_norm);
+            let lexical_score =
+                lexical_query_score(evidence, &query_weights, query_norm).max(lexical_text_score(
+                    &retrieval_evidence_search_text(evidence),
+                    &query_weights,
+                    query_norm,
+                ));
             let score = if lexical_score > 0.0 {
                 lexical_score
             } else {
@@ -21001,12 +21159,7 @@ fn rank_document_chunks_for_prompt(
     let mut ranked = sources
         .into_iter()
         .map(|(document, chunk)| {
-            let search_text = format!(
-                "{} {} {}",
-                document.title.trim(),
-                document.object_key.trim(),
-                chunk.content.trim()
-            );
+            let search_text = document_chunk_search_text(&document, &chunk);
             let lexical_score = lexical_text_score(&search_text, &query_weights, query_norm);
             RankedDocumentChunk {
                 document,
@@ -21028,6 +21181,32 @@ fn rank_document_chunks_for_prompt(
             .then_with(|| left.document.title.cmp(&right.document.title))
     });
     ranked.into_iter().take(limit).collect()
+}
+
+fn retrieval_evidence_search_text(evidence: &RetrievalEvidence) -> String {
+    let mut parts = Vec::new();
+    for value in [
+        evidence.summary.trim(),
+        evidence.content_excerpt.trim(),
+        evidence.source_locator.trim(),
+        evidence.payload_filter_key.trim(),
+    ] {
+        if !value.is_empty() {
+            parts.push(value.to_string());
+        }
+    }
+    let mut section_title_hints = Vec::new();
+    for pointer in [
+        "/evidence/section_title_hints",
+        "/section_title_hints",
+        "/metadata/section_title_hints",
+    ] {
+        if let Some(value) = evidence.evidence_manifest.pointer(pointer) {
+            collect_string_list(value, &mut section_title_hints);
+        }
+    }
+    parts.extend(section_title_hints);
+    parts.join("\n")
 }
 
 fn select_retrieval_evidence_ids_for_prompt(
@@ -46755,6 +46934,73 @@ mod tests {
     }
 
     #[test]
+    fn select_retrieval_evidence_ids_for_prompt_prefers_section_title_hint() {
+        let now = Utc::now();
+        let section_id = RetrievalEvidenceId::new();
+        let broad_id = RetrievalEvidenceId::new();
+        let evidences = vec![
+            RetrievalEvidence {
+                id: broad_id,
+                tenant_id: TenantId::new(),
+                dataset_id: DatasetId::new(),
+                execution_id: WorkflowExecutionId::new(),
+                document_id: DocumentId::new(),
+                document_chunk_id: DocumentChunkId::new(),
+                chunk_index: 0,
+                source_locator: "documents/assets.md#chunk=0".to_string(),
+                content_excerpt: "固定和资产分别出现在资产盘点记录中。".to_string(),
+                summary: "资产盘点记录".to_string(),
+                payload_filter_key: "dataset/assets".to_string(),
+                embedding_model: "local-lexical-v1".to_string(),
+                recall_score: 0.99,
+                evidence_manifest: json!({
+                    "embedding": {
+                        "term_weights": {
+                            "固定": 1.0,
+                            "资产": 1.0
+                        }
+                    },
+                    "recall": { "rank_hint": 1 }
+                }),
+                created_at: now,
+            },
+            RetrievalEvidence {
+                id: section_id,
+                tenant_id: TenantId::new(),
+                dataset_id: DatasetId::new(),
+                execution_id: WorkflowExecutionId::new(),
+                document_id: DocumentId::new(),
+                document_chunk_id: DocumentChunkId::new(),
+                chunk_index: 1,
+                source_locator: "documents/assets.md#chunk=1".to_string(),
+                content_excerpt: "提交审批后由财务复核。".to_string(),
+                summary: "审批流程".to_string(),
+                payload_filter_key: "dataset/assets".to_string(),
+                embedding_model: "local-lexical-v1".to_string(),
+                recall_score: 0.40,
+                evidence_manifest: json!({
+                    "embedding": {
+                        "term_weights": {
+                            "审批": 1.0,
+                            "流程": 1.0
+                        }
+                    },
+                    "evidence": {
+                        "section_title_hints": ["固定资产申请"]
+                    },
+                    "recall": { "rank_hint": 2 }
+                }),
+                created_at: now,
+            },
+        ];
+
+        let selected =
+            select_retrieval_evidence_ids_for_prompt(&evidences, "固定资产申请怎么提交", 2);
+
+        assert_eq!(selected, vec![section_id, broad_id]);
+    }
+
+    #[test]
     fn rank_document_chunks_for_prompt_prefers_cjk_phrase_overlap_for_fallback_supply() {
         let now = Utc::now();
         let tenant_id = TenantId::new();
@@ -46832,6 +47078,92 @@ mod tests {
         assert_eq!(ranked[1].chunk.id, broad_chunk_id);
         assert!(ranked[0].lexical_score > ranked[1].lexical_score);
         assert!(ranked[0].search_text.contains("订单延期风险"));
+    }
+
+    #[test]
+    fn rank_document_chunks_for_prompt_prefers_section_title_hint_for_fallback_supply() {
+        let now = Utc::now();
+        let tenant_id = TenantId::new();
+        let dataset_id = DatasetId::new();
+        let broad_document_id = DocumentId::new();
+        let section_document_id = DocumentId::new();
+        let broad_chunk_id = DocumentChunkId::new();
+        let section_chunk_id = DocumentChunkId::new();
+
+        let broad_document = Document {
+            id: broad_document_id,
+            tenant_id,
+            dataset_id,
+            owner_user_id: None,
+            title: "资产盘点记录".to_string(),
+            object_key: "documents/assets-audit.md".to_string(),
+            content_type: "text/markdown".to_string(),
+            lifecycle: domain_model::DocumentLifecycle::Extracted,
+            secret_binding_ids: Vec::new(),
+            metadata: BTreeMap::new(),
+            created_at: now,
+            updated_at: now,
+        };
+        let section_document = Document {
+            id: section_document_id,
+            tenant_id,
+            dataset_id,
+            owner_user_id: None,
+            title: "行政流程手册".to_string(),
+            object_key: "documents/admin-process.md".to_string(),
+            content_type: "text/markdown".to_string(),
+            lifecycle: domain_model::DocumentLifecycle::Extracted,
+            secret_binding_ids: Vec::new(),
+            metadata: BTreeMap::new(),
+            created_at: now,
+            updated_at: now,
+        };
+        let broad_chunk = DocumentChunk {
+            id: broad_chunk_id,
+            tenant_id,
+            dataset_id,
+            document_id: broad_document_id,
+            chunk_index: 0,
+            content: "固定和资产分别出现在资产盘点记录中。".to_string(),
+            token_count: 12,
+            state: DocumentChunkState::Extracted,
+            metadata: BTreeMap::new(),
+            created_at: now,
+            updated_at: now,
+        };
+        let mut section_metadata = BTreeMap::new();
+        section_metadata.insert("section_title_hints".to_string(), json!(["固定资产申请"]));
+        let section_chunk = DocumentChunk {
+            id: section_chunk_id,
+            tenant_id,
+            dataset_id,
+            document_id: section_document_id,
+            chunk_index: 1,
+            content: "提交审批后由财务复核。".to_string(),
+            token_count: 16,
+            state: DocumentChunkState::Extracted,
+            metadata: section_metadata,
+            created_at: now,
+            updated_at: now,
+        };
+
+        let ranked = rank_document_chunks_for_prompt(
+            vec![
+                (broad_document, broad_chunk),
+                (section_document, section_chunk),
+            ],
+            "固定资产申请怎么提交",
+            2,
+        );
+
+        assert_eq!(ranked[0].chunk.id, section_chunk_id);
+        assert_eq!(ranked[1].chunk.id, broad_chunk_id);
+        assert!(ranked[0].lexical_score > ranked[1].lexical_score);
+        assert!(ranked[0].search_text.contains("固定资产申请"));
+        assert!(
+            document_chunk_fallback_summary(&ranked[0].document, &ranked[0].chunk)
+                .contains("固定资产申请")
+        );
     }
 
     #[test]

@@ -432,19 +432,23 @@ fn build_document_chunks(
         .chunks
         .iter()
         .enumerate()
-        .map(|(index, content)| NewDocumentChunk {
-            dataset_id,
-            document_id,
-            chunk_index: index as i32,
-            content: content.clone(),
-            token_count: estimate_token_count(content),
-            metadata: json!({
-                "extractor": if outcome.used_placeholder { "placeholder" } else { "local_parser" },
-                "parse_method": outcome.parse_method.clone(),
-                "parse_metadata": outcome.metadata.clone(),
-                "source": "upload_ingest_workflow",
-            }),
-            created_at,
+        .map(|(index, content)| {
+            let section_title_hints = section_title_hints_from_text(content, 6);
+            NewDocumentChunk {
+                dataset_id,
+                document_id,
+                chunk_index: index as i32,
+                content: content.clone(),
+                token_count: estimate_token_count(content),
+                metadata: json!({
+                    "extractor": if outcome.used_placeholder { "placeholder" } else { "local_parser" },
+                    "parse_method": outcome.parse_method.clone(),
+                    "parse_metadata": outcome.metadata.clone(),
+                    "section_title_hints": section_title_hints,
+                    "source": "upload_ingest_workflow",
+                }),
+                created_at,
+            }
         })
         .collect()
 }
@@ -462,21 +466,25 @@ fn build_external_source_document_chunks(
     split_text_chunks(&input.body, 1_800)
         .into_iter()
         .enumerate()
-        .map(|(index, content)| NewDocumentChunk {
-            dataset_id,
-            document_id,
-            chunk_index: index as i32,
-            token_count: estimate_token_count(&content),
-            content,
-            metadata: json!({
-                "extractor": "external_source_inline",
-                "parse_method": "external_source_inline",
-                "source": "external_source_sync_workflow",
-                "external_source": external_source,
-                "external_acl": external_acl,
-                "parse_metadata": input.metadata.clone(),
-            }),
-            created_at,
+        .map(|(index, content)| {
+            let section_title_hints = section_title_hints_from_text(&content, 6);
+            NewDocumentChunk {
+                dataset_id,
+                document_id,
+                chunk_index: index as i32,
+                token_count: estimate_token_count(&content),
+                content,
+                metadata: json!({
+                    "extractor": "external_source_inline",
+                    "parse_method": "external_source_inline",
+                    "source": "external_source_sync_workflow",
+                    "external_source": external_source,
+                    "external_acl": external_acl,
+                    "section_title_hints": section_title_hints,
+                    "parse_metadata": input.metadata.clone(),
+                }),
+                created_at,
+            }
         })
         .collect()
 }
@@ -769,6 +777,86 @@ fn estimate_token_count(content: &str) -> i32 {
     estimated.try_into().unwrap_or(i32::MAX)
 }
 
+fn section_title_hints_from_text(text: &str, limit: usize) -> Vec<String> {
+    let mut hints = Vec::new();
+    for line in text.lines().map(str::trim).filter(|line| !line.is_empty()) {
+        if let Some(title) = normalize_section_title_hint(line) {
+            if !hints.contains(&title) {
+                hints.push(title);
+            }
+            if hints.len() >= limit {
+                break;
+            }
+        }
+    }
+    hints
+}
+
+fn normalize_section_title_hint(line: &str) -> Option<String> {
+    let trimmed = line.trim().trim_matches(|ch: char| ch == '*' || ch == '`');
+    if trimmed.is_empty() {
+        return None;
+    }
+    let candidate = trimmed
+        .strip_prefix('#')
+        .map(|value| value.trim_start_matches('#').trim())
+        .or_else(|| {
+            if let Some((index, _)) = trimmed
+                .char_indices()
+                .find(|(_, value)| value.is_whitespace())
+            {
+                let marker = trimmed[..index].trim();
+                if marker.chars().count() <= 12 && looks_like_heading_marker(marker) {
+                    return Some(trimmed[index..].trim());
+                }
+            }
+            let marker_end = trimmed
+                .char_indices()
+                .find_map(|(index, value)| {
+                    if matches!(value, '、' | '.' | '．' | ')' | '）' | ':' | '：') {
+                        Some(index + value.len_utf8())
+                    } else {
+                        None
+                    }
+                })
+                .filter(|index| *index <= 12)?;
+            let marker = trimmed[..marker_end].trim();
+            looks_like_heading_marker(marker).then(|| trimmed[marker_end..].trim())
+        })
+        .or_else(|| {
+            (trimmed.starts_with('第')
+                && trimmed
+                    .chars()
+                    .take(8)
+                    .any(|value| value == '章' || value == '节'))
+            .then_some(trimmed)
+        })
+        .or_else(|| looks_like_standalone_heading(trimmed).then_some(trimmed))?;
+    let normalized = candidate
+        .trim_matches(|ch: char| ch.is_whitespace() || "#*-_".contains(ch))
+        .chars()
+        .take(80)
+        .collect::<String>();
+    (!normalized.is_empty()).then_some(normalized)
+}
+
+fn looks_like_heading_marker(value: &str) -> bool {
+    value.chars().any(|ch| ch.is_ascii_digit())
+        || value.chars().any(|ch| "一二三四五六七八九十".contains(ch))
+}
+
+fn looks_like_standalone_heading(value: &str) -> bool {
+    let char_count = value.chars().count();
+    char_count >= 2
+        && char_count <= 32
+        && !value.ends_with('。')
+        && !value.ends_with('！')
+        && !value.ends_with('？')
+        && !value.ends_with(';')
+        && !value.ends_with('；')
+        && !value.contains('|')
+}
+
 fn context_uuid_string(value: &Value, key: &str) -> Result<Option<uuid::Uuid>> {
     match value {
         Value::Object(map) => match map.get(key).and_then(Value::as_str) {
@@ -847,7 +935,7 @@ mod tests {
             "document_external_id": "doc-002",
             "revision_external_id": "rev-8",
             "title": "订单风险制度",
-            "body": "订单延期超过两天需要赔付提醒。",
+            "body": "## 固定资产申请\n\n订单延期超过两天需要赔付提醒。",
             "acl_hash": "acl-002"
         }))
         .expect("external document should parse");
@@ -876,5 +964,19 @@ mod tests {
             chunks[0].metadata["external_acl"]["revision_external_id"],
             json!("rev-8")
         );
+        assert_eq!(
+            chunks[0].metadata["section_title_hints"],
+            json!(["固定资产申请"])
+        );
+    }
+
+    #[test]
+    fn section_title_hints_detect_common_heading_shapes() {
+        let hints = section_title_hints_from_text(
+            "# 固定资产申请\n正文第一句。\n\n1.2 审批流程\n审批说明。\n\n这里是一句普通正文。",
+            8,
+        );
+
+        assert_eq!(hints, vec!["固定资产申请", "审批流程"]);
     }
 }
