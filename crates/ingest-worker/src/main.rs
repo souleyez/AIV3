@@ -427,13 +427,17 @@ fn build_document_chunks(
     outcome: &IngestOutcome,
 ) -> Vec<NewDocumentChunk> {
     let created_at = Utc::now();
+    let section_title_hints_by_chunk = section_title_hints_for_chunk_sequence(&outcome.chunks, 6);
 
     outcome
         .chunks
         .iter()
         .enumerate()
         .map(|(index, content)| {
-            let section_title_hints = section_title_hints_from_text(content, 6);
+            let section_title_hints = section_title_hints_by_chunk
+                .get(index)
+                .cloned()
+                .unwrap_or_default();
             NewDocumentChunk {
                 dataset_id,
                 document_id,
@@ -462,12 +466,17 @@ fn build_external_source_document_chunks(
     let created_at = Utc::now();
     let external_source = external_source_ref(source_id, None, input);
     let external_acl = external_acl_ref(source_id, input);
+    let chunks = split_text_chunks(&input.body, 1_800);
+    let section_title_hints_by_chunk = section_title_hints_for_chunk_sequence(&chunks, 6);
 
-    split_text_chunks(&input.body, 1_800)
+    chunks
         .into_iter()
         .enumerate()
         .map(|(index, content)| {
-            let section_title_hints = section_title_hints_from_text(&content, 6);
+            let section_title_hints = section_title_hints_by_chunk
+                .get(index)
+                .cloned()
+                .unwrap_or_default();
             NewDocumentChunk {
                 dataset_id,
                 document_id,
@@ -792,6 +801,22 @@ fn section_title_hints_from_text(text: &str, limit: usize) -> Vec<String> {
     hints
 }
 
+fn section_title_hints_for_chunk_sequence(chunks: &[String], limit: usize) -> Vec<Vec<String>> {
+    let mut active_hints = Vec::new();
+    chunks
+        .iter()
+        .map(|chunk| {
+            let direct_hints = section_title_hints_from_text(chunk, limit);
+            if direct_hints.is_empty() {
+                active_hints.clone()
+            } else {
+                active_hints = direct_hints;
+                active_hints.clone()
+            }
+        })
+        .collect()
+}
+
 fn normalize_section_title_hint(line: &str) -> Option<String> {
     let trimmed = line.trim().trim_matches(|ch: char| ch == '*' || ch == '`');
     if trimmed.is_empty() {
@@ -978,5 +1003,45 @@ mod tests {
         );
 
         assert_eq!(hints, vec!["固定资产申请", "审批流程"]);
+    }
+
+    #[test]
+    fn build_document_chunks_inherit_section_title_hints_across_chunk_sequence() {
+        let outcome = IngestOutcome {
+            chunks: vec![
+                "# 固定资产申请\n提交前需要填写申请单。".to_string(),
+                "审批通过后由行政登记资产编号。".to_string(),
+                "## 报废处理\n报废前需要主管确认。".to_string(),
+                "财务完成残值核算。".to_string(),
+            ],
+            inferred_title: None,
+            parse_method: "local-text.md".to_string(),
+            extracted_chars: 64,
+            used_placeholder: false,
+            metadata: json!({}),
+        };
+
+        let chunks = build_document_chunks(
+            domain_model::DatasetId::new(),
+            domain_model::DocumentId::new(),
+            &outcome,
+        );
+
+        assert_eq!(
+            chunks[0].metadata["section_title_hints"],
+            json!(["固定资产申请"])
+        );
+        assert_eq!(
+            chunks[1].metadata["section_title_hints"],
+            json!(["固定资产申请"])
+        );
+        assert_eq!(
+            chunks[2].metadata["section_title_hints"],
+            json!(["报废处理"])
+        );
+        assert_eq!(
+            chunks[3].metadata["section_title_hints"],
+            json!(["报废处理"])
+        );
     }
 }
