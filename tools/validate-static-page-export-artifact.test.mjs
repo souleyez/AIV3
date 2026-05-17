@@ -204,3 +204,16 @@ test('validateStaticPageExportArtifact rejects render spec drift', () => {
   assert.equal(report.ready, false);
   assert.ok(report.errors.some((error) => error.code === 'render_spec_manifest_mismatch'));
 });
+
+test('validateStaticPageExportArtifact rejects data quality module drift', () => {
+  const artifact = makeArtifact();
+  const reportPath = path.join(artifact, 'data-quality-report.json');
+  const qualityReport = JSON.parse(fs.readFileSync(reportPath, 'utf8'));
+  qualityReport.modules[0].dataQualityStatus = 'partial';
+  writeJson(reportPath, qualityReport);
+
+  const report = validateStaticPageExportArtifact(artifact);
+
+  assert.equal(report.ready, false);
+  assert.ok(report.errors.some((error) => error.code === 'data_quality_modules_manifest_mismatch'));
+});

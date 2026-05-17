@@ -213,18 +213,32 @@ export function validateStaticPageExportArtifact(artifactDir) {
     htmlPath,
   );
 
-  const attentionModules = manifest?.chart_runtime?.dataQualitySummary?.attentionModules;
+  const manifestDataQualitySummary = manifest?.chart_runtime?.dataQualitySummary || {};
+  const manifestQualityModules = manifest?.chart_runtime?.modules;
+  const attentionModules = manifestDataQualitySummary?.attentionModules;
   addCheck(
     checks,
     errors,
     'data quality report mirrors ready manifest',
     dataQualityReport?.kind === 'static-page-data-quality-report'
-      && dataQualityReport?.summary?.attentionModules === attentionModules
+      && jsonValuesEqual(dataQualityReport?.summary, manifestDataQualitySummary)
       && attentionModules === 0
       && Array.isArray(dataQualityReport?.modules)
-      && dataQualityReport.modules.length === manifest?.chart_runtime?.modules?.length,
-    'data-quality-report.json must mirror a ready module-quality summary with zero attention modules.',
+      && dataQualityReport.modules.length === manifestQualityModules?.length,
+    'data-quality-report.json must mirror the ready module-quality summary with zero attention modules.',
     'data_quality_report_contract_invalid',
+    path.join(artifact, 'data-quality-report.json'),
+  );
+
+  addCheck(
+    checks,
+    errors,
+    'data quality module details mirror renderer manifest',
+    Array.isArray(dataQualityReport?.modules)
+      && Array.isArray(manifestQualityModules)
+      && jsonValuesEqual(dataQualityReport.modules, manifestQualityModules),
+    'data-quality-report.json modules must mirror chart_runtime.modules in asset-manifest.json.',
+    'data_quality_modules_manifest_mismatch',
     path.join(artifact, 'data-quality-report.json'),
   );
 
