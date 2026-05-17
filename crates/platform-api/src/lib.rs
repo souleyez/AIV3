@@ -13382,8 +13382,10 @@ fn build_assistant_run_react_provider_input(
         "OpenClaw 和 Codex Host 都是可选外挂能力；openclaw_memory_recall、openclaw_readonly_execution、codex_host_task 可能被 Host 拒绝，不能绕过 V3 选中范围、记忆、任务隔离和执行 allowlist。".to_string(),
         "如果用户表达报表意图，先用 list_report_options；收到该 observation 后，才能用 report_choice，并只在 arguments.choice 填 continue_qa 或 create_report，不能编写报表正文。".to_string(),
         "如果已经可以回答，使用 action_type=final_answer，arguments.content 放最终正文。".to_string(),
+        "final_answer 面向用户聊天框，只写自然语言结论、必要步骤和简短来源说明；禁止粘贴 observation JSON、execution_trail、react_trace、tool_trace、runtime_manifest、provider 原始载荷、私有路径或内部 URL。".to_string(),
         format!("当前 ReAct 步骤：{step_index}/{max_steps}"),
     ];
+    sections.extend(assistant_run_v3_awareness_lines());
     sections.push(format!(
         "弱规划目录（只用于选择工具，不可直接作为回答证据）：{}",
         serde_json::to_string(&planning_catalog).unwrap_or_else(|_| "{}".to_string())
@@ -13464,6 +13466,7 @@ fn build_assistant_run_react_continue_provider_input(
         "OpenClaw 和 Codex Host 都是可选外挂能力；openclaw_memory_recall、openclaw_readonly_execution、codex_host_task 可能被 Host 拒绝，不能绕过 V3 选中范围、记忆、任务隔离和执行 allowlist。".to_string(),
         "如果用户表达报表意图，先用 list_report_options；收到该 observation 后，才能用 report_choice，并只在 arguments.choice 填 continue_qa 或 create_report，不能编写报表正文。".to_string(),
         "如果已经可以回答，使用 action_type=final_answer，arguments.content 放最终正文。".to_string(),
+        "final_answer 面向用户聊天框，只写自然语言结论、必要步骤和简短来源说明；禁止粘贴 observation JSON、execution_trail、react_trace、tool_trace、runtime_manifest、provider 原始载荷、私有路径或内部 URL。".to_string(),
         format!("当前 ReAct 步骤：{step_index}/{max_steps}"),
         format!("运行ID：{}", run.id),
         format!("原始问题：{}", run.user_prompt.trim()),
@@ -13473,6 +13476,7 @@ fn build_assistant_run_react_continue_provider_input(
             serde_json::to_string(&planning_catalog).unwrap_or_else(|_| "{}".to_string())
         ),
     ];
+    sections.extend(assistant_run_v3_awareness_lines());
     let pending_model_completion_requests =
         assistant_run_pending_model_completion_requests(&run.output_artifacts);
     if let Some(evidence_state) = evidence_state {
@@ -36912,6 +36916,11 @@ mod tests {
         assert!(input.contains("extract_video_ppt_transcript"));
         assert!(input.contains("不要请求扫码、Cookie、登录态页面或录屏绕过"));
         assert!(input.contains("最终引用只能来自 observation"));
+        assert!(input.contains("final_answer 面向用户聊天框"));
+        assert!(input.contains("禁止粘贴 observation JSON"));
+        assert!(input.contains("execution_trail"));
+        assert!(input.contains("react_trace"));
+        assert!(input.contains("provider 原始载荷"));
         assert!(input.contains("OpenClaw 和 Codex Host 都是可选外挂能力"));
         assert!(!input.contains("secret-provider-key"));
         assert!(!input.contains("订单正文不该进入规划目录"));
@@ -37056,6 +37065,10 @@ mod tests {
         assert!(input.contains("submit_static_page_image_preview"));
         assert!(input.contains("\"previewStale\":true"));
         assert!(input.contains("\"id\":\"trend\""));
+        assert!(input.contains("final_answer 面向用户聊天框"));
+        assert!(input.contains("禁止粘贴 observation JSON"));
+        assert!(input.contains("tool_trace"));
+        assert!(input.contains("内部 URL"));
         assert!(!input.contains("继续执行提示不应该携带完整模块正文"));
         assert!(!input.contains("continue-current-artifact-row-should-not-leak"));
     }
