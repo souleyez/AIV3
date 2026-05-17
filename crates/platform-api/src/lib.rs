@@ -36541,6 +36541,146 @@ mod tests {
     }
 
     #[test]
+    fn assistant_run_continue_provider_input_keeps_plain_chat_unrestricted_and_v3_aware() {
+        let now = Utc::now();
+        let run = AssistantRun {
+            id: AssistantRunId::new(),
+            tenant_id: TenantId::new(),
+            user_id: None,
+            local_thread_id: Some("browser-thread-1".to_string()),
+            user_prompt: "为什么夏天傍晚会有雷阵雨？".to_string(),
+            startup_briefing: json!({"visibleDatasetCount": 0}),
+            selected_scope: json!({
+                "mode": "ordinary_chat",
+                "datasets": [],
+                "conversation_memory": [],
+                "intent": "ordinary_chat",
+            }),
+            scope_candidates: json!([]),
+            context_policy: json!({}),
+            evidence_state: json!({"status": "not_requested", "supplied_items": []}),
+            service_lane: "ordinary_chat".to_string(),
+            execution_trail: json!([]),
+            output_artifacts: json!([]),
+            runtime_manifest: json!({}),
+            created_at: now,
+            updated_at: now,
+        };
+        let request = ContinueAssistantRunRequest {
+            prompt: Some("继续说，但别太长".to_string()),
+            max_steps: Some(1),
+            current_artifact: None,
+            messages: Vec::new(),
+        };
+
+        let input = build_assistant_run_continue_provider_input(
+            &run,
+            &request,
+            "继续说，但别太长",
+            &run.selected_scope,
+            &run.evidence_state,
+            1,
+        );
+
+        assert!(input.contains("通用模型助手"));
+        assert!(input.contains("不要因为运行在数据智能助手中而限制通用问答能力"));
+        assert!(input.contains("AI Data Platform V3"));
+        assert!(input.contains("V3 上下文是附加能力"));
+        assert!(input.contains("不是能力限制"));
+        assert!(input.contains("当前不可见/未供料"));
+        assert!(input.contains("不要声称已联网搜索"));
+        assert!(input.contains("原始问题：为什么夏天傍晚会有雷阵雨？"));
+        assert!(input.contains("继续指令：继续说，但别太长"));
+        assert!(!input.contains("当前选中范围"));
+        assert!(!input.contains("供料状态"));
+        assert!(!input.contains("供料证据"));
+        assert!(!input.contains("规划/渲染/修改静态页"));
+    }
+
+    #[test]
+    fn assistant_run_continue_provider_input_preserves_v3_evidence_boundary_for_data_question() {
+        let now = Utc::now();
+        let dataset_id = DatasetId::new();
+        let document_id = DocumentId::new();
+        let run = AssistantRun {
+            id: AssistantRunId::new(),
+            tenant_id: TenantId::new(),
+            user_id: None,
+            local_thread_id: Some("browser-thread-1".to_string()),
+            user_prompt: "固定资产怎么申请？".to_string(),
+            startup_briefing: json!({"visibleDatasetCount": 1}),
+            selected_scope: json!({
+                "mode": "user_selected",
+                "datasets": [dataset_id],
+                "intent": "data_question",
+            }),
+            scope_candidates: json!([]),
+            context_policy: json!({}),
+            evidence_state: json!({
+                "status": "supplied",
+                "fallback_supply_count": 1,
+                "supply_quality": {
+                    "status": "partial",
+                    "citationLocatorCount": 1,
+                    "mediaContextCount": 0
+                },
+                "supplied_items": [{
+                    "type": "retrieval_evidence",
+                    "source": "document_chunk_fallback",
+                    "dataset_id": dataset_id,
+                    "document_id": document_id,
+                    "summary": "用户手册3-固定资产 / 固定资产申请",
+                    "content_excerpt": "提交固定资产申请单后，部门负责人审批，行政登记资产编号。",
+                    "source_locator": "documents/xinshijie/ioa/user-manual-3-fixed-asset.md#chunk=0"
+                }],
+                "detail_targets": [{
+                    "document_id": document_id,
+                    "reason": "fallback_supply_detail_target"
+                }]
+            }),
+            service_lane: "assistant_run".to_string(),
+            execution_trail: json!([]),
+            output_artifacts: json!([]),
+            runtime_manifest: json!({}),
+            created_at: now,
+            updated_at: now,
+        };
+        let request = ContinueAssistantRunRequest {
+            prompt: Some("那下一步谁审批？".to_string()),
+            max_steps: Some(2),
+            current_artifact: None,
+            messages: vec![AssistantRunMessageView {
+                role: ChatMessageRole::Assistant,
+                content: "已根据固定资产申请资料回答。".to_string(),
+            }],
+        };
+
+        let input = build_assistant_run_continue_provider_input(
+            &run,
+            &request,
+            "那下一步谁审批？",
+            &run.selected_scope,
+            &run.evidence_state,
+            2,
+        );
+
+        assert!(input.contains("AssistantRun 连续执行回答运行时"));
+        assert!(input.contains("AI Data Platform V3"));
+        assert!(input.contains("当前选中范围"));
+        assert!(input.contains("供料状态"));
+        assert!(input.contains("供料提示"));
+        assert!(input.contains("供料1"));
+        assert!(input.contains("固定资产申请"));
+        assert!(input.contains("建议细读"));
+        assert!(input.contains("不要编造"));
+        assert!(input.contains("普通常识、解释和建议可以使用模型通用知识"));
+        assert!(input.contains("当前不可见/未供料"));
+        assert!(input.contains("不要声称已联网搜索"));
+        assert!(input.contains("assistant: 已根据固定资产申请资料回答。"));
+        assert!(input.contains("继续指令：那下一步谁审批？"));
+    }
+
+    #[test]
     fn assistant_run_provider_input_summarizes_current_static_page_without_body() {
         let input = build_assistant_run_provider_input(&CreateAssistantRunRequest {
             prompt: "把核心判断模块改成更强的 KPI 视觉".to_string(),
