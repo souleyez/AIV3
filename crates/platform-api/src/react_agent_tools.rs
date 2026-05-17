@@ -747,6 +747,63 @@ fn current_static_page_draft_id(current_artifact: Option<&Value>) -> Option<Stat
     })
 }
 
+fn react_final_answer_content_is_raw_observation(content: &str) -> bool {
+    let Some(candidate) = react_final_answer_json_candidate(content) else {
+        return false;
+    };
+    let Ok(value) = serde_json::from_str::<Value>(&candidate) else {
+        return false;
+    };
+    react_value_looks_like_observation_payload(&value)
+}
+
+fn react_final_answer_json_candidate(content: &str) -> Option<String> {
+    let trimmed = content.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let fenced = trimmed
+        .strip_prefix("```json")
+        .or_else(|| trimmed.strip_prefix("```JSON"))
+        .or_else(|| trimmed.strip_prefix("```"));
+    if let Some(fenced) = fenced {
+        let inner = fenced.trim();
+        let inner = inner.strip_suffix("```").unwrap_or(inner).trim();
+        return Some(inner.to_string());
+    }
+    if trimmed.starts_with('{') || trimmed.starts_with('[') {
+        return Some(trimmed.to_string());
+    }
+    None
+}
+
+fn react_value_looks_like_observation_payload(value: &Value) -> bool {
+    let Some(object) = value.as_object() else {
+        return value
+            .as_array()
+            .is_some_and(|items| items.iter().any(react_value_looks_like_observation_payload));
+    };
+    if object
+        .get("observation")
+        .is_some_and(|value| value.is_object())
+    {
+        return true;
+    }
+    let has_status = object.get("status").and_then(Value::as_str).is_some();
+    let has_action = object
+        .get("action_type")
+        .or_else(|| object.get("actionType"))
+        .or_else(|| object.get("react_action"))
+        .and_then(Value::as_str)
+        .is_some();
+    let has_observation_shape = object.contains_key("items")
+        || object.contains_key("limits")
+        || object.contains_key("denied")
+        || object.contains_key("detail_targets")
+        || object.contains_key("supplied_items");
+    has_status && has_action && has_observation_shape
+}
+
 fn final_answer_result(action: &AssistantRunNextAction) -> AssistantRunReactToolResult {
     let content = action
         .arguments
@@ -757,6 +814,30 @@ fn final_answer_result(action: &AssistantRunNextAction) -> AssistantRunReactTool
         .filter(|value| !value.is_empty())
         .unwrap_or(action.reason_summary.as_str())
         .to_string();
+    if react_final_answer_content_is_raw_observation(&content) {
+        return AssistantRunReactToolResult {
+            observation: json!({
+                "status": "rejected",
+                "action_type": action.action_type.as_str(),
+                "actionType": action.action_type.as_str(),
+                "message": "final_answer_raw_observation_rejected",
+                "denied": ["raw_observation_as_user_answer"],
+                "items": [],
+                "limits": {},
+                "repair_required": true,
+                "next_step": "Generate a natural-language user-facing final_answer from visible evidence; do not paste observation JSON.",
+                "content_length": content.chars().count(),
+            }),
+            trail_step: json!({
+                "status": "rejected",
+                "label": "最终回答包含内部观测",
+                "react_action": action.action_type.as_str(),
+                "reason": "final_answer_raw_observation_rejected",
+                "at": Utc::now(),
+            }),
+            final_answer: None,
+        };
+    }
     AssistantRunReactToolResult {
         observation: json!({
             "status": "completed",
@@ -3095,6 +3176,59 @@ mod tests {
             json!("static_page.update_draft")
         );
         assert!(result.final_answer.is_none());
+    }
+
+    #[test]
+    fn final_answer_result_rejects_raw_observation_payloads() {
+        let mut action = test_action(AssistantRunReactActionType::FinalAnswer);
+        action.status = AssistantRunReActStatus::FinalAnswer;
+        action.arguments = json!({
+            "content": r#"{"status":"completed","action_type":"retrieve_evidence","items":[{"summary":"内部供料"}],"limits":{}}"#
+        });
+
+        let result = final_answer_result(&action);
+
+        assert_eq!(result.observation["status"], json!("rejected"));
+        assert_eq!(
+            result.observation["message"],
+            json!("final_answer_raw_observation_rejected")
+        );
+        assert_eq!(
+            result.observation["denied"][0],
+            json!("raw_observation_as_user_answer")
+        );
+        assert!(result.final_answer.is_none());
+    }
+
+    #[test]
+    fn final_answer_result_rejects_fenced_raw_observation_payloads() {
+        let mut action = test_action(AssistantRunReactActionType::FinalAnswer);
+        action.status = AssistantRunReActStatus::FinalAnswer;
+        action.arguments = json!({
+            "content": "```json\n{\"observation\":{\"status\":\"completed\",\"actionType\":\"read_document_detail\",\"items\":[]}}\n```"
+        });
+
+        let result = final_answer_result(&action);
+
+        assert_eq!(result.observation["status"], json!("rejected"));
+        assert!(result.final_answer.is_none());
+    }
+
+    #[test]
+    fn final_answer_result_allows_user_facing_json_examples() {
+        let mut action = test_action(AssistantRunReactActionType::FinalAnswer);
+        action.status = AssistantRunReActStatus::FinalAnswer;
+        action.arguments = json!({
+            "content": r#"{"example":"这是给用户看的 JSON 示例","status":"draft"}"#
+        });
+
+        let result = final_answer_result(&action);
+
+        assert_eq!(result.observation["status"], json!("completed"));
+        assert_eq!(
+            result.final_answer.as_deref(),
+            Some(r#"{"example":"这是给用户看的 JSON 示例","status":"draft"}"#)
+        );
     }
 
     #[test]
