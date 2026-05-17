@@ -4595,15 +4595,26 @@ body {
 }
 
 .mobile-home-status-strip span,
-.mobile-home-status-strip strong {
+.mobile-home-status-strip strong,
+.mobile-report-summary-button {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.mobile-home-status-strip strong {
+.mobile-home-status-strip strong,
+.mobile-report-summary-button {
   color: #e5eefb;
+}
+
+.mobile-report-summary-button {
+  max-width: 46%;
+  padding: 0;
+  background: transparent;
+  font-size: 12px;
+  font-weight: 850;
+  text-align: right;
 }
 
 .mobile-home-banner {
@@ -4614,7 +4625,7 @@ body {
   flex: 1 1 auto;
   min-height: 0;
   display: flex;
-  padding: 10px 10px 78px;
+  padding: 10px 10px calc(14px + env(safe-area-inset-bottom));
   overflow: hidden;
 }
 
@@ -4740,45 +4751,6 @@ body {
 .chat-panel-mobile-home .bubble,
 .mobile-home-results-drawer .bubble {
   max-width: calc(100vw - 86px);
-}
-
-.mobile-home-bottom-nav {
-  position: fixed;
-  left: 12px;
-  right: 12px;
-  bottom: calc(10px + env(safe-area-inset-bottom));
-  z-index: 18;
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 8px;
-  padding: 8px;
-  border-radius: 20px;
-  background: rgba(16, 22, 31, 0.88);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.28);
-  backdrop-filter: blur(16px);
-}
-
-.mobile-home-bottom-nav button {
-  min-height: 44px;
-  display: grid;
-  place-items: center;
-  gap: 2px;
-  border-radius: 14px;
-  color: #99a8bd;
-  background: transparent;
-  font-size: 11px;
-  font-weight: 800;
-}
-
-.mobile-home-bottom-nav button strong {
-  color: #dce8f8;
-  font-size: 12px;
-}
-
-.mobile-home-bottom-nav button.active {
-  background: rgba(41, 126, 255, 0.22);
-  color: #dbeafe;
 }
 
 .mobile-home-overlay {

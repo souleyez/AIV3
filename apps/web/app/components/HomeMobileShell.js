@@ -193,6 +193,19 @@ export default function HomeMobileShell({
     setSurface('chat');
   }
 
+  const visibleHtmlArtifactCount = Array.isArray(insightPanelProps?.htmlArtifacts)
+    ? insightPanelProps.htmlArtifacts.filter((artifact) => {
+      const templateId = artifact?.templateId || artifact?.template_id;
+      return templateId !== 'static_page_planning_handoff'
+        && templateId !== 'static_page_data_quality_report';
+    }).length
+    : 0;
+  const reportItemCount =
+    (Number(stats.plans) || 0)
+    + (Number(stats.published) || 0)
+    + visibleHtmlArtifactCount
+    + (Array.isArray(insightPanelProps?.staticPageDrafts) ? insightPanelProps.staticPageDrafts.length : 0);
+
   useEffect(() => {
     if (staticPageEditorOpen && staticPageDraft && surface !== 'static-page') {
       setSurface('static-page');
@@ -245,7 +258,18 @@ export default function HomeMobileShell({
 
       <div className="mobile-home-status-strip">
         <span>{selectedScopeLabel || '普通聊天 · 未选数据集'}</span>
-        <strong>{loading ? '同步中' : `会话 ${stats.sessions} · 报告 ${stats.plans}`}</strong>
+        <button
+          type="button"
+          className="mobile-report-summary-button"
+          onClick={() => {
+            setResultsOpen(true);
+            setDatasetOpen(false);
+            setConversationOpen(false);
+            setAccountOpen(false);
+          }}
+        >
+          {loading ? '同步中' : `会话 ${stats.sessions} · 报告 ${reportItemCount || stats.plans || 0}`}
+        </button>
       </div>
 
       {banner ? <div className="page-banner success-banner mobile-home-banner">{banner}</div> : null}
@@ -274,33 +298,6 @@ export default function HomeMobileShell({
         )}
       </main>
 
-      <nav className="mobile-home-bottom-nav" aria-label="移动端工作区">
-        <button type="button" onClick={() => setDatasetOpen(true)}>
-          <span>数据集</span>
-          <strong>{selectedScope.length ? `已选${selectedScope.length}` : '未选'}</strong>
-        </button>
-        <button type="button" className={surface === 'chat' ? 'active' : ''} onClick={() => setSurface('chat')}>
-          <span>对话</span>
-          <strong>{surface === 'chat' ? '当前' : '返回'}</strong>
-        </button>
-        <button
-          type="button"
-          className={surface === 'static-page' ? 'active' : ''}
-          onClick={() => {
-            onStaticPageEditorOpenChange?.(true);
-            setSurface('static-page');
-          }}
-          disabled={!staticPageDraft}
-        >
-          <span>静态页</span>
-          <strong>{staticPageDraft ? '构建' : '待生成'}</strong>
-        </button>
-        <button type="button" onClick={() => setResultsOpen(true)}>
-          <span>产物</span>
-          <strong>{stats.published || insightPanelProps?.htmlArtifacts?.length || 0}</strong>
-        </button>
-      </nav>
-
       {datasetOpen ? (
         <>
           <button
@@ -328,7 +325,7 @@ export default function HomeMobileShell({
           <aside className="mobile-home-results-drawer">
             <div className="mobile-home-drawer-head">
               <div>
-                <strong>产物列表</strong>
+                <strong>报告与产物</strong>
                 <span>{selectedScopeLabel || '草稿、报告和静态页产物'}</span>
               </div>
               <button type="button" className="ghost-btn compact-action-btn" onClick={() => setResultsOpen(false)}>

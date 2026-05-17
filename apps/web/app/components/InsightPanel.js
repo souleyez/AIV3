@@ -989,7 +989,7 @@ export default function InsightPanel({
               />
             );
           })}
-          {!resultCount ? <EmptySection text="暂时还没有生成项目。通过底部“页面”或对话发起后会出现在这里。" /> : null}
+          {!resultCount ? <EmptySection text="暂时还没有生成项目。通过对话发起后会出现在这里。" /> : null}
         </div>
         <button type="button" className="ghost-btn compact-action-btn" onClick={onRefreshStaticPageDrafts}>
           刷新项目
