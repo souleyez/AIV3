@@ -1,3 +1,5 @@
+import { attachVisibleDocumentsToDatasets, datasetDocumentTitleHints } from './dataset-document-hints.js';
+
 const MEDIA_DATASET_PATTERN = /音视频|音频|视频|录音|转写|字幕|会议|访谈|关键帧|ocr/i;
 const VIDEO_PPT_EXTRACTION_PATTERN = /((视频|mp4|mov|m4v|webm|公开视频|视频地址|视频链接|url|URL|上传).*(ppt|PPT|幻灯片|课件|原文|字幕|转写|讲稿|提取))|((ppt|PPT|幻灯片|课件|原文|字幕|转写|讲稿|提取).*(视频|mp4|mov|m4v|webm|公开视频|视频地址|视频链接|url|URL|上传))/i;
 const DIRECT_VIDEO_SOURCE_PATTERN = /https?:\/\/\S+|\.(mp4|mov|m4v|webm)(\b|$)|公开视频|视频地址|视频链接|url|URL/i;
@@ -41,13 +43,14 @@ const INTENT_LABELS = {
 export function planAssistantScope({
   prompt = '',
   datasets = [],
+  documents = [],
   selectedDatasetId = '',
   selectedDatasetIds = [],
   conversationMemory = [],
   activeStaticPageDraft = null,
 } = {}) {
   const normalizedPrompt = String(prompt || '').trim();
-  const visibleDatasets = Array.isArray(datasets) ? datasets : [];
+  const visibleDatasets = attachVisibleDocumentsToDatasets(datasets, documents);
   const userSelectedDatasetIds = normalizeDatasetIds([
     ...selectedDatasetIds,
     selectedDatasetId,
@@ -176,18 +179,6 @@ function textMatches(prompt, text) {
     .map((token) => token.trim())
     .filter((token) => token.length >= 2);
   return tokens.some((token) => prompt.includes(token));
-}
-
-function datasetDocumentTitleHints(dataset = {}) {
-  const hints = Array.isArray(dataset.documentTitleHints)
-    ? dataset.documentTitleHints
-    : Array.isArray(dataset.document_title_hints)
-      ? dataset.document_title_hints
-      : [];
-  return hints
-    .filter((hint) => typeof hint === 'string' && hint.trim())
-    .map((hint) => hint.trim())
-    .slice(0, 12);
 }
 
 function datasetMaterialHints(dataset = {}) {

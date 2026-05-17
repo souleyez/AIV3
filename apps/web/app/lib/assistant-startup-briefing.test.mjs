@@ -150,6 +150,42 @@ test('formatted briefing includes compact dataset material metadata without cont
   assert.doesNotMatch(formatted, /转写原文/);
 });
 
+test('startup briefing includes visible document title hints without document content', () => {
+  const briefing = buildAssistantStartupBriefing({
+    datasets: [{
+      id: 'dataset-ioa',
+      key: 'xinshijie-ioa',
+      title: '新世界 IOA 问答测试集',
+      lifecycle: 'active',
+    }],
+    documents: [
+      {
+        id: 'doc-fixed-assets',
+        dataset_id: 'dataset-ioa',
+        title: '用户手册3-固定资产.docx',
+        content: '固定资产正文不能进入启动简报',
+      },
+      {
+        id: 'doc-qa',
+        datasetId: 'dataset-ioa',
+        object_key: 'uploads/IOA系统Q&A.pdf',
+        content: '问答正文也不能进入启动简报',
+      },
+    ],
+  });
+  const formatted = formatStartupBriefingForModel(briefing);
+
+  assert.equal(briefing.visibleDocumentCount, 2);
+  assert.equal(briefing.datasetBriefs[0].documentCount, 2);
+  assert.deepEqual(briefing.datasetBriefs[0].documentTitleHints, [
+    '用户手册3-固定资产',
+    'IOA系统Q&A',
+  ]);
+  assert.match(formatted, /新世界 IOA 问答测试集\(2文档\/active\/解析:unknown:2\/主题:用户手册3-固定资产\+IOA系统Q&A\)/);
+  assert.doesNotMatch(formatted, /固定资产正文不能进入启动简报/);
+  assert.doesNotMatch(formatted, /问答正文也不能进入启动简报/);
+});
+
 test('startup briefing prefers recent upload or classification activity', () => {
   const briefing = buildAssistantStartupBriefing({
     datasets: [

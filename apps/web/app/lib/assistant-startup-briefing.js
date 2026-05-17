@@ -1,3 +1,5 @@
+import { attachVisibleDocumentsToDatasets, datasetDocumentTitleHints } from './dataset-document-hints.js';
+
 const MEDIA_EXTRACTION_POLICY = {
   supportedSources: [
     '上传视频文件',
@@ -68,6 +70,7 @@ const STATIC_PAGE_READY_CHART_FITS = new Set(['ready', 'not_required', 'non_char
 
 export function buildAssistantStartupBriefing({
   datasets = [],
+  documents = [],
   reportPlans = [],
   publishedReports = [],
   latestMessages = [],
@@ -77,7 +80,7 @@ export function buildAssistantStartupBriefing({
   activeStaticPageDraft = null,
   staticPageDrafts = [],
 } = {}) {
-  const visibleDatasets = Array.isArray(datasets) ? datasets : [];
+  const visibleDatasets = attachVisibleDocumentsToDatasets(datasets, documents);
   const reports = Array.isArray(reportPlans) ? reportPlans : [];
   const published = Array.isArray(publishedReports) ? publishedReports : [];
   const messages = Array.isArray(latestMessages) ? latestMessages : [];
@@ -310,6 +313,7 @@ function summarizeDatasets(datasets) {
     lifecycle: dataset?.lifecycle || dataset?.status || 'unknown',
     parseStatusSummary: datasetParseStatusSummary(dataset),
     materialHints: datasetMaterialHints(dataset),
+    documentTitleHints: datasetDocumentTitleHints(dataset, { limit: 4 }),
     documentCount: datasetDocumentCount(dataset),
     estimatedWordCount: datasetEstimatedWordCount(dataset),
     updatedAt: dataset?.updated_at || dataset?.updatedAt || '',
@@ -369,10 +373,13 @@ function formatDatasetBriefForModel(item) {
   const hints = Array.isArray(item.materialHints) && item.materialHints.length
     ? `/${item.materialHints.join('+')}`
     : '';
+  const titleHints = Array.isArray(item.documentTitleHints) && item.documentTitleHints.length
+    ? `/主题:${item.documentTitleHints.join('+')}`
+    : '';
   const parse = item.parseStatusSummary && item.parseStatusSummary !== item.lifecycle
     ? `/解析:${item.parseStatusSummary}`
     : '';
-  return `${item.title}(${item.documentCount}文档/${item.lifecycle}${parse}${hints})`;
+  return `${item.title}(${item.documentCount}文档/${item.lifecycle}${parse}${titleHints}${hints})`;
 }
 
 function summarizeStaticPageWorkspace(activeDraft, drafts) {

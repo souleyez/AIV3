@@ -74,6 +74,32 @@ test('scope planner preselects visible dataset from document title hints', () =>
   assert.equal(plan.supplyStrategy.retrievalPolicy, 'standard');
 });
 
+test('scope planner preselects visible dataset from visible document titles', () => {
+  const plan = planAssistantScope({
+    prompt: '固定资产怎么操作',
+    datasets: [
+      {
+        id: 'dataset-ioa',
+        key: 'xinshijie-ioa',
+        title: '新世界 IOA 问答测试集',
+        lifecycle: 'active',
+      },
+    ],
+    documents: [
+      {
+        id: 'doc-fixed-assets',
+        dataset_id: 'dataset-ioa',
+        title: '用户手册3-固定资产.docx',
+      },
+    ],
+  });
+
+  assert.equal(selectPlannerDatasetId(plan), 'dataset-ioa');
+  assert.equal(plan.candidates[0].source, 'scope_planner');
+  assert.equal(plan.candidates[0].documentCount, 1);
+  assert.equal(plan.supplyStrategy.retrievalPolicy, 'standard');
+});
+
 test('scope planner keeps unrelated no-dataset chat as ordinary model chat', () => {
   const plan = planAssistantScope({
     prompt: '帮我写一句开场白',

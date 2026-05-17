@@ -654,6 +654,7 @@ export default function HomePageClient() {
   const assistantStartupBriefing = useMemo(
     () => buildAssistantStartupBriefing({
       datasets,
+      documents,
       reportPlans,
       publishedReports,
       latestMessages: visibleMessages,
@@ -663,7 +664,7 @@ export default function HomePageClient() {
       activeStaticPageDraft,
       staticPageDrafts: staticPageDraftItems,
     }),
-    [activityEvents, activeStaticPageDraft, datasets, publishedReports, reportPlans, selectedDataset, selectedDatasets, staticPageDraftItems, visibleMessages],
+    [activityEvents, activeStaticPageDraft, datasets, documents, publishedReports, reportPlans, selectedDataset, selectedDatasets, staticPageDraftItems, visibleMessages],
   );
   const toolbarSourceItems = useMemo(
     () => selectedDatasets.map((dataset) => ({ name: dataset.title, status: 'healthy' })),
@@ -2206,6 +2207,7 @@ export default function HomePageClient() {
     const nextScopePlan = planAssistantScope({
       prompt,
       datasets,
+      documents,
       selectedDatasetId,
       selectedDatasetIds,
       conversationMemory: [...visibleMessages, userMessage],
@@ -2248,6 +2250,7 @@ export default function HomePageClient() {
         const assistantSelectedScope = buildAssistantRunSelectedScope(effectiveDatasetIds, nextScopePlan);
         const briefing = buildAssistantStartupBriefing({
           datasets,
+          documents,
           reportPlans,
           publishedReports,
           latestMessages: [...visibleMessages, userMessage],
