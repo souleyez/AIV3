@@ -9,6 +9,7 @@ The contract is:
 - All expected modules are visible, deterministic SVG chart fallbacks render, and the ECharts module exposes only a safe JSON hydration island.
 - Confirmed fixture data does not render missing-data placeholders.
 - The desktop and mobile layouts have no horizontal overflow, no module overlap, and no obvious text overflow.
+- The manifest preserves the direct-browser delivery contract: `index.html`, no remote scripts, deterministic chart fallback, and optional safe ECharts hydration.
 - Screenshots are captured for review under the smoke report directory.
 
 ## Command

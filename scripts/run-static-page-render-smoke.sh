@@ -141,6 +141,15 @@ check(
   "The render manifest exposes the expected export package files."
 );
 check(
+  "export package records browser delivery contract",
+  manifest.export_package?.browser_delivery_contract?.entry === "index.html" &&
+    manifest.export_package?.browser_delivery_contract?.remote_scripts_allowed === false &&
+    manifest.export_package?.browser_delivery_contract?.deterministic_chart_fallback === true &&
+    manifest.export_package?.browser_delivery_contract?.optional_echarts_hydration === "safe_json_option_islands" &&
+    manifest.export_package?.browser_delivery_contract?.mobile_viewport === "responsive_no_horizontal_overflow_expected",
+  "The export manifest keeps the direct-browser handoff rule: no remote scripts, deterministic chart fallback, and optional safe ECharts hydration."
+);
+check(
   "generated artifact summary matches manifest",
   summary.renderer === manifest.renderer &&
     summary.module_count === manifest.module_count &&
@@ -166,7 +175,7 @@ const report = {
     generated_html: "Renderer smoke generates an actual index.html artifact from a representative static-page draft.",
     chart_runtime: "Deterministic SVG chart output remains available, and ECharts modules expose only safe JSON hydration islands without remote scripts.",
     data_quality: "Confirmed sample rows render without missing-data placeholders; manifest attentionModules must be zero for this fixture.",
-    export_handoff: "The asset manifest must list the expected static-page export package files."
+    export_handoff: "The asset manifest must list the expected static-page export package files and preserve the browser delivery contract."
   },
   checks,
 };

@@ -360,6 +360,15 @@ function buildReport({ chromeBin, htmlPath, manifestPath, screenshotDir, manifes
   }
   add('HTML uses no remote scripts', results.every((result) => result.inspection.remoteScripts.length === 0), 'Static-page artifacts should not load remote scripts.');
   add('manifest remains delivery-ready', manifest.chart_runtime?.dataQualitySummary?.attentionModules === 0 && manifest.export_package?.status === 'rendered', 'Manifest attentionModules must stay zero and export package must be rendered.');
+  add(
+    'manifest preserves browser delivery contract',
+    manifest.export_package?.browser_delivery_contract?.entry === 'index.html'
+      && manifest.export_package?.browser_delivery_contract?.remote_scripts_allowed === false
+      && manifest.export_package?.browser_delivery_contract?.deterministic_chart_fallback === true
+      && manifest.export_package?.browser_delivery_contract?.optional_echarts_hydration === 'safe_json_option_islands'
+      && manifest.export_package?.browser_delivery_contract?.mobile_viewport === 'responsive_no_horizontal_overflow_expected',
+    'Export package must preserve direct-browser delivery, no remote scripts, deterministic chart fallback, and optional safe ECharts hydration.',
+  );
   return {
     smoke: 'static-page-browser',
     ready: checks.every((check) => check.status === 'passed'),

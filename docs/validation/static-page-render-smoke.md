@@ -9,7 +9,7 @@ The contract is:
 - Deterministic chart fallback is real DOM/SVG output.
 - Advanced ECharts modules expose only safe JSON hydration islands and do not inject remote scripts.
 - Confirmed sample rows render without missing-data placeholders.
-- The asset manifest records the renderer contract, zero attention modules for the fixture, and the expected export package files.
+- The asset manifest records the renderer contract, zero attention modules for the fixture, expected export package files, and the browser delivery contract.
 
 ## Command
 
