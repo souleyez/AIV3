@@ -22,3 +22,15 @@ target/assistant-chat-contract-smoke/
 ```
 
 Run a separate deployment-target/provider smoke when real external-model credentials are intentionally enabled.
+
+## 2026-05-17 Deployment Target Evidence
+
+- Host: `8服务器`
+- Repository: `/srv/aiv3/repo`
+- HEAD: `8761d89`
+- Command: `bash scripts/run-assistant-chat-contract-smoke.sh`
+- Result: passed
+- JSON report: `/srv/aiv3/repo/target/assistant-chat-contract-smoke/assistant-chat-contract-smoke-20260517T044056Z.json`
+- Markdown summary: `/srv/aiv3/repo/target/assistant-chat-contract-smoke/assistant-chat-contract-smoke-20260517T044056Z.md`
+
+The deployment target ran all eight user-facing chat contract checks successfully after a fast-forward pull from `c7f66fc` to `8761d89`.
