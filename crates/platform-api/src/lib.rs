@@ -23249,7 +23249,53 @@ fn lexical_query_tokens(content: &str) -> Vec<String> {
     }
     flush_lexical_ascii_token(&mut tokens, &mut ascii_token);
     flush_lexical_cjk_terms(&mut tokens, &mut cjk_chars);
+    extend_lexical_ascii_connector_tokens(content, &mut tokens);
     tokens
+}
+
+fn extend_lexical_ascii_connector_tokens(content: &str, tokens: &mut Vec<String>) {
+    let mut segment = String::new();
+    for value in content.chars() {
+        if value.is_ascii_alphanumeric() || is_ascii_connector_token_char(value) {
+            segment.push(value.to_ascii_lowercase());
+        } else {
+            flush_lexical_ascii_connector_token(tokens, &mut segment);
+        }
+    }
+    flush_lexical_ascii_connector_token(tokens, &mut segment);
+}
+
+fn flush_lexical_ascii_connector_token(tokens: &mut Vec<String>, segment: &mut String) {
+    if segment.is_empty() {
+        return;
+    }
+    if has_internal_ascii_connector(segment) {
+        let normalized = segment
+            .chars()
+            .filter(|value| value.is_ascii_alphanumeric())
+            .collect::<String>();
+        if let Some(token) = normalize_lexical_query_token(&normalized) {
+            tokens.push(token);
+        }
+    }
+    segment.clear();
+}
+
+fn has_internal_ascii_connector(segment: &str) -> bool {
+    let chars = segment.chars().collect::<Vec<_>>();
+    chars.iter().enumerate().any(|(index, value)| {
+        is_ascii_connector_token_char(*value)
+            && chars[..index]
+                .iter()
+                .any(|candidate| candidate.is_ascii_alphanumeric())
+            && chars[index + 1..]
+                .iter()
+                .any(|candidate| candidate.is_ascii_alphanumeric())
+    })
+}
+
+fn is_ascii_connector_token_char(value: char) -> bool {
+    matches!(value, '&' | '+' | '/' | '-' | '_' | '.')
 }
 
 fn flush_lexical_ascii_token(tokens: &mut Vec<String>, ascii_token: &mut String) {
@@ -46554,6 +46600,20 @@ mod tests {
     }
 
     #[test]
+    fn lexical_query_term_weights_include_ascii_connector_acronyms() {
+        let weights = lexical_query_term_weights("IOA系统 Q&A 操作 A/B 流程 v2.0");
+
+        for expected in ["ioa", "系统", "qa", "操作", "ab", "流程", "v20"] {
+            assert!(
+                weights.contains_key(expected),
+                "missing expected lexical term {expected}"
+            );
+        }
+        assert!(!weights.contains_key("q"));
+        assert!(!weights.contains_key("a"));
+    }
+
+    #[test]
     fn select_retrieval_evidence_ids_for_prompt_prefers_cjk_phrase_overlap() {
         let now = Utc::now();
         let phrase_id = RetrievalEvidenceId::new();
@@ -46699,6 +46759,83 @@ mod tests {
         assert_eq!(ranked[1].chunk.id, broad_chunk_id);
         assert!(ranked[0].lexical_score > ranked[1].lexical_score);
         assert!(ranked[0].search_text.contains("订单延期风险"));
+    }
+
+    #[test]
+    fn rank_document_chunks_for_prompt_prefers_document_title_acronym_for_fallback_supply() {
+        let now = Utc::now();
+        let tenant_id = TenantId::new();
+        let dataset_id = DatasetId::new();
+        let general_document_id = DocumentId::new();
+        let qa_document_id = DocumentId::new();
+        let general_chunk_id = DocumentChunkId::new();
+        let qa_chunk_id = DocumentChunkId::new();
+
+        let general_document = Document {
+            id: general_document_id,
+            tenant_id,
+            dataset_id,
+            owner_user_id: None,
+            title: "iOA应用技巧".to_string(),
+            object_key: "documents/ioa-tips.pdf".to_string(),
+            content_type: "application/pdf".to_string(),
+            lifecycle: domain_model::DocumentLifecycle::Extracted,
+            secret_binding_ids: Vec::new(),
+            metadata: BTreeMap::new(),
+            created_at: now,
+            updated_at: now,
+        };
+        let qa_document = Document {
+            id: qa_document_id,
+            tenant_id,
+            dataset_id,
+            owner_user_id: None,
+            title: "IOA系统Q&A".to_string(),
+            object_key: "documents/ioa-system-qa.pdf".to_string(),
+            content_type: "application/pdf".to_string(),
+            lifecycle: domain_model::DocumentLifecycle::Extracted,
+            secret_binding_ids: Vec::new(),
+            metadata: BTreeMap::new(),
+            created_at: now,
+            updated_at: now,
+        };
+        let general_chunk = DocumentChunk {
+            id: general_chunk_id,
+            tenant_id,
+            dataset_id,
+            document_id: general_document_id,
+            chunk_index: 0,
+            content: "iOA 登录、待办和常用操作入口说明。".to_string(),
+            token_count: 12,
+            state: DocumentChunkState::Extracted,
+            metadata: BTreeMap::new(),
+            created_at: now,
+            updated_at: now,
+        };
+        let qa_chunk = DocumentChunk {
+            id: qa_chunk_id,
+            tenant_id,
+            dataset_id,
+            document_id: qa_document_id,
+            chunk_index: 0,
+            content: "常见问题覆盖账号、流程和审批异常处理。".to_string(),
+            token_count: 16,
+            state: DocumentChunkState::Extracted,
+            metadata: BTreeMap::new(),
+            created_at: now,
+            updated_at: now,
+        };
+
+        let ranked = rank_document_chunks_for_prompt(
+            vec![(general_document, general_chunk), (qa_document, qa_chunk)],
+            "IOA Q&A",
+            2,
+        );
+
+        assert_eq!(ranked[0].chunk.id, qa_chunk_id);
+        assert_eq!(ranked[1].chunk.id, general_chunk_id);
+        assert!(ranked[0].lexical_score > ranked[1].lexical_score);
+        assert!(ranked[0].search_text.contains("IOA系统Q&A"));
     }
 
     #[test]
