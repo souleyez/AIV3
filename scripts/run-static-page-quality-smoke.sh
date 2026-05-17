@@ -62,6 +62,8 @@ run_check "preview gate blocks unrenderable chart bindings" \
   "${cargo_bin}" test -p platform-api static_page_preview_gate_blocks_unrenderable_chart_bindings
 run_check "preview gate blocks inferred evidence signals" \
   "${cargo_bin}" test -p platform-api static_page_preview_gate_blocks_inferred_evidence_signals
+run_check "final render gate blocks unrenderable chart bindings" \
+  "${cargo_bin}" test -p platform-api static_page_final_render_gate_blocks_unrenderable_chart_bindings
 run_check "explicit module data survives preview and render snapshots" \
   "${cargo_bin}" test -p platform-api static_page_data_snapshot_preserves_module_explicit_data_for_preview_and_render
 run_check "Codex plan-only blocks preview when data quality needs attention" \
@@ -95,6 +97,7 @@ const report = {
   contract: {
     data_snapshot: "Static pages carry field candidates, explicit evidence values, media windows, module sample data, and section-title hints into the draft data snapshot.",
     preview_gate: "Effect-image preview is blocked when chart modules lack renderable sample rows or only have inferred evidence signals.",
+    final_render_gate: "Final static-page render is blocked when chart modules still lack renderable sample rows.",
     codex_plan_only: "Codex plan-only suggestions must repair weak static-page data quality before submitting preview generation."
   },
   checks: JSON.parse(process.env.SMOKE_CHECKS_JSON || "[]"),
@@ -123,6 +126,7 @@ const lines = [
   "",
   `- Data snapshot: ${report.contract.data_snapshot}`,
   `- Preview gate: ${report.contract.preview_gate}`,
+  `- Final render gate: ${report.contract.final_render_gate}`,
   `- Codex plan-only: ${report.contract.codex_plan_only}`,
   "",
   "## Checks",

@@ -5,7 +5,7 @@ This smoke validates the static-page data quality contract before effect-preview
 The contract is:
 
 - Static-page data snapshots carry field candidates from selected datasets, retrieval evidence, media windows, explicit module data, and document section-title hints.
-- Chart modules must have renderable sample rows before effect-preview generation.
+- Chart modules must have renderable sample rows before effect-preview generation and final static-page render.
 - Inferred evidence signals are not treated as confirmed chart data.
 - Codex plan-only suggestions must repair weak static-page data quality before submitting preview generation.
 
