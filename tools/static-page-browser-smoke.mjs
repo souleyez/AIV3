@@ -258,6 +258,21 @@ function inspectPage(viewportName) {
   }
   const modules = Array.from(document.querySelectorAll('.module'));
   const moduleRects = modules.map(rectFor);
+  const moduleSummaries = modules.map((element, index) => {
+    const mobileOrderRaw = window.getComputedStyle(element).getPropertyValue('--mobile-order');
+    const mobileOrder = Number.parseInt(mobileOrderRaw, 10);
+    return {
+      id: element.getAttribute('data-module-id') || `module-${index}`,
+      mobileOrder: Number.isFinite(mobileOrder) ? mobileOrder : index,
+      rect: rectFor(element),
+    };
+  });
+  const moduleVisualOrder = [...moduleSummaries]
+    .sort((a, b) => (a.rect.top - b.rect.top) || (a.rect.left - b.rect.left))
+    .map((item) => item.id);
+  const moduleCssMobileOrder = [...moduleSummaries]
+    .sort((a, b) => (a.mobileOrder - b.mobileOrder) || a.id.localeCompare(b.id))
+    .map((item) => item.id);
   const overlappingModules = [];
   for (let left = 0; left < moduleRects.length; left += 1) {
     for (let right = left + 1; right < moduleRects.length; right += 1) {
@@ -298,6 +313,9 @@ function inspectPage(viewportName) {
     title: document.title,
     bodyTextLength: document.body.innerText.length,
     moduleCount: modules.length,
+    moduleIds: moduleSummaries.map((item) => item.id),
+    moduleVisualOrder,
+    moduleCssMobileOrder,
     visibleModuleCount: modules.filter(visible).length,
     svgCount: document.querySelectorAll('svg.chart-svg').length,
     echartsOptionCount: document.querySelectorAll('.static-page-echarts-option').length,
@@ -358,6 +376,11 @@ function buildReport({ chromeBin, htmlPath, manifestPath, screenshotDir, manifes
     add(`${name} text does not overflow containers`, data.textOverflow.length === 0 && data.textBoxOverflow.length === 0, `${data.textOverflow.length} overflowing text nodes; ${data.textBoxOverflow.length} clipped text boxes.`);
     add(`${name} screenshot is non-empty`, result.screenshot.bytes > 12000 && result.screenshot.dimensions?.width === width && result.screenshot.dimensions?.height === height, `${result.screenshot.bytes} bytes at ${result.screenshot.dimensions?.width || 0}x${result.screenshot.dimensions?.height || 0}.`);
   }
+  add(
+    'mobile respects generated module order',
+    arraysEqual(mobile?.inspection?.moduleVisualOrder || [], mobile?.inspection?.moduleCssMobileOrder || []),
+    `visual=${(mobile?.inspection?.moduleVisualOrder || []).join(' > ')}; mobileOrder=${(mobile?.inspection?.moduleCssMobileOrder || []).join(' > ')}.`,
+  );
   add('HTML uses no remote scripts', results.every((result) => result.inspection.remoteScripts.length === 0), 'Static-page artifacts should not load remote scripts.');
   add('manifest remains delivery-ready', manifest.chart_runtime?.dataQualitySummary?.attentionModules === 0 && manifest.export_package?.status === 'rendered', 'Manifest attentionModules must stay zero and export package must be rendered.');
   add(
@@ -380,6 +403,10 @@ function buildReport({ chromeBin, htmlPath, manifestPath, screenshotDir, manifes
     viewports: { desktop, mobile },
     checks,
   };
+}
+
+function arraysEqual(left, right) {
+  return left.length === right.length && left.every((item, index) => item === right[index]);
 }
 
 function writeReport(report) {
