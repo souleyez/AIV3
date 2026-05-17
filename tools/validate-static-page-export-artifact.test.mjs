@@ -136,3 +136,29 @@ test('validateStaticPageExportArtifact rejects unsafe declared paths', () => {
   assert.equal(report.ready, false);
   assert.ok(report.errors.some((error) => error.code === 'unsafe_declared_package_path'));
 });
+
+test('validateStaticPageExportArtifact rejects export package file list drift', () => {
+  const artifact = makeArtifact();
+  const exportPackagePath = path.join(artifact, 'export-package.json');
+  const exportPackage = JSON.parse(fs.readFileSync(exportPackagePath, 'utf8'));
+  exportPackage.files = [exportPackage.files[1], exportPackage.files[0], ...exportPackage.files.slice(2)];
+  writeJson(exportPackagePath, exportPackage);
+
+  const report = validateStaticPageExportArtifact(artifact);
+
+  assert.equal(report.ready, false);
+  assert.ok(report.errors.some((error) => error.code === 'export_package_manifest_mismatch'));
+});
+
+test('validateStaticPageExportArtifact rejects browser delivery contract drift', () => {
+  const artifact = makeArtifact();
+  const exportPackagePath = path.join(artifact, 'export-package.json');
+  const exportPackage = JSON.parse(fs.readFileSync(exportPackagePath, 'utf8'));
+  exportPackage.browser_delivery_contract.layout = 'unexpected_layout';
+  writeJson(exportPackagePath, exportPackage);
+
+  const report = validateStaticPageExportArtifact(artifact);
+
+  assert.equal(report.ready, false);
+  assert.ok(report.errors.some((error) => error.code === 'browser_delivery_contract_invalid'));
+});

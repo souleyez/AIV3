@@ -67,6 +67,31 @@ function declaredFiles(manifest, exportPackage) {
   return [];
 }
 
+function filePaths(files) {
+  if (!Array.isArray(files)) return [];
+  return files.map((file) => file?.path).filter((filePath) => typeof filePath === 'string');
+}
+
+function stringListsEqual(left, right) {
+  return left.length === right.length && left.every((item, index) => item === right[index]);
+}
+
+function flatObjectsEqual(left, right) {
+  if (!left || !right || typeof left !== 'object' || typeof right !== 'object') return false;
+  if (Array.isArray(left) || Array.isArray(right)) return false;
+  const leftKeys = Object.keys(left).sort();
+  const rightKeys = Object.keys(right).sort();
+  return stringListsEqual(leftKeys, rightKeys) && leftKeys.every((key) => left[key] === right[key]);
+}
+
+function browserDeliveryContractReady(contract) {
+  return contract?.entry === 'index.html'
+    && contract?.remote_scripts_allowed === false
+    && contract?.deterministic_chart_fallback === true
+    && contract?.optional_echarts_hydration === 'safe_json_option_islands'
+    && contract?.mobile_viewport === 'responsive_no_horizontal_overflow_expected';
+}
+
 export function validateStaticPageExportArtifact(artifactDir) {
   const artifact = path.resolve(artifactDir || '.');
   const errors = [];
@@ -91,6 +116,12 @@ export function validateStaticPageExportArtifact(artifactDir) {
   const renderSpec = readJson(path.join(artifact, 'render-spec.json'), errors, 'render_spec_missing', 'render-spec.json');
   const readme = readText(path.join(artifact, 'README.md'), errors, 'readme_missing', 'README.md');
   const files = declaredFiles(manifest, exportPackage);
+  const manifestFiles = manifest?.export_package?.files;
+  const exportPackageFiles = exportPackage?.files;
+  const manifestFilePaths = filePaths(manifestFiles);
+  const exportPackageFilePaths = filePaths(exportPackageFiles);
+  const manifestBrowserContract = manifest?.export_package?.browser_delivery_contract || {};
+  const exportPackageBrowserContract = exportPackage?.browser_delivery_contract || {};
 
   addCheck(
     checks,
@@ -107,8 +138,9 @@ export function validateStaticPageExportArtifact(artifactDir) {
     'export package manifest mirrors asset manifest',
     exportPackage?.kind === manifest?.export_package?.kind
       && exportPackage?.status === manifest?.export_package?.status
-      && Array.isArray(exportPackage?.files)
-      && exportPackage.files.length === files.length,
+      && Array.isArray(manifestFiles)
+      && Array.isArray(exportPackageFiles)
+      && stringListsEqual(exportPackageFilePaths, manifestFilePaths),
     'export-package.json must mirror the export_package block in asset-manifest.json.',
     'export_package_manifest_mismatch',
     exportPackagePath,
@@ -195,17 +227,14 @@ export function validateStaticPageExportArtifact(artifactDir) {
     artifact,
   );
 
-  const contract = manifest?.export_package?.browser_delivery_contract || exportPackage?.browser_delivery_contract || {};
   addCheck(
     checks,
     errors,
     'browser delivery contract is direct and offline-safe',
-    contract.entry === 'index.html'
-      && contract.remote_scripts_allowed === false
-      && contract.deterministic_chart_fallback === true
-      && contract.optional_echarts_hydration === 'safe_json_option_islands'
-      && contract.mobile_viewport === 'responsive_no_horizontal_overflow_expected',
-    'browser delivery contract must preserve direct index.html delivery, no remote scripts, deterministic fallback, and safe optional ECharts hydration.',
+    browserDeliveryContractReady(manifestBrowserContract)
+      && browserDeliveryContractReady(exportPackageBrowserContract)
+      && flatObjectsEqual(exportPackageBrowserContract, manifestBrowserContract),
+    'browser delivery contract must be valid in both manifests and match exactly.',
     'browser_delivery_contract_invalid',
     exportPackagePath,
   );
