@@ -86,7 +86,19 @@ export function planAssistantScope({
 
   for (const dataset of visibleDatasets) {
     if (!dataset?.id || userSelectedDatasetIds.includes(dataset.id)) continue;
-    const haystack = `${dataset.title || ''} ${dataset.key || ''} ${dataset.description || ''}`;
+    const documentTitleHints = datasetDocumentTitleHints(dataset).join(' ');
+    const haystack = [
+      dataset.title,
+      dataset.key,
+      dataset.description,
+      dataset.category,
+      dataset.default_category,
+      documentTitleHints,
+      dataset.content_type_summary,
+      dataset.contentTypeSummary,
+      dataset.parse_status_summary,
+      dataset.parseStatusSummary,
+    ].filter(Boolean).join(' ');
     const matchedByDatasetName = haystack && textMatches(normalizedPrompt, haystack);
     const matchedByCommonHint = DATASET_HINTS.some((hint) => hint.pattern.test(normalizedPrompt) && haystack.includes(hint.label));
     if (matchedByDatasetName || matchedByCommonHint) {
@@ -160,10 +172,22 @@ function normalizeDatasetIds(ids) {
 
 function textMatches(prompt, text) {
   const tokens = String(text || '')
-    .split(/[\s,，。:：/\\|_-]+/)
+    .split(/[\s,，。:：/\\|_\-.()（）]+/)
     .map((token) => token.trim())
     .filter((token) => token.length >= 2);
   return tokens.some((token) => prompt.includes(token));
+}
+
+function datasetDocumentTitleHints(dataset = {}) {
+  const hints = Array.isArray(dataset.documentTitleHints)
+    ? dataset.documentTitleHints
+    : Array.isArray(dataset.document_title_hints)
+      ? dataset.document_title_hints
+      : [];
+  return hints
+    .filter((hint) => typeof hint === 'string' && hint.trim())
+    .map((hint) => hint.trim())
+    .slice(0, 12);
 }
 
 function datasetMaterialHints(dataset = {}) {

@@ -4543,7 +4543,22 @@ async fn enrich_visible_datasets_for_scope_planning(
         let mut estimated_word_count = 0usize;
         let mut parse_status_counts = BTreeMap::<String, usize>::new();
         let mut content_type_counts = BTreeMap::<String, usize>::new();
+        let mut document_title_hints = BTreeSet::<String>::new();
         let mut material_hints = BTreeSet::<String>::new();
+
+        for hint in dataset
+            .metadata
+            .get("document_title_hints")
+            .or_else(|| dataset.metadata.get("documentTitleHints"))
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            document_title_hints.insert(hint.to_string());
+        }
 
         for hint in dataset
             .metadata
@@ -4577,6 +4592,9 @@ async fn enrich_visible_datasets_for_scope_planning(
             *content_type_counts
                 .entry(assistant_scope_content_kind(&document.content_type).to_string())
                 .or_insert(0) += 1;
+            if let Some(title_hint) = assistant_scope_document_title_hint(document) {
+                document_title_hints.insert(title_hint);
+            }
             assistant_scope_collect_material_hints(document, &chunks, &mut material_hints);
         }
 
@@ -4611,6 +4629,15 @@ async fn enrich_visible_datasets_for_scope_planning(
             "latest_upload".to_string(),
             json!(latest_activity.to_rfc3339()),
         );
+        if !document_title_hints.is_empty() {
+            dataset.metadata.insert(
+                "document_title_hints".to_string(),
+                json!(document_title_hints
+                    .into_iter()
+                    .take(12)
+                    .collect::<Vec<_>>()),
+            );
+        }
         if !material_hints.is_empty() {
             dataset.metadata.insert(
                 "material_hints".to_string(),
@@ -4645,6 +4672,43 @@ fn assistant_scope_document_word_count(document: &Document, chunks: &[DocumentCh
         }
     }
     0
+}
+
+fn assistant_scope_document_title_hint(document: &Document) -> Option<String> {
+    let raw_title = document.title.trim();
+    let raw = if raw_title.is_empty() {
+        let filename = document
+            .object_key
+            .rsplit('/')
+            .next()
+            .unwrap_or(&document.object_key)
+            .rsplit('\\')
+            .next()
+            .unwrap_or(&document.object_key);
+        filename.trim()
+    } else {
+        raw_title
+    };
+    let without_extension = raw
+        .rsplit_once('.')
+        .and_then(|(stem, extension)| {
+            let stem = stem.trim();
+            let extension = extension.trim();
+            if stem.is_empty() || extension.is_empty() || extension.chars().any(char::is_whitespace)
+            {
+                None
+            } else {
+                Some(stem)
+            }
+        })
+        .unwrap_or(raw);
+    let normalized =
+        without_extension.trim_matches(|ch: char| ch.is_whitespace() || ".-_".contains(ch));
+    if normalized.is_empty() {
+        None
+    } else {
+        Some(normalized.chars().take(80).collect())
+    }
 }
 
 fn assistant_scope_document_parse_status(document: &Document, chunks: &[DocumentChunk]) -> String {
@@ -40961,7 +41025,7 @@ mod tests {
                 state.tenant_id,
                 NewDocument {
                     dataset_id: dataset.id,
-                    title: "Customer interview audio".to_string(),
+                    title: "Customer interview audio.mp3".to_string(),
                     object_key: "uploads/customer-interview.mp3".to_string(),
                     content_type: "audio/mpeg".to_string(),
                     secret_binding_ids: Vec::new(),
@@ -41001,6 +41065,15 @@ mod tests {
             )
             .await
             .expect("document chunks should be created");
+
+        let enriched =
+            enrich_visible_datasets_for_scope_planning(&state, vec![dataset.clone()], None)
+                .await
+                .expect("visible datasets should be enriched");
+        assert_eq!(
+            enriched[0].metadata["document_title_hints"],
+            json!(["Customer interview audio"])
+        );
 
         let (_, Json(response)) = create_assistant_run(
             State(state),

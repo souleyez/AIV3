@@ -1883,6 +1883,9 @@ fn is_zero(value: &usize) -> bool {
 }
 
 fn dataset_haystack(dataset: &Dataset) -> String {
+    let document_title_hints =
+        dataset_metadata_string_list(dataset, &["document_title_hints", "documentTitleHints"])
+            .join(" ");
     let material_hints =
         dataset_metadata_string_list(dataset, &["material_hints", "materialHints"])
             .into_iter()
@@ -1898,11 +1901,12 @@ fn dataset_haystack(dataset: &Dataset) -> String {
             .collect::<Vec<_>>()
             .join(" ");
     format!(
-        "{} {} {} {} {} {} {}",
+        "{} {} {} {} {} {} {} {}",
         dataset.title,
         dataset.key,
         dataset.description.clone().unwrap_or_default(),
         dataset_metadata_string(dataset, &["category", "default_category"]),
+        document_title_hints,
         dataset_metadata_string(dataset, &["content_type_summary", "contentTypeSummary"]),
         dataset_metadata_string(dataset, &["parse_status_summary", "parseStatusSummary"]),
         material_hints
@@ -1953,7 +1957,7 @@ fn dataset_metadata_string_list(dataset: &Dataset, keys: &[&str]) -> Vec<String>
 }
 
 fn text_matches(prompt: &str, text: &str) -> bool {
-    text.split(|ch: char| ch.is_whitespace() || ",，。:：/\\|_-".contains(ch))
+    text.split(|ch: char| ch.is_whitespace() || ",，。:：/\\|_-.()（）".contains(ch))
         .map(str::trim)
         .filter(|token| token.chars().count() >= 2)
         .any(|token| prompt.contains(token))
@@ -3204,6 +3208,32 @@ mod tests {
             .material_hints
             .contains(&"audio_video".to_string()));
         assert_eq!(plan.selected_scope["mode"], json!("preselected"));
+    }
+
+    #[test]
+    fn document_title_hints_can_drive_scope_matching() {
+        let mut dataset = dataset("新世界 IOA 问答测试集", "xinshijie-ioa");
+        dataset.metadata.insert(
+            "document_title_hints".to_string(),
+            json!(["用户手册3-固定资产", "IOA系统Q&A"]),
+        );
+
+        let plan = plan_scope(ScopePlannerInput {
+            prompt: "固定资产怎么操作",
+            visible_datasets: &[dataset.clone()],
+            selected_dataset_id: None,
+            conversation_memory_available: false,
+        });
+
+        assert_eq!(plan.candidates.len(), 1);
+        assert_eq!(plan.candidates[0].id, dataset.id.to_string());
+        assert_eq!(plan.candidates[0].confidence, ScopeConfidence::High);
+        assert_eq!(plan.candidates[0].source, "scope_planner");
+        assert_eq!(plan.selected_scope["mode"], json!("preselected"));
+        assert_eq!(
+            plan.selected_scope["supply_policy"]["retrievalPolicy"],
+            json!("standard")
+        );
     }
 
     #[test]

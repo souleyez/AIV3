@@ -54,6 +54,26 @@ test('scope planner preselects matching visible dataset when none is selected', 
   assert.equal(plan.candidates[0].parseStatusSummary, 'completed:12');
 });
 
+test('scope planner preselects visible dataset from document title hints', () => {
+  const plan = planAssistantScope({
+    prompt: '固定资产怎么操作',
+    datasets: [
+      {
+        id: 'dataset-ioa',
+        key: 'xinshijie-ioa',
+        title: '新世界 IOA 问答测试集',
+        document_title_hints: ['用户手册3-固定资产.docx', 'IOA系统Q&A.pdf'],
+        document_count: 6,
+      },
+    ],
+  });
+
+  assert.equal(selectPlannerDatasetId(plan), 'dataset-ioa');
+  assert.equal(plan.candidates[0].source, 'scope_planner');
+  assert.equal(plan.candidates[0].documentCount, 6);
+  assert.equal(plan.supplyStrategy.retrievalPolicy, 'standard');
+});
+
 test('scope planner keeps unrelated no-dataset chat as ordinary model chat', () => {
   const plan = planAssistantScope({
     prompt: '帮我写一句开场白',
