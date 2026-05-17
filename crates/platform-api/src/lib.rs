@@ -31497,6 +31497,120 @@ mod tests {
         assert!(!reply.requires_confirmation);
     }
 
+    fn assert_public_external_channel_payload_hides_internal_observability(payload: &Value) {
+        let serialized = payload.to_string();
+        for forbidden in [
+            "selected_scope",
+            "scope_candidates",
+            "context_policy",
+            "evidence_state",
+            "supplied_items",
+            "retrieval_evidence",
+            "execution_trail",
+            "runtime_manifest",
+            "react_trace",
+            "tool_trace",
+            "observation",
+            "provider_raw",
+        ] {
+            assert!(
+                !serialized.contains(forbidden),
+                "external channel callback payload should not expose internal field `{forbidden}`: {serialized}"
+            );
+        }
+    }
+
+    #[test]
+    fn external_platform_task_status_callback_hides_internal_observability_fields() {
+        let message = sample_external_bot_message();
+        let run_id = AssistantRunId::new();
+        let response = ExternalChannelEventResponse {
+            accepted: true,
+            assistant_run_id: Some(run_id),
+            idempotency_key: message.idempotency_key.clone(),
+            reply: external_channel_task_status_reply(&message, "accepted"),
+        };
+        let payload = external_platform_callback_response(
+            &response,
+            json!({
+                "msg_type": "text",
+                "content": {"text": "V3 task accepted."}
+            }),
+        );
+
+        assert_eq!(payload["accepted"], json!(true));
+        assert_eq!(payload["assistant_run_id"], json!(run_id));
+        assert_eq!(payload["reply"]["reply_type"], json!("task_status"));
+        assert_eq!(payload["reply"]["task_status"], json!("accepted"));
+        assert_eq!(payload["reply"]["text"], Value::Null);
+        assert_public_external_channel_payload_hides_internal_observability(&payload);
+    }
+
+    #[test]
+    fn external_channel_action_and_search_replies_hide_internal_observability_fields() {
+        let message = sample_external_bot_message();
+        let confirmation_reply = external_channel_action_plan_reply(
+            &message,
+            &ExternalActionRunPlan {
+                action_id: "action-001".to_string(),
+                action_type: "external_business_action.invoke".to_string(),
+                risk_level: "high".to_string(),
+                confirmation_state: "pending".to_string(),
+                requires_confirmation: true,
+                target_system: "customer_crm".to_string(),
+            },
+        );
+        let confirmation_payload = external_platform_callback_response(
+            &ExternalChannelEventResponse {
+                accepted: true,
+                assistant_run_id: Some(AssistantRunId::new()),
+                idempotency_key: message.idempotency_key.clone(),
+                reply: confirmation_reply,
+            },
+            json!({
+                "msg_type": "interactive",
+                "card": {"header": {"title": {"content": "需要确认"}}}
+            }),
+        );
+        assert_eq!(
+            confirmation_payload["reply"]["reply_type"],
+            json!("requires_confirmation")
+        );
+        assert_eq!(
+            confirmation_payload["reply"]["card"]["type"],
+            json!("external_action_confirmation")
+        );
+        assert_public_external_channel_payload_hides_internal_observability(&confirmation_payload);
+
+        let search_reply = external_channel_search_evidence_required_reply(
+            &message,
+            &ExternalSearchEvidenceRequiredPlan {
+                freshness: "latest".to_string(),
+            },
+        );
+        let search_payload = external_platform_callback_response(
+            &ExternalChannelEventResponse {
+                accepted: true,
+                assistant_run_id: Some(AssistantRunId::new()),
+                idempotency_key: message.idempotency_key,
+                reply: search_reply,
+            },
+            json!({
+                "msg_type": "text",
+                "content": {"text": "等待 V3 搜索证据。"}
+            }),
+        );
+        assert_eq!(
+            search_payload["reply"]["task_status"],
+            json!("v3_search_evidence_required")
+        );
+        assert_eq!(
+            search_payload["reply"]["card"]["type"],
+            json!("v3_search_evidence_required")
+        );
+        assert_public_external_channel_payload_hides_internal_observability(&search_payload);
+    }
+
     #[test]
     fn external_channel_platform_wire_values_match_storage_values() {
         assert_eq!(
