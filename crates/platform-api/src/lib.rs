@@ -29254,6 +29254,25 @@ fn build_static_page_field_candidates(
                     }),
                     FIELD_CANDIDATE_LIMIT,
                 );
+                let section_title_hints = static_page_evidence_section_title_hints(item);
+                if !section_title_hints.is_empty() {
+                    push_static_page_field_candidate(
+                        &mut candidates,
+                        &mut seen,
+                        json!({
+                            "sourceId": "evidence",
+                            "fieldPath": "retrieval.section_title_hints",
+                            "label": format!("段落标题：{}", section_title_hints.join(" / ")),
+                            "kind": "section_title",
+                            "recommendedAggregation": Value::Null,
+                            "confidence": 0.74,
+                            "evidenceIds": static_page_evidence_ids(item),
+                            "evidenceRef": static_page_evidence_ref(item),
+                            "sectionTitleHints": section_title_hints,
+                        }),
+                        FIELD_CANDIDATE_LIMIT,
+                    );
+                }
 
                 if let Some(media_context) =
                     item.get("media_context").filter(|value| value.is_object())
@@ -30103,6 +30122,7 @@ fn build_static_page_explicit_metric_points(
                         "fieldPath": field_path,
                         "evidenceIds": static_page_evidence_ids(item),
                         "evidenceRef": static_page_evidence_ref(item),
+                        "sectionTitleHints": static_page_evidence_section_title_hints(item),
                     }))
                 })
                 .collect::<Vec<_>>()
@@ -30373,6 +30393,7 @@ fn static_page_evidence_ref(item: &Value) -> Value {
         "documentId": item.get("document_id").cloned().unwrap_or(Value::Null),
         "documentChunkId": item.get("document_chunk_id").cloned().unwrap_or(Value::Null),
         "sourceLocator": item.get("source_locator").cloned().unwrap_or(Value::Null),
+        "sectionTitleHints": static_page_evidence_section_title_hints(item),
     })
 }
 
@@ -30388,6 +30409,7 @@ fn static_page_evidence_text(item: &Value) -> String {
             parts.push(value.to_string());
         }
     }
+    parts.extend(static_page_evidence_section_title_hints(item));
     if let Some(term_weights) = item
         .get("evidence_manifest")
         .and_then(|manifest| manifest.pointer("/embedding/term_weights"))
@@ -30396,6 +30418,24 @@ fn static_page_evidence_text(item: &Value) -> String {
         parts.extend(term_weights.keys().cloned());
     }
     parts.join(" ")
+}
+
+fn static_page_evidence_section_title_hints(item: &Value) -> Vec<String> {
+    let mut hints = Vec::new();
+    for pointer in [
+        "/evidence_manifest/evidence/section_title_hints",
+        "/evidence_manifest/section_title_hints",
+        "/evidence_manifest/metadata/section_title_hints",
+        "/evidence/section_title_hints",
+        "/section_title_hints",
+        "/metadata/section_title_hints",
+    ] {
+        if let Some(value) = item.pointer(pointer) {
+            collect_string_list(value, &mut hints);
+        }
+    }
+    hints.truncate(6);
+    hints
 }
 
 fn static_page_text_contains_any(text: &str, keywords: &[&str]) -> bool {
@@ -39893,6 +39933,80 @@ mod tests {
         assert!(sample_data
             .iter()
             .all(|point| point["kind"] == json!("evidence_value")));
+    }
+
+    #[test]
+    fn static_page_data_snapshot_carries_section_title_hints() {
+        let dataset_id = DatasetId::new();
+        let selected_scope = json!({
+            "mode": "user_selected",
+            "datasets": [dataset_id.to_string()],
+        });
+        let payload = json!({
+            "modules": [{
+                "id": "trend",
+                "title": "订单趋势",
+                "dataBinding": {
+                    "sourceId": "evidence",
+                    "fieldPath": "orders.amount"
+                },
+                "visualization": {
+                    "type": "line-chart",
+                    "chartOptions": {
+                        "dataKey": "orders.amount"
+                    }
+                }
+            }]
+        });
+        let evidence_state = json!({
+            "status": "supplied",
+            "supplied_items": [{
+                "type": "retrieval_evidence",
+                "dataset_id": dataset_id.to_string(),
+                "document_id": Uuid::new_v4().to_string(),
+                "document_chunk_id": Uuid::new_v4().to_string(),
+                "retrieval_evidence_id": Uuid::new_v4().to_string(),
+                "source_locator": "documents/orders.md#chunk=0",
+                "summary": "订单金额和延期风险",
+                "content_excerpt": "1月,订单金额,1200\n2月,订单金额,1380",
+                "evidence_manifest": {
+                    "evidence": {
+                        "section_title_hints": ["经营数据 / 订单趋势"]
+                    },
+                    "embedding": {
+                        "term_weights": {
+                            "订单": 1.0,
+                            "金额": 0.9
+                        }
+                    }
+                }
+            }]
+        });
+
+        let snapshot = build_static_page_data_snapshot_with_evidence(
+            &payload,
+            &selected_scope,
+            Some(&evidence_state),
+            "assistant_run",
+        );
+        let sample_data = value_array(snapshot["module_bindings"][0]["sampleData"].clone());
+        let field_candidates = value_array(snapshot["field_candidates"].clone());
+
+        assert_eq!(
+            sample_data[0]["evidenceRef"]["sectionTitleHints"][0],
+            json!("经营数据 / 订单趋势")
+        );
+        assert_eq!(
+            sample_data[0]["sectionTitleHints"][0],
+            json!("经营数据 / 订单趋势")
+        );
+        assert!(field_candidates.iter().any(|candidate| {
+            candidate["fieldPath"] == json!("retrieval.section_title_hints")
+                && candidate["label"]
+                    .as_str()
+                    .is_some_and(|label| label.contains("经营数据"))
+                && candidate["sectionTitleHints"][0] == json!("经营数据 / 订单趋势")
+        }));
     }
 
     #[test]
