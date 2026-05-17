@@ -22,3 +22,15 @@ target/static-page-quality-smoke/
 ```
 
 Visual/browser rendering inspection remains a separate smoke for generated HTML artifacts.
+
+## 2026-05-17 Deployment Target Evidence
+
+- Host: `8服务器`
+- Repository: `/srv/aiv3/repo`
+- HEAD: `2d13bc7`
+- Command: `bash scripts/run-static-page-quality-smoke.sh`
+- Result: passed
+- JSON report: `/srv/aiv3/repo/target/static-page-quality-smoke/static-page-quality-smoke-20260517T044519Z.json`
+- Markdown summary: `/srv/aiv3/repo/target/static-page-quality-smoke/static-page-quality-smoke-20260517T044519Z.md`
+
+The deployment target ran all nine static-page quality checks successfully after a fast-forward pull from `8761d89` to `2d13bc7`.
