@@ -8,7 +8,7 @@ use auth_scope::{
     ScopeResolver,
 };
 use axum::{
-    body::Bytes,
+    body::{Body, Bytes},
     extract::{Path, Query, State},
     http::{header, HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
@@ -86,6 +86,7 @@ use domain_model::{
 use event_bus::{
     workflow_execution_transition_subject, workflow_task_enqueued_subject, EventBus, EventEnvelope,
 };
+use futures_util::{stream, Stream, StreamExt};
 use hmac::{Hmac, Mac};
 use llm_gateway::{
     build_provider_from_env, render_runtime_manifest, resolve_runtime_selection_from_env,
@@ -104,6 +105,7 @@ use static_page_runtime::{
 };
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
+    convert::Infallible,
     fmt::Display,
     fs,
     net::IpAddr,
@@ -450,6 +452,10 @@ pub fn router(
             "/v1/assistant-runs",
             axum::routing::post(create_assistant_run),
         )
+        .route(
+            "/v1/assistant-runs/stream",
+            axum::routing::post(create_assistant_run_stream),
+        )
         .route("/v1/external/integrations", get(list_external_integrations))
         .route(
             "/v1/external/integrations/{integration_id}/audit",
@@ -470,6 +476,10 @@ pub fn router(
         .route(
             "/v1/external/channels/{connection_id}/events",
             axum::routing::post(ingest_external_channel_event),
+        )
+        .route(
+            "/v1/external/channels/{connection_id}/events/stream",
+            axum::routing::post(ingest_external_channel_event_stream),
         )
         .route(
             "/v1/external/channels/{connection_id}/documents/parse",
@@ -511,6 +521,10 @@ pub fn router(
         .route(
             "/v1/assistant-runs/{run_id}/continue",
             axum::routing::post(continue_assistant_run),
+        )
+        .route(
+            "/v1/assistant-runs/{run_id}/continue/stream",
+            axum::routing::post(continue_assistant_run_stream),
         )
         .route(
             "/v1/assistant-runs/{run_id}/conversation-memory-candidates",
@@ -6407,6 +6421,139 @@ async fn append_chat_session_turn(
     ))
 }
 
+fn sse_json_event(event_name: &str, data: Value) -> String {
+    let data = serde_json::to_string(&data).unwrap_or_else(|error| {
+        json!({
+            "error": "sse_payload_serialize_failed",
+            "message": error.to_string(),
+        })
+        .to_string()
+    });
+    format!("event: {event_name}\ndata: {data}\n\n")
+}
+
+fn sse_stream_response<S>(stream: S) -> Response
+where
+    S: Stream<Item = std::result::Result<Bytes, Infallible>> + Send + 'static,
+{
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "text/event-stream; charset=utf-8")
+        .header(header::CACHE_CONTROL, "no-cache, no-transform")
+        .header(header::CONNECTION, "keep-alive")
+        .header("x-accel-buffering", "no")
+        .body(Body::from_stream(stream))
+        .expect("SSE response should build")
+}
+
+fn sse_error_event(error: ApiError) -> String {
+    sse_json_event(
+        "error",
+        json!({
+            "status": error.status.as_u16(),
+            "error": error.payload,
+        }),
+    ) + &sse_json_event("done", json!({"ok": false}))
+}
+
+fn sse_text_delta_events(event_name: &str, text: &str) -> String {
+    let mut encoded = String::new();
+    let mut chunk = String::new();
+    let mut index = 0usize;
+    for ch in text.chars() {
+        chunk.push(ch);
+        if chunk.chars().count() >= 24 {
+            encoded.push_str(&sse_json_event(
+                event_name,
+                json!({
+                    "index": index,
+                    "delta": chunk,
+                }),
+            ));
+            chunk = String::new();
+            index += 1;
+        }
+    }
+    if !chunk.is_empty() {
+        encoded.push_str(&sse_json_event(
+            event_name,
+            json!({
+                "index": index,
+                "delta": chunk,
+            }),
+        ));
+    }
+    encoded
+}
+
+fn create_assistant_run_sse_completion(response: CreateAssistantRunResponse) -> String {
+    let text = response.assistant_message.content.clone();
+    let assistant_run_id = response.assistant_run_id;
+    sse_text_delta_events("assistant_run.delta", &text)
+        + &sse_json_event(
+            "assistant_run.completed",
+            json!({
+                "assistant_run_id": assistant_run_id,
+                "response": response,
+            }),
+        )
+        + &sse_json_event("done", json!({"ok": true}))
+}
+
+fn continue_assistant_run_sse_completion(response: ContinueAssistantRunResponse) -> String {
+    let text = response.assistant_message.content.clone();
+    let assistant_run_id = response.run.id;
+    sse_text_delta_events("assistant_run.delta", &text)
+        + &sse_json_event(
+            "assistant_run.completed",
+            json!({
+                "assistant_run_id": assistant_run_id,
+                "response": response,
+            }),
+        )
+        + &sse_json_event("done", json!({"ok": true}))
+}
+
+fn external_channel_sse_completion(response: ExternalChannelEventResponse) -> String {
+    let text = response.reply.text.clone().unwrap_or_default();
+    let assistant_run_id = response.assistant_run_id;
+    let idempotency_key = response.idempotency_key.clone();
+    sse_text_delta_events("external_channel.delta", &text)
+        + &sse_json_event(
+            "external_channel.completed",
+            json!({
+                "assistant_run_id": assistant_run_id,
+                "idempotency_key": idempotency_key,
+                "response": response,
+            }),
+        )
+        + &sse_json_event("done", json!({"ok": true}))
+}
+
+async fn create_assistant_run_stream(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<CreateAssistantRunRequest>,
+) -> std::result::Result<Response, ApiError> {
+    validate_required("prompt", &request.prompt)?;
+    let accepted = sse_json_event(
+        "assistant_run.accepted",
+        json!({
+            "entrypoint": "create_assistant_run",
+            "stream": "sse",
+            "status": "accepted",
+        }),
+    );
+    let stream = stream::iter(vec![Ok(Bytes::from(accepted))]).chain(stream::once(async move {
+        let body = match create_assistant_run(State(state), headers, Json(request)).await {
+            Ok((_, Json(response))) => create_assistant_run_sse_completion(response),
+            Err(error) => sse_error_event(error),
+        };
+        Ok(Bytes::from(body))
+    }));
+    Ok(sse_stream_response(stream))
+}
+
 async fn create_assistant_run(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -9348,6 +9495,44 @@ async fn ingest_external_channel_event(
     )
     .await?;
     Ok((status, Json(response)))
+}
+
+async fn ingest_external_channel_event_stream(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(connection_id): Path<String>,
+    Json(payload): Json<Value>,
+) -> std::result::Result<Response, ApiError> {
+    validate_required("connection_id", &connection_id)?;
+    let connection = load_external_channel_connection(&state, &connection_id).await?;
+    ensure_external_channel_inbound_bearer_auth(&headers, &connection)?;
+    let message = parse_external_bot_message_payload(payload, &connection)?;
+    let accepted = sse_json_event(
+        "external_channel.accepted",
+        json!({
+            "connection_id": connection_id.clone(),
+            "conversation_external_id": message.conversation_external_id.clone(),
+            "message_external_id": message.message_external_id.clone(),
+            "idempotency_key": message.idempotency_key.clone(),
+            "stream": "sse",
+            "status": "accepted",
+        }),
+    );
+    let stream = stream::iter(vec![Ok(Bytes::from(accepted))]).chain(stream::once(async move {
+        let body = match ingest_external_channel_message_with_connection(
+            &state,
+            &connection_id,
+            &connection,
+            message,
+        )
+        .await
+        {
+            Ok((_, response)) => external_channel_sse_completion(response),
+            Err(error) => sse_error_event(error),
+        };
+        Ok(Bytes::from(body))
+    }));
+    Ok(sse_stream_response(stream))
 }
 
 async fn ingest_external_channel_message(
@@ -12322,6 +12507,34 @@ async fn continue_assistant_run(
     .await?;
 
     Ok((StatusCode::CREATED, Json(response)))
+}
+
+async fn continue_assistant_run_stream(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(run_id): Path<String>,
+    Json(request): Json<ContinueAssistantRunRequest>,
+) -> std::result::Result<Response, ApiError> {
+    let parsed_run_id = parse_assistant_run_id(&run_id)?;
+    let accepted = sse_json_event(
+        "assistant_run.accepted",
+        json!({
+            "entrypoint": "continue_assistant_run",
+            "assistant_run_id": parsed_run_id,
+            "stream": "sse",
+            "status": "accepted",
+        }),
+    );
+    let stream = stream::iter(vec![Ok(Bytes::from(accepted))]).chain(stream::once(async move {
+        let body = match continue_assistant_run(State(state), headers, Path(run_id), Json(request))
+            .await
+        {
+            Ok((_, Json(response))) => continue_assistant_run_sse_completion(response),
+            Err(error) => sse_error_event(error),
+        };
+        Ok(Bytes::from(body))
+    }));
+    Ok(sse_stream_response(stream))
 }
 
 async fn continue_assistant_run_loaded(
@@ -42895,6 +43108,28 @@ mod tests {
             artifact.get("source").and_then(Value::as_str) == Some("assistant_run_continue")
         }));
         clear_assistant_openclaw_env();
+    }
+
+    #[test]
+    fn assistant_run_sse_delta_events_encode_json_payloads() {
+        let encoded = sse_text_delta_events("assistant_run.delta", "一二三四五六七八九十");
+
+        assert!(encoded.contains("event: assistant_run.delta"));
+        assert!(encoded.contains("\"delta\":\"一二三四五六七八九十\""));
+        assert!(encoded.ends_with("\n\n"));
+    }
+
+    #[test]
+    fn assistant_run_sse_error_event_has_terminal_done() {
+        let encoded = sse_error_event(ApiError::bad_request(
+            "bad_stream_request",
+            "bad stream request".to_string(),
+        ));
+
+        assert!(encoded.contains("event: error"));
+        assert!(encoded.contains("\"code\":\"bad_stream_request\""));
+        assert!(encoded.contains("event: done"));
+        assert!(encoded.contains("\"ok\":false"));
     }
 
     #[tokio::test]

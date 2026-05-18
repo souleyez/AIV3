@@ -322,6 +322,46 @@ Authorization: Bearer <V3 inbound token>
 - 如果需要用户确认动作，会返回 `reply_type=requires_confirmation`；
 - 第一阶段不要求第三方再调用单独的“取回复”接口。
 
+### 10.2 流式提交用户消息（SSE）
+
+```http
+POST /v1/external/channels/{connection_id}/events/stream
+Host: v3.elepcloud.com
+Content-Type: application/json
+Accept: text/event-stream
+Authorization: Bearer <V3 inbound token>
+```
+
+用途：请求体与 `/events` 完全一致；第三方希望页面边等待边展示生成进度或最终文本时，使用 SSE 流式版本。
+
+SSE 事件：
+
+| event | data 说明 |
+| --- | --- |
+| `external_channel.accepted` | V3 已通过鉴权和入参解析，开始处理本轮消息 |
+| `external_channel.delta` | 文本增量，字段为 `delta`；第三方可逐段追加到聊天气泡 |
+| `external_channel.completed` | 完整 `ExternalChannelEventResponse`，结构与 `/events` JSON 响应一致 |
+| `error` | 本轮处理失败，包含 `status` 和 `error.code/message` |
+| `done` | 流结束标记，`ok=true/false` |
+
+响应片段示例：
+
+```text
+event: external_channel.accepted
+data: {"status":"accepted","idempotency_key":"generic_chat:tenant-ext-001:msg-20260513-0001"}
+
+event: external_channel.delta
+data: {"index":0,"delta":"根据你当前权限可查看的制度文档，"}
+
+event: external_channel.completed
+data: {"assistant_run_id":"arun_01HXEXAMPLE","response":{"accepted":true,"reply":{"reply_type":"text","text":"根据你当前权限可查看的制度文档..."}}}
+
+event: done
+data: {"ok":true}
+```
+
+说明：当前 SSE 是接口级流式：会先返回 `accepted`，最终文本按 `delta` 形式输出；上游模型 token 级实时透传会作为后续模型网关能力增强。
+
 任务状态响应示例：
 
 ```json
@@ -337,7 +377,7 @@ Authorization: Bearer <V3 inbound token>
 }
 ```
 
-### 10.2 查询任务状态
+### 10.3 查询任务状态
 
 可选查询接口：
 
@@ -360,7 +400,7 @@ GET /v1/external/runs/{assistant_run_id}
 }
 ```
 
-### 10.3 提交用户确认
+### 10.4 提交用户确认
 
 已接入接口：
 

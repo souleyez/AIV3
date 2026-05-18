@@ -17,10 +17,10 @@ export async function proxyPlatformApiRequest(request, pathSegments) {
     const targetUrl = buildPlatformApiUrl(`/v1/${path}`, incomingUrl.search);
 
     const headers = new Headers();
-    const contentType = request.headers.get('content-type');
+    const incomingContentType = request.headers.get('content-type');
     const accept = request.headers.get('accept');
 
-    if (contentType) headers.set('content-type', contentType);
+    if (incomingContentType) headers.set('content-type', incomingContentType);
     if (accept) headers.set('accept', accept);
     const cookie = request.headers.get('cookie');
     if (cookie) {
@@ -30,6 +30,10 @@ export async function proxyPlatformApiRequest(request, pathSegments) {
     if (secretBindingIds) {
       headers.set('x-ai-data-platform-secret-binding-ids', secretBindingIds);
     }
+    const localThreadId = request.headers.get('x-ai-data-platform-local-thread-id');
+    if (localThreadId) {
+      headers.set('x-ai-data-platform-local-thread-id', localThreadId);
+    }
 
     const response = await fetch(targetUrl, {
       method: request.method,
@@ -38,12 +42,19 @@ export async function proxyPlatformApiRequest(request, pathSegments) {
       cache: 'no-store',
     });
 
-    const payload = await response.arrayBuffer();
     const forwardedHeaders = new Headers();
-    ['content-type', 'cache-control', 'etag', 'content-disposition', 'content-length'].forEach((name) => {
+    ['content-type', 'cache-control', 'etag', 'content-disposition'].forEach((name) => {
       const value = response.headers.get(name);
       if (value) forwardedHeaders.set(name, value);
     });
+    const contentType = response.headers.get('content-type') || '';
+    if (!contentType.includes('text/event-stream')) {
+      const contentLength = response.headers.get('content-length');
+      if (contentLength) forwardedHeaders.set('content-length', contentLength);
+    } else {
+      forwardedHeaders.set('connection', 'keep-alive');
+      forwardedHeaders.set('x-accel-buffering', 'no');
+    }
     const setCookies = typeof response.headers.getSetCookie === 'function'
       ? response.headers.getSetCookie()
       : [response.headers.get('set-cookie')].filter(Boolean);
@@ -53,6 +64,14 @@ export async function proxyPlatformApiRequest(request, pathSegments) {
       forwardedHeaders.set('content-type', 'application/json; charset=utf-8');
     }
 
+    if (contentType.includes('text/event-stream')) {
+      return new Response(response.body, {
+        status: response.status,
+        headers: forwardedHeaders,
+      });
+    }
+
+    const payload = await response.arrayBuffer();
     return new Response(payload, {
       status: response.status,
       headers: forwardedHeaders,

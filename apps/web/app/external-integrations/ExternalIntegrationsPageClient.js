@@ -407,6 +407,10 @@ export default function ExternalIntegrationsPageClient() {
           <code>{buildThirdPartyApiUrl('/v1/external/channels/{connection_id}/events')}</code>
         </div>
         <div>
+          <span>流式聊天事件</span>
+          <code>{buildThirdPartyApiUrl('/v1/external/channels/{connection_id}/events/stream')}</code>
+        </div>
+        <div>
           <span>动作确认</span>
           <code>{buildThirdPartyApiUrl('/v1/external/channels/{connection_id}/confirmations')}</code>
         </div>

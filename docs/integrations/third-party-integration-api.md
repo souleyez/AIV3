@@ -313,6 +313,46 @@ Important behavior:
 - V3 does not compose the final answer in the route handler.
 - The final answer or action request is produced through V3 AssistantRun execution and returned through later reply/status mechanisms.
 
+### POST `/v1/external/channels/{connection_id}/events/stream`
+
+Use this endpoint when a third-party chat page wants an SSE response instead of a single buffered JSON response.
+
+Request headers:
+
+```http
+Content-Type: application/json
+Accept: text/event-stream
+Authorization: Bearer <V3 inbound token>
+```
+
+The request body is identical to `POST /v1/external/channels/{connection_id}/events`.
+
+SSE events:
+
+- `external_channel.accepted`: V3 authenticated and parsed the inbound event.
+- `external_channel.delta`: text increment; append `data.delta` to the visible chat bubble.
+- `external_channel.completed`: full `ExternalChannelEventResponse`, matching the buffered `/events` response shape.
+- `error`: failed turn with `status` and `error.code/message`.
+- `done`: terminal marker with `ok=true/false`.
+
+Example:
+
+```text
+event: external_channel.accepted
+data: {"status":"accepted","idempotency_key":"generic_chat:tenant-ext-001:msg-001"}
+
+event: external_channel.delta
+data: {"index":0,"delta":"Based on the documents visible to you, "}
+
+event: external_channel.completed
+data: {"assistant_run_id":"4fd1b8c0-7d12-49a2-9f4e-5bdce6e2e5a8","response":{"accepted":true,"reply":{"reply_type":"text","text":"Based on the documents visible to you..."}}}
+
+event: done
+data: {"ok":true}
+```
+
+Current scope: this is endpoint-level SSE. V3 sends an early `accepted` event and emits final text as `delta` chunks. True upstream token passthrough remains a model-gateway enhancement.
+
 ### GET `/v1/external/runs/{assistant_run_id}`
 
 Use this endpoint when a third-party page needs to poll a V3 run status.
