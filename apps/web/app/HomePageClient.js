@@ -19,7 +19,7 @@ import {
   summarizeAccountState,
   validateAccountEmail,
 } from './lib/account-auth';
-import { buildApiError, staticPagePreviewGateErrorMessage } from './lib/api-error';
+import { assistantRunFailureMessage, buildApiError, staticPagePreviewGateErrorMessage } from './lib/api-error';
 import { buildAssistantRunProgress } from './lib/assistant-run-progress';
 import { buildAssistantStartupBriefing } from './lib/assistant-startup-briefing';
 import { planAssistantScope, selectPlannerDatasetIds } from './lib/scope-planner';
@@ -2456,7 +2456,7 @@ export default function HomePageClient() {
           if (backendStaticPageEditRequested) {
             pendingStaticPageDraft = handleApplyStaticPagePrompt(prompt);
           }
-          assistantContent = `模型服务暂不可用，本轮没有生成回复。错误：${assistantRunError instanceof Error ? assistantRunError.message : '请求失败'}。`;
+          assistantContent = assistantRunFailureMessage(assistantRunError);
         }
 
         const assistantMessage = createLocalMessage('assistant', assistantContent);
@@ -2474,7 +2474,7 @@ export default function HomePageClient() {
               : usedAssistantRunContinue
                 ? '已在同一个 AssistantRun 上继续执行；记录只缓存在当前浏览器。'
               : '已通过 AssistantRun 返回普通聊天；记录只缓存在当前浏览器。'
-            : '模型服务暂不可用，本轮回复失败；用户消息已保留。',
+            : 'AssistantRun 本轮回复失败；用户消息已保留，详情见助手消息。',
         );
         setError('');
       } finally {

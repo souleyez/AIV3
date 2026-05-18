@@ -40,9 +40,40 @@ export function staticPagePreviewGateErrorMessage(error, fallbackMessage = '请�
   return `${message} 需处理模块：${labels}。`;
 }
 
+export function assistantRunFailureMessage(error, fallbackMessage = '本轮没有生成回复') {
+  const code = apiErrorCode(error);
+  const status = Number(error?.status || error?.payload?.status || 0);
+  const message = apiErrorMessage(error, fallbackMessage);
+
+  if (ASSISTANT_RUN_PROVIDER_FAILURE_CODES.has(code)) {
+    return `模型供应商调用失败，本轮没有生成回复。错误：${message}。`;
+  }
+  if (ASSISTANT_RUN_STATIC_PAGE_ACTION_CODES.has(code)) {
+    return `静态页动作链被后端拒绝，本轮没有完成页面生成。错误：${message}。`;
+  }
+  if (status === 502 || status === 503 || status === 504 || code === 'assistant_run_join_failed') {
+    return `V3 服务可能正在重启或网关暂不可达，本轮没有生成回复。错误：${message}。`;
+  }
+  return `AssistantRun 执行失败，本轮没有生成回复。错误：${message}。`;
+}
+
 const STATIC_PAGE_DATA_QUALITY_GATE_CODES = new Set([
   'static_page_preview_data_quality_gate',
   'static_page_final_render_data_quality_gate',
+]);
+
+const ASSISTANT_RUN_PROVIDER_FAILURE_CODES = new Set([
+  'assistant_run_provider_failed',
+  'assistant_run_continue_provider_failed',
+]);
+
+const ASSISTANT_RUN_STATIC_PAGE_ACTION_CODES = new Set([
+  'active_assistant_run_required',
+  'current_static_page_draft_required',
+  'current_static_page_draft_run_mismatch',
+  'static_page_preview_not_confirmed',
+  'static_page_preview_stale',
+  'static_page_image_job_mismatch',
 ]);
 
 function apiPayloadMessage(payload, fallbackMessage) {

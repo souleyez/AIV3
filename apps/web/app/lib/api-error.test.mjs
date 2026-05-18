@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  assistantRunFailureMessage,
   apiErrorMessage,
   buildApiError,
   staticPagePreviewGateErrorMessage,
@@ -59,4 +60,21 @@ test('staticPagePreviewGateErrorMessage handles final render data-quality gates'
 
   assert.match(staticPagePreviewGateErrorMessage(error), /风险提示/);
   assert.match(staticPagePreviewGateErrorMessage(error), /matched_field_candidate/);
+});
+
+test('assistantRunFailureMessage separates provider, static page action, and restart failures', () => {
+  const provider = buildApiError({
+    code: 'assistant_run_provider_failed',
+    message: 'upstream returned HTTP 500',
+  }, '请求失败', 500);
+  assert.match(assistantRunFailureMessage(provider), /模型供应商调用失败/);
+
+  const staticPage = buildApiError({
+    code: 'active_assistant_run_required',
+    message: 'active assistant run is required',
+  }, '请求失败', 400);
+  assert.match(assistantRunFailureMessage(staticPage), /静态页动作链被后端拒绝/);
+
+  const restart = buildApiError('Bad gateway', 'Bad gateway', 502);
+  assert.match(assistantRunFailureMessage(restart), /服务可能正在重启/);
 });

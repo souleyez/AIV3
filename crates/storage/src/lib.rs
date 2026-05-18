@@ -2993,6 +2993,16 @@ impl PgAssistantRunRepository {
             .await
     }
 
+    pub async fn update_runtime_manifest(
+        &self,
+        tenant_id: TenantId,
+        run_id: AssistantRunId,
+        runtime_manifest: &Value,
+    ) -> Result<AssistantRun> {
+        self.update_json_field(tenant_id, run_id, "runtime_manifest", runtime_manifest)
+            .await
+    }
+
     async fn update_json_field(
         &self,
         tenant_id: TenantId,
@@ -3002,7 +3012,11 @@ impl PgAssistantRunRepository {
     ) -> Result<AssistantRun> {
         let allowed = matches!(
             field_name,
-            "selected_scope" | "evidence_state" | "execution_trail" | "output_artifacts"
+            "selected_scope"
+                | "evidence_state"
+                | "execution_trail"
+                | "output_artifacts"
+                | "runtime_manifest"
         );
         if !allowed {
             return Err(anyhow!(

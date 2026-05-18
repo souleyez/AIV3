@@ -6515,69 +6515,6 @@ async fn create_assistant_run(
     } else {
         chat_runtime.model.clone()
     };
-    let react_outcome = if react_enabled {
-        Some(
-            run_assistant_run_react_for_create(
-                &state,
-                &request,
-                &selected_scope,
-                evidence_state.clone(),
-                local_thread_id.as_deref(),
-                &active_secret_binding_ids,
-                current_user_id,
-                &react_runtime.mode,
-                &react_runtime.provider,
-                &react_runtime.model,
-                &chat_runtime,
-            )
-            .await?,
-        )
-    } else {
-        None
-    };
-
-    let (runtime_manifest, mut react_trail_steps, mut output_artifacts, react_events) =
-        match react_outcome {
-            Some(outcome) => {
-                evidence_state = outcome.evidence_state;
-                (
-                    outcome.runtime_manifest,
-                    outcome.execution_trail_steps,
-                    outcome.output_artifacts,
-                    outcome.events,
-                )
-            }
-            None => {
-                let provider_input = if chat_runtime.mode == "placeholder" {
-                    assistant_run_placeholder_user_message(false, &evidence_state)
-                } else {
-                    build_assistant_run_provider_input_with_evidence(
-                        &request,
-                        Some(&evidence_state),
-                    )
-                };
-                let response = complete_assistant_run_provider(
-                    MODEL_LANE_ASSISTANT_CHAT,
-                    chat_runtime.mode.clone(),
-                    chat_runtime.provider.clone(),
-                    chat_runtime.model.clone(),
-                    provider_input,
-                )
-                .await?;
-                let runtime_manifest = render_runtime_manifest(&response.runtime);
-                (
-                    runtime_manifest,
-                    Vec::new(),
-                    vec![json!({
-                        "type": "assistant_message",
-                        "role": ChatMessageRole::Assistant.as_str(),
-                        "content": response.output_text,
-                    })],
-                    Vec::new(),
-                )
-            }
-        };
-
     let now = Utc::now();
     let planned_candidate_count = scope_candidates.len();
     let codex_scope_candidates = scope_candidates.clone();
@@ -6611,6 +6548,149 @@ async fn create_assistant_run(
             "at": now,
         }),
     ];
+    let initial_runtime_manifest = json!({
+        "status": "running",
+        "mode": runtime_mode_for_trail,
+        "provider": runtime_provider_for_trail,
+        "model": runtime_model_for_trail,
+        "react_enabled": react_enabled,
+        "entrypoint": "create_assistant_run",
+    });
+    let run = state
+        .storage
+        .assistant_runs()
+        .create(
+            state.tenant_id,
+            &NewAssistantRun {
+                user_id: current_user_id,
+                local_thread_id: local_thread_id.clone(),
+                user_prompt: request.prompt.trim().to_string(),
+                startup_briefing: request
+                    .startup_briefing
+                    .clone()
+                    .unwrap_or_else(|| json!({})),
+                selected_scope: selected_scope.clone(),
+                scope_candidates: scope_candidates.clone(),
+                context_policy: context_policy.clone(),
+                evidence_state: evidence_state.clone(),
+                service_lane: "ordinary_chat".to_string(),
+                execution_trail: Value::Array(execution_trail.clone()),
+                output_artifacts: json!([]),
+                runtime_manifest: initial_runtime_manifest.clone(),
+                created_at: now,
+            },
+        )
+        .await
+        .map_err(ApiError::from_storage)?;
+    state
+        .storage
+        .assistant_runs()
+        .append_event(
+            state.tenant_id,
+            run.id,
+            &NewAssistantRunEvent {
+                event_name: "assistant_run.started".to_string(),
+                payload: json!({
+                    "service_lane": run.service_lane.clone(),
+                    "runtime": initial_runtime_manifest,
+                    "react_enabled": react_enabled,
+                }),
+                created_at: now,
+            },
+        )
+        .await
+        .map_err(ApiError::from_storage)?;
+
+    let react_outcome = if react_enabled {
+        match run_assistant_run_react_for_create(
+            &state,
+            &request,
+            run.id,
+            &selected_scope,
+            evidence_state.clone(),
+            local_thread_id.as_deref(),
+            &active_secret_binding_ids,
+            current_user_id,
+            &react_runtime.mode,
+            &react_runtime.provider,
+            &react_runtime.model,
+            &chat_runtime,
+        )
+        .await
+        {
+            Ok(outcome) => Some(outcome),
+            Err(error) => {
+                record_assistant_run_create_failure(
+                    &state,
+                    run.id,
+                    &execution_trail,
+                    &error,
+                    "react",
+                )
+                .await;
+                return Err(error);
+            }
+        }
+    } else {
+        None
+    };
+
+    let (runtime_manifest, mut react_trail_steps, mut output_artifacts, react_events) =
+        match react_outcome {
+            Some(outcome) => {
+                evidence_state = outcome.evidence_state;
+                (
+                    outcome.runtime_manifest,
+                    outcome.execution_trail_steps,
+                    outcome.output_artifacts,
+                    outcome.events,
+                )
+            }
+            None => {
+                let provider_input = if chat_runtime.mode == "placeholder" {
+                    assistant_run_placeholder_user_message(false, &evidence_state)
+                } else {
+                    build_assistant_run_provider_input_with_evidence(
+                        &request,
+                        Some(&evidence_state),
+                    )
+                };
+                let response = match complete_assistant_run_provider(
+                    MODEL_LANE_ASSISTANT_CHAT,
+                    chat_runtime.mode.clone(),
+                    chat_runtime.provider.clone(),
+                    chat_runtime.model.clone(),
+                    provider_input,
+                )
+                .await
+                {
+                    Ok(response) => response,
+                    Err(error) => {
+                        record_assistant_run_create_failure(
+                            &state,
+                            run.id,
+                            &execution_trail,
+                            &error,
+                            "provider",
+                        )
+                        .await;
+                        return Err(error);
+                    }
+                };
+                let runtime_manifest = render_runtime_manifest(&response.runtime);
+                (
+                    runtime_manifest,
+                    Vec::new(),
+                    vec![json!({
+                        "type": "assistant_message",
+                        "role": ChatMessageRole::Assistant.as_str(),
+                        "content": response.output_text,
+                    })],
+                    Vec::new(),
+                )
+            }
+        };
+
     if react_enabled {
         execution_trail.push(json!({
             "status": "completed",
@@ -6631,29 +6711,35 @@ async fn create_assistant_run(
             "at": now,
         }));
     }
+    state
+        .storage
+        .assistant_runs()
+        .update_runtime_manifest(state.tenant_id, run.id, &runtime_manifest)
+        .await
+        .map_err(ApiError::from_storage)?;
+    state
+        .storage
+        .assistant_runs()
+        .update_evidence_state(state.tenant_id, run.id, &evidence_state)
+        .await
+        .map_err(ApiError::from_storage)?;
+    state
+        .storage
+        .assistant_runs()
+        .update_execution_trail(
+            state.tenant_id,
+            run.id,
+            &Value::Array(execution_trail.clone()),
+        )
+        .await
+        .map_err(ApiError::from_storage)?;
     let run = state
         .storage
         .assistant_runs()
-        .create(
+        .attach_output_artifacts(
             state.tenant_id,
-            &NewAssistantRun {
-                user_id: current_user_id,
-                local_thread_id,
-                user_prompt: request.prompt.trim().to_string(),
-                startup_briefing: request
-                    .startup_briefing
-                    .clone()
-                    .unwrap_or_else(|| json!({})),
-                selected_scope: selected_scope.clone(),
-                scope_candidates: scope_candidates.clone(),
-                context_policy,
-                evidence_state: evidence_state.clone(),
-                service_lane: "ordinary_chat".to_string(),
-                execution_trail: Value::Array(execution_trail.clone()),
-                output_artifacts: Value::Array(output_artifacts.clone()),
-                runtime_manifest: runtime_manifest.clone(),
-                created_at: now,
-            },
+            run.id,
+            &Value::Array(output_artifacts.clone()),
         )
         .await
         .map_err(ApiError::from_storage)?;
@@ -14170,6 +14256,62 @@ async fn complete_assistant_run_provider(
     .map_err(|error| ApiError::internal("assistant_run_provider_failed", error.to_string()))
 }
 
+async fn record_assistant_run_create_failure(
+    state: &AppState,
+    run_id: AssistantRunId,
+    execution_trail: &[Value],
+    error: &ApiError,
+    stage: &str,
+) {
+    let now = Utc::now();
+    let mut failed_trail = execution_trail.to_vec();
+    failed_trail.push(json!({
+        "status": "failed",
+        "label": "AssistantRun 执行失败",
+        "stage": stage,
+        "error_code": error.payload.code,
+        "http_status": error.status.as_u16(),
+        "at": now,
+    }));
+    if let Err(update_error) = state
+        .storage
+        .assistant_runs()
+        .update_execution_trail(state.tenant_id, run_id, &Value::Array(failed_trail))
+        .await
+    {
+        tracing::warn!(
+            error = ?update_error,
+            run_id = %run_id,
+            "failed to persist assistant run failure trail"
+        );
+    }
+    if let Err(event_error) = state
+        .storage
+        .assistant_runs()
+        .append_event(
+            state.tenant_id,
+            run_id,
+            &NewAssistantRunEvent {
+                event_name: "assistant_run.failed".to_string(),
+                payload: json!({
+                    "stage": stage,
+                    "code": error.payload.code,
+                    "message": error.payload.message,
+                    "http_status": error.status.as_u16(),
+                }),
+                created_at: now,
+            },
+        )
+        .await
+    {
+        tracing::warn!(
+            error = ?event_error,
+            run_id = %run_id,
+            "failed to persist assistant run failure event"
+        );
+    }
+}
+
 fn assistant_run_react_direct_natural_answer_from_invalid_output(
     output_text: &str,
 ) -> Option<String> {
@@ -14301,6 +14443,7 @@ fn assistant_run_react_unavailable_natural_answer_message() -> String {
 async fn run_assistant_run_react_for_create(
     state: &AppState,
     request: &CreateAssistantRunRequest,
+    active_assistant_run_id: AssistantRunId,
     selected_scope: &Value,
     initial_evidence_state: Value,
     local_thread_id: Option<&str>,
@@ -14413,7 +14556,7 @@ async fn run_assistant_run_react_for_create(
                 });
                 react_trace_steps.push(assistant_run_react_invalid_trace_step(
                     trace_id,
-                    None,
+                    Some(active_assistant_run_id),
                     step_index,
                     "invalid_action",
                     step_started.elapsed().as_millis(),
@@ -14454,7 +14597,7 @@ async fn run_assistant_run_react_for_create(
                 selected_scope,
                 &mut evidence_state,
                 request.current_artifact.as_ref(),
-                None,
+                Some(active_assistant_run_id),
                 request.prompt.trim(),
                 local_thread_id,
                 active_secret_binding_ids,
@@ -14485,7 +14628,7 @@ async fn run_assistant_run_react_for_create(
         let observation_summary = assistant_run_react_observation_summary(&result.observation);
         react_trace_steps.push(assistant_run_react_trace_step(
             trace_id,
-            None,
+            Some(active_assistant_run_id),
             step_index,
             &action,
             &observation_summary,
@@ -14565,10 +14708,15 @@ async fn run_assistant_run_react_for_create(
             );
         }
     }
-    assistant_run_react_attach_trace(&mut runtime_manifest, trace_id, None, &react_trace_steps);
+    assistant_run_react_attach_trace(
+        &mut runtime_manifest,
+        trace_id,
+        Some(active_assistant_run_id),
+        &react_trace_steps,
+    );
     execution_trail_steps.push(assistant_run_react_trace_trail_step(
         trace_id,
-        None,
+        Some(active_assistant_run_id),
         &react_trace_steps,
     ));
 
@@ -41725,6 +41873,166 @@ mod tests {
             event.event_name == "assistant_run.react.action_completed"
                 && event.payload.get("observation_summary").is_some()
                 && event.payload.get("observation").is_none()
+        }));
+    }
+
+    #[tokio::test]
+    async fn assistant_run_react_create_endpoint_can_create_static_page_draft() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        clear_assistant_openclaw_env();
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping assistant run react static page endpoint test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+        let addr = listener.local_addr().expect("addr");
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_MODE", "provider");
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_PROVIDER", "openclaw");
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_MODEL", "assistant-run-react-v1");
+        std::env::set_var("ASSISTANT_RUN_REACT_ENABLED", "true");
+        std::env::set_var("OPENCLAW_EXTENSION_ENABLED", "true");
+        std::env::set_var("OPENCLAW_GATEWAY_BASE_URL", format!("http://{addr}"));
+        std::env::set_var("OPENCLAW_GATEWAY_TOKEN", "test-openclaw-token");
+
+        let server = thread::spawn(move || {
+            let mut requests = Vec::new();
+            for index in 0..2 {
+                let (mut stream, _) = listener.accept().expect("accept");
+                let request = read_http_request(&mut stream);
+                requests.push(request.clone());
+                assert!(request.contains("POST /v1/responses HTTP/1.1"));
+                if index == 0 {
+                    assert!(request.contains("create_static_page_draft"));
+                    assert!(request.contains("新世界IOA"));
+                    let action = json!({
+                        "action_type": "create_static_page_draft",
+                        "reason_summary": "用户要求基于资料生成静态页",
+                        "arguments": {"prompt": "基于新世界IOA生成一个静态页"},
+                        "requires_confirmation": false
+                    })
+                    .to_string();
+                    let body = json!({
+                        "id": "resp_assistant_run_react_static_page_create",
+                        "output_text": action
+                    })
+                    .to_string();
+                    write_http_json_response(&mut stream, 200, &body);
+                } else {
+                    assert!(request.contains("static_page_draft"));
+                    assert!(!request.contains("active_assistant_run_required"));
+                    let action = json!({
+                        "action_type": "final_answer",
+                        "reason_summary": "静态页草稿已创建",
+                        "arguments": {"content": "已创建新世界IOA静态页草稿。"},
+                        "requires_confirmation": false
+                    })
+                    .to_string();
+                    let body = json!({
+                        "id": "resp_assistant_run_react_static_page_final",
+                        "output_text": action
+                    })
+                    .to_string();
+                    write_http_json_response(&mut stream, 200, &body);
+                }
+            }
+            requests
+        });
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("assistant-run-react-static-page-test-{}", Uuid::new_v4()),
+                "Assistant Run ReAct Static Page Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage,
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        let dataset = state
+            .storage
+            .datasets()
+            .create_with_metadata(
+                tenant.id,
+                NewDataset {
+                    key: format!("ioa-{}", Uuid::new_v4()),
+                    title: "新世界IOA".to_string(),
+                    description: Some("IOA 资料".to_string()),
+                    owner_user_id: None,
+                },
+                json!({
+                    "visibility": DatasetVisibility::Public.as_str(),
+                }),
+            )
+            .await
+            .expect("dataset should be created");
+
+        let (status, Json(response)) = create_assistant_run(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(CreateAssistantRunRequest {
+                prompt: "基于新世界IOA生成一个静态页".to_string(),
+                local_thread_id: Some("assistant-run-react-static-page-thread".to_string()),
+                startup_briefing: Some(json!({"capabilities": ["static_page_plan"]})),
+                selected_scope: Some(json!({
+                    "mode": "selected",
+                    "selected": [{"type": "dataset", "id": dataset.id.to_string()}],
+                    "intent": "static_page",
+                })),
+                scope_candidates: Vec::new(),
+                context_policy_hint: Some(json!({
+                    "assistant_intent": "static_page",
+                    "recommended_actions": ["create_static_page_draft"],
+                })),
+                current_artifact: None,
+                messages: Vec::new(),
+            }),
+        )
+        .await
+        .expect("assistant run should create static page draft through react");
+
+        let requests = server.join().expect("server join");
+        clear_assistant_openclaw_env();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(status, StatusCode::CREATED);
+        assert_eq!(
+            response.assistant_message.content,
+            "已创建新世界IOA静态页草稿。"
+        );
+        assert!(response
+            .output_artifacts
+            .iter()
+            .any(|artifact| artifact.get("type") == Some(&json!("static_page_draft"))));
+        assert_eq!(
+            response.runtime["react_trace"]["assistant_run_id"],
+            json!(response.assistant_run_id.to_string())
+        );
+
+        let Json(detail) = get_assistant_run(
+            State(state.clone()),
+            HeaderMap::new(),
+            Path(response.assistant_run_id.to_string()),
+        )
+        .await
+        .expect("assistant run detail should load");
+        let event_names = detail
+            .events
+            .iter()
+            .map(|event| event.event_name.as_str())
+            .collect::<Vec<_>>();
+        assert!(event_names.contains(&"assistant_run.started"));
+        assert!(event_names.contains(&"static_page_draft.react_created"));
+        assert!(event_names.contains(&"assistant_run.completed"));
+        assert!(!detail.events.iter().any(|event| {
+            event.payload.get("error_code").and_then(Value::as_str)
+                == Some("active_assistant_run_required")
         }));
     }
 
