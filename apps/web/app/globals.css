@@ -4390,27 +4390,13 @@ body {
   gap: 10px;
 }
 
-.document-original-html {
-  display: grid;
-  gap: 14px;
-}
-
-.document-html-section {
-  display: grid;
-  gap: 10px;
-  padding: 14px;
-  border-radius: 16px;
-  background: rgba(255, 255, 255, 0.035);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
-}
-
-.document-html-section-hints {
+.document-md-hints {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
 }
 
-.document-html-section-hints span {
+.document-md-hints span {
   padding: 4px 8px;
   border-radius: 999px;
   background: rgba(33, 214, 165, 0.12);
@@ -4418,28 +4404,30 @@ body {
   font-size: 11px;
 }
 
-.document-original-html h4 {
-  margin: 4px 0 0;
-  color: #f8fbff;
-  font-size: 16px;
-  line-height: 1.45;
-}
-
-.document-original-html p,
-.document-original-html li {
+.document-original-markdown {
+  max-height: none;
   margin: 0;
+  padding: 14px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.035);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
   color: #dce6f4;
-  font-size: 14px;
-  line-height: 1.78;
+  font-family: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.72;
+  overflow-x: auto;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
-.document-original-html ul {
-  display: grid;
-  gap: 6px;
+.document-original-markdown code {
+  font: inherit;
+  color: inherit;
+  white-space: inherit;
+}
+
+.document-original-markdown p {
   margin: 0;
-  padding-left: 20px;
 }
 
 .document-chunk-card p,
@@ -5364,13 +5352,9 @@ body {
     flex: 1 1 0;
   }
 
-  .document-html-section {
+  .document-original-markdown {
     padding: 12px;
-  }
-
-  .document-original-html p,
-  .document-original-html li {
-    font-size: 13px;
+    font-size: 12px;
   }
 
   .home-toolbar-right {
