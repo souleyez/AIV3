@@ -12,6 +12,7 @@ import {
   buildThirdPartyApiUrl,
   controlResultLabel,
   driftSignalLabel,
+  EXTERNAL_INTEGRATION_MODES,
   externalActionTraceFilename,
   formatObservationTime,
   latestIntegrationActivity,
@@ -27,6 +28,17 @@ test('buildThirdPartyApiUrl uses v3.elepcloud.com by default', () => {
     buildThirdPartyApiUrl('/v1/external/channels/main/events'),
     'https://v3.elepcloud.com/v1/external/channels/main/events',
   );
+});
+
+test('external integration modes are generic customer-facing guidance without secrets', () => {
+  const modeText = JSON.stringify(EXTERNAL_INTEGRATION_MODES);
+  assert(EXTERNAL_INTEGRATION_MODES.length >= 3);
+  assert(EXTERNAL_INTEGRATION_MODES.some((mode) => mode.key === 'pure_third_party'));
+  assert(EXTERNAL_INTEGRATION_MODES.some((mode) => mode.key === 'edge_local_data_plane'));
+  assert(!modeText.includes('v3in_live_'));
+  assert(!/Authorization:\s*Bearer\s+[A-Za-z0-9_-]{12,}/.test(modeText));
+  assert(!modeText.includes('third-party-original-integration-tracker'));
+  assert(!modeText.includes('本次联调'));
 });
 
 test('buildExternalAuditQuery encodes fixed audit filters', () => {

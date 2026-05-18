@@ -12,6 +12,7 @@ import {
   controlResultLabel,
   driftSignalLabel,
   EXTERNAL_AUDIT_FILTERS,
+  EXTERNAL_INTEGRATION_MODES,
   externalActionTraceFilename,
   formatObservationTime,
   latestIntegrationActivity,
@@ -416,6 +417,35 @@ export default function ExternalIntegrationsPageClient() {
         <div>
           <span>观测列表</span>
           <code>{buildThirdPartyApiUrl('/v1/external/integrations')}</code>
+        </div>
+      </section>
+
+      <section className="external-mode-band" aria-label="对接方式与文档">
+        <div className="external-mode-head">
+          <div>
+            <p className="external-kicker">Integration Playbooks</p>
+            <h2>对接方式与文档</h2>
+          </div>
+          <p>
+            面向所有客户的公开说明入口。凭证、客户 endpoint、真实权限样例和生产网络参数请通过线下交付。
+          </p>
+        </div>
+        <div className="external-mode-grid">
+          {EXTERNAL_INTEGRATION_MODES.map((mode) => (
+            <article className="external-mode-card" key={mode.key}>
+              <div className="external-mode-card-head">
+                <h3>{mode.title}</h3>
+                <span>{mode.status}</span>
+              </div>
+              <p>{mode.summary}</p>
+              <div className="external-mode-docs" aria-label={`${mode.title} 文档路径`}>
+                {mode.docs.map((docPath) => (
+                  <code key={docPath}>{docPath}</code>
+                ))}
+              </div>
+              <small>{mode.guardrail}</small>
+            </article>
+          ))}
         </div>
       </section>
 

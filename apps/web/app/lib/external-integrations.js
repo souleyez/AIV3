@@ -9,6 +9,53 @@ export const EXTERNAL_AUDIT_FILTERS = [
   { key: 'failed', label: '失败/阻断', params: { itemType: 'action', actionState: 'failed' } },
 ];
 
+export const EXTERNAL_INTEGRATION_MODES = [
+  {
+    key: 'standard_bot',
+    title: '标准机器人模式',
+    status: '可选',
+    summary: '飞书、Lark、企业微信等平台事件进入 V3 适配器，再转为统一外部通道事件。',
+    docs: [
+      'docs/integrations/third-party-integration-api.zh-CN.md',
+      'docs/integrations/third-party-integration-api.md',
+    ],
+    guardrail: '按平台官方验签；不要把平台 token 当作 V3 出站派发凭证。',
+  },
+  {
+    key: 'pure_third_party',
+    title: '纯第三方模式',
+    status: '常规接入',
+    summary: '第三方自建页面、资料源、用户权限和业务系统接入 V3，由 V3 统一解析、索引、问答、产物和动作治理。',
+    docs: [
+      'docs/integrations/pure-third-party-integration-guide.zh-CN.md',
+      'docs/integrations/third-party-integration-api.zh-CN.md',
+    ],
+    guardrail: '凭证线下交付；观测页只展示模式和文档路径，不展示 token、客户 endpoint 或密钥。',
+  },
+  {
+    key: 'edge_local_data_plane',
+    title: 'V3 Edge / Local Data Plane',
+    status: '新增可选模式',
+    summary: '资料、索引、页面和回答尽量留在第三方服务器，V3 只提供能力控制面和脱敏观测。',
+    docs: [
+      'docs/integrations/v3-edge-local-data-plane-mode.zh-CN.md',
+      'docs/integrations/v3-edge-local-data-plane.sample.json',
+    ],
+    guardrail: '适用于客户要求资料和页面尽量留在本地的场景；浏览器不得直连 V3，也不得持有 V3 token。',
+  },
+  {
+    key: 'handoff_package',
+    title: '交接清单与校验',
+    status: '按需生成',
+    summary: '用于客户沙箱联调前检查 HTTPS、派发鉴权、回调、资料权限样例和脱敏要求。',
+    docs: [
+      'docs/integrations/third-party-handoff.sample.json',
+      'tools/validate-external-handoff.mjs',
+    ],
+    guardrail: '清单只写交付方式和配置状态，不写明文 token、signing secret、password、private key。',
+  },
+];
+
 export function thirdPartyApiBaseUrl() {
   const configured = process.env.NEXT_PUBLIC_THIRD_PARTY_API_BASE_URL || DEFAULT_THIRD_PARTY_API_BASE_URL;
   return configured.endsWith('/') ? configured.slice(0, -1) : configured;
