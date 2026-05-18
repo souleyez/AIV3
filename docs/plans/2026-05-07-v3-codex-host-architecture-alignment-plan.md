@@ -10,6 +10,29 @@
 
 ---
 
+## 2026-05-18 Freeze Decision
+
+The Codex substrate plan is frozen until the operator explicitly resumes it.
+
+Current verified production status:
+
+- 8 server has Codex CLI installed (`/usr/local/bin/codex`, `codex-cli 0.130.0`) but is not logged in (`codex login status` reports `Not logged in`).
+- V3 ordinary AssistantRun answers still use the provider path, currently `ASSISTANT_RUN_RUNTIME_PROVIDER=minimax` with `MiniMax-M2.7`.
+- `aiv3-codex-host-agent` and the local Codex-compatible responses shim are deployed, but the host agent is configured as `CODEX_HOST_AGENT_EXECUTION_MODE=plan_only`, `CODEX_HOST_AGENT_PROFILE_KIND=codex-compatible-shim`, and `CODEX_HOST_AGENT_ALLOW_REAL_CODEX_EXEC=false`.
+- AssistantRun Codex diagnostics remain shadow/plan-only. Real Codex transports are not the authoritative answer path.
+
+Freeze means:
+
+- Do not switch ordinary AssistantRun, external bot, or third-party chat answers from MiniMax/provider routing to Codex-backed routing.
+- Do not log the 8 server Codex CLI into the operator's GPT account or store GPT account credentials for V3 service use.
+- Do not enable `CODEX_HOST_AGENT_ALLOW_REAL_CODEX_EXEC`, promote `codex_exec_schema`, SDK, app-server, or MCP transports, or add Linux-server real execution support.
+- Do not build a new Codex-backed model proxy unless the operator explicitly reopens this track.
+- Keep the existing code, services, diagnostics, and documents as a dormant reference. Bug fixes that prevent leakage or accidental execution are allowed; feature work should move back to the current mainline.
+
+If resumed later, restart from three explicit gates: account/login decision, isolated host smoke, and V3 promotion review. Until then, Codex remains an optional future execution-host design, not the current model gateway.
+
+---
+
 ## Why This Plan Exists
 
 The current discussion split the future system into three rough areas:
@@ -266,7 +289,7 @@ Borrow these existing V3 mechanisms before adding anything new:
 Add:
 
 ```markdown
-- `docs/plans/2026-05-07-v3-codex-host-architecture-alignment-plan.md`: active architecture boundary plan aligning V3's original control/integration/workflow/worker planes with Codex Host and future model proxy.
+- `docs/plans/2026-05-07-v3-codex-host-architecture-alignment-plan.md`: frozen architecture boundary plan aligning V3's original control/integration/workflow/worker planes with Codex Host and future model proxy.
 ```
 
 **Step 2: Add an architecture alignment section**
@@ -770,8 +793,8 @@ Expected: pass.
 
 ```text
 Continue AI Data Platform V3 from docs/plans/2026-05-07-v3-codex-host-architecture-alignment-plan.md.
-First complete Task 0 and Task 1: link the plan from the consolidated handoff and document the current dependency boundary audit.
-Then continue Task 2 and Task 3 to move Codex Host task payloads into shared contracts and reduce codex-host-agent -> platform-api coupling.
-Keep V3 as the control plane, llm-gateway as the model-provider seed, and Codex Host as an external execution worker.
-Do not run local-machine Codex from the developer workstation; real Codex execution validation belongs on windows-jump or later Mac host.
+Treat this plan as frozen as of 2026-05-18 unless the operator explicitly resumes the Codex substrate track.
+Do not promote Codex, log the 8 server Codex CLI into the operator GPT account, enable real transports, or route ordinary AssistantRun/external-bot/third-party chat answers through Codex.
+Keep V3 as the control plane, llm-gateway/provider routing as the active answer path, and Codex Host as dormant diagnostic/reference infrastructure.
+Only touch this track for leakage prevention, accidental-execution prevention, or documentation updates while frozen.
 ```

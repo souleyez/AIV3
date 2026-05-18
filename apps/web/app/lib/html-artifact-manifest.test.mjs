@@ -157,6 +157,35 @@ test('renders static page planning and code review templates', () => {
         layout: { x: 0, y: 2, w: 4, h: 3 },
         dataQuality: 'partial',
       }],
+      templateReference: {
+        source: 'html-anything',
+        templateId: 'dashboard',
+        label: '管理后台仪表板',
+        importPolicy: 'metadata_and_constraints_only',
+        styleDirection: 'data-command',
+        designIntent: '把运营状态整理成密集但可扫描的 KPI、趋势、风险和最近活动。',
+        promptHints: ['surface unresolved risks'],
+        forbiddenOutput: ['raw_html', 'remote_script'],
+      },
+      missingEvidence: {
+        status: 'needs_evidence',
+        items: [{
+          code: 'chart_sample_rows_required',
+          message: '图表模块需要样例行。',
+          recommendedAction: 'static_page.update_draft',
+        }],
+      },
+      structureSignals: {
+        status: 'available',
+        policy: 'source_structure_only_no_body_no_sample_rows',
+        sectionTitleHints: ['接口与数据', '校验与交付'],
+        boundModules: [{
+          moduleId: 'interfaces',
+          title: '接口与数据',
+          fieldPath: 'retrieval.section_title_hints',
+          bindingQualityStatus: 'confirmed',
+        }],
+      },
     },
   }));
   const quality = renderHtmlArtifactDocument(baseManifest({
@@ -199,6 +228,13 @@ test('renders static page planning and code review templates', () => {
   assert.match(staticPage.html, /规划已变更/);
   assert.match(staticPage.html, /design-abc123/);
   assert.match(staticPage.html, /效果图只锁定视觉方向/);
+  assert.match(staticPage.html, /模板参考/);
+  assert.match(staticPage.html, /管理后台仪表板/);
+  assert.match(staticPage.html, /证据状态/);
+  assert.match(staticPage.html, /chart_sample_rows_required/);
+  assert.match(staticPage.html, /源结构/);
+  assert.match(staticPage.html, /接口与数据/);
+  assert.match(staticPage.html, /source_structure_only_no_body_no_sample_rows/);
   assert.match(staticPage.html, /orders.delay_rate/);
   assert.match(quality.html, /数据质量汇总/);
   assert.match(quality.html, /趋势模块/);

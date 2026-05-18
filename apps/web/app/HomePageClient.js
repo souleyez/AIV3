@@ -294,9 +294,134 @@ function sortStaticPageDrafts(items) {
   });
 }
 
+function firstObjectValue(...values) {
+  for (const value of values) {
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      return value;
+    }
+    if (Array.isArray(value)) {
+      const found = value.find((item) => item && typeof item === 'object' && !Array.isArray(item));
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+function compactStaticPageTemplateReference(draft) {
+  const reference = firstObjectValue(
+    draft?.templateReference,
+    draft?.template_reference,
+    draft?.designReferences,
+    draft?.design_references,
+    draft?.source?.templateReference,
+    draft?.source?.template_reference,
+    draft?.source?.templateReferences,
+    draft?.source?.template_references,
+  );
+  if (!reference) return null;
+  const providerPolicy = reference.providerPolicy || reference.provider_policy || {};
+  return {
+    source: reference.source || 'html-anything',
+    templateId: reference.templateId || reference.template_id || reference.id || '',
+    label: reference.label || reference.name || '',
+    importPolicy: reference.importPolicy || reference.import_policy || '',
+    styleDirection: reference.styleDirection || reference.style_direction || '',
+    designIntent: reference.designIntent || reference.design_intent || '',
+    promptHints: Array.isArray(reference.promptHints || reference.prompt_hints)
+      ? (reference.promptHints || reference.prompt_hints).slice(0, 6)
+      : [],
+    forbiddenOutput: Array.isArray(providerPolicy.forbiddenOutput || providerPolicy.forbidden_output)
+      ? (providerPolicy.forbiddenOutput || providerPolicy.forbidden_output).slice(0, 8)
+      : [],
+  };
+}
+
+function compactStaticPageMissingEvidence(draft) {
+  const missingEvidence = firstObjectValue(
+    draft?.missingEvidence,
+    draft?.missing_evidence,
+    draft?.source?.missingEvidence,
+    draft?.source?.missing_evidence,
+  );
+  if (!missingEvidence) return null;
+  return {
+    status: missingEvidence.status || 'unknown',
+    items: Array.isArray(missingEvidence.items)
+      ? missingEvidence.items.slice(0, 8).map((item) => ({
+        code: item?.code || '',
+        message: item?.message || '',
+        recommendedAction: item?.recommendedAction || item?.recommended_action || '',
+        detailTargetCount: item?.detailTargetCount || item?.detail_target_count || null,
+      }))
+      : [],
+  };
+}
+
+function pushCompactText(out, value, limit = 80) {
+  if (typeof value === 'string') {
+    const text = value.trim().replace(/\s+/g, ' ').slice(0, limit);
+    if (text && !out.includes(text)) {
+      out.push(text);
+    }
+    return;
+  }
+  if (Array.isArray(value)) {
+    value.forEach((item) => pushCompactText(out, item, limit));
+  }
+}
+
+function compactStaticPageStructureSignals(draft) {
+  const raw = firstObjectValue(
+    draft?.structureSignals,
+    draft?.structure_signals,
+    draft?.dataSnapshot?.structureSignals,
+    draft?.dataSnapshot?.structure_signals,
+    draft?.source?.structureSignals,
+    draft?.source?.structure_signals,
+  );
+  if (!raw) return null;
+  const sectionTitleHints = [];
+  pushCompactText(sectionTitleHints, raw.sectionTitleHints || raw.section_title_hints);
+  const fieldCandidates = Array.isArray(raw.fieldCandidates || raw.field_candidates)
+    ? (raw.fieldCandidates || raw.field_candidates).slice(0, 4).map((candidate) => {
+      pushCompactText(sectionTitleHints, candidate?.sectionTitleHints || candidate?.section_title_hints);
+      return {
+        sourceId: candidate?.sourceId || candidate?.source_id || '',
+        fieldPath: candidate?.fieldPath || candidate?.field_path || '',
+        label: candidate?.label || '',
+        kind: candidate?.kind || '',
+        sectionTitleHints: Array.isArray(candidate?.sectionTitleHints || candidate?.section_title_hints)
+          ? (candidate.sectionTitleHints || candidate.section_title_hints).slice(0, 8)
+          : [],
+      };
+    })
+    : [];
+  const boundModules = Array.isArray(raw.boundModules || raw.bound_modules)
+    ? (raw.boundModules || raw.bound_modules).slice(0, 8).map((module) => ({
+      moduleId: module?.moduleId || module?.module_id || '',
+      title: module?.title || '',
+      fieldPath: module?.fieldPath || module?.field_path || '',
+      bindingQualityStatus: module?.bindingQualityStatus || module?.binding_quality_status || module?.status || '',
+    }))
+    : [];
+  if (!sectionTitleHints.length && !fieldCandidates.length && !boundModules.length) {
+    return null;
+  }
+  return {
+    status: raw.status || (sectionTitleHints.length ? 'available' : 'none'),
+    policy: raw.policy || 'source_structure_only_no_body_no_sample_rows',
+    sectionTitleHints: sectionTitleHints.slice(0, 12),
+    fieldCandidates,
+    boundModules,
+  };
+}
+
 function buildStaticPagePlanningHtmlArtifact(draft) {
   if (!draft) return null;
   const id = draft.backendDraftId || draft.id || 'local-static-page-draft';
+  const templateReference = compactStaticPageTemplateReference(draft);
+  const missingEvidence = compactStaticPageMissingEvidence(draft);
+  const structureSignals = compactStaticPageStructureSignals(draft);
   return {
     kind: 'html_artifact',
     version: 1,
@@ -322,6 +447,10 @@ function buildStaticPagePlanningHtmlArtifact(draft) {
     createdAt: draft.backendUpdatedAt || draft.updated_at || draft.updatedAt || draft.created_at || new Date(0).toISOString(),
     payload: {
       objective: draft.objective || draft.title || '静态页规划',
+      templateReference,
+      evidenceSummary: draft.templateEvidenceSummary || draft.template_evidence_summary || draft.source?.templateEvidenceSummary || null,
+      missingEvidence,
+      structureSignals,
       visualBridge: {
         providerLane: 'gpt-image-2-cloudflare-queue',
         role: 'effect_preview_reference_only',
@@ -924,11 +1053,16 @@ export default function HomePageClient() {
     if (!assistantRunId || localDraft?.backendDraftId) {
       return localDraft;
     }
+    const templateReferenceId = localDraft?.templateReferenceId
+      || localDraft?.designReferences?.[0]?.templateId
+      || localDraft?.source?.templateReferences?.[0]?.templateId
+      || null;
     const response = await fetchJson(`/api/v3/assistant-runs/${assistantRunId}/static-page-drafts`, {
       method: 'POST',
       body: {
         title: localDraft?.objective || '静态页草稿',
         prompt,
+        template_reference_id: templateReferenceId,
         selected_scope: localDraft?.datasetId ? buildStaticPageDraftSelectedScope(localDraft) : null,
         source_refs: buildStaticPageDraftSourceRefs(localDraft),
         draft_payload: {
@@ -2465,6 +2599,7 @@ export default function HomePageClient() {
     const baseDraft = buildInitialStaticPageDraft({
       datasetId: draftDatasetId,
       sessionId: selectedSessionId,
+      templateIntent: prompt,
       conversationSummary: buildStaticPageConversationSummary(prompt, {
         dataset,
         datasets: selectedDatasets,

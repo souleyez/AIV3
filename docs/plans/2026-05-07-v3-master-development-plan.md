@@ -2,17 +2,19 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Provide the single active development plan for AI Data Platform V3, with static-page generation as the product mainline and the model-gateway/Codex conversation executor as the core assistant execution architecture behind V3 control.
+**Goal:** Provide the single active development plan for AI Data Platform V3, with static-page generation, parsing/retrieval quality, ordinary AssistantRun reliability, and V3-owned model-gateway/provider routing as the current product mainline. The Codex substrate remains documented but is frozen as of 2026-05-18 until the operator explicitly resumes it.
 
-**Architecture:** V3 remains the control plane and source of truth: PostgreSQL owns identity, dataset visibility, AssistantRun state, memory scope, workflow state, and artifacts. The model gateway owns provider profiles and routing across GPT, MiniMax, and other OpenAI-compatible or adapted model APIs. The Codex conversation executor receives every assistant conversation as a bounded task, uses V3-supplied context/evidence/tool manifests, decides the next reasoning/tool steps, and returns model-authored messages plus validated action requests. Static-page generation, reports, parsing, retrieval, and media understanding stay as V3 product capabilities; Codex is the assistant execution kernel, not a replacement for V3's API, data plane, authorization, or durable workflow plane.
+**Architecture:** V3 remains the control plane and source of truth: PostgreSQL owns identity, dataset visibility, AssistantRun state, memory scope, workflow state, and artifacts. The model gateway owns provider profiles and routing across GPT, MiniMax, and other OpenAI-compatible or adapted model APIs; the current production answer path stays on provider routing. Static-page generation, reports, parsing, retrieval, and media understanding stay as V3 product capabilities. The previously planned Codex conversation executor / Codex Host substrate remains a dormant future execution-host option, not the current model gateway or authoritative answer path.
 
-**Tech Stack:** Next.js 16 / React 19 in `apps/web`; `react-grid-layout` for desktop module layout; `@dnd-kit` for mobile vertical ordering; Apache ECharts for advanced chart/runtime parity; deterministic HTML/SVG rendering for export-safe fallback; sandboxed HTML artifact renderer for task reports/planning handoffs/lightweight editors; Rust crates `platform-api`, `assistant-runtime`, `llm-gateway`, future `model-proxy` facade when extraction is justified, `static-page-runtime`, `static-page-worker`, `static-page-renderer`, `ingest-worker`, `media-worker`, `assistant-run-worker`, `retrieval-worker`, `memory-worker`, `document-vlm-runtime`, `codex-host-agent`; PostgreSQL 17.9 target; Cloudflare/Codex image queue; MiniMax VLM/media capability probes; OpenAI `openai/codex` OSS as the execution-kernel reference and host binary/SDK surface; Codex CLI/SDK/app-server/MCP server on jump host or later Mac host; OpenClaw only as optional legacy sidecar.
+**Tech Stack:** Next.js 16 / React 19 in `apps/web`; `react-grid-layout` for desktop module layout; `@dnd-kit` for mobile vertical ordering; Apache ECharts for advanced chart/runtime parity; deterministic HTML/SVG rendering for export-safe fallback; sandboxed HTML artifact renderer for task reports/planning handoffs/lightweight editors; Rust crates `platform-api`, `assistant-runtime`, `llm-gateway`, future `model-proxy` facade when extraction is justified, `static-page-runtime`, `static-page-worker`, `static-page-renderer`, `ingest-worker`, `media-worker`, `assistant-run-worker`, `retrieval-worker`, `memory-worker`, `document-vlm-runtime`, `codex-host-agent`; PostgreSQL 17.9 target; Cloudflare/Codex image queue; MiniMax VLM/media capability probes; OpenAI `openai/codex` OSS and Codex CLI/SDK/app-server/MCP notes remain frozen execution-kernel references only; OpenClaw only as optional legacy sidecar.
 
 ---
 
 ## Status
 
-This is the current active plan as of 2026-05-10.
+This is the current active plan as of 2026-05-18.
+
+2026-05-18 update: the Codex substrate track is frozen. 8 server has Codex CLI installed but not logged in; online V3 AssistantRun still uses the MiniMax/provider path; Codex Host remains plan-only with real execution disabled. Continue backend/static-page/retrieval/ordinary-chat quality work without promoting Codex until the operator explicitly resumes that track.
 
 Older plan files are now detailed references, not independent roadmaps:
 
@@ -32,7 +34,7 @@ V3 is not a generic file manager and not a standalone page builder. It is a data
 - Chat normally when no dataset is selected.
 - Understand visible datasets, documents, conversation memory, and artifacts as optional context supply.
 - Let the model choose retrieval/tool actions through V3 validation.
-- Route assistant conversations through a Codex execution kernel once the gateway bridge is ready, with V3 supplying context, evidence, memory, tool contracts, and safety gates.
+- Serve assistant conversations through V3-owned provider routing and V3-supplied context, evidence, memory, tool contracts, and safety gates. The Codex execution-kernel route is frozen and should not be promoted without an explicit operator resume decision.
 - Generate static-page/report artifacts inside the main assistant workspace.
 - Let users adjust modules by natural language and lightweight direct manipulation.
 - Open safe HTML artifacts for planning handoff, execution reports, code review summaries, and lightweight JSON-patch editors.
@@ -47,7 +49,7 @@ V3 is not a generic file manager and not a standalone page builder. It is a data
 - V3 model awareness is global and additive, not restrictive. Every AssistantRun surface must brief the model that it is serving through V3, what V3 can do, what permission-filtered datasets/tools are visible, and that the model may still answer general questions outside V3 when useful.
 - If V3 has not supplied permission, evidence, or tool results for a topic, the answer must say the relevant V3 scope is currently not visible or not supplied (`当前不可见/未供料`) before continuing with clearly labeled general model knowledge or judgment.
 - External/web search should become a default V3-controlled read-only capability. Until live search evidence is actually supplied, no answer may imply that V3 searched the web; when implemented, search results must enter context as audited evidence with source and timestamp metadata.
-- Codex may decide reasoning and action steps, but V3 remains the authority for permissions, visible datasets, memory scope, workflow state, queue submission, and artifact ownership.
+- Codex may only participate in dormant shadow/plan-only diagnostics while this track is frozen. V3 remains the authority for permissions, visible datasets, memory scope, workflow state, queue submission, model routing, and artifact ownership.
 - The model gateway must support multiple provider APIs through explicit profiles, redacted credentials, provider capability manifests, and per-lane fallback policy.
 - Dataset selection is supply preference, not a separate chat mode.
 - Conversation history is a hidden dataset and enters context only through scope policy.
@@ -91,8 +93,8 @@ Completed and preserved:
 - Home UI shell is now close to fixed: homepage keeps the conversation composer, directory pages remove the composer, the left rail remains dataset-only, the top toolbar owns page navigation/login/model status, the right shelf owns drafts/results, and members shows an explicit login-required overlay instead of looking broken.
 - Java 8 parity audit is complete: Java/Vue used `gridstack` plus `echarts`; V3 keeps `react-grid-layout` and adds ECharts as advanced chart runtime.
 - Model gateway seed exists in `llm-gateway` with model lanes, provider error redaction, MiniMax reasoning block cleanup, and frontend-safe AssistantRun gateway diagnostics for profile/wire API/Codex surface readiness.
-- Codex Host safe bridge exists in dry-run/plan-only form. Real execution is still blocked by default.
-- The next architecture uplift is to connect model-gateway profiles to the Codex conversation executor so normal assistant conversations can be judged/executed by Codex while V3 supplies data and validates actions.
+- Codex Host safe bridge exists in dry-run/plan-only form. Real execution is still blocked by default, and the whole Codex substrate promotion path is frozen as of 2026-05-18.
+- The next architecture uplift is not Codex promotion. Keep strengthening V3-owned provider routing, ordinary AssistantRun quality, retrieval/context supply, and static-page generation quality.
 - `openai/codex` OSS has been checked as the target execution-kernel reference. It is Apache-2.0, Rust-majority, installable by npm/Homebrew/releases, and exposes multiple integration surfaces: `codex exec` non-interactive runs, structured output schemas, SDK thread control, app-server JSON-RPC, and MCP server mode.
 - `CoDeepSeedeX` has been checked as a reference pattern for private Responses-compatible provider shims. It is useful for Codex-to-non-OpenAI provider adaptation, profile wrappers, health/usage/debug endpoints, context-budget diagnostics, tool-call protocol repair, and liveness guards. It is not a V3 dependency or replacement architecture.
 - Video PPT/transcript extraction is partially present: V3 can parse uploaded/local audio-video evidence, preserve media timestamps, expose model-visible `resolve_video_url` / `extract_video_ppt_transcript` action contracts, recognize direct video URLs as remote media sources, resolve simple public HTML pages that expose `<video>`, `<source>`, or OpenGraph/Twitter video fields, auto-register the resolved direct video URL into the selected visible dataset and enqueue ingest, let ReAct supply parsed transcript/scene/keyframe OCR evidence from selected uploaded video documents without host-composed answers, queue `video_extraction_workflow` from extraction requests when selected video evidence is still missing, let `media-worker` consume `media` queue stages and advance source resolution/asset registration/extraction-summary stages, let `media-worker` emit an FFmpeg/raw_frames extraction plan compatible with `wechat-video-ppt-extract`, optionally execute local-file FFmpeg extraction behind `MEDIA_FRAME_EXTRACTION_ENABLED`, let `ingest-worker` claim both normal ingest and `parse_video_media` tasks by default, let `ingest-worker` download explicitly enabled direct remote media URLs into a guarded local cache before parsing, emits a safe read-only `video_extraction_summary` HTML artifact from parsed evidence into AssistantRun events/right-shelf discovery, promotes generated text/review files, raw frame manifests, raw contact-sheet HTML previews, keep-list-derived selected slide manifests, final deliverable manifests, and basic screenshot-based PPTX outputs into standard artifact refs, exposes explicit deliverable status in worker output/HTML summaries, has shared request/source/asset/artifact/state contracts, has internal tool catalog entries for `media.resolve_video_url`, `media.register_video_asset`, and `media.extract_ppt_transcript`, and has a dedicated `video_extraction_workflow` stub with `resolving_source -> registered -> parsing -> extracting_ppt -> completed` plus `failed`/`unsupported_source` branches. Richer PPTX/Markdown extraction artifacts and durable final deliverable publication are still pending. Login-gated video sites, QR login, cookies, redirects, private hosts, and recording bypass flows are out of scope for the next implementation slice.
@@ -123,25 +125,25 @@ Owns `llm-gateway`, future `model-proxy` facade if needed, provider profile conf
 
 The gateway must be able to configure multiple model APIs, including GPT-family providers, MiniMax-compatible providers, and future OpenAI-compatible or adapter-backed providers. Do not create a separate network service until at least two independent processes need the same provider facade; before that, strengthen `llm-gateway` as the shared library/facade.
 
-### 4. Codex Conversation Executor
+### 4. Codex Conversation Executor (Frozen)
 
-Owns the bounded conversation-execution loop: receive an AssistantRun context package from V3, call Codex with the configured model profile, let Codex reason over supplied context/tool contracts, emit concise progress steps, request V3-validated actions, and return model-authored assistant messages or artifact/action intents.
+Frozen as of 2026-05-18. The existing design remains documented as a possible future execution-host option, but it is not the current AssistantRun answer path and should not receive feature work until the operator explicitly resumes it.
 
-The first integration should use supported `openai/codex` surfaces rather than forking the Codex core: TypeScript SDK/app-server for long-lived conversation threads when stable, `codex exec --output-schema` for non-interactive worker tasks, and `codex mcp-server` only as a later tool boundary if it is operationally cleaner.
+The dormant target remains a bounded conversation-execution loop: receive an AssistantRun context package from V3, call Codex with the configured model profile, let Codex reason over supplied context/tool contracts, emit concise progress steps, request V3-validated actions, and return model-authored assistant messages or artifact/action intents. Do not promote this route, log in the 8 server Codex CLI, or enable real transport while frozen.
 
-Does not own dataset visibility, memory source of truth, provider credentials, direct database reads, direct queue writes, static-page rendering, file parsing, or artifact ownership. It asks V3 for supply/action execution; V3 decides what is visible and what action is allowed.
+Does not own dataset visibility, memory source of truth, provider credentials, direct database reads, direct queue writes, static-page rendering, file parsing, model routing, or artifact ownership.
 
 ### 5. Workflow / Worker Plane
 
-Owns explicit workflow definitions, queue claiming, ingest/retrieval/memory/report/static-page/media workers, retry/cancel/dead-letter/replay semantics, background task status, and Codex execution tasks that need durable worker scheduling.
+Owns explicit workflow definitions, queue claiming, ingest/retrieval/memory/report/static-page/media workers, retry/cancel/dead-letter/replay semantics, and background task status. Existing Codex Host task plumbing stays dormant while the Codex substrate is frozen.
 
 Do not move routine parsing, retrieval, rendering, or memory refresh into the Codex conversation executor.
 
 ### 6. External Execution Host
 
-Owns `codex-host-agent`, host profile validation, isolated task workspace, guarded `codex exec`, redacted logs, returned artifacts, and workflow completion.
+Owns `codex-host-agent`, host profile validation, isolated task workspace, guarded `codex exec`, redacted logs, returned artifacts, and workflow completion when this frozen track is explicitly resumed.
 
-It is not a browser API, model gateway, memory authority, permission authority, or V3 scheduler. For normal chat, it should be treated as the host process for the Codex conversation executor; for heavier automation, it is a workflow worker.
+It is not a browser API, model gateway, memory authority, permission authority, or V3 scheduler. For normal chat, the current path remains V3 provider routing, not Codex Host.
 
 ### 7. Data / Artifact Plane
 
@@ -181,17 +183,17 @@ The product must support:
 
 The visible UI pattern is already selected. Future static-page work should focus on better planning, better module content/data binding, stronger retrieval supply, stronger image-preview prompts, better deterministic final render fidelity, and cleaner export diagnostics. Avoid broad visual redesign of the assistant shell.
 
-### Priority 2: Model Gateway + Codex Conversation Executor
+### Priority 2: Model Gateway / AssistantRun Provider Quality
 
-This is now a core architecture track, not a distant sidecar.
+The V3-owned model gateway remains active. The Codex conversation executor part of the previous track is frozen as of 2026-05-18.
 
-The target flow is:
+The active target flow is:
 
 1. Browser sends a conversation turn to V3.
 2. V3 creates or continues an `AssistantRun`.
 3. V3 builds a supply package: system/product briefing, visible datasets, selected/inferred scope, hidden-memory candidates, evidence, current artifact state, tool catalog, and safety policy.
-4. V3 sends the task to the Codex conversation executor.
-5. Codex uses the configured model profile through the model gateway, decides whether to answer, retrieve more, update a draft, request an image preview, render a page, recall memory, or continue execution.
+4. V3 sends the prompt and supplied evidence to the configured provider path through `llm-gateway` / AssistantRun runtime selection.
+5. The model answers or requests V3-validated ReAct actions through the existing provider path.
 6. V3 validates every requested action against user/session/dataset/artifact scope.
 7. V3 persists events, supplied evidence, actions, artifacts, and the final model-authored response.
 
@@ -201,8 +203,8 @@ The product must support:
 
 - Gateway-configured model profiles for multiple provider APIs.
 - Per-profile capability manifests: chat, reasoning, vision, audio/video, JSON mode, tool calling, image-prompt support, rate limits, and cost hints.
-- Codex as the normal assistant reasoning/execution kernel once the bridge is stable.
-- A non-fork integration with upstream `openai/codex`: use official binary/SDK/server surfaces first, keep a local checkout only for debugging, Python SDK experiments, or patch evaluation.
+- Stable AssistantRun provider quality with explicit runtime manifests, scoped evidence, and fallback discipline.
+- A frozen non-fork Codex reference: keep upstream `openai/codex` surfaces documented for future review only; do not continue implementation or promotion while frozen.
 - A V3-owned private Responses-compatible shim pattern for providers Codex cannot call natively, using `CoDeepSeedeX` as a design reference but not as a runtime dependency.
 - Provider-shim observability: local-only health/status, capability, balance/usage, trace, and context-budget diagnostics. Persist product-grade usage/audit into V3 PostgreSQL/runtime inspect rather than relying on shim-local SQLite as source of truth.
 - Context budget governance: diagnose and cap runaway conversation history, tool outputs, retrieval payloads, and media/image payload summaries while preserving recent/high-risk evidence. This is required because the product intentionally favors answer quality over token thrift.
@@ -210,9 +212,9 @@ The product must support:
 - V3-supplied context instead of Codex directly reading databases or local files.
 - ReAct progress surfaced as brief UI steps, not a verbose terminal log.
 - Provider fallback without silently changing safety/capability assumptions.
-- Jump-host/Mac-host validation for real Codex execution; no real local workstation execution.
+- No Codex Host promotion work while frozen. Existing jump-host/Mac-host validation notes remain historical reference only.
 
-This track must not disrupt the current static-page user flow. Codex can replace the reasoning/action planner behind a feature gate, but V3 keeps the existing static-page state machine, draft model, preview queue, final renderer, artifact ownership, and current UI progression. `direct` execution remains the fallback until Codex-backed action planning proves equivalent or better in shadow runs.
+This track must not disrupt the current static-page user flow. V3 keeps the existing static-page state machine, draft model, preview queue, final renderer, artifact ownership, and current UI progression.
 
 ### Priority 3: Assistant/RAG/Ingest Quality
 
@@ -225,6 +227,8 @@ Continue improving supply quality, not UI form complexity:
 - Media detail API for transcript windows, scenes, keyframes, OCR snippets, and provider evidence.
 - Direct-upload and publicly resolvable video acquisition: the assistant should know it can parse uploaded video files, direct video URLs, or public pages where V3 can safely resolve a video asset URL, then feed that media into the background parsing and PPT/transcript extraction pipeline. Login-gated pages, QR login, cookies, and browser recording bypass are explicitly excluded for now.
 - No foreground parsing beyond save/preclassify/register/enqueue.
+
+2026-05-18 document/RAG follow-up: document detail now canonicalizes paragraph/Markdown heading clues into each chunk's `metadata.section_title_hints`, including inferred headings when parser metadata is absent. The same heading set is summarized in `model_facing.signals` as a RAG signal, so the document detail page, fallback supply ranking, and model-facing context share one title/section clue path without inventing source facts. Static-page draft data snapshots now preserve supplied heading clues as `retrieval.section_title_hints` field candidates when evidence already contains those clues, and `docs-page` structure modules bind to that candidate in both frontend and backend snapshots so document-page planning can preserve source structure without changing the editable module body or inventing headings. Docs-page missing-evidence state also treats supplied section-title hints as satisfying the heading/detail gate, avoiding repeated detail requests once usable source headings are already available. Static-page provider input now carries compact `structure_signals` for those supplied headings, matching candidates, and bound modules, so provider planning can organize docs-page output from source structure clues without seeing raw document bodies or inventing headings. AssistantRun/ReAct current static-page artifact summaries also include compact `structureSignals` for follow-up planning while continuing to omit module body text and sample rows.
 
 ### Priority 4: External Bot And Third-Party Knowledge/Action Integrations
 
@@ -302,10 +306,10 @@ Do not continue OpenClaw as a main execution-kernel route.
 The project should stay split into three tracks:
 
 - Product track: assistant context supply, dataset/RAG/media quality, static-page planning/editing, preview image, final render, export package, and right-shelf artifact lifecycle.
-- Conversation-kernel track: model gateway profiles, Codex conversation executor, V3 context supply packages, validated action loop, and concise progress reporting.
-- Execution extension track: heavier Codex Host workflow tasks, task memory spaces, jump-host/Mac-host validation, and HTML execution reports.
+- AssistantRun/model track: model gateway profiles, provider quality, V3 context supply packages, validated action loop, and concise progress reporting.
+- Frozen execution extension track: heavier Codex Host workflow tasks, task memory spaces, jump-host/Mac-host validation, and HTML execution reports remain documented but paused.
 
-The product track must remain safe without real local host execution, but the normal assistant path should move toward Codex as the reasoning/execution kernel. V3 still answers product questions through model-authored output, retrieves evidence, generates reports/static pages, and manages artifacts through its own API/worker/data planes; Codex decides the next step and asks V3 to perform authorized actions.
+The product track must remain safe without real local host execution. V3 still answers product questions through model-authored provider output, retrieves evidence, generates reports/static pages, and manages artifacts through its own API/worker/data planes.
 
 The next highest leverage order is:
 
@@ -313,17 +317,17 @@ The next highest leverage order is:
 2. Finish static-page module editability, planning quality, final-render fidelity, export diagnostics, and data-quality handling.
 3. Improve parsing, retrieval, hidden conversation memory, media understanding, and AssistantRun context supply so the model sees better evidence and current draft state.
 4. Continue direct-upload / publicly resolvable video PPT extraction as a media-quality subtrack: complete the public video URL/page resolver, remote media registration, background media parsing, transcript/PPT extraction artifacts, and no host-composed fallback answers. Uploaded video evidence supply through ReAct already exists.
-5. Build the model-gateway profile system and Codex conversation executor bridge behind feature flags and shadow/dry-run comparison, without changing the visible static-page flow.
+5. Strengthen the model-gateway profile system and ordinary AssistantRun provider path; keep the Codex executor bridge frozen.
 6. Add the external bot and third-party integration core: generic channel/source contracts, ACL-aware third-party retrieval, Feishu/Lark and WeCom adapters, external artifact/action runtime, and observe-first management UI.
-7. Add the safe HTML artifact viewer as a common review/report surface, starting with Codex execution reports, static-page planning handoffs, and video extraction summaries.
-8. Validate real Codex/external-page fetching only on the jump host or later Mac host when browser access is needed.
+7. Add the safe HTML artifact viewer as a common review/report surface, starting with static-page planning handoffs, third-party handoff docs, and existing historical Codex execution report templates.
+8. Do not validate real Codex execution while frozen; browser/external-page fetching work should use non-Codex product paths unless explicitly reopened.
 9. Resume account expansion only when product workflows need it.
 
-The main architectural risk is letting four "brains/builders" compete: direct model calls, Codex conversation executor, static-page renderer, and HTML artifact renderer. The boundary is strict: Codex decides conversation/action flow, V3 validates and supplies data, static-page renderer produces customer report pages, HTML artifact renderer displays review/control artifacts, and heavier Codex Host workflow tasks execute external work without owning V3 product state.
+The main architectural risk is letting too many "brains/builders" compete: direct model calls, frozen Codex executor designs, static-page renderer, and HTML artifact renderer. While Codex is frozen, the boundary is simpler: V3 provider routing handles model-authored answers/actions, V3 validates and supplies data, static-page renderer produces customer report pages, and HTML artifact renderer displays review/control artifacts.
 
 ## Immediate Execution Track
 
-The next development thread should keep the current UI shell stable and continue with backend/static-page quality: parsing quality, retrieval/context supply, planning quality, image-preview prompt quality, chart/data fidelity, final-render fidelity, and export diagnostics. Start the model-gateway/Codex conversation executor foundation behind feature flags and shadow/dry-run comparison only; do not let it alter the visible static-page workflow until it proves stable.
+The next development thread should keep the current UI shell stable and continue with backend/static-page quality: parsing quality, retrieval/context supply, planning quality, image-preview prompt quality, chart/data fidelity, final-render fidelity, ordinary AssistantRun provider quality, and export diagnostics. Do not continue the model-gateway/Codex conversation executor foundation unless the operator explicitly resumes the frozen Codex substrate track.
 
 ### Task 0: Make This Master Plan The Entry Point
 
@@ -345,7 +349,7 @@ The next development thread should keep the current UI shell stable and continue
 - A fresh thread can find the active plan in under one minute.
 - Older plans are clearly marked as source references.
 
-### Task 0A: Promote Model Gateway And Codex Conversation Executor
+### Task 0A: Model Gateway Provider Quality And Frozen Codex Executor Record
 
 **Files:**
 
@@ -360,9 +364,9 @@ The next development thread should keep the current UI shell stable and continue
 - Modify: `docs/architecture/codex-host-bridge-contract.md`
 - Create or update tests near the touched crates
 
-**Status:** In progress. The current baseline has `llm-gateway` model lanes, MiniMax/Codex-shim profile support, ReAct tool contracts, V3-owned Codex context packages, dry-run/plan-only Codex conversation planning, shadow comparison, redacted diagnostics, Host validation summaries, and promotion gates. Direct execution remains authoritative; Codex does not yet route normal assistant conversations as the primary reasoning/execution kernel, and real transport remains blocked until stable shadow comparison plus jump-host/Mac-host smoke validation pass.
+**Status:** Frozen as of 2026-05-18. Preserve the existing Codex executor and Host work as diagnostic/reference infrastructure only. Do not promote Codex, log the 8 server Codex CLI into the operator GPT account, enable real transports, or route ordinary AssistantRun/external-bot/third-party chat answers through Codex unless the operator explicitly resumes this track. Active work in this area is limited to model-gateway/provider-quality improvements that help the ordinary AssistantRun path without advancing Codex promotion.
 
-**Current implementation note:** `llm-gateway` now has a first-class `ModelProviderProfile` contract with provider/model id, wire API, capability manifest, auth env key name, timeout, rate-limit hints, cost hints, and redaction policy. Public manifests expose only redacted/safe metadata and tests cover GPT-style and MiniMax/Codex-shim profiles without leaking raw keys. It can also convert provider runtime metadata into Provider Shim usage events and summaries for future runtime inspect/PostgreSQL audit persistence. `llm-gateway` also exposes a dedicated `codex_conversation` lane so Codex-backed AssistantRun execution can be routed separately from direct chat/ReAct lanes. `contracts` now has `AssistantRunCodexContextPackageView`, executor transport values, V3-owned safety policy, context budget diagnostics, action contracts, Provider Shim observability snapshots, top-level `supply_quality` and `model_gateway` fields, and a Codex tool-output budget policy so the future Codex executor receives a V3-supplied package and operations can inspect local shim health/profile/usage/budget/liveness state without exposing raw keys or prompts. `assistant-runtime` now has a dry-run/plan-only `execute_codex_conversation_plan` adapter that records safe execution trails, exposes planned action types plus compact supply-quality and model-gateway diagnostics, rejects unsafe context packages, chooses a single safe `suggested_action` with minimal V3-checkable argument skeletons only from V3-provided action contracts in plan-only shadow mode, emits the future `codex exec --output-schema` action-suggestion JSON schema, routes HTML artifact edit prompts through `submit_html_artifact_event`, marks mutation/queue execution as disallowed, emits a host-only invocation blueprint for future `codex exec --output-schema`/SDK/app-server/MCP transports, treats real Codex transports as unsupported until host validation, and always falls back to direct execution without mutating drafts or queues. `platform-api` can now opt in with `ASSISTANT_RUN_EXECUTOR=codex_dry_run|codex_plan_only|codex_exec_schema|codex_sdk_thread|codex_app_server|codex_mcp_server`; it builds a V3-scoped Codex context package for create/continue AssistantRun calls, promotes evidence-state `supply_quality` into the package for explicit Codex guidance, attaches the selected `codex_conversation` model-gateway snapshot/profile through `ASSISTANT_RUN_CODEX_*` route/profile settings, verifies redacted MiniMax/Codex-shim profile loading and runtime-selection fallback in tests, exposes V3 action contracts for retrieval/detail refresh, conversation-memory recall, static-page draft/module/preview/render flow, report flow, and `submit_html_artifact_event`, records concise `assistant_run.codex_executor_diagnostic` events with top-level `suggested_action`, model-gateway summary, host invocation blueprint, and output schema, exposes AssistantRun detail diagnostics for latest Codex shadow status/context-budget pressure/suggested action/model-gateway/host-invocation plus redacted provider usage summaries, computes a shadow gate over recent matched/diverged/invalid/no-suggestion events before allowing jump-host validation, marks suggestions outside V3-provided action contracts as `invalid_suggestion`, and keeps direct execution authoritative. Codex context budget diagnostics now classify prompt/history, startup briefing, selected scope, inferred candidates, retrieval evidence, hidden conversation memory, detail targets, media summaries, current artifact state, and tool/evidence state with estimated character counts and soft-limit pressure. Codex tool-output trimming is narrow and only bounds oversized `tool_outputs` payload fields while preserving recent outputs, error/status fields, evidence references, source locators, and media timestamps; retrieval evidence and media summaries stay quality-first. ReAct/provider protocol hardening now rejects incomplete provider tool-call payloads and repairs duplicate tool-call replay, missing tool outputs, and repeated pending-tool liveness stalls before continuing the action loop. Shadow comparison diagnostics now record direct action types, Codex suggested action type, matched/diverged/no-suggestion/invalid status, selected Codex model-gateway lane/profile, and a hard mutation guard so Codex cannot mutate drafts or queues during shadow evaluation.
+**Current implementation note, historical baseline:** `llm-gateway` now has a first-class `ModelProviderProfile` contract with provider/model id, wire API, capability manifest, auth env key name, timeout, rate-limit hints, cost hints, and redaction policy. Public manifests expose only redacted/safe metadata and tests cover GPT-style and MiniMax/Codex-shim profiles without leaking raw keys. It can also convert provider runtime metadata into Provider Shim usage events and summaries for future runtime inspect/PostgreSQL audit persistence. `llm-gateway` also exposes a dedicated `codex_conversation` lane so Codex-backed AssistantRun execution can be kept separate from direct chat/ReAct lanes if the frozen track is resumed later. `contracts` now has `AssistantRunCodexContextPackageView`, executor transport values, V3-owned safety policy, context budget diagnostics, action contracts, Provider Shim observability snapshots, top-level `supply_quality` and `model_gateway` fields, and a Codex tool-output budget policy so the frozen Codex executor design receives a V3-supplied package and operations can inspect local shim health/profile/usage/budget/liveness state without exposing raw keys or prompts. `assistant-runtime` now has a dry-run/plan-only `execute_codex_conversation_plan` adapter that records safe execution trails, exposes planned action types plus compact supply-quality and model-gateway diagnostics, rejects unsafe context packages, chooses a single safe `suggested_action` with minimal V3-checkable argument skeletons only from V3-provided action contracts in plan-only shadow mode, emits the future `codex exec --output-schema` action-suggestion JSON schema, routes HTML artifact edit prompts through `submit_html_artifact_event`, marks mutation/queue execution as disallowed, emits a host-only invocation blueprint for future `codex exec --output-schema`/SDK/app-server/MCP transports, treats real Codex transports as unsupported while frozen, and always falls back to direct execution without mutating drafts or queues. `platform-api` retains opt-in diagnostic values for `ASSISTANT_RUN_EXECUTOR=codex_dry_run|codex_plan_only|codex_exec_schema|codex_sdk_thread|codex_app_server|codex_mcp_server`; this must not be promoted for ordinary traffic while frozen. ReAct/provider protocol hardening remains active product value for the ordinary provider path. Shadow comparison diagnostics remain dormant observability and must not mutate drafts or queues.
 
 **2026-05-10/11 follow-up:** AssistantRun detail diagnostics now also expose a redacted `recent_shadow_events` list for Codex executor diagnostics, including newest-first comparison status, action type, model lane/profile summary, mutation guard signals, and next gate. The latest suggested action is summarized without raw arguments, the latest model-gateway payload is summarized through a fixed safe field whitelist instead of exposing full profile/env/debug data, and the shadow gate reports `matched_streak_count` plus a redacted `last_blocking_event` so operators can see whether failures come from divergence, no suggestion, invalid action type, or unsafe mutation signals. With the jump host available, the shadow gate also emits a `host_validation` readiness summary that says when `windows_jump`/`mac_host` smoke validation can start, while keeping local execution, Codex mutation, and queue submission disabled until host validation passes. AssistantRun diagnostics can also summarize completed Codex Host validation outputs from `codex_exec`/workflow events, provide an aggregate `host_validation_summary`, and combine shadow plus host status into a read-only `promotion_gate` that only marks the path eligible for feature-gate review after both checks pass. Host validation summaries now carry `host_kind` and treat completed `codex_exec` results from anything other than `windows_jump`/`mac_host` as `invalid_host`, not as a promotion signal. Browser-facing real Codex transports are requested/effective separated: unless the manual real-transport feature gate is enabled, `codex_exec_schema`/SDK/app-server/MCP requests are downgraded to `codex_plan_only` and exposed through fixed-field `transport_policy`, `host_invocation`, and `suggested_action` summaries. These summaries deliberately exclude raw prompts, provider secrets, suggested action arguments, command arguments, provider auth env names, transport env keys, host invocation debug fields, stdout/stderr excerpts, and verbose Codex logs.
 
@@ -426,17 +430,19 @@ The next development thread should keep the current UI shell stable and continue
 
 **Steps:**
 
+**Frozen step policy 2026-05-18:** Do not execute the Codex-promotion steps below while frozen. Steps that directly promote Codex transport, route normal assistant traffic through Codex, or validate real Codex execution are historical reference only. Active follow-up under this task is limited to provider-profile quality, redaction, runtime manifests, provider fallback, and ordinary AssistantRun reliability.
+
 1. Define a first-class model profile contract in `llm-gateway`: provider id, model id, base URL, auth env key name, capability flags, timeout, rate/cost hints, and redaction policy.
 2. Add tests proving GPT-style and MiniMax-style profiles normalize request/response metadata without leaking raw keys.
 3. Define an `AssistantRunCodexContextPackage` contract containing system/product briefing, selected/inferred datasets, evidence state, hidden-memory candidates, current artifact state, available V3 actions, and safety policy.
 4. Add a transport enum for Codex integration: `dry_run`, `plan_only`, `exec_schema`, `sdk_thread`, `app_server`, and future `mcp_server`.
-5. Add a Codex conversation executor adapter in `assistant-runtime` that can run in `dry_run` and `plan_only` first, then `exec_schema` using `codex exec --output-schema`, then `sdk_thread` or `app_server` for multi-turn conversations.
-6. Route normal `POST /v1/assistant-runs` through the adapter behind a feature/env gate such as `ASSISTANT_RUN_EXECUTOR=direct|codex`.
-7. Keep `direct` as the default until jump-host or Mac-host validation proves the Codex path stable.
+5. Historical only while frozen: add a Codex conversation executor adapter in `assistant-runtime` that can run in `dry_run` and `plan_only` first, then `exec_schema` using `codex exec --output-schema`, then `sdk_thread` or `app_server` for multi-turn conversations.
+6. Historical only while frozen: route normal `POST /v1/assistant-runs` through the adapter behind a feature/env gate such as `ASSISTANT_RUN_EXECUTOR=direct|codex`.
+7. Keep provider/direct routing authoritative unless the frozen Codex substrate is explicitly resumed and reapproved.
 8. Ensure Codex can only request V3 action contracts such as retrieval/detail refresh, conversation-memory recall, static-page draft creation, module update, image preview submit, final render request, and HTML artifact event submit.
 9. Persist Codex reasoning/action summaries as concise AssistantRun events; do not store raw verbose terminal logs in chat.
 10. Add UI-readable execution trail entries inside the existing homepage/right-shelf pattern only; do not add a new global execution panel or second chat surface.
-11. Validate real Codex execution only on the jump host or later Mac host. Never enable it on this developer workstation.
+11. Do not validate real Codex execution while frozen. The earlier jump-host/Mac-host validation rule remains historical reference only.
 12. Do not fork or vendor `openai/codex` in V3 unless a concrete upstream gap blocks the supported CLI/SDK/server surfaces. If a patch is needed, keep it as a documented upstream-compatible patch set.
 13. Define provider-shim observability contracts inspired by CoDeepSeedeX: health, status, profile/capability snapshot, balance if provider supports it, usage summary, recent usage events, debug trace status, and context-budget report.
 14. Store production usage/audit in V3 tables and runtime inspect events. Shim-local ledgers may exist only as host diagnostics and must not become the source of truth.
@@ -447,10 +453,10 @@ The next development thread should keep the current UI shell stable and continue
 
 **Acceptance:**
 
-- The system can switch a conversation between direct model execution and Codex-backed execution by configuration.
+- While frozen, the system must not switch ordinary conversations to Codex-backed execution by configuration.
 - Codex receives only V3-approved context and tool/action contracts, not unrestricted database/filesystem access.
 - Multi-provider model routing is controlled by gateway profiles, not hard-coded per endpoint.
-- Codex transport choice is explicit and auditable: `exec_schema` for one-shot tasks, `sdk_thread` or `app_server` for continuing conversations, `mcp_server` only if V3 needs to expose Codex as a tool.
+- Codex transport choice remains explicit, auditable, and dormant: `exec_schema` for one-shot tasks, `sdk_thread` or `app_server` for continuing conversations, `mcp_server` only if V3 needs to expose Codex as a tool after the freeze is lifted.
 - Non-native model providers can be attached through a private Responses-compatible shim without giving the shim direct V3 database, queue, filesystem, or tool-execution authority.
 - Runtime inspect can show provider usage, context-budget pressure, tool-output trimming, and liveness-retry decisions without exposing provider keys or raw sensitive payloads.
 - The model can still answer ordinary no-dataset chat when no data is selected.
@@ -620,6 +626,8 @@ The next development thread should keep the current UI shell stable and continue
 
 **Status:** In progress. Frontend startup briefing and scope planner expose static-page/report/media capabilities, controlled continuous-action policy, recommended tool actions, selected/inferred visible-scope rules, quality-first context budget, stale static-page preview/export blockers, compact UI intent/action chips, and a safe AssistantRun progress summary for supply-quality status/counts without leaking raw source locators or model guidance. Backend AssistantRun scope planning now emits the same supply-policy contract, enriches visible dataset candidates from real visible documents/chunks, carries recommended tool actions into context/evidence state, preserves ReAct protocol action names separately, exposes current static-page artifact status/module count/preview stale/final-render state in the weak ReAct planning catalog without leaking module body content, summarizes the currently opened static-page artifact in provider prompts as an operable skeleton of draft id/module ids/titles/layout/data-binding/chart type instead of raw module body/data rows, promotes vague follow-up prompts such as "继续刚才那版改一下" to active static-page draft context when a draft is open while leaving unrelated ordinary chat alone, lets ReAct explicitly recall hidden local-thread conversation memory even when the original ordinary-chat scope had an empty `conversation_memory` array, expands detail-first evidence limits for static-page/report/media scopes, falls back to visible document chunks when selected-scope retrieval evidence has not been generated yet, adds model-facing supply briefs so provider prompts distinguish citable supplied items from detail targets, records a `supply_quality` report with grounded/partial/missing/not-requested status, indexed evidence count, fallback chunk count, citation locators, media context count, and model guidance, aligns retrieval-worker indexing and AssistantRun query scoring on boosted CJK phrase n-grams up to 6 characters so business phrases such as "订单延期风险" and "客户满意度" survive lexical signatures, keeps regression coverage for CJK phrase weighting plus fallback chunk ranking, and guards ordinary chat so visible datasets do not force supply. Retrieval quality still needs deeper validation on larger real customer corpora, but the local lexical baseline is now covered by realistic order/support/FAQ phrase fixtures and supply quality is now explicit for the model and runtime diagnostics.
 
+**Current source-structure slice:** Document detail, retrieval fallback supply, ReAct document-detail reads, static-page draft snapshots, static-page provider input, and current static-page artifact summaries now carry compact `section_title_hints` / `structureSignals` so docs-page planning can preserve source headings without leaking document body text or chart sample rows.
+
 **Files:**
 
 - Modify: `crates/assistant-runtime/src/lib.rs`
@@ -673,7 +681,7 @@ The next development thread should keep the current UI shell stable and continue
 
 **Status:** In progress. This task turns the existing partial media foundation into a real assistant capability for direct video files and publicly resolvable video URLs/pages. Current baseline can parse uploaded/local media evidence, register direct video URLs, resolve simple public HTML video pages, enqueue guarded remote-media ingest, surface parsed video evidence as a safe read-only `video_extraction_summary` HTML artifact, expose shared video extraction request/state/artifact contracts, expose internal media action tool definitions, queue the dedicated video extraction workflow from assistant actions when evidence is missing, includes a thin `media-worker` for media queue stages, exposes a dedicated `video_extraction_workflow` state machine, can emit deterministic source/review artifacts, grouped final-deliverable manifests, plus a basic screenshot-based PPTX after a confirmed keep-list, exposes generated video/PPT artifacts through the persisted HTML artifact shelf with guarded download links, now emits deterministic slide-notes/quality-warning artifacts plus basic PPTX speaker-note parts, maps available transcript segments into a conservative `subtitle_page_map.json`, enriches generated `source_text.md`, `ppt_outline.md`, and `slide_notes.md` with evidence references, quality notes, selection metadata, rectangle/crop metadata, and redacted provider status, emits `video_slides.md` as a redacted final-output Markdown deck that mirrors the selected slide order, source frame names, crop status, and aligned narration, surfaces failed/skipped raw-frame extraction, generated-artifact writer failures, parse-partial evidence, provider failures, low-confidence transcript/OCR evidence, raw-frame-only slide candidates, detector-cropped slide rectangles, full-frame fallback slide rectangles, and selected-slide duplicate removal as structured deliverable warnings, classifies resolver failures as missing source / unsupported source / resolver blocked / unavailable video, maps warning states into completion follow-up next actions, renders structured background-completion follow-up plus warning-specific next-action labels in the video summary artifact, renders a redacted audit summary inside the same safe artifact, includes a status-only user notification intent for completed background extraction that is visible in the safe summary/right shelf, surfaces compact audit warning/provider-failure counts on the right-shelf video card, records a redacted `completion_audit` summary with source-resolution/provider-failure metadata on workflow-completed events, summary payloads, and durable output artifacts, emits a redacted `published_deliverable_manifest.json` that marks complete packages as immutable published version `v1` while preserving `no_host_composed_answer`, emits package-scoped `published_version_history.json` so each generated package carries a portable version history record, promotes complete packages into durable `published_video_ppt_packages` / `published_video_ppt_versions` history records with only redacted artifact pointer metadata, emits `slide_rectangles_manifest.json` so selected keep-list frames have an explicit detector/full-frame crop and dedupe contract inside the public deliverable gate, removes exact duplicate selected frame bytes and conservative visual near-duplicates before rectangle promotion/PPTX generation, can promote obvious JPEG/PNG slide rectangles with `border_background_contrast_v2`, refine dominant slide crops with `foreground_component_v1` when external foreground components would otherwise expand the crop, and can fall back to `edge_projection_v1` when non-uniform backgrounds make border-median contrast unsafe, applies detector crop boxes to generated PPTX slide images through OOXML `a:srcRect`, writes redacted native picture alt text into each PPTX slide so page/candidate/source-frame/timestamp/crop/transcript-count metadata is searchable without exposing local paths, feeds pending `video_extraction_model_completion_turn_request` records into the continue ReAct provider input as a redacted model-owned completion context, emits a durable `assistant_run.model_completion_turn_requested` dispatch request event for background video completion, has a platform-side idempotent consumer that converts those dispatch requests into the normal AssistantRun continue path, registers `assistant_run_model_completion_workflow` plus an `assistant-run-worker` that consumes the queued proactive turn through the same model/provider path, has a non-destructive Linux/deployment-target smoke entrypoint for that worker that passed on the 8-server deployment target at commit `0d5f268`, and now has the 8-server `aiv3-assistant-run-worker.service` systemd service enabled and active against the release binary. Richer editable slide reconstruction from OCR/layout remains pending.
 
-**Temporary freeze:** On 2026-05-15 the operator froze further PPT/video development. Do not continue Task 7A or richer PPTX/OCR reconstruction unless the operator explicitly resumes this track. Continue other mainline work such as third-party integration, external bot readiness, safe HTML artifacts, static-page quality, and model-gateway/Codex executor foundations.
+**Temporary freeze:** On 2026-05-15 the operator froze further PPT/video development. Do not continue Task 7A or richer PPTX/OCR reconstruction unless the operator explicitly resumes this track. Continue other mainline work such as third-party integration, external bot readiness, safe HTML artifacts, static-page quality, parsing/retrieval quality, and ordinary AssistantRun provider quality.
 
 **Capability boundary:**
 
@@ -791,7 +799,7 @@ The next development thread should keep the current UI shell stable and continue
 
 ### Task 8: Codex Host Contract Cleanup
 
-**Status:** Completed in current baseline. Shared request/result contracts live in `contracts`, `codex-host-agent` no longer depends on `platform-api`, dry-run/plan-only remain safe defaults, `codex_exec` is still host/profile gated, task memory space ids are first-class in the queue context, and successful worker outputs now serialize through `CodexHostTaskOutputView` with mode-specific AssistantRun events. Real `codex_exec` now additionally requires `CODEX_HOST_AGENT_TASK_WORKSPACE_ROOT`; the agent creates a task-scoped workspace label from `task_memory_space_id` and runs Codex from that directory instead of the host agent's current working directory.
+**Status:** Completed in current baseline and frozen as of 2026-05-18. Shared request/result contracts live in `contracts`, `codex-host-agent` no longer depends on `platform-api`, dry-run/plan-only remain safe defaults, `codex_exec` is still host/profile gated, task memory space ids are first-class in the queue context, and successful worker outputs now serialize through `CodexHostTaskOutputView` with mode-specific AssistantRun events. Real `codex_exec` now additionally requires `CODEX_HOST_AGENT_TASK_WORKSPACE_ROOT`; the agent creates a task-scoped workspace label from `task_memory_space_id` and runs Codex from that directory instead of the host agent's current working directory. While the Codex substrate is frozen, do not extend this task toward real execution, login/account binding, or promotion work; only fix leakage/accidental-execution bugs if found.
 
 **Files:**
 
@@ -809,7 +817,7 @@ The next development thread should keep the current UI shell stable and continue
 3. Keep dry-run and plan-only as default modes.
 4. Keep real `codex_exec` disabled unless host kind and profile allowlist pass.
 5. Add first-class task memory space id once memory-space storage is ready.
-6. Validate real execution only on jump host or later Mac host.
+6. Historical only while frozen: validate real execution only on jump host or later Mac host after operator reopens the Codex substrate.
 
 **Acceptance:**
 
@@ -824,6 +832,8 @@ The next development thread should keep the current UI shell stable and continue
 **GPT Image 2 integration note:** The image queue sits between planning and final render. It receives the same module/data snapshot and visual spec that the final renderer will later use, then returns an effect image for user confirmation. The confirmed image is a visual reference and a fingerprinted contract, not the source of truth. Final HTML still comes from `StaticPageDraft.modules`, `dataSnapshot`, `visualSpec`, `renderSpec`, and renderer manifests. Safe HTML artifacts show this bridge in planning handoffs so reviewers can see whether the effect image is missing, queued, stale, confirmed, or ready to drive final render.
 
 **Current visual-bridge artifact note:** Backend static-page planning handoff artifacts now include the same GPT Image 2 bridge diagnostics as the local web fallback: image job id/status, queue position/message, preview asset key, previous asset key, draft fingerprint, stale reason, style direction, render model, and final-render status. The safe artifact template renders these diagnostics without exposing queue credentials or treating the effect image as final HTML.
+
+**Current source-structure artifact note:** Static-page planning handoff artifacts now also render a read-only "源结构" section from structured `structureSignals`, including supplied heading clues and docs-page module bindings while keeping Markdown/JSON as source of truth and rejecting raw HTML/script-like payloads through the existing sanitizer.
 
 **Files:**
 
@@ -861,7 +871,7 @@ The next development thread should keep the current UI shell stable and continue
 
 - HTML artifacts are useful for review/report workflows without becoming arbitrary browser apps.
 - Static-page final delivery still uses the deterministic static-page renderer/export package.
-- Codex Host can return a readable execution report without exposing secrets or needing local workstation execution.
+- Existing dry-run/plan-only Codex Host reports can remain readable without exposing secrets or needing local workstation execution; no new real-execution report path is required while frozen.
 - Any user edit from an HTML artifact is converted into V3-validated JSON patch/action intent, never direct DOM/database mutation.
 
 ## Verification Commands
@@ -932,14 +942,14 @@ Use this prompt for the next development thread:
 Continue AI Data Platform V3 from docs/plans/2026-05-07-v3-master-development-plan.md.
 Treat that file as the active master plan; older plans are source references only.
 Keep the current overall UI shell stable. Do not redesign the left dataset rail, top toolbar, home-only composer, right output shelf, static-page entry card, or single `效果图——生成页面` CTA unless fixing a blocking bug.
-Product mainline is static-page generation quality: module editing correctness, data snapshots, ECharts advanced runtime, Cloudflare/Codex preview, durable final render/export, planning quality, parsing quality, retrieval/context quality, and generation quality.
-The model-gateway/Codex conversation executor is now a core architecture track, not a distant sidecar. Build toward routing normal assistant turns through Codex behind feature flags and shadow/dry-run comparison, with V3 supplying context/evidence/tool contracts and validating every requested action.
+Product mainline is static-page generation quality: module editing correctness, data snapshots, ECharts advanced runtime, effect-image preview, durable final render/export, planning quality, parsing quality, retrieval/context quality, and generation quality.
+The Codex substrate is frozen as of 2026-05-18. Do not promote Codex, log the 8 server Codex CLI into the operator GPT account, enable real transports, or route normal assistant/external-bot/third-party chat turns through Codex unless the operator explicitly reopens that track. Keep current Codex executor/Host work as dormant diagnostic/reference infrastructure only.
 Gateway model profiles must support multiple provider APIs such as GPT-family and MiniMax-compatible providers through explicit capability manifests, redacted credentials, and fallback policy.
 Every model-facing turn must receive V3 awareness as additive context: V3 identity, product capabilities, visible permission-scoped datasets/tools, and unavailable evidence state. This must not restrict normal model ability; if V3 has no visible evidence or permission for a topic, the answer should say it is `当前不可见/未供料` and may then continue with clearly labeled general knowledge.
 Treat external/web search as a planned default read-only V3 tool. Do not claim search results unless V3 supplied audited search evidence with source and timestamp metadata.
 Safe HTML artifacts are a shared review/control surface for Codex reports, planning handoffs, and lightweight JSON-patch editors; do not confuse them with final customer static-page delivery.
 Video/PPT extraction is temporarily frozen as of 2026-05-15 unless the operator explicitly resumes it. Do not continue richer PPTX/OCR reconstruction or related media work while frozen.
 Do not resume account expansion unless fixing a security/access regression.
-Do not run real Codex execution on the local developer workstation; Codex real validation is only for the jump host or later Mac host.
-Continue with backend/static-page quality work while also starting Task 0A model-gateway/Codex executor foundation without changing the visible static-page workflow.
+Do not run or validate real Codex execution while the Codex substrate is frozen; earlier jump-host/Mac-host validation notes are historical reference.
+Continue with backend/static-page quality, parsing/retrieval quality, ordinary AssistantRun provider quality, and V3 awareness/tool-supply work without changing the visible static-page workflow.
 ```

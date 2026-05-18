@@ -1432,7 +1432,8 @@ textarea {
 .static-page-planning-summary div,
 .static-page-model-summary,
 .static-page-intent-card,
-.static-page-planning-hint {
+.static-page-planning-hint,
+.static-page-template-reference {
   display: grid;
   gap: 5px;
   padding: 12px;
@@ -1444,15 +1445,167 @@ textarea {
 .static-page-planning-summary span,
 .static-page-model-summary span,
 .static-page-intent-card span,
-.static-page-planning-hint span {
+.static-page-planning-hint span,
+.static-page-template-reference span {
   color: var(--subtle);
   font-size: 12px;
   font-weight: 800;
 }
 
 .static-page-planning-summary strong,
-.static-page-planning-hint strong {
+.static-page-planning-hint strong,
+.static-page-template-reference strong {
   color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.static-page-template-reference {
+  gap: 12px;
+  border-color: rgba(14, 165, 233, 0.18);
+  background:
+    linear-gradient(135deg, rgba(14, 165, 233, 0.08), rgba(20, 184, 166, 0.07)),
+    rgba(248, 251, 255, 0.92);
+}
+
+.static-page-template-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.static-page-template-head div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.static-page-template-head em {
+  flex: none;
+  max-width: 150px;
+  padding: 5px 8px;
+  border-radius: 999px;
+  color: #0369a1;
+  background: rgba(14, 165, 233, 0.12);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 900;
+  overflow-wrap: anywhere;
+}
+
+.static-page-template-intent {
+  margin: 0;
+  color: var(--text);
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.static-page-template-meta {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 8px;
+}
+
+.static-page-template-meta div,
+.static-page-structure-signals,
+.static-page-missing-evidence,
+.static-page-missing-item {
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  border-radius: 14px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  background: rgba(255, 255, 255, 0.62);
+}
+
+.static-page-template-meta div.wide {
+  grid-column: 1 / -1;
+}
+
+.static-page-template-hints {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.static-page-template-hints span {
+  padding: 6px 8px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.06);
+  color: var(--muted);
+}
+
+.static-page-structure-signals {
+  gap: 9px;
+  border-color: rgba(20, 184, 166, 0.18);
+}
+
+.static-page-structure-signals.ready {
+  background: rgba(240, 253, 250, 0.76);
+}
+
+.static-page-structure-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.static-page-structure-hints,
+.static-page-structure-modules {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.static-page-structure-hints span,
+.static-page-structure-modules em {
+  padding: 6px 8px;
+  border-radius: 999px;
+  overflow-wrap: anywhere;
+}
+
+.static-page-structure-hints span {
+  background: rgba(20, 184, 166, 0.11);
+  color: #0f766e;
+}
+
+.static-page-structure-modules em {
+  background: rgba(15, 23, 42, 0.05);
+  color: var(--muted);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 800;
+}
+
+.static-page-missing-evidence {
+  background: rgba(255, 255, 255, 0.7);
+}
+
+.static-page-missing-evidence.attention {
+  border-color: rgba(245, 158, 11, 0.28);
+  background: rgba(255, 251, 235, 0.84);
+}
+
+.static-page-missing-evidence.ready {
+  border-color: rgba(22, 163, 74, 0.22);
+  background: rgba(240, 253, 244, 0.82);
+}
+
+.static-page-missing-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.static-page-missing-list {
+  display: grid;
+  gap: 8px;
+}
+
+.static-page-missing-item p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.45;
   overflow-wrap: anywhere;
 }
 
@@ -3411,6 +3564,11 @@ body {
 .assistant-shell .static-page-effect-preview,
 .assistant-shell .static-page-final-render,
 .assistant-shell .static-page-planning-hint,
+.assistant-shell .static-page-template-reference,
+.assistant-shell .static-page-template-meta div,
+.assistant-shell .static-page-structure-signals,
+.assistant-shell .static-page-missing-evidence,
+.assistant-shell .static-page-missing-item,
 .assistant-shell .static-page-canvas-shell,
 .assistant-shell .static-page-chart-preview {
   background: rgba(255, 255, 255, 0.045);
@@ -3424,6 +3582,7 @@ body {
 .assistant-shell .static-page-model-summary p,
 .assistant-shell .static-page-style-picker-head strong,
 .assistant-shell .static-page-style-option strong,
+.assistant-shell .static-page-template-reference strong,
 .assistant-shell .static-page-effect-head strong,
 .assistant-shell .static-page-queue-card strong,
 .assistant-shell .static-page-failure-card strong,
@@ -3441,6 +3600,7 @@ body {
 .assistant-shell .static-page-planning-summary span,
 .assistant-shell .static-page-model-summary span,
 .assistant-shell .static-page-planning-hint span,
+.assistant-shell .static-page-template-reference span,
 .assistant-shell .static-page-intent-card span,
 .assistant-shell .static-page-style-picker-head span,
 .assistant-shell .static-page-style-option span,
@@ -3456,6 +3616,23 @@ body {
 .assistant-shell .static-page-chart-preview-head span,
 .assistant-shell .static-page-chart-preview.empty span {
   color: #9aa7b9;
+}
+
+.assistant-shell .static-page-template-intent,
+.assistant-shell .static-page-missing-item p {
+  color: #cbd5e1;
+}
+
+.assistant-shell .static-page-template-head em,
+.assistant-shell .static-page-template-hints span,
+.assistant-shell .static-page-structure-hints span {
+  color: #bae6fd;
+  background: rgba(14, 165, 233, 0.14);
+}
+
+.assistant-shell .static-page-structure-modules em {
+  color: #cbd5e1;
+  background: rgba(255, 255, 255, 0.06);
 }
 
 .assistant-shell .static-page-style-option {
@@ -4995,6 +5172,11 @@ body {
   .static-page-mobile-preview,
   .static-page-mobile-model-summary,
   .static-page-mobile-intent,
+.static-page-mobile-builder .static-page-template-reference,
+.static-page-mobile-builder .static-page-template-meta div,
+.static-page-mobile-builder .static-page-structure-signals,
+.static-page-mobile-builder .static-page-missing-evidence,
+.static-page-mobile-builder .static-page-missing-item,
 .static-page-mobile-section-title,
 .static-page-mobile-empty,
 .static-page-mobile-module {
@@ -5016,6 +5198,7 @@ body {
 
 .static-page-mobile-preview span,
 .static-page-mobile-model-summary span,
+.static-page-mobile-builder .static-page-template-reference span,
 .static-page-mobile-section-title span,
 .static-page-mobile-intent label {
   color: #93c5fd;
@@ -5024,6 +5207,7 @@ body {
 }
 
 .static-page-mobile-preview strong,
+.static-page-mobile-builder .static-page-template-reference strong,
 .static-page-mobile-section-title strong,
 .static-page-mobile-empty strong {
   color: #f8fbff;
@@ -5031,10 +5215,24 @@ body {
 
 .static-page-mobile-preview p,
 .static-page-mobile-model-summary p,
+.static-page-mobile-builder .static-page-template-intent,
+.static-page-mobile-builder .static-page-missing-item p,
 .static-page-mobile-empty p {
   margin: 0;
   color: #9aa7b9;
   line-height: 1.65;
+}
+
+.static-page-mobile-builder .static-page-template-head em,
+.static-page-mobile-builder .static-page-template-hints span,
+.static-page-mobile-builder .static-page-structure-hints span {
+  color: #bae6fd;
+  background: rgba(14, 165, 233, 0.14);
+}
+
+.static-page-mobile-builder .static-page-structure-modules em {
+  color: #cbd5e1;
+  background: rgba(255, 255, 255, 0.06);
 }
 
 .static-page-mobile-preview-bars {

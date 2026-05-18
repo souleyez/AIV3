@@ -4,9 +4,9 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Consolidate the V3 assistant, static-page generation, document/media parsing, report outputs, separated memory, Codex Host execution-kernel direction, and optional OpenClaw extension into one execution plan that a fresh development thread can continue from without re-reading the whole project history.
+**Goal:** Consolidate the V3 assistant, static-page generation, document/media parsing, report outputs, separated memory, historical Codex Host substrate direction, and optional OpenClaw extension into one reference plan that a fresh development thread can use without re-reading the whole project history. The active plan is now `docs/plans/2026-05-07-v3-master-development-plan.md`.
 
-**Architecture:** V3 remains a host-controlled data platform: PostgreSQL is the source of truth, the assistant supplies model context rather than composing answers locally, and all data visibility, AssistantRun state, memory-space policy, draft state, queue state, and output artifacts are owned by V3. Static-page generation remains the core product loop. Codex Mac Host is now the preferred execution-kernel direction behind V3 validation and audit. OpenClaw has completed its first optional provider/stub pass and stays as a removable sidecar, not the main execution route.
+**Architecture:** V3 remains a host-controlled data platform: PostgreSQL is the source of truth, the assistant supplies model context rather than composing answers locally, and all data visibility, AssistantRun state, memory-space policy, draft state, queue state, and output artifacts are owned by V3. Static-page generation remains the core product loop. As of 2026-05-18 the Codex substrate / Mac Host execution-kernel direction is frozen and kept as historical reference only. OpenClaw has completed its first optional provider/stub pass and stays as a removable sidecar, not the main execution route.
 
 **Tech Stack:** Next.js 16 / React 19 in `apps/web`; `react-grid-layout` plus `@dnd-kit` for static-page module layout/reordering; Apache ECharts as the planned advanced chart runtime while deterministic HTML/SVG rendering remains the export-safe fallback; Rust crates including `platform-api`, `llm-gateway`, `static-page-runtime`, `static-page-worker`, `static-page-renderer`, `ingest-worker`, `retrieval-worker`, `memory-worker`, `document-vlm-runtime`; PostgreSQL 17.9 target; Cloudflare/Codex image queue endpoint; optional OpenClaw Gateway `/v1/responses` and `/v1/chat/completions`; local-first parsers plus configured MiniMax VLM/media capability probes.
 
@@ -14,16 +14,16 @@
 
 ## Source Plans
 
-Use this document as the active execution entry point.
+Use the 2026-05-07 master plan as the active execution entry point. This document is a historical source reference.
 
 Detailed source documents remain valid as references:
 
 - `docs/plans/2026-04-27-static-page-generation-studio-plan.md`: detailed static-page, assistant shell, ingestion, visibility, AssistantRun, and renderer plan/history.
 - `docs/plans/2026-04-29-openclaw-extension-adapter-plan.md`: detailed optional OpenClaw adapter plan.
 - `docs/plans/2026-04-29-v3-react-agent-refinement-plan.md`: detailed ReAct refinement plan comparing the Java reference, the original TS contract, and current V3 AssistantRun implementation.
-- `docs/plans/2026-05-03-codex-kernel-separated-memory-plan.md`: active plan for Codex Mac Host as future execution kernel and first-class separated memory spaces.
+- `docs/plans/2026-05-03-codex-kernel-separated-memory-plan.md`: historical plan for Codex Mac Host as future execution kernel and first-class separated memory spaces; frozen as of 2026-05-18 unless explicitly resumed.
 - `docs/plans/2026-05-03-codex-gateway-model-proxy-plan.md`: detailed boundary plan for Codex host integration versus V3-owned model gateway/proxy.
-- `docs/plans/2026-05-07-v3-codex-host-architecture-alignment-plan.md`: active architecture boundary plan aligning V3's original control/integration/workflow/worker planes with Codex Host and future model proxy.
+- `docs/plans/2026-05-07-v3-codex-host-architecture-alignment-plan.md`: frozen architecture boundary plan aligning V3's original control/integration/workflow/worker planes with Codex Host and future model proxy.
 - `docs/plans/2026-05-07-v3-email-account-auth-plan.md`: account/email authentication plan that upgrades local-key visibility into email-bound user ownership and verification-code login.
 - `docs/plans/2026-04-23-v3-development-plan.md`: older high-level V3 phase baseline.
 - `docs/plans/2026-04-25-static-page-visual-workbench-v3-plan.md`: older visual-workbench plan; keep only as Cloudflare image-provider and visual-contract reference. Do not revive the separate popup/workbench direction unless explicitly requested.
@@ -93,13 +93,14 @@ OpenClaw work has already completed a useful first optional-extension version:
 - AssistantRun and static-page runtime can route through OpenClaw provider configuration.
 - ReAct has gated OpenClaw memory/readonly execution stubs.
 
-This is now considered enough for the OpenClaw line unless a specific compatibility bug appears. The main execution-kernel route should move to Codex Mac Host:
+This is now considered enough for the OpenClaw line unless a specific compatibility bug appears. The previously proposed Codex Mac Host execution-kernel route is frozen as of 2026-05-18:
 
 ```text
+Historical only while frozen:
 V3 Web/API -> AssistantRun/ReAct -> V3 memory-space policy -> Workflow/task audit -> Codex Mac Host -> artifacts/logs back to V3
 ```
 
-The separated memory plan is now the next architecture foundation before any real Codex host daemon:
+The separated memory plan remains useful as a permission/scope reference, but it is not a prerequisite for real Codex host daemon work while the Codex substrate is frozen:
 
 - Default browser conversations get isolated conversation memory spaces.
 - Project memory is explicit and selected, not inferred silently.
@@ -227,19 +228,19 @@ Next outcomes:
 
 ### Workstream C: Codex Host Kernel And Separated Memory
 
-Priority: high and foundational.
+Priority: frozen as of 2026-05-18; historical architecture reference only unless the operator explicitly resumes it.
 
-Goal: make V3 safe for Codex-as-execution-kernel by separating memory and routing host tasks through V3-owned ReAct/tool policy.
+Goal: preserve the existing Codex Host/kernel design record without advancing it into production routing. V3's active answer path remains provider/model-gateway routing; Codex Host is dormant diagnostic/reference infrastructure while frozen.
 
-Next outcomes:
+Frozen record / resume-only outcomes:
 
 - `conversation`, `project`, `task`, `dataset`, and `system` memory spaces exist as first-class V3 concepts.
 - AssistantRun stores the active memory space and never recalls unrelated thread/project memory implicitly.
 - ReAct can select, recall, and write memory only through V3 validation.
-- Codex Host task actions are disabled by default, allowlisted, audited, and routed through a dedicated queue before any real host execution.
+- Codex Host task actions remain disabled by default, allowlisted, audited, and routed through a dedicated queue before any real host execution if the track is resumed.
 - Runtime inspect shows memory-space decisions, recalled counts, denied counts, and Codex task context summaries.
 
-Current Codex Host status: the V3 queue bridge, dry-run worker, and plan-only command policy are implemented; first-class task memory spaces, shared Codex Host contracts, dependency decoupling from `platform-api`, and real jump-host/Mac-host Codex execution are still pending.
+Current Codex Host status: the V3 queue bridge, dry-run worker, and plan-only command policy are implemented. The 8 server has Codex CLI installed but not logged in, online AssistantRun remains on the MiniMax/provider path, and real Codex execution/promotion is frozen. Do not continue account login, real transport, or ordinary-chat routing work unless the operator reopens the track.
 
 Detailed plans: `docs/plans/2026-05-07-v3-codex-host-architecture-alignment-plan.md`, `docs/plans/2026-05-03-codex-kernel-separated-memory-plan.md`, and `docs/plans/2026-05-03-codex-gateway-model-proxy-plan.md`.
 
@@ -761,16 +762,16 @@ The domain/workflow contracts now include `static_page_render_workflow` and rend
 
 ## Immediate Next Thread Instruction
 
-Current 2026-05-07 transition note: OpenClaw provider/stub work has completed its optional first pass, and the main execution-kernel direction is now Codex Mac Host plus separated memory. The Codex Host ReAct action, workflow queue, and dry-run worker exist. A fresh thread continuing Codex Host should first read `docs/plans/2026-05-07-v3-codex-host-architecture-alignment-plan.md`, then continue the shared-contract and dependency-decoupling tasks before real execution. Real Codex execution validation must happen only on `windows-jump` or the later Mac host.
+Current 2026-05-18 transition note: OpenClaw provider/stub work has completed its optional first pass, and the Codex substrate direction is frozen. The Codex Host ReAct action, workflow queue, and dry-run/plan-only worker exist as dormant reference infrastructure. A fresh thread should continue the active master plan's provider-routing, retrieval/context, and static-page quality work instead of Codex promotion. Real Codex execution validation, account login, and ordinary-chat routing through Codex must not continue unless the operator explicitly resumes the track.
 
 Recommended next prompt:
 
 ```text
 Continue AI Data Platform V3 from docs/plans/2026-05-07-v3-codex-host-architecture-alignment-plan.md.
 OpenClaw provider/stubs already completed their optional first pass; do not continue OpenClaw as the main execution kernel.
-Codex Host queue/dry-run/plan-only bridge is implemented; continue by linking the architecture plan, auditing crate boundaries, moving Codex Host payloads into shared contracts, and reducing codex-host-agent -> platform-api coupling before real execution.
-Keep V3 as the control plane, llm-gateway as the model-provider seed, and Codex Host as an external execution worker. Browser/API traffic must still go only through V3.
-Do not run local-machine Codex from the developer workstation.
+Codex Host queue/dry-run/plan-only bridge is implemented, but the Codex substrate is frozen as of 2026-05-18. Do not promote Codex, log the 8 server Codex CLI into the operator GPT account, enable real transports, or route ordinary AssistantRun/external-bot/third-party chat through Codex.
+Keep V3 as the control plane and llm-gateway/provider routing as the active answer path. Browser/API traffic must still go only through V3.
+Do not run or validate real Codex execution while frozen.
 Use separated memory rules: conversation/project/task/dataset/system memory must not leak across scopes.
 ```
 

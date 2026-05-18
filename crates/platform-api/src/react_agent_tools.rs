@@ -2,11 +2,11 @@ use axum::Json;
 use chrono::Utc;
 use contracts::{
     CodexHostTaskMemoryPolicyView, CodexHostTaskRequestView, CodexHostTaskSafetyPolicyView,
-    CreateStaticPageImageJobRequest, CreateStaticPageRenderRequest, HtmlArtifactDataRefView,
-    HtmlArtifactInteractionModeView, HtmlArtifactManifestView, HtmlArtifactOwnerScopeView,
-    HtmlArtifactProvenanceView, HtmlArtifactSourceTypeView, HtmlArtifactTemplateIdView,
-    VideoExtractionArtifactKindView, VideoExtractionRequestView, VideoExtractionSourceKindView,
-    VideoExtractionSourceRefView,
+    CreateStaticPageDraftRequest, CreateStaticPageImageJobRequest, CreateStaticPageRenderRequest,
+    HtmlArtifactDataRefView, HtmlArtifactInteractionModeView, HtmlArtifactManifestView,
+    HtmlArtifactOwnerScopeView, HtmlArtifactProvenanceView, HtmlArtifactSourceTypeView,
+    HtmlArtifactTemplateIdView, VideoExtractionArtifactKindView, VideoExtractionRequestView,
+    VideoExtractionSourceKindView, VideoExtractionSourceRefView,
 };
 use domain_model::{
     AssistantRunId, Document, DocumentChunk, DocumentId, SecretBindingId, StaticPageDraftId,
@@ -22,8 +22,9 @@ use crate::{
     append_static_page_draft_run_event, append_static_page_operations_metadata,
     apply_static_page_operations_to_payload, build_assistant_run_evidence_state,
     build_initial_upload_ingest_event, build_initial_upload_ingest_execution,
-    ensure_react_requested_dataset_is_selected, ensure_scope_requests_conversation_memory,
-    html_artifact_safe_summary_text, load_visible_dataset_for_user, load_visible_document_for_user,
+    create_static_page_draft_for_assistant_run_id, ensure_react_requested_dataset_is_selected,
+    ensure_scope_requests_conversation_memory, html_artifact_safe_summary_text,
+    load_visible_dataset_for_user, load_visible_document_for_user,
     react_static_page_operations_from_arguments, status_from_static_page_operations,
     status_from_static_page_payload, summarize_static_page_operations,
     to_document_media_detail_view, ApiError, AppState,
@@ -184,6 +185,17 @@ pub(crate) async fn execute_assistant_run_react_action(
         }
         AssistantRunReactActionType::CodexHostTask => {
             codex_host_task_result(state, action, active_assistant_run_id, local_thread_id).await
+        }
+        AssistantRunReactActionType::CreateStaticPageDraft => {
+            create_static_page_draft_from_react_action(
+                state,
+                action,
+                selected_scope,
+                active_assistant_run_id,
+                prompt,
+                current_user_id,
+            )
+            .await
         }
         AssistantRunReactActionType::UpdateStaticPageModule => {
             let operations = react_static_page_operations_from_arguments(&action.arguments)?;
@@ -348,6 +360,144 @@ pub(crate) fn assistant_run_react_policy_observation(
         }),
         final_answer: None,
     }
+}
+
+async fn create_static_page_draft_from_react_action(
+    state: &AppState,
+    action: &AssistantRunNextAction,
+    selected_scope: &Value,
+    active_assistant_run_id: Option<AssistantRunId>,
+    prompt: &str,
+    current_user_id: Option<UserId>,
+) -> std::result::Result<AssistantRunReactToolResult, ApiError> {
+    let Some(active_assistant_run_id) = active_assistant_run_id else {
+        return Ok(rejected_react_tool_result(
+            action,
+            "active_assistant_run_required",
+        ));
+    };
+
+    let title = react_argument_string(&action.arguments, &["title"]);
+    let action_prompt = react_argument_string(&action.arguments, &["prompt", "objective"])
+        .unwrap_or_else(|| prompt.trim().to_string());
+    let template_reference_id = react_argument_string(
+        &action.arguments,
+        &[
+            "template_reference_id",
+            "templateReferenceId",
+            "template_id",
+            "templateId",
+        ],
+    );
+    let draft_payload = action
+        .arguments
+        .get("draft_payload")
+        .or_else(|| action.arguments.get("draftPayload"))
+        .cloned()
+        .unwrap_or(Value::Null);
+    let source_refs = action
+        .arguments
+        .get("source_refs")
+        .or_else(|| action.arguments.get("sourceRefs"))
+        .cloned()
+        .unwrap_or_else(|| {
+            json!({
+                "source": "assistant_run_react",
+                "react_action": action.action_type.as_str(),
+            })
+        });
+    let outcome = create_static_page_draft_for_assistant_run_id(
+        state,
+        active_assistant_run_id,
+        current_user_id,
+        CreateStaticPageDraftRequest {
+            title,
+            prompt: Some(action_prompt),
+            template_reference_id,
+            selected_scope: Some(selected_scope.clone()),
+            visibility_snapshot: None,
+            source_refs,
+            draft_payload,
+        },
+    )
+    .await?;
+    append_static_page_draft_run_event(
+        state,
+        &outcome.draft,
+        "static_page_draft.react_created",
+        json!({
+            "draft_id": outcome.draft.id,
+            "status": outcome.draft.status.as_str(),
+            "react_action": action.action_type.as_str(),
+            "template_reference": outcome.template_reference.clone().unwrap_or(Value::Null),
+            "evidence_summary": outcome.evidence_summary.clone(),
+            "missing_evidence": outcome.missing_evidence.clone(),
+        }),
+    )
+    .await?;
+
+    let module_count = outcome
+        .draft
+        .draft_payload
+        .get("modules")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0);
+    let template_reference_id = outcome
+        .template_reference
+        .as_ref()
+        .and_then(|reference| reference.get("templateId"))
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
+
+    Ok(AssistantRunReactToolResult {
+        observation: json!({
+            "status": "completed",
+            "action_type": action.action_type.as_str(),
+            "actionType": action.action_type.as_str(),
+            "message": "static page draft created",
+            "items": [{
+                "type": "static_page_draft",
+                "draft_id": outcome.draft.id.to_string(),
+                "status": outcome.draft.status.as_str(),
+                "module_count": module_count,
+                "template_reference_id": template_reference_id,
+            }],
+            "limits": {},
+            "draft_id": outcome.draft.id.to_string(),
+            "draft_status": outcome.draft.status.as_str(),
+            "module_count": module_count,
+            "template_reference": outcome.template_reference,
+            "evidence_summary": outcome.evidence_summary,
+            "missing_evidence": outcome.missing_evidence,
+            "current_artifact": {
+                "kind": "static_page_draft",
+                "backendDraftId": outcome.draft.id.to_string(),
+            },
+        }),
+        trail_step: json!({
+            "status": "completed",
+            "label": "创建静态页草稿",
+            "react_action": action.action_type.as_str(),
+            "draft_id": outcome.draft.id.to_string(),
+            "draft_status": outcome.draft.status.as_str(),
+            "module_count": module_count,
+            "template_reference_id": template_reference_id,
+            "at": Utc::now(),
+        }),
+        final_answer: None,
+    })
+}
+
+fn react_argument_string(arguments: &Value, keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|key| {
+        arguments
+            .get(*key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+    })
 }
 
 fn static_page_module_operations_sanitized_result(

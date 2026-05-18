@@ -2867,6 +2867,8 @@ pub struct CreateStaticPageDraftRequest {
     pub title: Option<String>,
     #[serde(default)]
     pub prompt: Option<String>,
+    #[serde(default, alias = "templateReferenceId")]
+    pub template_reference_id: Option<String>,
     #[serde(default)]
     pub selected_scope: Option<Value>,
     #[serde(default)]

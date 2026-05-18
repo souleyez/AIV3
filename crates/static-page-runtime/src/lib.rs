@@ -26,6 +26,10 @@ pub struct StaticPageIntentRequest {
     #[serde(default)]
     pub evidence_state: Value,
     #[serde(default)]
+    pub template_reference: Value,
+    #[serde(default)]
+    pub missing_evidence: Value,
+    #[serde(default)]
     pub conversation_memory_refs: Vec<Value>,
     #[serde(default)]
     pub messages: Vec<Value>,
@@ -93,6 +97,7 @@ pub fn interpret_static_page_intent_with_provider(
         .filter(|value| !value.is_empty())
         .unwrap_or("模型已生成静态页修改操作。")
         .to_string();
+    validate_safe_text(&summary, "summary")?;
     let operations = payload
         .get("operations")
         .and_then(Value::as_array)
@@ -192,7 +197,8 @@ fn sanitize_static_page_operation(mut operation: Value) -> Result<Value> {
             }
         }
         "refresh_summary" => {
-            require_non_empty_string(&operation, "modelSummary")?;
+            let summary = require_non_empty_string(&operation, "modelSummary")?;
+            validate_safe_text(summary, "modelSummary")?;
         }
         "update_image_job_status" => {
             require_non_empty_string(&operation, "status")?;
@@ -292,13 +298,13 @@ fn validate_update_module_patch(operation: &Value) -> Result<()> {
     }
 
     if let Some(title) = object.get("title") {
-        validate_optional_string(title, "patch.title")?;
+        validate_safe_optional_string(title, "patch.title")?;
     }
     if let Some(content) = object.get("content") {
-        validate_optional_string(content, "patch.content")?;
+        validate_safe_optional_string(content, "patch.content")?;
     }
     if let Some(data_label) = object.get("dataLabel") {
-        validate_optional_string(data_label, "patch.dataLabel")?;
+        validate_safe_optional_string(data_label, "patch.dataLabel")?;
     }
     if let Some(data_binding) = object.get("dataBinding") {
         validate_data_binding(data_binding)?;
@@ -333,6 +339,22 @@ fn validate_optional_string(value: &Value, field_name: &str) -> Result<()> {
     }
 }
 
+fn validate_safe_optional_string(value: &Value, field_name: &str) -> Result<()> {
+    validate_optional_string(value, field_name)?;
+    if let Some(text) = value.as_str() {
+        validate_safe_text(text, field_name)?;
+    }
+    Ok(())
+}
+
+fn validate_safe_text(value: &str, field_name: &str) -> Result<()> {
+    if static_page_text_string_is_unsafe(value) {
+        Err(anyhow!("{field_name} contains unsafe text"))
+    } else {
+        Ok(())
+    }
+}
+
 fn validate_data_binding(value: &Value) -> Result<()> {
     let Some(object) = value.as_object() else {
         return Err(anyhow!("dataBinding must be an object"));
@@ -354,7 +376,7 @@ fn validate_data_binding(value: &Value) -> Result<()> {
         "aggregation",
     ] {
         if let Some(value) = object.get(key) {
-            validate_optional_string(value, &format!("dataBinding.{key}"))?;
+            validate_safe_optional_string(value, &format!("dataBinding.{key}"))?;
         }
     }
     if let Some(evidence_ids) = object.get("evidenceIds") {
@@ -394,7 +416,7 @@ fn validate_visualization_patch(value: &Value) -> Result<()> {
         }
     }
     if let Some(label) = object.get("label") {
-        validate_optional_string(label, "visualization.label")?;
+        validate_safe_optional_string(label, "visualization.label")?;
     }
     let chart_runtime = object
         .get("chartRuntime")
@@ -449,7 +471,7 @@ fn validate_module_contract(value: &Value) -> Result<()> {
     }
     for key in ["id", "role", "title", "content", "dataLabel"] {
         if let Some(value) = object.get(key) {
-            validate_optional_string(value, &format!("module.{key}"))?;
+            validate_safe_optional_string(value, &format!("module.{key}"))?;
         }
     }
     if let Some(data_binding) = object
@@ -644,6 +666,29 @@ fn chart_string_is_unsafe(value: &str) -> bool {
         || contains_html_like_tag(&lower)
 }
 
+fn static_page_text_string_is_unsafe(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    lower.contains("javascript:")
+        || lower.contains("data:text/html")
+        || lower.contains("@import")
+        || lower.contains("expression(")
+        || lower.contains("onerror=")
+        || lower.contains("onclick=")
+        || lower.contains("onload=")
+        || lower.contains("<script")
+        || lower.contains("</script")
+        || lower.contains("<iframe")
+        || lower.contains("<style")
+        || lower.contains("<link")
+        || lower.contains("<img")
+        || lower.contains("<svg")
+        || lower.contains("<object")
+        || lower.contains("<embed")
+        || lower.contains("<meta")
+        || lower.contains("<base")
+        || lower.contains("<form")
+}
+
 fn contains_html_like_tag(value: &str) -> bool {
     let chars = value.chars().collect::<Vec<_>>();
     let mut index = 0;
@@ -757,21 +802,41 @@ fn contains_unsafe_key(value: &Value) -> bool {
 fn build_provider_input(request: &StaticPageIntentRequest) -> String {
     let binding_quality_summary =
         static_page_provider_binding_quality_summary(&request.draft_payload);
+    let structure_signal_summary =
+        static_page_provider_structure_signal_summary(&request.draft_payload);
+    let template_reference_summary = if request.template_reference.is_null() {
+        static_page_provider_template_reference_summary(&request.draft_payload)
+    } else {
+        static_page_provider_compact_template_reference(&request.template_reference)
+    };
+    let missing_evidence_summary = if request.missing_evidence.is_null() {
+        static_page_provider_missing_evidence_summary(
+            &request.evidence_state,
+            &binding_quality_summary,
+        )
+    } else {
+        static_page_provider_compact_missing_evidence(&request.missing_evidence)
+    };
     json!({
         "instruction": [
             "You are the static page planning runtime.",
-            "Return strict JSON only.",
+            "Return strict JSON only and follow output_contract exactly.",
             "Schema: {\"summary\":\"short Chinese summary\",\"operations\":[StaticPageDraftOperation...]}",
-            "Do not answer the user directly. Do not include markdown fences.",
+            "Do not answer the user directly. Do not include markdown fences or prose outside JSON.",
             "Allowed operation types: update_module, add_module, remove_module, move_module, resize_module, change_visualization, change_data_binding, reorder_modules, change_style_direction, refresh_summary, queue_image_job, update_image_job_status, mark_preview_ready, confirm_preview, reset_image_job, reset_final_render, request_final_render.",
             "For module edits prefer update_module.patch with title, content, dataBinding, visualization, chartRuntime, chartOptions, and layout.",
             "For data binding use dataBinding={type,label,sourceId,fieldPath,aggregation,evidenceIds}. For charts use visualization={type,label,chartRuntime,chartOptions}.",
             "chartRuntime must be deterministic or echarts. Use echarts only for advanced plain-JSON ECharts options; never output functions, HTML, URLs, javascript:, renderItem, or event handler keys.",
+            "If assistant_context.template_reference.status is selected, use it only as style/module recipe guidance. Never copy or generate raw HTML from a template reference.",
+            "Respect template providerPolicy.forbiddenOutput. Never output raw_html, remote scripts, remote CSS, provider secrets, queue credentials, or private paths.",
             "Prefer fieldPath values from draft_payload.dataSnapshot.field_candidates or draft_payload.data_snapshot.field_candidates when they exist.",
+            "When assistant_context.structure_signals.sectionTitleHints exists, use those values as source structure clues for docs-page modules; preserve them as supplied headings and never invent headings.",
             "Read assistant_context.static_page_binding_quality before changing dataBinding or chart type.",
-            "Do not treat a matched field candidate as renderable chart data. If chartDataFit is needs_sample_rows or missing_binding, add/suggest module sample rows, switch to a non-chart visualization, or keep the module pending; do not queue image/final render unless the user explicitly accepts partial data.",
+            "Do not treat a matched field candidate as renderable chart data. If chartDataFit is needs_sample_rows or missing_binding, add/suggest module sample rows only from visible evidence, switch to a non-chart visualization, or keep the module pending; do not queue image/final render unless the user explicitly accepts partial data.",
+            "If assistant_context.missing_evidence.status is needs_evidence, keep the gap visible in module content or dataBinding and avoid request_final_render unless the user explicitly asks for a partial draft.",
             "Use only visible selected_scope and supplied evidence. Never invent private data."
         ],
+        "output_contract": static_page_provider_output_contract(),
         "prompt": request.prompt,
         "draft_payload": request.draft_payload,
         "assistant_context": {
@@ -779,12 +844,216 @@ fn build_provider_input(request: &StaticPageIntentRequest) -> String {
             "startup_briefing": request.startup_briefing,
             "selected_scope": request.selected_scope,
             "evidence_state": request.evidence_state,
+            "template_reference": template_reference_summary,
+            "missing_evidence": missing_evidence_summary,
             "conversation_memory_refs": request.conversation_memory_refs,
             "messages": request.messages,
+            "structure_signals": structure_signal_summary,
             "static_page_binding_quality": binding_quality_summary,
         }
     })
     .to_string()
+}
+
+fn static_page_provider_output_contract() -> Value {
+    json!({
+        "response": "strict_json_object",
+        "required_top_level_keys": ["summary", "operations"],
+        "summary": {
+            "type": "string",
+            "language": "zh-CN",
+            "max_chars": 120,
+        },
+        "operations": {
+            "type": "array",
+            "max_items": MAX_OPERATION_COUNT,
+            "allowed_types": [
+                "update_module",
+                "add_module",
+                "remove_module",
+                "move_module",
+                "resize_module",
+                "change_visualization",
+                "change_data_binding",
+                "reorder_modules",
+                "change_style_direction",
+                "refresh_summary",
+                "queue_image_job",
+                "update_image_job_status",
+                "mark_preview_ready",
+                "confirm_preview",
+                "reset_image_job",
+                "reset_final_render",
+                "request_final_render"
+            ],
+        },
+        "forbidden": [
+            "raw HTML or HTML-like tags in title/content/summary",
+            "remote scripts or CSS",
+            "javascript: URLs",
+            "provider tokens, queue credentials, private local paths",
+            "unverified numbers or hidden evidence claims"
+        ],
+    })
+}
+
+fn static_page_provider_template_reference_summary(draft_payload: &Value) -> Value {
+    draft_payload
+        .get("designReferences")
+        .or_else(|| draft_payload.get("design_references"))
+        .and_then(first_template_reference)
+        .or_else(|| {
+            draft_payload
+                .get("source")
+                .and_then(|source| {
+                    source
+                        .get("templateReferences")
+                        .or_else(|| source.get("template_references"))
+                })
+                .and_then(first_template_reference)
+        })
+        .map(static_page_provider_compact_template_reference)
+        .or_else(|| {
+            string_field(
+                draft_payload,
+                &["templateReferenceId", "template_reference_id"],
+            )
+            .map(|template_id| {
+                json!({
+                    "status": "id_only",
+                    "templateId": template_id,
+                    "policy": [
+                        "template reference can guide style and module recipe only",
+                        "V3 evidence and permissions remain authoritative"
+                    ],
+                })
+            })
+        })
+        .unwrap_or_else(|| {
+            json!({
+                "status": "none",
+                "policy": [
+                    "No template reference is selected; use V3 draft and evidence only"
+                ],
+            })
+        })
+}
+
+fn first_template_reference(value: &Value) -> Option<&Value> {
+    if value.is_object() {
+        return Some(value);
+    }
+    value
+        .as_array()
+        .and_then(|items| items.iter().find(|item| item.is_object()))
+}
+
+fn static_page_provider_compact_template_reference(reference: &Value) -> Value {
+    let provider_policy = reference
+        .get("providerPolicy")
+        .or_else(|| reference.get("provider_policy"))
+        .unwrap_or(&Value::Null);
+    json!({
+        "status": string_field(reference, &["status"]).unwrap_or_else(|| "selected".to_string()),
+        "source": string_field(reference, &["source"]),
+        "sourceKind": string_field(reference, &["sourceKind", "source_kind"]),
+        "templateId": string_field(reference, &["templateId", "template_id", "id"]),
+        "label": string_field(reference, &["label", "name"]),
+        "importPolicy": string_field(reference, &["importPolicy", "import_policy"]),
+        "styleDirection": string_field(reference, &["styleDirection", "style_direction"]),
+        "aspectHint": string_field(reference, &["aspectHint", "aspect_hint"]),
+        "designIntent": string_field(reference, &["designIntent", "design_intent"]),
+        "promptHints": string_array_field(reference, &["promptHints", "prompt_hints"], 8),
+        "guardrails": string_array_field(reference, &["guardrails"], 8),
+        "providerPolicy": {
+            "providerOutput": string_field(provider_policy, &["providerOutput", "provider_output"]),
+            "forbiddenOutput": string_array_field(provider_policy, &["forbiddenOutput", "forbidden_output"], 12),
+        },
+        "policy": [
+            "template reference controls style and module recipe only",
+            "V3 model routing, permissions, datasets, evidence, and artifacts remain authoritative",
+            "provider output must be structured StaticPageDraft operations, never raw final HTML"
+        ],
+    })
+}
+
+fn static_page_provider_missing_evidence_summary(
+    evidence_state: &Value,
+    binding_quality_summary: &Value,
+) -> Value {
+    let status = evidence_state
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let supplied_count = number_field(evidence_state, &["supplied_count", "suppliedCount"])
+        .and_then(|value| value.as_f64())
+        .or_else(|| array_len_as_f64(evidence_state, &["items", "evidence", "supplied"]));
+    let attention_modules = binding_quality_summary
+        .get("attentionModules")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let mut items = Vec::new();
+    if matches!(status, "not_requested" | "missing" | "empty" | "unknown")
+        || supplied_count == Some(0.0)
+    {
+        items.push(json!({
+            "code": "visible_evidence_required",
+            "message": "No visible evidence was supplied to the static-page planner.",
+            "recommendedAction": "retrieve_evidence",
+        }));
+    }
+    if attention_modules > 0 {
+        items.push(json!({
+            "code": "chart_binding_attention_required",
+            "message": "One or more chart/data modules still need sample rows, stronger binding, or a non-chart fallback.",
+            "recommendedAction": "update_static_page_module",
+            "moduleCount": attention_modules,
+        }));
+    }
+    json!({
+        "status": if items.is_empty() { "ready" } else { "needs_evidence" },
+        "items": items,
+        "policy": [
+            "Do not hide missing evidence in template-assisted output",
+            "Do not request final render while blocking evidence gaps remain unless the user accepts a partial draft"
+        ],
+    })
+}
+
+fn static_page_provider_compact_missing_evidence(value: &Value) -> Value {
+    let Some(object) = value.as_object() else {
+        return json!({
+            "status": "unknown",
+            "items": [],
+        });
+    };
+    let items = object
+        .get("items")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .take(8)
+                .map(|item| {
+                    json!({
+                        "code": string_field(item, &["code"]),
+                        "message": string_field(item, &["message"]),
+                        "recommendedAction": string_field(item, &["recommendedAction", "recommended_action"]),
+                        "detailTargetCount": number_field(item, &["detailTargetCount", "detail_target_count"]),
+                        "moduleCount": number_field(item, &["moduleCount", "module_count"]),
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    json!({
+        "status": string_field(value, &["status"]).unwrap_or_else(|| "unknown".to_string()),
+        "items": items,
+        "policy": [
+            "Do not hide missing evidence in template-assisted output",
+            "Do not request final render while blocking evidence gaps remain unless the user accepts a partial draft"
+        ],
+    })
 }
 
 fn static_page_provider_binding_quality_summary(draft_payload: &Value) -> Value {
@@ -835,6 +1104,152 @@ fn static_page_provider_binding_quality_summary(draft_payload: &Value) -> Value 
             "needs_sample_rows or missing_binding chart modules must receive sample rows, change visualization, or stay pending before preview/final render."
         ],
     })
+}
+
+fn static_page_provider_structure_signal_summary(draft_payload: &Value) -> Value {
+    const FIELD_LIMIT: usize = 4;
+    const MODULE_LIMIT: usize = 8;
+    const HINT_LIMIT: usize = 12;
+
+    let Some(snapshot) = draft_payload
+        .get("dataSnapshot")
+        .or_else(|| draft_payload.get("data_snapshot"))
+    else {
+        return static_page_provider_empty_structure_signal_summary();
+    };
+
+    let mut section_title_hints = Vec::new();
+    let field_candidates = snapshot
+        .get("fieldCandidates")
+        .or_else(|| snapshot.get("field_candidates"))
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter(|candidate| {
+                    static_page_provider_field_path(candidate)
+                        == Some("retrieval.section_title_hints")
+                })
+                .take(FIELD_LIMIT)
+                .map(|candidate| {
+                    let hints = static_page_provider_section_title_hints(candidate, HINT_LIMIT);
+                    for hint in &hints {
+                        push_limited_string(&mut section_title_hints, hint, HINT_LIMIT);
+                    }
+                    json!({
+                        "sourceId": string_field(candidate, &["sourceId", "source_id"]),
+                        "fieldPath": static_page_provider_field_path(candidate),
+                        "label": string_field(candidate, &["label"]),
+                        "kind": string_field(candidate, &["kind"]),
+                        "confidence": number_field(candidate, &["confidence"]),
+                        "evidenceIds": candidate
+                            .get("evidenceIds")
+                            .or_else(|| candidate.get("evidence_ids"))
+                            .cloned()
+                            .unwrap_or(Value::Null),
+                        "sectionTitleHints": hints,
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    let bound_modules = snapshot
+        .get("moduleBindings")
+        .or_else(|| snapshot.get("module_bindings"))
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|module| {
+                    let binding = module
+                        .get("binding")
+                        .or_else(|| module.get("dataBinding"))
+                        .or_else(|| module.get("data_binding"))
+                        .unwrap_or(&Value::Null);
+                    let binding_quality = module
+                        .get("bindingQuality")
+                        .or_else(|| module.get("binding_quality"))
+                        .unwrap_or(&Value::Null);
+                    let matched_candidate = binding_quality
+                        .get("matchedFieldCandidate")
+                        .or_else(|| binding_quality.get("matched_field_candidate"))
+                        .unwrap_or(&Value::Null);
+                    let field_path = static_page_provider_field_path(binding)
+                        .or_else(|| static_page_provider_field_path(binding_quality))
+                        .or_else(|| static_page_provider_field_path(matched_candidate));
+                    if field_path != Some("retrieval.section_title_hints") {
+                        return None;
+                    }
+                    let hints =
+                        static_page_provider_section_title_hints(matched_candidate, HINT_LIMIT);
+                    for hint in &hints {
+                        push_limited_string(&mut section_title_hints, hint, HINT_LIMIT);
+                    }
+                    Some(json!({
+                        "moduleId": string_field(module, &["moduleId", "module_id"]),
+                        "title": string_field(module, &["title"]),
+                        "fieldPath": field_path,
+                        "bindingQualityStatus": string_field(module, &["bindingQualityStatus", "binding_quality_status"])
+                            .or_else(|| string_field(binding_quality, &["status"])),
+                        "sectionTitleHints": hints,
+                    }))
+                })
+                .take(MODULE_LIMIT)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    json!({
+        "version": 1,
+        "status": if section_title_hints.is_empty() { "none" } else { "available" },
+        "source": "draft_payload.dataSnapshot.field_candidates",
+        "sectionTitleHints": section_title_hints,
+        "fieldCandidates": field_candidates,
+        "boundModules": bound_modules,
+        "policy": [
+            "Section title hints are supplied source structure clues, not invented content.",
+            "Use these hints to organize docs-page structure modules when relevant.",
+            "Do not claim unavailable interface details just because a heading exists."
+        ],
+    })
+}
+
+fn static_page_provider_empty_structure_signal_summary() -> Value {
+    json!({
+        "version": 1,
+        "status": "none",
+        "sectionTitleHints": [],
+        "fieldCandidates": [],
+        "boundModules": [],
+    })
+}
+
+fn static_page_provider_field_path(value: &Value) -> Option<&str> {
+    value
+        .get("fieldPath")
+        .or_else(|| value.get("field_path"))
+        .or_else(|| value.get("field"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+}
+
+fn static_page_provider_section_title_hints(value: &Value, limit: usize) -> Vec<String> {
+    let mut hints = Vec::new();
+    for key in [
+        "sectionTitleHints",
+        "section_title_hints",
+        "sectionTitles",
+        "section_titles",
+        "headingHints",
+        "heading_hints",
+    ] {
+        if let Some(value) = value.get(key) {
+            collect_limited_strings(value, &mut hints, limit);
+        }
+    }
+    hints
 }
 
 fn static_page_provider_module_binding_quality(binding: &Value) -> Value {
@@ -888,6 +1303,58 @@ fn array_len_field(value: &Value, keys: &[&str]) -> Option<Value> {
     keys.iter()
         .find_map(|key| value.get(*key).and_then(Value::as_array).map(Vec::len))
         .map(|len| json!(len))
+}
+
+fn array_len_as_f64(value: &Value, keys: &[&str]) -> Option<f64> {
+    keys.iter()
+        .find_map(|key| value.get(*key).and_then(Value::as_array).map(Vec::len))
+        .map(|len| len as f64)
+}
+
+fn string_array_field(value: &Value, keys: &[&str], limit: usize) -> Value {
+    let items = keys
+        .iter()
+        .find_map(|key| value.get(*key).and_then(Value::as_array))
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|text| !text.is_empty())
+                .take(limit)
+                .map(|text| json!(text))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    Value::Array(items)
+}
+
+fn collect_limited_strings(value: &Value, output: &mut Vec<String>, limit: usize) {
+    if output.len() >= limit {
+        return;
+    }
+    match value {
+        Value::String(text) => push_limited_string(output, text, limit),
+        Value::Array(items) => {
+            for item in items {
+                collect_limited_strings(item, output, limit);
+                if output.len() >= limit {
+                    break;
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn push_limited_string(output: &mut Vec<String>, text: impl AsRef<str>, limit: usize) {
+    if output.len() >= limit {
+        return;
+    }
+    let normalized = text.as_ref().trim().chars().take(80).collect::<String>();
+    if !normalized.is_empty() && !output.iter().any(|existing| existing == &normalized) {
+        output.push(normalized);
+    }
 }
 
 fn parse_provider_payload(output_text: &str) -> Result<Value> {
@@ -1281,6 +1748,128 @@ mod tests {
     }
 
     #[test]
+    fn provider_input_exposes_template_reference_and_missing_evidence_contract() {
+        let mut request = sample_request("继续优化文档页");
+        request.draft_payload = json!({
+            "templateReferenceId": "docs-page",
+            "designReferences": [{
+                "source": "html-anything",
+                "sourceKind": "template_design_reference",
+                "templateId": "docs-page",
+                "label": "技术文档页",
+                "importPolicy": "metadata_and_constraints_only",
+                "styleDirection": "client-delivery",
+                "designIntent": "把文档整理成清晰阅读页。",
+                "promptHints": [
+                    "preserve source headings",
+                    "show unavailable details as missing evidence"
+                ],
+                "guardrails": [
+                    "template reference controls style and module recipe only",
+                    "provider output must become structured draft data"
+                ],
+                "providerPolicy": {
+                    "providerOutput": "structured_static_page_draft_json",
+                    "forbiddenOutput": ["raw_html", "remote_script", "private_path"]
+                }
+            }],
+            "source": {
+                "templateReferences": [{
+                    "templateId": "docs-page"
+                }]
+            },
+            "dataSnapshot": {
+                "field_candidates": [{
+                    "sourceId": "evidence",
+                    "fieldPath": "retrieval.section_title_hints",
+                    "label": "文档段落标题线索",
+                    "kind": "section_titles",
+                    "confidence": 0.78,
+                    "evidenceIds": ["evidence-1"],
+                    "sectionTitleHints": ["接口与数据", "校验与交付"]
+                }],
+                "module_bindings": [{
+                    "moduleId": "interfaces",
+                    "title": "接口与数据",
+                    "binding": {
+                        "sourceId": "evidence",
+                        "fieldPath": "retrieval.section_title_hints"
+                    },
+                    "bindingQuality": {
+                        "status": "confirmed",
+                        "matchedFieldCandidate": {
+                            "fieldPath": "retrieval.section_title_hints",
+                            "sectionTitleHints": ["接口与数据", "校验与交付"]
+                        }
+                    }
+                }]
+            }
+        });
+        request.missing_evidence = json!({
+            "status": "needs_evidence",
+            "items": [{
+                "code": "document_headings_or_detail_required",
+                "message": "需要源文档标题或细读详情。",
+                "recommended_action": "read_document_detail",
+                "detail_target_count": 2
+            }]
+        });
+
+        let input = build_provider_input(&request);
+        let payload = serde_json::from_str::<Value>(&input).expect("input should be JSON");
+        let instructions = payload["instruction"]
+            .as_array()
+            .expect("provider input should include instructions");
+        let output_contract = &payload["output_contract"];
+        let template_reference = &payload["assistant_context"]["template_reference"];
+        let missing_evidence = &payload["assistant_context"]["missing_evidence"];
+        let structure_signals = &payload["assistant_context"]["structure_signals"];
+
+        assert!(instructions.iter().any(|instruction| {
+            instruction
+                .as_str()
+                .is_some_and(|text| text.contains("style/module recipe guidance"))
+        }));
+        assert!(instructions.iter().any(|instruction| {
+            instruction
+                .as_str()
+                .is_some_and(|text| text.contains("forbiddenOutput"))
+        }));
+        assert!(instructions.iter().any(|instruction| {
+            instruction.as_str().is_some_and(|text| {
+                text.contains("structure_signals.sectionTitleHints")
+                    && text.contains("never invent headings")
+            })
+        }));
+        assert_eq!(output_contract["response"], json!("strict_json_object"));
+        assert_eq!(template_reference["status"], json!("selected"));
+        assert_eq!(template_reference["source"], json!("html-anything"));
+        assert_eq!(template_reference["templateId"], json!("docs-page"));
+        assert_eq!(
+            template_reference["providerPolicy"]["forbiddenOutput"][0],
+            json!("raw_html")
+        );
+        assert_eq!(missing_evidence["status"], json!("needs_evidence"));
+        assert_eq!(
+            missing_evidence["items"][0]["recommendedAction"],
+            json!("read_document_detail")
+        );
+        assert_eq!(structure_signals["status"], json!("available"));
+        assert_eq!(
+            structure_signals["sectionTitleHints"][0],
+            json!("接口与数据")
+        );
+        assert_eq!(
+            structure_signals["fieldCandidates"][0]["fieldPath"],
+            json!("retrieval.section_title_hints")
+        );
+        assert_eq!(
+            structure_signals["boundModules"][0]["moduleId"],
+            json!("interfaces")
+        );
+    }
+
+    #[test]
     fn operation_sanitizer_rejects_unknown_and_unsafe_operations() {
         let unknown = sanitize_static_page_operations(vec![json!({"type": "run_shell"})]);
         let unsafe_key = sanitize_static_page_operations(vec![json!({
@@ -1291,6 +1880,24 @@ mod tests {
 
         assert!(unknown.is_err());
         assert!(unsafe_key.is_err());
+    }
+
+    #[test]
+    fn operation_sanitizer_rejects_raw_html_in_text_fields() {
+        let unsafe_content = sanitize_static_page_operations(vec![json!({
+            "type": "update_module",
+            "targetModuleId": "hero",
+            "patch": {
+                "content": "<script>alert(1)</script>"
+            }
+        })]);
+        let unsafe_summary = sanitize_static_page_operations(vec![json!({
+            "type": "refresh_summary",
+            "modelSummary": "下一版加载 javascript:alert(1)"
+        })]);
+
+        assert!(unsafe_content.is_err());
+        assert!(unsafe_summary.is_err());
     }
 
     #[test]

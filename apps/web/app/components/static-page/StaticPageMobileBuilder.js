@@ -1,6 +1,7 @@
 'use client';
 
 import StaticPageMobileModuleList from './StaticPageMobileModuleList';
+import StaticPageTemplateReferencePanel from './StaticPageTemplateReferencePanel';
 
 const STYLE_LABELS = {
   'decision-brief': '高层决策简报',
@@ -53,6 +54,8 @@ export default function StaticPageMobileBuilder({
           ))}
         </div>
       </div>
+
+      <StaticPageTemplateReferencePanel draft={draft} />
 
       <div className="static-page-mobile-section-title">
         <strong>模块顺序</strong>

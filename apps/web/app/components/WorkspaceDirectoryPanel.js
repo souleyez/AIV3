@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { buildDocumentDetailViewModel, chunkSectionHints } from '../lib/document-detail-view';
 import { formatDateTime, formatRelativeTime, formatSnakeCaseLabel, truncateText } from '../lib/formatters';
 
 const PAGE_COPY = {
@@ -253,21 +254,6 @@ function DatasetsPage({
   );
 }
 
-function documentRawTextFromChunks(chunks = []) {
-  return chunks
-    .map((chunk) => String(chunk?.content || '').trim())
-    .filter(Boolean)
-    .join('\n\n');
-}
-
-function chunkSectionHints(chunk) {
-  const hints = chunk?.metadata?.section_title_hints;
-  if (Array.isArray(hints)) {
-    return hints.map((item) => String(item || '').trim()).filter(Boolean);
-  }
-  return [];
-}
-
 function DocumentDetailPage({
   datasets,
   documents,
@@ -280,26 +266,21 @@ function DocumentDetailPage({
   onArchiveDocuments,
   documentActionBusy,
 }) {
-  const chunks = Array.isArray(selectedDocumentDetail?.chunks) ? selectedDocumentDetail.chunks : [];
-  const orderedChunks = [...chunks].sort((left, right) => (left.chunk_index || 0) - (right.chunk_index || 0));
-  const evidences = Array.isArray(selectedDocumentDetail?.retrieval_evidences)
-    ? selectedDocumentDetail.retrieval_evidences
-    : [];
-  const selectedDocument = selectedDocumentDetail?.document
-    || documents.find((document) => document.id === selectedDocumentId)
-    || null;
-  const siblingDocuments = selectedDocument?.dataset_id
-    ? documents.filter((document) => document.dataset_id === selectedDocument.dataset_id)
-    : documents;
-  const currentIndex = siblingDocuments.findIndex((document) => document.id === selectedDocument?.id);
-  const previousDocument = currentIndex > 0 ? siblingDocuments[currentIndex - 1] : null;
-  const nextDocument = currentIndex >= 0 && currentIndex < siblingDocuments.length - 1
-    ? siblingDocuments[currentIndex + 1]
-    : null;
+  const {
+    orderedChunks,
+    evidences,
+    selectedDocument,
+    previousDocument,
+    nextDocument,
+    rawText,
+    markdownSectionHints,
+    modelFacing,
+  } = buildDocumentDetailViewModel({
+    documents,
+    selectedDocumentId,
+    selectedDocumentDetail,
+  });
   const [documentTitleDraft, setDocumentTitleDraft] = useState('');
-  const rawText = documentRawTextFromChunks(orderedChunks);
-  const markdownSectionHints = [...new Set(orderedChunks.flatMap(chunkSectionHints))].slice(0, 24);
-  const modelFacing = selectedDocumentDetail?.model_facing || null;
 
   useEffect(() => {
     setDocumentTitleDraft(selectedDocument?.title || '');

@@ -294,6 +294,91 @@ function renderVisualBridge(value = {}) {
   `;
 }
 
+function renderTemplateReference(value = {}) {
+  if (!isPlainObject(value)) {
+    return '';
+  }
+  const promptHints = arrayOrEmpty(value.promptHints || value.prompt_hints).map((hint, index) => ({
+    title: `线索 ${index + 1}`,
+    detail: hint,
+  }));
+  const forbiddenOutput = arrayOrEmpty(value.forbiddenOutput || value.forbidden_output).map((item, index) => ({
+    title: `禁出 ${index + 1}`,
+    detail: item,
+  }));
+  return `
+    <section>
+      <h2>模板参考</h2>
+      ${renderKeyValueGrid([
+        { label: '来源', value: value.source || 'html-anything' },
+        { label: '模板', value: value.label || value.templateId || value.template_id || '未标注' },
+        { label: '模板 ID', value: value.templateId || value.template_id || '' },
+        { label: '导入策略', value: value.importPolicy || value.import_policy || 'metadata_and_constraints_only' },
+        { label: '风格方向', value: value.styleDirection || value.style_direction || '跟随草稿' },
+      ])}
+      <p>${escapeHtml(value.designIntent || value.design_intent || '模板只作为结构和风格参考。')}</p>
+      ${promptHints.length ? renderList(promptHints, '暂无提示。') : ''}
+      ${forbiddenOutput.length ? renderList(forbiddenOutput, '暂无禁出项。') : ''}
+    </section>
+  `;
+}
+
+function renderMissingEvidence(value = {}) {
+  if (!isPlainObject(value)) {
+    return '';
+  }
+  const items = arrayOrEmpty(value.items).map((item) => ({
+    title: item.code || item.recommendedAction || item.recommended_action || '缺证项',
+    detail: item.message || '',
+    meta: item.recommendedAction || item.recommended_action || '',
+  }));
+  return `
+    <section>
+      <h2>证据状态</h2>
+      ${renderKeyValueGrid([
+        { label: '状态', value: value.status || 'unknown' },
+        { label: '缺证项', value: String(items.length) },
+      ])}
+      ${renderList(items, '暂无缺证项。')}
+    </section>
+  `;
+}
+
+function renderStructureSignals(value = {}) {
+  if (!isPlainObject(value)) {
+    return '';
+  }
+  const hints = arrayOrEmpty(value.sectionTitleHints || value.section_title_hints)
+    .map((hint, index) => ({
+      title: `标题 ${index + 1}`,
+      detail: hint,
+    }))
+    .slice(0, 12);
+  const boundModules = arrayOrEmpty(value.boundModules || value.bound_modules)
+    .map((module) => ({
+      title: module.title || module.moduleId || module.module_id || '结构模块',
+      detail: module.fieldPath || module.field_path || 'retrieval.section_title_hints',
+      meta: module.bindingQualityStatus || module.binding_quality_status || module.status || '',
+    }))
+    .slice(0, 8);
+  if (!hints.length && !boundModules.length) {
+    return '';
+  }
+  return `
+    <section>
+      <h2>源结构</h2>
+      ${renderKeyValueGrid([
+        { label: '状态', value: value.status || 'available' },
+        { label: '策略', value: value.policy || 'source_structure_only_no_body_no_sample_rows' },
+        { label: '标题线索', value: String(hints.length) },
+        { label: '绑定模块', value: String(boundModules.length) },
+      ])}
+      ${hints.length ? renderList(hints, '暂无标题线索。') : ''}
+      ${boundModules.length ? renderList(boundModules, '暂无绑定模块。') : ''}
+    </section>
+  `;
+}
+
 function renderCodexExecutionReport(manifest) {
   const payload = manifest.payload || {};
   return `
@@ -335,6 +420,9 @@ function renderStaticPagePlanningHandoff(manifest) {
       <h2>页面目标</h2>
       <p>${escapeHtml(payload.objective || manifest.title)}</p>
     </section>
+    ${renderTemplateReference(payload.templateReference || payload.template_reference)}
+    ${renderMissingEvidence(payload.missingEvidence || payload.missing_evidence)}
+    ${renderStructureSignals(payload.structureSignals || payload.structure_signals)}
     ${renderVisualBridge(payload.visualBridge || payload.visual_bridge)}
     <section>
       <h2>模块规划</h2>

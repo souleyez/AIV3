@@ -1,6 +1,7 @@
 'use client';
 
 import StaticPagePlanningCanvas from './StaticPagePlanningCanvas';
+import StaticPageTemplateReferencePanel from './StaticPageTemplateReferencePanel';
 
 export default function StaticPagePlanningPanel({
   draft,
@@ -21,6 +22,8 @@ export default function StaticPagePlanningPanel({
 
   return (
     <div className="static-page-planning-panel">
+      <StaticPageTemplateReferencePanel draft={draft} />
+
       <StaticPagePlanningCanvas draft={draft} onApplyOperation={onApplyOperation} />
 
       <div className="static-page-planning-hint">

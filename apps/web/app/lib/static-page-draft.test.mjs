@@ -94,6 +94,80 @@ test('buildInitialStaticPageDraft creates default modules and mobile order', () 
   assert.equal(draft.dataSnapshot.moduleBindings.find((item) => item.moduleId === 'trend').chartDataFit, 'needs_sample_rows');
 });
 
+test('buildInitialStaticPageDraft can apply a safe html-anything design reference', () => {
+  const draft = buildInitialStaticPageDraft({
+    datasetId: 'dataset-1',
+    sessionId: 'session-1',
+    templateReferenceId: 'data-report',
+  });
+
+  assert.equal(draft.styleDirection, 'data-command');
+  assert.equal(draft.objective, '快速生成一页数据可视化报告，展示关键指标、趋势、结构和可核查证据。');
+  assert.equal(draft.designReferences.length, 1);
+  assert.equal(draft.designReferences[0].source, 'html-anything');
+  assert.equal(draft.designReferences[0].templateId, 'data-report');
+  assert.equal(draft.source.templateReferences[0].templateId, 'data-report');
+  assert.equal(draft.modules.some((module) => module.id === 'comparison'), true);
+  assert.equal(draft.dataSnapshot.designReferences[0].templateId, 'data-report');
+});
+
+test('buildInitialStaticPageDraft infers a template reference from prompt intent', () => {
+  const draft = buildInitialStaticPageDraft({
+    templateIntent: '帮我把当前项目整理成技术交接文档，包含接口和验收步骤。',
+  });
+
+  assert.equal(draft.templateReferenceId, 'docs-page');
+  assert.equal(draft.styleDirection, 'client-delivery');
+  assert.equal(draft.designReferences[0].templateId, 'docs-page');
+  assert.equal(draft.modules.some((module) => module.id === 'interfaces'), true);
+});
+
+test('docs page draft binds structure modules to supplied section title hints', () => {
+  const draft = buildInitialStaticPageDraft({
+    templateReferenceId: 'docs-page',
+    evidenceIds: ['ev-doc'],
+    fieldCandidates: [{
+      sourceId: 'evidence',
+      fieldPath: 'document.sections',
+      label: '文档章节',
+      section_title_hints: ['接口说明', '验收步骤'],
+    }],
+  });
+
+  const headingCandidate = draft.dataSnapshot.fieldCandidates.find((item) => item.fieldPath === 'retrieval.section_title_hints');
+  assert.deepEqual(headingCandidate.sectionTitleHints, ['接口说明', '验收步骤']);
+  assert.equal(draft.dataSnapshot.structureSignals.status, 'available');
+  assert.equal(draft.dataSnapshot.structureSignals.policy, 'source_structure_only_no_body_no_sample_rows');
+  assert.deepEqual(draft.dataSnapshot.structureSignals.sectionTitleHints, ['接口说明', '验收步骤']);
+
+  const bindings = new Map(draft.dataSnapshot.moduleBindings.map((item) => [item.moduleId, item]));
+  assert.equal(bindings.get('hero').binding.sourceId, 'session');
+  for (const moduleId of ['scope', 'steps', 'interfaces', 'checks']) {
+    assert.equal(bindings.get(moduleId).binding.sourceId, 'evidence');
+    assert.equal(bindings.get(moduleId).binding.fieldPath, 'retrieval.section_title_hints');
+    assert.equal(bindings.get(moduleId).binding.evidenceIds[0], 'ev-doc');
+    assert.equal(bindings.get(moduleId).bindingQuality.matchedFieldCandidate.fieldPath, 'retrieval.section_title_hints');
+  }
+  assert.deepEqual(
+    draft.dataSnapshot.structureSignals.boundModules.map((item) => item.moduleId),
+    ['scope', 'steps', 'interfaces', 'checks'],
+  );
+});
+
+test('template design references flow into preview image and final render payloads', () => {
+  const draft = buildInitialStaticPageDraft({
+    templateReferenceId: 'dashboard',
+  });
+
+  const imagePayload = buildStaticPageImagePayload(draft);
+  const finalPayload = buildStaticPageFinalRenderPayload(draft);
+
+  assert.equal(imagePayload.designReferences[0].templateId, 'dashboard');
+  assert.equal(imagePayload.designContract.templateReferences[0].source, 'html-anything');
+  assert.equal(finalPayload.designReferences[0].templateId, 'dashboard');
+  assert.doesNotMatch(JSON.stringify(imagePayload.designReferences), /<html|<script|https?:\/\//i);
+});
+
 test('preview queue gate blocks chart modules without renderable sample rows', () => {
   const draft = buildInitialStaticPageDraft({
     datasetId: 'dataset-1',
@@ -817,6 +891,7 @@ test('field candidates preserve backend suggestions and add evidence fallbacks',
         label: '订单金额',
         kind: 'metric',
         recommended_aggregation: 'sum',
+        section_title_hints: ['订单指标', '风险说明'],
       },
       {
         sourceId: 'evidence',
@@ -828,6 +903,7 @@ test('field candidates preserve backend suggestions and add evidence fallbacks',
         evidenceIds: ['ev-media'],
         evidenceRef: {
           sourceLocator: 'documents/call.mp3#chunk=0',
+          section_title_hints: ['客户访谈'],
         },
       },
     ],
@@ -835,11 +911,15 @@ test('field candidates preserve backend suggestions and add evidence fallbacks',
   const candidates = buildStaticPageFieldCandidates(draft);
 
   assert.equal(candidates.find((item) => item.fieldPath === 'orders.amount').recommendedAggregation, 'sum');
+  assert.deepEqual(candidates.find((item) => item.fieldPath === 'orders.amount').sectionTitleHints, ['订单指标', '风险说明']);
   assert.equal(candidates.find((item) => item.fieldPath === 'media.transcript_windows').timestamped, true);
   assert.equal(candidates.find((item) => item.fieldPath === 'media.transcript_windows').mediaKind, 'audio');
   assert.equal(candidates.find((item) => item.fieldPath === 'media.transcript_windows').evidenceRef.sourceLocator, 'documents/call.mp3#chunk=0');
   assert.ok(candidates.some((item) => item.fieldPath === 'dataset.metrics_summary'));
   assert.ok(candidates.some((item) => item.fieldPath === 'retrieval.content_excerpt'));
+  const headingCandidate = candidates.find((item) => item.fieldPath === 'retrieval.section_title_hints');
+  assert.equal(headingCandidate.kind, 'section_titles');
+  assert.deepEqual(headingCandidate.sectionTitleHints, ['订单指标', '风险说明', '客户访谈']);
 });
 
 test('static page visual and render spec builders expose renderer-safe constraints', () => {

@@ -2530,7 +2530,8 @@ fn infer_document_detail_model_facing_evidence_state(
 }
 
 fn collect_document_detail_model_facing_signals(detail: &DocumentDetailView) -> Vec<String> {
-    vec![
+    let section_title_hints = collect_document_detail_section_title_hints(detail);
+    let mut signals = vec![
         "workflow_kind=document_detail".to_string(),
         "document_focus=single_document".to_string(),
         format!(
@@ -2554,7 +2555,21 @@ fn collect_document_detail_model_facing_signals(detail: &DocumentDetailView) -> 
             "failed_retrieval_evidence_count={}",
             document_detail_failed_retrieval_evidence_count(detail)
         ),
-    ]
+        format!("section_title_hint_count={}", section_title_hints.len()),
+    ];
+    if !section_title_hints.is_empty() {
+        signals.push("rag_signal=section_title_hints".to_string());
+        signals.push(format!(
+            "section_title_hints={}",
+            section_title_hints
+                .iter()
+                .take(6)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join("|")
+        ));
+    }
+    signals
 }
 
 fn document_detail_failed_retrieval_evidence_count(detail: &DocumentDetailView) -> usize {
@@ -2563,6 +2578,36 @@ fn document_detail_failed_retrieval_evidence_count(detail: &DocumentDetailView) 
         .iter()
         .filter(|evidence| retrieval_evidence_has_failed_state(evidence))
         .count()
+}
+
+fn collect_document_detail_section_title_hints(detail: &DocumentDetailView) -> Vec<String> {
+    let mut hints = Vec::new();
+    for chunk in &detail.chunks {
+        for key in [
+            "section_title_hints",
+            "sectionTitleHints",
+            "section_titles",
+            "sectionTitles",
+            "heading_hints",
+            "headingHints",
+        ] {
+            if let Some(value) = chunk.metadata.get(key) {
+                collect_string_list(value, &mut hints);
+            }
+        }
+        if let Some(value) = chunk
+            .metadata
+            .get("parse_metadata")
+            .and_then(|value| value.get("section_title_hints"))
+        {
+            collect_string_list(value, &mut hints);
+        }
+        if hints.len() >= 24 {
+            break;
+        }
+    }
+    hints.truncate(24);
+    hints
 }
 
 fn derive_document_media_detail_model_facing_summary(
@@ -11771,7 +11816,47 @@ async fn create_static_page_draft_for_assistant_run(
 ) -> std::result::Result<(StatusCode, Json<CreateStaticPageDraftResponse>), ApiError> {
     let run_id = parse_assistant_run_id(&run_id)?;
     let current_user_id = current_auth_user_id(&state, &headers).await?;
-    let run = load_visible_assistant_run_for_user(&state, run_id, current_user_id).await?;
+    let outcome =
+        create_static_page_draft_for_assistant_run_id(&state, run_id, current_user_id, request)
+            .await?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(CreateStaticPageDraftResponse {
+            draft: to_static_page_draft_view(outcome.draft),
+        }),
+    ))
+}
+
+pub(crate) struct StaticPageDraftCreationOutcome {
+    pub(crate) draft: StaticPageDraft,
+    pub(crate) template_reference: Option<Value>,
+    pub(crate) evidence_summary: Value,
+    pub(crate) missing_evidence: Value,
+}
+
+pub(crate) async fn create_static_page_draft_for_assistant_run_id(
+    state: &AppState,
+    run_id: AssistantRunId,
+    current_user_id: Option<UserId>,
+    request: CreateStaticPageDraftRequest,
+) -> std::result::Result<StaticPageDraftCreationOutcome, ApiError> {
+    let run = if let Some(current_user_id) = current_user_id {
+        load_visible_assistant_run_for_user(state, run_id, Some(current_user_id)).await?
+    } else {
+        state
+            .storage
+            .assistant_runs()
+            .get_by_id(state.tenant_id, run_id)
+            .await
+            .map_err(ApiError::from_storage)?
+            .ok_or_else(|| {
+                ApiError::not_found(
+                    "assistant_run_not_found",
+                    format!("assistant run {run_id} was not found"),
+                )
+            })?
+    };
     let owner_user_id = run.user_id.or(current_user_id);
     let prompt = request
         .prompt
@@ -11786,6 +11871,19 @@ async fn create_static_page_draft_for_assistant_run(
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| derive_static_page_draft_title(prompt));
+    let draft_payload_from_default = request.draft_payload.is_null();
+    let template_reference_id =
+        normalize_static_page_template_reference_id(request.template_reference_id.as_deref())
+            .or_else(|| static_page_template_reference_id_from_payload(&request.draft_payload))
+            .or_else(|| static_page_template_reference_id_from_source_refs(&request.source_refs))
+            .or_else(|| {
+                if draft_payload_from_default {
+                    infer_static_page_template_reference_id(prompt)
+                } else {
+                    None
+                }
+            });
+    let template_reference = resolve_static_page_template_reference(template_reference_id)?;
     let selected_scope = request
         .selected_scope
         .clone()
@@ -11799,13 +11897,37 @@ async fn create_static_page_draft_for_assistant_run(
     } else {
         request.source_refs.clone()
     };
-    let draft_payload = if request.draft_payload.is_null() {
+    let source_refs = if let Some(reference) = template_reference {
+        apply_static_page_template_reference_to_source_refs(source_refs, reference)
+    } else {
+        source_refs
+    };
+    let draft_payload = if draft_payload_from_default {
         build_initial_static_page_draft_payload(&run, prompt)
     } else {
         request.draft_payload.clone()
     };
+    let draft_payload = if let Some(reference) = template_reference {
+        apply_static_page_template_reference_to_payload(
+            draft_payload,
+            reference,
+            draft_payload_from_default,
+        )
+    } else {
+        draft_payload
+    };
     let status =
         status_from_static_page_payload(&draft_payload).unwrap_or(StaticPageDraftStatus::Draft);
+    let template_reference_payload = template_reference.map(static_page_template_design_reference);
+    let evidence_summary = static_page_template_evidence_summary(&run.evidence_state);
+    let missing_evidence =
+        static_page_template_missing_evidence(template_reference, &run.evidence_state);
+    let draft_payload = apply_static_page_template_context_to_payload(
+        draft_payload,
+        template_reference_payload.as_ref(),
+        &evidence_summary,
+        &missing_evidence,
+    );
 
     let draft = state
         .storage
@@ -11826,6 +11948,29 @@ async fn create_static_page_draft_for_assistant_run(
         )
         .await
         .map_err(ApiError::from_storage)?;
+    let mut event_payload = json!({
+        "draft_id": draft.id,
+        "title": draft.title,
+        "status": draft.status.as_str(),
+    });
+    if let Some(reference) = template_reference {
+        set_payload_string(&mut event_payload, "template_reference_id", reference.id);
+    }
+    set_payload_value(
+        &mut event_payload,
+        "template_reference",
+        template_reference_payload.clone().unwrap_or(Value::Null),
+    );
+    set_payload_value(
+        &mut event_payload,
+        "evidence_summary",
+        evidence_summary.clone(),
+    );
+    set_payload_value(
+        &mut event_payload,
+        "missing_evidence",
+        missing_evidence.clone(),
+    );
     state
         .storage
         .assistant_runs()
@@ -11834,23 +11979,19 @@ async fn create_static_page_draft_for_assistant_run(
             run.id,
             &NewAssistantRunEvent {
                 event_name: "static_page_draft.created".to_string(),
-                payload: json!({
-                    "draft_id": draft.id,
-                    "title": draft.title,
-                    "status": draft.status.as_str(),
-                }),
+                payload: event_payload,
                 created_at: draft.created_at,
             },
         )
         .await
         .map_err(ApiError::from_storage)?;
 
-    Ok((
-        StatusCode::CREATED,
-        Json(CreateStaticPageDraftResponse {
-            draft: to_static_page_draft_view(draft),
-        }),
-    ))
+    Ok(StaticPageDraftCreationOutcome {
+        draft,
+        template_reference: template_reference_payload,
+        evidence_summary,
+        missing_evidence,
+    })
 }
 
 async fn list_static_page_drafts(
@@ -13863,7 +14004,10 @@ fn build_assistant_run_react_provider_input(
         "静态页或报表意图且存在数据集时，优先 retrieve_evidence；若需要模块数据、字段、表格/OCR 或原文措辞，继续 read_document_detail，再创建静态页/报表动作。".to_string(),
         "视频 PPT/原文提取：仅支持上传视频文件、直接视频 URL 或公开页面可解析视频地址；先用 resolve_video_url，已有登记视频素材后才用 extract_video_ppt_transcript；不要请求扫码、Cookie、登录态页面或录屏绕过。".to_string(),
         "如果当前打开产物是静态页草稿，用户要求修改标题、内容、图表、数据绑定或布局时，优先用 update_static_page_module；Host 只会把操作应用到当前已持久化草稿。".to_string(),
+        "如果当前打开产物包含 structureSignals.sectionTitleHints，这些是供料给出的源文档结构线索；用于组织 docs-page 模块，但不要编造标题、接口细节或把标题当作完整内容。".to_string(),
         "如果弱规划目录或当前打开产物显示静态页 previewStale=true 或 previewStatus=stale，禁止直接 render_static_page；应先 submit_static_page_image_preview，等用户确认新的效果图后再渲染最终页。".to_string(),
+        "静态页缺证决策：如果当前打开产物包含 missingEvidence.status=needs_evidence，先处理缺证，不要直接 submit_static_page_image_preview 或 render_static_page，除非用户明确接受部分草稿。".to_string(),
+        "缺证 recommended_action/recommendedAction 映射：retrieve_evidence -> retrieve_evidence；read_document_detail -> read_document_detail，document_id 必须来自选中范围、detailTargets 或 observation；static_page.update_draft/update_static_page_module -> update_static_page_module，用于修复模块数据或保留缺失说明。".to_string(),
         "OpenClaw 和 Codex Host 都是可选外挂能力；openclaw_memory_recall、openclaw_readonly_execution、codex_host_task 可能被 Host 拒绝，不能绕过 V3 选中范围、记忆、任务隔离和执行 allowlist。".to_string(),
         "如果用户表达报表意图，先用 list_report_options；收到该 observation 后，才能用 report_choice，并只在 arguments.choice 填 continue_qa 或 create_report，不能编写报表正文。".to_string(),
         "如果已经可以回答，使用 action_type=final_answer，arguments.content 放最终正文。".to_string(),
@@ -13947,7 +14091,10 @@ fn build_assistant_run_react_continue_provider_input(
         "静态页或报表意图且存在数据集时，优先 retrieve_evidence；若需要模块数据、字段、表格/OCR 或原文措辞，继续 read_document_detail，再创建静态页/报表动作。".to_string(),
         "视频 PPT/原文提取：仅支持上传视频文件、直接视频 URL 或公开页面可解析视频地址；先用 resolve_video_url，已有登记视频素材后才用 extract_video_ppt_transcript；不要请求扫码、Cookie、登录态页面或录屏绕过。".to_string(),
         "如果当前打开产物是静态页草稿，用户要求修改标题、内容、图表、数据绑定或布局时，优先用 update_static_page_module；Host 只会把操作应用到当前已持久化草稿。".to_string(),
+        "如果当前打开产物包含 structureSignals.sectionTitleHints，这些是供料给出的源文档结构线索；用于组织 docs-page 模块，但不要编造标题、接口细节或把标题当作完整内容。".to_string(),
         "如果弱规划目录或当前打开产物显示静态页 previewStale=true 或 previewStatus=stale，禁止直接 render_static_page；应先 submit_static_page_image_preview，等用户确认新的效果图后再渲染最终页。".to_string(),
+        "静态页缺证决策：如果当前打开产物包含 missingEvidence.status=needs_evidence，先处理缺证，不要直接 submit_static_page_image_preview 或 render_static_page，除非用户明确接受部分草稿。".to_string(),
+        "缺证 recommended_action/recommendedAction 映射：retrieve_evidence -> retrieve_evidence；read_document_detail -> read_document_detail，document_id 必须来自选中范围、detailTargets 或 observation；static_page.update_draft/update_static_page_module -> update_static_page_module，用于修复模块数据或保留缺失说明。".to_string(),
         "OpenClaw 和 Codex Host 都是可选外挂能力；openclaw_memory_recall、openclaw_readonly_execution、codex_host_task 可能被 Host 拒绝，不能绕过 V3 选中范围、记忆、任务隔离和执行 allowlist。".to_string(),
         "如果用户表达报表意图，先用 list_report_options；收到该 observation 后，才能用 report_choice，并只在 arguments.choice 填 continue_qa 或 create_report，不能编写报表正文。".to_string(),
         "如果已经可以回答，使用 action_type=final_answer，arguments.content 放最终正文。".to_string(),
@@ -17700,6 +17847,16 @@ fn assistant_run_static_page_artifact_brief(current_artifact: &Value) -> Value {
     if let Some(final_status) = static_page_artifact_final_status(current_artifact) {
         brief.insert("finalRenderStatus".to_string(), json!(final_status));
     }
+    if let Some(template_reference) =
+        assistant_run_static_page_template_reference_brief(current_artifact)
+    {
+        brief.insert("templateReference".to_string(), template_reference);
+    }
+    if let Some(missing_evidence) =
+        assistant_run_static_page_missing_evidence_brief(current_artifact)
+    {
+        brief.insert("missingEvidence".to_string(), missing_evidence);
+    }
     brief.insert(
         "moduleCount".to_string(),
         json!(static_page_artifact_module_count(current_artifact)),
@@ -17717,8 +17874,301 @@ fn assistant_run_static_page_artifact_brief(current_artifact: &Value) -> Value {
     {
         brief.insert("bindingQuality".to_string(), binding_quality);
     }
+    if let Some(structure_signals) =
+        assistant_run_static_page_structure_signals_brief(current_artifact)
+    {
+        brief.insert("structureSignals".to_string(), structure_signals);
+    }
 
     Value::Object(brief)
+}
+
+fn assistant_run_static_page_template_reference_brief(current_artifact: &Value) -> Option<Value> {
+    let mut brief = Map::new();
+    if let Some(template_id) = static_page_artifact_string(
+        current_artifact,
+        &["templateReferenceId", "template_reference_id"],
+    ) {
+        brief.insert("templateId".to_string(), json!(template_id));
+    }
+
+    if let Some(reference) = assistant_run_static_page_template_reference_value(current_artifact) {
+        for (source_key, target_key) in [
+            ("source", "source"),
+            ("sourceKind", "sourceKind"),
+            ("source_kind", "sourceKind"),
+            ("upstream", "upstream"),
+            ("license", "license"),
+            ("importPolicy", "importPolicy"),
+            ("import_policy", "importPolicy"),
+            ("templateId", "templateId"),
+            ("template_id", "templateId"),
+            ("id", "templateId"),
+            ("label", "label"),
+            ("category", "category"),
+            ("scenario", "scenario"),
+            ("surface", "surface"),
+            ("status", "status"),
+            ("quickOutput", "quickOutput"),
+            ("quick_output", "quickOutput"),
+            ("aspectHint", "aspectHint"),
+            ("aspect_hint", "aspectHint"),
+            ("styleDirection", "styleDirection"),
+            ("style_direction", "styleDirection"),
+            ("designIntent", "designIntent"),
+            ("design_intent", "designIntent"),
+        ] {
+            assistant_run_insert_safe_scalar_field(&mut brief, reference, source_key, target_key);
+        }
+        assistant_run_insert_safe_scalar_array_field(
+            &mut brief,
+            reference,
+            "promptHints",
+            "promptHints",
+            6,
+        );
+        assistant_run_insert_safe_scalar_array_field(
+            &mut brief,
+            reference,
+            "prompt_hints",
+            "promptHints",
+            6,
+        );
+    }
+
+    (!brief.is_empty()).then_some(Value::Object(brief))
+}
+
+fn assistant_run_static_page_template_reference_value(current_artifact: &Value) -> Option<&Value> {
+    current_artifact
+        .get("templateReference")
+        .or_else(|| current_artifact.get("template_reference"))
+        .or_else(|| {
+            current_artifact.get("source").and_then(|source| {
+                source
+                    .get("templateReference")
+                    .or_else(|| source.get("template_reference"))
+            })
+        })
+        .or_else(|| first_value_from_array_field(current_artifact, "designReferences"))
+        .or_else(|| first_value_from_array_field(current_artifact, "design_references"))
+        .or_else(|| {
+            current_artifact.get("source").and_then(|source| {
+                first_value_from_array_field(source, "templateReferences")
+                    .or_else(|| first_value_from_array_field(source, "template_references"))
+            })
+        })
+}
+
+fn first_value_from_array_field<'a>(value: &'a Value, key: &str) -> Option<&'a Value> {
+    value
+        .get(key)
+        .and_then(Value::as_array)
+        .and_then(|items| items.first())
+}
+
+fn assistant_run_static_page_missing_evidence_brief(current_artifact: &Value) -> Option<Value> {
+    let missing_evidence = assistant_run_static_page_missing_evidence_value(current_artifact)?;
+    let mut brief = Map::new();
+    for (source_key, target_key) in [
+        ("status", "status"),
+        ("source", "source"),
+        ("supplyQuality", "supplyQuality"),
+        ("supply_quality", "supplyQuality"),
+    ] {
+        assistant_run_insert_safe_scalar_field(
+            &mut brief,
+            missing_evidence,
+            source_key,
+            target_key,
+        );
+    }
+
+    let items = missing_evidence
+        .get("items")
+        .or_else(|| missing_evidence.get("missing"))
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .take(8)
+                .filter_map(assistant_run_static_page_missing_evidence_item_brief)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    brief.insert("itemCount".to_string(), json!(items.len()));
+    if !items.is_empty() {
+        brief.insert("items".to_string(), Value::Array(items));
+    }
+
+    (!brief.is_empty()).then_some(Value::Object(brief))
+}
+
+fn assistant_run_static_page_missing_evidence_value(current_artifact: &Value) -> Option<&Value> {
+    current_artifact
+        .get("missingEvidence")
+        .or_else(|| current_artifact.get("missing_evidence"))
+        .or_else(|| {
+            current_artifact.get("source").and_then(|source| {
+                source
+                    .get("missingEvidence")
+                    .or_else(|| source.get("missing_evidence"))
+            })
+        })
+}
+
+fn assistant_run_static_page_missing_evidence_item_brief(item: &Value) -> Option<Value> {
+    let mut brief = Map::new();
+    for (source_key, target_key) in [
+        ("code", "code"),
+        ("message", "message"),
+        ("recommended_action", "recommendedAction"),
+        ("recommendedAction", "recommendedAction"),
+        ("detail_target_count", "detailTargetCount"),
+        ("detailTargetCount", "detailTargetCount"),
+        ("document_id", "documentId"),
+        ("documentId", "documentId"),
+        ("source_id", "sourceId"),
+        ("sourceId", "sourceId"),
+        ("module_id", "moduleId"),
+        ("moduleId", "moduleId"),
+        ("title", "title"),
+    ] {
+        assistant_run_insert_safe_scalar_field(&mut brief, item, source_key, target_key);
+    }
+    (!brief.is_empty()).then_some(Value::Object(brief))
+}
+
+fn assistant_run_static_page_structure_signals_brief(current_artifact: &Value) -> Option<Value> {
+    const HINT_LIMIT: usize = 12;
+    const FIELD_LIMIT: usize = 4;
+    const MODULE_LIMIT: usize = 8;
+
+    let snapshot = current_artifact
+        .get("dataSnapshot")
+        .or_else(|| current_artifact.get("data_snapshot"))?;
+    let mut section_title_hints = Vec::<String>::new();
+
+    let field_candidates = snapshot
+        .get("fieldCandidates")
+        .or_else(|| snapshot.get("field_candidates"))
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter(|candidate| {
+                    assistant_run_static_page_field_path(candidate).as_deref()
+                        == Some("retrieval.section_title_hints")
+                })
+                .take(FIELD_LIMIT)
+                .map(|candidate| {
+                    let hints =
+                        assistant_run_static_page_section_title_hints(candidate, HINT_LIMIT);
+                    for hint in &hints {
+                        push_string_hint(&mut section_title_hints, hint);
+                    }
+                    let mut brief = Map::new();
+                    for (source_key, target_key) in [
+                        ("sourceId", "sourceId"),
+                        ("source_id", "sourceId"),
+                        ("fieldPath", "fieldPath"),
+                        ("field_path", "fieldPath"),
+                        ("label", "label"),
+                        ("kind", "kind"),
+                        ("confidence", "confidence"),
+                    ] {
+                        assistant_run_insert_safe_scalar_field(
+                            &mut brief, candidate, source_key, target_key,
+                        );
+                    }
+                    brief.insert("sectionTitleHints".to_string(), json!(hints));
+                    Value::Object(brief)
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    let bound_modules = snapshot
+        .get("moduleBindings")
+        .or_else(|| snapshot.get("module_bindings"))
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|module| {
+                    let binding = module
+                        .get("binding")
+                        .or_else(|| module.get("dataBinding"))
+                        .or_else(|| module.get("data_binding"))
+                        .unwrap_or(&Value::Null);
+                    let binding_quality = module
+                        .get("bindingQuality")
+                        .or_else(|| module.get("binding_quality"))
+                        .unwrap_or(&Value::Null);
+                    let matched_candidate = binding_quality
+                        .get("matchedFieldCandidate")
+                        .or_else(|| binding_quality.get("matched_field_candidate"))
+                        .unwrap_or(&Value::Null);
+                    let field_path = assistant_run_static_page_field_path(binding)
+                        .or_else(|| assistant_run_static_page_field_path(binding_quality))
+                        .or_else(|| assistant_run_static_page_field_path(matched_candidate));
+                    if field_path.as_deref() != Some("retrieval.section_title_hints") {
+                        return None;
+                    }
+                    let hints =
+                        assistant_run_static_page_section_title_hints(matched_candidate, HINT_LIMIT);
+                    for hint in &hints {
+                        push_string_hint(&mut section_title_hints, hint);
+                    }
+                    Some(json!({
+                        "moduleId": static_page_artifact_string(module, &["moduleId", "module_id"]).unwrap_or_default(),
+                        "title": static_page_artifact_string(module, &["title"]).unwrap_or_default(),
+                        "fieldPath": field_path,
+                        "bindingQualityStatus": static_page_artifact_string(module, &["bindingQualityStatus", "binding_quality_status"])
+                            .or_else(|| static_page_artifact_string(binding_quality, &["status"]))
+                            .unwrap_or_default(),
+                        "sectionTitleHints": hints,
+                    }))
+                })
+                .take(MODULE_LIMIT)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    if section_title_hints.is_empty() && field_candidates.is_empty() && bound_modules.is_empty() {
+        return None;
+    }
+    section_title_hints.truncate(HINT_LIMIT);
+
+    Some(json!({
+        "status": if section_title_hints.is_empty() { "none" } else { "available" },
+        "policy": "source_structure_only_no_body_no_sample_rows",
+        "sectionTitleHints": section_title_hints,
+        "fieldCandidates": field_candidates,
+        "boundModules": bound_modules,
+    }))
+}
+
+fn assistant_run_static_page_field_path(value: &Value) -> Option<String> {
+    static_page_artifact_string(value, &["fieldPath", "field_path", "field"])
+}
+
+fn assistant_run_static_page_section_title_hints(value: &Value, limit: usize) -> Vec<String> {
+    let mut hints = Vec::new();
+    for key in [
+        "sectionTitleHints",
+        "section_title_hints",
+        "sectionTitles",
+        "section_titles",
+        "headingHints",
+        "heading_hints",
+    ] {
+        if let Some(value) = value.get(key) {
+            collect_string_list(value, &mut hints);
+        }
+    }
+    hints.truncate(limit);
+    hints
 }
 
 fn assistant_run_static_page_binding_quality_brief(current_artifact: &Value) -> Option<Value> {
@@ -21376,6 +21826,15 @@ fn to_compare_documents_view(documents: Vec<DocumentDetailView>) -> CompareDocum
 }
 
 fn to_document_chunk_view(chunk: DocumentChunk) -> DocumentChunkView {
+    let section_title_hints = document_chunk_section_title_hints(&chunk);
+    let mut metadata = Map::from_iter(chunk.metadata);
+    if !section_title_hints.is_empty() {
+        metadata.insert(
+            "section_title_hints".to_string(),
+            json!(section_title_hints),
+        );
+    }
+
     DocumentChunkView {
         id: chunk.id,
         document_id: chunk.document_id,
@@ -21383,7 +21842,7 @@ fn to_document_chunk_view(chunk: DocumentChunk) -> DocumentChunkView {
         token_count: chunk.token_count,
         state: contracts::DocumentChunkStateView::from_domain(chunk.state),
         content: chunk.content,
-        metadata: Value::Object(Map::from_iter(chunk.metadata)),
+        metadata: Value::Object(metadata),
         created_at: chunk.created_at,
         updated_at: chunk.updated_at,
     }
@@ -28680,6 +29139,759 @@ fn derive_chat_session_report_plan_objective(session: &ChatSession) -> String {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+struct StaticPageTemplateReferenceSpec {
+    id: &'static str,
+    label: &'static str,
+    category: &'static str,
+    scenario: &'static str,
+    style_direction: &'static str,
+    aspect_hint: &'static str,
+    design_intent: &'static str,
+    objective: &'static str,
+    audience: &'static str,
+    prompt_hints: &'static [&'static str],
+}
+
+const STATIC_PAGE_TEMPLATE_REFERENCE_GUARDRAILS: &[&str] = &[
+    "template reference controls style and module recipe only",
+    "V3 model routing, permissions, datasets, evidence, and artifacts remain authoritative",
+    "model output must become structured draft data, not raw final HTML",
+    "missing or partial evidence must stay visible in draft and rendered output",
+];
+
+const STATIC_PAGE_TEMPLATE_FORBIDDEN_OUTPUTS: &[&str] = &[
+    "raw_html",
+    "remote_script",
+    "remote_css",
+    "provider_secret",
+    "queue_credential",
+    "private_path",
+];
+
+fn normalize_static_page_template_reference_id(raw_id: Option<&str>) -> Option<&str> {
+    raw_id.map(str::trim).filter(|value| !value.is_empty())
+}
+
+fn static_page_template_reference_id_from_array(value: &Value) -> Option<&str> {
+    value.as_array().and_then(|items| {
+        items.iter().find_map(|item| {
+            normalize_static_page_template_reference_id(
+                item.get("templateId")
+                    .or_else(|| item.get("template_id"))
+                    .or_else(|| item.get("id"))
+                    .and_then(Value::as_str),
+            )
+        })
+    })
+}
+
+fn static_page_template_reference_id_from_payload(payload: &Value) -> Option<&str> {
+    normalize_static_page_template_reference_id(
+        payload
+            .get("templateReferenceId")
+            .or_else(|| payload.get("template_reference_id"))
+            .and_then(Value::as_str),
+    )
+    .or_else(|| {
+        payload
+            .get("designReferences")
+            .or_else(|| payload.get("design_references"))
+            .and_then(static_page_template_reference_id_from_array)
+    })
+    .or_else(|| {
+        payload
+            .get("source")
+            .and_then(|source| {
+                source
+                    .get("templateReferences")
+                    .or_else(|| source.get("template_references"))
+            })
+            .and_then(static_page_template_reference_id_from_array)
+    })
+}
+
+fn static_page_template_reference_id_from_source_refs(source_refs: &Value) -> Option<&str> {
+    normalize_static_page_template_reference_id(
+        source_refs
+            .get("template_reference_id")
+            .or_else(|| source_refs.get("templateReferenceId"))
+            .and_then(Value::as_str),
+    )
+    .or_else(|| {
+        source_refs
+            .get("template_references")
+            .or_else(|| source_refs.get("templateReferences"))
+            .and_then(static_page_template_reference_id_from_array)
+    })
+}
+
+fn static_page_template_intent_contains_any(text: &str, keywords: &[&str]) -> bool {
+    keywords.iter().any(|keyword| text.contains(keyword))
+}
+
+fn infer_static_page_template_reference_id(intent: &str) -> Option<&'static str> {
+    let text = intent.trim().to_ascii_lowercase();
+    if text.is_empty() {
+        return None;
+    }
+    if static_page_template_intent_contains_any(
+        &text,
+        &[
+            "文档",
+            "技术方案",
+            "接口",
+            "api",
+            "readme",
+            "说明书",
+            "交接",
+            "handoff",
+            "sop",
+            "教程",
+            "操作手册",
+            "验收",
+        ],
+    ) {
+        return Some("docs-page");
+    }
+    if static_page_template_intent_contains_any(
+        &text,
+        &[
+            "看板",
+            "仪表板",
+            "仪表盘",
+            "dashboard",
+            "后台",
+            "运营总览",
+            "监控",
+            "状态总览",
+            "实时状态",
+            "overview",
+        ],
+    ) {
+        return Some("dashboard");
+    }
+    if static_page_template_intent_contains_any(
+        &text,
+        &[
+            "报告",
+            "分析",
+            "经营",
+            "数据可视化",
+            "图表",
+            "指标",
+            "kpi",
+            "report",
+            "analysis",
+            "metrics",
+            "one-pager",
+            "one pager",
+        ],
+    ) {
+        return Some("data-report");
+    }
+    None
+}
+
+fn resolve_static_page_template_reference(
+    raw_id: Option<&str>,
+) -> std::result::Result<Option<StaticPageTemplateReferenceSpec>, ApiError> {
+    let Some(raw_id) = raw_id else {
+        return Ok(None);
+    };
+    let id = raw_id.trim().to_ascii_lowercase();
+    if id.is_empty() {
+        return Ok(None);
+    }
+
+    match id.as_str() {
+        "data-report" => Ok(Some(StaticPageTemplateReferenceSpec {
+            id: "data-report",
+            label: "数据可视化报告",
+            category: "data",
+            scenario: "finance",
+            style_direction: "data-command",
+            aspect_hint: "desktop-long-page",
+            design_intent:
+                "把可见 CSV、Excel、JSON、文档指标或会话数据整理成 KPI、趋势、对比和证据表。",
+            objective: "快速生成一页数据可视化报告，展示关键指标、趋势、结构和可核查证据。",
+            audience: "业务负责人和客户决策层",
+            prompt_hints: &[
+                "prefer KPI cards, trend charts, comparison charts, and evidence notes",
+                "never invent numbers; ask V3 retrieval or data repair when chart rows are missing",
+            ],
+        })),
+        "dashboard" => Ok(Some(StaticPageTemplateReferenceSpec {
+            id: "dashboard",
+            label: "管理后台仪表板",
+            category: "dashboard",
+            scenario: "operations",
+            style_direction: "data-command",
+            aspect_hint: "desktop-dashboard",
+            design_intent: "把运营状态整理成密集但可扫描的 KPI、趋势、风险和最近活动。",
+            objective: "快速生成一页运营仪表板，帮助用户扫清当前状态、异常和下一步动作。",
+            audience: "运营负责人和项目管理人员",
+            prompt_hints: &[
+                "favor dense status scanning over marketing hero composition",
+                "surface unresolved risks and missing operational evidence",
+            ],
+        })),
+        "docs-page" => Ok(Some(StaticPageTemplateReferenceSpec {
+            id: "docs-page",
+            label: "技术文档页",
+            category: "doc",
+            scenario: "engineering",
+            style_direction: "client-delivery",
+            aspect_hint: "documentation-page",
+            design_intent: "把文档、接口说明或方案内容整理成清晰的阅读页。",
+            objective: "快速生成一页技术文档或交接说明，保留结构、步骤、注意事项和缺失信息。",
+            audience: "技术对接人员和项目成员",
+            prompt_hints: &[
+                "preserve source headings and section hierarchy when V3 supplied document detail",
+                "show unavailable interface details as missing evidence instead of guessing",
+            ],
+        })),
+        "deck-swiss-international" | "video-hyperframes" => Err(ApiError::bad_request(
+            "static_page_template_reference_paused",
+            format!("{id} belongs to a paused PPT/video track and cannot create V3 static pages"),
+        )),
+        _ => Err(ApiError::bad_request(
+            "invalid_static_page_template_reference",
+            format!("{id} is not an enabled V3 static page template reference"),
+        )),
+    }
+}
+
+fn static_page_template_design_reference(reference: StaticPageTemplateReferenceSpec) -> Value {
+    json!({
+        "source": "html-anything",
+        "sourceKind": "template_design_reference",
+        "upstream": "nexu-io/html-anything",
+        "license": "Apache-2.0",
+        "importPolicy": "metadata_and_constraints_only",
+        "templateId": reference.id,
+        "label": reference.label,
+        "category": reference.category,
+        "scenario": reference.scenario,
+        "surface": "static_page",
+        "status": "enabled",
+        "pauseReason": "",
+        "quickOutput": true,
+        "aspectHint": reference.aspect_hint,
+        "styleDirection": reference.style_direction,
+        "designIntent": reference.design_intent,
+        "promptHints": reference.prompt_hints,
+        "guardrails": STATIC_PAGE_TEMPLATE_REFERENCE_GUARDRAILS,
+        "providerPolicy": {
+            "providerOutput": "structured_static_page_draft_json",
+            "forbiddenOutput": STATIC_PAGE_TEMPLATE_FORBIDDEN_OUTPUTS,
+        },
+    })
+}
+
+fn static_page_template_evidence_summary(evidence_state: &Value) -> Value {
+    json!({
+        "status": evidence_state
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown"),
+        "supplied_count": assistant_run_evidence_supplied_count(evidence_state),
+        "detail_target_count": assistant_run_detail_target_count(evidence_state),
+        "recommended_actions": evidence_state
+            .get("recommended_actions")
+            .cloned()
+            .unwrap_or_else(|| Value::Array(Vec::new())),
+        "supply_quality": evidence_state
+            .get("supply_quality")
+            .or_else(|| evidence_state.get("supplyQuality"))
+            .cloned()
+            .unwrap_or(Value::Null),
+    })
+}
+
+fn static_page_template_missing_evidence(
+    reference: Option<StaticPageTemplateReferenceSpec>,
+    evidence_state: &Value,
+) -> Value {
+    let supplied_count = assistant_run_evidence_supplied_count(evidence_state);
+    let detail_target_count = assistant_run_detail_target_count(evidence_state);
+    let mut missing = Vec::<Value>::new();
+
+    if supplied_count == 0 {
+        missing.push(json!({
+            "code": "visible_evidence_required",
+            "message": "当前没有可引用供料；静态页只能先生成结构草稿，不能声称已使用真实数据。",
+            "recommended_action": "retrieve_evidence",
+        }));
+    }
+    if let Some(reference) = reference {
+        match reference.id {
+            "data-report" | "dashboard" => {
+                missing.push(json!({
+                    "code": "chart_sample_rows_required",
+                    "message": "图表模块需要来自可见数据集、检索证据或模型明确标注的样例行。",
+                    "recommended_action": "static_page.update_draft",
+                }));
+            }
+            "docs-page" => {
+                if !static_page_evidence_state_has_section_title_hints(evidence_state) {
+                    missing.push(json!({
+                        "code": "document_headings_or_detail_required",
+                        "message": "文档页需要源文档标题、章节线索或细读详情来避免编造接口与验收内容。",
+                        "recommended_action": "read_document_detail",
+                    }));
+                }
+            }
+            _ => {}
+        }
+    }
+    if detail_target_count > 0 {
+        missing.push(json!({
+            "code": "detail_targets_available",
+            "message": "存在建议细读目标；需要原文措辞、表格、OCR 或媒体时间戳时先读取文档详情。",
+            "recommended_action": "read_document_detail",
+            "detail_target_count": detail_target_count,
+        }));
+    }
+
+    json!({
+        "status": if missing.is_empty() { "ready" } else { "needs_evidence" },
+        "items": missing,
+    })
+}
+
+fn static_page_evidence_state_has_section_title_hints(evidence_state: &Value) -> bool {
+    evidence_state
+        .get("supplied_items")
+        .and_then(Value::as_array)
+        .is_some_and(|items| {
+            items
+                .iter()
+                .any(|item| !static_page_evidence_section_title_hints(item).is_empty())
+        })
+}
+
+fn static_page_template_reference_for_intent(
+    draft_payload: &Value,
+    source_refs: &Value,
+) -> std::result::Result<Option<StaticPageTemplateReferenceSpec>, ApiError> {
+    resolve_static_page_template_reference(
+        static_page_template_reference_id_from_payload(draft_payload)
+            .or_else(|| static_page_template_reference_id_from_source_refs(source_refs)),
+    )
+}
+
+fn static_page_template_reference_payload_for_intent(
+    draft_payload: &Value,
+    source_refs: &Value,
+) -> std::result::Result<Value, ApiError> {
+    Ok(
+        static_page_template_reference_for_intent(draft_payload, source_refs)?
+            .map(static_page_template_design_reference)
+            .unwrap_or(Value::Null),
+    )
+}
+
+fn static_page_template_missing_evidence_for_intent(
+    draft_payload: &Value,
+    source_refs: &Value,
+    evidence_state: &Value,
+) -> std::result::Result<Value, ApiError> {
+    let reference = static_page_template_reference_for_intent(draft_payload, source_refs)?;
+    Ok(static_page_template_missing_evidence(
+        reference,
+        evidence_state,
+    ))
+}
+
+fn upsert_static_page_template_reference(target: &mut Value, reference: Value) {
+    if !target.is_array() {
+        *target = Value::Array(Vec::new());
+    }
+    let template_id = reference
+        .get("templateId")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
+    let Some(items) = target.as_array_mut() else {
+        return;
+    };
+    if let Some(template_id) = template_id.as_deref() {
+        items.retain(|item| {
+            item.get("templateId").and_then(Value::as_str) != Some(template_id)
+                && item.get("template_id").and_then(Value::as_str) != Some(template_id)
+        });
+    }
+    items.insert(0, reference);
+    if items.len() > 5 {
+        items.truncate(5);
+    }
+}
+
+fn static_page_template_data_binding(source_id: &str) -> Value {
+    match source_id {
+        "session" => json!({
+            "type": "conversation_summary",
+            "label": "来自当前会话摘要",
+            "sourceId": "session",
+        }),
+        "dataset" => json!({
+            "type": "dataset_metrics",
+            "label": "来自数据集指标摘要",
+            "sourceId": "dataset",
+        }),
+        "evidence" => json!({
+            "type": "retrieval_evidence",
+            "label": "来自检索证据",
+            "sourceId": "evidence",
+        }),
+        "selected_scope" => json!({
+            "type": "selected_scope",
+            "label": "来自当前选中范围",
+            "sourceId": "selected_scope",
+        }),
+        _ => json!({
+            "type": "model_summary",
+            "label": "来自模型总结",
+            "sourceId": "model",
+        }),
+    }
+}
+
+fn static_page_template_module(
+    id: &str,
+    role: &str,
+    title: &str,
+    content: &str,
+    data_source: &str,
+    visualization_type: &str,
+    visualization_label: &str,
+    layout: (i64, i64, i64, i64),
+) -> Value {
+    json!({
+        "id": id,
+        "role": role,
+        "title": title,
+        "content": content,
+        "dataBinding": static_page_template_data_binding(data_source),
+        "visualization": {
+            "type": visualization_type,
+            "label": visualization_label,
+        },
+        "layout": {
+            "x": layout.0,
+            "y": layout.1,
+            "w": layout.2,
+            "h": layout.3,
+        },
+    })
+}
+
+fn static_page_template_modules(reference: StaticPageTemplateReferenceSpec) -> Value {
+    let modules = match reference.id {
+        "dashboard" => vec![
+            static_page_template_module(
+                "hero",
+                "hero",
+                "运营总览",
+                "总结当前状态、异常等级和本轮关注重点。",
+                "session",
+                "headline",
+                "大标题 + 关键结论",
+                (0, 0, 12, 2),
+            ),
+            static_page_template_module(
+                "kpi",
+                "metrics",
+                "关键状态",
+                "显示 3-5 个用于判断健康度、效率、进度或风险的指标。",
+                "dataset",
+                "kpi-cards",
+                "关键指标卡",
+                (0, 2, 5, 3),
+            ),
+            static_page_template_module(
+                "trend",
+                "trend",
+                "运行趋势",
+                "展示任务量、转化、响应、质量或异常的时间走势。",
+                "evidence",
+                "line-chart",
+                "趋势折线图",
+                (5, 2, 7, 3),
+            ),
+            static_page_template_module(
+                "risk",
+                "risk",
+                "风险预警",
+                "把阻塞项、异常项和机会点按优先级展示。",
+                "evidence",
+                "risk-matrix",
+                "风险优先级矩阵",
+                (0, 5, 6, 4),
+            ),
+            static_page_template_module(
+                "activity",
+                "activity",
+                "最近动作",
+                "列出最近更新、待处理动作和负责人线索；不可见时标注未供料。",
+                "model",
+                "timeline",
+                "阶段时间线",
+                (6, 5, 6, 4),
+            ),
+        ],
+        "docs-page" => vec![
+            static_page_template_module(
+                "hero",
+                "hero",
+                "文档概览",
+                "说明这份文档解决什么问题、适用对象和当前信息完整度。",
+                "session",
+                "headline",
+                "大标题 + 关键结论",
+                (0, 0, 12, 3),
+            ),
+            static_page_template_module(
+                "scope",
+                "scope",
+                "范围与边界",
+                "列出系统边界、权限边界、已供料和未供料范围。",
+                "evidence",
+                "text-insight",
+                "洞察文本块",
+                (0, 3, 6, 3),
+            ),
+            static_page_template_module(
+                "steps",
+                "steps",
+                "流程步骤",
+                "把关键流程拆成可执行步骤，保留前后依赖。",
+                "model",
+                "timeline",
+                "阶段时间线",
+                (6, 3, 6, 3),
+            ),
+            static_page_template_module(
+                "interfaces",
+                "interfaces",
+                "接口与数据",
+                "整理接口、字段、输入输出或配置项；没有真实接口时标注待补。",
+                "selected_scope",
+                "text-insight",
+                "洞察文本块",
+                (0, 6, 6, 4),
+            ),
+            static_page_template_module(
+                "checks",
+                "checks",
+                "校验与交付",
+                "列出验证命令、验收标准、风险和下一步交付动作。",
+                "model",
+                "text-insight",
+                "洞察文本块",
+                (6, 6, 6, 4),
+            ),
+        ],
+        _ => vec![
+            static_page_template_module(
+                "hero",
+                "hero",
+                "报告结论",
+                "用一句话说明当前数据最重要的业务判断，并标出数据来源状态。",
+                "session",
+                "headline",
+                "大标题 + 关键结论",
+                (0, 0, 12, 3),
+            ),
+            static_page_template_module(
+                "kpi",
+                "metrics",
+                "核心 KPI",
+                "提炼 3-5 个最重要指标；没有可见数值时明确标注需要补充数据。",
+                "dataset",
+                "kpi-cards",
+                "关键指标卡",
+                (0, 3, 5, 3),
+            ),
+            static_page_template_module(
+                "trend",
+                "trend",
+                "趋势变化",
+                "展示关键指标随时间、阶段或类别的变化方向。",
+                "evidence",
+                "line-chart",
+                "趋势折线图",
+                (5, 3, 7, 3),
+            ),
+            static_page_template_module(
+                "comparison",
+                "comparison",
+                "分类对比",
+                "用对比图解释不同渠道、品类、地区或阶段的差异。",
+                "selected_scope",
+                "bar-chart",
+                "分类对比柱状图",
+                (0, 6, 6, 4),
+            ),
+            static_page_template_module(
+                "evidence",
+                "evidence",
+                "证据与方法",
+                "列出数据口径、可见证据和当前缺失项，避免模板隐藏不完整数据。",
+                "evidence",
+                "text-insight",
+                "洞察文本块",
+                (6, 6, 6, 4),
+            ),
+        ],
+    };
+    Value::Array(modules)
+}
+
+fn static_page_template_mobile_order(modules: &Value) -> Value {
+    Value::Array(
+        modules
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|module| module.get("id").and_then(Value::as_str))
+            .map(|id| json!(id))
+            .collect(),
+    )
+}
+
+fn json_object_string_missing(object: &Map<String, Value>, key: &str) -> bool {
+    object
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_none()
+}
+
+fn json_object_array_missing_or_empty(object: &Map<String, Value>, key: &str) -> bool {
+    object
+        .get(key)
+        .and_then(Value::as_array)
+        .map(Vec::is_empty)
+        .unwrap_or(true)
+}
+
+fn apply_static_page_template_reference_to_payload(
+    mut payload: Value,
+    reference: StaticPageTemplateReferenceSpec,
+    allow_module_seed: bool,
+) -> Value {
+    ensure_json_object(&mut payload);
+    let design_reference = static_page_template_design_reference(reference);
+    if let Some(object) = payload.as_object_mut() {
+        object.insert("templateReferenceId".to_string(), json!(reference.id));
+        object.insert(
+            "styleDirection".to_string(),
+            json!(reference.style_direction),
+        );
+        object.insert(
+            "style_direction".to_string(),
+            json!(reference.style_direction),
+        );
+        if json_object_string_missing(object, "objective") {
+            object.insert("objective".to_string(), json!(reference.objective));
+        }
+        if json_object_string_missing(object, "audience") {
+            object.insert("audience".to_string(), json!(reference.audience));
+        }
+        if json_object_string_missing(object, "modelSummary") {
+            object.insert(
+                "modelSummary".to_string(),
+                json!(format!(
+                    "{} 模板参考已应用。V3 仍需按可见数据集、检索证据和缺失项生成结构化草稿。",
+                    reference.label
+                )),
+            );
+        }
+
+        if allow_module_seed && json_object_array_missing_or_empty(object, "modules") {
+            let modules = static_page_template_modules(reference);
+            object.insert(
+                "mobileOrder".to_string(),
+                static_page_template_mobile_order(&modules),
+            );
+            object.insert("modules".to_string(), modules);
+        }
+
+        let references = object
+            .entry("designReferences".to_string())
+            .or_insert_with(|| Value::Array(Vec::new()));
+        upsert_static_page_template_reference(references, design_reference.clone());
+
+        let source = object
+            .entry("source".to_string())
+            .or_insert_with(|| Value::Object(Map::new()));
+        ensure_json_object(source);
+        if let Some(source_object) = source.as_object_mut() {
+            let references = source_object
+                .entry("templateReferences".to_string())
+                .or_insert_with(|| Value::Array(Vec::new()));
+            upsert_static_page_template_reference(references, design_reference);
+        }
+    }
+    refresh_static_page_payload_design_contract(&mut payload);
+    payload
+}
+
+fn apply_static_page_template_reference_to_source_refs(
+    mut source_refs: Value,
+    reference: StaticPageTemplateReferenceSpec,
+) -> Value {
+    ensure_json_object(&mut source_refs);
+    if let Some(object) = source_refs.as_object_mut() {
+        object.insert("template_reference_id".to_string(), json!(reference.id));
+        let references = object
+            .entry("template_references".to_string())
+            .or_insert_with(|| Value::Array(Vec::new()));
+        upsert_static_page_template_reference(
+            references,
+            static_page_template_design_reference(reference),
+        );
+    }
+    source_refs
+}
+
+fn apply_static_page_template_context_to_payload(
+    mut payload: Value,
+    template_reference: Option<&Value>,
+    evidence_summary: &Value,
+    missing_evidence: &Value,
+) -> Value {
+    ensure_json_object(&mut payload);
+    if let Some(object) = payload.as_object_mut() {
+        if let Some(template_reference) = template_reference {
+            object.insert("templateReference".to_string(), template_reference.clone());
+        }
+        object.insert(
+            "templateEvidenceSummary".to_string(),
+            evidence_summary.clone(),
+        );
+        object.insert("missingEvidence".to_string(), missing_evidence.clone());
+
+        let source = object
+            .entry("source".to_string())
+            .or_insert_with(|| Value::Object(Map::new()));
+        ensure_json_object(source);
+        if let Some(source_object) = source.as_object_mut() {
+            if let Some(template_reference) = template_reference {
+                source_object.insert("templateReference".to_string(), template_reference.clone());
+            }
+            source_object.insert(
+                "templateEvidenceSummary".to_string(),
+                evidence_summary.clone(),
+            );
+            source_object.insert("missingEvidence".to_string(), missing_evidence.clone());
+        }
+    }
+    payload
+}
+
 fn derive_static_page_draft_title(prompt: &str) -> String {
     let normalized = prompt.split_whitespace().collect::<Vec<_>>().join(" ");
     if normalized.is_empty() {
@@ -29272,19 +30484,33 @@ fn build_static_page_data_snapshot_with_evidence(
 ) -> Value {
     let data_source_candidates = build_static_page_data_source_candidates(selected_scope);
     let field_candidates = build_static_page_field_candidates(selected_scope, evidence_state);
+    let is_docs_page_template =
+        static_page_template_reference_id_from_payload(payload) == Some("docs-page");
+    let heading_candidate = if is_docs_page_template {
+        static_page_heading_field_candidate(&field_candidates)
+    } else {
+        None
+    };
     let module_bindings = static_page_payload_modules(payload)
         .as_array()
         .cloned()
         .unwrap_or_default()
         .into_iter()
-        .map(|module| {
+        .map(|mut module| {
             let sample_data = build_static_page_module_sample_data(&module, evidence_state);
             let data_quality = static_page_sample_data_quality(&sample_data);
-            let binding = module
+            let mut binding = module
                 .get("dataBinding")
                 .or_else(|| module.get("data_binding"))
                 .cloned()
                 .unwrap_or(Value::Null);
+            binding = enrich_docs_page_heading_binding(&module, binding, heading_candidate);
+            if binding.is_object() {
+                if let Some(object) = module.as_object_mut() {
+                    object.insert("dataBinding".to_string(), binding.clone());
+                    object.insert("data_binding".to_string(), binding.clone());
+                }
+            }
             let visualization_type = module
                 .get("visualization")
                 .and_then(|visualization| visualization.get("type"))
@@ -29329,6 +30555,8 @@ fn build_static_page_data_snapshot_with_evidence(
             })
         })
         .collect::<Vec<_>>();
+    let structure_signals =
+        build_static_page_structure_signals(&field_candidates, &module_bindings);
     json!({
         "version": 1,
         "source": source,
@@ -29340,7 +30568,178 @@ fn build_static_page_data_snapshot_with_evidence(
         "data_source_candidates": data_source_candidates,
         "field_candidates": field_candidates,
         "module_bindings": module_bindings,
+        "structure_signals": structure_signals,
     })
+}
+
+fn build_static_page_structure_signals(
+    field_candidates: &Value,
+    module_bindings: &[Value],
+) -> Value {
+    const HINT_LIMIT: usize = 12;
+    const FIELD_LIMIT: usize = 4;
+    const MODULE_LIMIT: usize = 8;
+
+    let mut section_title_hints = Vec::<String>::new();
+    let field_candidate_briefs = field_candidates
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .filter(|candidate| {
+                    static_page_artifact_string(candidate, &["fieldPath", "field_path", "field"])
+                        .as_deref()
+                        == Some("retrieval.section_title_hints")
+                })
+                .take(FIELD_LIMIT)
+                .map(|candidate| {
+                    let hints =
+                        assistant_run_static_page_section_title_hints(candidate, HINT_LIMIT);
+                    for hint in &hints {
+                        push_string_hint(&mut section_title_hints, hint);
+                    }
+                    json!({
+                        "sourceId": static_page_artifact_string(candidate, &["sourceId", "source_id"]).unwrap_or_default(),
+                        "fieldPath": "retrieval.section_title_hints",
+                        "label": static_page_artifact_string(candidate, &["label"]).unwrap_or_default(),
+                        "kind": static_page_artifact_string(candidate, &["kind"]).unwrap_or_default(),
+                        "confidence": candidate.get("confidence").cloned().unwrap_or(Value::Null),
+                        "evidenceIds": candidate
+                            .get("evidenceIds")
+                            .or_else(|| candidate.get("evidence_ids"))
+                            .cloned()
+                            .unwrap_or_else(|| json!([])),
+                        "sectionTitleHints": hints,
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    let bound_modules = module_bindings
+        .iter()
+        .filter_map(|module| {
+            let binding = module
+                .get("binding")
+                .or_else(|| module.get("dataBinding"))
+                .or_else(|| module.get("data_binding"))
+                .unwrap_or(&Value::Null);
+            let binding_quality = module
+                .get("bindingQuality")
+                .or_else(|| module.get("binding_quality"))
+                .unwrap_or(&Value::Null);
+            let matched_candidate = binding_quality
+                .get("matchedFieldCandidate")
+                .or_else(|| binding_quality.get("matched_field_candidate"))
+                .unwrap_or(&Value::Null);
+            let field_path = static_page_artifact_string(binding, &["fieldPath", "field_path", "field"])
+                .or_else(|| static_page_artifact_string(binding_quality, &["fieldPath", "field_path", "field"]))
+                .or_else(|| static_page_artifact_string(matched_candidate, &["fieldPath", "field_path", "field"]));
+            if field_path.as_deref() != Some("retrieval.section_title_hints") {
+                return None;
+            }
+            let hints =
+                assistant_run_static_page_section_title_hints(matched_candidate, HINT_LIMIT);
+            for hint in &hints {
+                push_string_hint(&mut section_title_hints, hint);
+            }
+            Some(json!({
+                "moduleId": static_page_artifact_string(module, &["moduleId", "module_id"]).unwrap_or_default(),
+                "title": static_page_artifact_string(module, &["title"]).unwrap_or_default(),
+                "fieldPath": "retrieval.section_title_hints",
+                "bindingQualityStatus": static_page_artifact_string(module, &["bindingQualityStatus", "binding_quality_status"])
+                    .or_else(|| static_page_artifact_string(binding_quality, &["status"]))
+                    .unwrap_or_default(),
+                "sectionTitleHints": hints,
+            }))
+        })
+        .take(MODULE_LIMIT)
+        .collect::<Vec<_>>();
+
+    section_title_hints.truncate(HINT_LIMIT);
+    json!({
+        "version": 1,
+        "status": if section_title_hints.is_empty() { "none" } else { "available" },
+        "policy": "source_structure_only_no_body_no_sample_rows",
+        "sectionTitleHints": section_title_hints,
+        "fieldCandidates": field_candidate_briefs,
+        "boundModules": bound_modules,
+    })
+}
+
+fn static_page_heading_field_candidate(field_candidates: &Value) -> Option<&Value> {
+    field_candidates.as_array()?.iter().find(|candidate| {
+        candidate
+            .get("sourceId")
+            .or_else(|| candidate.get("source_id"))
+            .and_then(Value::as_str)
+            == Some("evidence")
+            && candidate
+                .get("fieldPath")
+                .or_else(|| candidate.get("field_path"))
+                .and_then(Value::as_str)
+                == Some("retrieval.section_title_hints")
+            && !static_page_field_candidate_section_title_hints(candidate).is_empty()
+    })
+}
+
+fn static_page_field_candidate_section_title_hints(candidate: &Value) -> Vec<String> {
+    let mut hints = Vec::new();
+    for key in ["sectionTitleHints", "section_title_hints"] {
+        if let Some(value) = candidate.get(key) {
+            collect_string_list(value, &mut hints);
+        }
+    }
+    hints.truncate(6);
+    hints
+}
+
+fn enrich_docs_page_heading_binding(
+    module: &Value,
+    binding: Value,
+    heading_candidate: Option<&Value>,
+) -> Value {
+    let Some(heading_candidate) = heading_candidate else {
+        return binding;
+    };
+    if !docs_page_structure_module_uses_heading_hints(module) {
+        return binding;
+    }
+    if let Some(field_path) = static_page_binding_string(&binding, &["fieldPath", "field_path"]) {
+        if field_path != "retrieval.section_title_hints" {
+            return binding;
+        }
+    }
+
+    let mut next = binding.as_object().cloned().unwrap_or_default();
+    next.insert("type".to_string(), json!("retrieval_evidence"));
+    next.insert("sourceId".to_string(), json!("evidence"));
+    next.insert(
+        "fieldPath".to_string(),
+        json!("retrieval.section_title_hints"),
+    );
+    next.insert(
+        "label".to_string(),
+        heading_candidate
+            .get("label")
+            .and_then(Value::as_str)
+            .map(|label| json!(label))
+            .unwrap_or_else(|| json!("文档段落标题线索")),
+    );
+    if let Some(evidence_ids) = heading_candidate.get("evidenceIds") {
+        next.insert("evidenceIds".to_string(), evidence_ids.clone());
+    }
+    Value::Object(next)
+}
+
+fn docs_page_structure_module_uses_heading_hints(module: &Value) -> bool {
+    for key in ["id", "role"] {
+        match module.get(key).and_then(Value::as_str) {
+            Some("scope" | "steps" | "interfaces" | "checks") => return true,
+            _ => {}
+        }
+    }
+    false
 }
 
 fn build_static_page_data_source_candidates(selected_scope: &Value) -> Value {
@@ -31058,6 +32457,13 @@ async fn interpret_static_page_draft_intent_for_api(
                 format!("assistant run {} was not found", draft.assistant_run_id),
             )
         })?;
+    let template_reference =
+        static_page_template_reference_payload_for_intent(draft_payload, &draft.source_refs)?;
+    let missing_evidence = static_page_template_missing_evidence_for_intent(
+        draft_payload,
+        &draft.source_refs,
+        &run.evidence_state,
+    )?;
     let runtime_request = StaticPageIntentRequest {
         prompt: prompt.to_string(),
         draft_payload: draft_payload.clone(),
@@ -31065,6 +32471,8 @@ async fn interpret_static_page_draft_intent_for_api(
         startup_briefing: run.startup_briefing.clone(),
         selected_scope: draft.selected_scope.clone(),
         evidence_state: run.evidence_state.clone(),
+        template_reference,
+        missing_evidence,
         conversation_memory_refs: static_page_conversation_memory_refs(&run),
         messages: messages
             .into_iter()
@@ -31836,6 +33244,116 @@ mod tests {
             citations: Vec::new(),
             conversation_state: json!({}),
         }
+    }
+
+    #[test]
+    fn static_page_template_reference_injects_safe_payload_contract() {
+        let reference = resolve_static_page_template_reference(Some("DATA-REPORT"))
+            .expect("template id should parse")
+            .expect("template reference should exist");
+        let payload = apply_static_page_template_reference_to_payload(
+            json!({
+                "version": 1,
+                "status": "draft",
+                "modules": []
+            }),
+            reference,
+            true,
+        );
+
+        assert_eq!(payload["templateReferenceId"], json!("data-report"));
+        assert_eq!(payload["styleDirection"], json!("data-command"));
+        assert_eq!(payload["modules"][0]["id"], json!("hero"));
+        assert_eq!(
+            payload["designReferences"][0]["source"],
+            json!("html-anything")
+        );
+        assert_eq!(
+            payload["designReferences"][0]["importPolicy"],
+            json!("metadata_and_constraints_only")
+        );
+        assert_eq!(
+            payload["designReferences"][0]["providerPolicy"]["providerOutput"],
+            json!("structured_static_page_draft_json")
+        );
+        assert!(value_array(
+            payload["designReferences"][0]["providerPolicy"]["forbiddenOutput"].clone()
+        )
+        .iter()
+        .any(|item| item == "raw_html"));
+        assert_eq!(
+            payload["source"]["templateReferences"][0]["templateId"],
+            json!("data-report")
+        );
+    }
+
+    #[test]
+    fn static_page_template_reference_rejects_paused_tracks() {
+        let error = resolve_static_page_template_reference(Some("video-hyperframes"))
+            .expect_err("paused video reference should be rejected");
+
+        assert_eq!(error.status, StatusCode::BAD_REQUEST);
+        assert_eq!(error.payload.code, "static_page_template_reference_paused");
+    }
+
+    #[test]
+    fn static_page_template_reference_infers_from_intent_and_payload() {
+        assert_eq!(
+            infer_static_page_template_reference_id("做一个运营监控看板"),
+            Some("dashboard")
+        );
+        assert_eq!(
+            infer_static_page_template_reference_id("整理接口交接文档和验收步骤"),
+            Some("docs-page")
+        );
+        assert_eq!(
+            infer_static_page_template_reference_id("生成经营分析报告和 KPI 图表"),
+            Some("data-report")
+        );
+        assert_eq!(infer_static_page_template_reference_id("随便聊聊"), None);
+
+        let payload = json!({
+            "source": {
+                "templateReferences": [{ "templateId": "docs-page" }]
+            }
+        });
+        assert_eq!(
+            static_page_template_reference_id_from_payload(&payload),
+            Some("docs-page")
+        );
+        let source_refs = json!({
+            "template_references": [{ "template_id": "dashboard" }]
+        });
+        assert_eq!(
+            static_page_template_reference_id_from_source_refs(&source_refs),
+            Some("dashboard")
+        );
+    }
+
+    #[test]
+    fn docs_page_missing_evidence_is_ready_when_section_title_hints_are_supplied() {
+        let reference = resolve_static_page_template_reference(Some("docs-page"))
+            .expect("docs-page reference should resolve")
+            .expect("docs-page reference should be enabled");
+        let evidence_state = json!({
+            "status": "supplied",
+            "supplied_items": [{
+                "type": "retrieval_evidence",
+                "summary": "接口交接说明",
+                "content_excerpt": "## 接口与数据\n输入输出字段说明。",
+                "evidence_manifest": {
+                    "evidence": {
+                        "section_title_hints": ["接口与数据"]
+                    }
+                }
+            }]
+        });
+
+        let missing_evidence =
+            static_page_template_missing_evidence(Some(reference), &evidence_state);
+
+        assert_eq!(missing_evidence["status"], json!("ready"));
+        assert!(value_array(missing_evidence["items"].clone()).is_empty());
     }
 
     fn codex_model_gateway_env_lock() -> &'static Mutex<()> {
@@ -37756,6 +39274,22 @@ mod tests {
                     "type": "static_page_draft",
                     "backendDraftId": "draft-1",
                     "previewContract": {"status": "stale"},
+                    "templateReference": {
+                        "source": "html-anything",
+                        "importPolicy": "metadata_and_constraints_only",
+                        "templateId": "docs-page",
+                        "label": "技术文档页",
+                        "styleDirection": "client-delivery",
+                        "designIntent": "把文档整理成清晰的阅读页。"
+                    },
+                    "missingEvidence": {
+                        "status": "needs_evidence",
+                        "items": [{
+                            "code": "document_headings_or_detail_required",
+                            "message": "需要源文档标题和章节线索。",
+                            "recommended_action": "read_document_detail"
+                        }]
+                    },
                     "modules": [{
                         "id": "hero",
                         "title": "核心判断",
@@ -37763,6 +39297,14 @@ mod tests {
                         "rows": [{"raw": "current-artifact-row-should-not-leak"}]
                     }],
                     "dataSnapshot": {
+                        "field_candidates": [{
+                            "sourceId": "evidence",
+                            "fieldPath": "retrieval.section_title_hints",
+                            "label": "文档段落标题线索",
+                            "kind": "section_titles",
+                            "confidence": 0.78,
+                            "sectionTitleHints": ["接口与数据", "校验与交付"]
+                        }],
                         "module_bindings": [{
                             "moduleId": "hero",
                             "title": "核心判断",
@@ -37784,6 +39326,20 @@ mod tests {
                                 "recommendedAction": "先补充样本行再出效果图。",
                                 "sampleRows": 1
                             }
+                        }, {
+                            "moduleId": "interfaces",
+                            "title": "接口与数据",
+                            "binding": {
+                                "sourceId": "evidence",
+                                "fieldPath": "retrieval.section_title_hints"
+                            },
+                            "bindingQuality": {
+                                "status": "confirmed",
+                                "matchedFieldCandidate": {
+                                    "fieldPath": "retrieval.section_title_hints",
+                                    "sectionTitleHints": ["接口与数据", "校验与交付"]
+                                }
+                            }
                         }]
                     }
                 })),
@@ -37800,12 +39356,29 @@ mod tests {
         assert!(input.contains("当前不可见/未供料"));
         assert!(input.contains("禁止直接 render_static_page"));
         assert!(input.contains("submit_static_page_image_preview"));
+        assert!(input.contains("missingEvidence.status=needs_evidence"));
+        assert!(input.contains("recommended_action/recommendedAction"));
+        assert!(input.contains("document_id 必须来自选中范围、detailTargets 或 observation"));
         assert!(input.contains("\"previewStale\":true"));
         assert!(input.contains("\"previewStatus\":\"stale\""));
+        assert!(input.contains("\"templateReference\""));
+        assert!(input.contains("\"source\":\"html-anything\""));
+        assert!(input.contains("\"importPolicy\":\"metadata_and_constraints_only\""));
+        assert!(input.contains("\"templateId\":\"docs-page\""));
+        assert!(input.contains("\"missingEvidence\""));
+        assert!(input.contains("\"status\":\"needs_evidence\""));
+        assert!(input.contains("document_headings_or_detail_required"));
+        assert!(input.contains("\"recommendedAction\":\"read_document_detail\""));
         assert!(input.contains("\"id\":\"hero\""));
         assert!(input.contains("\"bindingQuality\""));
         assert!(input.contains("\"chartDataFit\":\"needs_sample_rows\""));
         assert!(input.contains("\"sampleRows\":1"));
+        assert!(input.contains("structureSignals.sectionTitleHints"));
+        assert!(input.contains("\"structureSignals\""));
+        assert!(input.contains("\"policy\":\"source_structure_only_no_body_no_sample_rows\""));
+        assert!(input.contains("\"sectionTitleHints\":[\"接口与数据\",\"校验与交付\"]"));
+        assert!(input.contains("\"fieldPath\":\"retrieval.section_title_hints\""));
+        assert!(input.contains("\"moduleId\":\"interfaces\""));
         assert!(!input.contains("模块正文不能进入弱规划目录"));
         assert!(!input.contains("当前打开产物正文不能进入 ReAct 规划提示"));
         assert!(!input.contains("current-artifact-row-should-not-leak"));
@@ -37846,6 +39419,22 @@ mod tests {
                 "type": "static_page_draft",
                 "backendDraftId": "draft-1",
                 "previewContract": {"status": "stale"},
+                "source": {
+                    "templateReference": {
+                        "source": "html-anything",
+                        "templateId": "data-report",
+                        "label": "数据可视化报告",
+                        "styleDirection": "data-command"
+                    },
+                    "missingEvidence": {
+                        "status": "needs_evidence",
+                        "items": [{
+                            "code": "chart_sample_rows_required",
+                            "message": "需要样本行才能生成图表。",
+                            "recommended_action": "static_page.update_draft"
+                        }]
+                    }
+                },
                 "modules": [{
                     "id": "trend",
                     "title": "订单趋势",
@@ -37871,6 +39460,15 @@ mod tests {
         assert!(input.contains("禁止直接 render_static_page"));
         assert!(input.contains("submit_static_page_image_preview"));
         assert!(input.contains("\"previewStale\":true"));
+        assert!(input.contains("missingEvidence.status=needs_evidence"));
+        assert!(input.contains(
+            "static_page.update_draft/update_static_page_module -> update_static_page_module"
+        ));
+        assert!(input.contains("\"templateReference\""));
+        assert!(input.contains("\"templateId\":\"data-report\""));
+        assert!(input.contains("\"missingEvidence\""));
+        assert!(input.contains("chart_sample_rows_required"));
+        assert!(input.contains("\"recommendedAction\":\"static_page.update_draft\""));
         assert!(input.contains("\"id\":\"trend\""));
         assert!(input.contains("final_answer 面向用户聊天框"));
         assert!(input.contains("禁止粘贴 observation JSON"));
@@ -40335,6 +41933,122 @@ mod tests {
     }
 
     #[test]
+    fn docs_page_data_snapshot_binds_structure_modules_to_section_title_hints() {
+        let dataset_id = DatasetId::new();
+        let selected_scope = json!({
+            "mode": "user_selected",
+            "datasets": [dataset_id.to_string()],
+        });
+        let payload = json!({
+            "templateReferenceId": "docs-page",
+            "modules": [
+                {
+                    "id": "hero",
+                    "role": "hero",
+                    "title": "文档概览",
+                    "dataBinding": {"sourceId": "session"},
+                    "visualization": {"type": "headline"}
+                },
+                {
+                    "id": "scope",
+                    "role": "scope",
+                    "title": "范围与边界",
+                    "dataBinding": {"sourceId": "evidence"},
+                    "visualization": {"type": "text-insight"}
+                },
+                {
+                    "id": "steps",
+                    "role": "steps",
+                    "title": "流程步骤",
+                    "dataBinding": {"sourceId": "model"},
+                    "visualization": {"type": "timeline"}
+                },
+                {
+                    "id": "interfaces",
+                    "role": "interfaces",
+                    "title": "接口与数据",
+                    "dataBinding": {"sourceId": "selected_scope"},
+                    "visualization": {"type": "text-insight"}
+                },
+                {
+                    "id": "checks",
+                    "role": "checks",
+                    "title": "校验与交付",
+                    "dataBinding": {"sourceId": "model"},
+                    "visualization": {"type": "text-insight"}
+                }
+            ]
+        });
+        let evidence_state = json!({
+            "status": "supplied",
+            "supplied_items": [{
+                "type": "retrieval_evidence",
+                "dataset_id": dataset_id.to_string(),
+                "document_id": Uuid::new_v4().to_string(),
+                "document_chunk_id": Uuid::new_v4().to_string(),
+                "retrieval_evidence_id": Uuid::new_v4().to_string(),
+                "source_locator": "documents/api-handoff.md#chunk=0",
+                "summary": "接口交接与验收说明",
+                "content_excerpt": "## 接口与数据\n列出输入输出字段。\n## 校验与交付\n运行 smoke 验证。",
+                "evidence_manifest": {
+                    "evidence": {
+                        "section_title_hints": ["接口与数据", "校验与交付"]
+                    }
+                }
+            }]
+        });
+
+        let snapshot = build_static_page_data_snapshot_with_evidence(
+            &payload,
+            &selected_scope,
+            Some(&evidence_state),
+            "assistant_run",
+        );
+        let bindings = value_array(snapshot["module_bindings"].clone());
+        assert_eq!(snapshot["structure_signals"]["status"], json!("available"));
+        assert_eq!(
+            snapshot["structure_signals"]["policy"],
+            json!("source_structure_only_no_body_no_sample_rows")
+        );
+        assert_eq!(
+            snapshot["structure_signals"]["sectionTitleHints"][0],
+            json!("接口与数据")
+        );
+
+        let hero = bindings
+            .iter()
+            .find(|binding| binding["moduleId"] == json!("hero"))
+            .expect("hero module should be present");
+        assert_eq!(hero["binding"]["sourceId"], json!("session"));
+
+        for module_id in ["scope", "steps", "interfaces", "checks"] {
+            let binding = bindings
+                .iter()
+                .find(|binding| binding["moduleId"] == json!(module_id))
+                .expect("structure module should be present");
+            assert_eq!(binding["binding"]["sourceId"], json!("evidence"));
+            assert_eq!(
+                binding["binding"]["fieldPath"],
+                json!("retrieval.section_title_hints")
+            );
+            assert_eq!(
+                binding["bindingQuality"]["matchedFieldCandidate"]["fieldPath"],
+                json!("retrieval.section_title_hints")
+            );
+            assert_eq!(
+                binding["bindingQuality"]["matchedFieldCandidate"]["sectionTitleHints"][0],
+                json!("接口与数据")
+            );
+            assert_eq!(binding["bindingQualityStatus"], json!("confirmed"));
+        }
+        let bound_modules = value_array(snapshot["structure_signals"]["boundModules"].clone());
+        assert_eq!(bound_modules.len(), 4);
+        assert!(bound_modules
+            .iter()
+            .any(|module| module["moduleId"] == json!("interfaces")));
+    }
+
+    #[test]
     fn static_page_design_edit_marks_confirmed_preview_and_final_render_stale() {
         let job_id = StaticPageImageJobId::new();
         let base_payload = json!({
@@ -40829,6 +42543,7 @@ mod tests {
             Json(CreateStaticPageDraftRequest {
                 title: Some("经营分析静态页".to_string()),
                 prompt: Some("生成一页经营分析静态页".to_string()),
+                template_reference_id: Some("data-report".to_string()),
                 selected_scope: None,
                 visibility_snapshot: None,
                 source_refs: Value::Null,
@@ -40863,6 +42578,30 @@ mod tests {
         assert_eq!(
             draft_response.draft.draft_payload["modules"][0]["title"],
             json!("核心判断")
+        );
+        assert_eq!(
+            draft_response.draft.draft_payload["templateReferenceId"],
+            json!("data-report")
+        );
+        assert_eq!(
+            draft_response.draft.draft_payload["designReferences"][0]["source"],
+            json!("html-anything")
+        );
+        assert_eq!(
+            draft_response.draft.draft_payload["templateReference"]["templateId"],
+            json!("data-report")
+        );
+        assert_eq!(
+            draft_response.draft.draft_payload["templateEvidenceSummary"]["status"],
+            json!("not_requested")
+        );
+        assert_eq!(
+            draft_response.draft.draft_payload["missingEvidence"]["status"],
+            json!("needs_evidence")
+        );
+        assert_eq!(
+            draft_response.draft.source_refs["template_reference_id"],
+            json!("data-report")
         );
         assert!(value_array(
             draft_response.draft.draft_payload["dataSnapshot"]["data_source_candidates"].clone()
@@ -41549,6 +43288,256 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn assistant_run_react_can_create_template_assisted_static_page_draft() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        clear_assistant_openclaw_env();
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_MODE", "placeholder");
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping react static page create test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("react-static-page-create-test-{}", Uuid::new_v4()),
+                "ReAct Static Page Create Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage,
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+
+        let (_, Json(run_response)) = create_assistant_run(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(CreateAssistantRunRequest {
+                prompt: "做一个运营监控看板".to_string(),
+                local_thread_id: Some("react-static-page-create-thread".to_string()),
+                startup_briefing: Some(json!({"capabilities": ["static_page_plan"]})),
+                selected_scope: Some(json!({"mode": "ordinary_chat"})),
+                scope_candidates: Vec::new(),
+                context_policy_hint: None,
+                current_artifact: None,
+                messages: Vec::new(),
+            }),
+        )
+        .await
+        .expect("assistant run should be created");
+
+        let action = react_test_action(
+            AssistantRunReActStatus::Act,
+            AssistantRunReactActionType::CreateStaticPageDraft,
+            json!({
+                "prompt": "做一个运营监控看板，突出风险和最近动作"
+            }),
+        );
+        let mut evidence_state = json!({"status": "not_requested"});
+
+        let result = execute_assistant_run_react_action(
+            &state,
+            &action,
+            &json!({"mode": "ordinary_chat"}),
+            &mut evidence_state,
+            None,
+            Some(run_response.assistant_run_id),
+            "做一个运营监控看板",
+            Some("react-static-page-create-thread"),
+            &[],
+            None,
+        )
+        .await
+        .expect("react static page create should apply");
+
+        assert_eq!(result.observation["status"], json!("completed"));
+        assert_eq!(
+            result.observation["template_reference"]["templateId"],
+            json!("dashboard")
+        );
+        assert_eq!(
+            result.observation["missing_evidence"]["status"],
+            json!("needs_evidence")
+        );
+        let draft_id = result.observation["draft_id"]
+            .as_str()
+            .expect("draft id should be present")
+            .to_string();
+
+        let Json(loaded) =
+            get_static_page_draft(State(state.clone()), HeaderMap::new(), Path(draft_id))
+                .await
+                .expect("created static page draft should load");
+        assert_eq!(
+            loaded.draft_payload["templateReferenceId"],
+            json!("dashboard")
+        );
+        assert_eq!(
+            loaded.draft_payload["templateReference"]["templateId"],
+            json!("dashboard")
+        );
+        assert_eq!(
+            loaded.draft_payload["missingEvidence"]["status"],
+            json!("needs_evidence")
+        );
+        assert!(value_array(loaded.draft_payload["modules"].clone())
+            .iter()
+            .any(|module| module["id"] == json!("activity")));
+
+        let Json(detail) = get_assistant_run(
+            State(state),
+            HeaderMap::new(),
+            Path(run_response.assistant_run_id.to_string()),
+        )
+        .await
+        .expect("assistant run detail should load");
+        let created_event = detail
+            .events
+            .iter()
+            .find(|event| event.event_name == "static_page_draft.created")
+            .expect("created event should be appended");
+        assert_eq!(
+            created_event.payload["template_reference"]["templateId"],
+            json!("dashboard")
+        );
+        assert_eq!(
+            created_event.payload["missing_evidence"]["status"],
+            json!("needs_evidence")
+        );
+        assert!(detail
+            .events
+            .iter()
+            .any(|event| event.event_name == "static_page_draft.react_created"));
+    }
+
+    #[tokio::test]
+    async fn docs_page_draft_creation_uses_supplied_section_title_hints() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_MODE", "placeholder");
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping docs page draft creation test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("docs-page-draft-test-{}", Uuid::new_v4()),
+                "Docs Page Draft Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage,
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+
+        let (_, Json(run_response)) = create_assistant_run(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(CreateAssistantRunRequest {
+                prompt: "整理接口交接文档和验收步骤".to_string(),
+                local_thread_id: Some("docs-page-draft-thread".to_string()),
+                startup_briefing: Some(json!({"capabilities": ["static_page_plan"]})),
+                selected_scope: Some(json!({"mode": "ordinary_chat"})),
+                scope_candidates: Vec::new(),
+                context_policy_hint: None,
+                current_artifact: None,
+                messages: Vec::new(),
+            }),
+        )
+        .await
+        .expect("assistant run should be created");
+        let evidence_state = json!({
+            "status": "supplied",
+            "supplied_items": [{
+                "type": "retrieval_evidence",
+                "retrieval_evidence_id": Uuid::new_v4().to_string(),
+                "source_locator": "documents/api-handoff.md#chunk=0",
+                "summary": "接口交接与验收说明",
+                "content_excerpt": "## 接口与数据\n输入输出字段说明。\n## 校验与交付\n运行 smoke 验证。",
+                "evidence_manifest": {
+                    "evidence": {
+                        "section_title_hints": ["接口与数据", "校验与交付"]
+                    }
+                }
+            }]
+        });
+        state
+            .storage
+            .assistant_runs()
+            .update_evidence_state(
+                state.tenant_id,
+                run_response.assistant_run_id,
+                &evidence_state,
+            )
+            .await
+            .expect("evidence state should update");
+
+        let (draft_status, Json(draft_response)) = create_static_page_draft_for_assistant_run(
+            State(state.clone()),
+            HeaderMap::new(),
+            Path(run_response.assistant_run_id.to_string()),
+            Json(CreateStaticPageDraftRequest {
+                title: None,
+                prompt: Some("整理接口交接文档和验收步骤".to_string()),
+                template_reference_id: Some("docs-page".to_string()),
+                selected_scope: None,
+                visibility_snapshot: None,
+                source_refs: Value::Null,
+                draft_payload: Value::Null,
+            }),
+        )
+        .await
+        .expect("docs page static draft should be created");
+
+        assert_eq!(draft_status, StatusCode::CREATED);
+        assert_eq!(
+            draft_response.draft.draft_payload["templateReferenceId"],
+            json!("docs-page")
+        );
+        assert_eq!(
+            draft_response.draft.draft_payload["missingEvidence"]["status"],
+            json!("ready")
+        );
+        assert!(
+            value_array(draft_response.draft.draft_payload["modules"].clone())
+                .iter()
+                .any(|module| module["id"] == json!("interfaces"))
+        );
+
+        let bindings = value_array(
+            draft_response.draft.draft_payload["dataSnapshot"]["module_bindings"].clone(),
+        );
+        for module_id in ["scope", "steps", "interfaces", "checks"] {
+            let binding = bindings
+                .iter()
+                .find(|binding| binding["moduleId"] == json!(module_id))
+                .expect("docs-page structure module should be bound");
+            assert_eq!(binding["binding"]["sourceId"], json!("evidence"));
+            assert_eq!(
+                binding["binding"]["fieldPath"],
+                json!("retrieval.section_title_hints")
+            );
+            assert_eq!(
+                binding["bindingQuality"]["matchedFieldCandidate"]["sectionTitleHints"][0],
+                json!("接口与数据")
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn assistant_run_react_static_page_module_update_applies_current_backend_draft() {
         let _guard = shared_local_postgres_test_lock().lock().await;
         clear_assistant_openclaw_env();
@@ -41600,6 +43589,7 @@ mod tests {
             Json(CreateStaticPageDraftRequest {
                 title: Some("经营分析静态页".to_string()),
                 prompt: Some("生成一页经营分析静态页".to_string()),
+                template_reference_id: None,
                 selected_scope: None,
                 visibility_snapshot: None,
                 source_refs: Value::Null,
@@ -41764,6 +43754,7 @@ mod tests {
             Json(CreateStaticPageDraftRequest {
                 title: Some("经营分析静态页".to_string()),
                 prompt: Some("生成一页经营分析静态页".to_string()),
+                template_reference_id: None,
                 selected_scope: None,
                 visibility_snapshot: None,
                 source_refs: Value::Null,
@@ -46493,7 +48484,7 @@ mod tests {
                     dataset_id: dataset.id,
                     document_id: document.id,
                     chunk_index: 0,
-                    content: "Quarterly revenue increased by 12%.".to_string(),
+                    content: "# Executive Summary\nQuarterly revenue increased by 12%.".to_string(),
                     token_count: 8,
                     metadata: json!({ "section": "summary" }),
                     created_at: now,
@@ -46533,7 +48524,11 @@ mod tests {
         assert_eq!(detail.chunks.len(), 1);
         assert_eq!(
             detail.chunks[0].content,
-            "Quarterly revenue increased by 12%."
+            "# Executive Summary\nQuarterly revenue increased by 12%."
+        );
+        assert_eq!(
+            detail.chunks[0].metadata["section_title_hints"][0],
+            json!("Executive Summary")
         );
         assert_eq!(detail.retrieval_evidences.len(), 1);
         assert_eq!(detail.retrieval_evidences[0].document_id, document.id);
@@ -46552,6 +48547,16 @@ mod tests {
                 .and_then(|summary| summary.recommended_next_action.clone()),
             Some(contracts::ModelFacingNextActionView::AnswerDirectly)
         );
+        let signals = &detail.model_facing.as_ref().expect("model facing").signals;
+        assert!(signals
+            .iter()
+            .any(|signal| signal == "section_title_hint_count=1"));
+        assert!(signals
+            .iter()
+            .any(|signal| signal == "rag_signal=section_title_hints"));
+        assert!(signals
+            .iter()
+            .any(|signal| signal == "section_title_hints=Executive Summary"));
     }
 
     #[tokio::test]
@@ -47627,7 +49632,7 @@ mod tests {
             dataset_id: DatasetId::new(),
             document_id: DocumentId::new(),
             chunk_index: 0,
-            content: "alpha beta gamma".to_string(),
+            content: "## 客户交付\nalpha beta gamma".to_string(),
             token_count: 3,
             state: DocumentChunkState::Extracted,
             metadata: std::collections::BTreeMap::from_iter([(
@@ -47641,8 +49646,9 @@ mod tests {
         let view = to_document_chunk_view(chunk);
 
         assert_eq!(view.state, contracts::DocumentChunkStateView::Extracted);
-        assert_eq!(view.content, "alpha beta gamma");
+        assert_eq!(view.content, "## 客户交付\nalpha beta gamma");
         assert_eq!(view.metadata["source"], json!("placeholder"));
+        assert_eq!(view.metadata["section_title_hints"][0], json!("客户交付"));
     }
 
     #[test]
