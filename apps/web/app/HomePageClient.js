@@ -19,7 +19,12 @@ import {
   summarizeAccountState,
   validateAccountEmail,
 } from './lib/account-auth';
-import { assistantRunFailureMessage, buildApiError, staticPagePreviewGateErrorMessage } from './lib/api-error';
+import {
+  assistantRunErrorRunId,
+  assistantRunFailureMessage,
+  buildApiError,
+  staticPagePreviewGateErrorMessage,
+} from './lib/api-error';
 import { buildAssistantRunProgress } from './lib/assistant-run-progress';
 import { buildAssistantStartupBriefing } from './lib/assistant-startup-briefing';
 import { planAssistantScope, selectPlannerDatasetIds } from './lib/scope-planner';
@@ -2453,6 +2458,10 @@ export default function HomePageClient() {
           usedBackendAssistantRun = Boolean(assistantContent);
         } catch (assistantRunError) {
           setAssistantRunProgress(null);
+          assistantRunId = assistantRunErrorRunId(assistantRunError) || assistantRunId;
+          if (assistantRunId) {
+            setLastAssistantRunId(assistantRunId);
+          }
           if (backendStaticPageEditRequested) {
             pendingStaticPageDraft = handleApplyStaticPagePrompt(prompt);
           }

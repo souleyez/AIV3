@@ -57,6 +57,11 @@ export function assistantRunFailureMessage(error, fallbackMessage = '本轮没�
   return `AssistantRun 执行失败，本轮没有生成回复。错误：${message}。`;
 }
 
+export function assistantRunErrorRunId(error) {
+  const details = apiErrorDetails(error);
+  return details?.assistant_run_id || details?.assistantRunId || '';
+}
+
 const STATIC_PAGE_DATA_QUALITY_GATE_CODES = new Set([
   'static_page_preview_data_quality_gate',
   'static_page_final_render_data_quality_gate',

@@ -6620,15 +6620,18 @@ async fn create_assistant_run(
         {
             Ok(outcome) => Some(outcome),
             Err(error) => {
+                let stage = "react";
                 record_assistant_run_create_failure(
                     &state,
                     run.id,
                     &execution_trail,
                     &error,
-                    "react",
+                    stage,
                 )
                 .await;
-                return Err(error);
+                return Err(assistant_run_create_error_with_run_context(
+                    error, run.id, stage,
+                ));
             }
         }
     } else {
@@ -6666,15 +6669,18 @@ async fn create_assistant_run(
                 {
                     Ok(response) => response,
                     Err(error) => {
+                        let stage = "provider";
                         record_assistant_run_create_failure(
                             &state,
                             run.id,
                             &execution_trail,
                             &error,
-                            "provider",
+                            stage,
                         )
                         .await;
-                        return Err(error);
+                        return Err(assistant_run_create_error_with_run_context(
+                            error, run.id, stage,
+                        ));
                     }
                 };
                 let runtime_manifest = render_runtime_manifest(&response.runtime);
@@ -14310,6 +14316,18 @@ async fn record_assistant_run_create_failure(
             "failed to persist assistant run failure event"
         );
     }
+}
+
+fn assistant_run_create_error_with_run_context(
+    mut error: ApiError,
+    run_id: AssistantRunId,
+    stage: &str,
+) -> ApiError {
+    let mut details = error.payload.details.take().unwrap_or_else(|| json!({}));
+    set_payload_string(&mut details, "assistant_run_id", &run_id.to_string());
+    set_payload_string(&mut details, "stage", stage);
+    error.payload.details = Some(details);
+    error
 }
 
 fn assistant_run_react_direct_natural_answer_from_invalid_output(
@@ -42033,6 +42051,111 @@ mod tests {
         assert!(!detail.events.iter().any(|event| {
             event.payload.get("error_code").and_then(Value::as_str)
                 == Some("active_assistant_run_required")
+        }));
+    }
+
+    #[tokio::test]
+    async fn assistant_run_create_provider_failure_returns_run_context() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        clear_assistant_openclaw_env();
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping assistant run provider failure context test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+        let addr = listener.local_addr().expect("addr");
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_MODE", "provider");
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_PROVIDER", "openclaw");
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_MODEL", "assistant-run-provider-v1");
+        std::env::set_var("ASSISTANT_RUN_REACT_ENABLED", "false");
+        std::env::set_var("OPENCLAW_EXTENSION_ENABLED", "true");
+        std::env::set_var("OPENCLAW_GATEWAY_BASE_URL", format!("http://{addr}"));
+        std::env::set_var("OPENCLAW_GATEWAY_TOKEN", "test-openclaw-token");
+
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let request = read_http_request(&mut stream);
+            assert!(request.contains("POST /v1/responses HTTP/1.1"));
+            write_http_json_response(
+                &mut stream,
+                500,
+                r#"{"error":{"message":"upstream exploded"}}"#,
+            );
+            request
+        });
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("assistant-run-provider-failure-test-{}", Uuid::new_v4()),
+                "Assistant Run Provider Failure Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage,
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+
+        let error = create_assistant_run(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(CreateAssistantRunRequest {
+                prompt: "普通问题".to_string(),
+                local_thread_id: Some("assistant-run-provider-failure-thread".to_string()),
+                startup_briefing: None,
+                selected_scope: None,
+                scope_candidates: Vec::new(),
+                context_policy_hint: None,
+                current_artifact: None,
+                messages: Vec::new(),
+            }),
+        )
+        .await
+        .expect_err("provider failure should return an api error");
+
+        let _request = server.join().expect("server join");
+        clear_assistant_openclaw_env();
+        assert_eq!(error.payload.code, "assistant_run_provider_failed");
+        let details = error
+            .payload
+            .details
+            .as_ref()
+            .expect("failed assistant run id should be returned");
+        assert_eq!(
+            details.get("stage").and_then(Value::as_str),
+            Some("provider")
+        );
+        let run_id = details
+            .get("assistant_run_id")
+            .and_then(Value::as_str)
+            .and_then(|id| Uuid::parse_str(id).ok())
+            .map(AssistantRunId)
+            .expect("assistant run id should parse");
+
+        let Json(detail) = get_assistant_run(
+            State(state.clone()),
+            HeaderMap::new(),
+            Path(run_id.to_string()),
+        )
+        .await
+        .expect("failed assistant run detail should load");
+        let event_names = detail
+            .events
+            .iter()
+            .map(|event| event.event_name.as_str())
+            .collect::<Vec<_>>();
+        assert!(event_names.contains(&"assistant_run.started"));
+        assert!(event_names.contains(&"assistant_run.failed"));
+        assert!(detail.run.execution_trail.iter().any(|step| {
+            step.get("status") == Some(&json!("failed"))
+                && step.get("stage") == Some(&json!("provider"))
         }));
     }
 

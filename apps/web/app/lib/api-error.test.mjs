@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  assistantRunErrorRunId,
   assistantRunFailureMessage,
   apiErrorMessage,
   buildApiError,
@@ -77,4 +78,16 @@ test('assistantRunFailureMessage separates provider, static page action, and res
 
   const restart = buildApiError('Bad gateway', 'Bad gateway', 502);
   assert.match(assistantRunFailureMessage(restart), /服务可能正在重启/);
+});
+
+test('assistantRunErrorRunId extracts failed run context from backend details', () => {
+  const error = buildApiError({
+    code: 'assistant_run_provider_failed',
+    message: 'upstream returned HTTP 500',
+    details: {
+      assistant_run_id: 'run-001',
+      stage: 'provider',
+    },
+  }, '请求失败', 500);
+  assert.equal(assistantRunErrorRunId(error), 'run-001');
 });
