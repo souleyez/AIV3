@@ -1,7 +1,7 @@
 # V3 第三方接入说明书
 
 **文档状态：** 对外草案 v0.1
-**最后更新：** 2026-05-15
+**最后更新：** 2026-05-18
 **适用对象：** 第三方系统负责人、客户 IT 团队、渠道/文档/权限/业务系统对接开发人员
 **默认对外域名：** `https://v3.elepcloud.com`
 **说明：** 本文可作为第三方联调前的接口说明材料。默认第三方接口使用 `https://v3.elepcloud.com/v1/...`；具体凭证、白名单、回调地址和开放接口，以项目交付环境和双方确认的联调配置为准。
@@ -13,6 +13,7 @@
 - `https://v3.elepcloud.com/` 打开外部集成观测面板；
 - 第三方接口默认使用 `https://v3.elepcloud.com/v1/...`；
 - 该观测域名不提供直接跳回 V3 主工作台的导航入口。
+- 连接配置了入站 Bearer Token 时，第三方调用 V3 的聊天事件、用户确认和动作结果回传都必须带 `Authorization: Bearer <V3 inbound token>`；该 token 由 V3 生成并交付给第三方。
 - 部署目标的第三方 gateway smoke 会生成 JSON/Markdown readiness 报告，用于确认签名派发、结果回调、脱敏检查、交接清单校验和剩余客户联调准备项。
 - V3 提供第三方交接清单样例和自动校验命令，用于在客户沙箱联调前检查 HTTPS 或已批准的本机回环地址、派发鉴权、回调白名单、文档/权限样例、运维联系人，以及是否误填了明文密钥。
 - V3 可以生成一份自包含交接包，包含中英文接口说明、交接清单样例、清单/包完整性校验工具、mock gateway 参考、README 和 SHA256 文件清单。
@@ -198,6 +199,7 @@ method + "\n" + path + "\n" + timestamp + "\n" + nonce + "\n" + raw_body_sha256
 当前实现状态：
 
 - 入站聊天通道会校验连接和事件形态；飞书/Lark、企业微信已实现的平台入口使用各自的平台回调校验。
+- 自建聊天或纯第三方通道配置入站 Bearer Token 后，会强校验 `Authorization` 请求头；未配置时保留兼容模式。
 - V3 向第三方派发外部业务动作时，若配置了派发 endpoint，则必须同时配置派发专用 Bearer Token 或签名密钥之一。
 - 重放窗口、密钥轮换界面和更细的连接级鉴权策略仍属于后续 hardening。
 
@@ -230,9 +232,14 @@ generic_chat:tenant-001:msg-20260513-0001
 
 ```http
 POST /v1/external/channels/{connection_id}/events
+Host: v3.elepcloud.com
+Content-Type: application/json
+Authorization: Bearer <V3 inbound token>
 ```
 
 用途：第三方聊天页面、机器人网关或平台适配器向 V3 提交用户消息。
+
+请直接使用 `https://v3.elepcloud.com/v1/...`；不要先打 `http://` 再依赖重定向，避免调试工具把 `POST` 改成 `GET` 后得到 `405 Method Not Allowed`。
 
 路径参数：
 
@@ -249,20 +256,12 @@ POST /v1/external/channels/{connection_id}/events
   "bot_external_id": "bot-v3",
   "conversation_external_id": "chat-risk-room",
   "thread_external_id": "thread-001",
-  "sender_external_user_id": "user-10001",
-  "sender_display_name": "张三",
+  "sender_external_id": "user-10001",
   "message_external_id": "msg-20260513-0001",
   "message_type": "text",
   "text": "请基于我有权限查看的制度文档，说明本周采购审批需要注意什么。",
-  "attachments": [
-    {
-      "attachment_external_id": "file-001",
-      "filename": "采购申请补充说明.pdf",
-      "content_type": "application/pdf",
-      "size_bytes": 248930,
-      "download_url": "https://third-party.example.com/files/file-001"
-    }
-  ],
+  "mention_external_user_ids": [],
+  "attachment_refs": [],
   "idempotency_key": "generic_chat:tenant-ext-001:msg-20260513-0001",
   "received_at": "2026-05-13T12:00:00Z"
 }
@@ -277,12 +276,12 @@ POST /v1/external/channels/{connection_id}/events
 | `bot_external_id` | 是 | 第三方侧机器人或应用 ID |
 | `conversation_external_id` | 是 | 群聊、会话或页面会话 ID |
 | `thread_external_id` | 否 | 话题、帖子或子线程 ID |
-| `sender_external_user_id` | 是 | 第三方侧用户 ID，必须稳定 |
-| `sender_display_name` | 否 | 用户展示名 |
+| `sender_external_id` | 是 | 第三方侧用户 ID，必须稳定 |
 | `message_external_id` | 是 | 第三方侧消息 ID，必须稳定 |
 | `message_type` | 是 | 消息类型 |
 | `text` | 否 | 文本内容 |
-| `attachments` | 否 | 附件列表 |
+| `mention_external_user_ids` | 否 | 被提及的第三方用户 ID 列表 |
+| `attachment_refs` | 否 | 附件引用列表；文件下载方式按项目配置 |
 | `idempotency_key` | 是 | 幂等键 |
 | `received_at` | 是 | 第三方收到或生成该消息的时间 |
 
@@ -348,6 +347,9 @@ GET /v1/external/runs/{assistant_run_id}
 
 ```http
 POST /v1/external/channels/{connection_id}/confirmations
+Host: v3.elepcloud.com
+Content-Type: application/json
+Authorization: Bearer <V3 inbound token>
 ```
 
 用途：当 V3 判断某个动作需要确认时，第三方页面或机器人把用户确认结果提交给 V3。
@@ -674,6 +676,9 @@ V3 派发给第三方时，只发送脱敏 payload：
 
 ```http
 POST /v1/external/channels/{connection_id}/actions/{action_id}/result
+Host: v3.elepcloud.com
+Content-Type: application/json
+Authorization: Bearer <V3 inbound token>
 ```
 
 请求示例：

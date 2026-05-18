@@ -8089,9 +8089,12 @@ async fn load_external_source_audit_items(
 
 fn external_integration_config_summary(config: &Value) -> Value {
     let dispatch_auth = external_action_dispatch_auth_from_config(config);
+    let inbound_auth_configured =
+        external_channel_inbound_bearer_token_from_config(config).is_some();
     json!({
         "key_count": config.as_object().map(Map::len).unwrap_or(0),
         "redacted_value_present": external_integration_has_redacted_value(config),
+        "inbound_auth_mode": if inbound_auth_configured { "bearer" } else { "none" },
         "dispatch_endpoint_configured": external_action_dispatch_url_from_config(config, "external_business_action.invoke").is_some()
             || external_action_dispatch_url_from_config(config, "external_artifact.publish").is_some(),
         "dispatch_auth_mode": external_action_dispatch_auth_mode(&dispatch_auth),
@@ -8428,11 +8431,20 @@ async fn enqueue_external_source_sync(
 
 async fn ingest_external_channel_event(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(connection_id): Path<String>,
     Json(message): Json<ExternalBotMessageView>,
 ) -> std::result::Result<(StatusCode, Json<ExternalChannelEventResponse>), ApiError> {
-    let (status, response) =
-        ingest_external_channel_message(&state, &connection_id, message).await?;
+    validate_required("connection_id", &connection_id)?;
+    let connection = load_external_channel_connection(&state, &connection_id).await?;
+    ensure_external_channel_inbound_bearer_auth(&headers, &connection)?;
+    let (status, response) = ingest_external_channel_message_with_connection(
+        &state,
+        &connection_id,
+        &connection,
+        message,
+    )
+    .await?;
     Ok((status, Json(response)))
 }
 
@@ -8445,6 +8457,19 @@ async fn ingest_external_channel_message(
     validate_external_bot_message(&message)?;
 
     let connection = load_external_channel_connection(state, connection_id).await?;
+    ingest_external_channel_message_with_connection(state, connection_id, &connection, message)
+        .await
+}
+
+async fn ingest_external_channel_message_with_connection(
+    state: &AppState,
+    connection_id: &str,
+    connection: &ExternalChannelConnectionSummary,
+    message: ExternalBotMessageView,
+) -> std::result::Result<(StatusCode, ExternalChannelEventResponse), ApiError> {
+    validate_required("connection_id", connection_id)?;
+    validate_external_bot_message(&message)?;
+
     if connection.status != "enabled" {
         return Err(ApiError::forbidden(
             "external_channel_disabled",
@@ -8609,6 +8634,7 @@ async fn ingest_external_channel_message(
 
 async fn confirm_external_channel_action(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(connection_id): Path<String>,
     Json(request): Json<ExternalActionConfirmationRequestView>,
 ) -> std::result::Result<(StatusCode, Json<ExternalActionConfirmationResponseView>), ApiError> {
@@ -8621,6 +8647,7 @@ async fn confirm_external_channel_action(
     validate_required("idempotency_key", &request.idempotency_key)?;
 
     let connection = load_external_channel_connection(&state, &connection_id).await?;
+    ensure_external_channel_inbound_bearer_auth(&headers, &connection)?;
     ensure_external_channel_enabled(&connection_id, &connection)?;
 
     let action_id = request
@@ -8781,6 +8808,7 @@ async fn confirm_external_channel_action(
 
 async fn record_external_action_result_callback(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path((connection_id, action_id)): Path<(String, String)>,
     Json(request): Json<ExternalActionResultCallbackRequestView>,
 ) -> std::result::Result<(StatusCode, Json<ExternalActionResultCallbackResponseView>), ApiError> {
@@ -8790,6 +8818,7 @@ async fn record_external_action_result_callback(
     validate_required("idempotency_key", &request.idempotency_key)?;
 
     let connection = load_external_channel_connection(&state, &connection_id).await?;
+    ensure_external_channel_inbound_bearer_auth(&headers, &connection)?;
     ensure_external_channel_enabled(&connection_id, &connection)?;
 
     let row = sqlx::query(
@@ -10100,6 +10129,73 @@ fn ensure_external_channel_enabled(
         ));
     }
     Ok(())
+}
+
+fn ensure_external_channel_inbound_bearer_auth(
+    headers: &HeaderMap,
+    connection: &ExternalChannelConnectionSummary,
+) -> std::result::Result<(), ApiError> {
+    let Some(expected_token) =
+        external_channel_inbound_bearer_token_from_config(&connection.config_redacted)
+    else {
+        return Ok(());
+    };
+    let Some(provided_token) = authorization_bearer_token(headers) else {
+        return Err(external_channel_auth_failed());
+    };
+    if !constant_time_str_eq(provided_token, &expected_token) {
+        return Err(external_channel_auth_failed());
+    }
+    Ok(())
+}
+
+fn external_channel_inbound_bearer_token_from_config(config: &Value) -> Option<String> {
+    external_config_string(
+        config,
+        &[
+            "inbound_bearer_token",
+            "inboundBearerToken",
+            "inbound_token",
+            "inboundToken",
+            "external_channel_bearer_token",
+            "externalChannelBearerToken",
+            "callback_bearer_token",
+            "callbackBearerToken",
+            "generic_chat_inbound_bearer_token",
+            "genericChatInboundBearerToken",
+        ],
+    )
+}
+
+fn authorization_bearer_token(headers: &HeaderMap) -> Option<&str> {
+    let value = headers.get(header::AUTHORIZATION)?.to_str().ok()?.trim();
+    let mut parts = value.split_whitespace();
+    let scheme = parts.next()?;
+    let token = parts.next()?;
+    if parts.next().is_some() || !scheme.eq_ignore_ascii_case("bearer") || token.is_empty() {
+        return None;
+    }
+    Some(token)
+}
+
+fn external_channel_auth_failed() -> ApiError {
+    ApiError::unauthorized(
+        "external_channel_auth_failed",
+        "external channel bearer token is missing or invalid".to_string(),
+    )
+}
+
+fn constant_time_str_eq(left: &str, right: &str) -> bool {
+    let left = left.as_bytes();
+    let right = right.as_bytes();
+    let max_len = left.len().max(right.len());
+    let mut diff = left.len() ^ right.len();
+    for index in 0..max_len {
+        let left_byte = left.get(index).copied().unwrap_or(0);
+        let right_byte = right.get(index).copied().unwrap_or(0);
+        diff |= usize::from(left_byte ^ right_byte);
+    }
+    diff == 0
 }
 
 fn ensure_external_channel_platform(
@@ -34250,6 +34346,57 @@ mod tests {
         assert_eq!(external_control_integration_kind(0, 0), "unknown");
     }
 
+    #[test]
+    fn external_channel_inbound_bearer_auth_accepts_only_configured_token() {
+        let connection = ExternalChannelConnectionSummary {
+            platform: ExternalChannelPlatformView::GenericChat,
+            status: "enabled".to_string(),
+            config_redacted: json!({
+                "tenant_external_id": "tenant-ext-001",
+                "bot_external_id": "bot-v3",
+                "inbound_bearer_token": "inbound-secret"
+            }),
+        };
+
+        let missing = ensure_external_channel_inbound_bearer_auth(&HeaderMap::new(), &connection)
+            .expect_err("missing bearer token should be rejected");
+        assert_eq!(missing.status, StatusCode::UNAUTHORIZED);
+        assert_eq!(missing.payload.code, "external_channel_auth_failed");
+
+        let mut wrong_headers = HeaderMap::new();
+        wrong_headers.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer wrong-secret"),
+        );
+        let wrong = ensure_external_channel_inbound_bearer_auth(&wrong_headers, &connection)
+            .expect_err("wrong bearer token should be rejected");
+        assert_eq!(wrong.status, StatusCode::UNAUTHORIZED);
+        assert_eq!(wrong.payload.code, "external_channel_auth_failed");
+
+        let mut accepted_headers = HeaderMap::new();
+        accepted_headers.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer inbound-secret"),
+        );
+        ensure_external_channel_inbound_bearer_auth(&accepted_headers, &connection)
+            .expect("configured bearer token should be accepted");
+
+        let platform_callback_connection = ExternalChannelConnectionSummary {
+            platform: ExternalChannelPlatformView::Feishu,
+            status: "enabled".to_string(),
+            config_redacted: json!({
+                "tenant_external_id": "tenant-ext-001",
+                "bot_external_id": "bot-v3",
+                "token": "platform-callback-token"
+            }),
+        };
+        ensure_external_channel_inbound_bearer_auth(
+            &HeaderMap::new(),
+            &platform_callback_connection,
+        )
+        .expect("platform callback token should not be treated as generic inbound bearer auth");
+    }
+
     async fn insert_generic_external_channel_connection_with_config(
         state: &AppState,
         connection_id: &str,
@@ -34360,6 +34507,104 @@ mod tests {
             second.reply.task_status.as_deref(),
             Some("duplicate_accepted")
         );
+
+        let event_count: i64 = sqlx::query_scalar(
+            r#"
+            select count(*)
+            from external_message_events
+            where tenant_id = $1
+              and idempotency_key = $2
+            "#,
+        )
+        .bind(tenant.id.0)
+        .bind(&message.idempotency_key)
+        .fetch_one(storage.pool())
+        .await
+        .expect("message events should be queryable");
+        assert_eq!(event_count, 1);
+        clear_assistant_openclaw_env();
+    }
+
+    #[tokio::test]
+    async fn generic_chat_page_event_endpoint_requires_configured_bearer_token() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        clear_assistant_openclaw_env();
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping generic chat bearer auth test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("generic-chat-bearer-test-{}", Uuid::new_v4()),
+                "Generic Chat Bearer Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage.clone(),
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        insert_generic_external_channel_connection_with_config(
+            &state,
+            "generic-chat-main",
+            json!({
+                "tenant_external_id": "tenant-ext-001",
+                "bot_external_id": "bot-v3",
+                "inbound_bearer_token": "inbound-secret"
+            }),
+        )
+        .await;
+        let app = router(
+            storage.clone(),
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+
+        let message = sample_external_bot_message();
+        let missing = post_json_request_with_authorization(
+            app.clone(),
+            "/v1/external/channels/generic-chat-main/events",
+            &message,
+            None,
+        )
+        .await;
+        assert_eq!(missing.status(), StatusCode::UNAUTHORIZED);
+        let missing_error: ApiErrorResponse = read_json_response(missing).await;
+        assert_eq!(missing_error.code, "external_channel_auth_failed");
+        assert!(!missing_error.message.contains("inbound-secret"));
+
+        let wrong = post_json_request_with_authorization(
+            app.clone(),
+            "/v1/external/channels/generic-chat-main/events",
+            &message,
+            Some("Bearer wrong-secret"),
+        )
+        .await;
+        assert_eq!(wrong.status(), StatusCode::UNAUTHORIZED);
+        let wrong_error: ApiErrorResponse = read_json_response(wrong).await;
+        assert_eq!(wrong_error.code, "external_channel_auth_failed");
+        assert!(!wrong_error.message.contains("wrong-secret"));
+
+        let accepted = post_json_request_with_authorization(
+            app,
+            "/v1/external/channels/generic-chat-main/events",
+            &message,
+            Some("Bearer inbound-secret"),
+        )
+        .await;
+        assert_eq!(accepted.status(), StatusCode::ACCEPTED);
+        let accepted: ExternalChannelEventResponse = read_json_response(accepted).await;
+        assert!(accepted.accepted);
+        assert_eq!(accepted.idempotency_key, message.idempotency_key);
+        assert!(accepted.assistant_run_id.is_some());
 
         let event_count: i64 = sqlx::query_scalar(
             r#"
@@ -35206,6 +35451,7 @@ mod tests {
         };
         let (confirm_status, Json(confirm_response)) = confirm_external_channel_action(
             State(state.clone()),
+            HeaderMap::new(),
             Path("generic-chat-main".to_string()),
             Json(confirm_request),
         )
@@ -46037,6 +46283,30 @@ mod tests {
             .header(axum::http::header::CONTENT_TYPE, "application/json");
         if let Some(cookie) = cookie {
             builder = builder.header(axum::http::header::COOKIE, cookie);
+        }
+        let request = builder
+            .body(axum::body::Body::from(
+                serde_json::to_vec(payload).expect("request should serialize"),
+            ))
+            .expect("request should build");
+
+        app.oneshot(request)
+            .await
+            .expect("request should return a response")
+    }
+
+    async fn post_json_request_with_authorization<T: serde::Serialize>(
+        app: Router,
+        uri: &str,
+        payload: &T,
+        authorization: Option<&str>,
+    ) -> axum::response::Response {
+        let mut builder = axum::http::Request::builder()
+            .method("POST")
+            .uri(uri)
+            .header(axum::http::header::CONTENT_TYPE, "application/json");
+        if let Some(authorization) = authorization {
+            builder = builder.header(axum::http::header::AUTHORIZATION, authorization);
         }
         let request = builder
             .body(axum::body::Body::from(

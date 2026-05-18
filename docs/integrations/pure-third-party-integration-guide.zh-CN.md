@@ -1,7 +1,7 @@
 # V3 纯第三方模式对接文档
 
 **文档状态：** 对外草案 v0.1
-**最后更新：** 2026-05-15
+**最后更新：** 2026-05-18
 **适用对象：** 第三方自建门户、文档库、用户中心、产物系统、业务系统和客户 IT 对接团队
 **默认 V3 对外域名：** `https://v3.elepcloud.com`
 
@@ -108,13 +108,18 @@ V3 可以保存文档元数据、权限快照、解析后的文本片段、索�
 POST /v1/external/channels/{connection_id}/events
 Host: v3.elepcloud.com
 Content-Type: application/json
+Authorization: Bearer <V3 inbound token>
 ```
+
+请直接使用 `https://v3.elepcloud.com/v1/...`。如果从 `http://` 发起请求，网关重定向可能导致调试工具把 `POST` 改成 `GET`，表现为 `405 Method Not Allowed`。
+
+当连接配置了入站 Bearer Token 时，聊天事件、用户确认和动作结果回传都会强校验 `Authorization: Bearer <V3 inbound token>`。该 token 由 V3 生成并交付给第三方，只用于“第三方 -> V3”的入站调用；V3 派发第三方业务动作时使用第三方另行提供的派发专用 token 或签名密钥。
 
 请求示例：
 
 ```json
 {
-  "platform": "third_party",
+  "platform": "generic_chat",
   "tenant_external_id": "tenant-ext-001",
   "bot_external_id": "bot-v3",
   "conversation_external_id": "chat-risk-room",
@@ -125,7 +130,7 @@ Content-Type: application/json
   "text": "帮我总结我能看的采购审批制度，并指出本周需要处理的风险。",
   "mention_external_user_ids": [],
   "attachment_refs": [],
-  "idempotency_key": "third_party:tenant-ext-001:msg-20260515-0001",
+  "idempotency_key": "generic_chat:tenant-ext-001:msg-20260515-0001",
   "received_at": "2026-05-15T10:00:00Z"
 }
 ```
@@ -134,7 +139,7 @@ Content-Type: application/json
 
 | 字段 | 必填 | 说明 |
 | --- | --- | --- |
-| `platform` | 是 | 纯第三方建议使用 `third_party`；自建聊天也可按项目配置使用 `generic_chat` |
+| `platform` | 是 | 必须和连接配置一致；当前自建聊天联调通常使用 `generic_chat`，也可按项目配置使用 `third_party` |
 | `tenant_external_id` | 是 | 第三方租户、空间或客户 ID |
 | `bot_external_id` | 是 | 第三方侧机器人或应用 ID |
 | `conversation_external_id` | 是 | 会话、群、房间或页面上下文 ID |
@@ -152,7 +157,7 @@ Content-Type: application/json
 {
   "connection_id": "generic-chat-main",
   "assistant_run_id": "00000000-0000-0000-0000-000000000001",
-  "idempotency_key": "third_party:tenant-ext-001:msg-20260515-0001",
+  "idempotency_key": "generic_chat:tenant-ext-001:msg-20260515-0001",
   "reply": {
     "reply_type": "task_status",
     "task_status": "accepted",
@@ -348,6 +353,7 @@ V3 会把同步任务放入后台队列。同步任务应记录：
 POST /v1/external/channels/{connection_id}/confirmations
 Host: v3.elepcloud.com
 Content-Type: application/json
+Authorization: Bearer <V3 inbound token>
 ```
 
 请求示例：
@@ -489,6 +495,7 @@ V3 不会把飞书、企微或第三方入站回调用的通用 token 当作动�
 POST /v1/external/channels/{connection_id}/actions/{action_id}/result
 Host: v3.elepcloud.com
 Content-Type: application/json
+Authorization: Bearer <V3 inbound token>
 ```
 
 请求示例：
@@ -667,6 +674,7 @@ V3 错误格式：
 - 统一外部聊天通道事件：`POST /v1/external/channels/{connection_id}/events`；
 - 统一用户确认回调：`POST /v1/external/channels/{connection_id}/confirmations`；
 - 外部动作结果回传：`POST /v1/external/channels/{connection_id}/actions/{action_id}/result`；
+- 连接级入站 Bearer Token 校验，覆盖聊天事件、用户确认和动作结果回传；
 - 资料源同步触发：`POST /v1/external/sources/{source_id}/sync`；
 - 外部动作派发到第三方 HTTPS endpoint；
 - 派发 Bearer Token 和 HMAC 签名；
@@ -680,7 +688,7 @@ V3 错误格式：
 - 具体第三方文档 API 字段映射；
 - 用户目录和 ACL 规则映射；
 - 产物 endpoint 和业务动作 endpoint；
-- 生产级入站签名、白名单、重放窗口和密钥轮换策略；
+- 生产级入站签名、IP 白名单、重放窗口和密钥轮换界面；
 - 客户真实沙箱环境的端到端验证。
 
 ## 19. 推荐联调顺序

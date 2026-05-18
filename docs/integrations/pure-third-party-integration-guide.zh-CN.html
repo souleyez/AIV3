@@ -389,7 +389,7 @@
       </section>
       <article>
         <h1>V3 纯第三方模式对接文档</h1>
-<p><strong>文档状态：</strong> 对外草案 v0.1 <strong>最后更新：</strong> 2026-05-15 <strong>适用对象：</strong> 第三方自建门户、文档库、用户中心、产物系统、业务系统和客户 IT 对接团队 <strong>默认 V3 对外域名：</strong> <code>https://v3.elepcloud.com</code></p>
+<p><strong>文档状态：</strong> 对外草案 v0.1 <strong>最后更新：</strong> 2026-05-18 <strong>适用对象：</strong> 第三方自建门户、文档库、用户中心、产物系统、业务系统和客户 IT 对接团队 <strong>默认 V3 对外域名：</strong> <code>https://v3.elepcloud.com</code></p>
 <p>本文只描述“纯第三方模式”。飞书、Lark、企业微信等标准机器人平台不在本文展开；这些平台走各自官方事件和机器人接口，再由 V3 转为统一通道事件。</p>
 <p>纯第三方模式适用于：第三方自己搭建聊天页面或业务入口，文档库、用户权限、产物系统、业务系统也可以都在第三方服务器上；V3 作为统一智能处理、权限过滤、动作风控和审计中心。</p>
 <h2 id="section-01">1. 对接目标</h2>
@@ -487,13 +487,16 @@
     <figcaption><span>http</span><button type="button" class="copy-code">复制</button></figcaption>
     <pre><code>POST /v1/external/channels/{connection_id}/events
 Host: v3.elepcloud.com
-Content-Type: application/json</code></pre>
+Content-Type: application/json
+Authorization: Bearer &lt;V3 inbound token&gt;</code></pre>
   </figure>
+<p>请直接使用 <code>https://v3.elepcloud.com/v1/...</code>。如果从 <code>http://</code> 发起请求，网关重定向可能导致调试工具把 <code>POST</code> 改成 <code>GET</code>，表现为 <code>405 Method Not Allowed</code>。</p>
+<p>当连接配置了入站 Bearer Token 时，聊天事件、用户确认和动作结果回传都会强校验 <code>Authorization: Bearer &lt;V3 inbound token&gt;</code>。该 token 由 V3 生成并交付给第三方，只用于“第三方 -&gt; V3”的入站调用；V3 派发第三方业务动作时使用第三方另行提供的派发专用 token 或签名密钥。</p>
 <p>请求示例：</p>
 <figure class="code-card">
     <figcaption><span>json</span><button type="button" class="copy-code">复制</button></figcaption>
     <pre><code>{
-  &quot;platform&quot;: &quot;third_party&quot;,
+  &quot;platform&quot;: &quot;generic_chat&quot;,
   &quot;tenant_external_id&quot;: &quot;tenant-ext-001&quot;,
   &quot;bot_external_id&quot;: &quot;bot-v3&quot;,
   &quot;conversation_external_id&quot;: &quot;chat-risk-room&quot;,
@@ -504,19 +507,19 @@ Content-Type: application/json</code></pre>
   &quot;text&quot;: &quot;帮我总结我能看的采购审批制度，并指出本周需要处理的风险。&quot;,
   &quot;mention_external_user_ids&quot;: [],
   &quot;attachment_refs&quot;: [],
-  &quot;idempotency_key&quot;: &quot;third_party:tenant-ext-001:msg-20260515-0001&quot;,
+  &quot;idempotency_key&quot;: &quot;generic_chat:tenant-ext-001:msg-20260515-0001&quot;,
   &quot;received_at&quot;: &quot;2026-05-15T10:00:00Z&quot;
 }</code></pre>
   </figure>
 <p>字段要求：</p>
-<div class="table-shell"><table><thead><tr><th>字段</th><th>必填</th><th>说明</th></tr></thead><tbody><tr><td><code>platform</code></td><td>是</td><td>纯第三方建议使用 <code>third_party</code>；自建聊天也可按项目配置使用 <code>generic_chat</code></td></tr><tr><td><code>tenant_external_id</code></td><td>是</td><td>第三方租户、空间或客户 ID</td></tr><tr><td><code>bot_external_id</code></td><td>是</td><td>第三方侧机器人或应用 ID</td></tr><tr><td><code>conversation_external_id</code></td><td>是</td><td>会话、群、房间或页面上下文 ID</td></tr><tr><td><code>sender_external_id</code></td><td>是</td><td>当前提问用户在第三方系统中的稳定 ID</td></tr><tr><td><code>message_external_id</code></td><td>是</td><td>第三方消息 ID，必须稳定</td></tr><tr><td><code>message_type</code></td><td>是</td><td><code>text</code>、<code>image</code>、<code>file</code>、<code>audio</code>、<code>video</code>、<code>card</code>、<code>event</code> 或 <code>unknown</code></td></tr><tr><td><code>text</code></td><td>文本消息必填</td><td>用户输入文本</td></tr><tr><td><code>attachment_refs</code></td><td>否</td><td>附件引用，文件下载需按项目配置权限和有效期</td></tr><tr><td><code>idempotency_key</code></td><td>是</td><td>防重放和重复投递</td></tr><tr><td><code>received_at</code></td><td>是</td><td>第三方收到消息的时间</td></tr></tbody></table></div>
+<div class="table-shell"><table><thead><tr><th>字段</th><th>必填</th><th>说明</th></tr></thead><tbody><tr><td><code>platform</code></td><td>是</td><td>必须和连接配置一致；当前自建聊天联调通常使用 <code>generic_chat</code>，也可按项目配置使用 <code>third_party</code></td></tr><tr><td><code>tenant_external_id</code></td><td>是</td><td>第三方租户、空间或客户 ID</td></tr><tr><td><code>bot_external_id</code></td><td>是</td><td>第三方侧机器人或应用 ID</td></tr><tr><td><code>conversation_external_id</code></td><td>是</td><td>会话、群、房间或页面上下文 ID</td></tr><tr><td><code>sender_external_id</code></td><td>是</td><td>当前提问用户在第三方系统中的稳定 ID</td></tr><tr><td><code>message_external_id</code></td><td>是</td><td>第三方消息 ID，必须稳定</td></tr><tr><td><code>message_type</code></td><td>是</td><td><code>text</code>、<code>image</code>、<code>file</code>、<code>audio</code>、<code>video</code>、<code>card</code>、<code>event</code> 或 <code>unknown</code></td></tr><tr><td><code>text</code></td><td>文本消息必填</td><td>用户输入文本</td></tr><tr><td><code>attachment_refs</code></td><td>否</td><td>附件引用，文件下载需按项目配置权限和有效期</td></tr><tr><td><code>idempotency_key</code></td><td>是</td><td>防重放和重复投递</td></tr><tr><td><code>received_at</code></td><td>是</td><td>第三方收到消息的时间</td></tr></tbody></table></div>
 <p>响应示例：</p>
 <figure class="code-card">
     <figcaption><span>json</span><button type="button" class="copy-code">复制</button></figcaption>
     <pre><code>{
   &quot;connection_id&quot;: &quot;generic-chat-main&quot;,
   &quot;assistant_run_id&quot;: &quot;00000000-0000-0000-0000-000000000001&quot;,
-  &quot;idempotency_key&quot;: &quot;third_party:tenant-ext-001:msg-20260515-0001&quot;,
+  &quot;idempotency_key&quot;: &quot;generic_chat:tenant-ext-001:msg-20260515-0001&quot;,
   &quot;reply&quot;: {
     &quot;reply_type&quot;: &quot;task_status&quot;,
     &quot;task_status&quot;: &quot;accepted&quot;,
@@ -689,7 +692,8 @@ Host: v3.elepcloud.com</code></pre>
     <figcaption><span>http</span><button type="button" class="copy-code">复制</button></figcaption>
     <pre><code>POST /v1/external/channels/{connection_id}/confirmations
 Host: v3.elepcloud.com
-Content-Type: application/json</code></pre>
+Content-Type: application/json
+Authorization: Bearer &lt;V3 inbound token&gt;</code></pre>
   </figure>
 <p>请求示例：</p>
 <figure class="code-card">
@@ -809,7 +813,8 @@ POST /artifacts/{artifact_external_id}/revoke</code></pre>
     <figcaption><span>http</span><button type="button" class="copy-code">复制</button></figcaption>
     <pre><code>POST /v1/external/channels/{connection_id}/actions/{action_id}/result
 Host: v3.elepcloud.com
-Content-Type: application/json</code></pre>
+Content-Type: application/json
+Authorization: Bearer &lt;V3 inbound token&gt;</code></pre>
   </figure>
 <p>请求示例：</p>
 <figure class="code-card">
@@ -962,6 +967,7 @@ GET /v1/external/integrations/generic-chat-main/audit?item_type=action&amp;actio
 <li>统一外部聊天通道事件：<code>POST /v1/external/channels/{connection_id}/events</code>；</li>
 <li>统一用户确认回调：<code>POST /v1/external/channels/{connection_id}/confirmations</code>；</li>
 <li>外部动作结果回传：<code>POST /v1/external/channels/{connection_id}/actions/{action_id}/result</code>；</li>
+<li>连接级入站 Bearer Token 校验，覆盖聊天事件、用户确认和动作结果回传；</li>
 <li>资料源同步触发：<code>POST /v1/external/sources/{source_id}/sync</code>；</li>
 <li>外部动作派发到第三方 HTTPS endpoint；</li>
 <li>派发 Bearer Token 和 HMAC 签名；</li>
@@ -975,7 +981,7 @@ GET /v1/external/integrations/generic-chat-main/audit?item_type=action&amp;actio
 <li>具体第三方文档 API 字段映射；</li>
 <li>用户目录和 ACL 规则映射；</li>
 <li>产物 endpoint 和业务动作 endpoint；</li>
-<li>生产级入站签名、白名单、重放窗口和密钥轮换策略；</li>
+<li>生产级入站签名、IP 白名单、重放窗口和密钥轮换界面；</li>
 <li>客户真实沙箱环境的端到端验证。</li>
 </ul>
 <h2 id="section-22">19. 推荐联调顺序</h2>
