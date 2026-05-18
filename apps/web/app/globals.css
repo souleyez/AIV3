@@ -4384,22 +4384,62 @@ body {
   font-size: 12px;
 }
 
-.document-original-block pre {
-  max-height: 560px;
-  margin: 0;
-  overflow: auto;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  color: #dce6f4;
-  font-family: inherit;
-  font-size: 13px;
-  line-height: 1.72;
-}
-
 .document-chunk-list,
 .document-evidence-list {
   display: grid;
   gap: 10px;
+}
+
+.document-original-html {
+  display: grid;
+  gap: 14px;
+}
+
+.document-html-section {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.035);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+}
+
+.document-html-section-hints {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.document-html-section-hints span {
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: rgba(33, 214, 165, 0.12);
+  color: #99f6e4;
+  font-size: 11px;
+}
+
+.document-original-html h4 {
+  margin: 4px 0 0;
+  color: #f8fbff;
+  font-size: 16px;
+  line-height: 1.45;
+}
+
+.document-original-html p,
+.document-original-html li {
+  margin: 0;
+  color: #dce6f4;
+  font-size: 14px;
+  line-height: 1.78;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.document-original-html ul {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding-left: 20px;
 }
 
 .document-chunk-card p,
@@ -5324,8 +5364,13 @@ body {
     flex: 1 1 0;
   }
 
-  .document-original-block pre {
-    max-height: 460px;
+  .document-html-section {
+    padding: 12px;
+  }
+
+  .document-original-html p,
+  .document-original-html li {
+    font-size: 13px;
   }
 
   .home-toolbar-right {

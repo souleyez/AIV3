@@ -260,12 +260,75 @@ function documentRawTextFromChunks(chunks = []) {
     .join('\n\n');
 }
 
+function isDocumentListLine(line) {
+  return /^([-*•]|[0-9]+[.)、]|[一二三四五六七八九十]+[、.．])\s+/.test(String(line || '').trim());
+}
+
+function stripDocumentListMarker(line) {
+  return String(line || '').trim().replace(/^([-*•]|[0-9]+[.)、]|[一二三四五六七八九十]+[、.．])\s+/, '').trim();
+}
+
+function isDocumentHeadingLine(line) {
+  const text = String(line || '').replace(/^#{1,6}\s+/, '').trim();
+  if (!text || text.includes('\n') || text.length > 72) {
+    return false;
+  }
+  if (/^(第[一二三四五六七八九十\d]+[章节篇部分]|[一二三四五六七八九十\d]+[、.．]\s*|[（(]?[一二三四五六七八九十\d]+[）)]\s*)/.test(text)) {
+    return true;
+  }
+  return text.length <= 34 && !/[。！？；，,.!?;:]$/.test(text);
+}
+
+function documentHtmlBlocksFromChunk(chunk) {
+  const normalized = String(chunk?.content || '')
+    .replace(/\r\n/g, '\n')
+    .replace(/\u00a0/g, ' ')
+    .trim();
+  if (!normalized) {
+    return [];
+  }
+  return normalized
+    .split(/\n{2,}/)
+    .map((block) => block.trim())
+    .filter(Boolean)
+    .flatMap((block, blockIndex) => {
+      const lines = block.split('\n').map((line) => line.trim()).filter(Boolean);
+      if (lines.length > 1 && lines.every(isDocumentListLine)) {
+        return [{
+          type: 'list',
+          key: `${chunk.id || chunk.chunk_index}-${blockIndex}`,
+          items: lines.map(stripDocumentListMarker).filter(Boolean),
+        }];
+      }
+      const compact = lines.join('\n');
+      return [{
+        type: isDocumentHeadingLine(compact) ? 'heading' : 'paragraph',
+        key: `${chunk.id || chunk.chunk_index}-${blockIndex}`,
+        text: compact,
+      }];
+    });
+}
+
 function chunkSectionHints(chunk) {
   const hints = chunk?.metadata?.section_title_hints;
   if (Array.isArray(hints)) {
     return hints.map((item) => String(item || '').trim()).filter(Boolean);
   }
   return [];
+}
+
+function DocumentHtmlBlock({ block }) {
+  if (block.type === 'list') {
+    return (
+      <ul>
+        {block.items.map((item, index) => <li key={`${block.key}-${index}`}>{item}</li>)}
+      </ul>
+    );
+  }
+  if (block.type === 'heading') {
+    return <h4>{block.text.replace(/^#{1,6}\s+/, '')}</h4>;
+  }
+  return <p>{block.text}</p>;
 }
 
 function DocumentDetailPage({
@@ -364,11 +427,29 @@ function DocumentDetailPage({
             </div>
             <div className="document-original-block">
               <div className="document-block-title">
-                <strong>文档原文</strong>
-                <span>{rawText ? `${rawText.length} 字符` : '暂无可展示原文'}</span>
+                <strong>HTML 全文</strong>
+                <span>{rawText ? `${rawText.length} 字符 · 由解析切片生成` : '暂无可展示原文'}</span>
               </div>
               {rawText ? (
-                <pre>{rawText}</pre>
+                <article className="document-original-html">
+                  {orderedChunks.map((chunk) => {
+                    const hints = chunkSectionHints(chunk);
+                    const blocks = documentHtmlBlocksFromChunk(chunk);
+                    if (!blocks.length) {
+                      return null;
+                    }
+                    return (
+                      <section key={chunk.id || chunk.chunk_index} className="document-html-section">
+                        {hints.length ? (
+                          <div className="document-html-section-hints">
+                            {hints.map((hint) => <span key={hint}>{hint}</span>)}
+                          </div>
+                        ) : null}
+                        {blocks.map((block) => <DocumentHtmlBlock key={block.key} block={block} />)}
+                      </section>
+                    );
+                  })}
+                </article>
               ) : (
                 <div className="directory-empty">当前详情接口没有返回原文内容；若文档已解析，这里会优先展示解析后的正文切片。</div>
               )}
