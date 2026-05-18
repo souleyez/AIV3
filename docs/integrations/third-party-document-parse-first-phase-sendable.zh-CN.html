@@ -311,9 +311,10 @@
         <a href="#parse">2. 发起解析</a>
         <a href="#detail">3. 查询详情</a>
         <a href="#chat">4. 对话传文档 ID</a>
-        <a href="#acceptance">5. 验收口径</a>
-        <a href="#faq">6. 常见问题</a>
-        <a href="#boundary">7. 职责边界</a>
+        <a href="#html">5. 快速 HTML</a>
+        <a href="#acceptance">6. 验收口径</a>
+        <a href="#faq">7. 常见问题</a>
+        <a href="#boundary">8. 职责边界</a>
       </nav>
     </aside>
 
@@ -457,20 +458,56 @@ Content-Type: application/json</code></pre>
         </ul>
       </section>
 
+      <section id="html">
+        <h2>5. 快速生成 HTML 交付件</h2>
+        <p>如果第三方用户要生成页面、说明页、报告页或一页 HTML，优先走 V3 快速 HTML 交付模式。<code>html-anything</code> 作为模板来源和设计参考，能力并入 V3；第三方不需要单独对接一个新系统。</p>
+        <ul>
+          <li>V3 直接生成浏览器可打开的 HTML 文件，跳过调试页、效果图和截图确认。</li>
+          <li>HTML 仍走 V3 的模型路由、权限、数据集、证据供料和产物审计边界。</li>
+          <li>生成完成后，V3 可在消息响应 <code>reply.artifact_links</code> 中返回下载地址。</li>
+          <li>第三方服务端使用同一个 <code>Authorization: Bearer &lt;token&gt;</code> 下载 HTML，再提供给自己的用户下载；不要把 token 暴露在浏览器前端。</li>
+        </ul>
+        <figure>
+          <figcaption><span>V3 internal render request</span></figcaption>
+          <pre><code>{
+  "direct_html": true,
+  "background": false
+}</code></pre>
+        </figure>
+        <figure>
+          <figcaption><span>GET generated HTML</span></figcaption>
+          <pre><code>GET https://v3.elepcloud.com/v1/external/channels/{connection_id}/static-page-renders/{render_output_id}/download
+Authorization: Bearer &lt;由我方提供的 token&gt;</code></pre>
+        </figure>
+        <figure>
+          <figcaption><span>reply artifact link</span></figcaption>
+          <pre><code>{
+  "reply": {
+    "reply_type": "text",
+    "text": "已生成 HTML 交付件，可点击下载。",
+    "artifact_links": [
+      "https://v3.elepcloud.com/v1/external/channels/{connection_id}/static-page-renders/{render_output_id}/download"
+    ]
+  }
+}</code></pre>
+        </figure>
+      </section>
+
       <section id="acceptance">
-        <h2>5. 第一阶段验收口径</h2>
+        <h2>6. 第一阶段验收口径</h2>
         <ol>
           <li>文档上传后，第三方能调用解析接口，V3 返回成功接收。</li>
           <li>查询解析详情能看到该 <code>document_external_id</code> 的状态、切片数量和检索证据数量。</li>
           <li>对话请求带 <code>available_document_external_ids</code> 后，V3 能围绕指定文档回答。</li>
           <li>同一 <code>conversation_external_id</code> 的连续消息会作为同一个对话上下文进入模型。</li>
           <li>第三方发消息到 <code>/events</code> 后，能从响应体 <code>reply</code> 中拿到文本回复或处理状态。</li>
+          <li>需要页面类产物时，V3 可直接生成 HTML，并通过带 Bearer 鉴权的下载接口交给第三方服务端。</li>
           <li>换一个未传入的文档 ID 或不传文档 ID，V3 不应把该文档作为本轮回答依据。</li>
         </ol>
       </section>
 
       <section id="faq">
-        <h2>6. 常见问题</h2>
+        <h2>7. 常见问题</h2>
         <table>
           <thead><tr><th>现象</th><th>优先检查</th></tr></thead>
           <tbody>
@@ -479,16 +516,17 @@ Content-Type: application/json</code></pre>
             <tr><td><code>405 Method Not Allowed</code></td><td>是否误打了 <code>http://</code>、是否被重定向后从 <code>POST</code> 变成 <code>GET</code>。</td></tr>
             <tr><td>能提交但问答没有引用文档</td><td>文档是否解析完成，<code>available_document_external_ids</code> 是否传了正确的第三方文档 ID。</td></tr>
             <tr><td>多轮上下文接不上</td><td>同一轮对话是否保持相同 <code>conversation_external_id</code>，每条消息是否使用新的 <code>message_external_id</code>。</td></tr>
+            <tr><td>HTML 链接无法下载</td><td>确认由第三方服务端携带 Bearer token 请求下载接口，且 <code>render_output_id</code> 属于当前 <code>connection_id</code>。</td></tr>
             <tr><td>重复提交文档</td><td>检查 <code>idempotency_key</code> 是否按文档 ID 和版本稳定生成。</td></tr>
           </tbody>
         </table>
       </section>
 
       <section id="boundary">
-        <h2>7. 双方职责边界</h2>
+        <h2>8. 双方职责边界</h2>
         <ul>
-          <li>第三方负责：上传入口、文档下载地址、第三方文档 ID、用户页面、对话请求发起。</li>
-          <li>V3 负责：拉取文档、解析入库、按文档 ID 查询解析详情、按本轮可用文档范围生成回答。</li>
+          <li>第三方负责：上传入口、文档下载地址、第三方文档 ID、用户页面、对话请求发起、HTML 文件下载后的本地分发。</li>
+          <li>V3 负责：拉取文档、解析入库、按文档 ID 查询解析详情、按本轮可用文档范围生成回答、快速 HTML 生成和下载出口。</li>
           <li>第一阶段暂不要求第三方开放完整资料库批量同步接口；后续如果要做批量资料源同步，再对接资料源参数卡。</li>
         </ul>
       </section>

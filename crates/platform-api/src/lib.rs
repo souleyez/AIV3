@@ -480,6 +480,10 @@ pub fn router(
             get(get_external_document_parse_detail),
         )
         .route(
+            "/v1/external/channels/{connection_id}/static-page-renders/{render_output_id}/download",
+            get(download_external_channel_static_page_html),
+        )
+        .route(
             "/v1/external/channels/{connection_id}/confirmations",
             axum::routing::post(confirm_external_channel_action),
         )
@@ -8608,6 +8612,91 @@ async fn get_external_document_parse_detail(
     }))
 }
 
+async fn download_external_channel_static_page_html(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((connection_id, render_output_id)): Path<(String, String)>,
+) -> std::result::Result<Response, ApiError> {
+    validate_required("connection_id", &connection_id)?;
+    let render_output_id = parse_static_page_render_output_id(&render_output_id)?;
+    let connection = load_external_channel_connection(&state, &connection_id).await?;
+    ensure_external_channel_inbound_bearer_auth(&headers, &connection)?;
+    ensure_external_channel_enabled(&connection_id, &connection)?;
+    let output = state
+        .storage
+        .static_page_render_outputs()
+        .get_by_id(state.tenant_id, render_output_id)
+        .await
+        .map_err(ApiError::from_storage)?
+        .ok_or_else(|| {
+            ApiError::not_found(
+                "static_page_render_output_not_found",
+                format!("static page render output {render_output_id} was not found"),
+            )
+        })?;
+    if !matches!(output.status, StaticPageRenderOutputStatus::Rendered)
+        || output.html.trim().is_empty()
+    {
+        return Err(ApiError::bad_request(
+            "static_page_html_not_ready",
+            "static page HTML is not ready for download".to_string(),
+        ));
+    }
+    let run = state
+        .storage
+        .assistant_runs()
+        .get_by_id(state.tenant_id, output.assistant_run_id)
+        .await
+        .map_err(ApiError::from_storage)?
+        .ok_or_else(|| {
+            ApiError::not_found(
+                "assistant_run_not_found",
+                format!("assistant run {} was not found", output.assistant_run_id),
+            )
+        })?;
+    ensure_static_page_render_belongs_to_external_channel(&connection_id, &run)?;
+    let file_name = format!("v3-static-page-{}.html", output.id);
+    let bytes = output.html.into_bytes();
+    let mut builder = Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
+        .header(header::CACHE_CONTROL, "no-store")
+        .header(
+            header::CONTENT_DISPOSITION,
+            format!("attachment; filename=\"{file_name}\""),
+        );
+    if let Ok(length) = HeaderValue::from_str(&bytes.len().to_string()) {
+        builder = builder.header(header::CONTENT_LENGTH, length);
+    }
+    builder
+        .body(axum::body::Body::from(bytes))
+        .map_err(|error| {
+            ApiError::internal(
+                "static_page_html_download_response_failed",
+                format!("failed to build static page HTML download response: {error}"),
+            )
+        })
+}
+
+fn ensure_static_page_render_belongs_to_external_channel(
+    connection_id: &str,
+    run: &AssistantRun,
+) -> std::result::Result<(), ApiError> {
+    if run.service_lane != "external_channel"
+        || run
+            .selected_scope
+            .get("channel_connection_id")
+            .and_then(Value::as_str)
+            != Some(connection_id)
+    {
+        return Err(ApiError::forbidden(
+            "static_page_render_not_external_channel_scoped",
+            "static page render output does not belong to this external channel".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 struct DownloadedExternalDocument {
     object_key: String,
     content_type: String,
@@ -13340,9 +13429,14 @@ async fn create_static_page_render_for_draft(
     mut draft: StaticPageDraft,
     request: CreateStaticPageRenderRequest,
 ) -> std::result::Result<(StatusCode, Json<CreateStaticPageRenderResponse>), ApiError> {
-    let image_job =
-        resolve_confirmed_static_page_image_job(state, &draft, request.image_job_id).await?;
-    ensure_static_page_preview_contract_current(&draft, image_job.as_ref())?;
+    let image_job = if request.direct_html {
+        None
+    } else {
+        let image_job =
+            resolve_confirmed_static_page_image_job(state, &draft, request.image_job_id).await?;
+        ensure_static_page_preview_contract_current(&draft, image_job.as_ref())?;
+        image_job
+    };
     if let Some((reason, details)) = static_page_final_render_data_quality_gate_for_draft(&draft) {
         return Err(ApiError::bad_request_with_details(
             "static_page_final_render_data_quality_gate",
@@ -13489,18 +13583,24 @@ async fn create_static_page_render_for_draft(
             "status": "rendered",
             "renderOutputId": render_output.id,
             "assetManifest": render_output.asset_manifest,
+            "directHtml": request.direct_html,
         }
     })];
+    let render_summary = if request.direct_html {
+        "最终静态页已按快速 HTML 交付模式生成，未经过效果图确认。"
+    } else {
+        "最终静态页已根据确认效果图和模块规划生成。"
+    };
     draft.draft_payload = apply_static_page_operations_to_payload(
         draft.draft_payload,
         &operations,
-        Some("最终静态页已根据确认效果图和模块规划生成。"),
+        Some(render_summary),
     );
     append_static_page_operations_metadata(
         &mut draft.draft_payload,
         &operations,
         None,
-        "最终静态页已根据确认效果图和模块规划生成。",
+        render_summary,
     );
     draft.status = StaticPageDraftStatus::Rendered;
     let draft = state
@@ -22417,6 +22517,19 @@ fn parse_static_page_image_job_id(
             format!("{raw} is not a valid UUID"),
         )
     })
+}
+
+fn parse_static_page_render_output_id(
+    raw: &str,
+) -> std::result::Result<domain_model::StaticPageRenderOutputId, ApiError> {
+    Uuid::parse_str(raw)
+        .map(domain_model::StaticPageRenderOutputId)
+        .map_err(|_| {
+            ApiError::bad_request(
+                "invalid_static_page_render_output_id",
+                format!("{raw} is not a valid UUID"),
+            )
+        })
 }
 
 fn parse_published_report_id(raw: &str) -> std::result::Result<PublishedReportId, ApiError> {
@@ -43600,6 +43713,218 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn external_channel_direct_html_render_can_be_downloaded_with_channel_token() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping external direct HTML render test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("external-direct-html-test-{}", Uuid::new_v4()),
+                "External Direct HTML Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage.clone(),
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        insert_generic_external_channel_connection_with_config(
+            &state,
+            "generic-chat-main",
+            json!({
+                "tenant_external_id": "tenant-ext-001",
+                "bot_external_id": "bot-v3",
+                "inbound_bearer_token": "inbound-secret"
+            }),
+        )
+        .await;
+        let now = Utc::now();
+        let run = state
+            .storage
+            .assistant_runs()
+            .create(
+                state.tenant_id,
+                &NewAssistantRun {
+                    user_id: None,
+                    local_thread_id: Some(
+                        "external:generic_chat:tenant-ext-001:bot-v3:conv-html".to_string(),
+                    ),
+                    user_prompt: "给第三方直接生成一页 HTML 风险说明".to_string(),
+                    startup_briefing: json!({"surface": "external_channel"}),
+                    selected_scope: json!({
+                        "type": "external_channel",
+                        "channel_connection_id": "generic-chat-main",
+                        "platform": "generic_chat",
+                        "tenant_external_id": "tenant-ext-001",
+                        "conversation_external_id": "conv-html"
+                    }),
+                    scope_candidates: json!([]),
+                    context_policy: json!({}),
+                    evidence_state: json!({"status": "supplied"}),
+                    service_lane: "external_channel".to_string(),
+                    execution_trail: json!([]),
+                    output_artifacts: json!([]),
+                    runtime_manifest: json!({}),
+                    created_at: now,
+                },
+            )
+            .await
+            .expect("assistant run should be created");
+        let draft = state
+            .storage
+            .static_page_drafts()
+            .create(
+                state.tenant_id,
+                &NewStaticPageDraft {
+                    assistant_run_id: run.id,
+                    owner_user_id: None,
+                    title: "第三方风险说明".to_string(),
+                    status: StaticPageDraftStatus::Planned,
+                    selected_scope: run.selected_scope.clone(),
+                    visibility_snapshot: json!({"policy": "external_channel"}),
+                    source_refs: json!({"source": "external_channel"}),
+                    draft_payload: test_render_ready_static_page_payload(),
+                    created_at: now,
+                },
+            )
+            .await
+            .expect("static page draft should be created");
+
+        let (render_status, Json(render_response)) = create_static_page_render(
+            State(state.clone()),
+            HeaderMap::new(),
+            Path(draft.id.to_string()),
+            Json(CreateStaticPageRenderRequest {
+                image_job_id: None,
+                background: false,
+                direct_html: true,
+            }),
+        )
+        .await
+        .expect("direct HTML render should skip preview confirmation");
+        assert_eq!(render_status, StatusCode::CREATED);
+        assert_eq!(
+            render_response.render_output.status,
+            contracts::StaticPageRenderOutputStatusView::Rendered
+        );
+        assert!(render_response
+            .render_output
+            .html
+            .contains("第三方风险说明"));
+        assert!(!render_response.render_output.html.contains("previews/"));
+        assert_eq!(
+            render_response.draft.draft_payload["finalPage"]["directHtml"],
+            json!(true)
+        );
+
+        let app = router(
+            storage,
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        let missing = get_request_with_authorization(
+            app.clone(),
+            &format!(
+                "/v1/external/channels/generic-chat-main/static-page-renders/{}/download",
+                render_response.render_output.id
+            ),
+            None,
+        )
+        .await;
+        assert_eq!(missing.status(), StatusCode::UNAUTHORIZED);
+
+        let download = get_request_with_authorization(
+            app,
+            &format!(
+                "/v1/external/channels/generic-chat-main/static-page-renders/{}/download",
+                render_response.render_output.id
+            ),
+            Some("Bearer inbound-secret"),
+        )
+        .await;
+        assert_eq!(download.status(), StatusCode::OK);
+        let headers = download.headers().clone();
+        assert_eq!(
+            headers
+                .get(axum::http::header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("text/html; charset=utf-8")
+        );
+        assert!(headers
+            .get(axum::http::header::CONTENT_DISPOSITION)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.contains("attachment; filename=\"v3-static-page-")));
+        let body = axum::body::to_bytes(download.into_body(), usize::MAX)
+            .await
+            .expect("download body should load");
+        let html = String::from_utf8(body.to_vec()).expect("download should be utf-8");
+        assert!(html.contains("第三方风险说明"));
+        assert!(html.contains("风险概览"));
+    }
+
+    fn test_render_ready_static_page_payload() -> Value {
+        json!({
+            "version": 1,
+            "status": "planning",
+            "styleDirection": "client-delivery",
+            "modules": [
+                {
+                    "id": "hero",
+                    "title": "第三方风险说明",
+                    "content": "给第三方直接下载的 HTML 交付件。",
+                    "dataBinding": {
+                        "type": "model_summary",
+                        "label": "模型总结",
+                        "sourceId": "model"
+                    },
+                    "visualization": {
+                        "type": "headline",
+                        "label": "大标题"
+                    }
+                },
+                {
+                    "id": "risk",
+                    "title": "风险概览",
+                    "content": "本周优先看审批超时和权限错配。",
+                    "dataBinding": {
+                        "type": "module_data",
+                        "label": "风险样本",
+                        "sourceId": "model",
+                        "fieldPath": "risk.score"
+                    },
+                    "visualization": {
+                        "type": "risk-matrix",
+                        "label": "风险矩阵",
+                        "data": [
+                            {"label": "审批超时", "value": 0.72},
+                            {"label": "权限错配", "value": 0.58}
+                        ]
+                    }
+                }
+            ],
+            "assistant_context": {
+                "selected_scope": {
+                    "type": "external_channel",
+                    "channel_connection_id": "generic-chat-main"
+                },
+                "evidence_state": {
+                    "status": "supplied"
+                }
+            }
+        })
+    }
+
+    #[tokio::test]
     async fn static_page_draft_can_be_created_under_assistant_run() {
         let _guard = shared_local_postgres_test_lock().lock().await;
         std::env::set_var("ASSISTANT_RUN_RUNTIME_MODE", "placeholder");
@@ -43903,6 +44228,7 @@ mod tests {
             Json(CreateStaticPageRenderRequest {
                 image_job_id: None,
                 background: false,
+                direct_html: false,
             }),
         )
         .await
@@ -44196,6 +44522,7 @@ mod tests {
                 Json(CreateStaticPageRenderRequest {
                     image_job_id: Some(job_response.image_job.id),
                     background: true,
+                    direct_html: false,
                 }),
             )
             .await
@@ -44315,6 +44642,7 @@ mod tests {
             Json(CreateStaticPageRenderRequest {
                 image_job_id: Some(job_response.image_job.id),
                 background: false,
+                direct_html: false,
             }),
         )
         .await
@@ -47529,6 +47857,24 @@ mod tests {
         let mut builder = axum::http::Request::builder().method("GET").uri(uri);
         if let Some(cookie) = cookie {
             builder = builder.header(axum::http::header::COOKIE, cookie);
+        }
+        let request = builder
+            .body(axum::body::Body::empty())
+            .expect("request should build");
+
+        app.oneshot(request)
+            .await
+            .expect("request should return a response")
+    }
+
+    async fn get_request_with_authorization(
+        app: Router,
+        uri: &str,
+        authorization: Option<&str>,
+    ) -> axum::response::Response {
+        let mut builder = axum::http::Request::builder().method("GET").uri(uri);
+        if let Some(authorization) = authorization {
+            builder = builder.header(axum::http::header::AUTHORIZATION, authorization);
         }
         let request = builder
             .body(axum::body::Body::empty())

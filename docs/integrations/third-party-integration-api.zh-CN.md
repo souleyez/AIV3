@@ -547,6 +547,27 @@ V3 计算有效权限时会综合：
 
 当前实现状态：产物发布、状态查询和撤销已经接入外部动作运行时。V3 会把 `external_artifact.publish`、`external_artifact.status`、`external_artifact.revoke` 作为受控动作保存到审计记录中；撤销属于高风险动作，必须先完成用户确认。确认后或无需确认的动作，会由 V3 派发到第三方配置的产物 endpoint，并在观测接口中形成 `artifact_summary`。
 
+页面类产物支持快速 HTML 交付模式：V3 可使用 `html-anything` 作为模板来源和设计参考，直接渲染可浏览器打开的 HTML，跳过调试页、效果图和截图确认。该模式仍走 V3 的模型路由、权限、数据集、证据供料和产物审计边界。
+
+V3 内部最终渲染请求可使用：
+
+```json
+{
+  "direct_html": true,
+  "background": false
+}
+```
+
+第三方下载 HTML：
+
+```http
+GET /v1/external/channels/{connection_id}/static-page-renders/{render_output_id}/download
+Host: v3.elepcloud.com
+Authorization: Bearer <V3 inbound token>
+```
+
+响应为 `text/html; charset=utf-8` 附件。第三方应由服务器端带 token 下载后转存到自己的文件库或下载中心；浏览器页面不得持有 V3 token。V3 会校验该 `render_output_id` 必须属于对应 `connection_id` 的外部通道 AssistantRun。
+
 计划中的直接接口示例：
 
 ```http

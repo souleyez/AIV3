@@ -3153,6 +3153,8 @@ pub struct CreateStaticPageRenderRequest {
     pub image_job_id: Option<StaticPageImageJobId>,
     #[serde(default)]
     pub background: bool,
+    #[serde(default)]
+    pub direct_html: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

@@ -11,6 +11,7 @@
 5. 第三方发起对话时传入本轮可用的外部文档 ID 列表，并保持同一轮对话使用同一个 `conversation_external_id`。
 6. V3 只在这些文档 ID 映射出的内部文档范围内检索，并在进入模型前完成权限过滤。
 7. V3 在同一个 `/events` 响应体的 `reply` 字段里返回生成回复、任务状态或确认卡片；第一阶段不需要第三方再调用单独的“取回复”接口。
+8. 如果本轮要求生成页面或报告页，V3 可走快速 HTML 交付模式，跳过效果图确认，直接生成可下载 HTML。
 
 ## 解析请求
 
@@ -90,6 +91,33 @@ Content-Type: application/json
 
 如果 V3 已接收但暂时无法立即给出最终文本，会返回 `reply_type=task_status`；如果需要用户确认动作，会返回 `reply_type=requires_confirmation`。第三方页面按 `reply.target_conversation_external_id` 把回复展示回原会话即可。
 
+## 快速 HTML 交付
+
+本次第三方对接中，页面类产物采用快速 HTML 模式：
+
+- `html-anything` 只作为 V3 的模板来源和设计参考；
+- 不要求第三方对接调试页、效果图、截图预览或人工确认图；
+- V3 直接产出浏览器可打开的 HTML；
+- 第三方服务器端带入站 Bearer Token 下载 HTML，再转存到自己的文件库或下载中心。
+
+V3 内部渲染请求使用：
+
+```json
+{
+  "direct_html": true,
+  "background": false
+}
+```
+
+第三方下载接口：
+
+```http
+GET /v1/external/channels/{connection_id}/static-page-renders/{render_output_id}/download
+Authorization: Bearer <channel-inbound-token>
+```
+
+返回 `text/html; charset=utf-8` 附件。下载权限要求：该 `render_output_id` 必须来自同一个外部通道的 AssistantRun，否则 V3 会拒绝下载。
+
 ## 第一阶段验收
 
 - 文档解析接口能下载第三方文档并启动 V3 解析工作流。
@@ -97,4 +125,5 @@ Content-Type: application/json
 - 对话请求带 `available_document_external_ids` 时，V3 只从这些文档供料。
 - 同一 `conversation_external_id` 的连续消息会作为同一个对话上下文进入模型。
 - 第三方发消息到 `/events` 后，能从响应体 `reply` 中拿到文本回复或处理状态。
+- 页面类产物可用快速 HTML 模式直接生成，并通过外部通道下载接口交付给第三方。
 - 未解析、未授权或未传入的文档不会进入模型上下文。

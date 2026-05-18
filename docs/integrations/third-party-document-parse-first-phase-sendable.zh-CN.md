@@ -136,7 +136,52 @@ Content-Type: application/json
 - 未传入、未解析完成或无权使用的文档，不会进入本轮模型上下文。
 - `message_external_id` 和 `idempotency_key` 建议每条消息稳定唯一，方便重试和排查。
 
-## 5. 第一阶段验收口径
+## 5. 快速生成 HTML 交付件
+
+本次第三方对接如果用户要“生成页面、说明页、报告页或一页 HTML”，优先走 V3 快速 HTML 交付模式：
+
+- `html-anything` 作为模板来源和设计参考，不作为第三方需要单独对接的系统。
+- V3 直接生成浏览器可打开的 `index.html`，跳过调试页、效果图和截图确认。
+- HTML 仍走 V3 的模型路由、权限、数据集、证据供料和产物审计边界。
+- 生成完成后，V3 可在消息响应 `reply.artifact_links` 中返回下载地址。
+- 第三方服务器端使用同一个 Bearer Token 下载 HTML 后，再转存到第三方自己的文件库或下载中心；不要把 V3 token 放进浏览器页面。
+
+V3 内部创建最终 HTML 时使用：
+
+```json
+{
+  "direct_html": true,
+  "background": false
+}
+```
+
+第三方下载 HTML：
+
+```http
+GET https://v3.elepcloud.com/v1/external/channels/{connection_id}/static-page-renders/{render_output_id}/download
+Authorization: Bearer <由我方提供的 token>
+```
+
+返回内容是 `text/html; charset=utf-8`，并以附件形式下载，例如 `v3-static-page-{render_output_id}.html`。
+
+响应中的产物链接示例：
+
+```json
+{
+  "reply": {
+    "target_conversation_external_id": "conv-20260518-0001",
+    "reply_type": "artifact_link",
+    "text": "HTML 已生成，可由第三方服务器下载后交付给用户。",
+    "artifact_links": [
+      "https://v3.elepcloud.com/v1/external/channels/{connection_id}/static-page-renders/{render_output_id}/download"
+    ],
+    "task_status": "answered",
+    "requires_confirmation": false
+  }
+}
+```
+
+## 6. 第一阶段验收口径
 
 建议按以下顺序验收：
 
@@ -145,9 +190,10 @@ Content-Type: application/json
 3. 对话请求带 `available_document_external_ids` 后，V3 能围绕指定文档回答。
 4. 同一 `conversation_external_id` 的连续消息会作为同一个对话上下文进入模型。
 5. 第三方发消息到 `/events` 后，能从响应体 `reply` 中拿到文本回复或处理状态。
-6. 换一个未传入的文档 ID 或不传文档 ID，V3 不应把该文档作为本轮回答依据。
+6. 需要页面交付时，V3 能跳过效果图确认直接生成 HTML，并由第三方服务器端下载。
+7. 换一个未传入的文档 ID 或不传文档 ID，V3 不应把该文档作为本轮回答依据。
 
-## 6. 常见问题
+## 7. 常见问题
 
 | 现象 | 优先检查 |
 | --- | --- |
@@ -156,10 +202,11 @@ Content-Type: application/json
 | `405 Method Not Allowed` | 是否误打了 `http://`、是否被重定向后从 `POST` 变成 `GET` |
 | 能提交但问答没有引用文档 | 文档是否解析完成，`available_document_external_ids` 是否传了正确的第三方文档 ID |
 | 多轮上下文接不上 | 同一轮对话是否保持相同 `conversation_external_id`，每条消息是否使用新的 `message_external_id` |
+| HTML 链接打不开 | 第三方是否由服务器端带 Bearer Token 下载，不要让浏览器直接带 V3 token |
 | 重复提交文档 | 检查 `idempotency_key` 是否按文档 ID 和版本稳定生成 |
 
-## 7. 双方职责边界
+## 8. 双方职责边界
 
-- 第三方负责：上传入口、文档下载地址、第三方文档 ID、用户页面、对话请求发起。
-- V3 负责：拉取文档、解析入库、按文档 ID 查询解析详情、按本轮可用文档范围生成回答。
+- 第三方负责：上传入口、文档下载地址、第三方文档 ID、用户页面、对话请求发起、HTML 下载后的本地转存或分发。
+- V3 负责：拉取文档、解析入库、按文档 ID 查询解析详情、按本轮可用文档范围生成回答、快速 HTML 生成和下载出口。
 - 第一阶段暂不要求第三方开放完整资料库批量同步接口；后续如果要做批量资料源同步，再对接资料源参数卡。

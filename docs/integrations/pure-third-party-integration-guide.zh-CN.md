@@ -439,6 +439,27 @@ V3 可以生成报告、页面、文档、表格、图片、压缩包或链接�
 
 当前主链路采用“V3 外部动作派发”方式：V3 把 `external_artifact.publish`、`external_artifact.status`、`external_artifact.revoke` 作为受控动作保存到审计记录中，再派发到第三方配置的 HTTPS endpoint。
 
+本次第三方对接的页面类产物可采用“快速 HTML 交付”方式：`html-anything` 作为模板来源和设计参考，V3 直接渲染浏览器可打开的 HTML，跳过调试页、效果图和截图确认。V3 仍保留模型路由、权限、数据集、证据供料和产物审计边界。
+
+V3 内部渲染最终页时使用：
+
+```json
+{
+  "direct_html": true,
+  "background": false
+}
+```
+
+第三方服务器端下载 HTML：
+
+```http
+GET /v1/external/channels/{connection_id}/static-page-renders/{render_output_id}/download
+Host: v3.elepcloud.com
+Authorization: Bearer <V3 inbound token>
+```
+
+该下载接口返回 `text/html; charset=utf-8` 附件。第三方应由服务器端带 token 下载后转存或分发，不要把 V3 token 放到浏览器里。V3 会校验 `render_output_id` 必须属于该 `connection_id` 对应的外部通道上下文。
+
 第三方建议提供：
 
 ```http

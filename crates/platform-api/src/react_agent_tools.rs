@@ -756,6 +756,7 @@ async fn render_static_page_for_current_draft(
         CreateStaticPageRenderRequest {
             image_job_id,
             background: false,
+            direct_html: false,
         },
     )
     .await;
