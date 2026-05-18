@@ -683,6 +683,19 @@ export default function HomePageClient() {
     setActivePage(nextPage);
   }
 
+  function handleOpenDocumentPage(documentId) {
+    if (!documentId) {
+      return;
+    }
+    const document = documents.find((item) => item.id === documentId);
+    if (document?.dataset_id) {
+      setSelectedDatasetId(document.dataset_id);
+      setSelectedDatasetIds((current) => normalizeDatasetIds([document.dataset_id, ...current]));
+    }
+    setSelectedDocumentId(documentId);
+    setActivePage('document-detail');
+  }
+
   function promptRequestsStaticPage(prompt) {
     return /静态页|静态页面|页面规划|一页|生成页面|落地页/.test(String(prompt || ''));
   }
@@ -3130,7 +3143,7 @@ export default function HomePageClient() {
   }, [selectedDocumentId]);
 
   useEffect(() => {
-    if (!['datasets', 'sources'].includes(activePage)) {
+    if (!['datasets', 'sources', 'document-detail'].includes(activePage)) {
       return;
     }
     refreshDocuments({ silent: true });
@@ -3440,7 +3453,8 @@ export default function HomePageClient() {
     documentSearch,
     onDocumentSearchChange: setDocumentSearch,
     selectedDocumentId,
-    onSelectDocument: setSelectedDocumentId,
+    onOpenDocumentPage: handleOpenDocumentPage,
+    onBackToDatasets: () => setActivePage('datasets'),
     selectedDocumentDetail,
     documentDetailLoading,
     onRefreshDocuments: () => refreshDocuments({ silent: false }),

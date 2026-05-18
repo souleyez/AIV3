@@ -6,7 +6,11 @@ import { formatDateTime, formatRelativeTime, formatSnakeCaseLabel, truncateText 
 const PAGE_COPY = {
   datasets: {
     title: '数据集',
-    subtitle: '数据集列表、文档列表、解析详情和基础批量管理。',
+    subtitle: '数据集列表、文档列表和基础批量管理；点击文档名称进入原文与解析详情。',
+  },
+  'document-detail': {
+    title: '文档详情',
+    subtitle: '查看文档原文、解析切片、检索证据，并可在同一数据集内切换前后文档。',
   },
   sources: {
     title: '数据源',
@@ -72,14 +76,11 @@ function DatasetsPage({
   documentSearch,
   onDocumentSearchChange,
   selectedDocumentId,
-  onSelectDocument,
-  selectedDocumentDetail,
-  documentDetailLoading,
+  onOpenDocumentPage,
   onRefreshDocuments,
   onUpdateDataset,
   onArchiveDataset,
   datasetActionBusy,
-  onUpdateDocument,
   onArchiveDocuments,
   documentActionBusy,
 }) {
@@ -94,21 +95,12 @@ function DatasetsPage({
       || String(document.content_type || '').toLowerCase().includes(query);
     return inDataset && matches;
   });
-  const chunks = Array.isArray(selectedDocumentDetail?.chunks) ? selectedDocumentDetail.chunks : [];
-  const evidences = Array.isArray(selectedDocumentDetail?.retrieval_evidences)
-    ? selectedDocumentDetail.retrieval_evidences
-    : [];
   const [selectedDocumentIds, setSelectedDocumentIds] = useState([]);
   const [datasetTitleDraft, setDatasetTitleDraft] = useState('');
-  const [documentTitleDraft, setDocumentTitleDraft] = useState('');
 
   useEffect(() => {
     setDatasetTitleDraft(selectedDataset?.title || '');
   }, [selectedDataset?.id, selectedDataset?.title]);
-
-  useEffect(() => {
-    setDocumentTitleDraft(selectedDocumentDetail?.document?.title || '');
-  }, [selectedDocumentDetail?.document?.id, selectedDocumentDetail?.document?.title]);
 
   useEffect(() => {
     const visibleIds = new Set(filteredDocuments.map((document) => document.id));
@@ -122,7 +114,6 @@ function DatasetsPage({
         : [...current, documentId]
     ));
   };
-  const selectedDocument = selectedDocumentDetail?.document || null;
 
   return (
     <div className="directory-two-column">
@@ -247,7 +238,7 @@ function DatasetsPage({
                 onChange={() => toggleDocumentSelection(document.id)}
                 aria-label={`选择 ${document.title}`}
               />
-              <button type="button" className="directory-document-open" onClick={() => onSelectDocument?.(document.id)}>
+              <button type="button" className="directory-document-open" onClick={() => onOpenDocumentPage?.(document.id)}>
                 <strong>{document.title}</strong>
                 <span>{datasetTitle(document.dataset_id, datasets)} · {documentKind(document.content_type)} · {formatSnakeCaseLabel(document.lifecycle)}</span>
                 <em>{truncateText(document.object_key, 64)}</em>
@@ -258,71 +249,251 @@ function DatasetsPage({
           )}
         </div>
       </section>
+    </div>
+  );
+}
 
-      <section className="directory-card directory-detail-card">
-        <div className="directory-section-head">
-          <div>
-            <h3>解析详情</h3>
-            <p>基础解析状态、切片和检索证据先集中展示。</p>
-          </div>
+function documentRawTextFromChunks(chunks = []) {
+  return chunks
+    .map((chunk) => String(chunk?.content || '').trim())
+    .filter(Boolean)
+    .join('\n\n');
+}
+
+function chunkSectionHints(chunk) {
+  const hints = chunk?.metadata?.section_title_hints;
+  if (Array.isArray(hints)) {
+    return hints.map((item) => String(item || '').trim()).filter(Boolean);
+  }
+  return [];
+}
+
+function DocumentDetailPage({
+  datasets,
+  documents,
+  selectedDocumentId,
+  selectedDocumentDetail,
+  documentDetailLoading,
+  onOpenDocumentPage,
+  onBackToDatasets,
+  onUpdateDocument,
+  onArchiveDocuments,
+  documentActionBusy,
+}) {
+  const chunks = Array.isArray(selectedDocumentDetail?.chunks) ? selectedDocumentDetail.chunks : [];
+  const orderedChunks = [...chunks].sort((left, right) => (left.chunk_index || 0) - (right.chunk_index || 0));
+  const evidences = Array.isArray(selectedDocumentDetail?.retrieval_evidences)
+    ? selectedDocumentDetail.retrieval_evidences
+    : [];
+  const selectedDocument = selectedDocumentDetail?.document
+    || documents.find((document) => document.id === selectedDocumentId)
+    || null;
+  const siblingDocuments = selectedDocument?.dataset_id
+    ? documents.filter((document) => document.dataset_id === selectedDocument.dataset_id)
+    : documents;
+  const currentIndex = siblingDocuments.findIndex((document) => document.id === selectedDocument?.id);
+  const previousDocument = currentIndex > 0 ? siblingDocuments[currentIndex - 1] : null;
+  const nextDocument = currentIndex >= 0 && currentIndex < siblingDocuments.length - 1
+    ? siblingDocuments[currentIndex + 1]
+    : null;
+  const [documentTitleDraft, setDocumentTitleDraft] = useState('');
+  const rawText = documentRawTextFromChunks(orderedChunks);
+  const modelFacing = selectedDocumentDetail?.model_facing || null;
+
+  useEffect(() => {
+    setDocumentTitleDraft(selectedDocument?.title || '');
+  }, [selectedDocument?.id, selectedDocument?.title]);
+
+  if (!selectedDocumentId && !documentDetailLoading) {
+    return (
+      <div className="document-detail-page">
+        <section className="directory-card document-detail-empty-card">
+          <h3>尚未选择文档</h3>
+          <p>从数据集页点击文档名称后，会在这里打开原文和解析详情。</p>
+          <button type="button" className="primary-btn compact-action-btn" onClick={onBackToDatasets}>
+            返回数据集
+          </button>
+        </section>
+      </div>
+    );
+  }
+
+  return (
+    <div className="document-detail-page">
+      <div className="document-detail-toolbar">
+        <button type="button" className="ghost-btn compact-action-btn" onClick={onBackToDatasets}>
+          返回数据集
+        </button>
+        <div className="document-detail-nav">
+          <button
+            type="button"
+            className="ghost-btn compact-action-btn"
+            disabled={!previousDocument}
+            onClick={() => previousDocument && onOpenDocumentPage?.(previousDocument.id)}
+          >
+            上一份
+          </button>
+          <button
+            type="button"
+            className="ghost-btn compact-action-btn"
+            disabled={!nextDocument}
+            onClick={() => nextDocument && onOpenDocumentPage?.(nextDocument.id)}
+          >
+            下一份
+          </button>
         </div>
-        {documentDetailLoading ? (
-          <div className="directory-empty">正在读取解析详情...</div>
-        ) : selectedDocumentDetail ? (
-          <>
-            <div className="directory-metric-grid">
-              <MiniMetric label="切片" value={chunks.length} />
-              <MiniMetric label="证据" value={evidences.length} />
-              <MiniMetric label="状态" value={formatSnakeCaseLabel(selectedDocumentDetail.document.lifecycle)} />
-            </div>
-            <div className="directory-detail-block">
-              <strong>{selectedDocumentDetail.document.title}</strong>
-              <span>{selectedDocumentDetail.document.content_type}</span>
-              <p>{truncateText(selectedDocumentDetail.document.object_key, 160)}</p>
-            </div>
-            <form
-              className="directory-edit-box"
-              onSubmit={(event) => {
-                event.preventDefault();
-                if (selectedDocument) {
-                  onUpdateDocument?.(selectedDocument.id, { title: documentTitleDraft });
-                }
-              }}
-            >
-              <strong>文档基础管理</strong>
-              <input
-                value={documentTitleDraft}
-                onChange={(event) => setDocumentTitleDraft(event.target.value)}
-                placeholder="文档标题"
-                disabled={Boolean(documentActionBusy)}
-              />
-              <div className="directory-edit-actions">
-                <button className="primary-btn compact-action-btn" type="submit" disabled={!selectedDocument || Boolean(documentActionBusy)}>
-                  保存标题
-                </button>
-                <button
-                  className="ghost-btn compact-action-btn danger-action"
-                  type="button"
-                  disabled={!selectedDocument || Boolean(documentActionBusy)}
-                  onClick={() => selectedDocument && onArchiveDocuments?.([selectedDocument.id])}
-                >
-                  归档文档
-                </button>
+      </div>
+
+      {documentDetailLoading ? (
+        <section className="directory-card">
+          <div className="directory-empty">正在读取文档原文和解析详情...</div>
+        </section>
+      ) : selectedDocument ? (
+        <div className="document-detail-layout">
+          <section className="directory-card document-raw-card">
+            <div className="directory-section-head">
+              <div>
+                <h3>{selectedDocument.title}</h3>
+                <p>{datasetTitle(selectedDocument.dataset_id, datasets)} · {documentKind(selectedDocument.content_type)}</p>
               </div>
-            </form>
-            <div className="directory-detail-list">
-              {chunks.slice(0, 5).map((chunk) => (
-                <article key={chunk.id}>
-                  <strong>Chunk {chunk.chunk_index} · {chunk.token_count} tokens</strong>
-                  <p>{truncateText(chunk.content, 180)}</p>
-                </article>
-              ))}
             </div>
-          </>
-        ) : (
-          <div className="directory-empty">从文档列表选择一个文档查看解析详情。</div>
-        )}
-      </section>
+            <div className="document-detail-meta-grid">
+              <MiniMetric label="切片" value={orderedChunks.length} />
+              <MiniMetric label="证据" value={evidences.length} />
+              <MiniMetric label="状态" value={formatSnakeCaseLabel(selectedDocument.lifecycle)} />
+            </div>
+            <div className="document-original-block">
+              <div className="document-block-title">
+                <strong>文档原文</strong>
+                <span>{rawText ? `${rawText.length} 字符` : '暂无可展示原文'}</span>
+              </div>
+              {rawText ? (
+                <pre>{rawText}</pre>
+              ) : (
+                <div className="directory-empty">当前详情接口没有返回原文内容；若文档已解析，这里会优先展示解析后的正文切片。</div>
+              )}
+            </div>
+          </section>
+
+          <aside className="document-detail-side">
+            <section className="directory-card">
+              <div className="directory-section-head">
+                <div>
+                  <h3>文档信息</h3>
+                  <p>{truncateText(selectedDocument.object_key, 150)}</p>
+                </div>
+              </div>
+              <div className="document-detail-facts">
+                <span>内容类型：{selectedDocument.content_type || '未知'}</span>
+                <span>创建：{formatDateTime(selectedDocument.created_at)}</span>
+                <span>更新：{formatDateTime(selectedDocument.updated_at)}</span>
+              </div>
+              <form
+                className="directory-edit-box"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  onUpdateDocument?.(selectedDocument.id, { title: documentTitleDraft });
+                }}
+              >
+                <strong>基础管理</strong>
+                <input
+                  value={documentTitleDraft}
+                  onChange={(event) => setDocumentTitleDraft(event.target.value)}
+                  placeholder="文档标题"
+                  disabled={Boolean(documentActionBusy)}
+                />
+                <div className="directory-edit-actions">
+                  <button className="primary-btn compact-action-btn" type="submit" disabled={Boolean(documentActionBusy)}>
+                    保存标题
+                  </button>
+                  <button
+                    className="ghost-btn compact-action-btn danger-action"
+                    type="button"
+                    disabled={Boolean(documentActionBusy)}
+                    onClick={() => onArchiveDocuments?.([selectedDocument.id])}
+                  >
+                    归档文档
+                  </button>
+                </div>
+              </form>
+            </section>
+
+            <section className="directory-card">
+              <div className="directory-section-head">
+                <div>
+                  <h3>模型可见状态</h3>
+                  <p>展示当前详情对模型供料的摘要信号。</p>
+                </div>
+              </div>
+              {modelFacing ? (
+                <div className="document-model-facing">
+                  <span>证据：{formatSnakeCaseLabel(modelFacing.evidence_state)}</span>
+                  <span>后续：{formatSnakeCaseLabel(modelFacing.continuation_state)}</span>
+                  <span>工具：{modelFacing.recommended_tool_key || '无推荐'}</span>
+                  {Array.isArray(modelFacing.signals) && modelFacing.signals.length ? (
+                    <p>{modelFacing.signals.slice(0, 4).join(' · ')}</p>
+                  ) : null}
+                </div>
+              ) : (
+                <div className="directory-empty">暂无模型侧摘要。</div>
+              )}
+            </section>
+          </aside>
+
+          <section className="directory-card document-analysis-card">
+            <div className="directory-section-head">
+              <div>
+                <h3>解析切片</h3>
+                <p>按解析顺序展示正文切片；段落标题线索会作为 RAG 主要索引提示。</p>
+              </div>
+            </div>
+            <div className="document-chunk-list">
+              {orderedChunks.length ? orderedChunks.map((chunk) => {
+                const hints = chunkSectionHints(chunk);
+                return (
+                  <article key={chunk.id} className="document-chunk-card">
+                    <div>
+                      <strong>Chunk {chunk.chunk_index} · {chunk.token_count} tokens</strong>
+                      <span>{formatSnakeCaseLabel(chunk.state)}</span>
+                    </div>
+                    {hints.length ? <em>{hints.join(' / ')}</em> : null}
+                    <p>{chunk.content}</p>
+                  </article>
+                );
+              }) : (
+                <div className="directory-empty">当前文档尚无解析切片。</div>
+              )}
+            </div>
+          </section>
+
+          <section className="directory-card document-analysis-card">
+            <div className="directory-section-head">
+              <div>
+                <h3>检索证据</h3>
+                <p>展示已经索引的召回证据和定位信息。</p>
+              </div>
+            </div>
+            <div className="document-evidence-list">
+              {evidences.length ? evidences.map((evidence) => (
+                <article key={evidence.id} className="document-evidence-card">
+                  <div>
+                    <strong>Rank {evidence.evidence_manifest_view?.recall?.rank_hint ?? evidence.chunk_index}</strong>
+                    <span>{Number.isFinite(Number(evidence.recall_score)) ? Number(evidence.recall_score).toFixed(3) : '0.000'}</span>
+                  </div>
+                  <p>{evidence.summary || evidence.content_excerpt}</p>
+                  <em>{evidence.source_locator}</em>
+                </article>
+              )) : (
+                <div className="directory-empty">暂无检索证据；文档完成检索索引后会显示。</div>
+              )}
+            </div>
+          </section>
+        </div>
+      ) : (
+        <section className="directory-card">
+          <div className="directory-empty">没有找到这个文档，可能已归档或当前账号不可见。</div>
+        </section>
+      )}
     </div>
   );
 }
@@ -452,7 +623,8 @@ export default function WorkspaceDirectoryPanel({
   documentSearch,
   onDocumentSearchChange,
   selectedDocumentId,
-  onSelectDocument,
+  onOpenDocumentPage,
+  onBackToDatasets,
   selectedDocumentDetail,
   documentDetailLoading,
   onRefreshDocuments,
@@ -491,13 +663,24 @@ export default function WorkspaceDirectoryPanel({
           documentSearch={documentSearch}
           onDocumentSearchChange={onDocumentSearchChange}
           selectedDocumentId={selectedDocumentId}
-          onSelectDocument={onSelectDocument}
-          selectedDocumentDetail={selectedDocumentDetail}
-          documentDetailLoading={documentDetailLoading}
+          onOpenDocumentPage={onOpenDocumentPage}
           onRefreshDocuments={onRefreshDocuments}
           onUpdateDataset={onUpdateDataset}
           onArchiveDataset={onArchiveDataset}
           datasetActionBusy={datasetActionBusy}
+          onArchiveDocuments={onArchiveDocuments}
+          documentActionBusy={documentActionBusy}
+        />
+      ) : null}
+      {activePage === 'document-detail' ? (
+        <DocumentDetailPage
+          datasets={datasets}
+          documents={documents}
+          selectedDocumentId={selectedDocumentId}
+          selectedDocumentDetail={selectedDocumentDetail}
+          documentDetailLoading={documentDetailLoading}
+          onOpenDocumentPage={onOpenDocumentPage}
+          onBackToDatasets={onBackToDatasets}
           onUpdateDocument={onUpdateDocument}
           onArchiveDocuments={onArchiveDocuments}
           documentActionBusy={documentActionBusy}
