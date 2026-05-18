@@ -6931,6 +6931,8 @@ struct ExternalActionRunPlan {
     confirmation_state: String,
     requires_confirmation: bool,
     target_system: String,
+    dispatch_status: Option<String>,
+    dispatch_failure_kind: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -9104,6 +9106,172 @@ fn external_document_metadata_matches(
         })
 }
 
+fn parse_external_bot_message_payload(
+    payload: Value,
+    connection: &ExternalChannelConnectionSummary,
+) -> std::result::Result<ExternalBotMessageView, ApiError> {
+    let normalized = normalize_external_bot_message_payload(payload, connection);
+    serde_json::from_value(normalized.clone()).map_err(|error| {
+        ApiError::bad_request_with_details(
+            "external_channel_event_payload_invalid",
+            format!(
+                "external channel event JSON does not match the expected message schema: {error}"
+            ),
+            json!({
+                "expected_platform": external_channel_platform_wire_value(&connection.platform),
+                "expected_message_type": "text",
+                "accepted_field_names": [
+                    "platform",
+                    "tenant_external_id",
+                    "bot_external_id",
+                    "conversation_external_id",
+                    "sender_external_id",
+                    "message_external_id",
+                    "message_type",
+                    "text",
+                    "mention_external_user_ids",
+                    "attachment_refs",
+                    "available_document_source_id",
+                    "available_document_external_ids",
+                    "idempotency_key",
+                    "received_at"
+                ],
+                "accepted_aliases": [
+                    "tenantExternalId",
+                    "botExternalId",
+                    "conversationExternalId",
+                    "senderExternalId",
+                    "messageExternalId",
+                    "messageType",
+                    "mentionExternalUserIds",
+                    "attachmentRefs",
+                    "availableDocumentSourceId",
+                    "availableDocumentExternalIds",
+                    "idempotencyKey",
+                    "receivedAt"
+                ],
+            }),
+        )
+    })
+}
+
+fn normalize_external_bot_message_payload(
+    mut payload: Value,
+    connection: &ExternalChannelConnectionSummary,
+) -> Value {
+    ensure_json_object(&mut payload);
+    external_payload_copy_aliases(
+        &mut payload,
+        &[
+            ("tenantExternalId", "tenant_external_id"),
+            ("botExternalId", "bot_external_id"),
+            ("conversationExternalId", "conversation_external_id"),
+            ("threadExternalId", "thread_external_id"),
+            ("senderExternalId", "sender_external_id"),
+            ("messageExternalId", "message_external_id"),
+            ("messageType", "message_type"),
+            ("mentionExternalUserIds", "mention_external_user_ids"),
+            ("attachmentRefs", "attachment_refs"),
+            (
+                "availableDocumentExternalIds",
+                "available_document_external_ids",
+            ),
+            ("availableDocumentSourceId", "available_document_source_id"),
+            ("idempotencyKey", "idempotency_key"),
+            ("receivedAt", "received_at"),
+        ],
+    );
+    if payload.get("platform").and_then(Value::as_str).is_none() {
+        set_payload_string(
+            &mut payload,
+            "platform",
+            external_channel_platform_wire_value(&connection.platform),
+        );
+    }
+    if payload
+        .get("message_type")
+        .and_then(Value::as_str)
+        .is_none()
+    {
+        set_payload_string(&mut payload, "message_type", "text");
+    }
+    normalize_external_payload_string_case(&mut payload, "platform");
+    normalize_external_payload_string_case(&mut payload, "message_type");
+    if payload
+        .get("received_at")
+        .and_then(Value::as_str)
+        .is_none_or(|value| DateTime::parse_from_rfc3339(value.trim()).is_err())
+    {
+        set_payload_value(&mut payload, "received_at", json!(Utc::now()));
+    }
+    if payload
+        .get("idempotency_key")
+        .and_then(Value::as_str)
+        .is_none()
+    {
+        if let Some(message_id) = payload
+            .get("message_external_id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+        {
+            let tenant = payload
+                .get("tenant_external_id")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or("unknown")
+                .to_string();
+            set_payload_string(
+                &mut payload,
+                "idempotency_key",
+                &format!(
+                    "{}:{}:{}",
+                    external_channel_platform_wire_value(&connection.platform),
+                    tenant,
+                    message_id
+                ),
+            );
+        }
+    }
+    payload
+}
+
+fn external_payload_copy_aliases(payload: &mut Value, aliases: &[(&str, &str)]) {
+    let Some(object) = payload.as_object_mut() else {
+        return;
+    };
+    for (alias, canonical) in aliases {
+        if object.contains_key(*canonical) {
+            continue;
+        }
+        if let Some(value) = object.get(*alias).cloned() {
+            object.insert((*canonical).to_string(), value);
+        }
+    }
+}
+
+fn normalize_external_payload_string_case(payload: &mut Value, key: &str) {
+    let Some(value) = payload.get(key).and_then(Value::as_str) else {
+        return;
+    };
+    let compact = value
+        .trim()
+        .chars()
+        .filter(|ch| !matches!(ch, '-' | '_' | ' '))
+        .flat_map(|ch| ch.to_lowercase())
+        .collect::<String>();
+    let normalized = match (key, compact.as_str()) {
+        ("platform", "genericchat") => "generic_chat".to_string(),
+        ("platform", "thirdparty") => "third_party".to_string(),
+        ("platform", "wecom") => "we_com".to_string(),
+        ("message_type", "unknown") => "unknown".to_string(),
+        (_, value) => value.to_string(),
+    };
+    set_payload_string(payload, key, &normalized);
+}
+
 async fn to_external_document_parse_detail_item(
     state: &AppState,
     document: Document,
@@ -9166,11 +9334,12 @@ async fn ingest_external_channel_event(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(connection_id): Path<String>,
-    Json(message): Json<ExternalBotMessageView>,
+    Json(payload): Json<Value>,
 ) -> std::result::Result<(StatusCode, Json<ExternalChannelEventResponse>), ApiError> {
     validate_required("connection_id", &connection_id)?;
     let connection = load_external_channel_connection(&state, &connection_id).await?;
     ensure_external_channel_inbound_bearer_auth(&headers, &connection)?;
+    let message = parse_external_bot_message_payload(payload, &connection)?;
     let (status, response) = ingest_external_channel_message_with_connection(
         &state,
         &connection_id,
@@ -9263,12 +9432,19 @@ async fn ingest_external_channel_message_with_connection(
         .startup_briefing
         .clone()
         .unwrap_or_else(|| json!({}));
-    let pending_external_evidence_state = json!({
-        "status": "pending",
-        "source": "external_channel",
-        "supplied_count": 0,
-        "guidance": "external channel event accepted; V3 retrieval and permission supply run after identity/source policy resolution"
-    });
+    let external_evidence_state = build_assistant_run_evidence_state(
+        state,
+        &selected_scope,
+        assistant_request.prompt.trim(),
+        assistant_request.local_thread_id.as_deref(),
+        &[],
+        None,
+    )
+    .await?;
+    let evidence_status = external_evidence_state
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
     let run = state
         .storage
         .assistant_runs()
@@ -9282,7 +9458,7 @@ async fn ingest_external_channel_message_with_connection(
                 selected_scope: selected_scope.clone(),
                 scope_candidates: scope_candidates.clone(),
                 context_policy,
-                evidence_state: pending_external_evidence_state.clone(),
+                evidence_state: external_evidence_state.clone(),
                 service_lane: "external_channel".to_string(),
                 execution_trail: json!([
                     {
@@ -9293,8 +9469,11 @@ async fn ingest_external_channel_message_with_connection(
                         "at": now
                     },
                     {
-                        "status": "pending",
-                        "label": "等待 V3 外部身份和资料权限解析",
+                        "status": "completed",
+                        "label": "外部身份和资料权限解析",
+                        "evidence_status": evidence_status,
+                        "supplied_count": assistant_run_evidence_supplied_count(&external_evidence_state),
+                        "detail_target_count": assistant_run_detail_target_count(&external_evidence_state),
                         "at": now
                     }
                 ]),
@@ -9341,7 +9520,7 @@ async fn ingest_external_channel_message_with_connection(
         &selected_scope,
         &scope_candidates,
         &startup_briefing,
-        &pending_external_evidence_state,
+        &external_evidence_state,
         &message,
         now,
     )
@@ -9359,7 +9538,7 @@ async fn ingest_external_channel_message_with_connection(
                 connection_id,
                 run.id,
                 &assistant_request,
-                &pending_external_evidence_state,
+                &external_evidence_state,
                 &run.execution_trail,
                 &message,
                 now,
@@ -9835,6 +10014,10 @@ async fn plan_and_record_external_action_run(
     message: &ExternalBotMessageView,
     now: DateTime<Utc>,
 ) -> std::result::Result<Option<ExternalChannelPlanOutcome>, ApiError> {
+    if !external_channel_prompt_may_need_planned_action(prompt) {
+        return Ok(None);
+    }
+
     let codex_runtime = assistant_run_codex_runtime_selection();
     let codex_model_gateway = assistant_run_codex_model_gateway_snapshot(&codex_runtime);
     let codex_scope_candidates = value_array(scope_candidates.clone());
@@ -9910,8 +10093,11 @@ async fn plan_and_record_external_action_run(
     if !action_type.starts_with("external_") {
         return Ok(None);
     }
+    if !external_channel_prompt_allows_external_action(prompt, action_type) {
+        return Ok(None);
+    }
 
-    let plan = record_external_action_run_from_suggestion(
+    let mut plan = record_external_action_run_from_suggestion(
         state,
         connection_id,
         assistant_run_id,
@@ -9921,8 +10107,11 @@ async fn plan_and_record_external_action_run(
     )
     .await?;
     if !plan.requires_confirmation {
-        let _ = dispatch_external_action_run_if_ready(state, connection_id, &plan.action_id, now)
-            .await?;
+        let outcome =
+            dispatch_external_action_run_if_ready(state, connection_id, &plan.action_id, now)
+                .await?;
+        plan.dispatch_status = Some(outcome.status);
+        plan.dispatch_failure_kind = outcome.failure_kind;
     }
     state
         .storage
@@ -9962,6 +10151,89 @@ async fn plan_and_record_external_action_run(
         .map_err(ApiError::from_storage)?;
 
     Ok(Some(ExternalChannelPlanOutcome::Action(plan)))
+}
+
+fn external_channel_prompt_may_need_planned_action(prompt: &str) -> bool {
+    let normalized = prompt.to_ascii_lowercase();
+    let text = prompt.trim();
+    external_channel_text_has_any(
+        &normalized,
+        text,
+        &[
+            "web search",
+            "search web",
+            "latest",
+            "publish",
+            "revoke",
+            "dispatch",
+            "callback",
+            "status",
+            "查询状态",
+            "产物状态",
+            "投递状态",
+            "发布",
+            "撤回",
+            "下线",
+            "派发",
+            "回调",
+            "执行第三方",
+            "执行动作",
+            "业务动作",
+            "发起审批",
+            "提交审批",
+            "创建工单",
+            "联网搜索",
+            "网页搜索",
+            "最新",
+            "实时",
+        ],
+    )
+}
+
+fn external_channel_prompt_allows_external_action(prompt: &str, action_type: &str) -> bool {
+    let normalized = prompt.to_ascii_lowercase();
+    let text = prompt.trim();
+    match action_type {
+        "external_artifact.status" => external_channel_text_has_any(
+            &normalized,
+            text,
+            &["status", "查询状态", "产物状态", "投递状态", "处理状态"],
+        ),
+        "external_artifact.publish" => {
+            external_channel_text_has_any(&normalized, text, &["publish", "发布", "推送", "投递"])
+        }
+        "external_artifact.revoke" => external_channel_text_has_any(
+            &normalized,
+            text,
+            &["revoke", "撤回", "下线", "取消发布"],
+        ),
+        "external_business_action.invoke" => external_channel_text_has_any(
+            &normalized,
+            text,
+            &[
+                "dispatch",
+                "invoke",
+                "callback",
+                "执行第三方",
+                "执行动作",
+                "业务动作",
+                "发起审批",
+                "提交审批",
+                "创建工单",
+            ],
+        ),
+        _ => false,
+    }
+}
+
+fn external_channel_text_has_any(normalized_ascii: &str, original: &str, needles: &[&str]) -> bool {
+    needles.iter().any(|needle| {
+        if needle.is_ascii() {
+            normalized_ascii.contains(&needle.to_ascii_lowercase())
+        } else {
+            original.contains(needle)
+        }
+    })
 }
 
 async fn record_external_action_run_from_suggestion(
@@ -10090,6 +10362,8 @@ async fn record_external_action_run_from_suggestion(
         confirmation_state,
         requires_confirmation,
         target_system,
+        dispatch_status: None,
+        dispatch_failure_kind: None,
     })
 }
 
@@ -11823,13 +12097,27 @@ fn external_channel_action_plan_reply(
             confirmation_id: Some(plan.action_id.clone()),
         }
     } else {
+        let text = match plan.dispatch_failure_kind.as_deref() {
+            Some("dispatch_endpoint_missing") => {
+                Some("V3 已识别到第三方动作，但当前通道尚未配置动作接收 endpoint；动作已记录，待配置后可重试。".to_string())
+            }
+            Some("dispatch_auth_missing") => {
+                Some("V3 已识别到第三方动作，但当前通道尚未配置动作派发鉴权；动作已记录，待配置后可重试。".to_string())
+            }
+            Some(_) => Some("V3 已识别到第三方动作，但派发未完成；请在 V3 观测页查看动作状态。".to_string()),
+            None => None,
+        };
         ExternalBotReplyView {
             target_conversation_external_id: message.conversation_external_id.clone(),
             reply_type: ExternalBotReplyTypeView::TaskStatus,
-            text: None,
+            text,
             card: None,
             artifact_links: Vec::new(),
-            task_status: Some("external_action_planned".to_string()),
+            task_status: Some(
+                plan.dispatch_status
+                    .clone()
+                    .unwrap_or_else(|| "external_action_planned".to_string()),
+            ),
             requires_confirmation: false,
             action_id: Some(plan.action_id.clone()),
             confirmation_id: None,
@@ -34779,6 +35067,8 @@ mod tests {
                 confirmation_state: "pending".to_string(),
                 requires_confirmation: true,
                 target_system: "customer_crm".to_string(),
+                dispatch_status: None,
+                dispatch_failure_kind: None,
             },
         );
         let confirmation_payload = external_platform_callback_response(
@@ -35570,6 +35860,91 @@ mod tests {
         .expect("message events should be queryable");
         assert_eq!(event_count, 1);
         clear_assistant_openclaw_env();
+    }
+
+    #[tokio::test]
+    async fn generic_chat_page_event_endpoint_accepts_java_style_payload_aliases() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        clear_assistant_openclaw_env();
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping generic chat java style payload test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("generic-chat-java-payload-test-{}", Uuid::new_v4()),
+                "Generic Chat Java Payload Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage.clone(),
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        insert_generic_external_channel_connection(&state, "generic-chat-main").await;
+        let app = router(
+            storage.clone(),
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+
+        let payload = json!({
+            "platform": "GenericChat",
+            "tenantExternalId": "tenant-ext-001",
+            "botExternalId": "bot-v3",
+            "conversationExternalId": "chat-risk-room",
+            "senderExternalId": "user-ext-001",
+            "messageExternalId": "java-msg-001",
+            "messageType": "TEXT",
+            "text": "1+1等于几",
+            "mentionExternalUserIds": [],
+            "attachmentRefs": [],
+            "idempotencyKey": "generic:tenant-ext-001:java-msg-001",
+            "receivedAt": "2026-05-18 22:51:27",
+        });
+
+        let response = post_json_request(
+            app,
+            "/v1/external/channels/generic-chat-main/events",
+            &payload,
+            None,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let body: ExternalChannelEventResponse = read_json_response(response).await;
+        assert!(body.accepted);
+        assert_eq!(body.idempotency_key, "generic:tenant-ext-001:java-msg-001");
+        assert_eq!(body.reply.reply_type, ExternalBotReplyTypeView::Text);
+        clear_assistant_openclaw_env();
+    }
+
+    #[test]
+    fn external_channel_action_planning_gates_plain_questions() {
+        assert!(!external_channel_prompt_may_need_planned_action(
+            "1+1等于几"
+        ));
+        assert!(!external_channel_prompt_may_need_planned_action(
+            "帮我总结我能看的采购审批制度，并指出本周需要处理的风险。"
+        ));
+        assert!(external_channel_prompt_may_need_planned_action(
+            "请查询第三方产物状态"
+        ));
+        assert!(external_channel_prompt_allows_external_action(
+            "请查询第三方产物状态",
+            "external_artifact.status"
+        ));
+        assert!(!external_channel_prompt_allows_external_action(
+            "帮我总结本周需要处理的风险",
+            "external_business_action.invoke"
+        ));
     }
 
     #[tokio::test]
