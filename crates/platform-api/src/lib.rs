@@ -34,6 +34,7 @@ use contracts::{
     CreateChatSessionResponse, CreateConversationMemoryItemRequest, CreateDatasetOutputRequest,
     CreateDatasetOutputResponse, CreateDatasetRequest, CreateDatasetSecretBindingRequest,
     CreateDatasetSecretBindingResponse, CreateDocumentIngestResponse,
+    CreateExternalDocumentParseRequest, CreateExternalDocumentParseResponse,
     CreateExternalSourceSyncRequest, CreateExternalSourceSyncResponse,
     CreateMemoryDirectoryRefreshResponse, CreateReportPlanResponse, CreateReportRenderRequest,
     CreateReportRenderResponse, CreateStaticPageDraftRequest, CreateStaticPageDraftResponse,
@@ -44,19 +45,20 @@ use contracts::{
     ExternalActionConfirmationResponseView, ExternalActionResultCallbackRequestView,
     ExternalActionResultCallbackResponseView, ExternalBotMessageView, ExternalBotReplyTypeView,
     ExternalBotReplyView, ExternalChannelEventResponse, ExternalChannelPlatformView,
+    ExternalDocumentParseDetailItemView, ExternalDocumentParseDocumentView,
     ExternalIntegrationAuditItemView, ExternalIntegrationAuditResponse,
     ExternalIntegrationControlRequest, ExternalIntegrationControlResponse,
-    ExternalIntegrationSummaryView, ExternalMessageTypeView, HealthResponse,
-    HtmlArtifactInteractionModeView, HtmlArtifactManifestView, KeyLoginRequest, KeyLoginResponse,
-    KeyRotateRequest, KeyRotateResponse, ListExternalIntegrationsResponse, LlmInvocationView,
-    LogoutResponse, MemoryDirectoryView, PlanReportRequest, PublishReportRequest,
-    PublishReportResponse, PublishedReportDetailView, PublishedReportVersionView,
-    PublishedReportView, RegisterDocumentRequest, RegisterDocumentResponse,
-    ReportPlanAstVersionView, ReportPlanSummary, ReportRenderOutputView,
-    ResolveDatasetSecretBindingsRequest, ResolveDatasetSecretBindingsResponse,
-    RetrievalEvidenceView, RetrievalSearchHitView, RetrievalSearchResponse,
-    RetryWorkflowExecutionRequest, RetryWorkflowExecutionResponse, StartEmailAuthRequest,
-    StartEmailAuthResponse, StaticPageDraftView, StaticPageImageJobView,
+    ExternalIntegrationSummaryView, ExternalMessageTypeView,
+    GetExternalDocumentParseDetailResponse, HealthResponse, HtmlArtifactInteractionModeView,
+    HtmlArtifactManifestView, KeyLoginRequest, KeyLoginResponse, KeyRotateRequest,
+    KeyRotateResponse, ListExternalIntegrationsResponse, LlmInvocationView, LogoutResponse,
+    MemoryDirectoryView, PlanReportRequest, PublishReportRequest, PublishReportResponse,
+    PublishedReportDetailView, PublishedReportVersionView, PublishedReportView,
+    RegisterDocumentRequest, RegisterDocumentResponse, ReportPlanAstVersionView, ReportPlanSummary,
+    ReportRenderOutputView, ResolveDatasetSecretBindingsRequest,
+    ResolveDatasetSecretBindingsResponse, RetrievalEvidenceView, RetrievalSearchHitView,
+    RetrievalSearchResponse, RetryWorkflowExecutionRequest, RetryWorkflowExecutionResponse,
+    StartEmailAuthRequest, StartEmailAuthResponse, StaticPageDraftView, StaticPageImageJobView,
     StaticPageRenderOutputView, SubmitHtmlArtifactEventRequest, SubmitHtmlArtifactEventResponse,
     ToolDefinitionView, ToolExecutionView, UpdateChatSessionReportEntryRequest,
     UpdateChatSessionReportEntryResponse, UpdateChatSessionRequest, UpdateChatSessionResponse,
@@ -104,6 +106,7 @@ use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     fmt::Display,
     fs,
+    net::IpAddr,
     path::PathBuf,
     time::Instant,
 };
@@ -465,6 +468,14 @@ pub fn router(
         .route(
             "/v1/external/channels/{connection_id}/events",
             axum::routing::post(ingest_external_channel_event),
+        )
+        .route(
+            "/v1/external/channels/{connection_id}/documents/parse",
+            axum::routing::post(create_external_document_parse),
+        )
+        .route(
+            "/v1/external/channels/{connection_id}/documents/{document_external_id}/parse-detail",
+            get(get_external_document_parse_detail),
         )
         .route(
             "/v1/external/channels/{connection_id}/confirmations",
@@ -8429,6 +8440,545 @@ async fn enqueue_external_source_sync(
     })
 }
 
+async fn create_external_document_parse(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(connection_id): Path<String>,
+    Json(request): Json<CreateExternalDocumentParseRequest>,
+) -> std::result::Result<(StatusCode, Json<CreateExternalDocumentParseResponse>), ApiError> {
+    validate_required("connection_id", &connection_id)?;
+    validate_required("source_id", &request.source_id)?;
+    validate_required("document_external_id", &request.document_external_id)?;
+    validate_required("content_url", &request.content_url)?;
+
+    let connection = load_external_channel_connection(&state, &connection_id).await?;
+    ensure_external_channel_inbound_bearer_auth(&headers, &connection)?;
+    ensure_external_channel_enabled(&connection_id, &connection)?;
+
+    let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
+    let current_user_id = current_auth_user_id(&state, &headers).await?;
+    load_visible_dataset_for_user(
+        &state,
+        request.dataset_id,
+        &active_secret_binding_ids,
+        current_user_id,
+    )
+    .await?;
+    let source = load_external_source_connection(&state, &request.source_id).await?;
+    if source.disabled_at.is_some() {
+        return Err(ApiError::forbidden(
+            "external_source_disabled",
+            format!(
+                "external source connection {} is disabled",
+                request.source_id
+            ),
+        ));
+    }
+
+    let downloaded = download_external_document_parse_file(&request).await?;
+    let title = request
+        .title
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(&request.document_external_id)
+        .to_string();
+    let content_type = request
+        .content_type
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(downloaded.content_type.as_str())
+        .to_string();
+    let document = state
+        .storage
+        .documents()
+        .create(
+            state.tenant_id,
+            NewDocument {
+                dataset_id: request.dataset_id,
+                title,
+                object_key: downloaded.object_key,
+                content_type,
+                secret_binding_ids: Vec::new(),
+                owner_user_id: current_user_id,
+                metadata: json!({
+                    "external_source": {
+                        "source_id": request.source_id.clone(),
+                        "document_external_id": request.document_external_id.clone(),
+                        "revision_external_id": request.revision_external_id.clone(),
+                        "external_parse_request_id": request.idempotency_key.clone(),
+                        "synced_at": Utc::now(),
+                    },
+                    "external_metadata": if request.metadata.is_object() { request.metadata.clone() } else { json!({}) },
+                    "external_document_parse": {
+                        "connection_id": connection_id.clone(),
+                        "source_content_url_redacted": downloaded.content_url_redacted,
+                        "downloaded_bytes": downloaded.size_bytes,
+                        "downloaded_at": Utc::now(),
+                    }
+                }),
+            },
+        )
+        .await
+        .map_err(ApiError::from_storage)?;
+
+    let execution = build_initial_upload_ingest_execution(&state, &document)?;
+    let initial_event = build_initial_upload_ingest_event(&execution, &document);
+    state
+        .storage
+        .workflow_executions()
+        .create_with_initial_event(&execution, &initial_event)
+        .await
+        .map_err(ApiError::from_storage)?;
+    let started = apply_workflow_signal_with_dependencies(
+        &state.storage,
+        &state.workflow_catalog,
+        &state.event_bus,
+        state.tenant_id,
+        execution.id,
+        WorkflowSignal::Start,
+    )
+    .await?;
+
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(CreateExternalDocumentParseResponse {
+            accepted: true,
+            source_id: request.source_id,
+            document_external_id: request.document_external_id,
+            revision_external_id: request.revision_external_id,
+            document: to_external_document_parse_document_view(document),
+            workflow_execution: started.execution,
+        }),
+    ))
+}
+
+async fn get_external_document_parse_detail(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((connection_id, document_external_id)): Path<(String, String)>,
+    Query(query): Query<BTreeMap<String, String>>,
+) -> std::result::Result<Json<GetExternalDocumentParseDetailResponse>, ApiError> {
+    validate_required("connection_id", &connection_id)?;
+    validate_required("document_external_id", &document_external_id)?;
+
+    let connection = load_external_channel_connection(&state, &connection_id).await?;
+    ensure_external_channel_inbound_bearer_auth(&headers, &connection)?;
+    ensure_external_channel_enabled(&connection_id, &connection)?;
+
+    let source_id = query
+        .get("source_id")
+        .or_else(|| query.get("sourceId"))
+        .map(String::as_str)
+        .and_then(non_empty_trimmed_string)
+        .or_else(|| external_channel_default_source_id_from_config(&connection.config_redacted))
+        .ok_or_else(|| {
+            ApiError::bad_request(
+                "external_source_id_missing",
+                "parse detail query requires source_id or channel default_source_id".to_string(),
+            )
+        })?;
+    load_external_source_connection(&state, &source_id).await?;
+
+    let mut details = Vec::new();
+    for document in find_external_documents_by_external_id(
+        &state,
+        &source_id,
+        &document_external_id,
+        query
+            .get("revision_external_id")
+            .or_else(|| query.get("revisionExternalId"))
+            .map(String::as_str),
+    )
+    .await?
+    {
+        details.push(to_external_document_parse_detail_item(&state, document).await?);
+    }
+    details.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+    let latest = details.first().cloned();
+
+    Ok(Json(GetExternalDocumentParseDetailResponse {
+        source_id,
+        document_external_id,
+        latest,
+        documents: details,
+    }))
+}
+
+struct DownloadedExternalDocument {
+    object_key: String,
+    content_type: String,
+    content_url_redacted: String,
+    size_bytes: u64,
+}
+
+async fn download_external_document_parse_file(
+    request: &CreateExternalDocumentParseRequest,
+) -> std::result::Result<DownloadedExternalDocument, ApiError> {
+    let url = reqwest::Url::parse(request.content_url.trim()).map_err(|error| {
+        ApiError::bad_request(
+            "external_document_content_url_invalid",
+            format!("content_url is not a valid URL: {error}"),
+        )
+    })?;
+    validate_external_document_content_url(&url, request.allow_http_loopback)?;
+
+    let timeout_secs = std::env::var("EXTERNAL_DOCUMENT_PARSE_TIMEOUT_SECS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(30)
+        .max(1);
+    let max_bytes = std::env::var("EXTERNAL_DOCUMENT_PARSE_MAX_BYTES")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(50 * 1024 * 1024);
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(timeout_secs))
+        .build()
+        .map_err(|error| {
+            ApiError::internal(
+                "external_document_download_client_failed",
+                error.to_string(),
+            )
+        })?;
+    let response = client.get(url.clone()).send().await.map_err(|error| {
+        ApiError::bad_request(
+            "external_document_download_failed",
+            format!("failed to download external document: {error}"),
+        )
+    })?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(ApiError::bad_request(
+            "external_document_download_failed",
+            format!(
+                "external document download returned HTTP {}",
+                status.as_u16()
+            ),
+        ));
+    }
+    if response
+        .content_length()
+        .is_some_and(|content_length| content_length > max_bytes)
+    {
+        return Err(ApiError::bad_request(
+            "external_document_too_large",
+            format!("external document exceeds {} bytes", max_bytes),
+        ));
+    }
+    let response_content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(non_empty_trimmed_string)
+        .unwrap_or_else(|| "application/octet-stream".to_string());
+    let bytes = response.bytes().await.map_err(|error| {
+        ApiError::bad_request(
+            "external_document_download_failed",
+            format!("failed to read external document body: {error}"),
+        )
+    })?;
+    if bytes.len() as u64 > max_bytes {
+        return Err(ApiError::bad_request(
+            "external_document_too_large",
+            format!("external document exceeds {} bytes", max_bytes),
+        ));
+    }
+
+    let root = external_document_object_root()?;
+    let extension = external_document_file_extension(&url, request.content_type.as_deref())
+        .or_else(|| external_document_extension_from_content_type(&response_content_type))
+        .unwrap_or_else(|| ".bin".to_string());
+    let revision_or_request = request
+        .revision_external_id
+        .as_deref()
+        .and_then(non_empty_trimmed_string)
+        .or_else(|| {
+            request
+                .idempotency_key
+                .as_deref()
+                .and_then(non_empty_trimmed_string)
+        })
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
+    let path = root
+        .join("external-documents")
+        .join(safe_external_path_segment(&request.source_id))
+        .join(safe_external_path_segment(&request.document_external_id))
+        .join(format!(
+            "{}{}",
+            safe_external_path_segment(&revision_or_request),
+            extension
+        ));
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| {
+            ApiError::internal(
+                "external_document_store_failed",
+                format!("failed to create external document object dir: {error}"),
+            )
+        })?;
+    }
+    fs::write(&path, &bytes).map_err(|error| {
+        ApiError::internal(
+            "external_document_store_failed",
+            format!("failed to store external document object: {error}"),
+        )
+    })?;
+
+    Ok(DownloadedExternalDocument {
+        object_key: path.to_string_lossy().to_string(),
+        content_type: request
+            .content_type
+            .as_deref()
+            .and_then(non_empty_trimmed_string)
+            .unwrap_or(response_content_type),
+        content_url_redacted: external_document_redact_url(&url),
+        size_bytes: bytes.len() as u64,
+    })
+}
+
+fn validate_external_document_content_url(
+    url: &reqwest::Url,
+    allow_http_loopback: bool,
+) -> std::result::Result<(), ApiError> {
+    match url.scheme() {
+        "https" => {}
+        "http" if allow_http_loopback && is_loopback_url_host(url.host_str()) => {}
+        _ => {
+            return Err(ApiError::bad_request(
+                "external_document_content_url_insecure",
+                "content_url must use HTTPS; HTTP is only allowed for loopback smoke tests"
+                    .to_string(),
+            ))
+        }
+    }
+    if let Some(host) = url.host_str() {
+        if let Ok(ip) = host.parse::<IpAddr>() {
+            if ip.is_loopback()
+                || ip.is_unspecified()
+                || ip.is_multicast()
+                || match ip {
+                    IpAddr::V4(value) => {
+                        value.is_private() || value.is_link_local() || value.is_broadcast()
+                    }
+                    IpAddr::V6(value) => value.is_unique_local() || value.is_unicast_link_local(),
+                }
+            {
+                if !(allow_http_loopback && ip.is_loopback()) {
+                    return Err(ApiError::bad_request(
+                        "external_document_content_url_private_host",
+                        "content_url host must not be a private or local IP".to_string(),
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn is_loopback_url_host(host: Option<&str>) -> bool {
+    matches!(host, Some("127.0.0.1" | "localhost" | "::1"))
+}
+
+fn external_document_object_root() -> std::result::Result<PathBuf, ApiError> {
+    let root = std::env::var("PLATFORM_LOCAL_OBJECT_ROOT")
+        .ok()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| std::env::temp_dir().join("ai-data-platform-v3-objects"));
+    fs::create_dir_all(&root).map_err(|error| {
+        ApiError::internal(
+            "external_document_store_failed",
+            format!("failed to create local object root: {error}"),
+        )
+    })?;
+    Ok(root)
+}
+
+fn external_document_file_extension(
+    url: &reqwest::Url,
+    content_type: Option<&str>,
+) -> Option<String> {
+    url.path_segments()
+        .and_then(|mut segments| segments.next_back())
+        .and_then(|filename| filename.rsplit_once('.').map(|(_, ext)| ext))
+        .map(|ext| format!(".{}", safe_external_path_segment(ext)))
+        .filter(|ext| ext.len() > 1 && ext.len() <= 12)
+        .or_else(|| content_type.and_then(external_document_extension_from_content_type))
+}
+
+fn external_document_extension_from_content_type(content_type: &str) -> Option<String> {
+    let normalized = content_type
+        .split(';')
+        .next()
+        .unwrap_or(content_type)
+        .trim()
+        .to_ascii_lowercase();
+    let extension = match normalized.as_str() {
+        "text/plain" => ".txt",
+        "text/markdown" => ".md",
+        "text/html" => ".html",
+        "application/pdf" => ".pdf",
+        "application/json" => ".json",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document" => ".docx",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" => ".xlsx",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation" => ".pptx",
+        _ => return None,
+    };
+    Some(extension.to_string())
+}
+
+fn safe_external_path_segment(value: &str) -> String {
+    let mut output = String::new();
+    for ch in value.trim().chars() {
+        if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
+            output.push(ch);
+        } else {
+            output.push('_');
+        }
+    }
+    if output.is_empty() {
+        "unknown".to_string()
+    } else {
+        output.chars().take(120).collect()
+    }
+}
+
+fn external_document_redact_url(url: &reqwest::Url) -> String {
+    format!(
+        "{}://{}{}{}",
+        url.scheme(),
+        url.host_str().unwrap_or("[unknown]"),
+        url.port()
+            .map(|port| format!(":{port}"))
+            .unwrap_or_default(),
+        url.path()
+    )
+}
+
+fn to_external_document_parse_document_view(
+    document: Document,
+) -> ExternalDocumentParseDocumentView {
+    ExternalDocumentParseDocumentView {
+        id: document.id,
+        dataset_id: document.dataset_id,
+        title: document.title,
+        content_type: document.content_type,
+        lifecycle: contracts::DocumentLifecycleView::from_domain(document.lifecycle),
+        created_at: document.created_at,
+        updated_at: document.updated_at,
+    }
+}
+
+async fn find_external_documents_by_external_id(
+    state: &AppState,
+    source_id: &str,
+    document_external_id: &str,
+    revision_external_id: Option<&str>,
+) -> std::result::Result<Vec<Document>, ApiError> {
+    let revision_external_id = revision_external_id
+        .and_then(non_empty_trimmed_string)
+        .map(|value| value.to_string());
+    let documents = state
+        .storage
+        .documents()
+        .list_by_tenant(state.tenant_id)
+        .await
+        .map_err(ApiError::from_storage)?;
+    Ok(documents
+        .into_iter()
+        .filter(|document| {
+            external_document_metadata_matches(
+                &document.metadata,
+                source_id,
+                document_external_id,
+                revision_external_id.as_deref(),
+            )
+        })
+        .collect())
+}
+
+fn external_document_metadata_matches(
+    metadata: &BTreeMap<String, Value>,
+    source_id: &str,
+    document_external_id: &str,
+    revision_external_id: Option<&str>,
+) -> bool {
+    let Some(object) = metadata
+        .get("external_source")
+        .or_else(|| metadata.get("externalSource"))
+        .and_then(Value::as_object)
+    else {
+        return false;
+    };
+    object.get("source_id").and_then(Value::as_str) == Some(source_id)
+        && object.get("document_external_id").and_then(Value::as_str) == Some(document_external_id)
+        && revision_external_id.map_or(true, |revision| {
+            object
+                .get("revision_external_id")
+                .or_else(|| object.get("revisionExternalId"))
+                .and_then(Value::as_str)
+                == Some(revision)
+        })
+}
+
+async fn to_external_document_parse_detail_item(
+    state: &AppState,
+    document: Document,
+) -> std::result::Result<ExternalDocumentParseDetailItemView, ApiError> {
+    let chunks = state
+        .storage
+        .document_chunks()
+        .list_by_document(state.tenant_id, document.id)
+        .await
+        .map_err(ApiError::from_storage)?;
+    let retrieval_evidences = state
+        .storage
+        .retrieval_evidences()
+        .list_by_document(state.tenant_id, document.id)
+        .await
+        .map_err(ApiError::from_storage)?;
+    let external_source = document
+        .metadata
+        .get("external_source")
+        .or_else(|| document.metadata.get("externalSource"))
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let source_id = external_source
+        .get("source_id")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let document_external_id = external_source
+        .get("document_external_id")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let revision_external_id = external_source
+        .get("revision_external_id")
+        .or_else(|| external_source.get("revisionExternalId"))
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
+    Ok(ExternalDocumentParseDetailItemView {
+        document_id: document.id,
+        dataset_id: document.dataset_id,
+        title: document.title,
+        content_type: document.content_type,
+        lifecycle: contracts::DocumentLifecycleView::from_domain(document.lifecycle),
+        source_id,
+        document_external_id,
+        revision_external_id,
+        chunk_count: chunks.len(),
+        retrieval_evidence_count: retrieval_evidences.len(),
+        ingest: document
+            .metadata
+            .get("ingest")
+            .cloned()
+            .unwrap_or_else(|| json!({})),
+        created_at: document.created_at,
+        updated_at: document.updated_at,
+    })
+}
+
 async fn ingest_external_channel_event(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -8503,11 +9053,20 @@ async fn ingest_external_channel_message_with_connection(
     }
 
     let now = Utc::now();
-    let assistant_request = external_bot_message_to_assistant_run_request(connection_id, &message);
-    let selected_scope = assistant_request
+    let mut assistant_request =
+        external_bot_message_to_assistant_run_request(connection_id, &message);
+    let mut selected_scope = assistant_request
         .selected_scope
         .clone()
         .unwrap_or_else(|| json!({}));
+    enrich_external_channel_document_scope(state, connection, &message, &mut selected_scope)
+        .await?;
+    assistant_request.selected_scope = Some(selected_scope.clone());
+    for candidate in &mut assistant_request.scope_candidates {
+        if candidate.get("type").and_then(Value::as_str) == Some("external_channel") {
+            set_payload_value(candidate, "scope", selected_scope.clone());
+        }
+    }
     let scope_candidates = Value::Array(assistant_request.scope_candidates.clone());
     let context_policy = assistant_request
         .context_policy_hint
@@ -10167,6 +10726,20 @@ fn external_channel_inbound_bearer_token_from_config(config: &Value) -> Option<S
     )
 }
 
+fn external_channel_default_source_id_from_config(config: &Value) -> Option<String> {
+    external_config_string(
+        config,
+        &[
+            "default_source_id",
+            "defaultSourceId",
+            "source_id",
+            "sourceId",
+            "external_source_id",
+            "externalSourceId",
+        ],
+    )
+}
+
 fn authorization_bearer_token(headers: &HeaderMap) -> Option<&str> {
     let value = headers.get(header::AUTHORIZATION)?.to_str().ok()?.trim();
     let mut parts = value.split_whitespace();
@@ -10597,6 +11170,98 @@ async fn record_external_message_event(
     Ok(())
 }
 
+async fn enrich_external_channel_document_scope(
+    state: &AppState,
+    connection: &ExternalChannelConnectionSummary,
+    message: &ExternalBotMessageView,
+    selected_scope: &mut Value,
+) -> std::result::Result<(), ApiError> {
+    let mut requested_external_ids = Vec::new();
+    for raw in &message.available_document_external_ids {
+        if let Some(value) = non_empty_trimmed_string(raw) {
+            if !requested_external_ids.contains(&value) {
+                requested_external_ids.push(value);
+            }
+        }
+    }
+    if requested_external_ids.is_empty() {
+        return Ok(());
+    }
+
+    let source_id = message
+        .available_document_source_id
+        .as_deref()
+        .and_then(non_empty_trimmed_string)
+        .or_else(|| external_channel_default_source_id_from_config(&connection.config_redacted))
+        .ok_or_else(|| {
+            ApiError::bad_request(
+                "external_document_source_missing",
+                "available_document_external_ids requires available_document_source_id or channel default_source_id".to_string(),
+            )
+        })?;
+
+    let mut selected_documents = Vec::new();
+    let mut selected_datasets = Vec::new();
+    let mut unresolved_external_ids = Vec::new();
+    for external_id in &requested_external_ids {
+        let mut candidates =
+            find_external_documents_by_external_id(state, &source_id, external_id, None).await?;
+        candidates.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+        if let Some(document) = candidates.into_iter().next() {
+            if !selected_datasets
+                .iter()
+                .any(|dataset_id: &DatasetId| *dataset_id == document.dataset_id)
+            {
+                selected_datasets.push(document.dataset_id);
+            }
+            selected_documents.push(json!({
+                "type": "document",
+                "id": document.id,
+                "source_id": source_id,
+                "document_external_id": external_id,
+                "title": document.title,
+            }));
+        } else {
+            unresolved_external_ids.push(external_id.clone());
+        }
+    }
+
+    set_payload_value(
+        selected_scope,
+        "available_document_source_id",
+        json!(source_id),
+    );
+    set_payload_value(
+        selected_scope,
+        "available_document_external_ids",
+        json!(requested_external_ids),
+    );
+    set_payload_value(
+        selected_scope,
+        "unresolved_document_external_ids",
+        json!(unresolved_external_ids),
+    );
+    if !selected_documents.is_empty() {
+        set_payload_value(
+            selected_scope,
+            "documents",
+            Value::Array(selected_documents),
+        );
+        set_payload_value(
+            selected_scope,
+            "datasets",
+            Value::Array(
+                selected_datasets
+                    .into_iter()
+                    .map(|dataset_id| json!({"type": "dataset", "id": dataset_id}))
+                    .collect(),
+            ),
+        );
+    }
+
+    Ok(())
+}
+
 fn external_bot_message_to_assistant_run_request(
     connection_id: &str,
     message: &ExternalBotMessageView,
@@ -10614,6 +11279,8 @@ fn external_bot_message_to_assistant_run_request(
         "conversation_external_id": message.conversation_external_id,
         "sender_external_id": message.sender_external_id,
         "message_external_id": message.message_external_id,
+        "available_document_source_id": message.available_document_source_id,
+        "available_document_external_ids": message.available_document_external_ids,
     });
 
     CreateAssistantRunRequest {
@@ -10664,6 +11331,8 @@ fn external_bot_message_payload_summary(message: &ExternalBotMessageView) -> Val
         "text_chars": message.text.as_ref().map(|text| text.chars().count()).unwrap_or(0),
         "mention_count": message.mention_external_user_ids.len(),
         "attachment_count": message.attachment_refs.len(),
+        "available_document_count": message.available_document_external_ids.len(),
+        "available_document_source_id": message.available_document_source_id,
         "attachments": message.attachment_refs.iter().map(|attachment| json!({
             "attachment_external_id": attachment.attachment_external_id,
             "filename": attachment.filename,
@@ -16948,6 +17617,7 @@ async fn build_assistant_run_evidence_state(
     let prefer_detail = assistant_run_scope_prefers_detail(selected_scope);
     let limit = assistant_run_evidence_limit_for_scope(selected_scope);
     let external_acl_filter = load_external_acl_filter_context(state, selected_scope).await?;
+    let selected_document_ids = selected_document_ids_from_scope(selected_scope);
     let mut supplied_items = Vec::new();
     let mut supplied_datasets = Vec::new();
     let mut supplied_memory_items = Vec::new();
@@ -16994,6 +17664,8 @@ async fn build_assistant_run_evidence_state(
             evidences,
         )
         .await?;
+        let evidences =
+            filter_retrieval_evidences_for_selected_documents(evidences, &selected_document_ids);
 
         let ranked_evidences = rank_retrieval_evidences_for_prompt(&evidences, prompt, limit);
         if ranked_evidences.is_empty() {
@@ -17004,6 +17676,7 @@ async fn build_assistant_run_evidence_state(
                 limit,
                 current_user_id,
                 external_acl_filter.as_ref(),
+                &selected_document_ids,
                 &mut media_context_by_document,
             )
             .await?;
@@ -17132,6 +17805,7 @@ async fn build_assistant_run_chunk_fallback_supply(
     limit: usize,
     current_user_id: Option<UserId>,
     external_acl_filter: Option<&ExternalAclFilterContext>,
+    selected_document_ids: &[DocumentId],
     media_context_by_document: &mut HashMap<DocumentId, Option<Value>>,
 ) -> std::result::Result<Vec<Value>, ApiError> {
     if limit == 0 {
@@ -17146,6 +17820,9 @@ async fn build_assistant_run_chunk_fallback_supply(
         .map_err(ApiError::from_storage)?
         .into_iter()
         .filter(|document| owner_user_id_is_visible(document.owner_user_id, current_user_id))
+        .filter(|document| {
+            selected_document_ids.is_empty() || selected_document_ids.contains(&document.id)
+        })
         .collect::<Vec<_>>();
     let mut sources = Vec::new();
     for document in documents {
@@ -17212,6 +17889,19 @@ async fn build_assistant_run_chunk_fallback_supply(
         items.push(supplied_item);
     }
     Ok(items)
+}
+
+fn filter_retrieval_evidences_for_selected_documents(
+    evidences: Vec<RetrievalEvidence>,
+    selected_document_ids: &[DocumentId],
+) -> Vec<RetrievalEvidence> {
+    if selected_document_ids.is_empty() {
+        return evidences;
+    }
+    evidences
+        .into_iter()
+        .filter(|evidence| selected_document_ids.contains(&evidence.document_id))
+        .collect()
 }
 
 fn assistant_run_supply_quality_report(
@@ -29183,6 +29873,11 @@ fn trim_optional(value: Option<String>) -> Option<String> {
         let trimmed = value.trim().to_string();
         (!trimmed.is_empty()).then_some(trimmed)
     })
+}
+
+fn non_empty_trimmed_string(value: &str) -> Option<String> {
+    let trimmed = value.trim().to_string();
+    (!trimmed.is_empty()).then_some(trimmed)
 }
 
 fn derive_chat_session_title(prompt: &str) -> String {
@@ -45308,6 +46003,351 @@ mod tests {
             .contains("已有可见供料时，正式模型回答会优先参考供料"));
         assert!(!response.assistant_message.content.contains("供料状态:"));
         assert!(!response.assistant_message.content.contains("Prompt:"));
+    }
+
+    #[tokio::test]
+    async fn assistant_run_evidence_state_limits_to_selected_document_ids() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_MODE", "placeholder");
+        std::env::remove_var("ASSISTANT_RUN_EVIDENCE_LIMIT");
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping selected document evidence test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("assistant-selected-doc-test-{}", Uuid::new_v4()),
+                "Assistant Selected Document Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage,
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        let dataset = state
+            .storage
+            .datasets()
+            .create(
+                state.tenant_id,
+                NewDataset {
+                    key: format!("selected-doc-scope-{}", Uuid::new_v4()),
+                    title: "Selected document scope".to_string(),
+                    description: Some("Document ID scoping test dataset.".to_string()),
+                    owner_user_id: None,
+                },
+            )
+            .await
+            .expect("dataset should be created");
+        let first_document = state
+            .storage
+            .documents()
+            .create(
+                state.tenant_id,
+                NewDocument {
+                    dataset_id: dataset.id,
+                    title: "First policy".to_string(),
+                    object_key: "selected-doc/first.md".to_string(),
+                    content_type: "text/markdown".to_string(),
+                    secret_binding_ids: Vec::new(),
+                    owner_user_id: None,
+                    metadata: json!({}),
+                },
+            )
+            .await
+            .expect("first document should be created");
+        let second_document = state
+            .storage
+            .documents()
+            .create(
+                state.tenant_id,
+                NewDocument {
+                    dataset_id: dataset.id,
+                    title: "Second policy".to_string(),
+                    object_key: "selected-doc/second.md".to_string(),
+                    content_type: "text/markdown".to_string(),
+                    secret_binding_ids: Vec::new(),
+                    owner_user_id: None,
+                    metadata: json!({}),
+                },
+            )
+            .await
+            .expect("second document should be created");
+        let now = Utc::now();
+        let first_chunk = state
+            .storage
+            .document_chunks()
+            .replace_for_document(
+                state.tenant_id,
+                first_document.id,
+                &[storage::NewDocumentChunk {
+                    dataset_id: dataset.id,
+                    document_id: first_document.id,
+                    chunk_index: 0,
+                    content: "First document order delay risk.".to_string(),
+                    token_count: 6,
+                    metadata: json!({}),
+                    created_at: now,
+                }],
+            )
+            .await
+            .expect("first chunk should be created")
+            .remove(0);
+        let second_chunk = state
+            .storage
+            .document_chunks()
+            .replace_for_document(
+                state.tenant_id,
+                second_document.id,
+                &[storage::NewDocumentChunk {
+                    dataset_id: dataset.id,
+                    document_id: second_document.id,
+                    chunk_index: 0,
+                    content: "Second document order delay risk.".to_string(),
+                    token_count: 6,
+                    metadata: json!({}),
+                    created_at: now,
+                }],
+            )
+            .await
+            .expect("second chunk should be created")
+            .remove(0);
+        let evidence_execution = create_test_workflow_execution(
+            &state.storage,
+            state.tenant_id,
+            dataset.id,
+            WorkflowKind::UploadIngest,
+        )
+        .await;
+        state
+            .storage
+            .retrieval_evidences()
+            .create_many(
+                state.tenant_id,
+                &[
+                    storage::NewRetrievalEvidence {
+                        execution_id: evidence_execution.id,
+                        dataset_id: dataset.id,
+                        document_id: first_document.id,
+                        document_chunk_id: first_chunk.id,
+                        chunk_index: 0,
+                        source_locator: "selected-doc/first.md#chunk=0".to_string(),
+                        content_excerpt: "First document order delay risk.".to_string(),
+                        summary: "First document evidence".to_string(),
+                        payload_filter_key: "dataset/selected-doc".to_string(),
+                        embedding_model: "local-lexical-v1".to_string(),
+                        recall_score: 0.8,
+                        evidence_manifest: json!({
+                            "embedding": {"term_weights": {"order": 1.0, "delay": 1.0, "risk": 1.0}}
+                        }),
+                        created_at: now,
+                    },
+                    storage::NewRetrievalEvidence {
+                        execution_id: evidence_execution.id,
+                        dataset_id: dataset.id,
+                        document_id: second_document.id,
+                        document_chunk_id: second_chunk.id,
+                        chunk_index: 0,
+                        source_locator: "selected-doc/second.md#chunk=0".to_string(),
+                        content_excerpt: "Second document order delay risk.".to_string(),
+                        summary: "Second document evidence".to_string(),
+                        payload_filter_key: "dataset/selected-doc".to_string(),
+                        embedding_model: "local-lexical-v1".to_string(),
+                        recall_score: 0.8,
+                        evidence_manifest: json!({
+                            "embedding": {"term_weights": {"order": 1.0, "delay": 1.0, "risk": 1.0}}
+                        }),
+                        created_at: now,
+                    },
+                ],
+            )
+            .await
+            .expect("retrieval evidence should be created");
+
+        let evidence_state = build_assistant_run_evidence_state(
+            &state,
+            &json!({
+                "mode": "user_selected",
+                "datasets": [dataset.id],
+                "documents": [{"type": "document", "id": second_document.id}],
+            }),
+            "order delay risk",
+            None,
+            &[],
+            None,
+        )
+        .await
+        .expect("evidence state should be built");
+
+        assert_eq!(evidence_state["status"], json!("supplied"));
+        assert_eq!(
+            evidence_state["supplied_items"][0]["summary"],
+            json!("Second document evidence")
+        );
+        assert_eq!(
+            evidence_state["supplied_items"].as_array().unwrap().len(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn external_document_parse_endpoint_downloads_and_enqueues_ingest() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping external document parse endpoint test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("external-document-parse-test-{}", Uuid::new_v4()),
+                "External Document Parse Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage,
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        let dataset = state
+            .storage
+            .datasets()
+            .create(
+                state.tenant_id,
+                NewDataset {
+                    key: format!("external-parse-dataset-{}", Uuid::new_v4()),
+                    title: "External Parse Dataset".to_string(),
+                    description: Some("Third-party parse endpoint test.".to_string()),
+                    owner_user_id: None,
+                },
+            )
+            .await
+            .expect("dataset should be created");
+        sqlx::query(
+            r#"
+            insert into external_channel_connections (
+                id, tenant_id, platform, connection_key, display_name, config_redacted, status
+            )
+            values ('generic-chat-main', $1, 'generic_chat', 'generic-chat-main', 'Generic Chat', $2, 'enabled')
+            "#,
+        )
+        .bind(state.tenant_id.0)
+        .bind(json!({
+            "inbound_bearer_token": "parse-token",
+            "default_source_id": "src-docs"
+        }))
+        .execute(state.storage.pool())
+        .await
+        .expect("external channel connection should be inserted");
+        sqlx::query(
+            r#"
+            insert into external_source_connections (
+                id, tenant_id, connector_kind, source_key, display_name, base_url_redacted,
+                config_redacted, sync_mode, permission_mode
+            )
+            values ('src-docs', $1, 'document', 'src-docs', 'Third-party Docs',
+                    'https://docs.example/[redacted]', '{}', 'push', 'source_acl_snapshot')
+            "#,
+        )
+        .bind(state.tenant_id.0)
+        .execute(state.storage.pool())
+        .await
+        .expect("external source connection should be inserted");
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+        let url = format!(
+            "http://{}/doc-alpha.md",
+            listener.local_addr().expect("listener address")
+        );
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let request = read_http_request(&mut stream);
+            assert!(request.starts_with("GET /doc-alpha.md HTTP/1.1"));
+            let body = "# Alpha policy\n\nOrder delay risk should be reviewed.";
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/markdown\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream.write_all(response.as_bytes()).expect("write");
+        });
+
+        let object_root =
+            std::env::temp_dir().join(format!("aidp-v3-external-parse-{}", Uuid::new_v4()));
+        std::env::set_var("PLATFORM_LOCAL_OBJECT_ROOT", &object_root);
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer parse-token"),
+        );
+        let (status, Json(response)) = create_external_document_parse(
+            State(state.clone()),
+            headers.clone(),
+            Path("generic-chat-main".to_string()),
+            Json(CreateExternalDocumentParseRequest {
+                source_id: "src-docs".to_string(),
+                dataset_id: dataset.id,
+                document_external_id: "doc-alpha".to_string(),
+                revision_external_id: Some("rev-1".to_string()),
+                title: Some("Alpha policy".to_string()),
+                content_type: Some("text/markdown".to_string()),
+                content_url: url,
+                metadata: json!({"customer": "alpha"}),
+                idempotency_key: Some("parse-doc-alpha-rev-1".to_string()),
+                allow_http_loopback: true,
+            }),
+        )
+        .await
+        .expect("external document parse should be accepted");
+        server.join().expect("server should finish");
+
+        assert_eq!(status, StatusCode::ACCEPTED);
+        assert_eq!(response.source_id, "src-docs");
+        assert_eq!(response.document_external_id, "doc-alpha");
+        assert_eq!(
+            response.document.lifecycle,
+            contracts::DocumentLifecycleView::Received
+        );
+        assert!(object_root.join("external-documents").exists());
+        assert_eq!(response.workflow_execution.kind, WorkflowKind::UploadIngest);
+
+        let Json(detail) = get_external_document_parse_detail(
+            State(state),
+            headers,
+            Path(("generic-chat-main".to_string(), "doc-alpha".to_string())),
+            Query(BTreeMap::from([(
+                "source_id".to_string(),
+                "src-docs".to_string(),
+            )])),
+        )
+        .await
+        .expect("parse detail should be returned");
+        assert_eq!(
+            detail.latest.as_ref().unwrap().document_id,
+            response.document.id
+        );
+        assert_eq!(
+            detail
+                .latest
+                .as_ref()
+                .unwrap()
+                .revision_external_id
+                .as_deref(),
+            Some("rev-1")
+        );
     }
 
     #[tokio::test]

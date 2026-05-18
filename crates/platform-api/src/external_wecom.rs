@@ -403,6 +403,8 @@ fn wecom_message_from_fields(
         text: first_field(fields, &["Content", "EventKey", "Event"]),
         mention_external_user_ids: Vec::new(),
         attachment_refs: wecom_attachment_refs(fields),
+        available_document_external_ids: Vec::new(),
+        available_document_source_id: None,
         idempotency_key: format!(
             "we_com:{}:{}:{}",
             config.tenant_external_id, config.bot_external_id, message_external_id

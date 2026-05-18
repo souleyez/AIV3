@@ -1,0 +1,479 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>V3 第三方文档解析与问答对接说明</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f7f9f7;
+      --paper: #ffffff;
+      --ink: #17211f;
+      --muted: #64716d;
+      --line: #d8e2de;
+      --deep: #0c2f33;
+      --teal: #0f766e;
+      --green: #14845f;
+      --amber: #b87516;
+      --rose: #b6483d;
+      --code: #0e1b1d;
+      --soft: #eef6f3;
+      --shadow: 0 18px 42px rgba(20, 42, 41, 0.12);
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        linear-gradient(90deg, rgba(15, 118, 110, 0.05) 1px, transparent 1px),
+        linear-gradient(180deg, rgba(15, 118, 110, 0.04) 1px, transparent 1px),
+        var(--bg);
+      background-size: 34px 34px;
+      font-family: "Noto Sans SC", "Microsoft YaHei", "PingFang SC", Arial, sans-serif;
+      font-size: 16px;
+      line-height: 1.78;
+    }
+
+    a { color: var(--teal); text-underline-offset: 0.2em; }
+    code {
+      padding: 0.08rem 0.34rem;
+      border: 1px solid rgba(15, 118, 110, 0.22);
+      border-radius: 6px;
+      background: rgba(15, 118, 110, 0.08);
+      color: var(--code);
+      font-family: "Cascadia Code", Consolas, "SFMono-Regular", monospace;
+      font-size: 0.92em;
+    }
+
+    .page {
+      display: grid;
+      grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
+      min-height: 100vh;
+    }
+
+    aside {
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      padding: 26px 20px;
+      overflow: auto;
+      border-right: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.82);
+      backdrop-filter: blur(16px);
+    }
+
+    .brand {
+      padding-bottom: 20px;
+      margin-bottom: 20px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .badge {
+      display: inline-flex;
+      margin-bottom: 12px;
+      padding: 4px 10px;
+      border-radius: 999px;
+      background: var(--deep);
+      color: #fff;
+      font: 700 12px/1.6 "Cascadia Code", Consolas, monospace;
+      letter-spacing: 0;
+    }
+
+    .brand strong {
+      display: block;
+      font-size: 20px;
+      line-height: 1.35;
+    }
+
+    .brand small {
+      display: block;
+      margin-top: 8px;
+      color: var(--muted);
+      line-height: 1.6;
+    }
+
+    nav {
+      display: grid;
+      gap: 6px;
+    }
+
+    nav a {
+      display: block;
+      padding: 8px 10px;
+      border-radius: 8px;
+      color: var(--ink);
+      text-decoration: none;
+      font-size: 14px;
+    }
+
+    nav a:hover {
+      background: var(--soft);
+      color: var(--teal);
+    }
+
+    main {
+      width: min(1040px, 100%);
+      padding: 48px clamp(20px, 5vw, 70px) 72px;
+    }
+
+    .hero {
+      margin-bottom: 30px;
+      padding-bottom: 24px;
+      border-bottom: 4px solid var(--deep);
+    }
+
+    h1 {
+      max-width: 850px;
+      margin: 0 0 14px;
+      font-size: clamp(34px, 6vw, 64px);
+      line-height: 1.08;
+      letter-spacing: 0;
+    }
+
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin: 18px 0 0;
+      color: var(--muted);
+    }
+
+    .meta span {
+      padding: 7px 11px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.72);
+    }
+
+    section {
+      margin-top: 34px;
+      padding-top: 4px;
+    }
+
+    h2 {
+      margin: 0 0 14px;
+      font-size: clamp(24px, 3vw, 34px);
+      line-height: 1.25;
+      letter-spacing: 0;
+    }
+
+    p { margin: 0 0 14px; }
+    ul, ol { margin: 0 0 16px 1.2rem; padding: 0; }
+    li { margin: 7px 0; }
+
+    .callout {
+      margin: 18px 0;
+      padding: 16px 18px;
+      border-left: 4px solid var(--green);
+      border-radius: 8px;
+      background: var(--soft);
+    }
+
+    .callout.warning {
+      border-left-color: var(--amber);
+      background: #fff7e8;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+      margin: 18px 0;
+    }
+
+    .step {
+      min-height: 130px;
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--paper);
+      box-shadow: var(--shadow);
+    }
+
+    .step b {
+      display: inline-flex;
+      width: 30px;
+      height: 30px;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 10px;
+      border-radius: 50%;
+      background: var(--teal);
+      color: #fff;
+      font-family: "Cascadia Code", Consolas, monospace;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 18px 0;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--paper);
+    }
+
+    th, td {
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      background: var(--deep);
+      color: #fff;
+      font-weight: 700;
+    }
+
+    tr:last-child td { border-bottom: 0; }
+
+    figure {
+      margin: 18px 0;
+      border: 1px solid rgba(12, 47, 51, 0.22);
+      border-radius: 8px;
+      overflow: hidden;
+      background: #0e1b1d;
+      box-shadow: var(--shadow);
+    }
+
+    figcaption {
+      display: flex;
+      justify-content: space-between;
+      padding: 8px 12px;
+      background: #183235;
+      color: #d6f2eb;
+      font: 700 12px/1.6 "Cascadia Code", Consolas, monospace;
+    }
+
+    pre {
+      margin: 0;
+      padding: 16px;
+      overflow: auto;
+      color: #e7fff9;
+      font: 13px/1.6 "Cascadia Code", Consolas, monospace;
+    }
+
+    pre code {
+      padding: 0;
+      border: 0;
+      background: transparent;
+      color: inherit;
+      font-size: inherit;
+    }
+
+    .footer {
+      margin-top: 46px;
+      padding-top: 22px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    @media (max-width: 860px) {
+      .page { display: block; }
+      aside {
+        position: static;
+        height: auto;
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
+      }
+      nav {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+      main { padding-top: 34px; }
+      .grid { grid-template-columns: 1fr; }
+      h1 { font-size: 36px; }
+    }
+
+    @media print {
+      body { background: #fff; }
+      aside { display: none; }
+      .page { display: block; }
+      main { width: 100%; padding: 24px; }
+      figure, .step { box-shadow: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <aside>
+      <div class="brand">
+        <span class="badge">V3 · FIRST PHASE</span>
+        <strong>第三方文档解析与问答对接说明</strong>
+        <small>第三方保留自己的页面和资料入口，V3 提供解析、入库、状态查询和按指定文档回答能力。</small>
+      </div>
+      <nav aria-label="文档目录">
+        <a href="#params">1. 联调参数</a>
+        <a href="#parse">2. 发起解析</a>
+        <a href="#detail">3. 查询详情</a>
+        <a href="#chat">4. 对话传文档 ID</a>
+        <a href="#acceptance">5. 验收口径</a>
+        <a href="#faq">6. 常见问题</a>
+        <a href="#boundary">7. 职责边界</a>
+      </nav>
+    </aside>
+
+    <main>
+      <header class="hero">
+        <h1>V3 第三方文档解析与问答对接说明</h1>
+        <p>第一阶段采用轻量对接：第三方上传文档后通知 V3 解析；第三方对话时传入本轮可用的文档 ID；V3 只基于这些文档生成回答。</p>
+        <div class="meta">
+          <span>基础地址：<code>https://v3.elepcloud.com</code></span>
+          <span>认证：<code>Bearer Token</code></span>
+          <span>资料归属：第三方文档 ID</span>
+        </div>
+      </header>
+
+      <div class="grid" aria-label="第一阶段流程">
+        <div class="step"><b>1</b><strong>文档上传后请求解析</strong><br />第三方给 V3 一个短时效下载地址和自己的文档 ID。</div>
+        <div class="step"><b>2</b><strong>V3 解析并可查询状态</strong><br />V3 拉取、入库、切片、索引，并按外部文档 ID 返回解析详情。</div>
+        <div class="step"><b>3</b><strong>对话时限定文档范围</strong><br />第三方传入可用文档 ID，V3 只在这些文档内检索回答。</div>
+      </div>
+
+      <section id="params">
+        <h2>1. 联调前由我方提供</h2>
+        <p>请先确认以下参数，样例中的占位值需要替换成正式联调值。</p>
+        <table>
+          <thead><tr><th>参数</th><th>说明</th></tr></thead>
+          <tbody>
+            <tr><td><code>connection_id</code></td><td>V3 为本次第三方通道分配的连接 ID。</td></tr>
+            <tr><td><code>token</code></td><td>第三方请求 V3 时使用的 Bearer Token。</td></tr>
+            <tr><td><code>source_id</code></td><td>V3 中配置的第三方资料源 ID。</td></tr>
+            <tr><td><code>dataset_id</code></td><td>V3 中承接解析文档的目标数据集 ID。</td></tr>
+          </tbody>
+        </table>
+        <figure>
+          <figcaption><span>HTTP headers</span></figcaption>
+          <pre><code>Authorization: Bearer &lt;由我方提供的 token&gt;
+Content-Type: application/json</code></pre>
+        </figure>
+        <div class="callout warning">生产联调请直接使用 <code>https://v3.elepcloud.com/v1/...</code>。不要先请求 <code>http://</code> 再依赖重定向，避免调试工具把 <code>POST</code> 改成 <code>GET</code> 后出现 <code>405 Method Not Allowed</code>。</div>
+      </section>
+
+      <section id="parse">
+        <h2>2. 第三方上传文档后发起解析</h2>
+        <p>第三方完成文档上传后，向 V3 发起解析请求。V3 会按 <code>content_url</code> 拉取文档，写入指定数据集，并关联第三方自己的 <code>document_external_id</code>。</p>
+        <figure>
+          <figcaption><span>POST /documents/parse</span></figcaption>
+          <pre><code>POST https://v3.elepcloud.com/v1/external/channels/{connection_id}/documents/parse
+Authorization: Bearer &lt;由我方提供的 token&gt;
+Content-Type: application/json</code></pre>
+        </figure>
+        <figure>
+          <figcaption><span>request body</span></figcaption>
+          <pre><code>{
+  "source_id": "third-party-source-main",
+  "dataset_id": "dataset-third-party-main",
+  "document_external_id": "doc-20260518-0001",
+  "revision_external_id": "v1",
+  "title": "采购审批制度.pdf",
+  "content_type": "application/pdf",
+  "content_url": "https://third-party.example.com/files/doc-20260518-0001.pdf?signature=short-lived",
+  "idempotency_key": "third-party-source-main:doc-20260518-0001:v1"
+}</code></pre>
+        </figure>
+        <ul>
+          <li><code>content_url</code> 建议使用 HTTPS 短时效签名下载地址。</li>
+          <li><code>document_external_id</code> 使用第三方自己的文档 ID，后续查询状态和对话问答都继续传这个 ID。</li>
+          <li>同一份文档重复请求时，建议保持稳定的 <code>idempotency_key</code>，方便排查和去重。</li>
+          <li>V3 不会把下载 URL 传给模型，也不会在响应里暴露 V3 本地对象路径。</li>
+        </ul>
+        <div class="callout">成功响应会返回 V3 接收记录、内部文档 ID 和当前解析状态。解析是后台流程，刚提交后可能还在 <code>received</code> 或处理中。</div>
+      </section>
+
+      <section id="detail">
+        <h2>3. 查询解析详情</h2>
+        <p>第三方可以按自己的文档 ID 查询解析进度和解析结果摘要。</p>
+        <figure>
+          <figcaption><span>GET parse-detail</span></figcaption>
+          <pre><code>GET https://v3.elepcloud.com/v1/external/channels/{connection_id}/documents/{document_external_id}/parse-detail?source_id={source_id}
+Authorization: Bearer &lt;由我方提供的 token&gt;</code></pre>
+        </figure>
+        <ul>
+          <li><code>latest.lifecycle</code>：最近一次文档状态，例如 <code>received</code>、<code>extracted</code>、<code>failed</code>。</li>
+          <li><code>latest.chunk_count</code>：已生成的文档切片数量。</li>
+          <li><code>latest.retrieval_evidence_count</code>：已进入检索证据的数量。</li>
+          <li><code>documents</code>：同一外部文档 ID 的历史解析记录。</li>
+          <li><code>ingest</code>：解析摘要，不包含原始下载 URL。</li>
+        </ul>
+        <div class="callout">当 <code>chunk_count</code> 和 <code>retrieval_evidence_count</code> 已经有值后，再进入问答验收更稳。</div>
+      </section>
+
+      <section id="chat">
+        <h2>4. 对话时传入可用文档 ID</h2>
+        <p>第三方页面发起对话时，仍调用原来的消息事件接口，并在消息体里带上本轮允许使用的文档 ID 列表。V3 只会在这些文档映射出的内部文档范围内检索和回答。</p>
+        <figure>
+          <figcaption><span>POST /events</span></figcaption>
+          <pre><code>POST https://v3.elepcloud.com/v1/external/channels/{connection_id}/events
+Authorization: Bearer &lt;由我方提供的 token&gt;
+Content-Type: application/json</code></pre>
+        </figure>
+        <figure>
+          <figcaption><span>request body</span></figcaption>
+          <pre><code>{
+  "tenant_external_id": "tenant-ext-001",
+  "channel_external_id": "generic-chat-main",
+  "conversation_external_id": "conv-20260518-0001",
+  "sender_external_id": "user-10001",
+  "message_external_id": "msg-20260518-0001",
+  "message_type": "text",
+  "text": "帮我总结这份采购审批制度，并指出本周需要处理的风险。",
+  "available_document_source_id": "third-party-source-main",
+  "available_document_external_ids": [
+    "doc-20260518-0001"
+  ],
+  "mention_external_user_ids": [],
+  "attachment_refs": [],
+  "idempotency_key": "third-party:tenant-ext-001:msg-20260518-0001",
+  "received_at": "2026-05-18T10:00:00Z"
+}</code></pre>
+        </figure>
+        <ul>
+          <li>如果本轮只允许问某几份文档，就只传这些 <code>document_external_id</code>。</li>
+          <li>未传入、未解析完成或无权使用的文档，不会进入本轮模型上下文。</li>
+          <li><code>message_external_id</code> 和 <code>idempotency_key</code> 建议每条消息稳定唯一，方便重试和排查。</li>
+        </ul>
+      </section>
+
+      <section id="acceptance">
+        <h2>5. 第一阶段验收口径</h2>
+        <ol>
+          <li>文档上传后，第三方能调用解析接口，V3 返回成功接收。</li>
+          <li>查询解析详情能看到该 <code>document_external_id</code> 的状态、切片数量和检索证据数量。</li>
+          <li>对话请求带 <code>available_document_external_ids</code> 后，V3 能围绕指定文档回答。</li>
+          <li>换一个未传入的文档 ID 或不传文档 ID，V3 不应把该文档作为本轮回答依据。</li>
+        </ol>
+      </section>
+
+      <section id="faq">
+        <h2>6. 常见问题</h2>
+        <table>
+          <thead><tr><th>现象</th><th>优先检查</th></tr></thead>
+          <tbody>
+            <tr><td><code>401 Unauthorized</code></td><td><code>Authorization: Bearer ...</code> 是否使用我方提供的 token，是否有多余空格或过期。</td></tr>
+            <tr><td><code>404 Not Found</code></td><td><code>connection_id</code>、<code>source_id</code>、<code>document_external_id</code> 是否和联调参数一致。</td></tr>
+            <tr><td><code>405 Method Not Allowed</code></td><td>是否误打了 <code>http://</code>、是否被重定向后从 <code>POST</code> 变成 <code>GET</code>。</td></tr>
+            <tr><td>能提交但问答没有引用文档</td><td>文档是否解析完成，<code>available_document_external_ids</code> 是否传了正确的第三方文档 ID。</td></tr>
+            <tr><td>重复提交文档</td><td>检查 <code>idempotency_key</code> 是否按文档 ID 和版本稳定生成。</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="boundary">
+        <h2>7. 双方职责边界</h2>
+        <ul>
+          <li>第三方负责：上传入口、文档下载地址、第三方文档 ID、用户页面、对话请求发起。</li>
+          <li>V3 负责：拉取文档、解析入库、按文档 ID 查询解析详情、按本轮可用文档范围生成回答。</li>
+          <li>第一阶段暂不要求第三方开放完整资料库批量同步接口；后续如果要做批量资料源同步，再对接资料源参数卡。</li>
+        </ul>
+      </section>
+
+      <p class="footer">本文档不包含真实 token、V3 内部对象路径或第三方私有下载地址。正式联调参数以双方确认的配置为准。</p>
+    </main>
+  </div>
+</body>
+</html>

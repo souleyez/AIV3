@@ -1,0 +1,77 @@
+# V3 第三方文档解析与按文档问答第一阶段
+
+本文定义第一阶段对接方式：第三方仍使用自己的页面和资料库，V3 只输出“解析、入库、按指定文档回答”的能力。
+
+## 流程
+
+1. 第三方完成文档上传后，调用 V3 文档解析接口。
+2. V3 按 `content_url` 拉取文档，落入 V3 本地对象区，并创建关联 `source_id + document_external_id` 的文档记录。
+3. V3 启动现有上传解析工作流，解析完成后写入文档切片和检索索引。
+4. 第三方可按外部文档 ID 查询解析详情。
+5. 第三方发起对话时传入本轮可用的外部文档 ID 列表。
+6. V3 只在这些文档 ID 映射出的内部文档范围内检索，并在进入模型前完成权限过滤。
+
+## 解析请求
+
+```http
+POST /v1/external/channels/{connection_id}/documents/parse
+Authorization: Bearer <channel-inbound-token>
+Content-Type: application/json
+```
+
+请求体见 `third-party-document-parse-request.sample.json`。
+
+关键字段：
+
+- `source_id`：V3 中配置的第三方资料源 ID。
+- `dataset_id`：V3 中承接这些资料的目标数据集 ID。
+- `document_external_id`：第三方自己的文档 ID，后续对话也传这个 ID。
+- `revision_external_id`：可选，第三方文档版本号。
+- `content_url`：V3 拉取文档的临时下载地址。生产建议 HTTPS 和短时效签名 URL。
+- `idempotency_key`：建议由第三方按“文档 ID + 版本”生成，便于排查。
+
+安全边界：
+
+- `content_url` 生产必须使用 HTTPS；HTTP 只允许本机 smoke。
+- V3 不把下载 URL 传入模型，只保存脱敏 URL 和本地对象路径。
+- 返回给第三方的解析响应不暴露本地对象路径。
+
+## 解析详情查询
+
+```http
+GET /v1/external/channels/{connection_id}/documents/{document_external_id}/parse-detail?source_id={source_id}
+Authorization: Bearer <channel-inbound-token>
+```
+
+响应包含：
+
+- `latest`：最近一次解析记录；
+- `documents`：该外部文档 ID 对应的历史解析记录；
+- `lifecycle`：`received`、`extracted`、`failed` 等文档状态；
+- `chunk_count`：已解析切片数量；
+- `retrieval_evidence_count`：已入检索证据数量；
+- `ingest`：解析摘要，不含原始下载 URL。
+
+## 对话按文档限定
+
+第三方发起对话时仍调用原来的通道事件接口：
+
+```http
+POST /v1/external/channels/{connection_id}/events
+Authorization: Bearer <channel-inbound-token>
+Content-Type: application/json
+```
+
+在消息体中增加：
+
+- `available_document_source_id`：资料源 ID；如果通道配置里已有 `default_source_id`，可省略。
+- `available_document_external_ids`：本轮允许 V3 使用的第三方文档 ID 列表。
+
+请求体见 `third-party-chat-with-document-ids.sample.json`。
+
+## 第一阶段验收
+
+- 文档解析接口能下载第三方文档并启动 V3 解析工作流。
+- 解析详情接口能按 `source_id + document_external_id` 查到状态。
+- 对话请求带 `available_document_external_ids` 时，V3 只从这些文档供料。
+- 未解析、未授权或未传入的文档不会进入模型上下文。

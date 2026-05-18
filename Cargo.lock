@@ -776,6 +776,7 @@ dependencies = [
  "event-bus",
  "observability",
  "platform-api",
+ "reqwest",
  "serde_json",
  "sqlx",
  "storage",

@@ -1,0 +1,126 @@
+{
+  "manifest_version": "v3.third_party_source_parameter_card.v1",
+  "customer": {
+    "name": "Example Customer",
+    "technical_contact": "integration@example.com"
+  },
+  "environment": {
+    "name": "sandbox",
+    "base_url": "https://customer-sandbox.example.com",
+    "allow_http_loopback": false
+  },
+  "source": {
+    "source_id": "src-third-party-docs",
+    "connector_kind": "document",
+    "dataset_name": "第三方制度库",
+    "sync_mode": "pull",
+    "permission_mode": "source_acl_snapshot"
+  },
+  "auth": {
+    "request_auth_modes": ["bearer"],
+    "credential_delivery": "out_of_band",
+    "authorization_header": "Authorization: Bearer <third-party-source-token>",
+    "credential_rotation": "customer-managed"
+  },
+  "endpoints": {
+    "health": "GET /health",
+    "users": "GET /users",
+    "departments": "GET /departments",
+    "groups": "GET /groups",
+    "roles": "GET /roles",
+    "memberships": "GET /users/{user_external_id}/memberships",
+    "documents": "GET /documents?cursor={cursor}&updated_after={iso_time}&limit={limit}",
+    "document_content": "GET /documents/{document_external_id}/content?revision={revision}",
+    "document_acl": "GET /documents/{document_external_id}/acl?revision={revision}"
+  },
+  "fixtures": {
+    "users": [
+      {
+        "user_external_id": "user-10001",
+        "display_name": "采购专员",
+        "department_external_ids": ["dept-procurement"],
+        "group_external_ids": ["group-procurement"],
+        "role_external_ids": ["role-requester"],
+        "status": "active"
+      },
+      {
+        "user_external_id": "user-20001",
+        "display_name": "财务观察员",
+        "department_external_ids": ["dept-finance"],
+        "group_external_ids": ["group-finance"],
+        "role_external_ids": ["role-viewer"],
+        "status": "active"
+      },
+      {
+        "user_external_id": "user-denied",
+        "display_name": "受限用户",
+        "department_external_ids": ["dept-procurement"],
+        "group_external_ids": ["group-procurement"],
+        "role_external_ids": ["role-requester"],
+        "status": "active"
+      }
+    ],
+    "documents": [
+      {
+        "document_external_id": "doc-procurement-001",
+        "title": "采购审批制度",
+        "revision": "rev-20260518-001",
+        "content_hash": "sha256:procurement-001",
+        "expected_acl_case": "group-procurement-readable"
+      },
+      {
+        "document_external_id": "doc-finance-001",
+        "title": "供应商付款制度",
+        "revision": "rev-20260518-001",
+        "content_hash": "sha256:finance-001",
+        "expected_acl_case": "group-finance-readable"
+      },
+      {
+        "document_external_id": "doc-public-001",
+        "title": "通用合规问答",
+        "revision": "rev-20260518-001",
+        "content_hash": "sha256:public-001",
+        "expected_acl_case": "tenant-readable"
+      },
+      {
+        "document_external_id": "doc-restricted-001",
+        "title": "受限采购例外清单",
+        "revision": "rev-20260518-001",
+        "content_hash": "sha256:restricted-001",
+        "expected_acl_case": "explicit-deny"
+      },
+      {
+        "document_external_id": "doc-revoked-001",
+        "title": "已撤销旧制度",
+        "revision": "rev-20260518-001",
+        "content_hash": "sha256:revoked-001",
+        "expected_acl_case": "revoked-no-access"
+      }
+    ],
+    "access_cases": [
+      {
+        "case_id": "procurement-user-can-read-procurement",
+        "user_external_id": "user-10001",
+        "document_external_id": "doc-procurement-001",
+        "expected": "allow"
+      },
+      {
+        "case_id": "finance-user-cannot-read-procurement",
+        "user_external_id": "user-20001",
+        "document_external_id": "doc-procurement-001",
+        "expected": "deny"
+      },
+      {
+        "case_id": "deny-user-cannot-read-even-in-group",
+        "user_external_id": "user-denied",
+        "document_external_id": "doc-restricted-001",
+        "expected": "deny"
+      }
+    ]
+  },
+  "operations": {
+    "retry_contact": "ops@example.com",
+    "escalation_contact": "support@example.com",
+    "maintenance_window": "UTC+8 02:00-04:00"
+  }
+}

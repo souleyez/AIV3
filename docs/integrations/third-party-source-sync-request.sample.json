@@ -1,0 +1,28 @@
+{
+  "sync_kind": "full",
+  "dataset_id": "<v3-dataset-uuid>",
+  "checkpoint": {
+    "updated_after": null,
+    "cursor": null
+  },
+  "connector_context": {
+    "http_source": {
+      "platform": "generic_chat",
+      "base_url": "https://customer-sandbox.example.com",
+      "allow_http_loopback": false,
+      "auth": {
+        "request_auth_modes": ["bearer"],
+        "token_env": "THIRD_PARTY_SOURCE_TOKEN"
+      },
+      "timeout_ms": 10000,
+      "document_limit": 100,
+      "max_pages": 20,
+      "endpoints": {
+        "users": "GET /users",
+        "documents": "GET /documents?cursor={cursor}&updated_after={updated_after}&limit={limit}",
+        "document_content": "GET /documents/{document_external_id}/content?revision={revision}",
+        "document_acl": "GET /documents/{document_external_id}/acl?revision={revision}"
+      }
+    }
+  }
+}

@@ -1,0 +1,141 @@
+# V3 第三方文档解析与问答对接说明
+
+**版本：** 第一阶段联调版  
+**V3 基础地址：** `https://v3.elepcloud.com`  
+**适用方式：** 第三方保留自己的页面、资料上传入口和用户体系；V3 提供文档解析、入库、解析状态查询和按指定文档回答能力。
+
+## 1. 联调前由我方提供
+
+请先确认以下参数，样例中的占位值需要替换成正式联调值：
+
+| 参数 | 说明 |
+| --- | --- |
+| `connection_id` | V3 为本次第三方通道分配的连接 ID |
+| `token` | 第三方请求 V3 时使用的 Bearer Token |
+| `source_id` | V3 中配置的第三方资料源 ID |
+| `dataset_id` | V3 中承接解析文档的目标数据集 ID |
+
+请求统一带：
+
+```http
+Authorization: Bearer <由我方提供的 token>
+Content-Type: application/json
+```
+
+生产联调请直接使用 `https://v3.elepcloud.com/v1/...`。不要先请求 `http://` 再依赖重定向，避免调试工具把 `POST` 改成 `GET` 后出现 `405 Method Not Allowed`。
+
+## 2. 第三方上传文档后发起解析
+
+第三方完成文档上传后，向 V3 发起解析请求。V3 会按 `content_url` 拉取文档，写入指定数据集，并关联第三方自己的 `document_external_id`。
+
+```http
+POST https://v3.elepcloud.com/v1/external/channels/{connection_id}/documents/parse
+Authorization: Bearer <由我方提供的 token>
+Content-Type: application/json
+```
+
+示例请求：
+
+```json
+{
+  "source_id": "third-party-source-main",
+  "dataset_id": "dataset-third-party-main",
+  "document_external_id": "doc-20260518-0001",
+  "revision_external_id": "v1",
+  "title": "采购审批制度.pdf",
+  "content_type": "application/pdf",
+  "content_url": "https://third-party.example.com/files/doc-20260518-0001.pdf?signature=short-lived",
+  "idempotency_key": "third-party-source-main:doc-20260518-0001:v1"
+}
+```
+
+关键要求：
+
+- `content_url` 建议使用 HTTPS 短时效签名下载地址。
+- `document_external_id` 使用第三方自己的文档 ID，后续查询状态和对话问答都继续传这个 ID。
+- 同一份文档重复请求时，建议保持稳定的 `idempotency_key`，方便排查和去重。
+- V3 不会把下载 URL 传给模型，也不会在响应里暴露 V3 本地对象路径。
+
+成功响应会返回 V3 接收记录、内部文档 ID 和当前解析状态。解析是后台流程，刚提交后可能还在 `received` 或处理中。
+
+## 3. 查询解析详情
+
+第三方可以按自己的文档 ID 查询解析进度和解析结果摘要。
+
+```http
+GET https://v3.elepcloud.com/v1/external/channels/{connection_id}/documents/{document_external_id}/parse-detail?source_id={source_id}
+Authorization: Bearer <由我方提供的 token>
+```
+
+响应重点看：
+
+- `latest.lifecycle`：最近一次文档状态，例如 `received`、`extracted`、`failed`。
+- `latest.chunk_count`：已生成的文档切片数量。
+- `latest.retrieval_evidence_count`：已进入检索证据的数量。
+- `documents`：同一外部文档 ID 的历史解析记录。
+- `ingest`：解析摘要，不包含原始下载 URL。
+
+当 `chunk_count` 和 `retrieval_evidence_count` 已经有值后，再进入问答验收更稳。
+
+## 4. 对话时传入可用文档 ID
+
+第三方页面发起对话时，仍调用原来的消息事件接口，并在消息体里带上本轮允许使用的文档 ID 列表。V3 只会在这些文档映射出的内部文档范围内检索和回答。
+
+```http
+POST https://v3.elepcloud.com/v1/external/channels/{connection_id}/events
+Authorization: Bearer <由我方提供的 token>
+Content-Type: application/json
+```
+
+示例请求：
+
+```json
+{
+  "tenant_external_id": "tenant-ext-001",
+  "channel_external_id": "generic-chat-main",
+  "conversation_external_id": "conv-20260518-0001",
+  "sender_external_id": "user-10001",
+  "message_external_id": "msg-20260518-0001",
+  "message_type": "text",
+  "text": "帮我总结这份采购审批制度，并指出本周需要处理的风险。",
+  "available_document_source_id": "third-party-source-main",
+  "available_document_external_ids": [
+    "doc-20260518-0001"
+  ],
+  "mention_external_user_ids": [],
+  "attachment_refs": [],
+  "idempotency_key": "third-party:tenant-ext-001:msg-20260518-0001",
+  "received_at": "2026-05-18T10:00:00Z"
+}
+```
+
+注意：
+
+- 如果本轮只允许问某几份文档，就只传这些 `document_external_id`。
+- 未传入、未解析完成或无权使用的文档，不会进入本轮模型上下文。
+- `message_external_id` 和 `idempotency_key` 建议每条消息稳定唯一，方便重试和排查。
+
+## 5. 第一阶段验收口径
+
+建议按以下顺序验收：
+
+1. 文档上传后，第三方能调用解析接口，V3 返回成功接收。
+2. 查询解析详情能看到该 `document_external_id` 的状态、切片数量和检索证据数量。
+3. 对话请求带 `available_document_external_ids` 后，V3 能围绕指定文档回答。
+4. 换一个未传入的文档 ID 或不传文档 ID，V3 不应把该文档作为本轮回答依据。
+
+## 6. 常见问题
+
+| 现象 | 优先检查 |
+| --- | --- |
+| `401 Unauthorized` | `Authorization: Bearer ...` 是否使用我方提供的 token，是否有多余空格或过期 |
+| `404 Not Found` | `connection_id`、`source_id`、`document_external_id` 是否和联调参数一致 |
+| `405 Method Not Allowed` | 是否误打了 `http://`、是否被重定向后从 `POST` 变成 `GET` |
+| 能提交但问答没有引用文档 | 文档是否解析完成，`available_document_external_ids` 是否传了正确的第三方文档 ID |
+| 重复提交文档 | 检查 `idempotency_key` 是否按文档 ID 和版本稳定生成 |
+
+## 7. 双方职责边界
+
+- 第三方负责：上传入口、文档下载地址、第三方文档 ID、用户页面、对话请求发起。
+- V3 负责：拉取文档、解析入库、按文档 ID 查询解析详情、按本轮可用文档范围生成回答。
+- 第一阶段暂不要求第三方开放完整资料库批量同步接口；后续如果要做批量资料源同步，再对接资料源参数卡。

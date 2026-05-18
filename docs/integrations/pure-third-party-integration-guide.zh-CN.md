@@ -67,6 +67,8 @@ sequenceDiagram
 
 如果项目早期只做问答，可以先接聊天入口、用户身份、文档库和文档权限；产物和业务动作可以后续接入。
 
+资料库仍保留在第三方服务器时，建议先填写资料源参数卡，再进入联调。参数卡样例见 `docs/integrations/third-party-source-parameter-card.sample.json`，说明文档见 `docs/integrations/third-party-source-parameter-card.zh-CN.md`。V3 可用参数卡校验工具检查 HTTPS、鉴权交付方式、用户样例、文档样例和 ACL 边界是否足够进入资料问答验收。
+
 ## 4. 文档是否必须搬到 V3
 
 不需要把第三方服务器上的所有文档一次性拷贝到 V3 才能问答。
@@ -325,7 +327,42 @@ ACL 说明：
 - `deny` 优先级应高于 `allow`；
 - 文档权限变化后，应尽快触发 V3 同步。
 
-## 8. V3 触发资料源同步
+## 8. 文档解析与资料源同步
+
+第一阶段建议采用“第三方上传后触发单文档解析”的轻量链路：
+
+```http
+POST /v1/external/channels/{connection_id}/documents/parse
+Host: v3.elepcloud.com
+Content-Type: application/json
+Authorization: Bearer <V3 inbound token>
+```
+
+第三方传入 `source_id`、`dataset_id`、`document_external_id`、可选 `revision_external_id` 和短时效 `content_url`。V3 下载文档后进入现有上传解析工作流，并把内部文档记录关联到 `source_id + document_external_id`。
+
+解析状态查询：
+
+```http
+GET /v1/external/channels/{connection_id}/documents/{document_external_id}/parse-detail?source_id={source_id}
+Authorization: Bearer <V3 inbound token>
+```
+
+对话时，第三方继续调用消息接口，并传入本轮可用文档：
+
+```json
+{
+  "available_document_source_id": "src-docs",
+  "available_document_external_ids": ["third-doc-20260518-001"]
+}
+```
+
+V3 会把外部文档 ID 映射为内部文档范围，并只从这些文档供料给模型。完整样例见：
+
+- `docs/integrations/third-party-document-parse-first-phase.zh-CN.md`
+- `docs/integrations/third-party-document-parse-request.sample.json`
+- `docs/integrations/third-party-chat-with-document-ids.sample.json`
+
+### 8.1 V3 触发资料源同步
 
 V3 可通过连接配置中的第三方文档接口进行增量同步。运营或系统可触发：
 
@@ -710,6 +747,8 @@ V3 错误格式：
 
 - 总接口说明：`docs/integrations/third-party-integration-api.zh-CN.md`
 - 英文接口草案：`docs/integrations/third-party-integration-api.md`
+- 第一阶段可转发 HTML 简版：`docs/integrations/third-party-document-parse-first-phase-sendable.zh-CN.html`
+- 第一阶段文档解析说明：`docs/integrations/third-party-document-parse-first-phase.zh-CN.md`
 - 交接清单样例：`docs/integrations/third-party-handoff.sample.json`
 - 交接包内安全 HTML artifact manifest：`html-artifacts/third-party-handoff-document.json`
 - 第三方集成计划：`docs/plans/2026-05-13-v3-external-bot-third-party-knowledge-plan.md`

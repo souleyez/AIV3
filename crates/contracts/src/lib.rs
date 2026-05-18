@@ -82,6 +82,10 @@ pub struct ExternalBotMessageView {
     pub mention_external_user_ids: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attachment_refs: Vec<ExternalAttachmentRefView>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub available_document_external_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub available_document_source_id: Option<String>,
     pub idempotency_key: String,
     pub received_at: DateTime<Utc>,
 }
@@ -466,6 +470,76 @@ pub struct CreateExternalSourceSyncResponse {
     pub workflow_execution: WorkflowExecutionView,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub enqueued_tasks: Vec<WorkflowTaskView>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CreateExternalDocumentParseRequest {
+    pub source_id: String,
+    pub dataset_id: DatasetId,
+    pub document_external_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revision_external_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_type: Option<String>,
+    pub content_url: String,
+    #[serde(default)]
+    pub metadata: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idempotency_key: Option<String>,
+    #[serde(default)]
+    pub allow_http_loopback: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ExternalDocumentParseDocumentView {
+    pub id: DocumentId,
+    pub dataset_id: DatasetId,
+    pub title: String,
+    pub content_type: String,
+    pub lifecycle: DocumentLifecycleView,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CreateExternalDocumentParseResponse {
+    pub accepted: bool,
+    pub source_id: String,
+    pub document_external_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revision_external_id: Option<String>,
+    pub document: ExternalDocumentParseDocumentView,
+    pub workflow_execution: WorkflowExecutionView,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ExternalDocumentParseDetailItemView {
+    pub document_id: DocumentId,
+    pub dataset_id: DatasetId,
+    pub title: String,
+    pub content_type: String,
+    pub lifecycle: DocumentLifecycleView,
+    pub source_id: String,
+    pub document_external_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revision_external_id: Option<String>,
+    pub chunk_count: usize,
+    pub retrieval_evidence_count: usize,
+    #[serde(default)]
+    pub ingest: Value,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct GetExternalDocumentParseDetailResponse {
+    pub source_id: String,
+    pub document_external_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latest: Option<ExternalDocumentParseDetailItemView>,
+    pub documents: Vec<ExternalDocumentParseDetailItemView>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

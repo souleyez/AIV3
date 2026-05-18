@@ -417,6 +417,8 @@ fn feishu_message_from_payload(
         text,
         mention_external_user_ids: feishu_mentions(message, &content),
         attachment_refs: feishu_attachment_refs(&content),
+        available_document_external_ids: Vec::new(),
+        available_document_source_id: None,
         idempotency_key: format!(
             "feishu:{tenant_external_id}:{bot_external_id}:{}",
             event_id.as_deref().unwrap_or(&message_external_id)
