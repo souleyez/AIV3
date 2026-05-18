@@ -84,6 +84,7 @@ This does not add a new UI selector yet. The current frontend draft sync passes 
 - Added frontend `dataSnapshot.structureSignals` and backend `dataSnapshot.structure_signals` so source structure clues travel with the draft itself, not only provider/ReAct context.
 - Show source structure hints and the docs-page modules bound to them in the desktop/mobile template reference panel, without exposing document body text or chart sample rows.
 - Include the same structure signals in the existing static-page planning handoff HTML artifact, keeping Markdown/JSON as source of truth and rendering only a read-only "源结构" summary.
+- Added a repeatable "新世界 IOA" static-page planning smoke fixture and renderer that reads a committed structured manifest, writes review HTML only under `target/html-artifacts`, and verifies template reference, missing-evidence, source-structure, visual-bridge, and module-planning sections.
 
 ## Guardrails
 
@@ -99,6 +100,7 @@ P0 should pass:
 
 ```powershell
 node --test apps/web/app/lib/html-template-references.test.mjs apps/web/app/lib/static-page-draft.test.mjs
+node --test tools/render-static-page-planning-smoke-html.test.mjs
 cargo test -p platform-api static_page_template_reference --lib
 cargo test -p platform-api assistant_run_react_provider_input --lib
 cargo test -p platform-api assistant_run_react_continue_provider_input_warns_against_stale_static_page_render --lib

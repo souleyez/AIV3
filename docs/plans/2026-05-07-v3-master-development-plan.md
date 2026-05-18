@@ -835,6 +835,8 @@ The next development thread should keep the current UI shell stable and continue
 
 **Current source-structure artifact note:** Static-page planning handoff artifacts now also render a read-only "源结构" section from structured `structureSignals`, including supplied heading clues and docs-page module bindings while keeping Markdown/JSON as source of truth and rejecting raw HTML/script-like payloads through the existing sanitizer.
 
+**Current smoke note:** `docs/smokes/new-world-ioa-static-page-handoff.json` is a committed structured source fixture for the template-assisted static-page handoff path. `npm run build:static-page-planning-smoke-html` renders the ignored review HTML under `target/html-artifacts`, and `npm run test:static-page-planning-smoke-html` verifies the template reference, missing-evidence, source-structure, visual-bridge, and module-planning sections.
+
 **Files:**
 
 - Create: `apps/web/app/components/artifacts/HtmlArtifactViewer.js`

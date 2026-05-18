@@ -1,0 +1,183 @@
+{
+  "kind": "html_artifact",
+  "version": 1,
+  "id": "new-world-ioa-static-page-handoff",
+  "title": "新世界 IOA · 静态页规划样张",
+  "sourceType": "static_page",
+  "templateId": "static_page_planning_handoff",
+  "interactionMode": "read_only",
+  "ownerScope": {
+    "type": "static_page_draft",
+    "id": "new-world-ioa-demo-draft"
+  },
+  "dataRefs": [
+    {
+      "kind": "demo_scope",
+      "id": "new-world-ioa",
+      "label": "新世界 IOA 样张"
+    }
+  ],
+  "provenance": {
+    "producer": "v3-static-page-workspace",
+    "reason": "template-assisted rapid output smoke",
+    "sourceRunId": "local-review"
+  },
+  "createdAt": "2026-05-18T00:00:00.000Z",
+  "payload": {
+    "objective": "把“新世界 IOA”整理成一页可交付的产品/方案说明，用于快速评审模板辅助静态页能力。",
+    "templateReference": {
+      "source": "html-anything",
+      "templateId": "docs-page",
+      "label": "文档交接/方案说明页",
+      "importPolicy": "metadata_and_constraints_only",
+      "styleDirection": "client-delivery",
+      "designIntent": "以清晰分区呈现目标、能力边界、数据接入、交付路径和待确认项。",
+      "promptHints": [
+        "保持缺失证据可见",
+        "优先呈现源结构和交付边界",
+        "不要把概念样张伪装成已上线事实"
+      ],
+      "forbiddenOutput": [
+        "raw_html",
+        "remote_script",
+        "provider_token",
+        "private_path"
+      ]
+    },
+    "evidenceSummary": {
+      "status": "partial",
+      "note": "当前样张仅使用用户给出的名称“新世界 IOA”和本地结构化规划，没有接入真实数据集、客户资料或产品文档。"
+    },
+    "missingEvidence": {
+      "status": "needs_evidence",
+      "items": [
+        {
+          "code": "product_definition_required",
+          "message": "需要补充 IOA 的正式定义、目标用户、核心场景和边界。",
+          "recommendedAction": "read_document_detail"
+        },
+        {
+          "code": "data_sources_required",
+          "message": "需要补充可见数据集或接口说明，才能生成真实指标、流程和成效模块。",
+          "recommendedAction": "retrieve_evidence"
+        }
+      ]
+    },
+    "structureSignals": {
+      "status": "available",
+      "policy": "source_structure_only_no_body_no_sample_rows",
+      "sectionTitleHints": [
+        "定位与目标",
+        "核心能力",
+        "数据接入",
+        "交付路径",
+        "待确认项"
+      ],
+      "boundModules": [
+        {
+          "moduleId": "scope",
+          "title": "定位与目标",
+          "fieldPath": "retrieval.section_title_hints",
+          "bindingQualityStatus": "partial"
+        },
+        {
+          "moduleId": "interfaces",
+          "title": "数据接入",
+          "fieldPath": "retrieval.section_title_hints",
+          "bindingQualityStatus": "partial"
+        },
+        {
+          "moduleId": "checks",
+          "title": "待确认项",
+          "fieldPath": "retrieval.section_title_hints",
+          "bindingQualityStatus": "partial"
+        }
+      ]
+    },
+    "visualBridge": {
+      "providerLane": "gpt-image-2-cloudflare-queue",
+      "role": "effect_preview_reference_only",
+      "status": "not_requested",
+      "imageJobStatus": "not_requested",
+      "imageJobId": "",
+      "previewAssetKey": "",
+      "draftFingerprint": "demo-new-world-ioa",
+      "styleDirection": "client-delivery",
+      "renderModel": "dom-text-svg-chart",
+      "finalRenderStatus": "not_requested",
+      "rule": "效果图只锁定视觉方向；最终 HTML 仍由结构化草稿、数据快照和 renderer 生成。"
+    },
+    "modules": [
+      {
+        "id": "hero",
+        "title": "新世界 IOA",
+        "content": "面向组织运营、流程协同和智能分析的一页式方案样张；当前为未供料概念版。",
+        "dataBinding": "conversation_memory.demo_concept",
+        "visualizationType": "headline",
+        "layout": {
+          "x": 0,
+          "y": 0,
+          "w": 12,
+          "h": 2
+        },
+        "dataQuality": "partial"
+      },
+      {
+        "id": "scope",
+        "title": "定位与目标",
+        "content": "说明 IOA 要解决的业务问题、目标角色、上线边界和交付口径。",
+        "dataBinding": "retrieval.section_title_hints",
+        "visualizationType": "text-insight",
+        "layout": {
+          "x": 0,
+          "y": 2,
+          "w": 6,
+          "h": 3
+        },
+        "dataQuality": "partial"
+      },
+      {
+        "id": "capabilities",
+        "title": "核心能力",
+        "content": "可规划为智能问答、流程编排、指标看板、知识检索、交付审计五类能力。",
+        "dataBinding": "model.general_knowledge_labeled",
+        "visualizationType": "kpi-cards",
+        "layout": {
+          "x": 6,
+          "y": 2,
+          "w": 6,
+          "h": 3
+        },
+        "dataQuality": "missing"
+      },
+      {
+        "id": "interfaces",
+        "title": "数据接入",
+        "content": "需要明确系统边界、数据源、权限模型、接口列表和更新频率。",
+        "dataBinding": "retrieval.section_title_hints",
+        "visualizationType": "table",
+        "layout": {
+          "x": 0,
+          "y": 5,
+          "w": 7,
+          "h": 3
+        },
+        "dataQuality": "partial"
+      },
+      {
+        "id": "checks",
+        "title": "待确认项",
+        "content": "正式文档、真实数据、权限范围、验收指标和交付节奏仍需补证。",
+        "dataBinding": "retrieval.section_title_hints",
+        "visualizationType": "text-insight",
+        "layout": {
+          "x": 7,
+          "y": 5,
+          "w": 5,
+          "h": 3
+        },
+        "dataQuality": "partial"
+      }
+    ]
+  }
+}

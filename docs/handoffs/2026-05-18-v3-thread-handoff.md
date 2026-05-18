@@ -128,6 +128,7 @@ After this handoff was created, the local thread continued into the document/RAG
 - Frontend `dataSnapshot.structureSignals` and backend `dataSnapshot.structure_signals` now carry the same source-structure contract on the draft itself, so the signal is not limited to provider/ReAct context.
 - The desktop/mobile static-page template reference panel now shows a compact "源结构" summary for supplied heading clues and bound docs-page modules without exposing document body text or chart sample rows.
 - The static-page planning handoff HTML artifact now includes a read-only "源结构" section sourced from structured JSON, keeping Markdown/JSON as the source of truth and avoiding raw provider HTML.
+- A repeatable "新世界 IOA" static-page planning smoke fixture now lives at `docs/smokes/new-world-ioa-static-page-handoff.json`; `npm run build:static-page-planning-smoke-html` renders ignored review HTML/JSON under `target/html-artifacts`, and `npm run test:static-page-planning-smoke-html` verifies the safe HTML sections.
 - Existing retrieval ranking tests still cover section-title hints for indexed evidence and fallback chunk supply.
 - Focused validation passed:
   - `cargo test -p platform-api load_document_detail_returns_document_chunks_and_retrieval_evidences --lib`
@@ -144,6 +145,8 @@ After this handoff was created, the local thread continued into the document/RAG
   - `node --test app/lib/static-page-draft.test.mjs`
   - `node --test app/lib/document-detail-view.test.mjs`
   - `node --test app/lib/html-artifact-manifest.test.mjs`
+  - `npm run build:static-page-planning-smoke-html`
+  - `npm run test:static-page-planning-smoke-html`
   - `npm run build`
   - `git diff --check`
 
@@ -201,6 +204,7 @@ Use focused commands first:
 git status --short
 git diff --check
 node --test apps/web/app/lib/static-page-draft.test.mjs
+npm run test:static-page-planning-smoke-html
 Push-Location apps/web; npm run build; Pop-Location
 ```
 

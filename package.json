@@ -14,6 +14,7 @@
     "test:external-handoff-release": "node --test tools/validate-external-handoff-release.test.mjs",
     "test:pure-third-party-guide-html": "node --test tools/render-pure-third-party-guide-html.test.mjs",
     "test:third-party-handoff-html-artifact": "node --test tools/render-third-party-handoff-html-artifact.test.mjs",
+    "test:static-page-planning-smoke-html": "node --test tools/render-static-page-planning-smoke-html.test.mjs",
     "test:static-page-export-artifact": "node --test tools/validate-static-page-export-artifact.test.mjs",
     "validate:external-handoff": "node tools/validate-external-handoff.mjs --manifest docs/integrations/third-party-handoff.sample.json",
     "validate:static-page-export-artifact": "node tools/validate-static-page-export-artifact.mjs",
@@ -24,6 +25,7 @@
     "build:external-handoff-package": "node tools/render-pure-third-party-guide-html.mjs && node tools/build-external-handoff-package.mjs",
     "build:pure-third-party-guide-html": "node tools/render-pure-third-party-guide-html.mjs",
     "build:third-party-handoff-html-artifact": "node tools/render-third-party-handoff-html-artifact.mjs",
+    "build:static-page-planning-smoke-html": "node tools/render-static-page-planning-smoke-html.mjs",
     "check:pure-third-party-guide-html": "node tools/render-pure-third-party-guide-html.mjs --check",
     "test:video-deliverables": "node --test tools/validate-video-deliverables.test.mjs",
     "validate:video-deliverables": "node tools/validate-video-deliverables.mjs"
