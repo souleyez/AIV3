@@ -38,6 +38,28 @@ function makeArtifact(overrides = {}) {
     },
   ];
   const renderSpec = { componentModel: 'dom-text-svg-chart', responsive: true };
+  const dataSnapshot = {
+    source: 'unit-test',
+    module_bindings: [
+      {
+        moduleId: 'overview',
+        dataQuality: 'module_data',
+        bindingQuality: { status: 'confirmed', chartDataFit: 'ready', reason: 'unit_test_fixture' },
+        sampleData: [{ label: '可回答问题', value: 42 }],
+      },
+    ],
+  };
+  const visualBridge = {
+    kind: 'static-page-visual-bridge',
+    version: 1,
+    status: 'confirmed',
+    role: 'effect_preview_reference_only',
+    imageJobId: 'image-job-test',
+    previewAssetKey: 'previews/test.png',
+    draftFingerprint: 'draft-fingerprint-test',
+    finalRenderStatus: 'rendered',
+    finalHtmlSource: 'static-page-renderer-v1',
+  };
   const exportPackage = {
     kind: 'static-page-export-package',
     version: 1,
@@ -65,6 +87,8 @@ function makeArtifact(overrides = {}) {
       modules: [{ moduleId: 'overview', title: '总览', dataQualityStatus: 'confirmed' }],
     },
     export_package: exportPackage,
+    data_snapshot: dataSnapshot,
+    visual_bridge: visualBridge,
     modules,
     render_spec: renderSpec,
   };
@@ -79,13 +103,13 @@ function makeArtifact(overrides = {}) {
     'index.html': html,
     'asset-manifest.json': manifest,
     'export-package.json': exportPackage,
-    'data-snapshot.json': { source: 'unit-test' },
+    'data-snapshot.json': dataSnapshot,
     'data-quality-report.json': {
       kind: 'static-page-data-quality-report',
       summary: manifest.chart_runtime.dataQualitySummary,
       modules: manifest.chart_runtime.modules,
     },
-    'visual-bridge.json': { kind: 'static-page-visual-bridge', status: 'confirmed' },
+    'visual-bridge.json': visualBridge,
     'modules.json': modules,
     'runtime-requirements.json': [{ name: 'Apache ECharts', license: 'Apache-2.0', required: false }],
     'render-spec.json': renderSpec,
@@ -216,4 +240,30 @@ test('validateStaticPageExportArtifact rejects data quality module drift', () =>
 
   assert.equal(report.ready, false);
   assert.ok(report.errors.some((error) => error.code === 'data_quality_modules_manifest_mismatch'));
+});
+
+test('validateStaticPageExportArtifact rejects data snapshot drift', () => {
+  const artifact = makeArtifact();
+  const snapshotPath = path.join(artifact, 'data-snapshot.json');
+  const snapshot = JSON.parse(fs.readFileSync(snapshotPath, 'utf8'));
+  snapshot.module_bindings[0].sampleData[0].value = 43;
+  writeJson(snapshotPath, snapshot);
+
+  const report = validateStaticPageExportArtifact(artifact);
+
+  assert.equal(report.ready, false);
+  assert.ok(report.errors.some((error) => error.code === 'data_snapshot_manifest_mismatch'));
+});
+
+test('validateStaticPageExportArtifact rejects visual bridge drift', () => {
+  const artifact = makeArtifact();
+  const visualBridgePath = path.join(artifact, 'visual-bridge.json');
+  const visualBridge = JSON.parse(fs.readFileSync(visualBridgePath, 'utf8'));
+  visualBridge.status = 'stale';
+  writeJson(visualBridgePath, visualBridge);
+
+  const report = validateStaticPageExportArtifact(artifact);
+
+  assert.equal(report.ready, false);
+  assert.ok(report.errors.some((error) => error.code === 'visual_bridge_manifest_mismatch'));
 });

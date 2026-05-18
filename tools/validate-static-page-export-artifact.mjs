@@ -245,6 +245,30 @@ export function validateStaticPageExportArtifact(artifactDir) {
   addCheck(
     checks,
     errors,
+    'data snapshot mirrors renderer manifest',
+    typeof dataSnapshot?.source === 'string'
+      && manifest?.data_snapshot
+      && jsonValuesEqual(dataSnapshot, manifest.data_snapshot),
+    'data-snapshot.json must mirror data_snapshot in asset-manifest.json.',
+    'data_snapshot_manifest_mismatch',
+    path.join(artifact, 'data-snapshot.json'),
+  );
+
+  addCheck(
+    checks,
+    errors,
+    'visual bridge mirrors renderer manifest',
+    visualBridge?.kind === 'static-page-visual-bridge'
+      && manifest?.visual_bridge
+      && jsonValuesEqual(visualBridge, manifest.visual_bridge),
+    'visual-bridge.json must mirror visual_bridge in asset-manifest.json.',
+    'visual_bridge_manifest_mismatch',
+    path.join(artifact, 'visual-bridge.json'),
+  );
+
+  addCheck(
+    checks,
+    errors,
     'module plan mirrors renderer manifest',
     Array.isArray(modules)
       && Array.isArray(manifest?.modules)
