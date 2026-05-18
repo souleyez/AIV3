@@ -366,7 +366,7 @@ function DocumentDetailPage({
             <div className="document-original-block">
               <div className="document-block-title">
                 <strong>Markdown 原文</strong>
-                <span>{rawText ? `${rawText.length} 字符 · 由解析切片合并` : '暂无可展示原文'}</span>
+                <span>{rawText ? `${rawText.length} 字符 · 可下滑查看全文` : '暂无可展示原文'}</span>
               </div>
               {rawText ? (
                 <>
@@ -375,7 +375,11 @@ function DocumentDetailPage({
                       {markdownSectionHints.map((hint) => <span key={hint}>{hint}</span>)}
                     </div>
                   ) : null}
-                  <pre className="document-original-markdown"><code>{rawText}</code></pre>
+                  <pre
+                    className="document-original-markdown"
+                    aria-label="Markdown 原文，可滚动查看全文"
+                    tabIndex={0}
+                  ><code>{rawText}</code></pre>
                 </>
               ) : (
                 <div className="directory-empty">当前详情接口没有返回原文内容；若文档已解析，这里会优先展示解析后的正文切片。</div>

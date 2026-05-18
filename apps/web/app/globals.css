@@ -4405,7 +4405,7 @@ body {
 }
 
 .document-original-markdown {
-  max-height: none;
+  max-height: clamp(360px, 62vh, 760px);
   margin: 0;
   padding: 14px;
   border-radius: 16px;
@@ -4415,9 +4415,17 @@ body {
   font-family: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
   font-size: 13px;
   line-height: 1.72;
-  overflow-x: auto;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+  -webkit-overflow-scrolling: touch;
+}
+
+.document-original-markdown:focus {
+  outline: 2px solid rgba(33, 214, 165, 0.48);
+  outline-offset: 2px;
 }
 
 .document-original-markdown code {
@@ -5353,6 +5361,7 @@ body {
   }
 
   .document-original-markdown {
+    max-height: 62svh;
     padding: 12px;
     font-size: 12px;
   }
