@@ -156,6 +156,8 @@ const ASSISTANT_RUN_CONVERSATION_MEMORY_MAX_LIMIT: i64 = 8;
 const ASSISTANT_RUN_SCOPE_SUMMARY_DOC_LIMIT: usize = 24;
 const ASSISTANT_RUN_MODEL_SUPPLY_BRIEF_ITEM_LIMIT: usize = 4;
 const ASSISTANT_RUN_MODEL_SUPPLY_BRIEF_TEXT_LIMIT: usize = 220;
+const EXTERNAL_CHANNEL_CONVERSATION_HISTORY_RUN_LIMIT: i64 = 6;
+const EXTERNAL_CHANNEL_CONVERSATION_HISTORY_TEXT_LIMIT: usize = 1200;
 const ASSISTANT_RUN_LEXICAL_CJK_NGRAM_MAX: usize = 6;
 const ASSISTANT_RUN_CONTINUE_DEFAULT_MAX_STEPS: usize = 3;
 const ASSISTANT_RUN_CONTINUE_MAX_STEPS: usize = 5;
@@ -9055,6 +9057,10 @@ async fn ingest_external_channel_message_with_connection(
     let now = Utc::now();
     let mut assistant_request =
         external_bot_message_to_assistant_run_request(connection_id, &message);
+    if let Some(local_thread_id) = assistant_request.local_thread_id.as_deref() {
+        assistant_request.messages =
+            load_external_channel_conversation_history_messages(state, local_thread_id).await?;
+    }
     let mut selected_scope = assistant_request
         .selected_scope
         .clone()
@@ -9137,6 +9143,7 @@ async fn ingest_external_channel_message_with_connection(
                     "channel_connection_id": connection_id,
                     "message": payload_summary,
                     "idempotency_key": message.idempotency_key,
+                    "conversation_context_message_count": assistant_request.messages.len(),
                 }),
                 created_at: now,
             },
@@ -11316,6 +11323,72 @@ fn external_bot_message_to_assistant_run_request(
         current_artifact: None,
         messages: Vec::new(),
     }
+}
+
+async fn load_external_channel_conversation_history_messages(
+    state: &AppState,
+    local_thread_id: &str,
+) -> std::result::Result<Vec<AssistantRunMessageView>, ApiError> {
+    let runs = state
+        .storage
+        .assistant_runs()
+        .list_by_local_thread(
+            state.tenant_id,
+            local_thread_id,
+            EXTERNAL_CHANNEL_CONVERSATION_HISTORY_RUN_LIMIT,
+        )
+        .await
+        .map_err(ApiError::from_storage)?;
+    Ok(external_channel_conversation_history_messages_from_recent_runs(&runs))
+}
+
+fn external_channel_conversation_history_messages_from_recent_runs(
+    recent_runs_newest_first: &[AssistantRun],
+) -> Vec<AssistantRunMessageView> {
+    let mut messages = Vec::new();
+    for run in recent_runs_newest_first
+        .iter()
+        .rev()
+        .filter(|run| run.service_lane == "external_channel")
+    {
+        let user_prompt = truncate_assistant_supply_text(
+            &run.user_prompt,
+            EXTERNAL_CHANNEL_CONVERSATION_HISTORY_TEXT_LIMIT,
+        );
+        if !user_prompt.is_empty() {
+            messages.push(AssistantRunMessageView {
+                role: ChatMessageRole::User,
+                content: user_prompt,
+            });
+        }
+
+        if let Some(reply) = external_channel_assistant_reply_from_run(run) {
+            messages.push(AssistantRunMessageView {
+                role: ChatMessageRole::Assistant,
+                content: reply,
+            });
+        }
+    }
+    messages
+}
+
+fn external_channel_assistant_reply_from_run(run: &AssistantRun) -> Option<String> {
+    run.output_artifacts
+        .as_array()?
+        .iter()
+        .rev()
+        .find_map(|artifact| {
+            (artifact.get("type").and_then(Value::as_str) == Some("assistant_message"))
+                .then(|| artifact.get("content").and_then(Value::as_str))
+                .flatten()
+                .map(|content| {
+                    truncate_assistant_supply_text(
+                        content,
+                        EXTERNAL_CHANNEL_CONVERSATION_HISTORY_TEXT_LIMIT,
+                    )
+                })
+                .filter(|content| !content.is_empty())
+        })
 }
 
 fn external_bot_message_payload_summary(message: &ExternalBotMessageView) -> Value {
@@ -35398,6 +35471,99 @@ mod tests {
             event.event_name == "assistant_run.external_channel_model_reply_completed"
         }));
         clear_assistant_openclaw_env();
+    }
+
+    #[test]
+    fn external_channel_conversation_history_reuses_same_conversation_context() {
+        let now = Utc::now();
+        let older = test_external_channel_assistant_run(
+            "上一轮问：这份制度讲什么？",
+            Some("上一轮答：主要讲采购审批权限。"),
+            "external_channel",
+            now - Duration::minutes(2),
+        );
+        let ignored_other_lane = test_external_channel_assistant_run(
+            "不应进入外部通道上下文",
+            Some("不应进入"),
+            "assistant_run",
+            now - Duration::minutes(1),
+        );
+        let newer = test_external_channel_assistant_run(
+            "继续问：有哪些风险？",
+            Some("继续答：审批超时和权限错配。"),
+            "external_channel",
+            now,
+        );
+
+        let messages = external_channel_conversation_history_messages_from_recent_runs(&[
+            newer,
+            ignored_other_lane,
+            older,
+        ]);
+
+        assert_eq!(messages.len(), 4);
+        assert_eq!(messages[0].role, ChatMessageRole::User);
+        assert!(messages[0].content.contains("上一轮问"));
+        assert_eq!(messages[1].role, ChatMessageRole::Assistant);
+        assert!(messages[1].content.contains("采购审批权限"));
+        assert_eq!(messages[2].role, ChatMessageRole::User);
+        assert!(messages[2].content.contains("继续问"));
+        assert_eq!(messages[3].role, ChatMessageRole::Assistant);
+        assert!(messages[3].content.contains("权限错配"));
+
+        let input = build_assistant_run_provider_input(&CreateAssistantRunRequest {
+            prompt: "本轮请基于上文继续回答".to_string(),
+            local_thread_id: Some(
+                "external:generic_chat:tenant-ext-001:bot-v3:chat-risk-room".to_string(),
+            ),
+            startup_briefing: Some(json!({"surface": "external_channel"})),
+            selected_scope: Some(json!({"type": "external_channel"})),
+            scope_candidates: Vec::new(),
+            context_policy_hint: None,
+            current_artifact: None,
+            messages,
+        });
+
+        assert!(input.contains("最近对话："));
+        assert!(input.contains("user: 上一轮问：这份制度讲什么？"));
+        assert!(input.contains("assistant: 上一轮答：主要讲采购审批权限。"));
+        assert!(input.contains("用户问题：本轮请基于上文继续回答"));
+    }
+
+    fn test_external_channel_assistant_run(
+        prompt: &str,
+        reply: Option<&str>,
+        service_lane: &str,
+        at: DateTime<Utc>,
+    ) -> AssistantRun {
+        AssistantRun {
+            id: AssistantRunId(Uuid::new_v4()),
+            tenant_id: TenantId(Uuid::new_v4()),
+            user_id: None,
+            local_thread_id: Some(
+                "external:generic_chat:tenant-ext-001:bot-v3:chat-risk-room".to_string(),
+            ),
+            user_prompt: prompt.to_string(),
+            startup_briefing: json!({}),
+            selected_scope: json!({"type": "external_channel"}),
+            scope_candidates: json!([]),
+            context_policy: json!({}),
+            evidence_state: json!({}),
+            service_lane: service_lane.to_string(),
+            execution_trail: json!([]),
+            output_artifacts: reply
+                .map(|content| {
+                    json!([{
+                        "type": "assistant_message",
+                        "source": "external_channel_model_reply",
+                        "content": content
+                    }])
+                })
+                .unwrap_or_else(|| json!([])),
+            runtime_manifest: json!({}),
+            created_at: at,
+            updated_at: at,
+        }
     }
 
     #[tokio::test]

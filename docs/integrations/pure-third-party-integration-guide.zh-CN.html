@@ -361,19 +361,19 @@
 <a href="#section-05">V3 入站聊天接口</a>
 <a href="#section-06">用户与组织接口</a>
 <a href="#section-07">文档接口</a>
-<a href="#section-11">V3 触发资料源同步</a>
-<a href="#section-12">用户确认接口</a>
-<a href="#section-13">产物接口</a>
-<a href="#section-14">业务动作接口</a>
-<a href="#section-15">动作结果回传</a>
-<a href="#section-16">V3 出站派发签名</a>
-<a href="#section-17">观测接口</a>
-<a href="#section-18">错误返回</a>
-<a href="#section-19">联调前第三方准备清单</a>
-<a href="#section-20">安全与合规要求</a>
-<a href="#section-21">当前实现状态</a>
-<a href="#section-22">推荐联调顺序</a>
-<a href="#section-23">相关文档</a>
+<a href="#section-11">文档解析与资料源同步</a>
+<a href="#section-13">用户确认接口</a>
+<a href="#section-14">产物接口</a>
+<a href="#section-15">业务动作接口</a>
+<a href="#section-16">动作结果回传</a>
+<a href="#section-17">V3 出站派发签名</a>
+<a href="#section-18">观测接口</a>
+<a href="#section-19">错误返回</a>
+<a href="#section-20">联调前第三方准备清单</a>
+<a href="#section-21">安全与合规要求</a>
+<a href="#section-22">当前实现状态</a>
+<a href="#section-23">推荐联调顺序</a>
+<a href="#section-24">相关文档</a>
       </nav>
     </aside>
     <main>
@@ -458,6 +458,7 @@
 <p>最小可联调版本建议先准备：</p>
 <div class="table-shell"><table><thead><tr><th>模块</th><th>第三方需要提供</th><th>V3 使用方式</th></tr></thead><tbody><tr><td>聊天入口</td><td>自建页面或网关调用 V3 消息接口</td><td>创建 AssistantRun 并返回回复对象</td></tr><tr><td>用户身份</td><td>外部用户 ID、状态、部门/组/角色</td><td>解析当前提问用户的有效身份</td></tr><tr><td>文档库</td><td>文档列表、版本、正文或正文读取地址</td><td>建立索引或按需读取证据</td></tr><tr><td>文档权限</td><td>文档 ACL 快照或可访问主体列表</td><td>检索前过滤不可见文档</td></tr><tr><td>产物接口</td><td>接收报告、页面、文件或链接</td><td>发布/查询/撤销 V3 产物</td></tr><tr><td>业务动作</td><td>接收 V3 派发的动作请求</td><td>执行业务事务并回传结果</td></tr></tbody></table></div>
 <p>如果项目早期只做问答，可以先接聊天入口、用户身份、文档库和文档权限；产物和业务动作可以后续接入。</p>
+<p>资料库仍保留在第三方服务器时，建议先填写资料源参数卡，再进入联调。参数卡样例见 <code>docs/integrations/third-party-source-parameter-card.sample.json</code>，说明文档见 <code>docs/integrations/third-party-source-parameter-card.zh-CN.md</code>。V3 可用参数卡校验工具检查 HTTPS、鉴权交付方式、用户样例、文档样例和 ACL 边界是否足够进入资料问答验收。</p>
 <h2 id="section-04">4. 文档是否必须搬到 V3</h2>
 <p>不需要把第三方服务器上的所有文档一次性拷贝到 V3 才能问答。</p>
 <p>V3 需要的是“可验证、可权限过滤、可追溯版本”的证据供料。第三方可以根据安全要求选择以下方式：</p>
@@ -512,18 +513,35 @@ Authorization: Bearer &lt;V3 inbound token&gt;</code></pre>
 }</code></pre>
   </figure>
 <p>字段要求：</p>
-<div class="table-shell"><table><thead><tr><th>字段</th><th>必填</th><th>说明</th></tr></thead><tbody><tr><td><code>platform</code></td><td>是</td><td>必须和连接配置一致；当前自建聊天联调通常使用 <code>generic_chat</code>，也可按项目配置使用 <code>third_party</code></td></tr><tr><td><code>tenant_external_id</code></td><td>是</td><td>第三方租户、空间或客户 ID</td></tr><tr><td><code>bot_external_id</code></td><td>是</td><td>第三方侧机器人或应用 ID</td></tr><tr><td><code>conversation_external_id</code></td><td>是</td><td>会话、群、房间或页面上下文 ID</td></tr><tr><td><code>sender_external_id</code></td><td>是</td><td>当前提问用户在第三方系统中的稳定 ID</td></tr><tr><td><code>message_external_id</code></td><td>是</td><td>第三方消息 ID，必须稳定</td></tr><tr><td><code>message_type</code></td><td>是</td><td><code>text</code>、<code>image</code>、<code>file</code>、<code>audio</code>、<code>video</code>、<code>card</code>、<code>event</code> 或 <code>unknown</code></td></tr><tr><td><code>text</code></td><td>文本消息必填</td><td>用户输入文本</td></tr><tr><td><code>attachment_refs</code></td><td>否</td><td>附件引用，文件下载需按项目配置权限和有效期</td></tr><tr><td><code>idempotency_key</code></td><td>是</td><td>防重放和重复投递</td></tr><tr><td><code>received_at</code></td><td>是</td><td>第三方收到消息的时间</td></tr></tbody></table></div>
-<p>响应示例：</p>
+<div class="table-shell"><table><thead><tr><th>字段</th><th>必填</th><th>说明</th></tr></thead><tbody><tr><td><code>platform</code></td><td>是</td><td>必须和连接配置一致；当前自建聊天联调通常使用 <code>generic_chat</code>，也可按项目配置使用 <code>third_party</code></td></tr><tr><td><code>tenant_external_id</code></td><td>是</td><td>第三方租户、空间或客户 ID</td></tr><tr><td><code>bot_external_id</code></td><td>是</td><td>第三方侧机器人或应用 ID</td></tr><tr><td><code>conversation_external_id</code></td><td>是</td><td>会话、群、房间或页面上下文 ID；同一轮、同一页面会话或同一聊天窗口保持不变，V3 会映射为同一个对话上下文</td></tr><tr><td><code>sender_external_id</code></td><td>是</td><td>当前提问用户在第三方系统中的稳定 ID</td></tr><tr><td><code>message_external_id</code></td><td>是</td><td>第三方消息 ID，必须稳定</td></tr><tr><td><code>message_type</code></td><td>是</td><td><code>text</code>、<code>image</code>、<code>file</code>、<code>audio</code>、<code>video</code>、<code>card</code>、<code>event</code> 或 <code>unknown</code></td></tr><tr><td><code>text</code></td><td>文本消息必填</td><td>用户输入文本</td></tr><tr><td><code>attachment_refs</code></td><td>否</td><td>附件引用，文件下载需按项目配置权限和有效期</td></tr><tr><td><code>idempotency_key</code></td><td>是</td><td>防重放和重复投递</td></tr><tr><td><code>received_at</code></td><td>是</td><td>第三方收到消息的时间</td></tr></tbody></table></div>
+<p>生成回复响应示例：</p>
 <figure class="code-card">
     <figcaption><span>json</span><button type="button" class="copy-code">复制</button></figcaption>
     <pre><code>{
-  &quot;connection_id&quot;: &quot;generic-chat-main&quot;,
+  &quot;accepted&quot;: true,
   &quot;assistant_run_id&quot;: &quot;00000000-0000-0000-0000-000000000001&quot;,
   &quot;idempotency_key&quot;: &quot;generic_chat:tenant-ext-001:msg-20260515-0001&quot;,
   &quot;reply&quot;: {
+    &quot;target_conversation_external_id&quot;: &quot;chat-risk-room&quot;,
+    &quot;reply_type&quot;: &quot;text&quot;,
+    &quot;text&quot;: &quot;根据你当前可见的采购审批制度，本周建议重点关注审批超时、授权边界和供应商变更风险。&quot;,
+    &quot;task_status&quot;: &quot;answered&quot;,
+    &quot;requires_confirmation&quot;: false
+  }
+}</code></pre>
+  </figure>
+<p>这个 <code>/events</code> 接口同时承担两个职责：第三方把用户消息发给 V3，V3 把本次生成回复、任务状态或确认卡片放在响应体 <code>reply</code> 中返回给第三方。第三方页面按 <code>reply.target_conversation_external_id</code> 把回复展示回原会话即可；第一阶段不需要再调用单独的“取回复”接口。</p>
+<p>任务状态响应示例：</p>
+<figure class="code-card">
+    <figcaption><span>json</span><button type="button" class="copy-code">复制</button></figcaption>
+    <pre><code>{
+  &quot;accepted&quot;: true,
+  &quot;assistant_run_id&quot;: &quot;00000000-0000-0000-0000-000000000001&quot;,
+  &quot;idempotency_key&quot;: &quot;generic_chat:tenant-ext-001:msg-20260515-0001&quot;,
+  &quot;reply&quot;: {
+    &quot;target_conversation_external_id&quot;: &quot;chat-risk-room&quot;,
     &quot;reply_type&quot;: &quot;task_status&quot;,
-    &quot;task_status&quot;: &quot;accepted&quot;,
-    &quot;text&quot;: &quot;V3 已接收请求，正在处理。&quot;
+    &quot;task_status&quot;: &quot;accepted&quot;
   }
 }</code></pre>
   </figure>
@@ -534,7 +552,6 @@ Authorization: Bearer &lt;V3 inbound token&gt;</code></pre>
 <li><code>card</code>：结构化卡片；</li>
 <li><code>artifact_link</code>：产物链接；</li>
 <li><code>requires_confirmation</code>：需要用户确认；</li>
-<li><code>error</code>：错误或无法完成。</li>
 </ul>
 <p>如果消息需要外部/网页搜索，而 V3 尚未供给搜索证据，可能返回：</p>
 <figure class="code-card">
@@ -669,7 +686,37 @@ GET /users/{user_external_id}/memberships</code></pre>
 <li><code>deny</code> 优先级应高于 <code>allow</code>；</li>
 <li>文档权限变化后，应尽快触发 V3 同步。</li>
 </ul>
-<h2 id="section-11">8. V3 触发资料源同步</h2>
+<h2 id="section-11">8. 文档解析与资料源同步</h2>
+<p>第一阶段建议采用“第三方上传后触发单文档解析”的轻量链路：</p>
+<figure class="code-card">
+    <figcaption><span>http</span><button type="button" class="copy-code">复制</button></figcaption>
+    <pre><code>POST /v1/external/channels/{connection_id}/documents/parse
+Host: v3.elepcloud.com
+Content-Type: application/json
+Authorization: Bearer &lt;V3 inbound token&gt;</code></pre>
+  </figure>
+<p>第三方传入 <code>source_id</code>、<code>dataset_id</code>、<code>document_external_id</code>、可选 <code>revision_external_id</code> 和短时效 <code>content_url</code>。V3 下载文档后进入现有上传解析工作流，并把内部文档记录关联到 <code>source_id + document_external_id</code>。</p>
+<p>解析状态查询：</p>
+<figure class="code-card">
+    <figcaption><span>http</span><button type="button" class="copy-code">复制</button></figcaption>
+    <pre><code>GET /v1/external/channels/{connection_id}/documents/{document_external_id}/parse-detail?source_id={source_id}
+Authorization: Bearer &lt;V3 inbound token&gt;</code></pre>
+  </figure>
+<p>对话时，第三方继续调用消息接口，并传入本轮可用文档：</p>
+<figure class="code-card">
+    <figcaption><span>json</span><button type="button" class="copy-code">复制</button></figcaption>
+    <pre><code>{
+  &quot;available_document_source_id&quot;: &quot;src-docs&quot;,
+  &quot;available_document_external_ids&quot;: [&quot;third-doc-20260518-001&quot;]
+}</code></pre>
+  </figure>
+<p>V3 会把外部文档 ID 映射为内部文档范围，并只从这些文档供料给模型。完整样例见：</p>
+<ul>
+<li><code>docs/integrations/third-party-document-parse-first-phase.zh-CN.md</code></li>
+<li><code>docs/integrations/third-party-document-parse-request.sample.json</code></li>
+<li><code>docs/integrations/third-party-chat-with-document-ids.sample.json</code></li>
+</ul>
+<h3 id="section-12">8.1 V3 触发资料源同步</h3>
 <p>V3 可通过连接配置中的第三方文档接口进行增量同步。运营或系统可触发：</p>
 <figure class="code-card">
     <figcaption><span>http</span><button type="button" class="copy-code">复制</button></figcaption>
@@ -686,7 +733,7 @@ Host: v3.elepcloud.com</code></pre>
 <li>错误摘要。</li>
 </ul>
 <p>同步日志和观测摘要不会展示原始文档正文和密钥。</p>
-<h2 id="section-12">9. 用户确认接口</h2>
+<h2 id="section-13">9. 用户确认接口</h2>
 <p>当 V3 判断某个动作需要确认时，会返回 <code>requires_confirmation</code>。第三方页面应把动作摘要展示给用户，再把确认结果提交给 V3：</p>
 <figure class="code-card">
     <figcaption><span>http</span><button type="button" class="copy-code">复制</button></figcaption>
@@ -715,7 +762,7 @@ Authorization: Bearer &lt;V3 inbound token&gt;</code></pre>
 <li><code>rejected</code>。</li>
 </ul>
 <p>第三方页面必须展示 V3 返回的动作摘要，不应自行拼接高风险动作内容。</p>
-<h2 id="section-13">10. 产物接口</h2>
+<h2 id="section-14">10. 产物接口</h2>
 <p>V3 可以生成报告、页面、文档、表格、图片、压缩包或链接，并按项目配置发布到第三方系统。</p>
 <p>当前主链路采用“V3 外部动作派发”方式：V3 把 <code>external_artifact.publish</code>、<code>external_artifact.status</code>、<code>external_artifact.revoke</code> 作为受控动作保存到审计记录中，再派发到第三方配置的 HTTPS endpoint。</p>
 <p>第三方建议提供：</p>
@@ -766,7 +813,7 @@ POST /artifacts/{artifact_external_id}/revoke</code></pre>
 <li>发布、查看、下载、撤销都应可审计；</li>
 <li>V3 观测接口不展示原始产物正文、原始下载地址或凭证。</li>
 </ul>
-<h2 id="section-14">11. 业务动作接口</h2>
+<h2 id="section-15">11. 业务动作接口</h2>
 <p>V3 可在用户授权和系统校验后调用第三方业务接口，例如：</p>
 <ul>
 <li>创建或更新工单；</li>
@@ -807,7 +854,7 @@ POST /artifacts/{artifact_external_id}/revoke</code></pre>
 <p>风险等级建议：</p>
 <div class="table-shell"><table><thead><tr><th>风险等级</th><th>示例</th><th>处理要求</th></tr></thead><tbody><tr><td><code>read_only</code></td><td>查询状态</td><td>不写入第三方系统</td></tr><tr><td><code>low_risk_write</code></td><td>发布草稿、创建低风险记录</td><td>可直接执行或轻量确认</td></tr><tr><td><code>high_risk_write</code></td><td>对外发布、变更权限、提交审批</td><td>必须用户确认</td></tr><tr><td><code>cross_system</code></td><td>跨系统事务、影响多个系统</td><td>必须确认并重点审计</td></tr></tbody></table></div>
 <p>V3 不会把飞书、企微或第三方入站回调用的通用 token 当作动作派发凭证复用。派发 endpoint 必须配置派发专用 Bearer Token 或签名密钥之一；否则 V3 会记录 <code>dispatch_blocked</code> 和 <code>dispatch_auth_missing</code>。</p>
-<h2 id="section-15">12. 动作结果回传</h2>
+<h2 id="section-16">12. 动作结果回传</h2>
 <p>第三方异步执行完成后，把结果回传给 V3：</p>
 <figure class="code-card">
     <figcaption><span>http</span><button type="button" class="copy-code">复制</button></figcaption>
@@ -842,7 +889,7 @@ Authorization: Bearer &lt;V3 inbound token&gt;</code></pre>
 <li><code>rejected</code>。</li>
 </ul>
 <p>V3 会校验该通道是否拥有对应动作。如果派发时已经记录 <code>external_request_id</code>，回传时不允许传入不一致的请求 ID。<code>message</code> 和任意 <code>result</code> 值不会原文保存；V3 只保存是否存在、状态、安全错误码、字段数量等结构化摘要。</p>
-<h2 id="section-16">13. V3 出站派发签名</h2>
+<h2 id="section-17">13. V3 出站派发签名</h2>
 <p>V3 调用第三方产物或业务动作 endpoint 时，建议第三方校验以下请求头：</p>
 <figure class="code-card">
     <figcaption><span>http</span><button type="button" class="copy-code">复制</button></figcaption>
@@ -869,7 +916,7 @@ X-V3-Signature: sha256=&lt;HMAC-SHA256 hex&gt;</code></pre>
 <li>token 未过期；</li>
 <li>来源 IP 或网络白名单符合项目约定。</li>
 </ul>
-<h2 id="section-17">14. 观测接口</h2>
+<h2 id="section-18">14. 观测接口</h2>
 <p>V3 提供观测优先的管理接口，供 V3 控制台和运营人员使用。第三方自建聊天页面不需要直接暴露这些接口给普通用户。</p>
 <figure class="code-card">
     <figcaption><span>http</span><button type="button" class="copy-code">复制</button></figcaption>
@@ -905,7 +952,7 @@ POST /v1/external/integrations/{integration_id}/rotate-secret</code></pre>
 GET /v1/external/integrations/generic-chat-main/audit?item_type=search_evidence
 GET /v1/external/integrations/generic-chat-main/audit?item_type=action&amp;action_id=act-001&amp;limit=1</code></pre>
   </figure>
-<h2 id="section-18">15. 错误返回</h2>
+<h2 id="section-19">15. 错误返回</h2>
 <p>V3 错误格式：</p>
 <figure class="code-card">
     <figcaption><span>json</span><button type="button" class="copy-code">复制</button></figcaption>
@@ -918,7 +965,7 @@ GET /v1/external/integrations/generic-chat-main/audit?item_type=action&amp;actio
 <p>常见错误码：</p>
 <div class="table-shell"><table><thead><tr><th>错误码</th><th>说明</th></tr></thead><tbody><tr><td><code>external_channel_connection_not_found</code></td><td>未找到聊天通道连接</td></tr><tr><td><code>external_channel_disabled</code></td><td>连接已停用</td></tr><tr><td><code>external_channel_platform_mismatch</code></td><td>请求平台与连接配置不一致</td></tr><tr><td><code>external_message_invalid</code></td><td>消息结构不合法</td></tr><tr><td><code>external_action_not_found</code></td><td>未找到动作</td></tr><tr><td><code>external_action_result_request_mismatch</code></td><td>回传请求 ID 不一致</td></tr><tr><td><code>external_action_dispatch_blocked</code></td><td>动作派发被阻断</td></tr><tr><td><code>react_dataset_not_selected</code></td><td>请求的数据集不在当前可见范围</td></tr></tbody></table></div>
 <p>第三方错误返回也应使用稳定 <code>code</code>，不要在 <code>message</code> 中返回密钥、token、完整 SQL、堆栈或敏感业务正文。</p>
-<h2 id="section-19">16. 联调前第三方准备清单</h2>
+<h2 id="section-20">16. 联调前第三方准备清单</h2>
 <p>请第三方在联调前准备：</p>
 <ul>
 <li>测试环境域名和网络访问方式；</li>
@@ -949,7 +996,7 @@ GET /v1/external/integrations/generic-chat-main/audit?item_type=action&amp;actio
 <li>重复消息和重复结果回调不会重复创建任务；</li>
 <li>未配置派发凭证时，V3 记录 <code>dispatch_auth_missing</code>，不静默失败。</li>
 </ol>
-<h2 id="section-20">17. 安全与合规要求</h2>
+<h2 id="section-21">17. 安全与合规要求</h2>
 <ul>
 <li>生产环境必须使用 HTTPS；</li>
 <li>所有连接必须有明确租户和连接 ID；</li>
@@ -961,7 +1008,7 @@ GET /v1/external/integrations/generic-chat-main/audit?item_type=action&amp;actio
 <li>第三方页面不得把 V3 管理接口开放给普通用户；</li>
 <li>内网部署、专线、代理、网关和证书策略需在项目实施阶段确认。</li>
 </ul>
-<h2 id="section-21">18. 当前实现状态</h2>
+<h2 id="section-22">18. 当前实现状态</h2>
 <p>当前 V3 已具备的纯第三方主链路能力：</p>
 <ul>
 <li>统一外部聊天通道事件：<code>POST /v1/external/channels/{connection_id}/events</code>；</li>
@@ -984,7 +1031,7 @@ GET /v1/external/integrations/generic-chat-main/audit?item_type=action&amp;actio
 <li>生产级入站签名、IP 白名单、重放窗口和密钥轮换界面；</li>
 <li>客户真实沙箱环境的端到端验证。</li>
 </ul>
-<h2 id="section-22">19. 推荐联调顺序</h2>
+<h2 id="section-23">19. 推荐联调顺序</h2>
 <ol>
 <li>创建 V3 第三方连接和 <code>connection_id</code>；</li>
 <li>配置第三方测试环境、网络和凭证；</li>
@@ -999,10 +1046,12 @@ GET /v1/external/integrations/generic-chat-main/audit?item_type=action&amp;actio
 <li>生成并校验第三方交接包；</li>
 <li>进入真实客户沙箱联调。</li>
 </ol>
-<h2 id="section-23">20. 相关文档</h2>
+<h2 id="section-24">20. 相关文档</h2>
 <ul>
 <li>总接口说明：<code>docs/integrations/third-party-integration-api.zh-CN.md</code></li>
 <li>英文接口草案：<code>docs/integrations/third-party-integration-api.md</code></li>
+<li>第一阶段可转发 HTML 简版：<code>docs/integrations/third-party-document-parse-first-phase-sendable.zh-CN.html</code></li>
+<li>第一阶段文档解析说明：<code>docs/integrations/third-party-document-parse-first-phase.zh-CN.md</code></li>
 <li>交接清单样例：<code>docs/integrations/third-party-handoff.sample.json</code></li>
 <li>交接包内安全 HTML artifact manifest：<code>html-artifacts/third-party-handoff-document.json</code></li>
 <li>第三方集成计划：<code>docs/plans/2026-05-13-v3-external-bot-third-party-knowledge-plan.md</code></li>

@@ -77,9 +77,9 @@ Authorization: Bearer <由我方提供的 token>
 
 当 `chunk_count` 和 `retrieval_evidence_count` 已经有值后，再进入问答验收更稳。
 
-## 4. 对话时传入可用文档 ID
+## 4. 对话时传入可用文档 ID，并接收 V3 回复
 
-第三方页面发起对话时，仍调用原来的消息事件接口，并在消息体里带上本轮允许使用的文档 ID 列表。V3 只会在这些文档映射出的内部文档范围内检索和回答。
+第三方页面发起对话时，仍调用原来的消息事件接口，并在消息体里带上本轮允许使用的文档 ID 列表。这个接口同时承担两个职责：第三方把用户消息发给 V3，V3 把本次生成回复或处理状态放在响应体 `reply` 中返回给第三方。
 
 ```http
 POST https://v3.elepcloud.com/v1/external/channels/{connection_id}/events
@@ -91,8 +91,9 @@ Content-Type: application/json
 
 ```json
 {
+  "platform": "generic_chat",
   "tenant_external_id": "tenant-ext-001",
-  "channel_external_id": "generic-chat-main",
+  "bot_external_id": "bot-v3",
   "conversation_external_id": "conv-20260518-0001",
   "sender_external_id": "user-10001",
   "message_external_id": "msg-20260518-0001",
@@ -109,8 +110,28 @@ Content-Type: application/json
 }
 ```
 
+生成回复响应示例：
+
+```json
+{
+  "accepted": true,
+  "assistant_run_id": "00000000-0000-0000-0000-000000000001",
+  "idempotency_key": "third-party:tenant-ext-001:msg-20260518-0001",
+  "reply": {
+    "target_conversation_external_id": "conv-20260518-0001",
+    "reply_type": "text",
+    "text": "根据这份采购审批制度，本周建议重点关注审批超时、授权边界和供应商变更风险。",
+    "task_status": "answered",
+    "requires_confirmation": false
+  }
+}
+```
+
+如果 V3 已接收但暂时无法立即给出最终文本，会返回 `reply_type=task_status`；如果需要用户确认动作，会返回 `reply_type=requires_confirmation`。第三方页面按 `reply.target_conversation_external_id` 把回复展示回原会话即可。
+
 注意：
 
+- 同一轮、同一页面会话或同一聊天窗口请保持同一个 `conversation_external_id`；V3 会把它映射为同一个对话上下文。
 - 如果本轮只允许问某几份文档，就只传这些 `document_external_id`。
 - 未传入、未解析完成或无权使用的文档，不会进入本轮模型上下文。
 - `message_external_id` 和 `idempotency_key` 建议每条消息稳定唯一，方便重试和排查。
@@ -122,7 +143,9 @@ Content-Type: application/json
 1. 文档上传后，第三方能调用解析接口，V3 返回成功接收。
 2. 查询解析详情能看到该 `document_external_id` 的状态、切片数量和检索证据数量。
 3. 对话请求带 `available_document_external_ids` 后，V3 能围绕指定文档回答。
-4. 换一个未传入的文档 ID 或不传文档 ID，V3 不应把该文档作为本轮回答依据。
+4. 同一 `conversation_external_id` 的连续消息会作为同一个对话上下文进入模型。
+5. 第三方发消息到 `/events` 后，能从响应体 `reply` 中拿到文本回复或处理状态。
+6. 换一个未传入的文档 ID 或不传文档 ID，V3 不应把该文档作为本轮回答依据。
 
 ## 6. 常见问题
 
@@ -132,6 +155,7 @@ Content-Type: application/json
 | `404 Not Found` | `connection_id`、`source_id`、`document_external_id` 是否和联调参数一致 |
 | `405 Method Not Allowed` | 是否误打了 `http://`、是否被重定向后从 `POST` 变成 `GET` |
 | 能提交但问答没有引用文档 | 文档是否解析完成，`available_document_external_ids` 是否传了正确的第三方文档 ID |
+| 多轮上下文接不上 | 同一轮对话是否保持相同 `conversation_external_id`，每条消息是否使用新的 `message_external_id` |
 | 重复提交文档 | 检查 `idempotency_key` 是否按文档 ID 和版本稳定生成 |
 
 ## 7. 双方职责边界

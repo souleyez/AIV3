@@ -274,7 +274,7 @@ Authorization: Bearer <V3 inbound token>
 | `platform` | 是 | 通道来源，例如 `feishu`、`lark`、`we_com`、`generic_chat`、`third_party` |
 | `tenant_external_id` | 是 | 第三方侧租户或客户 ID |
 | `bot_external_id` | 是 | 第三方侧机器人或应用 ID |
-| `conversation_external_id` | 是 | 群聊、会话或页面会话 ID |
+| `conversation_external_id` | 是 | 群聊、会话或页面会话 ID；同一轮、同一页面会话或同一聊天窗口保持不变，V3 会映射为同一个对话上下文 |
 | `thread_external_id` | 否 | 话题、帖子或子线程 ID |
 | `sender_external_id` | 是 | 第三方侧用户 ID，必须稳定 |
 | `message_external_id` | 是 | 第三方侧消息 ID，必须稳定 |
@@ -296,17 +296,19 @@ Authorization: Bearer <V3 inbound token>
 - `event`
 - `unknown`
 
-响应示例：
+生成回复响应示例：
 
 ```json
 {
-  "status": "accepted",
+  "accepted": true,
   "assistant_run_id": "arun_01HXEXAMPLE",
   "idempotency_key": "generic_chat:tenant-ext-001:msg-20260513-0001",
   "reply": {
-    "reply_type": "task_status",
-    "task_status": "accepted",
-    "message": "V3 已接收请求，正在处理。"
+    "target_conversation_external_id": "chat-risk-room",
+    "reply_type": "text",
+    "text": "根据你当前权限可查看的制度文档，本周采购审批需要重点关注三点...",
+    "task_status": "answered",
+    "requires_confirmation": false
   }
 }
 ```
@@ -314,13 +316,30 @@ Authorization: Bearer <V3 inbound token>
 说明：
 
 - 该接口用于接收用户消息并创建或继续 V3 助手任务；
-- V3 可能立即返回任务状态，也可能异步返回最终答案；
-- 具体是同步等待、轮询查询还是回调发送结果，可在项目联调时确认；
-- 当前优先开放标准化消息入口，最终回答、卡片、文件和确认流程会按项目阶段逐步开放。
+- 同一个接口响应体中的 `reply` 即为 V3 返回给第三方页面的生成回复、任务状态或确认卡片；
+- 第三方页面按 `reply.target_conversation_external_id` 把回复展示回原会话；
+- 如果 V3 已接收但暂时无法立即给出最终文本，会返回 `reply_type=task_status`；
+- 如果需要用户确认动作，会返回 `reply_type=requires_confirmation`；
+- 第一阶段不要求第三方再调用单独的“取回复”接口。
+
+任务状态响应示例：
+
+```json
+{
+  "accepted": true,
+  "assistant_run_id": "arun_01HXEXAMPLE",
+  "idempotency_key": "generic_chat:tenant-ext-001:msg-20260513-0001",
+  "reply": {
+    "target_conversation_external_id": "chat-risk-room",
+    "reply_type": "task_status",
+    "task_status": "accepted"
+  }
+}
+```
 
 ### 10.2 查询任务状态
 
-计划接口：
+可选查询接口：
 
 ```http
 GET /v1/external/runs/{assistant_run_id}

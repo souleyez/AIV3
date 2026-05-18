@@ -404,8 +404,8 @@ Authorization: Bearer &lt;由我方提供的 token&gt;</code></pre>
       </section>
 
       <section id="chat">
-        <h2>4. 对话时传入可用文档 ID</h2>
-        <p>第三方页面发起对话时，仍调用原来的消息事件接口，并在消息体里带上本轮允许使用的文档 ID 列表。V3 只会在这些文档映射出的内部文档范围内检索和回答。</p>
+        <h2>4. 对话时传入可用文档 ID，并接收 V3 回复</h2>
+        <p>第三方页面发起对话时，仍调用原来的消息事件接口，并在消息体里带上本轮允许使用的文档 ID 列表。这个接口同时承担两个职责：第三方把用户消息发给 V3，V3 把本次生成回复或处理状态放在响应体 <code>reply</code> 中返回给第三方。</p>
         <figure>
           <figcaption><span>POST /events</span></figcaption>
           <pre><code>POST https://v3.elepcloud.com/v1/external/channels/{connection_id}/events
@@ -415,8 +415,9 @@ Content-Type: application/json</code></pre>
         <figure>
           <figcaption><span>request body</span></figcaption>
           <pre><code>{
+  "platform": "generic_chat",
   "tenant_external_id": "tenant-ext-001",
-  "channel_external_id": "generic-chat-main",
+  "bot_external_id": "bot-v3",
   "conversation_external_id": "conv-20260518-0001",
   "sender_external_id": "user-10001",
   "message_external_id": "msg-20260518-0001",
@@ -432,7 +433,24 @@ Content-Type: application/json</code></pre>
   "received_at": "2026-05-18T10:00:00Z"
 }</code></pre>
         </figure>
+        <figure>
+          <figcaption><span>response body</span></figcaption>
+          <pre><code>{
+  "accepted": true,
+  "assistant_run_id": "00000000-0000-0000-0000-000000000001",
+  "idempotency_key": "third-party:tenant-ext-001:msg-20260518-0001",
+  "reply": {
+    "target_conversation_external_id": "conv-20260518-0001",
+    "reply_type": "text",
+    "text": "根据这份采购审批制度，本周建议重点关注审批超时、授权边界和供应商变更风险。",
+    "task_status": "answered",
+    "requires_confirmation": false
+  }
+}</code></pre>
+        </figure>
+        <div class="callout">如果 V3 已接收但暂时无法立即给出最终文本，会返回 <code>reply_type=task_status</code>；如果需要用户确认动作，会返回 <code>reply_type=requires_confirmation</code>。第三方页面按 <code>reply.target_conversation_external_id</code> 把回复展示回原会话即可。</div>
         <ul>
+          <li>同一轮、同一页面会话或同一聊天窗口请保持同一个 <code>conversation_external_id</code>；V3 会把它映射为同一个对话上下文。</li>
           <li>如果本轮只允许问某几份文档，就只传这些 <code>document_external_id</code>。</li>
           <li>未传入、未解析完成或无权使用的文档，不会进入本轮模型上下文。</li>
           <li><code>message_external_id</code> 和 <code>idempotency_key</code> 建议每条消息稳定唯一，方便重试和排查。</li>
@@ -445,6 +463,8 @@ Content-Type: application/json</code></pre>
           <li>文档上传后，第三方能调用解析接口，V3 返回成功接收。</li>
           <li>查询解析详情能看到该 <code>document_external_id</code> 的状态、切片数量和检索证据数量。</li>
           <li>对话请求带 <code>available_document_external_ids</code> 后，V3 能围绕指定文档回答。</li>
+          <li>同一 <code>conversation_external_id</code> 的连续消息会作为同一个对话上下文进入模型。</li>
+          <li>第三方发消息到 <code>/events</code> 后，能从响应体 <code>reply</code> 中拿到文本回复或处理状态。</li>
           <li>换一个未传入的文档 ID 或不传文档 ID，V3 不应把该文档作为本轮回答依据。</li>
         </ol>
       </section>
@@ -458,6 +478,7 @@ Content-Type: application/json</code></pre>
             <tr><td><code>404 Not Found</code></td><td><code>connection_id</code>、<code>source_id</code>、<code>document_external_id</code> 是否和联调参数一致。</td></tr>
             <tr><td><code>405 Method Not Allowed</code></td><td>是否误打了 <code>http://</code>、是否被重定向后从 <code>POST</code> 变成 <code>GET</code>。</td></tr>
             <tr><td>能提交但问答没有引用文档</td><td>文档是否解析完成，<code>available_document_external_ids</code> 是否传了正确的第三方文档 ID。</td></tr>
+            <tr><td>多轮上下文接不上</td><td>同一轮对话是否保持相同 <code>conversation_external_id</code>，每条消息是否使用新的 <code>message_external_id</code>。</td></tr>
             <tr><td>重复提交文档</td><td>检查 <code>idempotency_key</code> 是否按文档 ID 和版本稳定生成。</td></tr>
           </tbody>
         </table>

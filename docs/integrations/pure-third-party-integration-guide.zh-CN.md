@@ -144,7 +144,7 @@ Authorization: Bearer <V3 inbound token>
 | `platform` | 是 | 必须和连接配置一致；当前自建聊天联调通常使用 `generic_chat`，也可按项目配置使用 `third_party` |
 | `tenant_external_id` | 是 | 第三方租户、空间或客户 ID |
 | `bot_external_id` | 是 | 第三方侧机器人或应用 ID |
-| `conversation_external_id` | 是 | 会话、群、房间或页面上下文 ID |
+| `conversation_external_id` | 是 | 会话、群、房间或页面上下文 ID；同一轮、同一页面会话或同一聊天窗口保持不变，V3 会映射为同一个对话上下文 |
 | `sender_external_id` | 是 | 当前提问用户在第三方系统中的稳定 ID |
 | `message_external_id` | 是 | 第三方消息 ID，必须稳定 |
 | `message_type` | 是 | `text`、`image`、`file`、`audio`、`video`、`card`、`event` 或 `unknown` |
@@ -153,17 +153,36 @@ Authorization: Bearer <V3 inbound token>
 | `idempotency_key` | 是 | 防重放和重复投递 |
 | `received_at` | 是 | 第三方收到消息的时间 |
 
-响应示例：
+生成回复响应示例：
 
 ```json
 {
-  "connection_id": "generic-chat-main",
+  "accepted": true,
   "assistant_run_id": "00000000-0000-0000-0000-000000000001",
   "idempotency_key": "generic_chat:tenant-ext-001:msg-20260515-0001",
   "reply": {
+    "target_conversation_external_id": "chat-risk-room",
+    "reply_type": "text",
+    "text": "根据你当前可见的采购审批制度，本周建议重点关注审批超时、授权边界和供应商变更风险。",
+    "task_status": "answered",
+    "requires_confirmation": false
+  }
+}
+```
+
+这个 `/events` 接口同时承担两个职责：第三方把用户消息发给 V3，V3 把本次生成回复、任务状态或确认卡片放在响应体 `reply` 中返回给第三方。第三方页面按 `reply.target_conversation_external_id` 把回复展示回原会话即可；第一阶段不需要再调用单独的“取回复”接口。
+
+任务状态响应示例：
+
+```json
+{
+  "accepted": true,
+  "assistant_run_id": "00000000-0000-0000-0000-000000000001",
+  "idempotency_key": "generic_chat:tenant-ext-001:msg-20260515-0001",
+  "reply": {
+    "target_conversation_external_id": "chat-risk-room",
     "reply_type": "task_status",
-    "task_status": "accepted",
-    "text": "V3 已接收请求，正在处理。"
+    "task_status": "accepted"
   }
 }
 ```
@@ -175,7 +194,6 @@ Authorization: Bearer <V3 inbound token>
 - `card`：结构化卡片；
 - `artifact_link`：产物链接；
 - `requires_confirmation`：需要用户确认；
-- `error`：错误或无法完成。
 
 如果消息需要外部/网页搜索，而 V3 尚未供给搜索证据，可能返回：
 
