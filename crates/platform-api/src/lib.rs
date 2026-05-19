@@ -10277,8 +10277,14 @@ async fn ingest_external_channel_message_with_connection(
         .selected_scope
         .clone()
         .unwrap_or_else(|| json!({}));
-    enrich_external_channel_document_scope(state, connection, &message, &mut selected_scope)
-        .await?;
+    enrich_external_channel_document_scope(
+        state,
+        connection_id,
+        connection,
+        &message,
+        &mut selected_scope,
+    )
+    .await?;
     assistant_request.selected_scope = Some(selected_scope.clone());
     for candidate in &mut assistant_request.scope_candidates {
         if candidate.get("type").and_then(Value::as_str) == Some("external_channel") {
@@ -12511,6 +12517,7 @@ async fn record_external_message_event(
 
 async fn enrich_external_channel_document_scope(
     state: &AppState,
+    connection_id: &str,
     connection: &ExternalChannelConnectionSummary,
     message: &ExternalBotMessageView,
     selected_scope: &mut Value,
@@ -12604,6 +12611,22 @@ async fn enrich_external_channel_document_scope(
         json!(unresolved_external_ids),
     );
     if !selected_documents.is_empty() {
+        set_external_channel_temporary_dataset_scope(
+            selected_scope,
+            connection_id,
+            message,
+            Some(source_id.as_str()),
+            selected_documents.len(),
+        );
+        set_payload_value(
+            selected_scope,
+            "external_document_scope_status",
+            json!(if unresolved_external_ids.is_empty() {
+                "resolved"
+            } else {
+                "partial"
+            }),
+        );
         set_payload_value(
             selected_scope,
             "documents",
@@ -12622,6 +12645,87 @@ async fn enrich_external_channel_document_scope(
     }
 
     Ok(())
+}
+
+fn set_external_channel_temporary_dataset_scope(
+    selected_scope: &mut Value,
+    connection_id: &str,
+    message: &ExternalBotMessageView,
+    source_id: Option<&str>,
+    document_count: usize,
+) {
+    set_payload_value(selected_scope, "mode", json!("external_document_scope"));
+    set_payload_value(
+        selected_scope,
+        "temporary_dataset",
+        json!({
+            "key": external_channel_temporary_dataset_key(connection_id, message, source_id),
+            "source": "available_document_external_ids",
+            "document_count": document_count,
+            "restores_on": "conversation_turn_end",
+        }),
+    );
+}
+
+fn external_channel_temporary_dataset_key(
+    connection_id: &str,
+    message: &ExternalBotMessageView,
+    source_id: Option<&str>,
+) -> String {
+    let mut parts = vec![
+        "external".to_string(),
+        "session".to_string(),
+        external_channel_temporary_dataset_key_component(connection_id),
+        external_channel_temporary_dataset_key_component(&message.conversation_external_id),
+    ];
+    if let Some(source_id) = source_id.and_then(non_empty_trimmed_string) {
+        parts.push(external_channel_temporary_dataset_key_component(&source_id));
+    }
+    compact_external_channel_temporary_dataset_key(parts.join("-"))
+}
+
+fn external_channel_temporary_dataset_key_component(value: &str) -> String {
+    let mut slug = String::new();
+    let mut last_was_separator = false;
+    for character in value.trim().chars() {
+        if character.is_ascii_alphanumeric() {
+            slug.push(character.to_ascii_lowercase());
+            last_was_separator = false;
+        } else if !slug.is_empty() && !last_was_separator {
+            slug.push('-');
+            last_was_separator = true;
+        }
+    }
+    while slug.ends_with('-') {
+        slug.pop();
+    }
+    if slug.is_empty() {
+        return format!("ref-{}", &sha256_hex([value.as_bytes()])[..12]);
+    }
+    if slug.len() > 64 {
+        let hash = sha256_hex([value.as_bytes()]);
+        slug.truncate(48);
+        while slug.ends_with('-') {
+            slug.pop();
+        }
+        slug.push('-');
+        slug.push_str(&hash[..12]);
+    }
+    slug
+}
+
+fn compact_external_channel_temporary_dataset_key(mut key: String) -> String {
+    if key.len() <= 128 {
+        return key;
+    }
+    let hash = sha256_hex([key.as_bytes()]);
+    key.truncate(112);
+    while key.ends_with('-') {
+        key.pop();
+    }
+    key.push('-');
+    key.push_str(&hash[..12]);
+    key
 }
 
 async fn infer_external_document_scope_source_id(
@@ -39592,9 +39696,15 @@ mod tests {
         message.available_document_external_ids = vec!["doc-alpha".to_string()];
         let mut selected_scope = json!({"type": "external_channel"});
 
-        enrich_external_channel_document_scope(&state, &connection, &message, &mut selected_scope)
-            .await
-            .expect("source should be inferred from document_external_id");
+        enrich_external_channel_document_scope(
+            &state,
+            "generic-chat-main",
+            &connection,
+            &message,
+            &mut selected_scope,
+        )
+        .await
+        .expect("source should be inferred from document_external_id");
 
         assert_eq!(
             selected_scope["available_document_source_id"],
@@ -39610,6 +39720,217 @@ mod tests {
             selected_scope["unresolved_document_external_ids"],
             json!([])
         );
+    }
+
+    #[tokio::test]
+    async fn external_channel_document_scope_builds_temporary_dataset_scope_from_available_documents(
+    ) {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping external temporary dataset scope test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+        let tenant = storage
+            .ensure_tenant(
+                &format!("external-temp-scope-test-{}", Uuid::new_v4()),
+                "External Temporary Scope Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage,
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        let dataset = state
+            .storage
+            .datasets()
+            .create(
+                state.tenant_id,
+                NewDataset {
+                    key: format!("external-temp-scope-{}", Uuid::new_v4()),
+                    title: "External Temporary Scope".to_string(),
+                    description: None,
+                    owner_user_id: None,
+                },
+            )
+            .await
+            .expect("dataset should be created");
+        let mut document_ids = Vec::new();
+        for (external_id, title) in [("doc-alpha", "Alpha policy"), ("doc-beta", "Beta policy")] {
+            let document = state
+                .storage
+                .documents()
+                .create(
+                    state.tenant_id,
+                    NewDocument {
+                        dataset_id: dataset.id,
+                        title: title.to_string(),
+                        object_key: format!("external-temp-scope/{external_id}.md"),
+                        content_type: "text/markdown".to_string(),
+                        secret_binding_ids: Vec::new(),
+                        owner_user_id: None,
+                        metadata: json!({
+                            "external_source": {
+                                "source_id": "src-docs",
+                                "document_external_id": external_id
+                            }
+                        }),
+                    },
+                )
+                .await
+                .expect("document should be created");
+            document_ids.push(document.id);
+        }
+        let connection = ExternalChannelConnectionSummary {
+            platform: ExternalChannelPlatformView::GenericChat,
+            status: "enabled".to_string(),
+            config_redacted: json!({}),
+        };
+        let mut message = sample_external_bot_message();
+        message.conversation_external_id = "conv-20260518-0001".to_string();
+        message.available_document_source_id = Some("src-docs".to_string());
+        message.available_document_external_ids =
+            vec!["doc-alpha".to_string(), "doc-beta".to_string()];
+        let mut selected_scope = json!({"type": "external_channel"});
+
+        enrich_external_channel_document_scope(
+            &state,
+            "generic-chat-main",
+            &connection,
+            &message,
+            &mut selected_scope,
+        )
+        .await
+        .expect("temporary document scope should be built");
+
+        assert_eq!(selected_scope["mode"], json!("external_document_scope"));
+        assert_eq!(
+            selected_scope["temporary_dataset"]["key"],
+            json!("external-session-generic-chat-main-conv-20260518-0001-src-docs")
+        );
+        assert_eq!(
+            selected_scope["temporary_dataset"]["source"],
+            json!("available_document_external_ids")
+        );
+        assert_eq!(
+            selected_scope["temporary_dataset"]["document_count"],
+            json!(2)
+        );
+        assert_eq!(
+            selected_scope["temporary_dataset"]["restores_on"],
+            json!("conversation_turn_end")
+        );
+        assert_eq!(
+            selected_scope["external_document_scope_status"],
+            json!("resolved")
+        );
+        assert_eq!(selected_scope["documents"][0]["id"], json!(document_ids[0]));
+        assert_eq!(selected_scope["documents"][1]["id"], json!(document_ids[1]));
+        assert_eq!(selected_scope["datasets"][0]["id"], json!(dataset.id));
+    }
+
+    #[tokio::test]
+    async fn external_channel_temporary_scope_does_not_mutate_document_dataset() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping external temporary scope ownership test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+        let tenant = storage
+            .ensure_tenant(
+                &format!("external-temp-ownership-test-{}", Uuid::new_v4()),
+                "External Temporary Ownership Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage,
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        let dataset = state
+            .storage
+            .datasets()
+            .create(
+                state.tenant_id,
+                NewDataset {
+                    key: format!("external-temp-ownership-{}", Uuid::new_v4()),
+                    title: "External Temporary Ownership".to_string(),
+                    description: None,
+                    owner_user_id: None,
+                },
+            )
+            .await
+            .expect("dataset should be created");
+        let document = state
+            .storage
+            .documents()
+            .create(
+                state.tenant_id,
+                NewDocument {
+                    dataset_id: dataset.id,
+                    title: "Alpha policy".to_string(),
+                    object_key: "external-temp-ownership/doc-alpha.md".to_string(),
+                    content_type: "text/markdown".to_string(),
+                    secret_binding_ids: Vec::new(),
+                    owner_user_id: None,
+                    metadata: json!({
+                        "external_source": {
+                            "source_id": "src-docs",
+                            "document_external_id": "doc-alpha"
+                        }
+                    }),
+                },
+            )
+            .await
+            .expect("document should be created");
+        let connection = ExternalChannelConnectionSummary {
+            platform: ExternalChannelPlatformView::GenericChat,
+            status: "enabled".to_string(),
+            config_redacted: json!({}),
+        };
+        let mut message = sample_external_bot_message();
+        message.available_document_source_id = Some("src-docs".to_string());
+        message.available_document_external_ids = vec!["doc-alpha".to_string()];
+        let mut selected_scope = json!({"type": "external_channel"});
+
+        enrich_external_channel_document_scope(
+            &state,
+            "generic-chat-main",
+            &connection,
+            &message,
+            &mut selected_scope,
+        )
+        .await
+        .expect("temporary document scope should be built");
+
+        let persisted_document = state
+            .storage
+            .documents()
+            .get_by_id(state.tenant_id, document.id)
+            .await
+            .expect("document lookup should succeed")
+            .expect("document should still exist");
+        assert_eq!(persisted_document.dataset_id, dataset.id);
+        let documents = state
+            .storage
+            .documents()
+            .list_by_tenant(state.tenant_id)
+            .await
+            .expect("documents should list");
+        assert_eq!(documents.len(), 1);
+        assert_eq!(selected_scope["documents"][0]["id"], json!(document.id));
     }
 
     #[tokio::test]
@@ -39646,9 +39967,15 @@ mod tests {
         message.available_document_external_ids = vec!["doc-missing".to_string()];
         let mut selected_scope = json!({"type": "external_channel"});
 
-        enrich_external_channel_document_scope(&state, &connection, &message, &mut selected_scope)
-            .await
-            .expect("missing source should be model-visible instead of a request failure");
+        enrich_external_channel_document_scope(
+            &state,
+            "generic-chat-main",
+            &connection,
+            &message,
+            &mut selected_scope,
+        )
+        .await
+        .expect("missing source should be model-visible instead of a request failure");
 
         assert_eq!(
             selected_scope["available_document_external_ids"],
@@ -44513,6 +44840,63 @@ mod tests {
         assert!(input.contains("失败 1 份，重解析/重试中 1 份"));
         assert!(input.contains("document_parse_status/visible_document_ingest_state"));
         assert!(input.contains("不要声称已经读到完整内容"));
+    }
+
+    #[test]
+    fn external_channel_temporary_scope_keeps_direct_reply_contract() {
+        let dataset_id = DatasetId::new();
+        let document_id = DocumentId::new();
+        let input = build_assistant_run_provider_input_with_evidence(
+            &CreateAssistantRunRequest {
+                prompt: "只根据这次传的文档范围回答采购风险".to_string(),
+                local_thread_id: Some(
+                    "generic-chat-main:tenant-ext-001:chat-risk-room".to_string(),
+                ),
+                startup_briefing: Some(json!({
+                    "surface": "external_channel",
+                    "channel_connection_id": "generic-chat-main"
+                })),
+                selected_scope: Some(json!({
+                    "type": "external_channel",
+                    "mode": "external_document_scope",
+                    "channel_connection_id": "generic-chat-main",
+                    "conversation_external_id": "chat-risk-room",
+                    "temporary_dataset": {
+                        "key": "external-session-generic-chat-main-chat-risk-room-src-docs",
+                        "source": "available_document_external_ids",
+                        "document_count": 1,
+                        "restores_on": "conversation_turn_end"
+                    },
+                    "datasets": [{"type": "dataset", "id": dataset_id}],
+                    "documents": [{
+                        "type": "document",
+                        "id": document_id,
+                        "document_external_id": "doc-alpha"
+                    }]
+                })),
+                scope_candidates: Vec::new(),
+                context_policy_hint: Some(json!({"source": "external_channel"})),
+                current_artifact: None,
+                messages: Vec::new(),
+            },
+            Some(&json!({
+                "status": "supplied",
+                "supplied_items": [],
+                "detail_targets": [],
+                "selected_scope": {
+                    "type": "external_channel",
+                    "mode": "external_document_scope"
+                }
+            })),
+        );
+
+        assert!(input.contains("外部通道直答合同"));
+        assert!(input.contains("必须直接回答用户问题"));
+        assert!(input.contains(
+            "禁止把“已收到/处理中/稍后为您分析/系统将结合知识库与数据源/为您输出结论”当作最终答案"
+        ));
+        assert!(input.contains("temporary_dataset"));
+        assert!(input.contains("external-session-generic-chat-main-chat-risk-room-src-docs"));
     }
 
     #[test]
@@ -51115,6 +51499,211 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn assistant_run_external_temporary_scope_retrieval_limits_to_selected_documents() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_MODE", "placeholder");
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping external temporary scope retrieval test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("external-temp-retrieval-test-{}", Uuid::new_v4()),
+                "External Temporary Retrieval Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage,
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        let dataset = state
+            .storage
+            .datasets()
+            .create(
+                state.tenant_id,
+                NewDataset {
+                    key: format!("external-temp-retrieval-{}", Uuid::new_v4()),
+                    title: "External Temporary Retrieval".to_string(),
+                    description: None,
+                    owner_user_id: None,
+                },
+            )
+            .await
+            .expect("dataset should be created");
+        let alpha_document = state
+            .storage
+            .documents()
+            .create(
+                state.tenant_id,
+                NewDocument {
+                    dataset_id: dataset.id,
+                    title: "Alpha approval".to_string(),
+                    object_key: "external-temp-retrieval/alpha.md".to_string(),
+                    content_type: "text/markdown".to_string(),
+                    secret_binding_ids: Vec::new(),
+                    owner_user_id: None,
+                    metadata: json!({}),
+                },
+            )
+            .await
+            .expect("alpha document should be created");
+        let beta_document = state
+            .storage
+            .documents()
+            .create(
+                state.tenant_id,
+                NewDocument {
+                    dataset_id: dataset.id,
+                    title: "Beta payroll".to_string(),
+                    object_key: "external-temp-retrieval/beta.md".to_string(),
+                    content_type: "text/markdown".to_string(),
+                    secret_binding_ids: Vec::new(),
+                    owner_user_id: None,
+                    metadata: json!({}),
+                },
+            )
+            .await
+            .expect("beta document should be created");
+        let now = Utc::now();
+        let alpha_chunks = state
+            .storage
+            .document_chunks()
+            .replace_for_document(
+                state.tenant_id,
+                alpha_document.id,
+                &[storage::NewDocumentChunk {
+                    dataset_id: dataset.id,
+                    document_id: alpha_document.id,
+                    chunk_index: 0,
+                    content: "Alpha approval policy covers purchase signoff.".to_string(),
+                    token_count: 8,
+                    metadata: json!({}),
+                    created_at: now,
+                }],
+            )
+            .await
+            .expect("alpha chunk should be created");
+        let beta_chunks = state
+            .storage
+            .document_chunks()
+            .replace_for_document(
+                state.tenant_id,
+                beta_document.id,
+                &[storage::NewDocumentChunk {
+                    dataset_id: dataset.id,
+                    document_id: beta_document.id,
+                    chunk_index: 0,
+                    content: "Beta payroll secret compensation schedule.".to_string(),
+                    token_count: 7,
+                    metadata: json!({}),
+                    created_at: now,
+                }],
+            )
+            .await
+            .expect("beta chunk should be created");
+        let evidence_execution = create_test_workflow_execution(
+            &state.storage,
+            state.tenant_id,
+            dataset.id,
+            WorkflowKind::UploadIngest,
+        )
+        .await;
+        state
+            .storage
+            .retrieval_evidences()
+            .create_many(
+                state.tenant_id,
+                &[
+                    storage::NewRetrievalEvidence {
+                        execution_id: evidence_execution.id,
+                        dataset_id: dataset.id,
+                        document_id: alpha_document.id,
+                        document_chunk_id: alpha_chunks[0].id,
+                        chunk_index: 0,
+                        source_locator: "alpha.md#chunk=0".to_string(),
+                        content_excerpt: "Alpha approval policy covers purchase signoff."
+                            .to_string(),
+                        summary: "Alpha approval policy".to_string(),
+                        payload_filter_key: "dataset/external-temp/alpha".to_string(),
+                        embedding_model: "local-lexical-v1".to_string(),
+                        recall_score: 0.2,
+                        evidence_manifest: json!({
+                            "embedding": {"term_weights": {"alpha": 1.0, "approval": 1.0}}
+                        }),
+                        created_at: now,
+                    },
+                    storage::NewRetrievalEvidence {
+                        execution_id: evidence_execution.id,
+                        dataset_id: dataset.id,
+                        document_id: beta_document.id,
+                        document_chunk_id: beta_chunks[0].id,
+                        chunk_index: 0,
+                        source_locator: "beta.md#chunk=0".to_string(),
+                        content_excerpt: "Beta payroll secret compensation schedule."
+                            .to_string(),
+                        summary: "Beta payroll secret".to_string(),
+                        payload_filter_key: "dataset/external-temp/beta".to_string(),
+                        embedding_model: "local-lexical-v1".to_string(),
+                        recall_score: 0.99,
+                        evidence_manifest: json!({
+                            "embedding": {"term_weights": {"beta": 1.0, "payroll": 1.0, "secret": 1.0}}
+                        }),
+                        created_at: now,
+                    },
+                ],
+            )
+            .await
+            .expect("retrieval evidences should be created");
+
+        let selected_scope = json!({
+            "type": "external_channel",
+            "mode": "external_document_scope",
+            "temporary_dataset": {
+                "key": "external-session-generic-chat-main-conv-alpha-src-docs",
+                "source": "available_document_external_ids",
+                "document_count": 1,
+                "restores_on": "conversation_turn_end"
+            },
+            "datasets": [{"type": "dataset", "id": dataset.id}],
+            "documents": [{"type": "document", "id": alpha_document.id, "document_external_id": "doc-alpha"}]
+        });
+        let evidence_state = build_assistant_run_evidence_state(
+            &state,
+            &selected_scope,
+            "payroll secret compensation",
+            None,
+            &[],
+            None,
+        )
+        .await
+        .expect("evidence state should be built");
+
+        let supplied_items = evidence_state["supplied_items"]
+            .as_array()
+            .expect("supplied items should be an array");
+        assert!(!supplied_items.iter().any(|item| {
+            item.get("document_id").or_else(|| item.get("documentId"))
+                == Some(&json!(beta_document.id))
+        }));
+        assert!(supplied_items.iter().any(|item| {
+            item.get("document_id").or_else(|| item.get("documentId"))
+                == Some(&json!(alpha_document.id))
+        }));
+        assert_eq!(
+            evidence_state["selected_scope"]["temporary_dataset"]["document_count"],
+            json!(1)
+        );
+    }
+
+    #[tokio::test]
     async fn external_channel_acl_filters_same_question_by_principal() {
         let _guard = shared_local_postgres_test_lock().lock().await;
         std::env::set_var("ASSISTANT_RUN_RUNTIME_MODE", "placeholder");
@@ -51930,6 +52519,170 @@ mod tests {
         assert!(provider_input.contains("不要声称已经读到完整内容"));
 
         assert_eq!(failed_document.lifecycle, DocumentLifecycle::Failed);
+    }
+
+    #[tokio::test]
+    async fn assistant_run_external_temporary_scope_supplies_parse_status_for_range_documents() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_MODE", "placeholder");
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping external temporary parse status test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("external-temp-parse-status-test-{}", Uuid::new_v4()),
+                "External Temporary Parse Status Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage,
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        let dataset = state
+            .storage
+            .datasets()
+            .create(
+                state.tenant_id,
+                NewDataset {
+                    key: format!("external-temp-parse-status-{}", Uuid::new_v4()),
+                    title: "External Temporary Parse Status".to_string(),
+                    description: None,
+                    owner_user_id: None,
+                },
+            )
+            .await
+            .expect("dataset should be created");
+        let selected_failed_document = state
+            .storage
+            .documents()
+            .create(
+                state.tenant_id,
+                NewDocument {
+                    dataset_id: dataset.id,
+                    title: "Selected failed PDF".to_string(),
+                    object_key: "external-temp-parse-status/selected.pdf".to_string(),
+                    content_type: "application/pdf".to_string(),
+                    secret_binding_ids: Vec::new(),
+                    owner_user_id: None,
+                    metadata: json!({
+                        "external_source": {
+                            "source_id": "src-docs",
+                            "document_external_id": "doc-selected"
+                        }
+                    }),
+                },
+            )
+            .await
+            .expect("selected document should be created");
+        let selected_failed_document = state
+            .storage
+            .documents()
+            .update_state(
+                state.tenant_id,
+                selected_failed_document.id,
+                DocumentLifecycle::Failed,
+                None,
+                &json!({
+                    "parse_status": "failed",
+                    "ingest": {"last_error": "ocr failed"}
+                }),
+                Utc::now(),
+            )
+            .await
+            .expect("selected document should be marked failed");
+        let unselected_failed_document = state
+            .storage
+            .documents()
+            .create(
+                state.tenant_id,
+                NewDocument {
+                    dataset_id: dataset.id,
+                    title: "Unselected failed PDF".to_string(),
+                    object_key: "external-temp-parse-status/unselected.pdf".to_string(),
+                    content_type: "application/pdf".to_string(),
+                    secret_binding_ids: Vec::new(),
+                    owner_user_id: None,
+                    metadata: json!({
+                        "external_source": {
+                            "source_id": "src-docs",
+                            "document_external_id": "doc-unselected"
+                        }
+                    }),
+                },
+            )
+            .await
+            .expect("unselected document should be created");
+        state
+            .storage
+            .documents()
+            .update_state(
+                state.tenant_id,
+                unselected_failed_document.id,
+                DocumentLifecycle::Failed,
+                None,
+                &json!({
+                    "parse_status": "failed",
+                    "ingest": {"last_error": "outside current document range"}
+                }),
+                Utc::now(),
+            )
+            .await
+            .expect("unselected document should be marked failed");
+
+        let selected_scope = json!({
+            "type": "external_channel",
+            "mode": "external_document_scope",
+            "temporary_dataset": {
+                "key": "external-session-generic-chat-main-conv-selected-src-docs",
+                "source": "available_document_external_ids",
+                "document_count": 1,
+                "restores_on": "conversation_turn_end"
+            },
+            "datasets": [{"type": "dataset", "id": dataset.id}],
+            "documents": [{
+                "type": "document",
+                "id": selected_failed_document.id,
+                "document_external_id": "doc-selected"
+            }]
+        });
+        let evidence_state = build_assistant_run_evidence_state(
+            &state,
+            &selected_scope,
+            "这份文档解析好了吗？",
+            None,
+            &[],
+            None,
+        )
+        .await
+        .expect("evidence state should build");
+
+        let parse_status_item = evidence_state["supplied_items"]
+            .as_array()
+            .expect("supplied items should be present")
+            .iter()
+            .find(|item| item.get("type").and_then(Value::as_str) == Some("document_parse_status"))
+            .expect("document parse status should be supplied for selected failed document");
+        assert_eq!(parse_status_item["failed_document_count"], json!(1));
+        let attention_titles = parse_status_item["attention_documents"]
+            .as_array()
+            .expect("attention documents should be present")
+            .iter()
+            .filter_map(|item| item.get("title").and_then(Value::as_str))
+            .collect::<Vec<_>>();
+        assert_eq!(attention_titles, vec!["Selected failed PDF"]);
+        assert_eq!(
+            evidence_state["selected_scope"]["temporary_dataset"]["document_count"],
+            json!(1)
+        );
     }
 
     #[tokio::test]

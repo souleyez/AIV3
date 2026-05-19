@@ -80,6 +80,14 @@ run_check "external parse auto-creates source dataset" \
   "${cargo_bin}" test -p platform-api external_document_parse_endpoint_auto_creates_source_dataset_when_missing --lib
 run_check "external chat document scope infers source from documentExternalId" \
   "${cargo_bin}" test -p platform-api external_channel_document_scope_infers_source_from_document_external_id --lib
+run_check "external chat document scope builds temporary dataset range" \
+  "${cargo_bin}" test -p platform-api external_channel_document_scope_builds_temporary_dataset_scope_from_available_documents --lib
+run_check "external temporary document scope preserves canonical document owner" \
+  "${cargo_bin}" test -p platform-api external_channel_temporary_scope_does_not_mutate_document_dataset --lib
+run_check "external temporary document scope limits retrieval to selected documents" \
+  "${cargo_bin}" test -p platform-api assistant_run_external_temporary_scope_retrieval_limits_to_selected_documents --lib
+run_check "external temporary document scope supplies range parse status" \
+  "${cargo_bin}" test -p platform-api assistant_run_external_temporary_scope_supplies_parse_status_for_range_documents --lib
 run_check "external chat missing document source is model-visible" \
   "${cargo_bin}" test -p platform-api external_channel_document_scope_missing_source_is_model_visible --lib
 run_check "document detail exposes parse state" \

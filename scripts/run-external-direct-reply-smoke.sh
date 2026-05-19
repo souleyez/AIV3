@@ -62,6 +62,8 @@ run_check "plain status prompts do not enter action planning" \
   "${cargo_bin}" test -p platform-api external_channel_action_planning_gates_plain_questions --lib
 run_check "external provider input forbids orchestration acknowledgements" \
   "${cargo_bin}" test -p platform-api assistant_run_provider_input_enforces_external_channel_direct_reply_contract --lib
+run_check "external temporary document scope keeps direct reply contract" \
+  "${cargo_bin}" test -p platform-api external_channel_temporary_scope_keeps_direct_reply_contract --lib
 run_check "OpenAI-compatible provider timeout is enforced" \
   "${cargo_bin}" test -p llm-gateway openai_compatible_provider_applies_configured_timeout --lib
 run_check "MiniMax global env builds OpenAI-compatible provider" \
