@@ -26,7 +26,21 @@ To force a PaddleOCR package readiness check without enabling parsing, run:
 INGEST_GATE_REQUIRE_PADDLEOCR=true bash scripts/run-ingest-runtime-gate.sh
 ```
 
-The PaddleOCR check verifies `from paddleocr import PPStructureV3`. It does not parse customer documents; the first real parse may still need model files and adequate timeout.
+The default PaddleOCR check verifies `from paddleocr import PPStructureV3`. To run a non-customer tiny PDF prediction smoke, use:
+
+```bash
+INGEST_GATE_REQUIRE_PADDLEOCR=true INGEST_GATE_PADDLEOCR_SMOKE=true bash scripts/run-ingest-runtime-gate.sh
+```
+
+The smoke may download and cache official PaddleOCR models on first run.
+
+The current dedicated sidecar dependency set is pinned in:
+
+```text
+infra/runtime/paddleocr-requirements.txt
+```
+
+On `8服务器`, use `/srv/aiv3/venv/paddleocr/bin/python` for PaddleOCR and keep `/srv/aiv3/venv/media/bin/python` for MarkItDown/media parsing. The first PP-StructureV3 prediction downloads and caches official models under `/root/.paddlex/official_models`.
 
 Reports are written under:
 

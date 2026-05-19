@@ -100,7 +100,9 @@ if env_truthy "${INGEST_GATE_REQUIRE_PADDLEOCR:-}" || env_truthy "${DOCUMENT_PAD
 fi
 
 paddleocr_status="skipped"
+paddleocr_smoke_status="skipped"
 paddleocr_output=""
+paddleocr_smoke_output=""
 paddleocr_python_bin="${DOCUMENT_PADDLEOCR_PYTHON_BIN:-${PYTHON_BIN}}"
 if [[ "${paddleocr_required}" == "true" ]]; then
   if [[ "${paddleocr_python_bin}" == */* && ! -x "${paddleocr_python_bin}" ]]; then
@@ -122,6 +124,43 @@ PY
   }
   paddleocr_status="passed"
   echo "PaddleOCR: ${paddleocr_output}"
+  if env_truthy "${INGEST_GATE_PADDLEOCR_SMOKE:-}"; then
+    paddleocr_smoke_output="$("${paddleocr_python_bin}" - <<'PY' 2>&1
+import os
+import tempfile
+from pathlib import Path
+os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
+from paddleocr import PPStructureV3
+
+pdf = b"""%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj
+4 0 obj << /Length 74 >> stream
+BT /F1 18 Tf 72 720 Td (PaddleOCR Smoke Resume) Tj T* (Company: Demo Corp) Tj ET
+endstream endobj
+5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj
+trailer << /Root 1 0 R >>
+%%EOF
+"""
+path = Path(tempfile.gettempdir()) / "aiv3-paddleocr-gate-smoke.pdf"
+path.write_bytes(pdf)
+pipeline = PPStructureV3(
+    use_formula_recognition=False,
+    use_chart_recognition=False,
+    use_seal_recognition=False,
+)
+results = list(pipeline.predict(input=str(path)))
+print(f"PPStructureV3 smoke pages={len(results)}")
+PY
+)" || {
+      echo "PaddleOCR smoke failed. Expected: ${paddleocr_python_bin} can run PPStructureV3.predict on a tiny PDF" >&2
+      echo "${paddleocr_smoke_output}" >&2
+      exit 1
+    }
+    paddleocr_smoke_status="passed"
+    echo "PaddleOCR smoke: ${paddleocr_smoke_output}"
+  fi
 else
   echo "PaddleOCR: skipped (not enabled)"
 fi
@@ -142,6 +181,8 @@ INGEST_GATE_PADDLEOCR_REQUIRED="${paddleocr_required}" \
 INGEST_GATE_PADDLEOCR_STATUS="${paddleocr_status}" \
 INGEST_GATE_PADDLEOCR_OUTPUT="${paddleocr_output}" \
 INGEST_GATE_PADDLEOCR_PYTHON_BIN="${paddleocr_python_bin}" \
+INGEST_GATE_PADDLEOCR_SMOKE_STATUS="${paddleocr_smoke_status}" \
+INGEST_GATE_PADDLEOCR_SMOKE_OUTPUT="${paddleocr_smoke_output}" \
 node >"${report_json}" <<'NODE'
 const fs = require("fs");
 const paddleocrRequired = process.env.INGEST_GATE_PADDLEOCR_REQUIRED === "true";
@@ -153,6 +194,10 @@ const checks = [
 ];
 if (paddleocrStatus !== "skipped") {
   checks.push({ name: "PYTHON_BIN can import paddleocr.PPStructureV3", status: paddleocrStatus });
+}
+const paddleocrSmokeStatus = process.env.INGEST_GATE_PADDLEOCR_SMOKE_STATUS || "skipped";
+if (paddleocrSmokeStatus !== "skipped") {
+  checks.push({ name: "PaddleOCR PPStructureV3 can predict a tiny PDF", status: paddleocrSmokeStatus });
 }
 const report = {
   gate: "ingest-runtime-dependencies",
@@ -177,7 +222,9 @@ const report = {
     document_paddleocr_python_bin: process.env.INGEST_GATE_DOCUMENT_PADDLEOCR_PYTHON_BIN || "",
     python_bin: process.env.INGEST_GATE_PADDLEOCR_PYTHON_BIN || "",
     check_status: paddleocrStatus,
-    output: process.env.INGEST_GATE_PADDLEOCR_OUTPUT || ""
+    output: process.env.INGEST_GATE_PADDLEOCR_OUTPUT || "",
+    smoke_status: paddleocrSmokeStatus,
+    smoke_output: process.env.INGEST_GATE_PADDLEOCR_SMOKE_OUTPUT || ""
   },
   checks,
   notes: [
@@ -207,6 +254,7 @@ const lines = [
   `- PaddleOCR required: ${report.paddleocr.required}`,
   `- PaddleOCR Python: ${report.paddleocr.python_bin}`,
   `- PaddleOCR check: ${report.paddleocr.check_status}`,
+  `- PaddleOCR smoke: ${report.paddleocr.smoke_status}`,
   "",
   "## Contract",
   "",

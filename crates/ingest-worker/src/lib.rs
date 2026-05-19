@@ -792,7 +792,7 @@ fn document_paddleocr_timeout() -> Duration {
     let millis = std::env::var("DOCUMENT_PADDLEOCR_TIMEOUT_MS")
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
-        .unwrap_or(120_000)
+        .unwrap_or(300_000)
         .max(1_000);
     Duration::from_millis(millis)
 }
@@ -834,10 +834,18 @@ import json
 import os
 import sys
 
+os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
+
 pdf_path = sys.argv[1]
 output_path = sys.argv[2]
 max_pages = max(1, int(sys.argv[3]))
 os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
+def env_bool(name, default):
+    value = os.environ.get(name)
+    if value is None or not str(value).strip():
+        return default
+    return str(value).strip().lower() in ("1", "true", "yes", "on")
 
 def emit(payload):
     with open(output_path, "w", encoding="utf-8") as fh:
@@ -938,7 +946,13 @@ page_markdowns = []
 page_count = 0
 
 try:
-    pipeline = PPStructureV3()
+    paddleocr_config = {
+        "use_table_recognition": env_bool("DOCUMENT_PADDLEOCR_USE_TABLE_RECOGNITION", True),
+        "use_formula_recognition": env_bool("DOCUMENT_PADDLEOCR_USE_FORMULA_RECOGNITION", False),
+        "use_chart_recognition": env_bool("DOCUMENT_PADDLEOCR_USE_CHART_RECOGNITION", False),
+        "use_seal_recognition": env_bool("DOCUMENT_PADDLEOCR_USE_SEAL_RECOGNITION", False),
+    }
+    pipeline = PPStructureV3(**paddleocr_config)
     output = pipeline.predict(input=pdf_path)
     for page_index, result in enumerate(output):
         if page_index >= max_pages:
@@ -977,6 +991,7 @@ try:
         "block_count": len(blocks),
         "blocks": blocks,
         "errors": errors,
+        "config": paddleocr_config,
     })
     sys.exit(0 if combined_markdown.strip() else 3)
 except Exception as exc:
@@ -987,6 +1002,7 @@ except Exception as exc:
         "block_count": len(blocks),
         "blocks": blocks,
         "errors": errors,
+        "config": globals().get("paddleocr_config", {}),
     })
     sys.exit(4)
 "##;
@@ -1056,6 +1072,7 @@ fn paddleocr_payload_to_extracted_text(
             "paddleocr": {
                 "parser": "PP-StructureV3",
                 "max_pages": max_pages,
+                "config": payload.get("config").cloned().unwrap_or_else(|| json!({})),
                 "errors": payload.get("errors").cloned().unwrap_or_else(|| json!([])),
             }
         }),
@@ -2803,6 +2820,7 @@ trailer << /Root 1 0 R >>
             json!("paragraph_title")
         );
         assert_eq!(extracted.metadata["paddleocr"]["max_pages"], json!(8));
+        assert_eq!(extracted.metadata["paddleocr"]["config"], json!({}));
     }
 
     #[test]
