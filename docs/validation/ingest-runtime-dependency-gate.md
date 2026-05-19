@@ -8,6 +8,7 @@ This gate validates the deployment-target runtime dependency needed for the gene
 - MarkItDown is pinned and enabled only as the fallback parser.
 - Deployment targets must pass `PYTHON_BIN -m markitdown --version` before MarkItDown fallback parsing is considered ready.
 - PaddleOCR PP-StructureV3 is optional and checked only when `DOCUMENT_PADDLEOCR_ENABLED=true`, `DOCUMENT_PDF_PARSE_ENGINE=paddleocr_first`, or `INGEST_GATE_REQUIRE_PADDLEOCR=true`.
+- PaddleOCR can use a dedicated sidecar interpreter via `DOCUMENT_PADDLEOCR_PYTHON_BIN`; otherwise it falls back to `PYTHON_BIN`.
 
 ## Command
 
@@ -17,7 +18,7 @@ Run on a Linux deployment target:
 bash scripts/run-ingest-runtime-gate.sh
 ```
 
-The script reads `PYTHON_BIN` from the environment first. If it is not set and `/etc/aiv3/aiv3.env` is readable, it reads the `PYTHON_BIN` entry from that file. It also reads `DOCUMENT_PADDLEOCR_ENABLED` and `DOCUMENT_PDF_PARSE_ENGINE` for optional PaddleOCR readiness checks. The default pinned fallback version is `0.1.5` and can be overridden with `MARKITDOWN_REQUIRED_VERSION`.
+The script reads `PYTHON_BIN` from the environment first. If it is not set and `/etc/aiv3/aiv3.env` is readable, it reads the `PYTHON_BIN` entry from that file. It also reads `DOCUMENT_PADDLEOCR_ENABLED`, `DOCUMENT_PDF_PARSE_ENGINE`, and `DOCUMENT_PADDLEOCR_PYTHON_BIN` for optional PaddleOCR readiness checks. If a dedicated `/srv/aiv3/venv/paddleocr/bin/python` exists, the gate uses it for PaddleOCR unless `DOCUMENT_PADDLEOCR_PYTHON_BIN` is already set. The default pinned fallback version is `0.1.5` and can be overridden with `MARKITDOWN_REQUIRED_VERSION`.
 
 To force a PaddleOCR package readiness check without enabling parsing, run:
 

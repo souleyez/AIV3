@@ -816,6 +816,13 @@ fn env_flag_enabled(name: &str) -> bool {
         .unwrap_or(false)
 }
 
+fn paddleocr_python_command_candidates() -> Vec<String> {
+    let mut candidates = direct_command_candidates("DOCUMENT_PADDLEOCR_PYTHON_BIN", "");
+    candidates.extend(python_command_candidates());
+    candidates.dedup();
+    candidates
+}
+
 fn run_paddleocr_sidecar(path: &Path, output_dir: &Path) -> Option<ExtractedDocumentText> {
     let output_path = output_dir.join("result.json");
     let path_arg = path.to_string_lossy().to_string();
@@ -984,7 +991,7 @@ except Exception as exc:
     sys.exit(4)
 "##;
 
-    for command in python_command_candidates() {
+    for command in paddleocr_python_command_candidates() {
         let _ = fs::remove_file(&output_path);
         if !run_status_command_with_timeout(
             &command,
@@ -2738,6 +2745,23 @@ trailer << /Root 1 0 R >>
                 assert!(extract_pdf_with_paddleocr(Path::new("missing.pdf")).is_none());
             });
         });
+    }
+
+    #[test]
+    fn paddleocr_python_candidates_prefer_dedicated_bin() {
+        with_env_var(
+            "DOCUMENT_PADDLEOCR_PYTHON_BIN",
+            Some("/opt/paddle/bin/python"),
+            || {
+                let candidates = paddleocr_python_command_candidates();
+
+                assert_eq!(
+                    candidates.first().map(String::as_str),
+                    Some("/opt/paddle/bin/python")
+                );
+                assert!(candidates.iter().any(|candidate| candidate == "python3"));
+            },
+        );
     }
 
     #[test]

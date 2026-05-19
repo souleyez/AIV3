@@ -40,12 +40,20 @@ if [[ -z "${DOCUMENT_PDF_PARSE_ENGINE:-}" && -r "${aiv3_env_file}" ]]; then
   DOCUMENT_PDF_PARSE_ENGINE="$(read_aiv3_env_value "DOCUMENT_PDF_PARSE_ENGINE")"
 fi
 
+if [[ -z "${DOCUMENT_PADDLEOCR_PYTHON_BIN:-}" && -r "${aiv3_env_file}" ]]; then
+  DOCUMENT_PADDLEOCR_PYTHON_BIN="$(read_aiv3_env_value "DOCUMENT_PADDLEOCR_PYTHON_BIN")"
+fi
+
 if [[ -z "${PYTHON_BIN:-}" && -x "/srv/aiv3/venv/media/bin/python" ]]; then
   PYTHON_BIN="/srv/aiv3/venv/media/bin/python"
 fi
 
 if [[ -z "${PYTHON_BIN:-}" ]]; then
   PYTHON_BIN="python3"
+fi
+
+if [[ -z "${DOCUMENT_PADDLEOCR_PYTHON_BIN:-}" && -x "/srv/aiv3/venv/paddleocr/bin/python" ]]; then
+  DOCUMENT_PADDLEOCR_PYTHON_BIN="/srv/aiv3/venv/paddleocr/bin/python"
 fi
 
 mkdir -p "${report_dir}"
@@ -61,6 +69,7 @@ echo "PYTHON_BIN: ${PYTHON_BIN}"
 echo "Required MarkItDown: ${required_markitdown_version}"
 echo "DOCUMENT_PADDLEOCR_ENABLED: ${DOCUMENT_PADDLEOCR_ENABLED:-}"
 echo "DOCUMENT_PDF_PARSE_ENGINE: ${DOCUMENT_PDF_PARSE_ENGINE:-}"
+echo "DOCUMENT_PADDLEOCR_PYTHON_BIN: ${DOCUMENT_PADDLEOCR_PYTHON_BIN:-}"
 
 if [[ "${PYTHON_BIN}" == */* && ! -x "${PYTHON_BIN}" ]]; then
   echo "PYTHON_BIN is not executable: ${PYTHON_BIN}" >&2
@@ -92,13 +101,22 @@ fi
 
 paddleocr_status="skipped"
 paddleocr_output=""
+paddleocr_python_bin="${DOCUMENT_PADDLEOCR_PYTHON_BIN:-${PYTHON_BIN}}"
 if [[ "${paddleocr_required}" == "true" ]]; then
-  paddleocr_output="$("${PYTHON_BIN}" - <<'PY' 2>&1
+  if [[ "${paddleocr_python_bin}" == */* && ! -x "${paddleocr_python_bin}" ]]; then
+    echo "DOCUMENT_PADDLEOCR_PYTHON_BIN is not executable: ${paddleocr_python_bin}" >&2
+    exit 1
+  fi
+  if ! command -v "${paddleocr_python_bin}" >/dev/null 2>&1 && [[ ! -x "${paddleocr_python_bin}" ]]; then
+    echo "PaddleOCR Python was not found: ${paddleocr_python_bin}" >&2
+    exit 1
+  fi
+  paddleocr_output="$("${paddleocr_python_bin}" - <<'PY' 2>&1
 from paddleocr import PPStructureV3
 print("PPStructureV3 import ok")
 PY
 )" || {
-    echo "PaddleOCR check failed. Expected: ${PYTHON_BIN} can import paddleocr.PPStructureV3" >&2
+    echo "PaddleOCR check failed. Expected: ${paddleocr_python_bin} can import paddleocr.PPStructureV3" >&2
     echo "${paddleocr_output}" >&2
     exit 1
   }
@@ -119,9 +137,11 @@ INGEST_GATE_MARKITDOWN_VERSION="${markitdown_version_output}" \
 INGEST_GATE_REQUIRED_MARKITDOWN_VERSION="${required_markitdown_version}" \
 INGEST_GATE_DOCUMENT_PADDLEOCR_ENABLED="${DOCUMENT_PADDLEOCR_ENABLED:-}" \
 INGEST_GATE_DOCUMENT_PDF_PARSE_ENGINE="${DOCUMENT_PDF_PARSE_ENGINE:-}" \
+INGEST_GATE_DOCUMENT_PADDLEOCR_PYTHON_BIN="${DOCUMENT_PADDLEOCR_PYTHON_BIN:-}" \
 INGEST_GATE_PADDLEOCR_REQUIRED="${paddleocr_required}" \
 INGEST_GATE_PADDLEOCR_STATUS="${paddleocr_status}" \
 INGEST_GATE_PADDLEOCR_OUTPUT="${paddleocr_output}" \
+INGEST_GATE_PADDLEOCR_PYTHON_BIN="${paddleocr_python_bin}" \
 node >"${report_json}" <<'NODE'
 const fs = require("fs");
 const paddleocrRequired = process.env.INGEST_GATE_PADDLEOCR_REQUIRED === "true";
@@ -154,6 +174,8 @@ const report = {
     required: paddleocrRequired,
     document_paddleocr_enabled: process.env.INGEST_GATE_DOCUMENT_PADDLEOCR_ENABLED || "",
     document_pdf_parse_engine: process.env.INGEST_GATE_DOCUMENT_PDF_PARSE_ENGINE || "",
+    document_paddleocr_python_bin: process.env.INGEST_GATE_DOCUMENT_PADDLEOCR_PYTHON_BIN || "",
+    python_bin: process.env.INGEST_GATE_PADDLEOCR_PYTHON_BIN || "",
     check_status: paddleocrStatus,
     output: process.env.INGEST_GATE_PADDLEOCR_OUTPUT || ""
   },
@@ -183,6 +205,7 @@ const lines = [
   `- Required MarkItDown: ${report.required_markitdown_version}`,
   `- Observed MarkItDown: ${report.observed_markitdown_version}`,
   `- PaddleOCR required: ${report.paddleocr.required}`,
+  `- PaddleOCR Python: ${report.paddleocr.python_bin}`,
   `- PaddleOCR check: ${report.paddleocr.check_status}`,
   "",
   "## Contract",
