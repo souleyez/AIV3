@@ -95,7 +95,11 @@ if [[ "${markitdown_version_output}" != *"markitdown ${required_markitdown_versi
 fi
 
 paddleocr_required="false"
-if env_truthy "${INGEST_GATE_REQUIRE_PADDLEOCR:-}" || env_truthy "${DOCUMENT_PADDLEOCR_ENABLED:-}" || [[ "${DOCUMENT_PDF_PARSE_ENGINE:-}" == "paddleocr_first" ]]; then
+if env_truthy "${INGEST_GATE_REQUIRE_PADDLEOCR:-}"; then
+  paddleocr_required="true"
+elif [[ "${DOCUMENT_PADDLEOCR_ENABLED:-}" =~ ^([Ff][Aa][Ll][Ss][Ee]|0|[Nn][Oo]|[Oo][Ff][Ff]|[Dd][Ii][Ss][Aa][Bb][Ll][Ee][Dd])$ ]] || [[ "${DOCUMENT_PDF_PARSE_ENGINE:-}" == "native_first" ]]; then
+  paddleocr_required="false"
+elif env_truthy "${DOCUMENT_PADDLEOCR_ENABLED:-}" || [[ "${DOCUMENT_PDF_PARSE_ENGINE:-}" == "paddleocr_first" ]] || [[ -n "${DOCUMENT_PADDLEOCR_PYTHON_BIN:-}" ]]; then
   paddleocr_required="true"
 fi
 
@@ -209,7 +213,7 @@ const report = {
   contract: {
     primary_parser_path: "V3 local ingest parsers remain the primary path.",
     fallback_parser: "MarkItDown is enabled only as the generic fallback parser.",
-    optional_structured_pdf_parser: "PaddleOCR PP-StructureV3 is required only when DOCUMENT_PADDLEOCR_ENABLED=true, DOCUMENT_PDF_PARSE_ENGINE=paddleocr_first, or INGEST_GATE_REQUIRE_PADDLEOCR=true.",
+    optional_structured_pdf_parser: "PaddleOCR PP-StructureV3 is the default PDF parser when DOCUMENT_PADDLEOCR_PYTHON_BIN is configured; use DOCUMENT_PADDLEOCR_ENABLED=false or DOCUMENT_PDF_PARSE_ENGINE=native_first to opt out.",
     deployment_guard: "Deployment target must pass PYTHON_BIN -m markitdown --version with the pinned version before ingest fallback is considered ready."
   },
   python_bin: process.env.INGEST_GATE_PYTHON_BIN,

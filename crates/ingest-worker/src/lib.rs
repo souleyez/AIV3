@@ -782,10 +782,23 @@ fn extract_pdf_with_paddleocr(path: &Path) -> Option<ExtractedDocumentText> {
 }
 
 fn document_paddleocr_enabled() -> bool {
-    env_flag_enabled("DOCUMENT_PADDLEOCR_ENABLED")
-        || std::env::var("DOCUMENT_PDF_PARSE_ENGINE")
-            .map(|value| value.trim().eq_ignore_ascii_case("paddleocr_first"))
-            .unwrap_or(false)
+    if let Some(enabled) = env_flag_value("DOCUMENT_PADDLEOCR_ENABLED") {
+        return enabled;
+    }
+
+    if let Ok(engine) = std::env::var("DOCUMENT_PDF_PARSE_ENGINE") {
+        let engine = engine.trim().to_ascii_lowercase();
+        if matches!(engine.as_str(), "off" | "disabled" | "native_first") {
+            return false;
+        }
+        if matches!(engine.as_str(), "paddleocr" | "paddleocr_first") {
+            return true;
+        }
+    }
+
+    std::env::var("DOCUMENT_PADDLEOCR_PYTHON_BIN")
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false)
 }
 
 fn document_paddleocr_timeout() -> Duration {
@@ -805,15 +818,15 @@ fn document_paddleocr_max_pages() -> usize {
         .max(1)
 }
 
-fn env_flag_enabled(name: &str) -> bool {
-    std::env::var(name)
-        .map(|value| {
-            matches!(
-                value.trim().to_ascii_lowercase().as_str(),
-                "1" | "true" | "yes" | "on"
-            )
-        })
-        .unwrap_or(false)
+fn env_flag_value(name: &str) -> Option<bool> {
+    std::env::var(name).ok().and_then(|value| {
+        let value = value.trim().to_ascii_lowercase();
+        match value.as_str() {
+            "1" | "true" | "yes" | "on" => Some(true),
+            "0" | "false" | "no" | "off" | "disabled" => Some(false),
+            _ => None,
+        }
+    })
 }
 
 fn paddleocr_python_command_candidates() -> Vec<String> {
@@ -2589,9 +2602,12 @@ mod tests {
     use super::*;
     use std::{
         io::Write,
+        sync::Mutex,
         time::{SystemTime, UNIX_EPOCH},
     };
     use zip::{write::SimpleFileOptions, ZipWriter};
+
+    static PADDLEOCR_ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn local_ingest_processor_returns_stable_placeholder_chunks_without_file() {
@@ -2757,18 +2773,76 @@ trailer << /Root 1 0 R >>
 
     #[test]
     fn paddleocr_disabled_by_default() {
-        with_env_var("DOCUMENT_PADDLEOCR_ENABLED", None, || {
-            with_env_var("DOCUMENT_PDF_PARSE_ENGINE", None, || {
+        with_paddleocr_env(
+            &[
+                ("DOCUMENT_PADDLEOCR_ENABLED", None),
+                ("DOCUMENT_PDF_PARSE_ENGINE", None),
+                ("DOCUMENT_PADDLEOCR_PYTHON_BIN", None),
+            ],
+            || {
                 assert!(extract_pdf_with_paddleocr(Path::new("missing.pdf")).is_none());
-            });
-        });
+            },
+        );
+    }
+
+    #[test]
+    fn paddleocr_enabled_by_dedicated_runtime_config() {
+        with_paddleocr_env(
+            &[
+                ("DOCUMENT_PADDLEOCR_ENABLED", None),
+                ("DOCUMENT_PDF_PARSE_ENGINE", None),
+                (
+                    "DOCUMENT_PADDLEOCR_PYTHON_BIN",
+                    Some("/opt/paddle/bin/python"),
+                ),
+            ],
+            || {
+                assert!(document_paddleocr_enabled());
+            },
+        );
+    }
+
+    #[test]
+    fn paddleocr_explicit_false_overrides_dedicated_runtime_config() {
+        with_paddleocr_env(
+            &[
+                ("DOCUMENT_PADDLEOCR_ENABLED", Some("false")),
+                ("DOCUMENT_PDF_PARSE_ENGINE", Some("paddleocr_first")),
+                (
+                    "DOCUMENT_PADDLEOCR_PYTHON_BIN",
+                    Some("/opt/paddle/bin/python"),
+                ),
+            ],
+            || {
+                assert!(!document_paddleocr_enabled());
+            },
+        );
+    }
+
+    #[test]
+    fn paddleocr_native_first_engine_disables_auto_runtime_config() {
+        with_paddleocr_env(
+            &[
+                ("DOCUMENT_PADDLEOCR_ENABLED", None),
+                ("DOCUMENT_PDF_PARSE_ENGINE", Some("native_first")),
+                (
+                    "DOCUMENT_PADDLEOCR_PYTHON_BIN",
+                    Some("/opt/paddle/bin/python"),
+                ),
+            ],
+            || {
+                assert!(!document_paddleocr_enabled());
+            },
+        );
     }
 
     #[test]
     fn paddleocr_python_candidates_prefer_dedicated_bin() {
-        with_env_var(
-            "DOCUMENT_PADDLEOCR_PYTHON_BIN",
-            Some("/opt/paddle/bin/python"),
+        with_paddleocr_env(
+            &[(
+                "DOCUMENT_PADDLEOCR_PYTHON_BIN",
+                Some("/opt/paddle/bin/python"),
+            )],
             || {
                 let candidates = paddleocr_python_command_candidates();
 
@@ -3126,5 +3200,38 @@ trailer << /Root 1 0 R >>
             None => std::env::remove_var(name),
         }
         result
+    }
+
+    struct EnvVarRestore(Vec<(String, Option<String>)>);
+
+    impl Drop for EnvVarRestore {
+        fn drop(&mut self) {
+            for (name, value) in self.0.drain(..) {
+                match value {
+                    Some(value) => std::env::set_var(name, value),
+                    None => std::env::remove_var(name),
+                }
+            }
+        }
+    }
+
+    fn with_paddleocr_env<T>(updates: &[(&str, Option<&str>)], run: impl FnOnce() -> T) -> T {
+        let _guard = PADDLEOCR_ENV_LOCK
+            .lock()
+            .expect("paddleocr env lock should not be poisoned");
+        let previous = updates
+            .iter()
+            .map(|(name, _)| ((*name).to_string(), std::env::var(name).ok()))
+            .collect::<Vec<_>>();
+
+        for (name, value) in updates {
+            match value {
+                Some(value) => std::env::set_var(name, value),
+                None => std::env::remove_var(name),
+            }
+        }
+
+        let _restore = EnvVarRestore(previous);
+        run()
     }
 }

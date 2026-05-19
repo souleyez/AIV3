@@ -82,7 +82,8 @@ Record the architecture, env flags, quality gates, and rollout steps.
 Add a short validation note:
 
 ```text
-DOCUMENT_PADDLEOCR_ENABLED=true
+# When DOCUMENT_PADDLEOCR_PYTHON_BIN is configured, PDF parsing uses PaddleOCR by default.
+# Set DOCUMENT_PADDLEOCR_ENABLED=false or DOCUMENT_PDF_PARSE_ENGINE=native_first to opt out.
 DOCUMENT_PADDLEOCR_PYTHON_BIN=/srv/aiv3/venv/paddleocr/bin/python
 DOCUMENT_PADDLEOCR_TIMEOUT_MS=300000
 DOCUMENT_PADDLEOCR_MAX_PAGES=8
@@ -90,7 +91,6 @@ DOCUMENT_PADDLEOCR_USE_TABLE_RECOGNITION=true
 DOCUMENT_PADDLEOCR_USE_FORMULA_RECOGNITION=false
 DOCUMENT_PADDLEOCR_USE_CHART_RECOGNITION=false
 DOCUMENT_PADDLEOCR_USE_SEAL_RECOGNITION=false
-DOCUMENT_PDF_PARSE_ENGINE=paddleocr_first
 ```
 
 **Step 3: Commit**
