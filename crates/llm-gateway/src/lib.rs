@@ -1180,20 +1180,9 @@ pub fn build_provider_from_env(
                 return Ok(Arc::new(provider));
             }
 
-            if let Ok(api_base_url) = std::env::var(format!("{env_prefix}_RUNTIME_BASE_URL")) {
-                let api_path = std::env::var(format!("{env_prefix}_RUNTIME_API_PATH"))
-                    .unwrap_or_else(|_| "/v1/chat/completions".to_string());
-                let api_key = std::env::var(format!("{env_prefix}_RUNTIME_API_KEY")).ok();
-                let timeout_ms = std::env::var(format!("{env_prefix}_RUNTIME_TIMEOUT_MS"))
-                    .ok()
-                    .map(|value| {
-                        value.parse::<u64>().map_err(|error| {
-                            anyhow!(
-                                "invalid {env_prefix}_RUNTIME_TIMEOUT_MS value {value}: {error}"
-                            )
-                        })
-                    })
-                    .transpose()?;
+            if let Some((api_base_url, api_path, api_key, timeout_ms)) =
+                openai_compatible_runtime_config_from_env(env_prefix, &runtime_provider)?
+            {
                 let provider = OpenAiCompatibleLlmProvider::new(
                     runtime_provider,
                     OpenAiCompatibleLlmProviderConfig {
@@ -1217,6 +1206,34 @@ pub fn build_provider_from_env(
             "unsupported {env_prefix}_RUNTIME_MODE {other}; expected placeholder or provider"
         )),
     }
+}
+
+fn openai_compatible_runtime_config_from_env(
+    env_prefix: &str,
+    runtime_provider: &str,
+) -> Result<Option<(String, String, Option<String>, Option<u64>)>> {
+    if let Ok(api_base_url) = std::env::var(format!("{env_prefix}_RUNTIME_BASE_URL")) {
+        let api_path = std::env::var(format!("{env_prefix}_RUNTIME_API_PATH"))
+            .unwrap_or_else(|_| "/v1/chat/completions".to_string());
+        let api_key = std::env::var(format!("{env_prefix}_RUNTIME_API_KEY")).ok();
+        let timeout_ms = optional_env_u64(env_prefix, "RUNTIME_TIMEOUT_MS")?;
+        return Ok(Some((api_base_url, api_path, api_key, timeout_ms)));
+    }
+
+    if runtime_provider.eq_ignore_ascii_case("minimax") {
+        if let Some(api_base_url) = optional_env_string("MINIMAX", "BASE_URL") {
+            let api_path = optional_env_string("MINIMAX", "API_PATH")
+                .unwrap_or_else(|| "/chat/completions".to_string());
+            let api_key = optional_env_string("MINIMAX", "API_KEY")
+                .ok_or_else(|| anyhow!("MINIMAX_API_KEY is required for minimax provider"))?;
+            let timeout_ms = optional_env_u64(env_prefix, "RUNTIME_TIMEOUT_MS")?
+                .or(optional_env_u64("MINIMAX", "TIMEOUT_MS")?)
+                .or(Some(120_000));
+            return Ok(Some((api_base_url, api_path, Some(api_key), timeout_ms)));
+        }
+    }
+
+    Ok(None)
 }
 
 #[derive(Clone, Debug)]
@@ -3241,6 +3258,72 @@ mod tests {
     }
 
     #[test]
+    fn minimax_provider_builds_openai_compatible_from_global_env() {
+        let _guard = minimax_env_lock().lock().expect("minimax env lock");
+        clear_runtime_env("TEST_MINIMAX_RUN");
+        clear_minimax_env();
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+        let addr = listener.local_addr().expect("addr");
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let request = read_http_request(&mut stream);
+            assert!(request.contains("POST /v1/chat/completions HTTP/1.1"));
+            assert!(
+                request.contains("Authorization: Bearer sk-minimax-test")
+                    || request.contains("authorization: Bearer sk-minimax-test")
+            );
+            assert!(request.contains("\"model\":\"MiniMax-M2.7\""));
+            assert!(request.contains("Reply with MINIMAX_GLOBAL_ENV_OK"));
+            write_http_json_response(
+                &mut stream,
+                200,
+                r#"{
+                    "id": "chatcmpl_minimax_global_env",
+                    "choices": [{
+                        "finish_reason": "stop",
+                        "message": {
+                            "content": "MINIMAX_GLOBAL_ENV_OK"
+                        }
+                    }],
+                    "usage": {
+                        "prompt_tokens": 5,
+                        "completion_tokens": 4,
+                        "total_tokens": 9
+                    }
+                }"#,
+            );
+        });
+        std::env::set_var("MINIMAX_BASE_URL", format!("http://{addr}/v1"));
+        std::env::set_var("MINIMAX_API_KEY", "sk-minimax-test");
+
+        let provider = build_provider_from_env(
+            "TEST_MINIMAX_RUN",
+            "provider",
+            "minimax",
+            bootstrap_default_prompt_registry(),
+        )
+        .expect("minimax provider should build from global env");
+        let response = provider
+            .complete(&LlmRequest {
+                model: "MiniMax-M2.7".to_string(),
+                lane: Some(MODEL_LANE_ASSISTANT_CHAT.to_string()),
+                system_prompt_key: None,
+                input: "Reply with MINIMAX_GLOBAL_ENV_OK".to_string(),
+            })
+            .expect("minimax provider should call global OpenAI-compatible endpoint");
+
+        server.join().expect("server join");
+        assert_eq!(provider.name(), "minimax");
+        assert_eq!(response.output_text, "MINIMAX_GLOBAL_ENV_OK");
+        assert_eq!(
+            response.runtime.request_id.as_deref(),
+            Some("chatcmpl_minimax_global_env")
+        );
+        clear_minimax_env();
+        clear_runtime_env("TEST_MINIMAX_RUN");
+    }
+
+    #[test]
     fn openclaw_provider_prefers_responses_endpoint_and_parses_output_text() {
         let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
         let addr = listener.local_addr().expect("addr");
@@ -3531,6 +3614,29 @@ mod tests {
         LOCK.get_or_init(|| Mutex::new(()))
     }
 
+    fn minimax_env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    fn clear_runtime_env(prefix: &str) {
+        for suffix in [
+            "RUNTIME_MODE",
+            "RUNTIME_PROVIDER",
+            "RUNTIME_MODEL",
+            "RUNTIME_BASE_URL",
+            "RUNTIME_API_PATH",
+            "RUNTIME_API_KEY",
+            "RUNTIME_TIMEOUT_MS",
+            "RUNTIME_OUTPUT_TEXT",
+            "RUNTIME_REQUEST_ID",
+            "RUNTIME_FINISH_REASON",
+            "RUNTIME_LATENCY_MS",
+        ] {
+            std::env::remove_var(format!("{prefix}_{suffix}"));
+        }
+    }
+
     fn clear_model_route_env(lane: &str) {
         let prefix = model_route_env_prefix(lane);
         for suffix in ["PROVIDER", "MODEL", "CAPABILITIES", "PRIORITY", "FALLBACK"] {
@@ -3561,6 +3667,17 @@ mod tests {
             "MAX_ERROR_CHARS",
         ] {
             std::env::remove_var(format!("{prefix}_{suffix}"));
+        }
+    }
+
+    fn clear_minimax_env() {
+        for key in [
+            "MINIMAX_BASE_URL",
+            "MINIMAX_API_PATH",
+            "MINIMAX_API_KEY",
+            "MINIMAX_TIMEOUT_MS",
+        ] {
+            std::env::remove_var(key);
         }
     }
 

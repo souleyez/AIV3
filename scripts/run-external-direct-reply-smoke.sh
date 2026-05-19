@@ -60,8 +60,12 @@ run_check "missing model config does not return accepted text" \
   "${cargo_bin}" test -p platform-api generic_chat_page_event_without_model_returns_unavailable_error_not_accepted_reply --lib
 run_check "plain status prompts do not enter action planning" \
   "${cargo_bin}" test -p platform-api external_channel_action_planning_gates_plain_questions --lib
+run_check "external provider input forbids orchestration acknowledgements" \
+  "${cargo_bin}" test -p platform-api assistant_run_provider_input_enforces_external_channel_direct_reply_contract --lib
 run_check "OpenAI-compatible provider timeout is enforced" \
   "${cargo_bin}" test -p llm-gateway openai_compatible_provider_applies_configured_timeout --lib
+run_check "MiniMax global env builds OpenAI-compatible provider" \
+  "${cargo_bin}" test -p llm-gateway minimax_provider_builds_openai_compatible_from_global_env --lib
 run_check "one-character PDF extraction is low quality" \
   "${cargo_bin}" test -p ingest-worker pdf_parse_quality_marks_one_character_extract_as_low_coverage --lib
 run_check "low-quality PDF diagnostic blocks single-character success" \
@@ -93,6 +97,8 @@ const report = {
   contract: {
     ordinary_external_chat: "Final user-visible ordinary chat replies must be provider-authored text with task_status=answered.",
     no_orchestration_answer: "accepted, duplicate_accepted, model_unavailable, and model_output_suppressed are not valid ordinary-chat answers.",
+    direct_reply_prompt: "External-channel model input must explicitly forbid received/processing/later-analysis acknowledgement copy as final answers.",
+    minimax_global_env: "provider=minimax may use MINIMAX_BASE_URL and MINIMAX_API_KEY directly as an OpenAI-compatible chat-completions provider.",
     fallback: "Timeouts, provider failures, empty output, and unsafe/internal output are retryable before any final response is returned.",
     pdf_quality: "One-character or otherwise too-short PDF extraction is low quality and must trigger OCR/VLM fallback or a parse-quality diagnostic."
   },
@@ -117,6 +123,8 @@ const lines = [
   "",
   `- Ordinary external chat: ${report.contract.ordinary_external_chat}`,
   `- No orchestration answer: ${report.contract.no_orchestration_answer}`,
+  `- Direct reply prompt: ${report.contract.direct_reply_prompt}`,
+  `- MiniMax global env: ${report.contract.minimax_global_env}`,
   `- Fallback: ${report.contract.fallback}`,
   `- PDF quality: ${report.contract.pdf_quality}`,
   "",

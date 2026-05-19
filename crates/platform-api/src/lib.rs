@@ -14993,6 +14993,12 @@ fn build_assistant_run_provider_input_with_evidence(
             "系统能力背景：可普通聊天、检索供料、读取文档细节、读取音视频转写/场景等媒体细节、创建报表、规划/渲染/修改静态页、导出静态页 ZIP 交付包。涉及供料中的数据、指标、文档事实或产物状态时，不要编造；普通常识和开放问答仍可使用模型通用能力。".to_string(),
         ]
     };
+    if assistant_run_scope_is_external_channel(selected_scope) {
+        sections.push(
+            "外部通道直答合同：本次输出会同步返回给第三方用户，必须直接回答用户问题；禁止把“已收到/处理中/稍后为您分析/系统将结合知识库与数据源/为您输出结论”当作最终答案。若文档未解析、不可见或供料不足，请直接说明当前可见状态和下一步，而不是承诺稍后输出。"
+                .to_string(),
+        );
+    }
     sections.extend(assistant_run_v3_awareness_lines());
 
     if !plain_ordinary_chat {
@@ -15052,6 +15058,20 @@ fn build_assistant_run_provider_input_with_evidence(
 
     sections.push(format!("用户问题：{}", request.prompt.trim()));
     sections.join("\n\n")
+}
+
+fn assistant_run_scope_is_external_channel(scope: Option<&Value>) -> bool {
+    let Some(scope) = scope else {
+        return false;
+    };
+    scope
+        .get("type")
+        .and_then(Value::as_str)
+        .is_some_and(|value| value == "external_channel")
+        || scope
+            .get("mode")
+            .and_then(Value::as_str)
+            .is_some_and(|value| value == "external_channel")
 }
 
 fn build_assistant_run_continue_provider_input(
@@ -44034,6 +44054,44 @@ mod tests {
         assert!(!input.contains("范围候选"));
         assert!(!input.contains("缺数据时必须说明缺失"));
         assert!(!input.contains("规划/渲染/修改静态页"));
+    }
+
+    #[test]
+    fn assistant_run_provider_input_enforces_external_channel_direct_reply_contract() {
+        let input = build_assistant_run_provider_input_with_evidence(
+            &CreateAssistantRunRequest {
+                prompt: "我刚刚上传的 documentExternalId 是不是已经能用了？".to_string(),
+                local_thread_id: Some("external-thread-1".to_string()),
+                startup_briefing: Some(json!({
+                    "surface": "external_channel",
+                    "channel_connection_id": "generic-chat-main",
+                })),
+                selected_scope: Some(json!({
+                    "type": "external_channel",
+                    "channel_connection_id": "generic-chat-main",
+                    "available_document_external_ids": ["doc-ext-001"],
+                })),
+                scope_candidates: Vec::new(),
+                context_policy_hint: None,
+                current_artifact: None,
+                messages: Vec::new(),
+            },
+            Some(&json!({
+                "status": "empty",
+                "supplied_items": [],
+                "supply_quality": {
+                    "status": "missing"
+                }
+            })),
+        );
+
+        assert!(input.contains("外部通道直答合同"));
+        assert!(input.contains("必须直接回答用户问题"));
+        assert!(input.contains("禁止把"));
+        assert!(input.contains("已收到/处理中/稍后为您分析"));
+        assert!(input.contains("系统将结合知识库与数据源"));
+        assert!(input.contains("若文档未解析、不可见或供料不足"));
+        assert!(input.contains("用户问题：我刚刚上传的 documentExternalId 是不是已经能用了？"));
     }
 
     #[test]
