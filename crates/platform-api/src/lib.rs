@@ -114,9 +114,10 @@ use std::{
 };
 use storage::{
     NewAssistantRun, NewAssistantRunEvent, NewAuthAuditEvent, NewChatMessage, NewChatSession,
-    NewConversationMemoryItem, NewDataset, NewDocument, NewHtmlArtifact, NewPublishedReport,
-    NewPublishedReportVersion, NewReportPlan, NewSecretBinding, NewStaticPageDraft,
-    NewStaticPageImageJob, NewStaticPageRenderOutput, NewUserSession, NewWorkflowTask, PgStorage,
+    NewConversationMemoryItem, NewDataset, NewDatasetDocumentMembership, NewDocument,
+    NewHtmlArtifact, NewPublishedReport, NewPublishedReportVersion, NewReportPlan,
+    NewSecretBinding, NewStaticPageDraft, NewStaticPageImageJob, NewStaticPageRenderOutput,
+    NewUserSession, NewWorkflowTask, PgStorage,
 };
 use tool_registry::{
     bootstrap_default_tool_registry, ToolCliOutputMode, ToolDefinition, ToolInvocationMode,
@@ -4653,12 +4654,8 @@ async fn enrich_visible_datasets_for_scope_planning(
 ) -> std::result::Result<Vec<Dataset>, ApiError> {
     let mut enriched = Vec::with_capacity(datasets.len());
     for mut dataset in datasets {
-        let documents = state
-            .storage
-            .documents()
-            .list_by_dataset(state.tenant_id, dataset.id)
-            .await
-            .map_err(ApiError::from_storage)?
+        let documents = list_documents_for_dataset_scope(state, dataset.id)
+            .await?
             .into_iter()
             .filter(|document| owner_user_id_is_visible(document.owner_user_id, current_user_id))
             .collect::<Vec<_>>();
@@ -5137,16 +5134,24 @@ async fn visible_document_ids_for_dataset(
     dataset_id: DatasetId,
     current_user_id: Option<UserId>,
 ) -> std::result::Result<HashSet<DocumentId>, ApiError> {
-    Ok(state
-        .storage
-        .documents()
-        .list_by_dataset(state.tenant_id, dataset_id)
-        .await
-        .map_err(ApiError::from_storage)?
+    Ok(list_documents_for_dataset_scope(state, dataset_id)
+        .await?
         .into_iter()
         .filter(|document| owner_user_id_is_visible(document.owner_user_id, current_user_id))
         .map(|document| document.id)
         .collect())
+}
+
+async fn list_documents_for_dataset_scope(
+    state: &AppState,
+    dataset_id: DatasetId,
+) -> std::result::Result<Vec<Document>, ApiError> {
+    state
+        .storage
+        .documents()
+        .list_by_dataset_scope(state.tenant_id, dataset_id)
+        .await
+        .map_err(ApiError::from_storage)
 }
 
 async fn filter_retrieval_evidences_for_visible_documents(
@@ -6036,7 +6041,7 @@ async fn list_dataset_retrieval_evidences(
     let mut evidences = state
         .storage
         .retrieval_evidences()
-        .list_latest_by_dataset(state.tenant_id, dataset_id, 100)
+        .list_latest_by_dataset_scope(state.tenant_id, dataset_id, 100)
         .await
         .map_err(ApiError::from_storage)?;
     evidences = filter_retrieval_evidences_for_visible_documents(
@@ -6078,7 +6083,7 @@ async fn search_dataset_retrieval_with_state(
     let evidences = state
         .storage
         .retrieval_evidences()
-        .list_latest_by_dataset(
+        .list_latest_by_dataset_scope(
             state.tenant_id,
             dataset_id,
             retrieval_search_scan_limit(limit),
@@ -6224,7 +6229,7 @@ async fn create_dataset_output(
     let bound_retrieval_evidences = state
         .storage
         .retrieval_evidences()
-        .list_latest_by_dataset(
+        .list_latest_by_dataset_scope(
             state.tenant_id,
             dataset.id,
             DATASET_OUTPUT_RETRIEVAL_SCAN_LIMIT,
@@ -12570,6 +12575,7 @@ async fn enrich_external_channel_document_scope(
     let source_id = source_id.expect("source id checked above");
 
     let mut selected_documents = Vec::new();
+    let mut selected_document_ids = Vec::new();
     let mut selected_datasets = Vec::new();
     let mut unresolved_external_ids = Vec::new();
     for external_id in &requested_external_ids {
@@ -12583,6 +12589,7 @@ async fn enrich_external_channel_document_scope(
             {
                 selected_datasets.push(document.dataset_id);
             }
+            selected_document_ids.push(document.id);
             selected_documents.push(json!({
                 "type": "document",
                 "id": document.id,
@@ -12611,12 +12618,21 @@ async fn enrich_external_channel_document_scope(
         json!(unresolved_external_ids),
     );
     if !selected_documents.is_empty() {
+        let temporary_dataset = create_or_refresh_external_channel_temporary_dataset_scope(
+            state,
+            connection_id,
+            message,
+            Some(source_id.as_str()),
+            &selected_document_ids,
+        )
+        .await?;
         set_external_channel_temporary_dataset_scope(
             selected_scope,
             connection_id,
             message,
             Some(source_id.as_str()),
             selected_documents.len(),
+            temporary_dataset.as_ref(),
         );
         set_payload_value(
             selected_scope,
@@ -12647,24 +12663,133 @@ async fn enrich_external_channel_document_scope(
     Ok(())
 }
 
+#[derive(Clone, Debug)]
+struct ExternalChannelTemporaryDatasetScope {
+    dataset_id: DatasetId,
+    key: String,
+    expires_at: DateTime<Utc>,
+}
+
+async fn create_or_refresh_external_channel_temporary_dataset_scope(
+    state: &AppState,
+    connection_id: &str,
+    message: &ExternalBotMessageView,
+    source_id: Option<&str>,
+    document_ids: &[DocumentId],
+) -> std::result::Result<Option<ExternalChannelTemporaryDatasetScope>, ApiError> {
+    if document_ids.is_empty() {
+        return Ok(None);
+    }
+    let key = external_channel_temporary_dataset_key(connection_id, message, source_id);
+    let expires_at = Utc::now() + Duration::hours(24);
+    let metadata = json!({
+        "visibility": DatasetVisibility::Private.as_str(),
+        "default_secret_binding_ids": [],
+        "scope_kind": "external_temporary",
+        "external_channel_connection_id": connection_id,
+        "conversation_external_id": message.conversation_external_id,
+        "available_document_source_id": source_id,
+        "expires_at": expires_at,
+    });
+    let dataset = match state
+        .storage
+        .datasets()
+        .get_by_key(state.tenant_id, &key)
+        .await
+        .map_err(ApiError::from_storage)?
+    {
+        Some(dataset) => state
+            .storage
+            .datasets()
+            .update_metadata(state.tenant_id, dataset.id, &metadata)
+            .await
+            .map_err(ApiError::from_storage)?,
+        None => state
+            .storage
+            .datasets()
+            .create_with_metadata(
+                state.tenant_id,
+                NewDataset {
+                    key: key.clone(),
+                    title: format!(
+                        "External session {}",
+                        message.conversation_external_id.trim()
+                    ),
+                    description: Some("Conversation-scoped temporary document range.".to_string()),
+                    owner_user_id: None,
+                },
+                metadata,
+            )
+            .await
+            .map_err(ApiError::from_storage)?,
+    };
+
+    cleanup_expired_temporary_dataset_memberships(state).await?;
+    for document_id in document_ids {
+        state
+            .storage
+            .dataset_document_memberships()
+            .create_or_update(
+                state.tenant_id,
+                NewDatasetDocumentMembership {
+                    dataset_id: dataset.id,
+                    document_id: *document_id,
+                    membership_kind: "temporary".to_string(),
+                    source: "external_channel.available_document_external_ids".to_string(),
+                    expires_at: Some(expires_at),
+                },
+            )
+            .await
+            .map_err(ApiError::from_storage)?;
+    }
+
+    Ok(Some(ExternalChannelTemporaryDatasetScope {
+        dataset_id: dataset.id,
+        key,
+        expires_at,
+    }))
+}
+
+async fn cleanup_expired_temporary_dataset_memberships(
+    state: &AppState,
+) -> std::result::Result<u64, ApiError> {
+    state
+        .storage
+        .dataset_document_memberships()
+        .delete_expired(state.tenant_id, Utc::now())
+        .await
+        .map_err(ApiError::from_storage)
+}
+
 fn set_external_channel_temporary_dataset_scope(
     selected_scope: &mut Value,
     connection_id: &str,
     message: &ExternalBotMessageView,
     source_id: Option<&str>,
     document_count: usize,
+    temporary_dataset: Option<&ExternalChannelTemporaryDatasetScope>,
 ) {
     set_payload_value(selected_scope, "mode", json!("external_document_scope"));
-    set_payload_value(
-        selected_scope,
-        "temporary_dataset",
-        json!({
-            "key": external_channel_temporary_dataset_key(connection_id, message, source_id),
-            "source": "available_document_external_ids",
-            "document_count": document_count,
-            "restores_on": "conversation_turn_end",
-        }),
-    );
+    let key = temporary_dataset
+        .map(|scope| scope.key.clone())
+        .unwrap_or_else(|| {
+            external_channel_temporary_dataset_key(connection_id, message, source_id)
+        });
+    let mut payload = json!({
+        "key": key,
+        "source": "available_document_external_ids",
+        "document_count": document_count,
+        "restores_on": "conversation_turn_end",
+    });
+    if let Some(temporary_dataset) = temporary_dataset {
+        set_payload_value(&mut payload, "id", json!(temporary_dataset.dataset_id));
+        set_payload_value(
+            &mut payload,
+            "expires_at",
+            json!(temporary_dataset.expires_at),
+        );
+    }
+    set_payload_value(selected_scope, "temporary_dataset", payload);
 }
 
 fn external_channel_temporary_dataset_key(
@@ -19664,7 +19789,7 @@ async fn build_assistant_run_evidence_state(
         let evidences = state
             .storage
             .retrieval_evidences()
-            .list_latest_by_dataset(
+            .list_latest_by_dataset_scope(
                 state.tenant_id,
                 dataset.id,
                 retrieval_search_scan_limit(limit),
@@ -19829,12 +19954,8 @@ async fn build_assistant_run_document_parse_status_supply(
     external_acl_filter: Option<&ExternalAclFilterContext>,
     selected_document_ids: &[DocumentId],
 ) -> std::result::Result<Vec<Value>, ApiError> {
-    let candidate_documents = state
-        .storage
-        .documents()
-        .list_by_dataset(state.tenant_id, dataset.id)
-        .await
-        .map_err(ApiError::from_storage)?
+    let candidate_documents = list_documents_for_dataset_scope(state, dataset.id)
+        .await?
         .into_iter()
         .filter(|document| owner_user_id_is_visible(document.owner_user_id, current_user_id))
         .filter(|document| {
@@ -20386,12 +20507,8 @@ async fn build_assistant_run_dataset_entity_scan_supply(
     external_acl_filter: Option<&ExternalAclFilterContext>,
     selected_document_ids: &[DocumentId],
 ) -> std::result::Result<Vec<Value>, ApiError> {
-    let documents = state
-        .storage
-        .documents()
-        .list_by_dataset(state.tenant_id, dataset.id)
-        .await
-        .map_err(ApiError::from_storage)?
+    let documents = list_documents_for_dataset_scope(state, dataset.id)
+        .await?
         .into_iter()
         .filter(|document| owner_user_id_is_visible(document.owner_user_id, current_user_id))
         .filter(|document| {
@@ -21331,12 +21448,8 @@ async fn build_assistant_run_chunk_fallback_supply(
         return Ok(Vec::new());
     }
 
-    let documents = state
-        .storage
-        .documents()
-        .list_by_dataset(state.tenant_id, dataset.id)
-        .await
-        .map_err(ApiError::from_storage)?
+    let documents = list_documents_for_dataset_scope(state, dataset.id)
+        .await?
         .into_iter()
         .filter(|document| owner_user_id_is_visible(document.owner_user_id, current_user_id))
         .filter(|document| {
@@ -39833,6 +39946,8 @@ mod tests {
         assert_eq!(selected_scope["documents"][0]["id"], json!(document_ids[0]));
         assert_eq!(selected_scope["documents"][1]["id"], json!(document_ids[1]));
         assert_eq!(selected_scope["datasets"][0]["id"], json!(dataset.id));
+        assert!(selected_scope["temporary_dataset"]["id"].is_string());
+        assert!(selected_scope["temporary_dataset"]["expires_at"].is_string());
     }
 
     #[tokio::test]
@@ -39931,6 +40046,123 @@ mod tests {
             .expect("documents should list");
         assert_eq!(documents.len(), 1);
         assert_eq!(selected_scope["documents"][0]["id"], json!(document.id));
+    }
+
+    #[tokio::test]
+    async fn external_channel_temporary_dataset_memberships_expire_without_moving_documents() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping external temporary membership lifecycle test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+        let tenant = storage
+            .ensure_tenant(
+                &format!("external-temp-membership-test-{}", Uuid::new_v4()),
+                "External Temporary Membership Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage,
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        let dataset = state
+            .storage
+            .datasets()
+            .create(
+                state.tenant_id,
+                NewDataset {
+                    key: format!("external-temp-membership-{}", Uuid::new_v4()),
+                    title: "External Temporary Membership".to_string(),
+                    description: None,
+                    owner_user_id: None,
+                },
+            )
+            .await
+            .expect("dataset should be created");
+        let document = state
+            .storage
+            .documents()
+            .create(
+                state.tenant_id,
+                NewDocument {
+                    dataset_id: dataset.id,
+                    title: "Alpha policy".to_string(),
+                    object_key: "external-temp-membership/doc-alpha.md".to_string(),
+                    content_type: "text/markdown".to_string(),
+                    secret_binding_ids: Vec::new(),
+                    owner_user_id: None,
+                    metadata: json!({
+                        "external_source": {
+                            "source_id": "src-docs",
+                            "document_external_id": "doc-alpha"
+                        }
+                    }),
+                },
+            )
+            .await
+            .expect("document should be created");
+        let connection = ExternalChannelConnectionSummary {
+            platform: ExternalChannelPlatformView::GenericChat,
+            status: "enabled".to_string(),
+            config_redacted: json!({}),
+        };
+        let mut message = sample_external_bot_message();
+        message.available_document_source_id = Some("src-docs".to_string());
+        message.available_document_external_ids = vec!["doc-alpha".to_string()];
+        let mut selected_scope = json!({"type": "external_channel"});
+
+        enrich_external_channel_document_scope(
+            &state,
+            "generic-chat-main",
+            &connection,
+            &message,
+            &mut selected_scope,
+        )
+        .await
+        .expect("temporary document scope should be built");
+
+        let temporary_dataset_id = selected_scope["temporary_dataset"]["id"]
+            .as_str()
+            .and_then(|raw| Uuid::parse_str(raw).ok())
+            .map(DatasetId)
+            .expect("temporary dataset id should be present");
+        let active_document_ids = state
+            .storage
+            .dataset_document_memberships()
+            .list_document_ids_by_dataset(state.tenant_id, temporary_dataset_id)
+            .await
+            .expect("active memberships should list");
+        assert_eq!(active_document_ids, vec![document.id]);
+
+        let deleted = state
+            .storage
+            .dataset_document_memberships()
+            .delete_expired(state.tenant_id, Utc::now() + Duration::hours(25))
+            .await
+            .expect("expired memberships should delete");
+        assert_eq!(deleted, 1);
+        let active_document_ids = state
+            .storage
+            .dataset_document_memberships()
+            .list_document_ids_by_dataset(state.tenant_id, temporary_dataset_id)
+            .await
+            .expect("active memberships should list after expiry");
+        assert!(active_document_ids.is_empty());
+        let persisted_document = state
+            .storage
+            .documents()
+            .get_by_id(state.tenant_id, document.id)
+            .await
+            .expect("document lookup should succeed")
+            .expect("document should exist");
+        assert_eq!(persisted_document.dataset_id, dataset.id);
     }
 
     #[tokio::test]
@@ -57562,6 +57794,182 @@ mod tests {
         );
         assert!(response.hits[0].score >= response.hits[1].score);
         assert_eq!(response.hits[1].document_id, roadmap_document.id);
+    }
+
+    #[tokio::test]
+    async fn dataset_document_memberships_allow_document_in_multiple_dataset_scopes() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping dataset document membership read-path test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("membership-read-path-test-{}", Uuid::new_v4()),
+                "Membership Read Path Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let canonical_dataset = storage
+            .datasets()
+            .create(
+                tenant.id,
+                NewDataset {
+                    key: format!("canonical-{}", Uuid::new_v4()),
+                    title: "Canonical Dataset".to_string(),
+                    description: None,
+                    owner_user_id: None,
+                },
+            )
+            .await
+            .expect("canonical dataset should be created");
+        let secondary_dataset = storage
+            .datasets()
+            .create(
+                tenant.id,
+                NewDataset {
+                    key: format!("secondary-{}", Uuid::new_v4()),
+                    title: "Secondary Dataset".to_string(),
+                    description: None,
+                    owner_user_id: None,
+                },
+            )
+            .await
+            .expect("secondary dataset should be created");
+        let document = storage
+            .documents()
+            .create(
+                tenant.id,
+                NewDocument {
+                    dataset_id: canonical_dataset.id,
+                    title: "Alpha Transfer Memo".to_string(),
+                    object_key: "documents/alpha-transfer.md".to_string(),
+                    content_type: "text/markdown".to_string(),
+                    secret_binding_ids: Vec::new(),
+                    owner_user_id: None,
+                    metadata: json!({}),
+                },
+            )
+            .await
+            .expect("document should be created");
+        storage
+            .dataset_document_memberships()
+            .create_or_update(
+                tenant.id,
+                NewDatasetDocumentMembership {
+                    dataset_id: secondary_dataset.id,
+                    document_id: document.id,
+                    membership_kind: "curated".to_string(),
+                    source: "test".to_string(),
+                    expires_at: None,
+                },
+            )
+            .await
+            .expect("membership should be created");
+
+        let now = Utc::now();
+        let evidence_execution = create_test_workflow_execution(
+            &storage,
+            tenant.id,
+            canonical_dataset.id,
+            WorkflowKind::UploadIngest,
+        )
+        .await;
+        let chunks = storage
+            .document_chunks()
+            .replace_for_document(
+                tenant.id,
+                document.id,
+                &[storage::NewDocumentChunk {
+                    dataset_id: canonical_dataset.id,
+                    document_id: document.id,
+                    chunk_index: 0,
+                    content: "Alpha transfer policy requires finance approval.".to_string(),
+                    token_count: 7,
+                    metadata: json!({ "section": "approval" }),
+                    created_at: now,
+                }],
+            )
+            .await
+            .expect("chunks should be created");
+        storage
+            .retrieval_evidences()
+            .create_many(
+                tenant.id,
+                &[storage::NewRetrievalEvidence {
+                    execution_id: evidence_execution.id,
+                    dataset_id: canonical_dataset.id,
+                    document_id: document.id,
+                    document_chunk_id: chunks[0].id,
+                    chunk_index: chunks[0].chunk_index,
+                    source_locator: "documents/alpha-transfer.md#chunk=0".to_string(),
+                    content_excerpt: "Alpha transfer policy requires finance approval.".to_string(),
+                    summary: "Alpha transfer memo".to_string(),
+                    payload_filter_key: "dataset/canonical".to_string(),
+                    embedding_model: "local-lexical-v1".to_string(),
+                    recall_score: 0.92,
+                    evidence_manifest: json!({
+                        "embedding": {
+                            "status": "indexed",
+                            "model": "local-lexical-v1",
+                            "term_weights": {
+                                "alpha": 1.8,
+                                "transfer": 1.6,
+                                "finance": 1.5
+                            }
+                        },
+                        "recall": {
+                            "status": "ready",
+                            "score": 0.92
+                        }
+                    }),
+                    created_at: now,
+                }],
+            )
+            .await
+            .expect("retrieval evidence should be created");
+
+        let state = AppState::new(
+            storage.clone(),
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        let visible_ids = visible_document_ids_for_dataset(&state, secondary_dataset.id, None)
+            .await
+            .expect("visible document ids should load");
+        assert!(visible_ids.contains(&document.id));
+
+        let response = search_dataset_retrieval(
+            storage.clone(),
+            tenant.id,
+            secondary_dataset.id,
+            "finance approval alpha transfer".to_string(),
+            Some(1),
+        )
+        .await
+        .expect("membership retrieval search should load hits");
+
+        assert_eq!(response.hits.len(), 1);
+        assert_eq!(response.hits[0].document_id, document.id);
+        let persisted_document = storage
+            .documents()
+            .get_by_id(tenant.id, document.id)
+            .await
+            .expect("document lookup should succeed")
+            .expect("document should exist");
+        assert_eq!(persisted_document.dataset_id, canonical_dataset.id);
+        let dataset_ids = storage
+            .dataset_document_memberships()
+            .list_dataset_ids_by_document(tenant.id, document.id)
+            .await
+            .expect("dataset membership ids should list");
+        assert_eq!(dataset_ids, vec![secondary_dataset.id]);
     }
 
     #[tokio::test]

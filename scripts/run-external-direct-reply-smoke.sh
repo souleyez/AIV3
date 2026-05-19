@@ -64,6 +64,8 @@ run_check "external provider input forbids orchestration acknowledgements" \
   "${cargo_bin}" test -p platform-api assistant_run_provider_input_enforces_external_channel_direct_reply_contract --lib
 run_check "external temporary document scope keeps direct reply contract" \
   "${cargo_bin}" test -p platform-api external_channel_temporary_scope_keeps_direct_reply_contract --lib
+run_check "external temporary document memberships expire without moving documents" \
+  "${cargo_bin}" test -p platform-api external_channel_temporary_dataset_memberships_expire_without_moving_documents --lib
 run_check "OpenAI-compatible provider timeout is enforced" \
   "${cargo_bin}" test -p llm-gateway openai_compatible_provider_applies_configured_timeout --lib
 run_check "MiniMax global env builds OpenAI-compatible provider" \
@@ -100,6 +102,7 @@ const report = {
     ordinary_external_chat: "Final user-visible ordinary chat replies must be provider-authored text with task_status=answered.",
     no_orchestration_answer: "accepted, duplicate_accepted, model_unavailable, and model_output_suppressed are not valid ordinary-chat answers.",
     direct_reply_prompt: "External-channel model input must explicitly forbid received/processing/later-analysis acknowledgement copy as final answers.",
+    temporary_document_scope: "External document ranges may create expiring dataset memberships, but ordinary chat still ends with provider-authored text.",
     minimax_global_env: "provider=minimax may use MINIMAX_BASE_URL and MINIMAX_API_KEY directly as an OpenAI-compatible chat-completions provider.",
     fallback: "Timeouts, provider failures, empty output, and unsafe/internal output are retryable before any final response is returned.",
     pdf_quality: "One-character or otherwise too-short PDF extraction is low quality and must trigger OCR/VLM fallback or a parse-quality diagnostic."
@@ -126,6 +129,7 @@ const lines = [
   `- Ordinary external chat: ${report.contract.ordinary_external_chat}`,
   `- No orchestration answer: ${report.contract.no_orchestration_answer}`,
   `- Direct reply prompt: ${report.contract.direct_reply_prompt}`,
+  `- Temporary document scope: ${report.contract.temporary_document_scope}`,
   `- MiniMax global env: ${report.contract.minimax_global_env}`,
   `- Fallback: ${report.contract.fallback}`,
   `- PDF quality: ${report.contract.pdf_quality}`,

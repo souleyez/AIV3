@@ -84,6 +84,10 @@ run_check "external chat document scope builds temporary dataset range" \
   "${cargo_bin}" test -p platform-api external_channel_document_scope_builds_temporary_dataset_scope_from_available_documents --lib
 run_check "external temporary document scope preserves canonical document owner" \
   "${cargo_bin}" test -p platform-api external_channel_temporary_scope_does_not_mutate_document_dataset --lib
+run_check "external temporary document memberships expire without moving documents" \
+  "${cargo_bin}" test -p platform-api external_channel_temporary_dataset_memberships_expire_without_moving_documents --lib
+run_check "dataset document memberships support multi-dataset read scopes" \
+  "${cargo_bin}" test -p platform-api dataset_document_memberships_allow_document_in_multiple_dataset_scopes --lib
 run_check "external temporary document scope limits retrieval to selected documents" \
   "${cargo_bin}" test -p platform-api assistant_run_external_temporary_scope_retrieval_limits_to_selected_documents --lib
 run_check "external temporary document scope supplies range parse status" \
@@ -151,6 +155,7 @@ const report = {
     auto_reparse: "Low-quality ingest should fail the current task, persist auto_reparse metadata, and requeue the upload workflow instead of completing as usable content.",
     external_parse_compatibility: "Third-party Java/camelCase parse payloads and parse-detail summary fields remain compatible, including parseStatus/modelStatus/workflow state.",
     external_document_id_resolution: "Third-party documentExternalId should resolve parse-detail and chat document scope by inferring a unique source when source_id is omitted; unresolved IDs should remain model-visible instead of failing ordinary chat.",
+    dataset_membership: "One canonical document may be linked into another dataset scope through active membership rows; temporary external memberships expire without moving the document.",
     document_detail_parse_state: "Document detail responses should expose parse_state so normal UI/model flows can explain pending, failed, or reparsing documents.",
     resume_entity_scan: "Resume/company entity scans should preserve valid company names while filtering common phrase noise.",
     entity_scan_trigger: "Dataset questions asking to count, list, extract, or segment positions, skills, projects, locations, people, keywords, terms, or nouns should supply document entity scans.",
@@ -186,6 +191,7 @@ const lines = [
   `- Auto reparse: ${report.contract.auto_reparse}`,
   `- External parse compatibility: ${report.contract.external_parse_compatibility}`,
   `- External document ID resolution: ${report.contract.external_document_id_resolution}`,
+  `- Dataset membership: ${report.contract.dataset_membership}`,
   `- Document detail parse state: ${report.contract.document_detail_parse_state}`,
   `- Resume entity scan: ${report.contract.resume_entity_scan}`,
   `- Entity scan trigger: ${report.contract.entity_scan_trigger}`,

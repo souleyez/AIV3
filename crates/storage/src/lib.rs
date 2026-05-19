@@ -83,6 +83,12 @@ pub const VIDEO_PPT_PUBLISHED_VERSIONS_SCHEMA: Migration = Migration {
     sql: include_str!("../migrations/0009_video_ppt_published_versions.sql"),
 };
 
+pub const DATASET_DOCUMENT_MEMBERSHIPS_SCHEMA: Migration = Migration {
+    version: "0010",
+    description: "dataset document memberships",
+    sql: include_str!("../migrations/0010_dataset_document_memberships.sql"),
+};
+
 pub const MIGRATIONS: &[Migration] = &[
     INITIAL_SCHEMA,
     WORKFLOW_RUNTIME_RECORDS_SCHEMA,
@@ -92,6 +98,7 @@ pub const MIGRATIONS: &[Migration] = &[
     HTML_ARTIFACTS_SCHEMA,
     EXTERNAL_INTEGRATIONS_SCHEMA,
     VIDEO_PPT_PUBLISHED_VERSIONS_SCHEMA,
+    DATASET_DOCUMENT_MEMBERSHIPS_SCHEMA,
 ];
 
 pub const TABLES: &[&str] = &[
@@ -102,6 +109,7 @@ pub const TABLES: &[&str] = &[
     "auth_audit_events",
     "datasets",
     "documents",
+    "dataset_document_memberships",
     "document_chunks",
     "secret_bindings",
     "secret_grants",
@@ -166,6 +174,26 @@ pub struct NewDocument {
     pub secret_binding_ids: Vec<SecretBindingId>,
     pub owner_user_id: Option<UserId>,
     pub metadata: Value,
+}
+
+#[derive(Clone, Debug)]
+pub struct NewDatasetDocumentMembership {
+    pub dataset_id: DatasetId,
+    pub document_id: DocumentId,
+    pub membership_kind: String,
+    pub source: String,
+    pub expires_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DatasetDocumentMembership {
+    pub tenant_id: TenantId,
+    pub dataset_id: DatasetId,
+    pub document_id: DocumentId,
+    pub membership_kind: String,
+    pub source: String,
+    pub expires_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Clone, Debug)]
@@ -585,6 +613,12 @@ impl PgStorage {
         }
     }
 
+    pub fn dataset_document_memberships(&self) -> PgDatasetDocumentMembershipRepository {
+        PgDatasetDocumentMembershipRepository {
+            pool: self.pool.clone(),
+        }
+    }
+
     pub fn secret_bindings(&self) -> PgSecretBindingRepository {
         PgSecretBindingRepository {
             pool: self.pool.clone(),
@@ -827,6 +861,22 @@ impl PgDatasetRepository {
         row.as_ref().map(map_dataset_row).transpose()
     }
 
+    pub async fn get_by_key(&self, tenant_id: TenantId, key: &str) -> Result<Option<Dataset>> {
+        let row = sqlx::query(
+            r#"
+            select id, tenant_id, owner_user_id, key, title, description, lifecycle, metadata, created_at, updated_at
+            from datasets
+            where tenant_id = $1 and key = $2
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(key)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        row.as_ref().map(map_dataset_row).transpose()
+    }
+
     pub async fn update_metadata(
         &self,
         tenant_id: TenantId,
@@ -929,6 +979,11 @@ impl PgDatasetRepository {
 
 #[derive(Clone)]
 pub struct PgDocumentRepository {
+    pool: PgPool,
+}
+
+#[derive(Clone)]
+pub struct PgDatasetDocumentMembershipRepository {
     pool: PgPool,
 }
 
@@ -1453,6 +1508,36 @@ impl PgDocumentRepository {
         rows.iter().map(map_document_row).collect()
     }
 
+    pub async fn list_by_dataset_scope(
+        &self,
+        tenant_id: TenantId,
+        dataset_id: DatasetId,
+    ) -> Result<Vec<Document>> {
+        let rows = sqlx::query(
+            r#"
+            select id, tenant_id, dataset_id, owner_user_id, title, object_key, content_type, lifecycle, metadata, created_at, updated_at
+            from documents
+            where tenant_id = $1 and dataset_id = $2
+            union
+            select d.id, d.tenant_id, d.dataset_id, d.owner_user_id, d.title, d.object_key, d.content_type, d.lifecycle, d.metadata, d.created_at, d.updated_at
+            from documents d
+            join dataset_document_memberships m
+              on m.tenant_id = d.tenant_id
+             and m.document_id = d.id
+            where m.tenant_id = $1
+              and m.dataset_id = $2
+              and (m.expires_at is null or m.expires_at > now())
+            order by created_at desc, title asc
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(dataset_id.0)
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.iter().map(map_document_row).collect()
+    }
+
     pub async fn get_by_id(
         &self,
         tenant_id: TenantId,
@@ -1510,6 +1595,112 @@ impl PgDocumentRepository {
         .await?;
 
         map_document_row(&row)
+    }
+}
+
+impl PgDatasetDocumentMembershipRepository {
+    pub async fn create_or_update(
+        &self,
+        tenant_id: TenantId,
+        new_membership: NewDatasetDocumentMembership,
+    ) -> Result<DatasetDocumentMembership> {
+        let row = sqlx::query(
+            r#"
+            insert into dataset_document_memberships (
+                tenant_id,
+                dataset_id,
+                document_id,
+                membership_kind,
+                source,
+                expires_at
+            )
+            values ($1, $2, $3, $4, $5, $6)
+            on conflict (tenant_id, dataset_id, document_id) do update
+            set membership_kind = excluded.membership_kind,
+                source = excluded.source,
+                expires_at = excluded.expires_at
+            returning tenant_id, dataset_id, document_id, membership_kind, source, expires_at, created_at
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(new_membership.dataset_id.0)
+        .bind(new_membership.document_id.0)
+        .bind(new_membership.membership_kind)
+        .bind(new_membership.source)
+        .bind(new_membership.expires_at)
+        .fetch_one(&self.pool)
+        .await?;
+
+        map_dataset_document_membership_row(&row)
+    }
+
+    pub async fn list_document_ids_by_dataset(
+        &self,
+        tenant_id: TenantId,
+        dataset_id: DatasetId,
+    ) -> Result<Vec<DocumentId>> {
+        let rows = sqlx::query(
+            r#"
+            select document_id
+            from dataset_document_memberships
+            where tenant_id = $1
+              and dataset_id = $2
+              and (expires_at is null or expires_at > now())
+            order by document_id
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(dataset_id.0)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .iter()
+            .map(|row| DocumentId(row.get::<Uuid, _>("document_id")))
+            .collect())
+    }
+
+    pub async fn list_dataset_ids_by_document(
+        &self,
+        tenant_id: TenantId,
+        document_id: DocumentId,
+    ) -> Result<Vec<DatasetId>> {
+        let rows = sqlx::query(
+            r#"
+            select dataset_id
+            from dataset_document_memberships
+            where tenant_id = $1
+              and document_id = $2
+              and (expires_at is null or expires_at > now())
+            order by dataset_id
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(document_id.0)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .iter()
+            .map(|row| DatasetId(row.get::<Uuid, _>("dataset_id")))
+            .collect())
+    }
+
+    pub async fn delete_expired(&self, tenant_id: TenantId, now: DateTime<Utc>) -> Result<u64> {
+        let result = sqlx::query(
+            r#"
+            delete from dataset_document_memberships
+            where tenant_id = $1
+              and expires_at is not null
+              and expires_at <= $2
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(now)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(result.rows_affected())
     }
 }
 
@@ -2617,6 +2808,49 @@ impl PgRetrievalEvidenceRepository {
                     embedding_model, recall_score, evidence_manifest, created_at
                 from retrieval_evidences
                 where tenant_id = $1 and dataset_id = $2
+                order by document_chunk_id, created_at desc
+            ) latest
+            order by created_at desc, document_id asc, chunk_index asc
+            limit $3
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(dataset_id.0)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.iter().map(map_retrieval_evidence_row).collect()
+    }
+
+    pub async fn list_latest_by_dataset_scope(
+        &self,
+        tenant_id: TenantId,
+        dataset_id: DatasetId,
+        limit: i64,
+    ) -> Result<Vec<RetrievalEvidence>> {
+        let rows = sqlx::query(
+            r#"
+            select id, tenant_id, dataset_id, execution_id, document_id, document_chunk_id,
+                   chunk_index, source_locator, content_excerpt, summary, payload_filter_key,
+                   embedding_model, recall_score, evidence_manifest, created_at
+            from (
+                select distinct on (document_chunk_id)
+                    id, tenant_id, dataset_id, execution_id, document_id, document_chunk_id,
+                    chunk_index, source_locator, content_excerpt, summary, payload_filter_key,
+                    embedding_model, recall_score, evidence_manifest, created_at
+                from retrieval_evidences
+                where tenant_id = $1
+                  and (
+                    dataset_id = $2
+                    or document_id in (
+                        select document_id
+                        from dataset_document_memberships
+                        where tenant_id = $1
+                          and dataset_id = $2
+                          and (expires_at is null or expires_at > now())
+                    )
+                  )
                 order by document_chunk_id, created_at desc
             ) latest
             order by created_at desc, document_id asc, chunk_index asc
@@ -5078,6 +5312,20 @@ fn map_document_row(row: &sqlx::postgres::PgRow) -> Result<Document> {
     })
 }
 
+fn map_dataset_document_membership_row(
+    row: &sqlx::postgres::PgRow,
+) -> Result<DatasetDocumentMembership> {
+    Ok(DatasetDocumentMembership {
+        tenant_id: TenantId(row.get::<Uuid, _>("tenant_id")),
+        dataset_id: DatasetId(row.get::<Uuid, _>("dataset_id")),
+        document_id: DocumentId(row.get::<Uuid, _>("document_id")),
+        membership_kind: row.get("membership_kind"),
+        source: row.get("source"),
+        expires_at: row.get("expires_at"),
+        created_at: row.get("created_at"),
+    })
+}
+
 fn map_secret_binding_row(row: &sqlx::postgres::PgRow) -> Result<SecretBinding> {
     let scope_level = row.get::<String, _>("scope_level");
 
@@ -6287,7 +6535,7 @@ mod tests {
                 .iter()
                 .map(|migration| migration.version)
                 .collect::<Vec<_>>(),
-            vec!["0001", "0002", "0004", "0005", "0006", "0007", "0008", "0009"]
+            vec!["0001", "0002", "0004", "0005", "0006", "0007", "0008", "0009", "0010"]
         );
         assert!(MIGRATIONS
             .iter()
@@ -6307,6 +6555,9 @@ mod tests {
         assert!(MIGRATIONS
             .iter()
             .any(|migration| migration.description == "video ppt published version history"));
+        assert!(MIGRATIONS
+            .iter()
+            .any(|migration| migration.description == "dataset document memberships"));
         assert!(TABLES.contains(&"published_video_ppt_packages"));
         assert!(TABLES.contains(&"published_video_ppt_versions"));
         assert!(VIDEO_PPT_PUBLISHED_VERSIONS_SCHEMA
@@ -6318,6 +6569,26 @@ mod tests {
         assert!(VIDEO_PPT_PUBLISHED_VERSIONS_SCHEMA
             .sql
             .contains("unique (package_id, version_fingerprint)"));
+    }
+
+    #[test]
+    fn dataset_document_membership_schema_mentions_table_and_indexes() {
+        assert!(TABLES.contains(&"dataset_document_memberships"));
+        assert!(INITIAL_SCHEMA
+            .sql
+            .contains("create table if not exists dataset_document_memberships"));
+        assert!(INITIAL_SCHEMA
+            .sql
+            .contains("primary key (tenant_id, dataset_id, document_id)"));
+        assert!(DATASET_DOCUMENT_MEMBERSHIPS_SCHEMA
+            .sql
+            .contains("create table if not exists dataset_document_memberships"));
+        assert!(DATASET_DOCUMENT_MEMBERSHIPS_SCHEMA
+            .sql
+            .contains("dataset_document_memberships_document_idx"));
+        assert!(DATASET_DOCUMENT_MEMBERSHIPS_SCHEMA
+            .sql
+            .contains("dataset_document_memberships_expiry_idx"));
     }
 
     #[test]
