@@ -22204,12 +22204,13 @@ async fn create_document_ingest(
         .create_with_initial_event(&execution, &initial_event)
         .await
         .map_err(ApiError::from_storage)?;
+    let started = apply_workflow_signal(&state, execution.id, WorkflowSignal::Start).await?;
 
     Ok((
         StatusCode::CREATED,
         Json(CreateDocumentIngestResponse {
             document: to_document_summary(document),
-            workflow_execution: to_workflow_execution_view(execution),
+            workflow_execution: started.execution,
         }),
     ))
 }
@@ -52238,6 +52239,70 @@ mod tests {
         assert!(!other_datasets
             .iter()
             .any(|dataset| dataset.id == created.id));
+    }
+
+    #[tokio::test]
+    async fn create_document_ingest_starts_workflow_and_enqueues_task() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let Some(harness) = build_auth_api_test_harness().await else {
+            return;
+        };
+        let dataset = harness
+            .storage
+            .datasets()
+            .create_with_metadata(
+                harness.tenant_id,
+                NewDataset {
+                    key: format!("manual-ingest-{}", Uuid::new_v4()),
+                    title: "Manual Ingest Dataset".to_string(),
+                    description: None,
+                    owner_user_id: None,
+                },
+                json!({
+                    "visibility": "public",
+                    "default_secret_binding_ids": []
+                }),
+            )
+            .await
+            .expect("dataset should be created");
+        let document = harness
+            .storage
+            .documents()
+            .create(
+                harness.tenant_id,
+                NewDocument {
+                    dataset_id: dataset.id,
+                    title: "Manual ingest doc".to_string(),
+                    object_key: "/tmp/manual-ingest-doc.md".to_string(),
+                    content_type: "text/markdown".to_string(),
+                    secret_binding_ids: Vec::new(),
+                    owner_user_id: None,
+                    metadata: json!({}),
+                },
+            )
+            .await
+            .expect("document should be created");
+
+        let response = post_json_request(
+            harness.app.clone(),
+            &format!("/v1/documents/{}/ingest", document.id),
+            &json!({}),
+            None,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let response: CreateDocumentIngestResponse = read_json_response(response).await;
+        let tasks = harness
+            .storage
+            .workflow_tasks()
+            .list_by_execution(response.workflow_execution.id)
+            .await
+            .expect("workflow tasks should load");
+
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].queue, "ingest");
+        assert_eq!(tasks[0].task_key, "ingest_uploaded_document");
+        assert_eq!(tasks[0].status.as_str(), "queued");
     }
 
     #[tokio::test]
