@@ -205,7 +205,8 @@ If V3 receives the same key again:
 
 - it returns the existing AssistantRun id when available;
 - it does not create a duplicate AssistantRun;
-- it returns a task-status reply such as `duplicate_accepted`.
+- if the original run has completed, it replays the final `answered` text reply;
+- if the original run is still running or has no displayable answer yet, it returns a non-answer task status such as `processing`.
 
 ## Error Format
 
@@ -298,8 +299,9 @@ Response body:
   "idempotency_key": "generic_chat:tenant-ext-001:msg-001",
   "reply": {
     "target_conversation_external_id": "chat-risk-room",
-    "reply_type": "task_status",
-    "task_status": "accepted",
+    "reply_type": "text",
+    "text": "Based on the documents visible to you, the main delay risks are approval timeout and supplier change handling.",
+    "task_status": "answered",
     "requires_confirmation": false
   }
 }
@@ -310,8 +312,9 @@ Important behavior:
 - V3 creates an `external_channel` AssistantRun.
 - V3 records a redacted message summary.
 - V3 does not store attachment download URLs in inspectable summaries.
-- V3 does not compose the final answer in the route handler.
-- The final answer or action request is produced through V3 AssistantRun execution and returned through later reply/status mechanisms.
+- For ordinary chat, V3 returns only provider-authored `reply_type=text` with `task_status=answered`.
+- `accepted`, `duplicate_accepted`, `model_unavailable`, and `model_output_suppressed` are not valid ordinary-chat answers.
+- Action, confirmation, and search-evidence flows can still return public task-status or confirmation payloads when the user explicitly requests those workflows.
 
 ### POST `/v1/external/channels/{connection_id}/events/stream`
 
@@ -329,7 +332,7 @@ The request body is identical to `POST /v1/external/channels/{connection_id}/eve
 
 SSE events:
 
-- `external_channel.accepted`: V3 authenticated and parsed the inbound event.
+- `external_channel.started`: V3 authenticated and parsed the inbound event. This is transport progress, not an assistant answer.
 - `external_channel.delta`: text increment; append `data.delta` to the visible chat bubble.
 - `external_channel.completed`: full `ExternalChannelEventResponse`, matching the buffered `/events` response shape.
 - `error`: failed turn with `status` and `error.code/message`.
@@ -338,8 +341,8 @@ SSE events:
 Example:
 
 ```text
-event: external_channel.accepted
-data: {"status":"accepted","idempotency_key":"generic_chat:tenant-ext-001:msg-001"}
+event: external_channel.started
+data: {"status":"started","idempotency_key":"generic_chat:tenant-ext-001:msg-001"}
 
 event: external_channel.delta
 data: {"index":0,"delta":"Based on the documents visible to you, "}
@@ -351,7 +354,7 @@ event: done
 data: {"ok":true}
 ```
 
-Current scope: this is endpoint-level SSE. V3 sends an early `accepted` event and emits final text as `delta` chunks. True upstream token passthrough remains a model-gateway enhancement.
+Current scope: this is endpoint-level SSE. V3 sends an early `started` transport event and emits final user-visible text only as `delta` chunks plus `completed.response.reply.text`. True upstream token passthrough remains a model-gateway enhancement.
 
 ### GET `/v1/external/runs/{assistant_run_id}`
 
@@ -770,7 +773,7 @@ V3 returns normalized replies. Adapters translate these into platform-native mes
   "text": null,
   "card": null,
   "artifact_links": [],
-  "task_status": "accepted",
+  "task_status": "processing",
   "requires_confirmation": false
 }
 ```
@@ -785,7 +788,7 @@ Supported `reply_type` values:
 
 Rules:
 
-- `task_status` means V3 accepted or is processing the request.
+- `task_status` means V3 is processing, waiting for evidence, or reporting a workflow state. It is not an ordinary chat answer.
 - `text` is model-authored or V3-approved final text.
 - `card` is a structured adapter-ready payload.
 - `artifact_link` must use V3-authorized links.

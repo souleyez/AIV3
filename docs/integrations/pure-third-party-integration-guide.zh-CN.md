@@ -188,7 +188,7 @@ SSE 事件类型：
 
 | 事件 | 说明 |
 | --- | --- |
-| `external_channel.accepted` | V3 已接收请求并通过鉴权、连接和幂等校验 |
+| `external_channel.started` | V3 已通过鉴权、连接和幂等校验并开始处理；这不是助手回复 |
 | `external_channel.delta` | 本轮回复的增量文本，第三方页面可逐段追加显示 |
 | `external_channel.completed` | 本轮运行完成，`response` 字段包含与 `/events` 同结构的最终响应 |
 | `error` | 本轮运行失败或请求不合法，`message` 字段说明原因 |
@@ -197,8 +197,8 @@ SSE 事件类型：
 SSE 响应示例：
 
 ```text
-event: external_channel.accepted
-data: {"status":"accepted","idempotency_key":"generic_chat:tenant-ext-001:msg-20260515-0001"}
+event: external_channel.started
+data: {"status":"started","idempotency_key":"generic_chat:tenant-ext-001:msg-20260515-0001"}
 
 event: external_channel.delta
 data: {"index":0,"delta":"根据你当前可见的采购审批制度，"}
@@ -217,7 +217,7 @@ data: {"ok":true}
 
 - 因为流式接口是 `POST + JSON body`，浏览器端建议使用 `fetch` + `ReadableStream` 读取 SSE；原生 `EventSource` 只适合 `GET`，不适合直接提交本接口请求体；
 - 同一条用户消息的重试必须复用相同 `idempotency_key`，避免重复创建运行或重复派发动作；
-- 页面展示时可以先显示“已接收”，随后把 `delta` 追加到同一个助手消息气泡，最后用 `completed.response.reply.text` 覆盖或校准最终文本；
+- 页面展示时不要把 `external_channel.started` 当作助手回答；只有 `external_channel.delta` 和 `external_channel.completed.response.reply.text` 可以进入助手消息气泡；
 - 当前流式能力是 V3 对外接口层的 SSE 流式返回；若某个模型供应商暂时只返回整段文本，V3 仍会把最终文本拆成增量事件输出，后续可按模型网关能力升级为更细粒度 token 透传。
 
 任务状态响应示例：
@@ -230,14 +230,14 @@ data: {"ok":true}
   "reply": {
     "target_conversation_external_id": "chat-risk-room",
     "reply_type": "task_status",
-    "task_status": "accepted"
+    "task_status": "processing"
   }
 }
 ```
 
 常见 `reply_type`：
 
-- `task_status`：已接收、处理中、失败、等待证据；
+- `task_status`：处理中、失败、等待证据；普通问答不要把它渲染成助手回答；
 - `text`：普通文本回答；
 - `card`：结构化卡片；
 - `artifact_link`：产物链接；

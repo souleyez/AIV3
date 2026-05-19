@@ -542,12 +542,12 @@ Authorization: Bearer &lt;V3 inbound token&gt;</code></pre>
   </figure>
 <p>流式接口适合长回答、静态页生成、报告生成和用户希望看到实时进展的场景。前端收到 <code>external_channel.delta</code> 后追加到同一个助手气泡；收到 <code>external_channel.completed</code> 后，以其中的 <code>response.reply</code> 作为最终权威结果。若第三方暂时不做流式展示，继续调用 <code>/events</code> 即可。</p>
 <p>SSE 事件类型：</p>
-<div class="table-shell"><table><thead><tr><th>事件</th><th>说明</th></tr></thead><tbody><tr><td><code>external_channel.accepted</code></td><td>V3 已接收请求并通过鉴权、连接和幂等校验</td></tr><tr><td><code>external_channel.delta</code></td><td>本轮回复的增量文本，第三方页面可逐段追加显示</td></tr><tr><td><code>external_channel.completed</code></td><td>本轮运行完成，<code>response</code> 字段包含与 <code>/events</code> 同结构的最终响应</td></tr><tr><td><code>error</code></td><td>本轮运行失败或请求不合法，<code>message</code> 字段说明原因</td></tr><tr><td><code>done</code></td><td>SSE 流结束</td></tr></tbody></table></div>
+<div class="table-shell"><table><thead><tr><th>事件</th><th>说明</th></tr></thead><tbody><tr><td><code>external_channel.started</code></td><td>V3 已通过鉴权、连接和幂等校验并开始处理；这不是助手回复</td></tr><tr><td><code>external_channel.delta</code></td><td>本轮回复的增量文本，第三方页面可逐段追加显示</td></tr><tr><td><code>external_channel.completed</code></td><td>本轮运行完成，<code>response</code> 字段包含与 <code>/events</code> 同结构的最终响应</td></tr><tr><td><code>error</code></td><td>本轮运行失败或请求不合法，<code>message</code> 字段说明原因</td></tr><tr><td><code>done</code></td><td>SSE 流结束</td></tr></tbody></table></div>
 <p>SSE 响应示例：</p>
 <figure class="code-card">
     <figcaption><span>text</span><button type="button" class="copy-code">复制</button></figcaption>
-    <pre><code>event: external_channel.accepted
-data: {&quot;status&quot;:&quot;accepted&quot;,&quot;idempotency_key&quot;:&quot;generic_chat:tenant-ext-001:msg-20260515-0001&quot;}
+    <pre><code>event: external_channel.started
+data: {&quot;status&quot;:&quot;started&quot;,&quot;idempotency_key&quot;:&quot;generic_chat:tenant-ext-001:msg-20260515-0001&quot;}
 
 event: external_channel.delta
 data: {&quot;index&quot;:0,&quot;delta&quot;:&quot;根据你当前可见的采购审批制度，&quot;}
@@ -565,7 +565,7 @@ data: {&quot;ok&quot;:true}</code></pre>
 <ul>
 <li>因为流式接口是 <code>POST + JSON body</code>，浏览器端建议使用 <code>fetch</code> + <code>ReadableStream</code> 读取 SSE；原生 <code>EventSource</code> 只适合 <code>GET</code>，不适合直接提交本接口请求体；</li>
 <li>同一条用户消息的重试必须复用相同 <code>idempotency_key</code>，避免重复创建运行或重复派发动作；</li>
-<li>页面展示时可以先显示“已接收”，随后把 <code>delta</code> 追加到同一个助手消息气泡，最后用 <code>completed.response.reply.text</code> 覆盖或校准最终文本；</li>
+<li>页面展示时不要把 <code>external_channel.started</code> 当作助手回答；只有 <code>external_channel.delta</code> 和 <code>external_channel.completed.response.reply.text</code> 可以进入助手消息气泡；</li>
 <li>当前流式能力是 V3 对外接口层的 SSE 流式返回；若某个模型供应商暂时只返回整段文本，V3 仍会把最终文本拆成增量事件输出，后续可按模型网关能力升级为更细粒度 token 透传。</li>
 </ul>
 <p>任务状态响应示例：</p>
@@ -578,13 +578,13 @@ data: {&quot;ok&quot;:true}</code></pre>
   &quot;reply&quot;: {
     &quot;target_conversation_external_id&quot;: &quot;chat-risk-room&quot;,
     &quot;reply_type&quot;: &quot;task_status&quot;,
-    &quot;task_status&quot;: &quot;accepted&quot;
+    &quot;task_status&quot;: &quot;processing&quot;
   }
 }</code></pre>
   </figure>
 <p>常见 <code>reply_type</code>：</p>
 <ul>
-<li><code>task_status</code>：已接收、处理中、失败、等待证据；</li>
+<li><code>task_status</code>：处理中、失败、等待证据；普通问答不要把它渲染成助手回答；</li>
 <li><code>text</code>：普通文本回答；</li>
 <li><code>card</code>：结构化卡片；</li>
 <li><code>artifact_link</code>：产物链接；</li>

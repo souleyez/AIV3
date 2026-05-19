@@ -207,6 +207,7 @@ pub struct OpenAiCompatibleLlmProviderConfig {
     pub api_base_url: String,
     pub api_path: String,
     pub api_key: Option<String>,
+    pub timeout_ms: Option<u64>,
 }
 
 #[derive(Clone, Debug)]
@@ -1183,12 +1184,23 @@ pub fn build_provider_from_env(
                 let api_path = std::env::var(format!("{env_prefix}_RUNTIME_API_PATH"))
                     .unwrap_or_else(|_| "/v1/chat/completions".to_string());
                 let api_key = std::env::var(format!("{env_prefix}_RUNTIME_API_KEY")).ok();
+                let timeout_ms = std::env::var(format!("{env_prefix}_RUNTIME_TIMEOUT_MS"))
+                    .ok()
+                    .map(|value| {
+                        value.parse::<u64>().map_err(|error| {
+                            anyhow!(
+                                "invalid {env_prefix}_RUNTIME_TIMEOUT_MS value {value}: {error}"
+                            )
+                        })
+                    })
+                    .transpose()?;
                 let provider = OpenAiCompatibleLlmProvider::new(
                     runtime_provider,
                     OpenAiCompatibleLlmProviderConfig {
                         api_base_url,
                         api_path,
                         api_key,
+                        timeout_ms,
                     },
                 )?
                 .with_prompt_registry(prompt_registry);
@@ -1392,11 +1404,17 @@ impl OpenAiCompatibleLlmProvider {
     ) -> Result<Self> {
         Ok(Self {
             provider_name: provider_name.into(),
+            client: {
+                let mut builder = Client::builder();
+                if let Some(timeout_ms) = config.timeout_ms {
+                    builder = builder.timeout(Duration::from_millis(timeout_ms.max(1)));
+                }
+                builder
+                    .build()
+                    .context("failed to build OpenAI-compatible HTTP client")?
+            },
             config,
             prompt_registry: InMemoryPromptRegistry::default(),
-            client: Client::builder()
-                .build()
-                .context("failed to build OpenAI-compatible HTTP client")?,
         })
     }
 
@@ -2923,6 +2941,7 @@ mod tests {
                 api_base_url: format!("http://{addr}"),
                 api_path: "/v1/chat/completions".to_string(),
                 api_key: Some("test-key".to_string()),
+                timeout_ms: None,
             },
         )
         .expect("provider")
@@ -3025,6 +3044,7 @@ mod tests {
                 api_base_url: format!("http://{addr}"),
                 api_path: "/v1/chat/completions".to_string(),
                 api_key: Some("test-key".to_string()),
+                timeout_ms: None,
             },
         )
         .expect("provider");
@@ -3042,6 +3062,52 @@ mod tests {
         assert_eq!(
             response.runtime.request_id.as_deref(),
             Some("chatcmpl_minimax_123")
+        );
+    }
+
+    #[test]
+    fn openai_compatible_provider_applies_configured_timeout() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+        let addr = listener.local_addr().expect("addr");
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let _request = read_http_request(&mut stream);
+            thread::sleep(Duration::from_millis(200));
+            let _ = stream.write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
+            );
+        });
+
+        let provider = OpenAiCompatibleLlmProvider::new(
+            "minimax_openai_compatible",
+            OpenAiCompatibleLlmProviderConfig {
+                api_base_url: format!("http://{addr}"),
+                api_path: "/v1/chat/completions".to_string(),
+                api_key: Some("test-key".to_string()),
+                timeout_ms: Some(25),
+            },
+        )
+        .expect("provider");
+        let error = provider
+            .complete(&LlmRequest {
+                model: "MiniMax-M2.7".to_string(),
+                lane: Some(MODEL_LANE_ASSISTANT_CHAT.to_string()),
+                system_prompt_key: None,
+                input: "Reply quickly".to_string(),
+            })
+            .expect_err("slow server should hit provider timeout");
+
+        server.join().expect("server join");
+        let provider_error = error
+            .downcast_ref::<LlmProviderError>()
+            .expect("provider error");
+        assert_eq!(
+            provider_error
+                .runtime()
+                .provider_failure
+                .as_ref()
+                .map(|failure| &failure.kind),
+            Some(&LlmProviderFailureKind::RequestTimeout)
         );
     }
 
@@ -3081,6 +3147,7 @@ mod tests {
                 api_base_url: format!("http://{addr}"),
                 api_path: "/v1/chat/completions".to_string(),
                 api_key: Some("client-secret-key".to_string()),
+                timeout_ms: None,
             },
         )
         .expect("provider");

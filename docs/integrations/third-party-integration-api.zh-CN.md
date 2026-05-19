@@ -338,7 +338,7 @@ SSE 事件：
 
 | event | data 说明 |
 | --- | --- |
-| `external_channel.accepted` | V3 已通过鉴权和入参解析，开始处理本轮消息 |
+| `external_channel.started` | V3 已通过鉴权和入参解析，开始处理本轮消息；这不是助手回复 |
 | `external_channel.delta` | 文本增量，字段为 `delta`；第三方可逐段追加到聊天气泡 |
 | `external_channel.completed` | 完整 `ExternalChannelEventResponse`，结构与 `/events` JSON 响应一致 |
 | `error` | 本轮处理失败，包含 `status` 和 `error.code/message` |
@@ -347,8 +347,8 @@ SSE 事件：
 响应片段示例：
 
 ```text
-event: external_channel.accepted
-data: {"status":"accepted","idempotency_key":"generic_chat:tenant-ext-001:msg-20260513-0001"}
+event: external_channel.started
+data: {"status":"started","idempotency_key":"generic_chat:tenant-ext-001:msg-20260513-0001"}
 
 event: external_channel.delta
 data: {"index":0,"delta":"根据你当前权限可查看的制度文档，"}
@@ -360,7 +360,7 @@ event: done
 data: {"ok":true}
 ```
 
-说明：当前 SSE 是接口级流式：会先返回 `accepted`，最终文本按 `delta` 形式输出；上游模型 token 级实时透传会作为后续模型网关能力增强。
+说明：当前 SSE 是接口级流式：会先返回 `started` 作为传输态，最终文本按 `delta` 形式输出；第三方页面不要把 `started` 渲染为助手消息。上游模型 token 级实时透传会作为后续模型网关能力增强。
 
 任务状态响应示例：
 
@@ -372,7 +372,7 @@ data: {"ok":true}
   "reply": {
     "target_conversation_external_id": "chat-risk-room",
     "reply_type": "task_status",
-    "task_status": "accepted"
+    "task_status": "processing"
   }
 }
 ```

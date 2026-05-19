@@ -9511,18 +9511,18 @@ async fn ingest_external_channel_event_stream(
     let connection = load_external_channel_connection(&state, &connection_id).await?;
     ensure_external_channel_inbound_bearer_auth(&headers, &connection)?;
     let message = parse_external_bot_message_payload(payload, &connection)?;
-    let accepted = sse_json_event(
-        "external_channel.accepted",
+    let started = sse_json_event(
+        "external_channel.started",
         json!({
             "connection_id": connection_id.clone(),
             "conversation_external_id": message.conversation_external_id.clone(),
             "message_external_id": message.message_external_id.clone(),
             "idempotency_key": message.idempotency_key.clone(),
             "stream": "sse",
-            "status": "accepted",
+            "status": "started",
         }),
     );
-    let stream = stream::iter(vec![Ok(Bytes::from(accepted))]).chain(stream::once(async move {
+    let stream = stream::iter(vec![Ok(Bytes::from(started))]).chain(stream::once(async move {
         let body = match ingest_external_channel_message_with_connection(
             &state,
             &connection_id,
@@ -9582,13 +9582,14 @@ async fn ingest_external_channel_message_with_connection(
     if let Some(existing_run_id) =
         load_external_message_event_run_id(&state, &message.idempotency_key).await?
     {
+        let reply = external_channel_duplicate_reply(state, existing_run_id, &message).await?;
         return Ok((
             StatusCode::OK,
             ExternalChannelEventResponse {
                 accepted: true,
                 assistant_run_id: Some(existing_run_id),
                 idempotency_key: message.idempotency_key.clone(),
-                reply: external_channel_task_status_reply(&message, "duplicate_accepted"),
+                reply,
             },
         ));
     }
@@ -12001,6 +12002,26 @@ async fn load_external_channel_conversation_history_messages(
     Ok(external_channel_conversation_history_messages_from_recent_runs(&runs))
 }
 
+async fn external_channel_duplicate_reply(
+    state: &AppState,
+    existing_run_id: AssistantRunId,
+    message: &ExternalBotMessageView,
+) -> std::result::Result<ExternalBotReplyView, ApiError> {
+    if let Some(run) = state
+        .storage
+        .assistant_runs()
+        .get_by_id(state.tenant_id, existing_run_id)
+        .await
+        .map_err(ApiError::from_storage)?
+    {
+        if let Some(reply) = external_channel_assistant_reply_from_run(&run) {
+            return Ok(external_channel_text_reply(message, reply, "answered"));
+        }
+    }
+
+    Ok(external_channel_task_status_reply(message, "processing"))
+}
+
 fn external_channel_conversation_history_messages_from_recent_runs(
     recent_runs_newest_first: &[AssistantRun],
 ) -> Vec<AssistantRunMessageView> {
@@ -12093,16 +12114,6 @@ fn external_channel_task_status_reply(
     }
 }
 
-fn external_channel_chat_acceptance_reply(
-    message: &ExternalBotMessageView,
-) -> ExternalBotReplyView {
-    external_channel_text_reply(
-        message,
-        "我已收到你的问题，正在按当前外部身份和资料权限进入 V3 对话处理。普通问题会按通用模型能力自然回答；涉及 V3 数据、第三方文档、权限或产物状态时，只基于可见供料回答，未供料会说明“当前不可见/未供料”。",
-        "accepted",
-    )
-}
-
 fn external_channel_text_reply(
     message: &ExternalBotMessageView,
     text: impl Into<String>,
@@ -12118,6 +12129,79 @@ fn external_channel_text_reply(
         requires_confirmation: false,
         action_id: None,
         confirmation_id: None,
+    }
+}
+
+#[derive(Clone, Debug)]
+struct ExternalChannelChatRuntimeAttempt {
+    env_prefix: &'static str,
+    label: &'static str,
+    runtime: LlmRuntimeSelection,
+}
+
+fn external_channel_chat_runtime_attempts(
+    primary: LlmRuntimeSelection,
+) -> Vec<ExternalChannelChatRuntimeAttempt> {
+    let mut attempts = vec![ExternalChannelChatRuntimeAttempt {
+        env_prefix: "ASSISTANT_RUN",
+        label: "primary",
+        runtime: primary.clone(),
+    }];
+
+    if let Some(fallback) = external_channel_fallback_runtime_selection_from_env() {
+        if !external_channel_same_runtime_selection(&primary, &fallback) {
+            attempts.push(ExternalChannelChatRuntimeAttempt {
+                env_prefix: "ASSISTANT_RUN_FALLBACK",
+                label: "fallback",
+                runtime: fallback,
+            });
+        }
+    }
+
+    attempts
+}
+
+fn external_channel_fallback_runtime_selection_from_env() -> Option<LlmRuntimeSelection> {
+    let mode = std::env::var("ASSISTANT_RUN_FALLBACK_RUNTIME_MODE").ok();
+    let provider = std::env::var("ASSISTANT_RUN_FALLBACK_RUNTIME_PROVIDER").ok();
+    let model = std::env::var("ASSISTANT_RUN_FALLBACK_RUNTIME_MODEL").ok();
+    if mode.is_none() && provider.is_none() && model.is_none() {
+        return None;
+    }
+
+    let mode = mode.unwrap_or_else(|| "provider".to_string());
+    let provider = provider.unwrap_or_else(|| mode.clone());
+    let model = model.unwrap_or_else(|| DEFAULT_ASSISTANT_RUN_RUNTIME_MODEL.to_string());
+    Some(LlmRuntimeSelection {
+        mode,
+        provider,
+        model,
+        lane: MODEL_LANE_ASSISTANT_CHAT.to_string(),
+    })
+}
+
+fn external_channel_same_runtime_selection(
+    left: &LlmRuntimeSelection,
+    right: &LlmRuntimeSelection,
+) -> bool {
+    left.mode == right.mode
+        && left.provider == right.provider
+        && left.model == right.model
+        && left.lane == right.lane
+}
+
+fn external_channel_model_reply_rejection_reason(response: &LlmResponse) -> Option<String> {
+    if let Some(failure) = response.runtime.provider_failure.as_ref() {
+        return Some(format!("provider_failure:{}", failure.kind.as_str()));
+    }
+
+    let output_text = response.output_text.trim();
+    if output_text.is_empty() {
+        Some("empty_output".to_string())
+    } else if assistant_run_react_output_contains_internal_marker(output_text) {
+        Some("internal_payload_marker".to_string())
+    } else {
+        None
     }
 }
 
@@ -12137,23 +12221,20 @@ async fn external_channel_chat_model_or_acceptance_reply(
         MODEL_LANE_ASSISTANT_CHAT,
         DEFAULT_ASSISTANT_RUN_RUNTIME_MODEL,
     );
-    if chat_runtime.mode == "placeholder" {
-        return Ok(external_channel_chat_acceptance_reply(message));
-    }
-
     let provider_input =
         build_assistant_run_provider_input_with_evidence(assistant_request, Some(evidence_state));
-    let response = match complete_assistant_run_provider(
-        MODEL_LANE_ASSISTANT_CHAT,
-        chat_runtime.mode.clone(),
-        chat_runtime.provider.clone(),
-        chat_runtime.model.clone(),
-        provider_input,
-    )
-    .await
-    {
-        Ok(response) => response,
-        Err(error) => {
+    let attempts = external_channel_chat_runtime_attempts(chat_runtime);
+    let mut rejected_attempts = Vec::new();
+
+    for attempt in attempts {
+        if attempt.runtime.mode == "placeholder" {
+            rejected_attempts.push(json!({
+                "attempt": attempt.label,
+                "runtime_mode": attempt.runtime.mode.as_str(),
+                "provider": attempt.runtime.provider.as_str(),
+                "model": attempt.runtime.model.as_str(),
+                "reason": "placeholder_runtime",
+            }));
             state
                 .storage
                 .assistant_runs()
@@ -12161,41 +12242,154 @@ async fn external_channel_chat_model_or_acceptance_reply(
                     state.tenant_id,
                     run_id,
                     &NewAssistantRunEvent {
-                        event_name: "assistant_run.external_channel_model_reply_failed".to_string(),
+                        event_name: "assistant_run.external_channel_model_reply_attempt_skipped"
+                            .to_string(),
                         payload: json!({
                             "channel_connection_id": connection_id,
                             "platform": external_channel_platform_wire_value(&message.platform),
                             "message_external_id": message.message_external_id.clone(),
-                            "runtime_mode": chat_runtime.mode,
-                            "provider": chat_runtime.provider,
-                            "model": chat_runtime.model,
-                            "error_code": error.payload.code,
-                            "error_status": error.status.as_u16(),
-                            "fallback_reply": "model_unavailable",
+                            "attempt": attempt.label,
+                            "runtime_mode": attempt.runtime.mode.as_str(),
+                            "provider": attempt.runtime.provider.as_str(),
+                            "model": attempt.runtime.model.as_str(),
+                            "reason": "placeholder_runtime",
+                            "strict_direct_reply": true,
                         }),
                         created_at: now,
                     },
                 )
                 .await
                 .map_err(ApiError::from_storage)?;
-            return Ok(external_channel_text_reply(
-                message,
-                "模型通道暂时没有生成可展示的回答，请稍后重试；V3 已记录本轮请求，不会用占位接收话术冒充最终答案。",
-                "model_unavailable",
-            ));
+            continue;
         }
-    };
 
-    let output_text = response.output_text.trim().to_string();
-    let runtime_manifest = render_runtime_manifest(&response.runtime);
-    let suppressed_reason = if output_text.is_empty() {
-        Some("empty_output")
-    } else if assistant_run_react_output_contains_internal_marker(&output_text) {
-        Some("internal_payload_marker")
-    } else {
-        None
-    };
-    if let Some(reason) = suppressed_reason {
+        let response = match complete_assistant_run_provider_with_env_prefix(
+            attempt.env_prefix,
+            MODEL_LANE_ASSISTANT_CHAT,
+            attempt.runtime.mode.clone(),
+            attempt.runtime.provider.clone(),
+            attempt.runtime.model.clone(),
+            provider_input.clone(),
+        )
+        .await
+        {
+            Ok(response) => response,
+            Err(error) => {
+                rejected_attempts.push(json!({
+                    "attempt": attempt.label,
+                    "runtime_mode": attempt.runtime.mode.as_str(),
+                    "provider": attempt.runtime.provider.as_str(),
+                    "model": attempt.runtime.model.as_str(),
+                    "reason": "provider_error",
+                    "error_code": error.payload.code.as_str(),
+                    "error_status": error.status.as_u16(),
+                }));
+                state
+                    .storage
+                    .assistant_runs()
+                    .append_event(
+                        state.tenant_id,
+                        run_id,
+                        &NewAssistantRunEvent {
+                            event_name: "assistant_run.external_channel_model_reply_failed"
+                                .to_string(),
+                            payload: json!({
+                                "channel_connection_id": connection_id,
+                                "platform": external_channel_platform_wire_value(&message.platform),
+                                "message_external_id": message.message_external_id.clone(),
+                                "attempt": attempt.label,
+                                "runtime_mode": attempt.runtime.mode.as_str(),
+                                "provider": attempt.runtime.provider.as_str(),
+                                "model": attempt.runtime.model.as_str(),
+                                "error_code": error.payload.code.as_str(),
+                                "error_status": error.status.as_u16(),
+                                "strict_direct_reply": true,
+                                "retryable": true,
+                            }),
+                            created_at: now,
+                        },
+                    )
+                    .await
+                    .map_err(ApiError::from_storage)?;
+                continue;
+            }
+        };
+
+        let output_text = response.output_text.trim().to_string();
+        let runtime_manifest = render_runtime_manifest(&response.runtime);
+        if let Some(reason) = external_channel_model_reply_rejection_reason(&response) {
+            rejected_attempts.push(json!({
+                "attempt": attempt.label,
+                "runtime_mode": attempt.runtime.mode.as_str(),
+                "provider": attempt.runtime.provider.as_str(),
+                "model": attempt.runtime.model.as_str(),
+                "reason": reason.as_str(),
+                "runtime": runtime_manifest.clone(),
+            }));
+            state
+                .storage
+                .assistant_runs()
+                .append_event(
+                    state.tenant_id,
+                    run_id,
+                    &NewAssistantRunEvent {
+                        event_name: "assistant_run.external_channel_model_reply_rejected"
+                            .to_string(),
+                        payload: json!({
+                            "channel_connection_id": connection_id,
+                            "platform": external_channel_platform_wire_value(&message.platform),
+                            "message_external_id": message.message_external_id.clone(),
+                            "attempt": attempt.label,
+                            "reason": reason.as_str(),
+                            "runtime": runtime_manifest,
+                            "strict_direct_reply": true,
+                            "retryable": true,
+                        }),
+                        created_at: now,
+                    },
+                )
+                .await
+                .map_err(ApiError::from_storage)?;
+            continue;
+        }
+
+        let assistant_artifact = json!({
+            "type": "assistant_message",
+            "role": ChatMessageRole::Assistant.as_str(),
+            "content": output_text.clone(),
+            "source": "external_channel_model_reply",
+            "created_at": now,
+        });
+        state
+            .storage
+            .assistant_runs()
+            .update_runtime_manifest(state.tenant_id, run_id, &runtime_manifest)
+            .await
+            .map_err(ApiError::from_storage)?;
+        let mut execution_trail = value_array(current_execution_trail.clone());
+        execution_trail.push(json!({
+            "status": "completed",
+            "label": "外部通道模型自然回答返回",
+            "attempt": attempt.label,
+            "runtime_mode": response.runtime.mode.as_str(),
+            "provider": response.runtime.provider.as_str(),
+            "model": response.runtime.model.as_str(),
+            "at": now,
+        }));
+        let execution_trail_value = Value::Array(execution_trail);
+        state
+            .storage
+            .assistant_runs()
+            .update_execution_trail(state.tenant_id, run_id, &execution_trail_value)
+            .await
+            .map_err(ApiError::from_storage)?;
+        let output_artifacts = json!([assistant_artifact]);
+        state
+            .storage
+            .assistant_runs()
+            .attach_output_artifacts(state.tenant_id, run_id, &output_artifacts)
+            .await
+            .map_err(ApiError::from_storage)?;
         state
             .storage
             .assistant_runs()
@@ -12203,63 +12397,28 @@ async fn external_channel_chat_model_or_acceptance_reply(
                 state.tenant_id,
                 run_id,
                 &NewAssistantRunEvent {
-                    event_name: "assistant_run.external_channel_model_reply_suppressed".to_string(),
+                    event_name: "assistant_run.external_channel_model_reply_completed".to_string(),
                     payload: json!({
                         "channel_connection_id": connection_id,
                         "platform": external_channel_platform_wire_value(&message.platform),
                         "message_external_id": message.message_external_id.clone(),
-                        "reason": reason,
+                        "attempt": attempt.label,
+                        "assistant_message_chars": output_text.chars().count(),
                         "runtime": runtime_manifest,
-                        "fallback_reply": "model_output_suppressed",
                     }),
                     created_at: now,
                 },
             )
             .await
             .map_err(ApiError::from_storage)?;
+
         return Ok(external_channel_text_reply(
             message,
-            "模型返回内容未通过展示安全检查，本轮没有可直接展示的最终回答；请换一种问法或稍后重试。",
-            "model_output_suppressed",
+            output_text,
+            "answered",
         ));
     }
 
-    let assistant_artifact = json!({
-        "type": "assistant_message",
-        "role": ChatMessageRole::Assistant.as_str(),
-        "content": output_text.clone(),
-        "source": "external_channel_model_reply",
-        "created_at": now,
-    });
-    state
-        .storage
-        .assistant_runs()
-        .update_runtime_manifest(state.tenant_id, run_id, &runtime_manifest)
-        .await
-        .map_err(ApiError::from_storage)?;
-    let mut execution_trail = value_array(current_execution_trail.clone());
-    execution_trail.push(json!({
-        "status": "completed",
-        "label": "外部通道模型自然回答返回",
-        "runtime_mode": chat_runtime.mode,
-        "provider": chat_runtime.provider,
-        "model": chat_runtime.model,
-        "at": now,
-    }));
-    let execution_trail_value = Value::Array(execution_trail);
-    state
-        .storage
-        .assistant_runs()
-        .update_execution_trail(state.tenant_id, run_id, &execution_trail_value)
-        .await
-        .map_err(ApiError::from_storage)?;
-    let output_artifacts = json!([assistant_artifact]);
-    state
-        .storage
-        .assistant_runs()
-        .attach_output_artifacts(state.tenant_id, run_id, &output_artifacts)
-        .await
-        .map_err(ApiError::from_storage)?;
     state
         .storage
         .assistant_runs()
@@ -12267,13 +12426,13 @@ async fn external_channel_chat_model_or_acceptance_reply(
             state.tenant_id,
             run_id,
             &NewAssistantRunEvent {
-                event_name: "assistant_run.external_channel_model_reply_completed".to_string(),
+                event_name: "assistant_run.external_channel_model_reply_unavailable".to_string(),
                 payload: json!({
                     "channel_connection_id": connection_id,
                     "platform": external_channel_platform_wire_value(&message.platform),
                     "message_external_id": message.message_external_id.clone(),
-                    "assistant_message_chars": output_text.chars().count(),
-                    "runtime": runtime_manifest,
+                    "strict_direct_reply": true,
+                    "attempts": rejected_attempts,
                 }),
                 created_at: now,
             },
@@ -12281,10 +12440,9 @@ async fn external_channel_chat_model_or_acceptance_reply(
         .await
         .map_err(ApiError::from_storage)?;
 
-    Ok(external_channel_text_reply(
-        message,
-        output_text,
-        "answered",
+    Err(ApiError::service_unavailable(
+        "external_channel_model_direct_reply_unavailable",
+        "external channel ordinary chat requires a model-generated direct reply, but no configured model attempt produced displayable text".to_string(),
     ))
 }
 
@@ -14779,9 +14937,28 @@ async fn complete_assistant_run_provider(
     runtime_model: String,
     provider_input: String,
 ) -> std::result::Result<LlmResponse, ApiError> {
+    complete_assistant_run_provider_with_env_prefix(
+        "ASSISTANT_RUN",
+        model_lane,
+        runtime_mode,
+        runtime_provider,
+        runtime_model,
+        provider_input,
+    )
+    .await
+}
+
+async fn complete_assistant_run_provider_with_env_prefix(
+    env_prefix: &'static str,
+    model_lane: &'static str,
+    runtime_mode: String,
+    runtime_provider: String,
+    runtime_model: String,
+    provider_input: String,
+) -> std::result::Result<LlmResponse, ApiError> {
     tokio::task::spawn_blocking(move || {
         let provider = build_provider_from_env(
-            "ASSISTANT_RUN",
+            env_prefix,
             &runtime_mode,
             runtime_provider,
             bootstrap_default_prompt_registry(),
@@ -35355,6 +35532,17 @@ impl ApiError {
         }
     }
 
+    fn service_unavailable(code: &str, message: String) -> Self {
+        Self {
+            status: StatusCode::SERVICE_UNAVAILABLE,
+            payload: ApiErrorResponse {
+                code: code.to_string(),
+                message,
+                details: None,
+            },
+        }
+    }
+
     fn internal(code: &str, message: String) -> Self {
         Self {
             status: StatusCode::INTERNAL_SERVER_ERROR,
@@ -35775,20 +35963,6 @@ mod tests {
         assert_eq!(reply.reply_type, ExternalBotReplyTypeView::TaskStatus);
         assert_eq!(reply.task_status.as_deref(), Some("accepted"));
         assert_eq!(reply.text, None);
-        assert!(!reply.requires_confirmation);
-    }
-
-    #[test]
-    fn external_channel_chat_acceptance_reply_is_user_facing() {
-        let message = sample_external_bot_message();
-        let reply = external_channel_chat_acceptance_reply(&message);
-
-        assert_eq!(reply.reply_type, ExternalBotReplyTypeView::Text);
-        assert_eq!(reply.task_status.as_deref(), Some("accepted"));
-        let text = reply.text.as_deref().expect("text reply");
-        assert!(text.contains("V3 对话处理"));
-        assert!(text.contains("通用模型能力自然回答"));
-        assert!(text.contains("当前不可见/未供料"));
         assert!(!reply.requires_confirmation);
     }
 
@@ -36563,10 +36737,15 @@ mod tests {
     async fn generic_chat_page_event_endpoint_accepts_idempotent_normalized_messages() {
         let _guard = shared_local_postgres_test_lock().lock().await;
         clear_assistant_openclaw_env();
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_MODE", "provider");
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_PROVIDER", "scripted");
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_MODEL", "assistant-run-scripted-v1");
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_OUTPUT_TEXT", "普通外部直答。");
         let storage = match local_postgres_storage().await {
             Ok(storage) => storage,
             Err(reason) => {
                 eprintln!("skipping generic chat page endpoint test: {reason}");
+                clear_assistant_openclaw_env();
                 return;
             }
         };
@@ -36607,10 +36786,11 @@ mod tests {
         assert_eq!(first.idempotency_key, message.idempotency_key);
         assert!(first.assistant_run_id.is_some());
         assert_eq!(first.reply.reply_type, ExternalBotReplyTypeView::Text);
-        assert_eq!(first.reply.task_status.as_deref(), Some("accepted"));
+        assert_eq!(first.reply.task_status.as_deref(), Some("answered"));
         let first_reply_text = first.reply.text.as_deref().expect("text reply");
-        assert!(first_reply_text.contains("V3 对话处理"));
-        assert!(first_reply_text.contains("当前不可见/未供料"));
+        assert_eq!(first_reply_text, "普通外部直答。");
+        assert!(!first_reply_text.contains("V3 对话处理"));
+        assert!(!first_reply_text.contains("已收到指令"));
         assert_eq!(
             first.reply.target_conversation_external_id,
             "chat-risk-room"
@@ -36626,10 +36806,9 @@ mod tests {
         assert_eq!(duplicate.status(), StatusCode::OK);
         let second: ExternalChannelEventResponse = read_json_response(duplicate).await;
         assert_eq!(second.assistant_run_id, first.assistant_run_id);
-        assert_eq!(
-            second.reply.task_status.as_deref(),
-            Some("duplicate_accepted")
-        );
+        assert_eq!(second.reply.reply_type, ExternalBotReplyTypeView::Text);
+        assert_eq!(second.reply.task_status.as_deref(), Some("answered"));
+        assert_eq!(second.reply.text.as_deref(), Some("普通外部直答。"));
 
         let event_count: i64 = sqlx::query_scalar(
             r#"
@@ -36652,10 +36831,15 @@ mod tests {
     async fn generic_chat_page_event_endpoint_accepts_java_style_payload_aliases() {
         let _guard = shared_local_postgres_test_lock().lock().await;
         clear_assistant_openclaw_env();
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_MODE", "provider");
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_PROVIDER", "scripted");
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_MODEL", "assistant-run-scripted-v1");
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_OUTPUT_TEXT", "2");
         let storage = match local_postgres_storage().await {
             Ok(storage) => storage,
             Err(reason) => {
                 eprintln!("skipping generic chat java style payload test: {reason}");
+                clear_assistant_openclaw_env();
                 return;
             }
         };
@@ -36709,6 +36893,72 @@ mod tests {
         assert!(body.accepted);
         assert_eq!(body.idempotency_key, "generic:tenant-ext-001:java-msg-001");
         assert_eq!(body.reply.reply_type, ExternalBotReplyTypeView::Text);
+        assert_eq!(body.reply.task_status.as_deref(), Some("answered"));
+        assert_eq!(body.reply.text.as_deref(), Some("2"));
+        clear_assistant_openclaw_env();
+    }
+
+    #[tokio::test]
+    async fn generic_chat_page_event_stream_does_not_emit_accepted_as_answer_state() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        clear_assistant_openclaw_env();
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_MODE", "provider");
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_PROVIDER", "scripted");
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_MODEL", "assistant-run-scripted-v1");
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_OUTPUT_TEXT", "流式模型直答。");
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping generic chat stream endpoint test: {reason}");
+                clear_assistant_openclaw_env();
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("generic-chat-stream-test-{}", Uuid::new_v4()),
+                "Generic Chat Stream Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage.clone(),
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        insert_generic_external_channel_connection(&state, "generic-chat-main").await;
+        let app = router(
+            storage.clone(),
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+
+        let mut message = sample_external_bot_message();
+        message.text = Some("1+1等于几？请直接回答。".to_string());
+        message.message_external_id = "msg-stream-001".to_string();
+        message.idempotency_key = "generic:tenant-ext-001:msg-stream-001".to_string();
+        let response = post_json_request(
+            app,
+            "/v1/external/channels/generic-chat-main/events/stream",
+            &message,
+            None,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("SSE body should load");
+        let body = String::from_utf8(body.to_vec()).expect("SSE should be utf8");
+        assert!(body.contains("event: external_channel.started"));
+        assert!(body.contains("event: external_channel.delta"));
+        assert!(body.contains("event: external_channel.completed"));
+        assert!(body.contains("流式模型直答。"));
+        assert!(!body.contains("event: external_channel.accepted"));
+        assert!(!body.contains("\"status\":\"accepted\""));
         clear_assistant_openclaw_env();
     }
 
@@ -36725,6 +36975,16 @@ mod tests {
         ));
         assert!(!external_channel_prompt_allows_external_action(
             "第三方对接联通性测试，请返回已接收状态。",
+            "external_artifact.status"
+        ));
+        assert!(!external_channel_prompt_may_need_planned_action("status"));
+        assert!(!external_channel_prompt_may_need_planned_action("查询状态"));
+        assert!(!external_channel_prompt_allows_external_action(
+            "status",
+            "external_artifact.status"
+        ));
+        assert!(!external_channel_prompt_allows_external_action(
+            "查询状态",
             "external_artifact.status"
         ));
         assert!(external_channel_prompt_may_need_planned_action(
@@ -36744,10 +37004,15 @@ mod tests {
     async fn generic_chat_page_event_endpoint_requires_configured_bearer_token() {
         let _guard = shared_local_postgres_test_lock().lock().await;
         clear_assistant_openclaw_env();
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_MODE", "provider");
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_PROVIDER", "scripted");
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_MODEL", "assistant-run-scripted-v1");
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_OUTPUT_TEXT", "鉴权后模型直答。");
         let storage = match local_postgres_storage().await {
             Ok(storage) => storage,
             Err(reason) => {
                 eprintln!("skipping generic chat bearer auth test: {reason}");
+                clear_assistant_openclaw_env();
                 return;
             }
         };
@@ -36885,7 +37150,7 @@ mod tests {
         message.message_external_id = "msg-provider-status-word-001".to_string();
         message.idempotency_key = "generic:tenant-ext-001:msg-provider-status-word-001".to_string();
         let response = post_json_request(
-            app,
+            app.clone(),
             "/v1/external/channels/generic-chat-main/events",
             &message,
             None,
@@ -36926,6 +37191,173 @@ mod tests {
         assert!(events.iter().any(|event| {
             event.event_name == "assistant_run.external_channel_model_reply_completed"
         }));
+        clear_assistant_openclaw_env();
+    }
+
+    #[tokio::test]
+    async fn generic_chat_page_event_uses_fallback_when_primary_output_is_rejected() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        clear_assistant_openclaw_env();
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_MODE", "provider");
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_PROVIDER", "scripted");
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_MODEL", "assistant-run-primary-v1");
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_OUTPUT_TEXT", "不应返回给用户");
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_FINISH_REASON", "error");
+        std::env::set_var("ASSISTANT_RUN_FALLBACK_RUNTIME_MODE", "provider");
+        std::env::set_var("ASSISTANT_RUN_FALLBACK_RUNTIME_PROVIDER", "scripted");
+        std::env::set_var(
+            "ASSISTANT_RUN_FALLBACK_RUNTIME_MODEL",
+            "assistant-run-fallback-v1",
+        );
+        std::env::set_var(
+            "ASSISTANT_RUN_FALLBACK_RUNTIME_OUTPUT_TEXT",
+            "这是兜底模型直答。",
+        );
+
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping generic chat fallback endpoint test: {reason}");
+                clear_assistant_openclaw_env();
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("generic-chat-fallback-test-{}", Uuid::new_v4()),
+                "Generic Chat Fallback Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage.clone(),
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        insert_generic_external_channel_connection(&state, "generic-chat-main").await;
+        let app = router(
+            storage.clone(),
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+
+        let mut message = sample_external_bot_message();
+        message.text = Some("status".to_string());
+        message.message_external_id = "msg-fallback-001".to_string();
+        message.idempotency_key = "generic:tenant-ext-001:msg-fallback-001".to_string();
+        let response = post_json_request(
+            app.clone(),
+            "/v1/external/channels/generic-chat-main/events",
+            &message,
+            None,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let body: ExternalChannelEventResponse = read_json_response(response).await;
+        assert_eq!(body.reply.reply_type, ExternalBotReplyTypeView::Text);
+        assert_eq!(body.reply.task_status.as_deref(), Some("answered"));
+        assert_eq!(body.reply.text.as_deref(), Some("这是兜底模型直答。"));
+
+        let run_id = body.assistant_run_id.expect("assistant run id");
+        let run = storage
+            .assistant_runs()
+            .get_by_id(tenant.id, run_id)
+            .await
+            .expect("run should load")
+            .expect("run should exist");
+        assert_eq!(
+            run.runtime_manifest["model"],
+            json!("assistant-run-fallback-v1")
+        );
+        let events = storage
+            .assistant_runs()
+            .list_events(tenant.id, run_id)
+            .await
+            .expect("events should load");
+        assert!(events.iter().any(|event| {
+            event.event_name == "assistant_run.external_channel_model_reply_rejected"
+                && event.payload["attempt"] == json!("primary")
+        }));
+        assert!(events.iter().any(|event| {
+            event.event_name == "assistant_run.external_channel_model_reply_completed"
+                && event.payload["attempt"] == json!("fallback")
+        }));
+        clear_assistant_openclaw_env();
+    }
+
+    #[tokio::test]
+    async fn generic_chat_page_event_without_model_returns_unavailable_error_not_accepted_reply() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        clear_assistant_openclaw_env();
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping generic chat unavailable endpoint test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("generic-chat-unavailable-test-{}", Uuid::new_v4()),
+                "Generic Chat Unavailable Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage.clone(),
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        insert_generic_external_channel_connection(&state, "generic-chat-main").await;
+        let app = router(
+            storage.clone(),
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+
+        let mut message = sample_external_bot_message();
+        message.text = Some("查询状态".to_string());
+        message.message_external_id = "msg-no-model-001".to_string();
+        message.idempotency_key = "generic:tenant-ext-001:msg-no-model-001".to_string();
+        let response = post_json_request(
+            app.clone(),
+            "/v1/external/channels/generic-chat-main/events",
+            &message,
+            None,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let error: ApiErrorResponse = read_json_response(response).await;
+        assert_eq!(
+            error.code,
+            "external_channel_model_direct_reply_unavailable"
+        );
+        assert!(!error.message.contains("已收到"));
+        assert!(!error.message.contains("V3 对话处理"));
+
+        let duplicate = post_json_request(
+            app,
+            "/v1/external/channels/generic-chat-main/events",
+            &message,
+            None,
+        )
+        .await;
+        assert_eq!(duplicate.status(), StatusCode::OK);
+        let duplicate: ExternalChannelEventResponse = read_json_response(duplicate).await;
+        assert_eq!(
+            duplicate.reply.reply_type,
+            ExternalBotReplyTypeView::TaskStatus
+        );
+        assert_eq!(duplicate.reply.task_status.as_deref(), Some("processing"));
+        assert_eq!(duplicate.reply.text, None);
         clear_assistant_openclaw_env();
     }
 
@@ -59659,6 +60091,20 @@ mod tests {
             "ASSISTANT_RUN_RUNTIME_BASE_URL",
             "ASSISTANT_RUN_RUNTIME_API_PATH",
             "ASSISTANT_RUN_RUNTIME_API_KEY",
+            "ASSISTANT_RUN_RUNTIME_TIMEOUT_MS",
+            "ASSISTANT_RUN_FALLBACK_RUNTIME_MODE",
+            "ASSISTANT_RUN_FALLBACK_RUNTIME_PROVIDER",
+            "ASSISTANT_RUN_FALLBACK_RUNTIME_MODEL",
+            "ASSISTANT_RUN_FALLBACK_RUNTIME_OUTPUT_TEXT",
+            "ASSISTANT_RUN_FALLBACK_RUNTIME_REQUEST_ID",
+            "ASSISTANT_RUN_FALLBACK_RUNTIME_FINISH_REASON",
+            "ASSISTANT_RUN_FALLBACK_RUNTIME_LATENCY_MS",
+            "ASSISTANT_RUN_FALLBACK_RUNTIME_USAGE_JSON",
+            "ASSISTANT_RUN_FALLBACK_RUNTIME_TOOL_TRACE_JSON",
+            "ASSISTANT_RUN_FALLBACK_RUNTIME_BASE_URL",
+            "ASSISTANT_RUN_FALLBACK_RUNTIME_API_PATH",
+            "ASSISTANT_RUN_FALLBACK_RUNTIME_API_KEY",
+            "ASSISTANT_RUN_FALLBACK_RUNTIME_TIMEOUT_MS",
             "ASSISTANT_RUN_REACT_ENABLED",
             "ASSISTANT_RUN_REACT_MAX_STEPS",
             "OPENCLAW_EXTENSION_ENABLED",

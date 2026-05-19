@@ -587,18 +587,164 @@ fn is_video_extension(extension: &str) -> bool {
 }
 
 fn extract_pdf_text(path: &Path) -> Option<ExtractedDocumentText> {
-    extract_pdf_with_pdftotext(path)
-        .map(|text| extracted_text(text, "pdf-pdftotext"))
-        .or_else(|| extract_pdf_with_python(path).map(|text| extracted_text(text, "pdf-python")))
-        .or_else(|| {
-            extract_pdf_with_ocrmypdf(path).map(|text| extracted_text(text, "pdf-ocrmypdf"))
+    let mut low_quality_candidate = None;
+    for extracted in [
+        extract_pdf_with_pdftotext(path).map(|text| extracted_text(text, "pdf-pdftotext")),
+        extract_pdf_with_python(path).map(|text| extracted_text(text, "pdf-python")),
+        extract_pdf_with_ocrmypdf(path).map(|text| extracted_text(text, "pdf-ocrmypdf")),
+        extract_pdf_with_tesseract_render(path)
+            .map(|text| extracted_text(text, "pdf-tesseract-render")),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        match pdf_parse_quality(&extracted.text) {
+            PdfParseQuality::Usable { text_chars } => {
+                return Some(with_pdf_parse_quality_metadata(
+                    extracted,
+                    "usable_text",
+                    text_chars,
+                    None,
+                ));
+            }
+            PdfParseQuality::LowTextCoverage { text_chars } => {
+                low_quality_candidate.get_or_insert_with(|| {
+                    with_pdf_parse_quality_metadata(
+                        extracted,
+                        "low_text_coverage",
+                        text_chars,
+                        None,
+                    )
+                });
+            }
+        }
+    }
+
+    let low_quality_ocr = low_quality_candidate
+        .as_ref()
+        .map(|candidate| candidate.text.as_str());
+    if let Some(vlm) = extract_pdf_with_vlm_render(path, low_quality_ocr) {
+        let text_chars = pdf_quality_text_chars(&vlm.text);
+        return Some(with_pdf_parse_quality_metadata(
+            vlm,
+            "vlm_fallback_used",
+            text_chars,
+            low_quality_candidate.as_ref(),
+        ));
+    }
+
+    if let Some(literal) =
+        extract_pdf_literal_text(path).map(|text| extracted_text(text, "pdf-literal"))
+    {
+        match pdf_parse_quality(&literal.text) {
+            PdfParseQuality::Usable { text_chars } => {
+                return Some(with_pdf_parse_quality_metadata(
+                    literal,
+                    "usable_text",
+                    text_chars,
+                    low_quality_candidate.as_ref(),
+                ));
+            }
+            PdfParseQuality::LowTextCoverage { text_chars } => {
+                low_quality_candidate.get_or_insert_with(|| {
+                    with_pdf_parse_quality_metadata(literal, "low_text_coverage", text_chars, None)
+                });
+            }
+        }
+    }
+
+    low_quality_candidate.map(pdf_low_quality_diagnostic_text)
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum PdfParseQuality {
+    Usable { text_chars: usize },
+    LowTextCoverage { text_chars: usize },
+}
+
+fn pdf_parse_quality(text: &str) -> PdfParseQuality {
+    let text_chars = pdf_quality_text_chars(text);
+    if text_chars < pdf_min_usable_text_chars() {
+        PdfParseQuality::LowTextCoverage { text_chars }
+    } else {
+        PdfParseQuality::Usable { text_chars }
+    }
+}
+
+fn pdf_quality_text_chars(text: &str) -> usize {
+    text.chars()
+        .filter(|ch| !ch.is_whitespace() && !ch.is_control())
+        .count()
+}
+
+fn pdf_min_usable_text_chars() -> usize {
+    std::env::var("DOCUMENT_PDF_MIN_USABLE_TEXT_CHARS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(32)
+        .max(1)
+}
+
+fn with_pdf_parse_quality_metadata(
+    mut extracted: ExtractedDocumentText,
+    status: &str,
+    text_chars: usize,
+    fallback_from: Option<&ExtractedDocumentText>,
+) -> ExtractedDocumentText {
+    let fallback_from = fallback_from.map(|candidate| {
+        json!({
+            "method": candidate.method,
+            "text_chars": pdf_quality_text_chars(&candidate.text),
         })
-        .or_else(|| {
-            extract_pdf_with_tesseract_render(path)
-                .map(|text| extracted_text(text, "pdf-tesseract-render"))
-        })
-        .or_else(|| extract_pdf_with_vlm_render(path))
-        .or_else(|| extract_pdf_literal_text(path).map(|text| extracted_text(text, "pdf-literal")))
+    });
+    merge_object_value(
+        &mut extracted.metadata,
+        "parse_quality",
+        json!({
+            "kind": "pdf_text_extraction",
+            "status": status,
+            "text_chars": text_chars,
+            "min_usable_text_chars": pdf_min_usable_text_chars(),
+            "fallback_from": fallback_from,
+        }),
+    );
+    extracted
+}
+
+fn pdf_low_quality_diagnostic_text(mut extracted: ExtractedDocumentText) -> ExtractedDocumentText {
+    let text_chars = pdf_quality_text_chars(&extracted.text);
+    let snippet = extracted
+        .text
+        .chars()
+        .take(200)
+        .collect::<String>()
+        .trim()
+        .to_string();
+    extracted.text = format!(
+        "PDF parse quality warning: text extraction produced only {text_chars} non-whitespace characters, below the minimum usable threshold. OCR/VLM fallback did not produce displayable text; do not treat the low-quality extract as document content.\n\nLow-quality extract:\n{snippet}"
+    );
+    extracted.method = format!("{}+low-quality", extracted.method);
+    merge_object_value(
+        &mut extracted.metadata,
+        "parse_quality",
+        json!({
+            "kind": "pdf_text_extraction",
+            "status": "low_text_coverage_fallback_unavailable",
+            "text_chars": text_chars,
+            "min_usable_text_chars": pdf_min_usable_text_chars(),
+            "fallback_status": "unavailable",
+        }),
+    );
+    extracted
+}
+
+fn merge_object_value(target: &mut Value, key: &str, value: Value) {
+    if !target.is_object() {
+        *target = json!({});
+    }
+    if let Some(object) = target.as_object_mut() {
+        object.insert(key.to_string(), value);
+    }
 }
 
 fn extract_pdf_with_pdftotext(path: &Path) -> Option<String> {
@@ -716,7 +862,10 @@ finally:
     None
 }
 
-fn extract_pdf_with_vlm_render(path: &Path) -> Option<ExtractedDocumentText> {
+fn extract_pdf_with_vlm_render(
+    path: &Path,
+    existing_ocr_text: Option<&str>,
+) -> Option<ExtractedDocumentText> {
     if !DocumentImageVlmConfig::from_env().available() {
         return None;
     }
@@ -733,7 +882,11 @@ fn extract_pdf_with_vlm_render(path: &Path) -> Option<ExtractedDocumentText> {
                 .unwrap_or("PDF"),
             index + 1
         );
-        if let Some(response) = run_document_image_vlm_from_env(&page_title, image_path, "") {
+        if let Some(response) = run_document_image_vlm_from_env(
+            &page_title,
+            image_path,
+            existing_ocr_text.unwrap_or(""),
+        ) {
             pages.push(json!({
                 "page_number": index + 1,
                 "model": response.model,
@@ -2200,6 +2353,45 @@ trailer << /Root 1 0 R >>
         assert!(body.contains("Quarterly Report"));
         assert!(body.contains("Orders grew 20%"));
         let _ = fs::remove_file(file_path);
+    }
+
+    #[test]
+    fn pdf_parse_quality_marks_one_character_extract_as_low_coverage() {
+        with_env_var("DOCUMENT_PDF_MIN_USABLE_TEXT_CHARS", Some("32"), || {
+            assert_eq!(
+                pdf_parse_quality("字"),
+                PdfParseQuality::LowTextCoverage { text_chars: 1 }
+            );
+            assert_eq!(
+                pdf_parse_quality(&"正".repeat(32)),
+                PdfParseQuality::Usable { text_chars: 32 }
+            );
+        });
+    }
+
+    #[test]
+    fn pdf_low_quality_diagnostic_does_not_treat_single_character_as_content() {
+        with_env_var("DOCUMENT_PDF_MIN_USABLE_TEXT_CHARS", Some("32"), || {
+            let extracted = with_pdf_parse_quality_metadata(
+                extracted_text("字", "pdf-python"),
+                "low_text_coverage",
+                1,
+                None,
+            );
+
+            let diagnostic = pdf_low_quality_diagnostic_text(extracted);
+
+            assert_eq!(diagnostic.method, "pdf-python+low-quality");
+            assert!(diagnostic.text.contains("PDF parse quality warning"));
+            assert!(diagnostic
+                .text
+                .contains("do not treat the low-quality extract"));
+            assert_eq!(
+                diagnostic.metadata["parse_quality"]["status"],
+                json!("low_text_coverage_fallback_unavailable")
+            );
+            assert_eq!(diagnostic.metadata["parse_quality"]["text_chars"], json!(1));
+        });
     }
 
     #[test]
