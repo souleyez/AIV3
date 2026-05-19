@@ -664,7 +664,7 @@ fn extract_pdf_text(path: &Path) -> Option<ExtractedDocumentText> {
     }
 
     if let Some(selected) = select_pdf_usable_candidate(&mut usable_candidates) {
-        return Some(selected);
+        return Some(rescue_weak_pdf_candidate_with_vlm(path, selected));
     }
 
     for extracted in [
@@ -681,7 +681,7 @@ fn extract_pdf_text(path: &Path) -> Option<ExtractedDocumentText> {
             &mut low_quality_candidates,
         );
         if let Some(selected) = select_pdf_usable_candidate(&mut usable_candidates) {
-            return Some(selected);
+            return Some(rescue_weak_pdf_candidate_with_vlm(path, selected));
         }
     }
 
@@ -726,6 +726,23 @@ fn extract_pdf_text(path: &Path) -> Option<ExtractedDocumentText> {
     }
 
     low_quality_candidate.map(pdf_low_quality_diagnostic_text)
+}
+
+fn rescue_weak_pdf_candidate_with_vlm(
+    path: &Path,
+    selected: ExtractedDocumentText,
+) -> ExtractedDocumentText {
+    if !pdf_candidate_should_try_vlm_rescue(&selected) {
+        return selected;
+    }
+
+    let Some(vlm) = extract_pdf_with_vlm_render(path, Some(&selected.text)) else {
+        return selected;
+    };
+    let text_chars = pdf_quality_text_chars(&vlm.text);
+    let vlm =
+        with_pdf_parse_quality_metadata(vlm, "vlm_fallback_used", text_chars, Some(&selected));
+    select_pdf_vlm_rescue_candidate(selected, vlm)
 }
 
 fn classify_pdf_candidate(
@@ -798,6 +815,58 @@ fn select_better_pdf_low_quality_candidate(
         right
     } else {
         left
+    }
+}
+
+fn pdf_candidate_should_try_vlm_rescue(candidate: &ExtractedDocumentText) -> bool {
+    if !document_pdf_vlm_fallback_on_weak_text() {
+        return false;
+    }
+    let text_chars = pdf_quality_text_chars(&candidate.text);
+    text_chars <= document_pdf_vlm_weak_text_max_chars()
+        && pdf_candidate_structure_block_count(candidate) == 0
+        && pdf_candidate_heading_count(&candidate.text) == 0
+        && pdf_candidate_table_signal_count(&candidate.text) == 0
+}
+
+fn document_pdf_vlm_fallback_on_weak_text() -> bool {
+    env_flag_value("DOCUMENT_PDF_VLM_FALLBACK_ON_WEAK_TEXT").unwrap_or(true)
+}
+
+fn document_pdf_vlm_weak_text_max_chars() -> usize {
+    std::env::var("DOCUMENT_PDF_VLM_WEAK_TEXT_MAX_CHARS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(256)
+        .max(pdf_min_usable_text_chars())
+}
+
+fn select_pdf_vlm_rescue_candidate(
+    mut existing: ExtractedDocumentText,
+    mut vlm: ExtractedDocumentText,
+) -> ExtractedDocumentText {
+    let existing_report = pdf_candidate_quality_report(&existing);
+    let vlm_report = pdf_candidate_quality_report(&vlm);
+    let existing_score = pdf_candidate_quality_score(&existing);
+    let vlm_score = pdf_candidate_quality_score(&vlm);
+    let selected = if vlm_score > existing_score {
+        "vlm"
+    } else {
+        "existing"
+    };
+    let rescue_report = json!({
+        "policy": "try_minimax_for_weak_unstructured_pdf_text",
+        "selected": selected,
+        "existing": existing_report,
+        "vlm": vlm_report,
+    });
+
+    if selected == "vlm" {
+        merge_parse_quality_field(&mut vlm.metadata, "vlm_rescue", rescue_report);
+        vlm
+    } else {
+        merge_parse_quality_field(&mut existing.metadata, "vlm_rescue", rescue_report);
+        existing
     }
 }
 
@@ -2826,6 +2895,7 @@ mod tests {
     use zip::{write::SimpleFileOptions, ZipWriter};
 
     static PADDLEOCR_ENV_LOCK: Mutex<()> = Mutex::new(());
+    static PDF_PARSE_ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn local_ingest_processor_returns_stable_placeholder_chunks_without_file() {
@@ -3094,6 +3164,99 @@ trailer << /Root 1 0 R >>
 
             assert_eq!(selected.method, "pdf-python");
         });
+    }
+
+    #[test]
+    fn pdf_vlm_rescue_targets_only_weak_unstructured_text() {
+        with_pdf_parse_env(
+            &[
+                ("DOCUMENT_PDF_VLM_WEAK_TEXT_MAX_CHARS", Some("128")),
+                ("DOCUMENT_PDF_VLM_FALLBACK_ON_WEAK_TEXT", None),
+            ],
+            || {
+                let weak = extracted_text("plain resume text ".repeat(5), "pdf-python");
+                assert!(pdf_candidate_should_try_vlm_rescue(&weak));
+
+                let structured = ExtractedDocumentText {
+                    text: "plain resume text ".repeat(5),
+                    method: "pdf-paddleocr".to_string(),
+                    metadata: json!({
+                        "document_structure": {
+                            "block_count": 3,
+                        }
+                    }),
+                };
+                assert!(!pdf_candidate_should_try_vlm_rescue(&structured));
+
+                let long = extracted_text("complete resume text ".repeat(40), "pdf-pdftotext");
+                assert!(!pdf_candidate_should_try_vlm_rescue(&long));
+            },
+        );
+    }
+
+    #[test]
+    fn pdf_vlm_rescue_can_be_disabled() {
+        with_pdf_parse_env(
+            &[("DOCUMENT_PDF_VLM_FALLBACK_ON_WEAK_TEXT", Some("false"))],
+            || {
+                let weak = extracted_text("plain resume text ".repeat(5), "pdf-python");
+                assert!(!pdf_candidate_should_try_vlm_rescue(&weak));
+            },
+        );
+    }
+
+    #[test]
+    fn pdf_vlm_rescue_selection_prefers_better_vlm_output() {
+        let existing = with_pdf_parse_quality_metadata(
+            extracted_text("plain resume text ".repeat(5), "pdf-python"),
+            "usable_text",
+            80,
+            None,
+        );
+        let vlm = with_pdf_parse_quality_metadata(
+            extracted_text(
+                "# Page 1\n\n广东高明中港城商业管理有限公司\n\n工作经历和岗位职责。".repeat(8),
+                "pdf-vlm",
+            ),
+            "vlm_fallback_used",
+            240,
+            Some(&existing),
+        );
+
+        let selected = select_pdf_vlm_rescue_candidate(existing, vlm);
+
+        assert_eq!(selected.method, "pdf-vlm");
+        assert_eq!(
+            selected.metadata["parse_quality"]["vlm_rescue"]["selected"],
+            json!("vlm")
+        );
+    }
+
+    #[test]
+    fn pdf_vlm_rescue_selection_keeps_existing_when_vlm_is_weaker() {
+        let existing = with_pdf_parse_quality_metadata(
+            extracted_text(
+                "plain resume text with useful extracted content ".repeat(20),
+                "pdf-python",
+            ),
+            "usable_text",
+            900,
+            None,
+        );
+        let vlm = with_pdf_parse_quality_metadata(
+            extracted_text("短", "pdf-vlm"),
+            "vlm_fallback_used",
+            1,
+            Some(&existing),
+        );
+
+        let selected = select_pdf_vlm_rescue_candidate(existing, vlm);
+
+        assert_eq!(selected.method, "pdf-python");
+        assert_eq!(
+            selected.metadata["parse_quality"]["vlm_rescue"]["selected"],
+            json!("existing")
+        );
     }
 
     #[test]
@@ -3588,6 +3751,26 @@ trailer << /Root 1 0 R >>
                 }
             }
         }
+    }
+
+    fn with_pdf_parse_env<T>(updates: &[(&str, Option<&str>)], run: impl FnOnce() -> T) -> T {
+        let _guard = PDF_PARSE_ENV_LOCK
+            .lock()
+            .expect("pdf parse env lock should not be poisoned");
+        let previous = updates
+            .iter()
+            .map(|(name, _)| ((*name).to_string(), std::env::var(name).ok()))
+            .collect::<Vec<_>>();
+
+        for (name, value) in updates {
+            match value {
+                Some(value) => std::env::set_var(name, value),
+                None => std::env::remove_var(name),
+            }
+        }
+
+        let _restore = EnvVarRestore(previous);
+        run()
     }
 
     fn with_paddleocr_env<T>(updates: &[(&str, Option<&str>)], run: impl FnOnce() -> T) -> T {
