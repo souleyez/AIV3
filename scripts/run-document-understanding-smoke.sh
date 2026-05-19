@@ -84,6 +84,8 @@ run_check "parse quality diagnostics are compact and model-visible" \
   "${cargo_bin}" test -p platform-api assistant_run_document_parse_quality_summary_compacts_parser_diagnostics --lib
 run_check "resume company scan expands supply actions" \
   "${cargo_bin}" test -p platform-api assistant_run_resume_company_scan_scope_expands_supply_actions --lib
+run_check "general entity scan prompts request dataset scan" \
+  "${cargo_bin}" test -p platform-api assistant_run_general_entity_scan_prompts_request_dataset_scan --lib
 run_check "resume company extractor keeps valid company names" \
   "${cargo_bin}" test -p platform-api assistant_run_extracts_company_names --lib
 run_check "resume company extractor filters phrase noise" \
@@ -136,6 +138,7 @@ const report = {
     external_parse_compatibility: "Third-party Java/camelCase parse payloads and parse-detail summary fields remain compatible, including parseStatus/modelStatus/workflow state.",
     document_detail_parse_state: "Document detail responses should expose parse_state so normal UI/model flows can explain pending, failed, or reparsing documents.",
     resume_entity_scan: "Resume/company entity scans should preserve valid company names while filtering common phrase noise.",
+    entity_scan_trigger: "Dataset questions asking to count, list, extract, or segment positions, skills, projects, locations, people, keywords, terms, or nouns should supply document entity scans.",
     typed_entity_terms: "Document entity scans should expose conservative typed entities and candidate noun terms beyond company names.",
     async_parse_status: "Assistant evidence should surface failed, reparsing, and degraded document parse states so models can answer availability correctly."
   },
@@ -169,6 +172,7 @@ const lines = [
   `- External parse compatibility: ${report.contract.external_parse_compatibility}`,
   `- Document detail parse state: ${report.contract.document_detail_parse_state}`,
   `- Resume entity scan: ${report.contract.resume_entity_scan}`,
+  `- Entity scan trigger: ${report.contract.entity_scan_trigger}`,
   `- Typed entity terms: ${report.contract.typed_entity_terms}`,
   `- Async parse status: ${report.contract.async_parse_status}`,
   "",

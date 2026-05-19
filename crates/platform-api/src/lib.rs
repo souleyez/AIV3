@@ -19325,7 +19325,11 @@ async fn build_assistant_run_evidence_state(
         "candidate_policy": assistant_run_scope_candidate_policy(selected_scope),
         "detail_preferred": prefer_detail,
         "recommended_tool_actions": assistant_run_scope_recommended_tool_actions(selected_scope),
-        "recommended_actions": assistant_run_recommended_supply_actions(selected_scope, !supplied_items.is_empty()),
+        "recommended_actions": assistant_run_recommended_supply_actions(
+            selected_scope,
+            !supplied_items.is_empty(),
+            dataset_entity_scan_requested,
+        ),
         "supply_quality": supply_quality,
         "detail_targets": detail_targets,
         "selected_scope": selected_scope,
@@ -21131,6 +21135,7 @@ fn assistant_run_evidence_limit() -> usize {
 fn assistant_run_recommended_supply_actions(
     selected_scope: &Value,
     has_supplied_items: bool,
+    dataset_entity_scan_requested: bool,
 ) -> Vec<&'static str> {
     let mut actions = Vec::new();
     let recommended_tool_actions = assistant_run_scope_recommended_tool_actions(selected_scope);
@@ -21139,7 +21144,7 @@ fn assistant_run_recommended_supply_actions(
         if assistant_run_scope_prefers_detail(selected_scope) && has_supplied_items {
             actions.push("read_document_detail");
         }
-        if assistant_run_scope_requests_dataset_entity_scan(selected_scope) {
+        if dataset_entity_scan_requested {
             actions.push("scan_dataset_entities");
         }
     }
@@ -25628,7 +25633,146 @@ fn assistant_run_scope_requests_dataset_entity_scan(scope: &Value) -> bool {
 fn assistant_run_dataset_entity_scan_requested(scope: &Value, prompt: &str) -> bool {
     !selected_dataset_ids_from_scope(scope).is_empty()
         && (assistant_run_scope_requests_dataset_entity_scan(scope)
-            || prompt_requests_resume_company_entity_scan(prompt))
+            || prompt_requests_document_entity_scan(prompt))
+}
+
+fn prompt_requests_document_entity_scan(prompt: &str) -> bool {
+    if prompt_requests_resume_company_entity_scan(prompt) {
+        return true;
+    }
+
+    let lower_prompt = prompt.to_ascii_lowercase();
+    let has_entity_signal = prompt_contains_any(
+        prompt,
+        &[
+            "公司名",
+            "公司",
+            "企业",
+            "组织",
+            "机构",
+            "单位",
+            "雇主",
+            "人员",
+            "姓名",
+            "联系人",
+            "候选人",
+            "岗位",
+            "职位",
+            "职务",
+            "角色",
+            "技能",
+            "技术栈",
+            "能力",
+            "项目",
+            "产品",
+            "系统",
+            "平台",
+            "地点",
+            "城市",
+            "地区",
+            "地址",
+            "实体",
+            "名词",
+            "专有名词",
+            "关键词",
+            "关键字",
+            "术语",
+            "标签",
+            "分词",
+        ],
+    ) || ascii_prompt_contains_any(
+        &lower_prompt,
+        &[
+            "entity",
+            "entities",
+            "noun",
+            "nouns",
+            "keyword",
+            "keywords",
+            "term",
+            "terms",
+            "organization",
+            "company",
+            "companies",
+            "employer",
+            "person",
+            "people",
+            "name",
+            "names",
+            "candidate",
+            "candidates",
+            "position",
+            "positions",
+            "role",
+            "roles",
+            "title",
+            "titles",
+            "skill",
+            "skills",
+            "project",
+            "projects",
+            "product",
+            "products",
+            "system",
+            "systems",
+            "platform",
+            "platforms",
+            "location",
+            "locations",
+            "city",
+            "cities",
+        ],
+    ) || lower_prompt.contains("tech stack");
+    let has_coverage_signal = prompt_contains_any(
+        prompt,
+        &[
+            "多少",
+            "几个",
+            "哪些",
+            "有什么",
+            "有哪些",
+            "列出",
+            "统计",
+            "汇总",
+            "分布",
+            "全部",
+            "所有",
+            "提到",
+            "出现",
+            "抽取",
+            "提取",
+            "识别",
+            "扫描",
+            "归纳",
+            "整理",
+            "清单",
+            "去重",
+            "频次",
+            "频率",
+            "分词",
+        ],
+    ) || ascii_prompt_contains_any(
+        &lower_prompt,
+        &[
+            "count",
+            "list",
+            "all",
+            "extract",
+            "scan",
+            "identify",
+            "summarize",
+            "summary",
+            "inventory",
+            "dedupe",
+            "frequency",
+            "frequencies",
+            "top",
+            "which",
+        ],
+    ) || lower_prompt.contains("how many")
+        || lower_prompt.contains("what are");
+
+    has_entity_signal && (has_coverage_signal || prompt.contains("公司名"))
 }
 
 fn prompt_requests_resume_company_entity_scan(prompt: &str) -> bool {
@@ -25664,6 +25808,22 @@ fn prompt_requests_resume_company_entity_scan(prompt: &str) -> bool {
             .any(|hint| lower_prompt.contains(hint));
 
     has_resume_signal && has_company_signal && (has_coverage_signal || prompt.contains("公司名"))
+}
+
+fn prompt_contains_any(prompt: &str, hints: &[&str]) -> bool {
+    hints.iter().any(|hint| prompt.contains(hint))
+}
+
+fn ascii_prompt_contains_any(lower_prompt: &str, hints: &[&str]) -> bool {
+    hints.iter().any(|hint| {
+        if hint.contains(' ') {
+            lower_prompt.contains(hint)
+        } else {
+            lower_prompt
+                .split(|ch: char| !ch.is_ascii_alphanumeric())
+                .any(|token| token == *hint)
+        }
+    })
 }
 
 fn assistant_run_scope_prefers_detail(scope: &Value) -> bool {
@@ -44750,7 +44910,7 @@ mod tests {
             ASSISTANT_RUN_EVIDENCE_MAX_LIMIT
         );
         assert_eq!(
-            assistant_run_recommended_supply_actions(&selected_scope, true),
+            assistant_run_recommended_supply_actions(&selected_scope, true, false),
             vec![
                 "retrieve_evidence",
                 "read_document_detail",
@@ -44791,7 +44951,7 @@ mod tests {
             "简历数据集里提到了多少个公司名"
         ));
         assert_eq!(
-            assistant_run_recommended_supply_actions(&selected_scope, true),
+            assistant_run_recommended_supply_actions(&selected_scope, true, true),
             vec![
                 "retrieve_evidence",
                 "read_document_detail",
@@ -44806,6 +44966,60 @@ mod tests {
                 "retrieval.scan_documents".to_string()
             ]
         );
+    }
+
+    #[test]
+    fn assistant_run_general_entity_scan_prompts_request_dataset_scan() {
+        let selected_scope = json!({
+            "mode": "user_selected",
+            "datasets": [DatasetId::new()],
+            "intent": "data_question",
+            "supply_policy": {
+                "retrievalPolicy": "search",
+                "preferDetail": false,
+                "noFakeData": true
+            }
+        });
+
+        assert!(assistant_run_dataset_entity_scan_requested(
+            &selected_scope,
+            "知识库里岗位和技能分别有哪些，按出现频次统计一下"
+        ));
+        assert!(assistant_run_dataset_entity_scan_requested(
+            &selected_scope,
+            "统计文档里的关键词和名词，去重后给我清单"
+        ));
+        assert_eq!(
+            assistant_run_recommended_supply_actions(&selected_scope, true, true),
+            vec!["retrieve_evidence", "scan_dataset_entities"]
+        );
+        assert_eq!(
+            assistant_run_scope_recommended_tool_actions(&selected_scope),
+            vec!["retrieval.search".to_string()]
+        );
+    }
+
+    #[test]
+    fn assistant_run_entity_words_without_coverage_do_not_force_scan() {
+        let selected_scope = json!({
+            "mode": "user_selected",
+            "datasets": [DatasetId::new()],
+            "intent": "data_question",
+            "supply_policy": {
+                "retrievalPolicy": "search",
+                "preferDetail": false,
+                "noFakeData": true
+            }
+        });
+
+        assert!(!assistant_run_dataset_entity_scan_requested(
+            &selected_scope,
+            "帮我写一段岗位技能介绍文案"
+        ));
+        assert!(!assistant_run_dataset_entity_scan_requested(
+            &selected_scope,
+            "这个项目平台的宣传语怎么写"
+        ));
     }
 
     #[test]
@@ -44938,7 +45152,7 @@ mod tests {
         });
 
         assert_eq!(
-            assistant_run_recommended_supply_actions(&selected_scope, false),
+            assistant_run_recommended_supply_actions(&selected_scope, false, false),
             vec!["resolve_video_url", "extract_video_ppt_transcript"]
         );
         assert_eq!(
