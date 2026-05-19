@@ -20682,6 +20682,15 @@ fn document_chunk_section_title_hints(chunk: &DocumentChunk) -> Vec<String> {
     {
         collect_string_list(value, &mut hints);
     }
+    if let Some(value) = chunk
+        .metadata
+        .get("parse_metadata")
+        .and_then(|value| value.get("document_structure"))
+    {
+        for hint in document_structure_section_title_hints(value, 6) {
+            push_string_hint(&mut hints, hint);
+        }
+    }
     if let Some(value) = chunk.metadata.get("understanding").and_then(|value| {
         value
             .get("section_title_hints")
@@ -20722,6 +20731,14 @@ fn document_chunk_value_section_title_hints(
     {
         collect_string_list(value, &mut hints);
     }
+    if let Some(value) = metadata
+        .get("parse_metadata")
+        .and_then(|value| value.get("document_structure"))
+    {
+        for hint in document_structure_section_title_hints(value, limit) {
+            push_string_hint(&mut hints, hint);
+        }
+    }
     if let Some(value) = metadata.get("understanding").and_then(|value| {
         value
             .get("section_title_hints")
@@ -20752,6 +20769,15 @@ fn document_chunk_noun_terms(chunk: &DocumentChunk) -> Vec<String> {
             collect_string_list(value, &mut terms);
         }
     }
+    if let Some(value) = chunk
+        .metadata
+        .get("parse_metadata")
+        .and_then(|value| value.get("document_structure"))
+    {
+        for term in document_structure_candidate_terms(value, 64) {
+            push_string_hint(&mut terms, term);
+        }
+    }
     terms.truncate(64);
     terms
 }
@@ -20769,8 +20795,122 @@ fn document_chunk_value_noun_terms(metadata: &Value) -> Vec<String> {
             collect_string_list(value, &mut terms);
         }
     }
+    if let Some(value) = metadata
+        .get("parse_metadata")
+        .and_then(|value| value.get("document_structure"))
+    {
+        for term in document_structure_candidate_terms(value, 64) {
+            push_string_hint(&mut terms, term);
+        }
+    }
     terms.truncate(64);
     terms
+}
+
+fn document_structure_section_title_hints(structure: &Value, limit: usize) -> Vec<String> {
+    let mut hints = Vec::new();
+    let Some(blocks) = structure.get("blocks").and_then(Value::as_array) else {
+        return hints;
+    };
+    for block in blocks {
+        if !document_structure_block_is_title(block) {
+            continue;
+        }
+        let Some(text) = document_structure_block_text(block) else {
+            continue;
+        };
+        let title = normalize_section_title_hint(&text).unwrap_or_else(|| {
+            text.trim()
+                .chars()
+                .take(80)
+                .collect::<String>()
+                .trim()
+                .to_string()
+        });
+        push_string_hint(&mut hints, title);
+        if hints.len() >= limit {
+            break;
+        }
+    }
+    hints
+}
+
+fn document_structure_candidate_terms(structure: &Value, limit: usize) -> Vec<String> {
+    let mut terms = Vec::new();
+    let Some(blocks) = structure.get("blocks").and_then(Value::as_array) else {
+        return terms;
+    };
+    for block in blocks {
+        if !document_structure_block_is_term_source(block) {
+            continue;
+        }
+        let Some(text) = document_structure_block_text(block) else {
+            continue;
+        };
+        push_string_hint(&mut terms, &text);
+        for token in lexical_query_tokens(&text) {
+            if token.chars().count() >= 2 && token.chars().count() <= 16 {
+                push_string_hint(&mut terms, token);
+            }
+            if terms.len() >= limit {
+                return terms;
+            }
+        }
+        if terms.len() >= limit {
+            break;
+        }
+    }
+    terms
+}
+
+fn document_structure_block_text(block: &Value) -> Option<String> {
+    for key in ["text", "content", "rec_text", "markdown", "html"] {
+        let Some(text) = block.get(key).and_then(Value::as_str) else {
+            continue;
+        };
+        let normalized = text.trim();
+        if !normalized.is_empty() {
+            return Some(normalized.chars().take(240).collect());
+        }
+    }
+    None
+}
+
+fn document_structure_block_type(block: &Value) -> String {
+    for key in ["block_type", "type", "label", "category"] {
+        let Some(value) = block.get(key).and_then(Value::as_str) else {
+            continue;
+        };
+        let normalized = value.trim().to_ascii_lowercase();
+        if !normalized.is_empty() {
+            return normalized;
+        }
+    }
+    String::new()
+}
+
+fn document_structure_block_is_title(block: &Value) -> bool {
+    let block_type = document_structure_block_type(block);
+    [
+        "doc_title",
+        "paragraph_title",
+        "title",
+        "header",
+        "heading",
+        "section_title",
+    ]
+    .iter()
+    .any(|value| block_type.contains(value))
+}
+
+fn document_structure_block_is_term_source(block: &Value) -> bool {
+    if document_structure_block_is_title(block) {
+        return true;
+    }
+    let block_type = document_structure_block_type(block);
+    ["table", "cell", "table_title", "figure_title", "caption"]
+        .iter()
+        .any(|value| block_type.contains(value))
 }
 
 fn collect_string_list(value: &Value, output: &mut Vec<String>) {
@@ -56406,6 +56546,63 @@ mod tests {
             document_chunk_noun_terms(&chunk),
             vec!["订单延期风险", "供应商确认"]
         );
+    }
+
+    #[test]
+    fn document_chunk_search_text_includes_parse_structure_hints() {
+        let now = Utc::now();
+        let tenant_id = TenantId::new();
+        let dataset_id = DatasetId::new();
+        let document_id = DocumentId::new();
+        let document = Document {
+            id: document_id,
+            tenant_id,
+            dataset_id,
+            owner_user_id: None,
+            title: "候选人简历".to_string(),
+            object_key: "documents/resume.pdf".to_string(),
+            content_type: "application/pdf".to_string(),
+            lifecycle: domain_model::DocumentLifecycle::Extracted,
+            secret_binding_ids: Vec::new(),
+            metadata: BTreeMap::new(),
+            created_at: now,
+            updated_at: now,
+        };
+        let mut metadata = BTreeMap::new();
+        metadata.insert(
+            "parse_metadata".to_string(),
+            json!({
+                "document_structure": {
+                    "source": "paddleocr_pp_structure_v3",
+                    "blocks": [
+                        {"type": "paragraph_title", "text": "工作经历"},
+                        {"type": "table", "text": "核心技能 Java 微服务"}
+                    ]
+                }
+            }),
+        );
+        let chunk = DocumentChunk {
+            id: DocumentChunkId::new(),
+            tenant_id,
+            dataset_id,
+            document_id,
+            chunk_index: 0,
+            content: "负责招聘系统后端服务。".to_string(),
+            token_count: 12,
+            state: DocumentChunkState::Extracted,
+            metadata,
+            created_at: now,
+            updated_at: now,
+        };
+
+        let search_text = document_chunk_search_text(&document, &chunk);
+
+        assert!(search_text.contains("工作经历"));
+        assert!(search_text.contains("核心技能 Java 微服务"));
+        assert_eq!(document_chunk_section_title_hints(&chunk), vec!["工作经历"]);
+        assert!(document_chunk_noun_terms(&chunk)
+            .iter()
+            .any(|term| term == "微服务"));
     }
 
     #[test]

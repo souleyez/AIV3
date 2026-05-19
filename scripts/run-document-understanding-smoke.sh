@@ -62,6 +62,10 @@ run_check "weak usable PDF text can trigger bounded VLM rescue" \
   "${cargo_bin}" test -p ingest-worker pdf_vlm_rescue --lib
 run_check "ingest outcomes expose model-visible parse status" \
   "${cargo_bin}" test -p ingest-worker ingest_outcome_derives_model_visible_parse_status --lib
+run_check "structure-aware chunks use PaddleOCR blocks" \
+  "${cargo_bin}" test -p ingest-worker build_document_chunks_uses_paddleocr_structure_title_blocks
+run_check "chunk understanding carries paragraphs and candidate terms" \
+  "${cargo_bin}" test -p ingest-worker chunk_understanding_metadata_extracts_paragraphs_and_noun_terms
 run_check "low-quality ingest auto reparse is requeued" \
   "${cargo_bin}" test -p ingest-worker degraded_uploaded_document_is_failed_and_requeued_for_auto_reparse
 run_check "external parse accepts Java camelCase payloads" \
@@ -72,6 +76,8 @@ run_check "external parse-detail surfaces async parse status" \
   "${cargo_bin}" test -p platform-api external_document_parse_endpoint_downloads_and_enqueues_ingest --lib
 run_check "document detail exposes parse state" \
   "${cargo_bin}" test -p platform-api load_document_detail_returns_document_chunks_and_retrieval_evidences --lib
+run_check "parse structure hints feed document chunk search" \
+  "${cargo_bin}" test -p platform-api document_chunk_search_text_includes_parse_structure_hints --lib
 run_check "parse quality diagnostics are compact and model-visible" \
   "${cargo_bin}" test -p platform-api assistant_run_document_parse_quality_summary_compacts_parser_diagnostics --lib
 run_check "resume company scan expands supply actions" \
@@ -119,6 +125,7 @@ const report = {
     parser_quality: "PaddleOCR parsing, low-quality PDF detection, and diagnostic fallback must not treat one-character extraction as usable content.",
     candidate_selection: "PDF parser candidates should be selected by text coverage plus structure/layout signals instead of returning the first minimally usable parser output.",
     vlm_rescue: "Short unstructured PDF text that barely passes the minimum quality gate may try MiniMax VLM rescue when configured; structured or complete local parses should not pay that cost.",
+    structure_aware_chunks: "PaddleOCR title/table blocks should seed section title hints, paragraph samples, and candidate noun terms for chunk metadata and later model supply.",
     ingest_parse_status: "Ingest outcomes should persist model-visible parse status values such as parsed, parse_degraded, and parsed_with_vlm_fallback.",
     auto_reparse: "Low-quality ingest should fail the current task, persist auto_reparse metadata, and requeue the upload workflow instead of completing as usable content.",
     external_parse_compatibility: "Third-party Java/camelCase parse payloads and parse-detail summary fields remain compatible, including parseStatus/modelStatus/workflow state.",
@@ -149,6 +156,7 @@ const lines = [
   `- Parser quality: ${report.contract.parser_quality}`,
   `- Candidate selection: ${report.contract.candidate_selection}`,
   `- VLM rescue: ${report.contract.vlm_rescue}`,
+  `- Structure-aware chunks: ${report.contract.structure_aware_chunks}`,
   `- Ingest parse status: ${report.contract.ingest_parse_status}`,
   `- Auto reparse: ${report.contract.auto_reparse}`,
   `- External parse compatibility: ${report.contract.external_parse_compatibility}`,

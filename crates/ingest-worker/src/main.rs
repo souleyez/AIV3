@@ -18,6 +18,7 @@ const EXTERNAL_SOURCE_INGEST_TASK_KEY: &str = "ingest_external_content";
 const DEFAULT_POLL_INTERVAL_MS: u64 = 1_000;
 const DEFAULT_AUTO_REPARSE_MAX_ATTEMPTS: usize = 1;
 const CHUNK_NOUN_TERM_LIMIT: usize = 64;
+const CHUNK_STRUCTURE_TERM_LIMIT: usize = 24;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct AutoReparseDecision {
@@ -728,7 +729,9 @@ fn build_document_chunks(
     outcome: &IngestOutcome,
 ) -> Vec<NewDocumentChunk> {
     let created_at = Utc::now();
-    let section_title_hints_by_chunk = section_title_hints_for_chunk_sequence(&outcome.chunks, 6);
+    let section_title_hints_by_chunk = section_title_hints_for_outcome_chunks(outcome, 6);
+    let structure_terms_by_chunk =
+        document_structure_terms_for_chunk_sequence(&outcome.chunks, &outcome.metadata);
 
     outcome
         .chunks
@@ -739,7 +742,12 @@ fn build_document_chunks(
                 .get(index)
                 .cloned()
                 .unwrap_or_default();
-            let understanding = chunk_understanding_metadata(content, &section_title_hints);
+            let structure_terms = structure_terms_by_chunk
+                .get(index)
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
+            let understanding =
+                chunk_understanding_metadata_with_seed_terms(content, &section_title_hints, structure_terms);
             NewDocumentChunk {
                 dataset_id,
                 document_id,
@@ -1094,7 +1102,36 @@ fn estimate_token_count(content: &str) -> i32 {
 }
 
 fn chunk_understanding_metadata(content: &str, section_title_hints: &[String]) -> Value {
+    chunk_understanding_metadata_with_seed_terms(content, section_title_hints, &[])
+}
+
+fn chunk_understanding_metadata_with_seed_terms(
+    content: &str,
+    section_title_hints: &[String],
+    seed_terms: &[String],
+) -> Value {
     let paragraphs = split_text_paragraphs(content);
+    let mut noun_terms = Vec::new();
+    for term in seed_terms {
+        push_chunk_noun_term(&mut noun_terms, term);
+    }
+    for hint in section_title_hints {
+        push_chunk_noun_term(&mut noun_terms, hint);
+    }
+    for term in extract_chunk_noun_terms(content, CHUNK_NOUN_TERM_LIMIT) {
+        push_chunk_noun_term(&mut noun_terms, term);
+        if noun_terms.len() >= CHUNK_NOUN_TERM_LIMIT {
+            break;
+        }
+    }
+    let mut term_sources = vec!["paragraph_ngram"];
+    if !section_title_hints.is_empty() {
+        term_sources.push("section_title");
+    }
+    if !seed_terms.is_empty() {
+        term_sources.push("document_structure");
+    }
+    let candidate_terms = noun_terms.clone();
     json!({
         "schema_version": "0.1.0",
         "strategy": "paragraph_aware_noun_terms_v1",
@@ -1104,9 +1141,29 @@ fn chunk_understanding_metadata(content: &str, section_title_hints: &[String]) -
             .take(12)
             .map(|paragraph| paragraph.chars().count())
             .collect::<Vec<_>>(),
-        "noun_terms": extract_chunk_noun_terms(content, CHUNK_NOUN_TERM_LIMIT),
+        "paragraphs": paragraphs
+            .iter()
+            .take(8)
+            .enumerate()
+            .map(|(index, paragraph)| json!({
+                "index": index,
+                "char_count": paragraph.chars().count(),
+                "text_excerpt": paragraph.chars().take(240).collect::<String>(),
+            }))
+            .collect::<Vec<_>>(),
+        "noun_terms": noun_terms,
+        "candidate_terms": candidate_terms,
+        "term_sources": term_sources,
         "section_title_hints": section_title_hints,
     })
+}
+
+fn push_chunk_noun_term(output: &mut Vec<String>, term: impl AsRef<str>) {
+    let normalized = term.as_ref().trim().chars().take(80).collect::<String>();
+    if normalized.is_empty() || output.iter().any(|existing| existing == &normalized) {
+        return;
+    }
+    output.push(normalized);
 }
 
 fn extract_chunk_noun_terms(content: &str, limit: usize) -> Vec<String> {
@@ -1301,6 +1358,203 @@ fn section_title_hints_for_chunk_sequence(chunks: &[String], limit: usize) -> Ve
             }
         })
         .collect()
+}
+
+fn section_title_hints_for_outcome_chunks(
+    outcome: &IngestOutcome,
+    limit: usize,
+) -> Vec<Vec<String>> {
+    let structure_hints = document_structure_section_title_hints(&outcome.metadata, limit * 4);
+    if structure_hints.is_empty() {
+        return section_title_hints_for_chunk_sequence(&outcome.chunks, limit);
+    }
+
+    let mut active_hints = Vec::new();
+    outcome
+        .chunks
+        .iter()
+        .enumerate()
+        .map(|(index, chunk)| {
+            let mut direct_hints = section_title_hints_from_text(chunk, limit);
+            for hint in structure_hints
+                .iter()
+                .filter(|hint| chunk_contains_structure_hint(chunk, hint))
+            {
+                push_unique_hint(&mut direct_hints, hint, limit);
+            }
+            if direct_hints.is_empty() && index == 0 {
+                for hint in structure_hints.iter().take(limit) {
+                    push_unique_hint(&mut direct_hints, hint, limit);
+                }
+            }
+            if direct_hints.is_empty() {
+                active_hints.clone()
+            } else {
+                direct_hints.truncate(limit);
+                active_hints = direct_hints;
+                active_hints.clone()
+            }
+        })
+        .collect()
+}
+
+fn document_structure_terms_for_chunk_sequence(
+    chunks: &[String],
+    metadata: &Value,
+) -> Vec<Vec<String>> {
+    let structure_terms =
+        document_structure_candidate_terms(metadata, CHUNK_STRUCTURE_TERM_LIMIT * 4);
+    if structure_terms.is_empty() {
+        return vec![Vec::new(); chunks.len()];
+    }
+    chunks
+        .iter()
+        .enumerate()
+        .map(|(index, chunk)| {
+            let mut terms = Vec::new();
+            for term in structure_terms
+                .iter()
+                .filter(|term| chunk_contains_structure_hint(chunk, term))
+            {
+                push_chunk_noun_term(&mut terms, term);
+                if terms.len() >= CHUNK_STRUCTURE_TERM_LIMIT {
+                    break;
+                }
+            }
+            if terms.is_empty() && index == 0 {
+                for term in structure_terms.iter().take(CHUNK_STRUCTURE_TERM_LIMIT) {
+                    push_chunk_noun_term(&mut terms, term);
+                }
+            }
+            terms
+        })
+        .collect()
+}
+
+fn document_structure_section_title_hints(metadata: &Value, limit: usize) -> Vec<String> {
+    let mut hints = Vec::new();
+    for block in document_structure_blocks(metadata) {
+        if !document_structure_block_is_title(block) {
+            continue;
+        }
+        if let Some(text) = document_structure_block_text(block) {
+            let title = normalize_section_title_hint(&text).unwrap_or_else(|| {
+                text.trim()
+                    .chars()
+                    .take(80)
+                    .collect::<String>()
+                    .trim()
+                    .to_string()
+            });
+            push_unique_hint(&mut hints, title, limit);
+        }
+    }
+    hints
+}
+
+fn document_structure_candidate_terms(metadata: &Value, limit: usize) -> Vec<String> {
+    let mut terms = Vec::new();
+    for block in document_structure_blocks(metadata) {
+        if !document_structure_block_is_term_source(block) {
+            continue;
+        }
+        if let Some(text) = document_structure_block_text(block) {
+            push_chunk_noun_term(&mut terms, &text);
+            for term in extract_chunk_noun_terms(&text, 16) {
+                push_chunk_noun_term(&mut terms, term);
+                if terms.len() >= limit {
+                    return terms;
+                }
+            }
+        }
+        if terms.len() >= limit {
+            break;
+        }
+    }
+    terms.truncate(limit);
+    terms
+}
+
+fn document_structure_blocks(metadata: &Value) -> Vec<&Value> {
+    metadata
+        .get("document_structure")
+        .and_then(|value| value.get("blocks"))
+        .and_then(Value::as_array)
+        .map(|blocks| blocks.iter().collect())
+        .unwrap_or_default()
+}
+
+fn document_structure_block_text(block: &Value) -> Option<String> {
+    for key in ["text", "content", "rec_text", "markdown", "html"] {
+        let Some(value) = block.get(key).and_then(Value::as_str) else {
+            continue;
+        };
+        let normalized = value.trim();
+        if !normalized.is_empty() {
+            return Some(normalized.chars().take(240).collect());
+        }
+    }
+    None
+}
+
+fn document_structure_block_type(block: &Value) -> String {
+    for key in ["block_type", "type", "label", "category"] {
+        let Some(value) = block.get(key).and_then(Value::as_str) else {
+            continue;
+        };
+        let normalized = value.trim().to_ascii_lowercase();
+        if !normalized.is_empty() {
+            return normalized;
+        }
+    }
+    String::new()
+}
+
+fn document_structure_block_is_title(block: &Value) -> bool {
+    let block_type = document_structure_block_type(block);
+    [
+        "doc_title",
+        "paragraph_title",
+        "title",
+        "header",
+        "heading",
+        "section_title",
+    ]
+    .iter()
+    .any(|value| block_type.contains(value))
+}
+
+fn document_structure_block_is_term_source(block: &Value) -> bool {
+    if document_structure_block_is_title(block) {
+        return true;
+    }
+    let block_type = document_structure_block_type(block);
+    ["table", "cell", "table_title", "figure_title", "caption"]
+        .iter()
+        .any(|value| block_type.contains(value))
+}
+
+fn chunk_contains_structure_hint(chunk: &str, hint: &str) -> bool {
+    let normalized_hint = hint.trim();
+    let prefix = normalized_hint
+        .chars()
+        .take(40)
+        .collect::<String>()
+        .trim()
+        .to_string();
+    !normalized_hint.is_empty()
+        && (chunk.contains(normalized_hint) || (!prefix.is_empty() && chunk.contains(&prefix)))
+}
+
+fn push_unique_hint(output: &mut Vec<String>, hint: impl AsRef<str>, limit: usize) {
+    if output.len() >= limit {
+        return;
+    }
+    let normalized = hint.as_ref().trim().chars().take(80).collect::<String>();
+    if normalized.is_empty() || output.iter().any(|existing| existing == &normalized) {
+        return;
+    }
+    output.push(normalized);
 }
 
 fn normalize_section_title_hint(line: &str) -> Option<String> {
@@ -1827,6 +2081,58 @@ mod tests {
     }
 
     #[test]
+    fn build_document_chunks_uses_paddleocr_structure_title_blocks() {
+        let outcome = IngestOutcome {
+            chunks: vec![
+                "工作经历\n负责智能知识库平台和客户数据治理。".to_string(),
+                "项目经验\n建设订单风险识别系统。".to_string(),
+            ],
+            inferred_title: None,
+            parse_method: "pdf-paddleocr".to_string(),
+            extracted_chars: 42,
+            used_placeholder: false,
+            metadata: json!({
+                "document_structure": {
+                    "source": "paddleocr_pp_structure_v3",
+                    "blocks": [
+                        {"page_number": 1, "type": "paragraph_title", "text": "工作经历"},
+                        {"page_number": 1, "type": "paragraph", "text": "负责智能知识库平台和客户数据治理。"},
+                        {"page_number": 2, "type": "paragraph_title", "text": "项目经验"},
+                        {"page_number": 2, "type": "table", "text": "订单风险识别系统"}
+                    ]
+                }
+            }),
+        };
+
+        let chunks = build_document_chunks(
+            domain_model::DatasetId::new(),
+            domain_model::DocumentId::new(),
+            &outcome,
+        );
+
+        assert_eq!(
+            chunks[0].metadata["section_title_hints"],
+            json!(["工作经历"])
+        );
+        assert_eq!(
+            chunks[1].metadata["section_title_hints"],
+            json!(["项目经验"])
+        );
+        assert_eq!(
+            chunks[0].metadata["understanding"]["term_sources"],
+            json!(["paragraph_ngram", "section_title", "document_structure"])
+        );
+        let first_terms = chunks[0].metadata["understanding"]["candidate_terms"]
+            .as_array()
+            .expect("candidate terms should be array")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>();
+        assert!(first_terms.contains(&"工作经历"));
+        assert!(first_terms.contains(&"知识库平台"));
+    }
+
+    #[test]
     fn chunk_understanding_metadata_extracts_paragraphs_and_noun_terms() {
         let metadata = chunk_understanding_metadata(
             "## 订单延期风险\n\n客户公司需要审批流程和库存周转报表。",
@@ -1835,6 +2141,14 @@ mod tests {
 
         assert_eq!(metadata["paragraph_count"], json!(2));
         assert_eq!(metadata["section_title_hints"], json!(["订单延期风险"]));
+        assert_eq!(
+            metadata["paragraphs"][0]["text_excerpt"],
+            json!("## 订单延期风险")
+        );
+        assert_eq!(
+            metadata["candidate_terms"], metadata["noun_terms"],
+            "candidate_terms should mirror current metadata-only noun candidates"
+        );
         let noun_terms = metadata["noun_terms"]
             .as_array()
             .expect("noun terms should be an array")
