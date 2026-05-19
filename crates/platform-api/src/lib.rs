@@ -8926,33 +8926,31 @@ async fn create_external_document_parse(
     Json(request): Json<CreateExternalDocumentParseRequest>,
 ) -> std::result::Result<(StatusCode, Json<CreateExternalDocumentParseResponse>), ApiError> {
     validate_required("connection_id", &connection_id)?;
-    validate_required("source_id", &request.source_id)?;
     validate_required("document_external_id", &request.document_external_id)?;
     validate_required("content_url", &request.content_url)?;
 
     let connection = load_external_channel_connection(&state, &connection_id).await?;
     ensure_external_channel_inbound_bearer_auth(&headers, &connection)?;
     ensure_external_channel_enabled(&connection_id, &connection)?;
+    let source_id = resolve_external_document_parse_source_id(&request, &connection)?;
 
     let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
     let current_user_id = current_auth_user_id(&state, &headers).await?;
-    load_visible_dataset_for_user(
+    let source = load_external_source_connection(&state, &source_id).await?;
+    if source.disabled_at.is_some() {
+        return Err(ApiError::forbidden(
+            "external_source_disabled",
+            format!("external source connection {} is disabled", source_id),
+        ));
+    }
+    let resolved_dataset = resolve_external_document_parse_dataset(
         &state,
-        request.dataset_id,
+        &request,
+        &source,
         &active_secret_binding_ids,
         current_user_id,
     )
     .await?;
-    let source = load_external_source_connection(&state, &request.source_id).await?;
-    if source.disabled_at.is_some() {
-        return Err(ApiError::forbidden(
-            "external_source_disabled",
-            format!(
-                "external source connection {} is disabled",
-                request.source_id
-            ),
-        ));
-    }
 
     let downloaded = download_external_document_parse_file(&request).await?;
     let title = request
@@ -8975,7 +8973,7 @@ async fn create_external_document_parse(
         .create(
             state.tenant_id,
             NewDocument {
-                dataset_id: request.dataset_id,
+                dataset_id: resolved_dataset.dataset.id,
                 title,
                 object_key: downloaded.object_key,
                 content_type,
@@ -8983,7 +8981,11 @@ async fn create_external_document_parse(
                 owner_user_id: current_user_id,
                 metadata: json!({
                     "external_source": {
-                        "source_id": request.source_id.clone(),
+                        "source_id": source_id.clone(),
+                        "source_display_name": source.display_name.clone(),
+                        "dataset_id": resolved_dataset.dataset.id,
+                        "dataset_key": resolved_dataset.dataset.key.clone(),
+                        "dataset_external_id": resolved_dataset.dataset_external_id.clone(),
                         "document_external_id": request.document_external_id.clone(),
                         "revision_external_id": request.revision_external_id.clone(),
                         "external_parse_request_id": request.idempotency_key.clone(),
@@ -8995,6 +8997,13 @@ async fn create_external_document_parse(
                         "source_content_url_redacted": downloaded.content_url_redacted,
                         "downloaded_bytes": downloaded.size_bytes,
                         "downloaded_at": Utc::now(),
+                        "dataset_resolution": {
+                            "mode": resolved_dataset.resolution_mode,
+                            "auto_created": resolved_dataset.auto_created,
+                            "requested_dataset_key": resolved_dataset.requested_dataset_key,
+                            "v3_dataset_id": resolved_dataset.dataset.id,
+                            "v3_dataset_key": resolved_dataset.dataset.key.clone(),
+                        },
                     }
                 }),
             },
@@ -9024,13 +9033,191 @@ async fn create_external_document_parse(
         StatusCode::ACCEPTED,
         Json(CreateExternalDocumentParseResponse {
             accepted: true,
-            source_id: request.source_id,
+            source_id,
             document_external_id: request.document_external_id,
             revision_external_id: request.revision_external_id,
             document: to_external_document_parse_document_view(document),
             workflow_execution: started.execution,
         }),
     ))
+}
+
+#[derive(Clone, Debug)]
+struct ResolvedExternalDocumentParseDataset {
+    dataset: Dataset,
+    dataset_external_id: Option<String>,
+    requested_dataset_key: String,
+    resolution_mode: &'static str,
+    auto_created: bool,
+}
+
+fn resolve_external_document_parse_source_id(
+    request: &CreateExternalDocumentParseRequest,
+    connection: &ExternalChannelConnectionSummary,
+) -> std::result::Result<String, ApiError> {
+    non_empty_trimmed_string(&request.source_id)
+        .or_else(|| external_channel_default_source_id_from_config(&connection.config_redacted))
+        .ok_or_else(|| {
+            ApiError::bad_request(
+                "validation_error",
+                "source_id is required when the external channel has no default_source_id"
+                    .to_string(),
+            )
+        })
+}
+
+async fn resolve_external_document_parse_dataset(
+    state: &AppState,
+    request: &CreateExternalDocumentParseRequest,
+    source: &ExternalSourceConnectionSummary,
+    active_secret_binding_ids: &[SecretBindingId],
+    current_user_id: Option<UserId>,
+) -> std::result::Result<ResolvedExternalDocumentParseDataset, ApiError> {
+    let dataset_external_id = trim_optional(request.dataset_external_id.clone());
+    if let Some(dataset_id) = request.dataset_id {
+        let dataset = load_visible_dataset_for_user(
+            state,
+            dataset_id,
+            active_secret_binding_ids,
+            current_user_id,
+        )
+        .await?;
+        return Ok(ResolvedExternalDocumentParseDataset {
+            requested_dataset_key: dataset.key.clone(),
+            dataset,
+            dataset_external_id,
+            resolution_mode: "provided_dataset_id",
+            auto_created: false,
+        });
+    }
+
+    let requested_dataset_key =
+        external_document_parse_dataset_key(&source.source_id, dataset_external_id.as_deref());
+    let existing = state
+        .storage
+        .datasets()
+        .list_by_tenant(state.tenant_id)
+        .await
+        .map_err(ApiError::from_storage)?
+        .into_iter()
+        .find(|dataset| dataset.key == requested_dataset_key);
+    if let Some(dataset) = existing {
+        return Ok(ResolvedExternalDocumentParseDataset {
+            dataset,
+            dataset_external_id,
+            requested_dataset_key,
+            resolution_mode: "source_dataset_reused",
+            auto_created: false,
+        });
+    }
+
+    let dataset = state
+        .storage
+        .datasets()
+        .create_with_metadata(
+            state.tenant_id,
+            NewDataset {
+                key: requested_dataset_key.clone(),
+                title: external_document_parse_dataset_title(request, source),
+                description: Some(format!(
+                    "Auto-created for external source {} document parsing.",
+                    source.source_id
+                )),
+                owner_user_id: current_user_id,
+            },
+            json!({
+                "visibility": DatasetVisibility::Public.as_str(),
+                "default_secret_binding_ids": [],
+                "external_source": {
+                    "source_id": source.source_id.clone(),
+                    "connector_kind": source.connector_kind.clone(),
+                    "display_name": source.display_name.clone(),
+                    "dataset_external_id": dataset_external_id.clone(),
+                    "created_by": "external_document_parse",
+                    "created_at": Utc::now(),
+                },
+            }),
+        )
+        .await
+        .map_err(ApiError::from_storage)?;
+
+    Ok(ResolvedExternalDocumentParseDataset {
+        dataset,
+        dataset_external_id,
+        requested_dataset_key,
+        resolution_mode: "source_dataset_created",
+        auto_created: true,
+    })
+}
+
+fn external_document_parse_dataset_title(
+    request: &CreateExternalDocumentParseRequest,
+    source: &ExternalSourceConnectionSummary,
+) -> String {
+    trim_optional(request.dataset_title.clone())
+        .or_else(|| non_empty_trimmed_string(&source.display_name))
+        .unwrap_or_else(|| format!("External source {}", source.source_id))
+}
+
+fn external_document_parse_dataset_key(
+    source_id: &str,
+    dataset_external_id: Option<&str>,
+) -> String {
+    let source_slug = external_document_parse_dataset_key_component(source_id);
+    let raw_key = if let Some(dataset_external_id) = dataset_external_id {
+        format!(
+            "external-source-{}-dataset-{}",
+            source_slug,
+            external_document_parse_dataset_key_component(dataset_external_id)
+        )
+    } else {
+        format!("external-source-{source_slug}")
+    };
+    compact_external_document_parse_dataset_key(raw_key)
+}
+
+fn external_document_parse_dataset_key_component(value: &str) -> String {
+    let mut slug = String::new();
+    let mut last_was_separator = false;
+    for character in value.trim().chars() {
+        if character.is_ascii_alphanumeric() {
+            slug.push(character.to_ascii_lowercase());
+            last_was_separator = false;
+        } else if !slug.is_empty() && !last_was_separator {
+            slug.push('-');
+            last_was_separator = true;
+        }
+    }
+    while slug.ends_with('-') {
+        slug.pop();
+    }
+    if slug.is_empty() {
+        return format!("ref-{}", &sha256_hex([value.as_bytes()])[..12]);
+    }
+    if slug.len() > 64 {
+        let hash = sha256_hex([value.as_bytes()]);
+        slug.truncate(48);
+        while slug.ends_with('-') {
+            slug.pop();
+        }
+        slug.push('-');
+        slug.push_str(&hash[..12]);
+    }
+    slug
+}
+
+fn compact_external_document_parse_dataset_key(mut key: String) -> String {
+    if key.len() <= 128 {
+        return key;
+    }
+    let hash = sha256_hex([key.as_bytes()]);
+    key.truncate(112);
+    while key.ends_with('-') {
+        key.pop();
+    }
+    key.push('-');
+    key.push_str(&hash[..12]);
+    key
 }
 
 async fn get_external_document_parse_detail(
@@ -52039,7 +52226,9 @@ mod tests {
             Path("generic-chat-main".to_string()),
             Json(CreateExternalDocumentParseRequest {
                 source_id: "src-docs".to_string(),
-                dataset_id: dataset.id,
+                dataset_id: Some(dataset.id),
+                dataset_external_id: None,
+                dataset_title: None,
                 document_external_id: "doc-alpha".to_string(),
                 revision_external_id: Some("rev-1".to_string()),
                 title: Some("Alpha policy".to_string()),
@@ -52167,6 +52356,205 @@ mod tests {
             detail_by_internal_id.lifecycle,
             Some(contracts::DocumentLifecycleView::Received)
         );
+    }
+
+    #[tokio::test]
+    async fn external_document_parse_endpoint_auto_creates_source_dataset_when_missing() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping external document parse dataset creation test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("external-document-parse-dataset-test-{}", Uuid::new_v4()),
+                "External Document Parse Dataset Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage,
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        sqlx::query(
+            r#"
+            insert into external_channel_connections (
+                id, tenant_id, platform, connection_key, display_name, config_redacted, status
+            )
+            values ('generic-chat-main', $1, 'generic_chat', 'generic-chat-main', 'Generic Chat', $2, 'enabled')
+            "#,
+        )
+        .bind(state.tenant_id.0)
+        .bind(json!({
+            "inbound_bearer_token": "parse-token",
+            "default_source_id": "src-auto-docs"
+        }))
+        .execute(state.storage.pool())
+        .await
+        .expect("external channel connection should be inserted");
+        sqlx::query(
+            r#"
+            insert into external_source_connections (
+                id, tenant_id, connector_kind, source_key, display_name, base_url_redacted,
+                config_redacted, sync_mode, permission_mode
+            )
+            values ('src-auto-docs', $1, 'document', 'src-auto-docs', 'Third-party Auto Docs',
+                    'https://docs.example/[redacted]', '{}', 'push', 'source_acl_snapshot')
+            "#,
+        )
+        .bind(state.tenant_id.0)
+        .execute(state.storage.pool())
+        .await
+        .expect("external source connection should be inserted");
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+        let url = format!(
+            "http://{}/doc-auto.md",
+            listener.local_addr().expect("listener address")
+        );
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let request = read_http_request(&mut stream);
+            assert!(request.starts_with("GET /doc-auto.md HTTP/1.1"));
+            let body = "# Auto dataset\n\nThe external parser should create a V3 dataset.";
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/markdown\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream.write_all(response.as_bytes()).expect("write");
+        });
+
+        let object_root =
+            std::env::temp_dir().join(format!("aidp-v3-external-parse-auto-{}", Uuid::new_v4()));
+        std::env::set_var("PLATFORM_LOCAL_OBJECT_ROOT", &object_root);
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer parse-token"),
+        );
+        let (status, Json(response)) = create_external_document_parse(
+            State(state.clone()),
+            headers,
+            Path("generic-chat-main".to_string()),
+            Json(CreateExternalDocumentParseRequest {
+                source_id: String::new(),
+                dataset_id: None,
+                dataset_external_id: Some("third-party-main".to_string()),
+                dataset_title: Some("Third-party Main Docs".to_string()),
+                document_external_id: "doc-auto".to_string(),
+                revision_external_id: None,
+                title: Some("Auto dataset".to_string()),
+                content_type: Some("text/markdown".to_string()),
+                content_url: url,
+                metadata: json!({"customer": "auto"}),
+                idempotency_key: Some("parse-doc-auto".to_string()),
+                allow_http_loopback: true,
+            }),
+        )
+        .await
+        .expect("external document parse should create a dataset");
+        server.join().expect("server should finish");
+
+        assert_eq!(status, StatusCode::ACCEPTED);
+        assert_eq!(response.source_id, "src-auto-docs");
+        assert_eq!(response.document_external_id, "doc-auto");
+        let created_dataset = state
+            .storage
+            .datasets()
+            .get_by_id(state.tenant_id, response.document.dataset_id)
+            .await
+            .expect("dataset lookup should succeed")
+            .expect("dataset should be created");
+        assert_eq!(
+            created_dataset.key,
+            "external-source-src-auto-docs-dataset-third-party-main"
+        );
+        assert_eq!(created_dataset.title, "Third-party Main Docs");
+        assert_eq!(
+            created_dataset
+                .metadata
+                .get("external_source")
+                .and_then(Value::as_object)
+                .and_then(|source| source.get("source_id"))
+                .and_then(Value::as_str),
+            Some("src-auto-docs")
+        );
+
+        let document = state
+            .storage
+            .documents()
+            .get_by_id(state.tenant_id, response.document.id)
+            .await
+            .expect("document lookup should succeed")
+            .expect("document should be created");
+        let external_source = document
+            .metadata
+            .get("external_source")
+            .and_then(Value::as_object)
+            .expect("document should retain external source metadata");
+        assert_eq!(
+            external_source
+                .get("dataset_external_id")
+                .and_then(Value::as_str),
+            Some("third-party-main")
+        );
+        assert_eq!(
+            external_source.get("dataset_key").and_then(Value::as_str),
+            Some("external-source-src-auto-docs-dataset-third-party-main")
+        );
+        let dataset_resolution = document
+            .metadata
+            .get("external_document_parse")
+            .and_then(Value::as_object)
+            .and_then(|metadata| metadata.get("dataset_resolution"))
+            .and_then(Value::as_object)
+            .expect("document should describe dataset resolution");
+        assert_eq!(
+            dataset_resolution.get("mode").and_then(Value::as_str),
+            Some("source_dataset_created")
+        );
+        assert_eq!(
+            dataset_resolution
+                .get("auto_created")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+
+        let source = load_external_source_connection(&state, "src-auto-docs")
+            .await
+            .expect("source should load");
+        let resolved_again = resolve_external_document_parse_dataset(
+            &state,
+            &CreateExternalDocumentParseRequest {
+                source_id: "src-auto-docs".to_string(),
+                dataset_id: None,
+                dataset_external_id: Some("third-party-main".to_string()),
+                dataset_title: None,
+                document_external_id: "doc-auto-2".to_string(),
+                revision_external_id: None,
+                title: None,
+                content_type: None,
+                content_url: "https://third-party.example/doc-auto-2.md".to_string(),
+                metadata: json!({}),
+                idempotency_key: None,
+                allow_http_loopback: false,
+            },
+            &source,
+            &[],
+            None,
+        )
+        .await
+        .expect("source dataset should be reused");
+        assert_eq!(resolved_again.dataset.id, created_dataset.id);
+        assert_eq!(resolved_again.resolution_mode, "source_dataset_reused");
     }
 
     #[tokio::test]

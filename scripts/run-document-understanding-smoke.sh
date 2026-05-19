@@ -76,6 +76,8 @@ run_check "external parse-detail exposes Java-compatible summary fields" \
   "${cargo_bin}" test -p contracts external_document_parse_detail_response_exposes_java_compat_summary_fields --lib
 run_check "external parse-detail surfaces async status and infers source" \
   "${cargo_bin}" test -p platform-api external_document_parse_endpoint_downloads_and_enqueues_ingest --lib
+run_check "external parse auto-creates source dataset" \
+  "${cargo_bin}" test -p platform-api external_document_parse_endpoint_auto_creates_source_dataset_when_missing --lib
 run_check "external chat document scope infers source from documentExternalId" \
   "${cargo_bin}" test -p platform-api external_channel_document_scope_infers_source_from_document_external_id --lib
 run_check "external chat missing document source is model-visible" \

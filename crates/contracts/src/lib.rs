@@ -474,10 +474,28 @@ pub struct CreateExternalSourceSyncResponse {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CreateExternalDocumentParseRequest {
-    #[serde(alias = "sourceId")]
+    #[serde(default, alias = "sourceId")]
     pub source_id: String,
-    #[serde(alias = "datasetId")]
-    pub dataset_id: DatasetId,
+    #[serde(
+        default,
+        alias = "datasetId",
+        deserialize_with = "deserialize_optional_dataset_id_lenient",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub dataset_id: Option<DatasetId>,
+    #[serde(
+        default,
+        alias = "datasetExternalId",
+        alias = "datasetKey",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub dataset_external_id: Option<String>,
+    #[serde(
+        default,
+        alias = "datasetTitle",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub dataset_title: Option<String>,
     #[serde(alias = "documentExternalId")]
     pub document_external_id: String,
     #[serde(
@@ -506,6 +524,21 @@ pub struct CreateExternalDocumentParseRequest {
     pub idempotency_key: Option<String>,
     #[serde(default, alias = "allowHttpLoopback")]
     pub allow_http_loopback: bool,
+}
+
+fn deserialize_optional_dataset_id_lenient<'de, D>(
+    deserializer: D,
+) -> Result<Option<DatasetId>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let Some(value) = Option::<Value>::deserialize(deserializer)? else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+    Ok(serde_json::from_value::<DatasetId>(value).ok())
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -3798,7 +3831,9 @@ mod tests {
         .expect("camelCase parse payload should deserialize");
 
         assert_eq!(decoded.source_id, "src-docs");
-        assert_eq!(decoded.dataset_id, dataset_id);
+        assert_eq!(decoded.dataset_id, Some(dataset_id));
+        assert_eq!(decoded.dataset_external_id, None);
+        assert_eq!(decoded.dataset_title, None);
         assert_eq!(decoded.document_external_id, "doc-java-001");
         assert_eq!(decoded.revision_external_id.as_deref(), Some("rev-1"));
         assert_eq!(decoded.content_type.as_deref(), Some("application/pdf"));
@@ -3811,6 +3846,25 @@ mod tests {
             Some("src-docs:doc-java-001:rev-1")
         );
         assert!(decoded.allow_http_loopback);
+    }
+
+    #[test]
+    fn external_document_parse_request_allows_omitted_or_external_dataset_ref() {
+        let decoded: CreateExternalDocumentParseRequest = serde_json::from_value(json!({
+            "documentExternalId": "doc-java-002",
+            "contentUrl": "https://third-party.example.com/files/doc-java-002.pdf",
+            "datasetId": "third-party-main",
+            "datasetTitle": "Third-party Main Docs"
+        }))
+        .expect("external dataset refs should not fail UUID parsing");
+
+        assert_eq!(decoded.source_id, "");
+        assert_eq!(decoded.dataset_id, None);
+        assert_eq!(
+            decoded.dataset_title.as_deref(),
+            Some("Third-party Main Docs")
+        );
+        assert_eq!(decoded.document_external_id, "doc-java-002");
     }
 
     #[test]
