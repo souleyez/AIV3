@@ -19025,6 +19025,7 @@ async fn build_assistant_run_dataset_entity_scan_supply(
         "source": "visible_document_scan",
         "dataset_id": dataset.id,
         "entity_type": "company_or_organization",
+        "entity_types": ["organization"],
         "summary": summary,
         "score": 1.0,
         "lexical_score": 1.0,
@@ -19222,6 +19223,7 @@ fn normalize_company_relation_prefix(mut value: String) -> String {
             "和",
             "与",
             "及",
+            "是",
             "在",
             "于",
         ] {
@@ -19246,6 +19248,7 @@ fn is_valid_company_name(value: &str) -> bool {
     let char_count = value.chars().count();
     char_count >= 4
         && char_count <= 40
+        && !["股份有限公司", "有限责任公司", "有限公司", "集团"].contains(&value)
         && (value.ends_with("股份有限公司")
             || value.ends_with("有限责任公司")
             || value.ends_with("有限公司")
@@ -42840,11 +42843,28 @@ mod tests {
     fn assistant_run_filters_resume_company_phrase_noise() {
         let names = extract_company_names_from_text(
             "项目作为集团级工程，配合CIO统筹规划集团流程，实现集团数据治理，\
-             上海)有限公司不是有效名称，微软（中国）有限公司是有效名称。",
+             上海)有限公司不是有效名称，股份有限公司也不是有效名称，微软（中国）有限公司是有效名称。",
             10,
         );
 
         assert_eq!(names, vec!["微软（中国）有限公司".to_string()]);
+    }
+
+    #[test]
+    fn assistant_run_normalizes_group_relation_company_names() {
+        let names = extract_company_names_from_text(
+            "广东叻叻网络科技有限责任公司\n\
+             统筹推进叻叻网络是佛山汇江集团主营业务全流程数字化。",
+            10,
+        );
+
+        assert_eq!(
+            names,
+            vec![
+                "广东叻叻网络科技有限责任公司".to_string(),
+                "佛山汇江集团".to_string()
+            ]
+        );
     }
 
     #[test]
