@@ -4794,16 +4794,8 @@ fn assistant_scope_document_title_hint(document: &Document) -> Option<String> {
 }
 
 fn assistant_scope_document_parse_status(document: &Document, chunks: &[DocumentChunk]) -> String {
-    for key in ["parse_status", "parseStatus", "status"] {
-        if let Some(value) = document
-            .metadata
-            .get(key)
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        {
-            return value.to_string();
-        }
+    if let Some(value) = document_metadata_parse_status(document) {
+        return value;
     }
     if let Some(parse_status) = extract_media_metadata_from_chunks(chunks).and_then(|metadata| {
         metadata
@@ -4816,6 +4808,21 @@ fn assistant_scope_document_parse_status(document: &Document, chunks: &[Document
         return parse_status;
     }
     document.lifecycle.as_str().to_string()
+}
+
+fn document_metadata_parse_status(document: &Document) -> Option<String> {
+    for key in ["parse_status", "parseStatus", "status"] {
+        if let Some(value) = document
+            .metadata
+            .get(key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            return Some(value.to_string());
+        }
+    }
+    None
 }
 
 fn assistant_scope_content_kind(content_type: &str) -> &'static str {
@@ -8877,8 +8884,14 @@ async fn get_external_document_parse_detail(
     let latest = details.first().cloned();
     let lifecycle = latest.as_ref().map(|item| item.lifecycle.clone());
     let chunk_count = latest.as_ref().map(|item| item.chunk_count);
+    let parse_status = latest.as_ref().map(|item| item.parse_status.clone());
+    let parse_quality_status = latest
+        .as_ref()
+        .and_then(|item| item.parse_quality_status.clone());
+    let model_status = latest.as_ref().map(|item| item.model_status.clone());
     let retrieval_evidence_count = latest.as_ref().map(|item| item.retrieval_evidence_count);
     let ingest = latest.as_ref().map(|item| item.ingest.clone());
+    let workflow = latest.as_ref().and_then(|item| item.workflow.clone());
 
     Ok(Json(GetExternalDocumentParseDetailResponse {
         source_id,
@@ -8886,9 +8899,16 @@ async fn get_external_document_parse_detail(
         lifecycle,
         chunk_count,
         chunk_count_camel: chunk_count,
+        parse_status: parse_status.clone(),
+        parse_status_camel: parse_status,
+        parse_quality_status: parse_quality_status.clone(),
+        parse_quality_status_camel: parse_quality_status,
+        model_status: model_status.clone(),
+        model_status_camel: model_status,
         retrieval_evidence_count,
         retrieval_evidence_count_camel: retrieval_evidence_count,
         ingest,
+        workflow,
         latest,
         documents: details,
     }))
@@ -9231,12 +9251,19 @@ fn external_document_redact_url(url: &reqwest::Url) -> String {
 fn to_external_document_parse_document_view(
     document: Document,
 ) -> ExternalDocumentParseDocumentView {
+    let parse_status = document_metadata_parse_status(&document)
+        .unwrap_or_else(|| document.lifecycle.as_str().to_string());
+    let parse_quality_status = assistant_run_document_parse_quality_status(&document);
     ExternalDocumentParseDocumentView {
         id: document.id,
         dataset_id: document.dataset_id,
         title: document.title,
         content_type: document.content_type,
         lifecycle: contracts::DocumentLifecycleView::from_domain(document.lifecycle),
+        parse_status: parse_status.clone(),
+        parse_status_camel: parse_status,
+        parse_quality_status: parse_quality_status.clone(),
+        parse_quality_status_camel: parse_quality_status,
         created_at: document.created_at,
         updated_at: document.updated_at,
     }
@@ -9511,15 +9538,31 @@ async fn to_external_document_parse_detail_item(
         .or_else(|| external_source.get("revisionExternalId"))
         .and_then(Value::as_str)
         .map(ToOwned::to_owned);
+    let workflow_by_document =
+        load_latest_upload_ingest_workflow_snapshots(state, document.dataset_id, &[document.id])
+            .await?;
+    let workflow = workflow_by_document.get(&document.id).cloned();
+    let parse_state = build_document_parse_status_view(
+        &document,
+        &chunks,
+        retrieval_evidences.len(),
+        workflow.as_ref(),
+    );
     Ok(ExternalDocumentParseDetailItemView {
         document_id: document.id,
         dataset_id: document.dataset_id,
-        title: document.title,
-        content_type: document.content_type,
-        lifecycle: contracts::DocumentLifecycleView::from_domain(document.lifecycle),
+        title: document.title.clone(),
+        content_type: document.content_type.clone(),
+        lifecycle: parse_state.lifecycle.clone(),
         source_id,
         document_external_id,
         revision_external_id,
+        parse_status: parse_state.parse_status.clone(),
+        parse_status_camel: parse_state.parse_status.clone(),
+        parse_quality_status: parse_state.parse_quality_status.clone(),
+        parse_quality_status_camel: parse_state.parse_quality_status.clone(),
+        model_status: parse_state.model_status.clone(),
+        model_status_camel: parse_state.model_status,
         chunk_count: chunks.len(),
         retrieval_evidence_count: retrieval_evidences.len(),
         ingest: document
@@ -9527,6 +9570,7 @@ async fn to_external_document_parse_detail_item(
             .get("ingest")
             .cloned()
             .unwrap_or_else(|| json!({})),
+        workflow,
         created_at: document.created_at,
         updated_at: document.updated_at,
     })
@@ -21800,11 +21844,16 @@ async fn load_document_detail_with_state(
         .await
         .map_err(ApiError::from_storage)?;
     sort_retrieval_evidences_by_relevance(&mut retrieval_evidences);
+    let workflow_by_document =
+        load_latest_upload_ingest_workflow_snapshots(state, document.dataset_id, &[document.id])
+            .await?;
+    let workflow = workflow_by_document.get(&document.id).cloned();
 
     Ok(to_document_detail_view(
         document,
         chunks,
         retrieval_evidences,
+        workflow,
     ))
 }
 
@@ -24592,6 +24641,9 @@ fn to_report_plan_summary(
 }
 
 fn to_document_summary(document: Document) -> DocumentSummary {
+    let parse_status = document_metadata_parse_status(&document)
+        .unwrap_or_else(|| document.lifecycle.as_str().to_string());
+    let parse_quality_status = assistant_run_document_parse_quality_status(&document);
     DocumentSummary {
         id: document.id,
         dataset_id: document.dataset_id,
@@ -24599,6 +24651,10 @@ fn to_document_summary(document: Document) -> DocumentSummary {
         object_key: document.object_key,
         content_type: document.content_type,
         lifecycle: contracts::DocumentLifecycleView::from_domain(document.lifecycle),
+        parse_status: parse_status.clone(),
+        parse_status_camel: parse_status,
+        parse_quality_status: parse_quality_status.clone(),
+        parse_quality_status_camel: parse_quality_status,
         secret_binding_ids: document.secret_binding_ids,
         created_at: document.created_at,
         updated_at: document.updated_at,
@@ -24609,7 +24665,14 @@ fn to_document_detail_view(
     document: Document,
     chunks: Vec<DocumentChunk>,
     retrieval_evidences: Vec<RetrievalEvidence>,
+    workflow: Option<Value>,
 ) -> DocumentDetailView {
+    let parse_state = build_document_parse_status_view(
+        &document,
+        &chunks,
+        retrieval_evidences.len(),
+        workflow.as_ref(),
+    );
     let mut view = DocumentDetailView {
         document: to_document_summary(document),
         chunks: chunks.into_iter().map(to_document_chunk_view).collect(),
@@ -24617,10 +24680,41 @@ fn to_document_detail_view(
             .into_iter()
             .map(to_retrieval_evidence_view)
             .collect(),
+        parse_state,
         model_facing: None,
     };
     view.model_facing = Some(derive_document_detail_model_facing_summary(&view));
     view
+}
+
+fn build_document_parse_status_view(
+    document: &Document,
+    chunks: &[DocumentChunk],
+    retrieval_evidence_count: usize,
+    workflow: Option<&Value>,
+) -> contracts::DocumentParseStatusView {
+    let parse_status = assistant_scope_document_parse_status(document, chunks);
+    let parse_quality_status = assistant_run_document_parse_quality_status(document);
+    let model_status = assistant_run_document_parse_model_status(
+        document,
+        &parse_status,
+        chunks.len(),
+        parse_quality_status.as_deref(),
+        workflow,
+    );
+    contracts::DocumentParseStatusView {
+        parse_status: parse_status.clone(),
+        parse_status_camel: parse_status,
+        parse_quality_status: parse_quality_status.clone(),
+        parse_quality_status_camel: parse_quality_status,
+        model_status: model_status.clone(),
+        model_status_camel: model_status,
+        lifecycle: contracts::DocumentLifecycleView::from_domain(document.lifecycle.clone()),
+        chunk_count: chunks.len(),
+        retrieval_evidence_count,
+        workflow: workflow.cloned(),
+        ingest: document.metadata.get("ingest").cloned(),
+    }
 }
 
 fn to_document_media_detail_view(
@@ -49483,6 +49577,23 @@ mod tests {
             .collect::<BTreeSet<_>>();
         assert!(external_ids.contains("customer-pdf-1"));
         assert!(external_ids.contains("resume-pdf-2"));
+
+        let reparsing_detail =
+            load_document_detail_with_state(&state, reparsing_document.id, &[], None)
+                .await
+                .expect("reparsing document detail should load");
+        assert_eq!(reparsing_detail.document.parse_status, "failed");
+        assert_eq!(reparsing_detail.parse_state.model_status, "reparsing");
+        assert_eq!(
+            reparsing_detail
+                .parse_state
+                .workflow
+                .as_ref()
+                .and_then(|workflow| workflow.get("status"))
+                .and_then(Value::as_str),
+            Some("running")
+        );
+
         let provider_input = build_assistant_run_provider_input_with_evidence(
             &CreateAssistantRunRequest {
                 prompt: "这几份文档现在能正常用了吗？".to_string(),
@@ -49823,6 +49934,8 @@ mod tests {
         );
         assert!(object_root.join("external-documents").exists());
         assert_eq!(response.workflow_execution.kind, WorkflowKind::UploadIngest);
+        assert_eq!(response.document.parse_status, "received");
+        assert_eq!(response.document.parse_status_camel, "received");
 
         let Json(detail) = get_external_document_parse_detail(
             State(state.clone()),
@@ -49853,8 +49966,22 @@ mod tests {
             Some(contracts::DocumentLifecycleView::Received)
         );
         assert_eq!(detail.chunk_count, Some(0));
+        assert_eq!(detail.parse_status.as_deref(), Some("received"));
+        assert_eq!(detail.parse_status_camel.as_deref(), Some("received"));
+        assert_eq!(detail.model_status.as_deref(), Some("parsing"));
+        assert_eq!(detail.model_status_camel.as_deref(), Some("parsing"));
         assert_eq!(detail.retrieval_evidence_count, Some(0));
         assert!(detail.ingest.as_ref().unwrap().is_object());
+        assert_eq!(
+            detail
+                .workflow
+                .as_ref()
+                .and_then(|workflow| workflow.get("status"))
+                .and_then(Value::as_str),
+            Some("running")
+        );
+        assert_eq!(detail.latest.as_ref().unwrap().parse_status, "received");
+        assert_eq!(detail.latest.as_ref().unwrap().model_status, "parsing");
 
         let Json(detail_by_internal_id) = get_external_document_parse_detail(
             State(state),
@@ -53379,6 +53506,10 @@ mod tests {
 
         assert_eq!(detail.document.id, document.id);
         assert_eq!(detail.document.title, "Q1 Notes");
+        assert_eq!(detail.document.parse_status, "received");
+        assert_eq!(detail.parse_state.parse_status, "received");
+        assert_eq!(detail.parse_state.chunk_count, 1);
+        assert_eq!(detail.parse_state.retrieval_evidence_count, 1);
         assert_eq!(detail.chunks.len(), 1);
         assert_eq!(
             detail.chunks[0].content,
@@ -59429,6 +59560,10 @@ mod tests {
                 object_key: "documents/broken.md".to_string(),
                 content_type: "text/markdown".to_string(),
                 lifecycle: contracts::DocumentLifecycleView::Indexed,
+                parse_status: "indexed".to_string(),
+                parse_status_camel: "indexed".to_string(),
+                parse_quality_status: None,
+                parse_quality_status_camel: None,
                 secret_binding_ids: Vec::new(),
                 created_at: now,
                 updated_at: now,
@@ -59492,6 +59627,16 @@ mod tests {
                 }),
                 created_at: now,
             }],
+            parse_state: contracts::DocumentParseStatusView {
+                parse_status: "indexed".to_string(),
+                parse_status_camel: "indexed".to_string(),
+                model_status: "ready".to_string(),
+                model_status_camel: "ready".to_string(),
+                lifecycle: contracts::DocumentLifecycleView::Indexed,
+                chunk_count: 1,
+                retrieval_evidence_count: 1,
+                ..Default::default()
+            },
             model_facing: None,
         };
 
@@ -59627,6 +59772,10 @@ mod tests {
                         object_key: "documents/a.md".to_string(),
                         content_type: "text/markdown".to_string(),
                         lifecycle: contracts::DocumentLifecycleView::Indexed,
+                        parse_status: "indexed".to_string(),
+                        parse_status_camel: "indexed".to_string(),
+                        parse_quality_status: None,
+                        parse_quality_status_camel: None,
                         secret_binding_ids: Vec::new(),
                         created_at: now,
                         updated_at: now,
@@ -59659,6 +59808,16 @@ mod tests {
                         evidence_manifest_view: None,
                         created_at: now,
                     }],
+                    parse_state: contracts::DocumentParseStatusView {
+                        parse_status: "indexed".to_string(),
+                        parse_status_camel: "indexed".to_string(),
+                        model_status: "ready".to_string(),
+                        model_status_camel: "ready".to_string(),
+                        lifecycle: contracts::DocumentLifecycleView::Indexed,
+                        chunk_count: 1,
+                        retrieval_evidence_count: 1,
+                        ..Default::default()
+                    },
                     model_facing: None,
                 },
                 DocumentDetailView {
@@ -59669,6 +59828,10 @@ mod tests {
                         object_key: "documents/b.md".to_string(),
                         content_type: "text/markdown".to_string(),
                         lifecycle: contracts::DocumentLifecycleView::Indexed,
+                        parse_status: "indexed".to_string(),
+                        parse_status_camel: "indexed".to_string(),
+                        parse_quality_status: None,
+                        parse_quality_status_camel: None,
                         secret_binding_ids: Vec::new(),
                         created_at: now,
                         updated_at: now,
@@ -59701,6 +59864,16 @@ mod tests {
                         evidence_manifest_view: None,
                         created_at: now,
                     }],
+                    parse_state: contracts::DocumentParseStatusView {
+                        parse_status: "indexed".to_string(),
+                        parse_status_camel: "indexed".to_string(),
+                        model_status: "ready".to_string(),
+                        model_status_camel: "ready".to_string(),
+                        lifecycle: contracts::DocumentLifecycleView::Indexed,
+                        chunk_count: 1,
+                        retrieval_evidence_count: 1,
+                        ..Default::default()
+                    },
                     model_facing: None,
                 },
             ],

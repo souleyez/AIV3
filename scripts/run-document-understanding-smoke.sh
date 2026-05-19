@@ -60,6 +60,10 @@ run_check "external parse accepts Java camelCase payloads" \
   "${cargo_bin}" test -p contracts external_document_parse_request_accepts_java_camel_case_payload --lib
 run_check "external parse-detail exposes Java-compatible summary fields" \
   "${cargo_bin}" test -p contracts external_document_parse_detail_response_exposes_java_compat_summary_fields --lib
+run_check "external parse-detail surfaces async parse status" \
+  "${cargo_bin}" test -p platform-api external_document_parse_endpoint_downloads_and_enqueues_ingest --lib
+run_check "document detail exposes parse state" \
+  "${cargo_bin}" test -p platform-api load_document_detail_returns_document_chunks_and_retrieval_evidences --lib
 run_check "resume company scan expands supply actions" \
   "${cargo_bin}" test -p platform-api assistant_run_resume_company_scan_scope_expands_supply_actions --lib
 run_check "resume company extractor keeps valid company names" \
@@ -103,7 +107,8 @@ const report = {
   runtime_gate_requested: /^(true|1|yes|on)$/i.test(process.env.SMOKE_RUNTIME_GATE || ""),
   contract: {
     parser_quality: "PaddleOCR parsing, low-quality PDF detection, and diagnostic fallback must not treat one-character extraction as usable content.",
-    external_parse_compatibility: "Third-party Java/camelCase parse payloads and parse-detail summary fields remain compatible.",
+    external_parse_compatibility: "Third-party Java/camelCase parse payloads and parse-detail summary fields remain compatible, including parseStatus/modelStatus/workflow state.",
+    document_detail_parse_state: "Document detail responses should expose parse_state so normal UI/model flows can explain pending, failed, or reparsing documents.",
     resume_entity_scan: "Resume/company entity scans should preserve valid company names while filtering common phrase noise.",
     async_parse_status: "Assistant evidence should surface failed, reparsing, and degraded document parse states so models can answer availability correctly."
   },
@@ -129,6 +134,7 @@ const lines = [
   "",
   `- Parser quality: ${report.contract.parser_quality}`,
   `- External parse compatibility: ${report.contract.external_parse_compatibility}`,
+  `- Document detail parse state: ${report.contract.document_detail_parse_state}`,
   `- Resume entity scan: ${report.contract.resume_entity_scan}`,
   `- Async parse status: ${report.contract.async_parse_status}`,
   "",

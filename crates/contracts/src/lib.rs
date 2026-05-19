@@ -515,6 +515,18 @@ pub struct ExternalDocumentParseDocumentView {
     pub title: String,
     pub content_type: String,
     pub lifecycle: DocumentLifecycleView,
+    #[serde(default)]
+    pub parse_status: String,
+    #[serde(default, rename = "parseStatus")]
+    pub parse_status_camel: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parse_quality_status: Option<String>,
+    #[serde(
+        default,
+        rename = "parseQualityStatus",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub parse_quality_status_camel: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -541,10 +553,28 @@ pub struct ExternalDocumentParseDetailItemView {
     pub document_external_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub revision_external_id: Option<String>,
+    #[serde(default)]
+    pub parse_status: String,
+    #[serde(default, rename = "parseStatus")]
+    pub parse_status_camel: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parse_quality_status: Option<String>,
+    #[serde(
+        default,
+        rename = "parseQualityStatus",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub parse_quality_status_camel: Option<String>,
+    #[serde(default)]
+    pub model_status: String,
+    #[serde(default, rename = "modelStatus")]
+    pub model_status_camel: String,
     pub chunk_count: usize,
     pub retrieval_evidence_count: usize,
     #[serde(default)]
     pub ingest: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow: Option<Value>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -564,6 +594,30 @@ pub struct GetExternalDocumentParseDetailResponse {
     )]
     pub chunk_count_camel: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parse_status: Option<String>,
+    #[serde(
+        default,
+        rename = "parseStatus",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub parse_status_camel: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parse_quality_status: Option<String>,
+    #[serde(
+        default,
+        rename = "parseQualityStatus",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub parse_quality_status_camel: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_status: Option<String>,
+    #[serde(
+        default,
+        rename = "modelStatus",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub model_status_camel: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retrieval_evidence_count: Option<usize>,
     #[serde(
         default,
@@ -573,6 +627,8 @@ pub struct GetExternalDocumentParseDetailResponse {
     pub retrieval_evidence_count_camel: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ingest: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub latest: Option<ExternalDocumentParseDetailItemView>,
     pub documents: Vec<ExternalDocumentParseDetailItemView>,
@@ -1835,6 +1891,18 @@ pub struct DocumentSummary {
     pub object_key: String,
     pub content_type: String,
     pub lifecycle: DocumentLifecycleView,
+    #[serde(default)]
+    pub parse_status: String,
+    #[serde(default, rename = "parseStatus")]
+    pub parse_status_camel: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parse_quality_status: Option<String>,
+    #[serde(
+        default,
+        rename = "parseQualityStatus",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub parse_quality_status_camel: Option<String>,
     pub secret_binding_ids: Vec<SecretBindingId>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -1959,7 +2027,54 @@ pub struct DocumentDetailView {
     pub chunks: Vec<DocumentChunkView>,
     pub retrieval_evidences: Vec<RetrievalEvidenceView>,
     #[serde(default)]
+    pub parse_state: DocumentParseStatusView,
+    #[serde(default)]
     pub model_facing: Option<WorkflowModelFacingSummaryView>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct DocumentParseStatusView {
+    #[serde(default)]
+    pub parse_status: String,
+    #[serde(default, rename = "parseStatus")]
+    pub parse_status_camel: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parse_quality_status: Option<String>,
+    #[serde(
+        default,
+        rename = "parseQualityStatus",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub parse_quality_status_camel: Option<String>,
+    #[serde(default)]
+    pub model_status: String,
+    #[serde(default, rename = "modelStatus")]
+    pub model_status_camel: String,
+    pub lifecycle: DocumentLifecycleView,
+    pub chunk_count: usize,
+    pub retrieval_evidence_count: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ingest: Option<Value>,
+}
+
+impl Default for DocumentParseStatusView {
+    fn default() -> Self {
+        Self {
+            parse_status: String::new(),
+            parse_status_camel: String::new(),
+            parse_quality_status: None,
+            parse_quality_status_camel: None,
+            model_status: String::new(),
+            model_status_camel: String::new(),
+            lifecycle: DocumentLifecycleView::Received,
+            chunk_count: 0,
+            retrieval_evidence_count: 0,
+            workflow: None,
+            ingest: None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -3644,9 +3759,16 @@ mod tests {
             lifecycle: Some(DocumentLifecycleView::Indexed),
             chunk_count: Some(3),
             chunk_count_camel: Some(3),
+            parse_status: Some("indexed".to_string()),
+            parse_status_camel: Some("indexed".to_string()),
+            parse_quality_status: Some("ok".to_string()),
+            parse_quality_status_camel: Some("ok".to_string()),
+            model_status: Some("ready".to_string()),
+            model_status_camel: Some("ready".to_string()),
             retrieval_evidence_count: Some(2),
             retrieval_evidence_count_camel: Some(2),
             ingest: Some(json!({"parse_method": "pdf-paddleocr"})),
+            workflow: Some(json!({"status": "succeeded", "stage": "completed"})),
             latest: Some(ExternalDocumentParseDetailItemView {
                 document_id,
                 dataset_id,
@@ -3656,9 +3778,16 @@ mod tests {
                 source_id: "src-docs".to_string(),
                 document_external_id: "doc-java-001".to_string(),
                 revision_external_id: Some("rev-1".to_string()),
+                parse_status: "indexed".to_string(),
+                parse_status_camel: "indexed".to_string(),
+                parse_quality_status: Some("ok".to_string()),
+                parse_quality_status_camel: Some("ok".to_string()),
+                model_status: "ready".to_string(),
+                model_status_camel: "ready".to_string(),
                 chunk_count: 3,
                 retrieval_evidence_count: 2,
                 ingest: json!({"parse_method": "pdf-paddleocr"}),
+                workflow: Some(json!({"status": "succeeded", "stage": "completed"})),
                 created_at: Utc::now(),
                 updated_at: Utc::now(),
             }),
@@ -3672,7 +3801,14 @@ mod tests {
         assert_eq!(encoded["retrieval_evidence_count"], json!(2));
         assert_eq!(encoded["retrievalEvidenceCount"], json!(2));
         assert_eq!(encoded["lifecycle"], json!("indexed"));
+        assert_eq!(encoded["parse_status"], json!("indexed"));
+        assert_eq!(encoded["parseStatus"], json!("indexed"));
+        assert_eq!(encoded["parse_quality_status"], json!("ok"));
+        assert_eq!(encoded["parseQualityStatus"], json!("ok"));
+        assert_eq!(encoded["model_status"], json!("ready"));
+        assert_eq!(encoded["modelStatus"], json!("ready"));
         assert_eq!(encoded["ingest"]["parse_method"], json!("pdf-paddleocr"));
+        assert_eq!(encoded["workflow"]["status"], json!("succeeded"));
     }
 
     #[test]
