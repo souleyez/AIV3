@@ -179,6 +179,9 @@ pub fn extract_document_text(
         if let Some(text) = extract_docx_text(&path) {
             return Ok(extracted_text(text, "docx-ooxml"));
         }
+        if let Some(extracted) = extract_docx_embedded_images_text(&path) {
+            return Ok(extracted);
+        }
     }
 
     if matches!(extension.as_str(), ".xlsx" | ".xlsm") {
@@ -2520,6 +2523,118 @@ fn extract_docx_text(path: &Path) -> Option<String> {
     )))
 }
 
+fn extract_docx_embedded_images_text(path: &Path) -> Option<ExtractedDocumentText> {
+    if !env_flag("DOCUMENT_DOCX_EMBEDDED_IMAGE_PARSE_ENABLED", true) {
+        return None;
+    }
+    let image_entries = docx_embedded_image_entries(path)?;
+    if image_entries.is_empty() {
+        return None;
+    }
+    let max_images = env_u64("DOCUMENT_DOCX_EMBEDDED_IMAGE_MAX_IMAGES", 8)
+        .max(1)
+        .min(64) as usize;
+    let mut archive = open_zip_archive(path)?;
+    let temp_dir = create_temp_dir("aidp-docx-images").ok()?;
+    let mut parts = Vec::new();
+    let mut reports = Vec::new();
+    let mut used_vlm = false;
+
+    for (index, entry_name) in image_entries.iter().take(max_images).enumerate() {
+        let Some(bytes) = read_zip_entry_bytes_from_archive(&mut archive, entry_name) else {
+            continue;
+        };
+        let extension = image_entry_extension(entry_name);
+        let image_path = temp_dir.join(format!("embedded-image-{}{}", index + 1, extension));
+        if fs::write(&image_path, bytes).is_err() {
+            continue;
+        }
+        let extracted = extract_image_document_text(&image_path);
+        let method = extracted.method.clone();
+        let metadata = extracted.metadata.clone();
+        used_vlm = used_vlm || method.contains("vlm");
+        let usable = docx_embedded_image_text_is_usable(&extracted);
+        let text_chars = extracted
+            .text
+            .chars()
+            .filter(|ch| !ch.is_whitespace() && !ch.is_control())
+            .count();
+        reports.push(json!({
+            "entry": entry_name,
+            "method": method,
+            "text_chars": text_chars,
+            "used": usable,
+            "metadata": metadata,
+        }));
+        if usable {
+            parts.push(format!(
+                "## DOCX embedded image {} ({})\n{}",
+                index + 1,
+                entry_name,
+                extracted.text.trim()
+            ));
+        }
+    }
+    let _ = fs::remove_dir_all(&temp_dir);
+    if parts.is_empty() {
+        return None;
+    }
+
+    Some(ExtractedDocumentText {
+        text: parts.join("\n\n"),
+        method: if used_vlm {
+            "docx-embedded-image-ocr+vlm".to_string()
+        } else {
+            "docx-embedded-image-ocr".to_string()
+        },
+        metadata: json!({
+            "document_structure": {
+                "source": "docx_embedded_images",
+                "image_count": image_entries.len(),
+                "parsed_image_count": parts.len(),
+                "max_images": max_images,
+            },
+            "embedded_images": reports,
+        }),
+    })
+}
+
+fn docx_embedded_image_text_is_usable(extracted: &ExtractedDocumentText) -> bool {
+    let text = extracted.text.trim();
+    !text.is_empty()
+        && extracted.method != "image-ocr-empty"
+        && !text.contains("OCR text was not extracted from this image")
+}
+
+fn docx_embedded_image_entries(path: &Path) -> Option<Vec<String>> {
+    let mut archive = open_zip_archive(path)?;
+    let mut entries = Vec::new();
+    for index in 0..archive.len() {
+        let name = {
+            let file = archive.by_index(index).ok()?;
+            file.name().to_string()
+        };
+        if name.starts_with("word/media/") && is_docx_embedded_image_entry(&name) {
+            entries.push(name);
+        }
+    }
+    entries.sort();
+    Some(entries)
+}
+
+fn is_docx_embedded_image_entry(name: &str) -> bool {
+    let extension = image_entry_extension(name);
+    is_image_extension(&extension)
+}
+
+fn image_entry_extension(name: &str) -> String {
+    Path::new(name)
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| format!(".{}", value.to_ascii_lowercase()))
+        .unwrap_or_else(|| ".png".to_string())
+}
+
 fn extract_pptx_text(path: &Path) -> Option<String> {
     let mut archive = open_zip_archive(path)?;
     let mut slide_entries = Vec::new();
@@ -2588,10 +2703,18 @@ fn read_zip_entry_to_string(path: &Path, entry_name: &str) -> Option<String> {
 }
 
 fn read_zip_entry_from_archive(archive: &mut ZipArchive<File>, entry_name: &str) -> Option<String> {
+    let bytes = read_zip_entry_bytes_from_archive(archive, entry_name)?;
+    Some(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+fn read_zip_entry_bytes_from_archive(
+    archive: &mut ZipArchive<File>,
+    entry_name: &str,
+) -> Option<Vec<u8>> {
     let mut file = archive.by_name(entry_name).ok()?;
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes).ok()?;
-    Some(String::from_utf8_lossy(&bytes).into_owned())
+    Some(bytes)
 }
 
 fn extract_shared_strings(xml: &str) -> Vec<String> {
@@ -3737,6 +3860,68 @@ trailer << /Root 1 0 R >>
         assert!(outcome.chunks.join("\n").contains("客户说明"));
         assert!(outcome.chunks.join("\n").contains("订单增长 20%"));
         let _ = fs::remove_file(file_path);
+    }
+
+    #[test]
+    fn docx_embedded_image_entries_detect_word_media_images() {
+        let file_path = write_temp_zip(
+            "image-only.docx",
+            &[
+                (
+                    "word/document.xml",
+                    "<w:document><w:body><w:p><w:drawing/></w:p></w:body></w:document>",
+                ),
+                ("word/media/image1.png", "fake png bytes"),
+                ("word/media/readme.txt", "not an image"),
+            ],
+        );
+
+        let entries = docx_embedded_image_entries(&file_path)
+            .expect("docx embedded image entries should be listed");
+
+        assert_eq!(entries, vec!["word/media/image1.png"]);
+        let _ = fs::remove_file(file_path);
+    }
+
+    #[test]
+    fn docx_embedded_image_parse_can_be_disabled() {
+        with_env_var(
+            "DOCUMENT_DOCX_EMBEDDED_IMAGE_PARSE_ENABLED",
+            Some("false"),
+            || {
+                let file_path = write_temp_zip(
+                    "disabled-image-only.docx",
+                    &[
+                        (
+                            "word/document.xml",
+                            "<w:document><w:body><w:p><w:drawing/></w:p></w:body></w:document>",
+                        ),
+                        ("word/media/image1.png", "fake png bytes"),
+                    ],
+                );
+
+                assert!(extract_docx_embedded_images_text(&file_path).is_none());
+                let _ = fs::remove_file(file_path);
+            },
+        );
+    }
+
+    #[test]
+    fn docx_embedded_image_text_filters_empty_ocr_placeholder() {
+        let empty = ExtractedDocumentText {
+            text: "Image file: image.png\n\nOCR text was not extracted from this image."
+                .to_string(),
+            method: "image-ocr-empty".to_string(),
+            metadata: json!({}),
+        };
+        let usable = ExtractedDocumentText {
+            text: "OCR text:\n客户公司 审批流程".to_string(),
+            method: "image-ocr".to_string(),
+            metadata: json!({}),
+        };
+
+        assert!(!docx_embedded_image_text_is_usable(&empty));
+        assert!(docx_embedded_image_text_is_usable(&usable));
     }
 
     #[test]
