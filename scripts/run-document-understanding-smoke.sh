@@ -90,6 +90,8 @@ run_check "resume company extractor filters phrase noise" \
   "${cargo_bin}" test -p platform-api assistant_run_filters_resume_company_phrase_noise --lib
 run_check "resume company extractor normalizes group relation names" \
   "${cargo_bin}" test -p platform-api assistant_run_normalizes_group_relation_company_names --lib
+run_check "typed document entities and candidate terms are extracted" \
+  "${cargo_bin}" test -p platform-api assistant_run_extracts_typed_document_entities_and_candidate_terms --lib
 run_check "async document parse status is supplied to assistant" \
   "${cargo_bin}" test -p platform-api assistant_run_supplies_document_parse_status_for_failed_and_reparsing_documents --lib
 
@@ -134,6 +136,7 @@ const report = {
     external_parse_compatibility: "Third-party Java/camelCase parse payloads and parse-detail summary fields remain compatible, including parseStatus/modelStatus/workflow state.",
     document_detail_parse_state: "Document detail responses should expose parse_state so normal UI/model flows can explain pending, failed, or reparsing documents.",
     resume_entity_scan: "Resume/company entity scans should preserve valid company names while filtering common phrase noise.",
+    typed_entity_terms: "Document entity scans should expose conservative typed entities and candidate noun terms beyond company names.",
     async_parse_status: "Assistant evidence should surface failed, reparsing, and degraded document parse states so models can answer availability correctly."
   },
   checks: JSON.parse(process.env.SMOKE_CHECKS_JSON || "[]")
@@ -166,6 +169,7 @@ const lines = [
   `- External parse compatibility: ${report.contract.external_parse_compatibility}`,
   `- Document detail parse state: ${report.contract.document_detail_parse_state}`,
   `- Resume entity scan: ${report.contract.resume_entity_scan}`,
+  `- Typed entity terms: ${report.contract.typed_entity_terms}`,
   `- Async parse status: ${report.contract.async_parse_status}`,
   "",
   "## Checks",

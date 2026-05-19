@@ -19918,7 +19918,8 @@ async fn build_assistant_run_dataset_entity_scan_supply(
 
     let mut scanned_document_count = 0usize;
     let mut limited_by_document_limit = false;
-    let mut entities_by_name: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut entities_by_key: BTreeMap<(String, String), BTreeSet<String>> = BTreeMap::new();
+    let mut candidate_terms_by_name: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     let mut document_hits = Vec::new();
 
     for document in documents {
@@ -19937,26 +19938,42 @@ async fn build_assistant_run_dataset_entity_scan_supply(
             .list_by_document(state.tenant_id, document.id)
             .await
             .map_err(ApiError::from_storage)?;
-        let scan_text = chunks
+        let scan_text = dataset_entity_scan_text(&document, &chunks);
+        let entity_candidates = extract_document_entity_candidates_from_text(&scan_text, 64);
+        let company_names = entity_candidates
             .iter()
-            .take(ASSISTANT_RUN_DATASET_ENTITY_SCAN_CHUNK_LIMIT)
-            .map(|chunk| chunk.content.as_str())
-            .collect::<Vec<_>>()
-            .join("\n");
-        let company_names = extract_company_names_from_text(&scan_text, 16);
-        if company_names.is_empty() {
+            .filter(|candidate| candidate.entity_type == "organization")
+            .map(|candidate| candidate.name.clone())
+            .collect::<Vec<_>>();
+        let candidate_terms = extract_document_candidate_terms_for_scan(&chunks, &scan_text, 32);
+        if entity_candidates.is_empty() && candidate_terms.is_empty() {
             continue;
         }
 
-        for company_name in &company_names {
-            entities_by_name
-                .entry(company_name.clone())
+        for candidate in &entity_candidates {
+            entities_by_key
+                .entry((candidate.entity_type.to_string(), candidate.name.clone()))
+                .or_default()
+                .insert(document.id.to_string());
+        }
+        for term in &candidate_terms {
+            candidate_terms_by_name
+                .entry(term.clone())
                 .or_default()
                 .insert(document.id.to_string());
         }
         document_hits.push(json!({
             "document_id": document.id,
             "company_names": company_names,
+            "entities": entity_candidates
+                .iter()
+                .take(24)
+                .map(|candidate| json!({
+                    "type": candidate.entity_type,
+                    "name": candidate.name.clone(),
+                }))
+                .collect::<Vec<_>>(),
+            "candidate_terms": candidate_terms,
         }));
     }
 
@@ -19964,8 +19981,25 @@ async fn build_assistant_run_dataset_entity_scan_supply(
         return Ok(Vec::new());
     }
 
-    let entity_count = entities_by_name.len();
-    let entity_views = entities_by_name
+    let entity_count = entities_by_key.len();
+    let organization_count = entities_by_key
+        .keys()
+        .filter(|(entity_type, _)| entity_type == "organization")
+        .count();
+    let candidate_term_count = candidate_terms_by_name.len();
+    let entity_views = entities_by_key
+        .iter()
+        .take(ASSISTANT_RUN_DATASET_ENTITY_SCAN_ENTITY_LIMIT)
+        .map(|((entity_type, name), document_ids)| {
+            json!({
+                "type": entity_type,
+                "name": name,
+                "document_count": document_ids.len(),
+                "document_ids": document_ids.iter().take(5).cloned().collect::<Vec<_>>(),
+            })
+        })
+        .collect::<Vec<_>>();
+    let candidate_term_views = candidate_terms_by_name
         .iter()
         .take(ASSISTANT_RUN_DATASET_ENTITY_SCAN_ENTITY_LIMIT)
         .map(|(name, document_ids)| {
@@ -19976,25 +20010,32 @@ async fn build_assistant_run_dataset_entity_scan_supply(
             })
         })
         .collect::<Vec<_>>();
-    let entity_summary = entities_by_name
+    let company_names = entities_by_key
+        .iter()
+        .filter(|((entity_type, _), _)| entity_type == "organization")
+        .map(|((_, name), _)| name.clone())
+        .take(ASSISTANT_RUN_DATASET_ENTITY_SCAN_ENTITY_LIMIT)
+        .collect::<Vec<_>>();
+    let entity_summary = entities_by_key
         .iter()
         .take(ASSISTANT_RUN_DATASET_ENTITY_SCAN_ENTITY_LIMIT)
-        .map(|(name, document_ids)| {
+        .map(|((entity_type, name), document_ids)| {
+            let label = document_entity_type_label(entity_type);
             if document_ids.len() > 1 {
-                format!("{name}({}份)", document_ids.len())
+                format!("{label}:{name}({}份)", document_ids.len())
             } else {
-                name.clone()
+                format!("{label}:{name}")
             }
         })
         .collect::<Vec<_>>()
         .join("、");
     let summary = if entity_summary.is_empty() {
         format!(
-            "资料库实体扫描：已扫描可见文档 {scanned_document_count} 份，未识别到明确的公司/组织名。"
+            "资料库实体扫描：已扫描可见文档 {scanned_document_count} 份，未识别到明确实体，候选名词 {candidate_term_count} 个。"
         )
     } else {
         format!(
-            "资料库实体扫描：已扫描可见文档 {scanned_document_count} 份，识别公司/组织名 {entity_count} 个：{entity_summary}。"
+            "资料库实体扫描：已扫描可见文档 {scanned_document_count} 份，识别实体 {entity_count} 个，其中公司/组织 {organization_count} 个，候选名词 {candidate_term_count} 个：{entity_summary}。"
         )
     };
 
@@ -20002,15 +20043,21 @@ async fn build_assistant_run_dataset_entity_scan_supply(
         "type": "dataset_entity_scan",
         "source": "visible_document_scan",
         "dataset_id": dataset.id,
-        "entity_type": "company_or_organization",
-        "entity_types": ["organization"],
+        "entity_type": "document_entity_scan",
+        "legacy_entity_type": "company_or_organization",
+        "entity_types": ["organization", "person", "position", "skill", "location", "project"],
         "summary": summary,
         "score": 1.0,
         "lexical_score": 1.0,
         "recall_score": 1.0,
         "scanned_document_count": scanned_document_count,
         "entity_count": entity_count,
+        "organization_count": organization_count,
+        "company_count": organization_count,
+        "candidate_term_count": candidate_term_count,
+        "company_names": company_names,
         "entities": entity_views,
+        "candidate_terms": candidate_term_views,
         "document_hits": document_hits.into_iter().take(24).collect::<Vec<_>>(),
         "limits": {
             "maxDocuments": ASSISTANT_RUN_DATASET_ENTITY_SCAN_DOCUMENT_LIMIT,
@@ -20019,6 +20066,518 @@ async fn build_assistant_run_dataset_entity_scan_supply(
             "limitedByDocumentLimit": limited_by_document_limit,
         },
     })])
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct DocumentEntityCandidate {
+    entity_type: &'static str,
+    name: String,
+}
+
+fn dataset_entity_scan_text(document: &Document, chunks: &[DocumentChunk]) -> String {
+    let mut parts = vec![document.title.trim().to_string()];
+    for chunk in chunks
+        .iter()
+        .take(ASSISTANT_RUN_DATASET_ENTITY_SCAN_CHUNK_LIMIT)
+    {
+        parts.push(chunk.content.trim().to_string());
+        parts.extend(document_chunk_section_title_hints(chunk));
+        parts.extend(document_chunk_noun_terms(chunk));
+    }
+    parts
+        .into_iter()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn extract_document_entity_candidates_from_text(
+    text: &str,
+    limit: usize,
+) -> Vec<DocumentEntityCandidate> {
+    let mut candidates = Vec::new();
+    let mut seen = BTreeSet::new();
+    for name in extract_company_names_from_text(text, limit) {
+        push_document_entity_candidate(&mut candidates, &mut seen, "organization", name, limit);
+    }
+    for name in extract_labeled_entity_values(text, &["姓名", "候选人", "联系人"], limit) {
+        if looks_like_person_name(&name) {
+            push_document_entity_candidate(&mut candidates, &mut seen, "person", name, limit);
+        }
+    }
+    for name in extract_labeled_entity_values(
+        text,
+        &["应聘岗位", "目标岗位", "岗位", "职位", "职务", "角色"],
+        limit,
+    ) {
+        if looks_like_position_name(&name) {
+            push_document_entity_candidate(&mut candidates, &mut seen, "position", name, limit);
+        }
+    }
+    for name in
+        extract_labeled_entity_values(text, &["技能", "核心技能", "专业技能", "技术栈"], limit)
+    {
+        if looks_like_skill_name(&name) {
+            push_document_entity_candidate(&mut candidates, &mut seen, "skill", name, limit);
+        }
+    }
+    for name in extract_known_skill_names(text, limit) {
+        push_document_entity_candidate(&mut candidates, &mut seen, "skill", name, limit);
+    }
+    for name in extract_labeled_entity_values(
+        text,
+        &[
+            "工作地点",
+            "项目地点",
+            "所在地",
+            "所在城市",
+            "城市",
+            "地点",
+            "籍贯",
+        ],
+        limit,
+    ) {
+        if looks_like_location_name(&name) {
+            push_document_entity_candidate(&mut candidates, &mut seen, "location", name, limit);
+        }
+    }
+    for name in extract_known_location_names(text, limit) {
+        push_document_entity_candidate(&mut candidates, &mut seen, "location", name, limit);
+    }
+    for name in extract_labeled_entity_values(text, &["项目名称", "项目", "项目经验"], limit)
+    {
+        if looks_like_project_name(&name) {
+            push_document_entity_candidate(&mut candidates, &mut seen, "project", name, limit);
+        }
+    }
+    for name in extract_project_like_terms(text, limit) {
+        push_document_entity_candidate(&mut candidates, &mut seen, "project", name, limit);
+    }
+    candidates.truncate(limit);
+    candidates
+}
+
+fn push_document_entity_candidate(
+    output: &mut Vec<DocumentEntityCandidate>,
+    seen: &mut BTreeSet<String>,
+    entity_type: &'static str,
+    name: String,
+    limit: usize,
+) {
+    if output.len() >= limit {
+        return;
+    }
+    let normalized = normalize_document_entity_value(&name);
+    if normalized.is_empty() {
+        return;
+    }
+    let key = format!("{entity_type}:{normalized}");
+    if seen.insert(key) {
+        output.push(DocumentEntityCandidate {
+            entity_type,
+            name: normalized,
+        });
+    }
+}
+
+fn extract_document_candidate_terms_for_scan(
+    chunks: &[DocumentChunk],
+    scan_text: &str,
+    limit: usize,
+) -> Vec<String> {
+    let mut terms = Vec::new();
+    for chunk in chunks
+        .iter()
+        .take(ASSISTANT_RUN_DATASET_ENTITY_SCAN_CHUNK_LIMIT)
+    {
+        for hint in document_chunk_section_title_hints(chunk) {
+            push_document_candidate_term(&mut terms, hint, limit);
+        }
+        for term in document_chunk_noun_terms(chunk) {
+            push_document_candidate_term(&mut terms, term, limit);
+        }
+    }
+    for term in extract_document_candidate_terms_from_text(scan_text, limit) {
+        push_document_candidate_term(&mut terms, term, limit);
+    }
+    terms
+}
+
+fn extract_document_candidate_terms_from_text(text: &str, limit: usize) -> Vec<String> {
+    let mut terms = BTreeSet::new();
+    for token in lexical_query_tokens(text) {
+        if document_candidate_term_has_signal(&token) {
+            let normalized = normalize_document_entity_value(&token);
+            if !normalized.is_empty() {
+                terms.insert(normalized);
+            }
+        }
+    }
+    let mut terms = terms.into_iter().collect::<Vec<_>>();
+    terms.sort_by(|left, right| {
+        document_candidate_term_score(right)
+            .cmp(&document_candidate_term_score(left))
+            .then_with(|| right.chars().count().cmp(&left.chars().count()))
+            .then_with(|| left.cmp(right))
+    });
+    terms.truncate(limit);
+    terms
+}
+
+fn push_document_candidate_term(output: &mut Vec<String>, value: impl AsRef<str>, limit: usize) {
+    if output.len() >= limit {
+        return;
+    }
+    let normalized = normalize_document_entity_value(value.as_ref());
+    let char_count = normalized.chars().count();
+    if char_count < 2
+        || char_count > 32
+        || output.iter().any(|existing| existing == &normalized)
+        || is_document_entity_noise(&normalized)
+    {
+        return;
+    }
+    output.push(normalized);
+}
+
+fn extract_labeled_entity_values(text: &str, labels: &[&str], limit: usize) -> Vec<String> {
+    let mut values = Vec::new();
+    for line in text.lines() {
+        for segment in line.split(|ch: char| matches!(ch, '\t' | '|' | '；' | ';')) {
+            let normalized = segment.trim();
+            if normalized.is_empty() {
+                continue;
+            }
+            for label in labels {
+                if let Some(value) = labeled_entity_value(normalized, label) {
+                    for item in split_entity_value_list(&value) {
+                        push_document_candidate_term(&mut values, item, limit);
+                    }
+                }
+            }
+            if values.len() >= limit {
+                return values;
+            }
+        }
+    }
+    values
+}
+
+fn labeled_entity_value(segment: &str, label: &str) -> Option<String> {
+    let normalized = segment.trim();
+    let label_position = normalized.find(label)?;
+    if label_position > 4 {
+        return None;
+    }
+    let mut rest = normalized[label_position + label.len()..].trim();
+    rest = rest.trim_start_matches(|ch: char| {
+        ch.is_whitespace() || matches!(ch, ':' | '：' | '-' | '—' | '–' | '=')
+    });
+    if rest.is_empty() {
+        return None;
+    }
+    Some(rest.chars().take(120).collect())
+}
+
+fn split_entity_value_list(value: &str) -> Vec<String> {
+    value
+        .split(|ch: char| {
+            matches!(
+                ch,
+                ',' | '，' | '、' | '/' | '／' | ';' | '；' | '|' | '\t' | '\n' | '\r'
+            )
+        })
+        .map(normalize_document_entity_value)
+        .filter(|value| !value.is_empty())
+        .collect()
+}
+
+fn normalize_document_entity_value(value: &str) -> String {
+    value
+        .trim()
+        .trim_matches(|ch: char| {
+            ch.is_whitespace()
+                || matches!(
+                    ch,
+                    ':' | '：'
+                        | '-'
+                        | '—'
+                        | '–'
+                        | '_'
+                        | '，'
+                        | ','
+                        | '。'
+                        | '；'
+                        | ';'
+                        | '、'
+                        | '（'
+                        | '('
+                        | '）'
+                        | ')'
+                        | '【'
+                        | '['
+                        | '】'
+                        | ']'
+                        | '"'
+                        | '\''
+                )
+        })
+        .chars()
+        .take(80)
+        .collect::<String>()
+}
+
+fn looks_like_person_name(value: &str) -> bool {
+    let char_count = value.chars().count();
+    char_count >= 2
+        && char_count <= 4
+        && value.chars().all(is_cjk_query_token_char)
+        && !is_document_entity_noise(value)
+        && ![
+            "姓名",
+            "候选人",
+            "联系人",
+            "公司",
+            "项目",
+            "岗位",
+            "职位",
+            "城市",
+            "技能",
+        ]
+        .contains(&value)
+}
+
+fn looks_like_position_name(value: &str) -> bool {
+    let char_count = value.chars().count();
+    char_count >= 2
+        && char_count <= 32
+        && [
+            "工程师",
+            "经理",
+            "总监",
+            "主管",
+            "专员",
+            "架构师",
+            "顾问",
+            "负责人",
+            "运营",
+            "产品",
+            "开发",
+            "测试",
+            "设计师",
+            "分析师",
+        ]
+        .iter()
+        .any(|suffix| value.ends_with(suffix) || value.contains(suffix))
+        && !is_document_entity_noise(value)
+}
+
+fn looks_like_skill_name(value: &str) -> bool {
+    let char_count = value.chars().count();
+    char_count >= 2
+        && char_count <= 32
+        && !is_document_entity_noise(value)
+        && (value.chars().any(|ch| ch.is_ascii_alphabetic())
+            || [
+                "微服务",
+                "知识库",
+                "数据治理",
+                "机器学习",
+                "深度学习",
+                "项目管理",
+                "流程优化",
+                "系统架构",
+            ]
+            .iter()
+            .any(|skill| value.contains(skill)))
+}
+
+fn looks_like_location_name(value: &str) -> bool {
+    let char_count = value.chars().count();
+    char_count >= 2
+        && char_count <= 20
+        && !is_document_entity_noise(value)
+        && (value.ends_with('市')
+            || value.ends_with('省')
+            || value.ends_with('区')
+            || value.ends_with("特别行政区")
+            || known_location_names().iter().any(|item| value == *item))
+}
+
+fn looks_like_project_name(value: &str) -> bool {
+    let char_count = value.chars().count();
+    char_count >= 3
+        && char_count <= 40
+        && !is_document_entity_noise(value)
+        && ["项目", "系统", "平台", "知识库", "中台", "网站", "小程序"]
+            .iter()
+            .any(|suffix| value.ends_with(suffix) || value.contains(suffix))
+}
+
+fn extract_known_skill_names(text: &str, limit: usize) -> Vec<String> {
+    let mut values = Vec::new();
+    for skill in [
+        "Java",
+        "Python",
+        "Rust",
+        "Go",
+        "JavaScript",
+        "TypeScript",
+        "React",
+        "Vue",
+        "Node.js",
+        "PostgreSQL",
+        "MySQL",
+        "Redis",
+        "Kubernetes",
+        "Docker",
+        "微服务",
+        "数据治理",
+        "知识库",
+        "项目管理",
+        "系统架构",
+    ] {
+        if text.contains(skill) {
+            push_document_candidate_term(&mut values, skill, limit);
+        }
+    }
+    values
+}
+
+fn extract_known_location_names(text: &str, limit: usize) -> Vec<String> {
+    let mut values = Vec::new();
+    for location in known_location_names() {
+        if text.contains(location) {
+            push_document_candidate_term(&mut values, location, limit);
+        }
+    }
+    values
+}
+
+fn known_location_names() -> &'static [&'static str] {
+    &[
+        "北京", "上海", "广州", "深圳", "杭州", "南京", "成都", "重庆", "武汉", "西安", "苏州",
+        "佛山", "东莞", "长沙", "郑州", "天津", "厦门", "青岛", "香港", "澳门",
+    ]
+}
+
+fn extract_project_like_terms(text: &str, limit: usize) -> Vec<String> {
+    let mut values = Vec::new();
+    for token in lexical_query_tokens(text) {
+        if looks_like_project_name(&token) {
+            push_document_candidate_term(&mut values, token, limit);
+        }
+        if values.len() >= limit {
+            break;
+        }
+    }
+    values
+}
+
+fn document_candidate_term_has_signal(value: &str) -> bool {
+    let char_count = value.chars().count();
+    char_count >= 2
+        && char_count <= 24
+        && !is_document_entity_noise(value)
+        && (chunk_like_business_suffix(value)
+            || looks_like_position_name(value)
+            || looks_like_skill_name(value)
+            || looks_like_project_name(value))
+}
+
+fn document_candidate_term_score(value: &str) -> usize {
+    let mut score = value.chars().count();
+    if looks_like_project_name(value) {
+        score += 30;
+    }
+    if chunk_like_business_suffix(value) {
+        score += 20;
+    }
+    if looks_like_skill_name(value) {
+        score += 12;
+    }
+    if looks_like_position_name(value) {
+        score += 10;
+    }
+    score
+}
+
+fn chunk_like_business_suffix(value: &str) -> bool {
+    [
+        "公司",
+        "集团",
+        "部门",
+        "岗位",
+        "职责",
+        "经验",
+        "能力",
+        "项目",
+        "系统",
+        "平台",
+        "流程",
+        "方案",
+        "数据",
+        "治理",
+        "报表",
+        "模型",
+        "知识库",
+        "文档",
+        "合同",
+        "订单",
+        "客户",
+        "资产",
+        "库存",
+        "风险",
+        "审批",
+        "采购",
+        "供应商",
+        "技术",
+        "架构",
+        "接口",
+        "状态",
+    ]
+    .iter()
+    .any(|suffix| value.ends_with(suffix))
+}
+
+fn is_document_entity_noise(value: &str) -> bool {
+    let normalized = value.trim();
+    normalized.is_empty()
+        || normalized.chars().all(|ch| ch.is_ascii_digit())
+        || [
+            "工作经历",
+            "项目经验",
+            "自我评价",
+            "教育经历",
+            "联系方式",
+            "技能",
+            "核心技能",
+            "专业技能",
+            "项目",
+            "公司",
+            "岗位",
+            "职责",
+            "负责",
+            "需要",
+            "可以",
+            "以及",
+            "通过",
+            "进行",
+        ]
+        .contains(&normalized)
+}
+
+fn document_entity_type_label(entity_type: &str) -> &'static str {
+    match entity_type {
+        "organization" => "组织",
+        "person" => "人员",
+        "position" => "岗位",
+        "skill" => "技能",
+        "location" => "地点",
+        "project" => "项目",
+        _ => "实体",
+    }
 }
 
 fn extract_company_names_from_text(text: &str, limit: usize) -> Vec<String> {
@@ -44332,6 +44891,37 @@ mod tests {
                 "三一集团".to_string()
             ]
         );
+    }
+
+    #[test]
+    fn assistant_run_extracts_typed_document_entities_and_candidate_terms() {
+        let text = "姓名：张三\n\
+            应聘岗位：高级Java工程师\n\
+            核心技能：Rust、Kubernetes、微服务\n\
+            项目名称：智能知识库平台\n\
+            工作地点：深圳\n\
+            任职公司：深圳星拓智能科技有限公司\n\
+            负责订单风险识别系统和客户数据治理。";
+
+        let entities = extract_document_entity_candidates_from_text(text, 32);
+        let pairs = entities
+            .iter()
+            .map(|candidate| (candidate.entity_type, candidate.name.as_str()))
+            .collect::<Vec<_>>();
+
+        assert!(pairs.contains(&("organization", "深圳星拓智能科技有限公司")));
+        assert!(pairs.contains(&("person", "张三")));
+        assert!(pairs.contains(&("position", "高级Java工程师")));
+        assert!(pairs.contains(&("skill", "Rust")));
+        assert!(pairs.contains(&("skill", "Kubernetes")));
+        assert!(pairs.contains(&("skill", "微服务")));
+        assert!(pairs.contains(&("project", "智能知识库平台")));
+        assert!(pairs.contains(&("location", "深圳")));
+
+        let terms = extract_document_candidate_terms_from_text(text, 24);
+        assert!(terms.contains(&"知识库平台".to_string()));
+        assert!(terms.contains(&"风险识别系统".to_string()));
+        assert!(terms.contains(&"数据治理".to_string()));
     }
 
     #[test]
