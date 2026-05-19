@@ -538,6 +538,14 @@ pub struct GetExternalDocumentParseDetailResponse {
     pub source_id: String,
     pub document_external_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lifecycle: Option<DocumentLifecycleView>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chunk_count: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retrieval_evidence_count: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ingest: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub latest: Option<ExternalDocumentParseDetailItemView>,
     pub documents: Vec<ExternalDocumentParseDetailItemView>,
 }

@@ -8832,8 +8832,7 @@ async fn get_external_document_parse_detail(
         })?;
     load_external_source_connection(&state, &source_id).await?;
 
-    let mut details = Vec::new();
-    for document in find_external_documents_by_external_id(
+    let mut documents = find_external_documents_by_external_id(
         &state,
         &source_id,
         &document_external_id,
@@ -8842,16 +8841,50 @@ async fn get_external_document_parse_detail(
             .or_else(|| query.get("revisionExternalId"))
             .map(String::as_str),
     )
-    .await?
-    {
+    .await?;
+    if documents.is_empty() {
+        if let Some(document_id) = Uuid::parse_str(&document_external_id).ok().map(DocumentId) {
+            if let Some(document) = state
+                .storage
+                .documents()
+                .get_by_id(state.tenant_id, document_id)
+                .await
+                .map_err(ApiError::from_storage)?
+            {
+                let revision_external_id = query
+                    .get("revision_external_id")
+                    .or_else(|| query.get("revisionExternalId"))
+                    .map(String::as_str)
+                    .and_then(non_empty_trimmed_string);
+                if external_document_source_matches(
+                    &document.metadata,
+                    &source_id,
+                    revision_external_id.as_deref(),
+                ) {
+                    documents.push(document);
+                }
+            }
+        }
+    }
+
+    let mut details = Vec::new();
+    for document in documents {
         details.push(to_external_document_parse_detail_item(&state, document).await?);
     }
     details.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
     let latest = details.first().cloned();
+    let lifecycle = latest.as_ref().map(|item| item.lifecycle.clone());
+    let chunk_count = latest.as_ref().map(|item| item.chunk_count);
+    let retrieval_evidence_count = latest.as_ref().map(|item| item.retrieval_evidence_count);
+    let ingest = latest.as_ref().map(|item| item.ingest.clone());
 
     Ok(Json(GetExternalDocumentParseDetailResponse {
         source_id,
         document_external_id,
+        lifecycle,
+        chunk_count,
+        retrieval_evidence_count,
+        ingest,
         latest,
         documents: details,
     }))
@@ -9239,6 +9272,21 @@ fn external_document_metadata_matches(
     document_external_id: &str,
     revision_external_id: Option<&str>,
 ) -> bool {
+    external_document_source_matches(metadata, source_id, revision_external_id)
+        && metadata
+            .get("external_source")
+            .or_else(|| metadata.get("externalSource"))
+            .and_then(Value::as_object)
+            .and_then(|object| object.get("document_external_id"))
+            .and_then(Value::as_str)
+            == Some(document_external_id)
+}
+
+fn external_document_source_matches(
+    metadata: &BTreeMap<String, Value>,
+    source_id: &str,
+    revision_external_id: Option<&str>,
+) -> bool {
     let Some(object) = metadata
         .get("external_source")
         .or_else(|| metadata.get("externalSource"))
@@ -9247,7 +9295,6 @@ fn external_document_metadata_matches(
         return false;
     };
     object.get("source_id").and_then(Value::as_str) == Some(source_id)
-        && object.get("document_external_id").and_then(Value::as_str) == Some(document_external_id)
         && revision_external_id.map_or(true, |revision| {
             object
                 .get("revision_external_id")
@@ -48944,8 +48991,8 @@ mod tests {
         assert_eq!(response.workflow_execution.kind, WorkflowKind::UploadIngest);
 
         let Json(detail) = get_external_document_parse_detail(
-            State(state),
-            headers,
+            State(state.clone()),
+            headers.clone(),
             Path(("generic-chat-main".to_string(), "doc-alpha".to_string())),
             Query(BTreeMap::from([(
                 "source_id".to_string(),
@@ -48966,6 +49013,36 @@ mod tests {
                 .revision_external_id
                 .as_deref(),
             Some("rev-1")
+        );
+        assert_eq!(
+            detail.lifecycle,
+            Some(contracts::DocumentLifecycleView::Received)
+        );
+        assert_eq!(detail.chunk_count, Some(0));
+        assert_eq!(detail.retrieval_evidence_count, Some(0));
+        assert!(detail.ingest.as_ref().unwrap().is_object());
+
+        let Json(detail_by_internal_id) = get_external_document_parse_detail(
+            State(state),
+            headers,
+            Path((
+                "generic-chat-main".to_string(),
+                response.document.id.to_string(),
+            )),
+            Query(BTreeMap::from([(
+                "source_id".to_string(),
+                "src-docs".to_string(),
+            )])),
+        )
+        .await
+        .expect("parse detail should accept the V3 document id as a compatibility key");
+        assert_eq!(
+            detail_by_internal_id.latest.as_ref().unwrap().document_id,
+            response.document.id
+        );
+        assert_eq!(
+            detail_by_internal_id.lifecycle,
+            Some(contracts::DocumentLifecycleView::Received)
         );
     }
 

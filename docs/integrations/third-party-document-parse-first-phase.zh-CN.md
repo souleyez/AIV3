@@ -41,7 +41,7 @@ Content-Type: application/json
 ## 解析详情查询
 
 ```http
-GET /v1/external/channels/{connection_id}/documents/{document_external_id}/parse-detail?source_id={source_id}
+GET /v1/external/channels/{connection_id}/documents/{document_external_id 或 V3 document_id}/parse-detail?source_id={source_id}
 Authorization: Bearer <channel-inbound-token>
 ```
 
@@ -49,10 +49,12 @@ Authorization: Bearer <channel-inbound-token>
 
 - `latest`：最近一次解析记录；
 - `documents`：该外部文档 ID 对应的历史解析记录；
-- `lifecycle`：`received`、`extracted`、`failed` 等文档状态；
-- `chunk_count`：已解析切片数量；
-- `retrieval_evidence_count`：已入检索证据数量；
-- `ingest`：解析摘要，不含原始下载 URL。
+- `lifecycle`：顶层兼容字段，等同于 `latest.lifecycle`；
+- `chunk_count`：顶层兼容字段，等同于 `latest.chunk_count`；
+- `retrieval_evidence_count`：顶层兼容字段，等同于 `latest.retrieval_evidence_count`；
+- `ingest`：顶层兼容字段，等同于 `latest.ingest`，不含原始下载 URL。
+
+兼容说明：推荐路径参数继续使用第三方自己的 `document_external_id`；如果调用方已经保存了解析响应里的 V3 内部 `document.id`，也可以传这个 UUID 查询同一条解析详情。
 
 ## 对话按文档限定
 

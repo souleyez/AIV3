@@ -63,7 +63,7 @@ Content-Type: application/json
 第三方可以按自己的文档 ID 查询解析进度和解析结果摘要。
 
 ```http
-GET https://v3.elepcloud.com/v1/external/channels/{connection_id}/documents/{document_external_id}/parse-detail?source_id={source_id}
+GET https://v3.elepcloud.com/v1/external/channels/{connection_id}/documents/{document_external_id 或 V3 document_id}/parse-detail?source_id={source_id}
 Authorization: Bearer <由我方提供的 token>
 ```
 
@@ -72,8 +72,11 @@ Authorization: Bearer <由我方提供的 token>
 - `latest.lifecycle`：最近一次文档状态，例如 `received`、`extracted`、`failed`。
 - `latest.chunk_count`：已生成的文档切片数量。
 - `latest.retrieval_evidence_count`：已进入检索证据的数量。
+- `lifecycle` / `chunk_count` / `retrieval_evidence_count`：兼容字段，等同于 `latest` 里的同名信息，方便旧 SDK 直接读取。
 - `documents`：同一外部文档 ID 的历史解析记录。
 - `ingest`：解析摘要，不包含原始下载 URL。
+
+推荐路径参数继续使用第三方自己的 `document_external_id`；如果调用方保存的是解析响应里的 V3 内部 `document.id`，也可以传这个 UUID 查询同一条解析详情。
 
 当 `chunk_count` 和 `retrieval_evidence_count` 已经有值后，再进入问答验收更稳。
 
