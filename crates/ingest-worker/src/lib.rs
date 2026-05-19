@@ -14,8 +14,8 @@ use std::{
     io::{Read, Write},
     net::IpAddr,
     path::{Path, PathBuf},
-    process::Command,
-    time::Duration,
+    process::{Command, Stdio},
+    time::{Duration, Instant},
 };
 use zip::ZipArchive;
 
@@ -588,6 +588,29 @@ fn is_video_extension(extension: &str) -> bool {
 
 fn extract_pdf_text(path: &Path) -> Option<ExtractedDocumentText> {
     let mut low_quality_candidate = None;
+    if let Some(extracted) = extract_pdf_with_paddleocr(path) {
+        match pdf_parse_quality(&extracted.text) {
+            PdfParseQuality::Usable { text_chars } => {
+                return Some(with_pdf_parse_quality_metadata(
+                    extracted,
+                    "usable_text",
+                    text_chars,
+                    None,
+                ));
+            }
+            PdfParseQuality::LowTextCoverage { text_chars } => {
+                low_quality_candidate.get_or_insert_with(|| {
+                    with_pdf_parse_quality_metadata(
+                        extracted,
+                        "low_text_coverage",
+                        text_chars,
+                        None,
+                    )
+                });
+            }
+        }
+    }
+
     for extracted in [
         extract_pdf_with_pdftotext(path).map(|text| extracted_text(text, "pdf-pdftotext")),
         extract_pdf_with_python(path).map(|text| extracted_text(text, "pdf-python")),
@@ -745,6 +768,291 @@ fn merge_object_value(target: &mut Value, key: &str, value: Value) {
     if let Some(object) = target.as_object_mut() {
         object.insert(key.to_string(), value);
     }
+}
+
+fn extract_pdf_with_paddleocr(path: &Path) -> Option<ExtractedDocumentText> {
+    if !document_paddleocr_enabled() {
+        return None;
+    }
+
+    let temp_dir = create_temp_dir("aidp-paddleocr").ok()?;
+    let extracted = run_paddleocr_sidecar(path, &temp_dir);
+    let _ = fs::remove_dir_all(&temp_dir);
+    extracted
+}
+
+fn document_paddleocr_enabled() -> bool {
+    env_flag_enabled("DOCUMENT_PADDLEOCR_ENABLED")
+        || std::env::var("DOCUMENT_PDF_PARSE_ENGINE")
+            .map(|value| value.trim().eq_ignore_ascii_case("paddleocr_first"))
+            .unwrap_or(false)
+}
+
+fn document_paddleocr_timeout() -> Duration {
+    let millis = std::env::var("DOCUMENT_PADDLEOCR_TIMEOUT_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(120_000)
+        .max(1_000);
+    Duration::from_millis(millis)
+}
+
+fn document_paddleocr_max_pages() -> usize {
+    std::env::var("DOCUMENT_PADDLEOCR_MAX_PAGES")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(8)
+        .max(1)
+}
+
+fn env_flag_enabled(name: &str) -> bool {
+    std::env::var(name)
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false)
+}
+
+fn run_paddleocr_sidecar(path: &Path, output_dir: &Path) -> Option<ExtractedDocumentText> {
+    let output_path = output_dir.join("result.json");
+    let path_arg = path.to_string_lossy().to_string();
+    let output_arg = output_path.to_string_lossy().to_string();
+    let max_pages = document_paddleocr_max_pages();
+    let max_pages_arg = max_pages.to_string();
+    let script = r##"
+import json
+import os
+import sys
+
+pdf_path = sys.argv[1]
+output_path = sys.argv[2]
+max_pages = max(1, int(sys.argv[3]))
+os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
+def emit(payload):
+    with open(output_path, "w", encoding="utf-8") as fh:
+        json.dump(payload, fh, ensure_ascii=False)
+
+def truncate_text(value, limit=1200):
+    text = str(value or "").strip()
+    return text if len(text) <= limit else text[:limit] + "..."
+
+def plain(value):
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, dict):
+        return {str(k): plain(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [plain(item) for item in value]
+    for attr in ("json",):
+        try:
+            attr_value = getattr(value, attr)
+            if callable(attr_value):
+                attr_value = attr_value()
+            return plain(attr_value)
+        except Exception:
+            pass
+    try:
+        return json.loads(json.dumps(value, ensure_ascii=False, default=str))
+    except Exception:
+        return str(value)
+
+def markdown_text(value):
+    value = plain(value)
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, dict):
+        for key in ("markdown_texts", "markdown_text", "markdown", "text", "content"):
+            item = value.get(key)
+            if isinstance(item, str) and item.strip():
+                return item.strip()
+            if isinstance(item, list):
+                joined = "\n\n".join(str(part).strip() for part in item if str(part).strip())
+                if joined.strip():
+                    return joined.strip()
+    if isinstance(value, list):
+        joined = "\n\n".join(markdown_text(item) for item in value)
+        return joined.strip()
+    return ""
+
+def first_text_value(node):
+    if not isinstance(node, dict):
+        return ""
+    for key in ("text", "content", "rec_text", "transcription", "markdown", "html"):
+        value = node.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    texts = node.get("rec_texts")
+    if isinstance(texts, list):
+        joined = " ".join(str(item).strip() for item in texts if str(item).strip())
+        if joined:
+            return joined
+    return ""
+
+def collect_blocks(node, page_number, blocks):
+    if len(blocks) >= 200:
+        return
+    if isinstance(node, dict):
+        text = first_text_value(node)
+        if text:
+            block = {
+                "page_number": page_number,
+                "text": truncate_text(text),
+            }
+            for out_key, keys in (
+                ("type", ("block_label", "type", "label", "category")),
+                ("bbox", ("bbox", "box", "poly", "coordinate")),
+                ("confidence", ("confidence", "score", "rec_score")),
+            ):
+                for key in keys:
+                    if key in node and node[key] not in (None, ""):
+                        block[out_key] = plain(node[key])
+                        break
+            blocks.append(block)
+        for value in node.values():
+            collect_blocks(value, page_number, blocks)
+    elif isinstance(node, list):
+        for item in node:
+            collect_blocks(item, page_number, blocks)
+
+try:
+    from paddleocr import PPStructureV3
+except Exception as exc:
+    emit({"ok": False, "error": f"paddleocr_import_failed: {exc}"})
+    sys.exit(2)
+
+errors = []
+blocks = []
+raw_markdowns = []
+page_markdowns = []
+page_count = 0
+
+try:
+    pipeline = PPStructureV3()
+    output = pipeline.predict(input=pdf_path)
+    for page_index, result in enumerate(output):
+        if page_index >= max_pages:
+            break
+        page_number = page_index + 1
+        page_count += 1
+        try:
+            result.save_to_json(save_path=os.path.dirname(output_path))
+        except Exception as exc:
+            errors.append(f"save_to_json_page_{page_number}: {exc}")
+        try:
+            result.save_to_markdown(save_path=os.path.dirname(output_path))
+        except Exception as exc:
+            errors.append(f"save_to_markdown_page_{page_number}: {exc}")
+        markdown_obj = getattr(result, "markdown", None)
+        if markdown_obj is not None:
+            raw_markdowns.append(markdown_obj)
+        markdown = markdown_text(markdown_obj) or markdown_text(result)
+        if markdown:
+            page_markdowns.append(f"# Page {page_number}\n\n{markdown}")
+        collect_blocks(plain(result), page_number, blocks)
+
+    combined_markdown = ""
+    if raw_markdowns and hasattr(pipeline, "concatenate_markdown_pages"):
+        try:
+            combined_markdown = markdown_text(pipeline.concatenate_markdown_pages(raw_markdowns))
+        except Exception as exc:
+            errors.append(f"concatenate_markdown_pages: {exc}")
+    if not combined_markdown:
+        combined_markdown = "\n\n".join(page_markdowns)
+
+    emit({
+        "ok": True,
+        "markdown": combined_markdown,
+        "page_count": page_count,
+        "block_count": len(blocks),
+        "blocks": blocks,
+        "errors": errors,
+    })
+    sys.exit(0 if combined_markdown.strip() else 3)
+except Exception as exc:
+    emit({
+        "ok": False,
+        "error": f"paddleocr_predict_failed: {exc}",
+        "page_count": page_count,
+        "block_count": len(blocks),
+        "blocks": blocks,
+        "errors": errors,
+    })
+    sys.exit(4)
+"##;
+
+    for command in python_command_candidates() {
+        let _ = fs::remove_file(&output_path);
+        if !run_status_command_with_timeout(
+            &command,
+            &[
+                "-c",
+                script,
+                path_arg.as_str(),
+                output_arg.as_str(),
+                max_pages_arg.as_str(),
+            ],
+            document_paddleocr_timeout(),
+        ) {
+            continue;
+        }
+        let Some(payload) = fs::read_to_string(&output_path)
+            .ok()
+            .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        else {
+            continue;
+        };
+        if let Some(extracted) = paddleocr_payload_to_extracted_text(payload, max_pages) {
+            return Some(extracted);
+        }
+    }
+    None
+}
+
+fn paddleocr_payload_to_extracted_text(
+    payload: Value,
+    max_pages: usize,
+) -> Option<ExtractedDocumentText> {
+    if payload
+        .get("ok")
+        .and_then(Value::as_bool)
+        .is_some_and(|ok| !ok)
+    {
+        return None;
+    }
+    let markdown = payload
+        .get("markdown")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .replace('\x0c', "\n");
+    let text = normalize_extracted_text(&markdown)?;
+    let blocks = payload.get("blocks").cloned().unwrap_or_else(|| json!([]));
+    let block_count = payload
+        .get("block_count")
+        .and_then(Value::as_u64)
+        .or_else(|| blocks.as_array().map(|items| items.len() as u64))
+        .unwrap_or(0);
+    Some(ExtractedDocumentText {
+        text,
+        method: "pdf-paddleocr".to_string(),
+        metadata: json!({
+            "document_structure": {
+                "source": "paddleocr_pp_structure_v3",
+                "format": "structured_markdown",
+                "page_count": payload.get("page_count").cloned().unwrap_or(Value::Null),
+                "block_count": block_count,
+                "blocks": blocks,
+            },
+            "paddleocr": {
+                "parser": "PP-StructureV3",
+                "max_pages": max_pages,
+                "errors": payload.get("errors").cloned().unwrap_or_else(|| json!([])),
+            }
+        }),
+    })
 }
 
 fn extract_pdf_with_pdftotext(path: &Path) -> Option<String> {
@@ -2130,6 +2438,35 @@ fn run_status_command(command: &str, args: &[&str]) -> bool {
         .unwrap_or(false)
 }
 
+fn run_status_command_with_timeout(command: &str, args: &[&str], timeout: Duration) -> bool {
+    let mut child = match Command::new(command)
+        .args(args)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(_) => return false,
+    };
+    let start = Instant::now();
+    loop {
+        if start.elapsed() >= timeout {
+            let _ = child.kill();
+            let _ = child.wait();
+            return false;
+        }
+        match child.try_wait() {
+            Ok(Some(status)) => return status.success(),
+            Ok(None) => std::thread::sleep(Duration::from_millis(100)),
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return false;
+            }
+        }
+    }
+}
+
 fn create_temp_dir(prefix: &str) -> std::io::Result<PathBuf> {
     let base = std::env::temp_dir();
     for attempt in 0..10 {
@@ -2391,6 +2728,78 @@ trailer << /Root 1 0 R >>
                 json!("low_text_coverage_fallback_unavailable")
             );
             assert_eq!(diagnostic.metadata["parse_quality"]["text_chars"], json!(1));
+        });
+    }
+
+    #[test]
+    fn paddleocr_disabled_by_default() {
+        with_env_var("DOCUMENT_PADDLEOCR_ENABLED", None, || {
+            with_env_var("DOCUMENT_PDF_PARSE_ENGINE", None, || {
+                assert!(extract_pdf_with_paddleocr(Path::new("missing.pdf")).is_none());
+            });
+        });
+    }
+
+    #[test]
+    fn paddleocr_payload_keeps_structured_markdown_and_blocks() {
+        let extracted = paddleocr_payload_to_extracted_text(
+            json!({
+                "ok": true,
+                "markdown": "# Page 1\n\n## 工作经历\n\n广东高明中港城商业管理有限公司\n\n- 运营经理",
+                "page_count": 1,
+                "block_count": 2,
+                "blocks": [
+                    {
+                        "page_number": 1,
+                        "type": "paragraph_title",
+                        "text": "工作经历",
+                        "bbox": [12, 24, 160, 48],
+                        "confidence": 0.97
+                    },
+                    {
+                        "page_number": 1,
+                        "type": "text",
+                        "text": "广东高明中港城商业管理有限公司"
+                    }
+                ],
+                "errors": []
+            }),
+            8,
+        )
+        .expect("structured PaddleOCR payload should become extracted text");
+
+        assert_eq!(extracted.method, "pdf-paddleocr");
+        assert!(extracted.text.contains("广东高明中港城商业管理有限公司"));
+        assert_eq!(
+            extracted.metadata["document_structure"]["source"],
+            json!("paddleocr_pp_structure_v3")
+        );
+        assert_eq!(
+            extracted.metadata["document_structure"]["blocks"][0]["type"],
+            json!("paragraph_title")
+        );
+        assert_eq!(extracted.metadata["paddleocr"]["max_pages"], json!(8));
+    }
+
+    #[test]
+    fn paddleocr_payload_with_one_character_stays_low_quality() {
+        with_env_var("DOCUMENT_PDF_MIN_USABLE_TEXT_CHARS", Some("32"), || {
+            let extracted = paddleocr_payload_to_extracted_text(
+                json!({
+                    "ok": true,
+                    "markdown": "字",
+                    "page_count": 1,
+                    "block_count": 1,
+                    "blocks": [{"page_number": 1, "text": "字"}],
+                }),
+                8,
+            )
+            .expect("single character payload is still parseable before quality gate");
+
+            assert_eq!(
+                pdf_parse_quality(&extracted.text),
+                PdfParseQuality::LowTextCoverage { text_chars: 1 }
+            );
         });
     }
 
