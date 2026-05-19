@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{bail, Result};
 use chrono::Utc;
 use domain_model::{
     Dataset, DatasetId, DatasetLifecycle, DatasetVisibility, ReportModule, ReportModuleId,
@@ -10,6 +10,8 @@ use std::sync::OnceLock;
 use std::time::Duration;
 use storage::{PgStorage, DEFAULT_LOCAL_DATABASE_URL, TABLES};
 use tokio::sync::Mutex;
+
+const ALLOW_SHARED_DATABASE_ENV: &str = "AIV3_ALLOW_TEST_FIXTURE_SHARED_DATABASE";
 
 pub fn sample_dataset() -> Dataset {
     Dataset {
@@ -93,6 +95,7 @@ pub async fn shared_local_postgres_storage() -> std::result::Result<PgStorage, S
 pub async fn local_postgres_storage() -> std::result::Result<PgStorage, String> {
     let database_url = std::env::var("PLATFORM_DATABASE_URL")
         .unwrap_or_else(|_| DEFAULT_LOCAL_DATABASE_URL.into());
+    ensure_safe_local_postgres_fixture_url(&database_url)?;
     let storage = PgStorage::connect_with_settings(&database_url, 4, Duration::from_secs(10))
         .await
         .map_err(|error| {
@@ -105,8 +108,93 @@ pub async fn local_postgres_storage() -> std::result::Result<PgStorage, String> 
 }
 
 pub async fn reset_local_postgres_storage(storage: &PgStorage) -> Result<()> {
+    ensure_safe_local_postgres_fixture_database(storage).await?;
     let truncate = format!("truncate table {} cascade", TABLES.join(", "));
     sqlx::query(&truncate).execute(storage.pool()).await?;
     storage.migrate().await?;
     Ok(())
+}
+
+fn ensure_safe_local_postgres_fixture_url(database_url: &str) -> std::result::Result<(), String> {
+    if shared_database_fixture_override_enabled() {
+        return Ok(());
+    }
+    let database_name =
+        database_name_from_url(database_url).unwrap_or_else(|| "<unknown>".to_string());
+    if database_name_looks_disposable(&database_name) {
+        return Ok(());
+    }
+    Err(format!(
+        "refusing to use non-test postgres fixture database '{database_name}'. \
+         Point PLATFORM_DATABASE_URL at a disposable test database, or set \
+         {ALLOW_SHARED_DATABASE_ENV}=1 only after confirming this is intentional."
+    ))
+}
+
+async fn ensure_safe_local_postgres_fixture_database(storage: &PgStorage) -> Result<()> {
+    if shared_database_fixture_override_enabled() {
+        return Ok(());
+    }
+    let database_name: String = sqlx::query_scalar("select current_database()")
+        .fetch_one(storage.pool())
+        .await?;
+    if database_name_looks_disposable(&database_name) {
+        return Ok(());
+    }
+    bail!(
+        "refusing to reset non-test postgres fixture database '{database_name}'. \
+         Point PLATFORM_DATABASE_URL at a disposable test database, or set \
+         {ALLOW_SHARED_DATABASE_ENV}=1 only after confirming this is intentional."
+    )
+}
+
+fn shared_database_fixture_override_enabled() -> bool {
+    std::env::var(ALLOW_SHARED_DATABASE_ENV)
+        .ok()
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false)
+}
+
+fn database_name_from_url(database_url: &str) -> Option<String> {
+    let without_fragment = database_url.split('#').next().unwrap_or(database_url);
+    let without_query = without_fragment
+        .split('?')
+        .next()
+        .unwrap_or(without_fragment);
+    let raw_name = without_query.rsplit('/').next()?.trim();
+    (!raw_name.is_empty()).then(|| raw_name.to_ascii_lowercase())
+}
+
+fn database_name_looks_disposable(database_name: &str) -> bool {
+    let normalized = database_name.trim().to_ascii_lowercase().replace('-', "_");
+    normalized.contains("test")
+        || normalized.starts_with("tmp_")
+        || normalized.ends_with("_tmp")
+        || normalized.starts_with("scratch_")
+        || normalized.ends_with("_scratch")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn database_name_from_url_extracts_name_without_query() {
+        assert_eq!(
+            database_name_from_url("postgres://user:pass@127.0.0.1:5432/aiv3_test?sslmode=disable"),
+            Some("aiv3_test".to_string())
+        );
+    }
+
+    #[test]
+    fn disposable_database_guard_rejects_shared_production_name() {
+        assert!(!database_name_looks_disposable("ai_data_platform_v3"));
+        assert!(database_name_looks_disposable("ai_data_platform_v3_test"));
+        assert!(database_name_looks_disposable("scratch_aiv3"));
+    }
 }

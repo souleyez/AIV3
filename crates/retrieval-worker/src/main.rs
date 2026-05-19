@@ -162,6 +162,7 @@ async fn process_task(
             })?;
             let source_locator = retrieval_source_locator(document_id, chunk);
             let section_title_hints = document_chunk_section_title_hints(chunk);
+            let noun_terms = document_chunk_noun_terms(chunk);
             let mut evidence_manifest = json!({
                 "schema_version": "0.4.0",
                 "generator": "retrieval-worker",
@@ -189,6 +190,7 @@ async fn process_task(
                     "payload_filter_key": &payload_filter_key,
                     "source_locator": source_locator.clone(),
                     "section_title_hints": &section_title_hints,
+                    "noun_terms": &noun_terms,
                 },
             });
             if let Some(media_manifest) = retrieval_media_manifest(chunk) {
@@ -520,6 +522,7 @@ async fn index_external_document(
         })?;
         let source_locator = retrieval_source_locator(document_id, chunk);
         let section_title_hints = document_chunk_section_title_hints(chunk);
+        let noun_terms = document_chunk_noun_terms(chunk);
         let mut evidence_manifest = json!({
             "schema_version": "0.4.0",
             "generator": "retrieval-worker",
@@ -547,6 +550,7 @@ async fn index_external_document(
                 "payload_filter_key": &payload_filter_key,
                 "source_locator": source_locator.clone(),
                 "section_title_hints": &section_title_hints,
+                "noun_terms": &noun_terms,
             },
         });
         if let Some(media_manifest) = retrieval_media_manifest(chunk) {
@@ -642,10 +646,12 @@ fn excerpt(content: &str, max_chars: usize) -> String {
 
 fn retrieval_index_text(document: &Document, chunk: &DocumentChunk) -> String {
     let section_title_hints = document_chunk_section_title_hints(chunk).join("\n");
+    let noun_terms = document_chunk_noun_terms(chunk).join("\n");
     [
         document.title.trim(),
         document.object_key.trim(),
         section_title_hints.trim(),
+        noun_terms.trim(),
         chunk.content.trim(),
     ]
     .into_iter()
@@ -698,6 +704,24 @@ fn document_chunk_section_title_hints(chunk: &DocumentChunk) -> Vec<String> {
     }
     hints.truncate(6);
     hints
+}
+
+fn document_chunk_noun_terms(chunk: &DocumentChunk) -> Vec<String> {
+    let mut terms = Vec::new();
+    if let Some(value) = chunk
+        .metadata
+        .get("understanding")
+        .and_then(|value| value.get("noun_terms").or_else(|| value.get("nounTerms")))
+    {
+        collect_string_list(value, &mut terms);
+    }
+    for key in ["noun_terms", "nounTerms", "term_hints", "termHints"] {
+        if let Some(value) = chunk.metadata.get(key) {
+            collect_string_list(value, &mut terms);
+        }
+    }
+    terms.truncate(64);
+    terms
 }
 
 fn collect_string_list(value: &Value, output: &mut Vec<String>) {
@@ -1167,6 +1191,24 @@ mod tests {
         assert!(indexed_text.contains("External Doc"));
         assert!(indexed_text.contains("固定资产申请"));
         assert!(indexed_text.contains("审批正文说明"));
+    }
+
+    #[test]
+    fn retrieval_index_text_includes_chunk_noun_terms() {
+        let document = document_with_metadata(json!({}));
+        let mut chunk = media_chunk(json!({}));
+        chunk.metadata.insert(
+            "understanding".to_string(),
+            json!({"noun_terms": ["订单延期风险", "供应商确认"]}),
+        );
+        chunk.content = "仓库交接超过两天需要提醒。".to_string();
+
+        let indexed_text = retrieval_index_text(&document, &chunk);
+        let noun_terms = document_chunk_noun_terms(&chunk);
+
+        assert!(indexed_text.contains("订单延期风险"));
+        assert!(indexed_text.contains("供应商确认"));
+        assert_eq!(noun_terms, vec!["订单延期风险", "供应商确认"]);
     }
 
     #[test]

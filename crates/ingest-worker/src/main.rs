@@ -3,9 +3,11 @@ use chrono::Utc;
 use domain_model::{Document, DocumentLifecycle, WorkflowStatus};
 use event_bus::{workflow_task_enqueued_subject, EventBus, EventSubscription};
 use ingest_worker::{
-    split_text_chunks, IngestJob, IngestOutcome, IngestProcessor, LocalIngestProcessor,
+    split_text_chunks, split_text_paragraphs, IngestJob, IngestOutcome, IngestProcessor,
+    LocalIngestProcessor,
 };
 use serde_json::{json, Value};
+use std::collections::{BTreeMap, BTreeSet};
 use storage::{NewDocument, NewDocumentChunk, PgStorage, DEFAULT_LOCAL_DATABASE_URL};
 use tokio::time::Duration;
 use workflow_engine::{WorkflowCatalog, WorkflowSignal};
@@ -15,6 +17,7 @@ const DEFAULT_WAKE_TASK_KEY: &str = "ingest_uploaded_document";
 const EXTERNAL_SOURCE_INGEST_TASK_KEY: &str = "ingest_external_content";
 const DEFAULT_POLL_INTERVAL_MS: u64 = 1_000;
 const DEFAULT_AUTO_REPARSE_MAX_ATTEMPTS: usize = 1;
+const CHUNK_NOUN_TERM_LIMIT: usize = 64;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct AutoReparseDecision {
@@ -736,6 +739,7 @@ fn build_document_chunks(
                 .get(index)
                 .cloned()
                 .unwrap_or_default();
+            let understanding = chunk_understanding_metadata(content, &section_title_hints);
             NewDocumentChunk {
                 dataset_id,
                 document_id,
@@ -748,6 +752,7 @@ fn build_document_chunks(
                     "parse_status": outcome.parse_status(),
                     "parse_metadata": outcome.metadata.clone(),
                     "section_title_hints": section_title_hints,
+                    "understanding": understanding,
                     "source": "upload_ingest_workflow",
                 }),
                 created_at,
@@ -776,12 +781,12 @@ fn build_external_source_document_chunks(
                 .get(index)
                 .cloned()
                 .unwrap_or_default();
+            let understanding = chunk_understanding_metadata(&content, &section_title_hints);
             NewDocumentChunk {
                 dataset_id,
                 document_id,
                 chunk_index: index as i32,
                 token_count: estimate_token_count(&content),
-                content,
                 metadata: json!({
                     "extractor": "external_source_inline",
                     "parse_method": "external_source_inline",
@@ -790,8 +795,10 @@ fn build_external_source_document_chunks(
                     "external_source": external_source,
                     "external_acl": external_acl,
                     "section_title_hints": section_title_hints,
+                    "understanding": understanding,
                     "parse_metadata": input.metadata.clone(),
                 }),
+                content,
                 created_at,
             }
         })
@@ -1084,6 +1091,185 @@ fn external_source_object_key(source_id: &str, input: &ExternalSourceDocumentInp
 fn estimate_token_count(content: &str) -> i32 {
     let estimated = (content.chars().count() / 4).max(1);
     estimated.try_into().unwrap_or(i32::MAX)
+}
+
+fn chunk_understanding_metadata(content: &str, section_title_hints: &[String]) -> Value {
+    let paragraphs = split_text_paragraphs(content);
+    json!({
+        "schema_version": "0.1.0",
+        "strategy": "paragraph_aware_noun_terms_v1",
+        "paragraph_count": paragraphs.len(),
+        "paragraph_char_counts": paragraphs
+            .iter()
+            .take(12)
+            .map(|paragraph| paragraph.chars().count())
+            .collect::<Vec<_>>(),
+        "noun_terms": extract_chunk_noun_terms(content, CHUNK_NOUN_TERM_LIMIT),
+        "section_title_hints": section_title_hints,
+    })
+}
+
+fn extract_chunk_noun_terms(content: &str, limit: usize) -> Vec<String> {
+    if limit == 0 {
+        return Vec::new();
+    }
+    let mut counts = BTreeMap::<String, usize>::new();
+    let mut ascii_token = String::new();
+    let mut cjk_run = Vec::<char>::new();
+
+    for ch in content.chars() {
+        if ch.is_ascii_alphanumeric() {
+            flush_cjk_noun_terms(&mut counts, &mut cjk_run);
+            ascii_token.push(ch.to_ascii_lowercase());
+            continue;
+        }
+        flush_ascii_noun_term(&mut counts, &mut ascii_token);
+        if is_cjk_noun_char(ch) {
+            cjk_run.push(ch);
+        } else {
+            flush_cjk_noun_terms(&mut counts, &mut cjk_run);
+        }
+    }
+    flush_ascii_noun_term(&mut counts, &mut ascii_token);
+    flush_cjk_noun_terms(&mut counts, &mut cjk_run);
+
+    let mut terms = counts.into_iter().collect::<Vec<_>>();
+    terms.sort_by(|left, right| {
+        right
+            .1
+            .cmp(&left.1)
+            .then_with(|| right.0.chars().count().cmp(&left.0.chars().count()))
+            .then_with(|| left.0.cmp(&right.0))
+    });
+    let mut seen = BTreeSet::new();
+    terms
+        .into_iter()
+        .filter_map(|(term, _)| seen.insert(term.clone()).then_some(term))
+        .take(limit)
+        .collect()
+}
+
+fn flush_ascii_noun_term(counts: &mut BTreeMap<String, usize>, token: &mut String) {
+    let normalized = token.trim();
+    if normalized.len() >= 2 && !is_chunk_noun_stop_word(normalized) {
+        *counts.entry(normalized.to_string()).or_insert(0) += 3;
+    }
+    token.clear();
+}
+
+fn flush_cjk_noun_terms(counts: &mut BTreeMap<String, usize>, chars: &mut Vec<char>) {
+    if chars.len() < 2 {
+        chars.clear();
+        return;
+    }
+    let max_ngram = 6.min(chars.len());
+    for ngram_size in 2..=max_ngram {
+        for window in chars.windows(ngram_size) {
+            let term = window.iter().collect::<String>();
+            if !looks_like_chunk_noun_term(&term) {
+                continue;
+            }
+            let boost = if chunk_noun_term_has_business_suffix(&term) {
+                4
+            } else if ngram_size >= 3 {
+                2
+            } else {
+                1
+            };
+            *counts.entry(term).or_insert(0) += boost;
+        }
+    }
+    chars.clear();
+}
+
+fn looks_like_chunk_noun_term(value: &str) -> bool {
+    let char_count = value.chars().count();
+    char_count >= 2
+        && char_count <= 16
+        && !is_chunk_noun_stop_word(value)
+        && !value.chars().all(|ch| ch.is_ascii_digit())
+        && ![
+            "我们", "你们", "他们", "以及", "或者", "如果", "因为", "所以", "但是", "然后", "通过",
+            "进行", "需要", "可以", "已经", "为了", "关于", "相关", "其中", "包括", "主要", "负责",
+            "完成", "实现", "提供", "支持",
+        ]
+        .iter()
+        .any(|stop| value == *stop)
+}
+
+fn chunk_noun_term_has_business_suffix(value: &str) -> bool {
+    [
+        "公司",
+        "集团",
+        "组织",
+        "部门",
+        "岗位",
+        "职责",
+        "经验",
+        "能力",
+        "项目",
+        "系统",
+        "平台",
+        "流程",
+        "方案",
+        "数据",
+        "报表",
+        "模型",
+        "知识库",
+        "文档",
+        "合同",
+        "订单",
+        "客户",
+        "资产",
+        "库存",
+        "风险",
+        "审批",
+        "采购",
+        "供应商",
+        "金额",
+        "工期",
+        "设备",
+        "人员",
+        "简历",
+        "证书",
+        "技术",
+        "架构",
+        "接口",
+        "状态",
+    ]
+    .iter()
+    .any(|suffix| value.ends_with(suffix))
+}
+
+fn is_chunk_noun_stop_word(value: &str) -> bool {
+    matches!(
+        value,
+        "a" | "an"
+            | "and"
+            | "are"
+            | "as"
+            | "at"
+            | "be"
+            | "by"
+            | "for"
+            | "from"
+            | "in"
+            | "is"
+            | "it"
+            | "of"
+            | "on"
+            | "or"
+            | "the"
+            | "to"
+            | "with"
+    )
+}
+
+fn is_cjk_noun_char(value: char) -> bool {
+    matches!(
+        value as u32,
+        0x4E00..=0x9FFF | 0x3400..=0x4DBF | 0xF900..=0xFAFF
+    )
 }
 
 fn section_title_hints_from_text(text: &str, limit: usize) -> Vec<String> {
@@ -1621,6 +1807,10 @@ mod tests {
             chunks[0].metadata["section_title_hints"],
             json!(["固定资产申请"])
         );
+        assert_eq!(
+            chunks[0].metadata["understanding"]["strategy"],
+            json!("paragraph_aware_noun_terms_v1")
+        );
         assert_eq!(chunks[0].metadata["parse_status"], json!("parsed"));
         assert_eq!(
             chunks[1].metadata["section_title_hints"],
@@ -1634,5 +1824,26 @@ mod tests {
             chunks[3].metadata["section_title_hints"],
             json!(["报废处理"])
         );
+    }
+
+    #[test]
+    fn chunk_understanding_metadata_extracts_paragraphs_and_noun_terms() {
+        let metadata = chunk_understanding_metadata(
+            "## 订单延期风险\n\n客户公司需要审批流程和库存周转报表。",
+            &["订单延期风险".to_string()],
+        );
+
+        assert_eq!(metadata["paragraph_count"], json!(2));
+        assert_eq!(metadata["section_title_hints"], json!(["订单延期风险"]));
+        let noun_terms = metadata["noun_terms"]
+            .as_array()
+            .expect("noun terms should be an array")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>();
+        assert!(noun_terms.contains(&"订单延期风险"));
+        assert!(noun_terms.contains(&"客户公司"));
+        assert!(noun_terms.contains(&"审批流程"));
+        assert!(noun_terms.contains(&"库存周转报表"));
     }
 }

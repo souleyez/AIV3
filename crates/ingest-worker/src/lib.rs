@@ -230,21 +230,15 @@ fn extracted_text(text: impl Into<String>, method: impl Into<String>) -> Extract
 }
 
 pub fn split_text_chunks(text: &str, max_chars: usize) -> Vec<String> {
-    let normalized = text
-        .replace('\0', "")
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    if normalized.is_empty() {
+    let max_chars = max_chars.max(1);
+    let paragraphs = split_text_paragraphs(text);
+    if paragraphs.is_empty() {
         return Vec::new();
     }
 
     let mut chunks = Vec::new();
     let mut current = String::new();
-    for paragraph in normalized.split("\n\n") {
+    for paragraph in paragraphs {
         let paragraph = paragraph.trim();
         if paragraph.is_empty() {
             continue;
@@ -273,6 +267,34 @@ pub fn split_text_chunks(text: &str, max_chars: usize) -> Vec<String> {
     }
 
     chunks
+}
+
+pub fn split_text_paragraphs(text: &str) -> Vec<String> {
+    let sanitized = text.replace('\0', "");
+    let mut paragraphs = Vec::new();
+    let mut current_lines = Vec::new();
+
+    for raw_line in sanitized.lines() {
+        let line = raw_line.trim();
+        if line.is_empty() {
+            flush_text_paragraph(&mut paragraphs, &mut current_lines);
+            continue;
+        }
+        current_lines.push(line.to_string());
+    }
+    flush_text_paragraph(&mut paragraphs, &mut current_lines);
+    paragraphs
+}
+
+fn flush_text_paragraph(paragraphs: &mut Vec<String>, current_lines: &mut Vec<String>) {
+    if current_lines.is_empty() {
+        return;
+    }
+    let paragraph = current_lines.join("\n").trim().to_string();
+    if !paragraph.is_empty() {
+        paragraphs.push(paragraph);
+    }
+    current_lines.clear();
 }
 
 fn build_placeholder_outcome(job: &IngestJob) -> IngestOutcome {
@@ -2869,6 +2891,56 @@ fn collapse_line_spaces_preserving_tabs(line: &str) -> String {
 }
 
 fn split_long_text(text: &str, max_chars: usize) -> Vec<String> {
+    let sentence_units = split_sentence_units(text);
+    if sentence_units.len() > 1 {
+        let mut chunks = Vec::new();
+        let mut current = String::new();
+        for unit in sentence_units {
+            if unit.chars().count() > max_chars {
+                if !current.trim().is_empty() {
+                    chunks.push(current.trim().to_string());
+                    current.clear();
+                }
+                chunks.extend(split_long_text_by_char(&unit, max_chars));
+                continue;
+            }
+            if current.chars().count() + unit.chars().count() > max_chars
+                && !current.trim().is_empty()
+            {
+                chunks.push(current.trim().to_string());
+                current.clear();
+            }
+            current.push_str(&unit);
+        }
+        if !current.trim().is_empty() {
+            chunks.push(current.trim().to_string());
+        }
+        return chunks;
+    }
+    split_long_text_by_char(text, max_chars)
+}
+
+fn split_sentence_units(text: &str) -> Vec<String> {
+    let mut units = Vec::new();
+    let mut current = String::new();
+    for ch in text.chars() {
+        current.push(ch);
+        if matches!(ch, '。' | '！' | '？' | '；' | '!' | '?' | ';' | '\n') {
+            let unit = current.trim().to_string();
+            if !unit.is_empty() {
+                units.push(unit);
+            }
+            current.clear();
+        }
+    }
+    let tail = current.trim().to_string();
+    if !tail.is_empty() {
+        units.push(tail);
+    }
+    units
+}
+
+fn split_long_text_by_char(text: &str, max_chars: usize) -> Vec<String> {
     let mut chunks = Vec::new();
     let mut current = String::new();
     for ch in text.chars() {
@@ -3607,6 +3679,38 @@ trailer << /Root 1 0 R >>
 
         assert!(chunks.len() > 1);
         assert!(chunks.iter().all(|chunk| chunk.chars().count() <= 8));
+    }
+
+    #[test]
+    fn split_text_chunks_preserves_blank_line_paragraph_boundaries() {
+        let chunks = split_text_chunks(
+            "第一段介绍订单延期风险。\n\n第二段介绍客服满意度。\n\n第三段介绍库存周转。",
+            16,
+        );
+
+        assert_eq!(
+            chunks,
+            vec![
+                "第一段介绍订单延期风险。",
+                "第二段介绍客服满意度。",
+                "第三段介绍库存周转。"
+            ]
+        );
+    }
+
+    #[test]
+    fn split_text_paragraphs_keeps_wrapped_lines_in_same_paragraph() {
+        let paragraphs = split_text_paragraphs(
+            "采购制度第一行\n延续同一个段落\n\n审批流程第一行\n审批流程第二行",
+        );
+
+        assert_eq!(
+            paragraphs,
+            vec![
+                "采购制度第一行\n延续同一个段落",
+                "审批流程第一行\n审批流程第二行"
+            ]
+        );
     }
 
     #[test]

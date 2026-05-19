@@ -12330,13 +12330,89 @@ fn external_channel_model_reply_rejection_reason(response: &LlmResponse) -> Opti
     }
 
     let output_text = response.output_text.trim();
+    external_channel_model_output_text_rejection_reason(output_text)
+}
+
+fn external_channel_model_output_text_rejection_reason(output_text: &str) -> Option<String> {
     if output_text.is_empty() {
-        Some("empty_output".to_string())
-    } else if assistant_run_react_output_contains_internal_marker(output_text) {
-        Some("internal_payload_marker".to_string())
-    } else {
-        None
+        return Some("empty_output".to_string());
     }
+    if assistant_run_react_output_contains_internal_marker(output_text) {
+        return Some("internal_payload_marker".to_string());
+    }
+    if external_channel_output_is_generic_orchestration_ack(output_text) {
+        return Some("generic_orchestration_ack".to_string());
+    }
+    None
+}
+
+fn external_channel_output_is_generic_orchestration_ack(output_text: &str) -> bool {
+    let normalized = normalize_external_channel_output_for_rejection(output_text);
+    if normalized.is_empty() {
+        return false;
+    }
+    let ack_markers = [
+        "已收到指令",
+        "已收到你的问题",
+        "已收到您的问题",
+        "收到指令",
+        "收到你的问题",
+        "收到您的问题",
+    ];
+    if ack_markers.iter().any(|marker| normalized.contains(marker)) {
+        return true;
+    }
+    let short_ack = normalized.chars().count() <= 24
+        && ["已收到", "收到", "已接收", "已接受"]
+            .iter()
+            .any(|marker| normalized.starts_with(marker));
+    if short_ack {
+        return true;
+    }
+    let orchestration_markers = [
+        "系统将结合知识库",
+        "结合知识库与数据源",
+        "为您输出结论",
+        "为你输出结论",
+        "稍后为您输出",
+        "稍后为你输出",
+        "正在为您分析",
+        "正在为你分析",
+        "请稍候",
+    ];
+    orchestration_markers
+        .iter()
+        .any(|marker| normalized.contains(marker))
+}
+
+fn normalize_external_channel_output_for_rejection(output_text: &str) -> String {
+    output_text
+        .chars()
+        .filter(|ch| {
+            !ch.is_whitespace()
+                && !matches!(
+                    ch,
+                    '。' | '，'
+                        | '、'
+                        | '；'
+                        | '：'
+                        | '！'
+                        | '？'
+                        | '.'
+                        | ','
+                        | ';'
+                        | ':'
+                        | '!'
+                        | '?'
+                        | '"'
+                        | '\''
+                        | '“'
+                        | '”'
+                        | '‘'
+                        | '’'
+                )
+        })
+        .collect()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -20027,6 +20103,7 @@ async fn build_assistant_run_chunk_fallback_supply(
         )
         .await?;
         let section_title_hints = document_chunk_section_title_hints(&ranked.chunk);
+        let noun_terms = document_chunk_noun_terms(&ranked.chunk);
         let mut supplied_item = json!({
             "type": "retrieval_evidence",
             "source": "document_chunk_fallback",
@@ -20048,7 +20125,8 @@ async fn build_assistant_run_chunk_fallback_supply(
                     "reason": "retrieval_evidence_unavailable"
                 },
                 "evidence": {
-                    "section_title_hints": &section_title_hints
+                    "section_title_hints": &section_title_hints,
+                    "noun_terms": &noun_terms
                 },
                 "embedding": {
                     "term_weights": limited_lexical_term_weights(&ranked.search_text, 40)
@@ -20342,10 +20420,12 @@ fn document_chunk_fallback_summary(document: &Document, chunk: &DocumentChunk) -
 
 fn document_chunk_search_text(document: &Document, chunk: &DocumentChunk) -> String {
     let section_title_hints = document_chunk_section_title_hints(chunk).join("\n");
+    let noun_terms = document_chunk_noun_terms(chunk).join("\n");
     [
         document.title.trim(),
         document.object_key.trim(),
         section_title_hints.trim(),
+        noun_terms.trim(),
         chunk.content.trim(),
     ]
     .into_iter()
@@ -20382,6 +20462,24 @@ fn document_chunk_section_title_hints(chunk: &DocumentChunk) -> Vec<String> {
     }
     hints.truncate(6);
     hints
+}
+
+fn document_chunk_noun_terms(chunk: &DocumentChunk) -> Vec<String> {
+    let mut terms = Vec::new();
+    if let Some(value) = chunk
+        .metadata
+        .get("understanding")
+        .and_then(|value| value.get("noun_terms").or_else(|| value.get("nounTerms")))
+    {
+        collect_string_list(value, &mut terms);
+    }
+    for key in ["noun_terms", "nounTerms", "term_hints", "termHints"] {
+        if let Some(value) = chunk.metadata.get(key) {
+            collect_string_list(value, &mut terms);
+        }
+    }
+    terms.truncate(64);
+    terms
 }
 
 fn collect_string_list(value: &Value, output: &mut Vec<String>) {
@@ -38081,8 +38179,10 @@ mod tests {
         std::env::set_var("ASSISTANT_RUN_RUNTIME_MODE", "provider");
         std::env::set_var("ASSISTANT_RUN_RUNTIME_PROVIDER", "scripted");
         std::env::set_var("ASSISTANT_RUN_RUNTIME_MODEL", "assistant-run-primary-v1");
-        std::env::set_var("ASSISTANT_RUN_RUNTIME_OUTPUT_TEXT", "不应返回给用户");
-        std::env::set_var("ASSISTANT_RUN_RUNTIME_FINISH_REASON", "error");
+        std::env::set_var(
+            "ASSISTANT_RUN_RUNTIME_OUTPUT_TEXT",
+            "已收到指令。系统将结合知识库与数据源进行分析，并为您输出结论。",
+        );
         std::env::set_var("ASSISTANT_RUN_FALLBACK_RUNTIME_MODE", "provider");
         std::env::set_var("ASSISTANT_RUN_FALLBACK_RUNTIME_PROVIDER", "scripted");
         std::env::set_var(
@@ -38161,12 +38261,34 @@ mod tests {
         assert!(events.iter().any(|event| {
             event.event_name == "assistant_run.external_channel_model_reply_rejected"
                 && event.payload["attempt"] == json!("primary")
+                && event.payload["reason"] == json!("generic_orchestration_ack")
         }));
         assert!(events.iter().any(|event| {
             event.event_name == "assistant_run.external_channel_model_reply_completed"
                 && event.payload["attempt"] == json!("fallback")
         }));
         clear_assistant_openclaw_env();
+    }
+
+    #[test]
+    fn external_channel_model_reply_rejects_generic_orchestration_ack() {
+        for text in [
+            "已收到指令。系统将结合知识库与数据源进行分析，并为您输出结论。",
+            "已收到你的问题，请稍候。",
+            "系统将结合知识库与数据源进行分析并为您输出结论。",
+        ] {
+            assert_eq!(
+                external_channel_model_output_text_rejection_reason(text).as_deref(),
+                Some("generic_orchestration_ack")
+            );
+        }
+
+        assert_eq!(
+            external_channel_model_output_text_rejection_reason(
+                "订单延期风险主要集中在仓库交接和供应商确认两个环节。"
+            ),
+            None
+        );
     }
 
     #[tokio::test]
@@ -55867,6 +55989,55 @@ mod tests {
         assert!(
             document_chunk_fallback_summary(&ranked[0].document, &ranked[0].chunk)
                 .contains("固定资产申请")
+        );
+    }
+
+    #[test]
+    fn document_chunk_search_text_includes_understanding_noun_terms() {
+        let now = Utc::now();
+        let tenant_id = TenantId::new();
+        let dataset_id = DatasetId::new();
+        let document_id = DocumentId::new();
+        let document = Document {
+            id: document_id,
+            tenant_id,
+            dataset_id,
+            owner_user_id: None,
+            title: "仓储记录".to_string(),
+            object_key: "documents/warehouse.md".to_string(),
+            content_type: "text/markdown".to_string(),
+            lifecycle: domain_model::DocumentLifecycle::Extracted,
+            secret_binding_ids: Vec::new(),
+            metadata: BTreeMap::new(),
+            created_at: now,
+            updated_at: now,
+        };
+        let mut metadata = BTreeMap::new();
+        metadata.insert(
+            "understanding".to_string(),
+            json!({"noun_terms": ["订单延期风险", "供应商确认"]}),
+        );
+        let chunk = DocumentChunk {
+            id: DocumentChunkId::new(),
+            tenant_id,
+            dataset_id,
+            document_id,
+            chunk_index: 0,
+            content: "仓库交接超过两天需要提醒。".to_string(),
+            token_count: 12,
+            state: DocumentChunkState::Extracted,
+            metadata,
+            created_at: now,
+            updated_at: now,
+        };
+
+        let search_text = document_chunk_search_text(&document, &chunk);
+
+        assert!(search_text.contains("订单延期风险"));
+        assert!(search_text.contains("供应商确认"));
+        assert_eq!(
+            document_chunk_noun_terms(&chunk),
+            vec!["订单延期风险", "供应商确认"]
         );
     }
 
