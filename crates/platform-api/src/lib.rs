@@ -19183,6 +19183,7 @@ fn sanitize_company_candidate(raw: &str) -> String {
             "供职于",
             "服务于",
             "来自",
+            "给",
             "在职",
             "目前",
             "雇主",
@@ -19224,6 +19225,7 @@ fn normalize_company_relation_prefix(mut value: String) -> String {
             "与",
             "及",
             "是",
+            "给",
             "在",
             "于",
         ] {
@@ -19268,6 +19270,7 @@ fn is_valid_company_name(value: &str) -> bool {
             "实现集团",
             "实现了",
             "完成了",
+            "开发了给",
             "参与1",
             "同办公系统",
             "客户公司",
@@ -42843,11 +42846,15 @@ mod tests {
     fn assistant_run_filters_resume_company_phrase_noise() {
         let names = extract_company_names_from_text(
             "项目作为集团级工程，配合CIO统筹规划集团流程，实现集团数据治理，\
-             上海)有限公司不是有效名称，股份有限公司也不是有效名称，微软（中国）有限公司是有效名称。",
+             上海)有限公司不是有效名称，股份有限公司也不是有效名称，\
+             给复地集团应该归一，还开发了给集团应该丢弃，微软（中国）有限公司是有效名称。",
             10,
         );
 
-        assert_eq!(names, vec!["微软（中国）有限公司".to_string()]);
+        assert_eq!(
+            names,
+            vec!["复地集团".to_string(), "微软（中国）有限公司".to_string()]
+        );
     }
 
     #[test]
