@@ -10356,10 +10356,16 @@ fn external_channel_prompt_may_need_planned_action(prompt: &str) -> bool {
             "revoke",
             "dispatch",
             "callback",
-            "status",
-            "查询状态",
+            "artifact status",
+            "delivery status",
+            "publish status",
+            "external action status",
+            "external artifact status",
             "产物状态",
             "投递状态",
+            "发布状态",
+            "外部动作状态",
+            "外部产物状态",
             "发布",
             "撤回",
             "下线",
@@ -10386,7 +10392,16 @@ fn external_channel_prompt_allows_external_action(prompt: &str, action_type: &st
         "external_artifact.status" => external_channel_text_has_any(
             &normalized,
             text,
-            &["status", "查询状态", "产物状态", "投递状态", "处理状态"],
+            &[
+                "artifact status",
+                "delivery status",
+                "publish status",
+                "external artifact status",
+                "产物状态",
+                "投递状态",
+                "发布状态",
+                "外部产物状态",
+            ],
         ),
         "external_artifact.publish" => {
             external_channel_text_has_any(&normalized, text, &["publish", "发布", "推送", "投递"])
@@ -12156,14 +12171,18 @@ async fn external_channel_chat_model_or_acceptance_reply(
                             "model": chat_runtime.model,
                             "error_code": error.payload.code,
                             "error_status": error.status.as_u16(),
-                            "fallback_reply": "accepted",
+                            "fallback_reply": "model_unavailable",
                         }),
                         created_at: now,
                     },
                 )
                 .await
                 .map_err(ApiError::from_storage)?;
-            return Ok(external_channel_chat_acceptance_reply(message));
+            return Ok(external_channel_text_reply(
+                message,
+                "模型通道暂时没有生成可展示的回答，请稍后重试；V3 已记录本轮请求，不会用占位接收话术冒充最终答案。",
+                "model_unavailable",
+            ));
         }
     };
 
@@ -12191,14 +12210,18 @@ async fn external_channel_chat_model_or_acceptance_reply(
                         "message_external_id": message.message_external_id.clone(),
                         "reason": reason,
                         "runtime": runtime_manifest,
-                        "fallback_reply": "accepted",
+                        "fallback_reply": "model_output_suppressed",
                     }),
                     created_at: now,
                 },
             )
             .await
             .map_err(ApiError::from_storage)?;
-        return Ok(external_channel_chat_acceptance_reply(message));
+        return Ok(external_channel_text_reply(
+            message,
+            "模型返回内容未通过展示安全检查，本轮没有可直接展示的最终回答；请换一种问法或稍后重试。",
+            "model_output_suppressed",
+        ));
     }
 
     let assistant_artifact = json!({
@@ -12208,6 +12231,12 @@ async fn external_channel_chat_model_or_acceptance_reply(
         "source": "external_channel_model_reply",
         "created_at": now,
     });
+    state
+        .storage
+        .assistant_runs()
+        .update_runtime_manifest(state.tenant_id, run_id, &runtime_manifest)
+        .await
+        .map_err(ApiError::from_storage)?;
     let mut execution_trail = value_array(current_execution_trail.clone());
     execution_trail.push(json!({
         "status": "completed",
@@ -18797,7 +18826,7 @@ fn extract_company_names_from_text(text: &str, limit: usize) -> Vec<String> {
     for segment in text.split(|ch: char| {
         matches!(
             ch,
-            '\n' | '\r' | '，' | ',' | '；' | ';' | '。' | '|' | '\t'
+            '\n' | '\r' | '，' | ',' | '；' | ';' | '。' | '、' | '|' | '/' | '／' | '\t'
         )
     }) {
         for name in extract_company_names_from_segment(segment) {
@@ -18828,9 +18857,17 @@ fn extract_company_names_from_segment(segment: &str) -> Vec<String> {
         let mut offset = 0usize;
         while let Some(position) = normalized[offset..].find(suffix) {
             let end = offset + position + suffix.len();
-            let candidate = sanitize_company_candidate(
+            if suffix == "集团"
+                && ["有限公司", "有限责任公司", "股份有限公司"]
+                    .iter()
+                    .any(|tail| normalized[end..].starts_with(tail))
+            {
+                offset = end;
+                continue;
+            }
+            let candidate = normalize_company_relation_prefix(sanitize_company_candidate(
                 &normalized[company_candidate_start(&normalized[..end])..end],
-            );
+            ));
             if is_valid_company_name(&candidate) && seen.insert(candidate.clone()) {
                 names.push(candidate);
             }
@@ -18843,7 +18880,10 @@ fn extract_company_names_from_segment(segment: &str) -> Vec<String> {
 fn company_candidate_start(value: &str) -> usize {
     let mut start = 0usize;
     for (index, ch) in value.char_indices() {
-        if matches!(ch, '：' | ':' | '-' | '—' | '–' | '（' | '(' | '】' | ']') {
+        if matches!(
+            ch,
+            '：' | ':' | '-' | '—' | '–' | '】' | ']' | '，' | ',' | '；' | ';' | '、'
+        ) {
             start = index + ch.len_utf8();
         }
     }
@@ -18856,7 +18896,21 @@ fn sanitize_company_candidate(raw: &str) -> String {
             ch.is_whitespace()
                 || matches!(
                     ch,
-                    ':' | '：' | '-' | '—' | '–' | '_' | '，' | ',' | '。' | '；' | ';'
+                    ':' | '：'
+                        | '-'
+                        | '—'
+                        | '–'
+                        | '_'
+                        | '，'
+                        | ','
+                        | '。'
+                        | '；'
+                        | ';'
+                        | '、'
+                        | '（'
+                        | '('
+                        | '【'
+                        | '['
                 )
         })
         .to_string();
@@ -18868,7 +18922,20 @@ fn sanitize_company_candidate(raw: &str) -> String {
                 ch.is_ascii_digit()
                     || matches!(
                         ch,
-                        '.' | '/' | '\\' | '-' | '—' | '–' | '_' | '年' | '月' | '至' | '今'
+                        '.' | '/'
+                            | '\\'
+                            | '-'
+                            | '—'
+                            | '–'
+                            | '_'
+                            | '年'
+                            | '月'
+                            | '至'
+                            | '今'
+                            | '）'
+                            | ')'
+                            | '】'
+                            | ']'
                     )
             })
             .to_string();
@@ -18879,7 +18946,18 @@ fn sanitize_company_candidate(raw: &str) -> String {
             "所在公司",
             "公司名称",
             "工作单位",
+            "任职单位",
+            "所在单位",
             "工作经历",
+            "曾任职于",
+            "任职于",
+            "就职于",
+            "工作于",
+            "供职于",
+            "服务于",
+            "来自",
+            "在职",
+            "目前",
             "雇主",
         ] {
             if value.starts_with(prefix) {
@@ -18887,8 +18965,50 @@ fn sanitize_company_candidate(raw: &str) -> String {
             }
         }
         value = value
-            .trim_matches(|ch: char| ch.is_whitespace() || matches!(ch, ':' | '：' | '-' | '—'))
+            .trim_matches(|ch: char| {
+                ch.is_whitespace()
+                    || matches!(
+                        ch,
+                        ':' | '：' | '-' | '—' | '–' | '、' | '，' | ',' | '）' | ')' | '】' | ']'
+                    )
+            })
             .to_string();
+        if value == before {
+            break;
+        }
+    }
+    value
+}
+
+fn normalize_company_relation_prefix(mut value: String) -> String {
+    loop {
+        let before = value.clone();
+        for marker in [
+            "是由",
+            "隶属于",
+            "服务于",
+            "任职于",
+            "就职于",
+            "供职于",
+            "来自",
+            "协同",
+            "由",
+            "和",
+            "与",
+            "及",
+            "在",
+            "于",
+        ] {
+            if let Some(position) = value.rfind(marker) {
+                if position > 0 {
+                    let candidate = sanitize_company_candidate(&value[position + marker.len()..]);
+                    if candidate.chars().count() >= 4 {
+                        value = candidate;
+                    }
+                }
+            }
+        }
+        value = sanitize_company_candidate(&value);
         if value == before {
             break;
         }
@@ -18905,9 +19025,22 @@ fn is_valid_company_name(value: &str) -> bool {
             || value.ends_with("有限公司")
             || value.ends_with("集团"))
         && !value.contains('@')
+        && !company_name_has_unbalanced_brackets(value)
         && ![
             "公司产品",
             "公司安排",
+            "办公系统",
+            "工作经历",
+            "项目作为",
+            "项目得到",
+            "统筹规划",
+            "统筹推进",
+            "配合CIO",
+            "实现集团",
+            "实现了",
+            "完成了",
+            "参与1",
+            "同办公系统",
             "客户公司",
             "本公司",
             "贵公司",
@@ -18916,6 +19049,20 @@ fn is_valid_company_name(value: &str) -> bool {
         ]
         .iter()
         .any(|fragment| value.contains(fragment))
+        && ![
+            "实现", "完成", "项目", "配合", "统筹", "参与", "定制", "后期", "在职", "了", "对接",
+            "负责", "充分",
+        ]
+        .iter()
+        .any(|prefix| value.starts_with(prefix))
+}
+
+fn company_name_has_unbalanced_brackets(value: &str) -> bool {
+    let left_cn = value.matches('（').count();
+    let right_cn = value.matches('）').count();
+    let left_ascii = value.matches('(').count();
+    let right_ascii = value.matches(')').count();
+    left_cn != right_cn || left_ascii != right_ascii
 }
 
 async fn build_assistant_run_chunk_fallback_supply(
@@ -36573,6 +36720,13 @@ mod tests {
         assert!(!external_channel_prompt_may_need_planned_action(
             "帮我总结我能看的采购审批制度，并指出本周需要处理的风险。"
         ));
+        assert!(!external_channel_prompt_may_need_planned_action(
+            "第三方对接联通性测试，请返回已接收状态。"
+        ));
+        assert!(!external_channel_prompt_allows_external_action(
+            "第三方对接联通性测试，请返回已接收状态。",
+            "external_artifact.status"
+        ));
         assert!(external_channel_prompt_may_need_planned_action(
             "请查询第三方产物状态"
         ));
@@ -36726,7 +36880,10 @@ mod tests {
             EventBus::Disabled,
         );
 
-        let message = sample_external_bot_message();
+        let mut message = sample_external_bot_message();
+        message.text = Some("第三方对接联通性测试，请返回已接收状态。".to_string());
+        message.message_external_id = "msg-provider-status-word-001".to_string();
+        message.idempotency_key = "generic:tenant-ext-001:msg-provider-status-word-001".to_string();
         let response = post_json_request(
             app,
             "/v1/external/channels/generic-chat-main/events",
@@ -36751,6 +36908,12 @@ mod tests {
             .output_artifacts
             .as_array()
             .expect("output artifacts should be an array");
+        assert_eq!(run.runtime_manifest["mode"], json!("provider"));
+        assert_eq!(run.runtime_manifest["provider"], json!("scripted"));
+        assert_eq!(
+            run.runtime_manifest["model"],
+            json!("assistant-run-scripted-v1")
+        );
         assert!(output_artifacts.iter().any(|artifact| {
             artifact.get("source").and_then(Value::as_str) == Some("external_channel_model_reply")
                 && artifact.get("content").and_then(Value::as_str) == Some("这是外部模型自然回答。")
@@ -42169,6 +42332,52 @@ mod tests {
             vec![
                 "深圳星拓智能科技有限公司".to_string(),
                 "广州云岚数码有限公司".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn assistant_run_extracts_company_names_across_resume_relation_phrases() {
+        let names = extract_company_names_from_text(
+            "IM智己是由上汽集团、张江高科和阿里巴巴集团共同打造。\n\
+             后期在湖南省电力有限公司负责交付；在职）广州富港万嘉智能科技有限公司。",
+            10,
+        );
+
+        assert_eq!(
+            names,
+            vec![
+                "上汽集团".to_string(),
+                "阿里巴巴集团".to_string(),
+                "湖南省电力有限公司".to_string(),
+                "广州富港万嘉智能科技有限公司".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn assistant_run_filters_resume_company_phrase_noise() {
+        let names = extract_company_names_from_text(
+            "项目作为集团级工程，配合CIO统筹规划集团流程，实现集团数据治理，\
+             上海)有限公司不是有效名称，微软（中国）有限公司是有效名称。",
+            10,
+        );
+
+        assert_eq!(names, vec!["微软（中国）有限公司".to_string()]);
+    }
+
+    #[test]
+    fn assistant_run_does_not_split_group_limited_company_names() {
+        let names = extract_company_names_from_text(
+            "任职公司：广东阿康健康科技集团有限公司，参与三一集团数字化项目。",
+            10,
+        );
+
+        assert_eq!(
+            names,
+            vec![
+                "广东阿康健康科技集团有限公司".to_string(),
+                "三一集团".to_string()
             ]
         );
     }

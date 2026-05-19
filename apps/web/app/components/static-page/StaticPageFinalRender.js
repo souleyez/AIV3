@@ -2,7 +2,9 @@
 
 import {
   buildStaticPageFinalRenderPayload,
+  canRequestStaticPageDirectHtml,
   canRequestStaticPageFinalRender,
+  staticPageDirectHtmlBlockReason,
   staticPageFinalRenderBlockReason,
 } from '../../lib/static-page-draft';
 import {
@@ -223,6 +225,8 @@ export default function StaticPageFinalRender({
 }) {
   const canRequestRender = canRequestStaticPageFinalRender(draft);
   const blockReason = staticPageFinalRenderBlockReason(draft);
+  const canRequestDirectHtml = canRequestStaticPageDirectHtml(draft);
+  const directHtmlBlockReason = staticPageDirectHtmlBlockReason(draft);
   const finalStatus = finalPageStatus(draft);
   const hasFinalPage = ['mock_ready', 'rendered', 'queued', 'rendering', 'failed', 'cancelled'].includes(finalStatus)
     || draft?.status === 'rendering'
@@ -245,6 +249,15 @@ export default function StaticPageFinalRender({
           <strong>等待效果图确认</strong>
         </div>
         <p>{blockReason || '先确认效果图，再按效果制作可交付静态页。'}</p>
+        <button
+          type="button"
+          className="ghost-btn compact-action-btn"
+          disabled={!canRequestDirectHtml}
+          title={canRequestDirectHtml ? '' : directHtmlBlockReason}
+          onClick={() => onApplyOperation?.({ type: 'request_final_render', directHtml: true })}
+        >
+          快速生成 HTML
+        </button>
       </section>
     );
   }
@@ -257,13 +270,24 @@ export default function StaticPageFinalRender({
       </div>
 
       {!hasFinalPage ? (
-        <button
-          type="button"
-          className="primary-btn compact-action-btn"
-          onClick={() => onApplyOperation?.({ type: 'request_final_render' })}
-        >
-          按效果制作静态页
-        </button>
+        <div className="static-page-final-actions">
+          <button
+            type="button"
+            className="primary-btn compact-action-btn"
+            onClick={() => onApplyOperation?.({ type: 'request_final_render' })}
+          >
+            按效果制作静态页
+          </button>
+          <button
+            type="button"
+            className="ghost-btn compact-action-btn"
+            disabled={!canRequestDirectHtml}
+            title={canRequestDirectHtml ? '' : directHtmlBlockReason}
+            onClick={() => onApplyOperation?.({ type: 'request_final_render', directHtml: true })}
+          >
+            快速生成 HTML
+          </button>
+        </div>
       ) : null}
 
       {hasFinalPage ? (
@@ -331,7 +355,9 @@ export default function StaticPageFinalRender({
 
           <p className="static-page-final-note">
             {finalStatus === 'rendered'
-              ? '后端 renderer 已按确认效果图和模块规划生成静态页。'
+              ? draft.finalPage?.directHtml
+                ? '后端 renderer 已按快速 HTML 模式生成静态页。'
+                : '后端 renderer 已按确认效果图和模块规划生成静态页。'
               : PENDING_FINAL_STATUSES.has(finalStatus)
                 ? '后台生成不会阻塞当前对话；完成后会在右侧成品栏保留。'
                 : finalStatus === 'mock_ready'

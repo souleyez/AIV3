@@ -13,8 +13,10 @@ import {
   buildStaticPagePreviewContract,
   buildStaticPageRenderSpec,
   buildStaticPageVisualSpec,
+  canRequestStaticPageDirectHtml,
   canRequestStaticPageFinalRender,
   interpretStaticPagePrompt,
+  staticPageDirectHtmlBlockReason,
   staticPageFinalRenderBlockReason,
   staticPagePreviewBlockReason,
   validateMobileOrder,
@@ -587,6 +589,29 @@ test('final render can only start from current confirmed preview with ready data
   assert.match(staticPageFinalRenderBlockReason(missingAsset), /资源缺失/);
 });
 
+test('direct HTML render can start before preview confirmation when data is ready', () => {
+  const draft = makeDefaultStaticPageChartDataReady(buildInitialStaticPageDraft());
+  const rendered = applyStaticPageOperation(draft, {
+    type: 'request_final_render',
+    directHtml: true,
+    finalPage: {
+      status: 'rendered',
+      renderer: 'platform-api-static-page-renderer',
+      renderOutputId: 'render-direct-1',
+      html: '<main>快速 HTML</main>',
+      directHtml: true,
+      assetManifest: { renderer: 'static-page-renderer' },
+    },
+  });
+
+  assert.equal(canRequestStaticPageFinalRender(draft), false);
+  assert.equal(canRequestStaticPageDirectHtml(draft), true);
+  assert.equal(staticPageDirectHtmlBlockReason(draft), '');
+  assert.equal(rendered.status, 'rendered');
+  assert.equal(rendered.finalPage.directHtml, true);
+  assert.match(rendered.finalPage.html, /快速 HTML/);
+});
+
 test('final render gate blocks historical confirmed previews with weak module data', () => {
   const confirmed = applyStaticPageOperation(buildInitialStaticPageDraft(), {
     type: 'confirm_preview',
@@ -594,6 +619,8 @@ test('final render gate blocks historical confirmed previews with weak module da
   });
 
   assert.equal(canRequestStaticPageFinalRender(confirmed), false);
+  assert.equal(canRequestStaticPageDirectHtml(confirmed), false);
+  assert.match(staticPageDirectHtmlBlockReason(confirmed), /快速 HTML 生成要求/);
   assert.match(staticPageFinalRenderBlockReason(confirmed), /最终页面生成要求/);
   assert.match(staticPageFinalRenderBlockReason(confirmed), /needs_sample_rows/);
   assert.match(staticPageFinalRenderBlockReason(confirmed), /重新生成并确认效果图/);

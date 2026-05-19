@@ -1544,6 +1544,7 @@ export function applyStaticPageOperation(draft, operation = {}) {
     const backendFinalPage = operation.finalPage && typeof operation.finalPage === 'object'
       ? operation.finalPage
       : null;
+    const directHtml = Boolean(operation.directHtml || backendFinalPage?.directHtml);
     next.status = backendFinalPage?.status === 'rendered' ? 'rendered' : 'rendering';
     next.finalPage = backendFinalPage
       ? {
@@ -1551,12 +1552,14 @@ export function applyStaticPageOperation(draft, operation = {}) {
           ...backendFinalPage,
           status: backendFinalPage.status || 'rendered',
           renderer: backendFinalPage.renderer || 'platform-api-static-page-renderer',
+          directHtml,
           payload: backendFinalPage.payload || buildStaticPageFinalRenderPayload(next),
         }
       : {
           ...next.finalPage,
           status: 'mock_ready',
           renderer: 'local-static-page-mock',
+          directHtml,
           notice: '后端 renderer 尚未接入，当前为前端静态页模拟结果。',
           payload: operation.payload || buildStaticPageFinalRenderPayload(next),
         };
@@ -1574,6 +1577,10 @@ export function applyStaticPageOperations(draft, operations = []) {
 
 export function canRequestStaticPageFinalRender(draft = {}) {
   return staticPageFinalRenderBlockReason(draft) === '';
+}
+
+export function canRequestStaticPageDirectHtml(draft = {}) {
+  return staticPageDirectHtmlBlockReason(draft) === '';
 }
 
 function bindingSampleRows(binding = {}) {
@@ -1681,6 +1688,15 @@ export function staticPageFinalRenderBlockReason(draft = {}) {
     draft,
     '最终页面生成要求',
     '请先回到模块编辑补充样本行、重新绑定字段，或让 V3 检索/修复模块数据，然后重新生成并确认效果图。',
+    { mode: 'final' },
+  );
+}
+
+export function staticPageDirectHtmlBlockReason(draft = {}) {
+  return staticPageDataQualityBlockReason(
+    draft,
+    '快速 HTML 生成要求',
+    '请先回到模块编辑补充样本行、重新绑定字段，或让 V3 检索/修复模块数据，然后重新生成 HTML。',
     { mode: 'final' },
   );
 }

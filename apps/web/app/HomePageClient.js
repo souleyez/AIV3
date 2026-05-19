@@ -34,8 +34,10 @@ import {
   buildInitialStaticPageDraft,
   buildMockStaticPagePreview,
   buildStaticPageImagePayload,
+  canRequestStaticPageDirectHtml,
   canRequestStaticPageFinalRender,
   interpretStaticPagePrompt,
+  staticPageDirectHtmlBlockReason,
   staticPageFinalRenderBlockReason,
   staticPagePreviewBlockReason,
 } from './lib/static-page-draft';
@@ -1135,6 +1137,7 @@ export default function HomePageClient() {
         imageJobId: renderOutput.image_job_id || draft.finalPage?.imageJobId || null,
         assetManifest: renderOutput.asset_manifest || draft.finalPage?.assetManifest || {},
         html: renderOutput.html || draft.finalPage?.html || '',
+        directHtml: Boolean(draft.finalPage?.directHtml || renderOutput.asset_manifest?.directHtml || renderOutput.asset_manifest?.direct_html),
       },
     };
   }
@@ -1477,9 +1480,10 @@ export default function HomePageClient() {
     if (!baseDraft?.backendDraftId) {
       throw new Error('静态页草稿还没有同步到后端。');
     }
+    const directHtml = Boolean(operation.directHtml || operation.finalPage?.directHtml);
     let draft = baseDraft;
     let imageJobId = isBackendStaticPageImageJobId(draft.imageJob?.id) ? draft.imageJob.id : '';
-    if (draft.imageJob?.status !== 'confirmed') {
+    if (!directHtml && draft.imageJob?.status !== 'confirmed') {
       const confirmed = await confirmBackendStaticPagePreview(draft, operation);
       draft = confirmed.draft;
       imageJobId = confirmed.imageJob?.id || draft.imageJob?.id || imageJobId;
@@ -1487,21 +1491,24 @@ export default function HomePageClient() {
     const response = await fetchJson(`/api/v3/static-page-drafts/${draft.backendDraftId}/renders`, {
       method: 'POST',
       body: {
-        image_job_id: imageJobId || null,
-        background: true,
+        image_job_id: directHtml ? null : imageJobId || null,
+        background: !directHtml,
+        direct_html: directHtml,
       },
     });
     const renderOutput = response?.render_output;
     const renderStatus = renderOutput?.status || 'queued';
     const rendered = applyStaticPageOperation(draft, {
       type: 'request_final_render',
+      directHtml,
       finalPage: {
         status: renderStatus,
         renderer: 'platform-api-static-page-renderer',
         renderOutputId: renderOutput?.id || '',
-        imageJobId: renderOutput?.image_job_id || imageJobId || null,
+        imageJobId: directHtml ? null : renderOutput?.image_job_id || imageJobId || null,
         assetManifest: renderOutput?.asset_manifest || {},
         html: renderOutput?.html || '',
+        directHtml,
       },
     });
     const merged = mergeBackendStaticPageDraft(rendered, response?.draft);
@@ -1512,7 +1519,9 @@ export default function HomePageClient() {
     };
     replaceStaticPageDraft(baseDraft.id, finalDraft);
     setBanner(renderStatus === 'rendered'
-      ? '最终静态页已按确认效果图生成。'
+      ? directHtml
+        ? '快速 HTML 已生成，可以下载 index.html。'
+        : '最终静态页已按确认效果图生成。'
       : '最终静态页已进入后台制作队列，可以继续聊天；完成后会保存在右侧成品栏。');
     if (typeof window !== 'undefined') {
       window.setTimeout(() => {
@@ -3000,8 +3009,22 @@ export default function HomePageClient() {
       return null;
     }
 
-    if (operation.type === 'request_final_render' && !canRequestStaticPageFinalRender(activeStaticPageDraft)) {
+    const directHtmlRender = Boolean(operation.directHtml || operation.finalPage?.directHtml);
+    if (
+      operation.type === 'request_final_render'
+      && !directHtmlRender
+      && !canRequestStaticPageFinalRender(activeStaticPageDraft)
+    ) {
       setBanner(staticPageFinalRenderBlockReason(activeStaticPageDraft) || '需要先确认当前效果图，再制作最终静态页。');
+      return activeStaticPageDraft;
+    }
+
+    if (
+      operation.type === 'request_final_render'
+      && directHtmlRender
+      && !canRequestStaticPageDirectHtml(activeStaticPageDraft)
+    ) {
+      setBanner(staticPageDirectHtmlBlockReason(activeStaticPageDraft) || '需要先补齐模块数据，再生成 HTML。');
       return activeStaticPageDraft;
     }
 
@@ -3012,10 +3035,13 @@ export default function HomePageClient() {
           status: 'queued',
           renderer: 'platform-api-static-page-renderer',
           renderOutputId: '',
-          imageJobId: activeStaticPageDraft.imageJob?.id || null,
+          imageJobId: directHtmlRender ? null : activeStaticPageDraft.imageJob?.id || null,
+          directHtml: directHtmlRender,
           assetManifest: {
             status: 'queued',
-            queue_copy: '最终静态页正在后台制作，可以继续聊天或修改其他内容。',
+            queue_copy: directHtmlRender
+              ? '快速 HTML 正在生成，完成后可直接下载 index.html。'
+              : '最终静态页正在后台制作，可以继续聊天或修改其他内容。',
           },
         },
       });
