@@ -1212,7 +1212,25 @@ async fn wait_for_next_task_signal(task_waker: &mut EventSubscription, poll_inte
 #[cfg(test)]
 mod tests {
     use super::*;
-    use domain_model::{DatasetId, DocumentId};
+    use domain_model::{
+        DatasetId, DocumentId, WorkflowEventId, WorkflowEventRecord, WorkflowExecution,
+        WorkflowExecutionId, WorkflowKind, WorkflowStatus, WorkflowTaskStatus,
+    };
+    use storage::{NewDataset, NewDocument};
+    use test_fixtures::{
+        local_postgres_storage, reset_local_postgres_storage, shared_local_postgres_test_lock,
+    };
+
+    #[derive(Clone, Debug)]
+    struct StaticIngestProcessor {
+        outcome: IngestOutcome,
+    }
+
+    impl IngestProcessor for StaticIngestProcessor {
+        fn process(&self, _job: &IngestJob) -> IngestOutcome {
+            self.outcome.clone()
+        }
+    }
 
     #[test]
     fn auto_reparse_decision_ignores_healthy_parse() {
@@ -1267,6 +1285,223 @@ mod tests {
         assert_eq!(decision.status, "disabled");
         assert_eq!(decision.attempt_count, 0);
         assert!(decision.reason.contains("auto reparse is disabled"));
+    }
+
+    #[tokio::test]
+    async fn degraded_uploaded_document_is_failed_and_requeued_for_auto_reparse() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping ingest auto reparse workflow test: {reason}");
+                return;
+            }
+        };
+        reset_local_postgres_storage(&storage)
+            .await
+            .expect("test storage should reset");
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("ingest-auto-reparse-test-{}", uuid::Uuid::new_v4()),
+                "Ingest Auto Reparse Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let dataset = storage
+            .datasets()
+            .create(
+                tenant.id,
+                NewDataset {
+                    key: format!("auto-reparse-{}", uuid::Uuid::new_v4()),
+                    title: "Auto reparse dataset".to_string(),
+                    description: Some("Documents that need a parse retry.".to_string()),
+                    owner_user_id: None,
+                },
+            )
+            .await
+            .expect("dataset should be created");
+        let document = storage
+            .documents()
+            .create(
+                tenant.id,
+                NewDocument {
+                    dataset_id: dataset.id,
+                    title: "One character customer PDF".to_string(),
+                    object_key: "documents/one-character.pdf".to_string(),
+                    content_type: "application/pdf".to_string(),
+                    secret_binding_ids: Vec::new(),
+                    owner_user_id: None,
+                    metadata: json!({}),
+                },
+            )
+            .await
+            .expect("document should be created");
+        let workflow_catalog = workflow_definitions::catalog();
+        let execution = test_upload_ingest_execution(tenant.id, &workflow_catalog, &document);
+        let initial_event = test_upload_ingest_event(&execution, &document);
+        storage
+            .workflow_executions()
+            .create_with_initial_event(&execution, &initial_event)
+            .await
+            .expect("workflow execution should be created");
+        platform_api::apply_workflow_signal_with_dependencies(
+            &storage,
+            &workflow_catalog,
+            &EventBus::Disabled,
+            tenant.id,
+            execution.id,
+            WorkflowSignal::Start,
+        )
+        .await
+        .expect("workflow should start");
+        let first_task = storage
+            .workflow_tasks()
+            .list_by_execution(execution.id)
+            .await
+            .expect("tasks should load")
+            .into_iter()
+            .next()
+            .expect("start should enqueue ingest task");
+        let processor = StaticIngestProcessor {
+            outcome: IngestOutcome {
+                chunks: vec!["PDF parse quality warning: extracted text was too short.".to_string()],
+                inferred_title: None,
+                parse_method: "pdf-paddleocr+low-quality".to_string(),
+                extracted_chars: 1,
+                used_placeholder: false,
+                metadata: json!({
+                    "parse_quality": {
+                        "kind": "pdf_text_extraction",
+                        "status": "low_text_coverage_fallback_unavailable",
+                        "text_chars": 1,
+                        "min_usable_text_chars": 32,
+                        "fallback_status": "unavailable"
+                    }
+                }),
+            },
+        };
+
+        process_uploaded_document_task(
+            &storage,
+            &workflow_catalog,
+            &EventBus::Disabled,
+            &processor,
+            first_task,
+        )
+        .await
+        .expect("degraded parse should be handled as controlled reparse");
+
+        let updated_document = storage
+            .documents()
+            .get_by_id(tenant.id, document.id)
+            .await
+            .expect("document should load")
+            .expect("document should exist");
+        assert_eq!(updated_document.lifecycle, DocumentLifecycle::Failed);
+        assert_eq!(
+            updated_document.metadata.get("parse_status"),
+            Some(&json!("parse_degraded"))
+        );
+        assert_eq!(
+            updated_document
+                .metadata
+                .get("ingest")
+                .and_then(|value| value.pointer("/auto_reparse/status")),
+            Some(&json!("queued"))
+        );
+        assert_eq!(
+            updated_document
+                .metadata
+                .get("ingest")
+                .and_then(|value| value.pointer("/auto_reparse/attempt_count")),
+            Some(&json!(1))
+        );
+
+        let updated_execution = storage
+            .workflow_executions()
+            .get_by_id(tenant.id, execution.id)
+            .await
+            .expect("execution should load")
+            .expect("execution should exist");
+        assert_eq!(updated_execution.status, WorkflowStatus::Running);
+        assert_eq!(updated_execution.stage, DEFAULT_WAKE_TASK_KEY);
+        let tasks = storage
+            .workflow_tasks()
+            .list_by_execution(execution.id)
+            .await
+            .expect("tasks should load");
+        assert_eq!(tasks.len(), 2);
+        assert_eq!(tasks[0].status, WorkflowTaskStatus::Failed);
+        assert_eq!(tasks[1].status, WorkflowTaskStatus::Queued);
+        assert_eq!(tasks[1].task_key, DEFAULT_WAKE_TASK_KEY);
+    }
+
+    fn test_upload_ingest_execution(
+        tenant_id: domain_model::TenantId,
+        workflow_catalog: &WorkflowCatalog,
+        document: &Document,
+    ) -> WorkflowExecution {
+        let definition = workflow_catalog
+            .find_definition(WorkflowKind::UploadIngest)
+            .expect("upload ingest workflow definition should exist");
+        let now = Utc::now();
+        let execution_id = WorkflowExecutionId::new();
+        let runtime_state = definition.initial_state(execution_id, now);
+        let mut context = runtime_state.context;
+        context.insert(
+            "retries_remaining".to_string(),
+            Value::Number(runtime_state.retries_remaining.into()),
+        );
+        context.insert(
+            "document_id".to_string(),
+            Value::String(document.id.to_string()),
+        );
+        context.insert(
+            "content_type".to_string(),
+            Value::String(document.content_type.clone()),
+        );
+        context.insert(
+            "object_key".to_string(),
+            Value::String(document.object_key.clone()),
+        );
+
+        WorkflowExecution {
+            id: execution_id,
+            tenant_id,
+            dataset_id: Some(document.dataset_id),
+            report_plan_id: None,
+            kind: WorkflowKind::UploadIngest,
+            version: runtime_state.version,
+            stage: runtime_state.stage,
+            status: runtime_state.status,
+            attempt: 0,
+            context: Value::Object(context),
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    fn test_upload_ingest_event(
+        execution: &WorkflowExecution,
+        document: &Document,
+    ) -> WorkflowEventRecord {
+        WorkflowEventRecord {
+            id: WorkflowEventId::new(),
+            execution_id: execution.id,
+            sequence_no: 1,
+            event_name: "workflow.execution_created".to_string(),
+            payload: json!({
+                "kind": execution.kind.as_str(),
+                "version": execution.version,
+                "status": execution.status.as_str(),
+                "stage": execution.stage,
+                "document_id": document.id,
+                "dataset_id": document.dataset_id,
+                "content_type": document.content_type,
+            }),
+            created_at: execution.created_at,
+        }
     }
 
     #[test]

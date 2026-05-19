@@ -58,6 +58,8 @@ run_check "low-quality PDF diagnostic blocks single-character success" \
   "${cargo_bin}" test -p ingest-worker pdf_low_quality_diagnostic_does_not_treat_single_character_as_content --lib
 run_check "ingest outcomes expose model-visible parse status" \
   "${cargo_bin}" test -p ingest-worker ingest_outcome_derives_model_visible_parse_status --lib
+run_check "low-quality ingest auto reparse is requeued" \
+  "${cargo_bin}" test -p ingest-worker degraded_uploaded_document_is_failed_and_requeued_for_auto_reparse
 run_check "external parse accepts Java camelCase payloads" \
   "${cargo_bin}" test -p contracts external_document_parse_request_accepts_java_camel_case_payload --lib
 run_check "external parse-detail exposes Java-compatible summary fields" \
@@ -110,6 +112,7 @@ const report = {
   contract: {
     parser_quality: "PaddleOCR parsing, low-quality PDF detection, and diagnostic fallback must not treat one-character extraction as usable content.",
     ingest_parse_status: "Ingest outcomes should persist model-visible parse status values such as parsed, parse_degraded, and parsed_with_vlm_fallback.",
+    auto_reparse: "Low-quality ingest should fail the current task, persist auto_reparse metadata, and requeue the upload workflow instead of completing as usable content.",
     external_parse_compatibility: "Third-party Java/camelCase parse payloads and parse-detail summary fields remain compatible, including parseStatus/modelStatus/workflow state.",
     document_detail_parse_state: "Document detail responses should expose parse_state so normal UI/model flows can explain pending, failed, or reparsing documents.",
     resume_entity_scan: "Resume/company entity scans should preserve valid company names while filtering common phrase noise.",
@@ -137,6 +140,7 @@ const lines = [
   "",
   `- Parser quality: ${report.contract.parser_quality}`,
   `- Ingest parse status: ${report.contract.ingest_parse_status}`,
+  `- Auto reparse: ${report.contract.auto_reparse}`,
   `- External parse compatibility: ${report.contract.external_parse_compatibility}`,
   `- Document detail parse state: ${report.contract.document_detail_parse_state}`,
   `- Resume entity scan: ${report.contract.resume_entity_scan}`,

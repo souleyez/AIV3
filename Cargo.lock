@@ -1329,6 +1329,7 @@ dependencies = [
  "serde_json",
  "sqlx",
  "storage",
+ "test-fixtures",
  "tokio",
  "tracing",
  "uuid",
