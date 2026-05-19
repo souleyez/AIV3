@@ -527,6 +527,14 @@ pub struct ExternalDocumentParseDocumentView {
         skip_serializing_if = "Option::is_none"
     )]
     pub parse_quality_status_camel: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parse_quality_summary: Option<Value>,
+    #[serde(
+        default,
+        rename = "parseQualitySummary",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub parse_quality_summary_camel: Option<Value>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -565,6 +573,14 @@ pub struct ExternalDocumentParseDetailItemView {
         skip_serializing_if = "Option::is_none"
     )]
     pub parse_quality_status_camel: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parse_quality_summary: Option<Value>,
+    #[serde(
+        default,
+        rename = "parseQualitySummary",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub parse_quality_summary_camel: Option<Value>,
     #[serde(default)]
     pub model_status: String,
     #[serde(default, rename = "modelStatus")]
@@ -609,6 +625,14 @@ pub struct GetExternalDocumentParseDetailResponse {
         skip_serializing_if = "Option::is_none"
     )]
     pub parse_quality_status_camel: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parse_quality_summary: Option<Value>,
+    #[serde(
+        default,
+        rename = "parseQualitySummary",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub parse_quality_summary_camel: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_status: Option<String>,
     #[serde(
@@ -2046,6 +2070,14 @@ pub struct DocumentParseStatusView {
         skip_serializing_if = "Option::is_none"
     )]
     pub parse_quality_status_camel: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parse_quality_summary: Option<Value>,
+    #[serde(
+        default,
+        rename = "parseQualitySummary",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub parse_quality_summary_camel: Option<Value>,
     #[serde(default)]
     pub model_status: String,
     #[serde(default, rename = "modelStatus")]
@@ -2066,6 +2098,8 @@ impl Default for DocumentParseStatusView {
             parse_status_camel: String::new(),
             parse_quality_status: None,
             parse_quality_status_camel: None,
+            parse_quality_summary: None,
+            parse_quality_summary_camel: None,
             model_status: String::new(),
             model_status_camel: String::new(),
             lifecycle: DocumentLifecycleView::Received,
@@ -3763,6 +3797,22 @@ mod tests {
             parse_status_camel: Some("indexed".to_string()),
             parse_quality_status: Some("ok".to_string()),
             parse_quality_status_camel: Some("ok".to_string()),
+            parse_quality_summary: Some(json!({
+                "status": "ok",
+                "parse_method": "pdf-paddleocr",
+                "candidate_selection": {
+                    "selected_method": "pdf-paddleocr",
+                    "candidate_count": 2
+                }
+            })),
+            parse_quality_summary_camel: Some(json!({
+                "status": "ok",
+                "parse_method": "pdf-paddleocr",
+                "candidate_selection": {
+                    "selected_method": "pdf-paddleocr",
+                    "candidate_count": 2
+                }
+            })),
             model_status: Some("ready".to_string()),
             model_status_camel: Some("ready".to_string()),
             retrieval_evidence_count: Some(2),
@@ -3782,6 +3832,22 @@ mod tests {
                 parse_status_camel: "indexed".to_string(),
                 parse_quality_status: Some("ok".to_string()),
                 parse_quality_status_camel: Some("ok".to_string()),
+                parse_quality_summary: Some(json!({
+                    "status": "ok",
+                    "parse_method": "pdf-paddleocr",
+                    "candidate_selection": {
+                        "selected_method": "pdf-paddleocr",
+                        "candidate_count": 2
+                    }
+                })),
+                parse_quality_summary_camel: Some(json!({
+                    "status": "ok",
+                    "parse_method": "pdf-paddleocr",
+                    "candidate_selection": {
+                        "selected_method": "pdf-paddleocr",
+                        "candidate_count": 2
+                    }
+                })),
                 model_status: "ready".to_string(),
                 model_status_camel: "ready".to_string(),
                 chunk_count: 3,
@@ -3805,6 +3871,14 @@ mod tests {
         assert_eq!(encoded["parseStatus"], json!("indexed"));
         assert_eq!(encoded["parse_quality_status"], json!("ok"));
         assert_eq!(encoded["parseQualityStatus"], json!("ok"));
+        assert_eq!(
+            encoded["parse_quality_summary"]["candidate_selection"]["candidate_count"],
+            json!(2)
+        );
+        assert_eq!(
+            encoded["parseQualitySummary"]["candidate_selection"]["selected_method"],
+            json!("pdf-paddleocr")
+        );
         assert_eq!(encoded["model_status"], json!("ready"));
         assert_eq!(encoded["modelStatus"], json!("ready"));
         assert_eq!(encoded["ingest"]["parse_method"], json!("pdf-paddleocr"));

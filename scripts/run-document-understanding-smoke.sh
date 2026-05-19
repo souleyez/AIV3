@@ -72,6 +72,8 @@ run_check "external parse-detail surfaces async parse status" \
   "${cargo_bin}" test -p platform-api external_document_parse_endpoint_downloads_and_enqueues_ingest --lib
 run_check "document detail exposes parse state" \
   "${cargo_bin}" test -p platform-api load_document_detail_returns_document_chunks_and_retrieval_evidences --lib
+run_check "parse quality diagnostics are compact and model-visible" \
+  "${cargo_bin}" test -p platform-api assistant_run_document_parse_quality_summary_compacts_parser_diagnostics --lib
 run_check "resume company scan expands supply actions" \
   "${cargo_bin}" test -p platform-api assistant_run_resume_company_scan_scope_expands_supply_actions --lib
 run_check "resume company extractor keeps valid company names" \

@@ -2606,6 +2606,35 @@ fn collect_document_detail_model_facing_signals(detail: &DocumentDetailView) -> 
                 .join("|")
         ));
     }
+    if let Some(parse_quality_status) = detail.parse_state.parse_quality_status.as_deref() {
+        signals.push(format!("parse_quality_status={parse_quality_status}"));
+    }
+    if let Some(parse_quality_summary) = detail.parse_state.parse_quality_summary.as_ref() {
+        if let Some(parse_method) = parse_quality_summary
+            .get("parse_method")
+            .and_then(Value::as_str)
+        {
+            signals.push(format!("parse_method={parse_method}"));
+        }
+        if let Some(selected_method) = parse_quality_summary
+            .pointer("/candidate_selection/selected_method")
+            .and_then(Value::as_str)
+        {
+            signals.push(format!("parse_candidate_selected_method={selected_method}"));
+        }
+        if let Some(vlm_selected) = parse_quality_summary
+            .pointer("/vlm_rescue/selected")
+            .and_then(Value::as_str)
+        {
+            signals.push(format!("parse_vlm_rescue_selected={vlm_selected}"));
+        }
+        if let Some(auto_reparse_status) = parse_quality_summary
+            .pointer("/auto_reparse/status")
+            .and_then(Value::as_str)
+        {
+            signals.push(format!("auto_reparse_status={auto_reparse_status}"));
+        }
+    }
     signals
 }
 
@@ -8888,6 +8917,9 @@ async fn get_external_document_parse_detail(
     let parse_quality_status = latest
         .as_ref()
         .and_then(|item| item.parse_quality_status.clone());
+    let parse_quality_summary = latest
+        .as_ref()
+        .and_then(|item| item.parse_quality_summary.clone());
     let model_status = latest.as_ref().map(|item| item.model_status.clone());
     let retrieval_evidence_count = latest.as_ref().map(|item| item.retrieval_evidence_count);
     let ingest = latest.as_ref().map(|item| item.ingest.clone());
@@ -8903,6 +8935,8 @@ async fn get_external_document_parse_detail(
         parse_status_camel: parse_status,
         parse_quality_status: parse_quality_status.clone(),
         parse_quality_status_camel: parse_quality_status,
+        parse_quality_summary: parse_quality_summary.clone(),
+        parse_quality_summary_camel: parse_quality_summary,
         model_status: model_status.clone(),
         model_status_camel: model_status,
         retrieval_evidence_count,
@@ -9254,6 +9288,7 @@ fn to_external_document_parse_document_view(
     let parse_status = document_metadata_parse_status(&document)
         .unwrap_or_else(|| document.lifecycle.as_str().to_string());
     let parse_quality_status = assistant_run_document_parse_quality_status(&document);
+    let parse_quality_summary = assistant_run_document_parse_quality_summary(&document);
     ExternalDocumentParseDocumentView {
         id: document.id,
         dataset_id: document.dataset_id,
@@ -9264,6 +9299,8 @@ fn to_external_document_parse_document_view(
         parse_status_camel: parse_status,
         parse_quality_status: parse_quality_status.clone(),
         parse_quality_status_camel: parse_quality_status,
+        parse_quality_summary: parse_quality_summary.clone(),
+        parse_quality_summary_camel: parse_quality_summary,
         created_at: document.created_at,
         updated_at: document.updated_at,
     }
@@ -9561,6 +9598,8 @@ async fn to_external_document_parse_detail_item(
         parse_status_camel: parse_state.parse_status.clone(),
         parse_quality_status: parse_state.parse_quality_status.clone(),
         parse_quality_status_camel: parse_state.parse_quality_status.clone(),
+        parse_quality_summary: parse_state.parse_quality_summary.clone(),
+        parse_quality_summary_camel: parse_state.parse_quality_summary.clone(),
         model_status: parse_state.model_status.clone(),
         model_status_camel: parse_state.model_status,
         chunk_count: chunks.len(),
@@ -19096,6 +19135,11 @@ async fn build_assistant_run_document_parse_status_supply(
             if let Some(parse_quality_status) = parse_quality_status {
                 set_payload_string(&mut item, "parse_quality_status", &parse_quality_status);
             }
+            if let Some(parse_quality_summary) =
+                assistant_run_document_parse_quality_summary(&document)
+            {
+                set_payload_value(&mut item, "parse_quality_summary", parse_quality_summary);
+            }
             if let Some(workflow) = workflow {
                 set_payload_value(&mut item, "workflow", workflow.clone());
             }
@@ -19140,6 +19184,7 @@ async fn build_assistant_run_document_parse_status_supply(
         "model_guidance": [
             "When a relevant document is parsing, queued, indexing, failed, reparsing, or parse_degraded, say the document content is not fully ready instead of guessing.",
             "If reparsing or reparse_queued is present, explain that a retry is already underway or queued.",
+            "If parse_quality_summary.vlm_rescue is present, mention whether MiniMax VLM rescue was selected or whether the local parse was kept.",
             "Use ready retrieval evidence and fallback chunks for facts; use this item for document availability/status only."
         ],
         "limits": {
@@ -19308,20 +19353,176 @@ fn assistant_run_document_parse_status_needs_attention(status: &str) -> bool {
 }
 
 fn assistant_run_document_parse_quality_status(document: &Document) -> Option<String> {
-    document
-        .metadata
-        .get("ingest")
-        .and_then(|ingest| ingest.pointer("/parse_metadata/parse_quality/status"))
-        .or_else(|| {
-            document
-                .metadata
-                .get("ingest")
-                .and_then(|ingest| ingest.pointer("/parseMetadata/parseQuality/status"))
-        })
+    assistant_run_document_parse_quality_metadata(document)
+        .and_then(|parse_quality| value_at_any_key(parse_quality, &["status"]))
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
+}
+
+fn assistant_run_document_parse_quality_metadata(document: &Document) -> Option<&Value> {
+    let ingest = document
+        .metadata
+        .get("ingest")
+        .filter(|value| value.is_object())?;
+    value_at_any_key(ingest, &["parse_metadata", "parseMetadata"])
+        .and_then(|parse_metadata| {
+            value_at_any_key(parse_metadata, &["parse_quality", "parseQuality"])
+        })
+        .filter(|value| value.is_object())
+}
+
+fn assistant_run_document_parse_quality_summary(document: &Document) -> Option<Value> {
+    let ingest = document
+        .metadata
+        .get("ingest")
+        .filter(|value| value.is_object())?;
+    let parse_quality = assistant_run_document_parse_quality_metadata(document)?;
+    let mut summary = Map::new();
+
+    copy_json_fields(
+        ingest,
+        &mut summary,
+        &[
+            "parse_method",
+            "parse_status",
+            "parse_quality_status",
+            "cloud_structured_provider",
+        ],
+    );
+    copy_json_fields(
+        parse_quality,
+        &mut summary,
+        &["kind", "status", "text_chars", "min_usable_text_chars"],
+    );
+    if let Some(fallback_from) = value_at_any_key(parse_quality, &["fallback_from", "fallbackFrom"])
+        .and_then(compact_parse_quality_candidate_report)
+    {
+        summary.insert("fallback_from".to_string(), fallback_from);
+    }
+    if let Some(candidate_selection) =
+        assistant_run_parse_quality_candidate_selection_summary(parse_quality)
+    {
+        summary.insert("candidate_selection".to_string(), candidate_selection);
+    }
+    if let Some(vlm_rescue) = assistant_run_parse_quality_vlm_rescue_summary(parse_quality) {
+        summary.insert("vlm_rescue".to_string(), vlm_rescue);
+    }
+    if let Some(auto_reparse) = value_at_any_key(ingest, &["auto_reparse", "autoReparse"])
+        .and_then(assistant_run_auto_reparse_summary)
+    {
+        summary.insert("auto_reparse".to_string(), auto_reparse);
+    }
+
+    if summary.is_empty() {
+        None
+    } else {
+        Some(Value::Object(summary))
+    }
+}
+
+fn assistant_run_parse_quality_candidate_selection_summary(parse_quality: &Value) -> Option<Value> {
+    let candidate_selection = value_at_any_key(
+        parse_quality,
+        &["candidate_selection", "candidateSelection"],
+    )?;
+    let mut summary = Map::new();
+    copy_json_fields(
+        candidate_selection,
+        &mut summary,
+        &["policy", "selected_method"],
+    );
+    if let Some(selected) = value_at_any_key(candidate_selection, &["selected"])
+        .and_then(compact_parse_quality_candidate_report)
+    {
+        summary.insert("selected".to_string(), selected);
+    }
+    if let Some(candidate_count) = value_at_any_key(candidate_selection, &["candidates"])
+        .and_then(Value::as_array)
+        .map(Vec::len)
+    {
+        summary.insert("candidate_count".to_string(), json!(candidate_count));
+    }
+    if summary.is_empty() {
+        None
+    } else {
+        Some(Value::Object(summary))
+    }
+}
+
+fn assistant_run_parse_quality_vlm_rescue_summary(parse_quality: &Value) -> Option<Value> {
+    let vlm_rescue = value_at_any_key(parse_quality, &["vlm_rescue", "vlmRescue"])?;
+    let mut summary = Map::new();
+    copy_json_fields(vlm_rescue, &mut summary, &["policy", "selected"]);
+    for key in ["existing", "vlm"] {
+        if let Some(report) =
+            value_at_any_key(vlm_rescue, &[key]).and_then(compact_parse_quality_candidate_report)
+        {
+            summary.insert(key.to_string(), report);
+        }
+    }
+    if summary.is_empty() {
+        None
+    } else {
+        Some(Value::Object(summary))
+    }
+}
+
+fn assistant_run_auto_reparse_summary(auto_reparse: &Value) -> Option<Value> {
+    let mut summary = Map::new();
+    copy_json_fields(
+        auto_reparse,
+        &mut summary,
+        &[
+            "status",
+            "reason",
+            "attempt_count",
+            "max_attempts",
+            "updated_at",
+        ],
+    );
+    if summary.is_empty() {
+        None
+    } else {
+        Some(Value::Object(summary))
+    }
+}
+
+fn compact_parse_quality_candidate_report(value: &Value) -> Option<Value> {
+    let mut summary = Map::new();
+    copy_json_fields(
+        value,
+        &mut summary,
+        &[
+            "method",
+            "text_chars",
+            "structure_block_count",
+            "heading_count",
+            "table_signal_count",
+            "quality_score",
+        ],
+    );
+    if summary.is_empty() {
+        None
+    } else {
+        Some(Value::Object(summary))
+    }
+}
+
+fn value_at_any_key<'a>(value: &'a Value, keys: &[&str]) -> Option<&'a Value> {
+    keys.iter().find_map(|key| value.get(*key))
+}
+
+fn copy_json_fields(source: &Value, target: &mut Map<String, Value>, keys: &[&str]) {
+    for key in keys {
+        if let Some(value) = value_at_any_key(source, &[*key])
+            .filter(|value| !value.is_null())
+            .cloned()
+        {
+            target.insert((*key).to_string(), value);
+        }
+    }
 }
 
 fn assistant_run_document_ingest_summary(document: &Document) -> Value {
@@ -19351,6 +19552,9 @@ fn assistant_run_document_ingest_summary(document: &Document) -> Value {
             "parse_quality_status".to_string(),
             json!(parse_quality_status),
         );
+    }
+    if let Some(parse_quality_summary) = assistant_run_document_parse_quality_summary(document) {
+        summary.insert("parse_quality_summary".to_string(), parse_quality_summary);
     }
     Value::Object(summary)
 }
@@ -24696,6 +24900,7 @@ fn build_document_parse_status_view(
 ) -> contracts::DocumentParseStatusView {
     let parse_status = assistant_scope_document_parse_status(document, chunks);
     let parse_quality_status = assistant_run_document_parse_quality_status(document);
+    let parse_quality_summary = assistant_run_document_parse_quality_summary(document);
     let model_status = assistant_run_document_parse_model_status(
         document,
         &parse_status,
@@ -24708,6 +24913,8 @@ fn build_document_parse_status_view(
         parse_status_camel: parse_status,
         parse_quality_status: parse_quality_status.clone(),
         parse_quality_status_camel: parse_quality_status,
+        parse_quality_summary: parse_quality_summary.clone(),
+        parse_quality_summary_camel: parse_quality_summary,
         model_status: model_status.clone(),
         model_status_camel: model_status,
         lifecycle: contracts::DocumentLifecycleView::from_domain(document.lifecycle.clone()),
@@ -49558,6 +49765,16 @@ mod tests {
             .as_str()
             .unwrap_or_default()
             .contains("模型应据此说明解析状态"));
+        let low_coverage_attention = parse_status_item["attention_documents"]
+            .as_array()
+            .expect("attention documents should be present")
+            .iter()
+            .find(|item| item.get("title").and_then(Value::as_str) == Some("Low coverage PDF"))
+            .expect("degraded parse document should be listed");
+        assert_eq!(
+            low_coverage_attention["parse_quality_summary"]["status"],
+            json!("low_text_coverage_fallback_unavailable")
+        );
         let attention_statuses = parse_status_item["attention_documents"]
             .as_array()
             .expect("attention documents should be present")
@@ -54459,6 +54676,83 @@ mod tests {
         assert_eq!(summary.lifecycle, contracts::DocumentLifecycleView::Indexed);
         assert_eq!(summary.content_type, "application/pdf");
         assert_eq!(summary.secret_binding_ids.len(), 1);
+    }
+
+    #[test]
+    fn assistant_run_document_parse_quality_summary_compacts_parser_diagnostics() {
+        let now = Utc::now();
+        let document = Document {
+            id: DocumentId::new(),
+            tenant_id: TenantId::new(),
+            dataset_id: DatasetId::new(),
+            owner_user_id: None,
+            title: "Weak scan.pdf".to_string(),
+            object_key: "documents/weak-scan.pdf".to_string(),
+            content_type: "application/pdf".to_string(),
+            lifecycle: domain_model::DocumentLifecycle::Failed,
+            secret_binding_ids: vec![],
+            metadata: BTreeMap::from_iter([(
+                "ingest".to_string(),
+                json!({
+                    "parse_method": "pdf-vlm",
+                    "parse_status": "parsed_with_vlm_fallback",
+                    "parse_quality_status": "vlm_fallback_used",
+                    "cloud_structured_provider": "minimax-vlm",
+                    "parse_metadata": {
+                        "parse_quality": {
+                            "kind": "pdf_text_extraction",
+                            "status": "vlm_fallback_used",
+                            "text_chars": 420,
+                            "min_usable_text_chars": 32,
+                            "candidate_selection": {
+                                "policy": "score_text_structure_and_layout",
+                                "selected_method": "pdf-pypdf",
+                                "selected": {
+                                    "method": "pdf-pypdf",
+                                    "text_chars": 41,
+                                    "structure_block_count": 0,
+                                    "heading_count": 0,
+                                    "table_signal_count": 0,
+                                    "quality_score": 41
+                                },
+                                "candidates": [
+                                    {"method": "pdf-pypdf", "text_chars": 41},
+                                    {"method": "pdf-paddleocr", "text_chars": 39}
+                                ]
+                            },
+                            "vlm_rescue": {
+                                "policy": "try_minimax_for_weak_unstructured_pdf_text",
+                                "selected": "vlm",
+                                "existing": {"method": "pdf-pypdf", "text_chars": 41, "quality_score": 41},
+                                "vlm": {"method": "pdf-vlm", "text_chars": 420, "quality_score": 420}
+                            }
+                        }
+                    },
+                    "auto_reparse": {
+                        "status": "retry_queued",
+                        "reason": "document parse quality requires reparse",
+                        "attempt_count": 1,
+                        "max_attempts": 1,
+                        "updated_at": now
+                    }
+                }),
+            )]),
+            created_at: now,
+            updated_at: now,
+        };
+
+        let summary =
+            assistant_run_document_parse_quality_summary(&document).expect("summary exists");
+
+        assert_eq!(summary["status"], json!("vlm_fallback_used"));
+        assert_eq!(summary["parse_method"], json!("pdf-vlm"));
+        assert_eq!(
+            summary["candidate_selection"]["selected_method"],
+            json!("pdf-pypdf")
+        );
+        assert_eq!(summary["candidate_selection"]["candidate_count"], json!(2));
+        assert_eq!(summary["vlm_rescue"]["selected"], json!("vlm"));
+        assert_eq!(summary["auto_reparse"]["status"], json!("retry_queued"));
     }
 
     #[test]
