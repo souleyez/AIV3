@@ -9051,25 +9051,38 @@ async fn get_external_document_parse_detail(
         .or_else(|| query.get("sourceId"))
         .map(String::as_str)
         .and_then(non_empty_trimmed_string)
-        .or_else(|| external_channel_default_source_id_from_config(&connection.config_redacted))
-        .ok_or_else(|| {
-            ApiError::bad_request(
-                "external_source_id_missing",
-                "parse detail query requires source_id or channel default_source_id".to_string(),
+        .or_else(|| external_channel_default_source_id_from_config(&connection.config_redacted));
+    let revision_external_id = query
+        .get("revision_external_id")
+        .or_else(|| query.get("revisionExternalId"))
+        .map(String::as_str)
+        .and_then(non_empty_trimmed_string);
+    let source_id = match source_id {
+        Some(source_id) => Some(source_id),
+        None => {
+            infer_external_document_source_id(
+                &state,
+                &document_external_id,
+                revision_external_id.as_deref(),
             )
-        })?;
-    load_external_source_connection(&state, &source_id).await?;
+            .await?
+        }
+    };
+    if let Some(source_id) = source_id.as_deref() {
+        load_external_source_connection(&state, source_id).await?;
+    }
 
-    let mut documents = find_external_documents_by_external_id(
-        &state,
-        &source_id,
-        &document_external_id,
-        query
-            .get("revision_external_id")
-            .or_else(|| query.get("revisionExternalId"))
-            .map(String::as_str),
-    )
-    .await?;
+    let mut documents = if let Some(source_id) = source_id.as_deref() {
+        find_external_documents_by_external_id(
+            &state,
+            source_id,
+            &document_external_id,
+            revision_external_id.as_deref(),
+        )
+        .await?
+    } else {
+        Vec::new()
+    };
     if documents.is_empty() {
         if let Some(document_id) = Uuid::parse_str(&document_external_id).ok().map(DocumentId) {
             if let Some(document) = state
@@ -9079,16 +9092,23 @@ async fn get_external_document_parse_detail(
                 .await
                 .map_err(ApiError::from_storage)?
             {
-                let revision_external_id = query
-                    .get("revision_external_id")
-                    .or_else(|| query.get("revisionExternalId"))
-                    .map(String::as_str)
-                    .and_then(non_empty_trimmed_string);
-                if external_document_source_matches(
-                    &document.metadata,
-                    &source_id,
-                    revision_external_id.as_deref(),
-                ) {
+                let matches_source = source_id.as_deref().map_or_else(
+                    || {
+                        external_document_source_id_from_metadata(
+                            &document.metadata,
+                            revision_external_id.as_deref(),
+                        )
+                        .is_some()
+                    },
+                    |source_id| {
+                        external_document_source_matches(
+                            &document.metadata,
+                            source_id,
+                            revision_external_id.as_deref(),
+                        )
+                    },
+                );
+                if matches_source {
                     documents.push(document);
                 }
             }
@@ -9116,7 +9136,7 @@ async fn get_external_document_parse_detail(
     let workflow = latest.as_ref().and_then(|item| item.workflow.clone());
 
     Ok(Json(GetExternalDocumentParseDetailResponse {
-        source_id,
+        source_id: source_id.unwrap_or_default(),
         document_external_id,
         lifecycle,
         chunk_count,
@@ -9561,6 +9581,86 @@ async fn find_external_documents_by_external_id(
         .collect())
 }
 
+async fn infer_external_document_source_id(
+    state: &AppState,
+    document_external_id: &str,
+    revision_external_id: Option<&str>,
+) -> std::result::Result<Option<String>, ApiError> {
+    if let Some(document_id) = Uuid::parse_str(document_external_id).ok().map(DocumentId) {
+        if let Some(document) = state
+            .storage
+            .documents()
+            .get_by_id(state.tenant_id, document_id)
+            .await
+            .map_err(ApiError::from_storage)?
+        {
+            if let Some(source_id) =
+                external_document_source_id_from_metadata(&document.metadata, revision_external_id)
+            {
+                return Ok(Some(source_id));
+            }
+        }
+    }
+
+    let documents = state
+        .storage
+        .documents()
+        .list_by_tenant(state.tenant_id)
+        .await
+        .map_err(ApiError::from_storage)?;
+    let source_ids = documents
+        .iter()
+        .filter(|document| {
+            external_document_metadata_document_id_matches(
+                &document.metadata,
+                document_external_id,
+                revision_external_id,
+            )
+        })
+        .filter_map(|document| external_document_source_id_from_metadata(&document.metadata, None))
+        .collect::<BTreeSet<_>>();
+
+    match source_ids.len() {
+        0 => Ok(None),
+        1 => Ok(source_ids.into_iter().next()),
+        _ => Err(ApiError::bad_request_with_details(
+            "external_source_id_ambiguous",
+            "document_external_id exists in multiple external sources; pass source_id to disambiguate"
+                .to_string(),
+            json!({
+                "document_external_id": document_external_id,
+                "source_ids": source_ids,
+            }),
+        )),
+    }
+}
+
+fn external_document_source_id_from_metadata(
+    metadata: &BTreeMap<String, Value>,
+    revision_external_id: Option<&str>,
+) -> Option<String> {
+    let object = metadata
+        .get("external_source")
+        .or_else(|| metadata.get("externalSource"))
+        .and_then(Value::as_object)?;
+    let source_id = object
+        .get("source_id")
+        .or_else(|| object.get("sourceId"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    if revision_external_id.map_or(false, |revision| {
+        object
+            .get("revision_external_id")
+            .or_else(|| object.get("revisionExternalId"))
+            .and_then(Value::as_str)
+            != Some(revision)
+    }) {
+        return None;
+    }
+    Some(source_id.to_string())
+}
+
 fn external_document_metadata_matches(
     metadata: &BTreeMap<String, Value>,
     source_id: &str,
@@ -9568,13 +9668,37 @@ fn external_document_metadata_matches(
     revision_external_id: Option<&str>,
 ) -> bool {
     external_document_source_matches(metadata, source_id, revision_external_id)
-        && metadata
-            .get("external_source")
-            .or_else(|| metadata.get("externalSource"))
-            .and_then(Value::as_object)
-            .and_then(|object| object.get("document_external_id"))
-            .and_then(Value::as_str)
-            == Some(document_external_id)
+        && external_document_metadata_document_id_matches(
+            metadata,
+            document_external_id,
+            revision_external_id,
+        )
+}
+
+fn external_document_metadata_document_id_matches(
+    metadata: &BTreeMap<String, Value>,
+    document_external_id: &str,
+    revision_external_id: Option<&str>,
+) -> bool {
+    let Some(object) = metadata
+        .get("external_source")
+        .or_else(|| metadata.get("externalSource"))
+        .and_then(Value::as_object)
+    else {
+        return false;
+    };
+    object
+        .get("document_external_id")
+        .or_else(|| object.get("documentExternalId"))
+        .and_then(Value::as_str)
+        == Some(document_external_id)
+        && revision_external_id.map_or(true, |revision| {
+            object
+                .get("revision_external_id")
+                .or_else(|| object.get("revisionExternalId"))
+                .and_then(Value::as_str)
+                == Some(revision)
+        })
 }
 
 fn external_document_source_matches(
@@ -12220,13 +12344,36 @@ async fn enrich_external_channel_document_scope(
         .available_document_source_id
         .as_deref()
         .and_then(non_empty_trimmed_string)
-        .or_else(|| external_channel_default_source_id_from_config(&connection.config_redacted))
-        .ok_or_else(|| {
-            ApiError::bad_request(
-                "external_document_source_missing",
-                "available_document_external_ids requires available_document_source_id or channel default_source_id".to_string(),
-            )
-        })?;
+        .or_else(|| external_channel_default_source_id_from_config(&connection.config_redacted));
+    let source_id = match source_id {
+        Some(source_id) => Some(source_id),
+        None => infer_external_document_scope_source_id(state, &requested_external_ids).await?,
+    };
+
+    if source_id.is_none() {
+        set_payload_value(
+            selected_scope,
+            "available_document_external_ids",
+            json!(requested_external_ids.clone()),
+        );
+        set_payload_value(
+            selected_scope,
+            "unresolved_document_external_ids",
+            json!(requested_external_ids),
+        );
+        set_payload_value(
+            selected_scope,
+            "external_document_scope_status",
+            json!("source_missing"),
+        );
+        set_payload_value(
+            selected_scope,
+            "external_document_scope_summary",
+            json!("available_document_external_ids were supplied, but no source_id/default_source_id was provided and V3 could not infer a unique source from visible documents."),
+        );
+        return Ok(());
+    }
+    let source_id = source_id.expect("source id checked above");
 
     let mut selected_documents = Vec::new();
     let mut selected_datasets = Vec::new();
@@ -12288,6 +12435,27 @@ async fn enrich_external_channel_document_scope(
     }
 
     Ok(())
+}
+
+async fn infer_external_document_scope_source_id(
+    state: &AppState,
+    requested_external_ids: &[String],
+) -> std::result::Result<Option<String>, ApiError> {
+    let mut source_ids = BTreeSet::new();
+    let mut matched_any = false;
+    for external_id in requested_external_ids {
+        if let Some(source_id) = infer_external_document_source_id(state, external_id, None).await?
+        {
+            source_ids.insert(source_id);
+            matched_any = true;
+        }
+    }
+
+    if matched_any && source_ids.len() == 1 {
+        Ok(source_ids.into_iter().next())
+    } else {
+        Ok(None)
+    }
 }
 
 fn external_bot_message_to_assistant_run_request(
@@ -39167,6 +39335,151 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn external_channel_document_scope_infers_source_from_document_external_id() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping external document source inference test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+        let tenant = storage
+            .ensure_tenant(
+                &format!("external-doc-source-infer-test-{}", Uuid::new_v4()),
+                "External Doc Source Infer Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage,
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        let dataset = state
+            .storage
+            .datasets()
+            .create(
+                state.tenant_id,
+                NewDataset {
+                    key: format!("external-doc-source-infer-{}", Uuid::new_v4()),
+                    title: "External Doc Source Infer".to_string(),
+                    description: None,
+                    owner_user_id: None,
+                },
+            )
+            .await
+            .expect("dataset should be created");
+        let document = state
+            .storage
+            .documents()
+            .create(
+                state.tenant_id,
+                NewDocument {
+                    dataset_id: dataset.id,
+                    title: "Alpha contract".to_string(),
+                    object_key: "external-doc-source-infer/alpha.md".to_string(),
+                    content_type: "text/markdown".to_string(),
+                    secret_binding_ids: Vec::new(),
+                    owner_user_id: None,
+                    metadata: json!({
+                        "external_source": {
+                            "source_id": "src-docs",
+                            "document_external_id": "doc-alpha",
+                            "revision_external_id": "rev-1"
+                        }
+                    }),
+                },
+            )
+            .await
+            .expect("document should be created");
+        let connection = ExternalChannelConnectionSummary {
+            platform: ExternalChannelPlatformView::GenericChat,
+            status: "enabled".to_string(),
+            config_redacted: json!({}),
+        };
+        let mut message = sample_external_bot_message();
+        message.available_document_source_id = None;
+        message.available_document_external_ids = vec!["doc-alpha".to_string()];
+        let mut selected_scope = json!({"type": "external_channel"});
+
+        enrich_external_channel_document_scope(&state, &connection, &message, &mut selected_scope)
+            .await
+            .expect("source should be inferred from document_external_id");
+
+        assert_eq!(
+            selected_scope["available_document_source_id"],
+            json!("src-docs")
+        );
+        assert_eq!(selected_scope["documents"][0]["id"], json!(document.id));
+        assert_eq!(
+            selected_scope["documents"][0]["document_external_id"],
+            json!("doc-alpha")
+        );
+        assert_eq!(selected_scope["datasets"][0]["id"], json!(dataset.id));
+        assert_eq!(
+            selected_scope["unresolved_document_external_ids"],
+            json!([])
+        );
+    }
+
+    #[tokio::test]
+    async fn external_channel_document_scope_missing_source_is_model_visible() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping external missing source scope test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+        let tenant = storage
+            .ensure_tenant(
+                &format!("external-doc-source-missing-test-{}", Uuid::new_v4()),
+                "External Doc Source Missing Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage,
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        let connection = ExternalChannelConnectionSummary {
+            platform: ExternalChannelPlatformView::GenericChat,
+            status: "enabled".to_string(),
+            config_redacted: json!({}),
+        };
+        let mut message = sample_external_bot_message();
+        message.available_document_source_id = None;
+        message.available_document_external_ids = vec!["doc-missing".to_string()];
+        let mut selected_scope = json!({"type": "external_channel"});
+
+        enrich_external_channel_document_scope(&state, &connection, &message, &mut selected_scope)
+            .await
+            .expect("missing source should be model-visible instead of a request failure");
+
+        assert_eq!(
+            selected_scope["available_document_external_ids"],
+            json!(["doc-missing"])
+        );
+        assert_eq!(
+            selected_scope["unresolved_document_external_ids"],
+            json!(["doc-missing"])
+        );
+        assert_eq!(
+            selected_scope["external_document_scope_status"],
+            json!("source_missing")
+        );
+        assert!(selected_scope["documents"].is_null());
+        assert!(selected_scope["datasets"].is_null());
+    }
+
+    #[tokio::test]
     async fn generic_chat_page_event_endpoint_requires_configured_bearer_token() {
         let _guard = shared_local_postgres_test_lock().lock().await;
         clear_assistant_openclaw_env();
@@ -51798,6 +52111,39 @@ mod tests {
         );
         assert_eq!(detail.latest.as_ref().unwrap().parse_status, "received");
         assert_eq!(detail.latest.as_ref().unwrap().model_status, "parsing");
+
+        sqlx::query(
+            r#"
+            update external_channel_connections
+            set config_redacted = $3
+            where tenant_id = $1 and id = $2
+            "#,
+        )
+        .bind(state.tenant_id.0)
+        .bind("generic-chat-main")
+        .bind(json!({
+            "inbound_bearer_token": "parse-token"
+        }))
+        .execute(state.storage.pool())
+        .await
+        .expect("connection config should be updated");
+        let Json(detail_without_source_query) = get_external_document_parse_detail(
+            State(state.clone()),
+            headers.clone(),
+            Path(("generic-chat-main".to_string(), "doc-alpha".to_string())),
+            Query(BTreeMap::new()),
+        )
+        .await
+        .expect("parse detail should infer source_id from document_external_id");
+        assert_eq!(detail_without_source_query.source_id, "src-docs");
+        assert_eq!(
+            detail_without_source_query
+                .latest
+                .as_ref()
+                .unwrap()
+                .document_id,
+            response.document.id
+        );
 
         let Json(detail_by_internal_id) = get_external_document_parse_detail(
             State(state),

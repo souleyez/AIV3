@@ -74,8 +74,12 @@ run_check "external parse accepts Java camelCase payloads" \
   "${cargo_bin}" test -p contracts external_document_parse_request_accepts_java_camel_case_payload --lib
 run_check "external parse-detail exposes Java-compatible summary fields" \
   "${cargo_bin}" test -p contracts external_document_parse_detail_response_exposes_java_compat_summary_fields --lib
-run_check "external parse-detail surfaces async parse status" \
+run_check "external parse-detail surfaces async status and infers source" \
   "${cargo_bin}" test -p platform-api external_document_parse_endpoint_downloads_and_enqueues_ingest --lib
+run_check "external chat document scope infers source from documentExternalId" \
+  "${cargo_bin}" test -p platform-api external_channel_document_scope_infers_source_from_document_external_id --lib
+run_check "external chat missing document source is model-visible" \
+  "${cargo_bin}" test -p platform-api external_channel_document_scope_missing_source_is_model_visible --lib
 run_check "document detail exposes parse state" \
   "${cargo_bin}" test -p platform-api load_document_detail_returns_document_chunks_and_retrieval_evidences --lib
 run_check "parse structure hints feed document chunk search" \
@@ -136,6 +140,7 @@ const report = {
     ingest_parse_status: "Ingest outcomes should persist model-visible parse status values such as parsed, parse_degraded, and parsed_with_vlm_fallback.",
     auto_reparse: "Low-quality ingest should fail the current task, persist auto_reparse metadata, and requeue the upload workflow instead of completing as usable content.",
     external_parse_compatibility: "Third-party Java/camelCase parse payloads and parse-detail summary fields remain compatible, including parseStatus/modelStatus/workflow state.",
+    external_document_id_resolution: "Third-party documentExternalId should resolve parse-detail and chat document scope by inferring a unique source when source_id is omitted; unresolved IDs should remain model-visible instead of failing ordinary chat.",
     document_detail_parse_state: "Document detail responses should expose parse_state so normal UI/model flows can explain pending, failed, or reparsing documents.",
     resume_entity_scan: "Resume/company entity scans should preserve valid company names while filtering common phrase noise.",
     entity_scan_trigger: "Dataset questions asking to count, list, extract, or segment positions, skills, projects, locations, people, keywords, terms, or nouns should supply document entity scans.",
@@ -170,6 +175,7 @@ const lines = [
   `- Ingest parse status: ${report.contract.ingest_parse_status}`,
   `- Auto reparse: ${report.contract.auto_reparse}`,
   `- External parse compatibility: ${report.contract.external_parse_compatibility}`,
+  `- External document ID resolution: ${report.contract.external_document_id_resolution}`,
   `- Document detail parse state: ${report.contract.document_detail_parse_state}`,
   `- Resume entity scan: ${report.contract.resume_entity_scan}`,
   `- Entity scan trigger: ${report.contract.entity_scan_trigger}`,
