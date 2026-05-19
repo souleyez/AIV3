@@ -1,6 +1,8 @@
 import { attachVisibleDocumentsToDatasets, datasetDocumentTitleHints } from './dataset-document-hints.js';
 
 const MEDIA_DATASET_PATTERN = /音视频|音频|视频|录音|转写|字幕|会议|访谈|关键帧|ocr/i;
+const RESUME_DATASET_PATTERN = /简历|履历|候选人|求职|招聘|人才|面试|任职|工作经历|教育经历|项目经历|雇主|公司名|就职公司|resume|cv|candidate|recruit/i;
+const RESUME_ENTITY_SCAN_PATTERN = /(?=.*(简历|履历|候选人|求职|招聘|人才|resume|cv|candidate))(?=.*(公司名|公司|企业|雇主|任职|就职|工作经历|经历|company|employer))(?=.*(多少|几个|哪些|列出|统计|汇总|分布|全部|所有|提到|公司名|count|list|all))/i;
 const VIDEO_PPT_EXTRACTION_PATTERN = /((视频|mp4|mov|m4v|webm|公开视频|视频地址|视频链接|url|URL|上传).*(ppt|PPT|幻灯片|课件|原文|字幕|转写|讲稿|提取))|((ppt|PPT|幻灯片|课件|原文|字幕|转写|讲稿|提取).*(视频|mp4|mov|m4v|webm|公开视频|视频地址|视频链接|url|URL|上传))/i;
 const DIRECT_VIDEO_SOURCE_PATTERN = /https?:\/\/\S+|\.(mp4|mov|m4v|webm)(\b|$)|公开视频|视频地址|视频链接|url|URL/i;
 
@@ -8,6 +10,10 @@ const DATASET_HINTS = [
   { pattern: /订单|销售|营收|收入|库存|发货|客单|转化|复购|经营/, label: '订单' },
   { pattern: /客服|工单|投诉|满意|售后|咨询|回复|评价/, label: '客服' },
   { pattern: /企业问答|制度|流程|员工|手册|政策|组织|公司介绍|FAQ|问答/i, label: '企业问答' },
+  { pattern: RESUME_DATASET_PATTERN, label: '简历' },
+  { pattern: RESUME_DATASET_PATTERN, label: '候选人' },
+  { pattern: RESUME_DATASET_PATTERN, label: '招聘' },
+  { pattern: RESUME_DATASET_PATTERN, label: '人才' },
   { pattern: /网页|采集|官网|竞品|新闻|页面|站点|爬取|抓取/, label: '网页采集' },
   { pattern: MEDIA_DATASET_PATTERN, label: '音视频' },
   { pattern: MEDIA_DATASET_PATTERN, label: '录音' },
@@ -19,7 +25,7 @@ const CONVERSATION_HINT = /刚才|上面|之前|继续|按你说的|这个|那�
 const STATIC_PAGE_HINT = /静态页|静态页面|页面规划|一页|生成页面|落地页|模块|效果图|出图/;
 const STATIC_PAGE_EDIT_HINT = /继续|接着|下一步|刚才|上面|之前|这个|那版|草稿|标题|文案|内容|数据|图表|布局|模块|调整|修改|改|换|突出|减少|增加|放大|缩小|移动|排序|风格|确认|效果图|导出/;
 const REPORT_HINT = /报表|报告|周报|月报|经营分析|汇报|可视化|看板|dashboard/i;
-const DATA_QUESTION_HINT = /分析|总结|趋势|原因|风险|机会|对比|明细|指标|数据|检索|查找|引用|音视频|音频|视频|录音|转写|字幕|会议|访谈|关键帧|ocr/i;
+const DATA_QUESTION_HINT = /分析|总结|趋势|原因|风险|机会|对比|明细|指标|数据|检索|查找|引用|音视频|音频|视频|录音|转写|字幕|会议|访谈|关键帧|ocr|简历|履历|候选人|招聘|人才|面试|任职|工作经历|公司名|就职公司|雇主|resume|cv|candidate/i;
 
 const STATIC_PAGE_VISUALIZATIONS_REQUIRING_SAMPLE_ROWS = new Set([
   'kpi-cards',
@@ -345,10 +351,12 @@ function buildSupplyStrategy(intent, candidates, prompt = '') {
     candidate.type === 'static_page_draft' && candidate.dataQualityStatus === 'unknown'
   ));
   const wantsVideoPptExtraction = VIDEO_PPT_EXTRACTION_PATTERN.test(prompt);
+  const wantsResumeEntityScan = RESUME_ENTITY_SCAN_PATTERN.test(prompt);
   const needsDetail = hasDataset && (
     ['static_page', 'report'].includes(intent)
     || MEDIA_DATASET_PATTERN.test(prompt)
     || wantsVideoPptExtraction
+    || wantsResumeEntityScan
     || staticPageNeedsDataRepair
   );
   return {
@@ -373,25 +381,30 @@ function buildSupplyStrategy(intent, candidates, prompt = '') {
       ? 'intent_gated_selected'
       : 'intent_gated',
     retrievalPolicy: hasDataset ? (needsDetail ? 'detail_first' : 'standard') : 'not_requested',
+    coveragePolicy: hasDataset && wantsResumeEntityScan ? 'document_entity_scan' : 'ranked_retrieval',
     preferDetail: needsDetail,
     recommendedActions: buildRecommendedActions(intent, {
       hasDataset,
       hasStaticPageDraft,
       staticPageNeedsDataRepair,
       wantsVideoPptExtraction,
+      wantsResumeEntityScan,
       prompt,
     }),
     noFakeData: true,
   };
 }
 
-function buildRecommendedActions(intent, { hasDataset, hasStaticPageDraft, staticPageNeedsDataRepair, wantsVideoPptExtraction, prompt }) {
+function buildRecommendedActions(intent, { hasDataset, hasStaticPageDraft, staticPageNeedsDataRepair, wantsVideoPptExtraction, wantsResumeEntityScan, prompt }) {
   const actions = [];
   if (hasDataset) {
     actions.push('retrieval.search');
   }
-  if (hasDataset && (intent === 'static_page' || intent === 'report' || MEDIA_DATASET_PATTERN.test(prompt) || staticPageNeedsDataRepair)) {
+  if (hasDataset && (intent === 'static_page' || intent === 'report' || MEDIA_DATASET_PATTERN.test(prompt) || staticPageNeedsDataRepair || wantsResumeEntityScan)) {
     actions.push('retrieval.read_detail');
+  }
+  if (hasDataset && wantsResumeEntityScan) {
+    actions.push('retrieval.scan_documents');
   }
   if (MEDIA_DATASET_PATTERN.test(prompt) && (!wantsVideoPptExtraction || hasDataset)) {
     actions.push('media.detail');

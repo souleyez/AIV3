@@ -75,7 +75,7 @@ test('buildInitialStaticPageDraft creates default modules and mobile order', () 
   const draft = buildInitialStaticPageDraft({
     datasetId: 'dataset-1',
     sessionId: 'session-1',
-    conversationSummary: '客户需要一页经营摘要。',
+    conversationSummary: '客户需要一页项目摘要。',
     evidenceIds: ['ev-1'],
   });
 
@@ -87,6 +87,10 @@ test('buildInitialStaticPageDraft creates default modules and mobile order', () 
   assert.equal(draft.visualSpec.styleDirection, 'client-delivery');
   assert.equal(draft.renderSpec.componentModel, 'dom-text-svg-chart');
   assert.equal(draft.previewContract.status, 'not_requested');
+  assert.equal(draft.source.planningBrief.subject, '客户需要一页项目摘要');
+  assert.match(draft.modelSummary, /# 客户需要一页项目摘要 静态页规划简稿/);
+  assert.match(draft.modules[0].title, /客户需要一页项目摘要/);
+  assert.match(draft.modules[0].content, /当前对话和可见资料/);
   assert.equal(draft.dataSnapshot.moduleBindings.length, 5);
   assert.ok(draft.dataSnapshot.dataSourceCandidates.some((item) => item.sourceId === 'selected_scope'));
   assert.ok(draft.dataSnapshot.fieldCandidates.some((item) => item.fieldPath === 'retrieval.summary'));
@@ -120,6 +124,42 @@ test('buildInitialStaticPageDraft infers a template reference from prompt intent
   assert.equal(draft.styleDirection, 'client-delivery');
   assert.equal(draft.designReferences[0].templateId, 'docs-page');
   assert.equal(draft.modules.some((module) => module.id === 'interfaces'), true);
+});
+
+test('buildInitialStaticPageDraft infers html-anything reference from planning context', () => {
+  const dataDraft = buildInitialStaticPageDraft({
+    conversationSummary: [
+      '# 静态页规划输入',
+      '用户要求：基于新世界 IOA 数据生成一个 html',
+      '数据集：新世界 IOA（5文档）',
+      '文档线索：采购审批制度、合同管理办法',
+    ].join('\n'),
+  });
+
+  assert.equal(dataDraft.templateReferenceId, 'data-report');
+  assert.equal(dataDraft.designReferences[0].templateId, 'data-report');
+  assert.equal(dataDraft.modules.some((module) => module.id === 'comparison'), true);
+
+  const docsDraft = buildInitialStaticPageDraft({
+    conversationSummary: [
+      '# 静态页规划输入',
+      '用户要求：整理第三方对接接口说明和验收清单',
+      '数据集：第三方联调资料',
+    ].join('\n'),
+  });
+
+  assert.equal(docsDraft.templateReferenceId, 'docs-page');
+  assert.equal(docsDraft.modules.some((module) => module.id === 'interfaces'), true);
+});
+
+test('buildInitialStaticPageDraft can use quick-output fallback template', () => {
+  const draft = buildInitialStaticPageDraft({
+    conversationSummary: '# 静态页规划输入\n用户要求：快速出一版效果图',
+    templateReferenceFallbackId: 'data-report',
+  });
+
+  assert.equal(draft.templateReferenceId, 'data-report');
+  assert.equal(draft.designReferences[0].source, 'html-anything');
 });
 
 test('docs page draft binds structure modules to supplied section title hints', () => {
@@ -168,20 +208,50 @@ test('template design references flow into preview image and final render payloa
   assert.doesNotMatch(JSON.stringify(imagePayload.designReferences), /<html|<script|https?:\/\//i);
 });
 
-test('preview queue gate blocks chart modules without renderable sample rows', () => {
+test('preview queue gate allows planned chart modules without renderable sample rows', () => {
   const draft = buildInitialStaticPageDraft({
     datasetId: 'dataset-1',
     sessionId: 'session-1',
   });
 
-  const blockReason = staticPagePreviewBlockReason(draft);
-  assert.match(blockReason, /数据绑定未达到效果图生成要求/);
-  assert.match(blockReason, /关键指标/);
-  assert.match(blockReason, /needs_sample_rows/);
+  assert.equal(staticPagePreviewBlockReason(draft), '');
+
+  const confirmedWithoutRows = applyStaticPageOperation(draft, {
+    type: 'confirm_preview',
+    previewImage: { assetKey: 'preview-without-rows.png' },
+  });
+  const finalBlockReason = staticPageFinalRenderBlockReason(confirmedWithoutRows);
+  assert.match(finalBlockReason, /最终页面生成要求/);
+  assert.match(finalBlockReason, /needs_sample_rows/);
 
   const ready = makeDefaultStaticPageChartDataReady(draft);
 
   assert.equal(staticPagePreviewBlockReason(ready), '');
+});
+
+test('preview queue gate still blocks modules without any content source', () => {
+  const draft = buildInitialStaticPageDraft();
+  const weak = {
+    ...draft,
+    dataSnapshot: {
+      ...draft.dataSnapshot,
+      moduleBindings: [{
+        moduleId: 'bad-chart',
+        title: '未绑定图表',
+        binding: {},
+        visualizationType: 'bar-chart',
+        sampleData: [],
+        bindingQualityStatus: 'missing',
+        chartDataFit: 'missing_binding',
+      }],
+    },
+  };
+
+  const blockReason = staticPagePreviewBlockReason(weak);
+
+  assert.match(blockReason, /数据绑定未达到效果图生成要求/);
+  assert.match(blockReason, /未绑定图表/);
+  assert.match(blockReason, /missing_binding/);
 });
 
 test('applyStaticPageOperation updates module copy without mutating original draft', () => {

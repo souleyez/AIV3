@@ -389,7 +389,7 @@
       </section>
       <article>
         <h1>V3 纯第三方模式对接文档</h1>
-<p><strong>文档状态：</strong> 对外草案 v0.1 <strong>最后更新：</strong> 2026-05-18 <strong>适用对象：</strong> 第三方自建门户、文档库、用户中心、产物系统、业务系统和客户 IT 对接团队 <strong>默认 V3 对外域名：</strong> <code>https://v3.elepcloud.com</code></p>
+<p><strong>文档状态：</strong> 对外草案 v0.2 <strong>最后更新：</strong> 2026-05-19 <strong>适用对象：</strong> 第三方自建门户、文档库、用户中心、产物系统、业务系统和客户 IT 对接团队 <strong>默认 V3 对外域名：</strong> <code>https://v3.elepcloud.com</code></p>
 <p>本文只描述“纯第三方模式”。飞书、Lark、企业微信等标准机器人平台不在本文展开；这些平台走各自官方事件和机器人接口，再由 V3 转为统一通道事件。</p>
 <p>纯第三方模式适用于：第三方自己搭建聊天页面或业务入口，文档库、用户权限、产物系统、业务系统也可以都在第三方服务器上；V3 作为统一智能处理、权限过滤、动作风控和审计中心。</p>
 <h2 id="section-01">1. 对接目标</h2>
@@ -531,6 +531,43 @@ Authorization: Bearer &lt;V3 inbound token&gt;</code></pre>
 }</code></pre>
   </figure>
 <p>这个 <code>/events</code> 接口同时承担两个职责：第三方把用户消息发给 V3，V3 把本次生成回复、任务状态或确认卡片放在响应体 <code>reply</code> 中返回给第三方。第三方页面按 <code>reply.target_conversation_external_id</code> 把回复展示回原会话即可；第一阶段不需要再调用单独的“取回复”接口。</p>
+<p>如果第三方自建聊天页希望获得“边生成边展示”的体验，可以改用流式接口。流式接口的请求体、鉴权、幂等规则和 <code>/events</code> 一致，只是响应采用 SSE：</p>
+<figure class="code-card">
+    <figcaption><span>http</span><button type="button" class="copy-code">复制</button></figcaption>
+    <pre><code>POST /v1/external/channels/{connection_id}/events/stream
+Host: v3.elepcloud.com
+Content-Type: application/json
+Accept: text/event-stream
+Authorization: Bearer &lt;V3 inbound token&gt;</code></pre>
+  </figure>
+<p>流式接口适合长回答、静态页生成、报告生成和用户希望看到实时进展的场景。前端收到 <code>external_channel.delta</code> 后追加到同一个助手气泡；收到 <code>external_channel.completed</code> 后，以其中的 <code>response.reply</code> 作为最终权威结果。若第三方暂时不做流式展示，继续调用 <code>/events</code> 即可。</p>
+<p>SSE 事件类型：</p>
+<div class="table-shell"><table><thead><tr><th>事件</th><th>说明</th></tr></thead><tbody><tr><td><code>external_channel.accepted</code></td><td>V3 已接收请求并通过鉴权、连接和幂等校验</td></tr><tr><td><code>external_channel.delta</code></td><td>本轮回复的增量文本，第三方页面可逐段追加显示</td></tr><tr><td><code>external_channel.completed</code></td><td>本轮运行完成，<code>response</code> 字段包含与 <code>/events</code> 同结构的最终响应</td></tr><tr><td><code>error</code></td><td>本轮运行失败或请求不合法，<code>message</code> 字段说明原因</td></tr><tr><td><code>done</code></td><td>SSE 流结束</td></tr></tbody></table></div>
+<p>SSE 响应示例：</p>
+<figure class="code-card">
+    <figcaption><span>text</span><button type="button" class="copy-code">复制</button></figcaption>
+    <pre><code>event: external_channel.accepted
+data: {&quot;status&quot;:&quot;accepted&quot;,&quot;idempotency_key&quot;:&quot;generic_chat:tenant-ext-001:msg-20260515-0001&quot;}
+
+event: external_channel.delta
+data: {&quot;index&quot;:0,&quot;delta&quot;:&quot;根据你当前可见的采购审批制度，&quot;}
+
+event: external_channel.delta
+data: {&quot;index&quot;:1,&quot;delta&quot;:&quot;本周建议重点关注审批超时、授权边界和供应商变更风险。&quot;}
+
+event: external_channel.completed
+data: {&quot;assistant_run_id&quot;:&quot;00000000-0000-0000-0000-000000000001&quot;,&quot;response&quot;:{&quot;accepted&quot;:true,&quot;reply&quot;:{&quot;target_conversation_external_id&quot;:&quot;chat-risk-room&quot;,&quot;reply_type&quot;:&quot;text&quot;,&quot;text&quot;:&quot;根据你当前可见的采购审批制度，本周建议重点关注审批超时、授权边界和供应商变更风险。&quot;,&quot;task_status&quot;:&quot;answered&quot;,&quot;requires_confirmation&quot;:false}}}
+
+event: done
+data: {&quot;ok&quot;:true}</code></pre>
+  </figure>
+<p>前端实现注意事项：</p>
+<ul>
+<li>因为流式接口是 <code>POST + JSON body</code>，浏览器端建议使用 <code>fetch</code> + <code>ReadableStream</code> 读取 SSE；原生 <code>EventSource</code> 只适合 <code>GET</code>，不适合直接提交本接口请求体；</li>
+<li>同一条用户消息的重试必须复用相同 <code>idempotency_key</code>，避免重复创建运行或重复派发动作；</li>
+<li>页面展示时可以先显示“已接收”，随后把 <code>delta</code> 追加到同一个助手消息气泡，最后用 <code>completed.response.reply.text</code> 覆盖或校准最终文本；</li>
+<li>当前流式能力是 V3 对外接口层的 SSE 流式返回；若某个模型供应商暂时只返回整段文本，V3 仍会把最终文本拆成增量事件输出，后续可按模型网关能力升级为更细粒度 token 透传。</li>
+</ul>
 <p>任务状态响应示例：</p>
 <figure class="code-card">
     <figcaption><span>json</span><button type="button" class="copy-code">复制</button></figcaption>
@@ -1029,6 +1066,7 @@ GET /v1/external/integrations/generic-chat-main/audit?item_type=action&amp;actio
 <p>当前 V3 已具备的纯第三方主链路能力：</p>
 <ul>
 <li>统一外部聊天通道事件：<code>POST /v1/external/channels/{connection_id}/events</code>；</li>
+<li>统一外部聊天通道流式事件：<code>POST /v1/external/channels/{connection_id}/events/stream</code>；</li>
 <li>统一用户确认回调：<code>POST /v1/external/channels/{connection_id}/confirmations</code>；</li>
 <li>外部动作结果回传：<code>POST /v1/external/channels/{connection_id}/actions/{action_id}/result</code>；</li>
 <li>连接级入站 Bearer Token 校验，覆盖聊天事件、用户确认和动作结果回传；</li>

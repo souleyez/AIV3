@@ -744,11 +744,11 @@ button {
 
 .chat-static-page-workspace {
   flex: 1 1 auto;
-  min-height: 420px;
+  min-height: 0;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   gap: 12px;
-  overflow-y: auto;
+  overflow: hidden;
   padding: 4px 2px 0;
 }
 
@@ -1419,8 +1419,14 @@ textarea {
 }
 
 .static-page-planning-panel {
+  min-height: 0;
   display: grid;
   gap: 14px;
+  align-content: start;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 6px;
+  scrollbar-gutter: stable;
 }
 
 .static-page-planning-summary {
@@ -2235,6 +2241,7 @@ textarea {
 }
 
 .static-page-canvas-shell {
+  min-height: 0;
   min-width: 0;
   padding: 12px;
   border-radius: 20px;
@@ -2244,7 +2251,7 @@ textarea {
     linear-gradient(90deg, rgba(37, 99, 235, 0.06) 1px, transparent 1px),
     rgba(248, 251, 255, 0.72);
   background-size: 54px 54px;
-  overflow: hidden;
+  overflow: auto;
 }
 
 .static-page-grid-layout {
@@ -5504,7 +5511,7 @@ body {
   }
 
   .chat-static-page-workspace {
-    min-height: 320px;
+    min-height: 0;
   }
 }
 

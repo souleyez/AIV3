@@ -100,6 +100,33 @@ test('scope planner preselects visible dataset from visible document titles', ()
   assert.equal(plan.supplyStrategy.retrievalPolicy, 'standard');
 });
 
+test('scope planner treats resume company questions as broad entity scans', () => {
+  const plan = planAssistantScope({
+    prompt: '简历数据集里提到了多少个公司名',
+    datasets: [
+      {
+        id: 'dataset-resumes',
+        key: 'resumes',
+        title: '简历',
+        description: '候选人履历、工作经历和任职公司',
+        document_count: 25,
+      },
+    ],
+  });
+
+  assert.equal(selectPlannerDatasetId(plan), 'dataset-resumes');
+  assert.equal(plan.intent, 'data_question');
+  assert.equal(plan.supplyStrategy.retrievalPolicy, 'detail_first');
+  assert.equal(plan.supplyStrategy.coveragePolicy, 'document_entity_scan');
+  assert.equal(plan.supplyStrategy.preferDetail, true);
+  assert.equal(plan.supplyStrategy.contextBudgetPolicy, 'quality_first_token_tolerant');
+  assert.deepEqual(plan.supplyStrategy.recommendedActions, [
+    'retrieval.search',
+    'retrieval.read_detail',
+    'retrieval.scan_documents',
+  ]);
+});
+
 test('scope planner keeps unrelated no-dataset chat as ordinary model chat', () => {
   const plan = planAssistantScope({
     prompt: '帮我写一句开场白',

@@ -1114,6 +1114,143 @@ function shortModuleContent(module) {
   return `${title}保留关键结论、数据依据和行动含义，减少解释性文字。`;
 }
 
+function compactPlanningText(value, limit = 160) {
+  return String(value || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, limit);
+}
+
+function planningSummaryLine(summary = '', prefixes = []) {
+  const lines = String(summary || '').split(/\r?\n/);
+  const matched = lines.find((line) => prefixes.some((prefix) => line.trim().startsWith(prefix)));
+  if (!matched) return '';
+  const separator = matched.indexOf('：') >= 0 ? matched.indexOf('：') : matched.indexOf(':');
+  return separator >= 0 ? matched.slice(separator + 1).trim() : matched.trim();
+}
+
+function extractStaticPageSubject({ templateIntent = '', conversationSummary = '' } = {}) {
+  const directGoal = planningSummaryLine(conversationSummary, ['用户要求', '目标', '主题']);
+  const datasetLine = planningSummaryLine(conversationSummary, ['数据集']);
+  const candidates = [
+    templateIntent,
+    directGoal,
+    datasetLine,
+    conversationSummary,
+  ].map((item) => String(item || '').trim()).filter(Boolean);
+
+  for (const candidate of candidates) {
+    const patternMatch = candidate.match(/(?:基于|根据|围绕|关于|把|将)\s*([^，。；\n]+?)(?:生成|做成|做一个|制作|整理|转成|输出|出一版|做|$)/);
+    const raw = patternMatch?.[1] || candidate.split(/[，。；\n]/)[0];
+    const cleaned = raw
+      .replace(/用户要求[:：]?/g, '')
+      .replace(/数据集[:：]?/g, '')
+      .replace(/(帮我|请|快速|直接|马上|立即|一键|生成|制作|做一个|做成|输出|静态页|静态页面|页面|效果图|html|HTML|报告|可视化|数据|资料|基于|根据|围绕|关于)/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (cleaned.length >= 2) {
+      return cleaned.slice(0, 32);
+    }
+  }
+
+  return '当前主题';
+}
+
+function buildStaticPagePlanningBrief({
+  templateIntent = '',
+  conversationSummary = '',
+  templateLabel = '',
+} = {}) {
+  const subject = extractStaticPageSubject({ templateIntent, conversationSummary });
+  const userGoal = compactPlanningText(
+    planningSummaryLine(conversationSummary, ['用户要求', '目标'])
+      || templateIntent
+      || `生成${subject}静态页`,
+    180,
+  );
+  const datasetLine = compactPlanningText(planningSummaryLine(conversationSummary, ['数据集']), 180);
+  const contextLine = compactPlanningText(planningSummaryLine(conversationSummary, ['最近内容', '上下文']), 220);
+  const documentLine = compactPlanningText(planningSummaryLine(conversationSummary, ['文档线索']), 220);
+  const evidenceLine = compactPlanningText(planningSummaryLine(conversationSummary, ['证据线索', '供料线索']), 220);
+  const availableLines = [
+    datasetLine ? `数据集：${datasetLine}` : '',
+    documentLine ? `文档线索：${documentLine}` : '',
+    evidenceLine ? `证据线索：${evidenceLine}` : '',
+    contextLine ? `上下文：${contextLine}` : '',
+  ].filter(Boolean);
+
+  return {
+    version: 1,
+    subject,
+    userGoal,
+    templateLabel,
+    sourceMarkdown: [
+      `# ${subject} 静态页规划简稿`,
+      '',
+      `- 用户目标：${userGoal}`,
+      templateLabel ? `- 模板参考：${templateLabel}` : '',
+      ...availableLines.map((line) => `- ${line}`),
+      availableLines.length ? '' : '- 当前缺少结构化供料，先生成可编辑设计规划，后续补证据和样本数据。',
+    ].filter((line) => line !== '').join('\n'),
+    datasetLine,
+    contextLine,
+    documentLine,
+    evidenceLine,
+  };
+}
+
+function plannedModuleCopy(module, { templateId = '', subject = '', brief = {} } = {}) {
+  const role = module.role || module.id;
+  const goal = brief.userGoal || `生成${subject}静态页`;
+  const context = brief.contextLine || brief.documentLine || brief.evidenceLine || '当前对话和可见资料';
+  const dataset = brief.datasetLine || '当前可见数据集';
+  const evidence = brief.evidenceLine || brief.documentLine || '已供料证据和待补信息';
+
+  if (templateId === 'docs-page') {
+    const copies = {
+      hero: [`${subject}概览`, `说明${subject}要解决的问题、适用对象、当前资料完整度和交付边界。目标：${goal}`],
+      scope: ['范围与边界', `从${context}中整理系统边界、权限边界、已确认范围和仍需第三方补充的信息。`],
+      steps: ['关键流程', `把${subject}拆成准备、请求、处理、回传、验收等阶段，保留每一步依赖和责任方线索。`],
+      interfaces: ['接口与数据', `沉淀${subject}涉及的接口、字段、入参出参、鉴权和数据来源；缺少真实字段时明确标注待补。`],
+      checks: ['验收与风险', `列出联调验收项、风险点、失败重试和下一步交付动作，避免只给抽象说明。`],
+    };
+    return copies[module.id] || copies[role] || [module.title, module.content];
+  }
+
+  if (templateId === 'dashboard') {
+    const copies = {
+      hero: [`${subject}总览`, `用一句话概括${subject}当前状态、异常等级和本轮最应该关注的判断。`],
+      kpi: ['关键状态指标', `从${dataset}中提炼能判断健康度、进度、效率或风险的指标；没有数值时保留待补口径。`],
+      trend: ['运行趋势', `围绕${subject}展示时间、阶段或类别变化方向，优先承接已供料线索。`],
+      risk: ['风险预警', `把${evidence}里的阻塞项、异常项和机会点按优先级展示。`],
+      activity: ['最近动作', `整理${context}中已经发生、正在等待和下一步应执行的动作。`],
+    };
+    return copies[module.id] || copies[role] || [module.title, module.content];
+  }
+
+  const copies = {
+    hero: [`${subject}核心结论`, `先给出${subject}最重要的判断，并说明判断来自${context}。`],
+    kpi: ['关键指标与口径', `从${dataset}中规划 3-5 个指标位；没有真实数值时显示为待补口径，不编造数字。`],
+    trend: ['趋势与变化', `展示${subject}随时间、阶段或类别的变化方向，优先使用已供料字段或证据线索。`],
+    comparison: ['分类对比', `对${subject}的渠道、类型、角色或阶段差异做对比规划，缺少数据时保留补数提示。`],
+    evidence: ['证据与缺口', `列出${evidence}、当前不可见内容和后续需要补齐的数据。`],
+    risk: ['风险与机会', `提炼${subject}中需要优先处理的风险、影响范围和可推进机会。`],
+    'next-steps': ['建议动作', `把${subject}结论转成后续动作、责任线索和验收标准。`],
+  };
+  return copies[module.id] || copies[role] || [module.title, module.content];
+}
+
+function applyPlanningBriefToModules(modules, { templateId = '', brief = {} } = {}) {
+  return modules.map((module) => {
+    const [title, content] = plannedModuleCopy(module, {
+      templateId,
+      subject: brief.subject || '当前主题',
+      brief,
+    });
+    return mergeModule(module, { title, content });
+  });
+}
+
 export function buildMockStaticPagePreview(draft) {
   const style = STATIC_PAGE_STYLE_DIRECTIONS.find((item) => item.key === draft.styleDirection);
   return {
@@ -1138,11 +1275,31 @@ export function buildInitialStaticPageDraft({
   evidenceIds = [],
   fieldCandidates = [],
   templateReferenceId = null,
+  templateReferenceFallbackId = null,
   templateIntent = '',
 } = {}) {
-  const resolvedTemplateReferenceId = templateReferenceId || inferStaticPageTemplateReferenceId(templateIntent);
+  const templateInferenceInput = [
+    templateIntent,
+    conversationSummary,
+    fieldCandidates,
+  ].filter(Boolean);
+  const resolvedTemplateReferenceId = templateReferenceId
+    || inferStaticPageTemplateReferenceId(templateInferenceInput)
+    || templateReferenceFallbackId;
   const templateSeed = staticPageTemplateReferenceDraftSeed(resolvedTemplateReferenceId);
-  const modules = clone(templateSeed?.modules || DEFAULT_STATIC_PAGE_MODULES);
+  const hasPlanningContext = Boolean(String(templateIntent || '').trim() || String(conversationSummary || '').trim());
+  const planningBrief = buildStaticPagePlanningBrief({
+    templateIntent,
+    conversationSummary,
+    templateLabel: templateSeed?.designReference?.label || '',
+  });
+  const seedModules = clone(templateSeed?.modules || DEFAULT_STATIC_PAGE_MODULES);
+  const modules = hasPlanningContext
+    ? applyPlanningBriefToModules(seedModules, {
+        templateId: templateSeed?.templateId || '',
+        brief: planningBrief,
+      })
+    : seedModules;
   const styleDirection = templateSeed?.styleDirection || DEFAULT_STYLE_DIRECTION;
   const designReferences = templateSeed ? [templateSeed.designReference] : [];
   const draft = {
@@ -1155,13 +1312,18 @@ export function buildInitialStaticPageDraft({
       evidenceIds: Array.isArray(evidenceIds) ? [...evidenceIds] : [],
       fieldCandidates: Array.isArray(fieldCandidates) ? [...fieldCandidates] : [],
       templateReferences: designReferences,
+      planningBrief,
     },
     status: 'planning',
     templateReferenceId: templateSeed?.templateId || '',
-    objective: templateSeed?.objective || '给客户展示当前数据结论，并生成可交付静态页',
+    objective: hasPlanningContext
+      ? planningBrief.userGoal || templateSeed?.objective || '给客户展示当前数据结论，并生成可交付静态页'
+      : templateSeed?.objective || '给客户展示当前数据结论，并生成可交付静态页',
     audience: templateSeed?.audience || '客户决策层',
     styleDirection,
-    modelSummary: conversationSummary || templateSeed?.modelSummary || '模型将根据当前会话和数据集生成静态页结构。',
+    modelSummary: hasPlanningContext
+      ? planningBrief.sourceMarkdown || conversationSummary || templateSeed?.modelSummary || '模型将根据当前会话和数据集生成静态页结构。'
+      : templateSeed?.modelSummary || '模型将根据当前会话和数据集生成静态页结构。',
     designReferences,
     mobileOrder: modules.map((module) => module.id),
     modules,
@@ -1429,6 +1591,31 @@ function bindingNeedsPreviewAttention(binding = {}) {
       || binding.binding_quality?.status
       || '',
   ).trim();
+  if (status && !['confirmed', 'ready', 'non_chart', 'partial'].includes(status)) return true;
+
+  const chartDataFit = String(
+    binding.chartDataFit
+      || binding.chart_data_fit
+      || binding.bindingQuality?.chartDataFit
+      || binding.binding_quality?.chart_data_fit
+      || '',
+  ).trim();
+  if (chartDataFit && !['ready', 'not_required', 'non_chart_ready', 'needs_sample_rows', 'inferred_signal'].includes(chartDataFit)) return true;
+
+  const visualizationType = String(binding.visualizationType || binding.visualization_type || '').trim();
+  const source = binding.binding || binding.dataBinding || binding.data_binding || {};
+  const hasBinding = Boolean(source.sourceId || source.source_id || source.fieldPath || source.field_path || source.label);
+  return VISUALIZATIONS_REQUIRING_SAMPLE_ROWS.has(visualizationType) && bindingSampleRows(binding) === 0 && !hasBinding;
+}
+
+function bindingNeedsFinalAttention(binding = {}) {
+  const status = String(
+    binding.bindingQualityStatus
+      || binding.binding_quality_status
+      || binding.bindingQuality?.status
+      || binding.binding_quality?.status
+      || '',
+  ).trim();
   if (status && !['confirmed', 'ready', 'non_chart'].includes(status)) return true;
 
   const chartDataFit = String(
@@ -1454,11 +1641,12 @@ function bindingPreviewLabel(binding = {}) {
   return marker ? `${title}（${marker}）` : String(title);
 }
 
-function staticPageDataQualityBlockReason(draft = {}, actionLabel, nextInstruction) {
+function staticPageDataQualityBlockReason(draft = {}, actionLabel, nextInstruction, { mode = 'final' } = {}) {
   const snapshot = draft?.dataSnapshot || draft?.data_snapshot || buildStaticPageDataSnapshot(draft);
   const bindings = snapshot?.moduleBindings || snapshot?.module_bindings || [];
+  const predicate = mode === 'preview' ? bindingNeedsPreviewAttention : bindingNeedsFinalAttention;
   const attentionBindings = Array.isArray(bindings)
-    ? bindings.filter(bindingNeedsPreviewAttention)
+    ? bindings.filter(predicate)
     : [];
   if (!attentionBindings.length) return '';
   const labels = attentionBindings.slice(0, 3).map(bindingPreviewLabel).join('、');
@@ -1469,7 +1657,8 @@ export function staticPagePreviewBlockReason(draft = {}) {
   return staticPageDataQualityBlockReason(
     draft,
     '效果图生成要求',
-    '请先回到模块编辑补充样本行、重新绑定字段，或让 V3 检索/修复模块数据。',
+    '请先回到模块编辑补充内容来源或重新绑定字段；只有缺少来源的模块会阻断效果图，缺少样本行的图表会先作为设计预览进入出图。',
+    { mode: 'preview' },
   );
 }
 
@@ -1492,6 +1681,7 @@ export function staticPageFinalRenderBlockReason(draft = {}) {
     draft,
     '最终页面生成要求',
     '请先回到模块编辑补充样本行、重新绑定字段，或让 V3 检索/修复模块数据，然后重新生成并确认效果图。',
+    { mode: 'final' },
   );
 }
 

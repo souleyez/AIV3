@@ -1,7 +1,7 @@
 # V3 纯第三方模式对接文档
 
-**文档状态：** 对外草案 v0.1
-**最后更新：** 2026-05-18
+**文档状态：** 对外草案 v0.2
+**最后更新：** 2026-05-19
 **适用对象：** 第三方自建门户、文档库、用户中心、产物系统、业务系统和客户 IT 对接团队
 **默认 V3 对外域名：** `https://v3.elepcloud.com`
 
@@ -171,6 +171,54 @@ Authorization: Bearer <V3 inbound token>
 ```
 
 这个 `/events` 接口同时承担两个职责：第三方把用户消息发给 V3，V3 把本次生成回复、任务状态或确认卡片放在响应体 `reply` 中返回给第三方。第三方页面按 `reply.target_conversation_external_id` 把回复展示回原会话即可；第一阶段不需要再调用单独的“取回复”接口。
+
+如果第三方自建聊天页希望获得“边生成边展示”的体验，可以改用流式接口。流式接口的请求体、鉴权、幂等规则和 `/events` 一致，只是响应采用 SSE：
+
+```http
+POST /v1/external/channels/{connection_id}/events/stream
+Host: v3.elepcloud.com
+Content-Type: application/json
+Accept: text/event-stream
+Authorization: Bearer <V3 inbound token>
+```
+
+流式接口适合长回答、静态页生成、报告生成和用户希望看到实时进展的场景。前端收到 `external_channel.delta` 后追加到同一个助手气泡；收到 `external_channel.completed` 后，以其中的 `response.reply` 作为最终权威结果。若第三方暂时不做流式展示，继续调用 `/events` 即可。
+
+SSE 事件类型：
+
+| 事件 | 说明 |
+| --- | --- |
+| `external_channel.accepted` | V3 已接收请求并通过鉴权、连接和幂等校验 |
+| `external_channel.delta` | 本轮回复的增量文本，第三方页面可逐段追加显示 |
+| `external_channel.completed` | 本轮运行完成，`response` 字段包含与 `/events` 同结构的最终响应 |
+| `error` | 本轮运行失败或请求不合法，`message` 字段说明原因 |
+| `done` | SSE 流结束 |
+
+SSE 响应示例：
+
+```text
+event: external_channel.accepted
+data: {"status":"accepted","idempotency_key":"generic_chat:tenant-ext-001:msg-20260515-0001"}
+
+event: external_channel.delta
+data: {"index":0,"delta":"根据你当前可见的采购审批制度，"}
+
+event: external_channel.delta
+data: {"index":1,"delta":"本周建议重点关注审批超时、授权边界和供应商变更风险。"}
+
+event: external_channel.completed
+data: {"assistant_run_id":"00000000-0000-0000-0000-000000000001","response":{"accepted":true,"reply":{"target_conversation_external_id":"chat-risk-room","reply_type":"text","text":"根据你当前可见的采购审批制度，本周建议重点关注审批超时、授权边界和供应商变更风险。","task_status":"answered","requires_confirmation":false}}}
+
+event: done
+data: {"ok":true}
+```
+
+前端实现注意事项：
+
+- 因为流式接口是 `POST + JSON body`，浏览器端建议使用 `fetch` + `ReadableStream` 读取 SSE；原生 `EventSource` 只适合 `GET`，不适合直接提交本接口请求体；
+- 同一条用户消息的重试必须复用相同 `idempotency_key`，避免重复创建运行或重复派发动作；
+- 页面展示时可以先显示“已接收”，随后把 `delta` 追加到同一个助手消息气泡，最后用 `completed.response.reply.text` 覆盖或校准最终文本；
+- 当前流式能力是 V3 对外接口层的 SSE 流式返回；若某个模型供应商暂时只返回整段文本，V3 仍会把最终文本拆成增量事件输出，后续可按模型网关能力升级为更细粒度 token 透传。
 
 任务状态响应示例：
 
@@ -748,6 +796,7 @@ V3 错误格式：
 当前 V3 已具备的纯第三方主链路能力：
 
 - 统一外部聊天通道事件：`POST /v1/external/channels/{connection_id}/events`；
+- 统一外部聊天通道流式事件：`POST /v1/external/channels/{connection_id}/events/stream`；
 - 统一用户确认回调：`POST /v1/external/channels/{connection_id}/confirmations`；
 - 外部动作结果回传：`POST /v1/external/channels/{connection_id}/actions/{action_id}/result`；
 - 连接级入站 Bearer Token 校验，覆盖聊天事件、用户确认和动作结果回传；

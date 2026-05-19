@@ -153,11 +153,15 @@ const ASSISTANT_RUN_EVIDENCE_DEFAULT_LIMIT: usize = 4;
 const ASSISTANT_RUN_EVIDENCE_MAX_LIMIT: usize = 8;
 const ASSISTANT_RUN_EVIDENCE_DATASET_LIMIT: usize = 2;
 const ASSISTANT_RUN_DETAIL_TARGET_LIMIT: usize = 3;
+const ASSISTANT_RUN_DATASET_ENTITY_SCAN_DOCUMENT_LIMIT: usize = 48;
+const ASSISTANT_RUN_DATASET_ENTITY_SCAN_CHUNK_LIMIT: usize = 4;
+const ASSISTANT_RUN_DATASET_ENTITY_SCAN_ENTITY_LIMIT: usize = 80;
 const ASSISTANT_RUN_CONVERSATION_MEMORY_DEFAULT_LIMIT: i64 = 4;
 const ASSISTANT_RUN_CONVERSATION_MEMORY_MAX_LIMIT: i64 = 8;
 const ASSISTANT_RUN_SCOPE_SUMMARY_DOC_LIMIT: usize = 24;
 const ASSISTANT_RUN_MODEL_SUPPLY_BRIEF_ITEM_LIMIT: usize = 4;
 const ASSISTANT_RUN_MODEL_SUPPLY_BRIEF_TEXT_LIMIT: usize = 220;
+const ASSISTANT_RUN_MODEL_SCAN_BRIEF_TEXT_LIMIT: usize = 900;
 const EXTERNAL_CHANNEL_CONVERSATION_HISTORY_RUN_LIMIT: i64 = 6;
 const EXTERNAL_CHANNEL_CONVERSATION_HISTORY_TEXT_LIMIT: usize = 1200;
 const ASSISTANT_RUN_LEXICAL_CJK_NGRAM_MAX: usize = 6;
@@ -14594,7 +14598,14 @@ fn assistant_run_model_supply_item_brief(item: &Value) -> Option<String> {
         format!("{item_type}/{source}"),
         format!(
             "摘要={}",
-            truncate_assistant_supply_text(&summary, ASSISTANT_RUN_MODEL_SUPPLY_BRIEF_TEXT_LIMIT)
+            truncate_assistant_supply_text(
+                &summary,
+                if item_type == "dataset_entity_scan" {
+                    ASSISTANT_RUN_MODEL_SCAN_BRIEF_TEXT_LIMIT
+                } else {
+                    ASSISTANT_RUN_MODEL_SUPPLY_BRIEF_TEXT_LIMIT
+                }
+            )
         ),
     ];
     if let Some(locator) = locator {
@@ -18456,6 +18467,8 @@ async fn build_assistant_run_evidence_state(
 
     let prefer_detail = assistant_run_scope_prefers_detail(selected_scope);
     let limit = assistant_run_evidence_limit_for_scope(selected_scope);
+    let dataset_entity_scan_requested =
+        assistant_run_dataset_entity_scan_requested(selected_scope, prompt);
     let external_acl_filter = load_external_acl_filter_context(state, selected_scope).await?;
     let selected_document_ids = selected_document_ids_from_scope(selected_scope);
     let mut supplied_items = Vec::new();
@@ -18480,6 +18493,18 @@ async fn build_assistant_run_evidence_state(
             "title": dataset.title.clone(),
             "visibility": dataset.visibility.as_str(),
         }));
+
+        if dataset_entity_scan_requested {
+            let scan_items = build_assistant_run_dataset_entity_scan_supply(
+                state,
+                &dataset,
+                current_user_id,
+                external_acl_filter.as_ref(),
+                &selected_document_ids,
+            )
+            .await?;
+            supplied_items.extend(scan_items);
+        }
 
         let evidences = state
             .storage
@@ -18638,6 +18663,261 @@ async fn build_assistant_run_evidence_state(
     }))
 }
 
+async fn build_assistant_run_dataset_entity_scan_supply(
+    state: &AppState,
+    dataset: &Dataset,
+    current_user_id: Option<UserId>,
+    external_acl_filter: Option<&ExternalAclFilterContext>,
+    selected_document_ids: &[DocumentId],
+) -> std::result::Result<Vec<Value>, ApiError> {
+    let documents = state
+        .storage
+        .documents()
+        .list_by_dataset(state.tenant_id, dataset.id)
+        .await
+        .map_err(ApiError::from_storage)?
+        .into_iter()
+        .filter(|document| owner_user_id_is_visible(document.owner_user_id, current_user_id))
+        .filter(|document| {
+            selected_document_ids.is_empty() || selected_document_ids.contains(&document.id)
+        })
+        .collect::<Vec<_>>();
+
+    let mut scanned_document_count = 0usize;
+    let mut limited_by_document_limit = false;
+    let mut entities_by_name: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut document_hits = Vec::new();
+
+    for document in documents {
+        if scanned_document_count >= ASSISTANT_RUN_DATASET_ENTITY_SCAN_DOCUMENT_LIMIT {
+            limited_by_document_limit = true;
+            break;
+        }
+        if !document_is_visible_for_external_acl(state, external_acl_filter, &document).await? {
+            continue;
+        }
+        scanned_document_count += 1;
+
+        let chunks = state
+            .storage
+            .document_chunks()
+            .list_by_document(state.tenant_id, document.id)
+            .await
+            .map_err(ApiError::from_storage)?;
+        let scan_text = chunks
+            .iter()
+            .take(ASSISTANT_RUN_DATASET_ENTITY_SCAN_CHUNK_LIMIT)
+            .map(|chunk| chunk.content.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let company_names = extract_company_names_from_text(&scan_text, 16);
+        if company_names.is_empty() {
+            continue;
+        }
+
+        for company_name in &company_names {
+            entities_by_name
+                .entry(company_name.clone())
+                .or_default()
+                .insert(document.id.to_string());
+        }
+        document_hits.push(json!({
+            "document_id": document.id,
+            "company_names": company_names,
+        }));
+    }
+
+    if scanned_document_count == 0 {
+        return Ok(Vec::new());
+    }
+
+    let entity_count = entities_by_name.len();
+    let entity_views = entities_by_name
+        .iter()
+        .take(ASSISTANT_RUN_DATASET_ENTITY_SCAN_ENTITY_LIMIT)
+        .map(|(name, document_ids)| {
+            json!({
+                "name": name,
+                "document_count": document_ids.len(),
+                "document_ids": document_ids.iter().take(5).cloned().collect::<Vec<_>>(),
+            })
+        })
+        .collect::<Vec<_>>();
+    let entity_summary = entities_by_name
+        .iter()
+        .take(ASSISTANT_RUN_DATASET_ENTITY_SCAN_ENTITY_LIMIT)
+        .map(|(name, document_ids)| {
+            if document_ids.len() > 1 {
+                format!("{name}({}份)", document_ids.len())
+            } else {
+                name.clone()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("、");
+    let summary = if entity_summary.is_empty() {
+        format!(
+            "资料库实体扫描：已扫描可见文档 {scanned_document_count} 份，未识别到明确的公司/组织名。"
+        )
+    } else {
+        format!(
+            "资料库实体扫描：已扫描可见文档 {scanned_document_count} 份，识别公司/组织名 {entity_count} 个：{entity_summary}。"
+        )
+    };
+
+    Ok(vec![json!({
+        "type": "dataset_entity_scan",
+        "source": "visible_document_scan",
+        "dataset_id": dataset.id,
+        "entity_type": "company_or_organization",
+        "summary": summary,
+        "score": 1.0,
+        "lexical_score": 1.0,
+        "recall_score": 1.0,
+        "scanned_document_count": scanned_document_count,
+        "entity_count": entity_count,
+        "entities": entity_views,
+        "document_hits": document_hits.into_iter().take(24).collect::<Vec<_>>(),
+        "limits": {
+            "maxDocuments": ASSISTANT_RUN_DATASET_ENTITY_SCAN_DOCUMENT_LIMIT,
+            "maxChunksPerDocument": ASSISTANT_RUN_DATASET_ENTITY_SCAN_CHUNK_LIMIT,
+            "maxEntities": ASSISTANT_RUN_DATASET_ENTITY_SCAN_ENTITY_LIMIT,
+            "limitedByDocumentLimit": limited_by_document_limit,
+        },
+    })])
+}
+
+fn extract_company_names_from_text(text: &str, limit: usize) -> Vec<String> {
+    if limit == 0 {
+        return Vec::new();
+    }
+
+    let mut names = Vec::new();
+    let mut seen = BTreeSet::new();
+    for segment in text.split(|ch: char| {
+        matches!(
+            ch,
+            '\n' | '\r' | '，' | ',' | '；' | ';' | '。' | '|' | '\t'
+        )
+    }) {
+        for name in extract_company_names_from_segment(segment) {
+            if seen.insert(name.clone()) {
+                names.push(name);
+                if names.len() >= limit {
+                    return names;
+                }
+            }
+        }
+    }
+    names
+}
+
+fn extract_company_names_from_segment(segment: &str) -> Vec<String> {
+    let normalized = segment.split_whitespace().collect::<String>();
+    if !(normalized.contains("有限公司")
+        || normalized.contains("有限责任公司")
+        || normalized.contains("股份有限公司")
+        || normalized.contains("集团"))
+    {
+        return Vec::new();
+    }
+
+    let mut names = Vec::new();
+    let mut seen = BTreeSet::new();
+    for suffix in ["股份有限公司", "有限责任公司", "有限公司", "集团"] {
+        let mut offset = 0usize;
+        while let Some(position) = normalized[offset..].find(suffix) {
+            let end = offset + position + suffix.len();
+            let candidate = sanitize_company_candidate(
+                &normalized[company_candidate_start(&normalized[..end])..end],
+            );
+            if is_valid_company_name(&candidate) && seen.insert(candidate.clone()) {
+                names.push(candidate);
+            }
+            offset = end;
+        }
+    }
+    names
+}
+
+fn company_candidate_start(value: &str) -> usize {
+    let mut start = 0usize;
+    for (index, ch) in value.char_indices() {
+        if matches!(ch, '：' | ':' | '-' | '—' | '–' | '（' | '(' | '】' | ']') {
+            start = index + ch.len_utf8();
+        }
+    }
+    start
+}
+
+fn sanitize_company_candidate(raw: &str) -> String {
+    let mut value = raw
+        .trim_matches(|ch: char| {
+            ch.is_whitespace()
+                || matches!(
+                    ch,
+                    ':' | '：' | '-' | '—' | '–' | '_' | '，' | ',' | '。' | '；' | ';'
+                )
+        })
+        .to_string();
+
+    loop {
+        let before = value.clone();
+        value = value
+            .trim_start_matches(|ch: char| {
+                ch.is_ascii_digit()
+                    || matches!(
+                        ch,
+                        '.' | '/' | '\\' | '-' | '—' | '–' | '_' | '年' | '月' | '至' | '今'
+                    )
+            })
+            .to_string();
+        for prefix in [
+            "最近就职公司",
+            "就职公司",
+            "任职公司",
+            "所在公司",
+            "公司名称",
+            "工作单位",
+            "工作经历",
+            "雇主",
+        ] {
+            if value.starts_with(prefix) {
+                value = value[prefix.len()..].to_string();
+            }
+        }
+        value = value
+            .trim_matches(|ch: char| ch.is_whitespace() || matches!(ch, ':' | '：' | '-' | '—'))
+            .to_string();
+        if value == before {
+            break;
+        }
+    }
+    value
+}
+
+fn is_valid_company_name(value: &str) -> bool {
+    let char_count = value.chars().count();
+    char_count >= 4
+        && char_count <= 40
+        && (value.ends_with("股份有限公司")
+            || value.ends_with("有限责任公司")
+            || value.ends_with("有限公司")
+            || value.ends_with("集团"))
+        && !value.contains('@')
+        && ![
+            "公司产品",
+            "公司安排",
+            "客户公司",
+            "本公司",
+            "贵公司",
+            "对公司",
+            "为公司",
+        ]
+        .iter()
+        .any(|fragment| value.contains(fragment))
+}
+
 async fn build_assistant_run_chunk_fallback_supply(
     state: &AppState,
     dataset: &Dataset,
@@ -18770,6 +19050,10 @@ fn assistant_run_supply_quality_report(
         .iter()
         .filter(|item| item.get("media_context").is_some())
         .count();
+    let dataset_entity_scan_count = supplied_items
+        .iter()
+        .filter(|item| item.get("type").and_then(Value::as_str) == Some("dataset_entity_scan"))
+        .count();
     let citation_locators = assistant_run_supply_citation_locators(supplied_items, 8);
     let prefer_detail = assistant_run_scope_prefers_detail(selected_scope);
     let status = if !supply_requested {
@@ -18794,6 +19078,9 @@ fn assistant_run_supply_quality_report(
     if !detail_targets.is_empty() {
         notes.push("detail_read_recommended_before_high_confidence_claims");
     }
+    if dataset_entity_scan_count > 0 {
+        notes.push("dataset_entity_scan_available");
+    }
     if media_context_count > 0 {
         notes.push("media_context_available_with_timestamps_when_present");
     }
@@ -18816,6 +19103,7 @@ fn assistant_run_supply_quality_report(
         "fallbackChunkCount": fallback_supply_count,
         "conversationMemoryItemCount": supplied_memory_items.len(),
         "mediaContextCount": media_context_count,
+        "datasetEntityScanCount": dataset_entity_scan_count,
         "detailTargetCount": detail_targets.len(),
         "limit": limit,
         "citationLocatorCount": citation_locators.len(),
@@ -18880,6 +19168,9 @@ fn assistant_run_recommended_supply_actions(
         actions.push("retrieve_evidence");
         if assistant_run_scope_prefers_detail(selected_scope) && has_supplied_items {
             actions.push("read_document_detail");
+        }
+        if assistant_run_scope_requests_dataset_entity_scan(selected_scope) {
+            actions.push("scan_dataset_entities");
         }
     }
     if selected_scope_requests_conversation_memory(selected_scope) {
@@ -23097,6 +23388,9 @@ fn assistant_run_scope_recommended_tool_actions(scope: &Value) -> Vec<String> {
     if assistant_run_scope_prefers_detail(scope) {
         actions.push("retrieval.read_detail".to_string());
     }
+    if assistant_run_scope_requests_dataset_entity_scan(scope) {
+        actions.push("retrieval.scan_documents".to_string());
+    }
     match assistant_run_scope_intent(scope) {
         "static_page" => actions.push("static_page.plan".to_string()),
         "report" => actions.push("report.plan".to_string()),
@@ -23107,6 +23401,69 @@ fn assistant_run_scope_recommended_tool_actions(scope: &Value) -> Vec<String> {
     }
     actions.truncate(5);
     actions
+}
+
+fn assistant_run_scope_requests_dataset_entity_scan(scope: &Value) -> bool {
+    let policy = assistant_run_scope_supply_policy(scope);
+    policy
+        .get("coveragePolicy")
+        .or_else(|| policy.get("coverage_policy"))
+        .and_then(Value::as_str)
+        .is_some_and(|value| value == "document_entity_scan")
+        || policy
+            .get("recommendedActions")
+            .or_else(|| policy.get("recommended_actions"))
+            .and_then(Value::as_array)
+            .map(|actions| {
+                actions.iter().any(|action| {
+                    action
+                        .as_str()
+                        .map(str::trim)
+                        .is_some_and(|value| value == "retrieval.scan_documents")
+                })
+            })
+            .unwrap_or(false)
+}
+
+fn assistant_run_dataset_entity_scan_requested(scope: &Value, prompt: &str) -> bool {
+    !selected_dataset_ids_from_scope(scope).is_empty()
+        && (assistant_run_scope_requests_dataset_entity_scan(scope)
+            || prompt_requests_resume_company_entity_scan(prompt))
+}
+
+fn prompt_requests_resume_company_entity_scan(prompt: &str) -> bool {
+    let lower_prompt = prompt.to_ascii_lowercase();
+    let has_resume_signal = ["简历", "履历", "候选人", "求职", "招聘", "人才", "面试"]
+        .iter()
+        .any(|hint| prompt.contains(hint))
+        || ["resume", "cv", "candidate", "recruit"]
+            .iter()
+            .any(|hint| lower_prompt.contains(hint));
+    let has_company_signal = [
+        "公司名",
+        "公司",
+        "企业",
+        "雇主",
+        "任职",
+        "就职",
+        "工作经历",
+        "经历",
+    ]
+    .iter()
+    .any(|hint| prompt.contains(hint))
+        || ["company", "employer"]
+            .iter()
+            .any(|hint| lower_prompt.contains(hint));
+    let has_coverage_signal = [
+        "多少", "几个", "哪些", "列出", "统计", "汇总", "分布", "全部", "所有", "提到",
+    ]
+    .iter()
+    .any(|hint| prompt.contains(hint))
+        || ["count", "list", "all"]
+            .iter()
+            .any(|hint| lower_prompt.contains(hint));
+
+    has_resume_signal && has_company_signal && (has_coverage_signal || prompt.contains("公司名"))
 }
 
 fn assistant_run_scope_prefers_detail(scope: &Value) -> bool {
@@ -31707,7 +32064,7 @@ fn static_page_final_render_data_quality_gate_for_draft(
     }
     refresh_static_page_payload_design_contract(&mut payload);
 
-    let attention_modules = static_page_preview_data_quality_attention_modules(&payload);
+    let attention_modules = static_page_final_render_data_quality_attention_modules(&payload);
     if attention_modules.is_empty() {
         return None;
     }
@@ -31748,6 +32105,75 @@ fn static_page_preview_data_quality_attention_modules(payload: &Value) -> Vec<Va
 }
 
 fn static_page_preview_binding_module_needs_attention(module: &Value) -> bool {
+    let status = static_page_artifact_string(
+        module,
+        &["bindingQualityStatus", "binding_quality_status", "status"],
+    )
+    .unwrap_or_default();
+    if !status.is_empty()
+        && !matches!(
+            status.as_str(),
+            "confirmed" | "ready" | "non_chart" | "partial"
+        )
+    {
+        return true;
+    }
+
+    let chart_data_fit = static_page_artifact_string(module, &["chartDataFit", "chart_data_fit"])
+        .unwrap_or_default();
+    if !chart_data_fit.is_empty()
+        && !matches!(
+            chart_data_fit.as_str(),
+            "ready" | "not_required" | "non_chart_ready" | "needs_sample_rows" | "inferred_signal"
+        )
+    {
+        return true;
+    }
+
+    let visualization_type =
+        static_page_artifact_string(module, &["visualizationType", "visualization_type"])
+            .unwrap_or_default();
+    let has_binding = static_page_preview_module_has_binding_source(module)
+        || module
+            .get("binding")
+            .or_else(|| module.get("dataBinding"))
+            .or_else(|| module.get("data_binding"))
+            .is_some_and(static_page_preview_module_has_binding_source);
+    static_page_visualization_needs_sample_rows(&visualization_type)
+        && static_page_preview_quality_u64(module, &["sampleRows", "sample_rows"]) == 0
+        && !has_binding
+}
+
+fn static_page_preview_module_has_binding_source(binding: &Value) -> bool {
+    static_page_artifact_string(
+        binding,
+        &["sourceId", "source_id", "fieldPath", "field_path", "label"],
+    )
+    .is_some()
+}
+
+fn static_page_final_render_data_quality_attention_modules(payload: &Value) -> Vec<Value> {
+    payload
+        .get("dataSnapshot")
+        .or_else(|| payload.get("data_snapshot"))
+        .and_then(|snapshot| {
+            snapshot
+                .get("moduleBindings")
+                .or_else(|| snapshot.get("module_bindings"))
+        })
+        .and_then(Value::as_array)
+        .map(|bindings| {
+            bindings
+                .iter()
+                .take(24)
+                .map(assistant_run_static_page_binding_quality_module_brief)
+                .filter(static_page_final_render_binding_module_needs_attention)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+}
+
+fn static_page_final_render_binding_module_needs_attention(module: &Value) -> bool {
     let status = static_page_artifact_string(
         module,
         &["bindingQualityStatus", "binding_quality_status", "status"],
@@ -41689,6 +42115,65 @@ mod tests {
     }
 
     #[test]
+    fn assistant_run_resume_company_scan_scope_expands_supply_actions() {
+        let selected_scope = json!({
+            "mode": "user_selected",
+            "datasets": [DatasetId::new()],
+            "intent": "data_question",
+            "supply_policy": {
+                "retrievalPolicy": "detail_first",
+                "coveragePolicy": "document_entity_scan",
+                "preferDetail": true,
+                "recommendedActions": [
+                    "retrieval.search",
+                    "retrieval.read_detail",
+                    "retrieval.scan_documents"
+                ],
+                "noFakeData": true
+            }
+        });
+
+        assert!(assistant_run_dataset_entity_scan_requested(
+            &selected_scope,
+            "简历数据集里提到了多少个公司名"
+        ));
+        assert_eq!(
+            assistant_run_recommended_supply_actions(&selected_scope, true),
+            vec![
+                "retrieve_evidence",
+                "read_document_detail",
+                "scan_dataset_entities"
+            ]
+        );
+        assert_eq!(
+            assistant_run_scope_recommended_tool_actions(&selected_scope),
+            vec![
+                "retrieval.search".to_string(),
+                "retrieval.read_detail".to_string(),
+                "retrieval.scan_documents".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn assistant_run_extracts_company_names_from_resume_text() {
+        let names = extract_company_names_from_text(
+            "最近就职公司：深圳星拓智能科技有限公司\n\
+             - 2019-2023 广州云岚数码有限公司，运营经理\n\
+             能接受公司安排的长短期出差。",
+            10,
+        );
+
+        assert_eq!(
+            names,
+            vec![
+                "深圳星拓智能科技有限公司".to_string(),
+                "广州云岚数码有限公司".to_string()
+            ]
+        );
+    }
+
+    #[test]
     fn assistant_run_video_ppt_scope_exposes_media_supply_actions() {
         let selected_scope = json!({
             "mode": "ordinary_chat",
@@ -43893,7 +44378,7 @@ mod tests {
     }
 
     #[test]
-    fn static_page_preview_gate_blocks_unrenderable_chart_bindings() {
+    fn static_page_preview_gate_allows_bound_chart_bindings_for_design_preview() {
         let now = Utc::now();
         let draft = StaticPageDraft {
             id: StaticPageDraftId::new(),
@@ -43931,12 +44416,18 @@ mod tests {
             updated_at: now,
         };
 
-        let (reason, details) = static_page_preview_data_quality_gate_for_draft(&draft)
-            .expect("chart without sample rows should be blocked");
+        assert!(
+            static_page_preview_data_quality_gate_for_draft(&draft).is_none(),
+            "bound chart modules may enter design preview before sample rows are repaired"
+        );
+
+        let (reason, details) = static_page_final_render_data_quality_gate_for_draft(&draft)
+            .expect("chart without sample rows should still block final render");
 
         assert!(reason.contains("订单趋势"));
         assert!(reason.contains("needs_sample_rows"));
         assert!(reason.contains("补充样本行"));
+        assert_eq!(details["blockedAction"], json!("render_static_page"));
         assert!(details["attentionModules"][0]["gateReasons"]
             .as_array()
             .expect("gate reasons")
@@ -43948,7 +44439,7 @@ mod tests {
     }
 
     #[test]
-    fn static_page_preview_gate_blocks_inferred_evidence_signals() {
+    fn static_page_preview_gate_allows_inferred_evidence_signals_for_design_preview() {
         let now = Utc::now();
         let dataset_id = DatasetId::new();
         let selected_scope = json!({
@@ -44014,12 +44505,18 @@ mod tests {
             updated_at: now,
         };
 
-        let (reason, details) = static_page_preview_data_quality_gate_for_draft(&draft)
-            .expect("inferred evidence signals should be repaired before preview");
+        assert!(
+            static_page_preview_data_quality_gate_for_draft(&draft).is_none(),
+            "inferred evidence signals can guide design preview before final data repair"
+        );
+
+        let (reason, details) = static_page_final_render_data_quality_gate_for_draft(&draft)
+            .expect("inferred evidence signals should be repaired before final render");
         let attention_module = &details["attentionModules"][0];
 
         assert!(reason.contains("订单趋势"));
         assert!(reason.contains("inferred_signal"));
+        assert_eq!(details["blockedAction"], json!("render_static_page"));
         assert_eq!(attention_module["chartDataFit"], json!("inferred_signal"));
         assert_eq!(
             attention_module["reason"],
@@ -45279,7 +45776,7 @@ mod tests {
             "static_page_preview_not_confirmed"
         );
 
-        let preview_before_data_repair = create_static_page_image_job(
+        let (job_status, Json(job_response)) = create_static_page_image_job(
             State(state.clone()),
             HeaderMap::new(),
             Path(draft_response.draft.id.to_string()),
@@ -45289,50 +45786,29 @@ mod tests {
             }),
         )
         .await
-        .expect_err("preview queue should require renderable module data");
+        .expect("preview queue should allow planned design before data repair");
+        assert_eq!(job_status, StatusCode::CREATED);
         assert_eq!(
-            preview_before_data_repair.payload.code,
-            "static_page_preview_data_quality_gate"
+            job_response.image_job.status,
+            contracts::StaticPageImageJobStatusView::Queued
         );
-        assert!(preview_before_data_repair
-            .payload
-            .message
-            .contains("数据绑定未达到效果图生成要求"));
-        let preview_gate_details = preview_before_data_repair
-            .payload
-            .details
-            .as_ref()
-            .expect("preview quality gate details");
+        assert_eq!(job_response.image_job.queue_position, Some(1));
         assert_eq!(
-            preview_gate_details["gate"],
-            json!("static_page_preview_data_quality")
+            job_response.image_job.image_prompt_payload["queue_copy"],
+            json!("资源正在排队，可以联系商务开通高级用户跳过等待。")
         );
         assert_eq!(
-            preview_gate_details["blockedAction"],
-            json!("submit_static_page_image_preview")
+            job_response.image_job.image_prompt_payload["design_contract"]["editable_core"],
+            json!("DOM text + SVG/chart components + safe ECharts JSON options")
         );
-        assert!(preview_gate_details["attentionModuleCount"]
-            .as_u64()
-            .is_some_and(|count| count > 0));
-        assert!(preview_gate_details["attentionModules"]
-            .as_array()
-            .expect("attention modules")
-            .iter()
-            .any(|module| module["moduleId"] == json!("kpi")
-                && module["chartDataFit"] == json!("needs_sample_rows")
-                && module["gateReasons"]
-                    .as_array()
-                    .expect("gate reasons")
-                    .contains(&json!("chart_sample_rows_missing"))));
-        assert!(
-            preview_gate_details["gateReasonCounts"]["chart_data_fit:needs_sample_rows"]
-                .as_u64()
-                .is_some_and(|count| count > 0)
+        assert_eq!(
+            job_response.image_job.image_prompt_payload["render_spec"]["componentModel"],
+            json!("dom-text-svg-chart")
         );
-        assert!(preview_gate_details["recommendedActions"]
-            .as_array()
-            .expect("recommended actions")
-            .contains(&json!("static_page.update_draft")));
+        assert_eq!(
+            job_response.image_job.image_prompt_payload["render_spec"]["chartRuntime"],
+            json!("deterministic-with-echarts-advanced")
+        );
 
         let (data_repair_status, Json(data_repair_response)) = append_static_page_draft_operations(
             State(state.clone()),
@@ -45451,39 +45927,6 @@ mod tests {
             json!("confirmed")
         );
 
-        let (job_status, Json(job_response)) = create_static_page_image_job(
-            State(state.clone()),
-            HeaderMap::new(),
-            Path(draft_response.draft.id.to_string()),
-            Json(CreateStaticPageImageJobRequest {
-                prompt: Some("生成一张经营分析效果图".to_string()),
-                image_prompt_payload: Value::Null,
-            }),
-        )
-        .await
-        .expect("static page image job should be created");
-        assert_eq!(job_status, StatusCode::CREATED);
-        assert_eq!(
-            job_response.image_job.status,
-            contracts::StaticPageImageJobStatusView::Queued
-        );
-        assert_eq!(job_response.image_job.queue_position, Some(1));
-        assert_eq!(
-            job_response.image_job.image_prompt_payload["queue_copy"],
-            json!("资源正在排队，可以联系商务开通高级用户跳过等待。")
-        );
-        assert_eq!(
-            job_response.image_job.image_prompt_payload["design_contract"]["editable_core"],
-            json!("DOM text + SVG/chart components + safe ECharts JSON options")
-        );
-        assert_eq!(
-            job_response.image_job.image_prompt_payload["render_spec"]["componentModel"],
-            json!("dom-text-svg-chart")
-        );
-        assert_eq!(
-            job_response.image_job.image_prompt_payload["render_spec"]["chartRuntime"],
-            json!("deterministic-with-echarts-advanced")
-        );
         let image_workflows = state
             .storage
             .workflow_executions()

@@ -283,9 +283,9 @@ function AssistantContextStrip({ dataset, selectedDatasets = [], startupBriefing
         {mediaCandidate ? <span className="message-chip green">媒体资料</span> : null}
         {preferDetail ? <span className="message-chip green">深度供料</span> : null}
         {memoryCandidate ? <span className="message-chip neutral">参考本轮对话</span> : null}
-        {recommendedActions.slice(0, 2).map((action) => (
+        {recommendedActions.slice(0, 3).map((action) => (
           <span className="message-chip neutral" key={action}>
-            可用 {formatRecommendedActionLabel(action)}
+            策略 {formatRecommendedActionLabel(action)}
           </span>
         ))}
         {!datasetCandidates.length && !memoryCandidate ? <span className="message-chip neutral">不强行检索</span> : null}
@@ -298,6 +298,7 @@ function formatRecommendedActionLabel(action) {
   const labels = {
     'retrieval.search': '资料检索',
     'retrieval.read_detail': '全文细读',
+    'retrieval.scan_documents': '全量扫描',
     'media.detail': '媒体细节',
     'static_page.plan': '静态页规划',
     'static_page.update_draft': '修改静态页',
@@ -705,10 +706,11 @@ export default function ChatPanel({
             <button
               className="ghost-btn static-page-one-click-btn"
               type="button"
-              onClick={() => onStartStaticPageDraft?.({ oneClick: false, openEditor: true })}
+              onClick={() => onStartStaticPageDraft?.({ oneClick: true, openEditor: false, prompt: input.trim() })}
               disabled={submitting}
+              title="快速生成静态页效果图"
             >
-              页面
+              效果图
             </button>
           </div>
         </div>

@@ -296,7 +296,6 @@ export function inferStaticPageTemplateReferenceId(value = '') {
   const text = intentText(value);
   if (!text.trim()) return '';
   if (textIncludesAny(text, [
-    '文档',
     '技术方案',
     '接口',
     'api',
@@ -308,6 +307,15 @@ export function inferStaticPageTemplateReferenceId(value = '') {
     '教程',
     '操作手册',
     '验收',
+    '对接',
+    '联调',
+    '接入',
+    '文档页',
+    '文档说明',
+    '文档指南',
+    '文档中心',
+    '文档规范',
+    '文档清单',
   ])) {
     return 'docs-page';
   }
@@ -338,6 +346,10 @@ export function inferStaticPageTemplateReferenceId(value = '') {
     'metrics',
     'one-pager',
     'one pager',
+    'html',
+    '网页',
+    '可视化页',
+    '数据页',
   ])) {
     return 'data-report';
   }

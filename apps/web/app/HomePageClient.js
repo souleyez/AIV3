@@ -942,7 +942,7 @@ export default function HomePageClient() {
   }
 
   function promptRequestsStaticPage(prompt) {
-    return /静态页|静态页面|页面规划|一页|生成页面|落地页/.test(String(prompt || ''));
+    return /静态页|静态页面|页面规划|一页|生成页面|落地页|效果图|网页|html|HTML|可视化页/.test(String(prompt || ''));
   }
 
   function buildStaticPageConversationSummary(prompt = '', options = {}) {
@@ -952,17 +952,75 @@ export default function HomePageClient() {
       : selectedDatasets;
     const draftSession = options.session || selectedSession;
     const sourceMessages = options.messages || visibleMessages;
-    const latestAssistantMessage = [...sourceMessages].reverse().find((message) => message.role === 'assistant');
-    const latestMessage = latestAssistantMessage || sourceMessages[sourceMessages.length - 1];
+    const draftDatasetIds = new Set([
+      ...draftDatasets.map((dataset) => dataset.id).filter(Boolean),
+      draftDataset?.id,
+    ].filter(Boolean));
+    const relatedDocuments = documents
+      .filter((document) => draftDatasetIds.has(document.dataset_id || document.datasetId))
+      .slice(0, 8);
+    const recentMessages = sourceMessages
+      .slice(-6)
+      .map((message) => {
+        const role = message.role === 'assistant' ? '助手' : '用户';
+        return `${role}: ${String(message.content || '').replace(/\s+/g, ' ').trim().slice(0, 180)}`;
+      })
+      .filter((line) => !/^(助手|用户):\s*$/.test(line));
+    const datasetLine = draftDatasets.length
+      ? draftDatasets.map((dataset) => {
+          const count = dataset.document_count ?? dataset.documentCount ?? dataset.documents_count ?? dataset.documentsCount;
+          const status = dataset.parse_status_summary || dataset.parseStatusSummary || dataset.content_type_summary || dataset.contentTypeSummary || '';
+          return `${dataset.title || dataset.key}${count ? `（${count}文档）` : ''}${status ? `/${status}` : ''}`;
+        }).join('、')
+      : draftDataset ? `${draftDataset.title || draftDataset.key}` : '未选数据集，按普通对话意图规划。';
+    const documentLine = relatedDocuments
+      .map((document) => document.title || document.name || document.filename || document.id)
+      .filter(Boolean)
+      .slice(0, 8)
+      .join('、');
     const summaryParts = [
-      draftDatasets.length
-        ? `数据集：${draftDatasets.map((dataset) => dataset.title || dataset.key).join('、')}`
-        : draftDataset ? `数据集：${draftDataset.title}` : '未选数据集，按普通对话意图规划。',
-      draftSession ? `会话：${draftSession.title}` : '',
-      latestMessage?.content ? `最近内容：${latestMessage.content}` : '',
+      '# 静态页规划输入',
       prompt ? `用户要求：${prompt}` : '',
+      `数据集：${datasetLine}`,
+      draftSession ? `会话：${draftSession.title}` : '',
+      documentLine ? `文档线索：${documentLine}` : '',
+      recentMessages.length ? `上下文：${recentMessages.join(' / ')}` : '',
     ].filter(Boolean);
     return summaryParts.join('\n');
+  }
+
+  function buildStaticPageContextFieldCandidates(options = {}) {
+    const draftDataset = options.dataset || selectedDataset;
+    const draftDatasets = Array.isArray(options.datasets) && options.datasets.length
+      ? options.datasets
+      : selectedDatasets;
+    const datasetIds = new Set([
+      ...draftDatasets.map((dataset) => dataset.id).filter(Boolean),
+      draftDataset?.id,
+    ].filter(Boolean));
+    const hints = [];
+    draftDatasets.forEach((dataset) => {
+      if (dataset?.title || dataset?.key) hints.push(dataset.title || dataset.key);
+    });
+    if (!draftDatasets.length && (draftDataset?.title || draftDataset?.key)) {
+      hints.push(draftDataset.title || draftDataset.key);
+    }
+    documents
+      .filter((document) => datasetIds.has(document.dataset_id || document.datasetId))
+      .slice(0, 10)
+      .forEach((document) => {
+        const title = document.title || document.name || document.filename;
+        if (title && !hints.includes(title)) hints.push(title);
+      });
+    if (!hints.length) return [];
+    return [{
+      sourceId: 'evidence',
+      fieldPath: 'retrieval.section_title_hints',
+      label: '对话和文档标题线索',
+      kind: 'section_titles',
+      confidence: 0.52,
+      sectionTitleHints: hints.slice(0, 12),
+    }];
   }
 
   function buildStaticPageDraftSelectedScope(draft) {
@@ -2734,16 +2792,23 @@ export default function HomePageClient() {
       assistantRunId = lastAssistantRunId,
     } = options;
     const draftDatasetId = datasetId || '';
+    const conversationSummary = buildStaticPageConversationSummary(prompt, {
+      dataset,
+      datasets: selectedDatasets,
+      messages: visibleMessages,
+    });
+    const fieldCandidates = buildStaticPageContextFieldCandidates({
+      dataset,
+      datasets: selectedDatasets,
+    });
 
     const baseDraft = buildInitialStaticPageDraft({
       datasetId: draftDatasetId,
       sessionId: selectedSessionId,
       templateIntent: prompt,
-      conversationSummary: buildStaticPageConversationSummary(prompt, {
-        dataset,
-        datasets: selectedDatasets,
-        messages: visibleMessages,
-      }),
+      templateReferenceFallbackId: oneClick ? 'data-report' : null,
+      conversationSummary,
+      fieldCandidates,
     });
     const draft = oneClick
       ? applyStaticPageOperation(baseDraft, {
