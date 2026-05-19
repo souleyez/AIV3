@@ -107,7 +107,7 @@ impl IngestProcessor for LocalIngestProcessor {
     fn process(&self, job: &IngestJob) -> IngestOutcome {
         match extract_document_text(&job.object_key, &job.content_type) {
             Ok(extracted) if !extracted.text.trim().is_empty() => {
-                let chunks = split_text_chunks(&extracted.text, 1_800);
+                let chunks = split_extracted_document_chunks(&extracted, 1_800);
                 IngestOutcome {
                     extracted_chars: extracted.text.chars().count(),
                     chunks,
@@ -120,6 +120,28 @@ impl IngestProcessor for LocalIngestProcessor {
             _ => build_placeholder_outcome(job),
         }
     }
+}
+
+pub fn split_extracted_document_chunks(
+    extracted: &ExtractedDocumentText,
+    max_chars: usize,
+) -> Vec<String> {
+    let max_chars = max_chars.max(1);
+    let section_hints = document_structure_section_title_hints(&extracted.metadata, 128);
+    if section_hints.is_empty() {
+        return split_text_chunks(&extracted.text, max_chars);
+    }
+
+    let paragraph_count = split_text_paragraphs(&extracted.text).len();
+    if paragraph_count <= 1 {
+        let structure_chunks =
+            split_document_structure_block_chunks(&extracted.metadata, max_chars);
+        if structure_chunks_are_usable(&structure_chunks, &extracted.text) {
+            return structure_chunks;
+        }
+    }
+
+    split_text_chunks_with_section_hints(&extracted.text, max_chars, &section_hints)
 }
 
 pub type PlaceholderIngestProcessor = LocalIngestProcessor;
@@ -270,6 +292,242 @@ pub fn split_text_chunks(text: &str, max_chars: usize) -> Vec<String> {
     }
 
     chunks
+}
+
+fn split_text_chunks_with_section_hints(
+    text: &str,
+    max_chars: usize,
+    section_hints: &[String],
+) -> Vec<String> {
+    let max_chars = max_chars.max(1);
+    let paragraphs = split_text_paragraphs(text);
+    if paragraphs.is_empty() {
+        return Vec::new();
+    }
+
+    let mut chunks = Vec::new();
+    let mut current = String::new();
+    for paragraph in paragraphs {
+        let paragraph = paragraph.trim();
+        if paragraph.is_empty() {
+            continue;
+        }
+        let is_section_start = paragraph_matches_section_hint(paragraph, section_hints)
+            || looks_like_document_section_title(paragraph);
+        if is_section_start
+            && !current.trim().is_empty()
+            && !looks_like_synthetic_page_marker(current.trim())
+        {
+            chunks.push(current.trim().to_string());
+            current.clear();
+        }
+        if current.chars().count() + paragraph.chars().count() + 2 > max_chars
+            && !current.is_empty()
+        {
+            chunks.push(current.trim().to_string());
+            current.clear();
+        }
+        if paragraph.chars().count() > max_chars {
+            if !current.is_empty() {
+                chunks.push(current.trim().to_string());
+                current.clear();
+            }
+            chunks.extend(split_long_text(paragraph, max_chars));
+            continue;
+        }
+        if !current.is_empty() {
+            current.push_str("\n\n");
+        }
+        current.push_str(paragraph);
+    }
+    if !current.trim().is_empty() {
+        chunks.push(current.trim().to_string());
+    }
+    chunks
+}
+
+fn paragraph_matches_section_hint(paragraph: &str, section_hints: &[String]) -> bool {
+    let paragraph = normalize_document_structure_text(paragraph);
+    let first_line = paragraph
+        .lines()
+        .next()
+        .map(str::trim)
+        .unwrap_or_default()
+        .to_string();
+    section_hints.iter().any(|hint| {
+        let hint = normalize_document_structure_text(hint);
+        !hint.is_empty()
+            && (first_line == hint
+                || paragraph == hint
+                || paragraph.starts_with(&format!("# {hint}"))
+                || paragraph.starts_with(&format!("## {hint}"))
+                || (paragraph.chars().count() <= hint.chars().count() + 8
+                    && paragraph.contains(&hint)))
+    })
+}
+
+fn looks_like_document_section_title(paragraph: &str) -> bool {
+    let normalized = normalize_document_structure_text(paragraph);
+    if looks_like_synthetic_page_marker(&normalized) {
+        return false;
+    }
+    let char_count = normalized.chars().count();
+    char_count >= 2
+        && char_count <= 80
+        && (normalized.starts_with('#')
+            || normalized.ends_with(':')
+            || normalized.ends_with('：')
+            || looks_like_numbered_heading(&normalized))
+}
+
+fn looks_like_synthetic_page_marker(value: &str) -> bool {
+    let normalized = value.trim().trim_start_matches('#').trim();
+    let Some(rest) = normalized.strip_prefix("Page ") else {
+        return false;
+    };
+    !rest.is_empty() && rest.chars().all(|ch| ch.is_ascii_digit())
+}
+
+fn split_document_structure_block_chunks(metadata: &Value, max_chars: usize) -> Vec<String> {
+    let max_chars = max_chars.max(1);
+    let mut chunks = Vec::new();
+    let mut current = String::new();
+
+    for block in document_structure_blocks(metadata) {
+        let Some(text) = document_structure_block_text(block) else {
+            continue;
+        };
+        let is_title = document_structure_block_is_title(block);
+        let unit = if is_title { format!("# {text}") } else { text };
+        if is_title && !current.trim().is_empty() {
+            chunks.push(current.trim().to_string());
+            current.clear();
+        }
+        if current.chars().count() + unit.chars().count() + 2 > max_chars && !current.is_empty() {
+            chunks.push(current.trim().to_string());
+            current.clear();
+        }
+        if unit.chars().count() > max_chars {
+            if !current.trim().is_empty() {
+                chunks.push(current.trim().to_string());
+                current.clear();
+            }
+            chunks.extend(split_long_text(&unit, max_chars));
+            continue;
+        }
+        if !current.is_empty() {
+            current.push_str("\n\n");
+        }
+        current.push_str(&unit);
+    }
+
+    if !current.trim().is_empty() {
+        chunks.push(current.trim().to_string());
+    }
+    chunks
+}
+
+fn structure_chunks_are_usable(chunks: &[String], original_text: &str) -> bool {
+    if chunks.is_empty() {
+        return false;
+    }
+    let structured_chars = chunks
+        .iter()
+        .map(|chunk| pdf_quality_text_chars(chunk))
+        .sum::<usize>();
+    let original_chars = pdf_quality_text_chars(original_text);
+    if original_chars == 0 {
+        return structured_chars >= pdf_min_usable_text_chars();
+    }
+    let coverage_ok = structured_chars * 3 >= original_chars.min(12_000);
+    if chunks.len() > 1 {
+        return structured_chars >= 8 && coverage_ok;
+    }
+    structured_chars >= pdf_min_usable_text_chars() && coverage_ok
+}
+
+fn document_structure_section_title_hints(metadata: &Value, limit: usize) -> Vec<String> {
+    let mut hints = Vec::new();
+    for block in document_structure_blocks(metadata) {
+        if !document_structure_block_is_title(block) {
+            continue;
+        }
+        let Some(text) = document_structure_block_text(block) else {
+            continue;
+        };
+        push_unique_document_structure_hint(&mut hints, text, limit);
+    }
+    hints
+}
+
+fn document_structure_blocks(metadata: &Value) -> Vec<&Value> {
+    metadata
+        .get("document_structure")
+        .and_then(|value| value.get("blocks"))
+        .and_then(Value::as_array)
+        .map(|blocks| blocks.iter().collect())
+        .unwrap_or_default()
+}
+
+fn document_structure_block_text(block: &Value) -> Option<String> {
+    for key in ["text", "content", "rec_text", "markdown", "html"] {
+        let Some(value) = block.get(key).and_then(Value::as_str) else {
+            continue;
+        };
+        let normalized = normalize_document_structure_text(value);
+        if !normalized.is_empty() {
+            return Some(normalized.chars().take(1_200).collect());
+        }
+    }
+    None
+}
+
+fn document_structure_block_type(block: &Value) -> String {
+    for key in ["block_type", "type", "label", "category"] {
+        let Some(value) = block.get(key).and_then(Value::as_str) else {
+            continue;
+        };
+        let normalized = value.trim().to_ascii_lowercase();
+        if !normalized.is_empty() {
+            return normalized;
+        }
+    }
+    String::new()
+}
+
+fn document_structure_block_is_title(block: &Value) -> bool {
+    let block_type = document_structure_block_type(block);
+    [
+        "doc_title",
+        "paragraph_title",
+        "title",
+        "header",
+        "heading",
+        "section_title",
+    ]
+    .iter()
+    .any(|value| block_type.contains(value))
+}
+
+fn normalize_document_structure_text(value: &str) -> String {
+    value
+        .replace('\0', "")
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn push_unique_document_structure_hint(output: &mut Vec<String>, hint: String, limit: usize) {
+    if output.len() >= limit {
+        return;
+    }
+    let normalized = hint.trim().chars().take(80).collect::<String>();
+    if normalized.is_empty() || output.iter().any(|existing| existing == &normalized) {
+        return;
+    }
+    output.push(normalized);
 }
 
 pub fn split_text_paragraphs(text: &str) -> Vec<String> {
@@ -3817,6 +4075,87 @@ trailer << /Root 1 0 R >>
                 "第一段介绍订单延期风险。",
                 "第二段介绍客服满意度。",
                 "第三段介绍库存周转。"
+            ]
+        );
+    }
+
+    #[test]
+    fn split_extracted_document_chunks_breaks_on_structure_headings() {
+        let extracted = ExtractedDocumentText {
+            text: "工作经历\n负责智能知识库平台。\n\n项目经验\n建设订单风险识别系统。".to_string(),
+            method: "pdf-paddleocr".to_string(),
+            metadata: json!({
+                "document_structure": {
+                    "source": "paddleocr_pp_structure_v3",
+                    "blocks": [
+                        {"type": "paragraph_title", "text": "工作经历"},
+                        {"type": "paragraph", "text": "负责智能知识库平台。"},
+                        {"type": "paragraph_title", "text": "项目经验"},
+                        {"type": "paragraph", "text": "建设订单风险识别系统。"}
+                    ]
+                }
+            }),
+        };
+
+        let chunks = split_extracted_document_chunks(&extracted, 1_800);
+
+        assert_eq!(
+            chunks,
+            vec![
+                "工作经历\n负责智能知识库平台。",
+                "项目经验\n建设订单风险识别系统。"
+            ]
+        );
+    }
+
+    #[test]
+    fn split_extracted_document_chunks_keeps_page_marker_with_section() {
+        let extracted = ExtractedDocumentText {
+            text: "# Page 1\n\n## 工作经历\n\n负责智能知识库平台。\n\n## 项目经验\n\n建设订单风险识别系统。".to_string(),
+            method: "pdf-paddleocr".to_string(),
+            metadata: json!({
+                "document_structure": {
+                    "source": "paddleocr_pp_structure_v3",
+                    "blocks": [
+                        {"type": "paragraph_title", "text": "工作经历"},
+                        {"type": "paragraph_title", "text": "项目经验"}
+                    ]
+                }
+            }),
+        };
+
+        let chunks = split_extracted_document_chunks(&extracted, 1_800);
+
+        assert_eq!(chunks.len(), 2);
+        assert!(chunks[0].starts_with("# Page 1\n\n## 工作经历"));
+        assert!(chunks[1].starts_with("## 项目经验"));
+    }
+
+    #[test]
+    fn split_extracted_document_chunks_rebuilds_from_blocks_when_text_has_no_paragraphs() {
+        let extracted = ExtractedDocumentText {
+            text: "工作经历负责智能知识库平台。项目经验建设订单风险识别系统。".to_string(),
+            method: "pdf-paddleocr".to_string(),
+            metadata: json!({
+                "document_structure": {
+                    "source": "paddleocr_pp_structure_v3",
+                    "blocks": [
+                        {"type": "paragraph_title", "text": "工作经历"},
+                        {"type": "text", "text": "负责智能知识库平台。"},
+                        {"type": "paragraph_title", "text": "项目经验"},
+                        {"type": "table", "text": "订单风险识别系统"}
+                    ]
+                }
+            }),
+        };
+
+        let chunks = split_extracted_document_chunks(&extracted, 1_800);
+
+        assert_eq!(
+            chunks,
+            vec![
+                "# 工作经历\n\n负责智能知识库平台。",
+                "# 项目经验\n\n订单风险识别系统"
             ]
         );
     }
