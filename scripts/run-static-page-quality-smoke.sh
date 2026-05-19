@@ -66,6 +66,10 @@ run_check "final render gate blocks unrenderable chart bindings" \
   "${cargo_bin}" test -p platform-api static_page_final_render_gate_blocks_unrenderable_chart_bindings
 run_check "explicit module data survives preview and render snapshots" \
   "${cargo_bin}" test -p platform-api static_page_data_snapshot_preserves_module_explicit_data_for_preview_and_render
+run_check "external direct HTML render exposes downloadable URL" \
+  "${cargo_bin}" test -p platform-api external_channel_direct_html_render_can_be_downloaded_with_channel_token
+run_check "external HTML download URL requires external scope" \
+  "${cargo_bin}" test -p platform-api static_page_html_download_url_requires_external_channel_scope
 run_check "Codex plan-only blocks preview when data quality needs attention" \
   "${cargo_bin}" test -p assistant-runtime codex_executor_plan_only_blocks_preview_when_static_page_data_quality_needs_attention
 run_check "Codex plan-only allows preview when data quality is confirmed" \

@@ -78,10 +78,10 @@ use domain_model::{
     PublishedSurface, ReportPlan, ReportPlanAstVersion, ReportPlanId, ReportRenderOutput,
     RetrievalEvidence, RetrievalEvidenceId, SecretBindingId, SecretScopeLevel, StaticPageDraft,
     StaticPageDraftId, StaticPageDraftStatus, StaticPageImageJob, StaticPageImageJobId,
-    StaticPageImageJobStatus, StaticPageRenderOutput, StaticPageRenderOutputStatus, TenantId,
-    ToolExecution, ToolExecutionSourceKind, ToolExecutionStatus, User, UserId, UserSession,
-    UserSessionId, WorkflowEventRecord, WorkflowExecution, WorkflowExecutionId, WorkflowKind,
-    WorkflowStatus, WorkflowTask,
+    StaticPageImageJobStatus, StaticPageRenderOutput, StaticPageRenderOutputId,
+    StaticPageRenderOutputStatus, TenantId, ToolExecution, ToolExecutionSourceKind,
+    ToolExecutionStatus, User, UserId, UserSession, UserSessionId, WorkflowEventRecord,
+    WorkflowExecution, WorkflowExecutionId, WorkflowKind, WorkflowStatus, WorkflowTask,
 };
 use event_bus::{
     workflow_execution_transition_subject, workflow_task_enqueued_subject, EventBus, EventEnvelope,
@@ -14459,7 +14459,10 @@ async fn create_static_page_render_for_draft(
         return Ok((
             StatusCode::CREATED,
             Json(CreateStaticPageRenderResponse {
-                render_output: to_static_page_render_output_view(render_output),
+                render_output: to_static_page_render_output_view(
+                    render_output,
+                    Some(&draft.selected_scope),
+                ),
                 draft: to_static_page_draft_view(draft),
             }),
         ));
@@ -14542,7 +14545,10 @@ async fn create_static_page_render_for_draft(
     Ok((
         StatusCode::CREATED,
         Json(CreateStaticPageRenderResponse {
-            render_output: to_static_page_render_output_view(render_output),
+            render_output: to_static_page_render_output_view(
+                render_output,
+                Some(&draft.selected_scope),
+            ),
             draft: to_static_page_draft_view(draft),
         }),
     ))
@@ -14565,7 +14571,7 @@ async fn list_static_page_render_outputs(
     Ok(Json(
         outputs
             .into_iter()
-            .map(to_static_page_render_output_view)
+            .map(|output| to_static_page_render_output_view(output, Some(&draft.selected_scope)))
             .collect(),
     ))
 }
@@ -31853,7 +31859,12 @@ fn to_static_page_image_job_view(job: StaticPageImageJob) -> StaticPageImageJobV
     }
 }
 
-fn to_static_page_render_output_view(output: StaticPageRenderOutput) -> StaticPageRenderOutputView {
+fn to_static_page_render_output_view(
+    output: StaticPageRenderOutput,
+    selected_scope: Option<&Value>,
+) -> StaticPageRenderOutputView {
+    let html_download_url =
+        selected_scope.and_then(|scope| static_page_external_html_download_url(scope, output.id));
     StaticPageRenderOutputView {
         id: output.id,
         draft_id: output.draft_id,
@@ -31861,9 +31872,48 @@ fn to_static_page_render_output_view(output: StaticPageRenderOutput) -> StaticPa
         image_job_id: output.image_job_id,
         status: contracts::StaticPageRenderOutputStatusView::from_domain(output.status),
         html: output.html,
+        html_download_url: html_download_url.clone(),
+        html_download_url_camel: html_download_url,
         asset_manifest: output.asset_manifest,
         created_at: output.created_at,
     }
+}
+
+fn static_page_external_html_download_url(
+    selected_scope: &Value,
+    render_output_id: StaticPageRenderOutputId,
+) -> Option<String> {
+    if value_at_any_key(selected_scope, &["type", "scope_type", "scopeType"])
+        .and_then(Value::as_str)
+        != Some("external_channel")
+    {
+        return None;
+    }
+    let channel_connection_id = value_at_any_key(
+        selected_scope,
+        &["channel_connection_id", "channelConnectionId"],
+    )
+    .and_then(Value::as_str)
+    .map(str::trim)
+    .filter(|value| !value.is_empty())?;
+    Some(format!(
+        "/v1/external/channels/{}/static-page-renders/{}/download",
+        encode_url_path_segment(channel_connection_id),
+        render_output_id
+    ))
+}
+
+fn encode_url_path_segment(value: &str) -> String {
+    let mut encoded = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        let ch = byte as char;
+        if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '.' | '_' | '~') {
+            encoded.push(ch);
+        } else {
+            encoded.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    encoded
 }
 
 fn to_conversation_memory_item_view(item: ConversationMemoryItem) -> ConversationMemoryItemView {
@@ -46898,9 +46948,36 @@ mod tests {
             .html
             .contains("第三方风险说明"));
         assert!(!render_response.render_output.html.contains("previews/"));
+        let expected_download_url = format!(
+            "/v1/external/channels/generic-chat-main/static-page-renders/{}/download",
+            render_response.render_output.id
+        );
+        assert_eq!(
+            render_response.render_output.html_download_url.as_deref(),
+            Some(expected_download_url.as_str())
+        );
+        assert_eq!(
+            render_response
+                .render_output
+                .html_download_url_camel
+                .as_deref(),
+            Some(expected_download_url.as_str())
+        );
         assert_eq!(
             render_response.draft.draft_payload["finalPage"]["directHtml"],
             json!(true)
+        );
+        let Json(render_outputs) = list_static_page_render_outputs(
+            State(state.clone()),
+            HeaderMap::new(),
+            Path(draft.id.to_string()),
+        )
+        .await
+        .expect("render outputs should list");
+        assert_eq!(render_outputs.len(), 1);
+        assert_eq!(
+            render_outputs[0].html_download_url.as_deref(),
+            Some(expected_download_url.as_str())
         );
 
         let app = router(
@@ -46947,6 +47024,35 @@ mod tests {
         let html = String::from_utf8(body.to_vec()).expect("download should be utf-8");
         assert!(html.contains("第三方风险说明"));
         assert!(html.contains("风险概览"));
+    }
+
+    #[test]
+    fn static_page_html_download_url_requires_external_channel_scope() {
+        let render_output_id = StaticPageRenderOutputId::new();
+
+        let url = static_page_external_html_download_url(
+            &json!({
+                "type": "external_channel",
+                "channelConnectionId": "generic chat/主通道"
+            }),
+            render_output_id,
+        )
+        .expect("external channel scope should produce a download URL");
+
+        assert_eq!(
+            url,
+            format!(
+                "/v1/external/channels/generic%20chat%2F%E4%B8%BB%E9%80%9A%E9%81%93/static-page-renders/{render_output_id}/download"
+            )
+        );
+        assert!(static_page_external_html_download_url(
+            &json!({
+                "mode": "ordinary_chat",
+                "channel_connection_id": "generic-chat-main"
+            }),
+            StaticPageRenderOutputId::new()
+        )
+        .is_none());
     }
 
     fn test_render_ready_static_page_payload() -> Value {

@@ -3372,6 +3372,14 @@ pub struct StaticPageRenderOutputView {
     pub image_job_id: Option<StaticPageImageJobId>,
     pub status: StaticPageRenderOutputStatusView,
     pub html: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub html_download_url: Option<String>,
+    #[serde(
+        default,
+        rename = "htmlDownloadUrl",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub html_download_url_camel: Option<String>,
     pub asset_manifest: Value,
     pub created_at: DateTime<Utc>,
 }
