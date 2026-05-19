@@ -68,6 +68,8 @@ run_check "resume company extractor filters phrase noise" \
   "${cargo_bin}" test -p platform-api assistant_run_filters_resume_company_phrase_noise --lib
 run_check "resume company extractor normalizes group relation names" \
   "${cargo_bin}" test -p platform-api assistant_run_normalizes_group_relation_company_names --lib
+run_check "async document parse status is supplied to assistant" \
+  "${cargo_bin}" test -p platform-api assistant_run_supplies_document_parse_status_for_failed_and_reparsing_documents --lib
 
 if [[ "${DOCUMENT_UNDERSTANDING_SMOKE_RUNTIME_GATE:-false}" =~ ^([Tt][Rr][Uu][Ee]|1|[Yy][Ee][Ss]|[Oo][Nn])$ ]]; then
   run_check "deployment ingest runtime gate" \
@@ -102,7 +104,8 @@ const report = {
   contract: {
     parser_quality: "PaddleOCR parsing, low-quality PDF detection, and diagnostic fallback must not treat one-character extraction as usable content.",
     external_parse_compatibility: "Third-party Java/camelCase parse payloads and parse-detail summary fields remain compatible.",
-    resume_entity_scan: "Resume/company entity scans should preserve valid company names while filtering common phrase noise."
+    resume_entity_scan: "Resume/company entity scans should preserve valid company names while filtering common phrase noise.",
+    async_parse_status: "Assistant evidence should surface failed, reparsing, and degraded document parse states so models can answer availability correctly."
   },
   checks: JSON.parse(process.env.SMOKE_CHECKS_JSON || "[]")
 };
@@ -127,6 +130,7 @@ const lines = [
   `- Parser quality: ${report.contract.parser_quality}`,
   `- External parse compatibility: ${report.contract.external_parse_compatibility}`,
   `- Resume entity scan: ${report.contract.resume_entity_scan}`,
+  `- Async parse status: ${report.contract.async_parse_status}`,
   "",
   "## Checks",
   "",

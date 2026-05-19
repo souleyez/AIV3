@@ -156,6 +156,8 @@ const ASSISTANT_RUN_DETAIL_TARGET_LIMIT: usize = 3;
 const ASSISTANT_RUN_DATASET_ENTITY_SCAN_DOCUMENT_LIMIT: usize = 48;
 const ASSISTANT_RUN_DATASET_ENTITY_SCAN_CHUNK_LIMIT: usize = 4;
 const ASSISTANT_RUN_DATASET_ENTITY_SCAN_ENTITY_LIMIT: usize = 80;
+const ASSISTANT_RUN_DOCUMENT_PARSE_STATUS_DOCUMENT_LIMIT: usize = 48;
+const ASSISTANT_RUN_DOCUMENT_PARSE_STATUS_ATTENTION_LIMIT: usize = 12;
 const ASSISTANT_RUN_CONVERSATION_MEMORY_DEFAULT_LIMIT: i64 = 4;
 const ASSISTANT_RUN_CONVERSATION_MEMORY_MAX_LIMIT: i64 = 8;
 const ASSISTANT_RUN_SCOPE_SUMMARY_DOC_LIMIT: usize = 24;
@@ -14753,6 +14755,18 @@ fn build_assistant_run_model_supply_brief(evidence_state: &Value) -> Option<Stri
         .and_then(|quality| quality.get("mediaContextCount"))
         .and_then(Value::as_u64)
         .unwrap_or(0);
+    let document_not_ready_count = supply_quality
+        .and_then(|quality| quality.get("documentNotReadyCount"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let document_failed_count = supply_quality
+        .and_then(|quality| quality.get("documentFailedCount"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let document_reparsing_count = supply_quality
+        .and_then(|quality| quality.get("documentReparsingCount"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
     let mut lines = vec![
         format!(
             "状态：{status}；可引用供料 {supplied_count} 条；建议细读目标 {detail_target_count} 个；兜底切片 {fallback_count} 条。"
@@ -14762,6 +14776,11 @@ fn build_assistant_run_model_supply_brief(evidence_state: &Value) -> Option<Stri
         ),
         "供料只作为可引用上下文；最终正文由模型自行组织。涉及供料里的数据、指标、文档事实或产物状态时不要编造；普通常识、解释和建议可以使用模型通用知识，并区分供料事实与通用判断。detail_targets 只代表建议细读目标，不是引用依据。".to_string(),
     ];
+    if document_not_ready_count > 0 {
+        lines.push(format!(
+            "文档解析状态：有 {document_not_ready_count} 份可见文档未完全就绪，其中失败 {document_failed_count} 份，重解析/重试中 {document_reparsing_count} 份；涉及这些文档时应说明解析状态，不要声称已经读到完整内容。"
+        ));
+    }
 
     if let Some(items) = evidence_state
         .get("supplied_items")
@@ -18749,6 +18768,16 @@ async fn build_assistant_run_evidence_state(
             "visibility": dataset.visibility.as_str(),
         }));
 
+        let parse_status_items = build_assistant_run_document_parse_status_supply(
+            state,
+            &dataset,
+            current_user_id,
+            external_acl_filter.as_ref(),
+            &selected_document_ids,
+        )
+        .await?;
+        supplied_items.extend(parse_status_items);
+
         if dataset_entity_scan_requested {
             let scan_items = build_assistant_run_dataset_entity_scan_supply(
                 state,
@@ -18915,6 +18944,397 @@ async fn build_assistant_run_evidence_state(
         "fallback_supply_count": fallback_supply_count,
         "fallback_supply_policy": if fallback_supply_count > 0 { "visible_document_chunks_when_retrieval_evidence_missing" } else { "not_used" },
         "limit": limit,
+    }))
+}
+
+async fn build_assistant_run_document_parse_status_supply(
+    state: &AppState,
+    dataset: &Dataset,
+    current_user_id: Option<UserId>,
+    external_acl_filter: Option<&ExternalAclFilterContext>,
+    selected_document_ids: &[DocumentId],
+) -> std::result::Result<Vec<Value>, ApiError> {
+    let candidate_documents = state
+        .storage
+        .documents()
+        .list_by_dataset(state.tenant_id, dataset.id)
+        .await
+        .map_err(ApiError::from_storage)?
+        .into_iter()
+        .filter(|document| owner_user_id_is_visible(document.owner_user_id, current_user_id))
+        .filter(|document| {
+            selected_document_ids.is_empty() || selected_document_ids.contains(&document.id)
+        })
+        .collect::<Vec<_>>();
+
+    if candidate_documents.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut documents = Vec::new();
+    let mut limited_by_document_limit = false;
+    for document in candidate_documents {
+        if documents.len() >= ASSISTANT_RUN_DOCUMENT_PARSE_STATUS_DOCUMENT_LIMIT {
+            limited_by_document_limit = true;
+            break;
+        }
+        if !document_is_visible_for_external_acl(state, external_acl_filter, &document).await? {
+            continue;
+        }
+        documents.push(document);
+    }
+
+    if documents.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let document_ids = documents
+        .iter()
+        .map(|document| document.id)
+        .collect::<Vec<_>>();
+    let workflow_by_document =
+        load_latest_upload_ingest_workflow_snapshots(state, dataset.id, &document_ids).await?;
+
+    let mut scanned_document_count = 0usize;
+    let mut status_counts = BTreeMap::<String, usize>::new();
+    let mut attention_documents = Vec::new();
+    let mut active_parse_count = 0usize;
+    let mut failed_document_count = 0usize;
+    let mut reparsing_document_count = 0usize;
+    let mut degraded_parse_count = 0usize;
+
+    for document in documents {
+        scanned_document_count += 1;
+
+        let chunks = state
+            .storage
+            .document_chunks()
+            .list_by_document(state.tenant_id, document.id)
+            .await
+            .map_err(ApiError::from_storage)?;
+        let parse_status = assistant_scope_document_parse_status(&document, &chunks);
+        let parse_quality_status = assistant_run_document_parse_quality_status(&document);
+        let workflow = workflow_by_document.get(&document.id);
+        let model_status = assistant_run_document_parse_model_status(
+            &document,
+            &parse_status,
+            chunks.len(),
+            parse_quality_status.as_deref(),
+            workflow,
+        );
+        *status_counts.entry(model_status.clone()).or_insert(0) += 1;
+
+        if assistant_run_document_parse_status_is_active(&model_status) {
+            active_parse_count += 1;
+        }
+        if model_status == "failed" {
+            failed_document_count += 1;
+        }
+        if model_status == "reparsing" || model_status == "reparse_queued" {
+            reparsing_document_count += 1;
+        }
+        if model_status == "parse_degraded" {
+            degraded_parse_count += 1;
+        }
+
+        if assistant_run_document_parse_status_needs_attention(&model_status) {
+            let mut item = json!({
+                "document_id": document.id,
+                "title": document.title.clone(),
+                "content_type": document.content_type.clone(),
+                "lifecycle": document.lifecycle.as_str(),
+                "parse_status": parse_status,
+                "model_status": model_status,
+                "chunk_count": chunks.len(),
+                "updated_at": document.updated_at,
+                "ingest": assistant_run_document_ingest_summary(&document),
+            });
+            if let Some(parse_quality_status) = parse_quality_status {
+                set_payload_string(&mut item, "parse_quality_status", &parse_quality_status);
+            }
+            if let Some(workflow) = workflow {
+                set_payload_value(&mut item, "workflow", workflow.clone());
+            }
+            if let Some(external_ref) = assistant_run_document_external_ref(&document) {
+                set_payload_value(&mut item, "external_document", external_ref);
+            }
+            attention_documents.push(item);
+        }
+    }
+
+    if scanned_document_count == 0
+        || (active_parse_count == 0 && failed_document_count == 0 && degraded_parse_count == 0)
+    {
+        return Ok(Vec::new());
+    }
+
+    let status_summary = assistant_scope_count_summary(&status_counts);
+    let summary = format!(
+        "文档解析状态：已扫描可见文档 {scanned_document_count} 份，状态分布 {status_summary}。未完成/失败/重解析中的文档仅代表资料暂不可完整引用；模型应据此说明解析状态，避免把未解析内容当作事实。"
+    );
+
+    Ok(vec![json!({
+        "type": "document_parse_status",
+        "source": "visible_document_ingest_state",
+        "dataset_id": dataset.id,
+        "summary": summary,
+        "score": 1.0,
+        "lexical_score": 1.0,
+        "recall_score": 1.0,
+        "scanned_document_count": scanned_document_count,
+        "status_summary": status_summary,
+        "status_counts": status_counts,
+        "active_parse_count": active_parse_count,
+        "failed_document_count": failed_document_count,
+        "reparsing_document_count": reparsing_document_count,
+        "degraded_parse_count": degraded_parse_count,
+        "not_ready_document_count": active_parse_count + failed_document_count + degraded_parse_count,
+        "attention_documents": attention_documents
+            .into_iter()
+            .take(ASSISTANT_RUN_DOCUMENT_PARSE_STATUS_ATTENTION_LIMIT)
+            .collect::<Vec<_>>(),
+        "model_guidance": [
+            "When a relevant document is parsing, queued, indexing, failed, reparsing, or parse_degraded, say the document content is not fully ready instead of guessing.",
+            "If reparsing or reparse_queued is present, explain that a retry is already underway or queued.",
+            "Use ready retrieval evidence and fallback chunks for facts; use this item for document availability/status only."
+        ],
+        "limits": {
+            "maxDocuments": ASSISTANT_RUN_DOCUMENT_PARSE_STATUS_DOCUMENT_LIMIT,
+            "maxAttentionDocuments": ASSISTANT_RUN_DOCUMENT_PARSE_STATUS_ATTENTION_LIMIT,
+            "limitedByDocumentLimit": limited_by_document_limit,
+        },
+    })])
+}
+
+async fn load_latest_upload_ingest_workflow_snapshots(
+    state: &AppState,
+    dataset_id: DatasetId,
+    document_ids: &[DocumentId],
+) -> std::result::Result<HashMap<DocumentId, Value>, ApiError> {
+    if document_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let document_id_strings = document_ids
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    let rows = sqlx::query(
+        r#"
+        select distinct on (e.context ->> 'document_id')
+               e.context ->> 'document_id' as document_id,
+               e.id as execution_id,
+               e.status,
+               e.stage,
+               e.attempt,
+               e.context,
+               e.created_at,
+               e.updated_at,
+               (
+                   select jsonb_build_object(
+                       'task_id', t.id,
+                       'queue', t.queue,
+                       'task_key', t.task_key,
+                       'status', t.status,
+                       'attempt', t.attempt,
+                       'max_attempts', t.max_attempts,
+                       'available_at', t.available_at,
+                       'claimed_at', t.claimed_at,
+                       'finished_at', t.finished_at,
+                       'error', t.error
+                   )
+                   from workflow_tasks t
+                   where t.execution_id = e.id
+                   order by t.updated_at desc, t.created_at desc
+                   limit 1
+               ) as latest_task
+        from workflow_executions e
+        where e.tenant_id = $1
+          and e.dataset_id = $2
+          and e.kind = $3
+          and e.context ? 'document_id'
+          and e.context ->> 'document_id' = any($4)
+        order by e.context ->> 'document_id', e.updated_at desc, e.created_at desc
+        "#,
+    )
+    .bind(state.tenant_id.0)
+    .bind(dataset_id.0)
+    .bind(WorkflowKind::UploadIngest.as_str())
+    .bind(&document_id_strings)
+    .fetch_all(state.storage.pool())
+    .await
+    .map_err(|error| ApiError::from_storage(anyhow::Error::new(error)))?;
+
+    let mut snapshots = HashMap::new();
+    for row in rows {
+        let Some(document_id) = row
+            .get::<Option<String>, _>("document_id")
+            .and_then(|raw| Uuid::parse_str(raw.trim()).ok().map(DocumentId))
+        else {
+            continue;
+        };
+        let context = row.get::<Value, _>("context");
+        let latest_task = row
+            .try_get::<Option<Value>, _>("latest_task")
+            .ok()
+            .flatten();
+        snapshots.insert(
+            document_id,
+            json!({
+                "execution_id": WorkflowExecutionId(row.get("execution_id")),
+                "status": row.get::<String, _>("status"),
+                "stage": row.get::<String, _>("stage"),
+                "attempt": row.get::<i32, _>("attempt"),
+                "retries_remaining": context.get("retries_remaining").cloned().unwrap_or(Value::Null),
+                "retry_reason": context.get("retry_reason").cloned().unwrap_or(Value::Null),
+                "last_error": context.get("last_error").cloned().unwrap_or(Value::Null),
+                "latest_task": latest_task,
+                "created_at": row.get::<DateTime<Utc>, _>("created_at"),
+                "updated_at": row.get::<DateTime<Utc>, _>("updated_at"),
+            }),
+        );
+    }
+    Ok(snapshots)
+}
+
+fn assistant_run_document_parse_model_status(
+    document: &Document,
+    parse_status: &str,
+    chunk_count: usize,
+    parse_quality_status: Option<&str>,
+    workflow: Option<&Value>,
+) -> String {
+    let workflow_status = workflow
+        .and_then(|value| value.get("status"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let workflow_stage = workflow
+        .and_then(|value| value.get("stage"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let workflow_active = matches!(workflow_status, "pending" | "running");
+
+    if workflow_active && document.lifecycle == DocumentLifecycle::Failed {
+        return if workflow_status == "pending" {
+            "reparse_queued".to_string()
+        } else {
+            "reparsing".to_string()
+        };
+    }
+    if workflow_active && workflow_stage == "index_retrieval_artifacts" {
+        return "indexing".to_string();
+    }
+    if workflow_active {
+        return if workflow_status == "pending" {
+            "queued".to_string()
+        } else {
+            "parsing".to_string()
+        };
+    }
+    if document.lifecycle == DocumentLifecycle::Failed || parse_status == "failed" {
+        return "failed".to_string();
+    }
+    if parse_quality_status
+        .map(|status| status.contains("low_text_coverage"))
+        .unwrap_or(false)
+    {
+        return "parse_degraded".to_string();
+    }
+    if document.lifecycle == DocumentLifecycle::Received {
+        return "received".to_string();
+    }
+    if document.lifecycle == DocumentLifecycle::Indexed {
+        return "ready".to_string();
+    }
+    if document.lifecycle == DocumentLifecycle::Extracted && chunk_count > 0 {
+        return "extracted_pending_index".to_string();
+    }
+    document.lifecycle.as_str().to_string()
+}
+
+fn assistant_run_document_parse_status_is_active(status: &str) -> bool {
+    matches!(
+        status,
+        "queued" | "parsing" | "indexing" | "reparsing" | "reparse_queued"
+    )
+}
+
+fn assistant_run_document_parse_status_needs_attention(status: &str) -> bool {
+    !matches!(status, "ready" | "extracted_pending_index" | "archived")
+}
+
+fn assistant_run_document_parse_quality_status(document: &Document) -> Option<String> {
+    document
+        .metadata
+        .get("ingest")
+        .and_then(|ingest| ingest.pointer("/parse_metadata/parse_quality/status"))
+        .or_else(|| {
+            document
+                .metadata
+                .get("ingest")
+                .and_then(|ingest| ingest.pointer("/parseMetadata/parseQuality/status"))
+        })
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn assistant_run_document_ingest_summary(document: &Document) -> Value {
+    let Some(ingest) = document
+        .metadata
+        .get("ingest")
+        .filter(|value| value.is_object())
+    else {
+        return Value::Null;
+    };
+    let mut summary = Map::new();
+    for key in [
+        "processor",
+        "parse_method",
+        "cloud_structured_provider",
+        "chunk_count",
+        "extracted_chars",
+        "failed_at",
+        "last_error",
+    ] {
+        if let Some(value) = ingest.get(key).cloned() {
+            summary.insert(key.to_string(), value);
+        }
+    }
+    if let Some(parse_quality_status) = assistant_run_document_parse_quality_status(document) {
+        summary.insert(
+            "parse_quality_status".to_string(),
+            json!(parse_quality_status),
+        );
+    }
+    Value::Object(summary)
+}
+
+fn assistant_run_document_external_ref(document: &Document) -> Option<Value> {
+    let external_source = document
+        .metadata
+        .get("external_source")
+        .or_else(|| document.metadata.get("externalSource"))?
+        .as_object()?;
+    let source_id = external_source
+        .get("source_id")
+        .or_else(|| external_source.get("sourceId"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    let document_external_id = external_source
+        .get("document_external_id")
+        .or_else(|| external_source.get("documentExternalId"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    Some(json!({
+        "source_id": source_id,
+        "document_external_id": document_external_id,
+        "revision_external_id": external_source
+            .get("revision_external_id")
+            .or_else(|| external_source.get("revisionExternalId"))
+            .and_then(Value::as_str),
     }))
 }
 
@@ -19433,13 +19853,44 @@ fn assistant_run_supply_quality_report(
         .iter()
         .filter(|item| item.get("type").and_then(Value::as_str) == Some("dataset_entity_scan"))
         .count();
+    let document_parse_status_count = supplied_items
+        .iter()
+        .filter(|item| item.get("type").and_then(Value::as_str) == Some("document_parse_status"))
+        .count();
+    let document_not_ready_count: usize = supplied_items
+        .iter()
+        .filter(|item| item.get("type").and_then(Value::as_str) == Some("document_parse_status"))
+        .filter_map(|item| item.get("not_ready_document_count").and_then(Value::as_u64))
+        .map(|value| value as usize)
+        .sum();
+    let document_failed_count: usize = supplied_items
+        .iter()
+        .filter(|item| item.get("type").and_then(Value::as_str) == Some("document_parse_status"))
+        .filter_map(|item| item.get("failed_document_count").and_then(Value::as_u64))
+        .map(|value| value as usize)
+        .sum();
+    let document_reparsing_count: usize = supplied_items
+        .iter()
+        .filter(|item| item.get("type").and_then(Value::as_str) == Some("document_parse_status"))
+        .filter_map(|item| item.get("reparsing_document_count").and_then(Value::as_u64))
+        .map(|value| value as usize)
+        .sum();
+    let document_degraded_parse_count: usize = supplied_items
+        .iter()
+        .filter(|item| item.get("type").and_then(Value::as_str) == Some("document_parse_status"))
+        .filter_map(|item| item.get("degraded_parse_count").and_then(Value::as_u64))
+        .map(|value| value as usize)
+        .sum();
     let citation_locators = assistant_run_supply_citation_locators(supplied_items, 8);
     let prefer_detail = assistant_run_scope_prefers_detail(selected_scope);
     let status = if !supply_requested {
         "not_requested"
     } else if supplied_item_count == 0 {
         "missing"
-    } else if fallback_supply_count > 0 || (prefer_detail && !detail_targets.is_empty()) {
+    } else if document_not_ready_count > 0
+        || fallback_supply_count > 0
+        || (prefer_detail && !detail_targets.is_empty())
+    {
         "partial"
     } else {
         "grounded"
@@ -19459,6 +19910,21 @@ fn assistant_run_supply_quality_report(
     }
     if dataset_entity_scan_count > 0 {
         notes.push("dataset_entity_scan_available");
+    }
+    if document_parse_status_count > 0 {
+        notes.push("document_parse_status_available");
+    }
+    if document_not_ready_count > 0 {
+        notes.push("some_documents_not_ready_or_reparsing");
+    }
+    if document_failed_count > 0 {
+        notes.push("some_documents_failed_parse");
+    }
+    if document_reparsing_count > 0 {
+        notes.push("document_reparse_in_progress");
+    }
+    if document_degraded_parse_count > 0 {
+        notes.push("some_documents_parse_degraded");
     }
     if media_context_count > 0 {
         notes.push("media_context_available_with_timestamps_when_present");
@@ -19483,6 +19949,11 @@ fn assistant_run_supply_quality_report(
         "conversationMemoryItemCount": supplied_memory_items.len(),
         "mediaContextCount": media_context_count,
         "datasetEntityScanCount": dataset_entity_scan_count,
+        "documentParseStatusCount": document_parse_status_count,
+        "documentNotReadyCount": document_not_ready_count,
+        "documentFailedCount": document_failed_count,
+        "documentReparsingCount": document_reparsing_count,
+        "documentDegradedParseCount": document_degraded_parse_count,
         "detailTargetCount": detail_targets.len(),
         "limit": limit,
         "citationLocatorCount": citation_locators.len(),
@@ -19491,6 +19962,7 @@ fn assistant_run_supply_quality_report(
         "modelGuidance": [
             "treat supplied_items as citable context, not an answer template",
             "distinguish supplied document facts from general model knowledge",
+            "when document_parse_status reports not-ready, failed, reparsing, or degraded documents, tell the user the relevant document is still parsing or failed instead of claiming its contents",
             "read detail_targets before asserting exact source wording, tables, OCR, or media timestamps"
         ],
     })
@@ -41833,6 +42305,54 @@ mod tests {
     }
 
     #[test]
+    fn assistant_run_provider_input_mentions_document_parse_status_supply() {
+        let dataset_id = DatasetId::new();
+        let evidence_state = json!({
+            "status": "supplied",
+            "fallback_supply_count": 0,
+            "supply_quality": {
+                "status": "partial",
+                "citationLocatorCount": 0,
+                "mediaContextCount": 0,
+                "documentNotReadyCount": 2,
+                "documentFailedCount": 1,
+                "documentReparsingCount": 1
+            },
+            "supplied_items": [{
+                "type": "document_parse_status",
+                "source": "visible_document_ingest_state",
+                "dataset_id": dataset_id,
+                "summary": "文档解析状态：已扫描可见文档 2 份，状态分布 failed=1, reparsing=1。",
+                "not_ready_document_count": 2,
+                "failed_document_count": 1,
+                "reparsing_document_count": 1
+            }],
+            "detail_targets": []
+        });
+        let input = build_assistant_run_provider_input_with_evidence(
+            &CreateAssistantRunRequest {
+                prompt: "刚传的 PDF 能正常用了吗？".to_string(),
+                local_thread_id: Some("document-parse-status-thread".to_string()),
+                startup_briefing: None,
+                selected_scope: Some(json!({
+                    "mode": "user_selected",
+                    "datasets": [dataset_id],
+                })),
+                scope_candidates: Vec::new(),
+                context_policy_hint: None,
+                current_artifact: None,
+                messages: Vec::new(),
+            },
+            Some(&evidence_state),
+        );
+
+        assert!(input.contains("文档解析状态：有 2 份可见文档未完全就绪"));
+        assert!(input.contains("失败 1 份，重解析/重试中 1 份"));
+        assert!(input.contains("document_parse_status/visible_document_ingest_state"));
+        assert!(input.contains("不要声称已经读到完整内容"));
+    }
+
+    #[test]
     fn assistant_run_provider_input_keeps_plain_ordinary_chat_unrestricted() {
         let input = build_assistant_run_provider_input_with_evidence(
             &CreateAssistantRunRequest {
@@ -48698,6 +49218,291 @@ mod tests {
             .contains("已有可见供料时，正式模型回答会优先参考供料"));
         assert!(!response.assistant_message.content.contains("供料状态:"));
         assert!(!response.assistant_message.content.contains("Prompt:"));
+    }
+
+    #[tokio::test]
+    async fn assistant_run_supplies_document_parse_status_for_failed_and_reparsing_documents() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_MODE", "placeholder");
+        std::env::remove_var("ASSISTANT_RUN_EVIDENCE_LIMIT");
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping assistant run document parse status test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("assistant-parse-status-test-{}", Uuid::new_v4()),
+                "Assistant Parse Status Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage,
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        let dataset = state
+            .storage
+            .datasets()
+            .create(
+                state.tenant_id,
+                NewDataset {
+                    key: format!("parse-status-{}", Uuid::new_v4()),
+                    title: "Parse status dataset".to_string(),
+                    description: Some("Documents with async parse states.".to_string()),
+                    owner_user_id: None,
+                },
+            )
+            .await
+            .expect("dataset should be created");
+
+        let failed_document = state
+            .storage
+            .documents()
+            .create(
+                state.tenant_id,
+                NewDocument {
+                    dataset_id: dataset.id,
+                    title: "Customer one-character PDF".to_string(),
+                    object_key: "documents/one-character.pdf".to_string(),
+                    content_type: "application/pdf".to_string(),
+                    secret_binding_ids: Vec::new(),
+                    owner_user_id: None,
+                    metadata: json!({
+                        "external_source": {
+                            "source_id": "third-party-source",
+                            "document_external_id": "customer-pdf-1"
+                        }
+                    }),
+                },
+            )
+            .await
+            .expect("failed document should be created");
+        let failed_document = state
+            .storage
+            .documents()
+            .update_state(
+                state.tenant_id,
+                failed_document.id,
+                DocumentLifecycle::Failed,
+                None,
+                &json!({
+                    "parse_status": "failed",
+                    "ingest": {
+                        "last_error": "only one text character extracted",
+                        "failed_at": Utc::now()
+                    }
+                }),
+                Utc::now(),
+            )
+            .await
+            .expect("failed document should be marked failed");
+
+        let reparsing_document = state
+            .storage
+            .documents()
+            .create(
+                state.tenant_id,
+                NewDocument {
+                    dataset_id: dataset.id,
+                    title: "Retrying resume PDF".to_string(),
+                    object_key: "documents/retrying-resume.pdf".to_string(),
+                    content_type: "application/pdf".to_string(),
+                    secret_binding_ids: Vec::new(),
+                    owner_user_id: None,
+                    metadata: json!({
+                        "external_source": {
+                            "source_id": "third-party-source",
+                            "document_external_id": "resume-pdf-2"
+                        }
+                    }),
+                },
+            )
+            .await
+            .expect("reparsing document should be created");
+        let reparsing_document = state
+            .storage
+            .documents()
+            .update_state(
+                state.tenant_id,
+                reparsing_document.id,
+                DocumentLifecycle::Failed,
+                None,
+                &json!({
+                    "parse_status": "failed",
+                    "ingest": {
+                        "last_error": "ocr timeout before retry",
+                        "failed_at": Utc::now()
+                    }
+                }),
+                Utc::now(),
+            )
+            .await
+            .expect("reparsing document should be marked failed first");
+        let execution = build_initial_upload_ingest_execution(&state, &reparsing_document)
+            .expect("upload ingest execution should build");
+        let initial_event = build_initial_upload_ingest_event(&execution, &reparsing_document);
+        state
+            .storage
+            .workflow_executions()
+            .create_with_initial_event(&execution, &initial_event)
+            .await
+            .expect("workflow execution should be created");
+        let started = apply_workflow_signal(&state, execution.id, WorkflowSignal::Start)
+            .await
+            .expect("reparse workflow should start");
+        assert_eq!(started.execution.status, WorkflowStatus::Running);
+
+        let degraded_document = state
+            .storage
+            .documents()
+            .create(
+                state.tenant_id,
+                NewDocument {
+                    dataset_id: dataset.id,
+                    title: "Low coverage PDF".to_string(),
+                    object_key: "documents/low-coverage.pdf".to_string(),
+                    content_type: "application/pdf".to_string(),
+                    secret_binding_ids: Vec::new(),
+                    owner_user_id: None,
+                    metadata: json!({
+                        "ingest": {
+                            "parse_metadata": {
+                                "parse_quality": {
+                                    "status": "low_text_coverage_fallback_unavailable"
+                                }
+                            }
+                        }
+                    }),
+                },
+            )
+            .await
+            .expect("degraded document should be created");
+        state
+            .storage
+            .documents()
+            .update_state(
+                state.tenant_id,
+                degraded_document.id,
+                DocumentLifecycle::Extracted,
+                None,
+                &json!({}),
+                Utc::now(),
+            )
+            .await
+            .expect("degraded document should be marked extracted");
+
+        let evidence_state = build_assistant_run_evidence_state(
+            &state,
+            &json!({
+                "mode": "user_selected",
+                "datasets": [dataset.id],
+            }),
+            "这几份文档现在能正常用了吗？",
+            None,
+            &[],
+            None,
+        )
+        .await
+        .expect("evidence state should build");
+
+        assert_eq!(evidence_state["status"], json!("supplied"));
+        assert_eq!(evidence_state["supply_quality"]["status"], json!("partial"));
+        assert_eq!(
+            evidence_state["supply_quality"]["documentParseStatusCount"],
+            json!(1)
+        );
+        assert_eq!(
+            evidence_state["supply_quality"]["documentFailedCount"],
+            json!(1)
+        );
+        assert_eq!(
+            evidence_state["supply_quality"]["documentReparsingCount"],
+            json!(1)
+        );
+        assert_eq!(
+            evidence_state["supply_quality"]["documentDegradedParseCount"],
+            json!(1)
+        );
+        assert_eq!(
+            evidence_state["supply_quality"]["documentNotReadyCount"],
+            json!(3)
+        );
+        let notes = evidence_state["supply_quality"]["notes"]
+            .as_array()
+            .expect("notes should be present");
+        assert!(notes
+            .iter()
+            .any(|note| note.as_str() == Some("document_parse_status_available")));
+        assert!(notes
+            .iter()
+            .any(|note| note.as_str() == Some("document_reparse_in_progress")));
+        assert!(notes
+            .iter()
+            .any(|note| note.as_str() == Some("some_documents_failed_parse")));
+        assert!(notes
+            .iter()
+            .any(|note| note.as_str() == Some("some_documents_parse_degraded")));
+
+        let parse_status_item = evidence_state["supplied_items"]
+            .as_array()
+            .expect("supplied items should be present")
+            .iter()
+            .find(|item| item.get("type").and_then(Value::as_str) == Some("document_parse_status"))
+            .expect("document parse status item should be supplied");
+        assert_eq!(parse_status_item["failed_document_count"], json!(1));
+        assert_eq!(parse_status_item["reparsing_document_count"], json!(1));
+        assert_eq!(parse_status_item["degraded_parse_count"], json!(1));
+        assert!(parse_status_item["summary"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("模型应据此说明解析状态"));
+        let attention_statuses = parse_status_item["attention_documents"]
+            .as_array()
+            .expect("attention documents should be present")
+            .iter()
+            .filter_map(|item| item.get("model_status").and_then(Value::as_str))
+            .collect::<BTreeSet<_>>();
+        assert!(attention_statuses.contains("failed"));
+        assert!(attention_statuses.contains("reparsing"));
+        assert!(attention_statuses.contains("parse_degraded"));
+        let external_ids = parse_status_item["attention_documents"]
+            .as_array()
+            .expect("attention documents should be present")
+            .iter()
+            .filter_map(|item| {
+                item.pointer("/external_document/document_external_id")
+                    .and_then(Value::as_str)
+            })
+            .collect::<BTreeSet<_>>();
+        assert!(external_ids.contains("customer-pdf-1"));
+        assert!(external_ids.contains("resume-pdf-2"));
+        let provider_input = build_assistant_run_provider_input_with_evidence(
+            &CreateAssistantRunRequest {
+                prompt: "这几份文档现在能正常用了吗？".to_string(),
+                local_thread_id: Some("assistant-parse-status-thread".to_string()),
+                startup_briefing: None,
+                selected_scope: Some(json!({
+                    "mode": "user_selected",
+                    "datasets": [dataset.id],
+                })),
+                scope_candidates: Vec::new(),
+                context_policy_hint: None,
+                current_artifact: None,
+                messages: Vec::new(),
+            },
+            Some(&evidence_state),
+        );
+        assert!(provider_input.contains("文档解析状态：有 3 份可见文档未完全就绪"));
+        assert!(provider_input.contains("不要声称已经读到完整内容"));
+
+        assert_eq!(failed_document.lifecycle, DocumentLifecycle::Failed);
     }
 
     #[tokio::test]
