@@ -639,33 +639,35 @@ fn is_video_extension(extension: &str) -> bool {
 }
 
 fn extract_pdf_text(path: &Path) -> Option<ExtractedDocumentText> {
-    let mut low_quality_candidate = None;
+    let mut usable_candidates = Vec::new();
+    let mut low_quality_candidates = Vec::new();
     if let Some(extracted) = extract_pdf_with_paddleocr(path) {
-        match pdf_parse_quality(&extracted.text) {
-            PdfParseQuality::Usable { text_chars } => {
-                return Some(with_pdf_parse_quality_metadata(
-                    extracted,
-                    "usable_text",
-                    text_chars,
-                    None,
-                ));
-            }
-            PdfParseQuality::LowTextCoverage { text_chars } => {
-                low_quality_candidate.get_or_insert_with(|| {
-                    with_pdf_parse_quality_metadata(
-                        extracted,
-                        "low_text_coverage",
-                        text_chars,
-                        None,
-                    )
-                });
-            }
-        }
+        classify_pdf_candidate(
+            extracted,
+            &mut usable_candidates,
+            &mut low_quality_candidates,
+        );
     }
 
     for extracted in [
         extract_pdf_with_pdftotext(path).map(|text| extracted_text(text, "pdf-pdftotext")),
         extract_pdf_with_python(path).map(|text| extracted_text(text, "pdf-python")),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        classify_pdf_candidate(
+            extracted,
+            &mut usable_candidates,
+            &mut low_quality_candidates,
+        );
+    }
+
+    if let Some(selected) = select_pdf_usable_candidate(&mut usable_candidates) {
+        return Some(selected);
+    }
+
+    for extracted in [
         extract_pdf_with_ocrmypdf(path).map(|text| extracted_text(text, "pdf-ocrmypdf")),
         extract_pdf_with_tesseract_render(path)
             .map(|text| extracted_text(text, "pdf-tesseract-render")),
@@ -673,28 +675,17 @@ fn extract_pdf_text(path: &Path) -> Option<ExtractedDocumentText> {
     .into_iter()
     .flatten()
     {
-        match pdf_parse_quality(&extracted.text) {
-            PdfParseQuality::Usable { text_chars } => {
-                return Some(with_pdf_parse_quality_metadata(
-                    extracted,
-                    "usable_text",
-                    text_chars,
-                    None,
-                ));
-            }
-            PdfParseQuality::LowTextCoverage { text_chars } => {
-                low_quality_candidate.get_or_insert_with(|| {
-                    with_pdf_parse_quality_metadata(
-                        extracted,
-                        "low_text_coverage",
-                        text_chars,
-                        None,
-                    )
-                });
-            }
+        classify_pdf_candidate(
+            extracted,
+            &mut usable_candidates,
+            &mut low_quality_candidates,
+        );
+        if let Some(selected) = select_pdf_usable_candidate(&mut usable_candidates) {
+            return Some(selected);
         }
     }
 
+    let low_quality_candidate = select_pdf_low_quality_candidate(low_quality_candidates);
     let low_quality_ocr = low_quality_candidate
         .as_ref()
         .map(|candidate| candidate.text.as_str());
@@ -721,14 +712,93 @@ fn extract_pdf_text(path: &Path) -> Option<ExtractedDocumentText> {
                 ));
             }
             PdfParseQuality::LowTextCoverage { text_chars } => {
-                low_quality_candidate.get_or_insert_with(|| {
-                    with_pdf_parse_quality_metadata(literal, "low_text_coverage", text_chars, None)
-                });
+                let literal =
+                    with_pdf_parse_quality_metadata(literal, "low_text_coverage", text_chars, None);
+                let low_quality_candidate = match low_quality_candidate {
+                    Some(candidate) => {
+                        Some(select_better_pdf_low_quality_candidate(candidate, literal))
+                    }
+                    None => Some(literal),
+                };
+                return low_quality_candidate.map(pdf_low_quality_diagnostic_text);
             }
         }
     }
 
     low_quality_candidate.map(pdf_low_quality_diagnostic_text)
+}
+
+fn classify_pdf_candidate(
+    extracted: ExtractedDocumentText,
+    usable_candidates: &mut Vec<ExtractedDocumentText>,
+    low_quality_candidates: &mut Vec<ExtractedDocumentText>,
+) {
+    match pdf_parse_quality(&extracted.text) {
+        PdfParseQuality::Usable { text_chars } => {
+            usable_candidates.push(with_pdf_parse_quality_metadata(
+                extracted,
+                "usable_text",
+                text_chars,
+                None,
+            ));
+        }
+        PdfParseQuality::LowTextCoverage { text_chars } => {
+            low_quality_candidates.push(with_pdf_parse_quality_metadata(
+                extracted,
+                "low_text_coverage",
+                text_chars,
+                None,
+            ));
+        }
+    }
+}
+
+fn select_pdf_usable_candidate(
+    candidates: &mut Vec<ExtractedDocumentText>,
+) -> Option<ExtractedDocumentText> {
+    if candidates.is_empty() {
+        return None;
+    }
+    let reports = candidates
+        .iter()
+        .map(pdf_candidate_quality_report)
+        .collect::<Vec<_>>();
+    let (selected_index, _) = candidates
+        .iter()
+        .enumerate()
+        .max_by_key(|(_, candidate)| pdf_candidate_quality_score(candidate))?;
+    let mut selected = candidates.remove(selected_index);
+    let selected_report = pdf_candidate_quality_report(&selected);
+    merge_parse_quality_field(
+        &mut selected.metadata,
+        "candidate_selection",
+        json!({
+            "policy": "score_text_structure_and_layout",
+            "selected_method": selected.method.clone(),
+            "selected": selected_report,
+            "candidates": reports,
+        }),
+    );
+    Some(selected)
+}
+
+fn select_pdf_low_quality_candidate(
+    candidates: Vec<ExtractedDocumentText>,
+) -> Option<ExtractedDocumentText> {
+    candidates
+        .into_iter()
+        .max_by_key(pdf_low_quality_candidate_score)
+}
+
+fn select_better_pdf_low_quality_candidate(
+    left: ExtractedDocumentText,
+    right: ExtractedDocumentText,
+) -> ExtractedDocumentText {
+    if pdf_low_quality_candidate_score(&right) > pdf_low_quality_candidate_score(&left) {
+        right
+    } else {
+        left
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -768,7 +838,7 @@ fn with_pdf_parse_quality_metadata(
 ) -> ExtractedDocumentText {
     let fallback_from = fallback_from.map(|candidate| {
         json!({
-            "method": candidate.method,
+            "method": candidate.method.clone(),
             "text_chars": pdf_quality_text_chars(&candidate.text),
         })
     });
@@ -784,6 +854,102 @@ fn with_pdf_parse_quality_metadata(
         }),
     );
     extracted
+}
+
+fn merge_parse_quality_field(target: &mut Value, key: &str, value: Value) {
+    if let Some(parse_quality) = target
+        .get_mut("parse_quality")
+        .and_then(Value::as_object_mut)
+    {
+        parse_quality.insert(key.to_string(), value);
+    }
+}
+
+fn pdf_candidate_quality_report(extracted: &ExtractedDocumentText) -> Value {
+    let text_chars = pdf_quality_text_chars(&extracted.text);
+    let structure_block_count = pdf_candidate_structure_block_count(extracted);
+    let heading_count = pdf_candidate_heading_count(&extracted.text);
+    let table_signal_count = pdf_candidate_table_signal_count(&extracted.text);
+    json!({
+        "method": extracted.method.clone(),
+        "text_chars": text_chars,
+        "structure_block_count": structure_block_count,
+        "heading_count": heading_count,
+        "table_signal_count": table_signal_count,
+        "quality_score": pdf_candidate_quality_score(extracted),
+    })
+}
+
+fn pdf_candidate_quality_score(extracted: &ExtractedDocumentText) -> usize {
+    let text_chars = pdf_quality_text_chars(&extracted.text).min(50_000);
+    let structure_block_count = pdf_candidate_structure_block_count(extracted).min(200);
+    let heading_count = pdf_candidate_heading_count(&extracted.text).min(50);
+    let table_signal_count = pdf_candidate_table_signal_count(&extracted.text).min(50);
+    let method_bonus = if extracted.method.contains("paddleocr") {
+        80
+    } else if extracted.method.contains("pdftotext") {
+        20
+    } else if extracted.method.contains("python") {
+        15
+    } else {
+        0
+    };
+
+    text_chars
+        + structure_block_count * 8
+        + heading_count * 40
+        + table_signal_count * 20
+        + method_bonus
+}
+
+fn pdf_low_quality_candidate_score(extracted: &ExtractedDocumentText) -> usize {
+    pdf_quality_text_chars(&extracted.text)
+        + pdf_candidate_structure_block_count(extracted).min(50) * 2
+        + pdf_candidate_heading_count(&extracted.text).min(10) * 5
+        + pdf_candidate_table_signal_count(&extracted.text).min(10) * 5
+}
+
+fn pdf_candidate_structure_block_count(extracted: &ExtractedDocumentText) -> usize {
+    extracted
+        .metadata
+        .get("document_structure")
+        .and_then(|value| value.get("block_count"))
+        .and_then(Value::as_u64)
+        .and_then(|value| usize::try_from(value).ok())
+        .unwrap_or(0)
+}
+
+fn pdf_candidate_heading_count(text: &str) -> usize {
+    text.lines()
+        .filter(|line| {
+            let trimmed = line.trim();
+            trimmed.starts_with('#')
+                || trimmed.ends_with(':')
+                || trimmed.ends_with('：')
+                || looks_like_numbered_heading(trimmed)
+        })
+        .count()
+}
+
+fn looks_like_numbered_heading(value: &str) -> bool {
+    let mut chars = value.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !first.is_ascii_digit() {
+        return false;
+    }
+    let prefix = chars.take(5).collect::<String>();
+    prefix.contains('.') || prefix.contains('、') || prefix.contains(')')
+}
+
+fn pdf_candidate_table_signal_count(text: &str) -> usize {
+    text.lines()
+        .filter(|line| {
+            let trimmed = line.trim();
+            trimmed.matches('|').count() >= 2 || trimmed.contains('\t')
+        })
+        .count()
 }
 
 fn pdf_low_quality_diagnostic_text(mut extracted: ExtractedDocumentText) -> ExtractedDocumentText {
@@ -2820,6 +2986,113 @@ trailer << /Root 1 0 R >>
                 json!("low_text_coverage_fallback_unavailable")
             );
             assert_eq!(diagnostic.metadata["parse_quality"]["text_chars"], json!(1));
+        });
+    }
+
+    #[test]
+    fn pdf_candidate_selection_prefers_structured_paddleocr_when_text_is_similar() {
+        with_env_var("DOCUMENT_PDF_MIN_USABLE_TEXT_CHARS", Some("32"), || {
+            let native_text = "Plain resume text ".repeat(12);
+            let paddle_text =
+                "# 工作经历\n\n广东高明中港城商业管理有限公司\n\n| 时间 | 公司 |\n| --- | --- |\n";
+            let mut usable = Vec::new();
+            let mut low_quality = Vec::new();
+            classify_pdf_candidate(
+                extracted_text(native_text, "pdf-pdftotext"),
+                &mut usable,
+                &mut low_quality,
+            );
+            classify_pdf_candidate(
+                ExtractedDocumentText {
+                    text: paddle_text.to_string(),
+                    method: "pdf-paddleocr".to_string(),
+                    metadata: json!({
+                        "document_structure": {
+                            "source": "paddleocr_pp_structure_v3",
+                            "block_count": 8,
+                        }
+                    }),
+                },
+                &mut usable,
+                &mut low_quality,
+            );
+
+            let selected =
+                select_pdf_usable_candidate(&mut usable).expect("usable candidate should select");
+
+            assert_eq!(selected.method, "pdf-paddleocr");
+            assert_eq!(
+                selected.metadata["parse_quality"]["candidate_selection"]["selected_method"],
+                json!("pdf-paddleocr")
+            );
+            assert_eq!(
+                selected.metadata["parse_quality"]["candidate_selection"]["candidates"]
+                    .as_array()
+                    .map(Vec::len),
+                Some(2)
+            );
+        });
+    }
+
+    #[test]
+    fn pdf_candidate_selection_prefers_much_longer_native_text() {
+        with_env_var("DOCUMENT_PDF_MIN_USABLE_TEXT_CHARS", Some("32"), || {
+            let mut usable = Vec::new();
+            let mut low_quality = Vec::new();
+            classify_pdf_candidate(
+                ExtractedDocumentText {
+                    text: format!("# 简历\n\n{}", "短文本".repeat(12)),
+                    method: "pdf-paddleocr".to_string(),
+                    metadata: json!({
+                        "document_structure": {
+                            "source": "paddleocr_pp_structure_v3",
+                            "block_count": 5,
+                        }
+                    }),
+                },
+                &mut usable,
+                &mut low_quality,
+            );
+            classify_pdf_candidate(
+                extracted_text(
+                    "Full native text with work history and company names. ".repeat(30),
+                    "pdf-pdftotext",
+                ),
+                &mut usable,
+                &mut low_quality,
+            );
+
+            let selected =
+                select_pdf_usable_candidate(&mut usable).expect("usable candidate should select");
+
+            assert_eq!(selected.method, "pdf-pdftotext");
+            assert_eq!(
+                selected.metadata["parse_quality"]["candidate_selection"]["selected_method"],
+                json!("pdf-pdftotext")
+            );
+        });
+    }
+
+    #[test]
+    fn pdf_low_quality_candidate_selection_keeps_best_diagnostic_source() {
+        with_env_var("DOCUMENT_PDF_MIN_USABLE_TEXT_CHARS", Some("32"), || {
+            let first = with_pdf_parse_quality_metadata(
+                extracted_text("字", "pdf-paddleocr"),
+                "low_text_coverage",
+                1,
+                None,
+            );
+            let second = with_pdf_parse_quality_metadata(
+                extracted_text("短文本但比单字更多", "pdf-python"),
+                "low_text_coverage",
+                8,
+                None,
+            );
+
+            let selected = select_pdf_low_quality_candidate(vec![first, second])
+                .expect("low quality candidate should select");
+
+            assert_eq!(selected.method, "pdf-python");
         });
     }
 

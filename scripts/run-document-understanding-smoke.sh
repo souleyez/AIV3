@@ -56,6 +56,8 @@ run_check "one-character PDF extraction is low quality" \
   "${cargo_bin}" test -p ingest-worker pdf_parse_quality_marks_one_character_extract_as_low_coverage --lib
 run_check "low-quality PDF diagnostic blocks single-character success" \
   "${cargo_bin}" test -p ingest-worker pdf_low_quality_diagnostic_does_not_treat_single_character_as_content --lib
+run_check "PDF parser candidate selection scores structure and coverage" \
+  "${cargo_bin}" test -p ingest-worker pdf_candidate_selection --lib
 run_check "ingest outcomes expose model-visible parse status" \
   "${cargo_bin}" test -p ingest-worker ingest_outcome_derives_model_visible_parse_status --lib
 run_check "low-quality ingest auto reparse is requeued" \
@@ -111,6 +113,7 @@ const report = {
   runtime_gate_requested: /^(true|1|yes|on)$/i.test(process.env.SMOKE_RUNTIME_GATE || ""),
   contract: {
     parser_quality: "PaddleOCR parsing, low-quality PDF detection, and diagnostic fallback must not treat one-character extraction as usable content.",
+    candidate_selection: "PDF parser candidates should be selected by text coverage plus structure/layout signals instead of returning the first minimally usable parser output.",
     ingest_parse_status: "Ingest outcomes should persist model-visible parse status values such as parsed, parse_degraded, and parsed_with_vlm_fallback.",
     auto_reparse: "Low-quality ingest should fail the current task, persist auto_reparse metadata, and requeue the upload workflow instead of completing as usable content.",
     external_parse_compatibility: "Third-party Java/camelCase parse payloads and parse-detail summary fields remain compatible, including parseStatus/modelStatus/workflow state.",
@@ -139,6 +142,7 @@ const lines = [
   "## Contract",
   "",
   `- Parser quality: ${report.contract.parser_quality}`,
+  `- Candidate selection: ${report.contract.candidate_selection}`,
   `- Ingest parse status: ${report.contract.ingest_parse_status}`,
   `- Auto reparse: ${report.contract.auto_reparse}`,
   `- External parse compatibility: ${report.contract.external_parse_compatibility}`,
