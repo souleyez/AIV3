@@ -12,6 +12,7 @@ import {
   dataQualitySummaryFromManifest,
   downloadStaticPageExportZip,
   downloadTextArtifact,
+  downloadUrlArtifact,
   hasDataQualitySummary,
   staticPageHtmlFilename,
 } from '../lib/static-page-export-package';
@@ -147,6 +148,10 @@ function staticPageIsPreviewStale(draft) {
 }
 
 function downloadStaticPageHtmlFromShelf(draft) {
+  const downloadHref = draft?.finalPage?.htmlDownloadUrl || draft?.finalPage?.html_download_url || '';
+  if (downloadHref && downloadUrlArtifact({ href: downloadHref })) {
+    return;
+  }
   const html = buildStaticPageStandaloneHtml(draft, draft?.finalPage?.html || '');
   if (!html) return;
   downloadTextArtifact({
@@ -825,6 +830,12 @@ function GeneratedProjectCard({
           ) : null}
           {stage.key === 'static' ? (
             <>
+              <button type="button" className="ghost-btn compact-action-btn" disabled={!exportable} onClick={() => downloadStaticPageHtmlFromShelf(draft)}>
+                HTML
+              </button>
+              <button type="button" className="ghost-btn compact-action-btn" disabled={!exportable} onClick={() => downloadStaticPagePackageFromShelf(draft)}>
+                ZIP
+              </button>
               <button type="button" className="ghost-btn compact-action-btn" disabled={!exportable} onClick={() => downloadStaticPagePpt(draft)}>
                 导出PPT
               </button>

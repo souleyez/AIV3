@@ -1877,6 +1877,28 @@ pub struct DatasetSummary {
     pub lifecycle: DatasetLifecycle,
     pub visibility: DatasetVisibility,
     pub secret_binding_ids: Vec<SecretBindingId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub document_count: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub documents_count: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub estimated_word_count: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parse_status_summary: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_type_summary: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latest_upload: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub document_title_hints: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub material_hints: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub noun_term_hints: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub section_title_hints: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub document_understanding_strategies: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub access_warning: Option<String>,
 }

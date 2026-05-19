@@ -1137,6 +1137,7 @@ export default function HomePageClient() {
         imageJobId: renderOutput.image_job_id || draft.finalPage?.imageJobId || null,
         assetManifest: renderOutput.asset_manifest || draft.finalPage?.assetManifest || {},
         html: renderOutput.html || draft.finalPage?.html || '',
+        htmlDownloadUrl: renderOutput.html_download_url || renderOutput.htmlDownloadUrl || draft.finalPage?.htmlDownloadUrl || '',
         directHtml: Boolean(draft.finalPage?.directHtml || renderOutput.asset_manifest?.directHtml || renderOutput.asset_manifest?.direct_html),
       },
     };
@@ -1508,6 +1509,7 @@ export default function HomePageClient() {
         imageJobId: directHtml ? null : renderOutput?.image_job_id || imageJobId || null,
         assetManifest: renderOutput?.asset_manifest || {},
         html: renderOutput?.html || '',
+        htmlDownloadUrl: renderOutput?.html_download_url || renderOutput?.htmlDownloadUrl || '',
         directHtml,
       },
     });

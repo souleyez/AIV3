@@ -74,6 +74,28 @@ test('scope planner preselects visible dataset from document title hints', () =>
   assert.equal(plan.supplyStrategy.retrievalPolicy, 'standard');
 });
 
+test('scope planner preselects visible dataset from document understanding hints', () => {
+  const plan = planAssistantScope({
+    prompt: '查找供应商确认这个主题在哪个库里',
+    datasets: [
+      {
+        id: 'dataset-contracts',
+        key: 'contracts',
+        title: '合同资料',
+        lifecycle: 'active',
+        noun_term_hints: ['订单延期风险', '供应商确认'],
+        section_title_hints: ['履约概览'],
+        document_count: 3,
+      },
+    ],
+  });
+
+  assert.equal(selectPlannerDatasetId(plan), 'dataset-contracts');
+  assert.equal(plan.candidates[0].source, 'scope_planner');
+  assert.deepEqual(plan.candidates[0].nounTermHints, ['订单延期风险', '供应商确认']);
+  assert.deepEqual(plan.candidates[0].sectionTitleHints, ['履约概览']);
+});
+
 test('scope planner preselects visible dataset from visible document titles', () => {
   const plan = planAssistantScope({
     prompt: '固定资产怎么操作',

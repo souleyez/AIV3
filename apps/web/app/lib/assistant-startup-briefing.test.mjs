@@ -14,6 +14,8 @@ test('startup briefing summarizes visible datasets and system capability', () =>
         estimated_word_count: 1200,
         parse_status_summary: 'completed:3',
         materialHints: ['tabular'],
+        noun_term_hints: ['延期风险', '供应商确认'],
+        section_title_hints: ['履约概览'],
         updated_at: '2026-04-26T10:00:00.000Z',
       },
       {
@@ -42,6 +44,8 @@ test('startup briefing summarizes visible datasets and system capability', () =>
   assert.equal(briefing.datasetBriefs.length, 2);
   assert.equal(briefing.datasetBriefs[0].parseStatusSummary, 'completed:3');
   assert.deepEqual(briefing.datasetBriefs[0].materialHints, ['tabular']);
+  assert.deepEqual(briefing.datasetBriefs[0].nounTermHints, ['延期风险', '供应商确认']);
+  assert.deepEqual(briefing.datasetBriefs[0].sectionTitleHints, ['履约概览']);
   assert.ok(briefing.capabilities.includes('media_detail'));
   assert.ok(briefing.capabilities.includes('video_url_resolve'));
   assert.ok(briefing.capabilities.includes('video_ppt_extract'));
@@ -86,6 +90,7 @@ test('startup briefing summarizes visible datasets and system capability', () =>
   assert.match(briefing.productCapabilities.continuousExecution, /受控动作/);
   assert.match(briefing.latestActivity, /订单数据/);
   assert.match(briefing.productTruth, /智能数据工作台/);
+  assert.match(formatStartupBriefingForModel(briefing), /段落:履约概览\/名词:延期风险\+供应商确认/);
 });
 
 test('formatted briefing tells model when no dataset is selected', () => {

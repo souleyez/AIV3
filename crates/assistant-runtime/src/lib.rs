@@ -244,6 +244,10 @@ pub struct ScopeCandidate {
     pub source: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub material_hints: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub noun_term_hints: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub section_title_hints: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -1775,6 +1779,8 @@ pub fn plan_scope(input: ScopePlannerInput<'_>) -> ScopePlan {
             reason: "用户引用了刚才或已有草稿内容".to_string(),
             source: "scope_planner".to_string(),
             material_hints: Vec::new(),
+            noun_term_hints: Vec::new(),
+            section_title_hints: Vec::new(),
         });
     }
 
@@ -1955,6 +1961,30 @@ fn dataset_scope_candidate(
         reason: reason.to_string(),
         source: source.to_string(),
         material_hints: dataset_material_hints(dataset),
+        noun_term_hints: dataset_metadata_string_list(
+            dataset,
+            &[
+                "noun_term_hints",
+                "nounTermHints",
+                "noun_terms",
+                "nounTerms",
+            ],
+        )
+        .into_iter()
+        .take(12)
+        .collect(),
+        section_title_hints: dataset_metadata_string_list(
+            dataset,
+            &[
+                "section_title_hints",
+                "sectionTitleHints",
+                "document_section_hints",
+                "documentSectionHints",
+            ],
+        )
+        .into_iter()
+        .take(12)
+        .collect(),
     }
 }
 
@@ -1992,6 +2022,26 @@ fn dataset_haystack(dataset: &Dataset) -> String {
     let document_title_hints =
         dataset_metadata_string_list(dataset, &["document_title_hints", "documentTitleHints"])
             .join(" ");
+    let noun_term_hints = dataset_metadata_string_list(
+        dataset,
+        &[
+            "noun_term_hints",
+            "nounTermHints",
+            "noun_terms",
+            "nounTerms",
+        ],
+    )
+    .join(" ");
+    let section_title_hints = dataset_metadata_string_list(
+        dataset,
+        &[
+            "section_title_hints",
+            "sectionTitleHints",
+            "document_section_hints",
+            "documentSectionHints",
+        ],
+    )
+    .join(" ");
     let material_hints =
         dataset_metadata_string_list(dataset, &["material_hints", "materialHints"])
             .into_iter()
@@ -2007,12 +2057,14 @@ fn dataset_haystack(dataset: &Dataset) -> String {
             .collect::<Vec<_>>()
             .join(" ");
     format!(
-        "{} {} {} {} {} {} {} {}",
+        "{} {} {} {} {} {} {} {} {} {}",
         dataset.title,
         dataset.key,
         dataset.description.clone().unwrap_or_default(),
         dataset_metadata_string(dataset, &["category", "default_category"]),
         document_title_hints,
+        noun_term_hints,
+        section_title_hints,
         dataset_metadata_string(dataset, &["content_type_summary", "contentTypeSummary"]),
         dataset_metadata_string(dataset, &["parse_status_summary", "parseStatusSummary"]),
         material_hints
@@ -3440,6 +3492,37 @@ mod tests {
             plan.selected_scope["supply_policy"]["retrievalPolicy"],
             json!("standard")
         );
+    }
+
+    #[test]
+    fn document_understanding_hints_can_drive_scope_matching() {
+        let mut dataset = dataset("合同资料", "contracts");
+        dataset.metadata.insert(
+            "noun_term_hints".to_string(),
+            json!(["订单延期风险", "供应商确认"]),
+        );
+        dataset
+            .metadata
+            .insert("section_title_hints".to_string(), json!(["履约概览"]));
+
+        let plan = plan_scope(ScopePlannerInput {
+            prompt: "查找供应商确认这个主题在哪个库里",
+            visible_datasets: &[dataset.clone()],
+            selected_dataset_id: None,
+            conversation_memory_available: false,
+        });
+
+        assert_eq!(plan.candidates.len(), 1);
+        assert_eq!(plan.candidates[0].id, dataset.id.to_string());
+        assert_eq!(
+            plan.candidates[0].noun_term_hints,
+            vec!["订单延期风险".to_string(), "供应商确认".to_string()]
+        );
+        assert_eq!(
+            plan.candidates[0].section_title_hints,
+            vec!["履约概览".to_string()]
+        );
+        assert_eq!(plan.selected_scope["mode"], json!("preselected"));
     }
 
     #[test]

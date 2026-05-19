@@ -13,6 +13,7 @@ import {
   dataQualitySummaryFromManifest,
   downloadStaticPageExportZip,
   downloadTextArtifact,
+  downloadUrlArtifact,
   hasDataQualitySummary,
   staticPageHtmlFilename,
 } from '../../lib/static-page-export-package';
@@ -99,6 +100,10 @@ function downloadStaticPageExportPackage(draft, payload, backendHtml) {
 }
 
 function downloadStaticPageHtml(draft, backendHtml) {
+  const downloadHref = draft?.finalPage?.htmlDownloadUrl || draft?.finalPage?.html_download_url || '';
+  if (downloadHref && downloadUrlArtifact({ href: downloadHref })) {
+    return;
+  }
   const html = buildStaticPageStandaloneHtml(draft, backendHtml);
   if (!html) {
     return;
@@ -234,9 +239,10 @@ export default function StaticPageFinalRender({
   const manifest = finalPageManifest(draft);
   const workflowExecutionId = workflowExecutionIdFromManifest(manifest);
   const backendHtml = typeof draft?.finalPage?.html === 'string' ? draft.finalPage.html : '';
+  const htmlDownloadUrl = draft?.finalPage?.htmlDownloadUrl || draft?.finalPage?.html_download_url || '';
   const payload = draft ? buildStaticPageFinalRenderPayload(draft) : null;
   const canShowRenderedPage = finalStatus === 'rendered' || finalStatus === 'mock_ready';
-  const canDownloadHtml = finalStatus === 'rendered' && Boolean(backendHtml);
+  const canDownloadHtml = finalStatus === 'rendered' && Boolean(backendHtml || htmlDownloadUrl);
   const canDownloadPackage = finalStatus === 'rendered';
 
   if (!draft) return null;

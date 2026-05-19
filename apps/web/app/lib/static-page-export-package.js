@@ -311,6 +311,15 @@ export function staticPageHtmlFilename(draft) {
   return `static-page-${staticPageSafeId(draft)}-index.html`;
 }
 
+export function staticPageHtmlDownloadHref(url) {
+  const value = String(url || '').trim();
+  if (!value) return '';
+  if (value.startsWith('/v1/')) {
+    return `/api/v3/${value.slice('/v1/'.length)}`;
+  }
+  return value;
+}
+
 export function staticPageZipFilename(draft) {
   return staticPageExportFilename(draft, 'zip');
 }
@@ -547,5 +556,18 @@ export function downloadTextArtifact({ content, filename, mime }) {
   link.click();
   link.remove();
   window.setTimeout(() => URL.revokeObjectURL(url), 0);
+  return true;
+}
+
+export function downloadUrlArtifact({ href }) {
+  const url = staticPageHtmlDownloadHref(href);
+  if (!url || typeof window === 'undefined' || typeof document === 'undefined') {
+    return false;
+  }
+  const link = document.createElement('a');
+  link.href = url;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
   return true;
 }

@@ -8,6 +8,7 @@ import {
   dataQualityModulesFromManifest,
   dataQualitySummaryFromManifest,
   hasDataQualitySummary,
+  staticPageHtmlDownloadHref,
   staticPageExportFilename,
   staticPageHtmlFilename,
   staticPageZipFilename,
@@ -245,6 +246,15 @@ test('static page export helpers sanitize filenames and prefer backend html', ()
   assert.equal(staticPageExportFilename(draft), 'static-page-draft-id-with-spaces-package.json');
   assert.equal(staticPageZipFilename(draft), 'static-page-draft-id-with-spaces-package.zip');
   assert.equal(staticPageHtmlFilename(draft), 'static-page-draft-id-with-spaces-index.html');
+  assert.equal(
+    staticPageHtmlDownloadHref('/v1/static-page-render-outputs/render-1/download'),
+    '/api/v3/static-page-render-outputs/render-1/download',
+  );
+  assert.equal(
+    staticPageHtmlDownloadHref('/v1/external/channels/main/static-page-renders/render-1/download'),
+    '/api/v3/external/channels/main/static-page-renders/render-1/download',
+  );
+  assert.equal(staticPageHtmlDownloadHref('https://example.com/index.html'), 'https://example.com/index.html');
   assert.equal(buildStaticPageStandaloneHtml(draft, '<main>fresh</main>'), '<main>fresh</main>');
 });
 

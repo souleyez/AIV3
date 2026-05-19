@@ -292,6 +292,15 @@ function summarizeParseState(datasets) {
   if (!datasets.length) {
     return '当前可见库为空，等待上传或采集。';
   }
+  const parseCounts = datasets.reduce((counts, dataset) => {
+    mergeCountSummary(counts, datasetParseStatusSummary(dataset), dataset?.lifecycle || dataset?.status || 'unknown');
+    return counts;
+  }, {});
+  if (Object.keys(parseCounts).length) {
+    return Object.entries(parseCounts)
+      .map(([key, count]) => `${key}:${count}`)
+      .join('，');
+  }
   const lifecycleCounts = datasets.reduce((counts, dataset) => {
     const key = String(dataset?.lifecycle || dataset?.status || 'unknown');
     counts[key] = (counts[key] || 0) + 1;
@@ -300,6 +309,24 @@ function summarizeParseState(datasets) {
   return Object.entries(lifecycleCounts)
     .map(([key, count]) => `${key}:${count}`)
     .join('，');
+}
+
+function mergeCountSummary(counts, summary, fallbackKey = 'unknown') {
+  const text = String(summary || '').trim();
+  if (!text || text === fallbackKey) return;
+  let matched = false;
+  text.split(/[，,;]/).forEach((part) => {
+    const [rawKey, rawCount] = part.split(':');
+    const key = String(rawKey || '').trim();
+    const count = Number(String(rawCount || '').trim());
+    if (key && Number.isFinite(count) && count > 0) {
+      counts[key] = (counts[key] || 0) + count;
+      matched = true;
+    }
+  });
+  if (!matched && text) {
+    counts[text] = (counts[text] || 0) + 1;
+  }
 }
 
 function summarizeDatasets(datasets) {
@@ -314,6 +341,8 @@ function summarizeDatasets(datasets) {
     parseStatusSummary: datasetParseStatusSummary(dataset),
     materialHints: datasetMaterialHints(dataset),
     documentTitleHints: datasetDocumentTitleHints(dataset, { limit: 4 }),
+    nounTermHints: datasetStringList(dataset, ['noun_term_hints', 'nounTermHints', 'noun_terms', 'nounTerms'], 6),
+    sectionTitleHints: datasetStringList(dataset, ['section_title_hints', 'sectionTitleHints', 'document_section_hints', 'documentSectionHints'], 6),
     documentCount: datasetDocumentCount(dataset),
     estimatedWordCount: datasetEstimatedWordCount(dataset),
     updatedAt: dataset?.updated_at || dataset?.updatedAt || '',
@@ -353,6 +382,19 @@ function datasetMaterialHints(dataset = {}) {
   return [...hints].filter((hint) => typeof hint === 'string' && hint.trim()).slice(0, 6);
 }
 
+function datasetStringList(dataset = {}, keys = [], limit = 6) {
+  for (const key of keys) {
+    const value = dataset[key];
+    if (Array.isArray(value)) {
+      return value
+        .map((item) => String(item || '').trim())
+        .filter(Boolean)
+        .slice(0, limit);
+    }
+  }
+  return [];
+}
+
 function datasetParseStatusSummary(dataset = {}) {
   const explicit = dataset.parse_status_summary || dataset.parseStatusSummary || dataset.parse_status || dataset.parseStatus;
   if (explicit) return String(explicit).slice(0, 80);
@@ -376,10 +418,16 @@ function formatDatasetBriefForModel(item) {
   const titleHints = Array.isArray(item.documentTitleHints) && item.documentTitleHints.length
     ? `/主题:${item.documentTitleHints.join('+')}`
     : '';
+  const nounHints = Array.isArray(item.nounTermHints) && item.nounTermHints.length
+    ? `/名词:${item.nounTermHints.join('+')}`
+    : '';
+  const sectionHints = Array.isArray(item.sectionTitleHints) && item.sectionTitleHints.length
+    ? `/段落:${item.sectionTitleHints.join('+')}`
+    : '';
   const parse = item.parseStatusSummary && item.parseStatusSummary !== item.lifecycle
     ? `/解析:${item.parseStatusSummary}`
     : '';
-  return `${item.title}(${item.documentCount}文档/${item.lifecycle}${parse}${titleHints}${hints})`;
+  return `${item.title}(${item.documentCount}文档/${item.lifecycle}${parse}${titleHints}${sectionHints}${nounHints}${hints})`;
 }
 
 function summarizeStaticPageWorkspace(activeDraft, drafts) {

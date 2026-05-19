@@ -96,6 +96,8 @@ export function planAssistantScope({
   for (const dataset of visibleDatasets) {
     if (!dataset?.id || userSelectedDatasetIds.includes(dataset.id)) continue;
     const documentTitleHints = datasetDocumentTitleHints(dataset).join(' ');
+    const nounTermHints = datasetStringList(dataset, ['noun_term_hints', 'nounTermHints', 'noun_terms', 'nounTerms']).join(' ');
+    const sectionTitleHints = datasetStringList(dataset, ['section_title_hints', 'sectionTitleHints', 'document_section_hints', 'documentSectionHints']).join(' ');
     const haystack = [
       dataset.title,
       dataset.key,
@@ -103,6 +105,8 @@ export function planAssistantScope({
       dataset.category,
       dataset.default_category,
       documentTitleHints,
+      nounTermHints,
+      sectionTitleHints,
       dataset.content_type_summary,
       dataset.contentTypeSummary,
       dataset.parse_status_summary,
@@ -204,6 +208,19 @@ function datasetMaterialHints(dataset = {}) {
   return [...hints].filter((hint) => typeof hint === 'string' && hint.trim()).slice(0, 6);
 }
 
+function datasetStringList(dataset = {}, keys = [], limit = 8) {
+  for (const key of keys) {
+    const value = dataset[key];
+    if (Array.isArray(value)) {
+      return value
+        .map((item) => String(item || '').trim())
+        .filter(Boolean)
+        .slice(0, limit);
+    }
+  }
+  return [];
+}
+
 function buildDatasetCandidate(dataset, { confidence, reason, source }) {
   return {
     type: 'dataset',
@@ -221,6 +238,8 @@ function buildDatasetCandidate(dataset, { confidence, reason, source }) {
     reason,
     source,
     materialHints: datasetMaterialHints(dataset),
+    nounTermHints: datasetStringList(dataset, ['noun_term_hints', 'nounTermHints', 'noun_terms', 'nounTerms'], 8),
+    sectionTitleHints: datasetStringList(dataset, ['section_title_hints', 'sectionTitleHints', 'document_section_hints', 'documentSectionHints'], 8),
   };
 }
 

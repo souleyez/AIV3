@@ -579,6 +579,10 @@ pub fn router(
             get(list_static_page_render_outputs).post(create_static_page_render),
         )
         .route(
+            "/v1/static-page-render-outputs/{render_output_id}/download",
+            get(download_static_page_render_output_html),
+        )
+        .route(
             "/v1/conversation-memory-items",
             get(list_conversation_memory_items).post(create_conversation_memory_item),
         )
@@ -2568,6 +2572,7 @@ fn infer_document_detail_model_facing_evidence_state(
 
 fn collect_document_detail_model_facing_signals(detail: &DocumentDetailView) -> Vec<String> {
     let section_title_hints = collect_document_detail_section_title_hints(detail);
+    let noun_terms = collect_document_detail_noun_terms(detail);
     let mut signals = vec![
         "workflow_kind=document_detail".to_string(),
         "document_focus=single_document".to_string(),
@@ -2593,6 +2598,7 @@ fn collect_document_detail_model_facing_signals(detail: &DocumentDetailView) -> 
             document_detail_failed_retrieval_evidence_count(detail)
         ),
         format!("section_title_hint_count={}", section_title_hints.len()),
+        format!("noun_term_hint_count={}", noun_terms.len()),
     ];
     if !section_title_hints.is_empty() {
         signals.push("rag_signal=section_title_hints".to_string());
@@ -2601,6 +2607,18 @@ fn collect_document_detail_model_facing_signals(detail: &DocumentDetailView) -> 
             section_title_hints
                 .iter()
                 .take(6)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join("|")
+        ));
+    }
+    if !noun_terms.is_empty() {
+        signals.push("rag_signal=noun_term_hints".to_string());
+        signals.push(format!(
+            "noun_terms={}",
+            noun_terms
+                .iter()
+                .take(10)
                 .cloned()
                 .collect::<Vec<_>>()
                 .join("|")
@@ -2649,24 +2667,8 @@ fn document_detail_failed_retrieval_evidence_count(detail: &DocumentDetailView) 
 fn collect_document_detail_section_title_hints(detail: &DocumentDetailView) -> Vec<String> {
     let mut hints = Vec::new();
     for chunk in &detail.chunks {
-        for key in [
-            "section_title_hints",
-            "sectionTitleHints",
-            "section_titles",
-            "sectionTitles",
-            "heading_hints",
-            "headingHints",
-        ] {
-            if let Some(value) = chunk.metadata.get(key) {
-                collect_string_list(value, &mut hints);
-            }
-        }
-        if let Some(value) = chunk
-            .metadata
-            .get("parse_metadata")
-            .and_then(|value| value.get("section_title_hints"))
-        {
-            collect_string_list(value, &mut hints);
+        for hint in document_chunk_value_section_title_hints(&chunk.metadata, &chunk.content, 6) {
+            push_string_hint(&mut hints, hint);
         }
         if hints.len() >= 24 {
             break;
@@ -2674,6 +2676,20 @@ fn collect_document_detail_section_title_hints(detail: &DocumentDetailView) -> V
     }
     hints.truncate(24);
     hints
+}
+
+fn collect_document_detail_noun_terms(detail: &DocumentDetailView) -> Vec<String> {
+    let mut terms = Vec::new();
+    for chunk in &detail.chunks {
+        for term in document_chunk_value_noun_terms(&chunk.metadata) {
+            push_string_hint(&mut terms, term);
+        }
+        if terms.len() >= 40 {
+            break;
+        }
+    }
+    terms.truncate(40);
+    terms
 }
 
 fn derive_document_media_detail_model_facing_summary(
@@ -4656,6 +4672,9 @@ async fn enrich_visible_datasets_for_scope_planning(
         let mut content_type_counts = BTreeMap::<String, usize>::new();
         let mut document_title_hints = BTreeSet::<String>::new();
         let mut material_hints = BTreeSet::<String>::new();
+        let mut noun_term_hints = BTreeSet::<String>::new();
+        let mut section_title_hints = BTreeSet::<String>::new();
+        let mut understanding_strategy_hints = BTreeSet::<String>::new();
 
         for hint in dataset
             .metadata
@@ -4707,6 +4726,12 @@ async fn enrich_visible_datasets_for_scope_planning(
                 document_title_hints.insert(title_hint);
             }
             assistant_scope_collect_material_hints(document, &chunks, &mut material_hints);
+            assistant_scope_collect_document_understanding_hints(
+                &chunks,
+                &mut noun_term_hints,
+                &mut section_title_hints,
+                &mut understanding_strategy_hints,
+            );
         }
 
         let document_count = documents.len();
@@ -4753,6 +4778,27 @@ async fn enrich_visible_datasets_for_scope_planning(
             dataset.metadata.insert(
                 "material_hints".to_string(),
                 json!(material_hints.into_iter().take(8).collect::<Vec<_>>()),
+            );
+        }
+        if !noun_term_hints.is_empty() {
+            dataset.metadata.insert(
+                "noun_term_hints".to_string(),
+                json!(noun_term_hints.into_iter().take(16).collect::<Vec<_>>()),
+            );
+        }
+        if !section_title_hints.is_empty() {
+            dataset.metadata.insert(
+                "section_title_hints".to_string(),
+                json!(section_title_hints.into_iter().take(16).collect::<Vec<_>>()),
+            );
+        }
+        if !understanding_strategy_hints.is_empty() {
+            dataset.metadata.insert(
+                "document_understanding_strategies".to_string(),
+                json!(understanding_strategy_hints
+                    .into_iter()
+                    .take(6)
+                    .collect::<Vec<_>>()),
             );
         }
         enriched.push(dataset);
@@ -4908,6 +4954,47 @@ fn assistant_scope_collect_material_hints(
             .is_some_and(|items| !items.is_empty())
         {
             material_hints.insert("keyframe_ocr_possible".to_string());
+        }
+    }
+}
+
+fn assistant_scope_collect_document_understanding_hints(
+    chunks: &[DocumentChunk],
+    noun_term_hints: &mut BTreeSet<String>,
+    section_title_hints: &mut BTreeSet<String>,
+    understanding_strategy_hints: &mut BTreeSet<String>,
+) {
+    for chunk in chunks {
+        for term in document_chunk_noun_terms(chunk).into_iter().take(16) {
+            noun_term_hints.insert(term);
+            if noun_term_hints.len() >= 64 {
+                break;
+            }
+        }
+        for hint in document_chunk_section_title_hints(chunk)
+            .into_iter()
+            .take(8)
+        {
+            section_title_hints.insert(hint);
+            if section_title_hints.len() >= 64 {
+                break;
+            }
+        }
+        if let Some(strategy) = chunk
+            .metadata
+            .get("understanding")
+            .and_then(|value| value.get("strategy"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            understanding_strategy_hints.insert(strategy.to_string());
+        }
+        if noun_term_hints.len() >= 64
+            && section_title_hints.len() >= 64
+            && understanding_strategy_hints.len() >= 8
+        {
+            break;
         }
     }
 }
@@ -5502,6 +5589,57 @@ async fn ensure_default_public_datasets(state: &AppState) -> std::result::Result
 }
 
 fn dataset_summary(dataset: Dataset, access_warning: Option<String>) -> DatasetSummary {
+    let document_count = dataset_metadata_usize_optional(
+        &dataset,
+        &[
+            "document_count",
+            "documentCount",
+            "documents_count",
+            "documentsCount",
+        ],
+    );
+    let estimated_word_count = dataset_metadata_usize_optional(
+        &dataset,
+        &[
+            "estimated_word_count",
+            "estimatedWordCount",
+            "word_count",
+            "wordCount",
+        ],
+    );
+    let parse_status_summary =
+        dataset_metadata_string_optional(&dataset, &["parse_status_summary", "parseStatusSummary"]);
+    let content_type_summary =
+        dataset_metadata_string_optional(&dataset, &["content_type_summary", "contentTypeSummary"]);
+    let latest_upload =
+        dataset_metadata_string_optional(&dataset, &["latest_upload", "latestUpload"]);
+    let document_title_hints = dataset_metadata_string_vec(
+        &dataset,
+        &["document_title_hints", "documentTitleHints"],
+        12,
+    );
+    let material_hints =
+        dataset_metadata_string_vec(&dataset, &["material_hints", "materialHints"], 8);
+    let noun_term_hints = dataset_metadata_string_vec(
+        &dataset,
+        &[
+            "noun_term_hints",
+            "nounTermHints",
+            "noun_terms",
+            "nounTerms",
+        ],
+        16,
+    );
+    let section_title_hints =
+        dataset_metadata_string_vec(&dataset, &["section_title_hints", "sectionTitleHints"], 16);
+    let document_understanding_strategies = dataset_metadata_string_vec(
+        &dataset,
+        &[
+            "document_understanding_strategies",
+            "documentUnderstandingStrategies",
+        ],
+        6,
+    );
     DatasetSummary {
         id: dataset.id,
         key: dataset.key,
@@ -5509,8 +5647,53 @@ fn dataset_summary(dataset: Dataset, access_warning: Option<String>) -> DatasetS
         lifecycle: dataset.lifecycle,
         visibility: dataset.visibility,
         secret_binding_ids: dataset.default_secret_binding_ids,
+        document_count,
+        documents_count: document_count,
+        estimated_word_count,
+        parse_status_summary,
+        content_type_summary,
+        latest_upload,
+        document_title_hints,
+        material_hints,
+        noun_term_hints,
+        section_title_hints,
+        document_understanding_strategies,
         access_warning,
     }
+}
+
+fn dataset_metadata_usize_optional(dataset: &Dataset, keys: &[&str]) -> Option<usize> {
+    keys.iter().find_map(|key| {
+        dataset.metadata.get(*key).and_then(|value| {
+            value
+                .as_u64()
+                .or_else(|| value.as_str()?.parse::<u64>().ok())
+                .map(|number| number as usize)
+        })
+    })
+}
+
+fn dataset_metadata_string_optional(dataset: &Dataset, keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|key| {
+        dataset
+            .metadata
+            .get(*key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+    })
+}
+
+fn dataset_metadata_string_vec(dataset: &Dataset, keys: &[&str], limit: usize) -> Vec<String> {
+    let mut values = Vec::new();
+    for key in keys {
+        if let Some(value) = dataset.metadata.get(*key) {
+            collect_string_list(value, &mut values);
+        }
+    }
+    values.truncate(limit);
+    values
 }
 
 async fn create_dataset_secret_binding(
@@ -5626,17 +5809,24 @@ async fn list_datasets(
         .await
         .map_err(ApiError::from_storage)?;
 
+    let visible_datasets = filter_visible_datasets(
+        datasets,
+        &active_secret_binding_ids,
+        current_user_id,
+        local_thread_id.as_deref(),
+    )
+    .into_iter()
+    .filter(|dataset| dataset.lifecycle != DatasetLifecycle::Archived)
+    .collect::<Vec<_>>();
+    let visible_datasets =
+        enrich_visible_datasets_for_scope_planning(&state, visible_datasets, current_user_id)
+            .await?;
+
     Ok(Json(
-        filter_visible_datasets(
-            datasets,
-            &active_secret_binding_ids,
-            current_user_id,
-            local_thread_id.as_deref(),
-        )
-        .into_iter()
-        .filter(|dataset| dataset.lifecycle != DatasetLifecycle::Archived)
-        .map(|dataset| dataset_summary(dataset, None))
-        .collect(),
+        visible_datasets
+            .into_iter()
+            .map(|dataset| dataset_summary(dataset, None))
+            .collect(),
     ))
 }
 
@@ -8991,6 +9181,43 @@ async fn download_external_channel_static_page_html(
             )
         })?;
     ensure_static_page_render_belongs_to_external_channel(&connection_id, &run)?;
+    static_page_html_download_response(output)
+}
+
+async fn download_static_page_render_output_html(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(render_output_id): Path<String>,
+) -> std::result::Result<Response, ApiError> {
+    let render_output_id = parse_static_page_render_output_id(&render_output_id)?;
+    let current_user_id = current_auth_user_id(&state, &headers).await?;
+    let output = state
+        .storage
+        .static_page_render_outputs()
+        .get_by_id(state.tenant_id, render_output_id)
+        .await
+        .map_err(ApiError::from_storage)?
+        .ok_or_else(|| {
+            ApiError::not_found(
+                "static_page_render_output_not_found",
+                format!("static page render output {render_output_id} was not found"),
+            )
+        })?;
+    load_visible_static_page_draft(&state, output.draft_id, current_user_id).await?;
+    if !matches!(output.status, StaticPageRenderOutputStatus::Rendered)
+        || output.html.trim().is_empty()
+    {
+        return Err(ApiError::bad_request(
+            "static_page_html_not_ready",
+            "static page HTML is not ready for download".to_string(),
+        ));
+    }
+    static_page_html_download_response(output)
+}
+
+fn static_page_html_download_response(
+    output: StaticPageRenderOutput,
+) -> std::result::Result<Response, ApiError> {
     let file_name = format!("v3-static-page-{}.html", output.id);
     let bytes = output.html.into_bytes();
     let mut builder = Response::builder()
@@ -20455,12 +20682,59 @@ fn document_chunk_section_title_hints(chunk: &DocumentChunk) -> Vec<String> {
     {
         collect_string_list(value, &mut hints);
     }
+    if let Some(value) = chunk.metadata.get("understanding").and_then(|value| {
+        value
+            .get("section_title_hints")
+            .or_else(|| value.get("sectionTitleHints"))
+    }) {
+        collect_string_list(value, &mut hints);
+    }
     if hints.is_empty() {
         for hint in infer_section_title_hints_from_text(&chunk.content, 6) {
             push_string_hint(&mut hints, hint);
         }
     }
     hints.truncate(6);
+    hints
+}
+
+fn document_chunk_value_section_title_hints(
+    metadata: &Value,
+    content: &str,
+    limit: usize,
+) -> Vec<String> {
+    let mut hints = Vec::new();
+    for key in [
+        "section_title_hints",
+        "sectionTitleHints",
+        "section_titles",
+        "sectionTitles",
+        "heading_hints",
+        "headingHints",
+    ] {
+        if let Some(value) = metadata.get(key) {
+            collect_string_list(value, &mut hints);
+        }
+    }
+    if let Some(value) = metadata
+        .get("parse_metadata")
+        .and_then(|value| value.get("section_title_hints"))
+    {
+        collect_string_list(value, &mut hints);
+    }
+    if let Some(value) = metadata.get("understanding").and_then(|value| {
+        value
+            .get("section_title_hints")
+            .or_else(|| value.get("sectionTitleHints"))
+    }) {
+        collect_string_list(value, &mut hints);
+    }
+    if hints.is_empty() {
+        for hint in infer_section_title_hints_from_text(content, limit) {
+            push_string_hint(&mut hints, hint);
+        }
+    }
+    hints.truncate(limit);
     hints
 }
 
@@ -20475,6 +20749,23 @@ fn document_chunk_noun_terms(chunk: &DocumentChunk) -> Vec<String> {
     }
     for key in ["noun_terms", "nounTerms", "term_hints", "termHints"] {
         if let Some(value) = chunk.metadata.get(key) {
+            collect_string_list(value, &mut terms);
+        }
+    }
+    terms.truncate(64);
+    terms
+}
+
+fn document_chunk_value_noun_terms(metadata: &Value) -> Vec<String> {
+    let mut terms = Vec::new();
+    if let Some(value) = metadata
+        .get("understanding")
+        .and_then(|value| value.get("noun_terms").or_else(|| value.get("nounTerms")))
+    {
+        collect_string_list(value, &mut terms);
+    }
+    for key in ["noun_terms", "nounTerms", "term_hints", "termHints"] {
+        if let Some(value) = metadata.get(key) {
             collect_string_list(value, &mut terms);
         }
     }
@@ -31962,8 +32253,7 @@ fn to_static_page_render_output_view(
     output: StaticPageRenderOutput,
     selected_scope: Option<&Value>,
 ) -> StaticPageRenderOutputView {
-    let html_download_url =
-        selected_scope.and_then(|scope| static_page_external_html_download_url(scope, output.id));
+    let html_download_url = static_page_html_download_url(selected_scope, &output);
     StaticPageRenderOutputView {
         id: output.id,
         draft_id: output.draft_id,
@@ -31976,6 +32266,25 @@ fn to_static_page_render_output_view(
         asset_manifest: output.asset_manifest,
         created_at: output.created_at,
     }
+}
+
+fn static_page_html_download_url(
+    selected_scope: Option<&Value>,
+    output: &StaticPageRenderOutput,
+) -> Option<String> {
+    if !matches!(output.status, StaticPageRenderOutputStatus::Rendered)
+        || output.html.trim().is_empty()
+    {
+        return None;
+    }
+    selected_scope
+        .and_then(|scope| static_page_external_html_download_url(scope, output.id))
+        .or_else(|| {
+            Some(format!(
+                "/v1/static-page-render-outputs/{}/download",
+                output.id
+            ))
+        })
 }
 
 fn static_page_external_html_download_url(
@@ -47090,6 +47399,24 @@ mod tests {
             render_response.draft.draft_payload["finalPage"]["directHtml"],
             json!(true)
         );
+
+        let internal_download_url = format!(
+            "/v1/static-page-render-outputs/{}/download",
+            render_response.render_output.id
+        );
+        let internal_view_url = static_page_html_download_url(
+            None,
+            &state
+                .storage
+                .static_page_render_outputs()
+                .get_by_id(state.tenant_id, render_response.render_output.id)
+                .await
+                .expect("render output lookup should succeed")
+                .expect("render output should exist"),
+        )
+        .expect("rendered ordinary scope should expose internal download URL");
+        assert_eq!(internal_view_url, internal_download_url);
+
         let Json(render_outputs) = list_static_page_render_outputs(
             State(state.clone()),
             HeaderMap::new(),
@@ -47147,6 +47474,29 @@ mod tests {
         let html = String::from_utf8(body.to_vec()).expect("download should be utf-8");
         assert!(html.contains("第三方风险说明"));
         assert!(html.contains("风险概览"));
+
+        let app = router(
+            state.storage.clone(),
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        let internal_download = get_request_with_authorization(
+            app,
+            &format!(
+                "/v1/static-page-render-outputs/{}/download",
+                render_response.render_output.id
+            ),
+            None,
+        )
+        .await;
+        assert_eq!(internal_download.status(), StatusCode::OK);
+        let internal_body = axum::body::to_bytes(internal_download.into_body(), usize::MAX)
+            .await
+            .expect("internal download body should load");
+        let internal_html =
+            String::from_utf8(internal_body.to_vec()).expect("internal download should be utf-8");
+        assert!(internal_html.contains("第三方风险说明"));
     }
 
     #[test]
@@ -48972,6 +49322,11 @@ mod tests {
                                     "text": "客户询问订单延迟赔付。"
                                 }]
                             }
+                        },
+                        "understanding": {
+                            "strategy": "paragraph_aware_noun_terms_v1",
+                            "noun_terms": ["订单延迟赔付", "客户询问"],
+                            "section_title_hints": ["客户访谈"]
                         }
                     }),
                     created_at: Utc::now(),
@@ -48987,6 +49342,18 @@ mod tests {
         assert_eq!(
             enriched[0].metadata["document_title_hints"],
             json!(["Customer interview audio"])
+        );
+        assert_eq!(
+            enriched[0].metadata["noun_term_hints"],
+            json!(["客户询问", "订单延迟赔付"])
+        );
+        assert_eq!(
+            enriched[0].metadata["section_title_hints"],
+            json!(["客户访谈"])
+        );
+        assert_eq!(
+            enriched[0].metadata["document_understanding_strategies"],
+            json!(["paragraph_aware_noun_terms_v1"])
         );
 
         let (_, Json(response)) = create_assistant_run(
