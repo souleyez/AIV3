@@ -1,6 +1,6 @@
 use anyhow::{anyhow, Result};
 use chrono::Utc;
-use domain_model::{Document, DocumentLifecycle};
+use domain_model::{Document, DocumentLifecycle, WorkflowStatus};
 use event_bus::{workflow_task_enqueued_subject, EventBus, EventSubscription};
 use ingest_worker::{
     split_text_chunks, IngestJob, IngestOutcome, IngestProcessor, LocalIngestProcessor,
@@ -14,6 +14,22 @@ const DEFAULT_QUEUE: &str = "ingest";
 const DEFAULT_WAKE_TASK_KEY: &str = "ingest_uploaded_document";
 const EXTERNAL_SOURCE_INGEST_TASK_KEY: &str = "ingest_external_content";
 const DEFAULT_POLL_INTERVAL_MS: u64 = 1_000;
+const DEFAULT_AUTO_REPARSE_MAX_ATTEMPTS: usize = 1;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AutoReparseDecision {
+    should_retry: bool,
+    attempt_count: usize,
+    max_attempts: usize,
+    status: &'static str,
+    reason: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum UploadedDocumentTaskOutcome {
+    Completed,
+    DeferredForReparse,
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -125,33 +141,107 @@ async fn process_uploaded_document_task(
     let current_content_type = document.content_type.clone();
     let current_object_key = document.object_key.clone();
 
-    let process_result: Result<()> = async {
+    let process_result: Result<UploadedDocumentTaskOutcome> = async {
         let outcome = processor.process(&job);
         let chunk_count = outcome.chunk_count();
         let parse_status = outcome.parse_status();
         let parse_quality_status = outcome.parse_quality_status();
         let cloud_structured_provider = outcome.cloud_structured_provider();
+        let auto_reparse_decision =
+            auto_reparse_decision(&document, &parse_status, parse_quality_status.as_deref());
         let chunks = build_document_chunks(dataset_id, document_id, &outcome);
         storage
             .document_chunks()
             .replace_for_document(task.tenant_id, document_id, &chunks)
             .await?;
+        let extracted_at = Utc::now();
+        let mut ingest_metadata = json!({
+            "processor": if outcome.used_placeholder { "placeholder" } else { "local_parser" },
+            "parse_method": outcome.parse_method.clone(),
+            "parse_status": parse_status,
+            "parse_quality_status": parse_quality_status,
+            "cloud_structured_provider": cloud_structured_provider,
+            "parse_metadata": outcome.metadata.clone(),
+            "chunk_count": chunk_count,
+            "extracted_chars": outcome.extracted_chars,
+            "content_type": current_content_type,
+            "object_key": current_object_key,
+            "extracted_at": extracted_at,
+        });
+        if let Value::Object(metadata) = &mut ingest_metadata {
+            if let Some(decision) = auto_reparse_decision.as_ref() {
+                metadata.insert(
+                    "auto_reparse".to_string(),
+                    auto_reparse_metadata(decision, extracted_at),
+                );
+            } else if let Some(success_metadata) =
+                auto_reparse_success_metadata(&document, extracted_at)
+            {
+                metadata.insert("auto_reparse".to_string(), success_metadata);
+            }
+        }
         let metadata_updates = json!({
             "parse_status": parse_status,
-            "ingest": {
-                "processor": if outcome.used_placeholder { "placeholder" } else { "local_parser" },
-                "parse_method": outcome.parse_method.clone(),
-                "parse_status": parse_status,
-                "parse_quality_status": parse_quality_status,
-                "cloud_structured_provider": cloud_structured_provider,
-                "parse_metadata": outcome.metadata.clone(),
-                "chunk_count": chunk_count,
-                "extracted_chars": outcome.extracted_chars,
-                "content_type": current_content_type,
-                "object_key": current_object_key,
-                "extracted_at": Utc::now(),
-            }
+            "ingest": ingest_metadata
         });
+        if let Some(decision) = auto_reparse_decision.as_ref() {
+            let updated_document = storage
+                .documents()
+                .update_state(
+                    task.tenant_id,
+                    document_id,
+                    DocumentLifecycle::Failed,
+                    Some(&current_title),
+                    &metadata_updates,
+                    Utc::now(),
+                )
+                .await?;
+
+            platform_api::apply_workflow_signal_with_dependencies(
+                storage,
+                workflow_catalog,
+                event_bus,
+                task.tenant_id,
+                task.execution_id,
+                WorkflowSignal::StepFailed {
+                    task_key: task.task_key.clone(),
+                    error: decision.reason.clone(),
+                },
+            )
+            .await?;
+            storage
+                .workflow_tasks()
+                .mark_failed(task.id, &decision.reason, Utc::now())
+                .await?;
+
+            let retry_started = if decision.should_retry {
+                dispatch_auto_reparse_retry(
+                    storage,
+                    workflow_catalog,
+                    event_bus,
+                    &task,
+                    decision.reason.clone(),
+                )
+                .await
+            } else {
+                false
+            };
+
+            tracing::warn!(
+                task_id = %task.id,
+                execution_id = %task.execution_id,
+                document_id = %updated_document.id,
+                dataset_id = %updated_document.dataset_id,
+                parse_status = %parse_status,
+                auto_reparse_status = %decision.status,
+                auto_reparse_attempt = decision.attempt_count,
+                auto_reparse_max_attempts = decision.max_attempts,
+                retry_started,
+                "ingest parse quality degraded; workflow deferred for reparse"
+            );
+            return Ok(UploadedDocumentTaskOutcome::DeferredForReparse);
+        }
+
         let updated_document = storage
             .documents()
             .update_state(
@@ -190,57 +280,61 @@ async fn process_uploaded_document_task(
         )
         .await?;
 
-        Ok(())
+        Ok(UploadedDocumentTaskOutcome::Completed)
     }
     .await;
 
-    if let Err(error) = process_result {
-        let error_message = error.to_string();
-        let _ = storage
-            .documents()
-            .update_state(
-                task.tenant_id,
-                document_id,
-                DocumentLifecycle::Failed,
-                Some(&current_title),
-                &json!({
-                    "parse_status": "failed",
-                    "ingest": {
-                        "processor": "placeholder",
+    match process_result {
+        Ok(UploadedDocumentTaskOutcome::Completed) => {}
+        Ok(UploadedDocumentTaskOutcome::DeferredForReparse) => return Ok(()),
+        Err(error) => {
+            let error_message = error.to_string();
+            let _ = storage
+                .documents()
+                .update_state(
+                    task.tenant_id,
+                    document_id,
+                    DocumentLifecycle::Failed,
+                    Some(&current_title),
+                    &json!({
                         "parse_status": "failed",
-                        "failed_at": Utc::now(),
-                        "last_error": error_message,
-                    }
-                }),
-                Utc::now(),
+                        "ingest": {
+                            "processor": "placeholder",
+                            "parse_status": "failed",
+                            "failed_at": Utc::now(),
+                            "last_error": error_message,
+                        }
+                    }),
+                    Utc::now(),
+                )
+                .await;
+
+            if let Err(signal_error) = platform_api::apply_workflow_signal_with_dependencies(
+                storage,
+                workflow_catalog,
+                event_bus,
+                task.tenant_id,
+                task.execution_id,
+                WorkflowSignal::StepFailed {
+                    task_key: task.task_key.clone(),
+                    error: error_message.clone(),
+                },
             )
-            .await;
+            .await
+            {
+                tracing::error!(
+                    error = ?signal_error,
+                    task_id = %task.id,
+                    "ingest worker failed to send workflow step_failed signal"
+                );
+            }
 
-        if let Err(signal_error) = platform_api::apply_workflow_signal_with_dependencies(
-            storage,
-            workflow_catalog,
-            event_bus,
-            task.tenant_id,
-            task.execution_id,
-            WorkflowSignal::StepFailed {
-                task_key: task.task_key.clone(),
-                error: error_message.clone(),
-            },
-        )
-        .await
-        {
-            tracing::error!(
-                error = ?signal_error,
-                task_id = %task.id,
-                "ingest worker failed to send workflow step_failed signal"
-            );
+            storage
+                .workflow_tasks()
+                .mark_failed(task.id, &error_message, Utc::now())
+                .await?;
+            return Err(error);
         }
-
-        storage
-            .workflow_tasks()
-            .mark_failed(task.id, &error_message, Utc::now())
-            .await?;
-        return Err(error);
     }
 
     storage
@@ -257,6 +351,198 @@ async fn process_uploaded_document_task(
     );
 
     Ok(())
+}
+
+fn auto_reparse_decision(
+    document: &Document,
+    parse_status: &str,
+    parse_quality_status: Option<&str>,
+) -> Option<AutoReparseDecision> {
+    auto_reparse_decision_for_attempts(
+        parse_status,
+        parse_quality_status,
+        document_auto_reparse_attempt_count(document),
+        ingest_auto_reparse_enabled(),
+        ingest_auto_reparse_max_attempts(),
+    )
+}
+
+fn auto_reparse_decision_for_attempts(
+    parse_status: &str,
+    parse_quality_status: Option<&str>,
+    current_attempt_count: usize,
+    enabled: bool,
+    max_attempts: usize,
+) -> Option<AutoReparseDecision> {
+    if !parse_status_requires_auto_reparse(parse_status) {
+        return None;
+    }
+
+    let should_retry = enabled && current_attempt_count < max_attempts;
+    let attempt_count = if should_retry {
+        current_attempt_count.saturating_add(1)
+    } else {
+        current_attempt_count
+    };
+    let status = if should_retry {
+        "queued"
+    } else if enabled {
+        "exhausted"
+    } else {
+        "disabled"
+    };
+    let quality_status = parse_quality_status
+        .filter(|status| !status.trim().is_empty())
+        .unwrap_or("unknown");
+    let reason = if should_retry {
+        format!(
+            "document parse quality requires reparse: parse_status={parse_status}, parse_quality_status={quality_status}, attempt={attempt_count}/{max_attempts}"
+        )
+    } else {
+        format!(
+            "document parse quality requires reparse but auto reparse is {status}: parse_status={parse_status}, parse_quality_status={quality_status}, attempts={attempt_count}/{max_attempts}"
+        )
+    };
+
+    Some(AutoReparseDecision {
+        should_retry,
+        attempt_count,
+        max_attempts,
+        status,
+        reason,
+    })
+}
+
+fn parse_status_requires_auto_reparse(parse_status: &str) -> bool {
+    matches!(parse_status, "parse_degraded" | "placeholder")
+}
+
+fn ingest_auto_reparse_enabled() -> bool {
+    std::env::var("INGEST_AUTO_REPARSE_ENABLED")
+        .ok()
+        .and_then(|value| parse_bool_env_value(&value))
+        .unwrap_or(true)
+}
+
+fn ingest_auto_reparse_max_attempts() -> usize {
+    std::env::var("INGEST_AUTO_REPARSE_MAX_ATTEMPTS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(DEFAULT_AUTO_REPARSE_MAX_ATTEMPTS)
+}
+
+fn parse_bool_env_value(value: &str) -> Option<bool> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Some(true),
+        "0" | "false" | "no" | "off" => Some(false),
+        _ => None,
+    }
+}
+
+fn document_auto_reparse_attempt_count(document: &Document) -> usize {
+    document
+        .metadata
+        .get("ingest")
+        .and_then(|metadata| metadata.get("auto_reparse"))
+        .and_then(|metadata| metadata.get("attempt_count"))
+        .and_then(Value::as_u64)
+        .and_then(|value| usize::try_from(value).ok())
+        .unwrap_or(0)
+}
+
+fn auto_reparse_metadata(
+    decision: &AutoReparseDecision,
+    updated_at: chrono::DateTime<Utc>,
+) -> Value {
+    json!({
+        "status": decision.status,
+        "reason": decision.reason,
+        "attempt_count": decision.attempt_count,
+        "max_attempts": decision.max_attempts,
+        "updated_at": updated_at,
+    })
+}
+
+fn auto_reparse_success_metadata(
+    document: &Document,
+    updated_at: chrono::DateTime<Utc>,
+) -> Option<Value> {
+    let attempt_count = document_auto_reparse_attempt_count(document);
+    if attempt_count == 0 {
+        return None;
+    }
+
+    Some(json!({
+        "status": "succeeded",
+        "reason": "document parse succeeded after auto reparse",
+        "attempt_count": attempt_count,
+        "max_attempts": ingest_auto_reparse_max_attempts(),
+        "updated_at": updated_at,
+    }))
+}
+
+async fn dispatch_auto_reparse_retry(
+    storage: &PgStorage,
+    workflow_catalog: &WorkflowCatalog,
+    event_bus: &EventBus,
+    task: &domain_model::WorkflowTask,
+    reason: String,
+) -> bool {
+    let retry_transition = match platform_api::apply_workflow_signal_with_dependencies(
+        storage,
+        workflow_catalog,
+        event_bus,
+        task.tenant_id,
+        task.execution_id,
+        WorkflowSignal::RetryRequested {
+            reason: reason.clone(),
+        },
+    )
+    .await
+    {
+        Ok(transition) => transition,
+        Err(error) => {
+            tracing::error!(
+                error = ?error,
+                task_id = %task.id,
+                execution_id = %task.execution_id,
+                "ingest worker failed to request auto reparse retry"
+            );
+            return false;
+        }
+    };
+
+    if retry_transition.execution.status != WorkflowStatus::Pending {
+        tracing::warn!(
+            task_id = %task.id,
+            execution_id = %task.execution_id,
+            status = %retry_transition.execution.status.as_str(),
+            "ingest auto reparse retry did not return workflow to pending"
+        );
+        return false;
+    }
+
+    match platform_api::apply_workflow_signal_with_dependencies(
+        storage,
+        workflow_catalog,
+        event_bus,
+        task.tenant_id,
+        task.execution_id,
+        WorkflowSignal::Start,
+    )
+    .await
+    {
+        Ok(_) => true,
+        Err(error) => {
+            tracing::error!(
+                error = ?error,
+                task_id = %task.id,
+                execution_id = %task.execution_id,
+                "ingest worker failed to restart workflow for auto reparse"
+            );
+            false
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -927,6 +1213,61 @@ async fn wait_for_next_task_signal(task_waker: &mut EventSubscription, poll_inte
 mod tests {
     use super::*;
     use domain_model::{DatasetId, DocumentId};
+
+    #[test]
+    fn auto_reparse_decision_ignores_healthy_parse() {
+        let decision =
+            auto_reparse_decision_for_attempts("parsed", Some("usable_text"), 0, true, 1);
+
+        assert_eq!(decision, None);
+    }
+
+    #[test]
+    fn auto_reparse_decision_queues_degraded_parse_once() {
+        let decision = auto_reparse_decision_for_attempts(
+            "parse_degraded",
+            Some("low_text_coverage"),
+            0,
+            true,
+            1,
+        )
+        .expect("degraded parse should request reparse");
+
+        assert!(decision.should_retry);
+        assert_eq!(decision.status, "queued");
+        assert_eq!(decision.attempt_count, 1);
+        assert_eq!(decision.max_attempts, 1);
+        assert!(decision.reason.contains("parse_status=parse_degraded"));
+        assert!(decision.reason.contains("attempt=1/1"));
+    }
+
+    #[test]
+    fn auto_reparse_decision_exhausts_after_attempt_limit() {
+        let decision = auto_reparse_decision_for_attempts(
+            "parse_degraded",
+            Some("low_text_coverage"),
+            1,
+            true,
+            1,
+        )
+        .expect("degraded parse should be classified");
+
+        assert!(!decision.should_retry);
+        assert_eq!(decision.status, "exhausted");
+        assert_eq!(decision.attempt_count, 1);
+        assert!(decision.reason.contains("attempts=1/1"));
+    }
+
+    #[test]
+    fn auto_reparse_decision_can_be_disabled() {
+        let decision = auto_reparse_decision_for_attempts("placeholder", None, 0, false, 1)
+            .expect("placeholder parse should be classified");
+
+        assert!(!decision.should_retry);
+        assert_eq!(decision.status, "disabled");
+        assert_eq!(decision.attempt_count, 0);
+        assert!(decision.reason.contains("auto reparse is disabled"));
+    }
 
     #[test]
     fn external_source_documents_parse_from_workflow_last_output() {
