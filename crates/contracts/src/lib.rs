@@ -474,21 +474,37 @@ pub struct CreateExternalSourceSyncResponse {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CreateExternalDocumentParseRequest {
+    #[serde(alias = "sourceId")]
     pub source_id: String,
+    #[serde(alias = "datasetId")]
     pub dataset_id: DatasetId,
+    #[serde(alias = "documentExternalId")]
     pub document_external_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        alias = "revisionExternalId",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub revision_external_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        alias = "contentType",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub content_type: Option<String>,
+    #[serde(alias = "contentUrl")]
     pub content_url: String,
     #[serde(default)]
     pub metadata: Value,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        alias = "idempotencyKey",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub idempotency_key: Option<String>,
-    #[serde(default)]
+    #[serde(default, alias = "allowHttpLoopback")]
     pub allow_http_loopback: bool,
 }
 
@@ -541,8 +557,20 @@ pub struct GetExternalDocumentParseDetailResponse {
     pub lifecycle: Option<DocumentLifecycleView>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chunk_count: Option<usize>,
+    #[serde(
+        default,
+        rename = "chunkCount",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub chunk_count_camel: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retrieval_evidence_count: Option<usize>,
+    #[serde(
+        default,
+        rename = "retrievalEvidenceCount",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub retrieval_evidence_count_camel: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ingest: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -3571,6 +3599,80 @@ mod tests {
             serde_json::from_value(encoded_acl).expect("acl should deserialize");
         assert_eq!(decoded_acl.captured_at, captured_at);
         assert_eq!(decoded_acl.acl_hash.as_deref(), Some("acl-hash-001"));
+    }
+
+    #[test]
+    fn external_document_parse_request_accepts_java_camel_case_payload() {
+        let dataset_id = DatasetId::new();
+
+        let decoded: CreateExternalDocumentParseRequest = serde_json::from_value(json!({
+            "sourceId": "src-docs",
+            "datasetId": dataset_id,
+            "documentExternalId": "doc-java-001",
+            "revisionExternalId": "rev-1",
+            "title": "Java payload.pdf",
+            "contentType": "application/pdf",
+            "contentUrl": "https://third-party.example.com/files/doc-java-001.pdf",
+            "idempotencyKey": "src-docs:doc-java-001:rev-1",
+            "allowHttpLoopback": true
+        }))
+        .expect("camelCase parse payload should deserialize");
+
+        assert_eq!(decoded.source_id, "src-docs");
+        assert_eq!(decoded.dataset_id, dataset_id);
+        assert_eq!(decoded.document_external_id, "doc-java-001");
+        assert_eq!(decoded.revision_external_id.as_deref(), Some("rev-1"));
+        assert_eq!(decoded.content_type.as_deref(), Some("application/pdf"));
+        assert_eq!(
+            decoded.content_url,
+            "https://third-party.example.com/files/doc-java-001.pdf"
+        );
+        assert_eq!(
+            decoded.idempotency_key.as_deref(),
+            Some("src-docs:doc-java-001:rev-1")
+        );
+        assert!(decoded.allow_http_loopback);
+    }
+
+    #[test]
+    fn external_document_parse_detail_response_exposes_java_compat_summary_fields() {
+        let document_id = DocumentId::new();
+        let dataset_id = DatasetId::new();
+        let response = GetExternalDocumentParseDetailResponse {
+            source_id: "src-docs".to_string(),
+            document_external_id: "doc-java-001".to_string(),
+            lifecycle: Some(DocumentLifecycleView::Indexed),
+            chunk_count: Some(3),
+            chunk_count_camel: Some(3),
+            retrieval_evidence_count: Some(2),
+            retrieval_evidence_count_camel: Some(2),
+            ingest: Some(json!({"parse_method": "pdf-paddleocr"})),
+            latest: Some(ExternalDocumentParseDetailItemView {
+                document_id,
+                dataset_id,
+                title: "Java payload.pdf".to_string(),
+                content_type: "application/pdf".to_string(),
+                lifecycle: DocumentLifecycleView::Indexed,
+                source_id: "src-docs".to_string(),
+                document_external_id: "doc-java-001".to_string(),
+                revision_external_id: Some("rev-1".to_string()),
+                chunk_count: 3,
+                retrieval_evidence_count: 2,
+                ingest: json!({"parse_method": "pdf-paddleocr"}),
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+            }),
+            documents: Vec::new(),
+        };
+
+        let encoded = serde_json::to_value(response).expect("response should serialize");
+
+        assert_eq!(encoded["chunk_count"], json!(3));
+        assert_eq!(encoded["chunkCount"], json!(3));
+        assert_eq!(encoded["retrieval_evidence_count"], json!(2));
+        assert_eq!(encoded["retrievalEvidenceCount"], json!(2));
+        assert_eq!(encoded["lifecycle"], json!("indexed"));
+        assert_eq!(encoded["ingest"]["parse_method"], json!("pdf-paddleocr"));
     }
 
     #[test]

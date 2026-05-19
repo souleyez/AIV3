@@ -49,6 +49,8 @@ Content-Type: application/json
 }
 ```
 
+兼容说明：请求体同时接受 Java 常用驼峰字段名，例如 `sourceId`、`datasetId`、`documentExternalId`、`revisionExternalId`、`contentType`、`contentUrl`、`idempotencyKey`、`allowHttpLoopback`。文档示例仍使用 V3 标准 snake_case。
+
 关键要求：
 
 - `content_url` 建议使用 HTTPS 短时效签名下载地址。

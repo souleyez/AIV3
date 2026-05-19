@@ -32,6 +32,8 @@ Content-Type: application/json
 - `content_url`：V3 拉取文档的临时下载地址。生产建议 HTTPS 和短时效签名 URL。
 - `idempotency_key`：建议由第三方按“文档 ID + 版本”生成，便于排查。
 
+兼容说明：解析请求同时接受 Java 常用驼峰字段名，例如 `sourceId`、`datasetId`、`documentExternalId`、`revisionExternalId`、`contentType`、`contentUrl`、`idempotencyKey`、`allowHttpLoopback`。文档示例仍使用 V3 标准 snake_case。
+
 安全边界：
 
 - `content_url` 生产必须使用 HTTPS；HTTP 只允许本机 smoke。
