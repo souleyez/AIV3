@@ -56,6 +56,8 @@ run_check "one-character PDF extraction is low quality" \
   "${cargo_bin}" test -p ingest-worker pdf_parse_quality_marks_one_character_extract_as_low_coverage --lib
 run_check "low-quality PDF diagnostic blocks single-character success" \
   "${cargo_bin}" test -p ingest-worker pdf_low_quality_diagnostic_does_not_treat_single_character_as_content --lib
+run_check "ingest outcomes expose model-visible parse status" \
+  "${cargo_bin}" test -p ingest-worker ingest_outcome_derives_model_visible_parse_status --lib
 run_check "external parse accepts Java camelCase payloads" \
   "${cargo_bin}" test -p contracts external_document_parse_request_accepts_java_camel_case_payload --lib
 run_check "external parse-detail exposes Java-compatible summary fields" \
@@ -107,6 +109,7 @@ const report = {
   runtime_gate_requested: /^(true|1|yes|on)$/i.test(process.env.SMOKE_RUNTIME_GATE || ""),
   contract: {
     parser_quality: "PaddleOCR parsing, low-quality PDF detection, and diagnostic fallback must not treat one-character extraction as usable content.",
+    ingest_parse_status: "Ingest outcomes should persist model-visible parse status values such as parsed, parse_degraded, and parsed_with_vlm_fallback.",
     external_parse_compatibility: "Third-party Java/camelCase parse payloads and parse-detail summary fields remain compatible, including parseStatus/modelStatus/workflow state.",
     document_detail_parse_state: "Document detail responses should expose parse_state so normal UI/model flows can explain pending, failed, or reparsing documents.",
     resume_entity_scan: "Resume/company entity scans should preserve valid company names while filtering common phrase noise.",
@@ -133,6 +136,7 @@ const lines = [
   "## Contract",
   "",
   `- Parser quality: ${report.contract.parser_quality}`,
+  `- Ingest parse status: ${report.contract.ingest_parse_status}`,
   `- External parse compatibility: ${report.contract.external_parse_compatibility}`,
   `- Document detail parse state: ${report.contract.document_detail_parse_state}`,
   `- Resume entity scan: ${report.contract.resume_entity_scan}`,

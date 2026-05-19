@@ -42,6 +42,58 @@ impl IngestOutcome {
     pub fn chunk_count(&self) -> u32 {
         self.chunks.len().try_into().unwrap_or(u32::MAX)
     }
+
+    pub fn parse_status(&self) -> String {
+        if let Some(status) = value_string_at_path(&self.metadata, &["media", "parse_status"]) {
+            return status;
+        }
+
+        if let Some(status) = self.parse_quality_status() {
+            return match status.as_str() {
+                "usable_text" => "parsed".to_string(),
+                "vlm_fallback_used" => "parsed_with_vlm_fallback".to_string(),
+                "low_text_coverage" | "low_text_coverage_fallback_unavailable" => {
+                    "parse_degraded".to_string()
+                }
+                _ => status,
+            };
+        }
+
+        if self.used_placeholder {
+            return "placeholder".to_string();
+        }
+        if self.parse_method.contains("vlm") {
+            return "parsed_with_vlm".to_string();
+        }
+        if self.parse_method.ends_with("-empty") || self.parse_method.contains("+low-quality") {
+            return "parse_degraded".to_string();
+        }
+        "parsed".to_string()
+    }
+
+    pub fn parse_quality_status(&self) -> Option<String> {
+        value_string_at_path(&self.metadata, &["parse_quality", "status"])
+    }
+
+    pub fn cloud_structured_provider(&self) -> &'static str {
+        if self.parse_method.contains("vlm") {
+            "minimax"
+        } else {
+            ""
+        }
+    }
+}
+
+fn value_string_at_path(value: &Value, path: &[&str]) -> Option<String> {
+    let mut current = value;
+    for key in path {
+        current = current.get(*key)?;
+    }
+    current
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 pub trait IngestProcessor {
@@ -2769,6 +2821,56 @@ trailer << /Root 1 0 R >>
             );
             assert_eq!(diagnostic.metadata["parse_quality"]["text_chars"], json!(1));
         });
+    }
+
+    #[test]
+    fn ingest_outcome_derives_model_visible_parse_status() {
+        let degraded = IngestOutcome {
+            chunks: vec!["PDF parse quality warning".to_string()],
+            inferred_title: None,
+            parse_method: "pdf-python+low-quality".to_string(),
+            extracted_chars: 25,
+            used_placeholder: false,
+            metadata: json!({
+                "parse_quality": {
+                    "status": "low_text_coverage_fallback_unavailable"
+                }
+            }),
+        };
+        assert_eq!(degraded.parse_status(), "parse_degraded");
+        assert_eq!(
+            degraded.parse_quality_status().as_deref(),
+            Some("low_text_coverage_fallback_unavailable")
+        );
+
+        let vlm = IngestOutcome {
+            chunks: vec!["VLM extracted page".to_string()],
+            inferred_title: None,
+            parse_method: "pdf-vlm".to_string(),
+            extracted_chars: 18,
+            used_placeholder: false,
+            metadata: json!({
+                "parse_quality": {
+                    "status": "vlm_fallback_used"
+                }
+            }),
+        };
+        assert_eq!(vlm.parse_status(), "parsed_with_vlm_fallback");
+        assert_eq!(vlm.cloud_structured_provider(), "minimax");
+
+        let media = IngestOutcome {
+            chunks: vec!["Transcript was not extracted".to_string()],
+            inferred_title: None,
+            parse_method: "media-partial".to_string(),
+            extracted_chars: 32,
+            used_placeholder: false,
+            metadata: json!({
+                "media": {
+                    "parse_status": "partial"
+                }
+            }),
+        };
+        assert_eq!(media.parse_status(), "partial");
     }
 
     #[test]

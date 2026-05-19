@@ -19277,9 +19277,10 @@ fn assistant_run_document_parse_model_status(
     if document.lifecycle == DocumentLifecycle::Failed || parse_status == "failed" {
         return "failed".to_string();
     }
-    if parse_quality_status
-        .map(|status| status.contains("low_text_coverage"))
-        .unwrap_or(false)
+    if matches!(parse_status, "parse_degraded" | "placeholder")
+        || parse_quality_status
+            .map(|status| status.contains("low_text_coverage"))
+            .unwrap_or(false)
     {
         return "parse_degraded".to_string();
     }

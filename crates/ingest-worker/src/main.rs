@@ -128,16 +128,22 @@ async fn process_uploaded_document_task(
     let process_result: Result<()> = async {
         let outcome = processor.process(&job);
         let chunk_count = outcome.chunk_count();
+        let parse_status = outcome.parse_status();
+        let parse_quality_status = outcome.parse_quality_status();
+        let cloud_structured_provider = outcome.cloud_structured_provider();
         let chunks = build_document_chunks(dataset_id, document_id, &outcome);
         storage
             .document_chunks()
             .replace_for_document(task.tenant_id, document_id, &chunks)
             .await?;
         let metadata_updates = json!({
+            "parse_status": parse_status,
             "ingest": {
                 "processor": if outcome.used_placeholder { "placeholder" } else { "local_parser" },
                 "parse_method": outcome.parse_method.clone(),
-                "cloud_structured_provider": if outcome.parse_method.contains("vlm") { "minimax" } else { "" },
+                "parse_status": parse_status,
+                "parse_quality_status": parse_quality_status,
+                "cloud_structured_provider": cloud_structured_provider,
                 "parse_metadata": outcome.metadata.clone(),
                 "chunk_count": chunk_count,
                 "extracted_chars": outcome.extracted_chars,
@@ -162,9 +168,11 @@ async fn process_uploaded_document_task(
             "dataset_id": updated_document.dataset_id,
             "content_type": updated_document.content_type,
             "chunk_count": chunk_count,
-                "parse_method": outcome.parse_method.clone(),
-                "cloud_structured_provider": if outcome.parse_method.contains("vlm") { "minimax" } else { "" },
-                "extracted_chars": outcome.extracted_chars,
+            "parse_method": outcome.parse_method.clone(),
+            "parse_status": parse_status,
+            "parse_quality_status": parse_quality_status,
+            "cloud_structured_provider": cloud_structured_provider,
+            "extracted_chars": outcome.extracted_chars,
             "lifecycle": updated_document.lifecycle.as_str(),
             "title": updated_document.title,
         });
@@ -196,8 +204,10 @@ async fn process_uploaded_document_task(
                 DocumentLifecycle::Failed,
                 Some(&current_title),
                 &json!({
+                    "parse_status": "failed",
                     "ingest": {
                         "processor": "placeholder",
+                        "parse_status": "failed",
                         "failed_at": Utc::now(),
                         "last_error": error_message,
                     }
@@ -328,12 +338,14 @@ async fn process_external_source_ingest_task(
                         "ingest": {
                             "processor": "external_source_inline",
                             "parse_method": "external_source_inline",
+                            "parse_status": "parsed",
                             "chunk_count": chunks.len(),
                             "extracted_chars": input.body.chars().count(),
                             "content_type": input.content_type,
                             "object_key": document.object_key,
                             "extracted_at": Utc::now(),
                         },
+                        "parse_status": "parsed",
                         "external_source": external_source_ref(&source_id, sync_run_id.as_deref(), &input),
                     }),
                     Utc::now(),
@@ -447,6 +459,7 @@ fn build_document_chunks(
                 metadata: json!({
                     "extractor": if outcome.used_placeholder { "placeholder" } else { "local_parser" },
                     "parse_method": outcome.parse_method.clone(),
+                    "parse_status": outcome.parse_status(),
                     "parse_metadata": outcome.metadata.clone(),
                     "section_title_hints": section_title_hints,
                     "source": "upload_ingest_workflow",
@@ -486,6 +499,7 @@ fn build_external_source_document_chunks(
                 metadata: json!({
                     "extractor": "external_source_inline",
                     "parse_method": "external_source_inline",
+                    "parse_status": "parsed",
                     "source": "external_source_sync_workflow",
                     "external_source": external_source,
                     "external_acl": external_acl,
@@ -1031,6 +1045,7 @@ mod tests {
             chunks[0].metadata["section_title_hints"],
             json!(["固定资产申请"])
         );
+        assert_eq!(chunks[0].metadata["parse_status"], json!("parsed"));
         assert_eq!(
             chunks[1].metadata["section_title_hints"],
             json!(["固定资产申请"])
