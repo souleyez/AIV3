@@ -92,8 +92,8 @@ use hmac::{Hmac, Mac};
 use llm_gateway::{
     build_provider_from_env, render_runtime_manifest, resolve_runtime_selection_from_env,
     LlmFinishReason, LlmProviderError, LlmProviderFailureKind, LlmRequest, LlmResponse,
-    LlmRuntimeSelection, ModelProviderProfile, MODEL_LANE_ASSISTANT_CHAT,
-    MODEL_LANE_ASSISTANT_REACT_JSON, MODEL_LANE_CODEX_CONVERSATION,
+    LlmRuntimeMetadata, LlmRuntimeMode, LlmRuntimeSelection, ModelProviderProfile,
+    MODEL_LANE_ASSISTANT_CHAT, MODEL_LANE_ASSISTANT_REACT_JSON, MODEL_LANE_CODEX_CONVERSATION,
 };
 use prompt_registry::bootstrap_default_prompt_registry;
 use serde::{Deserialize, Serialize};
@@ -7439,7 +7439,38 @@ async fn create_assistant_run(
                                     response
                                 }
                                 Err(retry_error) => {
-                                    state
+                                    if let Some(direct_answer) =
+                                        assistant_run_dataset_entity_scan_direct_answer(
+                                            &request,
+                                            &evidence_state,
+                                        )
+                                    {
+                                        let response =
+                                            assistant_run_direct_answer_response(direct_answer);
+                                        state
+                                            .storage
+                                            .assistant_runs()
+                                            .append_event(
+                                                state.tenant_id,
+                                                run.id,
+                                                &NewAssistantRunEvent {
+                                                    event_name:
+                                                        "assistant_run.provider_compact_retry_direct_answered"
+                                                            .to_string(),
+                                                    payload: json!({
+                                                        "source": "dataset_entity_scan_direct_answer",
+                                                        "previous_error_code": retry_error.payload.code,
+                                                        "previous_error_status": retry_error.status.as_u16(),
+                                                        "runtime": render_runtime_manifest(&response.runtime),
+                                                    }),
+                                                    created_at: Utc::now(),
+                                                },
+                                            )
+                                            .await
+                                            .map_err(ApiError::from_storage)?;
+                                        response
+                                    } else {
+                                        state
                                         .storage
                                         .assistant_runs()
                                         .append_event(
@@ -7458,20 +7489,21 @@ async fn create_assistant_run(
                                         )
                                         .await
                                         .map_err(ApiError::from_storage)?;
-                                    let stage = "provider";
-                                    record_assistant_run_create_failure(
-                                        &state,
-                                        run.id,
-                                        &execution_trail,
-                                        &retry_error,
-                                        stage,
-                                    )
-                                    .await;
-                                    return Err(assistant_run_create_error_with_run_context(
-                                        retry_error,
-                                        run.id,
-                                        stage,
-                                    ));
+                                        let stage = "provider";
+                                        record_assistant_run_create_failure(
+                                            &state,
+                                            run.id,
+                                            &execution_trail,
+                                            &retry_error,
+                                            stage,
+                                        )
+                                        .await;
+                                        return Err(assistant_run_create_error_with_run_context(
+                                            retry_error,
+                                            run.id,
+                                            stage,
+                                        ));
+                                    }
                                 }
                             }
                         } else {
@@ -18044,6 +18076,112 @@ fn assistant_run_compact_dataset_entity_scan_payload(item: &Value) -> Option<Val
         "answer_guidance": item.get("answer_guidance").cloned().unwrap_or(Value::Null),
         "model_note": "Answer from company_count and company_rows only. Do not use omitted candidate_terms, entities, document_hits, or summed row counts.",
     }))
+}
+
+fn assistant_run_dataset_entity_scan_direct_answer(
+    request: &CreateAssistantRunRequest,
+    evidence_state: &Value,
+) -> Option<String> {
+    let scans = assistant_run_compact_dataset_entity_scan_payloads(evidence_state);
+    if scans.is_empty() {
+        return None;
+    }
+
+    if assistant_run_request_output_format(request).as_deref() == Some("json") {
+        return serde_json::to_string_pretty(&json!({
+            "status": "answered",
+            "source": "dataset_entity_scan",
+            "question": request.prompt.trim(),
+            "dataset_entity_scans": scans,
+        }))
+        .ok();
+    }
+
+    let mut lines = Vec::new();
+    for (scan_index, scan) in scans.iter().enumerate() {
+        let scanned_document_count = scan
+            .get("scanned_document_count")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        let company_rows = scan
+            .get("company_rows")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let company_count = scan
+            .get("company_count")
+            .and_then(Value::as_u64)
+            .unwrap_or(company_rows.len() as u64);
+
+        if scans.len() > 1 {
+            lines.push(format!("### 数据集 {}", scan_index + 1));
+            lines.push(String::new());
+        }
+        if scanned_document_count > 0 {
+            lines.push(format!(
+                "已扫描 {scanned_document_count} 份可见文档，共识别到 {company_count} 个公司/组织名。"
+            ));
+        } else {
+            lines.push(format!("共识别到 {company_count} 个公司/组织名。"));
+        }
+        lines.push(String::new());
+        lines.push("| 公司/组织名 | 覆盖文档数 |".to_string());
+        lines.push("| --- | ---: |".to_string());
+        for row in company_rows {
+            let Some(name) = row.get("name").and_then(Value::as_str) else {
+                continue;
+            };
+            let document_count = row
+                .get("document_count")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            lines.push(format!(
+                "| {} | {} |",
+                escape_markdown_table_cell(name),
+                document_count
+            ));
+        }
+        lines.push(String::new());
+    }
+
+    Some(lines.join("\n").trim().to_string())
+}
+
+fn assistant_run_request_output_format(request: &CreateAssistantRunRequest) -> Option<String> {
+    assistant_run_request_external_answer_policy(request)
+        .and_then(|policy| policy.get("output_format"))
+        .and_then(|format| {
+            format
+                .get("format")
+                .and_then(Value::as_str)
+                .or_else(|| format.as_str())
+        })
+        .map(str::to_string)
+}
+
+fn assistant_run_direct_answer_response(output_text: String) -> LlmResponse {
+    LlmResponse {
+        output_text,
+        runtime: LlmRuntimeMetadata {
+            mode: LlmRuntimeMode::Placeholder,
+            provider: "platform_direct_answer".to_string(),
+            model: "dataset-entity-scan-direct-v1".to_string(),
+            lane: Some(MODEL_LANE_ASSISTANT_CHAT.to_string()),
+            request_id: None,
+            finish_reason: Some(LlmFinishReason::Stop),
+            provider_failure: None,
+            latency_ms: Some(0),
+            usage: None,
+            system_prompt_key: None,
+            system_prompt_version: None,
+            tool_trace_count: 0,
+        },
+        tool_calls: Vec::new(),
+    }
+}
+
+fn escape_markdown_table_cell(value: &str) -> String {
+    value.replace('|', "\\|").replace('\n', " ")
 }
 
 fn assistant_run_model_supply_item_brief(item: &Value) -> Option<String> {
@@ -51033,6 +51171,13 @@ mod tests {
         assert!(!input.contains("\"candidate_terms\""));
         assert!(!input.contains("项目经验"));
         assert!(!input.contains("噪声实体"));
+
+        let answer = assistant_run_dataset_entity_scan_direct_answer(&request, &evidence)
+            .expect("company scan should produce a direct answer");
+        assert!(answer.contains("已扫描 25 份可见文档"));
+        assert!(answer.contains("共识别到 2 个公司/组织名"));
+        assert!(answer.contains("| 广州寓力地产顾问有限公司 | 2 |"));
+        assert!(!answer.contains("document_ids"));
     }
 
     #[test]
