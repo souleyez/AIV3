@@ -90,6 +90,8 @@ run_check "dataset document memberships support multi-dataset read scopes" \
   "${cargo_bin}" test -p platform-api dataset_document_memberships_allow_document_in_multiple_dataset_scopes --lib
 run_check "external temporary document scope limits retrieval to selected documents" \
   "${cargo_bin}" test -p platform-api assistant_run_external_temporary_scope_retrieval_limits_to_selected_documents --lib
+run_check "external selected DOC question supplies explicit document evidence" \
+  "${cargo_bin}" test -p platform-api assistant_run_external_document_scope_supplies_selected_doc_without_acl_snapshot --lib
 run_check "external temporary document scope supplies range parse status" \
   "${cargo_bin}" test -p platform-api assistant_run_external_temporary_scope_supplies_parse_status_for_range_documents --lib
 run_check "external chat missing document source is model-visible" \
@@ -156,6 +158,7 @@ const report = {
     external_parse_compatibility: "Third-party Java/camelCase parse payloads and parse-detail summary fields remain compatible, including parseStatus/modelStatus/workflow state.",
     external_document_id_resolution: "Third-party documentExternalId should resolve parse-detail and chat document scope by inferring a unique source when source_id is omitted; unresolved IDs should remain model-visible instead of failing ordinary chat.",
     dataset_membership: "One canonical document may be linked into another dataset scope through active membership rows; temporary external memberships expire without moving the document.",
+    external_selected_doc_qa: "When a third-party turn explicitly supplies a DOC/DOCX external document range, person or short-name questions such as who a named engineer is must receive evidence from that selected document even before an ACL snapshot exists.",
     document_detail_parse_state: "Document detail responses should expose parse_state so normal UI/model flows can explain pending, failed, or reparsing documents.",
     resume_entity_scan: "Resume/company entity scans should preserve valid company names while filtering common phrase noise.",
     entity_scan_trigger: "Dataset questions asking to count, list, extract, or segment positions, skills, projects, locations, people, keywords, terms, or nouns should supply document entity scans.",
@@ -192,6 +195,7 @@ const lines = [
   `- External parse compatibility: ${report.contract.external_parse_compatibility}`,
   `- External document ID resolution: ${report.contract.external_document_id_resolution}`,
   `- Dataset membership: ${report.contract.dataset_membership}`,
+  `- External selected DOC QA: ${report.contract.external_selected_doc_qa}`,
   `- Document detail parse state: ${report.contract.document_detail_parse_state}`,
   `- Resume entity scan: ${report.contract.resume_entity_scan}`,
   `- Entity scan trigger: ${report.contract.entity_scan_trigger}`,
