@@ -21490,7 +21490,7 @@ fn selected_scope_allows_external_document_range_without_acl_snapshot(
         selected_scope
             .get("external_document_scope_status")
             .and_then(Value::as_str),
-        Some("resolved" | "partial")
+        Some("resolved" | "partial" | "source_resolved")
     ) {
         return false;
     }
@@ -41590,6 +41590,32 @@ mod tests {
             message.available_document_external_ids,
             vec!["doc-deng".to_string()]
         );
+    }
+
+    #[test]
+    fn external_source_document_scope_allows_missing_acl_snapshot() {
+        let dataset_id = DatasetId::new();
+        let selected_scope = json!({
+            "type": "external_channel",
+            "mode": "external_document_scope",
+            "external_document_scope_status": "source_resolved",
+            "source_document_scope": {
+                "source": "available_document_source_id",
+                "source_id": "third-party-source-main",
+                "document_count": 3,
+                "dataset_count": 1
+            },
+            "datasets": [{"type": "dataset", "id": dataset_id}]
+        });
+
+        assert!(
+            selected_scope_allows_external_document_range_without_acl_snapshot(&selected_scope)
+        );
+        assert!(external_acl_allows_missing_snapshot_for_selected_document(
+            DocumentId::new(),
+            &[],
+            true
+        ));
     }
 
     #[test]
