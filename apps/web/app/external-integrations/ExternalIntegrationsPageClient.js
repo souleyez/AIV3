@@ -29,6 +29,33 @@ import {
 
 const REFRESH_INTERVAL_MS = 15000;
 
+const PRODUCT_FEATURES = [
+  '文档入库',
+  '数据库入库',
+  '爬虫采集',
+  '可视化报表',
+  '移动端',
+  '企业对接',
+];
+
+const DATA_PIPELINE_STEPS = [
+  { label: '采集', text: '文档、数据库、网页资料统一进入 V3' },
+  { label: '处理', text: '解析、索引、问答、模板产物一次串联' },
+  { label: '呈现', text: '秒生 HTML、MD、图文和数据可视化报表' },
+  { label: '落地', text: '移动端可用，业务动作可确认回传' },
+];
+
+const ASSISTANT_REFERENCES = [
+  {
+    label: 'PC 页面',
+    src: '/external-integrations/assistant-pc-reference.png',
+  },
+  {
+    label: '移动页面',
+    src: '/external-integrations/assistant-mobile-reference.png',
+  },
+];
+
 async function fetchJson(pathname, options = {}) {
   const headers = { accept: 'application/json', ...(options.headers || {}) };
   let body = options.body;
@@ -421,10 +448,71 @@ export default function ExternalIntegrationsPageClient() {
 
   return (
     <main className="external-observability-shell">
-      <section className="external-hero-band">
+      <section className="external-product-hero">
+        <div className="external-product-copy">
+          <p className="external-kicker">V3 Enterprise Data Assistant</p>
+          <h1>
+            <span>V3企业级</span>
+            <span>数据处理</span>
+            <span>助手</span>
+          </h1>
+          <p className="external-product-tagline">
+            <span>无需开发对接，文档数据库爬虫采集皆可入库，</span>
+            <span>秒生数据可视化报表，支持移动端。</span>
+          </p>
+          <div className="external-contact-row" aria-label="对接联系">
+            <a href="mailto:soulzyn@qq.com">soulzyn@qq.com</a>
+            <span>开放 API</span>
+            <span>在线接口文档</span>
+            <span>支持联调</span>
+          </div>
+          <div className="external-feature-chips" aria-label="V3 能力标签">
+            {PRODUCT_FEATURES.map((feature) => (
+              <span key={feature}>{feature}</span>
+            ))}
+          </div>
+          <div className="external-hero-actions">
+            <a href="#external-docs">查看接口文档</a>
+            <a href="#external-observability">查看观测状态</a>
+          </div>
+        </div>
+        <figure className="external-product-visual">
+          <img
+            src="/external-integrations/v3-enterprise-assistant-hero.png"
+            alt="V3企业级数据处理助手能力概览"
+          />
+        </figure>
+      </section>
+
+      <section className="external-capability-strip" aria-label="V3 数据处理流程">
+        {DATA_PIPELINE_STEPS.map((step) => (
+          <article key={step.label}>
+            <strong>{step.label}</strong>
+            <span>{step.text}</span>
+          </article>
+        ))}
+      </section>
+
+      <section className="external-reference-band" aria-label="智能助手界面参考">
+        <div className="external-reference-copy">
+          <p className="external-kicker">Assistant UI Reference</p>
+          <h2>智能助手界面参考</h2>
+          <p>用于展示企业用户最终看到的 PC 与移动端体验形态；这里只放截图，不放站点入口。</p>
+        </div>
+        <div className="external-reference-grid">
+          {ASSISTANT_REFERENCES.map((item) => (
+            <figure className={`external-reference-shot external-reference-shot-${item.label.startsWith('PC') ? 'pc' : 'mobile'}`} key={item.label}>
+              <figcaption>{item.label}</figcaption>
+              <img src={item.src} alt={`${item.label}参考截图`} />
+            </figure>
+          ))}
+        </div>
+      </section>
+
+      <section className="external-hero-band" id="external-observability">
         <div>
-          <p className="external-kicker">V3 External Integrations</p>
-          <h1>外部集成观测</h1>
+          <p className="external-kicker">V3 Observability</p>
+          <h2>接入状态与运营观测</h2>
           <div className="external-domain-line">
             <span>默认接口域名</span>
             <code>{thirdPartyApiBaseUrl()}</code>
@@ -457,12 +545,12 @@ export default function ExternalIntegrationsPageClient() {
           </div>
           <div>
             <strong>{totals.searchEvidenceRequired}</strong>
-            <span>搜索待供料</span>
+            <span>网页待处理</span>
           </div>
         </div>
       </section>
 
-      <section className="external-api-band" aria-label="第三方接口">
+      <section className="external-api-band" id="external-docs" aria-label="第三方接口">
         <div>
           <span>聊天事件</span>
           <code>{buildThirdPartyApiUrl('/v1/external/channels/{connection_id}/events')}</code>
@@ -543,16 +631,16 @@ export default function ExternalIntegrationsPageClient() {
       {error ? <div className="external-error-line">{error}</div> : null}
       {notice ? <div className="external-notice-line">{notice}</div> : null}
 
-      <section className="external-panel external-conversation-panel" aria-label="外部对话测试">
+      <section className="external-panel external-conversation-panel external-conversation-mini" aria-label="对话查看">
         <div className="external-panel-head">
           <div>
-            <h2>外部对话测试</h2>
+            <h2>对话查看</h2>
             <p>
               {conversationTestsOpen
                 ? conversationTestsLoading
                   ? '读取中'
                   : `${selected?.displayName || selectedId || '当前集成'} · ${conversationTotals.total} 条最近消息`
-                : '未打开'}
+                : '默认收起，仅用于联调抽查'}
             </p>
           </div>
           {conversationTestsOpen ? (
@@ -584,7 +672,7 @@ export default function ExternalIntegrationsPageClient() {
           </div>
         </div>
         {!conversationTestsOpen ? (
-          <div className="external-empty-state">当前集成的对话测试未加载</div>
+          <div className="external-empty-state">需要时再展开查看最近消息。</div>
         ) : conversationAccessRequired ? (
           <form className="external-conversation-access-form" action="/external-integrations/access" method="post">
             <label>

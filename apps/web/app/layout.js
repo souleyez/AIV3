@@ -1,8 +1,8 @@
 import './globals.css';
 
 export const metadata = {
-  title: 'AI Data Platform V3 | 智能助手',
-  description: 'Rust V3 平台的智能助手工作台，支持数据集选择、会话回看与发布结果浏览。',
+  title: 'V3企业级数据处理助手',
+  description: '无需开发对接，文档数据库爬虫采集皆可入库，秒生数据可视化报表，支持移动端。',
 };
 
 export const viewport = {
