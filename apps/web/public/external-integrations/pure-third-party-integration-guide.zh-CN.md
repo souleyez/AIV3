@@ -54,18 +54,29 @@ sequenceDiagram
 
 最小可联调版本建议先准备：
 
+<span class="requirement-highlight">红色标记表示本次 Data Buddy 最大需求中，纯第三方最小对接必须优先确认或落地的部分。</span>
+
 | 模块 | 第三方需要提供 | V3 使用方式 |
 | --- | --- | --- |
 | 聊天入口 | 自建页面或网关调用 V3 消息接口 | 创建 AssistantRun 并返回回复对象 |
 | 用户标识 | 当前提问人的稳定外部 ID | 绑定会话、审计和历史上下文 |
-| 文档库 | 文档 ID、版本、正文或下载地址 | 建立索引或按需读取证据 |
-| 本轮文档范围 | 每次消息传入本轮可用文档 ID 列表 | 只在该列表对应文档内检索 |
-| 产物接口 | 接收报告、页面、文件或链接 | 发布/查询/撤销 V3 产物 |
+| <span class="requirement-highlight">文档库</span> | <span class="requirement-highlight">文档 ID、版本、正文或下载地址</span> | <span class="requirement-highlight">建立索引或按需读取证据，对应需求 1：解析文档并同步</span> |
+| <span class="requirement-highlight">本轮文档范围</span> | <span class="requirement-highlight">每次消息传入本轮可用文档 ID 列表，包括普通资料和模板文档 ID</span> | <span class="requirement-highlight">只在该列表对应文档内检索，对应需求 3：聊天指定模板文件</span> |
+| <span class="requirement-highlight">对话控制参数</span> | <span class="requirement-highlight">新会话提交默认提示词、输出格式和本轮模板要求</span> | <span class="requirement-highlight">创建 AssistantRun 时写入本轮策略，对应需求 2：按默认提示词和输出格式对话</span> |
+| <span class="requirement-highlight">产物接口</span> | <span class="requirement-highlight">接收 HTML 页面、下载链接或发布回执</span> | <span class="requirement-highlight">发布/查询/下载 V3 产物，对应需求 3：按模板输出 HTML 页面</span> |
 | 业务动作 | 接收 V3 派发的动作请求 | 执行业务事务并回传结果 |
 
-如果项目早期只做问答，可以先接聊天入口、用户标识、文档解析和本轮文档范围；产物和业务动作可以后续接入。
+<span class="requirement-highlight">如果项目早期只覆盖本次三项需求，最小闭环是：文档解析与同步 -> 新会话携带默认提示词/输出格式 -> 聊天携带模板文档 ID -> V3 输出 HTML 页面并返回预览/下载地址。业务动作可以后续接入。</span>
 
 资料库仍保留在第三方服务器时，按本文的文档接口字段准备文档 ID、版本、正文或下载地址即可进入联调。后续如果新增对接说明，统一发布到 V3 外部集成观测页的“对接方式与文档”区域，不再另发散落的历史文档。
+
+## 3.1 本次三项需求的最小范围与缺口评估
+
+| 需求 | 在线文档相关部分 | 现有覆盖 | 当前缺口 | 建议落地 |
+| --- | --- | --- | --- | --- |
+| <span class="requirement-highlight">1. 解析文档并同步</span> | <span class="requirement-highlight">第 7 节文档接口、第 8 节 `documents/parse`、`parse-detail`、`external/sources/{source_id}/sync`</span> | <span class="requirement-highlight">已有单文档解析、解析详情查询、资料源同步触发和本轮文档范围字段</span> | <span class="requirement-highlight">批量存量文档解析/同步的对外批处理接口尚未作为独立接口公开；当前可用循环调用单文档解析或走资料源同步</span> | <span class="requirement-highlight">联调先用单文档 `documents/parse`；存量批量导入如有性能要求，再补批量 parse 或 source sync 任务参数</span> |
+| <span class="requirement-highlight">2. 新会话接收默认提示词和输出格式后对话</span> | <span class="requirement-highlight">第 5 节 `/events`、`conversation_external_id`、`sender_external_id`、`requested_skills[].arguments`</span> | <span class="requirement-highlight">已有新会话 ID、用户 ID、消息文本和本轮 skill 参数承载位</span> | <span class="requirement-highlight">尚未有一等字段 `default_prompt`、`output_format`、`render_mode`；目前只能放在 `text` 或 `requested_skills[].arguments` 中，审计和校验不够直接</span> | <span class="requirement-highlight">建议新增请求字段：`default_prompt`、`output_format=markdown/html/chat/copyable_rich_text`、`render_mode=normal/artifact`，并做长度、枚举和敏感信息校验</span> |
+| <span class="requirement-highlight">3. 聊天指定模板文件并按模板输出 HTML 页面</span> | <span class="requirement-highlight">第 5 节 `document_template_skill`，第 8 节模板文档先解析，第 10 节快速 HTML 交付</span> | <span class="requirement-highlight">已有模板文档 ID、输出类型 `static_page/html`、快速 HTML 渲染、预览和下载接口</span> | <span class="requirement-highlight">模板必须先解析并出现在本轮 `available_document_external_ids`；尚未有专门的“模板文件上传/选择/生成 HTML”组合接口</span> | <span class="requirement-highlight">最小联调用 `requested_skills[].arguments.template_document_external_id`；后续可加 `template_document_external_id` 顶层字段或模板管理接口</span> |
 
 ## 4. 文档是否必须搬到 V3
 
@@ -128,6 +139,9 @@ Authorization: Bearer <V3 inbound token>
   "text": "帮我按周报模板总结本轮传入的采购审批制度，并生成一页 HTML 交付稿。",
   "available_document_source_id": "src-docs",
   "available_document_external_ids": ["doc-001", "doc-002", "tpl-weekly-report-001"],
+  "default_prompt": "你是 Data Buddy 助手，请优先按本轮传入资料回答，输出面向业务用户。",
+  "output_format": "html",
+  "render_mode": "artifact",
   "requested_skills": [
     {
       "skill_id": "procurement_policy_review",
@@ -170,6 +184,9 @@ Authorization: Bearer <V3 inbound token>
 | `text` | 文本消息必填 | 用户输入文本 |
 | `available_document_source_id` | 文档问答建议传 | 本轮可用文档所属资料源 ID；连接配置了默认资料源时可省略，但联调建议显式传 |
 | `available_document_external_ids` | 文档问答建议传 | 本轮允许 V3 使用的第三方文档 ID 列表；只传本轮已筛好的文档，不要传全库 |
+| <span class="requirement-highlight">`default_prompt`</span> | <span class="requirement-highlight">本次需求建议新增</span> | <span class="requirement-highlight">新会话默认提示词或页面级 system prompt；当前可临时放入 `requested_skills[].arguments.default_prompt` 或连接配置，建议补成一等字段</span> |
+| <span class="requirement-highlight">`output_format`</span> | <span class="requirement-highlight">本次需求建议新增</span> | <span class="requirement-highlight">期望输出格式，建议枚举为 `markdown`、`html`、`chat`、`copyable_rich_text`；当前可临时放入 `requested_skills[].arguments.output_format`</span> |
+| <span class="requirement-highlight">`render_mode`</span> | <span class="requirement-highlight">本次需求建议新增</span> | <span class="requirement-highlight">输出处理模式，建议 `normal` 表示普通聊天，`artifact` 表示生成可预览/下载产物；当前可由 `output_type` 和用户文本间接表达</span> |
 | `requested_skills` | 否 | 第三方希望本轮应用的结构化 skill 列表；正式对接建议传此字段，不建议只把 skill 写进用户自然语言文本 |
 | `requested_skills[].skill_id` | `requested_skills` 有值时必填 | 本轮希望启用的 skill 稳定标识，建议使用英文或业务 slug |
 | `requested_skills[].version` | 否 | skill 版本号或策略版本，用于审计和复现；不传时按连接默认策略处理 |
@@ -195,6 +212,7 @@ Authorization: Bearer <V3 inbound token>
 - 正式对接建议传 `requested_skills`。V3 会把它作为本轮结构化运行策略写入助手运行上下文，并供给模型；
 - `requested_skills[].skill_id` 必填，建议使用稳定英文或业务 slug；`version` 可选；`mode` 可选，取值为 `required`、`preferred` 或 `disabled`，不传时按 `preferred` 处理；
 - `requested_skills[].arguments` 可选，必须是 JSON object，只放本轮 skill 所需的非敏感参数，例如 `{ "focus": "risk" }`。不要放 token、密码、Cookie 或长期下载 URL；
+- <span class="requirement-highlight">本次需求中的“默认提示词、输出格式、正常聊天/MD/HTML/可复制图文格式”建议作为 `default_prompt`、`output_format`、`render_mode` 一等字段补到接口；在接口补齐前，可先放入 `requested_skills[].arguments` 做联调占位。</span>
 - 当前版本是模型提示级 skill 策略，先解决“本轮用什么规则/流程回答”的问题；如果后续要把 skill 变成可执行工具，还需要单独配置工具范围、确认和审计白名单；
 - 请求体兼容驼峰字段 `requestedSkills`，也兼容别名 `skillRefs` / `skill_refs`。嵌套字段兼容 `skillId`、`skillVersion`。
 
@@ -507,6 +525,8 @@ GET /documents/{document_external_id}/content?revision=rev-20260515-01
 
 ## 8. 文档解析与资料源同步
 
+<span class="requirement-highlight">本节对应需求 1：解析文档并同步。最小联调先使用单文档 `documents/parse`，再用 `parse-detail` 确认 `lifecycle=indexed`、`chunkCount` 和 `retrievalEvidenceCount` 后进入对话。</span>
+
 第一阶段建议采用“第三方上传后触发单文档解析”的轻量链路：
 
 ```http
@@ -631,6 +651,8 @@ V3 会把外部文档 ID 映射为内部文档范围，并只从这些文档供�
 
 ### 8.1 V3 触发资料源同步
 
+<span class="requirement-highlight">本节也对应需求 1 的“同步”。如果第三方已有文档列表/正文接口，V3 可通过资料源同步拉取增量；如果是前端上传后立即解析，优先走上面的 `documents/parse`。</span>
+
 V3 可通过连接配置中的第三方文档接口进行增量同步。运营或系统可触发：
 
 ```http
@@ -696,11 +718,13 @@ Authorization: Bearer <V3 inbound token>
 
 ## 10. 产物接口
 
+<span class="requirement-highlight">本节对应需求 3：聊天中指定模板文件 ID 后，按模板要求输出 HTML 页面，并通过预览/下载地址交付。</span>
+
 V3 可以生成报告、页面、文档、表格、图片、压缩包或链接，并按项目配置发布到第三方系统。
 
 当前主链路采用“V3 外部动作派发”方式：V3 把 `external_artifact.publish`、`external_artifact.status`、`external_artifact.revoke` 作为受控动作保存到审计记录中，再派发到第三方配置的 HTTPS endpoint。
 
-本次第三方对接的页面类产物可采用“快速 HTML 交付”方式：`html-anything` 作为模板来源和设计参考，V3 直接渲染浏览器可打开的 HTML，跳过调试页、效果图和截图确认。V3 仍保留模型路由、数据集、证据供料和产物审计边界。
+<span class="requirement-highlight">本次第三方对接的页面类产物可采用“快速 HTML 交付”方式：`html-anything` 作为模板来源和设计参考，V3 直接渲染浏览器可打开的 HTML，跳过调试页、效果图和截图确认。</span> V3 仍保留模型路由、数据集、证据供料和产物审计边界。
 
 V3 内部渲染最终页时使用：
 
@@ -717,6 +741,8 @@ V3 内部渲染最终页时使用：
 | --- | --- |
 | `direct_html` | 是否走快速 HTML 直出模式；为 `true` 时跳过调试页和截图确认 |
 | `background` | 是否后台异步渲染；为 `false` 时接口尽量同步返回初始渲染结果 |
+
+<span class="requirement-highlight">模板选择最小路径：先把模板文件作为普通文档解析成功，再在聊天请求中把模板文档 ID 放入 `available_document_external_ids` 和 `requested_skills[].arguments.template_document_external_id`，同时设置 `output_type=static_page` 或 `html`。</span>
 
 渲染响应里的 `render_output.id` 是本次 HTML 生成 id。第三方如果采用异步或需要确认状态，可用同一个 id 查询：
 
@@ -1133,7 +1159,9 @@ V3 错误格式：
 - 统一用户确认回调：`POST /v1/external/channels/{connection_id}/confirmations`；
 - 外部动作结果回传：`POST /v1/external/channels/{connection_id}/actions/{action_id}/result`；
 - 连接级入站 Bearer Token 校验，覆盖聊天事件、用户确认和动作结果回传；
-- 资料源同步触发：`POST /v1/external/sources/{source_id}/sync`；
+- <span class="requirement-highlight">单文档解析触发：`POST /v1/external/channels/{connection_id}/documents/parse`；</span>
+- <span class="requirement-highlight">解析详情查询：`GET /v1/external/channels/{connection_id}/documents/{document_external_id}/parse-detail`；</span>
+- <span class="requirement-highlight">资料源同步触发：`POST /v1/external/sources/{source_id}/sync`；</span>
 - 外部动作派发到第三方 HTTPS endpoint；
 - 派发 Bearer Token 和 HMAC 签名；
 - 动作生命周期观测和审计筛选；
@@ -1144,7 +1172,10 @@ V3 错误格式：
 仍需按项目配置或后续联调确认：
 
 - 具体第三方文档 API 字段映射；
-- 用户 ID、会话 ID、skill 和模板文档字段映射；
+- <span class="requirement-highlight">用户 ID、会话 ID、skill 和模板文档字段映射；</span>
+- <span class="requirement-highlight">`default_prompt`、`output_format`、`render_mode` 是否作为 `/events` 一等字段实现；当前文档已按本次需求建议标注，代码侧还需要补合同和校验；</span>
+- <span class="requirement-highlight">批量存量文档解析接口是否需要新增；当前已有单文档 parse 和 source sync，但没有独立的批量 parse 请求体；</span>
+- <span class="requirement-highlight">模板文件上传/选择/生成 HTML 是否需要组合接口；当前最小方案是模板先作为文档解析，再通过 `document_template_skill` 指定；</span>
 - 产物 endpoint 和业务动作 endpoint；
 - 生产级入站签名、IP 白名单、重放窗口和密钥轮换界面；
 - 客户真实沙箱环境的端到端验证。

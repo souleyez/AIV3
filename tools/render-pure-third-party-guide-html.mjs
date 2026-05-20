@@ -62,6 +62,10 @@ function escapeHtml(value) {
 
 function inlineMarkdown(value) {
   let html = escapeHtml(value);
+  html = html.replace(
+    /&lt;span class=&quot;requirement-highlight&quot;&gt;([\s\S]*?)&lt;\/span&gt;/g,
+    '<span class="requirement-highlight">$1</span>',
+  );
   html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
   html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
   html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, label, href) => {
@@ -307,6 +311,10 @@ function renderDocument({ body, nav }, profile = pureGuideProfile) {
       background: rgba(15, 118, 110, 0.08);
       font-family: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
       font-size: 0.9em;
+    }
+    .requirement-highlight {
+      color: #b42318;
+      font-weight: 800;
     }
 
     .shell {
