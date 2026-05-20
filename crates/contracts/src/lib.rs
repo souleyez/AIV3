@@ -3435,6 +3435,30 @@ pub struct StaticPageRenderOutputView {
         skip_serializing_if = "Option::is_none"
     )]
     pub html_download_url_camel: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub download_url: Option<String>,
+    #[serde(
+        default,
+        rename = "downloadUrl",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub download_url_camel: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub html_preview_url: Option<String>,
+    #[serde(
+        default,
+        rename = "htmlPreviewUrl",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub html_preview_url_camel: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retryable_error_reason: Option<String>,
+    #[serde(
+        default,
+        rename = "retryableErrorReason",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub retryable_error_reason_camel: Option<String>,
     pub asset_manifest: Value,
     pub created_at: DateTime<Utc>,
 }

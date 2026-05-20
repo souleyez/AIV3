@@ -54,6 +54,12 @@ run_check "ordinary external chat returns provider-authored answered text" \
   "${cargo_bin}" test -p platform-api generic_chat_page_event_returns_provider_model_text_when_configured --lib
 run_check "ordinary external chat falls back when primary output is rejected" \
   "${cargo_bin}" test -p platform-api generic_chat_page_event_uses_fallback_when_primary_output_is_rejected --lib
+run_check "ordinary external chat falls back when primary output is suppressed" \
+  "${cargo_bin}" test -p platform-api generic_chat_page_event_uses_fallback_when_primary_output_is_suppressed --lib
+run_check "ordinary external chat falls back when primary provider exceeds direct budget" \
+  "${cargo_bin}" test -p platform-api generic_chat_page_event_uses_fallback_when_primary_provider_exceeds_direct_budget --lib
+run_check "direct reply guard rejects empty and suppressed output" \
+  "${cargo_bin}" test -p platform-api external_channel_model_reply_rejects_empty_and_suppressed_output --lib
 run_check "external chat stream emits started/delta/completed without accepted" \
   "${cargo_bin}" test -p platform-api generic_chat_page_event_stream_does_not_emit_accepted_as_answer_state --lib
 run_check "missing model config does not return accepted text" \
@@ -105,6 +111,7 @@ const report = {
     temporary_document_scope: "External document ranges may create expiring dataset memberships, but ordinary chat still ends with provider-authored text.",
     minimax_global_env: "provider=minimax may use MINIMAX_BASE_URL and MINIMAX_API_KEY directly as an OpenAI-compatible chat-completions provider.",
     fallback: "Timeouts, provider failures, empty output, and unsafe/internal output are retryable before any final response is returned.",
+    direct_reply_budget: "External direct replies use configurable total and per-attempt budgets before falling back or returning a transparent unavailable error.",
     pdf_quality: "One-character or otherwise too-short PDF extraction is low quality and must trigger OCR/VLM fallback or a parse-quality diagnostic."
   },
   checks: JSON.parse(process.env.SMOKE_CHECKS_JSON || "[]")
@@ -132,6 +139,7 @@ const lines = [
   `- Temporary document scope: ${report.contract.temporary_document_scope}`,
   `- MiniMax global env: ${report.contract.minimax_global_env}`,
   `- Fallback: ${report.contract.fallback}`,
+  `- Direct reply budget: ${report.contract.direct_reply_budget}`,
   `- PDF quality: ${report.contract.pdf_quality}`,
   "",
   "## Checks",

@@ -47,6 +47,32 @@ node tools/validate-static-page-export-artifact.mjs \
   --artifact "${artifact_dir}" \
   --out "${export_validation_json}"
 
+api_checks=()
+
+run_api_check() {
+  local name="$1"
+  shift
+  echo ""
+  echo "== ${name} =="
+  "$@"
+  api_checks+=("${name}")
+}
+
+run_api_check "external direct HTML status preview download loop" \
+  "${cargo_bin}" test -p platform-api external_channel_direct_html_render_can_be_downloaded_with_channel_token --lib
+run_api_check "static HTML URLs include external preview path" \
+  "${cargo_bin}" test -p platform-api static_page_html_download_url_requires_external_channel_scope --lib
+run_api_check "failed static render exposes retryable reason" \
+  "${cargo_bin}" test -p platform-api static_page_render_output_view_exposes_retryable_failure_reason --lib
+
+api_checks_json="$(
+  printf '%s\n' "${api_checks[@]}" | node -e '
+const fs = require("fs");
+const checks = fs.readFileSync(0, "utf8").trim().split(/\n/).filter(Boolean);
+process.stdout.write(JSON.stringify(checks.map((name) => ({ name, details: "API contract check passed." }))));
+'
+)"
+
 finished_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 SMOKE_REPO_ROOT="${repo_root}" \
@@ -55,6 +81,7 @@ SMOKE_STARTED_AT="${started_at}" \
 SMOKE_FINISHED_AT="${finished_at}" \
 SMOKE_ARTIFACT_DIR="${artifact_dir}" \
 SMOKE_EXPORT_VALIDATION_JSON="${export_validation_json}" \
+SMOKE_API_CHECKS_JSON="${api_checks_json}" \
 SMOKE_REPORT_JSON="${report_json}" \
 SMOKE_REPORT_MD="${report_md}" \
 node <<'NODE'
@@ -114,6 +141,10 @@ function check(name, passed, details) {
     status: passed ? "passed" : "failed",
     details,
   });
+}
+
+for (const apiCheck of JSON.parse(process.env.SMOKE_API_CHECKS_JSON || "[]")) {
+  check(apiCheck.name, true, apiCheck.details);
 }
 
 check(
@@ -264,6 +295,7 @@ const report = {
     generated_html: "Renderer smoke generates an actual index.html artifact from a representative static-page draft.",
     chart_runtime: "Deterministic SVG chart output remains available, and ECharts modules expose only safe JSON hydration islands without remote scripts.",
     data_quality: "Confirmed sample rows render without missing-data placeholders; manifest attentionModules must be zero for this fixture.",
+    api_state_loop: "Static page render outputs expose a stable status view with preview URL, download URL, and retryable failure reason.",
     export_handoff: "The asset manifest must list and the smoke artifact must write the expected static-page export package files while preserving the browser delivery contract."
   },
   checks,
@@ -286,6 +318,7 @@ const lines = [
   `- Generated HTML: ${report.contract.generated_html}`,
   `- Chart runtime: ${report.contract.chart_runtime}`,
   `- Data quality: ${report.contract.data_quality}`,
+  `- API state loop: ${report.contract.api_state_loop}`,
   `- Export handoff: ${report.contract.export_handoff}`,
   "",
   "## Checks",

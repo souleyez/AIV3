@@ -504,6 +504,24 @@ V3 内部渲染最终页时使用：
 }
 ```
 
+渲染响应里的 `render_output.id` 是本次 HTML 生成 id。第三方如果采用异步或需要确认状态，可用同一个 id 查询：
+
+```http
+GET /v1/external/channels/{connection_id}/static-page-renders/{render_output_id}
+Host: v3.elepcloud.com
+Authorization: Bearer <V3 inbound token>
+```
+
+状态响应会返回 `status`、`html_preview_url` / `htmlPreviewUrl`、`html_download_url` / `htmlDownloadUrl`、`download_url` / `downloadUrl` 和 `retryable_error_reason` / `retryableErrorReason`。`status=rendered` 且存在下载地址时即可进入下载；`status=failed` 时，第三方应展示失败状态并参考 `retryable_error_reason` 发起重试或人工处理。
+
+预览 HTML：
+
+```http
+GET /v1/external/channels/{connection_id}/static-page-renders/{render_output_id}/preview
+Host: v3.elepcloud.com
+Authorization: Bearer <V3 inbound token>
+```
+
 第三方服务器端下载 HTML：
 
 ```http
@@ -512,7 +530,7 @@ Host: v3.elepcloud.com
 Authorization: Bearer <V3 inbound token>
 ```
 
-该下载接口返回 `text/html; charset=utf-8` 附件。第三方应由服务器端带 token 下载后转存或分发，不要把 V3 token 放到浏览器里。V3 会校验 `render_output_id` 必须属于该 `connection_id` 对应的外部通道上下文。
+预览接口返回 inline `text/html; charset=utf-8`；下载接口返回 `text/html; charset=utf-8` 附件。第三方应由服务器端带 token 下载后转存或分发，不要把 V3 token 放到浏览器里。V3 会校验 `render_output_id` 必须属于该 `connection_id` 对应的外部通道上下文。
 
 第三方建议提供：
 

@@ -90,8 +90,8 @@ use futures_util::{stream, Stream, StreamExt};
 use hmac::{Hmac, Mac};
 use llm_gateway::{
     build_provider_from_env, render_runtime_manifest, resolve_runtime_selection_from_env,
-    LlmRequest, LlmResponse, LlmRuntimeSelection, ModelProviderProfile, MODEL_LANE_ASSISTANT_CHAT,
-    MODEL_LANE_ASSISTANT_REACT_JSON, MODEL_LANE_CODEX_CONVERSATION,
+    LlmFinishReason, LlmRequest, LlmResponse, LlmRuntimeSelection, ModelProviderProfile,
+    MODEL_LANE_ASSISTANT_CHAT, MODEL_LANE_ASSISTANT_REACT_JSON, MODEL_LANE_CODEX_CONVERSATION,
 };
 use prompt_registry::bootstrap_default_prompt_registry;
 use serde::{Deserialize, Serialize};
@@ -158,6 +158,8 @@ const ASSISTANT_RUN_DATASET_ENTITY_SCAN_DOCUMENT_LIMIT: usize = 48;
 const ASSISTANT_RUN_DATASET_ENTITY_SCAN_CHUNK_LIMIT: usize = 4;
 const ASSISTANT_RUN_DATASET_ENTITY_SCAN_ENTITY_LIMIT: usize = 80;
 const ASSISTANT_RUN_DOCUMENT_PARSE_STATUS_DOCUMENT_LIMIT: usize = 48;
+const EXTERNAL_CHANNEL_DIRECT_REPLY_DEFAULT_TOTAL_BUDGET_MS: u64 = 90_000;
+const EXTERNAL_CHANNEL_DIRECT_REPLY_DEFAULT_ATTEMPT_TIMEOUT_MS: u64 = 45_000;
 const ASSISTANT_RUN_DOCUMENT_PARSE_STATUS_ATTENTION_LIMIT: usize = 12;
 const ASSISTANT_RUN_CONVERSATION_MEMORY_DEFAULT_LIMIT: i64 = 4;
 const ASSISTANT_RUN_CONVERSATION_MEMORY_MAX_LIMIT: i64 = 8;
@@ -502,6 +504,14 @@ pub fn router(
             get(get_external_document_parse_detail),
         )
         .route(
+            "/v1/external/channels/{connection_id}/static-page-renders/{render_output_id}",
+            get(get_external_channel_static_page_render_output),
+        )
+        .route(
+            "/v1/external/channels/{connection_id}/static-page-renders/{render_output_id}/preview",
+            get(preview_external_channel_static_page_html),
+        )
+        .route(
             "/v1/external/channels/{connection_id}/static-page-renders/{render_output_id}/download",
             get(download_external_channel_static_page_html),
         )
@@ -583,6 +593,14 @@ pub fn router(
         .route(
             "/v1/static-page-drafts/{draft_id}/renders",
             get(list_static_page_render_outputs).post(create_static_page_render),
+        )
+        .route(
+            "/v1/static-page-render-outputs/{render_output_id}",
+            get(get_static_page_render_output),
+        )
+        .route(
+            "/v1/static-page-render-outputs/{render_output_id}/preview",
+            get(preview_static_page_render_output_html),
         )
         .route(
             "/v1/static-page-render-outputs/{render_output_id}/download",
@@ -9642,11 +9660,62 @@ async fn get_external_document_parse_detail(
     }))
 }
 
+async fn get_external_channel_static_page_render_output(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((connection_id, render_output_id)): Path<(String, String)>,
+) -> std::result::Result<Json<StaticPageRenderOutputView>, ApiError> {
+    let (output, selected_scope) = load_external_channel_static_page_render_output(
+        &state,
+        &headers,
+        &connection_id,
+        &render_output_id,
+    )
+    .await?;
+    Ok(Json(to_static_page_render_output_view(
+        output,
+        Some(&selected_scope),
+    )))
+}
+
+async fn preview_external_channel_static_page_html(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((connection_id, render_output_id)): Path<(String, String)>,
+) -> std::result::Result<Response, ApiError> {
+    let (output, _) = load_external_channel_static_page_render_output(
+        &state,
+        &headers,
+        &connection_id,
+        &render_output_id,
+    )
+    .await?;
+    ensure_static_page_html_ready(&output)?;
+    static_page_html_preview_response(output)
+}
+
 async fn download_external_channel_static_page_html(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path((connection_id, render_output_id)): Path<(String, String)>,
 ) -> std::result::Result<Response, ApiError> {
+    let (output, _) = load_external_channel_static_page_render_output(
+        &state,
+        &headers,
+        &connection_id,
+        &render_output_id,
+    )
+    .await?;
+    ensure_static_page_html_ready(&output)?;
+    static_page_html_download_response(output)
+}
+
+async fn load_external_channel_static_page_render_output(
+    state: &AppState,
+    headers: &HeaderMap,
+    connection_id: &str,
+    render_output_id: &str,
+) -> std::result::Result<(StaticPageRenderOutput, Value), ApiError> {
     validate_required("connection_id", &connection_id)?;
     let render_output_id = parse_static_page_render_output_id(&render_output_id)?;
     let connection = load_external_channel_connection(&state, &connection_id).await?;
@@ -9664,14 +9733,6 @@ async fn download_external_channel_static_page_html(
                 format!("static page render output {render_output_id} was not found"),
             )
         })?;
-    if !matches!(output.status, StaticPageRenderOutputStatus::Rendered)
-        || output.html.trim().is_empty()
-    {
-        return Err(ApiError::bad_request(
-            "static_page_html_not_ready",
-            "static page HTML is not ready for download".to_string(),
-        ));
-    }
     let run = state
         .storage
         .assistant_runs()
@@ -9685,7 +9746,31 @@ async fn download_external_channel_static_page_html(
             )
         })?;
     ensure_static_page_render_belongs_to_external_channel(&connection_id, &run)?;
-    static_page_html_download_response(output)
+    Ok((output, run.selected_scope))
+}
+
+async fn get_static_page_render_output(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(render_output_id): Path<String>,
+) -> std::result::Result<Json<StaticPageRenderOutputView>, ApiError> {
+    let (output, selected_scope) =
+        load_visible_static_page_render_output(&state, &headers, &render_output_id).await?;
+    Ok(Json(to_static_page_render_output_view(
+        output,
+        Some(&selected_scope),
+    )))
+}
+
+async fn preview_static_page_render_output_html(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(render_output_id): Path<String>,
+) -> std::result::Result<Response, ApiError> {
+    let (output, _) =
+        load_visible_static_page_render_output(&state, &headers, &render_output_id).await?;
+    ensure_static_page_html_ready(&output)?;
+    static_page_html_preview_response(output)
 }
 
 async fn download_static_page_render_output_html(
@@ -9693,8 +9778,19 @@ async fn download_static_page_render_output_html(
     headers: HeaderMap,
     Path(render_output_id): Path<String>,
 ) -> std::result::Result<Response, ApiError> {
-    let render_output_id = parse_static_page_render_output_id(&render_output_id)?;
-    let current_user_id = current_auth_user_id(&state, &headers).await?;
+    let (output, _) =
+        load_visible_static_page_render_output(&state, &headers, &render_output_id).await?;
+    ensure_static_page_html_ready(&output)?;
+    static_page_html_download_response(output)
+}
+
+async fn load_visible_static_page_render_output(
+    state: &AppState,
+    headers: &HeaderMap,
+    render_output_id: &str,
+) -> std::result::Result<(StaticPageRenderOutput, Value), ApiError> {
+    let render_output_id = parse_static_page_render_output_id(render_output_id)?;
+    let current_user_id = current_auth_user_id(state, headers).await?;
     let output = state
         .storage
         .static_page_render_outputs()
@@ -9707,21 +9803,50 @@ async fn download_static_page_render_output_html(
                 format!("static page render output {render_output_id} was not found"),
             )
         })?;
-    load_visible_static_page_draft(&state, output.draft_id, current_user_id).await?;
-    if !matches!(output.status, StaticPageRenderOutputStatus::Rendered)
-        || output.html.trim().is_empty()
+    let draft = load_visible_static_page_draft(state, output.draft_id, current_user_id).await?;
+    Ok((output, draft.selected_scope))
+}
+
+fn ensure_static_page_html_ready(
+    output: &StaticPageRenderOutput,
+) -> std::result::Result<(), ApiError> {
+    if matches!(output.status, StaticPageRenderOutputStatus::Rendered)
+        && !output.html.trim().is_empty()
     {
-        return Err(ApiError::bad_request(
-            "static_page_html_not_ready",
-            "static page HTML is not ready for download".to_string(),
-        ));
+        return Ok(());
     }
-    static_page_html_download_response(output)
+    Err(ApiError::bad_request(
+        "static_page_html_not_ready",
+        "static page HTML is not ready for download".to_string(),
+    ))
+}
+
+fn static_page_html_preview_response(
+    output: StaticPageRenderOutput,
+) -> std::result::Result<Response, ApiError> {
+    let bytes = output.html.into_bytes();
+    let mut builder = Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
+        .header(header::CACHE_CONTROL, "no-store")
+        .header(header::CONTENT_DISPOSITION, "inline");
+    if let Ok(length) = HeaderValue::from_str(&bytes.len().to_string()) {
+        builder = builder.header(header::CONTENT_LENGTH, length);
+    }
+    builder
+        .body(axum::body::Body::from(bytes))
+        .map_err(|error| {
+            ApiError::internal(
+                "static_page_html_preview_response_failed",
+                format!("failed to build static page HTML preview response: {error}"),
+            )
+        })
 }
 
 fn static_page_html_download_response(
     output: StaticPageRenderOutput,
 ) -> std::result::Result<Response, ApiError> {
+    ensure_static_page_html_ready(&output)?;
     let file_name = format!("v3-static-page-{}.html", output.id);
     let bytes = output.html.into_bytes();
     let mut builder = Response::builder()
@@ -13572,12 +13697,51 @@ fn external_channel_model_reply_rejection_reason(response: &LlmResponse) -> Opti
     if let Some(failure) = response.runtime.provider_failure.as_ref() {
         return Some(format!("provider_failure:{}", failure.kind.as_str()));
     }
+    if matches!(
+        response.runtime.finish_reason.as_ref(),
+        Some(LlmFinishReason::ContentFilter)
+    ) {
+        return Some("model_output_suppressed".to_string());
+    }
 
     let output_text = response.output_text.trim();
     external_channel_model_output_text_rejection_reason(output_text)
 }
 
+fn external_channel_direct_reply_env_ms(key: &str, default_ms: u64) -> u64 {
+    std::env::var(key)
+        .ok()
+        .and_then(|value| {
+            let value = value.trim();
+            (!value.is_empty())
+                .then(|| value.parse::<u64>().ok())
+                .flatten()
+        })
+        .filter(|value| *value > 0)
+        .unwrap_or(default_ms)
+}
+
+fn external_channel_direct_reply_total_budget() -> std::time::Duration {
+    std::time::Duration::from_millis(external_channel_direct_reply_env_ms(
+        "EXTERNAL_CHANNEL_DIRECT_REPLY_TOTAL_BUDGET_MS",
+        EXTERNAL_CHANNEL_DIRECT_REPLY_DEFAULT_TOTAL_BUDGET_MS,
+    ))
+}
+
+fn external_channel_direct_reply_attempt_timeout(
+    remaining_budget: std::time::Duration,
+) -> std::time::Duration {
+    let configured = std::time::Duration::from_millis(external_channel_direct_reply_env_ms(
+        "EXTERNAL_CHANNEL_DIRECT_REPLY_ATTEMPT_TIMEOUT_MS",
+        EXTERNAL_CHANNEL_DIRECT_REPLY_DEFAULT_ATTEMPT_TIMEOUT_MS,
+    ));
+    configured
+        .min(remaining_budget)
+        .max(std::time::Duration::from_millis(1))
+}
+
 fn external_channel_model_output_text_rejection_reason(output_text: &str) -> Option<String> {
+    let output_text = output_text.trim();
     if output_text.is_empty() {
         return Some("empty_output".to_string());
     }
@@ -13679,8 +13843,51 @@ async fn external_channel_chat_model_or_acceptance_reply(
         build_assistant_run_provider_input_with_evidence(assistant_request, Some(evidence_state));
     let attempts = external_channel_chat_runtime_attempts(chat_runtime);
     let mut rejected_attempts = Vec::new();
+    let direct_reply_started_at = Instant::now();
+    let direct_reply_total_budget = external_channel_direct_reply_total_budget();
 
     for attempt in attempts {
+        let elapsed = direct_reply_started_at.elapsed();
+        if elapsed >= direct_reply_total_budget {
+            rejected_attempts.push(json!({
+                "attempt": attempt.label,
+                "runtime_mode": attempt.runtime.mode.as_str(),
+                "provider": attempt.runtime.provider.as_str(),
+                "model": attempt.runtime.model.as_str(),
+                "reason": "direct_reply_budget_exhausted",
+                "elapsed_ms": elapsed.as_millis() as u64,
+                "total_budget_ms": direct_reply_total_budget.as_millis() as u64,
+            }));
+            state
+                .storage
+                .assistant_runs()
+                .append_event(
+                    state.tenant_id,
+                    run_id,
+                    &NewAssistantRunEvent {
+                        event_name: "assistant_run.external_channel_model_reply_attempt_skipped"
+                            .to_string(),
+                        payload: json!({
+                            "channel_connection_id": connection_id,
+                            "platform": external_channel_platform_wire_value(&message.platform),
+                            "message_external_id": message.message_external_id.clone(),
+                            "attempt": attempt.label,
+                            "runtime_mode": attempt.runtime.mode.as_str(),
+                            "provider": attempt.runtime.provider.as_str(),
+                            "model": attempt.runtime.model.as_str(),
+                            "reason": "direct_reply_budget_exhausted",
+                            "elapsed_ms": elapsed.as_millis() as u64,
+                            "total_budget_ms": direct_reply_total_budget.as_millis() as u64,
+                            "strict_direct_reply": true,
+                        }),
+                        created_at: now,
+                    },
+                )
+                .await
+                .map_err(ApiError::from_storage)?;
+            break;
+        }
+
         if attempt.runtime.mode == "placeholder" {
             rejected_attempts.push(json!({
                 "attempt": attempt.label,
@@ -13717,18 +13924,23 @@ async fn external_channel_chat_model_or_acceptance_reply(
             continue;
         }
 
-        let response = match complete_assistant_run_provider_with_env_prefix(
-            attempt.env_prefix,
-            MODEL_LANE_ASSISTANT_CHAT,
-            attempt.runtime.mode.clone(),
-            attempt.runtime.provider.clone(),
-            attempt.runtime.model.clone(),
-            provider_input.clone(),
+        let remaining_budget = direct_reply_total_budget.saturating_sub(elapsed);
+        let attempt_timeout = external_channel_direct_reply_attempt_timeout(remaining_budget);
+        let response = match tokio::time::timeout(
+            attempt_timeout,
+            complete_assistant_run_provider_with_env_prefix(
+                attempt.env_prefix,
+                MODEL_LANE_ASSISTANT_CHAT,
+                attempt.runtime.mode.clone(),
+                attempt.runtime.provider.clone(),
+                attempt.runtime.model.clone(),
+                provider_input.clone(),
+            ),
         )
         .await
         {
-            Ok(response) => response,
-            Err(error) => {
+            Ok(Ok(response)) => response,
+            Ok(Err(error)) => {
                 rejected_attempts.push(json!({
                     "attempt": attempt.label,
                     "runtime_mode": attempt.runtime.mode.as_str(),
@@ -13737,6 +13949,8 @@ async fn external_channel_chat_model_or_acceptance_reply(
                     "reason": "provider_error",
                     "error_code": error.payload.code.as_str(),
                     "error_status": error.status.as_u16(),
+                    "attempt_timeout_ms": attempt_timeout.as_millis() as u64,
+                    "total_budget_ms": direct_reply_total_budget.as_millis() as u64,
                 }));
                 state
                     .storage
@@ -13757,6 +13971,48 @@ async fn external_channel_chat_model_or_acceptance_reply(
                                 "model": attempt.runtime.model.as_str(),
                                 "error_code": error.payload.code.as_str(),
                                 "error_status": error.status.as_u16(),
+                                "attempt_timeout_ms": attempt_timeout.as_millis() as u64,
+                                "total_budget_ms": direct_reply_total_budget.as_millis() as u64,
+                                "strict_direct_reply": true,
+                                "retryable": true,
+                            }),
+                            created_at: now,
+                        },
+                    )
+                    .await
+                    .map_err(ApiError::from_storage)?;
+                continue;
+            }
+            Err(_elapsed) => {
+                rejected_attempts.push(json!({
+                    "attempt": attempt.label,
+                    "runtime_mode": attempt.runtime.mode.as_str(),
+                    "provider": attempt.runtime.provider.as_str(),
+                    "model": attempt.runtime.model.as_str(),
+                    "reason": "direct_reply_attempt_timeout",
+                    "attempt_timeout_ms": attempt_timeout.as_millis() as u64,
+                    "total_budget_ms": direct_reply_total_budget.as_millis() as u64,
+                }));
+                state
+                    .storage
+                    .assistant_runs()
+                    .append_event(
+                        state.tenant_id,
+                        run_id,
+                        &NewAssistantRunEvent {
+                            event_name: "assistant_run.external_channel_model_reply_failed"
+                                .to_string(),
+                            payload: json!({
+                                "channel_connection_id": connection_id,
+                                "platform": external_channel_platform_wire_value(&message.platform),
+                                "message_external_id": message.message_external_id.clone(),
+                                "attempt": attempt.label,
+                                "runtime_mode": attempt.runtime.mode.as_str(),
+                                "provider": attempt.runtime.provider.as_str(),
+                                "model": attempt.runtime.model.as_str(),
+                                "reason": "direct_reply_attempt_timeout",
+                                "attempt_timeout_ms": attempt_timeout.as_millis() as u64,
+                                "total_budget_ms": direct_reply_total_budget.as_millis() as u64,
                                 "strict_direct_reply": true,
                                 "retryable": true,
                             }),
@@ -34415,6 +34671,8 @@ fn to_static_page_render_output_view(
     selected_scope: Option<&Value>,
 ) -> StaticPageRenderOutputView {
     let html_download_url = static_page_html_download_url(selected_scope, &output);
+    let html_preview_url = static_page_html_preview_url(selected_scope, &output);
+    let retryable_error_reason = static_page_render_output_retryable_error_reason(&output);
     StaticPageRenderOutputView {
         id: output.id,
         draft_id: output.draft_id,
@@ -34423,7 +34681,13 @@ fn to_static_page_render_output_view(
         status: contracts::StaticPageRenderOutputStatusView::from_domain(output.status),
         html: output.html,
         html_download_url: html_download_url.clone(),
-        html_download_url_camel: html_download_url,
+        html_download_url_camel: html_download_url.clone(),
+        download_url: html_download_url.clone(),
+        download_url_camel: html_download_url,
+        html_preview_url: html_preview_url.clone(),
+        html_preview_url_camel: html_preview_url,
+        retryable_error_reason: retryable_error_reason.clone(),
+        retryable_error_reason_camel: retryable_error_reason,
         asset_manifest: output.asset_manifest,
         created_at: output.created_at,
     }
@@ -34443,6 +34707,25 @@ fn static_page_html_download_url(
         .or_else(|| {
             Some(format!(
                 "/v1/static-page-render-outputs/{}/download",
+                output.id
+            ))
+        })
+}
+
+fn static_page_html_preview_url(
+    selected_scope: Option<&Value>,
+    output: &StaticPageRenderOutput,
+) -> Option<String> {
+    if !matches!(output.status, StaticPageRenderOutputStatus::Rendered)
+        || output.html.trim().is_empty()
+    {
+        return None;
+    }
+    selected_scope
+        .and_then(|scope| static_page_external_html_preview_url(scope, output.id))
+        .or_else(|| {
+            Some(format!(
+                "/v1/static-page-render-outputs/{}/preview",
                 output.id
             ))
         })
@@ -34470,6 +34753,60 @@ fn static_page_external_html_download_url(
         encode_url_path_segment(channel_connection_id),
         render_output_id
     ))
+}
+
+fn static_page_external_html_preview_url(
+    selected_scope: &Value,
+    render_output_id: StaticPageRenderOutputId,
+) -> Option<String> {
+    if value_at_any_key(selected_scope, &["type", "scope_type", "scopeType"])
+        .and_then(Value::as_str)
+        != Some("external_channel")
+    {
+        return None;
+    }
+    let channel_connection_id = value_at_any_key(
+        selected_scope,
+        &["channel_connection_id", "channelConnectionId"],
+    )
+    .and_then(Value::as_str)
+    .map(str::trim)
+    .filter(|value| !value.is_empty())?;
+    Some(format!(
+        "/v1/external/channels/{}/static-page-renders/{}/preview",
+        encode_url_path_segment(channel_connection_id),
+        render_output_id
+    ))
+}
+
+fn static_page_render_output_retryable_error_reason(
+    output: &StaticPageRenderOutput,
+) -> Option<String> {
+    if !matches!(output.status, StaticPageRenderOutputStatus::Failed) {
+        return None;
+    }
+    [
+        "/retryable_error_reason",
+        "/retryableErrorReason",
+        "/failure_reason",
+        "/failureReason",
+        "/last_error",
+        "/lastError",
+        "/error/reason",
+        "/error/message",
+        "/workflow/error/reason",
+        "/workflow/error/message",
+    ]
+    .iter()
+    .find_map(|pointer| {
+        output
+            .asset_manifest
+            .pointer(pointer)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+    })
 }
 
 fn encode_url_path_segment(value: &str) -> String {
@@ -41608,6 +41945,197 @@ mod tests {
         clear_assistant_openclaw_env();
     }
 
+    #[tokio::test]
+    async fn generic_chat_page_event_uses_fallback_when_primary_output_is_suppressed() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        clear_assistant_openclaw_env();
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_MODE", "provider");
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_PROVIDER", "scripted");
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_MODEL", "assistant-run-primary-v1");
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_OUTPUT_TEXT", "内容已被过滤。");
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_FINISH_REASON", "content_filter");
+        std::env::set_var("ASSISTANT_RUN_FALLBACK_RUNTIME_MODE", "provider");
+        std::env::set_var("ASSISTANT_RUN_FALLBACK_RUNTIME_PROVIDER", "scripted");
+        std::env::set_var(
+            "ASSISTANT_RUN_FALLBACK_RUNTIME_MODEL",
+            "assistant-run-fallback-v1",
+        );
+        std::env::set_var(
+            "ASSISTANT_RUN_FALLBACK_RUNTIME_OUTPUT_TEXT",
+            "这是过滤后兜底模型直答。",
+        );
+
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping generic chat suppressed fallback endpoint test: {reason}");
+                clear_assistant_openclaw_env();
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("generic-chat-suppressed-fallback-test-{}", Uuid::new_v4()),
+                "Generic Chat Suppressed Fallback Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage.clone(),
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        insert_generic_external_channel_connection(&state, "generic-chat-main").await;
+        let app = router(
+            storage.clone(),
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+
+        let mut message = sample_external_bot_message();
+        message.text = Some("普通问题需要直答".to_string());
+        message.message_external_id = "msg-suppressed-fallback-001".to_string();
+        message.idempotency_key = "generic:tenant-ext-001:msg-suppressed-fallback-001".to_string();
+        let response = post_json_request(
+            app.clone(),
+            "/v1/external/channels/generic-chat-main/events",
+            &message,
+            None,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let body: ExternalChannelEventResponse = read_json_response(response).await;
+        assert_eq!(body.reply.reply_type, ExternalBotReplyTypeView::Text);
+        assert_eq!(body.reply.task_status.as_deref(), Some("answered"));
+        assert_eq!(body.reply.text.as_deref(), Some("这是过滤后兜底模型直答。"));
+
+        let run_id = body.assistant_run_id.expect("assistant run id");
+        let events = storage
+            .assistant_runs()
+            .list_events(tenant.id, run_id)
+            .await
+            .expect("events should load");
+        assert!(events.iter().any(|event| {
+            event.event_name == "assistant_run.external_channel_model_reply_rejected"
+                && event.payload["attempt"] == json!("primary")
+                && event.payload["reason"] == json!("model_output_suppressed")
+        }));
+        assert!(events.iter().any(|event| {
+            event.event_name == "assistant_run.external_channel_model_reply_completed"
+                && event.payload["attempt"] == json!("fallback")
+        }));
+        clear_assistant_openclaw_env();
+    }
+
+    #[tokio::test]
+    async fn generic_chat_page_event_uses_fallback_when_primary_provider_exceeds_direct_budget() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        clear_assistant_openclaw_env();
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping generic chat timeout fallback endpoint test: {reason}");
+                clear_assistant_openclaw_env();
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+        let addr = listener.local_addr().expect("addr");
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let _request = read_http_request(&mut stream);
+            std::thread::sleep(std::time::Duration::from_millis(250));
+            write_http_json_response(
+                &mut stream,
+                200,
+                r#"{"id":"chatcmpl-slow","choices":[{"message":{"content":"慢主模型返回不应作为最终答复。"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}"#,
+            );
+        });
+
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_MODE", "provider");
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_PROVIDER", "openai");
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_MODEL", "slow-primary-v1");
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_BASE_URL", format!("http://{addr}"));
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_API_PATH", "/v1/chat/completions");
+        std::env::set_var("EXTERNAL_CHANNEL_DIRECT_REPLY_ATTEMPT_TIMEOUT_MS", "75");
+        std::env::set_var("EXTERNAL_CHANNEL_DIRECT_REPLY_TOTAL_BUDGET_MS", "1000");
+        std::env::set_var("ASSISTANT_RUN_FALLBACK_RUNTIME_MODE", "provider");
+        std::env::set_var("ASSISTANT_RUN_FALLBACK_RUNTIME_PROVIDER", "scripted");
+        std::env::set_var(
+            "ASSISTANT_RUN_FALLBACK_RUNTIME_MODEL",
+            "assistant-run-fallback-v1",
+        );
+        std::env::set_var(
+            "ASSISTANT_RUN_FALLBACK_RUNTIME_OUTPUT_TEXT",
+            "这是超时后的兜底模型直答。",
+        );
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("generic-chat-timeout-fallback-test-{}", Uuid::new_v4()),
+                "Generic Chat Timeout Fallback Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage.clone(),
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        insert_generic_external_channel_connection(&state, "generic-chat-main").await;
+        let app = router(
+            storage.clone(),
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+
+        let mut message = sample_external_bot_message();
+        message.text = Some("普通问题需要直答".to_string());
+        message.message_external_id = "msg-timeout-fallback-001".to_string();
+        message.idempotency_key = "generic:tenant-ext-001:msg-timeout-fallback-001".to_string();
+        let response = post_json_request(
+            app.clone(),
+            "/v1/external/channels/generic-chat-main/events",
+            &message,
+            None,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let body: ExternalChannelEventResponse = read_json_response(response).await;
+        assert_eq!(body.reply.reply_type, ExternalBotReplyTypeView::Text);
+        assert_eq!(body.reply.task_status.as_deref(), Some("answered"));
+        assert_eq!(
+            body.reply.text.as_deref(),
+            Some("这是超时后的兜底模型直答。")
+        );
+
+        server.join().expect("server join");
+        let run_id = body.assistant_run_id.expect("assistant run id");
+        let events = storage
+            .assistant_runs()
+            .list_events(tenant.id, run_id)
+            .await
+            .expect("events should load");
+        assert!(events.iter().any(|event| {
+            event.event_name == "assistant_run.external_channel_model_reply_failed"
+                && event.payload["attempt"] == json!("primary")
+                && event.payload["reason"] == json!("direct_reply_attempt_timeout")
+        }));
+        assert!(events.iter().any(|event| {
+            event.event_name == "assistant_run.external_channel_model_reply_completed"
+                && event.payload["attempt"] == json!("fallback")
+        }));
+        clear_assistant_openclaw_env();
+    }
+
     #[test]
     fn external_channel_model_reply_rejects_generic_orchestration_ack() {
         for text in [
@@ -41626,6 +42154,38 @@ mod tests {
                 "订单延期风险主要集中在仓库交接和供应商确认两个环节。"
             ),
             None
+        );
+    }
+
+    #[test]
+    fn external_channel_model_reply_rejects_empty_and_suppressed_output() {
+        assert_eq!(
+            external_channel_model_output_text_rejection_reason(" \n\t").as_deref(),
+            Some("empty_output")
+        );
+
+        let suppressed = LlmResponse {
+            output_text: "内容已被过滤。".to_string(),
+            runtime: llm_gateway::LlmRuntimeMetadata {
+                mode: llm_gateway::LlmRuntimeMode::Provider,
+                provider: "scripted".to_string(),
+                model: "assistant-run-primary-v1".to_string(),
+                lane: Some(MODEL_LANE_ASSISTANT_CHAT.to_string()),
+                request_id: None,
+                finish_reason: Some(LlmFinishReason::ContentFilter),
+                provider_failure: None,
+                latency_ms: None,
+                usage: None,
+                system_prompt_key: None,
+                system_prompt_version: None,
+                tool_trace_count: 0,
+            },
+            tool_calls: Vec::new(),
+        };
+
+        assert_eq!(
+            external_channel_model_reply_rejection_reason(&suppressed).as_deref(),
+            Some("model_output_suppressed")
         );
     }
 
@@ -50593,9 +51153,21 @@ mod tests {
             "/v1/external/channels/generic-chat-main/static-page-renders/{}/download",
             render_response.render_output.id
         );
+        let expected_preview_url = format!(
+            "/v1/external/channels/generic-chat-main/static-page-renders/{}/preview",
+            render_response.render_output.id
+        );
         assert_eq!(
             render_response.render_output.html_download_url.as_deref(),
             Some(expected_download_url.as_str())
+        );
+        assert_eq!(
+            render_response.render_output.download_url.as_deref(),
+            Some(expected_download_url.as_str())
+        );
+        assert_eq!(
+            render_response.render_output.html_preview_url.as_deref(),
+            Some(expected_preview_url.as_str())
         );
         assert_eq!(
             render_response
@@ -50603,6 +51175,17 @@ mod tests {
                 .html_download_url_camel
                 .as_deref(),
             Some(expected_download_url.as_str())
+        );
+        assert_eq!(
+            render_response.render_output.download_url_camel.as_deref(),
+            Some(expected_download_url.as_str())
+        );
+        assert_eq!(
+            render_response
+                .render_output
+                .html_preview_url_camel
+                .as_deref(),
+            Some(expected_preview_url.as_str())
         );
         assert_eq!(
             render_response.draft.draft_payload["finalPage"]["directHtml"],
@@ -50626,6 +51209,23 @@ mod tests {
         .expect("rendered ordinary scope should expose internal download URL");
         assert_eq!(internal_view_url, internal_download_url);
 
+        let internal_preview_url = format!(
+            "/v1/static-page-render-outputs/{}/preview",
+            render_response.render_output.id
+        );
+        let internal_view_preview_url = static_page_html_preview_url(
+            None,
+            &state
+                .storage
+                .static_page_render_outputs()
+                .get_by_id(state.tenant_id, render_response.render_output.id)
+                .await
+                .expect("render output lookup should succeed")
+                .expect("render output should exist"),
+        )
+        .expect("rendered ordinary scope should expose internal preview URL");
+        assert_eq!(internal_view_preview_url, internal_preview_url);
+
         let Json(render_outputs) = list_static_page_render_outputs(
             State(state.clone()),
             HeaderMap::new(),
@@ -50638,6 +51238,10 @@ mod tests {
             render_outputs[0].html_download_url.as_deref(),
             Some(expected_download_url.as_str())
         );
+        assert_eq!(
+            render_outputs[0].html_preview_url.as_deref(),
+            Some(expected_preview_url.as_str())
+        );
 
         let app = router(
             storage,
@@ -50648,13 +51252,62 @@ mod tests {
         let missing = get_request_with_authorization(
             app.clone(),
             &format!(
-                "/v1/external/channels/generic-chat-main/static-page-renders/{}/download",
+                "/v1/external/channels/generic-chat-main/static-page-renders/{}",
                 render_response.render_output.id
             ),
             None,
         )
         .await;
         assert_eq!(missing.status(), StatusCode::UNAUTHORIZED);
+
+        let status = get_request_with_authorization(
+            app.clone(),
+            &format!(
+                "/v1/external/channels/generic-chat-main/static-page-renders/{}",
+                render_response.render_output.id
+            ),
+            Some("Bearer inbound-secret"),
+        )
+        .await;
+        assert_eq!(status.status(), StatusCode::OK);
+        let status_view: StaticPageRenderOutputView = read_json_response(status).await;
+        assert_eq!(status_view.id, render_response.render_output.id);
+        assert_eq!(
+            status_view.status,
+            contracts::StaticPageRenderOutputStatusView::Rendered
+        );
+        assert_eq!(
+            status_view.download_url.as_deref(),
+            Some(expected_download_url.as_str())
+        );
+        assert_eq!(
+            status_view.html_preview_url.as_deref(),
+            Some(expected_preview_url.as_str())
+        );
+
+        let preview = get_request_with_authorization(
+            app.clone(),
+            &format!(
+                "/v1/external/channels/generic-chat-main/static-page-renders/{}/preview",
+                render_response.render_output.id
+            ),
+            Some("Bearer inbound-secret"),
+        )
+        .await;
+        assert_eq!(preview.status(), StatusCode::OK);
+        assert_eq!(
+            preview
+                .headers()
+                .get(axum::http::header::CONTENT_DISPOSITION)
+                .and_then(|value| value.to_str().ok()),
+            Some("inline")
+        );
+        let preview_body = axum::body::to_bytes(preview.into_body(), usize::MAX)
+            .await
+            .expect("preview body should load");
+        let preview_html =
+            String::from_utf8(preview_body.to_vec()).expect("preview should be utf-8");
+        assert!(preview_html.contains("第三方风险说明"));
 
         let download = get_request_with_authorization(
             app,
@@ -50735,6 +51388,53 @@ mod tests {
             StaticPageRenderOutputId::new()
         )
         .is_none());
+
+        let preview_url = static_page_external_html_preview_url(
+            &json!({
+                "type": "external_channel",
+                "channelConnectionId": "generic chat/主通道"
+            }),
+            render_output_id,
+        )
+        .expect("external channel scope should produce a preview URL");
+        assert_eq!(
+            preview_url,
+            format!(
+                "/v1/external/channels/generic%20chat%2F%E4%B8%BB%E9%80%9A%E9%81%93/static-page-renders/{render_output_id}/preview"
+            )
+        );
+    }
+
+    #[test]
+    fn static_page_render_output_view_exposes_retryable_failure_reason() {
+        let now = Utc::now();
+        let output = StaticPageRenderOutput {
+            id: StaticPageRenderOutputId::new(),
+            tenant_id: TenantId::new(),
+            draft_id: StaticPageDraftId::new(),
+            assistant_run_id: AssistantRunId::new(),
+            owner_user_id: None,
+            image_job_id: None,
+            status: StaticPageRenderOutputStatus::Failed,
+            html: String::new(),
+            asset_manifest: json!({
+                "workflow": {
+                    "status": "failed",
+                    "error": {
+                        "reason": "renderer timeout before HTML export"
+                    }
+                }
+            }),
+            created_at: now,
+        };
+
+        let view = to_static_page_render_output_view(output, Some(&json!({"mode": "ordinary"})));
+        assert_eq!(view.html_download_url, None);
+        assert_eq!(view.html_preview_url, None);
+        assert_eq!(
+            view.retryable_error_reason.as_deref(),
+            Some("renderer timeout before HTML export")
+        );
     }
 
     fn test_render_ready_static_page_payload() -> Value {
@@ -66254,6 +66954,8 @@ mod tests {
             "ASSISTANT_RUN_FALLBACK_RUNTIME_API_PATH",
             "ASSISTANT_RUN_FALLBACK_RUNTIME_API_KEY",
             "ASSISTANT_RUN_FALLBACK_RUNTIME_TIMEOUT_MS",
+            "EXTERNAL_CHANNEL_DIRECT_REPLY_TOTAL_BUDGET_MS",
+            "EXTERNAL_CHANNEL_DIRECT_REPLY_ATTEMPT_TIMEOUT_MS",
             "ASSISTANT_RUN_REACT_ENABLED",
             "ASSISTANT_RUN_REACT_MAX_STEPS",
             "OPENCLAW_EXTENSION_ENABLED",
