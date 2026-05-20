@@ -7759,6 +7759,10 @@ async fn list_external_conversation_tests(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string);
+    validate_required(
+        "integration_id",
+        integration_id.as_deref().unwrap_or_default(),
+    )?;
     let conversation_external_id = query
         .conversation_external_id
         .as_deref()
