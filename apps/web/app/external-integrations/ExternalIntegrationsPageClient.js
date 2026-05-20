@@ -447,6 +447,22 @@ export default function ExternalIntegrationsPageClient() {
                   <code key={docPath}>{docPath}</code>
                 ))}
               </div>
+              {Array.isArray(mode.documentLinks) && mode.documentLinks.length ? (
+                <div className="external-mode-actions" aria-label={`${mode.title} 可打开文档`}>
+                  {mode.documentLinks.map((link) => (
+                    <a
+                      key={link.key || link.href}
+                      className={`external-mode-link external-mode-link-${link.kind || 'doc'}`}
+                      href={link.href}
+                      target={link.download ? undefined : link.target || '_blank'}
+                      rel={link.download ? undefined : 'noopener noreferrer'}
+                      download={link.download || undefined}
+                    >
+                      {link.label}
+                    </a>
+                  ))}
+                </div>
+              ) : null}
               <small>{mode.guardrail}</small>
             </article>
           ))}

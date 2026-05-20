@@ -6,6 +6,51 @@ import { fileURLToPath } from 'node:url';
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const defaultSourcePath = path.join(repoRoot, 'docs/integrations/pure-third-party-integration-guide.zh-CN.md');
 const defaultOutputPath = path.join(repoRoot, 'docs/integrations/pure-third-party-integration-guide.zh-CN.html');
+const defaultFullSourcePath = path.join(repoRoot, 'docs/integrations/third-party-integration-api.zh-CN.md');
+const defaultFullOutputPath = path.join(repoRoot, 'docs/integrations/third-party-integration-api.zh-CN.html');
+const defaultPublicDocsRoot = path.join(repoRoot, 'apps/web/public/external-integrations');
+
+const pureGuideProfile = {
+  sourcePath: defaultSourcePath,
+  outputPath: defaultOutputPath,
+  publicHtmlOutputPath: path.join(defaultPublicDocsRoot, 'pure-third-party-integration-guide.zh-CN.html'),
+  publicMarkdownOutputPath: path.join(defaultPublicDocsRoot, 'pure-third-party-integration-guide.zh-CN.md'),
+  title: 'V3 纯第三方简单版接口文档',
+  brandCode: 'V3 / PURE THIRD PARTY',
+  brandTitle: '纯第三方简单版',
+  brandDescription: '自建页面、文档库、用户 ID、会话 ID、skill、模板、产物与业务动作的接口说明。',
+  heroTitle: 'V3 纯第三方简单版接口文档',
+  heroDescription: '把原来的长 Markdown 拆成可浏览的交付页面：左侧目录快速定位，正文保留完整接口细节，代码块可复制，表格和流程更适合发给第三方技术团队评审。',
+  metrics: [
+    ['4', '核心闭环：问答、文档范围、产物、事务'],
+    ['6', '第三方接口面：聊天、文档、用户标识、skill、产物、动作'],
+    ['0', '无需整库搬迁，支持按需读取与增量索引'],
+    ['V3', '统一处理供料、skill、模板、风控和审计'],
+  ],
+  mermaidMode: 'pure-flow',
+  footerSource: 'docs/integrations/pure-third-party-integration-guide.zh-CN.md',
+};
+
+const fullGuideProfile = {
+  sourcePath: defaultFullSourcePath,
+  outputPath: defaultFullOutputPath,
+  publicHtmlOutputPath: path.join(defaultPublicDocsRoot, 'third-party-integration-api.zh-CN.html'),
+  publicMarkdownOutputPath: path.join(defaultPublicDocsRoot, 'third-party-integration-api.zh-CN.md'),
+  title: 'V3 第三方完整对接文档',
+  brandCode: 'V3 / THIRD PARTY API',
+  brandTitle: '完整对接文档',
+  brandDescription: '标准机器人、纯第三方、文档、用户标识、产物、动作、观测和交接清单的完整接口说明。',
+  heroTitle: 'V3 第三方完整对接文档',
+  heroDescription: '用于第三方技术评审和联调前对齐的完整接口说明，覆盖接入模式、鉴权、幂等、聊天、流式响应、文档解析、产物发布、业务动作和观测接口。',
+  metrics: [
+    ['3', '接入模式：标准机器人、纯第三方、混合部署'],
+    ['9+', '接口面：聊天、流式、文档、用户标识、产物、动作、观测'],
+    ['SSE', '支持流式聊天事件，便于自建页面实时展示'],
+    ['V3', '统一处理解析、索引、检索、运行、审计和风控'],
+  ],
+  mermaidMode: 'code',
+  footerSource: 'docs/integrations/third-party-integration-api.zh-CN.md',
+};
 
 function escapeHtml(value) {
   return String(value)
@@ -70,8 +115,8 @@ function renderArchitectureDiagram() {
   </div>`;
 }
 
-function renderCodeBlock(language, code) {
-  if (language === 'mermaid') {
+function renderCodeBlock(language, code, options = {}) {
+  if (language === 'mermaid' && options.mermaidMode === 'pure-flow') {
     return renderArchitectureDiagram();
   }
   const label = language || 'text';
@@ -81,7 +126,7 @@ function renderCodeBlock(language, code) {
   </figure>`;
 }
 
-function markdownToHtml(markdown) {
+function markdownToHtml(markdown, options = {}) {
   const lines = markdown.replace(/\r\n/g, '\n').split('\n');
   const html = [];
   const nav = [];
@@ -121,7 +166,7 @@ function markdownToHtml(markdown) {
         index += 1;
       }
       index += 1;
-      html.push(renderCodeBlock(language, codeLines.join('\n')));
+      html.push(renderCodeBlock(language, codeLines.join('\n'), options));
       continue;
     }
 
@@ -208,9 +253,12 @@ function markdownToHtml(markdown) {
   return { body: html.join('\n'), nav };
 }
 
-function renderDocument({ body, nav }) {
+function renderDocument({ body, nav }, profile = pureGuideProfile) {
   const navHtml = nav
     .map(({ id, title }) => `<a href="#${id}">${escapeHtml(title.replace(/^\d+\.\s*/, ''))}</a>`)
+    .join('\n');
+  const metricsHtml = profile.metrics
+    .map(([value, label]) => `<div class="metric"><strong>${escapeHtml(value)}</strong><span>${escapeHtml(label)}</span></div>`)
     .join('\n');
 
   return `<!doctype html>
@@ -218,7 +266,7 @@ function renderDocument({ body, nav }) {
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>V3 纯第三方简单版接口文档</title>
+  <title>${escapeHtml(profile.title)}</title>
   <style>
     :root {
       color-scheme: light;
@@ -564,9 +612,9 @@ function renderDocument({ body, nav }) {
   <div class="shell">
     <aside>
       <div class="brand">
-        <span>V3 / PURE THIRD PARTY</span>
-        <strong>纯第三方简单版</strong>
-        <small>自建页面、文档库、用户 ID、会话 ID、skill、模板、产物与业务动作的接口说明。</small>
+        <span>${escapeHtml(profile.brandCode)}</span>
+        <strong>${escapeHtml(profile.brandTitle)}</strong>
+        <small>${escapeHtml(profile.brandDescription)}</small>
       </div>
       <nav aria-label="文档目录">
         ${navHtml}
@@ -574,19 +622,16 @@ function renderDocument({ body, nav }) {
     </aside>
     <main>
       <section class="hero">
-        <h1>V3 纯第三方简单版接口文档</h1>
-        <p>把原来的长 Markdown 拆成可浏览的交付页面：左侧目录快速定位，正文保留完整接口细节，代码块可复制，表格和流程更适合发给第三方技术团队评审。</p>
+        <h1>${escapeHtml(profile.heroTitle)}</h1>
+        <p>${escapeHtml(profile.heroDescription)}</p>
         <div class="hero-metrics">
-          <div class="metric"><strong>4</strong><span>核心闭环：问答、文档范围、产物、事务</span></div>
-          <div class="metric"><strong>6</strong><span>第三方接口面：聊天、文档、用户标识、skill、产物、动作</span></div>
-          <div class="metric"><strong>0</strong><span>无需整库搬迁，支持按需读取与增量索引</span></div>
-          <div class="metric"><strong>V3</strong><span>统一处理供料、skill、模板、风控和审计</span></div>
+          ${metricsHtml}
         </div>
       </section>
       <article>
         ${body}
       </article>
-      <p class="doc-footer">Generated from <code>docs/integrations/pure-third-party-integration-guide.zh-CN.md</code>. Keep Markdown as the editable source and HTML as the human-facing review surface.</p>
+      <p class="doc-footer">Generated from <code>${escapeHtml(profile.footerSource)}</code>. Keep Markdown as the editable source and HTML as the human-facing review surface.</p>
     </main>
   </div>
   <script>
@@ -609,31 +654,128 @@ function renderDocument({ body, nav }) {
 `;
 }
 
-function renderPureThirdPartyGuideHtml({
-  source = defaultSourcePath,
-  output = defaultOutputPath,
+function samePath(left, right) {
+  return path.resolve(left) === path.resolve(right);
+}
+
+function defaultPublicTargetsFor({ source, output, profile, publicHtmlOutput, publicMarkdownOutput }) {
+  const usesProfileDefaults = samePath(source, profile.sourcePath) && samePath(output, profile.outputPath);
+  return {
+    publicHtmlOutput: publicHtmlOutput !== undefined
+      ? publicHtmlOutput
+      : usesProfileDefaults ? profile.publicHtmlOutputPath : null,
+    publicMarkdownOutput: publicMarkdownOutput !== undefined
+      ? publicMarkdownOutput
+      : usesProfileDefaults ? profile.publicMarkdownOutputPath : null,
+  };
+}
+
+function writeTextFile(filePath, content) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, content);
+}
+
+function assertTextFileMatches(filePath, expected, label) {
+  const current = fs.existsSync(filePath) ? fs.readFileSync(filePath, 'utf8') : '';
+  if (current !== expected) {
+    throw new Error(
+      `${label} is stale: ${path.relative(repoRoot, filePath)}. Run npm run build:pure-third-party-guide-html.`,
+    );
+  }
+}
+
+function renderGuideHtml({
+  profile = pureGuideProfile,
+  source = profile.sourcePath,
+  output = profile.outputPath,
+  publicHtmlOutput,
+  publicMarkdownOutput,
   check = false,
 } = {}) {
   const markdown = fs.readFileSync(source, 'utf8');
-  const rendered = renderDocument(markdownToHtml(markdown));
+  const rendered = renderDocument(markdownToHtml(markdown, profile), profile);
+  const publicTargets = defaultPublicTargetsFor({
+    source,
+    output,
+    profile,
+    publicHtmlOutput,
+    publicMarkdownOutput,
+  });
   if (check) {
-    const current = fs.existsSync(output) ? fs.readFileSync(output, 'utf8') : '';
-    if (current !== rendered) {
-      throw new Error(
-        `HTML guide is stale: ${path.relative(repoRoot, output)}. Run npm run build:pure-third-party-guide-html.`,
-      );
+    assertTextFileMatches(output, rendered, 'HTML guide');
+    if (publicTargets.publicHtmlOutput) {
+      assertTextFileMatches(publicTargets.publicHtmlOutput, rendered, 'Published HTML guide');
     }
-    return { outputPath: output, bytes: Buffer.byteLength(rendered), checked: true };
+    if (publicTargets.publicMarkdownOutput) {
+      assertTextFileMatches(publicTargets.publicMarkdownOutput, markdown, 'Published Markdown guide');
+    }
+    return {
+      outputPath: output,
+      publicHtmlOutputPath: publicTargets.publicHtmlOutput,
+      publicMarkdownOutputPath: publicTargets.publicMarkdownOutput,
+      bytes: Buffer.byteLength(rendered),
+      checked: true,
+    };
   }
-  fs.writeFileSync(output, rendered);
-  return { outputPath: output, bytes: Buffer.byteLength(rendered), checked: false };
+  writeTextFile(output, rendered);
+  if (publicTargets.publicHtmlOutput) {
+    writeTextFile(publicTargets.publicHtmlOutput, rendered);
+  }
+  if (publicTargets.publicMarkdownOutput) {
+    writeTextFile(publicTargets.publicMarkdownOutput, markdown);
+  }
+  return {
+    outputPath: output,
+    publicHtmlOutputPath: publicTargets.publicHtmlOutput,
+    publicMarkdownOutputPath: publicTargets.publicMarkdownOutput,
+    bytes: Buffer.byteLength(rendered),
+    checked: false,
+  };
+}
+
+function renderPureThirdPartyGuideHtml(options = {}) {
+  return renderGuideHtml({
+    profile: pureGuideProfile,
+    source: options.source ?? defaultSourcePath,
+    output: options.output ?? defaultOutputPath,
+    publicHtmlOutput: options.publicHtmlOutput,
+    publicMarkdownOutput: options.publicMarkdownOutput,
+    check: options.check ?? false,
+  });
+}
+
+function renderFullThirdPartyGuideHtml(options = {}) {
+  return renderGuideHtml({
+    profile: fullGuideProfile,
+    source: options.source ?? defaultFullSourcePath,
+    output: options.output ?? defaultFullOutputPath,
+    publicHtmlOutput: options.publicHtmlOutput,
+    publicMarkdownOutput: options.publicMarkdownOutput,
+    check: options.check ?? false,
+  });
+}
+
+function renderAllThirdPartyGuideHtml({ check = false } = {}) {
+  return [
+    renderPureThirdPartyGuideHtml({ check }),
+    renderFullThirdPartyGuideHtml({ check }),
+  ];
 }
 
 function main(argv = process.argv.slice(2)) {
   const check = argv.includes('--check');
-  const result = renderPureThirdPartyGuideHtml({ check });
-  const relativeOutput = path.relative(repoRoot, result.outputPath);
-  console.log(check ? `HTML guide is up to date: ${relativeOutput}` : `Rendered ${relativeOutput}`);
+  const results = renderAllThirdPartyGuideHtml({ check });
+  for (const result of results) {
+    const relativeOutput = path.relative(repoRoot, result.outputPath);
+    const publicOutputs = [
+      result.publicHtmlOutputPath,
+      result.publicMarkdownOutputPath,
+    ].filter(Boolean).map((filePath) => path.relative(repoRoot, filePath));
+    console.log(check ? `Guide is up to date: ${relativeOutput}` : `Rendered ${relativeOutput}`);
+    if (publicOutputs.length) {
+      console.log(`${check ? 'Checked' : 'Published'} ${publicOutputs.join(', ')}`);
+    }
+  }
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
@@ -641,7 +783,12 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
 }
 
 export {
+  fullGuideProfile,
   markdownToHtml,
+  pureGuideProfile,
   renderDocument,
+  renderFullThirdPartyGuideHtml,
+  renderGuideHtml,
+  renderAllThirdPartyGuideHtml,
   renderPureThirdPartyGuideHtml,
 };

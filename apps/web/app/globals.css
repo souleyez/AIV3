@@ -5822,6 +5822,42 @@ body {
   line-height: 1.45;
 }
 
+.external-mode-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.external-mode-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 32px;
+  padding: 6px 10px;
+  border: 1px solid #9ba7b4;
+  border-radius: 6px;
+  background: #1f2937;
+  color: #fffaf0;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.2;
+  text-decoration: none;
+}
+
+.external-mode-link:hover {
+  background: #111827;
+}
+
+.external-mode-link-markdown {
+  border-color: #c9b99a;
+  background: #fffaf0;
+  color: #1f2937;
+}
+
+.external-mode-link-markdown:hover {
+  background: #f4ead7;
+}
+
 .external-mode-card small {
   color: #667085;
   font-size: 11px;
