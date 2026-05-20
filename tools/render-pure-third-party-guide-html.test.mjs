@@ -5,14 +5,14 @@ import os from 'node:os';
 import path from 'node:path';
 import { renderPureThirdPartyGuideHtml } from './render-pure-third-party-guide-html.mjs';
 
-const sampleMarkdown = `# V3 纯第三方模式对接文档
+const sampleMarkdown = `# V3 纯第三方简单版接口文档
 
 文档状态：对外草案。
 
 ## 1. 对接目标
 
 - 用户在第三方页面提问；
-- V3 按权限供料。
+- V3 按本轮文档范围供料。
 
 | 接口面 | 用途 |
 | --- | --- |
@@ -45,7 +45,7 @@ test('renderPureThirdPartyGuideHtml renders a review-friendly HTML document', ()
   assert.equal(result.checked, false);
   assert.ok(result.bytes > 0);
   const html = fs.readFileSync(paths.output, 'utf8');
-  assert.match(html, /<title>V3 纯第三方模式对接文档<\/title>/);
+  assert.match(html, /<title>V3 纯第三方简单版接口文档<\/title>/);
   assert.match(html, /<nav aria-label="文档目录">/);
   assert.match(html, /flow-board/);
   assert.match(html, /table-shell/);

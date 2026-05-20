@@ -48,11 +48,11 @@ function renderTable(lines) {
 function renderArchitectureDiagram() {
   const steps = [
     ['外部用户', '输入问题或操作请求'],
-    ['第三方聊天页面/门户', '提交标准化消息事件'],
+    ['第三方聊天页面/门户', '提交消息、用户 ID、会话 ID 和本轮文档范围'],
     ['V3 对外接入网关', '校验连接、幂等、通道策略'],
-    ['第三方用户/权限系统', '解析身份、部门、组、角色'],
-    ['第三方文档库', '按版本和 ACL 获取可见证据'],
-    ['V3 助手运行时', '权限过滤后供料给模型'],
+    ['第三方文档库', '按文档 ID 和版本获取证据'],
+    ['V3 助手运行时', '按本轮范围供料给模型'],
+    ['Skill 与模板策略', '应用 requested_skills 和模板文档'],
     ['第三方产物/业务系统', '执行已确认动作并回传结果'],
   ];
   return `<div class="flow-board" aria-label="纯第三方模式总体流程">
@@ -218,7 +218,7 @@ function renderDocument({ body, nav }) {
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>V3 纯第三方模式对接文档</title>
+  <title>V3 纯第三方简单版接口文档</title>
   <style>
     :root {
       color-scheme: light;
@@ -565,8 +565,8 @@ function renderDocument({ body, nav }) {
     <aside>
       <div class="brand">
         <span>V3 / PURE THIRD PARTY</span>
-        <strong>纯第三方模式</strong>
-        <small>自建页面、文档库、用户权限、产物与业务动作的对接说明。</small>
+        <strong>纯第三方简单版</strong>
+        <small>自建页面、文档库、用户 ID、会话 ID、skill、模板、产物与业务动作的接口说明。</small>
       </div>
       <nav aria-label="文档目录">
         ${navHtml}
@@ -574,13 +574,13 @@ function renderDocument({ body, nav }) {
     </aside>
     <main>
       <section class="hero">
-        <h1>V3 纯第三方模式对接文档</h1>
+        <h1>V3 纯第三方简单版接口文档</h1>
         <p>把原来的长 Markdown 拆成可浏览的交付页面：左侧目录快速定位，正文保留完整接口细节，代码块可复制，表格和流程更适合发给第三方技术团队评审。</p>
         <div class="hero-metrics">
-          <div class="metric"><strong>4</strong><span>核心闭环：问答、权限、产物、事务</span></div>
-          <div class="metric"><strong>6</strong><span>第三方接口面：聊天、文档、用户、ACL、产物、动作</span></div>
+          <div class="metric"><strong>4</strong><span>核心闭环：问答、文档范围、产物、事务</span></div>
+          <div class="metric"><strong>6</strong><span>第三方接口面：聊天、文档、用户标识、skill、产物、动作</span></div>
           <div class="metric"><strong>0</strong><span>无需整库搬迁，支持按需读取与增量索引</span></div>
-          <div class="metric"><strong>V3</strong><span>统一控制权限、供料、风控和审计</span></div>
+          <div class="metric"><strong>V3</strong><span>统一处理供料、skill、模板、风控和审计</span></div>
         </div>
       </section>
       <article>

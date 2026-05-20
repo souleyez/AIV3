@@ -1,24 +1,24 @@
-# V3 纯第三方模式对接文档
+# V3 纯第三方简单版接口文档
 
 **文档状态：** 对外草案 v0.5
 **最后更新：** 2026-05-20
-**适用对象：** 第三方自建门户、文档库、用户中心、产物系统、业务系统和客户 IT 对接团队
+**适用对象：** 第三方自建门户、文档库、产物系统、业务系统和客户 IT 对接团队
 **默认 V3 对外域名：** `https://v3.elepcloud.com`
 
 本文只描述“纯第三方模式”。飞书、Lark、企业微信等标准机器人平台不在本文展开；这些平台走各自官方事件和机器人接口，再由 V3 转为统一通道事件。
 
-纯第三方模式适用于：第三方自己搭建聊天页面或业务入口，文档库、用户权限、产物系统、业务系统也可以都在第三方服务器上；V3 作为统一智能处理、权限过滤、动作风控和审计中心。
+纯第三方模式适用于：第三方自己搭建聊天页面或业务入口，文档库、产物系统、业务系统也可以都在第三方服务器上；V3 作为统一智能处理、资料供料、动作风控和审计中心。
 
 ## 1. 对接目标
 
 纯第三方模式要完成四类闭环：
 
 - 用户在第三方页面或系统里向 V3 提问；
-- V3 按第三方用户身份和文档权限，只检索该用户可访问的资料；
+- 第三方把本轮已经筛好的可用文档 ID 传给 V3，V3 只在这些文档内检索；
 - V3 生成回答、报告、静态页或其他产物，并可发布回第三方系统；
 - V3 在用户确认后，调用第三方业务接口处理事务，并接收异步结果回传。
 
-V3 不要求第三方放弃自己的页面、文档库或业务系统。第三方页面仍由第三方控制，V3 负责背后的问答、资料供料、权限治理、动作确认和审计。
+V3 不要求第三方放弃自己的页面、文档库或业务系统。第三方页面仍由第三方控制，V3 负责背后的问答、资料供料、动作确认和审计。
 
 ## 2. 总体架构
 
@@ -27,17 +27,15 @@ sequenceDiagram
   participant User as "外部用户"
   participant Page as "第三方聊天页面/门户"
   participant V3 as "V3 对外接入网关"
-  participant Identity as "第三方用户/权限系统"
   participant Docs as "第三方文档库"
   participant Runtime as "V3 助手运行时"
   participant Business as "第三方产物/业务系统"
 
   User->>Page: 输入问题或操作请求
-  Page->>V3: 提交标准化消息事件
+  Page->>V3: 提交标准化消息事件和本轮文档范围
   V3->>V3: 校验连接、幂等、通道策略
-  V3->>Identity: 解析用户身份、部门、用户组、角色
-  V3->>Docs: 按文档版本和权限快照获取可见证据
-  V3->>Runtime: 权限过滤后供料给模型
+  V3->>Docs: 按文档 ID 和版本获取证据
+  V3->>Runtime: 将本轮证据供料给模型
   Runtime->>V3: 生成回答、产物或动作意图
   V3->>Business: 派发已确认的产物/业务动作
   Business->>V3: 回传异步动作结果
@@ -47,9 +45,9 @@ sequenceDiagram
 
 关键边界：
 
-- 第三方页面只负责交互展示，不负责最终权限判断；
-- V3 不把未授权文档交给模型；
-- 模型可以回答普通问题，但涉及 V3 文档、权限、产物和工具结果时，只能基于 V3 已供给证据；
+- 第三方负责在调用 V3 前筛好本轮可用文档；
+- V3 只使用请求中传入且已解析成功的文档；
+- 模型可以回答普通问题，但涉及 V3 文档、产物和工具结果时，只能基于 V3 已供给证据；
 - 高风险或跨系统写入必须经过 V3 确认流程。
 
 ## 3. 最小接入范围
@@ -59,26 +57,26 @@ sequenceDiagram
 | 模块 | 第三方需要提供 | V3 使用方式 |
 | --- | --- | --- |
 | 聊天入口 | 自建页面或网关调用 V3 消息接口 | 创建 AssistantRun 并返回回复对象 |
-| 用户身份 | 外部用户 ID、状态、部门/组/角色 | 解析当前提问用户的有效身份 |
-| 文档库 | 文档列表、版本、正文或正文读取地址 | 建立索引或按需读取证据 |
-| 文档权限 | 文档 ACL 快照或可访问主体列表 | 检索前过滤不可见文档 |
+| 用户标识 | 当前提问人的稳定外部 ID | 绑定会话、审计和历史上下文 |
+| 文档库 | 文档 ID、版本、正文或下载地址 | 建立索引或按需读取证据 |
+| 本轮文档范围 | 每次消息传入本轮可用文档 ID 列表 | 只在该列表对应文档内检索 |
 | 产物接口 | 接收报告、页面、文件或链接 | 发布/查询/撤销 V3 产物 |
 | 业务动作 | 接收 V3 派发的动作请求 | 执行业务事务并回传结果 |
 
-如果项目早期只做问答，可以先接聊天入口、用户身份、文档库和文档权限；产物和业务动作可以后续接入。
+如果项目早期只做问答，可以先接聊天入口、用户标识、文档解析和本轮文档范围；产物和业务动作可以后续接入。
 
-资料库仍保留在第三方服务器时，建议先填写资料源参数卡，再进入联调。参数卡样例见 `docs/integrations/third-party-source-parameter-card.sample.json`，说明文档见 `docs/integrations/third-party-source-parameter-card.zh-CN.md`。V3 可用参数卡校验工具检查 HTTPS、鉴权交付方式、用户样例、文档样例和 ACL 边界是否足够进入资料问答验收。
+资料库仍保留在第三方服务器时，建议先填写资料源参数卡，再进入联调。参数卡样例见 `docs/integrations/third-party-source-parameter-card.sample.json`，说明文档见 `docs/integrations/third-party-source-parameter-card.zh-CN.md`。V3 可用参数卡校验工具检查 HTTPS、鉴权交付方式、用户样例、文档样例和文档范围是否足够进入资料问答验收。
 
 ## 4. 文档是否必须搬到 V3
 
 不需要把第三方服务器上的所有文档一次性拷贝到 V3 才能问答。
 
-V3 需要的是“可验证、可权限过滤、可追溯版本”的证据供料。第三方可以根据安全要求选择以下方式：
+V3 需要的是“可验证、可追溯版本、可限定范围”的证据供料。第三方可以根据安全要求选择以下方式：
 
 | 方式 | 说明 | 适用场景 |
 | --- | --- | --- |
 | 增量索引 | V3 拉取发生变化的文档正文或解析文本，生成检索索引和证据片段 | 常规知识库问答，体验最好 |
-| 按需读取 | V3 先同步文档元数据、版本和 ACL，需要深读时再调用正文接口 | 原文敏感、文档量大、只允许按需访问 |
+| 按需读取 | V3 先同步文档元数据和版本，需要深读时再调用正文接口 | 原文敏感、文档量大、只允许按需访问 |
 | 第三方预解析 | 第三方提供已解析 Markdown/HTML/段落/结构化表格，V3 不下载原文件 | 第三方已有解析管线 |
 | 推送供料 | 第三方主动推送变更文档、片段或索引包 | 内网隔离或第三方主动控制同步 |
 
@@ -88,19 +86,17 @@ V3 需要的是“可验证、可权限过滤、可追溯版本”的证据供�
 - 单调变化或可比较的 `revision`；
 - `updated_at`；
 - `content_hash` 或文件哈希；
-- 文档 ACL 快照；
-- 文档删除或权限撤销信号。
+- 文档删除或停用信号。
 
-V3 可以保存文档元数据、权限快照、解析后的文本片段、索引和来源定位信息。文档原件可以继续留在第三方服务器上。若项目要求 V3 不长期保存正文，可在实施阶段约定缓存周期、删除策略和只读按需读取策略。
+V3 可以保存文档元数据、解析后的文本片段、索引和来源定位信息。文档原件可以继续留在第三方服务器上。若项目要求 V3 不长期保存正文，可在实施阶段约定缓存周期、删除策略和只读按需读取策略。
 
 问答时的基本过程是：
 
-1. 第三方页面把用户消息和 `sender_external_id` 发给 V3；
-2. V3 解析该用户在第三方系统里的部门、用户组、角色和状态；
-3. V3 根据文档 ACL 计算该用户可访问的文档集合；
-4. V3 只在可访问集合内检索或按需读取；
-5. V3 把证据片段、来源和版本供给模型；
-6. 模型基于这些证据回答，并保留 `当前不可见/未供料` 的边界说明。
+1. 第三方页面把用户消息、`sender_external_id` 和本轮文档 ID 列表发给 V3；
+2. V3 把外部文档 ID 映射到内部文档记录；
+3. V3 只在本轮传入且已解析成功的文档内检索或按需读取；
+4. V3 把证据片段、来源和版本供给模型；
+5. 模型基于这些证据回答，并保留 `当前未供料` 的边界说明。
 
 ## 5. V3 入站聊天接口
 
@@ -129,7 +125,7 @@ Authorization: Bearer <V3 inbound token>
   "sender_external_id": "user-10001",
   "message_external_id": "msg-20260515-0001",
   "message_type": "text",
-  "text": "帮我按周报模板总结我能看的采购审批制度，并生成一页 HTML 交付稿。",
+  "text": "帮我按周报模板总结本轮传入的采购审批制度，并生成一页 HTML 交付稿。",
   "available_document_source_id": "src-docs",
   "available_document_external_ids": ["doc-001", "doc-002", "tpl-weekly-report-001"],
   "requested_skills": [
@@ -167,15 +163,15 @@ Authorization: Bearer <V3 inbound token>
 | `tenant_external_id` | 是 | 第三方租户、空间或客户 ID |
 | `bot_external_id` | 是 | 第三方侧机器人或应用 ID |
 | `conversation_external_id` | 是 | 会话、群、房间或页面上下文 ID；同一轮、同一页面会话或同一聊天窗口保持不变，V3 会映射为同一个对话上下文 |
-| `sender_external_id` | 是 | 当前提问用户在第三方系统中的稳定 ID；V3 会用它做权限主体解析，也会作为“用户历史上下文”的身份键 |
+| `sender_external_id` | 是 | 当前提问用户在第三方系统中的稳定 ID；V3 会用它绑定会话、审计和“用户历史上下文” |
 | `message_external_id` | 是 | 第三方消息 ID，必须稳定 |
 | `message_type` | 是 | `text`、`image`、`file`、`audio`、`video`、`card`、`event` 或 `unknown` |
 | `text` | 文本消息必填 | 用户输入文本 |
 | `available_document_source_id` | 文档问答建议传 | 本轮可用文档所属资料源 ID；连接配置了默认资料源时可省略，但联调建议显式传 |
-| `available_document_external_ids` | 文档问答建议传 | 本轮允许 V3 使用的第三方文档 ID 列表；只传当前用户本轮可见文档，不要传全库 |
+| `available_document_external_ids` | 文档问答建议传 | 本轮允许 V3 使用的第三方文档 ID 列表；只传本轮已筛好的文档，不要传全库 |
 | `requested_skills` | 否 | 第三方希望本轮应用的结构化 skill 列表；正式对接建议传此字段，不建议只把 skill 写进用户自然语言文本 |
 | `mention_external_user_ids` | 否 | 本条消息中被 @ 的第三方用户 ID 列表；无 @ 时传空数组或省略 |
-| `attachment_refs` | 否 | 附件引用，文件下载需按项目配置权限和有效期 |
+| `attachment_refs` | 否 | 附件引用，文件下载需按项目配置访问方式和有效期 |
 | `idempotency_key` | 是 | 防重放和重复投递 |
 | `received_at` | 是 | 第三方收到消息的时间 |
 
@@ -183,7 +179,7 @@ Authorization: Bearer <V3 inbound token>
 
 - V3 会按 `platform + tenant_external_id + bot_external_id + sender_external_id` 维护一个内部隐藏的用户上下文范围，用于沉淀该用户历史对话摘要；
 - 该上下文不是默认供料。只有当用户问题明确引用“刚才、上次、之前、继续”等历史语境时，V3 才会把该用户自己的历史上下文作为可选证据供给模型；
-- `mention_external_user_ids` 只是本条消息中的提及对象，不代表授权读取被提及用户的历史上下文，也不会把被提及用户的历史对话供给模型。
+- `mention_external_user_ids` 只是本条消息中的提及对象，不会把被提及用户的历史对话供给模型。
 
 关于本轮 SKILL：
 
@@ -191,25 +187,24 @@ Authorization: Bearer <V3 inbound token>
 - 正式对接建议传 `requested_skills`。V3 会把它作为本轮结构化运行策略写入助手运行上下文，并供给模型；
 - `requested_skills[].skill_id` 必填，建议使用稳定英文或业务 slug；`version` 可选；`mode` 可选，取值为 `required`、`preferred` 或 `disabled`，不传时按 `preferred` 处理；
 - `requested_skills[].arguments` 可选，必须是 JSON object，只放本轮 skill 所需的非敏感参数，例如 `{ "focus": "risk" }`。不要放 token、密码、Cookie 或长期下载 URL；
-- 当前版本是模型提示级 skill 策略，先解决“本轮用什么规则/流程回答”的问题；如果后续要把 skill 变成可执行工具，还需要单独配置工具权限、确认和审计白名单；
+- 当前版本是模型提示级 skill 策略，先解决“本轮用什么规则/流程回答”的问题；如果后续要把 skill 变成可执行工具，还需要单独配置工具范围、确认和审计白名单；
 - 请求体兼容驼峰字段 `requestedSkills`，也兼容别名 `skillRefs` / `skill_refs`。嵌套字段兼容 `skillId`、`skillVersion`。
 
 关于本轮文档模板 skill：
 
 - 如果第三方希望“指定某个文档为模板，按这个格式/结构/风格输出”，请在 `requested_skills` 中传 `skill_id: "document_template_skill"`；
-- 模板文档也必须出现在本轮 `available_document_external_ids` 中，V3 只会从本轮可见文档范围里读取模板快照，避免跨权限引用；
+- 模板文档也必须出现在本轮 `available_document_external_ids` 中，V3 只会从本轮文档范围里读取模板快照；
 - 推荐参数为 `arguments.template_document_external_id`、`arguments.source_id`、`arguments.output_type`。也兼容 `templateDocumentExternalId`、`template_document_id` / `templateDocumentId`；
 - `output_type` 可传 `static_page`、`html`、`page` 或 `any`。当用户生成快速 HTML/静态页时，V3 会把模板文档转换成自定义 `templateReference`；
-- 模板文档默认只约束输出结构、章节顺序、措辞风格和必填字段，不会自动作为事实证据。事实仍来自本轮普通文档供料和 V3 可见证据。
+- 模板文档默认只约束输出结构、章节顺序、措辞风格和必填字段，不会自动作为事实证据。事实仍来自本轮普通文档供料和 V3 本轮证据。
 
 关于本轮文档范围：
 
 - 文档问答建议每条消息都传 `available_document_source_id` 和 `available_document_external_ids`，不要依赖上一轮消息里的文档列表；
 - V3 会把这些外部文档 ID 映射为内部文档，并为 `connection_id + conversation_external_id + source_id` 创建或刷新一个会话级临时数据集；
 - 同一份 V3 文档可以同时属于原始资料库和多个临时数据集。临时数据集只保存 membership 范围，不移动、不复制、不删除原文档；
-- 有外部 ACL 快照时，V3 仍会在进入模型前按 ACL 严格过滤；
-- 如果第一阶段尚未同步 ACL 快照，V3 只会使用本轮显式传入且已成功解析到内部文档的 `available_document_external_ids` 作为兜底范围，不会扩大到同资料源或同数据集的其它文档；
-- 未解析到、未索引完成、未传入本轮列表或被 ACL 拒绝的文档不会供料给模型。
+- V3 只会使用本轮显式传入且已成功解析到内部文档的 `available_document_external_ids`，不会扩大到同资料源或同数据集的其它文档；
+- 未解析到、未索引完成或未传入本轮列表的文档不会供料给模型。
 
 生成回复响应示例：
 
@@ -221,7 +216,7 @@ Authorization: Bearer <V3 inbound token>
   "reply": {
     "target_conversation_external_id": "chat-risk-room",
     "reply_type": "text",
-    "text": "根据你当前可见的采购审批制度，本周建议重点关注审批超时、授权边界和供应商变更风险。",
+    "text": "根据本轮传入的采购审批制度，本周建议重点关注审批超时、审批边界和供应商变更风险。",
     "task_status": "answered",
     "requires_confirmation": false
   }
@@ -259,13 +254,13 @@ event: external_channel.started
 data: {"status":"started","idempotency_key":"generic_chat:tenant-ext-001:msg-20260515-0001"}
 
 event: external_channel.delta
-data: {"index":0,"delta":"根据你当前可见的采购审批制度，"}
+data: {"index":0,"delta":"根据本轮传入的采购审批制度，"}
 
 event: external_channel.delta
-data: {"index":1,"delta":"本周建议重点关注审批超时、授权边界和供应商变更风险。"}
+data: {"index":1,"delta":"本周建议重点关注审批超时、审批边界和供应商变更风险。"}
 
 event: external_channel.completed
-data: {"assistant_run_id":"00000000-0000-0000-0000-000000000001","response":{"accepted":true,"reply":{"target_conversation_external_id":"chat-risk-room","reply_type":"text","text":"根据你当前可见的采购审批制度，本周建议重点关注审批超时、授权边界和供应商变更风险。","task_status":"answered","requires_confirmation":false}}}
+data: {"assistant_run_id":"00000000-0000-0000-0000-000000000001","response":{"accepted":true,"reply":{"target_conversation_external_id":"chat-risk-room","reply_type":"text","text":"根据本轮传入的采购审批制度，本周建议重点关注审批超时、审批边界和供应商变更风险。","task_status":"answered","requires_confirmation":false}}}
 
 event: done
 data: {"ok":true}
@@ -316,53 +311,27 @@ data: {"ok":true}
 
 这表示 V3 正等待只读搜索证据供料，不表示已经完成联网搜索。
 
-## 6. 用户与组织接口
+## 6. 用户标识约定
 
-第三方需要让 V3 能够识别外部用户是谁，以及该用户属于哪些部门、用户组和角色。
+简单版不要求第三方提供额外用户接口。第三方只需要在每条消息里提供稳定的 `sender_external_id`，用于：
 
-建议第三方提供：
+- 绑定同一外部用户的会话上下文；
+- 生成审计摘要；
+- 支持用户追问“刚才、上次、继续”等历史语境。
 
-```http
-GET /users
-GET /departments
-GET /groups
-GET /roles
-GET /users/{user_external_id}/memberships
-```
+`sender_external_id` 建议使用第三方系统内部稳定 ID，不建议使用昵称、手机号、临时 session id 或会变化的展示名。
 
-用户列表响应示例：
+最小示例：
 
 ```json
 {
-  "items": [
-    {
-      "user_external_id": "user-10001",
-      "display_name": "张三",
-      "email": "zhangsan@example.com",
-      "mobile": "+86-13800000000",
-      "status": "active",
-      "department_external_ids": ["dept-finance"],
-      "group_external_ids": ["group-procurement"],
-      "role_external_ids": ["role-requester"],
-      "updated_at": "2026-05-15T09:00:00Z"
-    }
-  ],
-  "next_cursor": null
+  "tenant_external_id": "tenant-ext-001",
+  "bot_external_id": "bot-v3",
+  "conversation_external_id": "chat-risk-room",
+  "sender_external_id": "user-10001",
+  "message_external_id": "msg-20260515-0001"
 }
 ```
-
-V3 计算有效权限时会综合：
-
-- 用户直接权限；
-- 部门权限；
-- 用户组权限；
-- 角色权限；
-- 租户、空间或连接默认策略；
-- 明确拒绝规则；
-- 用户是否停用；
-- 文档版本和权限快照时间。
-
-用户停用、部门调整、角色变更后，应尽快让 V3 同步最新状态。
 
 ## 7. 文档接口
 
@@ -416,40 +385,27 @@ GET /documents/{document_external_id}/content?revision=rev-20260515-01
 
 正文必须与 `revision` 对应。文档更新后，应生成新的版本标识。
 
-### 7.3 文档权限快照
+### 7.3 文档状态变更
 
-建议第三方提供：
-
-```http
-GET /documents/{document_external_id}/acl?revision=rev-20260515-01
-```
-
-响应示例：
+建议第三方在文档列表或同步回调中明确表达文档是否仍可使用：
 
 ```json
 {
   "document_external_id": "doc-001",
   "revision": "rev-20260515-01",
-  "acl_hash": "sha256:...",
-  "captured_at": "2026-05-15T09:21:00Z",
-  "allow": [
-    { "subject_type": "user", "subject_external_id": "user-10001", "level": "read" },
-    { "subject_type": "department", "subject_external_id": "dept-finance", "level": "read" },
-    { "subject_type": "role", "subject_external_id": "role-procurement-admin", "level": "manage" }
-  ],
-  "deny": [
-    { "subject_type": "user", "subject_external_id": "user-99999", "reason": "restricted" }
-  ]
+  "updated_at": "2026-05-15T09:21:00Z",
+  "deleted": false,
+  "disabled": false,
+  "content_hash": "sha256:..."
 }
 ```
 
-ACL 说明：
+状态说明：
 
-- `allow` 表示可访问主体；
-- `deny` 表示明确拒绝主体；
-- 主体可以是 `user`、`department`、`group`、`role`、`tenant`；
-- `deny` 优先级应高于 `allow`；
-- 文档权限变化后，应尽快触发 V3 同步。
+- `deleted=true` 表示文档已删除，V3 后续不应继续使用该文档；
+- `disabled=true` 表示文档暂不可用，V3 后续不应继续使用该文档；
+- `revision` 或 `content_hash` 变化时，V3 应重新解析或刷新索引；
+- 第三方每次对话仍应只传本轮要使用的 `available_document_external_ids`。
 
 ## 8. 文档解析与资料源同步
 
@@ -485,9 +441,9 @@ V3 会把外部文档 ID 映射为内部文档范围，并只从这些文档供�
 实现细节：
 
 - 每次带 `available_document_external_ids` 的对话请求都会刷新当前会话的临时文档范围；
-- 临时数据集的可见范围来自本轮传入的文档 ID，完成或过期后只清理临时 membership，不影响原始文档所在资料库；
-- 如果第三方尚未同步用户目录或文档 ACL，V3 不会因此把全库开放给模型，只允许本轮显式范围内、已解析可索引的文档供料；
-- 如果第三方已经同步 ACL 快照，则 ACL 判断优先于显式范围，显式传入但无权访问的文档仍不会进入模型。
+- 临时数据集的范围来自本轮传入的文档 ID，完成或过期后只清理临时 membership，不影响原始文档所在资料库；
+- V3 只允许本轮显式范围内、已解析可索引的文档供料；
+- 没有出现在本轮 `available_document_external_ids` 里的文档不会进入模型上下文。
 
 - `docs/integrations/third-party-document-parse-first-phase.zh-CN.md`
 - `docs/integrations/third-party-document-parse-request.sample.json`
@@ -508,7 +464,6 @@ V3 会把同步任务放入后台队列。同步任务应记录：
 - 增量游标；
 - 文档数量；
 - 新增、更新、删除、失败数量；
-- ACL 快照状态；
 - 错误摘要。
 
 同步日志和观测摘要不会展示原始文档正文和密钥。
@@ -552,7 +507,7 @@ V3 可以生成报告、页面、文档、表格、图片、压缩包或链接�
 
 当前主链路采用“V3 外部动作派发”方式：V3 把 `external_artifact.publish`、`external_artifact.status`、`external_artifact.revoke` 作为受控动作保存到审计记录中，再派发到第三方配置的 HTTPS endpoint。
 
-本次第三方对接的页面类产物可采用“快速 HTML 交付”方式：`html-anything` 作为模板来源和设计参考，V3 直接渲染浏览器可打开的 HTML，跳过调试页、效果图和截图确认。V3 仍保留模型路由、权限、数据集、证据供料和产物审计边界。
+本次第三方对接的页面类产物可采用“快速 HTML 交付”方式：`html-anything` 作为模板来源和设计参考，V3 直接渲染浏览器可打开的 HTML，跳过调试页、效果图和截图确认。V3 仍保留模型路由、数据集、证据供料和产物审计边界。
 
 V3 内部渲染最终页时使用：
 
@@ -636,15 +591,14 @@ V3 派发示例：
 
 产物发布要求：
 
-- 产物权限不高于来源文档权限；
-- 下载链接应短期有效或带权限校验；
+- 下载链接应短期有效或带访问校验；
 - 撤销后第三方不可继续访问；
 - 发布、查看、下载、撤销都应可审计；
 - V3 观测接口不展示原始产物正文、原始下载地址或凭证。
 
 ## 11. 业务动作接口
 
-V3 可在用户授权和系统校验后调用第三方业务接口，例如：
+V3 可在用户确认和系统校验后调用第三方业务接口，例如：
 
 - 创建或更新工单；
 - 发起审批；
@@ -689,7 +643,7 @@ V3 派发请求示例：
 | --- | --- | --- |
 | `read_only` | 查询状态 | 不写入第三方系统 |
 | `low_risk_write` | 发布草稿、创建低风险记录 | 可直接执行或轻量确认 |
-| `high_risk_write` | 对外发布、变更权限、提交审批 | 必须用户确认 |
+| `high_risk_write` | 对外发布、提交审批、关键字段变更 | 必须用户确认 |
 | `cross_system` | 跨系统事务、影响多个系统 | 必须确认并重点审计 |
 
 V3 不会把飞书、企微或第三方入站回调用的通用 token 当作动作派发凭证复用。派发 endpoint 必须配置派发专用 Bearer Token 或签名密钥之一；否则 V3 会记录 `dispatch_blocked` 和 `dispatch_auth_missing`。
@@ -781,7 +735,7 @@ POST /v1/external/integrations/{integration_id}/rotate-secret
 - 通道健康状态；
 - 最近活动时间；
 - 文档同步状态；
-- 用户映射和权限漂移；
+- 消息、文档范围和同步摘要；
 - 动作总数、待确认、派发阻断、派发失败、等待结果、结果成功/失败；
 - 搜索证据待供料数量；
 - 产物发布、撤销和状态查询摘要。
@@ -790,7 +744,7 @@ POST /v1/external/integrations/{integration_id}/rotate-secret
 
 - 第三方原始密钥；
 - 原始 provider payload；
-- 未授权文档正文；
+- 未供料文档正文；
 - 原始用户查询全文；
 - 原始动作结果正文；
 - 原始下载地址或长期凭证。
@@ -826,7 +780,7 @@ V3 错误格式：
 | `external_action_not_found` | 未找到动作 |
 | `external_action_result_request_mismatch` | 回传请求 ID 不一致 |
 | `external_action_dispatch_blocked` | 动作派发被阻断 |
-| `react_dataset_not_selected` | 请求的数据集不在当前可见范围 |
+| `react_dataset_not_selected` | 请求的数据集不在当前文档范围 |
 
 第三方错误返回也应使用稳定 `code`，不要在 `message` 中返回密钥、token、完整 SQL、堆栈或敏感业务正文。
 
@@ -837,10 +791,11 @@ V3 错误格式：
 - 测试环境域名和网络访问方式；
 - V3 可调用的文档列表接口；
 - V3 可调用的文档正文或解析文本接口；
-- V3 可调用的文档 ACL 接口；
-- 用户、部门、用户组、角色样例；
-- 至少 3 个不同权限等级的测试用户；
-- 至少 5 份测试文档，包括有权、无权、部门可见、角色可见、权限撤销样例；
+- 至少 1 个稳定的测试 `sender_external_id`；
+- 至少 2 个测试 `conversation_external_id`，用于验证不同会话上下文；
+- 至少 5 份测试文档，包括普通资料、模板资料、已更新版本、已删除或停用样例；
+- 至少 1 组 `requested_skills` 样例；
+- 至少 1 份模板文档，并能在消息中通过 `document_template_skill` 指定；
 - 自建聊天页面或消息网关；
 - 产物接收 endpoint；
 - 业务动作接收 endpoint；
@@ -851,10 +806,10 @@ V3 错误格式：
 
 推荐测试用例：
 
-1. 同一问题，不同权限用户得到不同可见范围回答；
-2. 用户无权访问的文档不进入回答证据；
+1. 同一问题，传入不同 `available_document_external_ids` 时回答只基于本轮文档范围；
+2. 未传入本轮文档列表的文档不进入回答证据；
 3. 文档更新后，V3 使用新 revision；
-4. 文档权限撤销后，原用户无法继续引用该文档；
+4. 指定模板文档后，V3 按模板结构生成结果；
 5. 高风险动作必须先返回确认请求；
 6. 用户拒绝确认后，V3 不派发动作；
 7. 已确认动作派发到第三方 endpoint；
@@ -868,9 +823,9 @@ V3 错误格式：
 - 所有连接必须有明确租户和连接 ID；
 - 所有写入动作必须可审计；
 - 高风险动作必须确认；
-- 第三方下载地址应短期有效或带权限校验；
-- 文档权限撤销后，应尽快同步到 V3；
-- V3 和第三方都不应在日志中保存明文 token、密钥、Cookie 或未授权正文；
+- 第三方下载地址应短期有效或带访问校验；
+- 文档删除、停用或版本变化后，应尽快同步到 V3；
+- V3 和第三方都不应在日志中保存明文 token、密钥、Cookie 或未供料正文；
 - 第三方页面不得把 V3 管理接口开放给普通用户；
 - 内网部署、专线、代理、网关和证书策略需在项目实施阶段确认。
 
@@ -894,7 +849,7 @@ V3 错误格式：
 仍需按项目配置或后续联调确认：
 
 - 具体第三方文档 API 字段映射；
-- 用户目录和 ACL 规则映射；
+- 用户 ID、会话 ID、skill 和模板文档字段映射；
 - 产物 endpoint 和业务动作 endpoint；
 - 生产级入站签名、IP 白名单、重放窗口和密钥轮换界面；
 - 客户真实沙箱环境的端到端验证。
@@ -904,15 +859,16 @@ V3 错误格式：
 1. 创建 V3 第三方连接和 `connection_id`；
 2. 配置第三方测试环境、网络和凭证；
 3. 第三方消息网关调用 V3 events 接口；
-4. 同步测试用户和组织关系；
-5. 同步测试文档元数据、正文和 ACL；
-6. 验证不同权限用户问答；
-7. 接入产物发布 endpoint；
-8. 接入业务动作 endpoint；
-9. 验证用户确认、动作派发和结果回传；
-10. 查看 V3 外部集成观测面板和审计筛选；
-11. 生成并校验第三方交接包；
-12. 进入真实客户沙箱联调。
+4. 准备稳定的 `sender_external_id` 和 `conversation_external_id`；
+5. 同步测试文档元数据、正文和解析状态；
+6. 验证 `available_document_external_ids` 本轮文档范围；
+7. 验证 `requested_skills` 和模板文档生成；
+8. 接入产物发布 endpoint；
+9. 接入业务动作 endpoint；
+10. 验证用户确认、动作派发和结果回传；
+11. 查看 V3 外部集成观测面板和审计筛选；
+12. 生成并校验第三方交接包；
+13. 进入真实客户沙箱联调。
 
 ## 20. 相关文档
 
