@@ -7384,18 +7384,110 @@ async fn create_assistant_run(
                 {
                     Ok(response) => response,
                     Err(error) => {
-                        let stage = "provider";
-                        record_assistant_run_create_failure(
-                            &state,
-                            run.id,
-                            &execution_trail,
-                            &error,
-                            stage,
-                        )
-                        .await;
-                        return Err(assistant_run_create_error_with_run_context(
-                            error, run.id, stage,
-                        ));
+                        if let Some(compact_provider_input) =
+                            assistant_run_compact_provider_retry_input(&request, &evidence_state)
+                        {
+                            state
+                                .storage
+                                .assistant_runs()
+                                .append_event(
+                                    state.tenant_id,
+                                    run.id,
+                                    &NewAssistantRunEvent {
+                                        event_name:
+                                            "assistant_run.provider_compact_retry_started"
+                                                .to_string(),
+                                        payload: json!({
+                                            "reason": "provider_failed_with_structured_scan_available",
+                                            "previous_error_code": error.payload.code,
+                                            "previous_error_status": error.status.as_u16(),
+                                        }),
+                                        created_at: Utc::now(),
+                                    },
+                                )
+                                .await
+                                .map_err(ApiError::from_storage)?;
+                            match complete_assistant_run_provider(
+                                MODEL_LANE_ASSISTANT_CHAT,
+                                chat_runtime.mode.clone(),
+                                chat_runtime.provider.clone(),
+                                chat_runtime.model.clone(),
+                                compact_provider_input,
+                            )
+                            .await
+                            {
+                                Ok(response) => {
+                                    state
+                                        .storage
+                                        .assistant_runs()
+                                        .append_event(
+                                            state.tenant_id,
+                                            run.id,
+                                            &NewAssistantRunEvent {
+                                                event_name:
+                                                    "assistant_run.provider_compact_retry_completed"
+                                                        .to_string(),
+                                                payload: json!({
+                                                    "source": "dataset_entity_scan_compact_retry",
+                                                    "runtime": render_runtime_manifest(&response.runtime),
+                                                }),
+                                                created_at: Utc::now(),
+                                            },
+                                        )
+                                        .await
+                                        .map_err(ApiError::from_storage)?;
+                                    response
+                                }
+                                Err(retry_error) => {
+                                    state
+                                        .storage
+                                        .assistant_runs()
+                                        .append_event(
+                                            state.tenant_id,
+                                            run.id,
+                                            &NewAssistantRunEvent {
+                                                event_name:
+                                                    "assistant_run.provider_compact_retry_failed"
+                                                        .to_string(),
+                                                payload: json!({
+                                                    "error_code": retry_error.payload.code,
+                                                    "error_status": retry_error.status.as_u16(),
+                                                }),
+                                                created_at: Utc::now(),
+                                            },
+                                        )
+                                        .await
+                                        .map_err(ApiError::from_storage)?;
+                                    let stage = "provider";
+                                    record_assistant_run_create_failure(
+                                        &state,
+                                        run.id,
+                                        &execution_trail,
+                                        &retry_error,
+                                        stage,
+                                    )
+                                    .await;
+                                    return Err(assistant_run_create_error_with_run_context(
+                                        retry_error,
+                                        run.id,
+                                        stage,
+                                    ));
+                                }
+                            }
+                        } else {
+                            let stage = "provider";
+                            record_assistant_run_create_failure(
+                                &state,
+                                run.id,
+                                &execution_trail,
+                                &error,
+                                stage,
+                            )
+                            .await;
+                            return Err(assistant_run_create_error_with_run_context(
+                                error, run.id, stage,
+                            ));
+                        }
                     }
                 };
                 let runtime_manifest = render_runtime_manifest(&response.runtime);
@@ -17853,6 +17945,105 @@ fn assistant_run_model_dataset_entity_scan_item(item: &Value) -> Value {
         "limits": item.get("limits").cloned().unwrap_or(Value::Null),
         "model_note": "Use company_count and company_rows as the authoritative company statistic. Use scanned_document_count as the document total; do not sum company_rows.document_count as total documents. Do not extend company lists from candidate_terms or document_hits.",
     })
+}
+
+fn assistant_run_compact_provider_retry_input(
+    request: &CreateAssistantRunRequest,
+    evidence_state: &Value,
+) -> Option<String> {
+    let scans = assistant_run_compact_dataset_entity_scan_payloads(evidence_state);
+    if scans.is_empty() {
+        return None;
+    }
+
+    let mut sections = vec![
+        "你是 AI 数据智能助手里的模型回答运行时。完整供料请求刚才未完成；现在系统只给你紧凑结构化供料，请直接回答用户问题。".to_string(),
+        "禁止回复“已收到/处理中/稍后分析/系统将结合知识库与数据源”；如果结构化供料已经给出统计值，就按统计值直接输出。".to_string(),
+        "统计规则：company_count 是公司/组织总数；scanned_document_count 是扫描文档总数；company_rows[].document_count 是该公司覆盖的文档数，不能把这些覆盖数相加当作文档总数。".to_string(),
+        format!("用户问题：{}", request.prompt.trim()),
+        format!(
+            "紧凑结构化供料：{}",
+            serde_json::to_string(&json!({
+                "status": evidence_state.get("status").cloned().unwrap_or(Value::Null),
+                "dataset_entity_scans": scans,
+            }))
+            .unwrap_or_else(|_| "{}".to_string())
+        ),
+    ];
+
+    if let Some(answer_policy) = assistant_run_request_external_answer_policy(request) {
+        sections.push(format!(
+            "本轮外部回答要求：{}",
+            serde_json::to_string(answer_policy).unwrap_or_else(|_| "{}".to_string())
+        ));
+    }
+    if let Some(skill_policy) = assistant_run_request_requested_skills_policy(request) {
+        sections.push(format!(
+            "本轮 SKILL 策略：{}",
+            serde_json::to_string(skill_policy).unwrap_or_else(|_| "{}".to_string())
+        ));
+    }
+    if let Some(template_policy) = assistant_run_request_document_template_skills_policy(request) {
+        sections.push(format!(
+            "本轮文档模板 SKILL：{}",
+            serde_json::to_string(template_policy).unwrap_or_else(|_| "{}".to_string())
+        ));
+    }
+
+    Some(sections.join("\n\n"))
+}
+
+fn assistant_run_compact_dataset_entity_scan_payloads(evidence_state: &Value) -> Vec<Value> {
+    evidence_state
+        .get("supplied_items")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter(|item| {
+                    item.get("type").and_then(Value::as_str) == Some("dataset_entity_scan")
+                })
+                .filter_map(assistant_run_compact_dataset_entity_scan_payload)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn assistant_run_compact_dataset_entity_scan_payload(item: &Value) -> Option<Value> {
+    let company_rows = item
+        .get("company_rows")
+        .and_then(Value::as_array)
+        .map(|rows| {
+            rows.iter()
+                .filter_map(|row| {
+                    let name = row.get("name").and_then(Value::as_str)?.trim();
+                    if name.is_empty() {
+                        return None;
+                    }
+                    Some(json!({
+                        "name": name,
+                        "document_count": row.get("document_count").cloned().unwrap_or(Value::Null),
+                    }))
+                })
+                .take(ASSISTANT_RUN_DATASET_ENTITY_SCAN_ROW_LIMIT)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if company_rows.is_empty() {
+        return None;
+    }
+
+    Some(json!({
+        "type": "dataset_entity_scan",
+        "source": item.get("source").cloned().unwrap_or(Value::Null),
+        "dataset_id": item.get("dataset_id").cloned().unwrap_or(Value::Null),
+        "summary": item.get("summary").cloned().unwrap_or(Value::Null),
+        "scanned_document_count": item.get("scanned_document_count").cloned().unwrap_or(Value::Null),
+        "company_count": item.get("company_count").cloned().unwrap_or(Value::Null),
+        "company_rows": company_rows,
+        "answer_guidance": item.get("answer_guidance").cloned().unwrap_or(Value::Null),
+        "model_note": "Answer from company_count and company_rows only. Do not use omitted candidate_terms, entities, document_hits, or summed row counts.",
+    }))
 }
 
 fn assistant_run_model_supply_item_brief(item: &Value) -> Option<String> {
@@ -50798,6 +50989,50 @@ mod tests {
         );
         assert!(item.get("candidate_terms").is_none());
         assert!(item.get("document_hits").is_none());
+    }
+
+    #[test]
+    fn assistant_run_compact_retry_input_keeps_only_authoritative_company_rows() {
+        let evidence = json!({
+            "status": "supplied",
+            "supplied_items": [{
+                "type": "dataset_entity_scan",
+                "source": "visible_document_scan",
+                "dataset_id": "dataset-resume",
+                "summary": "资料库实体扫描",
+                "scanned_document_count": 25,
+                "company_count": 2,
+                "company_rows": [
+                    {"name": "广州冠晚网络有限公司", "document_count": 1, "document_ids": ["doc-1"]},
+                    {"name": "广州寓力地产顾问有限公司", "document_count": 2, "document_ids": ["doc-2", "doc-3"]}
+                ],
+                "company_names": ["广州冠晚网络有限公司", "广州寓力地产顾问有限公司"],
+                "entities": [{"name": "噪声实体", "document_ids": ["doc-4"]}],
+                "candidate_terms": [{"name": "项目经验", "document_count": 3}],
+                "document_hits": [{"document_id": "doc-1", "candidate_terms": ["项目经验"]}]
+            }]
+        });
+        let request = CreateAssistantRunRequest {
+            prompt: "简历库里一共提到了多少个公司名？".to_string(),
+            local_thread_id: None,
+            startup_briefing: None,
+            selected_scope: None,
+            scope_candidates: Vec::new(),
+            context_policy_hint: None,
+            current_artifact: None,
+            messages: Vec::new(),
+        };
+
+        let input = assistant_run_compact_provider_retry_input(&request, &evidence)
+            .expect("company scan should produce compact retry input");
+
+        assert!(input.contains("\"company_count\":2"));
+        assert!(input.contains("\"scanned_document_count\":25"));
+        assert!(input.contains("\"name\":\"广州冠晚网络有限公司\""));
+        assert!(!input.contains("document_ids"));
+        assert!(!input.contains("\"candidate_terms\""));
+        assert!(!input.contains("项目经验"));
+        assert!(!input.contains("噪声实体"));
     }
 
     #[test]
