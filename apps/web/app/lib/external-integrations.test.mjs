@@ -53,6 +53,10 @@ test('external integration modes are generic customer-facing guidance without se
     pureMode.documentLinks.find((link) => link.key === 'pure-third-party-md').download,
     true,
   );
+  assert(standardMode.checklist.includes('平台事件验签与消息解密'));
+  assert(standardMode.checklist.includes('用户确认、动作派发和结果回调'));
+  assert(pureMode.checklist.includes('文档解析：parse 与 parse-detail'));
+  assert(pureMode.checklist.includes('按模板生成报表：document_template_skill'));
   assert(!modeText.includes('用户权限'));
   assert(!modeText.includes('v3in_live_'));
   assert(!/Authorization:\s*Bearer\s+[A-Za-z0-9_-]{12,}/.test(modeText));

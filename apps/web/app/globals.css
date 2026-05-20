@@ -5756,7 +5756,7 @@ body {
 
 .external-mode-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
 }
 
@@ -5856,6 +5856,51 @@ body {
 
 .external-mode-link-markdown:hover {
   background: #f4ead7;
+}
+
+.external-mode-checklist {
+  display: grid;
+  gap: 7px;
+  padding: 10px;
+  border: 1px solid #d6cbbb;
+  border-radius: 8px;
+  background: #fffaf0;
+}
+
+.external-mode-checklist strong {
+  color: #111827;
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+.external-mode-checklist ul {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.external-mode-checklist li {
+  position: relative;
+  min-width: 0;
+  padding-left: 14px;
+  color: #475569;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.45;
+}
+
+.external-mode-checklist li::before {
+  position: absolute;
+  left: 0;
+  top: 0.55em;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: #bca77f;
+  content: "";
 }
 
 .external-mode-card small {

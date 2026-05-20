@@ -463,6 +463,16 @@ export default function ExternalIntegrationsPageClient() {
                   ))}
                 </div>
               ) : null}
+              {Array.isArray(mode.checklist) && mode.checklist.length ? (
+                <div className="external-mode-checklist" aria-label={`${mode.title} 完整对接清单`}>
+                  <strong>完整对接清单</strong>
+                  <ul>
+                    {mode.checklist.map((item) => (
+                      <li key={item}>{item}</li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
               <small>{mode.guardrail}</small>
             </article>
           ))}
