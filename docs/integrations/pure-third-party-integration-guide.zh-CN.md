@@ -163,6 +163,7 @@ Authorization: Bearer <V3 inbound token>
 | `tenant_external_id` | 是 | 第三方租户、空间或客户 ID |
 | `bot_external_id` | 是 | 第三方侧机器人或应用 ID |
 | `conversation_external_id` | 是 | 会话、群、房间或页面上下文 ID；同一轮、同一页面会话或同一聊天窗口保持不变，V3 会映射为同一个对话上下文 |
+| `thread_external_id` | 否 | 子线程、话题或页面局部上下文 ID；没有子线程时可省略 |
 | `sender_external_id` | 是 | 当前提问用户在第三方系统中的稳定 ID；V3 会用它绑定会话、审计和“用户历史上下文” |
 | `message_external_id` | 是 | 第三方消息 ID，必须稳定 |
 | `message_type` | 是 | `text`、`image`、`file`、`audio`、`video`、`card`、`event` 或 `unknown` |
@@ -170,6 +171,13 @@ Authorization: Bearer <V3 inbound token>
 | `available_document_source_id` | 文档问答建议传 | 本轮可用文档所属资料源 ID；连接配置了默认资料源时可省略，但联调建议显式传 |
 | `available_document_external_ids` | 文档问答建议传 | 本轮允许 V3 使用的第三方文档 ID 列表；只传本轮已筛好的文档，不要传全库 |
 | `requested_skills` | 否 | 第三方希望本轮应用的结构化 skill 列表；正式对接建议传此字段，不建议只把 skill 写进用户自然语言文本 |
+| `requested_skills[].skill_id` | `requested_skills` 有值时必填 | 本轮希望启用的 skill 稳定标识，建议使用英文或业务 slug |
+| `requested_skills[].version` | 否 | skill 版本号或策略版本，用于审计和复现；不传时按连接默认策略处理 |
+| `requested_skills[].mode` | 否 | `required`、`preferred` 或 `disabled`；不传默认按 `preferred` |
+| `requested_skills[].arguments` | 否 | 本轮 skill 参数对象，只放非敏感参数；禁止放 token、密码、Cookie 或长期下载 URL |
+| `requested_skills[].arguments.template_document_external_id` | 模板 skill 建议传 | 模板文档的第三方文档 ID，必须同时出现在本轮 `available_document_external_ids` 中 |
+| `requested_skills[].arguments.source_id` | 模板 skill 建议传 | 模板文档所属资料源 ID，通常与 `available_document_source_id` 一致 |
+| `requested_skills[].arguments.output_type` | 模板 skill 建议传 | 期望输出类型，例如 `static_page`、`html`、`page` 或 `any` |
 | `mention_external_user_ids` | 否 | 本条消息中被 @ 的第三方用户 ID 列表；无 @ 时传空数组或省略 |
 | `attachment_refs` | 否 | 附件引用，文件下载需按项目配置访问方式和有效期 |
 | `idempotency_key` | 是 | 防重放和重复投递 |
@@ -223,6 +231,24 @@ Authorization: Bearer <V3 inbound token>
 }
 ```
 
+响应字段说明：
+
+| 字段 | 说明 |
+| --- | --- |
+| `accepted` | V3 是否已接收本轮消息并完成接口层处理 |
+| `assistant_run_id` | 本轮 V3 助手运行 ID；后续查询状态、确认动作和审计定位时使用 |
+| `idempotency_key` | V3 回显的幂等键，用于第三方排查重复投递 |
+| `reply` | V3 返回给第三方页面展示或处理的最终回复对象 |
+| `reply.target_conversation_external_id` | 应展示回复的第三方会话 ID，通常等于请求里的 `conversation_external_id` |
+| `reply.reply_type` | 回复类型，例如 `text`、`task_status`、`card`、`artifact_link` 或 `requires_confirmation` |
+| `reply.text` | 文本回复内容；仅当 `reply_type=text` 或需要展示文本时有值 |
+| `reply.task_status` | 任务状态，例如 `answered`、`processing`、`failed` 或 `v3_search_evidence_required` |
+| `reply.requires_confirmation` | 是否需要第三方页面继续展示确认动作 |
+| `reply.action_id` | 需要确认或跟踪的外部动作 ID；仅动作类回复返回 |
+| `reply.confirmation_id` | 确认请求 ID；第三方提交确认时可用于关联 |
+| `reply.card` | 结构化卡片对象，例如等待搜索证据、错误提示或业务摘要 |
+| `reply.artifact_links` | 产物链接列表；只放可展示给第三方页面的短期或受控链接 |
+
 这个 `/events` 接口同时承担两个职责：第三方把用户消息发给 V3，V3 把本次生成回复、任务状态或确认卡片放在响应体 `reply` 中返回给第三方。第三方页面按 `reply.target_conversation_external_id` 把回复展示回原会话即可；第一阶段不需要再调用单独的“取回复”接口。
 
 如果第三方自建聊天页希望获得“边生成边展示”的体验，可以改用流式接口。流式接口的请求体、鉴权、幂等规则和 `/events` 一致，只是响应采用 SSE：
@@ -266,6 +292,21 @@ event: done
 data: {"ok":true}
 ```
 
+SSE data 字段说明：
+
+| 位置 | 字段 | 说明 |
+| --- | --- | --- |
+| `external_channel.started.data` | `status` | 固定表示流已开始处理，通常为 `started` |
+| `external_channel.started.data` | `idempotency_key` | 本轮消息幂等键，用于前端和服务端日志关联 |
+| `external_channel.delta.data` | `index` | 增量片段序号，从 0 开始递增 |
+| `external_channel.delta.data` | `delta` | 本次追加的文本片段，可追加到同一个助手气泡 |
+| `external_channel.completed.data` | `assistant_run_id` | 本轮助手运行 ID |
+| `external_channel.completed.data` | `response` | 与 `/events` JSON 响应同结构的最终权威响应 |
+| `done.data` | `ok` | SSE 流是否正常结束 |
+| `error.data` | `status` | 错误状态或 HTTP 状态，便于页面展示失败态 |
+| `error.data` | `error.code` | 稳定错误码，便于第三方做分支处理 |
+| `error.data` | `error.message` | 可展示或记录的错误说明，不包含密钥和敏感正文 |
+
 前端实现注意事项：
 
 - 因为流式接口是 `POST + JSON body`，浏览器端建议使用 `fetch` + `ReadableStream` 读取 SSE；原生 `EventSource` 只适合 `GET`，不适合直接提交本接口请求体；
@@ -288,6 +329,17 @@ data: {"ok":true}
 }
 ```
 
+任务状态字段说明：
+
+| 字段 | 说明 |
+| --- | --- |
+| `accepted` | V3 是否接收该请求 |
+| `assistant_run_id` | 当前任务运行 ID |
+| `idempotency_key` | 本轮请求幂等键 |
+| `reply.target_conversation_external_id` | 任务状态应回显到的第三方会话 |
+| `reply.reply_type` | 当前为 `task_status`，表示不是最终自然语言答案 |
+| `reply.task_status` | 任务状态值，例如 `processing`、`failed`、`answered` 或 `v3_search_evidence_required` |
+
 常见 `reply_type`：
 
 - `task_status`：处理中、失败、等待证据；普通问答不要把它渲染成助手回答；
@@ -308,6 +360,15 @@ data: {"ok":true}
   }
 }
 ```
+
+等待搜索证据字段说明：
+
+| 字段 | 说明 |
+| --- | --- |
+| `reply_type` | 固定为 `task_status`，表示当前不是最终回答 |
+| `task_status` | 固定为 `v3_search_evidence_required`，表示需要 V3 只读搜索证据供料 |
+| `card.type` | 卡片类型，第三方页面可按该类型展示等待证据状态 |
+| `card.search_evidence_required` | 是否处于等待搜索证据状态 |
 
 这表示 V3 正等待只读搜索证据供料，不表示已经完成联网搜索。
 
@@ -332,6 +393,16 @@ data: {"ok":true}
   "message_external_id": "msg-20260515-0001"
 }
 ```
+
+最小用户标识字段说明：
+
+| 字段 | 说明 |
+| --- | --- |
+| `tenant_external_id` | 第三方租户、空间或客户 ID |
+| `bot_external_id` | 第三方机器人或应用 ID |
+| `conversation_external_id` | 本轮会话或页面上下文 ID |
+| `sender_external_id` | 第三方用户稳定 ID，不能用昵称或临时 session 替代 |
+| `message_external_id` | 第三方消息稳定 ID，用于幂等和审计定位 |
 
 ## 7. 文档接口
 
@@ -363,6 +434,22 @@ GET /documents?cursor=<cursor>&updated_after=<iso_time>&limit=100
   "next_cursor": "cursor-002"
 }
 ```
+
+文档列表字段说明：
+
+| 字段 | 说明 |
+| --- | --- |
+| `items` | 当前页文档数组 |
+| `items[].document_external_id` | 第三方文档稳定 ID；V3 对话和解析映射都使用该 ID |
+| `items[].title` | 文档标题，用于展示和检索摘要 |
+| `items[].document_type` | 文档类型或扩展名，例如 `pdf`、`docx`、`md` |
+| `items[].revision` | 文档版本标识；正文变化时必须变化 |
+| `items[].updated_at` | 第三方文档更新时间，ISO 8601 格式 |
+| `items[].deleted` | 是否已删除；为 `true` 时 V3 后续不应继续使用 |
+| `items[].content_url` | V3 拉取正文或文件的短期受控 URL |
+| `items[].acl_url` | V3 拉取权限快照的短期受控 URL |
+| `items[].content_hash` | 文档内容哈希，用于判断是否需要重新解析 |
+| `next_cursor` | 下一页游标；没有下一页时传 `null` 或省略 |
 
 ### 7.2 文档正文
 
@@ -400,6 +487,17 @@ GET /documents/{document_external_id}/content?revision=rev-20260515-01
 }
 ```
 
+文档状态字段说明：
+
+| 字段 | 说明 |
+| --- | --- |
+| `document_external_id` | 第三方文档稳定 ID |
+| `revision` | 当前文档版本标识 |
+| `updated_at` | 本次状态或内容变化时间 |
+| `deleted` | 是否删除；删除后 V3 不应继续把该文档作为证据 |
+| `disabled` | 是否停用；停用表示暂不可用但不等于删除 |
+| `content_hash` | 当前正文或文件哈希，变化时 V3 应重新解析或刷新索引 |
+
 状态说明：
 
 - `deleted=true` 表示文档已删除，V3 后续不应继续使用该文档；
@@ -420,12 +518,91 @@ Authorization: Bearer <V3 inbound token>
 
 第三方传入 `source_id`、`dataset_id`、`document_external_id`、可选 `revision_external_id` 和短时效 `content_url`。V3 下载文档后进入现有上传解析工作流，并把内部文档记录关联到 `source_id + document_external_id`。
 
+请求 Body 示例：
+
+```json
+{
+  "source_id": "third-party-source-main",
+  "dataset_id": "0f2f7b19-58ab-4b2b-9a8f-cc38bfbf8c9d",
+  "dataset_external_id": "dataset-third-party-main",
+  "dataset_title": "第三方资料库",
+  "document_external_id": "doc-001",
+  "revision_external_id": "rev-20260515-01",
+  "title": "采购审批制度.docx",
+  "content_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "content_url": "https://third-party.example.com/download/doc-001?expires=short",
+  "metadata": {
+    "business_category": "procurement"
+  },
+  "idempotency_key": "third-party-source-main:doc-001:rev-20260515-01"
+}
+```
+
+解析请求字段说明：
+
+| 字段 | 必填 | 说明 |
+| --- | --- | --- |
+| `source_id` | 是 | V3 资料源 ID，通常由 V3 联调配置给出 |
+| `dataset_id` | 否 | V3 内部数据集 UUID；如果传错或传非 UUID 会返回反序列化或数据集不存在错误 |
+| `dataset_external_id` | 否 | 第三方数据集或资料库稳定 ID；不知道内部 UUID 时建议传这个字段 |
+| `dataset_title` | 否 | 数据集展示名；V3 创建或展示资料库时使用 |
+| `document_external_id` | 是 | 第三方文档稳定 ID；后续对话用 `available_document_external_ids` 引用同一个值 |
+| `revision_external_id` | 否 | 第三方文档版本 ID；内容更新时建议变化 |
+| `title` | 否 | 文档标题或文件名 |
+| `content_type` | 否 | MIME 类型；不传时 V3 会尝试从文件名或响应头推断 |
+| `content_url` | 是 | V3 可下载原始文件的短期 URL；不要使用长期公开链接 |
+| `metadata` | 否 | 非敏感业务元数据对象，只用于审计和后续映射 |
+| `idempotency_key` | 否 | 本次解析请求幂等键；建议按 `source_id + document_external_id + revision` 生成 |
+| `allow_http_loopback` | 否 | 仅本地联调使用，允许 HTTP loopback 下载；生产不要开启 |
+
+解析响应关键字段说明：
+
+| 字段 | 说明 |
+| --- | --- |
+| `accepted` | V3 是否接收解析请求 |
+| `source_id` | V3 回显的资料源 ID |
+| `document_external_id` | V3 回显的第三方文档 ID |
+| `revision_external_id` | V3 回显的第三方版本 ID |
+| `document.id` | V3 内部文档 ID |
+| `document.dataset_id` | 文档归属的 V3 内部数据集 UUID |
+| `document.title` | V3 记录的文档标题 |
+| `document.content_type` | V3 记录或推断的 MIME 类型 |
+| `document.lifecycle` | 文档生命周期；`indexed` 表示已经完成索引并可作为检索证据 |
+| `document.parse_status` | 解析状态摘要，例如已接收、解析中、已完成或失败 |
+| `document.parseQualityStatus` | 解析质量状态的驼峰兼容字段 |
+| `document.created_at` | V3 文档记录创建时间 |
+| `document.updated_at` | V3 文档记录更新时间 |
+| `workflow_execution` | 后台解析工作流信息，用于 V3 侧排查 |
+
 解析状态查询：
 
 ```http
 GET /v1/external/channels/{connection_id}/documents/{document_external_id}/parse-detail?source_id={source_id}
 Authorization: Bearer <V3 inbound token>
 ```
+
+解析详情响应字段说明：
+
+| 字段 | 说明 |
+| --- | --- |
+| `source_id` | 查询的资料源 ID |
+| `document_external_id` | 查询的第三方文档 ID |
+| `lifecycle` | 当前聚合生命周期；`indexed` 表示文档已完成索引 |
+| `chunk_count` / `chunkCount` | 已生成的文本分块数量 |
+| `retrieval_evidence_count` / `retrievalEvidenceCount` | 可用于检索供料的证据数量 |
+| `parse_status` / `parseStatus` | 文档解析状态 |
+| `parse_quality_status` / `parseQualityStatus` | 解析质量状态 |
+| `parse_quality_summary` / `parseQualitySummary` | 解析质量摘要对象 |
+| `model_status` / `modelStatus` | 面向模型供料的状态摘要 |
+| `ingest` | 解析入库摘要，例如标题、内容类型和分块数 |
+| `workflow` | 后台工作流状态摘要 |
+| `latest` | 最新版本对应的文档详情对象 |
+| `documents` | 与该外部文档 ID 匹配的 V3 文档记录列表 |
+| `documents[].document_id` | V3 内部文档 ID |
+| `documents[].dataset_id` | V3 内部数据集 UUID |
+| `documents[].revision_external_id` | 第三方版本 ID |
+| `documents[].created_at` | V3 文档记录创建时间 |
+| `documents[].updated_at` | V3 文档记录更新时间 |
 
 对话时，第三方继续调用消息接口，并传入本轮可用文档：
 
@@ -435,6 +612,13 @@ Authorization: Bearer <V3 inbound token>
   "available_document_external_ids": ["third-doc-20260518-001"]
 }
 ```
+
+对话文档范围字段说明：
+
+| 字段 | 说明 |
+| --- | --- |
+| `available_document_source_id` | 本轮文档所属资料源 ID |
+| `available_document_external_ids` | 本轮允许 V3 使用的第三方文档 ID 列表；只传本轮选中的文档 |
 
 V3 会把外部文档 ID 映射为内部文档范围，并只从这些文档供料给模型。
 
@@ -490,6 +674,19 @@ Authorization: Bearer <V3 inbound token>
 }
 ```
 
+确认请求字段说明：
+
+| 字段 | 说明 |
+| --- | --- |
+| `assistant_run_id` | V3 返回的助手运行 ID |
+| `action_id` | V3 待确认动作 ID |
+| `confirmation_external_id` | 第三方侧确认记录 ID，便于对账和幂等 |
+| `sender_external_user_id` | 做出确认或拒绝的第三方用户 ID |
+| `decision` | `approved` 或 `rejected` |
+| `comment` | 用户确认备注；V3 仅保存必要摘要 |
+| `idempotency_key` | 确认请求幂等键 |
+| `confirmed_at` | 第三方确认发生时间 |
+
 `decision` 支持：
 
 - `approved`；
@@ -514,6 +711,13 @@ V3 内部渲染最终页时使用：
 }
 ```
 
+渲染请求字段说明：
+
+| 字段 | 说明 |
+| --- | --- |
+| `direct_html` | 是否走快速 HTML 直出模式；为 `true` 时跳过调试页和截图确认 |
+| `background` | 是否后台异步渲染；为 `false` 时接口尽量同步返回初始渲染结果 |
+
 渲染响应里的 `render_output.id` 是本次 HTML 生成 id。第三方如果采用异步或需要确认状态，可用同一个 id 查询：
 
 ```http
@@ -523,6 +727,23 @@ Authorization: Bearer <V3 inbound token>
 ```
 
 状态响应会返回 `status`、`html_preview_url` / `htmlPreviewUrl`、`html_download_url` / `htmlDownloadUrl`、`download_url` / `downloadUrl` 和 `retryable_error_reason` / `retryableErrorReason`。`status=rendered` 且存在下载地址时即可进入下载；`status=failed` 时，第三方应展示失败状态并参考 `retryable_error_reason` 发起重试或人工处理。
+
+渲染状态字段说明：
+
+| 字段 | 说明 |
+| --- | --- |
+| `id` | V3 静态页渲染输出 ID，即路径中的 `render_output_id` |
+| `draft_id` | 对应的静态页草稿 ID |
+| `assistant_run_id` | 触发渲染的助手运行 ID |
+| `image_job_id` | 关联的图片任务 ID；快速 HTML 模式通常为空 |
+| `status` | `queued`、`rendering`、`rendered`、`failed` 或 `cancelled` |
+| `html` | 内部响应中的 HTML 内容；外部状态接口通常应使用预览或下载 URL |
+| `html_preview_url` / `htmlPreviewUrl` | 浏览器 inline 预览地址 |
+| `html_download_url` / `htmlDownloadUrl` | HTML 附件下载地址 |
+| `download_url` / `downloadUrl` | 兼容下载地址，通常与 `html_download_url` 等价 |
+| `retryable_error_reason` / `retryableErrorReason` | 失败时是否可重试及原因 |
+| `asset_manifest` | 渲染资产摘要和审计信息 |
+| `created_at` | 渲染输出创建时间 |
 
 预览 HTML：
 
@@ -575,6 +796,27 @@ V3 派发示例：
 }
 ```
 
+产物派发字段说明：
+
+| 字段 | 说明 |
+| --- | --- |
+| `action_id` | V3 外部动作运行 ID |
+| `assistant_run_id` | 触发动作的助手运行 ID |
+| `action_type` | 动作类型，例如 `external_artifact.publish`、`external_artifact.status` 或 `external_artifact.revoke` |
+| `risk_level` | 动作风险级别，例如 `read_only`、`low_risk_write`、`high_risk_write` 或 `cross_system` |
+| `target_system` | 第三方目标系统标识 |
+| `arguments_redacted` | 脱敏后的动作参数摘要，只包含第三方执行所需的安全字段 |
+| `arguments_redacted.artifact_ref` | V3 或业务侧产物引用 |
+| `arguments_redacted.target_system` | 产物发布目标，例如客户门户或下载中心 |
+| `arguments_redacted.visibility` | 产物可见性策略，例如跟随来源权限 |
+| `confirmation_state` | 确认状态，例如 `not_required`、`pending`、`confirmed` 或 `rejected` |
+| `requester_summary` | 请求来源摘要，不包含原始用户消息正文 |
+| `requester_summary.platform` | 来源平台 |
+| `requester_summary.tenant_external_id` | 第三方租户 ID |
+| `requester_summary.conversation_external_id` | 第三方会话 ID |
+| `requester_summary.sender_external_id` | 发起动作的第三方用户 ID |
+| `raw_arguments_included` | 是否包含原始参数；对外派发应为 `false` |
+
 第三方响应可返回：
 
 ```json
@@ -584,6 +826,14 @@ V3 派发示例：
   "artifact_external_id": "tp-artifact-001"
 }
 ```
+
+产物响应字段说明：
+
+| 字段 | 说明 |
+| --- | --- |
+| `external_request_id` | 第三方接收本次动作后的请求 ID |
+| `status` | 第三方处理状态，例如 `accepted`、`running`、`succeeded` 或 `failed` |
+| `artifact_external_id` | 第三方系统生成的产物 ID |
 
 产物发布要求：
 
@@ -633,6 +883,22 @@ V3 派发请求示例：
 }
 ```
 
+业务动作派发字段说明：
+
+| 字段 | 说明 |
+| --- | --- |
+| `action_id` | V3 外部动作运行 ID |
+| `assistant_run_id` | 触发动作的助手运行 ID |
+| `action_type` | 业务动作类型，由双方联调约定，例如 `ticket.update_priority` |
+| `risk_level` | 风险级别，决定是否必须用户确认 |
+| `target_system` | 第三方业务系统标识 |
+| `confirmation_state` | 动作确认状态；高风险动作必须为 `confirmed` 才会派发 |
+| `arguments_redacted` | 脱敏后的业务参数对象 |
+| `arguments_redacted.ticket_id` | 示例工单 ID；实际字段按业务动作约定 |
+| `arguments_redacted.priority` | 示例优先级；实际字段按业务动作约定 |
+| `requester_summary` | 请求来源摘要 |
+| `raw_arguments_included` | 是否包含原始参数；对外派发应为 `false` |
+
 风险等级建议：
 
 | 风险等级 | 示例 | 处理要求 |
@@ -672,6 +938,20 @@ Authorization: Bearer <V3 inbound token>
 }
 ```
 
+结果回传字段说明：
+
+| 字段 | 说明 |
+| --- | --- |
+| `external_request_id` | 第三方执行请求 ID；如果派发时已记录，回传必须一致 |
+| `status` | `accepted`、`running`、`succeeded`、`failed`、`cancelled` 或 `rejected` |
+| `idempotency_key` | 结果回传幂等键，重复回传必须复用 |
+| `completed_at` | 第三方动作完成或状态更新时间 |
+| `code` | 第三方稳定结果码或错误码 |
+| `message` | 可选说明；V3 只保存是否存在和安全摘要，不保存原文 |
+| `result` | 第三方结果对象；V3 只保存结构摘要和字段数量 |
+| `result.artifact_id` | 示例产物 ID；实际字段按业务动作约定 |
+| `result.status` | 示例结果状态；实际字段按业务动作约定 |
+
 支持的 `status`：
 
 - `accepted`；
@@ -695,6 +975,17 @@ X-V3-Nonce: 01HX...
 X-V3-Content-SHA256: <JSON 原始请求体 sha256 hex>
 X-V3-Signature: sha256=<HMAC-SHA256 hex>
 ```
+
+出站请求头字段说明：
+
+| 请求头 | 说明 |
+| --- | --- |
+| `Authorization` | V3 派发动作时使用的专用 Bearer Token；只在配置了派发 token 时发送 |
+| `X-V3-Connection-Id` | V3 外部连接 ID |
+| `X-V3-Timestamp` | V3 发起请求时间，第三方应校验时间窗口 |
+| `X-V3-Nonce` | 一次性随机值，第三方应防重放 |
+| `X-V3-Content-SHA256` | JSON 原始请求体的 SHA-256 摘要 |
+| `X-V3-Signature` | 基于签名原文和派发签名密钥生成的 HMAC-SHA256 |
 
 只有配置派发 Bearer Token 时才发送 `Authorization`。只有配置派发签名密钥时才发送 `X-V3-Signature`。两者都配置时，V3 会同时发送。
 
@@ -764,6 +1055,14 @@ V3 错误格式：
   "details": {}
 }
 ```
+
+错误字段说明：
+
+| 字段 | 说明 |
+| --- | --- |
+| `code` | 稳定错误码，第三方应优先按该字段做分支处理 |
+| `message` | 面向调试或展示的错误说明，不包含密钥和敏感正文 |
+| `details` | 可选结构化错误详情，例如字段名、约束或安全错误码 |
 
 常见错误码：
 

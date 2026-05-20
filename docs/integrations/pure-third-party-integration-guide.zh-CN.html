@@ -533,7 +533,7 @@ Authorization: Bearer &lt;V3 inbound token&gt;</code></pre>
 }</code></pre>
   </figure>
 <p>字段要求：</p>
-<div class="table-shell"><table><thead><tr><th>字段</th><th>必填</th><th>说明</th></tr></thead><tbody><tr><td><code>platform</code></td><td>是</td><td>必须和连接配置一致；当前自建聊天联调通常使用 <code>generic_chat</code>，也可按项目配置使用 <code>third_party</code></td></tr><tr><td><code>tenant_external_id</code></td><td>是</td><td>第三方租户、空间或客户 ID</td></tr><tr><td><code>bot_external_id</code></td><td>是</td><td>第三方侧机器人或应用 ID</td></tr><tr><td><code>conversation_external_id</code></td><td>是</td><td>会话、群、房间或页面上下文 ID；同一轮、同一页面会话或同一聊天窗口保持不变，V3 会映射为同一个对话上下文</td></tr><tr><td><code>sender_external_id</code></td><td>是</td><td>当前提问用户在第三方系统中的稳定 ID；V3 会用它绑定会话、审计和“用户历史上下文”</td></tr><tr><td><code>message_external_id</code></td><td>是</td><td>第三方消息 ID，必须稳定</td></tr><tr><td><code>message_type</code></td><td>是</td><td><code>text</code>、<code>image</code>、<code>file</code>、<code>audio</code>、<code>video</code>、<code>card</code>、<code>event</code> 或 <code>unknown</code></td></tr><tr><td><code>text</code></td><td>文本消息必填</td><td>用户输入文本</td></tr><tr><td><code>available_document_source_id</code></td><td>文档问答建议传</td><td>本轮可用文档所属资料源 ID；连接配置了默认资料源时可省略，但联调建议显式传</td></tr><tr><td><code>available_document_external_ids</code></td><td>文档问答建议传</td><td>本轮允许 V3 使用的第三方文档 ID 列表；只传本轮已筛好的文档，不要传全库</td></tr><tr><td><code>requested_skills</code></td><td>否</td><td>第三方希望本轮应用的结构化 skill 列表；正式对接建议传此字段，不建议只把 skill 写进用户自然语言文本</td></tr><tr><td><code>mention_external_user_ids</code></td><td>否</td><td>本条消息中被 @ 的第三方用户 ID 列表；无 @ 时传空数组或省略</td></tr><tr><td><code>attachment_refs</code></td><td>否</td><td>附件引用，文件下载需按项目配置访问方式和有效期</td></tr><tr><td><code>idempotency_key</code></td><td>是</td><td>防重放和重复投递</td></tr><tr><td><code>received_at</code></td><td>是</td><td>第三方收到消息的时间</td></tr></tbody></table></div>
+<div class="table-shell"><table><thead><tr><th>字段</th><th>必填</th><th>说明</th></tr></thead><tbody><tr><td><code>platform</code></td><td>是</td><td>必须和连接配置一致；当前自建聊天联调通常使用 <code>generic_chat</code>，也可按项目配置使用 <code>third_party</code></td></tr><tr><td><code>tenant_external_id</code></td><td>是</td><td>第三方租户、空间或客户 ID</td></tr><tr><td><code>bot_external_id</code></td><td>是</td><td>第三方侧机器人或应用 ID</td></tr><tr><td><code>conversation_external_id</code></td><td>是</td><td>会话、群、房间或页面上下文 ID；同一轮、同一页面会话或同一聊天窗口保持不变，V3 会映射为同一个对话上下文</td></tr><tr><td><code>thread_external_id</code></td><td>否</td><td>子线程、话题或页面局部上下文 ID；没有子线程时可省略</td></tr><tr><td><code>sender_external_id</code></td><td>是</td><td>当前提问用户在第三方系统中的稳定 ID；V3 会用它绑定会话、审计和“用户历史上下文”</td></tr><tr><td><code>message_external_id</code></td><td>是</td><td>第三方消息 ID，必须稳定</td></tr><tr><td><code>message_type</code></td><td>是</td><td><code>text</code>、<code>image</code>、<code>file</code>、<code>audio</code>、<code>video</code>、<code>card</code>、<code>event</code> 或 <code>unknown</code></td></tr><tr><td><code>text</code></td><td>文本消息必填</td><td>用户输入文本</td></tr><tr><td><code>available_document_source_id</code></td><td>文档问答建议传</td><td>本轮可用文档所属资料源 ID；连接配置了默认资料源时可省略，但联调建议显式传</td></tr><tr><td><code>available_document_external_ids</code></td><td>文档问答建议传</td><td>本轮允许 V3 使用的第三方文档 ID 列表；只传本轮已筛好的文档，不要传全库</td></tr><tr><td><code>requested_skills</code></td><td>否</td><td>第三方希望本轮应用的结构化 skill 列表；正式对接建议传此字段，不建议只把 skill 写进用户自然语言文本</td></tr><tr><td><code>requested_skills[].skill_id</code></td><td><code>requested_skills</code> 有值时必填</td><td>本轮希望启用的 skill 稳定标识，建议使用英文或业务 slug</td></tr><tr><td><code>requested_skills[].version</code></td><td>否</td><td>skill 版本号或策略版本，用于审计和复现；不传时按连接默认策略处理</td></tr><tr><td><code>requested_skills[].mode</code></td><td>否</td><td><code>required</code>、<code>preferred</code> 或 <code>disabled</code>；不传默认按 <code>preferred</code></td></tr><tr><td><code>requested_skills[].arguments</code></td><td>否</td><td>本轮 skill 参数对象，只放非敏感参数；禁止放 token、密码、Cookie 或长期下载 URL</td></tr><tr><td><code>requested_skills[].arguments.template_document_external_id</code></td><td>模板 skill 建议传</td><td>模板文档的第三方文档 ID，必须同时出现在本轮 <code>available_document_external_ids</code> 中</td></tr><tr><td><code>requested_skills[].arguments.source_id</code></td><td>模板 skill 建议传</td><td>模板文档所属资料源 ID，通常与 <code>available_document_source_id</code> 一致</td></tr><tr><td><code>requested_skills[].arguments.output_type</code></td><td>模板 skill 建议传</td><td>期望输出类型，例如 <code>static_page</code>、<code>html</code>、<code>page</code> 或 <code>any</code></td></tr><tr><td><code>mention_external_user_ids</code></td><td>否</td><td>本条消息中被 @ 的第三方用户 ID 列表；无 @ 时传空数组或省略</td></tr><tr><td><code>attachment_refs</code></td><td>否</td><td>附件引用，文件下载需按项目配置访问方式和有效期</td></tr><tr><td><code>idempotency_key</code></td><td>是</td><td>防重放和重复投递</td></tr><tr><td><code>received_at</code></td><td>是</td><td>第三方收到消息的时间</td></tr></tbody></table></div>
 <p>关于用户历史上下文：</p>
 <ul>
 <li>V3 会按 <code>platform + tenant_external_id + bot_external_id + sender_external_id</code> 维护一个内部隐藏的用户上下文范围，用于沉淀该用户历史对话摘要；</li>
@@ -581,6 +581,8 @@ Authorization: Bearer &lt;V3 inbound token&gt;</code></pre>
   }
 }</code></pre>
   </figure>
+<p>响应字段说明：</p>
+<div class="table-shell"><table><thead><tr><th>字段</th><th>说明</th></tr></thead><tbody><tr><td><code>accepted</code></td><td>V3 是否已接收本轮消息并完成接口层处理</td></tr><tr><td><code>assistant_run_id</code></td><td>本轮 V3 助手运行 ID；后续查询状态、确认动作和审计定位时使用</td></tr><tr><td><code>idempotency_key</code></td><td>V3 回显的幂等键，用于第三方排查重复投递</td></tr><tr><td><code>reply</code></td><td>V3 返回给第三方页面展示或处理的最终回复对象</td></tr><tr><td><code>reply.target_conversation_external_id</code></td><td>应展示回复的第三方会话 ID，通常等于请求里的 <code>conversation_external_id</code></td></tr><tr><td><code>reply.reply_type</code></td><td>回复类型，例如 <code>text</code>、<code>task_status</code>、<code>card</code>、<code>artifact_link</code> 或 <code>requires_confirmation</code></td></tr><tr><td><code>reply.text</code></td><td>文本回复内容；仅当 <code>reply_type=text</code> 或需要展示文本时有值</td></tr><tr><td><code>reply.task_status</code></td><td>任务状态，例如 <code>answered</code>、<code>processing</code>、<code>failed</code> 或 <code>v3_search_evidence_required</code></td></tr><tr><td><code>reply.requires_confirmation</code></td><td>是否需要第三方页面继续展示确认动作</td></tr><tr><td><code>reply.action_id</code></td><td>需要确认或跟踪的外部动作 ID；仅动作类回复返回</td></tr><tr><td><code>reply.confirmation_id</code></td><td>确认请求 ID；第三方提交确认时可用于关联</td></tr><tr><td><code>reply.card</code></td><td>结构化卡片对象，例如等待搜索证据、错误提示或业务摘要</td></tr><tr><td><code>reply.artifact_links</code></td><td>产物链接列表；只放可展示给第三方页面的短期或受控链接</td></tr></tbody></table></div>
 <p>这个 <code>/events</code> 接口同时承担两个职责：第三方把用户消息发给 V3，V3 把本次生成回复、任务状态或确认卡片放在响应体 <code>reply</code> 中返回给第三方。第三方页面按 <code>reply.target_conversation_external_id</code> 把回复展示回原会话即可；第一阶段不需要再调用单独的“取回复”接口。</p>
 <p>如果第三方自建聊天页希望获得“边生成边展示”的体验，可以改用流式接口。流式接口的请求体、鉴权、幂等规则和 <code>/events</code> 一致，只是响应采用 SSE：</p>
 <figure class="code-card">
@@ -612,6 +614,8 @@ data: {&quot;assistant_run_id&quot;:&quot;00000000-0000-0000-0000-000000000001&q
 event: done
 data: {&quot;ok&quot;:true}</code></pre>
   </figure>
+<p>SSE data 字段说明：</p>
+<div class="table-shell"><table><thead><tr><th>位置</th><th>字段</th><th>说明</th></tr></thead><tbody><tr><td><code>external_channel.started.data</code></td><td><code>status</code></td><td>固定表示流已开始处理，通常为 <code>started</code></td></tr><tr><td><code>external_channel.started.data</code></td><td><code>idempotency_key</code></td><td>本轮消息幂等键，用于前端和服务端日志关联</td></tr><tr><td><code>external_channel.delta.data</code></td><td><code>index</code></td><td>增量片段序号，从 0 开始递增</td></tr><tr><td><code>external_channel.delta.data</code></td><td><code>delta</code></td><td>本次追加的文本片段，可追加到同一个助手气泡</td></tr><tr><td><code>external_channel.completed.data</code></td><td><code>assistant_run_id</code></td><td>本轮助手运行 ID</td></tr><tr><td><code>external_channel.completed.data</code></td><td><code>response</code></td><td>与 <code>/events</code> JSON 响应同结构的最终权威响应</td></tr><tr><td><code>done.data</code></td><td><code>ok</code></td><td>SSE 流是否正常结束</td></tr><tr><td><code>error.data</code></td><td><code>status</code></td><td>错误状态或 HTTP 状态，便于页面展示失败态</td></tr><tr><td><code>error.data</code></td><td><code>error.code</code></td><td>稳定错误码，便于第三方做分支处理</td></tr><tr><td><code>error.data</code></td><td><code>error.message</code></td><td>可展示或记录的错误说明，不包含密钥和敏感正文</td></tr></tbody></table></div>
 <p>前端实现注意事项：</p>
 <ul>
 <li>因为流式接口是 <code>POST + JSON body</code>，浏览器端建议使用 <code>fetch</code> + <code>ReadableStream</code> 读取 SSE；原生 <code>EventSource</code> 只适合 <code>GET</code>，不适合直接提交本接口请求体；</li>
@@ -633,6 +637,8 @@ data: {&quot;ok&quot;:true}</code></pre>
   }
 }</code></pre>
   </figure>
+<p>任务状态字段说明：</p>
+<div class="table-shell"><table><thead><tr><th>字段</th><th>说明</th></tr></thead><tbody><tr><td><code>accepted</code></td><td>V3 是否接收该请求</td></tr><tr><td><code>assistant_run_id</code></td><td>当前任务运行 ID</td></tr><tr><td><code>idempotency_key</code></td><td>本轮请求幂等键</td></tr><tr><td><code>reply.target_conversation_external_id</code></td><td>任务状态应回显到的第三方会话</td></tr><tr><td><code>reply.reply_type</code></td><td>当前为 <code>task_status</code>，表示不是最终自然语言答案</td></tr><tr><td><code>reply.task_status</code></td><td>任务状态值，例如 <code>processing</code>、<code>failed</code>、<code>answered</code> 或 <code>v3_search_evidence_required</code></td></tr></tbody></table></div>
 <p>常见 <code>reply_type</code>：</p>
 <ul>
 <li><code>task_status</code>：处理中、失败、等待证据；普通问答不要把它渲染成助手回答；</li>
@@ -653,6 +659,8 @@ data: {&quot;ok&quot;:true}</code></pre>
   }
 }</code></pre>
   </figure>
+<p>等待搜索证据字段说明：</p>
+<div class="table-shell"><table><thead><tr><th>字段</th><th>说明</th></tr></thead><tbody><tr><td><code>reply_type</code></td><td>固定为 <code>task_status</code>，表示当前不是最终回答</td></tr><tr><td><code>task_status</code></td><td>固定为 <code>v3_search_evidence_required</code>，表示需要 V3 只读搜索证据供料</td></tr><tr><td><code>card.type</code></td><td>卡片类型，第三方页面可按该类型展示等待证据状态</td></tr><tr><td><code>card.search_evidence_required</code></td><td>是否处于等待搜索证据状态</td></tr></tbody></table></div>
 <p>这表示 V3 正等待只读搜索证据供料，不表示已经完成联网搜索。</p>
 <h2 id="section-06">6. 用户标识约定</h2>
 <p>简单版不要求第三方提供额外用户接口。第三方只需要在每条消息里提供稳定的 <code>sender_external_id</code>，用于：</p>
@@ -673,6 +681,8 @@ data: {&quot;ok&quot;:true}</code></pre>
   &quot;message_external_id&quot;: &quot;msg-20260515-0001&quot;
 }</code></pre>
   </figure>
+<p>最小用户标识字段说明：</p>
+<div class="table-shell"><table><thead><tr><th>字段</th><th>说明</th></tr></thead><tbody><tr><td><code>tenant_external_id</code></td><td>第三方租户、空间或客户 ID</td></tr><tr><td><code>bot_external_id</code></td><td>第三方机器人或应用 ID</td></tr><tr><td><code>conversation_external_id</code></td><td>本轮会话或页面上下文 ID</td></tr><tr><td><code>sender_external_id</code></td><td>第三方用户稳定 ID，不能用昵称或临时 session 替代</td></tr><tr><td><code>message_external_id</code></td><td>第三方消息稳定 ID，用于幂等和审计定位</td></tr></tbody></table></div>
 <h2 id="section-07">7. 文档接口</h2>
 <h3 id="section-08">7.1 文档列表</h3>
 <p>建议第三方提供：</p>
@@ -700,6 +710,8 @@ data: {&quot;ok&quot;:true}</code></pre>
   &quot;next_cursor&quot;: &quot;cursor-002&quot;
 }</code></pre>
   </figure>
+<p>文档列表字段说明：</p>
+<div class="table-shell"><table><thead><tr><th>字段</th><th>说明</th></tr></thead><tbody><tr><td><code>items</code></td><td>当前页文档数组</td></tr><tr><td><code>items[].document_external_id</code></td><td>第三方文档稳定 ID；V3 对话和解析映射都使用该 ID</td></tr><tr><td><code>items[].title</code></td><td>文档标题，用于展示和检索摘要</td></tr><tr><td><code>items[].document_type</code></td><td>文档类型或扩展名，例如 <code>pdf</code>、<code>docx</code>、<code>md</code></td></tr><tr><td><code>items[].revision</code></td><td>文档版本标识；正文变化时必须变化</td></tr><tr><td><code>items[].updated_at</code></td><td>第三方文档更新时间，ISO 8601 格式</td></tr><tr><td><code>items[].deleted</code></td><td>是否已删除；为 <code>true</code> 时 V3 后续不应继续使用</td></tr><tr><td><code>items[].content_url</code></td><td>V3 拉取正文或文件的短期受控 URL</td></tr><tr><td><code>items[].acl_url</code></td><td>V3 拉取权限快照的短期受控 URL</td></tr><tr><td><code>items[].content_hash</code></td><td>文档内容哈希，用于判断是否需要重新解析</td></tr><tr><td><code>next_cursor</code></td><td>下一页游标；没有下一页时传 <code>null</code> 或省略</td></tr></tbody></table></div>
 <h3 id="section-09">7.2 文档正文</h3>
 <p>建议第三方提供：</p>
 <figure class="code-card">
@@ -731,6 +743,8 @@ data: {&quot;ok&quot;:true}</code></pre>
   &quot;content_hash&quot;: &quot;sha256:...&quot;
 }</code></pre>
   </figure>
+<p>文档状态字段说明：</p>
+<div class="table-shell"><table><thead><tr><th>字段</th><th>说明</th></tr></thead><tbody><tr><td><code>document_external_id</code></td><td>第三方文档稳定 ID</td></tr><tr><td><code>revision</code></td><td>当前文档版本标识</td></tr><tr><td><code>updated_at</code></td><td>本次状态或内容变化时间</td></tr><tr><td><code>deleted</code></td><td>是否删除；删除后 V3 不应继续把该文档作为证据</td></tr><tr><td><code>disabled</code></td><td>是否停用；停用表示暂不可用但不等于删除</td></tr><tr><td><code>content_hash</code></td><td>当前正文或文件哈希，变化时 V3 应重新解析或刷新索引</td></tr></tbody></table></div>
 <p>状态说明：</p>
 <ul>
 <li><code>deleted=true</code> 表示文档已删除，V3 后续不应继续使用该文档；</li>
@@ -748,12 +762,37 @@ Content-Type: application/json
 Authorization: Bearer &lt;V3 inbound token&gt;</code></pre>
   </figure>
 <p>第三方传入 <code>source_id</code>、<code>dataset_id</code>、<code>document_external_id</code>、可选 <code>revision_external_id</code> 和短时效 <code>content_url</code>。V3 下载文档后进入现有上传解析工作流，并把内部文档记录关联到 <code>source_id + document_external_id</code>。</p>
+<p>请求 Body 示例：</p>
+<figure class="code-card">
+    <figcaption><span>json</span><button type="button" class="copy-code">复制</button></figcaption>
+    <pre><code>{
+  &quot;source_id&quot;: &quot;third-party-source-main&quot;,
+  &quot;dataset_id&quot;: &quot;0f2f7b19-58ab-4b2b-9a8f-cc38bfbf8c9d&quot;,
+  &quot;dataset_external_id&quot;: &quot;dataset-third-party-main&quot;,
+  &quot;dataset_title&quot;: &quot;第三方资料库&quot;,
+  &quot;document_external_id&quot;: &quot;doc-001&quot;,
+  &quot;revision_external_id&quot;: &quot;rev-20260515-01&quot;,
+  &quot;title&quot;: &quot;采购审批制度.docx&quot;,
+  &quot;content_type&quot;: &quot;application/vnd.openxmlformats-officedocument.wordprocessingml.document&quot;,
+  &quot;content_url&quot;: &quot;https://third-party.example.com/download/doc-001?expires=short&quot;,
+  &quot;metadata&quot;: {
+    &quot;business_category&quot;: &quot;procurement&quot;
+  },
+  &quot;idempotency_key&quot;: &quot;third-party-source-main:doc-001:rev-20260515-01&quot;
+}</code></pre>
+  </figure>
+<p>解析请求字段说明：</p>
+<div class="table-shell"><table><thead><tr><th>字段</th><th>必填</th><th>说明</th></tr></thead><tbody><tr><td><code>source_id</code></td><td>是</td><td>V3 资料源 ID，通常由 V3 联调配置给出</td></tr><tr><td><code>dataset_id</code></td><td>否</td><td>V3 内部数据集 UUID；如果传错或传非 UUID 会返回反序列化或数据集不存在错误</td></tr><tr><td><code>dataset_external_id</code></td><td>否</td><td>第三方数据集或资料库稳定 ID；不知道内部 UUID 时建议传这个字段</td></tr><tr><td><code>dataset_title</code></td><td>否</td><td>数据集展示名；V3 创建或展示资料库时使用</td></tr><tr><td><code>document_external_id</code></td><td>是</td><td>第三方文档稳定 ID；后续对话用 <code>available_document_external_ids</code> 引用同一个值</td></tr><tr><td><code>revision_external_id</code></td><td>否</td><td>第三方文档版本 ID；内容更新时建议变化</td></tr><tr><td><code>title</code></td><td>否</td><td>文档标题或文件名</td></tr><tr><td><code>content_type</code></td><td>否</td><td>MIME 类型；不传时 V3 会尝试从文件名或响应头推断</td></tr><tr><td><code>content_url</code></td><td>是</td><td>V3 可下载原始文件的短期 URL；不要使用长期公开链接</td></tr><tr><td><code>metadata</code></td><td>否</td><td>非敏感业务元数据对象，只用于审计和后续映射</td></tr><tr><td><code>idempotency_key</code></td><td>否</td><td>本次解析请求幂等键；建议按 <code>source_id + document_external_id + revision</code> 生成</td></tr><tr><td><code>allow_http_loopback</code></td><td>否</td><td>仅本地联调使用，允许 HTTP loopback 下载；生产不要开启</td></tr></tbody></table></div>
+<p>解析响应关键字段说明：</p>
+<div class="table-shell"><table><thead><tr><th>字段</th><th>说明</th></tr></thead><tbody><tr><td><code>accepted</code></td><td>V3 是否接收解析请求</td></tr><tr><td><code>source_id</code></td><td>V3 回显的资料源 ID</td></tr><tr><td><code>document_external_id</code></td><td>V3 回显的第三方文档 ID</td></tr><tr><td><code>revision_external_id</code></td><td>V3 回显的第三方版本 ID</td></tr><tr><td><code>document.id</code></td><td>V3 内部文档 ID</td></tr><tr><td><code>document.dataset_id</code></td><td>文档归属的 V3 内部数据集 UUID</td></tr><tr><td><code>document.title</code></td><td>V3 记录的文档标题</td></tr><tr><td><code>document.content_type</code></td><td>V3 记录或推断的 MIME 类型</td></tr><tr><td><code>document.lifecycle</code></td><td>文档生命周期；<code>indexed</code> 表示已经完成索引并可作为检索证据</td></tr><tr><td><code>document.parse_status</code></td><td>解析状态摘要，例如已接收、解析中、已完成或失败</td></tr><tr><td><code>document.parseQualityStatus</code></td><td>解析质量状态的驼峰兼容字段</td></tr><tr><td><code>document.created_at</code></td><td>V3 文档记录创建时间</td></tr><tr><td><code>document.updated_at</code></td><td>V3 文档记录更新时间</td></tr><tr><td><code>workflow_execution</code></td><td>后台解析工作流信息，用于 V3 侧排查</td></tr></tbody></table></div>
 <p>解析状态查询：</p>
 <figure class="code-card">
     <figcaption><span>http</span><button type="button" class="copy-code">复制</button></figcaption>
     <pre><code>GET /v1/external/channels/{connection_id}/documents/{document_external_id}/parse-detail?source_id={source_id}
 Authorization: Bearer &lt;V3 inbound token&gt;</code></pre>
   </figure>
+<p>解析详情响应字段说明：</p>
+<div class="table-shell"><table><thead><tr><th>字段</th><th>说明</th></tr></thead><tbody><tr><td><code>source_id</code></td><td>查询的资料源 ID</td></tr><tr><td><code>document_external_id</code></td><td>查询的第三方文档 ID</td></tr><tr><td><code>lifecycle</code></td><td>当前聚合生命周期；<code>indexed</code> 表示文档已完成索引</td></tr><tr><td><code>chunk_count</code> / <code>chunkCount</code></td><td>已生成的文本分块数量</td></tr><tr><td><code>retrieval_evidence_count</code> / <code>retrievalEvidenceCount</code></td><td>可用于检索供料的证据数量</td></tr><tr><td><code>parse_status</code> / <code>parseStatus</code></td><td>文档解析状态</td></tr><tr><td><code>parse_quality_status</code> / <code>parseQualityStatus</code></td><td>解析质量状态</td></tr><tr><td><code>parse_quality_summary</code> / <code>parseQualitySummary</code></td><td>解析质量摘要对象</td></tr><tr><td><code>model_status</code> / <code>modelStatus</code></td><td>面向模型供料的状态摘要</td></tr><tr><td><code>ingest</code></td><td>解析入库摘要，例如标题、内容类型和分块数</td></tr><tr><td><code>workflow</code></td><td>后台工作流状态摘要</td></tr><tr><td><code>latest</code></td><td>最新版本对应的文档详情对象</td></tr><tr><td><code>documents</code></td><td>与该外部文档 ID 匹配的 V3 文档记录列表</td></tr><tr><td><code>documents[].document_id</code></td><td>V3 内部文档 ID</td></tr><tr><td><code>documents[].dataset_id</code></td><td>V3 内部数据集 UUID</td></tr><tr><td><code>documents[].revision_external_id</code></td><td>第三方版本 ID</td></tr><tr><td><code>documents[].created_at</code></td><td>V3 文档记录创建时间</td></tr><tr><td><code>documents[].updated_at</code></td><td>V3 文档记录更新时间</td></tr></tbody></table></div>
 <p>对话时，第三方继续调用消息接口，并传入本轮可用文档：</p>
 <figure class="code-card">
     <figcaption><span>json</span><button type="button" class="copy-code">复制</button></figcaption>
@@ -762,6 +801,8 @@ Authorization: Bearer &lt;V3 inbound token&gt;</code></pre>
   &quot;available_document_external_ids&quot;: [&quot;third-doc-20260518-001&quot;]
 }</code></pre>
   </figure>
+<p>对话文档范围字段说明：</p>
+<div class="table-shell"><table><thead><tr><th>字段</th><th>说明</th></tr></thead><tbody><tr><td><code>available_document_source_id</code></td><td>本轮文档所属资料源 ID</td></tr><tr><td><code>available_document_external_ids</code></td><td>本轮允许 V3 使用的第三方文档 ID 列表；只传本轮选中的文档</td></tr></tbody></table></div>
 <p>V3 会把外部文档 ID 映射为内部文档范围，并只从这些文档供料给模型。</p>
 <p>实现细节：</p>
 <ul>
@@ -809,6 +850,8 @@ Authorization: Bearer &lt;V3 inbound token&gt;</code></pre>
   &quot;confirmed_at&quot;: &quot;2026-05-15T10:03:00Z&quot;
 }</code></pre>
   </figure>
+<p>确认请求字段说明：</p>
+<div class="table-shell"><table><thead><tr><th>字段</th><th>说明</th></tr></thead><tbody><tr><td><code>assistant_run_id</code></td><td>V3 返回的助手运行 ID</td></tr><tr><td><code>action_id</code></td><td>V3 待确认动作 ID</td></tr><tr><td><code>confirmation_external_id</code></td><td>第三方侧确认记录 ID，便于对账和幂等</td></tr><tr><td><code>sender_external_user_id</code></td><td>做出确认或拒绝的第三方用户 ID</td></tr><tr><td><code>decision</code></td><td><code>approved</code> 或 <code>rejected</code></td></tr><tr><td><code>comment</code></td><td>用户确认备注；V3 仅保存必要摘要</td></tr><tr><td><code>idempotency_key</code></td><td>确认请求幂等键</td></tr><tr><td><code>confirmed_at</code></td><td>第三方确认发生时间</td></tr></tbody></table></div>
 <p><code>decision</code> 支持：</p>
 <ul>
 <li><code>approved</code>；</li>
@@ -827,6 +870,8 @@ Authorization: Bearer &lt;V3 inbound token&gt;</code></pre>
   &quot;background&quot;: false
 }</code></pre>
   </figure>
+<p>渲染请求字段说明：</p>
+<div class="table-shell"><table><thead><tr><th>字段</th><th>说明</th></tr></thead><tbody><tr><td><code>direct_html</code></td><td>是否走快速 HTML 直出模式；为 <code>true</code> 时跳过调试页和截图确认</td></tr><tr><td><code>background</code></td><td>是否后台异步渲染；为 <code>false</code> 时接口尽量同步返回初始渲染结果</td></tr></tbody></table></div>
 <p>渲染响应里的 <code>render_output.id</code> 是本次 HTML 生成 id。第三方如果采用异步或需要确认状态，可用同一个 id 查询：</p>
 <figure class="code-card">
     <figcaption><span>http</span><button type="button" class="copy-code">复制</button></figcaption>
@@ -835,6 +880,8 @@ Host: v3.elepcloud.com
 Authorization: Bearer &lt;V3 inbound token&gt;</code></pre>
   </figure>
 <p>状态响应会返回 <code>status</code>、<code>html_preview_url</code> / <code>htmlPreviewUrl</code>、<code>html_download_url</code> / <code>htmlDownloadUrl</code>、<code>download_url</code> / <code>downloadUrl</code> 和 <code>retryable_error_reason</code> / <code>retryableErrorReason</code>。<code>status=rendered</code> 且存在下载地址时即可进入下载；<code>status=failed</code> 时，第三方应展示失败状态并参考 <code>retryable_error_reason</code> 发起重试或人工处理。</p>
+<p>渲染状态字段说明：</p>
+<div class="table-shell"><table><thead><tr><th>字段</th><th>说明</th></tr></thead><tbody><tr><td><code>id</code></td><td>V3 静态页渲染输出 ID，即路径中的 <code>render_output_id</code></td></tr><tr><td><code>draft_id</code></td><td>对应的静态页草稿 ID</td></tr><tr><td><code>assistant_run_id</code></td><td>触发渲染的助手运行 ID</td></tr><tr><td><code>image_job_id</code></td><td>关联的图片任务 ID；快速 HTML 模式通常为空</td></tr><tr><td><code>status</code></td><td><code>queued</code>、<code>rendering</code>、<code>rendered</code>、<code>failed</code> 或 <code>cancelled</code></td></tr><tr><td><code>html</code></td><td>内部响应中的 HTML 内容；外部状态接口通常应使用预览或下载 URL</td></tr><tr><td><code>html_preview_url</code> / <code>htmlPreviewUrl</code></td><td>浏览器 inline 预览地址</td></tr><tr><td><code>html_download_url</code> / <code>htmlDownloadUrl</code></td><td>HTML 附件下载地址</td></tr><tr><td><code>download_url</code> / <code>downloadUrl</code></td><td>兼容下载地址，通常与 <code>html_download_url</code> 等价</td></tr><tr><td><code>retryable_error_reason</code> / <code>retryableErrorReason</code></td><td>失败时是否可重试及原因</td></tr><tr><td><code>asset_manifest</code></td><td>渲染资产摘要和审计信息</td></tr><tr><td><code>created_at</code></td><td>渲染输出创建时间</td></tr></tbody></table></div>
 <p>预览 HTML：</p>
 <figure class="code-card">
     <figcaption><span>http</span><button type="button" class="copy-code">复制</button></figcaption>
@@ -881,6 +928,8 @@ POST /artifacts/{artifact_external_id}/revoke</code></pre>
   &quot;raw_arguments_included&quot;: false
 }</code></pre>
   </figure>
+<p>产物派发字段说明：</p>
+<div class="table-shell"><table><thead><tr><th>字段</th><th>说明</th></tr></thead><tbody><tr><td><code>action_id</code></td><td>V3 外部动作运行 ID</td></tr><tr><td><code>assistant_run_id</code></td><td>触发动作的助手运行 ID</td></tr><tr><td><code>action_type</code></td><td>动作类型，例如 <code>external_artifact.publish</code>、<code>external_artifact.status</code> 或 <code>external_artifact.revoke</code></td></tr><tr><td><code>risk_level</code></td><td>动作风险级别，例如 <code>read_only</code>、<code>low_risk_write</code>、<code>high_risk_write</code> 或 <code>cross_system</code></td></tr><tr><td><code>target_system</code></td><td>第三方目标系统标识</td></tr><tr><td><code>arguments_redacted</code></td><td>脱敏后的动作参数摘要，只包含第三方执行所需的安全字段</td></tr><tr><td><code>arguments_redacted.artifact_ref</code></td><td>V3 或业务侧产物引用</td></tr><tr><td><code>arguments_redacted.target_system</code></td><td>产物发布目标，例如客户门户或下载中心</td></tr><tr><td><code>arguments_redacted.visibility</code></td><td>产物可见性策略，例如跟随来源权限</td></tr><tr><td><code>confirmation_state</code></td><td>确认状态，例如 <code>not_required</code>、<code>pending</code>、<code>confirmed</code> 或 <code>rejected</code></td></tr><tr><td><code>requester_summary</code></td><td>请求来源摘要，不包含原始用户消息正文</td></tr><tr><td><code>requester_summary.platform</code></td><td>来源平台</td></tr><tr><td><code>requester_summary.tenant_external_id</code></td><td>第三方租户 ID</td></tr><tr><td><code>requester_summary.conversation_external_id</code></td><td>第三方会话 ID</td></tr><tr><td><code>requester_summary.sender_external_id</code></td><td>发起动作的第三方用户 ID</td></tr><tr><td><code>raw_arguments_included</code></td><td>是否包含原始参数；对外派发应为 <code>false</code></td></tr></tbody></table></div>
 <p>第三方响应可返回：</p>
 <figure class="code-card">
     <figcaption><span>json</span><button type="button" class="copy-code">复制</button></figcaption>
@@ -890,6 +939,8 @@ POST /artifacts/{artifact_external_id}/revoke</code></pre>
   &quot;artifact_external_id&quot;: &quot;tp-artifact-001&quot;
 }</code></pre>
   </figure>
+<p>产物响应字段说明：</p>
+<div class="table-shell"><table><thead><tr><th>字段</th><th>说明</th></tr></thead><tbody><tr><td><code>external_request_id</code></td><td>第三方接收本次动作后的请求 ID</td></tr><tr><td><code>status</code></td><td>第三方处理状态，例如 <code>accepted</code>、<code>running</code>、<code>succeeded</code> 或 <code>failed</code></td></tr><tr><td><code>artifact_external_id</code></td><td>第三方系统生成的产物 ID</td></tr></tbody></table></div>
 <p>产物发布要求：</p>
 <ul>
 <li>下载链接应短期有效或带访问校验；</li>
@@ -935,6 +986,8 @@ POST /artifacts/{artifact_external_id}/revoke</code></pre>
   &quot;raw_arguments_included&quot;: false
 }</code></pre>
   </figure>
+<p>业务动作派发字段说明：</p>
+<div class="table-shell"><table><thead><tr><th>字段</th><th>说明</th></tr></thead><tbody><tr><td><code>action_id</code></td><td>V3 外部动作运行 ID</td></tr><tr><td><code>assistant_run_id</code></td><td>触发动作的助手运行 ID</td></tr><tr><td><code>action_type</code></td><td>业务动作类型，由双方联调约定，例如 <code>ticket.update_priority</code></td></tr><tr><td><code>risk_level</code></td><td>风险级别，决定是否必须用户确认</td></tr><tr><td><code>target_system</code></td><td>第三方业务系统标识</td></tr><tr><td><code>confirmation_state</code></td><td>动作确认状态；高风险动作必须为 <code>confirmed</code> 才会派发</td></tr><tr><td><code>arguments_redacted</code></td><td>脱敏后的业务参数对象</td></tr><tr><td><code>arguments_redacted.ticket_id</code></td><td>示例工单 ID；实际字段按业务动作约定</td></tr><tr><td><code>arguments_redacted.priority</code></td><td>示例优先级；实际字段按业务动作约定</td></tr><tr><td><code>requester_summary</code></td><td>请求来源摘要</td></tr><tr><td><code>raw_arguments_included</code></td><td>是否包含原始参数；对外派发应为 <code>false</code></td></tr></tbody></table></div>
 <p>风险等级建议：</p>
 <div class="table-shell"><table><thead><tr><th>风险等级</th><th>示例</th><th>处理要求</th></tr></thead><tbody><tr><td><code>read_only</code></td><td>查询状态</td><td>不写入第三方系统</td></tr><tr><td><code>low_risk_write</code></td><td>发布草稿、创建低风险记录</td><td>可直接执行或轻量确认</td></tr><tr><td><code>high_risk_write</code></td><td>对外发布、提交审批、关键字段变更</td><td>必须用户确认</td></tr><tr><td><code>cross_system</code></td><td>跨系统事务、影响多个系统</td><td>必须确认并重点审计</td></tr></tbody></table></div>
 <p>V3 不会把飞书、企微或第三方入站回调用的通用 token 当作动作派发凭证复用。派发 endpoint 必须配置派发专用 Bearer Token 或签名密钥之一；否则 V3 会记录 <code>dispatch_blocked</code> 和 <code>dispatch_auth_missing</code>。</p>
@@ -963,6 +1016,8 @@ Authorization: Bearer &lt;V3 inbound token&gt;</code></pre>
   }
 }</code></pre>
   </figure>
+<p>结果回传字段说明：</p>
+<div class="table-shell"><table><thead><tr><th>字段</th><th>说明</th></tr></thead><tbody><tr><td><code>external_request_id</code></td><td>第三方执行请求 ID；如果派发时已记录，回传必须一致</td></tr><tr><td><code>status</code></td><td><code>accepted</code>、<code>running</code>、<code>succeeded</code>、<code>failed</code>、<code>cancelled</code> 或 <code>rejected</code></td></tr><tr><td><code>idempotency_key</code></td><td>结果回传幂等键，重复回传必须复用</td></tr><tr><td><code>completed_at</code></td><td>第三方动作完成或状态更新时间</td></tr><tr><td><code>code</code></td><td>第三方稳定结果码或错误码</td></tr><tr><td><code>message</code></td><td>可选说明；V3 只保存是否存在和安全摘要，不保存原文</td></tr><tr><td><code>result</code></td><td>第三方结果对象；V3 只保存结构摘要和字段数量</td></tr><tr><td><code>result.artifact_id</code></td><td>示例产物 ID；实际字段按业务动作约定</td></tr><tr><td><code>result.status</code></td><td>示例结果状态；实际字段按业务动作约定</td></tr></tbody></table></div>
 <p>支持的 <code>status</code>：</p>
 <ul>
 <li><code>accepted</code>；</li>
@@ -984,6 +1039,8 @@ X-V3-Nonce: 01HX...
 X-V3-Content-SHA256: &lt;JSON 原始请求体 sha256 hex&gt;
 X-V3-Signature: sha256=&lt;HMAC-SHA256 hex&gt;</code></pre>
   </figure>
+<p>出站请求头字段说明：</p>
+<div class="table-shell"><table><thead><tr><th>请求头</th><th>说明</th></tr></thead><tbody><tr><td><code>Authorization</code></td><td>V3 派发动作时使用的专用 Bearer Token；只在配置了派发 token 时发送</td></tr><tr><td><code>X-V3-Connection-Id</code></td><td>V3 外部连接 ID</td></tr><tr><td><code>X-V3-Timestamp</code></td><td>V3 发起请求时间，第三方应校验时间窗口</td></tr><tr><td><code>X-V3-Nonce</code></td><td>一次性随机值，第三方应防重放</td></tr><tr><td><code>X-V3-Content-SHA256</code></td><td>JSON 原始请求体的 SHA-256 摘要</td></tr><tr><td><code>X-V3-Signature</code></td><td>基于签名原文和派发签名密钥生成的 HMAC-SHA256</td></tr></tbody></table></div>
 <p>只有配置派发 Bearer Token 时才发送 <code>Authorization</code>。只有配置派发签名密钥时才发送 <code>X-V3-Signature</code>。两者都配置时，V3 会同时发送。</p>
 <p>推荐签名原文：</p>
 <figure class="code-card">
@@ -1046,6 +1103,8 @@ GET /v1/external/integrations/generic-chat-main/audit?item_type=action&amp;actio
   &quot;details&quot;: {}
 }</code></pre>
   </figure>
+<p>错误字段说明：</p>
+<div class="table-shell"><table><thead><tr><th>字段</th><th>说明</th></tr></thead><tbody><tr><td><code>code</code></td><td>稳定错误码，第三方应优先按该字段做分支处理</td></tr><tr><td><code>message</code></td><td>面向调试或展示的错误说明，不包含密钥和敏感正文</td></tr><tr><td><code>details</code></td><td>可选结构化错误详情，例如字段名、约束或安全错误码</td></tr></tbody></table></div>
 <p>常见错误码：</p>
 <div class="table-shell"><table><thead><tr><th>错误码</th><th>说明</th></tr></thead><tbody><tr><td><code>external_channel_connection_not_found</code></td><td>未找到聊天通道连接</td></tr><tr><td><code>external_channel_disabled</code></td><td>连接已停用</td></tr><tr><td><code>external_channel_platform_mismatch</code></td><td>请求平台与连接配置不一致</td></tr><tr><td><code>external_message_invalid</code></td><td>消息结构不合法</td></tr><tr><td><code>external_action_not_found</code></td><td>未找到动作</td></tr><tr><td><code>external_action_result_request_mismatch</code></td><td>回传请求 ID 不一致</td></tr><tr><td><code>external_action_dispatch_blocked</code></td><td>动作派发被阻断</td></tr><tr><td><code>react_dataset_not_selected</code></td><td>请求的数据集不在当前文档范围</td></tr></tbody></table></div>
 <p>第三方错误返回也应使用稳定 <code>code</code>，不要在 <code>message</code> 中返回密钥、token、完整 SQL、堆栈或敏感业务正文。</p>
