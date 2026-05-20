@@ -24768,6 +24768,7 @@ fn looks_like_person_name(value: &str) -> bool {
         && char_count <= 4
         && value.chars().all(is_cjk_query_token_char)
         && !is_document_entity_noise(value)
+        && !is_resume_person_name_noise(value)
         && ![
             "姓名",
             "候选人",
@@ -24780,6 +24781,34 @@ fn looks_like_person_name(value: &str) -> bool {
             "技能",
         ]
         .contains(&value)
+}
+
+fn is_resume_person_name_noise(value: &str) -> bool {
+    [
+        "男",
+        "女",
+        "简历",
+        "履历",
+        "个人简历",
+        "个人履历",
+        "个人优势",
+        "个人介绍",
+        "个人简介",
+        "亮点",
+        "优势",
+        "简介",
+        "概况",
+        "基本信息",
+        "联系方式",
+        "教育经历",
+        "工作经历",
+        "项目经验",
+        "专业技能",
+        "技能清单",
+        "自我评价",
+        "求职意向",
+    ]
+    .contains(&value)
 }
 
 fn looks_like_position_name(value: &str) -> bool {
@@ -52303,6 +52332,8 @@ mod tests {
         assert_eq!(profile.candidate_name.as_deref(), Some("谢泽强"));
         assert_eq!(profile.gender.as_deref(), Some("男"));
         assert_eq!(profile.age, Some(38));
+        assert_eq!(extract_resume_candidate_name_from_title("个人优势"), None);
+        assert_eq!(extract_resume_candidate_name_from_title("简历"), None);
     }
 
     #[test]
