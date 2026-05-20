@@ -23733,6 +23733,7 @@ fn company_candidate_start(value: &str) -> usize {
             ch,
             '：' | ':'
                 | '-'
+                | '－'
                 | '—'
                 | '–'
                 | '】'
@@ -23764,6 +23765,7 @@ fn sanitize_company_candidate(raw: &str) -> String {
                     ch,
                     ':' | '：'
                         | '-'
+                        | '－'
                         | '—'
                         | '–'
                         | '_'
@@ -23824,6 +23826,7 @@ fn sanitize_company_candidate(raw: &str) -> String {
                         ch,
                         ':' | '：'
                             | '-'
+                            | '－'
                             | '—'
                             | '–'
                             | '、'
@@ -23863,6 +23866,7 @@ fn strip_company_candidate_leading_noise(raw: &str) -> String {
                         '.' | '/'
                             | '\\'
                             | '-'
+                            | '－'
                             | '—'
                             | '–'
                             | '_'
@@ -23916,6 +23920,7 @@ fn normalize_company_relation_prefix(mut value: String) -> String {
             "与",
             "及",
             "是",
+            "的",
             "给",
             "在",
             "于",
@@ -23993,7 +23998,7 @@ fn is_valid_company_name(value: &str) -> bool {
         .any(|fragment| value.contains(fragment))
         && ![
             "实现", "完成", "项目", "配合", "统筹", "参与", "定制", "后期", "在职", "了", "对接",
-            "负责", "充分", "达成",
+            "负责", "充分", "达成", "满足",
         ]
         .iter()
         .any(|prefix| value.starts_with(prefix))
@@ -50519,7 +50524,8 @@ mod tests {
             "##中软国际科技服务有限公司\n\
              ##➢2020年3月一2023年2月广州绿葆网络发展有限公司\n\
              ➢2015年7月一2018年7月广州山点海赞科技有限公司\n\
-             ~2022.12阿里巴巴集团",
+             ~2022.12阿里巴巴集团\n\
+             －2023年9月碧桂园生活服务集团股份有限公司",
             10,
         );
 
@@ -50529,9 +50535,18 @@ mod tests {
                 "中软国际科技服务有限公司".to_string(),
                 "广州绿葆网络发展有限公司".to_string(),
                 "广州山点海赞科技有限公司".to_string(),
-                "阿里巴巴集团".to_string()
+                "阿里巴巴集团".to_string(),
+                "碧桂园生活服务集团股份有限公司".to_string()
             ]
         );
+    }
+
+    #[test]
+    fn assistant_run_normalizes_resume_company_relation_noise() {
+        let names =
+            extract_company_names_from_text("机械老板作为“找设备APP”的三一集团，满足由集团。", 10);
+
+        assert_eq!(names, vec!["三一集团".to_string()]);
     }
 
     #[test]
