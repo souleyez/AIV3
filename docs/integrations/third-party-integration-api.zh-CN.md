@@ -4,7 +4,7 @@
 **最后更新：** 2026-05-20
 **适用对象：** 第三方系统负责人、客户 IT 团队、渠道/文档/权限/业务系统对接开发人员
 **默认对外域名：** `https://v3.elepcloud.com`
-**说明：** 本文可作为第三方联调前的接口说明材料。默认第三方接口使用 `https://v3.elepcloud.com/v1/...`；具体凭证、白名单、回调地址和开放接口，以项目交付环境和双方确认的联调配置为准。
+**说明：** 本文可作为第三方联调前的接口说明材料，只说明 V3 对外开放的能力、接口、字段和使用方式，不展开具体实现细节。默认第三方接口使用 `https://v3.elepcloud.com/v1/...`；具体凭证、白名单、回调地址和开放接口，以项目交付环境和双方确认的联调配置为准。
 
 如果第三方采用自建聊天页面、自建文档库、自建用户 ID、会话 ID、skill、模板、产物或业务接口的“纯第三方模式”，可优先阅读独立对接文档：`docs/integrations/pure-third-party-integration-guide.zh-CN.md`。需要发给业务/技术评审时，可直接打开同目录 HTML 阅读版：`docs/integrations/pure-third-party-integration-guide.zh-CN.html`。
 
@@ -22,13 +22,11 @@ V3 外部集成观测页提供两类公开文档入口：
 - 该观测域名不提供直接跳回 V3 主工作台的导航入口。
 - 连接配置了入站 Bearer Token 时，第三方调用 V3 的聊天事件、用户确认和动作结果回传都必须带 `Authorization: Bearer <V3 inbound token>`；该 token 由 V3 生成并交付给第三方。
 - V3 对外对接文档只保留最新有效版本；HTML 和 MD 都统一发布在外部集成观测页的“对接方式与文档”区域。
-- V3 助手运行时已接入全局模型认知策略：模型知道自己服务于 AI Data Platform V3，知道可见数据和工具范围；缺少 V3 供料时会说明 `当前不可见/未供料`，也不会在没有搜索证据时声称已联网搜索。
-- 外部聊天消息如果需要实时网页信息，但 V3 尚未供给搜索证据，会返回 `task_status=v3_search_evidence_required`；这表示等待 V3 只读搜索证据，不代表已经完成联网搜索，也不会写入第三方动作运行记录。
-- `GET /v1/external/integrations` 会为聊天通道返回脱敏的 `search_summary`，外部观测面板会在概览和详情中显示搜索证据待供料数量。
+- 外部聊天消息如果需要实时网页信息但当前不可用，V3 会返回 `task_status=v3_search_evidence_required`；第三方页面应把它展示为等待状态，不要展示成已完成搜索。
 
 ## 1. 接入目标
 
-V3 支持把智能助手能力接入到第三方系统中，包括：
+V3 支持把智能助手能力接入到第三方系统中，第三方可以按需使用以下能力：
 
 - 在飞书、Lark、企业微信或第三方自建聊天页面中使用 V3 助手；
 - 接入第三方文档库，让 V3 在授权范围内解析、索引和问答；
@@ -36,7 +34,7 @@ V3 支持把智能助手能力接入到第三方系统中，包括：
 - 将 V3 生成的产物发布回第三方系统；
 - 在用户确认后，由 V3 调用第三方业务接口处理事务。
 
-V3 的定位是统一的智能处理和治理中心。第三方系统可以提供聊天入口、文档来源、用户权限来源、产物存储位置或业务动作接口，但 V3 负责最终的权限校验、问答检索、任务运行、动作风控和审计记录。
+第三方只需要明确使用哪些 V3 能力，以及按本文接口传递用户、会话、文档、模板、输出格式和动作确认信息。V3 会按接口返回文本、任务状态、确认请求、产物链接或错误码。
 
 ## 2. 接入模式
 
@@ -48,9 +46,8 @@ V3 的定位是统一的智能处理和治理中心。第三方系统可以提�
 
 - 第三方平台负责消息投递、事件回调、群聊或单聊入口；
 - V3 适配平台的官方机器人接口；
-- V3 将平台消息转换为统一事件；
 - V3 返回文本、卡片、文件、任务状态或确认请求；
-- 平台侧只作为聊天通道，不绕过 V3 的权限和动作校验。
+- 平台侧负责把 V3 返回内容展示给用户。
 
 ### 2.2 纯第三方模式
 
@@ -61,11 +58,11 @@ V3 的定位是统一的智能处理和治理中心。第三方系统可以提�
 - 聊天通道接口：把用户消息发送给 V3；
 - 文档接口：让 V3 拉取或接收文档、附件、版本和正文；
 - 用户接口：让 V3 同步用户、部门、用户组、角色和停用状态；
-- 权限接口：让 V3 获取文档级权限快照；
+- 权限接口：让 V3 获取文档级访问范围；
 - 产物接口：接收 V3 生成的报告、页面、文件或链接；
-- 事务接口：接收经过 V3 校验和用户确认后的业务动作。
+- 事务接口：接收用户确认后的业务动作。
 
-第三方可以搭建自己的页面。该页面只负责交互展示，不能替代 V3 的权限判断。
+第三方可以搭建自己的聊天页面，并按本文的聊天、文档、模板和产物接口调用 V3。
 
 ### 2.3 混合模式
 
@@ -74,10 +71,10 @@ V3 的定位是统一的智能处理和治理中心。第三方系统可以提�
 示例：
 
 - 用户在企业微信群里提问；
-- 文档来自客户内部门户；
+- 文档来自客户门户；
 - 用户和部门来自客户统一身份系统；
 - 审批或工单动作写入客户业务系统；
-- V3 负责统一编排、权限过滤、问答生成、动作确认和审计。
+- V3 返回问答结果、产物链接、任务状态或用户确认请求。
 
 ## 3. 总体流程
 
@@ -88,17 +85,17 @@ sequenceDiagram
   participant V3 as "V3 接入网关"
   participant Identity as "第三方用户与权限系统"
   participant Docs as "第三方文档库"
-  participant Runtime as "V3 助手运行时"
+  participant Capability as "V3 能力服务"
   participant Action as "第三方产物或业务系统"
 
   User->>Channel: 发送问题或操作请求
   Channel->>V3: 提交标准化消息事件
-  V3->>V3: 校验连接、签名和幂等键
+  V3->>V3: 校验请求和幂等键
   V3->>Identity: 解析用户身份和有效权限
   V3->>Docs: 使用已授权的文档证据
-  V3->>Runtime: 生成回答、产物或动作意图
-  Runtime->>Action: 执行已确认的发布或业务动作
-  Runtime->>Channel: 返回回答、状态或确认请求
+  V3->>Capability: 生成回答、产物或动作请求
+  Capability->>Action: 发送已确认的发布或业务动作
+  Capability->>Channel: 返回回答、状态或确认请求
   Channel->>User: 展示给用户
 ```
 
@@ -109,12 +106,11 @@ sequenceDiagram
 - 创建和管理第三方连接；
 - 绑定租户、账号和外部身份；
 - 解析第三方文档并建立索引；
-- 保存第三方权限快照并计算用户有效权限；
-- 在检索前过滤不可访问文档；
-- 创建和维护助手任务状态；
+- 按第三方提供的用户、会话、文档范围和权限信息处理请求；
+- 创建和维护对话任务状态；
 - 返回问答结果、产物链接、任务状态和确认请求；
-- 对高风险动作进行确认和审计；
-- 提供接入健康状态、同步状态、错误和审计观测。
+- 按配置发送已确认的产物发布或业务动作；
+- 提供接入健康状态、同步状态、错误和观测信息。
 
 ### 第三方负责
 
@@ -130,26 +126,26 @@ sequenceDiagram
 
 - 所有请求必须归属到明确租户和连接。
 - 所有消息、文档和动作回调都必须支持幂等。
-- V3 不会把用户无权访问的文档放入模型上下文。
-- V3 不依赖模型自行判断权限，权限过滤发生在检索和生成之前。
-- V3 会向模型说明当前系统身份、可见能力、可见数据集/工具和不可见供料状态；这是附加上下文，不限制模型回答普通问题的能力。
-- 如果某个 V3 相关问题没有拿到可见权限、证据或工具结果，回答应先说明 `当前不可见/未供料`，再把后续通用判断和 V3 证据区分开。
-- 外部/网页搜索属于计划中的 V3 受控只读能力；没有带来源和时间的 V3 搜索证据时，回答不能声称已经联网搜索，也不能把实时网页结果当作已验证事实。
+- 第三方应只把本轮允许使用的文档 ID、模板 ID、skill 和输出格式传给 V3。
+- V3 对文档问答只使用本轮可访问、已解析或已提供的文档范围。
+- 如果当前问题需要实时网页信息但不可用，V3 会返回等待或不可用状态，而不是返回未验证的实时网页结论。
 - 高风险写入、跨系统事务、权限变更、外部发布等动作必须经过确认。
 - 日志、观测页面、错误返回和接口响应不得泄露密钥、令牌或未授权正文。
-- 第三方聊天页面可以独立部署，但不能绕过 V3 的权限、审计和风控。
+- 第三方聊天页面可以独立部署，但应通过本文接口完成消息提交、确认、产物查询和动作结果回传。
 
-## 6. 模型认知与回答边界
+## 6. 回答能力与状态返回
 
-第三方聊天页面、飞书/Lark 机器人、企业微信机器人和客户自建网关，最终都进入 V3 的 AssistantRun 助手运行链路。模型会知道自己正在 AI Data Platform V3 中服务用户，并只接收当前租户、通道、会话和用户权限范围内的摘要、证据、工具和产物状态。
+V3 接收第三方消息后，会按请求内容返回以下几类结果：
 
-这不代表 V3 助手只能回答 V3 资料内的问题。用户问普通问题时，模型仍可使用通用知识、推理和表达能力正常回答。边界在于事实归属：凡是 V3 数据、文档、权限、产物状态或工具结果，必须来自 V3 已供给证据；没有供料时不能编造成 V3 已知事实。
+- `text`：普通文本回答；
+- `card`：结构化卡片；
+- `artifact_link`：产物链接；
+- `requires_confirmation`：需要用户确认的动作；
+- `task_status`：处理中、失败、等待外部条件或无法立即完成。
 
-当证据缺失、过期、无权访问或尚未供料时，面向中文用户的回答建议使用 `当前不可见/未供料` 这类表述。说明之后，模型可以继续给出通用建议，但需要明确区分“V3 当前可见证据”和“模型通用判断”。
+文档问答场景下，第三方应在请求中传入本轮可用文档范围，例如 `available_document_source_id`、`available_document_external_ids` 或项目约定的资料源默认范围。V3 会基于可用文档生成回答；如果文档尚未解析完成、缺少必要输入或当前能力不可用，会返回任务状态或错误码。
 
-外部/网页搜索也按 V3 工具处理。只有当 V3 明确供给带来源 URL/标题、时间、请求用户/通道和查询信息的搜索证据时，回答才可以说使用了搜索结果；否则不能声称已经联网搜索或引用实时网页结论。
-
-当标准化聊天消息明显需要实时或网页来源信息，而 V3 尚未供给搜索证据时，通道响应可以使用 `reply_type=task_status`、`task_status=v3_search_evidence_required`，并携带 `type=v3_search_evidence_required` 的安全卡片。第三方自建聊天页面应把它展示为“等待 V3 证据供料”的状态，而不是展示成已经搜索完成。
+当标准化聊天消息明显需要实时网页信息而当前不可用时，通道响应可以使用 `reply_type=task_status`、`task_status=v3_search_evidence_required`，并携带 `type=v3_search_evidence_required` 的安全卡片。第三方自建聊天页面应把它展示为“等待 V3 可用证据”的状态。
 
 ## 7. 连接与凭证
 
@@ -161,7 +157,7 @@ V3 会为每个第三方通道或数据源创建连接记录。
 - 文档源连接：文档库、文件夹、知识库、附件库；
 - 用户源连接：用户目录、组织架构、角色系统、权限系统；
 - 产物连接：报告库、文件库、页面系统、下载中心；
-- 业务动作连接：工单、审批、CRM、ERP、内部流程系统。
+- 业务动作连接：工单、审批、CRM、ERP、流程系统。
 
 第三方通常会获得：
 
@@ -199,14 +195,7 @@ method + "\n" + path + "\n" + timestamp + "\n" + nonce + "\n" + raw_body_sha256
 - 密钥支持轮换；
 - 失败请求返回明确错误码，但不返回密钥细节。
 
-飞书、Lark、企业微信等标准平台接入时，应优先使用平台官方签名和事件校验机制，再转换为 V3 内部统一事件。
-
-当前实现状态：
-
-- 入站聊天通道会校验连接和事件形态；飞书/Lark、企业微信已实现的平台入口使用各自的平台回调校验。
-- 自建聊天或纯第三方通道配置入站 Bearer Token 后，会强校验 `Authorization` 请求头；未配置时保留兼容模式。
-- V3 向第三方派发外部业务动作时，若配置了派发 endpoint，则必须同时配置派发专用 Bearer Token 或签名密钥之一。
-- 重放窗口、密钥轮换界面和更细的连接级鉴权策略仍属于后续 hardening。
+飞书、Lark、企业微信等标准平台接入时，应优先使用平台官方签名和事件校验机制。自建聊天或纯第三方通道配置入站 Bearer Token 后，第三方请求必须携带 `Authorization` 请求头。V3 向第三方派发业务动作时，若配置了派发 endpoint，应同时配置派发专用 Bearer Token 或签名密钥之一。
 
 ## 9. 幂等规则
 
@@ -291,7 +280,7 @@ Authorization: Bearer <V3 inbound token>
 | `platform` | 是 | 通道来源，例如 `feishu`、`lark`、`we_com`、`generic_chat`、`third_party` |
 | `tenant_external_id` | 是 | 第三方侧租户或客户 ID |
 | `bot_external_id` | 是 | 第三方侧机器人或应用 ID |
-| `conversation_external_id` | 是 | 群聊、会话或页面会话 ID；同一轮、同一页面会话或同一聊天窗口保持不变，V3 会映射为同一个对话上下文 |
+| `conversation_external_id` | 是 | 群聊、会话或页面会话 ID；同一轮、同一页面会话或同一聊天窗口保持不变，用于维持多轮对话 |
 | `thread_external_id` | 否 | 话题、帖子或子线程 ID |
 | `sender_external_id` | 是 | 第三方侧用户 ID，必须稳定 |
 | `message_external_id` | 是 | 第三方侧消息 ID，必须稳定 |
@@ -301,7 +290,7 @@ Authorization: Bearer <V3 inbound token>
 | `available_document_external_ids` | 文档问答建议传 | 本轮允许 V3 使用的第三方文档 ID 列表；只传当前会话或当前问题选中的文档 |
 | `requested_skills` | 否 | 第三方希望本轮应用的结构化 skill 列表 |
 | `requested_skills[].skill_id` | `requested_skills` 有值时必填 | skill 稳定标识，建议使用英文或业务 slug |
-| `requested_skills[].version` | 否 | skill 版本或策略版本，用于审计和复现 |
+| `requested_skills[].version` | 否 | skill 版本或策略版本，用于版本选择和问题复现 |
 | `requested_skills[].mode` | 否 | `required`、`preferred` 或 `disabled`；不传默认按 `preferred` |
 | `requested_skills[].arguments` | 否 | 本轮 skill 参数对象，只放非敏感参数 |
 | `mention_external_user_ids` | 否 | 被提及的第三方用户 ID 列表 |
@@ -342,7 +331,7 @@ Authorization: Bearer <V3 inbound token>
 | 字段 | 说明 |
 | --- | --- |
 | `accepted` | V3 是否已接收本轮消息并完成接口层处理 |
-| `assistant_run_id` | 本轮 V3 助手运行 ID，用于状态查询、确认动作和审计定位 |
+| `assistant_run_id` | 本轮 V3 任务 ID，用于状态查询、确认动作和问题定位 |
 | `idempotency_key` | V3 回显的幂等键 |
 | `reply` | V3 返回给第三方页面展示或处理的回复对象 |
 | `reply.target_conversation_external_id` | 应展示回复的第三方会话 ID |
@@ -357,7 +346,7 @@ Authorization: Bearer <V3 inbound token>
 
 说明：
 
-- 该接口用于接收用户消息并创建或继续 V3 助手任务；
+- 该接口用于接收用户消息并创建或继续 V3 对话任务；
 - 同一个接口响应体中的 `reply` 即为 V3 返回给第三方页面的生成回复、任务状态或确认卡片；
 - 第三方页面按 `reply.target_conversation_external_id` 把回复展示回原会话；
 - 如果 V3 已接收但暂时无法立即给出最终文本，会返回 `reply_type=task_status`；
@@ -410,14 +399,14 @@ SSE data 字段说明：
 | `external_channel.started.data` | `idempotency_key` | 本轮消息幂等键 |
 | `external_channel.delta.data` | `index` | 增量片段序号，从 0 开始 |
 | `external_channel.delta.data` | `delta` | 本次追加的文本片段 |
-| `external_channel.completed.data` | `assistant_run_id` | 本轮助手运行 ID |
+| `external_channel.completed.data` | `assistant_run_id` | 本轮 V3 任务 ID |
 | `external_channel.completed.data` | `response` | 与 `/events` JSON 响应同结构的最终响应 |
 | `done.data` | `ok` | SSE 流是否正常结束 |
 | `error.data` | `status` | 错误状态或 HTTP 状态 |
 | `error.data` | `error.code` | 稳定错误码 |
 | `error.data` | `error.message` | 错误说明，不包含密钥和敏感正文 |
 
-说明：当前 SSE 是接口级流式：会先返回 `started` 作为传输态，最终文本按 `delta` 形式输出；第三方页面不要把 `started` 渲染为助手消息。上游模型 token 级实时透传会作为后续模型网关能力增强。
+说明：SSE 会先返回 `started` 作为传输态，随后按 `delta` 输出文本片段，并在 `completed` 中返回最终响应；第三方页面不要把 `started` 渲染为助手消息。
 
 任务状态响应示例：
 
@@ -439,7 +428,7 @@ SSE data 字段说明：
 | 字段 | 说明 |
 | --- | --- |
 | `accepted` | V3 是否接收该请求 |
-| `assistant_run_id` | 当前任务运行 ID |
+| `assistant_run_id` | 当前 V3 任务 ID |
 | `idempotency_key` | 本轮请求幂等键 |
 | `reply.target_conversation_external_id` | 任务状态应回显到的第三方会话 |
 | `reply.reply_type` | 当前为 `task_status`，表示不是最终自然语言答案 |
@@ -472,7 +461,7 @@ GET /v1/external/runs/{assistant_run_id}
 
 | 字段 | 说明 |
 | --- | --- |
-| `assistant_run_id` | 查询的助手运行 ID |
+| `assistant_run_id` | 查询的 V3 任务 ID |
 | `status` | 运行状态，例如 `queued`、`running`、`completed`、`failed` 或 `cancelled` |
 | `created_at` | 任务创建时间 |
 | `completed_at` | 任务完成时间；未完成时可能为空 |
@@ -512,7 +501,7 @@ Authorization: Bearer <V3 inbound token>
 
 | 字段 | 说明 |
 | --- | --- |
-| `assistant_run_id` | V3 返回的 AssistantRun ID |
+| `assistant_run_id` | V3 返回的任务 ID |
 | `action_id` | V3 在需要确认的回复中返回的外部动作 ID；如未传，V3 会兼容使用 `confirmation_external_id` 查找 |
 | `confirmation_external_id` | 第三方侧确认记录 ID，便于对账和幂等 |
 | `sender_external_user_id` | 做出确认或拒绝的第三方用户 ID |
@@ -528,7 +517,7 @@ V3 支持两种文档接入方式：
 - 拉取模式：V3 按计划调用第三方文档接口；
 - 推送模式：第三方主动把文档、版本和权限推送给 V3。
 
-项目初期建议优先采用拉取模式，便于 V3 统一处理重试、分页、增量同步和权限快照。
+新接入项目建议优先采用拉取模式，便于双方处理重试、分页和增量同步。
 
 ### 11.1 文档列表
 
@@ -578,7 +567,7 @@ GET /documents
 | `items[].updated_at` | 第三方文档更新时间，ISO 8601 格式 |
 | `items[].deleted` | 是否已删除 |
 | `items[].content_url` | V3 拉取正文或文件的短期受控 URL |
-| `items[].acl_url` | V3 拉取权限快照的短期受控 URL |
+| `items[].acl_url` | V3 拉取文档访问范围的短期受控 URL |
 | `next_cursor` | 下一页游标；没有下一页时传 `null` 或省略 |
 
 ### 11.2 文档正文
@@ -599,7 +588,7 @@ GET /documents/{document_external_id}/content
 
 正文必须与 `revision` 对应。文档更新后，应生成新的版本标识。
 
-### 11.3 文档权限快照
+### 11.3 文档访问范围
 
 第三方建议提供：
 
@@ -626,14 +615,14 @@ GET /documents/{document_external_id}/acl
 }
 ```
 
-权限快照字段说明：
+访问范围字段说明：
 
 | 字段 | 说明 |
 | --- | --- |
 | `document_external_id` | 第三方文档稳定 ID |
-| `revision` | 权限快照对应的文档版本 |
-| `acl_hash` | 权限快照哈希，用于判断 ACL 是否变化 |
-| `captured_at` | 权限快照采集时间 |
+| `revision` | 访问范围对应的文档版本 |
+| `acl_hash` | 访问范围哈希，用于判断 ACL 是否变化 |
+| `captured_at` | 访问范围采集时间 |
 | `allow` | 允许访问主体列表 |
 | `allow[].subject_type` | 主体类型，例如 `user`、`department`、`group`、`role` 或 `tenant` |
 | `allow[].subject_external_id` | 第三方主体稳定 ID |
@@ -648,8 +637,8 @@ GET /documents/{document_external_id}/acl
 - `allow` 表示可访问主体；
 - `deny` 表示明确拒绝主体；
 - 主体可以是用户、部门、用户组、角色或租户；
-- V3 会保存权限快照，并在检索前按用户有效权限过滤文档；
-- 文档权限变化后，应尽快让 V3 重新同步权限快照。
+- V3 会按第三方提供的访问范围处理文档问答；
+- 文档访问范围变化后，应尽快让 V3 重新同步。
 
 ### 11.4 第三方触发 V3 文档解析
 
@@ -687,15 +676,15 @@ Authorization: Bearer <V3 inbound token>
 | 字段 | 必填 | 说明 |
 | --- | --- | --- |
 | `source_id` | 是 | V3 资料源 ID，通常由 V3 联调配置给出 |
-| `dataset_id` | 否 | V3 内部数据集 UUID；传非 UUID 时会被视为无效或返回数据集不存在 |
-| `dataset_external_id` | 否 | 第三方数据集或资料库稳定 ID；不知道内部 UUID 时建议传这个字段 |
+| `dataset_id` | 否 | V3 分配的数据集 UUID；传非 UUID 时会被视为无效或返回数据集不存在 |
+| `dataset_external_id` | 否 | 第三方数据集或资料库稳定 ID；不知道 V3 数据集 UUID 时建议传这个字段 |
 | `dataset_title` | 否 | 数据集展示名 |
 | `document_external_id` | 是 | 第三方文档稳定 ID；后续对话用 `available_document_external_ids` 引用同一个值 |
 | `revision_external_id` | 否 | 第三方文档版本 ID；内容更新时建议变化 |
 | `title` | 否 | 文档标题或文件名 |
 | `content_type` | 否 | MIME 类型；不传时 V3 会尝试从文件名或响应头推断 |
 | `content_url` | 是 | V3 可下载原始文件的短期 URL；不要使用长期公开链接 |
-| `metadata` | 否 | 非敏感业务元数据对象，只用于审计和后续映射 |
+| `metadata` | 否 | 非敏感业务元数据对象，用于后续查询、展示或双方对账 |
 | `idempotency_key` | 否 | 本次解析请求幂等键 |
 | `allow_http_loopback` | 否 | 仅本地联调使用，允许 HTTP loopback 下载；生产不要开启 |
 
@@ -707,8 +696,8 @@ Authorization: Bearer <V3 inbound token>
 | `source_id` | V3 回显的资料源 ID |
 | `document_external_id` | V3 回显的第三方文档 ID |
 | `revision_external_id` | V3 回显的第三方版本 ID |
-| `document.id` | V3 内部文档 ID |
-| `document.dataset_id` | 文档归属的 V3 内部数据集 UUID |
+| `document.id` | V3 返回的文档 ID，用于状态排查和后续接口关联 |
+| `document.dataset_id` | 文档归属的 V3 数据集 UUID |
 | `document.title` | V3 记录的文档标题 |
 | `document.content_type` | V3 记录或推断的 MIME 类型 |
 | `document.lifecycle` | 文档生命周期；`indexed` 表示已经完成索引并可作为检索证据 |
@@ -717,7 +706,7 @@ Authorization: Bearer <V3 inbound token>
 | `document.parse_quality_summary` / `document.parseQualitySummary` | 解析质量摘要对象 |
 | `document.created_at` | V3 文档记录创建时间 |
 | `document.updated_at` | V3 文档记录更新时间 |
-| `workflow_execution` | 后台解析工作流信息，用于 V3 侧排查 |
+| `workflow_execution` | 可选排查信息；正常对接可忽略 |
 
 解析状态查询：
 
@@ -734,17 +723,17 @@ Authorization: Bearer <V3 inbound token>
 | `document_external_id` | 查询的第三方文档 ID |
 | `lifecycle` | 当前聚合生命周期；`indexed` 表示文档已完成索引 |
 | `chunk_count` / `chunkCount` | 已生成的文本分块数量 |
-| `retrieval_evidence_count` / `retrievalEvidenceCount` | 可用于检索供料的证据数量 |
+| `retrieval_evidence_count` / `retrievalEvidenceCount` | 可用于文档问答的证据数量 |
 | `parse_status` / `parseStatus` | 文档解析状态 |
 | `parse_quality_status` / `parseQualityStatus` | 解析质量状态 |
 | `parse_quality_summary` / `parseQualitySummary` | 解析质量摘要对象 |
-| `model_status` / `modelStatus` | 面向模型供料的状态摘要 |
+| `model_status` / `modelStatus` | 问答可用状态摘要 |
 | `ingest` | 解析入库摘要，例如标题、内容类型和分块数 |
-| `workflow` | 后台工作流状态摘要 |
+| `workflow` | 可选排查状态摘要；正常对接可忽略 |
 | `latest` | 最新版本对应的文档详情对象 |
 | `documents` | 与该外部文档 ID 匹配的 V3 文档记录列表 |
-| `documents[].document_id` | V3 内部文档 ID |
-| `documents[].dataset_id` | V3 内部数据集 UUID |
+| `documents[].document_id` | V3 返回的文档 ID |
+| `documents[].dataset_id` | V3 数据集 UUID |
 | `documents[].title` | V3 文档标题 |
 | `documents[].content_type` | V3 文档 MIME 类型 |
 | `documents[].lifecycle` | 单条文档记录生命周期 |
@@ -812,17 +801,17 @@ V3 计算有效权限时会综合：
 - 租户或空间默认权限；
 - 明确拒绝规则；
 - 用户是否已停用；
-- 文档版本和权限快照时间。
+- 文档版本和访问范围时间。
 
 ## 13. 产物发布接口
 
 当 V3 生成报告、页面、文档、表格、图片或其他产物时，可按项目配置发布到第三方系统。
 
-当前实现状态：产物发布、状态查询和撤销已经接入外部动作运行时。V3 会把 `external_artifact.publish`、`external_artifact.status`、`external_artifact.revoke` 作为受控动作保存到审计记录中；撤销属于高风险动作，必须先完成用户确认。确认后或无需确认的动作，会由 V3 派发到第三方配置的产物 endpoint，并在观测接口中形成 `artifact_summary`。
+V3 支持产物发布、状态查询和撤销。撤销属于高风险动作，必须先完成用户确认；确认后或无需确认的动作，会由 V3 发送到第三方配置的产物 endpoint。观测接口会返回 `artifact_summary`，用于查看发布、撤销、失败和待确认数量。
 
-页面类产物支持快速 HTML 交付模式：V3 可使用 `html-anything` 作为模板来源和设计参考，直接渲染可浏览器打开的 HTML，跳过调试页、效果图和截图确认。该模式仍走 V3 的模型路由、权限、数据集、证据供料和产物审计边界。
+页面类产物支持快速 HTML 交付模式：V3 可以按模板和聊天要求生成可浏览器打开的 HTML，并返回预览和下载地址。
 
-V3 内部最终渲染请求可使用：
+快速 HTML 生成可使用以下选项：
 
 ```json
 {
@@ -836,7 +825,7 @@ V3 内部最终渲染请求可使用：
 | 字段 | 说明 |
 | --- | --- |
 | `direct_html` | 是否走快速 HTML 直出模式；为 `true` 时跳过调试页和截图确认 |
-| `background` | 是否后台异步渲染；为 `false` 时接口尽量同步返回初始渲染结果 |
+| `background` | 是否异步渲染；为 `false` 时接口尽量同步返回初始渲染结果 |
 
 渲染响应中的 `render_output.id` 是稳定生成 id。第三方服务端可用该 id 轮询状态：
 
@@ -854,15 +843,15 @@ Authorization: Bearer <V3 inbound token>
 | --- | --- |
 | `id` | V3 静态页渲染输出 ID，即路径中的 `render_output_id` |
 | `draft_id` | 对应的静态页草稿 ID |
-| `assistant_run_id` | 触发渲染的助手运行 ID |
+| `assistant_run_id` | 触发渲染的 V3 任务 ID |
 | `image_job_id` | 关联的图片任务 ID；快速 HTML 模式通常为空 |
 | `status` | `queued`、`rendering`、`rendered`、`failed` 或 `cancelled` |
-| `html` | 内部响应中的 HTML 内容；外部状态接口通常应使用预览或下载 URL |
+| `html` | HTML 内容；第三方通常优先使用预览或下载 URL |
 | `html_preview_url` / `htmlPreviewUrl` | 浏览器 inline 预览地址 |
 | `html_download_url` / `htmlDownloadUrl` | HTML 附件下载地址 |
 | `download_url` / `downloadUrl` | 兼容下载地址，通常与 `html_download_url` 等价 |
 | `retryable_error_reason` / `retryableErrorReason` | 失败时是否可重试及原因 |
-| `asset_manifest` | 渲染资产摘要和审计信息 |
+| `asset_manifest` | 渲染资产摘要 |
 | `created_at` | 渲染输出创建时间 |
 
 第三方预览 HTML：
@@ -881,9 +870,9 @@ Host: v3.elepcloud.com
 Authorization: Bearer <V3 inbound token>
 ```
 
-预览响应为 inline `text/html; charset=utf-8`；下载响应为 `text/html; charset=utf-8` 附件。第三方应由服务器端带 token 下载后转存到自己的文件库或下载中心；浏览器页面不得持有 V3 token。V3 会校验该 `render_output_id` 必须属于对应 `connection_id` 的外部通道 AssistantRun。
+预览响应为 inline `text/html; charset=utf-8`；下载响应为 `text/html; charset=utf-8` 附件。第三方应由服务器端带 token 下载后转存到自己的文件库或下载中心；浏览器页面不得持有 V3 token。`render_output_id` 必须属于对应 `connection_id` 的外部通道任务。
 
-计划中的直接接口示例：
+如项目配置直接产物接口，可按双方约定使用：
 
 ```http
 POST /v1/external/artifacts/{artifact_id}/publish
@@ -927,7 +916,7 @@ V3 派发到第三方产物 endpoint 的请求会采用统一外部动作格式�
 | 字段 | 说明 |
 | --- | --- |
 | `action_id` | V3 外部动作运行 ID |
-| `assistant_run_id` | 触发动作的助手运行 ID |
+| `assistant_run_id` | 触发动作的 V3 任务 ID |
 | `action_type` | 动作类型，例如 `external_artifact.publish`、`external_artifact.status` 或 `external_artifact.revoke` |
 | `risk_level` | 动作风险级别，例如 `read_only`、`low_risk_write`、`high_risk_write` 或 `cross_system` |
 | `target_system` | 第三方目标系统标识 |
@@ -978,7 +967,7 @@ V3 派发到第三方产物 endpoint 的请求会采用统一外部动作格式�
 - 产物权限不高于来源文档权限；
 - 下载链接具备有效期或访问校验；
 - 撤销后第三方不可继续访问；
-- 发布、查看、下载、撤销都应可审计。
+- 发布、查看、下载、撤销都应可追溯。
 - 观测接口会展示发布、撤销、阻断、失败和待确认数量，但不会展示原始产物正文、原始下载地址或密钥。
 
 ## 14. 业务动作接口
@@ -991,7 +980,7 @@ V3 可以在用户授权和系统校验后调用第三方业务接口，例如�
 - 创建项目任务；
 - 发送通知；
 - 提交结构化表单；
-- 调用客户内部流程。
+- 调用客户业务流程。
 
 动作风险等级建议：
 
@@ -1000,9 +989,9 @@ V3 可以在用户授权和系统校验后调用第三方业务接口，例如�
 | `low` | 查询状态、生成草稿 | 可直接执行或轻量确认 |
 | `medium` | 创建任务、提交普通记录 | 需要清晰展示动作摘要 |
 | `high` | 对外发布、变更权限、发起审批 | 必须用户确认 |
-| `critical` | 财务、法务、删除、跨系统重大变更 | 需要更严格的确认和审计 |
+| `critical` | 财务、法务、删除、跨系统重大变更 | 需要更严格的确认和留痕 |
 
-当前实现状态：外部聊天通道中的业务动作已具备 MVP 闭环。V3 会先保存模型选择的动作意图；高风险和跨系统动作必须等待用户确认；已确认或无需确认的动作，才会派发到第三方配置的 HTTPS endpoint。若未配置派发 endpoint，V3 会把动作记录为 `dispatch_blocked`，失败原因记录为 `dispatch_endpoint_missing`，用于观测和审计，不会静默丢弃。
+业务动作通过第三方配置的 HTTPS endpoint 接收。高风险和跨系统动作必须等待用户确认；已确认或无需确认的动作，才会发送给第三方。若未配置派发 endpoint，V3 会返回或展示 `dispatch_blocked`，失败原因是 `dispatch_endpoint_missing`。
 
 派发 endpoint 配置键：
 
@@ -1015,40 +1004,7 @@ V3 可以在用户授权和系统校验后调用第三方业务接口，例如�
 - Bearer Token：`external_action_bearer_token`、`externalActionBearerToken`、`action_bearer_token`、`actionBearerToken`、`dispatch_bearer_token`、`dispatchBearerToken`；
 - 签名密钥：`external_action_signing_secret`、`externalActionSigningSecret`、`action_signing_secret`、`actionSigningSecret`、`dispatch_signing_secret`、`dispatchSigningSecret`。
 
-V3 不会把飞书、企微或第三方回调用的通用 `token`、`callback_token`、`verification_token` 当作外部动作派发凭证复用。若配置了派发 endpoint，但没有配置派发专用 Bearer Token 或签名密钥，V3 会记录 `dispatch_blocked`，失败原因是 `dispatch_auth_missing`。
-
-动作意图示例：
-
-```json
-{
-  "action_external_id": "create-ticket",
-  "risk_level": "medium",
-  "title": "创建采购审批跟进工单",
-  "summary": "为采购审批制度差异创建一条跟进工单。",
-  "requires_confirmation": true,
-  "requested_by_external_user_id": "user-10001",
-  "payload": {
-    "ticket_title": "采购审批制度差异跟进",
-    "priority": "normal"
-  },
-  "idempotency_key": "action:create-ticket:arun_01HXEXAMPLE"
-}
-```
-
-动作意图字段说明：
-
-| 字段 | 说明 |
-| --- | --- |
-| `action_external_id` | 第三方或模型建议的动作外部标识 |
-| `risk_level` | 动作风险等级，影响是否必须确认 |
-| `title` | 给用户展示的动作标题 |
-| `summary` | 给用户展示的动作摘要 |
-| `requires_confirmation` | 是否需要用户确认 |
-| `requested_by_external_user_id` | 发起动作的第三方用户 ID |
-| `payload` | 原始业务参数对象；V3 对外派发前会按策略脱敏 |
-| `payload.ticket_title` | 示例工单标题；实际字段按业务动作约定 |
-| `payload.priority` | 示例优先级；实际字段按业务动作约定 |
-| `idempotency_key` | 动作意图幂等键 |
+V3 不会把飞书、企微或第三方回调用的通用 `token`、`callback_token`、`verification_token` 当作外部动作派发凭证复用。若配置了派发 endpoint，但没有配置派发专用 Bearer Token 或签名密钥，V3 会返回或展示 `dispatch_blocked`，失败原因是 `dispatch_auth_missing`。
 
 V3 派发给第三方时，只发送脱敏 payload：
 
@@ -1079,7 +1035,7 @@ V3 派发给第三方时，只发送脱敏 payload：
 | 字段 | 说明 |
 | --- | --- |
 | `action_id` | V3 外部动作运行 ID |
-| `assistant_run_id` | 触发动作的助手运行 ID |
+| `assistant_run_id` | 触发动作的 V3 任务 ID |
 | `action_type` | 业务动作类型，由双方联调约定 |
 | `risk_level` | 风险级别，决定是否必须用户确认 |
 | `target_system` | 第三方业务系统标识 |
@@ -1223,11 +1179,11 @@ V3 提供观测优先的管理接口，供运营人员和 V3 控制台使用。�
 GET /v1/external/integrations
 ```
 
-返回聊天通道和资料源连接摘要，包括健康状态、最近活动时间、动作派发计数、动作生命周期摘要、搜索证据待供料摘要、权限/同步治理信号和脱敏后的配置摘要。
+返回聊天通道和资料源连接摘要，包括健康状态、最近活动时间、动作派发计数、动作生命周期摘要、实时网页信息等待状态、权限/同步状态和脱敏后的配置摘要。
 
 聊天通道会返回 `action_summary`，用于观测外部动作生命周期，包括总动作数、待确认、派发阻断/失败、已派发待结果、已收到结果回调、成功/失败/处理中结果、最近动作时间和最近结果回调时间。该字段不包含第三方原始结果正文或任意回调 message 文本。
 
-聊天通道还会返回 `search_summary`，用于观测 V3 受控网页/搜索证据状态，包括 `required_count`、`latest_required_at` 和 `search_evidence_required` 等信号。该字段不包含用户原始查询文本或搜索结果正文。
+聊天通道还会返回 `search_summary`，用于观测实时网页信息是否等待处理，包括 `required_count`、`latest_required_at` 和 `search_evidence_required` 等信号。该字段不包含用户原始查询文本或搜索结果正文。
 
 响应中的 `drift_summary` 是观测字段，不包含原始文档正文、原始权限明细或密钥材料：
 
@@ -1239,9 +1195,9 @@ GET /v1/external/integrations
 GET /v1/external/integrations/{integration_id}/audit
 ```
 
-返回该集成相关的消息、动作、V3 搜索证据待供料状态和同步记录时间线。动作记录会展示确认状态、派发状态、派发原因、鉴权模式、HTTP 状态、脱敏响应摘要，以及安全的结果回调状态，例如回调状态、幂等键、完成时间和结构化结果摘要。搜索证据记录使用 `item_type=search_evidence`，只说明 `web_search` 需要 V3 供给搜索证据，不暴露用户原始查询。嵌套摘要中的 `token`、`secret`、`authorization`、`cookie`、`password` 等敏感键会被移除。
+返回该集成相关的消息、动作、实时网页信息等待状态和同步记录时间线。动作记录会展示确认状态、派发状态、派发原因、鉴权模式、HTTP 状态、脱敏响应摘要，以及安全的结果回调状态，例如回调状态、幂等键、完成时间和结构化结果摘要。搜索证据记录使用 `item_type=search_evidence`，只说明当前需要实时网页信息，不暴露用户原始查询。嵌套摘要中的 `token`、`secret`、`authorization`、`cookie`、`password` 等敏感键会被移除。
 
-外部集成观测面板会把当前选中的 `integration_id`、`audit_filter` 和 `action_id` 保存在 URL 中，方便运营人员分享单条动作详情定位链接。面板也可以导出一份脱敏 action trace JSON，内容来自同一份审计摘要，不包含第三方原始请求体、原始回调消息或凭证材料。
+外部集成观测面板会把当前选中的 `integration_id`、`audit_filter` 和 `action_id` 保存在 URL 中，方便运营人员分享单条动作详情定位链接。面板也可以导出一份脱敏 action trace JSON，不包含第三方原始请求体、原始回调消息或凭证材料。
 
 可选查询参数：
 
@@ -1255,7 +1211,7 @@ GET /v1/external/integrations/{integration_id}/audit
 | 字段 | 说明 |
 | --- | --- |
 | `integration_id` | 外部集成 ID，可为聊天通道或资料源连接 |
-| `item_type` | 审计记录类型过滤 |
+| `item_type` | 观测记录类型过滤 |
 | `action_state` | 动作状态过滤，仅适用于 `item_type=action` |
 | `action_id` | 外部动作运行 ID，用于定位单条动作 |
 | `limit` | 返回记录数量上限 |
@@ -1278,7 +1234,7 @@ GET /v1/external/integrations/generic-chat-main/audit?item_type=action&action_id
 POST /v1/external/integrations/{integration_id}/retry
 ```
 
-资料源集成会入队一次增量同步；聊天通道集成会把最近处于 `dispatch_blocked` 或 `dispatch_failed` 的、已经确认或无需确认的外部动作排入 `external_action_dispatch_workflow`，并由 `external_action` worker 后台派发到已配置的第三方 endpoint。worker 输出只保存脱敏后的派发状态和结果摘要。
+资料源集成会请求一次增量同步；聊天通道集成会重试最近处于 `dispatch_blocked` 或 `dispatch_failed` 的、已经确认或无需确认的外部动作。重试结果会以脱敏状态和结果摘要展示在观测接口中。
 
 ```http
 POST /v1/external/integrations/{integration_id}/disable
@@ -1339,11 +1295,11 @@ POST /v1/external/integrations/{integration_id}/rotate-secret
 - 不在日志中打印访问令牌、签名密钥、完整下载地址或敏感正文；
 - 文件下载地址应短期有效，或必须带权限校验；
 - 用户手机号、邮箱等个人信息只在必要字段中传递；
-- 文档正文只用于授权索引、问答和审计，不对无权用户暴露；
+- 文档正文只用于授权索引、问答和必要问题排查，不对无权用户暴露；
 - 权限撤销后，应让 V3 尽快同步新权限；
 - 用户停用后，应禁止继续以该用户身份发起问答或动作；
 - 跨租户数据必须物理或逻辑隔离；
-- 错误信息只返回排查所需内容，不返回内部堆栈和密钥细节。
+- 错误信息只返回排查所需内容，不返回服务端堆栈和密钥细节。
 
 ## 19. 部署方式
 
@@ -1355,13 +1311,13 @@ POST /v1/external/integrations/{integration_id}/rotate-secret
 
 第三方在自己的网络中部署网关：
 
-- 网关连接内部文档库、用户系统和业务系统；
+- 网关连接文档库、用户系统和业务系统；
 - 网关与 V3 通过 HTTPS 通信；
-- 内部系统无需直接暴露给 V3。
+- 源系统无需直接暴露给 V3。
 
 ### 19.3 私有化或混合部署
 
-V3、文档源、聊天通道和业务系统可以部署在同一内网或多个网络区域。具体网络、密钥、证书、回调和审计策略在项目实施阶段确认。
+V3、文档源、聊天通道和业务系统可以部署在同一内网或多个网络区域。具体网络、密钥、证书、回调和留痕策略在项目实施阶段确认。
 
 ## 20. 飞书、Lark、企业微信说明
 
@@ -1429,7 +1385,7 @@ V3 会优先按平台官方规则完成验签、事件解析、消息发送和�
 2. 配置聊天通道连接；
 3. 提交一条标准化测试消息；
 4. 同步测试用户和组织结构；
-5. 同步测试文档和权限快照；
+5. 同步测试文档和访问范围；
 6. 验证不同用户权限下的问答结果；
 7. 验证附件、产物链接和任务状态；
 8. 验证需要确认的业务动作；
