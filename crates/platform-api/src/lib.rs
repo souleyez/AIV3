@@ -23285,7 +23285,24 @@ fn company_candidate_start(value: &str) -> usize {
     for (index, ch) in value.char_indices() {
         if matches!(
             ch,
-            '：' | ':' | '-' | '—' | '–' | '】' | ']' | '，' | ',' | '；' | ';' | '、'
+            '：' | ':'
+                | '-'
+                | '—'
+                | '–'
+                | '】'
+                | ']'
+                | '，'
+                | ','
+                | '；'
+                | ';'
+                | '、'
+                | '#'
+                | '>'
+                | '➢'
+                | '•'
+                | '·'
+                | '~'
+                | '～'
         ) {
             start = index + ch.len_utf8();
         }
@@ -23294,7 +23311,7 @@ fn company_candidate_start(value: &str) -> usize {
 }
 
 fn sanitize_company_candidate(raw: &str) -> String {
-    let mut value = raw
+    let mut value = strip_company_candidate_leading_noise(raw)
         .trim_matches(|ch: char| {
             ch.is_whitespace()
                 || matches!(
@@ -23314,34 +23331,20 @@ fn sanitize_company_candidate(raw: &str) -> String {
                         | '('
                         | '【'
                         | '['
+                        | '#'
+                        | '>'
+                        | '➢'
+                        | '•'
+                        | '·'
+                        | '~'
+                        | '～'
                 )
         })
         .to_string();
 
     loop {
         let before = value.clone();
-        value = value
-            .trim_start_matches(|ch: char| {
-                ch.is_ascii_digit()
-                    || matches!(
-                        ch,
-                        '.' | '/'
-                            | '\\'
-                            | '-'
-                            | '—'
-                            | '–'
-                            | '_'
-                            | '年'
-                            | '月'
-                            | '至'
-                            | '今'
-                            | '）'
-                            | ')'
-                            | '】'
-                            | ']'
-                    )
-            })
-            .to_string();
+        value = strip_company_candidate_leading_noise(&value);
         for prefix in [
             "最近就职公司",
             "就职公司",
@@ -23373,10 +23376,76 @@ fn sanitize_company_candidate(raw: &str) -> String {
                 ch.is_whitespace()
                     || matches!(
                         ch,
-                        ':' | '：' | '-' | '—' | '–' | '、' | '，' | ',' | '）' | ')' | '】' | ']'
+                        ':' | '：'
+                            | '-'
+                            | '—'
+                            | '–'
+                            | '、'
+                            | '，'
+                            | ','
+                            | '）'
+                            | ')'
+                            | '】'
+                            | ']'
+                            | '#'
+                            | '>'
+                            | '➢'
+                            | '•'
+                            | '·'
+                            | '~'
+                            | '～'
                     )
             })
             .to_string();
+        if value == before {
+            break;
+        }
+    }
+    value
+}
+
+fn strip_company_candidate_leading_noise(raw: &str) -> String {
+    let mut value = raw.trim().to_string();
+    loop {
+        let before = value.clone();
+        value = value
+            .trim_start_matches(|ch: char| {
+                ch.is_ascii_digit()
+                    || ch.is_whitespace()
+                    || matches!(
+                        ch,
+                        '.' | '/'
+                            | '\\'
+                            | '-'
+                            | '—'
+                            | '–'
+                            | '_'
+                            | '年'
+                            | '月'
+                            | '日'
+                            | '至'
+                            | '今'
+                            | '一'
+                            | '到'
+                            | '）'
+                            | ')'
+                            | '】'
+                            | ']'
+                            | '#'
+                            | '>'
+                            | '➢'
+                            | '•'
+                            | '·'
+                            | '~'
+                            | '～'
+                    )
+            })
+            .to_string();
+        for prefix in ["工作经历", "项目经历", "任职经历", "教育经历"] {
+            if value.starts_with(prefix) {
+                value = value[prefix.len()..].to_string();
+            }
+        }
         if value == before {
             break;
         }
@@ -23426,6 +23495,9 @@ fn is_valid_company_name(value: &str) -> bool {
     let char_count = value.chars().count();
     char_count >= 4
         && char_count <= 40
+        && !value.starts_with('#')
+        && !value.starts_with('➢')
+        && !value.chars().next().is_some_and(|ch| ch.is_ascii_digit())
         && !["股份有限公司", "有限责任公司", "有限公司", "集团"].contains(&value)
         && (value.ends_with("股份有限公司")
             || value.ends_with("有限责任公司")
@@ -49957,6 +50029,27 @@ mod tests {
             vec![
                 "广东阿康健康科技集团有限公司".to_string(),
                 "三一集团".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn assistant_run_normalizes_resume_heading_and_date_company_names() {
+        let names = extract_company_names_from_text(
+            "##中软国际科技服务有限公司\n\
+             ##➢2020年3月一2023年2月广州绿葆网络发展有限公司\n\
+             ➢2015年7月一2018年7月广州山点海赞科技有限公司\n\
+             ~2022.12阿里巴巴集团",
+            10,
+        );
+
+        assert_eq!(
+            names,
+            vec![
+                "中软国际科技服务有限公司".to_string(),
+                "广州绿葆网络发展有限公司".to_string(),
+                "广州山点海赞科技有限公司".to_string(),
+                "阿里巴巴集团".to_string()
             ]
         );
     }
