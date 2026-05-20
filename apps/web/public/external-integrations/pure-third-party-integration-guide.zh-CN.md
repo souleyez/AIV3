@@ -146,6 +146,7 @@ Content-Type: application/json
   "available_document_external_ids": [             // 本轮允许使用的文档 ID 列表
     "doc-20260520-0001"
   ],
+  "documentExternalId": "doc-20260520-0001",        // 可选兼容写法：单文档 ID；有数组时不用传
   "requested_skills": [],                          // 本轮指定 skill；没有传空数组或省略
   "mention_external_user_ids": [],                 // 本条消息 @ 的用户 ID；没有传空数组或省略
   "attachment_refs": [],                           // 附件引用；没有传空数组或省略
@@ -171,8 +172,8 @@ Content-Type: application/json
 | `default_prompt` | 否 | 本轮默认提示词；会供给模型但不越过权限和证据规则 |
 | `output_format` | 否 | `rich_text` 富文本；`image_text` 图文排版；`markdown_table` MD 表格；`json` JSON |
 | `render_mode` | 否 | `normal` 普通回答；`artifact` 生成产物 |
-| `available_document_source_id` | 文档问答建议必填 | 本轮文档源 ID |
-| `available_document_external_ids` | 文档问答建议必填 | 本轮允许 V3 使用的文档 ID |
+| `available_document_source_id` | 文档问答建议必填 | 本轮文档源 ID；只传此字段时，V3 按该资料源已入库文档检索 |
+| `available_document_external_ids` | 文档问答建议必填 | 本轮允许 V3 使用的文档 ID；也可用 `documentExternalId` 传单个文档 |
 | `requested_skills` | 否 | 本轮 skill 列表 |
 | `mention_external_user_ids` | 否 | 被 @ 的第三方用户 ID |
 | `attachment_refs` | 否 | 附件引用列表 |
