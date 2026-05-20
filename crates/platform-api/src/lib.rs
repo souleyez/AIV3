@@ -20215,6 +20215,8 @@ fn required_scope_string<'a>(
 async fn filter_retrieval_evidences_for_external_acl(
     state: &AppState,
     context: Option<&ExternalAclFilterContext>,
+    selected_document_ids: &[DocumentId],
+    allow_selected_documents_without_acl_snapshot: bool,
     evidences: Vec<RetrievalEvidence>,
 ) -> std::result::Result<Vec<RetrievalEvidence>, ApiError> {
     let Some(context) = context else {
@@ -20226,21 +20228,30 @@ async fn filter_retrieval_evidences_for_external_acl(
         HashMap::<ExternalAclDocumentRef, Option<ExternalDocumentAclSnapshot>>::new();
 
     for evidence in evidences {
+        let allow_without_snapshot = external_acl_allows_missing_snapshot_for_selected_document(
+            evidence.document_id,
+            selected_document_ids,
+            allow_selected_documents_without_acl_snapshot,
+        );
         let Some(acl_ref) = external_acl_document_ref_from_value(&evidence.evidence_manifest)
         else {
+            if allow_without_snapshot {
+                visible.push(evidence);
+            }
             continue;
         };
         let acl = load_external_acl_snapshot_cached(state, &mut acl_cache, &acl_ref).await?;
-        if acl
-            .as_ref()
-            .map(|snapshot| {
-                resolver
+        match acl.as_ref() {
+            Some(snapshot) => {
+                if resolver
                     .can_access_external_document(&context.principal, snapshot)
                     .allowed
-            })
-            .unwrap_or(false)
-        {
-            visible.push(evidence);
+                {
+                    visible.push(evidence);
+                }
+            }
+            None if allow_without_snapshot => visible.push(evidence),
+            None => {}
         }
     }
 
@@ -20251,23 +20262,62 @@ async fn document_is_visible_for_external_acl(
     state: &AppState,
     context: Option<&ExternalAclFilterContext>,
     document: &Document,
+    selected_document_ids: &[DocumentId],
+    allow_selected_documents_without_acl_snapshot: bool,
 ) -> std::result::Result<bool, ApiError> {
     let Some(context) = context else {
         return Ok(true);
     };
+    let allow_without_snapshot = external_acl_allows_missing_snapshot_for_selected_document(
+        document.id,
+        selected_document_ids,
+        allow_selected_documents_without_acl_snapshot,
+    );
     let metadata = Value::Object(Map::from_iter(document.metadata.clone()));
     let Some(acl_ref) = external_acl_document_ref_from_value(&metadata) else {
-        return Ok(false);
+        return Ok(allow_without_snapshot);
     };
     let mut acl_cache =
         HashMap::<ExternalAclDocumentRef, Option<ExternalDocumentAclSnapshot>>::new();
     let Some(acl) = load_external_acl_snapshot_cached(state, &mut acl_cache, &acl_ref).await?
     else {
-        return Ok(false);
+        return Ok(allow_without_snapshot);
     };
     Ok(ScopeResolver
         .can_access_external_document(&context.principal, &acl)
         .allowed)
+}
+
+fn external_acl_allows_missing_snapshot_for_selected_document(
+    document_id: DocumentId,
+    selected_document_ids: &[DocumentId],
+    allow_selected_documents_without_acl_snapshot: bool,
+) -> bool {
+    allow_selected_documents_without_acl_snapshot && selected_document_ids.contains(&document_id)
+}
+
+fn selected_scope_allows_external_document_range_without_acl_snapshot(
+    selected_scope: &Value,
+) -> bool {
+    if selected_scope.get("type").and_then(Value::as_str) != Some("external_channel") {
+        return false;
+    }
+    if selected_scope.get("mode").and_then(Value::as_str) != Some("external_document_scope") {
+        return false;
+    }
+    if !matches!(
+        selected_scope
+            .get("external_document_scope_status")
+            .and_then(Value::as_str),
+        Some("resolved" | "partial")
+    ) {
+        return false;
+    }
+    let has_requested_external_ids = selected_scope
+        .get("available_document_external_ids")
+        .and_then(Value::as_array)
+        .is_some_and(|items| !items.is_empty());
+    has_requested_external_ids && !selected_document_ids_from_scope(selected_scope).is_empty()
 }
 
 async fn load_external_acl_snapshot_cached(
@@ -20544,6 +20594,8 @@ async fn build_assistant_run_evidence_state(
         assistant_run_dataset_entity_scan_requested(selected_scope, prompt);
     let external_acl_filter = load_external_acl_filter_context(state, selected_scope).await?;
     let selected_document_ids = selected_document_ids_from_scope(selected_scope);
+    let allow_selected_documents_without_acl_snapshot =
+        selected_scope_allows_external_document_range_without_acl_snapshot(selected_scope);
     let mut supplied_items = Vec::new();
     let mut supplied_datasets = Vec::new();
     let mut supplied_memory_items = Vec::new();
@@ -20574,6 +20626,7 @@ async fn build_assistant_run_evidence_state(
             current_user_id,
             external_acl_filter.as_ref(),
             &selected_document_ids,
+            allow_selected_documents_without_acl_snapshot,
         )
         .await?;
         supplied_items.extend(parse_status_items);
@@ -20585,6 +20638,7 @@ async fn build_assistant_run_evidence_state(
                 current_user_id,
                 external_acl_filter.as_ref(),
                 &selected_document_ids,
+                allow_selected_documents_without_acl_snapshot,
             )
             .await?;
             supplied_items.extend(scan_items);
@@ -20610,6 +20664,8 @@ async fn build_assistant_run_evidence_state(
         let evidences = filter_retrieval_evidences_for_external_acl(
             state,
             external_acl_filter.as_ref(),
+            &selected_document_ids,
+            allow_selected_documents_without_acl_snapshot,
             evidences,
         )
         .await?;
@@ -20626,6 +20682,7 @@ async fn build_assistant_run_evidence_state(
                 current_user_id,
                 external_acl_filter.as_ref(),
                 &selected_document_ids,
+                allow_selected_documents_without_acl_snapshot,
                 &mut media_context_by_document,
             )
             .await?;
@@ -20730,6 +20787,7 @@ async fn build_assistant_run_document_parse_status_supply(
     current_user_id: Option<UserId>,
     external_acl_filter: Option<&ExternalAclFilterContext>,
     selected_document_ids: &[DocumentId],
+    allow_selected_documents_without_acl_snapshot: bool,
 ) -> std::result::Result<Vec<Value>, ApiError> {
     let candidate_documents = list_documents_for_dataset_scope(state, dataset.id)
         .await?
@@ -20751,7 +20809,15 @@ async fn build_assistant_run_document_parse_status_supply(
             limited_by_document_limit = true;
             break;
         }
-        if !document_is_visible_for_external_acl(state, external_acl_filter, &document).await? {
+        if !document_is_visible_for_external_acl(
+            state,
+            external_acl_filter,
+            &document,
+            selected_document_ids,
+            allow_selected_documents_without_acl_snapshot,
+        )
+        .await?
+        {
             continue;
         }
         documents.push(document);
@@ -21283,6 +21349,7 @@ async fn build_assistant_run_dataset_entity_scan_supply(
     current_user_id: Option<UserId>,
     external_acl_filter: Option<&ExternalAclFilterContext>,
     selected_document_ids: &[DocumentId],
+    allow_selected_documents_without_acl_snapshot: bool,
 ) -> std::result::Result<Vec<Value>, ApiError> {
     let documents = list_documents_for_dataset_scope(state, dataset.id)
         .await?
@@ -21304,7 +21371,15 @@ async fn build_assistant_run_dataset_entity_scan_supply(
             limited_by_document_limit = true;
             break;
         }
-        if !document_is_visible_for_external_acl(state, external_acl_filter, &document).await? {
+        if !document_is_visible_for_external_acl(
+            state,
+            external_acl_filter,
+            &document,
+            selected_document_ids,
+            allow_selected_documents_without_acl_snapshot,
+        )
+        .await?
+        {
             continue;
         }
         scanned_document_count += 1;
@@ -22219,6 +22294,7 @@ async fn build_assistant_run_chunk_fallback_supply(
     current_user_id: Option<UserId>,
     external_acl_filter: Option<&ExternalAclFilterContext>,
     selected_document_ids: &[DocumentId],
+    allow_selected_documents_without_acl_snapshot: bool,
     media_context_by_document: &mut HashMap<DocumentId, Option<Value>>,
 ) -> std::result::Result<Vec<Value>, ApiError> {
     if limit == 0 {
@@ -22235,7 +22311,15 @@ async fn build_assistant_run_chunk_fallback_supply(
         .collect::<Vec<_>>();
     let mut sources = Vec::new();
     for document in documents {
-        if !document_is_visible_for_external_acl(state, external_acl_filter, &document).await? {
+        if !document_is_visible_for_external_acl(
+            state,
+            external_acl_filter,
+            &document,
+            selected_document_ids,
+            allow_selected_documents_without_acl_snapshot,
+        )
+        .await?
+        {
             continue;
         }
         let chunks = state
@@ -53689,6 +53773,11 @@ mod tests {
         let selected_scope = json!({
             "type": "external_channel",
             "mode": "external_document_scope",
+            "platform": "generic_chat",
+            "sender_external_id": "user-alpha",
+            "external_document_scope_status": "resolved",
+            "available_document_source_id": "src-docs",
+            "available_document_external_ids": ["doc-alpha"],
             "temporary_dataset": {
                 "key": "external-session-generic-chat-main-conv-alpha-src-docs",
                 "source": "available_document_external_ids",
@@ -53724,6 +53813,286 @@ mod tests {
             evidence_state["selected_scope"]["temporary_dataset"]["document_count"],
             json!(1)
         );
+    }
+
+    #[tokio::test]
+    async fn assistant_run_external_document_scope_supplies_selected_doc_without_acl_snapshot() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_MODE", "placeholder");
+        std::env::remove_var("ASSISTANT_RUN_EVIDENCE_LIMIT");
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping external selected doc fallback test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("external-selected-doc-no-acl-test-{}", Uuid::new_v4()),
+                "External Selected Document No ACL Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage,
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        let dataset = state
+            .storage
+            .datasets()
+            .create(
+                state.tenant_id,
+                NewDataset {
+                    key: format!("external-selected-doc-no-acl-{}", Uuid::new_v4()),
+                    title: "第三方对接资料库".to_string(),
+                    description: Some("第三方显式文档范围测试。".to_string()),
+                    owner_user_id: None,
+                },
+            )
+            .await
+            .expect("dataset should be created");
+        let selected_document = state
+            .storage
+            .documents()
+            .create(
+                state.tenant_id,
+                NewDocument {
+                    dataset_id: dataset.id,
+                    title: "资料1.docx".to_string(),
+                    object_key: "external/third-party-source-main/doc-deng.docx".to_string(),
+                    content_type:
+                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                            .to_string(),
+                    secret_binding_ids: Vec::new(),
+                    owner_user_id: None,
+                    metadata: json!({
+                        "external_source": {
+                            "source_id": "third-party-source-main",
+                            "document_external_id": "doc-deng",
+                            "revision_external_id": "v1"
+                        }
+                    }),
+                },
+            )
+            .await
+            .expect("selected document should be created");
+        let other_document = state
+            .storage
+            .documents()
+            .create(
+                state.tenant_id,
+                NewDocument {
+                    dataset_id: dataset.id,
+                    title: "其它资料.docx".to_string(),
+                    object_key: "external/third-party-source-main/doc-other.docx".to_string(),
+                    content_type:
+                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                            .to_string(),
+                    secret_binding_ids: Vec::new(),
+                    owner_user_id: None,
+                    metadata: json!({
+                        "external_source": {
+                            "source_id": "third-party-source-main",
+                            "document_external_id": "doc-other",
+                            "revision_external_id": "v1"
+                        }
+                    }),
+                },
+            )
+            .await
+            .expect("other document should be created");
+        let now = Utc::now();
+        let selected_chunk = state
+            .storage
+            .document_chunks()
+            .replace_for_document(
+                state.tenant_id,
+                selected_document.id,
+                &[storage::NewDocumentChunk {
+                    dataset_id: dataset.id,
+                    document_id: selected_document.id,
+                    chunk_index: 0,
+                    content: "邓工是技术人员\n展浩是前端人员".to_string(),
+                    token_count: 3,
+                    metadata: json!({}),
+                    created_at: now,
+                }],
+            )
+            .await
+            .expect("selected chunk should be created")
+            .remove(0);
+        let other_chunk = state
+            .storage
+            .document_chunks()
+            .replace_for_document(
+                state.tenant_id,
+                other_document.id,
+                &[storage::NewDocumentChunk {
+                    dataset_id: dataset.id,
+                    document_id: other_document.id,
+                    chunk_index: 0,
+                    content: "邓工不是这份资料的讨论对象。".to_string(),
+                    token_count: 3,
+                    metadata: json!({}),
+                    created_at: now,
+                }],
+            )
+            .await
+            .expect("other chunk should be created")
+            .remove(0);
+        let evidence_execution = create_test_workflow_execution(
+            &state.storage,
+            state.tenant_id,
+            dataset.id,
+            WorkflowKind::UploadIngest,
+        )
+        .await;
+        state
+            .storage
+            .retrieval_evidences()
+            .create_many(
+                state.tenant_id,
+                &[
+                    storage::NewRetrievalEvidence {
+                        execution_id: evidence_execution.id,
+                        dataset_id: dataset.id,
+                        document_id: selected_document.id,
+                        document_chunk_id: selected_chunk.id,
+                        chunk_index: 0,
+                        source_locator: "document://doc-deng/chunks/0".to_string(),
+                        content_excerpt: "邓工是技术人员\n展浩是前端人员".to_string(),
+                        summary: "资料1.docx chunk 0 section 邓工是技术人员".to_string(),
+                        payload_filter_key: "dataset/third-party-source-main".to_string(),
+                        embedding_model: "local-lexical-v1".to_string(),
+                        recall_score: 0.1,
+                        evidence_manifest: json!({
+                            "external_acl": {
+                                "source_id": "third-party-source-main",
+                                "document_external_id": "doc-deng",
+                                "revision_external_id": "v1"
+                            },
+                            "embedding": {
+                                "term_weights": {"邓工": 1.0, "技术人员": 1.0}
+                            }
+                        }),
+                        created_at: now,
+                    },
+                    storage::NewRetrievalEvidence {
+                        execution_id: evidence_execution.id,
+                        dataset_id: dataset.id,
+                        document_id: other_document.id,
+                        document_chunk_id: other_chunk.id,
+                        chunk_index: 0,
+                        source_locator: "document://doc-other/chunks/0".to_string(),
+                        content_excerpt: "邓工不是这份资料的讨论对象。".to_string(),
+                        summary: "其它资料 chunk 0".to_string(),
+                        payload_filter_key: "dataset/third-party-source-main".to_string(),
+                        embedding_model: "local-lexical-v1".to_string(),
+                        recall_score: 0.99,
+                        evidence_manifest: json!({
+                            "external_acl": {
+                                "source_id": "third-party-source-main",
+                                "document_external_id": "doc-other",
+                                "revision_external_id": "v1"
+                            },
+                            "embedding": {
+                                "term_weights": {"邓工": 1.0}
+                            }
+                        }),
+                        created_at: now,
+                    },
+                ],
+            )
+            .await
+            .expect("retrieval evidences should be created");
+
+        let selected_scope = json!({
+            "type": "external_channel",
+            "mode": "external_document_scope",
+            "platform": "generic_chat",
+            "sender_external_id": "user-default",
+            "external_document_scope_status": "resolved",
+            "available_document_source_id": "third-party-source-main",
+            "available_document_external_ids": ["doc-deng"],
+            "datasets": [{"type": "dataset", "id": dataset.id}],
+            "documents": [{
+                "type": "document",
+                "id": selected_document.id,
+                "source_id": "third-party-source-main",
+                "document_external_id": "doc-deng",
+                "title": selected_document.title,
+            }],
+            "temporary_dataset": {
+                "key": "external-session-generic-chat-main-conv-deng-third-party-source-main",
+                "source": "available_document_external_ids",
+                "document_count": 1,
+                "restores_on": "conversation_turn_end"
+            }
+        });
+        let evidence_state = build_assistant_run_evidence_state(
+            &state,
+            &selected_scope,
+            "邓工是谁",
+            None,
+            &[],
+            None,
+        )
+        .await
+        .expect("evidence state should be built");
+
+        assert_eq!(evidence_state["status"], json!("supplied"));
+        assert_eq!(
+            evidence_state["external_acl_filter"]["trust_level"],
+            json!("unresolved")
+        );
+        let supplied_items = evidence_state["supplied_items"]
+            .as_array()
+            .expect("supplied items should be an array");
+        assert_eq!(supplied_items.len(), 1);
+        assert_eq!(
+            supplied_items[0]["document_id"],
+            json!(selected_document.id)
+        );
+        assert!(supplied_items[0]["content_excerpt"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("邓工是技术人员"));
+    }
+
+    #[test]
+    fn external_document_scope_missing_acl_policy_requires_explicit_selected_range() {
+        let document_id = DocumentId::new();
+        let selected_scope = json!({
+            "type": "external_channel",
+            "mode": "external_document_scope",
+            "external_document_scope_status": "resolved",
+            "available_document_external_ids": ["doc-deng"],
+            "documents": [{"type": "document", "id": document_id}],
+        });
+
+        assert!(
+            selected_scope_allows_external_document_range_without_acl_snapshot(&selected_scope)
+        );
+        assert!(external_acl_allows_missing_snapshot_for_selected_document(
+            document_id,
+            &[document_id],
+            true,
+        ));
+        assert!(!external_acl_allows_missing_snapshot_for_selected_document(
+            DocumentId::new(),
+            &[document_id],
+            true,
+        ));
+        assert!(!external_acl_allows_missing_snapshot_for_selected_document(
+            document_id,
+            &[document_id],
+            false,
+        ));
     }
 
     #[tokio::test]
@@ -60746,6 +61115,9 @@ mod tests {
             phrase_weights["订单延期风险"] > phrase_weights["订"],
             "full business phrase should carry more weight than a single character"
         );
+
+        let person_title_weights = lexical_query_term_weights("邓工是谁");
+        assert!(person_title_weights.contains_key("邓工"));
     }
 
     #[test]
