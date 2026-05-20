@@ -7365,29 +7365,59 @@ async fn create_assistant_run(
                 )
             }
             None => {
-                let provider_input = if chat_runtime.mode == "placeholder" {
-                    assistant_run_placeholder_user_message(false, &evidence_state)
-                } else {
-                    build_assistant_run_provider_input_with_evidence(
+                let response = if let Some(direct_answer) =
+                    assistant_run_preferred_dataset_entity_scan_direct_answer(
                         &request,
-                        Some(&evidence_state),
+                        &evidence_state,
+                    ) {
+                    let response = assistant_run_direct_answer_response(direct_answer);
+                    state
+                        .storage
+                        .assistant_runs()
+                        .append_event(
+                            state.tenant_id,
+                            run.id,
+                            &NewAssistantRunEvent {
+                                event_name: "assistant_run.dataset_entity_scan_direct_answered"
+                                    .to_string(),
+                                payload: json!({
+                                    "source": "dataset_entity_scan_direct_answer",
+                                    "reason": "company_statistics_prompt",
+                                    "runtime": render_runtime_manifest(&response.runtime),
+                                }),
+                                created_at: Utc::now(),
+                            },
+                        )
+                        .await
+                        .map_err(ApiError::from_storage)?;
+                    response
+                } else {
+                    let provider_input = if chat_runtime.mode == "placeholder" {
+                        assistant_run_placeholder_user_message(false, &evidence_state)
+                    } else {
+                        build_assistant_run_provider_input_with_evidence(
+                            &request,
+                            Some(&evidence_state),
+                        )
+                    };
+                    match complete_assistant_run_provider(
+                        MODEL_LANE_ASSISTANT_CHAT,
+                        chat_runtime.mode.clone(),
+                        chat_runtime.provider.clone(),
+                        chat_runtime.model.clone(),
+                        provider_input,
                     )
-                };
-                let response = match complete_assistant_run_provider(
-                    MODEL_LANE_ASSISTANT_CHAT,
-                    chat_runtime.mode.clone(),
-                    chat_runtime.provider.clone(),
-                    chat_runtime.model.clone(),
-                    provider_input,
-                )
-                .await
-                {
-                    Ok(response) => response,
-                    Err(error) => {
-                        if let Some(compact_provider_input) =
-                            assistant_run_compact_provider_retry_input(&request, &evidence_state)
-                        {
-                            state
+                    .await
+                    {
+                        Ok(response) => response,
+                        Err(error) => {
+                            if let Some(compact_provider_input) =
+                                assistant_run_compact_provider_retry_input(
+                                    &request,
+                                    &evidence_state,
+                                )
+                            {
+                                state
                                 .storage
                                 .assistant_runs()
                                 .append_event(
@@ -7407,17 +7437,17 @@ async fn create_assistant_run(
                                 )
                                 .await
                                 .map_err(ApiError::from_storage)?;
-                            match complete_assistant_run_provider(
-                                MODEL_LANE_ASSISTANT_CHAT,
-                                chat_runtime.mode.clone(),
-                                chat_runtime.provider.clone(),
-                                chat_runtime.model.clone(),
-                                compact_provider_input,
-                            )
-                            .await
-                            {
-                                Ok(response) => {
-                                    state
+                                match complete_assistant_run_provider(
+                                    MODEL_LANE_ASSISTANT_CHAT,
+                                    chat_runtime.mode.clone(),
+                                    chat_runtime.provider.clone(),
+                                    chat_runtime.model.clone(),
+                                    compact_provider_input,
+                                )
+                                .await
+                                {
+                                    Ok(response) => {
+                                        state
                                         .storage
                                         .assistant_runs()
                                         .append_event(
@@ -7436,18 +7466,18 @@ async fn create_assistant_run(
                                         )
                                         .await
                                         .map_err(ApiError::from_storage)?;
-                                    response
-                                }
-                                Err(retry_error) => {
-                                    if let Some(direct_answer) =
-                                        assistant_run_dataset_entity_scan_direct_answer(
-                                            &request,
-                                            &evidence_state,
-                                        )
-                                    {
-                                        let response =
-                                            assistant_run_direct_answer_response(direct_answer);
-                                        state
+                                        response
+                                    }
+                                    Err(retry_error) => {
+                                        if let Some(direct_answer) =
+                                            assistant_run_dataset_entity_scan_direct_answer(
+                                                &request,
+                                                &evidence_state,
+                                            )
+                                        {
+                                            let response =
+                                                assistant_run_direct_answer_response(direct_answer);
+                                            state
                                             .storage
                                             .assistant_runs()
                                             .append_event(
@@ -7468,9 +7498,9 @@ async fn create_assistant_run(
                                             )
                                             .await
                                             .map_err(ApiError::from_storage)?;
-                                        response
-                                    } else {
-                                        state
+                                            response
+                                        } else {
+                                            state
                                         .storage
                                         .assistant_runs()
                                         .append_event(
@@ -7489,36 +7519,39 @@ async fn create_assistant_run(
                                         )
                                         .await
                                         .map_err(ApiError::from_storage)?;
-                                        let stage = "provider";
-                                        record_assistant_run_create_failure(
-                                            &state,
-                                            run.id,
-                                            &execution_trail,
-                                            &retry_error,
-                                            stage,
-                                        )
-                                        .await;
-                                        return Err(assistant_run_create_error_with_run_context(
-                                            retry_error,
-                                            run.id,
-                                            stage,
-                                        ));
+                                            let stage = "provider";
+                                            record_assistant_run_create_failure(
+                                                &state,
+                                                run.id,
+                                                &execution_trail,
+                                                &retry_error,
+                                                stage,
+                                            )
+                                            .await;
+                                            return Err(
+                                                assistant_run_create_error_with_run_context(
+                                                    retry_error,
+                                                    run.id,
+                                                    stage,
+                                                ),
+                                            );
+                                        }
                                     }
                                 }
+                            } else {
+                                let stage = "provider";
+                                record_assistant_run_create_failure(
+                                    &state,
+                                    run.id,
+                                    &execution_trail,
+                                    &error,
+                                    stage,
+                                )
+                                .await;
+                                return Err(assistant_run_create_error_with_run_context(
+                                    error, run.id, stage,
+                                ));
                             }
-                        } else {
-                            let stage = "provider";
-                            record_assistant_run_create_failure(
-                                &state,
-                                run.id,
-                                &execution_trail,
-                                &error,
-                                stage,
-                            )
-                            .await;
-                            return Err(assistant_run_create_error_with_run_context(
-                                error, run.id, stage,
-                            ));
                         }
                     }
                 };
@@ -18145,6 +18178,58 @@ fn assistant_run_dataset_entity_scan_direct_answer(
     }
 
     Some(lines.join("\n").trim().to_string())
+}
+
+fn assistant_run_preferred_dataset_entity_scan_direct_answer(
+    request: &CreateAssistantRunRequest,
+    evidence_state: &Value,
+) -> Option<String> {
+    if !prompt_requests_company_entity_statistics(&request.prompt) {
+        return None;
+    }
+    assistant_run_dataset_entity_scan_direct_answer(request, evidence_state)
+}
+
+fn prompt_requests_company_entity_statistics(prompt: &str) -> bool {
+    if prompt_requests_resume_company_entity_scan(prompt) {
+        return true;
+    }
+
+    let lower_prompt = prompt.to_ascii_lowercase();
+    let has_company_signal = prompt_contains_any(
+        prompt,
+        &["公司名", "公司", "企业", "组织", "机构", "单位", "雇主"],
+    ) || ascii_prompt_contains_any(
+        &lower_prompt,
+        &[
+            "company",
+            "companies",
+            "organization",
+            "organizations",
+            "employer",
+        ],
+    );
+    let has_stat_signal = prompt_contains_any(
+        prompt,
+        &[
+            "多少", "几个", "哪些", "列出", "统计", "汇总", "全部", "所有", "清单", "覆盖", "出现",
+            "提到", "频次", "频率",
+        ],
+    ) || ascii_prompt_contains_any(
+        &lower_prompt,
+        &[
+            "count",
+            "list",
+            "all",
+            "which",
+            "inventory",
+            "coverage",
+            "frequency",
+            "frequencies",
+        ],
+    ) || lower_prompt.contains("how many");
+
+    has_company_signal && has_stat_signal
 }
 
 fn assistant_run_request_output_format(request: &CreateAssistantRunRequest) -> Option<String> {
@@ -51178,6 +51263,10 @@ mod tests {
         assert!(answer.contains("共识别到 2 个公司/组织名"));
         assert!(answer.contains("| 广州寓力地产顾问有限公司 | 2 |"));
         assert!(!answer.contains("document_ids"));
+        assert!(
+            assistant_run_preferred_dataset_entity_scan_direct_answer(&request, &evidence)
+                .is_some()
+        );
     }
 
     #[test]
