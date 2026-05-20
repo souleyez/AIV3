@@ -4637,6 +4637,35 @@ fn dataset_local_scope_is_visible(dataset: &Dataset, local_thread_id: Option<&st
         .is_some_and(|dataset_thread_id| Some(dataset_thread_id) == local_thread_id)
 }
 
+fn dataset_is_visible_by_local_thread_scope(
+    dataset: &Dataset,
+    local_thread_id: Option<&str>,
+) -> bool {
+    dataset.owner_user_id.is_none()
+        && dataset
+            .metadata
+            .get("local_only")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && dataset
+            .metadata
+            .get("local_thread_id")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .is_some_and(|dataset_thread_id| Some(dataset_thread_id) == local_thread_id)
+}
+
+fn dataset_is_visible_for_request(
+    dataset: &Dataset,
+    active_secret_binding_ids: &[SecretBindingId],
+    current_user_id: Option<UserId>,
+    local_thread_id: Option<&str>,
+) -> bool {
+    (dataset_is_visible(dataset, active_secret_binding_ids, current_user_id)
+        && dataset_local_scope_is_visible(dataset, local_thread_id))
+        || dataset_is_visible_by_local_thread_scope(dataset, local_thread_id)
+}
+
 fn filter_visible_datasets(
     datasets: Vec<Dataset>,
     active_secret_binding_ids: &[SecretBindingId],
@@ -4646,8 +4675,12 @@ fn filter_visible_datasets(
     datasets
         .into_iter()
         .filter(|dataset| {
-            dataset_is_visible(dataset, active_secret_binding_ids, current_user_id)
-                && dataset_local_scope_is_visible(dataset, local_thread_id)
+            dataset_is_visible_for_request(
+                dataset,
+                active_secret_binding_ids,
+                current_user_id,
+                local_thread_id,
+            )
         })
         .collect()
 }
@@ -5087,6 +5120,23 @@ async fn load_visible_dataset_for_user(
     active_secret_binding_ids: &[SecretBindingId],
     current_user_id: Option<UserId>,
 ) -> std::result::Result<Dataset, ApiError> {
+    load_visible_dataset_for_user_with_local_scope(
+        state,
+        dataset_id,
+        active_secret_binding_ids,
+        current_user_id,
+        None,
+    )
+    .await
+}
+
+async fn load_visible_dataset_for_user_with_local_scope(
+    state: &AppState,
+    dataset_id: DatasetId,
+    active_secret_binding_ids: &[SecretBindingId],
+    current_user_id: Option<UserId>,
+    local_thread_id: Option<&str>,
+) -> std::result::Result<Dataset, ApiError> {
     let dataset = state
         .storage
         .datasets()
@@ -5094,10 +5144,49 @@ async fn load_visible_dataset_for_user(
         .await
         .map_err(ApiError::from_storage)?
         .ok_or_else(|| dataset_not_found_error(dataset_id))?;
-    if !dataset_is_visible(&dataset, active_secret_binding_ids, current_user_id) {
+    if !dataset_is_visible_for_request(
+        &dataset,
+        active_secret_binding_ids,
+        current_user_id,
+        local_thread_id,
+    ) {
         return Err(dataset_not_found_error(dataset_id));
     }
     Ok(dataset)
+}
+
+async fn load_visible_dataset_for_assistant_scope(
+    state: &AppState,
+    dataset_id: DatasetId,
+    active_secret_binding_ids: &[SecretBindingId],
+    current_user_id: Option<UserId>,
+    selected_scope: &Value,
+) -> std::result::Result<Dataset, ApiError> {
+    match load_visible_dataset_for_user(
+        state,
+        dataset_id,
+        active_secret_binding_ids,
+        current_user_id,
+    )
+    .await
+    {
+        Ok(dataset) => Ok(dataset),
+        Err(error) if selected_scope_temporary_dataset_id(selected_scope) == Some(dataset_id) => {
+            let dataset = state
+                .storage
+                .datasets()
+                .get_by_id(state.tenant_id, dataset_id)
+                .await
+                .map_err(ApiError::from_storage)?
+                .ok_or_else(|| dataset_not_found_error(dataset_id))?;
+            if dataset_is_external_temporary_scope(&dataset) {
+                Ok(dataset)
+            } else {
+                Err(error)
+            }
+        }
+        Err(error) => Err(error),
+    }
 }
 
 async fn load_visible_document_for_user(
@@ -5105,6 +5194,77 @@ async fn load_visible_document_for_user(
     document_id: DocumentId,
     active_secret_binding_ids: &[SecretBindingId],
     current_user_id: Option<UserId>,
+) -> std::result::Result<Document, ApiError> {
+    load_visible_document_for_user_with_local_scope(
+        state,
+        document_id,
+        active_secret_binding_ids,
+        current_user_id,
+        None,
+    )
+    .await
+}
+
+async fn load_visible_document_for_assistant_scope(
+    state: &AppState,
+    document_id: DocumentId,
+    active_secret_binding_ids: &[SecretBindingId],
+    current_user_id: Option<UserId>,
+    selected_scope: &Value,
+) -> std::result::Result<Document, ApiError> {
+    match load_visible_document_for_user(
+        state,
+        document_id,
+        active_secret_binding_ids,
+        current_user_id,
+    )
+    .await
+    {
+        Ok(document) => Ok(document),
+        Err(error) => {
+            let Some(temporary_dataset_id) = selected_scope_temporary_dataset_id(selected_scope)
+            else {
+                return Err(error);
+            };
+            let document = state
+                .storage
+                .documents()
+                .get_by_id(state.tenant_id, document_id)
+                .await
+                .map_err(ApiError::from_storage)?
+                .ok_or_else(|| {
+                    ApiError::not_found(
+                        "document_not_found",
+                        format!("document {} was not found", document_id),
+                    )
+                })?;
+            if !owner_user_id_is_visible(document.owner_user_id, current_user_id) {
+                return Err(error);
+            }
+            if !document_belongs_to_dataset_scope(state, &document, temporary_dataset_id).await? {
+                return Err(error);
+            }
+            let dataset = state
+                .storage
+                .datasets()
+                .get_by_id(state.tenant_id, temporary_dataset_id)
+                .await
+                .map_err(ApiError::from_storage)?
+                .ok_or_else(|| dataset_not_found_error(temporary_dataset_id))?;
+            if !dataset_is_external_temporary_scope(&dataset) {
+                return Err(error);
+            }
+            Ok(document)
+        }
+    }
+}
+
+async fn load_visible_document_for_user_with_local_scope(
+    state: &AppState,
+    document_id: DocumentId,
+    active_secret_binding_ids: &[SecretBindingId],
+    current_user_id: Option<UserId>,
+    local_thread_id: Option<&str>,
 ) -> std::result::Result<Document, ApiError> {
     let document = state
         .storage
@@ -5118,20 +5278,115 @@ async fn load_visible_document_for_user(
                 format!("document {} was not found", document_id),
             )
         })?;
-    load_visible_dataset_for_user(
-        state,
-        document.dataset_id,
-        active_secret_binding_ids,
-        current_user_id,
-    )
-    .await?;
     if !owner_user_id_is_visible(document.owner_user_id, current_user_id) {
         return Err(ApiError::not_found(
             "document_not_found",
             format!("document {} was not found", document_id),
         ));
     }
-    Ok(document)
+    if document_has_visible_dataset_scope(
+        state,
+        &document,
+        active_secret_binding_ids,
+        current_user_id,
+        local_thread_id,
+    )
+    .await?
+    {
+        return Ok(document);
+    }
+    Err(ApiError::not_found(
+        "document_not_found",
+        format!("document {} was not found", document_id),
+    ))
+}
+
+async fn document_has_visible_dataset_scope(
+    state: &AppState,
+    document: &Document,
+    active_secret_binding_ids: &[SecretBindingId],
+    current_user_id: Option<UserId>,
+    local_thread_id: Option<&str>,
+) -> std::result::Result<bool, ApiError> {
+    if load_visible_dataset_for_user_with_local_scope(
+        state,
+        document.dataset_id,
+        active_secret_binding_ids,
+        current_user_id,
+        local_thread_id,
+    )
+    .await
+    .is_ok()
+    {
+        return Ok(true);
+    }
+
+    let membership_dataset_ids = state
+        .storage
+        .dataset_document_memberships()
+        .list_dataset_ids_by_document(state.tenant_id, document.id)
+        .await
+        .map_err(ApiError::from_storage)?;
+    for dataset_id in membership_dataset_ids {
+        if load_visible_dataset_for_user_with_local_scope(
+            state,
+            dataset_id,
+            active_secret_binding_ids,
+            current_user_id,
+            local_thread_id,
+        )
+        .await
+        .is_ok()
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+async fn document_belongs_to_dataset_scope(
+    state: &AppState,
+    document: &Document,
+    dataset_id: DatasetId,
+) -> std::result::Result<bool, ApiError> {
+    if document.dataset_id == dataset_id {
+        return Ok(true);
+    }
+    let membership_dataset_ids = state
+        .storage
+        .dataset_document_memberships()
+        .list_dataset_ids_by_document(state.tenant_id, document.id)
+        .await
+        .map_err(ApiError::from_storage)?;
+    Ok(membership_dataset_ids.contains(&dataset_id))
+}
+
+async fn list_documents_for_visible_dataset_scopes(
+    state: &AppState,
+    visible_dataset_ids: &HashSet<DatasetId>,
+    current_user_id: Option<UserId>,
+) -> std::result::Result<Vec<Document>, ApiError> {
+    let mut documents = Vec::new();
+    let mut seen = HashSet::new();
+    for dataset_id in visible_dataset_ids {
+        for document in list_documents_for_dataset_scope(state, *dataset_id)
+            .await?
+            .into_iter()
+            .filter(|document| owner_user_id_is_visible(document.owner_user_id, current_user_id))
+            .filter(|document| document.lifecycle != DocumentLifecycle::Archived)
+        {
+            if seen.insert(document.id) {
+                documents.push(document);
+            }
+        }
+    }
+    documents.sort_by(|left, right| {
+        right
+            .created_at
+            .cmp(&left.created_at)
+            .then_with(|| left.title.cmp(&right.title))
+    });
+    Ok(documents)
 }
 
 async fn visible_document_ids_for_dataset(
@@ -12692,16 +12947,22 @@ async fn enrich_external_channel_document_scope(
             "documents",
             Value::Array(selected_documents),
         );
+        let canonical_datasets = selected_datasets
+            .iter()
+            .map(|dataset_id| json!({"type": "dataset", "id": dataset_id}))
+            .collect::<Vec<_>>();
         set_payload_value(
             selected_scope,
-            "datasets",
-            Value::Array(
-                selected_datasets
-                    .into_iter()
-                    .map(|dataset_id| json!({"type": "dataset", "id": dataset_id}))
-                    .collect(),
-            ),
+            "canonical_datasets",
+            Value::Array(canonical_datasets.clone()),
         );
+        let active_datasets = temporary_dataset
+            .as_ref()
+            .map(|temporary_dataset| {
+                vec![json!({"type": "dataset", "id": temporary_dataset.dataset_id})]
+            })
+            .unwrap_or(canonical_datasets);
+        set_payload_value(selected_scope, "datasets", Value::Array(active_datasets));
     }
 
     Ok(())
@@ -12730,6 +12991,8 @@ async fn create_or_refresh_external_channel_temporary_dataset_scope(
         "visibility": DatasetVisibility::Private.as_str(),
         "default_secret_binding_ids": [],
         "scope_kind": "external_temporary",
+        "local_only": true,
+        "local_thread_id": external_bot_message_local_thread_id(message),
         "external_channel_connection_id": connection_id,
         "conversation_external_id": message.conversation_external_id,
         "available_document_source_id": source_id,
@@ -19966,11 +20229,12 @@ async fn build_assistant_run_evidence_state(
         .into_iter()
         .take(ASSISTANT_RUN_EVIDENCE_DATASET_LIMIT)
     {
-        let dataset = load_visible_dataset_for_user(
+        let dataset = load_visible_dataset_for_assistant_scope(
             state,
             dataset_id,
             active_secret_binding_ids,
             current_user_id,
+            selected_scope,
         )
         .await?;
         supplied_datasets.push(json!({
@@ -23784,23 +24048,12 @@ async fn list_documents(
     .into_iter()
     .map(|dataset| dataset.id)
     .collect();
-    let documents = state
-        .storage
-        .documents()
-        .list_by_tenant(state.tenant_id)
-        .await
-        .map_err(ApiError::from_storage)?;
+    let documents =
+        list_documents_for_visible_dataset_scopes(&state, &visible_dataset_ids, current_user_id)
+            .await?;
 
     Ok(Json(
-        documents
-            .into_iter()
-            .filter(|document| {
-                visible_dataset_ids.contains(&document.dataset_id)
-                    && owner_user_id_is_visible(document.owner_user_id, current_user_id)
-                    && document.lifecycle != DocumentLifecycle::Archived
-            })
-            .map(to_document_summary)
-            .collect(),
+        documents.into_iter().map(to_document_summary).collect(),
     ))
 }
 
@@ -23866,11 +24119,13 @@ async fn get_document_detail(
     let document_id = parse_document_id(&document_id)?;
     let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
     let current_user_id = current_auth_user_id(&state, &headers).await?;
-    let detail = load_document_detail_with_state(
+    let local_thread_id = local_thread_id_from_headers(&headers);
+    let detail = load_document_detail_with_state_and_local_scope(
         &state,
         document_id,
         &active_secret_binding_ids,
         current_user_id,
+        local_thread_id.as_deref(),
     )
     .await?;
     Ok(Json(detail))
@@ -23884,11 +24139,13 @@ async fn get_document_media_detail(
     let document_id = parse_document_id(&document_id)?;
     let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
     let current_user_id = current_auth_user_id(&state, &headers).await?;
-    let document = load_visible_document_for_user(
+    let local_thread_id = local_thread_id_from_headers(&headers);
+    let document = load_visible_document_for_user_with_local_scope(
         &state,
         document_id,
         &active_secret_binding_ids,
         current_user_id,
+        local_thread_id.as_deref(),
     )
     .await?;
     let chunks = state
@@ -23922,11 +24179,13 @@ async fn list_document_chunks(
     let document_id = parse_document_id(&document_id)?;
     let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
     let current_user_id = current_auth_user_id(&state, &headers).await?;
-    load_visible_document_for_user(
+    let local_thread_id = local_thread_id_from_headers(&headers);
+    load_visible_document_for_user_with_local_scope(
         &state,
         document_id,
         &active_secret_binding_ids,
         current_user_id,
+        local_thread_id.as_deref(),
     )
     .await?;
 
@@ -23950,11 +24209,13 @@ async fn list_document_retrieval_evidences(
     let document_id = parse_document_id(&document_id)?;
     let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
     let current_user_id = current_auth_user_id(&state, &headers).await?;
-    load_visible_document_for_user(
+    let local_thread_id = local_thread_id_from_headers(&headers);
+    load_visible_document_for_user_with_local_scope(
         &state,
         document_id,
         &active_secret_binding_ids,
         current_user_id,
+        local_thread_id.as_deref(),
     )
     .await?;
 
@@ -23980,11 +24241,29 @@ async fn load_document_detail_with_state(
     active_secret_binding_ids: &[SecretBindingId],
     current_user_id: Option<UserId>,
 ) -> std::result::Result<DocumentDetailView, ApiError> {
-    let document = load_visible_document_for_user(
+    load_document_detail_with_state_and_local_scope(
         state,
         document_id,
         active_secret_binding_ids,
         current_user_id,
+        None,
+    )
+    .await
+}
+
+async fn load_document_detail_with_state_and_local_scope(
+    state: &AppState,
+    document_id: DocumentId,
+    active_secret_binding_ids: &[SecretBindingId],
+    current_user_id: Option<UserId>,
+    local_thread_id: Option<&str>,
+) -> std::result::Result<DocumentDetailView, ApiError> {
+    let document = load_visible_document_for_user_with_local_scope(
+        state,
+        document_id,
+        active_secret_binding_ids,
+        current_user_id,
+        local_thread_id,
     )
     .await?;
     let chunks = state
@@ -26355,6 +26634,19 @@ fn selected_scope_conversation_memory_ids(scope: &Value) -> Vec<String> {
 
 fn selected_scope_requests_conversation_memory(scope: &Value) -> bool {
     !selected_scope_conversation_memory_ids(scope).is_empty()
+}
+
+fn selected_scope_temporary_dataset_id(scope: &Value) -> Option<DatasetId> {
+    scope
+        .get("temporary_dataset")
+        .and_then(|value| value.get("id"))
+        .and_then(Value::as_str)
+        .and_then(|raw| Uuid::parse_str(raw.trim()).ok())
+        .map(DatasetId)
+}
+
+fn dataset_is_external_temporary_scope(dataset: &Dataset) -> bool {
+    dataset.metadata.get("scope_kind").and_then(Value::as_str) == Some("external_temporary")
 }
 
 fn set_selected_scope_conversation_memory(scope: &mut Value, memory_ids: Vec<String>) {
@@ -40450,9 +40742,16 @@ mod tests {
         );
         assert_eq!(selected_scope["documents"][0]["id"], json!(document_ids[0]));
         assert_eq!(selected_scope["documents"][1]["id"], json!(document_ids[1]));
-        assert_eq!(selected_scope["datasets"][0]["id"], json!(dataset.id));
         assert!(selected_scope["temporary_dataset"]["id"].is_string());
         assert!(selected_scope["temporary_dataset"]["expires_at"].is_string());
+        assert_eq!(
+            selected_scope["datasets"][0]["id"],
+            selected_scope["temporary_dataset"]["id"]
+        );
+        assert_eq!(
+            selected_scope["canonical_datasets"][0]["id"],
+            json!(dataset.id)
+        );
     }
 
     #[tokio::test]
@@ -40551,6 +40850,181 @@ mod tests {
             .expect("documents should list");
         assert_eq!(documents.len(), 1);
         assert_eq!(selected_scope["documents"][0]["id"], json!(document.id));
+    }
+
+    #[tokio::test]
+    async fn external_channel_temporary_scope_is_visible_only_for_local_thread() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping external temporary scope visibility test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+        let tenant = storage
+            .ensure_tenant(
+                &format!("external-temp-local-visible-test-{}", Uuid::new_v4()),
+                "External Temporary Local Visible Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage,
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        let secret_binding_id = SecretBindingId::new();
+        let dataset = state
+            .storage
+            .datasets()
+            .create_with_metadata(
+                state.tenant_id,
+                NewDataset {
+                    key: format!("external-temp-private-{}", Uuid::new_v4()),
+                    title: "External Temporary Private Canonical".to_string(),
+                    description: None,
+                    owner_user_id: None,
+                },
+                json!({
+                    "visibility": DatasetVisibility::Private.as_str(),
+                    "default_secret_binding_ids": [secret_binding_id],
+                }),
+            )
+            .await
+            .expect("private canonical dataset should be created");
+        let document = state
+            .storage
+            .documents()
+            .create(
+                state.tenant_id,
+                NewDocument {
+                    dataset_id: dataset.id,
+                    title: "Private Alpha policy".to_string(),
+                    object_key: "external-temp-private/doc-alpha.md".to_string(),
+                    content_type: "text/markdown".to_string(),
+                    secret_binding_ids: Vec::new(),
+                    owner_user_id: None,
+                    metadata: json!({
+                        "external_source": {
+                            "source_id": "src-docs",
+                            "document_external_id": "doc-alpha"
+                        }
+                    }),
+                },
+            )
+            .await
+            .expect("document should be created");
+        state
+            .storage
+            .document_chunks()
+            .replace_for_document(
+                state.tenant_id,
+                document.id,
+                &[storage::NewDocumentChunk {
+                    dataset_id: dataset.id,
+                    document_id: document.id,
+                    chunk_index: 0,
+                    content: "Private alpha policy detail.".to_string(),
+                    token_count: 4,
+                    metadata: json!({}),
+                    created_at: Utc::now(),
+                }],
+            )
+            .await
+            .expect("document chunk should be created");
+
+        let connection = ExternalChannelConnectionSummary {
+            platform: ExternalChannelPlatformView::GenericChat,
+            status: "enabled".to_string(),
+            config_redacted: json!({}),
+        };
+        let mut message = sample_external_bot_message();
+        message.conversation_external_id = "conv-private-alpha".to_string();
+        message.available_document_source_id = Some("src-docs".to_string());
+        message.available_document_external_ids = vec!["doc-alpha".to_string()];
+        let mut selected_scope = json!({"type": "external_channel"});
+        enrich_external_channel_document_scope(
+            &state,
+            "generic-chat-main",
+            &connection,
+            &message,
+            &mut selected_scope,
+        )
+        .await
+        .expect("temporary document scope should be built");
+
+        let Json(hidden_documents) = list_documents(State(state.clone()), HeaderMap::new())
+            .await
+            .expect("document list should load without local thread");
+        assert!(hidden_documents
+            .iter()
+            .all(|summary| summary.id != document.id));
+        assert!(
+            load_document_detail_with_state(&state, document.id, &[], None)
+                .await
+                .is_err()
+        );
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            LOCAL_THREAD_ID_HEADER,
+            HeaderValue::from_str(&external_bot_message_local_thread_id(&message))
+                .expect("local thread header should be valid"),
+        );
+        let Json(visible_documents) = list_documents(State(state.clone()), headers.clone())
+            .await
+            .expect("document list should load with local thread");
+        assert!(visible_documents
+            .iter()
+            .any(|summary| summary.id == document.id));
+        let Json(detail) =
+            get_document_detail(State(state.clone()), headers, Path(document.id.to_string()))
+                .await
+                .expect("document detail should load through temporary membership");
+        assert_eq!(detail.document.id, document.id);
+        let read_action = react_test_action(
+            AssistantRunReActStatus::Act,
+            AssistantRunReactActionType::ReadDocumentDetail,
+            json!({"document_id": document.id.to_string()}),
+        );
+        let mut evidence_state = json!({});
+        let read_result = execute_assistant_run_react_action(
+            &state,
+            &read_action,
+            &selected_scope,
+            &mut evidence_state,
+            None,
+            None,
+            "读取这份文档的原文",
+            None,
+            &[],
+            None,
+        )
+        .await
+        .expect("react document detail should load through temporary dataset scope");
+        assert_eq!(read_result.observation["status"], json!("completed"));
+        assert_eq!(
+            read_result.observation["items"]
+                .as_array()
+                .expect("items should be an array")
+                .len(),
+            1
+        );
+        assert!(read_result.observation["denied"]
+            .as_array()
+            .expect("denied should be an array")
+            .is_empty());
+        assert_eq!(
+            selected_scope["datasets"][0]["id"],
+            selected_scope["temporary_dataset"]["id"]
+        );
+        assert_eq!(
+            selected_scope["canonical_datasets"][0]["id"],
+            json!(dataset.id)
+        );
     }
 
     #[tokio::test]
@@ -58320,9 +58794,10 @@ mod tests {
             )
             .await
             .expect("tenant should exist");
+        let private_secret_binding_id = SecretBindingId::new();
         let canonical_dataset = storage
             .datasets()
-            .create(
+            .create_with_metadata(
                 tenant.id,
                 NewDataset {
                     key: format!("canonical-{}", Uuid::new_v4()),
@@ -58330,6 +58805,10 @@ mod tests {
                     description: None,
                     owner_user_id: None,
                 },
+                json!({
+                    "visibility": DatasetVisibility::Private.as_str(),
+                    "default_secret_binding_ids": [private_secret_binding_id],
+                }),
             )
             .await
             .expect("canonical dataset should be created");
@@ -58445,6 +58924,17 @@ mod tests {
             tenant.id,
             EventBus::Disabled,
         );
+        let Json(listed_documents) = list_documents(State(state.clone()), HeaderMap::new())
+            .await
+            .expect("membership-scoped document list should load");
+        assert!(listed_documents
+            .iter()
+            .any(|summary| summary.id == document.id));
+        let detail = load_document_detail_with_state(&state, document.id, &[], None)
+            .await
+            .expect("membership-scoped document detail should load");
+        assert_eq!(detail.document.id, document.id);
+
         let visible_ids = visible_document_ids_for_dataset(&state, secondary_dataset.id, None)
             .await
             .expect("visible document ids should load");

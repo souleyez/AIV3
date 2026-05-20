@@ -24,7 +24,7 @@ use crate::{
     build_initial_upload_ingest_event, build_initial_upload_ingest_execution,
     create_static_page_draft_for_assistant_run_id, ensure_react_requested_dataset_is_selected,
     ensure_scope_requests_conversation_memory, html_artifact_safe_summary_text,
-    load_visible_dataset_for_user, load_visible_document_for_user,
+    load_visible_dataset_for_user, load_visible_document_for_assistant_scope,
     react_static_page_operations_from_arguments, status_from_static_page_operations,
     status_from_static_page_payload, summarize_static_page_operations,
     to_document_media_detail_view, ApiError, AppState,
@@ -1888,11 +1888,12 @@ async fn video_ppt_extraction_result(
         .into_iter()
         .take(REACT_VIDEO_PPT_MAX_DOCUMENTS)
     {
-        let document = match load_visible_document_for_user(
+        let document = match load_visible_document_for_assistant_scope(
             state,
             document_id,
             active_secret_binding_ids,
             current_user_id,
+            selected_scope,
         )
         .await
         {
@@ -1904,10 +1905,13 @@ async fn video_ppt_extraction_result(
         };
 
         if !document_allowed_by_selected_scope(
+            state,
             &document,
             &selected_dataset_ids,
             &selected_document_ids,
-        ) {
+        )
+        .await?
+        {
             denied.push(format!("document:{document_id}"));
             continue;
         }
@@ -2936,11 +2940,12 @@ async fn read_document_detail_result(
         .into_iter()
         .take(REACT_READ_DOCUMENT_MAX_DOCUMENTS)
     {
-        let document = match load_visible_document_for_user(
+        let document = match load_visible_document_for_assistant_scope(
             state,
             document_id,
             active_secret_binding_ids,
             current_user_id,
+            selected_scope,
         )
         .await
         {
@@ -2952,10 +2957,13 @@ async fn read_document_detail_result(
         };
 
         if !document_allowed_by_selected_scope(
+            state,
             &document,
             &selected_dataset_ids,
             &selected_document_ids,
-        ) {
+        )
+        .await?
+        {
             denied.push(format!("document:{document_id}"));
             continue;
         }
@@ -3093,16 +3101,45 @@ fn selected_scope_id_strings(selected_scope: &Value, expected_type: &str) -> Vec
     ids
 }
 
-fn document_allowed_by_selected_scope(
+async fn document_allowed_by_selected_scope(
+    state: &AppState,
     document: &Document,
     selected_dataset_ids: &[String],
     selected_document_ids: &[String],
-) -> bool {
-    if !selected_document_ids.is_empty() {
-        return selected_document_ids.contains(&document.id.to_string());
+) -> std::result::Result<bool, ApiError> {
+    if let Some(allowed) = document_allowed_by_direct_selected_scope(
+        document,
+        selected_dataset_ids,
+        selected_document_ids,
+    ) {
+        return Ok(allowed);
     }
-    !selected_dataset_ids.is_empty()
-        && selected_dataset_ids.contains(&document.dataset_id.to_string())
+    let membership_dataset_ids = state
+        .storage
+        .dataset_document_memberships()
+        .list_dataset_ids_by_document(state.tenant_id, document.id)
+        .await
+        .map_err(ApiError::from_storage)?;
+    Ok(membership_dataset_ids
+        .into_iter()
+        .any(|dataset_id| selected_dataset_ids.contains(&dataset_id.to_string())))
+}
+
+fn document_allowed_by_direct_selected_scope(
+    document: &Document,
+    selected_dataset_ids: &[String],
+    selected_document_ids: &[String],
+) -> Option<bool> {
+    if !selected_document_ids.is_empty() {
+        return Some(selected_document_ids.contains(&document.id.to_string()));
+    }
+    if selected_dataset_ids.is_empty() {
+        return Some(false);
+    }
+    if selected_dataset_ids.contains(&document.dataset_id.to_string()) {
+        return Some(true);
+    }
+    None
 }
 
 fn document_detail_item(
@@ -4175,15 +4212,17 @@ mod tests {
             updated_at: Utc::now(),
         };
 
-        assert!(!document_allowed_by_selected_scope(
+        assert!(!document_allowed_by_direct_selected_scope(
             &outside_document,
             &[],
             &[selected_document_id.to_string()],
-        ));
-        assert!(document_allowed_by_selected_scope(
+        )
+        .expect("direct selected document scope should decide"));
+        assert!(document_allowed_by_direct_selected_scope(
             &outside_document,
             &[dataset_id.to_string()],
             &[],
-        ));
+        )
+        .expect("direct selected dataset scope should decide"));
     }
 }
