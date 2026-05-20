@@ -23931,7 +23931,9 @@ fn extract_resume_document_profile(
             .iter()
             .find(|candidate| candidate.entity_type == "person")
             .map(|candidate| candidate.name.clone())
-            .or_else(|| extract_resume_candidate_name(scan_text)),
+            .or_else(|| extract_resume_candidate_name(scan_text))
+            .or_else(|| extract_resume_candidate_name_from_title(&document.title))
+            .or_else(|| extract_resume_candidate_name_from_title(scan_text)),
         gender: extract_resume_gender(scan_text),
         age: extract_resume_age(scan_text),
         birth_year: extract_resume_birth_year(scan_text),
@@ -23971,6 +23973,39 @@ fn extract_resume_candidate_name(text: &str) -> Option<String> {
         .find(|value| looks_like_person_name(value))
 }
 
+fn extract_resume_candidate_name_from_title(text: &str) -> Option<String> {
+    for line in text.lines().take(16) {
+        let normalized = normalize_document_entity_value(line);
+        if looks_like_person_name(&normalized) {
+            return Some(normalized);
+        }
+        let compact = normalized
+            .chars()
+            .filter(|ch| !ch.is_whitespace())
+            .collect::<String>();
+        for marker in [
+            "个人简历",
+            "个人履历",
+            "简历",
+            "履历",
+            "Personalresume",
+            "Resume",
+            "CV",
+        ] {
+            if let Some(index) = compact.find(marker) {
+                let prefix = compact[..index].trim_matches(|ch: char| {
+                    ch.is_whitespace()
+                        || matches!(ch, ':' | '：' | '-' | '_' | '|' | '｜' | '/' | '\\')
+                });
+                if looks_like_person_name(prefix) {
+                    return Some(prefix.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
 fn extract_resume_gender(text: &str) -> Option<String> {
     for value in extract_labeled_resume_values(text, &["性别"], 4) {
         if let Some(gender) = normalize_resume_gender(&value) {
@@ -23978,9 +24013,13 @@ fn extract_resume_gender(text: &str) -> Option<String> {
         }
     }
     for line in text.lines().take(24) {
-        let normalized = normalize_document_entity_value(line);
-        if normalized == "男" || normalized == "女" {
-            return Some(normalized);
+        for segment in line.split(|ch: char| {
+            matches!(ch, '\t' | '|' | '｜' | '/' | '／' | '，' | ',' | '；' | ';')
+        }) {
+            let normalized = normalize_document_entity_value(segment);
+            if let Some(gender) = normalize_resume_gender(&normalized) {
+                return Some(gender.to_string());
+            }
         }
     }
     None
@@ -52236,6 +52275,34 @@ mod tests {
         assert!(profile.company_count >= 1);
         assert!(profile.skill_count >= 3);
         assert!(profile.project_count >= 1);
+    }
+
+    #[test]
+    fn assistant_run_extracts_resume_name_and_gender_from_title_lines() {
+        let now = Utc::now();
+        let document = Document {
+            id: DocumentId::new(),
+            tenant_id: TenantId::new(),
+            dataset_id: DatasetId::new(),
+            owner_user_id: None,
+            title: "谢泽强Personalresume".to_string(),
+            object_key: "documents/resume-title.pdf".to_string(),
+            content_type: "application/pdf".to_string(),
+            lifecycle: domain_model::DocumentLifecycle::Indexed,
+            secret_binding_ids: vec![],
+            metadata: BTreeMap::new(),
+            created_at: now,
+            updated_at: now,
+        };
+        let profile = extract_resume_document_profile(
+            &document,
+            "男 | 年龄：38岁 | 16年以上经验 | 2014-2024 项目管理",
+            &[],
+        );
+
+        assert_eq!(profile.candidate_name.as_deref(), Some("谢泽强"));
+        assert_eq!(profile.gender.as_deref(), Some("男"));
+        assert_eq!(profile.age, Some(38));
     }
 
     #[test]
