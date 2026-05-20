@@ -91,8 +91,9 @@ use futures_util::{stream, Stream, StreamExt};
 use hmac::{Hmac, Mac};
 use llm_gateway::{
     build_provider_from_env, render_runtime_manifest, resolve_runtime_selection_from_env,
-    LlmFinishReason, LlmRequest, LlmResponse, LlmRuntimeSelection, ModelProviderProfile,
-    MODEL_LANE_ASSISTANT_CHAT, MODEL_LANE_ASSISTANT_REACT_JSON, MODEL_LANE_CODEX_CONVERSATION,
+    LlmFinishReason, LlmProviderError, LlmProviderFailureKind, LlmRequest, LlmResponse,
+    LlmRuntimeSelection, ModelProviderProfile, MODEL_LANE_ASSISTANT_CHAT,
+    MODEL_LANE_ASSISTANT_REACT_JSON, MODEL_LANE_CODEX_CONVERSATION,
 };
 use prompt_registry::bootstrap_default_prompt_registry;
 use serde::{Deserialize, Serialize};
@@ -162,6 +163,10 @@ const ASSISTANT_RUN_DATASET_ENTITY_SCAN_ROW_LIMIT: usize = 160;
 const ASSISTANT_RUN_DOCUMENT_PARSE_STATUS_DOCUMENT_LIMIT: usize = 48;
 const EXTERNAL_CHANNEL_DIRECT_REPLY_DEFAULT_TOTAL_BUDGET_MS: u64 = 90_000;
 const EXTERNAL_CHANNEL_DIRECT_REPLY_DEFAULT_ATTEMPT_TIMEOUT_MS: u64 = 45_000;
+const ASSISTANT_RUN_RUNTIME_RETRY_DEFAULT_ATTEMPTS: usize = 3;
+const ASSISTANT_RUN_RUNTIME_RETRY_MAX_ATTEMPTS: usize = 5;
+const ASSISTANT_RUN_RUNTIME_RETRY_DEFAULT_BACKOFF_MS: u64 = 400;
+const ASSISTANT_RUN_RUNTIME_RETRY_MAX_BACKOFF_MS: u64 = 10_000;
 const EXTERNAL_CHANNEL_REQUESTED_SKILL_LIMIT: usize = 16;
 const EXTERNAL_CHANNEL_REQUESTED_SKILL_ID_LIMIT: usize = 128;
 const EXTERNAL_CHANNEL_REQUESTED_SKILL_VERSION_LIMIT: usize = 64;
@@ -18044,6 +18049,8 @@ async fn complete_assistant_run_provider_with_env_prefix(
     runtime_model: String,
     provider_input: String,
 ) -> std::result::Result<LlmResponse, ApiError> {
+    let retry_attempts = assistant_run_runtime_retry_attempts(env_prefix);
+    let retry_backoff = assistant_run_runtime_retry_backoff(env_prefix);
     tokio::task::spawn_blocking(move || {
         let provider = build_provider_from_env(
             env_prefix,
@@ -18051,12 +18058,28 @@ async fn complete_assistant_run_provider_with_env_prefix(
             runtime_provider,
             bootstrap_default_prompt_registry(),
         )?;
-        provider.complete(&LlmRequest {
+        let request = LlmRequest {
             model: runtime_model,
             lane: Some(model_lane.to_string()),
             system_prompt_key: None,
             input: provider_input,
-        })
+        };
+        for attempt_index in 0..retry_attempts {
+            match provider.complete(&request) {
+                Ok(response) => return Ok(response),
+                Err(error) => {
+                    let can_retry = assistant_run_provider_error_is_retryable(&error);
+                    if !can_retry || attempt_index + 1 >= retry_attempts {
+                        return Err(error);
+                    }
+                    std::thread::sleep(assistant_run_runtime_retry_delay(
+                        retry_backoff,
+                        attempt_index,
+                    ));
+                }
+            }
+        }
+        unreachable!("retry_attempts is always at least one")
     })
     .await
     .map_err(|error| {
@@ -18066,6 +18089,75 @@ async fn complete_assistant_run_provider_with_env_prefix(
         )
     })?
     .map_err(|error| ApiError::internal("assistant_run_provider_failed", error.to_string()))
+}
+
+fn assistant_run_runtime_retry_attempts(env_prefix: &str) -> usize {
+    assistant_run_runtime_retry_env_usize(
+        &format!("{env_prefix}_RUNTIME_RETRY_ATTEMPTS"),
+        ASSISTANT_RUN_RUNTIME_RETRY_DEFAULT_ATTEMPTS,
+        ASSISTANT_RUN_RUNTIME_RETRY_MAX_ATTEMPTS,
+    )
+}
+
+fn assistant_run_runtime_retry_backoff(env_prefix: &str) -> std::time::Duration {
+    std::time::Duration::from_millis(assistant_run_runtime_retry_env_u64(
+        &format!("{env_prefix}_RUNTIME_RETRY_BACKOFF_MS"),
+        ASSISTANT_RUN_RUNTIME_RETRY_DEFAULT_BACKOFF_MS,
+        ASSISTANT_RUN_RUNTIME_RETRY_MAX_BACKOFF_MS,
+    ))
+}
+
+fn assistant_run_runtime_retry_env_usize(
+    key: &str,
+    default_value: usize,
+    max_value: usize,
+) -> usize {
+    std::env::var(key)
+        .ok()
+        .and_then(|value| {
+            let value = value.trim();
+            (!value.is_empty())
+                .then(|| value.parse::<usize>().ok())
+                .flatten()
+        })
+        .map(|value| value.clamp(1, max_value))
+        .unwrap_or(default_value)
+}
+
+fn assistant_run_runtime_retry_env_u64(key: &str, default_value: u64, max_value: u64) -> u64 {
+    std::env::var(key)
+        .ok()
+        .and_then(|value| {
+            let value = value.trim();
+            (!value.is_empty())
+                .then(|| value.parse::<u64>().ok())
+                .flatten()
+        })
+        .map(|value| value.clamp(1, max_value))
+        .unwrap_or(default_value)
+}
+
+fn assistant_run_runtime_retry_delay(
+    base_delay: std::time::Duration,
+    attempt_index: usize,
+) -> std::time::Duration {
+    let factor = 1_u32 << attempt_index.min(4);
+    base_delay.saturating_mul(factor)
+}
+
+fn assistant_run_provider_error_is_retryable(error: &anyhow::Error) -> bool {
+    error
+        .downcast_ref::<LlmProviderError>()
+        .and_then(|provider_error| provider_error.runtime().provider_failure.as_ref())
+        .map(|failure| {
+            matches!(
+                failure.kind,
+                LlmProviderFailureKind::RequestFailed
+                    | LlmProviderFailureKind::RequestTimeout
+                    | LlmProviderFailureKind::ResponseBodyReadFailed
+            )
+        })
+        .unwrap_or(false)
 }
 
 async fn record_assistant_run_create_failure(
@@ -44726,6 +44818,60 @@ mod tests {
         clear_assistant_openclaw_env();
     }
 
+    #[tokio::test]
+    async fn assistant_run_provider_retries_transient_transport_failure() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        clear_assistant_openclaw_env();
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+        let addr = listener.local_addr().expect("addr");
+        let server = thread::spawn(move || {
+            let mut requests = Vec::new();
+            {
+                let (mut stream, _) = listener.accept().expect("accept first request");
+                requests.push(read_http_request(&mut stream));
+            }
+            {
+                let (mut stream, _) = listener.accept().expect("accept retry request");
+                requests.push(read_http_request(&mut stream));
+                write_http_json_response(
+                    &mut stream,
+                    200,
+                    r#"{"id":"chatcmpl-retry-ok","choices":[{"message":{"content":"重试后模型直答。"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}"#,
+                );
+            }
+            requests
+        });
+
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_MODE", "provider");
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_PROVIDER", "openai");
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_MODEL", "retry-primary-v1");
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_BASE_URL", format!("http://{addr}"));
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_API_PATH", "/v1/chat/completions");
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_RETRY_ATTEMPTS", "2");
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_RETRY_BACKOFF_MS", "1");
+
+        let response = complete_assistant_run_provider_with_env_prefix(
+            "ASSISTANT_RUN",
+            MODEL_LANE_ASSISTANT_CHAT,
+            "provider".to_string(),
+            "openai".to_string(),
+            "retry-primary-v1".to_string(),
+            "请直接回复。".to_string(),
+        )
+        .await
+        .expect("transient transport failure should be retried");
+
+        let requests = server.join().expect("server join");
+        clear_assistant_openclaw_env();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(response.output_text, "重试后模型直答。");
+        assert_eq!(
+            response.runtime.request_id.as_deref(),
+            Some("chatcmpl-retry-ok")
+        );
+    }
+
     #[test]
     fn external_channel_model_reply_rejects_generic_orchestration_ack() {
         for text in [
@@ -69951,6 +70097,8 @@ mod tests {
             "ASSISTANT_RUN_RUNTIME_API_PATH",
             "ASSISTANT_RUN_RUNTIME_API_KEY",
             "ASSISTANT_RUN_RUNTIME_TIMEOUT_MS",
+            "ASSISTANT_RUN_RUNTIME_RETRY_ATTEMPTS",
+            "ASSISTANT_RUN_RUNTIME_RETRY_BACKOFF_MS",
             "ASSISTANT_RUN_FALLBACK_RUNTIME_MODE",
             "ASSISTANT_RUN_FALLBACK_RUNTIME_PROVIDER",
             "ASSISTANT_RUN_FALLBACK_RUNTIME_MODEL",
@@ -69964,6 +70112,8 @@ mod tests {
             "ASSISTANT_RUN_FALLBACK_RUNTIME_API_PATH",
             "ASSISTANT_RUN_FALLBACK_RUNTIME_API_KEY",
             "ASSISTANT_RUN_FALLBACK_RUNTIME_TIMEOUT_MS",
+            "ASSISTANT_RUN_FALLBACK_RUNTIME_RETRY_ATTEMPTS",
+            "ASSISTANT_RUN_FALLBACK_RUNTIME_RETRY_BACKOFF_MS",
             "EXTERNAL_CHANNEL_DIRECT_REPLY_TOTAL_BUDGET_MS",
             "EXTERNAL_CHANNEL_DIRECT_REPLY_ATTEMPT_TIMEOUT_MS",
             "ASSISTANT_RUN_REACT_ENABLED",
