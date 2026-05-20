@@ -375,8 +375,8 @@
 <a href="#section-31">部署方式</a>
 <a href="#section-35">飞书、Lark、企业微信说明</a>
 <a href="#section-36">第三方联调准备清单</a>
-<a href="#section-39">版本与变更</a>
-<a href="#section-40">推荐联调顺序</a>
+<a href="#section-38">版本与变更</a>
+<a href="#section-39">推荐联调顺序</a>
       </nav>
     </aside>
     <main>
@@ -407,9 +407,7 @@
 <li>第三方接口默认使用 <code>https://v3.elepcloud.com/v1/...</code>；</li>
 <li>该观测域名不提供直接跳回 V3 主工作台的导航入口。</li>
 <li>连接配置了入站 Bearer Token 时，第三方调用 V3 的聊天事件、用户确认和动作结果回传都必须带 <code>Authorization: Bearer &lt;V3 inbound token&gt;</code>；该 token 由 V3 生成并交付给第三方。</li>
-<li>部署目标的第三方 gateway smoke 会生成 JSON/Markdown readiness 报告，用于确认签名派发、结果回调、脱敏检查、交接清单校验和剩余客户联调准备项。</li>
-<li>V3 提供第三方交接清单样例和自动校验命令，用于在客户沙箱联调前检查 HTTPS 或已批准的本机回环地址、派发鉴权、回调白名单、文档/权限样例、运维联系人，以及是否误填了明文密钥。</li>
-<li>V3 可以生成一份自包含交接包，包含中英文接口说明、交接清单样例、清单/包完整性校验工具、mock gateway 参考、README 和 SHA256 文件清单。</li>
+<li>V3 对外对接文档只保留最新有效版本；HTML 和 MD 都统一发布在外部集成观测页的“对接方式与文档”区域。</li>
 <li>V3 助手运行时已接入全局模型认知策略：模型知道自己服务于 AI Data Platform V3，知道可见数据和工具范围；缺少 V3 供料时会说明 <code>当前不可见/未供料</code>，也不会在没有搜索证据时声称已联网搜索。</li>
 <li>外部聊天消息如果需要实时网页信息，但 V3 尚未供给搜索证据，会返回 <code>task_status=v3_search_evidence_required</code>；这表示等待 V3 只读搜索证据，不代表已经完成联网搜索，也不会写入第三方动作运行记录。</li>
 <li><code>GET /v1/external/integrations</code> 会为聊天通道返回脱敏的 <code>search_summary</code>，外部观测面板会在概览和详情中显示搜索证据待供料数量。</li>
@@ -1224,84 +1222,17 @@ X-V3-Signature: sha256=&lt;HMAC-SHA256 hex&gt;</code></pre>
 <li>业务动作接口和确认规则，如需要；</li>
 <li>联调负责人和故障联系渠道。</li>
 </ul>
-<h3 id="section-37">21.1 标准交接清单</h3>
-<p>联调前建议先填写标准交接清单：</p>
-<figure class="code-card">
-    <figcaption><span>text</span><button type="button" class="copy-code">复制</button></figcaption>
-    <pre><code>docs/integrations/third-party-handoff.sample.json</code></pre>
-  </figure>
-<p>V3 侧可执行以下命令做自动校验：</p>
-<figure class="code-card">
-    <figcaption><span>bash</span><button type="button" class="copy-code">复制</button></figcaption>
-    <pre><code>npm run validate:external-handoff</code></pre>
-  </figure>
-<p>该校验会重点检查：</p>
+<h3 id="section-37">21.1 文档入口与版本规则</h3>
+<p>联调文档只以 V3 外部集成观测页的“对接方式与文档”区域为准。HTML 用于直接打开评审，Markdown 用于下载留档；旧的第一阶段文档、交接包说明、历史计划和历史验证收据不再作为对外材料维护。</p>
+<p>当前保留的公开入口：</p>
 <ul>
-<li>第三方测试环境、派发 endpoint、V3 回调地址是否使用 HTTPS，或是否明确声明为本机回环测试；</li>
-<li>外部动作派发是否提供 Bearer Token 或 HMAC 签名密钥的安全交付方式；</li>
-<li>第三方是否确认 V3 回调来源白名单或网络规则；</li>
-<li>是否提供测试文档、文档权限样例和不同权限用户问答样例；</li>
-<li>是否提供联调和故障升级联系人；</li>
-<li>清单中是否误写入明文 token、signing secret、password、private key、API key 等敏感材料。</li>
+<li>完整对接文档 HTML：<code>/external-integrations/third-party-integration-api.zh-CN.html</code></li>
+<li>完整对接文档 MD：<code>/external-integrations/third-party-integration-api.zh-CN.md</code></li>
+<li>纯第三方简单版 HTML：<code>/external-integrations/pure-third-party-integration-guide.zh-CN.html</code></li>
+<li>纯第三方简单版 MD：<code>/external-integrations/pure-third-party-integration-guide.zh-CN.md</code></li>
 </ul>
-<p>清单里只应写凭证交付方式和配置引用，不应粘贴真实密钥。真实凭证应通过双方确认的安全通道单独交付。</p>
-<h3 id="section-38">21.2 交接包生成</h3>
-<p>V3 侧可以生成一份第三方沙箱交接包：</p>
-<figure class="code-card">
-    <figcaption><span>bash</span><button type="button" class="copy-code">复制</button></figcaption>
-    <pre><code>npm run build:external-handoff-package</code></pre>
-  </figure>
-<p>生成目录默认位于：</p>
-<figure class="code-card">
-    <figcaption><span>text</span><button type="button" class="copy-code">复制</button></figcaption>
-    <pre><code>target/external-third-party-handoff</code></pre>
-  </figure>
-<p>生成结果包含交接包目录、同名 <code>.tar.gz</code> 归档、<code>.sha256</code> 校验文件、同级 <code>.release.json</code> 机器可读交付校验报告、同级 <code>.release.md</code> 人工审阅摘要、同级 <code>.delivery-manifest.json</code> 交付文件清单、同级 <code>.all.json</code> 聚合校验证据、同级 <code>.all.md</code> 聚合人工摘要、同级 <code>.evidence-manifest.json</code> 最终证据清单，以及同级 <code>.evidence-manifest.md</code> 人工证据摘要。交接包包含：</p>
-<ul>
-<li>中文接口说明和英文接口说明；</li>
-<li><code>docs/pure-third-party-integration-guide.zh-CN.html</code> 和 <code>html-artifacts/third-party-handoff-document.json</code>，分别用于人工阅读评审和 V3 受信模板渲染；</li>
-<li><code>handoff/third-party-handoff.sample.json</code>；</li>
-<li><code>tools/validate-external-handoff.mjs</code>、<code>tools/validate-external-handoff-package.mjs</code>、<code>tools/validate-external-handoff-archive.mjs</code>、<code>tools/validate-external-handoff-delivery.mjs</code>、<code>tools/validate-external-handoff-release.mjs</code>、<code>tools/validate-external-handoff-all.mjs</code> 和 <code>tools/validate-external-handoff-evidence.mjs</code>；</li>
-<li><code>sandbox/external-third-party-mock-gateway.mjs</code>；</li>
-<li>V3 侧 smoke/readiness 参考脚本；</li>
-<li><code>README.zh-CN.md</code>、<code>README.md</code>、<code>package.json</code>；</li>
-<li><code>handoff-package-manifest.json</code>，记录包内文件、来源、用途、生成时间、V3 提交和 SHA256 摘要；<code>validate:package</code> 会校验这些 provenance 字段和文件完整性。</li>
-<li>包目录同级的 <code>&lt;package&gt;.release.json</code>，记录本次包目录、归档、摘要、V3 提交、生成时间和交接清单的一键校验结果。</li>
-<li>包目录同级的 <code>&lt;package&gt;.release.md</code>，以人工可读形式汇总 ready 状态、V3 提交、生成时间、归档 SHA256、delivery manifest provenance、检查项和错误。</li>
-<li>包目录同级的 <code>&lt;package&gt;.delivery-manifest.json</code>，列出本次应交付的包目录、包内清单、归档、<code>.sha256</code> sidecar、release JSON 和 release Markdown，并记录各文件 SHA256，方便第三方接收时逐项核对；<code>validate:delivery</code> 还会校验其中的 package type、生成时间和 V3 提交与包内清单、release JSON 一致。</li>
-<li>包目录同级的 <code>&lt;package&gt;.all.json</code> 和 <code>&lt;package&gt;.all.md</code>，在交付清单生成后记录交接清单、包完整性、归档、交付清单和 release gate 的完整聚合校验证据，并带出 package type、生成时间、V3 提交 provenance，以及包目录/归档 HTML artifact 命令契约 ready 状态；构建器会校验 <code>&lt;package&gt;.all.md</code> 确实由当前聚合校验结果重新渲染得到，并在构建输出中给出 <code>allMarkdownReady</code>，最终 evidence 校验也会重复确认这一点，而不仅是文件 hash 出现在证据清单里。</li>
-<li>包目录同级的 <code>&lt;package&gt;.evidence-manifest.json</code>，最后生成，用于列出最终交付物和聚合证据文件，避免把 <code>.all.json</code> 反写进 delivery manifest 造成循环 hash；它也会显式记录 <code>all_markdown_ready=true</code> 和 <code>html_artifact_command_contract_ready=true</code>，让最终证据清单本身暴露聚合 Markdown 收据状态和 HTML artifact 命令契约状态；最终 evidence 校验也会要求 package type、生成时间、V3 提交 provenance、<code>all_ready</code>、<code>all_markdown_ready</code> 和 <code>html_artifact_command_contract_ready</code> 合法，并与包内清单、release JSON、delivery manifest、aggregate JSON 一致，全部通过后才认为交付包 ready。</li>
-<li>包目录同级的 <code>&lt;package&gt;.evidence-manifest.md</code>，由最终 evidence 校验结果渲染，方便人工审阅最终证据状态、package type、生成时间、V3 提交、artifact 数量、manifest SHA256、聚合 Markdown 收据新鲜度、包目录/归档 HTML artifact readiness、HTML 命令契约 readiness 和错误码；构建器会校验它与当前 evidence validation 输出一致，并在构建输出中给出 <code>evidenceMarkdownReady</code>。</li>
-<li><code>html-artifacts/third-party-handoff-document.json</code> 里的校验命令也会显式写出 <code>validate:all</code> 和 <code>validate:evidence</code> 背后的包内脚本、<code>--verifyMarkdown auto</code> 以及应覆盖的聚合/最终 Markdown 收据检查；<code>validate:package</code> 会反向校验这些字段，避免人工阅读页只列出简单命令但漏掉真实 gate 语义。</li>
-</ul>
-<p>第三方拿到包后，可在包目录内执行：</p>
-<figure class="code-card">
-    <figcaption><span>bash</span><button type="button" class="copy-code">复制</button></figcaption>
-    <pre><code>npm run validate:handoff
-npm run validate:package
-npm run validate:archive
-npm run validate:delivery
-npm run validate:release
-npm run validate:all
-npm run validate:evidence</code></pre>
-  </figure>
-<p>这些命令会分别校验包内交接清单样例、包文件完整性、包生成时间/V3 提交 provenance、V3 安全 HTML artifact manifest 契约、包目录同级 <code>.tar.gz</code> 归档和 <code>.sha256</code> sidecar、归档内 HTML artifact manifest 契约、交付清单列出的应收文件和 provenance 一致性、目录/归档/摘要一致性的 release ready/not-ready 汇总、覆盖全部 gate 且带 package type/生成时间/V3 提交的聚合报告，以及最终证据清单。包内 <code>validate:all</code> 默认会自动校验同级 <code>.all.md</code> 人工收据是否与当前 aggregate validation 输出一致；包内 <code>validate:evidence</code> 默认会自动校验同级 <code>.evidence-manifest.md</code> 人工收据是否与当前 evidence validation 输出一致；<code>validate:package</code> 还会检查 HTML artifact manifest 中是否声明了这两个自动 Markdown 收据校验能力。最终证据清单还会确认 <code>.all.json</code> 的 provenance 与包内清单、release JSON、delivery manifest 一致，确认 <code>.all.md</code> 与当前聚合校验输出一致，并确认 <code>.all.json</code> 中同时包含包目录和归档的 <code>html_artifact_ready</code> 与 <code>html_artifact_command_contract_ready</code> 信号，避免发送包缺少可审阅 HTML 对接页或命令契约说明。第三方正式填写自己的清单后，也应先通过同一类校验，再交给 V3 项目组联调。接收交付文件时，应保留包目录、<code>.tar.gz</code>、<code>.sha256</code>、<code>.release.json</code>、<code>.release.md</code>、<code>.delivery-manifest.json</code>、<code>.all.json</code>、<code>.all.md</code>、<code>.evidence-manifest.json</code> 和 <code>.evidence-manifest.md</code> 在同一目录，运行 <code>validate:package</code>、<code>validate:delivery</code>、<code>validate:all</code> 或 <code>validate:evidence</code> 确认所有应收文件都存在、SHA256 一致且 package type/生成时间/V3 提交一致。</p>
-<p>如需留存交接校验证据，可运行：</p>
-<figure class="code-card">
-    <figcaption><span>bash</span><button type="button" class="copy-code">复制</button></figcaption>
-    <pre><code>npm run validate:all -- --out aggregate.json --markdown aggregate.md</code></pre>
-  </figure>
-<p>发送 <code>.tar.gz</code> 归档前，V3 侧也可以在主仓库里不解压直接校验归档：</p>
-<figure class="code-card">
-    <figcaption><span>bash</span><button type="button" class="copy-code">复制</button></figcaption>
-    <pre><code>node tools/validate-external-handoff-archive.mjs --archive target/external-third-party-handoff/&lt;package&gt;.tar.gz
-node tools/validate-external-handoff-delivery.mjs --package target/external-third-party-handoff/&lt;package&gt;
-node tools/validate-external-handoff-release.mjs --package target/external-third-party-handoff/&lt;package&gt;
-node tools/validate-external-handoff-all.mjs --package target/external-third-party-handoff/&lt;package&gt; --out target/external-third-party-handoff/&lt;package&gt;.all.json --markdown target/external-third-party-handoff/&lt;package&gt;.all.md
-node tools/validate-external-handoff-evidence.mjs --package target/external-third-party-handoff/&lt;package&gt;</code></pre>
-  </figure>
-<p>这些命令会检查 <code>.sha256</code> sidecar、gzip/tar 结构、单一包根目录、路径穿越风险、必备条目、包 manifest 文件摘要，以及交接清单是否可进入客户沙箱联调。</p>
-<h2 id="section-39">22. 版本与变更</h2>
+<p>后续新增或变更对接文档时，先更新仓库内对应 Markdown 源文件，再通过生成脚本同步 HTML 和 Web public 发布文件，最后在观测页保持同一组最新入口。</p>
+<h2 id="section-38">22. 版本与变更</h2>
 <p>本文为 v0.1 对外草案。后续如接口路径、字段、鉴权、幂等、权限模型、回复格式或部署方式发生变化，应同步更新文档版本。</p>
 <p>建议版本策略：</p>
 <ul>
@@ -1311,7 +1242,7 @@ node tools/validate-external-handoff-evidence.mjs --package target/external-thir
 <li>安全策略变化：需要重新联调；</li>
 <li>平台官方接口变化：以平台官方最新规则和双方联调结果为准。</li>
 </ul>
-<h2 id="section-40">23. 推荐联调顺序</h2>
+<h2 id="section-39">23. 推荐联调顺序</h2>
 <p>建议按以下顺序推进：</p>
 <ol>
 <li>确认接入模式和部署方式；</li>

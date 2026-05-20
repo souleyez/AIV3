@@ -41,8 +41,7 @@ The new pure third-party guide HTML proved the pattern for external delivery: th
 
 Build a small family of trusted templates for:
 
-- Third-party handoff and API guides.
-- External integration readiness/release reports.
+- Observability-published third-party API guides.
 - Codex execution summaries.
 - Static-page planning handoff pages.
 - Data-quality reports.
@@ -86,6 +85,5 @@ Recommended path:
 ## Immediate Follow-Up
 
 - Add HTML freshness checks for every committed generated HTML document.
-- Extend the handoff package builder pattern to future external reports. Current handoff package and archive validation now check the third-party HTML artifact manifest contract and unsafe payload strings, instead of only checking file presence and SHA256. Final evidence validation and readiness summaries also require the aggregate receipt to report package/archive HTML artifact readiness, so the review page is visible at the same gate level as the sendable handoff archive.
-- Define the first V3 HTML artifact template registry entry for third-party handoff documents. Completed slices: the web safe artifact template allowlist now includes `third_party_handoff_document` with `external_integration` source type, and the third-party handoff package now emits `html-artifacts/third-party-handoff-document.json` as a V3 safe artifact manifest.
+- Keep the third-party API guide renderer as the current external-document path: Markdown remains the source of truth, generated HTML is committed for review, and Web public copies are the only published customer-facing links.
 - Later, create a local `v3-html-artifacts` Codex skill that points to this architecture note and the safe HTML artifact rules.

@@ -21,9 +21,7 @@ V3 外部集成观测页提供两类公开文档入口：
 - 第三方接口默认使用 `https://v3.elepcloud.com/v1/...`；
 - 该观测域名不提供直接跳回 V3 主工作台的导航入口。
 - 连接配置了入站 Bearer Token 时，第三方调用 V3 的聊天事件、用户确认和动作结果回传都必须带 `Authorization: Bearer <V3 inbound token>`；该 token 由 V3 生成并交付给第三方。
-- 部署目标的第三方 gateway smoke 会生成 JSON/Markdown readiness 报告，用于确认签名派发、结果回调、脱敏检查、交接清单校验和剩余客户联调准备项。
-- V3 提供第三方交接清单样例和自动校验命令，用于在客户沙箱联调前检查 HTTPS 或已批准的本机回环地址、派发鉴权、回调白名单、文档/权限样例、运维联系人，以及是否误填了明文密钥。
-- V3 可以生成一份自包含交接包，包含中英文接口说明、交接清单样例、清单/包完整性校验工具、mock gateway 参考、README 和 SHA256 文件清单。
+- V3 对外对接文档只保留最新有效版本；HTML 和 MD 都统一发布在外部集成观测页的“对接方式与文档”区域。
 - V3 助手运行时已接入全局模型认知策略：模型知道自己服务于 AI Data Platform V3，知道可见数据和工具范围；缺少 V3 供料时会说明 `当前不可见/未供料`，也不会在没有搜索证据时声称已联网搜索。
 - 外部聊天消息如果需要实时网页信息，但 V3 尚未供给搜索证据，会返回 `task_status=v3_search_evidence_required`；这表示等待 V3 只读搜索证据，不代表已经完成联网搜索，也不会写入第三方动作运行记录。
 - `GET /v1/external/integrations` 会为聊天通道返回脱敏的 `search_summary`，外部观测面板会在概览和详情中显示搜索证据待供料数量。
@@ -1015,94 +1013,18 @@ V3 会优先按平台官方规则完成验签、事件解析、消息发送和�
 - 业务动作接口和确认规则，如需要；
 - 联调负责人和故障联系渠道。
 
-### 21.1 标准交接清单
+### 21.1 文档入口与版本规则
 
-联调前建议先填写标准交接清单：
+联调文档只以 V3 外部集成观测页的“对接方式与文档”区域为准。HTML 用于直接打开评审，Markdown 用于下载留档；旧的第一阶段文档、交接包说明、历史计划和历史验证收据不再作为对外材料维护。
 
-```text
-docs/integrations/third-party-handoff.sample.json
-```
+当前保留的公开入口：
 
-V3 侧可执行以下命令做自动校验：
+- 完整对接文档 HTML：`/external-integrations/third-party-integration-api.zh-CN.html`
+- 完整对接文档 MD：`/external-integrations/third-party-integration-api.zh-CN.md`
+- 纯第三方简单版 HTML：`/external-integrations/pure-third-party-integration-guide.zh-CN.html`
+- 纯第三方简单版 MD：`/external-integrations/pure-third-party-integration-guide.zh-CN.md`
 
-```bash
-npm run validate:external-handoff
-```
-
-该校验会重点检查：
-
-- 第三方测试环境、派发 endpoint、V3 回调地址是否使用 HTTPS，或是否明确声明为本机回环测试；
-- 外部动作派发是否提供 Bearer Token 或 HMAC 签名密钥的安全交付方式；
-- 第三方是否确认 V3 回调来源白名单或网络规则；
-- 是否提供测试文档、文档权限样例和不同权限用户问答样例；
-- 是否提供联调和故障升级联系人；
-- 清单中是否误写入明文 token、signing secret、password、private key、API key 等敏感材料。
-
-清单里只应写凭证交付方式和配置引用，不应粘贴真实密钥。真实凭证应通过双方确认的安全通道单独交付。
-
-### 21.2 交接包生成
-
-V3 侧可以生成一份第三方沙箱交接包：
-
-```bash
-npm run build:external-handoff-package
-```
-
-生成目录默认位于：
-
-```text
-target/external-third-party-handoff
-```
-
-生成结果包含交接包目录、同名 `.tar.gz` 归档、`.sha256` 校验文件、同级 `.release.json` 机器可读交付校验报告、同级 `.release.md` 人工审阅摘要、同级 `.delivery-manifest.json` 交付文件清单、同级 `.all.json` 聚合校验证据、同级 `.all.md` 聚合人工摘要、同级 `.evidence-manifest.json` 最终证据清单，以及同级 `.evidence-manifest.md` 人工证据摘要。交接包包含：
-
-- 中文接口说明和英文接口说明；
-- `docs/pure-third-party-integration-guide.zh-CN.html` 和 `html-artifacts/third-party-handoff-document.json`，分别用于人工阅读评审和 V3 受信模板渲染；
-- `handoff/third-party-handoff.sample.json`；
-- `tools/validate-external-handoff.mjs`、`tools/validate-external-handoff-package.mjs`、`tools/validate-external-handoff-archive.mjs`、`tools/validate-external-handoff-delivery.mjs`、`tools/validate-external-handoff-release.mjs`、`tools/validate-external-handoff-all.mjs` 和 `tools/validate-external-handoff-evidence.mjs`；
-- `sandbox/external-third-party-mock-gateway.mjs`；
-- V3 侧 smoke/readiness 参考脚本；
-- `README.zh-CN.md`、`README.md`、`package.json`；
-- `handoff-package-manifest.json`，记录包内文件、来源、用途、生成时间、V3 提交和 SHA256 摘要；`validate:package` 会校验这些 provenance 字段和文件完整性。
-- 包目录同级的 `<package>.release.json`，记录本次包目录、归档、摘要、V3 提交、生成时间和交接清单的一键校验结果。
-- 包目录同级的 `<package>.release.md`，以人工可读形式汇总 ready 状态、V3 提交、生成时间、归档 SHA256、delivery manifest provenance、检查项和错误。
-- 包目录同级的 `<package>.delivery-manifest.json`，列出本次应交付的包目录、包内清单、归档、`.sha256` sidecar、release JSON 和 release Markdown，并记录各文件 SHA256，方便第三方接收时逐项核对；`validate:delivery` 还会校验其中的 package type、生成时间和 V3 提交与包内清单、release JSON 一致。
-- 包目录同级的 `<package>.all.json` 和 `<package>.all.md`，在交付清单生成后记录交接清单、包完整性、归档、交付清单和 release gate 的完整聚合校验证据，并带出 package type、生成时间、V3 提交 provenance，以及包目录/归档 HTML artifact 命令契约 ready 状态；构建器会校验 `<package>.all.md` 确实由当前聚合校验结果重新渲染得到，并在构建输出中给出 `allMarkdownReady`，最终 evidence 校验也会重复确认这一点，而不仅是文件 hash 出现在证据清单里。
-- 包目录同级的 `<package>.evidence-manifest.json`，最后生成，用于列出最终交付物和聚合证据文件，避免把 `.all.json` 反写进 delivery manifest 造成循环 hash；它也会显式记录 `all_markdown_ready=true` 和 `html_artifact_command_contract_ready=true`，让最终证据清单本身暴露聚合 Markdown 收据状态和 HTML artifact 命令契约状态；最终 evidence 校验也会要求 package type、生成时间、V3 提交 provenance、`all_ready`、`all_markdown_ready` 和 `html_artifact_command_contract_ready` 合法，并与包内清单、release JSON、delivery manifest、aggregate JSON 一致，全部通过后才认为交付包 ready。
-- 包目录同级的 `<package>.evidence-manifest.md`，由最终 evidence 校验结果渲染，方便人工审阅最终证据状态、package type、生成时间、V3 提交、artifact 数量、manifest SHA256、聚合 Markdown 收据新鲜度、包目录/归档 HTML artifact readiness、HTML 命令契约 readiness 和错误码；构建器会校验它与当前 evidence validation 输出一致，并在构建输出中给出 `evidenceMarkdownReady`。
-- `html-artifacts/third-party-handoff-document.json` 里的校验命令也会显式写出 `validate:all` 和 `validate:evidence` 背后的包内脚本、`--verifyMarkdown auto` 以及应覆盖的聚合/最终 Markdown 收据检查；`validate:package` 会反向校验这些字段，避免人工阅读页只列出简单命令但漏掉真实 gate 语义。
-
-第三方拿到包后，可在包目录内执行：
-
-```bash
-npm run validate:handoff
-npm run validate:package
-npm run validate:archive
-npm run validate:delivery
-npm run validate:release
-npm run validate:all
-npm run validate:evidence
-```
-
-这些命令会分别校验包内交接清单样例、包文件完整性、包生成时间/V3 提交 provenance、V3 安全 HTML artifact manifest 契约、包目录同级 `.tar.gz` 归档和 `.sha256` sidecar、归档内 HTML artifact manifest 契约、交付清单列出的应收文件和 provenance 一致性、目录/归档/摘要一致性的 release ready/not-ready 汇总、覆盖全部 gate 且带 package type/生成时间/V3 提交的聚合报告，以及最终证据清单。包内 `validate:all` 默认会自动校验同级 `.all.md` 人工收据是否与当前 aggregate validation 输出一致；包内 `validate:evidence` 默认会自动校验同级 `.evidence-manifest.md` 人工收据是否与当前 evidence validation 输出一致；`validate:package` 还会检查 HTML artifact manifest 中是否声明了这两个自动 Markdown 收据校验能力。最终证据清单还会确认 `.all.json` 的 provenance 与包内清单、release JSON、delivery manifest 一致，确认 `.all.md` 与当前聚合校验输出一致，并确认 `.all.json` 中同时包含包目录和归档的 `html_artifact_ready` 与 `html_artifact_command_contract_ready` 信号，避免发送包缺少可审阅 HTML 对接页或命令契约说明。第三方正式填写自己的清单后，也应先通过同一类校验，再交给 V3 项目组联调。接收交付文件时，应保留包目录、`.tar.gz`、`.sha256`、`.release.json`、`.release.md`、`.delivery-manifest.json`、`.all.json`、`.all.md`、`.evidence-manifest.json` 和 `.evidence-manifest.md` 在同一目录，运行 `validate:package`、`validate:delivery`、`validate:all` 或 `validate:evidence` 确认所有应收文件都存在、SHA256 一致且 package type/生成时间/V3 提交一致。
-
-如需留存交接校验证据，可运行：
-
-```bash
-npm run validate:all -- --out aggregate.json --markdown aggregate.md
-```
-
-发送 `.tar.gz` 归档前，V3 侧也可以在主仓库里不解压直接校验归档：
-
-```bash
-node tools/validate-external-handoff-archive.mjs --archive target/external-third-party-handoff/<package>.tar.gz
-node tools/validate-external-handoff-delivery.mjs --package target/external-third-party-handoff/<package>
-node tools/validate-external-handoff-release.mjs --package target/external-third-party-handoff/<package>
-node tools/validate-external-handoff-all.mjs --package target/external-third-party-handoff/<package> --out target/external-third-party-handoff/<package>.all.json --markdown target/external-third-party-handoff/<package>.all.md
-node tools/validate-external-handoff-evidence.mjs --package target/external-third-party-handoff/<package>
-```
-
-这些命令会检查 `.sha256` sidecar、gzip/tar 结构、单一包根目录、路径穿越风险、必备条目、包 manifest 文件摘要，以及交接清单是否可进入客户沙箱联调。
+后续新增或变更对接文档时，先更新仓库内对应 Markdown 源文件，再通过生成脚本同步 HTML 和 Web public 发布文件，最后在观测页保持同一组最新入口。
 
 ## 22. 版本与变更
 

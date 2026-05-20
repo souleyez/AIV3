@@ -373,7 +373,7 @@
 <a href="#section-21">安全与合规要求</a>
 <a href="#section-22">当前实现状态</a>
 <a href="#section-23">推荐联调顺序</a>
-<a href="#section-24">相关文档</a>
+<a href="#section-24">最新公开文档入口</a>
       </nav>
     </aside>
     <main>
@@ -458,7 +458,7 @@
 <p>最小可联调版本建议先准备：</p>
 <div class="table-shell"><table><thead><tr><th>模块</th><th>第三方需要提供</th><th>V3 使用方式</th></tr></thead><tbody><tr><td>聊天入口</td><td>自建页面或网关调用 V3 消息接口</td><td>创建 AssistantRun 并返回回复对象</td></tr><tr><td>用户标识</td><td>当前提问人的稳定外部 ID</td><td>绑定会话、审计和历史上下文</td></tr><tr><td>文档库</td><td>文档 ID、版本、正文或下载地址</td><td>建立索引或按需读取证据</td></tr><tr><td>本轮文档范围</td><td>每次消息传入本轮可用文档 ID 列表</td><td>只在该列表对应文档内检索</td></tr><tr><td>产物接口</td><td>接收报告、页面、文件或链接</td><td>发布/查询/撤销 V3 产物</td></tr><tr><td>业务动作</td><td>接收 V3 派发的动作请求</td><td>执行业务事务并回传结果</td></tr></tbody></table></div>
 <p>如果项目早期只做问答，可以先接聊天入口、用户标识、文档解析和本轮文档范围；产物和业务动作可以后续接入。</p>
-<p>资料库仍保留在第三方服务器时，建议先填写资料源参数卡，再进入联调。参数卡样例见 <code>docs/integrations/third-party-source-parameter-card.sample.json</code>，说明文档见 <code>docs/integrations/third-party-source-parameter-card.zh-CN.md</code>。V3 可用参数卡校验工具检查 HTTPS、鉴权交付方式、用户样例、文档样例和文档范围是否足够进入资料问答验收。</p>
+<p>资料库仍保留在第三方服务器时，按本文的文档接口字段准备文档 ID、版本、正文或下载地址即可进入联调。后续如果新增对接说明，统一发布到 V3 外部集成观测页的“对接方式与文档”区域，不再另发散落的历史文档。</p>
 <h2 id="section-04">4. 文档是否必须搬到 V3</h2>
 <p>不需要把第三方服务器上的所有文档一次性拷贝到 V3 才能问答。</p>
 <p>V3 需要的是“可验证、可追溯版本、可限定范围”的证据供料。第三方可以根据安全要求选择以下方式：</p>
@@ -762,18 +762,13 @@ Authorization: Bearer &lt;V3 inbound token&gt;</code></pre>
   &quot;available_document_external_ids&quot;: [&quot;third-doc-20260518-001&quot;]
 }</code></pre>
   </figure>
-<p>V3 会把外部文档 ID 映射为内部文档范围，并只从这些文档供料给模型。完整样例见：</p>
+<p>V3 会把外部文档 ID 映射为内部文档范围，并只从这些文档供料给模型。</p>
 <p>实现细节：</p>
 <ul>
 <li>每次带 <code>available_document_external_ids</code> 的对话请求都会刷新当前会话的临时文档范围；</li>
 <li>临时数据集的范围来自本轮传入的文档 ID，完成或过期后只清理临时 membership，不影响原始文档所在资料库；</li>
 <li>V3 只允许本轮显式范围内、已解析可索引的文档供料；</li>
 <li>没有出现在本轮 <code>available_document_external_ids</code> 里的文档不会进入模型上下文。</li>
-</ul>
-<ul>
-<li><code>docs/integrations/third-party-document-parse-first-phase.zh-CN.md</code></li>
-<li><code>docs/integrations/third-party-document-parse-request.sample.json</code></li>
-<li><code>docs/integrations/third-party-chat-with-document-ids.sample.json</code></li>
 </ul>
 <h3 id="section-12">8.1 V3 触发资料源同步</h3>
 <p>V3 可通过连接配置中的第三方文档接口进行增量同步。运营或系统可触发：</p>
@@ -1112,7 +1107,7 @@ GET /v1/external/integrations/generic-chat-main/audit?item_type=action&amp;actio
 <li>动作生命周期观测和审计筛选；</li>
 <li>action detail permalink 和脱敏 trace export；</li>
 <li>搜索证据待供料状态观测；</li>
-<li>第三方交接清单、mock gateway、交接包、V3 安全 HTML artifact manifest 和校验工具。</li>
+<li>观测页公开文档入口，支持 HTML 直接打开和 Markdown 下载。</li>
 </ul>
 <p>仍需按项目配置或后续联调确认：</p>
 <ul>
@@ -1135,18 +1130,20 @@ GET /v1/external/integrations/generic-chat-main/audit?item_type=action&amp;actio
 <li>接入业务动作 endpoint；</li>
 <li>验证用户确认、动作派发和结果回传；</li>
 <li>查看 V3 外部集成观测面板和审计筛选；</li>
-<li>生成并校验第三方交接包；</li>
 <li>进入真实客户沙箱联调。</li>
 </ol>
-<h2 id="section-24">20. 相关文档</h2>
+<h2 id="section-24">20. 最新公开文档入口</h2>
+<p>V3 对外对接文档只保留最新有效版本，并统一发布在外部集成观测页的“对接方式与文档”区域。</p>
 <ul>
-<li>总接口说明：<code>docs/integrations/third-party-integration-api.zh-CN.md</code></li>
-<li>英文接口草案：<code>docs/integrations/third-party-integration-api.md</code></li>
-<li>第一阶段可转发 HTML 简版：<code>docs/integrations/third-party-document-parse-first-phase-sendable.zh-CN.html</code></li>
-<li>第一阶段文档解析说明：<code>docs/integrations/third-party-document-parse-first-phase.zh-CN.md</code></li>
-<li>交接清单样例：<code>docs/integrations/third-party-handoff.sample.json</code></li>
-<li>交接包内安全 HTML artifact manifest：<code>html-artifacts/third-party-handoff-document.json</code></li>
-<li>第三方集成计划：<code>docs/plans/2026-05-13-v3-external-bot-third-party-knowledge-plan.md</code></li>
+<li>完整对接文档 HTML：<code>/external-integrations/third-party-integration-api.zh-CN.html</code></li>
+<li>完整对接文档 MD：<code>/external-integrations/third-party-integration-api.zh-CN.md</code></li>
+<li>纯第三方简单版 HTML：<code>/external-integrations/pure-third-party-integration-guide.zh-CN.html</code></li>
+<li>纯第三方简单版 MD：<code>/external-integrations/pure-third-party-integration-guide.zh-CN.md</code></li>
+</ul>
+<p>仓库内保留的源文件为：</p>
+<ul>
+<li><code>docs/integrations/third-party-integration-api.zh-CN.md</code></li>
+<li><code>docs/integrations/pure-third-party-integration-guide.zh-CN.md</code></li>
 </ul>
       </article>
       <p class="doc-footer">Generated from <code>docs/integrations/pure-third-party-integration-guide.zh-CN.md</code>. Keep Markdown as the editable source and HTML as the human-facing review surface.</p>

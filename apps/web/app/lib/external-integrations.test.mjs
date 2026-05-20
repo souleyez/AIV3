@@ -34,10 +34,9 @@ test('external integration modes are generic customer-facing guidance without se
   const modeText = JSON.stringify(EXTERNAL_INTEGRATION_MODES);
   const standardMode = EXTERNAL_INTEGRATION_MODES.find((mode) => mode.key === 'standard_bot');
   const pureMode = EXTERNAL_INTEGRATION_MODES.find((mode) => mode.key === 'pure_third_party');
-  assert(EXTERNAL_INTEGRATION_MODES.length >= 3);
+  assert.equal(EXTERNAL_INTEGRATION_MODES.length, 2);
   assert(standardMode);
   assert(pureMode);
-  assert(EXTERNAL_INTEGRATION_MODES.some((mode) => mode.key === 'edge_local_data_plane'));
   assert.equal(
     standardMode.documentLinks.find((link) => link.key === 'complete-third-party-html').href,
     '/external-integrations/third-party-integration-api.zh-CN.html',
@@ -57,7 +56,6 @@ test('external integration modes are generic customer-facing guidance without se
   assert(!modeText.includes('用户权限'));
   assert(!modeText.includes('v3in_live_'));
   assert(!/Authorization:\s*Bearer\s+[A-Za-z0-9_-]{12,}/.test(modeText));
-  assert(!modeText.includes('third-party-original-integration-tracker'));
   assert(!modeText.includes('本次联调'));
 });
 

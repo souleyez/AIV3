@@ -65,7 +65,7 @@ sequenceDiagram
 
 如果项目早期只做问答，可以先接聊天入口、用户标识、文档解析和本轮文档范围；产物和业务动作可以后续接入。
 
-资料库仍保留在第三方服务器时，建议先填写资料源参数卡，再进入联调。参数卡样例见 `docs/integrations/third-party-source-parameter-card.sample.json`，说明文档见 `docs/integrations/third-party-source-parameter-card.zh-CN.md`。V3 可用参数卡校验工具检查 HTTPS、鉴权交付方式、用户样例、文档样例和文档范围是否足够进入资料问答验收。
+资料库仍保留在第三方服务器时，按本文的文档接口字段准备文档 ID、版本、正文或下载地址即可进入联调。后续如果新增对接说明，统一发布到 V3 外部集成观测页的“对接方式与文档”区域，不再另发散落的历史文档。
 
 ## 4. 文档是否必须搬到 V3
 
@@ -436,7 +436,7 @@ Authorization: Bearer <V3 inbound token>
 }
 ```
 
-V3 会把外部文档 ID 映射为内部文档范围，并只从这些文档供料给模型。完整样例见：
+V3 会把外部文档 ID 映射为内部文档范围，并只从这些文档供料给模型。
 
 实现细节：
 
@@ -444,10 +444,6 @@ V3 会把外部文档 ID 映射为内部文档范围，并只从这些文档供�
 - 临时数据集的范围来自本轮传入的文档 ID，完成或过期后只清理临时 membership，不影响原始文档所在资料库；
 - V3 只允许本轮显式范围内、已解析可索引的文档供料；
 - 没有出现在本轮 `available_document_external_ids` 里的文档不会进入模型上下文。
-
-- `docs/integrations/third-party-document-parse-first-phase.zh-CN.md`
-- `docs/integrations/third-party-document-parse-request.sample.json`
-- `docs/integrations/third-party-chat-with-document-ids.sample.json`
 
 ### 8.1 V3 触发资料源同步
 
@@ -844,7 +840,7 @@ V3 错误格式：
 - 动作生命周期观测和审计筛选；
 - action detail permalink 和脱敏 trace export；
 - 搜索证据待供料状态观测；
-- 第三方交接清单、mock gateway、交接包、V3 安全 HTML artifact manifest 和校验工具。
+- 观测页公开文档入口，支持 HTML 直接打开和 Markdown 下载。
 
 仍需按项目配置或后续联调确认：
 
@@ -867,15 +863,18 @@ V3 错误格式：
 9. 接入业务动作 endpoint；
 10. 验证用户确认、动作派发和结果回传；
 11. 查看 V3 外部集成观测面板和审计筛选；
-12. 生成并校验第三方交接包；
-13. 进入真实客户沙箱联调。
+12. 进入真实客户沙箱联调。
 
-## 20. 相关文档
+## 20. 最新公开文档入口
 
-- 总接口说明：`docs/integrations/third-party-integration-api.zh-CN.md`
-- 英文接口草案：`docs/integrations/third-party-integration-api.md`
-- 第一阶段可转发 HTML 简版：`docs/integrations/third-party-document-parse-first-phase-sendable.zh-CN.html`
-- 第一阶段文档解析说明：`docs/integrations/third-party-document-parse-first-phase.zh-CN.md`
-- 交接清单样例：`docs/integrations/third-party-handoff.sample.json`
-- 交接包内安全 HTML artifact manifest：`html-artifacts/third-party-handoff-document.json`
-- 第三方集成计划：`docs/plans/2026-05-13-v3-external-bot-third-party-knowledge-plan.md`
+V3 对外对接文档只保留最新有效版本，并统一发布在外部集成观测页的“对接方式与文档”区域。
+
+- 完整对接文档 HTML：`/external-integrations/third-party-integration-api.zh-CN.html`
+- 完整对接文档 MD：`/external-integrations/third-party-integration-api.zh-CN.md`
+- 纯第三方简单版 HTML：`/external-integrations/pure-third-party-integration-guide.zh-CN.html`
+- 纯第三方简单版 MD：`/external-integrations/pure-third-party-integration-guide.zh-CN.md`
+
+仓库内保留的源文件为：
+
+- `docs/integrations/third-party-integration-api.zh-CN.md`
+- `docs/integrations/pure-third-party-integration-guide.zh-CN.md`

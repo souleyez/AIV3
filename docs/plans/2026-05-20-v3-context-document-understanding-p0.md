@@ -577,9 +577,4 @@ Replay:
 
 ## Supersedes / References
 
-This is the active combined execution plan. It incorporates the remaining work from:
-
-- `docs/plans/2026-05-19-external-channel-temporary-dataset-scope.md`
-- `docs/plans/2026-05-19-external-direct-reply-no-failures.md`
-- `docs/plans/2026-05-19-paddleocr-document-understanding.md`
-- `docs/plans/2026-05-20-external-user-history-memory-scope.md`
+This is the active combined execution plan. It incorporates the remaining work from the May 19-20 external temporary-dataset, direct-reply, PaddleOCR document-understanding, and external-user history-memory slices. The older slice plans were removed after consolidation.

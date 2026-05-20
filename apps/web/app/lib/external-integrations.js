@@ -18,7 +18,6 @@ export const EXTERNAL_INTEGRATION_MODES = [
     docs: [
       'docs/integrations/third-party-integration-api.zh-CN.html',
       'docs/integrations/third-party-integration-api.zh-CN.md',
-      'docs/integrations/third-party-integration-api.md',
     ],
     documentLinks: [
       {
@@ -46,14 +45,6 @@ export const EXTERNAL_INTEGRATION_MODES = [
     docs: [
       'docs/integrations/pure-third-party-integration-guide.zh-CN.html',
       'docs/integrations/pure-third-party-integration-guide.zh-CN.md',
-      'docs/integrations/third-party-document-parse-first-phase.zh-CN.md',
-      'docs/integrations/third-party-document-parse-first-phase-sendable.zh-CN.html',
-      'docs/integrations/third-party-document-parse-first-phase-sendable.zh-CN.md',
-      'docs/integrations/third-party-document-parse-request.sample.json',
-      'docs/integrations/third-party-chat-with-document-ids.sample.json',
-      'docs/integrations/third-party-source-parameter-card.zh-CN.md',
-      'docs/integrations/third-party-source-parameter-card.sample.json',
-      'docs/integrations/third-party-source-sync-request.sample.json',
       'docs/integrations/third-party-integration-api.zh-CN.md',
     ],
     documentLinks: [
@@ -87,28 +78,6 @@ export const EXTERNAL_INTEGRATION_MODES = [
       },
     ],
     guardrail: '凭证线下交付；观测页只展示模式和文档路径，不展示 token、客户 endpoint 或密钥。',
-  },
-  {
-    key: 'edge_local_data_plane',
-    title: 'V3 Edge / Local Data Plane',
-    status: '新增可选模式',
-    summary: '资料、索引、页面和回答尽量留在第三方服务器，V3 只提供能力控制面和脱敏观测。',
-    docs: [
-      'docs/integrations/v3-edge-local-data-plane-mode.zh-CN.md',
-      'docs/integrations/v3-edge-local-data-plane.sample.json',
-    ],
-    guardrail: '适用于客户要求资料和页面尽量留在本地的场景；浏览器不得直连 V3，也不得持有 V3 token。',
-  },
-  {
-    key: 'handoff_package',
-    title: '交接清单与校验',
-    status: '按需生成',
-    summary: '用于客户沙箱联调前检查 HTTPS、派发鉴权、回调、资料权限样例和脱敏要求。',
-    docs: [
-      'docs/integrations/third-party-handoff.sample.json',
-      'tools/validate-external-handoff.mjs',
-    ],
-    guardrail: '清单只写交付方式和配置状态，不写明文 token、signing secret、password、private key。',
   },
 ];
 
