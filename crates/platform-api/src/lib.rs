@@ -23933,7 +23933,7 @@ fn extract_resume_document_profile(
             .map(|candidate| candidate.name.clone())
             .or_else(|| extract_resume_candidate_name(scan_text))
             .or_else(|| extract_resume_candidate_name_from_title(&document.title))
-            .or_else(|| extract_resume_candidate_name_from_title(scan_text)),
+            .or_else(|| extract_resume_candidate_name_from_marked_text(scan_text)),
         gender: extract_resume_gender(scan_text),
         age: extract_resume_age(scan_text),
         birth_year: extract_resume_birth_year(scan_text),
@@ -23974,9 +23974,20 @@ fn extract_resume_candidate_name(text: &str) -> Option<String> {
 }
 
 fn extract_resume_candidate_name_from_title(text: &str) -> Option<String> {
+    extract_resume_candidate_name_from_heading_text(text, true)
+}
+
+fn extract_resume_candidate_name_from_marked_text(text: &str) -> Option<String> {
+    extract_resume_candidate_name_from_heading_text(text, false)
+}
+
+fn extract_resume_candidate_name_from_heading_text(
+    text: &str,
+    allow_standalone_name_line: bool,
+) -> Option<String> {
     for line in text.lines().take(16) {
         let normalized = normalize_document_entity_value(line);
-        if looks_like_person_name(&normalized) {
+        if allow_standalone_name_line && looks_like_person_name(&normalized) {
             return Some(normalized);
         }
         let compact = normalized
