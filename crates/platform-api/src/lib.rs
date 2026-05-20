@@ -30367,6 +30367,9 @@ fn assistant_run_dataset_entity_scan_requested(scope: &Value, prompt: &str) -> b
 }
 
 fn prompt_requests_document_entity_scan(prompt: &str) -> bool {
+    if assistant_run_entity_scan_answer_dimension(prompt).is_some() {
+        return true;
+    }
     if prompt_requests_resume_company_entity_scan(prompt) {
         return true;
     }
@@ -51761,6 +51764,18 @@ mod tests {
         assert!(assistant_run_dataset_entity_scan_requested(
             &selected_scope,
             "知识库里岗位和技能分别有哪些，按出现频次统计一下"
+        ));
+        assert!(assistant_run_dataset_entity_scan_requested(
+            &selected_scope,
+            "按年龄排序出表"
+        ));
+        assert!(assistant_run_dataset_entity_scan_requested(
+            &selected_scope,
+            "按性别汇总候选人"
+        ));
+        assert!(assistant_run_dataset_entity_scan_requested(
+            &selected_scope,
+            "按最近年份排序简历"
         ));
         assert!(assistant_run_dataset_entity_scan_requested(
             &selected_scope,
