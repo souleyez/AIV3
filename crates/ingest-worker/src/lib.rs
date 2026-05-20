@@ -1366,9 +1366,7 @@ fn document_paddleocr_enabled() -> bool {
         }
     }
 
-    std::env::var("DOCUMENT_PADDLEOCR_PYTHON_BIN")
-        .map(|value| !value.trim().is_empty())
-        .unwrap_or(false)
+    configured_paddleocr_python_bin().is_some() || default_paddleocr_python_bin().is_some()
 }
 
 fn document_paddleocr_timeout() -> Duration {
@@ -1400,10 +1398,36 @@ fn env_flag_value(name: &str) -> Option<bool> {
 }
 
 fn paddleocr_python_command_candidates() -> Vec<String> {
-    let mut candidates = direct_command_candidates("DOCUMENT_PADDLEOCR_PYTHON_BIN", "");
+    let mut candidates = Vec::new();
+    if let Some(configured) = configured_paddleocr_python_bin() {
+        candidates.push(configured);
+    }
+    if let Some(default_bin) = default_paddleocr_python_bin() {
+        candidates.push(default_bin);
+    }
     candidates.extend(python_command_candidates());
     candidates.dedup();
     candidates
+}
+
+fn configured_paddleocr_python_bin() -> Option<String> {
+    std::env::var("DOCUMENT_PADDLEOCR_PYTHON_BIN")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn default_paddleocr_python_bin() -> Option<String> {
+    if let Ok(configured) = std::env::var("DOCUMENT_PADDLEOCR_DEFAULT_PYTHON_BIN") {
+        let configured = configured.trim();
+        if !configured.is_empty() {
+            return Some(configured.to_string());
+        }
+    }
+    let default_bin = Path::new("/srv/aiv3/venv/paddleocr/bin/python");
+    default_bin
+        .is_file()
+        .then(|| default_bin.to_string_lossy().to_string())
 }
 
 fn run_paddleocr_sidecar(path: &Path, output_dir: &Path) -> Option<ExtractedDocumentText> {
@@ -3769,6 +3793,7 @@ trailer << /Root 1 0 R >>
                 ("DOCUMENT_PADDLEOCR_ENABLED", None),
                 ("DOCUMENT_PDF_PARSE_ENGINE", None),
                 ("DOCUMENT_PADDLEOCR_PYTHON_BIN", None),
+                ("DOCUMENT_PADDLEOCR_DEFAULT_PYTHON_BIN", None),
             ],
             || {
                 assert!(extract_pdf_with_paddleocr(Path::new("missing.pdf")).is_none());
@@ -3786,9 +3811,34 @@ trailer << /Root 1 0 R >>
                     "DOCUMENT_PADDLEOCR_PYTHON_BIN",
                     Some("/opt/paddle/bin/python"),
                 ),
+                ("DOCUMENT_PADDLEOCR_DEFAULT_PYTHON_BIN", None),
             ],
             || {
                 assert!(document_paddleocr_enabled());
+            },
+        );
+    }
+
+    #[test]
+    fn paddleocr_enabled_by_default_runtime_bin() {
+        with_paddleocr_env(
+            &[
+                ("DOCUMENT_PADDLEOCR_ENABLED", None),
+                ("DOCUMENT_PDF_PARSE_ENGINE", None),
+                ("DOCUMENT_PADDLEOCR_PYTHON_BIN", None),
+                (
+                    "DOCUMENT_PADDLEOCR_DEFAULT_PYTHON_BIN",
+                    Some("/srv/aiv3/venv/paddleocr/bin/python"),
+                ),
+            ],
+            || {
+                assert!(document_paddleocr_enabled());
+                assert_eq!(
+                    paddleocr_python_command_candidates()
+                        .first()
+                        .map(String::as_str),
+                    Some("/srv/aiv3/venv/paddleocr/bin/python")
+                );
             },
         );
     }
@@ -3802,6 +3852,10 @@ trailer << /Root 1 0 R >>
                 (
                     "DOCUMENT_PADDLEOCR_PYTHON_BIN",
                     Some("/opt/paddle/bin/python"),
+                ),
+                (
+                    "DOCUMENT_PADDLEOCR_DEFAULT_PYTHON_BIN",
+                    Some("/srv/aiv3/venv/paddleocr/bin/python"),
                 ),
             ],
             || {
@@ -3820,6 +3874,10 @@ trailer << /Root 1 0 R >>
                     "DOCUMENT_PADDLEOCR_PYTHON_BIN",
                     Some("/opt/paddle/bin/python"),
                 ),
+                (
+                    "DOCUMENT_PADDLEOCR_DEFAULT_PYTHON_BIN",
+                    Some("/srv/aiv3/venv/paddleocr/bin/python"),
+                ),
             ],
             || {
                 assert!(!document_paddleocr_enabled());
@@ -3830,10 +3888,13 @@ trailer << /Root 1 0 R >>
     #[test]
     fn paddleocr_python_candidates_prefer_dedicated_bin() {
         with_paddleocr_env(
-            &[(
-                "DOCUMENT_PADDLEOCR_PYTHON_BIN",
-                Some("/opt/paddle/bin/python"),
-            )],
+            &[
+                (
+                    "DOCUMENT_PADDLEOCR_PYTHON_BIN",
+                    Some("/opt/paddle/bin/python"),
+                ),
+                ("DOCUMENT_PADDLEOCR_DEFAULT_PYTHON_BIN", None),
+            ],
             || {
                 let candidates = paddleocr_python_command_candidates();
 

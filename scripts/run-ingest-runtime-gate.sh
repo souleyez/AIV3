@@ -44,6 +44,10 @@ if [[ -z "${DOCUMENT_PADDLEOCR_PYTHON_BIN:-}" && -r "${aiv3_env_file}" ]]; then
   DOCUMENT_PADDLEOCR_PYTHON_BIN="$(read_aiv3_env_value "DOCUMENT_PADDLEOCR_PYTHON_BIN")"
 fi
 
+if [[ -z "${DOCUMENT_PADDLEOCR_DEFAULT_PYTHON_BIN:-}" && -r "${aiv3_env_file}" ]]; then
+  DOCUMENT_PADDLEOCR_DEFAULT_PYTHON_BIN="$(read_aiv3_env_value "DOCUMENT_PADDLEOCR_DEFAULT_PYTHON_BIN")"
+fi
+
 if [[ -z "${PYTHON_BIN:-}" && -x "/srv/aiv3/venv/media/bin/python" ]]; then
   PYTHON_BIN="/srv/aiv3/venv/media/bin/python"
 fi
@@ -54,6 +58,10 @@ fi
 
 if [[ -z "${DOCUMENT_PADDLEOCR_PYTHON_BIN:-}" && -x "/srv/aiv3/venv/paddleocr/bin/python" ]]; then
   DOCUMENT_PADDLEOCR_PYTHON_BIN="/srv/aiv3/venv/paddleocr/bin/python"
+fi
+
+if [[ -z "${DOCUMENT_PADDLEOCR_PYTHON_BIN:-}" && -n "${DOCUMENT_PADDLEOCR_DEFAULT_PYTHON_BIN:-}" ]]; then
+  DOCUMENT_PADDLEOCR_PYTHON_BIN="${DOCUMENT_PADDLEOCR_DEFAULT_PYTHON_BIN}"
 fi
 
 mkdir -p "${report_dir}"
@@ -70,6 +78,7 @@ echo "Required MarkItDown: ${required_markitdown_version}"
 echo "DOCUMENT_PADDLEOCR_ENABLED: ${DOCUMENT_PADDLEOCR_ENABLED:-}"
 echo "DOCUMENT_PDF_PARSE_ENGINE: ${DOCUMENT_PDF_PARSE_ENGINE:-}"
 echo "DOCUMENT_PADDLEOCR_PYTHON_BIN: ${DOCUMENT_PADDLEOCR_PYTHON_BIN:-}"
+echo "DOCUMENT_PADDLEOCR_DEFAULT_PYTHON_BIN: ${DOCUMENT_PADDLEOCR_DEFAULT_PYTHON_BIN:-}"
 
 if [[ "${PYTHON_BIN}" == */* && ! -x "${PYTHON_BIN}" ]]; then
   echo "PYTHON_BIN is not executable: ${PYTHON_BIN}" >&2

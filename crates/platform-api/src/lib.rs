@@ -13008,7 +13008,14 @@ async fn create_or_refresh_external_channel_temporary_dataset_scope(
         Some(dataset) => state
             .storage
             .datasets()
-            .update_metadata(state.tenant_id, dataset.id, &metadata)
+            .update_state(
+                state.tenant_id,
+                dataset.id,
+                None,
+                None,
+                Some(DatasetLifecycle::Draft),
+                &metadata,
+            )
             .await
             .map_err(ApiError::from_storage)?,
         None => state
@@ -13031,7 +13038,7 @@ async fn create_or_refresh_external_channel_temporary_dataset_scope(
             .map_err(ApiError::from_storage)?,
     };
 
-    cleanup_expired_temporary_dataset_memberships(state).await?;
+    cleanup_expired_external_temporary_dataset_scopes(state).await?;
     for document_id in document_ids {
         state
             .storage
@@ -13057,15 +13064,76 @@ async fn create_or_refresh_external_channel_temporary_dataset_scope(
     }))
 }
 
-async fn cleanup_expired_temporary_dataset_memberships(
+async fn cleanup_expired_external_temporary_dataset_scopes(
     state: &AppState,
 ) -> std::result::Result<u64, ApiError> {
-    state
+    cleanup_expired_external_temporary_dataset_scopes_at(state, Utc::now()).await
+}
+
+async fn cleanup_expired_external_temporary_dataset_scopes_at(
+    state: &AppState,
+    now: DateTime<Utc>,
+) -> std::result::Result<u64, ApiError> {
+    let deleted_memberships = state
         .storage
         .dataset_document_memberships()
-        .delete_expired(state.tenant_id, Utc::now())
+        .delete_expired(state.tenant_id, now)
         .await
-        .map_err(ApiError::from_storage)
+        .map_err(ApiError::from_storage)?;
+
+    let datasets = state
+        .storage
+        .datasets()
+        .list_by_tenant(state.tenant_id)
+        .await
+        .map_err(ApiError::from_storage)?;
+    let mut archived_datasets = 0u64;
+    for dataset in datasets {
+        if dataset.lifecycle == DatasetLifecycle::Archived
+            || !dataset_is_external_temporary_scope(&dataset)
+            || !dataset_external_temporary_scope_is_expired(&dataset, now)
+        {
+            continue;
+        }
+        let active_document_ids = state
+            .storage
+            .dataset_document_memberships()
+            .list_document_ids_by_dataset(state.tenant_id, dataset.id)
+            .await
+            .map_err(ApiError::from_storage)?;
+        if !active_document_ids.is_empty() {
+            continue;
+        }
+        state
+            .storage
+            .datasets()
+            .update_state(
+                state.tenant_id,
+                dataset.id,
+                None,
+                None,
+                Some(DatasetLifecycle::Archived),
+                &json!({
+                    "archived_at": now,
+                    "archive_reason": "external_temporary_scope_expired"
+                }),
+            )
+            .await
+            .map_err(ApiError::from_storage)?;
+        archived_datasets += 1;
+    }
+
+    Ok(deleted_memberships + archived_datasets)
+}
+
+fn dataset_external_temporary_scope_is_expired(dataset: &Dataset, now: DateTime<Utc>) -> bool {
+    dataset
+        .metadata
+        .get("expires_at")
+        .and_then(Value::as_str)
+        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+        .map(|expires_at| expires_at.with_timezone(&Utc) <= now)
+        .unwrap_or(false)
 }
 
 fn set_external_channel_temporary_dataset_scope(
@@ -41120,13 +41188,13 @@ mod tests {
             .expect("active memberships should list");
         assert_eq!(active_document_ids, vec![document.id]);
 
-        let deleted = state
-            .storage
-            .dataset_document_memberships()
-            .delete_expired(state.tenant_id, Utc::now() + Duration::hours(25))
-            .await
-            .expect("expired memberships should delete");
-        assert_eq!(deleted, 1);
+        let cleaned = cleanup_expired_external_temporary_dataset_scopes_at(
+            &state,
+            Utc::now() + Duration::hours(25),
+        )
+        .await
+        .expect("expired memberships and temporary dataset should be cleaned");
+        assert_eq!(cleaned, 2);
         let active_document_ids = state
             .storage
             .dataset_document_memberships()
@@ -41134,6 +41202,17 @@ mod tests {
             .await
             .expect("active memberships should list after expiry");
         assert!(active_document_ids.is_empty());
+        let archived_temporary_dataset = state
+            .storage
+            .datasets()
+            .get_by_id(state.tenant_id, temporary_dataset_id)
+            .await
+            .expect("temporary dataset lookup should succeed")
+            .expect("temporary dataset should exist");
+        assert_eq!(
+            archived_temporary_dataset.lifecycle,
+            DatasetLifecycle::Archived
+        );
         let persisted_document = state
             .storage
             .documents()
@@ -41142,6 +41221,39 @@ mod tests {
             .expect("document lookup should succeed")
             .expect("document should exist");
         assert_eq!(persisted_document.dataset_id, dataset.id);
+
+        let mut refreshed_scope = json!({"type": "external_channel"});
+        enrich_external_channel_document_scope(
+            &state,
+            "generic-chat-main",
+            &connection,
+            &message,
+            &mut refreshed_scope,
+        )
+        .await
+        .expect("archived temporary dataset should be restorable by scope refresh");
+        assert_eq!(
+            refreshed_scope["temporary_dataset"]["id"],
+            json!(temporary_dataset_id)
+        );
+        let restored_temporary_dataset = state
+            .storage
+            .datasets()
+            .get_by_id(state.tenant_id, temporary_dataset_id)
+            .await
+            .expect("temporary dataset lookup should succeed after refresh")
+            .expect("temporary dataset should exist after refresh");
+        assert_eq!(
+            restored_temporary_dataset.lifecycle,
+            DatasetLifecycle::Draft
+        );
+        let active_document_ids = state
+            .storage
+            .dataset_document_memberships()
+            .list_document_ids_by_dataset(state.tenant_id, temporary_dataset_id)
+            .await
+            .expect("active memberships should list after refresh");
+        assert_eq!(active_document_ids, vec![document.id]);
     }
 
     #[tokio::test]
