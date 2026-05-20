@@ -54,6 +54,10 @@ export function externalObservabilityCookieValue() {
   return key ? digestAccessKey(key) : '';
 }
 
+export function externalObservabilityProxyHeaderValue() {
+  return configuredAccessKey();
+}
+
 export function verifyExternalObservabilityKey(input) {
   const expectedKey = configuredAccessKey();
   if (!expectedKey) {

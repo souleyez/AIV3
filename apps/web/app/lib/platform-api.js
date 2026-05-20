@@ -1,4 +1,7 @@
-import { hasExternalObservabilityAccessCookie } from './external-observability-access';
+import {
+  externalObservabilityProxyHeaderValue,
+  hasExternalObservabilityAccessCookie,
+} from './external-observability-access';
 
 const DEFAULT_PLATFORM_API_BASE_URL = 'http://127.0.0.1:3000';
 
@@ -19,8 +22,9 @@ function isExternalObservabilityPath(pathSegments) {
 
 export async function proxyPlatformApiRequest(request, pathSegments) {
   try {
+    const isObservationPath = isExternalObservabilityPath(pathSegments);
     if (
-      isExternalObservabilityPath(pathSegments)
+      isObservationPath
       && !hasExternalObservabilityAccessCookie(request.headers.get('cookie'))
     ) {
       return Response.json(
@@ -53,6 +57,12 @@ export async function proxyPlatformApiRequest(request, pathSegments) {
     const localThreadId = request.headers.get('x-ai-data-platform-local-thread-id');
     if (localThreadId) {
       headers.set('x-ai-data-platform-local-thread-id', localThreadId);
+    }
+    if (isObservationPath) {
+      const observabilityKey = externalObservabilityProxyHeaderValue();
+      if (observabilityKey) {
+        headers.set('x-ai-data-platform-external-observability-key', observabilityKey);
+      }
     }
 
     const response = await fetch(targetUrl, {

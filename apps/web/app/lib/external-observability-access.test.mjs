@@ -4,6 +4,7 @@ import {
   EXTERNAL_OBSERVABILITY_COOKIE,
   externalObservabilityAccessRequired,
   externalObservabilityCookieValue,
+  externalObservabilityProxyHeaderValue,
   hasExternalObservabilityAccessCookie,
   verifyExternalObservabilityKey,
 } from './external-observability-access.js';
@@ -24,6 +25,7 @@ test('external observability access only locks protected data when key is config
 
     const cookieValue = externalObservabilityCookieValue();
     assert.notEqual(cookieValue, 'obs-secret');
+    assert.equal(externalObservabilityProxyHeaderValue(), 'obs-secret');
     assert.equal(hasExternalObservabilityAccessCookie(''), false);
     assert.equal(
       hasExternalObservabilityAccessCookie(`${EXTERNAL_OBSERVABILITY_COOKIE}=${cookieValue}`),

@@ -7711,10 +7711,48 @@ struct ExternalConversationTestsQuery {
     limit: Option<usize>,
 }
 
+const EXTERNAL_OBSERVABILITY_ACCESS_HEADER: &str = "x-ai-data-platform-external-observability-key";
+
+fn external_observability_configured_access_key() -> Option<String> {
+    std::env::var("EXTERNAL_OBSERVABILITY_ACCESS_KEY")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            std::env::var("EXTERNAL_INTEGRATIONS_OBSERVATION_KEY")
+                .ok()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+        })
+}
+
+fn external_observability_access_allowed(headers: &HeaderMap) -> bool {
+    let Some(expected) = external_observability_configured_access_key() else {
+        return true;
+    };
+    let Some(actual) = headers
+        .get(EXTERNAL_OBSERVABILITY_ACCESS_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return false;
+    };
+    Sha256::digest(expected.as_bytes()) == Sha256::digest(actual.as_bytes())
+}
+
 async fn list_external_conversation_tests(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Query(query): Query<ExternalConversationTestsQuery>,
 ) -> std::result::Result<Json<ListExternalConversationTestsResponse>, ApiError> {
+    if !external_observability_access_allowed(&headers) {
+        return Err(ApiError::unauthorized(
+            "external_observability_access_required",
+            "external conversation tests require an observability access key".to_string(),
+        ));
+    }
+
     let integration_id = query
         .integration_id
         .as_deref()
@@ -41895,6 +41933,40 @@ mod tests {
         assert!(!summary_text.contains("secret-token"));
         assert!(!summary_text.contains("Bearer secret"));
         assert!(!summary_text.contains("secret-cookie"));
+    }
+
+    #[test]
+    fn external_observability_access_requires_configured_header() {
+        let previous = std::env::var("EXTERNAL_OBSERVABILITY_ACCESS_KEY").ok();
+        let previous_alias = std::env::var("EXTERNAL_INTEGRATIONS_OBSERVATION_KEY").ok();
+        std::env::set_var("EXTERNAL_OBSERVABILITY_ACCESS_KEY", "obs-secret");
+        std::env::remove_var("EXTERNAL_INTEGRATIONS_OBSERVATION_KEY");
+
+        let empty = HeaderMap::new();
+        assert!(!external_observability_access_allowed(&empty));
+
+        let mut wrong = HeaderMap::new();
+        wrong.insert(
+            EXTERNAL_OBSERVABILITY_ACCESS_HEADER,
+            HeaderValue::from_static("wrong"),
+        );
+        assert!(!external_observability_access_allowed(&wrong));
+
+        let mut allowed = HeaderMap::new();
+        allowed.insert(
+            EXTERNAL_OBSERVABILITY_ACCESS_HEADER,
+            HeaderValue::from_static("obs-secret"),
+        );
+        assert!(external_observability_access_allowed(&allowed));
+
+        match previous {
+            Some(value) => std::env::set_var("EXTERNAL_OBSERVABILITY_ACCESS_KEY", value),
+            None => std::env::remove_var("EXTERNAL_OBSERVABILITY_ACCESS_KEY"),
+        }
+        match previous_alias {
+            Some(value) => std::env::set_var("EXTERNAL_INTEGRATIONS_OBSERVATION_KEY", value),
+            None => std::env::remove_var("EXTERNAL_INTEGRATIONS_OBSERVATION_KEY"),
+        }
     }
 
     #[test]
