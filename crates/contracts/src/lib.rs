@@ -94,6 +94,32 @@ pub struct ExternalBotMessageView {
     pub message_type: ExternalMessageTypeView,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
+    #[serde(
+        default,
+        alias = "defaultPrompt",
+        alias = "system_prompt",
+        alias = "systemPrompt",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub default_prompt: Option<String>,
+    #[serde(
+        default,
+        alias = "outputFormat",
+        alias = "answer_format",
+        alias = "answerFormat",
+        alias = "reply_format",
+        alias = "replyFormat",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub output_format: Option<String>,
+    #[serde(
+        default,
+        alias = "renderMode",
+        alias = "response_mode",
+        alias = "responseMode",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub render_mode: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mention_external_user_ids: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -3781,6 +3807,9 @@ mod tests {
             "message_external_id": "msg-001",
             "message_type": "text",
             "text": "本周订单风险有哪些？",
+            "defaultPrompt": "请面向业务用户回答。",
+            "outputFormat": "MD表格",
+            "renderMode": "artifact",
             "requestedSkills": [
                 {
                     "skillId": "contract_review",
@@ -3807,6 +3836,12 @@ mod tests {
 
         assert_eq!(message.platform, ExternalChannelPlatformView::WeCom);
         assert_eq!(message.message_type, ExternalMessageTypeView::Text);
+        assert_eq!(
+            message.default_prompt.as_deref(),
+            Some("请面向业务用户回答。")
+        );
+        assert_eq!(message.output_format.as_deref(), Some("MD表格"));
+        assert_eq!(message.render_mode.as_deref(), Some("artifact"));
         assert!(message.mention_external_user_ids.is_empty());
         assert_eq!(message.requested_skills.len(), 1);
         assert_eq!(message.requested_skills[0].skill_id, "contract_review");
@@ -3837,6 +3872,9 @@ mod tests {
             encoded["requested_skills"][0]["skill_id"],
             json!("contract_review")
         );
+        assert_eq!(encoded["default_prompt"], json!("请面向业务用户回答。"));
+        assert_eq!(encoded["output_format"], json!("MD表格"));
+        assert_eq!(encoded["render_mode"], json!("artifact"));
         assert!(encoded.get("thread_external_id").is_none());
     }
 

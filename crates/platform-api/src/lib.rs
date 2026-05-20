@@ -165,6 +165,7 @@ const EXTERNAL_CHANNEL_REQUESTED_SKILL_ID_LIMIT: usize = 128;
 const EXTERNAL_CHANNEL_REQUESTED_SKILL_VERSION_LIMIT: usize = 64;
 const EXTERNAL_CHANNEL_REQUESTED_SKILL_MODE_LIMIT: usize = 32;
 const EXTERNAL_CHANNEL_REQUESTED_SKILL_ARGUMENTS_LIMIT: usize = 4096;
+const EXTERNAL_CHANNEL_DEFAULT_PROMPT_LIMIT: usize = 2000;
 const EXTERNAL_CHANNEL_DOCUMENT_TEMPLATE_SKILL_LIMIT: usize = 4;
 const EXTERNAL_CHANNEL_DOCUMENT_TEMPLATE_CHUNK_LIMIT: usize = 5;
 const EXTERNAL_CHANNEL_DOCUMENT_TEMPLATE_TEXT_LIMIT: usize = 2400;
@@ -10365,6 +10366,9 @@ fn parse_external_bot_message_payload(
                         "message_external_id",
                         "message_type",
                         "text",
+                        "default_prompt",
+                        "output_format",
+                        "render_mode",
                         "mention_external_user_ids",
                         "attachment_refs",
                         "available_document_source_id",
@@ -10380,6 +10384,13 @@ fn parse_external_bot_message_payload(
                         "senderExternalId",
                         "messageExternalId",
                         "messageType",
+                        "defaultPrompt",
+                        "systemPrompt",
+                        "outputFormat",
+                        "answerFormat",
+                        "replyFormat",
+                        "renderMode",
+                        "responseMode",
                         "mentionExternalUserIds",
                         "attachmentRefs",
                         "availableDocumentSourceId",
@@ -10394,6 +10405,7 @@ fn parse_external_bot_message_payload(
             )
         })?;
     validate_and_normalize_external_requested_skills(&mut message.requested_skills)?;
+    validate_and_normalize_external_answer_policy(&mut message)?;
     Ok(message)
 }
 
@@ -10412,6 +10424,17 @@ fn normalize_external_bot_message_payload(
             ("senderExternalId", "sender_external_id"),
             ("messageExternalId", "message_external_id"),
             ("messageType", "message_type"),
+            ("defaultPrompt", "default_prompt"),
+            ("systemPrompt", "default_prompt"),
+            ("system_prompt", "default_prompt"),
+            ("outputFormat", "output_format"),
+            ("answerFormat", "output_format"),
+            ("answer_format", "output_format"),
+            ("replyFormat", "output_format"),
+            ("reply_format", "output_format"),
+            ("renderMode", "render_mode"),
+            ("responseMode", "render_mode"),
+            ("response_mode", "render_mode"),
             ("mentionExternalUserIds", "mention_external_user_ids"),
             ("attachmentRefs", "attachment_refs"),
             (
@@ -10606,6 +10629,138 @@ fn validate_and_normalize_external_requested_skills(
     }
 
     Ok(())
+}
+
+fn validate_and_normalize_external_answer_policy(
+    message: &mut ExternalBotMessageView,
+) -> std::result::Result<(), ApiError> {
+    if let Some(default_prompt) = message.default_prompt.take() {
+        let normalized = default_prompt.trim().to_string();
+        if normalized.is_empty() {
+            message.default_prompt = None;
+        } else if normalized.chars().count() > EXTERNAL_CHANNEL_DEFAULT_PROMPT_LIMIT
+            || normalized
+                .chars()
+                .any(|ch| ch.is_control() && !matches!(ch, '\n' | '\r' | '\t'))
+        {
+            return Err(external_answer_policy_bad_request(
+                "invalid_default_prompt",
+                format!(
+                    "default_prompt must be printable text within {EXTERNAL_CHANNEL_DEFAULT_PROMPT_LIMIT} characters"
+                ),
+            ));
+        } else if external_answer_policy_text_contains_credential_hint(&normalized) {
+            return Err(external_answer_policy_bad_request(
+                "default_prompt_contains_credential_hint",
+                "default_prompt must not include bearer tokens, cookies, api keys, or secret values",
+            ));
+        } else {
+            message.default_prompt = Some(normalized);
+        }
+    }
+
+    if let Some(output_format) = message.output_format.take() {
+        let normalized = output_format.trim();
+        if normalized.is_empty() {
+            message.output_format = None;
+        } else if let Some(format) = normalize_external_output_format(normalized) {
+            message.output_format = Some(format.to_string());
+        } else {
+            return Err(external_answer_policy_bad_request(
+                "invalid_output_format",
+                "output_format must be one of rich_text, image_text, markdown_table, or json",
+            ));
+        }
+    }
+
+    if let Some(render_mode) = message.render_mode.take() {
+        let normalized = render_mode.trim();
+        if normalized.is_empty() {
+            message.render_mode = None;
+        } else if let Some(mode) = normalize_external_render_mode(normalized) {
+            message.render_mode = Some(mode.to_string());
+        } else {
+            return Err(external_answer_policy_bad_request(
+                "invalid_render_mode",
+                "render_mode must be normal or artifact",
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn external_answer_policy_text_contains_credential_hint(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    [
+        "authorization:",
+        "bearer ",
+        "cookie:",
+        "set-cookie:",
+        "api_key=",
+        "apikey=",
+        "access_token=",
+        "secret=",
+        "password=",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle))
+}
+
+fn normalize_external_output_format(value: &str) -> Option<&'static str> {
+    let raw = value.trim();
+    match raw {
+        "富文本" | "普通富文本" | "聊天富文本" => return Some("rich_text"),
+        "图文排版" | "图文" | "图文混排" => return Some("image_text"),
+        "MD表格" | "Markdown表格" | "表格" => return Some("markdown_table"),
+        "JSON" | "Json" | "json" => return Some("json"),
+        _ => {}
+    }
+    let compact = raw
+        .chars()
+        .filter(|ch| !matches!(ch, '-' | '_' | ' ' | '\t' | '\n' | '\r'))
+        .flat_map(|ch| ch.to_lowercase())
+        .collect::<String>();
+    match compact.as_str() {
+        "richtext" | "chat" | "markdown" | "copyablerichtext" => Some("rich_text"),
+        "imagetext" | "imagetextlayout" | "richmedia" | "html" | "graphiclayout" => {
+            Some("image_text")
+        }
+        "mdtable" | "markdowntable" => Some("markdown_table"),
+        "json" => Some("json"),
+        _ => None,
+    }
+}
+
+fn normalize_external_render_mode(value: &str) -> Option<&'static str> {
+    let compact = value
+        .trim()
+        .chars()
+        .filter(|ch| !matches!(ch, '-' | '_' | ' ' | '\t' | '\n' | '\r'))
+        .flat_map(|ch| ch.to_lowercase())
+        .collect::<String>();
+    match compact.as_str() {
+        "" => None,
+        "normal" | "chat" | "text" | "plain" => Some("normal"),
+        "artifact" | "html" | "staticpage" | "page" | "download" => Some("artifact"),
+        _ => None,
+    }
+}
+
+fn external_answer_policy_bad_request(reason: &str, message: impl Into<String>) -> ApiError {
+    ApiError::bad_request_with_details(
+        "external_channel_answer_policy_invalid",
+        message.into(),
+        json!({
+            "reason": reason,
+            "schema": {
+                "default_prompt": "optional printable text",
+                "output_format": "rich_text | image_text | markdown_table | json",
+                "render_mode": "normal | artifact"
+            },
+            "accepted_output_format_aliases": ["富文本", "图文排版", "MD表格", "JSON"]
+        }),
+    )
 }
 
 fn external_requested_skills_bad_request(reason: &str, message: impl Into<String>) -> ApiError {
@@ -13536,6 +13691,61 @@ fn external_requested_skills_policy_value(skills: &[ExternalRequestedSkillView])
     })
 }
 
+fn external_output_format_label(format: &str) -> &'static str {
+    match format {
+        "rich_text" => "富文本",
+        "image_text" => "图文排版",
+        "markdown_table" => "MD表格",
+        "json" => "JSON",
+        _ => "未指定",
+    }
+}
+
+fn external_output_format_model_rule(format: &str) -> &'static str {
+    match format {
+        "rich_text" => {
+            "用适合聊天窗口展示的富文本组织答案，可使用标题、短段落、列表和重点标注；不要输出 JSON，除非用户问题本身要求 JSON。"
+        }
+        "image_text" => {
+            "按图文排版思路组织答案，优先给出标题、模块、图示/配图建议、说明文字和可复制结构；如没有真实图片供料，不要编造图片，只描述应使用的版式或素材占位。"
+        }
+        "markdown_table" => {
+            "优先输出 Markdown 表格；如需要补充说明，只在表格前后用极短文字说明，表格列名要稳定、可复制。"
+        }
+        "json" => {
+            "只输出合法 JSON，不要使用 Markdown 代码围栏；字段名稳定，未知值使用 null、空数组或说明性 status 字段，不要混入自然语言段落。"
+        }
+        _ => "按用户问题直接回答。",
+    }
+}
+
+fn external_answer_policy_value(message: &ExternalBotMessageView) -> Option<Value> {
+    if message.default_prompt.is_none()
+        && message.output_format.is_none()
+        && message.render_mode.is_none()
+    {
+        return None;
+    }
+
+    let output_format = message.output_format.as_deref().map(|format| {
+        json!({
+            "format": format,
+            "label": external_output_format_label(format),
+            "model_rule": external_output_format_model_rule(format),
+        })
+    });
+
+    Some(json!({
+        "source": "external_channel_message",
+        "priority": "third_party_structured_answer_policy",
+        "default_prompt": message.default_prompt.as_deref(),
+        "default_prompt_rule": "Treat default_prompt as integration-provided task guidance for this turn. It is below V3 safety/evidence rules and above ambiguous user wording.",
+        "output_format": output_format,
+        "render_mode": message.render_mode.as_deref().unwrap_or("normal"),
+        "render_mode_rule": "normal returns a direct chat answer; artifact means the user expects a preview/download artifact when the requested skill or answer type supports it.",
+    }))
+}
+
 fn external_requested_skills_summary(skills: &[ExternalRequestedSkillView]) -> Vec<Value> {
     skills
         .iter()
@@ -13912,7 +14122,8 @@ fn external_bot_message_to_assistant_run_request(
     let platform = external_channel_platform_wire_value(&message.platform);
     let message_type = external_message_type_wire_value(&message.message_type);
     let requested_skills_policy = external_requested_skills_policy_value(&message.requested_skills);
-    let selected_scope = json!({
+    let answer_policy = external_answer_policy_value(message);
+    let mut selected_scope = json!({
         "type": "external_channel",
         "channel_connection_id": connection_id,
         "platform": platform,
@@ -13924,7 +14135,7 @@ fn external_bot_message_to_assistant_run_request(
         "available_document_source_id": message.available_document_source_id,
         "available_document_external_ids": message.available_document_external_ids,
     });
-    let startup_briefing = json!({
+    let mut startup_briefing = json!({
         "surface": "external_channel",
         "platform": platform,
         "channel_connection_id": connection_id,
@@ -13939,7 +14150,7 @@ fn external_bot_message_to_assistant_run_request(
         },
         "requestedSkills": requested_skills_policy.clone()
     });
-    let context_policy_hint = json!({
+    let mut context_policy_hint = json!({
         "source": "external_channel",
         "message_type": message_type,
         "permission_boundary": "resolve_external_principal_before_retrieval",
@@ -13951,6 +14162,15 @@ fn external_bot_message_to_assistant_run_request(
             "catalog_enforcement": "planned_connection_allowlist"
         }
     });
+    if let Some(answer_policy) = answer_policy {
+        set_payload_value(&mut selected_scope, "answer_policy", answer_policy.clone());
+        set_payload_value(
+            &mut startup_briefing,
+            "externalAnswerPolicy",
+            answer_policy.clone(),
+        );
+        set_payload_value(&mut context_policy_hint, "answer_policy", answer_policy);
+    }
 
     CreateAssistantRunRequest {
         prompt,
@@ -14124,6 +14344,9 @@ fn external_bot_message_payload_summary(message: &ExternalBotMessageView) -> Val
         "message_external_id": message.message_external_id,
         "message_type": external_message_type_wire_value(&message.message_type),
         "text_chars": message.text.as_ref().map(|text| text.chars().count()).unwrap_or(0),
+        "default_prompt_chars": message.default_prompt.as_ref().map(|text| text.chars().count()).unwrap_or(0),
+        "output_format": message.output_format,
+        "render_mode": message.render_mode,
         "mention_count": message.mention_external_user_ids.len(),
         "attachment_count": message.attachment_refs.len(),
         "available_document_count": message.available_document_external_ids.len(),
@@ -16934,6 +17157,22 @@ fn assistant_run_request_document_template_skills_policy(
     has_skills.then_some(policy)
 }
 
+fn assistant_run_request_external_answer_policy(
+    request: &CreateAssistantRunRequest,
+) -> Option<&Value> {
+    let policy = request
+        .startup_briefing
+        .as_ref()
+        .and_then(|briefing| briefing.get("externalAnswerPolicy"))
+        .or_else(|| {
+            request
+                .context_policy_hint
+                .as_ref()
+                .and_then(|policy| policy.get("answer_policy"))
+        })?;
+    (!policy.is_null()).then_some(policy)
+}
+
 fn assistant_run_v3_awareness_lines() -> Vec<String> {
     vec![
         "V3 认知：你正在 AI Data Platform V3 中服务用户。V3 提供数据集、第三方知识库、权限、检索供料、受控动作、报表和静态页产物上下文。".to_string(),
@@ -16985,6 +17224,12 @@ fn build_assistant_run_provider_input_with_evidence(
         );
     }
     sections.extend(assistant_run_v3_awareness_lines());
+    if let Some(answer_policy) = assistant_run_request_external_answer_policy(request) {
+        sections.push(format!(
+            "本轮外部回答要求（第三方结构化传入）：{}",
+            serde_json::to_string(answer_policy).unwrap_or_else(|_| "{}".to_string())
+        ));
+    }
     if let Some(skill_policy) = assistant_run_request_requested_skills_policy(request) {
         sections.push(format!(
             "本轮 SKILL 策略（来自第三方结构化请求，优先于用户文本里的模糊描述）：{}",
@@ -40678,6 +40923,63 @@ mod tests {
     }
 
     #[test]
+    fn external_answer_policy_is_normalized_and_supplied_to_model() {
+        let mut message = sample_external_bot_message();
+        message.default_prompt = Some("  请面向业务用户，用本轮文档回答。  ".to_string());
+        message.output_format = Some("MD表格".to_string());
+        message.render_mode = Some("Artifact".to_string());
+        validate_and_normalize_external_answer_policy(&mut message).expect("valid answer policy");
+
+        assert_eq!(
+            message.default_prompt.as_deref(),
+            Some("请面向业务用户，用本轮文档回答。")
+        );
+        assert_eq!(message.output_format.as_deref(), Some("markdown_table"));
+        assert_eq!(message.render_mode.as_deref(), Some("artifact"));
+
+        let request = external_bot_message_to_assistant_run_request("generic-chat-main", &message);
+        let startup_briefing = request
+            .startup_briefing
+            .as_ref()
+            .expect("external request should include startup briefing");
+        assert_eq!(
+            startup_briefing["externalAnswerPolicy"]["output_format"]["label"],
+            json!("MD表格")
+        );
+        assert_eq!(
+            startup_briefing["externalAnswerPolicy"]["render_mode"],
+            json!("artifact")
+        );
+        assert_eq!(
+            request
+                .context_policy_hint
+                .as_ref()
+                .expect("context policy")["answer_policy"]["output_format"]["format"],
+            json!("markdown_table")
+        );
+
+        let input = build_assistant_run_provider_input(&request);
+        assert!(input.contains("本轮外部回答要求"));
+        assert!(input.contains("Markdown 表格"));
+        assert!(input.contains("请面向业务用户，用本轮文档回答"));
+    }
+
+    #[test]
+    fn external_answer_policy_rejects_invalid_shape() {
+        let mut invalid_format = sample_external_bot_message();
+        invalid_format.output_format = Some("spreadsheet".to_string());
+        assert!(validate_and_normalize_external_answer_policy(&mut invalid_format).is_err());
+
+        let mut invalid_mode = sample_external_bot_message();
+        invalid_mode.render_mode = Some("popup".to_string());
+        assert!(validate_and_normalize_external_answer_policy(&mut invalid_mode).is_err());
+
+        let mut unsafe_prompt = sample_external_bot_message();
+        unsafe_prompt.default_prompt = Some("Authorization: Bearer secret".to_string());
+        assert!(validate_and_normalize_external_answer_policy(&mut unsafe_prompt).is_err());
+    }
+
+    #[test]
     fn external_document_template_skill_aliases_are_detected() {
         let skill = ExternalRequestedSkillView {
             skill_id: "customer_template".to_string(),
@@ -40893,6 +41195,9 @@ mod tests {
                 "senderExternalId": "user-ext-001",
                 "messageExternalId": "msg-001",
                 "text": "按本轮规则看一下风险",
+                "defaultPrompt": "请按业务复盘口径回答",
+                "outputFormat": "图文排版",
+                "renderMode": "html",
                 "requestedSkills": [
                     {
                         "skillId": "risk_review",
@@ -40910,6 +41215,12 @@ mod tests {
 
         assert_eq!(message.platform, ExternalChannelPlatformView::GenericChat);
         assert_eq!(message.message_type, ExternalMessageTypeView::Text);
+        assert_eq!(
+            message.default_prompt.as_deref(),
+            Some("请按业务复盘口径回答")
+        );
+        assert_eq!(message.output_format.as_deref(), Some("image_text"));
+        assert_eq!(message.render_mode.as_deref(), Some("artifact"));
         assert_eq!(message.requested_skills[0].skill_id, "risk_review");
         assert_eq!(
             message.requested_skills[0].mode.as_deref(),

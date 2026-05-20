@@ -75,7 +75,7 @@ sequenceDiagram
 | 需求 | 在线文档相关部分 | 现有覆盖 | 当前缺口 | 建议落地 |
 | --- | --- | --- | --- | --- |
 | <span class="requirement-highlight">1. 解析文档并同步</span> | <span class="requirement-highlight">第 7 节文档接口、第 8 节 `documents/parse`、`parse-detail`、`external/sources/{source_id}/sync`</span> | <span class="requirement-highlight">已有单文档解析、解析详情查询、资料源同步触发和本轮文档范围字段</span> | <span class="requirement-highlight">批量存量文档解析/同步的对外批处理接口尚未作为独立接口公开；当前可用循环调用单文档解析或走资料源同步</span> | <span class="requirement-highlight">联调先用单文档 `documents/parse`；存量批量导入如有性能要求，再补批量 parse 或 source sync 任务参数</span> |
-| <span class="requirement-highlight">2. 新会话接收默认提示词和输出格式后对话</span> | <span class="requirement-highlight">第 5 节 `/events`、`conversation_external_id`、`sender_external_id`、`requested_skills[].arguments`</span> | <span class="requirement-highlight">已有新会话 ID、用户 ID、消息文本和本轮 skill 参数承载位</span> | <span class="requirement-highlight">尚未有一等字段 `default_prompt`、`output_format`、`render_mode`；目前只能放在 `text` 或 `requested_skills[].arguments` 中，审计和校验不够直接</span> | <span class="requirement-highlight">建议新增请求字段：`default_prompt`、`output_format=markdown/html/chat/copyable_rich_text`、`render_mode=normal/artifact`，并做长度、枚举和敏感信息校验</span> |
+| <span class="requirement-highlight">2. 新会话接收默认提示词和输出格式后对话</span> | <span class="requirement-highlight">第 5 节 `/events` 的 `default_prompt`、`output_format`、`render_mode`</span> | <span class="requirement-highlight">已支持一等字段、驼峰别名、长度/枚举/高危凭据提示校验，并写入本轮模型上下文</span> | <span class="requirement-highlight">需要第三方在自建页面确认四种输出格式的展示映射；后端接口侧不再需要把这些参数塞进 `text` 或 skill 参数</span> | <span class="requirement-highlight">最小联调直接传 `default_prompt`、`output_format=rich_text/image_text/markdown_table/json`、`render_mode=normal/artifact`</span> |
 | <span class="requirement-highlight">3. 聊天指定模板文件并按模板输出 HTML 页面</span> | <span class="requirement-highlight">第 5 节 `document_template_skill`，第 8 节模板文档先解析，第 10 节快速 HTML 交付</span> | <span class="requirement-highlight">已有模板文档 ID、输出类型 `static_page/html`、快速 HTML 渲染、预览和下载接口</span> | <span class="requirement-highlight">模板必须先解析并出现在本轮 `available_document_external_ids`；尚未有专门的“模板文件上传/选择/生成 HTML”组合接口</span> | <span class="requirement-highlight">最小联调用 `requested_skills[].arguments.template_document_external_id`；后续可加 `template_document_external_id` 顶层字段或模板管理接口</span> |
 
 ## 4. 文档是否必须搬到 V3
@@ -140,7 +140,7 @@ Authorization: Bearer <V3 inbound token>
   "available_document_source_id": "src-docs",
   "available_document_external_ids": ["doc-001", "doc-002", "tpl-weekly-report-001"],
   "default_prompt": "你是 Data Buddy 助手，请优先按本轮传入资料回答，输出面向业务用户。",
-  "output_format": "html",
+  "output_format": "image_text",
   "render_mode": "artifact",
   "requested_skills": [
     {
@@ -184,9 +184,9 @@ Authorization: Bearer <V3 inbound token>
 | `text` | 文本消息必填 | 用户输入文本 |
 | `available_document_source_id` | 文档问答建议传 | 本轮可用文档所属资料源 ID；连接配置了默认资料源时可省略，但联调建议显式传 |
 | `available_document_external_ids` | 文档问答建议传 | 本轮允许 V3 使用的第三方文档 ID 列表；只传本轮已筛好的文档，不要传全库 |
-| <span class="requirement-highlight">`default_prompt`</span> | <span class="requirement-highlight">本次需求建议新增</span> | <span class="requirement-highlight">新会话默认提示词或页面级 system prompt；当前可临时放入 `requested_skills[].arguments.default_prompt` 或连接配置，建议补成一等字段</span> |
-| <span class="requirement-highlight">`output_format`</span> | <span class="requirement-highlight">本次需求建议新增</span> | <span class="requirement-highlight">期望输出格式，建议枚举为 `markdown`、`html`、`chat`、`copyable_rich_text`；当前可临时放入 `requested_skills[].arguments.output_format`</span> |
-| <span class="requirement-highlight">`render_mode`</span> | <span class="requirement-highlight">本次需求建议新增</span> | <span class="requirement-highlight">输出处理模式，建议 `normal` 表示普通聊天，`artifact` 表示生成可预览/下载产物；当前可由 `output_type` 和用户文本间接表达</span> |
+| <span class="requirement-highlight">`default_prompt`</span> | <span class="requirement-highlight">否</span> | <span class="requirement-highlight">新会话默认提示词或页面级 system prompt；V3 会裁剪空白、限制长度，并作为本轮任务指导供给模型，不作为越权系统指令</span> |
+| <span class="requirement-highlight">`output_format`</span> | <span class="requirement-highlight">否</span> | <span class="requirement-highlight">期望回答输出格式：`rich_text`（富文本）、`image_text`（图文排版）、`markdown_table`（MD 表格）、`json`（JSON）。也兼容中文值 `富文本`、`图文排版`、`MD表格`、`JSON` 和驼峰字段名 `outputFormat`</span> |
+| <span class="requirement-highlight">`render_mode`</span> | <span class="requirement-highlight">否</span> | <span class="requirement-highlight">输出处理模式：`normal` 表示普通聊天直答，`artifact` 表示本轮希望生成可预览/下载产物；兼容 `renderMode`，也兼容 `html` / `static_page` 等 artifact 别名</span> |
 | `requested_skills` | 否 | 第三方希望本轮应用的结构化 skill 列表；正式对接建议传此字段，不建议只把 skill 写进用户自然语言文本 |
 | `requested_skills[].skill_id` | `requested_skills` 有值时必填 | 本轮希望启用的 skill 稳定标识，建议使用英文或业务 slug |
 | `requested_skills[].version` | 否 | skill 版本号或策略版本，用于审计和复现；不传时按连接默认策略处理 |
@@ -212,9 +212,18 @@ Authorization: Bearer <V3 inbound token>
 - 正式对接建议传 `requested_skills`。V3 会把它作为本轮结构化运行策略写入助手运行上下文，并供给模型；
 - `requested_skills[].skill_id` 必填，建议使用稳定英文或业务 slug；`version` 可选；`mode` 可选，取值为 `required`、`preferred` 或 `disabled`，不传时按 `preferred` 处理；
 - `requested_skills[].arguments` 可选，必须是 JSON object，只放本轮 skill 所需的非敏感参数，例如 `{ "focus": "risk" }`。不要放 token、密码、Cookie 或长期下载 URL；
-- <span class="requirement-highlight">本次需求中的“默认提示词、输出格式、正常聊天/MD/HTML/可复制图文格式”建议作为 `default_prompt`、`output_format`、`render_mode` 一等字段补到接口；在接口补齐前，可先放入 `requested_skills[].arguments` 做联调占位。</span>
 - 当前版本是模型提示级 skill 策略，先解决“本轮用什么规则/流程回答”的问题；如果后续要把 skill 变成可执行工具，还需要单独配置工具范围、确认和审计白名单；
 - 请求体兼容驼峰字段 `requestedSkills`，也兼容别名 `skillRefs` / `skill_refs`。嵌套字段兼容 `skillId`、`skillVersion`。
+
+关于回答输出格式：
+
+- <span class="requirement-highlight">第三方可以在 `/events` 里直接传 `output_format`，四个正式取值是 `rich_text`、`image_text`、`markdown_table`、`json`，分别对应富文本、图文排版、MD 表格、JSON。</span>
+- `rich_text`：适合普通聊天窗口，模型会优先使用标题、短段落、列表和重点标注；
+- `image_text`：适合图文排版或页面卡片，模型会输出标题、模块、配图/图示建议和说明文字；没有真实图片供料时不会编造图片；
+- `markdown_table`：适合要求表格化结论，模型会优先输出可复制的 Markdown 表格；
+- `json`：适合程序读取，模型会只输出合法 JSON，不加 Markdown 代码围栏；
+- `render_mode=normal` 表示普通直答；`render_mode=artifact` 表示本轮希望走可预览/下载产物闭环，例如模板 skill 生成静态页 HTML；
+- `default_prompt`、`output_format`、`render_mode` 都是本轮结构化回答策略，会进入模型上下文；V3 安全、权限、证据边界仍然优先于这些字段。
 
 关于本轮文档模板 skill：
 
@@ -1116,6 +1125,7 @@ V3 错误格式：
 - 至少 2 个测试 `conversation_external_id`，用于验证不同会话上下文；
 - 至少 5 份测试文档，包括普通资料、模板资料、已更新版本、已删除或停用样例；
 - 至少 1 组 `requested_skills` 样例；
+- 至少 1 组 `default_prompt`、`output_format`、`render_mode` 样例，覆盖富文本、图文排版、MD 表格或 JSON 中的目标格式；
 - 至少 1 份模板文档，并能在消息中通过 `document_template_skill` 指定；
 - 自建聊天页面或消息网关；
 - 产物接收 endpoint；
@@ -1131,12 +1141,14 @@ V3 错误格式：
 2. 未传入本轮文档列表的文档不进入回答证据；
 3. 文档更新后，V3 使用新 revision；
 4. 指定模板文档后，V3 按模板结构生成结果；
-5. 高风险动作必须先返回确认请求；
-6. 用户拒绝确认后，V3 不派发动作；
-7. 已确认动作派发到第三方 endpoint；
-8. 第三方回传 `succeeded` 后，V3 观测面板展示结果回调；
-9. 重复消息和重复结果回调不会重复创建任务；
-10. 未配置派发凭证时，V3 记录 `dispatch_auth_missing`，不静默失败。
+5. 传入 `output_format=markdown_table` 时，回答优先输出可复制 MD 表格；
+6. 传入 `output_format=json` 时，回答只返回合法 JSON；
+7. 高风险动作必须先返回确认请求；
+8. 用户拒绝确认后，V3 不派发动作；
+9. 已确认动作派发到第三方 endpoint；
+10. 第三方回传 `succeeded` 后，V3 观测面板展示结果回调；
+11. 重复消息和重复结果回调不会重复创建任务；
+12. 未配置派发凭证时，V3 记录 `dispatch_auth_missing`，不静默失败。
 
 ## 17. 安全与合规要求
 
@@ -1172,8 +1184,8 @@ V3 错误格式：
 仍需按项目配置或后续联调确认：
 
 - 具体第三方文档 API 字段映射；
-- <span class="requirement-highlight">用户 ID、会话 ID、skill 和模板文档字段映射；</span>
-- <span class="requirement-highlight">`default_prompt`、`output_format`、`render_mode` 是否作为 `/events` 一等字段实现；当前文档已按本次需求建议标注，代码侧还需要补合同和校验；</span>
+- <span class="requirement-highlight">用户 ID、会话 ID、skill、模板文档字段和四种输出格式在第三方页面里的展示映射；</span>
+- <span class="requirement-highlight">`default_prompt`、`output_format`、`render_mode` 已作为 `/events` 一等字段实现；联调时需确认第三方是否传 snake_case、camelCase 或中文输出格式值；</span>
 - <span class="requirement-highlight">批量存量文档解析接口是否需要新增；当前已有单文档 parse 和 source sync，但没有独立的批量 parse 请求体；</span>
 - <span class="requirement-highlight">模板文件上传/选择/生成 HTML 是否需要组合接口；当前最小方案是模板先作为文档解析，再通过 `document_template_skill` 指定；</span>
 - 产物 endpoint 和业务动作 endpoint；
