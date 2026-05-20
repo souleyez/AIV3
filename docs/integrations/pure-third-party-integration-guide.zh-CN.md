@@ -1,6 +1,6 @@
 # V3 纯第三方模式对接文档
 
-**文档状态：** 对外草案 v0.3
+**文档状态：** 对外草案 v0.5
 **最后更新：** 2026-05-20
 **适用对象：** 第三方自建门户、文档库、用户中心、产物系统、业务系统和客户 IT 对接团队
 **默认 V3 对外域名：** `https://v3.elepcloud.com`
@@ -129,9 +129,29 @@ Authorization: Bearer <V3 inbound token>
   "sender_external_id": "user-10001",
   "message_external_id": "msg-20260515-0001",
   "message_type": "text",
-  "text": "帮我总结我能看的采购审批制度，并指出本周需要处理的风险。",
+  "text": "帮我按周报模板总结我能看的采购审批制度，并生成一页 HTML 交付稿。",
   "available_document_source_id": "src-docs",
-  "available_document_external_ids": ["doc-001", "doc-002"],
+  "available_document_external_ids": ["doc-001", "doc-002", "tpl-weekly-report-001"],
+  "requested_skills": [
+    {
+      "skill_id": "procurement_policy_review",
+      "version": "2026-05-20",
+      "mode": "preferred",
+      "arguments": {
+        "focus": "risk"
+      }
+    },
+    {
+      "skill_id": "document_template_skill",
+      "version": "2026-05-20",
+      "mode": "required",
+      "arguments": {
+        "template_document_external_id": "tpl-weekly-report-001",
+        "source_id": "src-docs",
+        "output_type": "static_page"
+      }
+    }
+  ],
   "mention_external_user_ids": [],
   "attachment_refs": [],
   "idempotency_key": "generic_chat:tenant-ext-001:msg-20260515-0001",
@@ -153,6 +173,7 @@ Authorization: Bearer <V3 inbound token>
 | `text` | 文本消息必填 | 用户输入文本 |
 | `available_document_source_id` | 文档问答建议传 | 本轮可用文档所属资料源 ID；连接配置了默认资料源时可省略，但联调建议显式传 |
 | `available_document_external_ids` | 文档问答建议传 | 本轮允许 V3 使用的第三方文档 ID 列表；只传当前用户本轮可见文档，不要传全库 |
+| `requested_skills` | 否 | 第三方希望本轮应用的结构化 skill 列表；正式对接建议传此字段，不建议只把 skill 写进用户自然语言文本 |
 | `mention_external_user_ids` | 否 | 本条消息中被 @ 的第三方用户 ID 列表；无 @ 时传空数组或省略 |
 | `attachment_refs` | 否 | 附件引用，文件下载需按项目配置权限和有效期 |
 | `idempotency_key` | 是 | 防重放和重复投递 |
@@ -163,6 +184,23 @@ Authorization: Bearer <V3 inbound token>
 - V3 会按 `platform + tenant_external_id + bot_external_id + sender_external_id` 维护一个内部隐藏的用户上下文范围，用于沉淀该用户历史对话摘要；
 - 该上下文不是默认供料。只有当用户问题明确引用“刚才、上次、之前、继续”等历史语境时，V3 才会把该用户自己的历史上下文作为可选证据供给模型；
 - `mention_external_user_ids` 只是本条消息中的提及对象，不代表授权读取被提及用户的历史上下文，也不会把被提及用户的历史对话供给模型。
+
+关于本轮 SKILL：
+
+- 如果第三方只在 `text` 里写“本轮使用某某 skill”，V3 会把它当作普通用户文本，模型可能遵循，但这是非结构化兜底，不保证可审计、可复现或可校验；
+- 正式对接建议传 `requested_skills`。V3 会把它作为本轮结构化运行策略写入助手运行上下文，并供给模型；
+- `requested_skills[].skill_id` 必填，建议使用稳定英文或业务 slug；`version` 可选；`mode` 可选，取值为 `required`、`preferred` 或 `disabled`，不传时按 `preferred` 处理；
+- `requested_skills[].arguments` 可选，必须是 JSON object，只放本轮 skill 所需的非敏感参数，例如 `{ "focus": "risk" }`。不要放 token、密码、Cookie 或长期下载 URL；
+- 当前版本是模型提示级 skill 策略，先解决“本轮用什么规则/流程回答”的问题；如果后续要把 skill 变成可执行工具，还需要单独配置工具权限、确认和审计白名单；
+- 请求体兼容驼峰字段 `requestedSkills`，也兼容别名 `skillRefs` / `skill_refs`。嵌套字段兼容 `skillId`、`skillVersion`。
+
+关于本轮文档模板 skill：
+
+- 如果第三方希望“指定某个文档为模板，按这个格式/结构/风格输出”，请在 `requested_skills` 中传 `skill_id: "document_template_skill"`；
+- 模板文档也必须出现在本轮 `available_document_external_ids` 中，V3 只会从本轮可见文档范围里读取模板快照，避免跨权限引用；
+- 推荐参数为 `arguments.template_document_external_id`、`arguments.source_id`、`arguments.output_type`。也兼容 `templateDocumentExternalId`、`template_document_id` / `templateDocumentId`；
+- `output_type` 可传 `static_page`、`html`、`page` 或 `any`。当用户生成快速 HTML/静态页时，V3 会把模板文档转换成自定义 `templateReference`；
+- 模板文档默认只约束输出结构、章节顺序、措辞风格和必填字段，不会自动作为事实证据。事实仍来自本轮普通文档供料和 V3 可见证据。
 
 关于本轮文档范围：
 

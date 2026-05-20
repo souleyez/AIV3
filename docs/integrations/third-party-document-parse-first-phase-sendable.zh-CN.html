@@ -555,10 +555,31 @@ Content-Type: application/json</code></pre>
   "sender_external_id": "user-10001",
   "message_external_id": "msg-20260518-0001",
   "message_type": "text",
-  "text": "帮我总结这份采购审批制度，并指出本周需要处理的风险。",
+  "text": "帮我按交付模板总结这份采购审批制度，并生成一页 HTML。",
   "available_document_source_id": "third-party-source-main",
   "available_document_external_ids": [
-    "doc-20260518-0001"
+    "doc-20260518-0001",
+    "tpl-20260518-weekly-html"
+  ],
+  "requested_skills": [
+    {
+      "skill_id": "document_qa_policy",
+      "version": "2026-05-20",
+      "mode": "preferred",
+      "arguments": {
+        "focus": "risk"
+      }
+    },
+    {
+      "skill_id": "document_template_skill",
+      "version": "2026-05-20",
+      "mode": "required",
+      "arguments": {
+        "template_document_external_id": "tpl-20260518-weekly-html",
+        "source_id": "third-party-source-main",
+        "output_type": "static_page"
+      }
+    }
   ],
   "mention_external_user_ids": [],
   "attachment_refs": [],
@@ -581,6 +602,11 @@ Content-Type: application/json</code></pre>
             <tr><td><code>text</code></td><td>文本消息必填</td><td>string</td><td>用户输入文本。非文本消息可为空，但第一阶段问答建议使用文本。</td></tr>
             <tr><td><code>available_document_source_id</code></td><td>文档问答建议传</td><td>string</td><td>本轮允许供料的第三方资料源 ID。传文档列表时建议显式传。</td></tr>
             <tr><td><code>available_document_external_ids</code></td><td>文档问答建议传</td><td>string[]</td><td>本轮允许 V3 使用的第三方文档 ID 列表。只传本轮可见文档，不要传全库。</td></tr>
+            <tr><td><code>requested_skills</code></td><td>否</td><td>object[]</td><td>本轮希望 V3 应用的结构化 skill 列表；正式对接建议传字段，不要只写进用户自然语言文本。</td></tr>
+            <tr><td><code>requested_skills[].skill_id</code></td><td>skill 存在时必填</td><td>string</td><td>第三方定义或双方约定的稳定 skill ID。</td></tr>
+            <tr><td><code>requested_skills[].version</code></td><td>否</td><td>string</td><td>skill 版本号或发布日期。</td></tr>
+            <tr><td><code>requested_skills[].mode</code></td><td>否</td><td>string</td><td><code>required</code>、<code>preferred</code> 或 <code>disabled</code>；不传按 <code>preferred</code> 处理。</td></tr>
+            <tr><td><code>requested_skills[].arguments</code></td><td>否</td><td>object</td><td>本轮 skill 参数，只放非敏感业务字段，不要放 token、密码、Cookie 或长期下载 URL。</td></tr>
             <tr><td><code>mention_external_user_ids</code></td><td>否</td><td>string[]</td><td>被 @ 的第三方用户 ID 列表；无 @ 时传空数组或省略。</td></tr>
             <tr><td><code>attachment_refs</code></td><td>否</td><td>object[]</td><td>第三方附件引用列表；第一阶段文档问答通常不用传。</td></tr>
             <tr><td><code>attachment_refs[].attachment_external_id</code></td><td>附件存在时必填</td><td>string</td><td>第三方附件 ID。</td></tr>
@@ -592,7 +618,7 @@ Content-Type: application/json</code></pre>
             <tr><td><code>received_at</code></td><td>建议传</td><td>ISO datetime</td><td>第三方侧消息接收时间；不传或格式非法时 V3 使用服务端接收时间。</td></tr>
           </tbody>
         </table>
-        <p>兼容说明：请求体同时接受 Java 常用驼峰字段名，例如 <code>tenantExternalId</code>、<code>botExternalId</code>、<code>conversationExternalId</code>、<code>threadExternalId</code>、<code>senderExternalId</code>、<code>messageExternalId</code>、<code>messageType</code>、<code>mentionExternalUserIds</code>、<code>attachmentRefs</code>、<code>availableDocumentSourceId</code>、<code>availableDocumentExternalIds</code>、<code>idempotencyKey</code>、<code>receivedAt</code>。文档示例仍使用 V3 标准 snake_case。</p>
+        <p>兼容说明：请求体同时接受 Java 常用驼峰字段名，例如 <code>tenantExternalId</code>、<code>botExternalId</code>、<code>conversationExternalId</code>、<code>threadExternalId</code>、<code>senderExternalId</code>、<code>messageExternalId</code>、<code>messageType</code>、<code>mentionExternalUserIds</code>、<code>attachmentRefs</code>、<code>availableDocumentSourceId</code>、<code>availableDocumentExternalIds</code>、<code>requestedSkills</code>、<code>idempotencyKey</code>、<code>receivedAt</code>。<code>requested_skills</code> 也兼容别名 <code>skillRefs</code> / <code>skill_refs</code>，嵌套字段兼容 <code>skillId</code>、<code>skillVersion</code>。文档示例仍使用 V3 标准 snake_case。</p>
         <ul>
           <li><code>platform</code> 未传时，V3 会使用通道配置的平台值；生产联调仍建议显式传 <code>generic_chat</code> 或双方约定的平台值。</li>
           <li><code>message_type</code> 未传时默认为 <code>text</code>；支持 <code>text</code>、<code>image</code>、<code>file</code>、<code>audio</code>、<code>video</code>、<code>card</code>、<code>event</code>、<code>unknown</code>。</li>
@@ -601,6 +627,8 @@ Content-Type: application/json</code></pre>
           <li>传 <code>available_document_external_ids</code> 时，必须同时传 <code>available_document_source_id</code>，或由 V3 通道配置默认资料源；未解析到的外部文档 ID 会进入 <code>unresolved_document_external_ids</code>，不会供料给模型。</li>
           <li>文档问答建议每条消息都传本轮文档范围。V3 会为当前 <code>connection_id + conversation_external_id + source_id</code> 创建或刷新临时数据集；同一份文档可以同时属于原始资料库和多个临时数据集，临时范围不会移动或删除原文档。</li>
           <li>如果已同步外部 ACL 快照，V3 会继续按 ACL 严格过滤；如果第一阶段尚未同步 ACL 快照，V3 只使用本轮显式传入且已成功解析的文档作为兜底范围，不会扩大到同资料源或同数据集的其它文档。</li>
+          <li>如果第三方只在 <code>text</code> 里写“本轮使用某某 skill”，V3 会当作普通用户文本处理，模型可能遵循但不保证可审计；正式对接请传 <code>requested_skills</code>。当前版本是提示级 skill 策略，不代表自动执行外部工具。</li>
+          <li>如果要指定某个文档作为输出模板，请传 <code>skill_id: "document_template_skill"</code>，并在 <code>arguments</code> 里给出 <code>template_document_external_id</code>、<code>source_id</code>、<code>output_type</code>。模板文档也必须出现在本轮 <code>available_document_external_ids</code> 中；V3 只把它作为格式、结构、风格和必填字段参考，不把它自动当作事实证据。生成快速 HTML/静态页时，V3 会把模板快照转换成自定义 <code>templateReference</code>。</li>
         </ul>
         <figure>
           <figcaption><span>response body</span></figcaption>

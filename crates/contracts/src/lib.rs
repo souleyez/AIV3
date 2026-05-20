@@ -66,6 +66,22 @@ pub struct ExternalAttachmentRefView {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ExternalRequestedSkillView {
+    #[serde(alias = "skillId")]
+    pub skill_id: String,
+    #[serde(
+        default,
+        alias = "skillVersion",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arguments: Option<Value>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ExternalBotMessageView {
     pub platform: ExternalChannelPlatformView,
     pub tenant_external_id: String,
@@ -86,6 +102,14 @@ pub struct ExternalBotMessageView {
     pub available_document_external_ids: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub available_document_source_id: Option<String>,
+    #[serde(
+        default,
+        alias = "requestedSkills",
+        alias = "skillRefs",
+        alias = "skill_refs",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub requested_skills: Vec<ExternalRequestedSkillView>,
     pub idempotency_key: String,
     pub received_at: DateTime<Utc>,
 }
@@ -3757,6 +3781,16 @@ mod tests {
             "message_external_id": "msg-001",
             "message_type": "text",
             "text": "本周订单风险有哪些？",
+            "requestedSkills": [
+                {
+                    "skillId": "contract_review",
+                    "skillVersion": "2026-05-20",
+                    "mode": "required",
+                    "arguments": {
+                        "focus": "risk"
+                    }
+                }
+            ],
             "attachment_refs": [
                 {
                     "attachment_external_id": "file-001",
@@ -3774,6 +3808,19 @@ mod tests {
         assert_eq!(message.platform, ExternalChannelPlatformView::WeCom);
         assert_eq!(message.message_type, ExternalMessageTypeView::Text);
         assert!(message.mention_external_user_ids.is_empty());
+        assert_eq!(message.requested_skills.len(), 1);
+        assert_eq!(message.requested_skills[0].skill_id, "contract_review");
+        assert_eq!(
+            message.requested_skills[0].version.as_deref(),
+            Some("2026-05-20")
+        );
+        assert_eq!(
+            message.requested_skills[0]
+                .arguments
+                .as_ref()
+                .and_then(|value| { value.get("focus").and_then(Value::as_str) }),
+            Some("risk")
+        );
         assert_eq!(
             message.attachment_refs[0].filename.as_deref(),
             Some("orders.xlsx")
@@ -3785,6 +3832,10 @@ mod tests {
         assert_eq!(
             encoded["attachment_refs"][0]["download_url_redacted"],
             json!("https://wecom.example/download/[redacted]")
+        );
+        assert_eq!(
+            encoded["requested_skills"][0]["skill_id"],
+            json!("contract_review")
         );
         assert!(encoded.get("thread_external_id").is_none());
     }

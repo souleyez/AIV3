@@ -405,6 +405,7 @@ fn wecom_message_from_fields(
         attachment_refs: wecom_attachment_refs(fields),
         available_document_external_ids: Vec::new(),
         available_document_source_id: None,
+        requested_skills: Vec::new(),
         idempotency_key: format!(
             "we_com:{}:{}:{}",
             config.tenant_external_id, config.bot_external_id, message_external_id

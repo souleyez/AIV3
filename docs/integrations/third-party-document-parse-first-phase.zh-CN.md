@@ -74,12 +74,15 @@ Content-Type: application/json
 - `conversation_external_id`：同一轮、同一页面会话或同一聊天窗口保持不变；V3 会把它映射为同一个对话上下文。
 - `available_document_source_id`：资料源 ID；如果通道配置里已有 `default_source_id`，可省略。
 - `available_document_external_ids`：本轮允许 V3 使用的第三方文档 ID 列表。
+- `requested_skills`：可选，本轮希望 V3 应用的结构化 skill 列表；正式对接建议传字段，不要只写进用户自然语言文本。
 
 补充说明：
 
 - 文档问答建议每条消息都传 `available_document_external_ids`，不要依赖上一轮消息里的文档列表。
 - 同一份 V3 文档可以同时属于原始资料库和多个临时数据集；临时数据集只保存本轮/本会话的 membership，不移动、不复制、不删除原文档。
 - 已同步外部 ACL 快照时，ACL 优先于显式范围；未同步 ACL 快照时，V3 只使用本轮显式传入且已解析成功的文档，未传入或未解析到的文档不会供料。
+- 如果第三方要指定本轮 skill，请传 `requested_skills[].skill_id`，可选 `version`、`mode=required|preferred|disabled` 和 object 类型的 `arguments`。V3 会把它作为本轮运行策略供给模型；当前是提示级策略，不代表自动执行外部工具。
+- 如果第三方要指定某个文档作为输出模板，请传 `skill_id: "document_template_skill"`，并在 `arguments` 中传 `template_document_external_id`、`source_id` 和 `output_type`。模板文档也必须出现在本轮 `available_document_external_ids` 中；V3 只把它作为格式、结构、风格和必填字段参考，不把它自动当作事实证据。生成快速 HTML/静态页时会转成自定义 `templateReference`。
 
 请求体见 `third-party-chat-with-document-ids.sample.json`。
 

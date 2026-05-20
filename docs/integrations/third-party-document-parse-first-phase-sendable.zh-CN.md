@@ -232,10 +232,31 @@ Content-Type: application/json
   "sender_external_id": "user-10001",
   "message_external_id": "msg-20260518-0001",
   "message_type": "text",
-  "text": "帮我总结这份采购审批制度，并指出本周需要处理的风险。",
+  "text": "帮我按交付模板总结这份采购审批制度，并生成一页 HTML。",
   "available_document_source_id": "third-party-source-main",
   "available_document_external_ids": [
-    "doc-20260518-0001"
+    "doc-20260518-0001",
+    "tpl-20260518-weekly-html"
+  ],
+  "requested_skills": [
+    {
+      "skill_id": "document_qa_policy",
+      "version": "2026-05-20",
+      "mode": "preferred",
+      "arguments": {
+        "focus": "risk"
+      }
+    },
+    {
+      "skill_id": "document_template_skill",
+      "version": "2026-05-20",
+      "mode": "required",
+      "arguments": {
+        "template_document_external_id": "tpl-20260518-weekly-html",
+        "source_id": "third-party-source-main",
+        "output_type": "static_page"
+      }
+    }
   ],
   "mention_external_user_ids": [],
   "attachment_refs": [],
@@ -259,6 +280,11 @@ Content-Type: application/json
 | `text` | 文本消息必填 | string | 用户输入文本。非文本消息可为空，但第一阶段问答建议使用文本。 |
 | `available_document_source_id` | 文档问答建议传 | string | 本轮允许供料的第三方资料源 ID。传文档列表时建议显式传。 |
 | `available_document_external_ids` | 文档问答建议传 | string[] | 本轮允许 V3 使用的第三方文档 ID 列表。只传本轮可见文档，不要传全库。 |
+| `requested_skills` | 否 | object[] | 本轮希望 V3 应用的结构化 skill 列表；正式对接建议传字段，不要只写进用户自然语言文本。 |
+| `requested_skills[].skill_id` | skill 存在时必填 | string | 第三方定义或双方约定的稳定 skill ID。 |
+| `requested_skills[].version` | 否 | string | skill 版本号或发布日期。 |
+| `requested_skills[].mode` | 否 | string | `required`、`preferred` 或 `disabled`；不传按 `preferred` 处理。 |
+| `requested_skills[].arguments` | 否 | object | 本轮 skill 参数，只放非敏感业务字段，不要放 token、密码、Cookie 或长期下载 URL。 |
 | `mention_external_user_ids` | 否 | string[] | 被 @ 的第三方用户 ID 列表；无 @ 时传空数组或省略。 |
 | `attachment_refs` | 否 | object[] | 第三方附件引用列表；第一阶段文档问答通常不用传。 |
 | `attachment_refs[].attachment_external_id` | 附件存在时必填 | string | 第三方附件 ID。 |
@@ -269,7 +295,7 @@ Content-Type: application/json
 | `idempotency_key` | 建议传 | string | 消息幂等键。第三方重试同一条消息时必须保持不变。 |
 | `received_at` | 建议传 | ISO datetime | 第三方侧消息接收时间；不传或格式非法时 V3 使用服务端接收时间。 |
 
-兼容说明：请求体同时接受 Java 常用驼峰字段名，例如 `tenantExternalId`、`botExternalId`、`conversationExternalId`、`threadExternalId`、`senderExternalId`、`messageExternalId`、`messageType`、`mentionExternalUserIds`、`attachmentRefs`、`availableDocumentSourceId`、`availableDocumentExternalIds`、`idempotencyKey`、`receivedAt`。文档示例仍使用 V3 标准 snake_case。
+兼容说明：请求体同时接受 Java 常用驼峰字段名，例如 `tenantExternalId`、`botExternalId`、`conversationExternalId`、`threadExternalId`、`senderExternalId`、`messageExternalId`、`messageType`、`mentionExternalUserIds`、`attachmentRefs`、`availableDocumentSourceId`、`availableDocumentExternalIds`、`requestedSkills`、`idempotencyKey`、`receivedAt`。`requested_skills` 也兼容别名 `skillRefs` / `skill_refs`，嵌套字段兼容 `skillId`、`skillVersion`。文档示例仍使用 V3 标准 snake_case。
 
 字段补充：
 
@@ -280,6 +306,8 @@ Content-Type: application/json
 - 传 `available_document_external_ids` 时，必须同时传 `available_document_source_id`，或由 V3 通道配置默认资料源；未解析到的外部文档 ID 会进入 `unresolved_document_external_ids`，不会供料给模型。
 - 文档问答建议每条消息都传本轮文档范围。V3 会为当前 `connection_id + conversation_external_id + source_id` 创建或刷新临时数据集；同一份文档可以同时属于原始资料库和多个临时数据集，临时范围不会移动或删除原文档。
 - 如果已同步外部 ACL 快照，V3 会继续按 ACL 严格过滤；如果第一阶段尚未同步 ACL 快照，V3 只使用本轮显式传入且已成功解析的文档作为兜底范围，不会扩大到同资料源或同数据集的其它文档。
+- 如果第三方只在 `text` 里写“本轮使用某某 skill”，V3 会当作普通用户文本处理，模型可能遵循但不保证可审计；正式对接请传 `requested_skills`。当前版本是提示级 skill 策略，不代表自动执行外部工具。
+- 如果要指定某个文档作为输出模板，请传 `skill_id: "document_template_skill"`，并在 `arguments` 里给出 `template_document_external_id`、`source_id`、`output_type`。模板文档也必须出现在本轮 `available_document_external_ids` 中；V3 只把它作为格式、结构、风格和必填字段参考，不把它自动当作事实证据。生成快速 HTML/静态页时，V3 会把模板快照转换成自定义 `templateReference`。
 
 生成回复响应示例：
 

@@ -389,7 +389,7 @@
       </section>
       <article>
         <h1>V3 纯第三方模式对接文档</h1>
-<p><strong>文档状态：</strong> 对外草案 v0.2 <strong>最后更新：</strong> 2026-05-19 <strong>适用对象：</strong> 第三方自建门户、文档库、用户中心、产物系统、业务系统和客户 IT 对接团队 <strong>默认 V3 对外域名：</strong> <code>https://v3.elepcloud.com</code></p>
+<p><strong>文档状态：</strong> 对外草案 v0.5 <strong>最后更新：</strong> 2026-05-20 <strong>适用对象：</strong> 第三方自建门户、文档库、用户中心、产物系统、业务系统和客户 IT 对接团队 <strong>默认 V3 对外域名：</strong> <code>https://v3.elepcloud.com</code></p>
 <p>本文只描述“纯第三方模式”。飞书、Lark、企业微信等标准机器人平台不在本文展开；这些平台走各自官方事件和机器人接口，再由 V3 转为统一通道事件。</p>
 <p>纯第三方模式适用于：第三方自己搭建聊天页面或业务入口，文档库、用户权限、产物系统、业务系统也可以都在第三方服务器上；V3 作为统一智能处理、权限过滤、动作风控和审计中心。</p>
 <h2 id="section-01">1. 对接目标</h2>
@@ -505,7 +505,29 @@ Authorization: Bearer &lt;V3 inbound token&gt;</code></pre>
   &quot;sender_external_id&quot;: &quot;user-10001&quot;,
   &quot;message_external_id&quot;: &quot;msg-20260515-0001&quot;,
   &quot;message_type&quot;: &quot;text&quot;,
-  &quot;text&quot;: &quot;帮我总结我能看的采购审批制度，并指出本周需要处理的风险。&quot;,
+  &quot;text&quot;: &quot;帮我按周报模板总结我能看的采购审批制度，并生成一页 HTML 交付稿。&quot;,
+  &quot;available_document_source_id&quot;: &quot;src-docs&quot;,
+  &quot;available_document_external_ids&quot;: [&quot;doc-001&quot;, &quot;doc-002&quot;, &quot;tpl-weekly-report-001&quot;],
+  &quot;requested_skills&quot;: [
+    {
+      &quot;skill_id&quot;: &quot;procurement_policy_review&quot;,
+      &quot;version&quot;: &quot;2026-05-20&quot;,
+      &quot;mode&quot;: &quot;preferred&quot;,
+      &quot;arguments&quot;: {
+        &quot;focus&quot;: &quot;risk&quot;
+      }
+    },
+    {
+      &quot;skill_id&quot;: &quot;document_template_skill&quot;,
+      &quot;version&quot;: &quot;2026-05-20&quot;,
+      &quot;mode&quot;: &quot;required&quot;,
+      &quot;arguments&quot;: {
+        &quot;template_document_external_id&quot;: &quot;tpl-weekly-report-001&quot;,
+        &quot;source_id&quot;: &quot;src-docs&quot;,
+        &quot;output_type&quot;: &quot;static_page&quot;
+      }
+    }
+  ],
   &quot;mention_external_user_ids&quot;: [],
   &quot;attachment_refs&quot;: [],
   &quot;idempotency_key&quot;: &quot;generic_chat:tenant-ext-001:msg-20260515-0001&quot;,
@@ -513,12 +535,38 @@ Authorization: Bearer &lt;V3 inbound token&gt;</code></pre>
 }</code></pre>
   </figure>
 <p>字段要求：</p>
-<div class="table-shell"><table><thead><tr><th>字段</th><th>必填</th><th>说明</th></tr></thead><tbody><tr><td><code>platform</code></td><td>是</td><td>必须和连接配置一致；当前自建聊天联调通常使用 <code>generic_chat</code>，也可按项目配置使用 <code>third_party</code></td></tr><tr><td><code>tenant_external_id</code></td><td>是</td><td>第三方租户、空间或客户 ID</td></tr><tr><td><code>bot_external_id</code></td><td>是</td><td>第三方侧机器人或应用 ID</td></tr><tr><td><code>conversation_external_id</code></td><td>是</td><td>会话、群、房间或页面上下文 ID；同一轮、同一页面会话或同一聊天窗口保持不变，V3 会映射为同一个对话上下文</td></tr><tr><td><code>sender_external_id</code></td><td>是</td><td>当前提问用户在第三方系统中的稳定 ID；V3 会用它做权限主体解析，也会作为“用户历史上下文”的身份键</td></tr><tr><td><code>message_external_id</code></td><td>是</td><td>第三方消息 ID，必须稳定</td></tr><tr><td><code>message_type</code></td><td>是</td><td><code>text</code>、<code>image</code>、<code>file</code>、<code>audio</code>、<code>video</code>、<code>card</code>、<code>event</code> 或 <code>unknown</code></td></tr><tr><td><code>text</code></td><td>文本消息必填</td><td>用户输入文本</td></tr><tr><td><code>attachment_refs</code></td><td>否</td><td>附件引用，文件下载需按项目配置权限和有效期</td></tr><tr><td><code>idempotency_key</code></td><td>是</td><td>防重放和重复投递</td></tr><tr><td><code>received_at</code></td><td>是</td><td>第三方收到消息的时间</td></tr></tbody></table></div>
+<div class="table-shell"><table><thead><tr><th>字段</th><th>必填</th><th>说明</th></tr></thead><tbody><tr><td><code>platform</code></td><td>是</td><td>必须和连接配置一致；当前自建聊天联调通常使用 <code>generic_chat</code>，也可按项目配置使用 <code>third_party</code></td></tr><tr><td><code>tenant_external_id</code></td><td>是</td><td>第三方租户、空间或客户 ID</td></tr><tr><td><code>bot_external_id</code></td><td>是</td><td>第三方侧机器人或应用 ID</td></tr><tr><td><code>conversation_external_id</code></td><td>是</td><td>会话、群、房间或页面上下文 ID；同一轮、同一页面会话或同一聊天窗口保持不变，V3 会映射为同一个对话上下文</td></tr><tr><td><code>sender_external_id</code></td><td>是</td><td>当前提问用户在第三方系统中的稳定 ID；V3 会用它做权限主体解析，也会作为“用户历史上下文”的身份键</td></tr><tr><td><code>message_external_id</code></td><td>是</td><td>第三方消息 ID，必须稳定</td></tr><tr><td><code>message_type</code></td><td>是</td><td><code>text</code>、<code>image</code>、<code>file</code>、<code>audio</code>、<code>video</code>、<code>card</code>、<code>event</code> 或 <code>unknown</code></td></tr><tr><td><code>text</code></td><td>文本消息必填</td><td>用户输入文本</td></tr><tr><td><code>available_document_source_id</code></td><td>文档问答建议传</td><td>本轮可用文档所属资料源 ID；连接配置了默认资料源时可省略，但联调建议显式传</td></tr><tr><td><code>available_document_external_ids</code></td><td>文档问答建议传</td><td>本轮允许 V3 使用的第三方文档 ID 列表；只传当前用户本轮可见文档，不要传全库</td></tr><tr><td><code>requested_skills</code></td><td>否</td><td>第三方希望本轮应用的结构化 skill 列表；正式对接建议传此字段，不建议只把 skill 写进用户自然语言文本</td></tr><tr><td><code>mention_external_user_ids</code></td><td>否</td><td>本条消息中被 @ 的第三方用户 ID 列表；无 @ 时传空数组或省略</td></tr><tr><td><code>attachment_refs</code></td><td>否</td><td>附件引用，文件下载需按项目配置权限和有效期</td></tr><tr><td><code>idempotency_key</code></td><td>是</td><td>防重放和重复投递</td></tr><tr><td><code>received_at</code></td><td>是</td><td>第三方收到消息的时间</td></tr></tbody></table></div>
 <p>关于用户历史上下文：</p>
 <ul>
 <li>V3 会按 <code>platform + tenant_external_id + bot_external_id + sender_external_id</code> 维护一个内部隐藏的用户上下文范围，用于沉淀该用户历史对话摘要；</li>
 <li>该上下文不是默认供料。只有当用户问题明确引用“刚才、上次、之前、继续”等历史语境时，V3 才会把该用户自己的历史上下文作为可选证据供给模型；</li>
 <li><code>mention_external_user_ids</code> 只是本条消息中的提及对象，不代表授权读取被提及用户的历史上下文，也不会把被提及用户的历史对话供给模型。</li>
+</ul>
+<p>关于本轮 SKILL：</p>
+<ul>
+<li>如果第三方只在 <code>text</code> 里写“本轮使用某某 skill”，V3 会把它当作普通用户文本，模型可能遵循，但这是非结构化兜底，不保证可审计、可复现或可校验；</li>
+<li>正式对接建议传 <code>requested_skills</code>。V3 会把它作为本轮结构化运行策略写入助手运行上下文，并供给模型；</li>
+<li><code>requested_skills[].skill_id</code> 必填，建议使用稳定英文或业务 slug；<code>version</code> 可选；<code>mode</code> 可选，取值为 <code>required</code>、<code>preferred</code> 或 <code>disabled</code>，不传时按 <code>preferred</code> 处理；</li>
+<li><code>requested_skills[].arguments</code> 可选，必须是 JSON object，只放本轮 skill 所需的非敏感参数，例如 <code>{ "focus": "risk" }</code>。不要放 token、密码、Cookie 或长期下载 URL；</li>
+<li>当前版本是模型提示级 skill 策略，先解决“本轮用什么规则/流程回答”的问题；如果后续要把 skill 变成可执行工具，还需要单独配置工具权限、确认和审计白名单；</li>
+<li>请求体兼容驼峰字段 <code>requestedSkills</code>，也兼容别名 <code>skillRefs</code> / <code>skill_refs</code>。嵌套字段兼容 <code>skillId</code>、<code>skillVersion</code>。</li>
+</ul>
+<p>关于本轮文档模板 skill：</p>
+<ul>
+<li>如果第三方希望“指定某个文档为模板，按这个格式/结构/风格输出”，请在 <code>requested_skills</code> 中传 <code>skill_id: "document_template_skill"</code>；</li>
+<li>模板文档也必须出现在本轮 <code>available_document_external_ids</code> 中，V3 只会从本轮可见文档范围里读取模板快照，避免跨权限引用；</li>
+<li>推荐参数为 <code>arguments.template_document_external_id</code>、<code>arguments.source_id</code>、<code>arguments.output_type</code>。也兼容 <code>templateDocumentExternalId</code>、<code>template_document_id</code> / <code>templateDocumentId</code>；</li>
+<li><code>output_type</code> 可传 <code>static_page</code>、<code>html</code>、<code>page</code> 或 <code>any</code>。当用户生成快速 HTML/静态页时，V3 会把模板文档转换成自定义 <code>templateReference</code>；</li>
+<li>模板文档默认只约束输出结构、章节顺序、措辞风格和必填字段，不会自动作为事实证据。事实仍来自本轮普通文档供料和 V3 可见证据。</li>
+</ul>
+<p>关于本轮文档范围：</p>
+<ul>
+<li>文档问答建议每条消息都传 <code>available_document_source_id</code> 和 <code>available_document_external_ids</code>，不要依赖上一轮消息里的文档列表；</li>
+<li>V3 会把这些外部文档 ID 映射为内部文档，并为 <code>connection_id + conversation_external_id + source_id</code> 创建或刷新一个会话级临时数据集；</li>
+<li>同一份 V3 文档可以同时属于原始资料库和多个临时数据集。临时数据集只保存 membership 范围，不移动、不复制、不删除原文档；</li>
+<li>有外部 ACL 快照时，V3 仍会在进入模型前按 ACL 严格过滤；</li>
+<li>如果第一阶段尚未同步 ACL 快照，V3 只会使用本轮显式传入且已成功解析到内部文档的 <code>available_document_external_ids</code> 作为兜底范围，不会扩大到同资料源或同数据集的其它文档；</li>
+<li>未解析到、未索引完成、未传入本轮列表或被 ACL 拒绝的文档不会供料给模型。</li>
 </ul>
 <p>生成回复响应示例：</p>
 <figure class="code-card">
