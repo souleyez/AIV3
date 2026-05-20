@@ -39,9 +39,9 @@ export const EXTERNAL_INTEGRATION_MODES = [
   },
   {
     key: 'pure_third_party',
-    title: '纯第三方简单版',
+    title: '纯第三方最简版',
     status: '常规接入',
-    summary: '第三方自建页面、资料源、用户 ID、会话 ID、skill、模板和业务系统接入 V3，由 V3 统一解析、索引、问答、产物和动作治理。',
+    summary: '只保留文档解析、聊天同步、按模板生成报表三段最小接口，适合第三方 AI 小上下文直接读取。',
     docs: [
       'docs/integrations/pure-third-party-integration-guide.zh-CN.html',
       'docs/integrations/pure-third-party-integration-guide.zh-CN.md',
@@ -50,14 +50,14 @@ export const EXTERNAL_INTEGRATION_MODES = [
     documentLinks: [
       {
         key: 'pure-third-party-html',
-        label: '简单版 HTML',
+        label: '最简版 HTML',
         href: '/external-integrations/pure-third-party-integration-guide.zh-CN.html',
         kind: 'html',
         target: '_blank',
       },
       {
         key: 'pure-third-party-md',
-        label: '简单版 MD 下载',
+        label: '最简版 MD 下载',
         href: '/external-integrations/pure-third-party-integration-guide.zh-CN.md',
         kind: 'markdown',
         download: true,
