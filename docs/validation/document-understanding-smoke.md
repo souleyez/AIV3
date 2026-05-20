@@ -30,8 +30,8 @@ target/document-understanding-smoke/
 
 - Host: `8服务器`
 - Repository: `/srv/aiv3/repo`
-- HEAD: `5300741`
+- HEAD: `d3bf97a`
 - Command: `bash scripts/run-document-understanding-smoke.sh`
 - Result: passed
-- JSON report: `/srv/aiv3/repo/target/document-understanding-smoke/document-understanding-smoke-20260520T081024Z.json`
-- Markdown summary: `/srv/aiv3/repo/target/document-understanding-smoke/document-understanding-smoke-20260520T081024Z.md`
+- JSON report: `/srv/aiv3/repo/target/document-understanding-smoke/document-understanding-smoke-20260520T081746Z.json`
+- Markdown summary: `/srv/aiv3/repo/target/document-understanding-smoke/document-understanding-smoke-20260520T081746Z.md`
