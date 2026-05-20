@@ -17846,7 +17846,7 @@ fn assistant_run_model_dataset_entity_scan_item(item: &Value) -> Value {
         "entities": item.get("entities").cloned().unwrap_or(Value::Null),
         "answer_guidance": item.get("answer_guidance").cloned().unwrap_or(Value::Null),
         "limits": item.get("limits").cloned().unwrap_or(Value::Null),
-        "model_note": "Use company_count and company_rows as the authoritative company statistic. Do not extend company lists from candidate_terms or document_hits.",
+        "model_note": "Use company_count and company_rows as the authoritative company statistic. Use scanned_document_count as the document total; do not sum company_rows.document_count as total documents. Do not extend company lists from candidate_terms or document_hits.",
     })
 }
 
@@ -22801,8 +22801,10 @@ async fn build_assistant_run_dataset_entity_scan_supply(
         "document_hits": document_hits.into_iter().take(24).collect::<Vec<_>>(),
         "answer_guidance": {
             "company_count_authoritative": organization_count,
+            "scanned_document_count_authoritative": scanned_document_count,
             "company_rows_authoritative": true,
             "ignore_candidate_terms_for_company_count": true,
+            "do_not_sum_company_row_document_counts_as_total_documents": true,
             "candidate_terms_are_only_noun_hints": true,
         },
         "limits": {
@@ -23811,6 +23813,7 @@ fn sanitize_company_candidate(raw: &str) -> String {
             "服务于",
             "来自",
             "给",
+            "用房",
             "在职",
             "目前",
             "雇主",
@@ -24282,6 +24285,7 @@ fn assistant_run_supply_quality_report(
             "treat supplied_items as citable context, not an answer template",
             "distinguish supplied document facts from general model knowledge",
             "when dataset_entity_scan contains company_count and company_rows, use those as the authoritative company statistics and do not extend the list from candidate_terms",
+            "when dataset_entity_scan contains scanned_document_count, use it as the total scanned document count and do not sum company_rows.document_count as total documents",
             "when document_parse_status reports not-ready, failed, reparsing, or degraded documents, tell the user the relevant document is still parsing or failed instead of claiming its contents",
             "read detail_targets before asserting exact source wording, tables, OCR, or media timestamps"
         ],
@@ -50543,10 +50547,18 @@ mod tests {
 
     #[test]
     fn assistant_run_normalizes_resume_company_relation_noise() {
-        let names =
-            extract_company_names_from_text("机械老板作为“找设备APP”的三一集团，满足由集团。", 10);
+        let names = extract_company_names_from_text(
+            "机械老板作为“找设备APP”的三一集团，用房广州酷狗计算股份有限公司，满足由集团。",
+            10,
+        );
 
-        assert_eq!(names, vec!["三一集团".to_string()]);
+        assert_eq!(
+            names,
+            vec![
+                "三一集团".to_string(),
+                "广州酷狗计算股份有限公司".to_string()
+            ]
+        );
     }
 
     #[test]
