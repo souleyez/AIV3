@@ -13,11 +13,13 @@ import {
   controlResultLabel,
   driftSignalLabel,
   EXTERNAL_INTEGRATION_MODES,
+  externalConversationStatusLabel,
   externalActionTraceFilename,
   formatObservationTime,
   latestIntegrationActivity,
   normalizeControlResult,
   normalizeAuditItem,
+  normalizeExternalConversationTest,
   normalizeIntegrationSummary,
   searchEvidenceSignalLabel,
   signalLabel,
@@ -251,6 +253,35 @@ test('normalizeAuditItem keeps redacted summary shape stable', () => {
   assert.equal(item.actionId, 'act-001');
   assert.equal(item.summary.dispatch_reason, 'dispatch_auth_missing');
   assert.notEqual(formatObservationTime(item.createdAt), '无记录');
+});
+
+test('normalizeExternalConversationTest keeps conversation test fields readable', () => {
+  const item = normalizeExternalConversationTest({
+    event_id: 'evt-1',
+    integration_id: 'generic-chat-main',
+    integration_display_name: 'Generic Chat',
+    platform: 'generic_chat',
+    conversation_external_id: 'conv-001',
+    sender_external_id: 'user-001',
+    message_external_id: 'msg-001',
+    direction: 'inbound',
+    assistant_run_id: 'run-001',
+    assistant_status: 'completed',
+    assistant_event: 'assistant_run.external_channel_model_reply_completed',
+    payload_summary: {
+      text_chars: 5,
+      output_format: 'markdown_table',
+    },
+  });
+
+  assert.equal(item.integrationDisplayName, 'Generic Chat');
+  assert.equal(item.conversationExternalId, 'conv-001');
+  assert.equal(item.senderExternalId, 'user-001');
+  assert.equal(item.assistantRunId, 'run-001');
+  assert.equal(item.payloadSummary.output_format, 'markdown_table');
+  assert.equal(externalConversationStatusLabel(item.assistantStatus), '已回复');
+  assert.equal(externalConversationStatusLabel('failed'), '失败');
+  assert.equal(externalConversationStatusLabel('no_run'), '未建运行');
 });
 
 test('auditItemTypeLabel covers search evidence items', () => {

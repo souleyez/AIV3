@@ -256,6 +256,47 @@ export function normalizeAuditItem(raw = {}) {
   };
 }
 
+export function normalizeExternalConversationTest(raw = {}) {
+  const payloadSummary = raw.payload_summary && typeof raw.payload_summary === 'object'
+    ? raw.payload_summary
+    : {};
+  return {
+    eventId: String(raw.event_id || ''),
+    integrationId: String(raw.integration_id || ''),
+    integrationDisplayName: String(raw.integration_display_name || raw.integration_id || '未命名集成'),
+    platform: String(raw.platform || 'unknown'),
+    conversationExternalId: String(raw.conversation_external_id || ''),
+    senderExternalId: raw.sender_external_id ? String(raw.sender_external_id) : '',
+    messageExternalId: String(raw.message_external_id || ''),
+    direction: String(raw.direction || 'inbound'),
+    assistantRunId: raw.assistant_run_id ? String(raw.assistant_run_id) : '',
+    assistantStatus: String(raw.assistant_status || 'unknown'),
+    assistantEvent: raw.assistant_event ? String(raw.assistant_event) : '',
+    createdAt: raw.created_at || null,
+    assistantUpdatedAt: raw.assistant_updated_at || null,
+    payloadSummary,
+  };
+}
+
+export function externalConversationStatusLabel(status) {
+  switch (String(status || '').toLowerCase()) {
+    case 'completed':
+      return '已回复';
+    case 'running':
+      return '处理中';
+    case 'failed':
+      return '失败';
+    case 'rejected':
+      return '已拒绝';
+    case 'unavailable':
+      return '无可用回复';
+    case 'no_run':
+      return '未建运行';
+    default:
+      return '未知';
+  }
+}
+
 export function auditItemTypeLabel(itemType) {
   switch (String(itemType || '').toLowerCase()) {
     case 'message':

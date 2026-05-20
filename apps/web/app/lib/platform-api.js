@@ -1,3 +1,5 @@
+import { hasExternalObservabilityAccessCookie } from './external-observability-access';
+
 const DEFAULT_PLATFORM_API_BASE_URL = 'http://127.0.0.1:3000';
 
 function normalizeBaseUrl() {
@@ -10,8 +12,26 @@ export function buildPlatformApiUrl(pathname, search = '') {
   return `${normalizeBaseUrl()}${normalizedPath}${search}`;
 }
 
+function isExternalObservabilityPath(pathSegments) {
+  const path = Array.isArray(pathSegments) ? pathSegments.join('/') : '';
+  return path === 'external/conversation-tests';
+}
+
 export async function proxyPlatformApiRequest(request, pathSegments) {
   try {
+    if (
+      isExternalObservabilityPath(pathSegments)
+      && !hasExternalObservabilityAccessCookie(request.headers.get('cookie'))
+    ) {
+      return Response.json(
+        {
+          error: 'external_observability_access_required',
+          message: '外部集成观测需要访问密钥',
+        },
+        { status: 401 },
+      );
+    }
+
     const incomingUrl = new URL(request.url);
     const path = Array.isArray(pathSegments) ? pathSegments.join('/') : '';
     const targetUrl = buildPlatformApiUrl(`/v1/${path}`, incomingUrl.search);

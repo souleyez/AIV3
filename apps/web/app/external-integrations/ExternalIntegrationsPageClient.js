@@ -13,11 +13,13 @@ import {
   driftSignalLabel,
   EXTERNAL_AUDIT_FILTERS,
   EXTERNAL_INTEGRATION_MODES,
+  externalConversationStatusLabel,
   externalActionTraceFilename,
   formatObservationTime,
   latestIntegrationActivity,
   normalizeControlResult,
   normalizeAuditItem,
+  normalizeExternalConversationTest,
   normalizeIntegrationSummary,
   numberOrZero,
   searchEvidenceSignalLabel,
@@ -42,7 +44,10 @@ async function fetchJson(pathname, options = {}) {
   });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error(payload?.message || payload?.error || `请求失败 ${response.status}`);
+    const error = new Error(payload?.message || payload?.error || `请求失败 ${response.status}`);
+    error.status = response.status;
+    error.code = payload?.error || '';
+    throw error;
   }
   return payload;
 }
@@ -138,6 +143,7 @@ function readInitialUrlState() {
       ? requestedFilter
       : '',
     actionId: params.get('action_id') || '',
+    conversationTestsOpen: params.get('conversation_tests') === '1',
   };
 }
 
@@ -157,12 +163,16 @@ function replaceUrlState({ integrationId, auditFilterKey, actionId }) {
 
 export default function ExternalIntegrationsPageClient() {
   const [integrations, setIntegrations] = useState([]);
+  const [conversationTests, setConversationTests] = useState([]);
+  const [conversationTestsOpen, setConversationTestsOpen] = useState(false);
+  const [conversationAccessRequired, setConversationAccessRequired] = useState(false);
   const [selectedId, setSelectedId] = useState('');
   const [auditItems, setAuditItems] = useState([]);
   const [auditFilterKey, setAuditFilterKey] = useState('all');
   const [selectedActionId, setSelectedActionId] = useState('');
   const [actionDetail, setActionDetail] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [conversationTestsLoading, setConversationTestsLoading] = useState(false);
   const [auditLoading, setAuditLoading] = useState(false);
   const [actionDetailLoading, setActionDetailLoading] = useState(false);
   const [error, setError] = useState('');
@@ -212,6 +222,42 @@ export default function ExternalIntegrationsPageClient() {
     } finally {
       setAuditLoading(false);
     }
+  }
+
+  async function loadConversationTests(integrationId = selectedId) {
+    if (!integrationId) {
+      setConversationTests([]);
+      return;
+    }
+    setConversationTestsLoading(true);
+    try {
+      const payload = await fetchJson(
+        `/api/v3/external/conversation-tests?limit=50&integration_id=${encodeURIComponent(integrationId)}`,
+      );
+      setConversationAccessRequired(false);
+      setConversationTests(Array.isArray(payload?.tests)
+        ? payload.tests.map(normalizeExternalConversationTest)
+        : []);
+    } catch (loadError) {
+      if (loadError?.status === 401 || loadError?.code === 'external_observability_access_required') {
+        setConversationAccessRequired(true);
+        setConversationTests([]);
+        return;
+      }
+      setConversationTests([]);
+    } finally {
+      setConversationTestsLoading(false);
+    }
+  }
+
+  function toggleConversationTests() {
+    if (conversationTestsOpen) {
+      setConversationTestsOpen(false);
+      setConversationTests([]);
+      setConversationAccessRequired(false);
+      return;
+    }
+    setConversationTestsOpen(true);
   }
 
   async function loadActionDetail(integrationId, actionId) {
@@ -326,6 +372,9 @@ export default function ExternalIntegrationsPageClient() {
     if (initialUrlState.actionId) {
       setSelectedActionId(initialUrlState.actionId);
     }
+    if (initialUrlState.conversationTestsOpen) {
+      setConversationTestsOpen(true);
+    }
     loadIntegrations();
     const timer = window.setInterval(() => {
       loadIntegrations({ silent: true });
@@ -342,10 +391,22 @@ export default function ExternalIntegrationsPageClient() {
   }, [selectedId, selectedActionId]);
 
   useEffect(() => {
+    if (conversationTestsOpen) {
+      loadConversationTests(selectedId);
+    }
+  }, [selectedId, conversationTestsOpen]);
+
+  useEffect(() => {
     replaceUrlState({ integrationId: selectedId, auditFilterKey, actionId: selectedActionId });
   }, [selectedId, auditFilterKey, selectedActionId]);
 
   const selected = integrations.find((item) => item.id === selectedId) || integrations[0] || null;
+  const conversationTotals = {
+    total: conversationTests.length,
+    completed: conversationTests.filter((item) => item.assistantStatus === 'completed').length,
+    failed: conversationTests.filter((item) => ['failed', 'rejected', 'unavailable'].includes(item.assistantStatus)).length,
+    running: conversationTests.filter((item) => item.assistantStatus === 'running').length,
+  };
   const totals = {
     pending: metricTotal(integrations, 'pendingActionCount'),
     blocked: metricTotal(integrations, 'blockedActionCount'),
@@ -481,6 +542,100 @@ export default function ExternalIntegrationsPageClient() {
 
       {error ? <div className="external-error-line">{error}</div> : null}
       {notice ? <div className="external-notice-line">{notice}</div> : null}
+
+      <section className="external-panel external-conversation-panel" aria-label="外部对话测试">
+        <div className="external-panel-head">
+          <div>
+            <h2>外部对话测试</h2>
+            <p>
+              {conversationTestsOpen
+                ? conversationTestsLoading
+                  ? '读取中'
+                  : `${selected?.displayName || selectedId || '当前集成'} · ${conversationTotals.total} 条最近消息`
+                : '未打开'}
+            </p>
+          </div>
+          {conversationTestsOpen ? (
+            <div className="external-conversation-totals" aria-label="外部对话测试统计">
+              <span>已回复 {conversationTotals.completed}</span>
+              <span>处理中 {conversationTotals.running}</span>
+              <span>异常 {conversationTotals.failed}</span>
+            </div>
+          ) : null}
+          <div className="external-conversation-actions">
+            {conversationTestsOpen ? (
+              <button
+                type="button"
+                className="external-refresh-button"
+                disabled={!selectedId || conversationTestsLoading}
+                onClick={() => loadConversationTests(selectedId)}
+              >
+                刷新
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className="external-refresh-button external-conversation-toggle"
+              disabled={!selectedId}
+              onClick={toggleConversationTests}
+            >
+              {conversationTestsOpen ? '关闭' : '打开'}
+            </button>
+          </div>
+        </div>
+        {!conversationTestsOpen ? (
+          <div className="external-empty-state">当前集成的对话测试未加载</div>
+        ) : conversationAccessRequired ? (
+          <form className="external-conversation-access-form" action="/external-integrations/access" method="post">
+            <label>
+              <span>对话测试访问密钥</span>
+              <input name="access_key" type="password" autoComplete="current-password" required />
+            </label>
+            <button type="submit">解锁对话测试</button>
+          </form>
+        ) : (
+          <div className="external-conversation-table">
+            <div className="external-conversation-row external-conversation-head">
+              <span>时间</span>
+              <span>集成</span>
+              <span>会话 / 用户</span>
+              <span>消息</span>
+              <span>状态</span>
+              <span>摘要</span>
+            </div>
+            {conversationTests.map((test) => (
+              <article className="external-conversation-row" key={test.eventId}>
+                <span>{formatObservationTime(test.createdAt)}</span>
+                <span>
+                  <strong>{test.integrationDisplayName}</strong>
+                  <small>{test.integrationId} / {test.platform}</small>
+                </span>
+                <span>
+                  <strong>{test.conversationExternalId || '无会话 ID'}</strong>
+                  <small>{test.senderExternalId || '无用户 ID'}</small>
+                </span>
+                <span>
+                  <strong>{test.messageExternalId}</strong>
+                  <small>{test.assistantRunId || '无 run'}</small>
+                </span>
+                <span className={`external-conversation-status external-conversation-status-${test.assistantStatus}`}>
+                  {externalConversationStatusLabel(test.assistantStatus)}
+                </span>
+                <JsonPreview
+                  value={{
+                    direction: test.direction,
+                    assistant_event: test.assistantEvent,
+                    payload_summary: test.payloadSummary,
+                  }}
+                />
+              </article>
+            ))}
+            {!conversationTestsLoading && !conversationTests.length ? (
+              <div className="external-empty-state">暂无外部对话测试记录</div>
+            ) : null}
+          </div>
+        )}
+      </section>
 
       <section className="external-dashboard-grid">
         <div className="external-panel external-list-panel">

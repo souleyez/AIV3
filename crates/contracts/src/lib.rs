@@ -473,6 +473,33 @@ pub struct ExternalIntegrationAuditResponse {
     pub items: Vec<ExternalIntegrationAuditItemView>,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct ExternalConversationTestView {
+    pub event_id: String,
+    pub integration_id: String,
+    pub integration_display_name: String,
+    pub platform: String,
+    pub conversation_external_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sender_external_id: Option<String>,
+    pub message_external_id: String,
+    pub direction: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assistant_run_id: Option<AssistantRunId>,
+    pub assistant_status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assistant_event: Option<String>,
+    pub created_at: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assistant_updated_at: Option<DateTime<Utc>>,
+    pub payload_summary: Value,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct ListExternalConversationTestsResponse {
+    pub tests: Vec<ExternalConversationTestView>,
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ExternalIntegrationControlRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]

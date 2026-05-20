@@ -45,20 +45,21 @@ use contracts::{
     ExternalActionConfirmationResponseView, ExternalActionResultCallbackRequestView,
     ExternalActionResultCallbackResponseView, ExternalBotMessageView, ExternalBotReplyTypeView,
     ExternalBotReplyView, ExternalChannelEventResponse, ExternalChannelPlatformView,
-    ExternalDocumentParseDetailItemView, ExternalDocumentParseDocumentView,
-    ExternalIntegrationAuditItemView, ExternalIntegrationAuditResponse,
-    ExternalIntegrationControlRequest, ExternalIntegrationControlResponse,
-    ExternalIntegrationSummaryView, ExternalMessageTypeView, ExternalRequestedSkillView,
-    GetExternalDocumentParseDetailResponse, HealthResponse, HtmlArtifactInteractionModeView,
-    HtmlArtifactManifestView, KeyLoginRequest, KeyLoginResponse, KeyRotateRequest,
-    KeyRotateResponse, ListExternalIntegrationsResponse, LlmInvocationView, LogoutResponse,
-    MemoryDirectoryView, PlanReportRequest, PublishReportRequest, PublishReportResponse,
-    PublishedReportDetailView, PublishedReportVersionView, PublishedReportView,
-    RegisterDocumentRequest, RegisterDocumentResponse, ReportPlanAstVersionView, ReportPlanSummary,
-    ReportRenderOutputView, ResolveDatasetSecretBindingsRequest,
-    ResolveDatasetSecretBindingsResponse, RetrievalEvidenceView, RetrievalSearchHitView,
-    RetrievalSearchResponse, RetryWorkflowExecutionRequest, RetryWorkflowExecutionResponse,
-    StartEmailAuthRequest, StartEmailAuthResponse, StaticPageDraftView, StaticPageImageJobView,
+    ExternalConversationTestView, ExternalDocumentParseDetailItemView,
+    ExternalDocumentParseDocumentView, ExternalIntegrationAuditItemView,
+    ExternalIntegrationAuditResponse, ExternalIntegrationControlRequest,
+    ExternalIntegrationControlResponse, ExternalIntegrationSummaryView, ExternalMessageTypeView,
+    ExternalRequestedSkillView, GetExternalDocumentParseDetailResponse, HealthResponse,
+    HtmlArtifactInteractionModeView, HtmlArtifactManifestView, KeyLoginRequest, KeyLoginResponse,
+    KeyRotateRequest, KeyRotateResponse, ListExternalConversationTestsResponse,
+    ListExternalIntegrationsResponse, LlmInvocationView, LogoutResponse, MemoryDirectoryView,
+    PlanReportRequest, PublishReportRequest, PublishReportResponse, PublishedReportDetailView,
+    PublishedReportVersionView, PublishedReportView, RegisterDocumentRequest,
+    RegisterDocumentResponse, ReportPlanAstVersionView, ReportPlanSummary, ReportRenderOutputView,
+    ResolveDatasetSecretBindingsRequest, ResolveDatasetSecretBindingsResponse,
+    RetrievalEvidenceView, RetrievalSearchHitView, RetrievalSearchResponse,
+    RetryWorkflowExecutionRequest, RetryWorkflowExecutionResponse, StartEmailAuthRequest,
+    StartEmailAuthResponse, StaticPageDraftView, StaticPageImageJobView,
     StaticPageRenderOutputView, SubmitHtmlArtifactEventRequest, SubmitHtmlArtifactEventResponse,
     ToolDefinitionView, ToolExecutionView, UpdateChatSessionReportEntryRequest,
     UpdateChatSessionReportEntryResponse, UpdateChatSessionRequest, UpdateChatSessionResponse,
@@ -479,6 +480,10 @@ pub fn router(
         .route(
             "/v1/assistant-runs/stream",
             axum::routing::post(create_assistant_run_stream),
+        )
+        .route(
+            "/v1/external/conversation-tests",
+            get(list_external_conversation_tests),
         )
         .route("/v1/external/integrations", get(list_external_integrations))
         .route(
@@ -7697,6 +7702,144 @@ struct ExternalIntegrationAuditFilter {
     action_state: Option<String>,
     action_id: Option<String>,
     limit: usize,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+struct ExternalConversationTestsQuery {
+    integration_id: Option<String>,
+    conversation_external_id: Option<String>,
+    limit: Option<usize>,
+}
+
+async fn list_external_conversation_tests(
+    State(state): State<AppState>,
+    Query(query): Query<ExternalConversationTestsQuery>,
+) -> std::result::Result<Json<ListExternalConversationTestsResponse>, ApiError> {
+    let integration_id = query
+        .integration_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let conversation_external_id = query
+        .conversation_external_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let limit = query.limit.unwrap_or(50).clamp(1, 100) as i64;
+    let rows = sqlx::query(
+        r#"
+        select e.id::text as event_id,
+               e.channel_connection_id,
+               coalesce(c.display_name, e.channel_connection_id) as integration_display_name,
+               e.platform,
+               e.conversation_external_id,
+               e.message_external_id,
+               e.direction,
+               e.assistant_run_id,
+               e.payload_summary,
+               e.created_at,
+               r.updated_at as assistant_updated_at,
+               case
+                   when e.assistant_run_id is null then 'no_run'
+                   when exists (
+                       select 1
+                       from assistant_run_events ev
+                       where ev.tenant_id = e.tenant_id
+                         and ev.run_id = e.assistant_run_id
+                         and ev.event_name in (
+                             'assistant_run.external_channel_model_reply_failed',
+                             'assistant_run.failed'
+                         )
+                   ) then 'failed'
+                   when exists (
+                       select 1
+                       from assistant_run_events ev
+                       where ev.tenant_id = e.tenant_id
+                         and ev.run_id = e.assistant_run_id
+                         and ev.event_name = 'assistant_run.external_channel_model_reply_rejected'
+                   ) then 'rejected'
+                   when exists (
+                       select 1
+                       from assistant_run_events ev
+                       where ev.tenant_id = e.tenant_id
+                         and ev.run_id = e.assistant_run_id
+                         and ev.event_name = 'assistant_run.external_channel_model_reply_unavailable'
+                   ) then 'unavailable'
+                   when exists (
+                       select 1
+                       from assistant_run_events ev
+                       where ev.tenant_id = e.tenant_id
+                         and ev.run_id = e.assistant_run_id
+                         and ev.event_name in (
+                             'assistant_run.external_channel_model_reply_completed',
+                             'assistant_run.completed'
+                         )
+                   ) then 'completed'
+                   else 'running'
+               end as assistant_status,
+               (
+                   select ev.event_name
+                   from assistant_run_events ev
+                   where ev.tenant_id = e.tenant_id
+                     and ev.run_id = e.assistant_run_id
+                     and ev.event_name like 'assistant_run.external_channel_model_reply_%'
+                   order by ev.created_at desc
+                   limit 1
+               ) as assistant_event
+        from external_message_events e
+        left join external_channel_connections c
+          on c.tenant_id = e.tenant_id
+         and c.id = e.channel_connection_id
+        left join assistant_runs r
+          on r.tenant_id = e.tenant_id
+         and r.id = e.assistant_run_id
+        where e.tenant_id = $1
+          and ($2::text is null or e.channel_connection_id = $2)
+          and ($3::text is null or e.conversation_external_id = $3)
+        order by e.created_at desc
+        limit $4
+        "#,
+    )
+    .bind(state.tenant_id.0)
+    .bind(integration_id.as_deref())
+    .bind(conversation_external_id.as_deref())
+    .bind(limit)
+    .fetch_all(state.storage.pool())
+    .await
+    .map_err(|error| ApiError::from_storage(anyhow::Error::new(error)))?;
+
+    let tests = rows
+        .into_iter()
+        .map(|row| {
+            let payload_summary =
+                external_integration_redacted_summary(row.get::<Value, _>("payload_summary"));
+            ExternalConversationTestView {
+                event_id: row.get("event_id"),
+                integration_id: row.get("channel_connection_id"),
+                integration_display_name: row.get("integration_display_name"),
+                platform: row.get("platform"),
+                conversation_external_id: row.get("conversation_external_id"),
+                sender_external_id: payload_summary
+                    .get("sender_external_id")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                message_external_id: row.get("message_external_id"),
+                direction: row.get("direction"),
+                assistant_run_id: row
+                    .get::<Option<Uuid>, _>("assistant_run_id")
+                    .map(AssistantRunId),
+                assistant_status: row.get("assistant_status"),
+                assistant_event: row.get("assistant_event"),
+                created_at: row.get("created_at"),
+                assistant_updated_at: row.get("assistant_updated_at"),
+                payload_summary,
+            }
+        })
+        .collect();
+
+    Ok(Json(ListExternalConversationTestsResponse { tests }))
 }
 
 async fn list_external_integrations(
