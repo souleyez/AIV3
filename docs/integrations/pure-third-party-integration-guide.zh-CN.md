@@ -1,7 +1,7 @@
 # V3 纯第三方模式对接文档
 
-**文档状态：** 对外草案 v0.2
-**最后更新：** 2026-05-19
+**文档状态：** 对外草案 v0.3
+**最后更新：** 2026-05-20
 **适用对象：** 第三方自建门户、文档库、用户中心、产物系统、业务系统和客户 IT 对接团队
 **默认 V3 对外域名：** `https://v3.elepcloud.com`
 
@@ -130,6 +130,8 @@ Authorization: Bearer <V3 inbound token>
   "message_external_id": "msg-20260515-0001",
   "message_type": "text",
   "text": "帮我总结我能看的采购审批制度，并指出本周需要处理的风险。",
+  "available_document_source_id": "src-docs",
+  "available_document_external_ids": ["doc-001", "doc-002"],
   "mention_external_user_ids": [],
   "attachment_refs": [],
   "idempotency_key": "generic_chat:tenant-ext-001:msg-20260515-0001",
@@ -149,6 +151,9 @@ Authorization: Bearer <V3 inbound token>
 | `message_external_id` | 是 | 第三方消息 ID，必须稳定 |
 | `message_type` | 是 | `text`、`image`、`file`、`audio`、`video`、`card`、`event` 或 `unknown` |
 | `text` | 文本消息必填 | 用户输入文本 |
+| `available_document_source_id` | 文档问答建议传 | 本轮可用文档所属资料源 ID；连接配置了默认资料源时可省略，但联调建议显式传 |
+| `available_document_external_ids` | 文档问答建议传 | 本轮允许 V3 使用的第三方文档 ID 列表；只传当前用户本轮可见文档，不要传全库 |
+| `mention_external_user_ids` | 否 | 本条消息中被 @ 的第三方用户 ID 列表；无 @ 时传空数组或省略 |
 | `attachment_refs` | 否 | 附件引用，文件下载需按项目配置权限和有效期 |
 | `idempotency_key` | 是 | 防重放和重复投递 |
 | `received_at` | 是 | 第三方收到消息的时间 |
@@ -158,6 +163,15 @@ Authorization: Bearer <V3 inbound token>
 - V3 会按 `platform + tenant_external_id + bot_external_id + sender_external_id` 维护一个内部隐藏的用户上下文范围，用于沉淀该用户历史对话摘要；
 - 该上下文不是默认供料。只有当用户问题明确引用“刚才、上次、之前、继续”等历史语境时，V3 才会把该用户自己的历史上下文作为可选证据供给模型；
 - `mention_external_user_ids` 只是本条消息中的提及对象，不代表授权读取被提及用户的历史上下文，也不会把被提及用户的历史对话供给模型。
+
+关于本轮文档范围：
+
+- 文档问答建议每条消息都传 `available_document_source_id` 和 `available_document_external_ids`，不要依赖上一轮消息里的文档列表；
+- V3 会把这些外部文档 ID 映射为内部文档，并为 `connection_id + conversation_external_id + source_id` 创建或刷新一个会话级临时数据集；
+- 同一份 V3 文档可以同时属于原始资料库和多个临时数据集。临时数据集只保存 membership 范围，不移动、不复制、不删除原文档；
+- 有外部 ACL 快照时，V3 仍会在进入模型前按 ACL 严格过滤；
+- 如果第一阶段尚未同步 ACL 快照，V3 只会使用本轮显式传入且已成功解析到内部文档的 `available_document_external_ids` 作为兜底范围，不会扩大到同资料源或同数据集的其它文档；
+- 未解析到、未索引完成、未传入本轮列表或被 ACL 拒绝的文档不会供料给模型。
 
 生成回复响应示例：
 
@@ -429,6 +443,13 @@ Authorization: Bearer <V3 inbound token>
 ```
 
 V3 会把外部文档 ID 映射为内部文档范围，并只从这些文档供料给模型。完整样例见：
+
+实现细节：
+
+- 每次带 `available_document_external_ids` 的对话请求都会刷新当前会话的临时文档范围；
+- 临时数据集的可见范围来自本轮传入的文档 ID，完成或过期后只清理临时 membership，不影响原始文档所在资料库；
+- 如果第三方尚未同步用户目录或文档 ACL，V3 不会因此把全库开放给模型，只允许本轮显式范围内、已解析可索引的文档供料；
+- 如果第三方已经同步 ACL 快照，则 ACL 判断优先于显式范围，显式传入但无权访问的文档仍不会进入模型。
 
 - `docs/integrations/third-party-document-parse-first-phase.zh-CN.md`
 - `docs/integrations/third-party-document-parse-request.sample.json`

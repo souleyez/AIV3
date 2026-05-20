@@ -278,6 +278,8 @@ Content-Type: application/json
 - `received_at` 未传或格式非法时，V3 会使用服务端接收时间；生产联调建议传第三方侧消息时间。
 - `idempotency_key` 未传时，V3 会按平台、租户和 `message_external_id` 生成兜底值；生产联调建议第三方显式传稳定值，便于重试和排查。
 - 传 `available_document_external_ids` 时，必须同时传 `available_document_source_id`，或由 V3 通道配置默认资料源；未解析到的外部文档 ID 会进入 `unresolved_document_external_ids`，不会供料给模型。
+- 文档问答建议每条消息都传本轮文档范围。V3 会为当前 `connection_id + conversation_external_id + source_id` 创建或刷新临时数据集；同一份文档可以同时属于原始资料库和多个临时数据集，临时范围不会移动或删除原文档。
+- 如果已同步外部 ACL 快照，V3 会继续按 ACL 严格过滤；如果第一阶段尚未同步 ACL 快照，V3 只使用本轮显式传入且已成功解析的文档作为兜底范围，不会扩大到同资料源或同数据集的其它文档。
 
 生成回复响应示例：
 
@@ -508,7 +510,7 @@ HTML 下载字段说明：
 
 1. 文档上传后，第三方能调用解析接口，V3 返回 `accepted=true`、V3 内部 `document.id` 和解析工作流信息。
 2. 查询解析详情能看到该 `document_external_id`，并最终进入 `latest.lifecycle=indexed`。
-3. `latest.chunk_count` 和 `latest.retrieval_evidence_count` 有值后，对话请求带 `available_document_external_ids`，V3 能围绕指定文档回答。
+3. `latest.chunk_count` 和 `latest.retrieval_evidence_count` 有值后，对话请求每轮带 `available_document_external_ids`，V3 能围绕指定文档回答。
 4. 同一 `conversation_external_id` 的连续消息会作为同一个对话上下文进入模型。
 5. 第三方发消息到 `/events` 后，能从响应体 `reply` 中拿到文本回复、任务状态或产物链接。
 6. 第三方发消息到 `/events/stream` 后，能按 `delta` 追加展示，并以 `completed.response.reply` 收口。
@@ -529,7 +531,7 @@ HTML 下载字段说明：
 | `403 Forbidden` | 第三方通道或资料源是否被禁用，目标 `dataset_id` 当前 token 是否有权访问 |
 | `405 Method Not Allowed` | 是否误打了 `http://`、是否被重定向后从 `POST` 变成 `GET` |
 | 解析一直没进入问答可用 | `latest.lifecycle` 是否到 `indexed`，`chunk_count` 和 `retrieval_evidence_count` 是否有值，`workflow` 是否有失败原因 |
-| 能提交但问答没有引用文档 | 文档是否解析完成，`available_document_external_ids` 是否传了正确的第三方文档 ID，`available_document_source_id` 是否传对 |
+| 能提交但问答没有引用文档 | 文档是否解析完成，`available_document_external_ids` 是否每轮传了正确的第三方文档 ID，`available_document_source_id` 是否传对；如果已同步 ACL，继续检查当前 `sender_external_id` 是否有读权限 |
 | 多轮上下文接不上 | 同一轮对话是否保持相同 `conversation_external_id`，每条消息是否使用新的 `message_external_id` |
 | 流式页面没有逐段展示 | 是否调用 `/events/stream`，请求头是否带 `Accept: text/event-stream`，浏览器侧是否用 `fetch` 读取 `ReadableStream` |
 | HTML 链接打不开 | 第三方是否由服务器端带 Bearer Token 下载，不要让浏览器直接带 V3 token |

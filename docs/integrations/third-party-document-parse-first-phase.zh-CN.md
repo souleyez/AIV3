@@ -9,9 +9,10 @@
 3. V3 启动现有上传解析工作流，解析完成后写入文档切片和检索索引。
 4. 第三方可按外部文档 ID 查询解析详情。
 5. 第三方发起对话时传入本轮可用的外部文档 ID 列表，并保持同一轮对话使用同一个 `conversation_external_id`。
-6. V3 只在这些文档 ID 映射出的内部文档范围内检索，并在进入模型前完成权限过滤。
-7. V3 在同一个 `/events` 响应体的 `reply` 字段里返回生成回复、任务状态或确认卡片；第一阶段不需要第三方再调用单独的“取回复”接口。
-8. 如果本轮要求生成页面或报告页，V3 可走快速 HTML 交付模式，跳过效果图确认，直接生成可下载 HTML。
+6. V3 将这些文档 ID 映射为内部文档，并为当前会话创建或刷新临时数据集范围。
+7. V3 只在这些文档 ID 映射出的内部文档范围内检索，并在进入模型前完成权限过滤；若第一阶段尚未同步 ACL 快照，则只允许本轮显式传入且已解析成功的文档作为兜底供料范围，不扩大到同资料源或同数据集的其它文档。
+8. V3 在同一个 `/events` 响应体的 `reply` 字段里返回生成回复、任务状态或确认卡片；第一阶段不需要第三方再调用单独的“取回复”接口。
+9. 如果本轮要求生成页面或报告页，V3 可走快速 HTML 交付模式，跳过效果图确认，直接生成可下载 HTML。
 
 ## 解析请求
 
@@ -74,6 +75,12 @@ Content-Type: application/json
 - `available_document_source_id`：资料源 ID；如果通道配置里已有 `default_source_id`，可省略。
 - `available_document_external_ids`：本轮允许 V3 使用的第三方文档 ID 列表。
 
+补充说明：
+
+- 文档问答建议每条消息都传 `available_document_external_ids`，不要依赖上一轮消息里的文档列表。
+- 同一份 V3 文档可以同时属于原始资料库和多个临时数据集；临时数据集只保存本轮/本会话的 membership，不移动、不复制、不删除原文档。
+- 已同步外部 ACL 快照时，ACL 优先于显式范围；未同步 ACL 快照时，V3 只使用本轮显式传入且已解析成功的文档，未传入或未解析到的文档不会供料。
+
 请求体见 `third-party-chat-with-document-ids.sample.json`。
 
 生成回复响应示例：
@@ -126,7 +133,7 @@ Authorization: Bearer <channel-inbound-token>
 
 - 文档解析接口能下载第三方文档并启动 V3 解析工作流。
 - 解析详情接口能按 `source_id + document_external_id` 查到状态。
-- 对话请求带 `available_document_external_ids` 时，V3 只从这些文档供料。
+- 对话请求每轮带 `available_document_external_ids` 时，V3 只从这些文档供料。
 - 同一 `conversation_external_id` 的连续消息会作为同一个对话上下文进入模型。
 - 第三方发消息到 `/events` 后，能从响应体 `reply` 中拿到文本回复或处理状态。
 - 页面类产物可用快速 HTML 模式直接生成，并通过外部通道下载接口交付给第三方。

@@ -599,6 +599,8 @@ Content-Type: application/json</code></pre>
           <li><code>received_at</code> 未传或格式非法时，V3 会使用服务端接收时间；生产联调建议传第三方侧消息时间。</li>
           <li><code>idempotency_key</code> 未传时，V3 会按平台、租户和 <code>message_external_id</code> 生成兜底值；生产联调建议第三方显式传稳定值，便于重试和排查。</li>
           <li>传 <code>available_document_external_ids</code> 时，必须同时传 <code>available_document_source_id</code>，或由 V3 通道配置默认资料源；未解析到的外部文档 ID 会进入 <code>unresolved_document_external_ids</code>，不会供料给模型。</li>
+          <li>文档问答建议每条消息都传本轮文档范围。V3 会为当前 <code>connection_id + conversation_external_id + source_id</code> 创建或刷新临时数据集；同一份文档可以同时属于原始资料库和多个临时数据集，临时范围不会移动或删除原文档。</li>
+          <li>如果已同步外部 ACL 快照，V3 会继续按 ACL 严格过滤；如果第一阶段尚未同步 ACL 快照，V3 只使用本轮显式传入且已成功解析的文档作为兜底范围，不会扩大到同资料源或同数据集的其它文档。</li>
         </ul>
         <figure>
           <figcaption><span>response body</span></figcaption>
@@ -841,7 +843,7 @@ Authorization: Bearer &lt;由我方提供的 token&gt;</code></pre>
         <ol>
           <li>文档上传后，第三方能调用解析接口，V3 返回 <code>accepted=true</code>、V3 内部 <code>document.id</code> 和解析工作流信息。</li>
           <li>查询解析详情能看到该 <code>document_external_id</code>，并最终进入 <code>latest.lifecycle=indexed</code>。</li>
-          <li><code>latest.chunk_count</code> 和 <code>latest.retrieval_evidence_count</code> 有值后，对话请求带 <code>available_document_external_ids</code>，V3 能围绕指定文档回答。</li>
+          <li><code>latest.chunk_count</code> 和 <code>latest.retrieval_evidence_count</code> 有值后，对话请求每轮带 <code>available_document_external_ids</code>，V3 能围绕指定文档回答。</li>
           <li>同一 <code>conversation_external_id</code> 的连续消息会作为同一个对话上下文进入模型。</li>
           <li>第三方发消息到 <code>/events</code> 后，能从响应体 <code>reply</code> 中拿到文本回复、任务状态或产物链接。</li>
           <li>第三方发消息到 <code>/events/stream</code> 后，能按 <code>delta</code> 追加展示，并以 <code>completed.response.reply</code> 收口。</li>
@@ -865,7 +867,7 @@ Authorization: Bearer &lt;由我方提供的 token&gt;</code></pre>
             <tr><td><code>403 Forbidden</code></td><td>第三方通道或资料源是否被禁用，目标 <code>dataset_id</code> 当前 token 是否有权访问。</td></tr>
             <tr><td><code>405 Method Not Allowed</code></td><td>是否误打了 <code>http://</code>、是否被重定向后从 <code>POST</code> 变成 <code>GET</code>。</td></tr>
             <tr><td>解析一直没进入问答可用</td><td><code>latest.lifecycle</code> 是否到 <code>indexed</code>，<code>chunk_count</code> 和 <code>retrieval_evidence_count</code> 是否有值，<code>workflow</code> 是否有失败原因。</td></tr>
-            <tr><td>能提交但问答没有引用文档</td><td>文档是否解析完成，<code>available_document_external_ids</code> 是否传了正确的第三方文档 ID，<code>available_document_source_id</code> 是否传对。</td></tr>
+            <tr><td>能提交但问答没有引用文档</td><td>文档是否解析完成，<code>available_document_external_ids</code> 是否每轮传了正确的第三方文档 ID，<code>available_document_source_id</code> 是否传对；如果已同步 ACL，继续检查当前 <code>sender_external_id</code> 是否有读权限。</td></tr>
             <tr><td>多轮上下文接不上</td><td>同一轮对话是否保持相同 <code>conversation_external_id</code>，每条消息是否使用新的 <code>message_external_id</code>。</td></tr>
             <tr><td>流式页面没有逐段展示</td><td>是否调用 <code>/events/stream</code>，请求头是否带 <code>Accept: text/event-stream</code>，浏览器侧是否用 <code>fetch</code> 读取 <code>ReadableStream</code>。</td></tr>
             <tr><td>HTML 链接无法下载</td><td>确认由第三方服务端携带 Bearer token 请求下载接口，且 <code>render_output_id</code> 属于当前 <code>connection_id</code>。</td></tr>
