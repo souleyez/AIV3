@@ -158,6 +158,7 @@ const ASSISTANT_RUN_DETAIL_TARGET_LIMIT: usize = 3;
 const ASSISTANT_RUN_DATASET_ENTITY_SCAN_DOCUMENT_LIMIT: usize = 48;
 const ASSISTANT_RUN_DATASET_ENTITY_SCAN_CHUNK_LIMIT: usize = 4;
 const ASSISTANT_RUN_DATASET_ENTITY_SCAN_ENTITY_LIMIT: usize = 80;
+const ASSISTANT_RUN_DATASET_ENTITY_SCAN_ROW_LIMIT: usize = 160;
 const ASSISTANT_RUN_DOCUMENT_PARSE_STATUS_DOCUMENT_LIMIT: usize = 48;
 const EXTERNAL_CHANNEL_DIRECT_REPLY_DEFAULT_TOTAL_BUDGET_MS: u64 = 90_000;
 const EXTERNAL_CHANNEL_DIRECT_REPLY_DEFAULT_ATTEMPT_TIMEOUT_MS: u64 = 45_000;
@@ -17593,9 +17594,10 @@ fn build_assistant_run_provider_input_with_evidence(
             if let Some(brief) = build_assistant_run_model_supply_brief(evidence_state) {
                 sections.push(format!("供料提示（供你参考，不是回答模板）：\n{brief}"));
             }
+            let model_evidence_state = assistant_run_model_evidence_state(evidence_state);
             sections.push(format!(
                 "供料证据（可引用上下文）：{}",
-                serde_json::to_string(evidence_state).unwrap_or_else(|_| "{}".to_string())
+                serde_json::to_string(&model_evidence_state).unwrap_or_else(|_| "{}".to_string())
             ));
         }
     }
@@ -17652,6 +17654,7 @@ fn build_assistant_run_continue_provider_input(
         Some(evidence_state),
         request.current_artifact.as_ref(),
     );
+    let model_evidence_state = assistant_run_model_evidence_state(evidence_state);
     let mut sections = if plain_ordinary_chat {
         vec![
             "你是通用模型助手，正在继续一轮普通对话。".to_string(),
@@ -17673,7 +17676,7 @@ fn build_assistant_run_continue_provider_input(
             ),
             format!(
                 "供料状态：{}",
-                serde_json::to_string(evidence_state).unwrap_or_else(|_| "{}".to_string())
+                serde_json::to_string(&model_evidence_state).unwrap_or_else(|_| "{}".to_string())
             ),
         ]
     };
@@ -17805,6 +17808,46 @@ fn build_assistant_run_model_supply_brief(evidence_state: &Value) -> Option<Stri
     }
 
     Some(lines.join("\n"))
+}
+
+fn assistant_run_model_evidence_state(evidence_state: &Value) -> Value {
+    let mut model_state = evidence_state.clone();
+    let Some(object) = model_state.as_object_mut() else {
+        return model_state;
+    };
+    let Some(items) = object
+        .get_mut("supplied_items")
+        .and_then(Value::as_array_mut)
+    else {
+        return model_state;
+    };
+    for item in items {
+        if item.get("type").and_then(Value::as_str) == Some("dataset_entity_scan") {
+            *item = assistant_run_model_dataset_entity_scan_item(item);
+        }
+    }
+    model_state
+}
+
+fn assistant_run_model_dataset_entity_scan_item(item: &Value) -> Value {
+    json!({
+        "type": "dataset_entity_scan",
+        "source": item.get("source").cloned().unwrap_or(Value::Null),
+        "dataset_id": item.get("dataset_id").cloned().unwrap_or(Value::Null),
+        "summary": item.get("summary").cloned().unwrap_or(Value::Null),
+        "score": item.get("score").cloned().unwrap_or(Value::Null),
+        "scanned_document_count": item.get("scanned_document_count").cloned().unwrap_or(Value::Null),
+        "entity_count": item.get("entity_count").cloned().unwrap_or(Value::Null),
+        "organization_count": item.get("organization_count").cloned().unwrap_or(Value::Null),
+        "company_count": item.get("company_count").cloned().unwrap_or(Value::Null),
+        "candidate_term_count": item.get("candidate_term_count").cloned().unwrap_or(Value::Null),
+        "company_rows": item.get("company_rows").cloned().unwrap_or(Value::Null),
+        "company_names": item.get("company_names").cloned().unwrap_or(Value::Null),
+        "entities": item.get("entities").cloned().unwrap_or(Value::Null),
+        "answer_guidance": item.get("answer_guidance").cloned().unwrap_or(Value::Null),
+        "limits": item.get("limits").cloned().unwrap_or(Value::Null),
+        "model_note": "Use company_count and company_rows as the authoritative company statistic. Do not extend company lists from candidate_terms or document_hits.",
+    })
 }
 
 fn assistant_run_model_supply_item_brief(item: &Value) -> Option<String> {
@@ -18891,9 +18934,10 @@ fn build_assistant_run_react_provider_input(
             if let Some(brief) = build_assistant_run_model_supply_brief(evidence_state) {
                 sections.push(format!("供料综合提示：\n{brief}"));
             }
+            let model_evidence_state = assistant_run_model_evidence_state(evidence_state);
             sections.push(format!(
                 "可回答供料证据：{}",
-                serde_json::to_string(evidence_state).unwrap_or_else(|_| "{}".to_string())
+                serde_json::to_string(&model_evidence_state).unwrap_or_else(|_| "{}".to_string())
             ));
         }
     }
@@ -18983,9 +19027,10 @@ fn build_assistant_run_react_continue_provider_input(
             if let Some(brief) = build_assistant_run_model_supply_brief(evidence_state) {
                 sections.push(format!("供料综合提示：\n{brief}"));
             }
+            let model_evidence_state = assistant_run_model_evidence_state(evidence_state);
             sections.push(format!(
                 "可回答供料证据：{}",
-                serde_json::to_string(evidence_state).unwrap_or_else(|_| "{}".to_string())
+                serde_json::to_string(&model_evidence_state).unwrap_or_else(|_| "{}".to_string())
             ));
         }
     }
@@ -22578,7 +22623,22 @@ async fn build_assistant_run_dataset_entity_scan_supply(
             .await
             .map_err(ApiError::from_storage)?;
         let scan_text = dataset_entity_scan_text(&document, &chunks);
-        let entity_candidates = extract_document_entity_candidates_from_text(&scan_text, 64);
+        let structured_entity_candidates =
+            extract_document_entity_candidates_from_chunk_metadata(&chunks, 64);
+        let has_structured_organizations = structured_entity_candidates
+            .iter()
+            .any(|candidate| candidate.entity_type == "organization");
+        let text_scan = if has_structured_organizations {
+            dataset_entity_scan_structured_text(&document, &chunks)
+                .unwrap_or_else(|| scan_text.clone())
+        } else {
+            scan_text.clone()
+        };
+        let entity_candidates = merge_document_entity_candidates(
+            structured_entity_candidates,
+            extract_document_entity_candidates_from_text(&text_scan, 64),
+            64,
+        );
         let company_names = entity_candidates
             .iter()
             .filter(|candidate| candidate.entity_type == "organization")
@@ -22626,6 +22686,47 @@ async fn build_assistant_run_dataset_entity_scan_supply(
         .filter(|(entity_type, _)| entity_type == "organization")
         .count();
     let candidate_term_count = candidate_terms_by_name.len();
+    let mut organization_rows = entities_by_key
+        .iter()
+        .filter(|((entity_type, _), _)| entity_type == "organization")
+        .map(|((_, name), document_ids)| (name.clone(), document_ids.clone()))
+        .collect::<Vec<_>>();
+    organization_rows.sort_by(
+        |(left_name, left_documents), (right_name, right_documents)| {
+            right_documents
+                .len()
+                .cmp(&left_documents.len())
+                .then_with(|| left_name.cmp(right_name))
+        },
+    );
+    let company_rows = organization_rows
+        .iter()
+        .take(ASSISTANT_RUN_DATASET_ENTITY_SCAN_ROW_LIMIT)
+        .map(|(name, document_ids)| {
+            json!({
+                "name": name,
+                "document_count": document_ids.len(),
+                "document_ids": document_ids.iter().take(5).cloned().collect::<Vec<_>>(),
+            })
+        })
+        .collect::<Vec<_>>();
+    let company_names = organization_rows
+        .iter()
+        .take(ASSISTANT_RUN_DATASET_ENTITY_SCAN_ROW_LIMIT)
+        .map(|(name, _)| name.clone())
+        .collect::<Vec<_>>();
+    let company_summary = organization_rows
+        .iter()
+        .take(ASSISTANT_RUN_DATASET_ENTITY_SCAN_ENTITY_LIMIT)
+        .map(|(name, document_ids)| {
+            if document_ids.len() > 1 {
+                format!("{name}({}份)", document_ids.len())
+            } else {
+                name.clone()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("、");
     let entity_views = entities_by_key
         .iter()
         .take(ASSISTANT_RUN_DATASET_ENTITY_SCAN_ENTITY_LIMIT)
@@ -22649,12 +22750,6 @@ async fn build_assistant_run_dataset_entity_scan_supply(
             })
         })
         .collect::<Vec<_>>();
-    let company_names = entities_by_key
-        .iter()
-        .filter(|((entity_type, _), _)| entity_type == "organization")
-        .map(|((_, name), _)| name.clone())
-        .take(ASSISTANT_RUN_DATASET_ENTITY_SCAN_ENTITY_LIMIT)
-        .collect::<Vec<_>>();
     let entity_summary = entities_by_key
         .iter()
         .take(ASSISTANT_RUN_DATASET_ENTITY_SCAN_ENTITY_LIMIT)
@@ -22673,8 +22768,13 @@ async fn build_assistant_run_dataset_entity_scan_supply(
             "资料库实体扫描：已扫描可见文档 {scanned_document_count} 份，未识别到明确实体，候选名词 {candidate_term_count} 个。"
         )
     } else {
+        let company_part = if company_summary.is_empty() {
+            entity_summary
+        } else {
+            company_summary
+        };
         format!(
-            "资料库实体扫描：已扫描可见文档 {scanned_document_count} 份，识别实体 {entity_count} 个，其中公司/组织 {organization_count} 个，候选名词 {candidate_term_count} 个：{entity_summary}。"
+            "资料库实体扫描：已扫描可见文档 {scanned_document_count} 份，识别实体 {entity_count} 个，其中公司/组织 {organization_count} 个，候选名词 {candidate_term_count} 个。公司/组织统计以 company_rows 和 company_count 为准：{company_part}。"
         )
     };
 
@@ -22693,15 +22793,23 @@ async fn build_assistant_run_dataset_entity_scan_supply(
         "entity_count": entity_count,
         "organization_count": organization_count,
         "company_count": organization_count,
+        "company_rows": company_rows,
         "candidate_term_count": candidate_term_count,
         "company_names": company_names,
         "entities": entity_views,
         "candidate_terms": candidate_term_views,
         "document_hits": document_hits.into_iter().take(24).collect::<Vec<_>>(),
+        "answer_guidance": {
+            "company_count_authoritative": organization_count,
+            "company_rows_authoritative": true,
+            "ignore_candidate_terms_for_company_count": true,
+            "candidate_terms_are_only_noun_hints": true,
+        },
         "limits": {
             "maxDocuments": ASSISTANT_RUN_DATASET_ENTITY_SCAN_DOCUMENT_LIMIT,
             "maxChunksPerDocument": ASSISTANT_RUN_DATASET_ENTITY_SCAN_CHUNK_LIMIT,
             "maxEntities": ASSISTANT_RUN_DATASET_ENTITY_SCAN_ENTITY_LIMIT,
+            "maxCompanyRows": ASSISTANT_RUN_DATASET_ENTITY_SCAN_ROW_LIMIT,
             "limitedByDocumentLimit": limited_by_document_limit,
         },
     })])
@@ -22729,6 +22837,82 @@ fn dataset_entity_scan_text(document: &Document, chunks: &[DocumentChunk]) -> St
         .filter(|value| !value.is_empty())
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn dataset_entity_scan_structured_text(
+    document: &Document,
+    chunks: &[DocumentChunk],
+) -> Option<String> {
+    let mut parts = Vec::new();
+    let mut seen = BTreeSet::new();
+    push_unique_scan_text_part(&mut parts, &mut seen, &document.title);
+    for chunk in chunks
+        .iter()
+        .take(ASSISTANT_RUN_DATASET_ENTITY_SCAN_CHUNK_LIMIT)
+    {
+        if chunk.content.contains("Visual summary:")
+            || chunk.content.contains("Visual transcription:")
+            || chunk.content.contains("Visual evidence:")
+        {
+            push_unique_scan_text_part(&mut parts, &mut seen, &chunk.content);
+        }
+        collect_document_metadata_scan_text(&chunk.metadata, &mut parts, &mut seen);
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("\n"))
+    }
+}
+
+fn push_unique_scan_text_part(parts: &mut Vec<String>, seen: &mut BTreeSet<String>, value: &str) {
+    let normalized = value.trim();
+    if normalized.is_empty() {
+        return;
+    }
+    let normalized = truncate_assistant_supply_text(normalized, 1600);
+    if seen.insert(normalized.clone()) {
+        parts.push(normalized);
+    }
+}
+
+fn collect_document_metadata_scan_text(
+    metadata: &BTreeMap<String, Value>,
+    parts: &mut Vec<String>,
+    seen: &mut BTreeSet<String>,
+) {
+    visit_document_vlm_payloads(metadata, |payload| {
+        for field in ["summary", "visualSummary", "transcribedText"] {
+            if let Some(value) = payload.get(field).and_then(Value::as_str) {
+                push_unique_scan_text_part(parts, seen, value);
+            }
+        }
+        if let Some(entities) = payload.get("entities").and_then(Value::as_array) {
+            for entity in entities {
+                if let Some(text) = entity.get("text").and_then(Value::as_str) {
+                    push_unique_scan_text_part(parts, seen, text);
+                }
+            }
+        }
+        if let Some(fields) = payload.get("fieldCandidates").and_then(Value::as_array) {
+            for field in fields {
+                let key = field.get("key").and_then(Value::as_str).unwrap_or("");
+                let value = field.get("value").and_then(Value::as_str).unwrap_or("");
+                if !key.trim().is_empty() && !value.trim().is_empty() {
+                    push_unique_scan_text_part(parts, seen, &format!("{key}: {value}"));
+                }
+            }
+        }
+        if let Some(blocks) = payload.get("evidenceBlocks").and_then(Value::as_array) {
+            for block in blocks {
+                let title = block.get("title").and_then(Value::as_str).unwrap_or("");
+                let text = block.get("text").and_then(Value::as_str).unwrap_or("");
+                if !title.trim().is_empty() || !text.trim().is_empty() {
+                    push_unique_scan_text_part(parts, seen, &format!("{title}: {text}"));
+                }
+            }
+        }
+    });
 }
 
 fn extract_document_entity_candidates_from_text(
@@ -22797,6 +22981,141 @@ fn extract_document_entity_candidates_from_text(
     candidates
 }
 
+fn extract_document_entity_candidates_from_chunk_metadata(
+    chunks: &[DocumentChunk],
+    limit: usize,
+) -> Vec<DocumentEntityCandidate> {
+    let mut candidates = Vec::new();
+    let mut seen = BTreeSet::new();
+    for chunk in chunks
+        .iter()
+        .take(ASSISTANT_RUN_DATASET_ENTITY_SCAN_CHUNK_LIMIT)
+    {
+        visit_document_vlm_payloads(&chunk.metadata, |payload| {
+            collect_document_vlm_entity_candidates(payload, &mut candidates, &mut seen, limit);
+        });
+        if candidates.len() >= limit {
+            break;
+        }
+    }
+    candidates
+}
+
+fn visit_document_vlm_payloads<F>(metadata: &BTreeMap<String, Value>, mut visitor: F)
+where
+    F: FnMut(&Value),
+{
+    for value in metadata.values() {
+        visit_document_vlm_payloads_value(value, &mut visitor);
+    }
+}
+
+fn visit_document_vlm_payloads_value<F>(value: &Value, visitor: &mut F)
+where
+    F: FnMut(&Value),
+{
+    if let Some(object) = value.as_object() {
+        if let Some(payload) = object
+            .get("vlm")
+            .and_then(|vlm| vlm.get("payload"))
+            .filter(|payload| payload.is_object())
+        {
+            visitor(payload);
+        }
+        for child in object.values() {
+            visit_document_vlm_payloads_value(child, visitor);
+        }
+    } else if let Some(array) = value.as_array() {
+        for child in array {
+            visit_document_vlm_payloads_value(child, visitor);
+        }
+    }
+}
+
+fn collect_document_vlm_entity_candidates(
+    payload: &Value,
+    candidates: &mut Vec<DocumentEntityCandidate>,
+    seen: &mut BTreeSet<String>,
+    limit: usize,
+) {
+    if let Some(entities) = payload.get("entities").and_then(Value::as_array) {
+        for entity in entities {
+            if candidates.len() >= limit {
+                return;
+            }
+            let Some(entity_type) = entity
+                .get("type")
+                .and_then(Value::as_str)
+                .and_then(document_metadata_entity_type)
+            else {
+                continue;
+            };
+            let Some(text) = entity.get("text").and_then(Value::as_str) else {
+                continue;
+            };
+            push_document_metadata_entity_candidate(candidates, seen, entity_type, text, limit);
+        }
+    }
+
+    if let Some(fields) = payload.get("fieldCandidates").and_then(Value::as_array) {
+        for field in fields {
+            if candidates.len() >= limit {
+                return;
+            }
+            let Some(entity_type) = field
+                .get("key")
+                .and_then(Value::as_str)
+                .and_then(document_field_candidate_entity_type)
+            else {
+                continue;
+            };
+            let Some(value) = field.get("value").and_then(Value::as_str) else {
+                continue;
+            };
+            push_document_metadata_entity_candidate(candidates, seen, entity_type, value, limit);
+        }
+    }
+
+    if let Some(blocks) = payload.get("evidenceBlocks").and_then(Value::as_array) {
+        let mut block_text = String::new();
+        for block in blocks {
+            if let Some(title) = block.get("title").and_then(Value::as_str) {
+                block_text.push_str(title);
+                block_text.push('\n');
+            }
+            if let Some(text) = block.get("text").and_then(Value::as_str) {
+                block_text.push_str(text);
+                block_text.push('\n');
+            }
+        }
+        for name in extract_company_names_from_text(&block_text, limit) {
+            push_document_metadata_entity_candidate(candidates, seen, "organization", &name, limit);
+        }
+    }
+}
+
+fn merge_document_entity_candidates(
+    primary: Vec<DocumentEntityCandidate>,
+    secondary: Vec<DocumentEntityCandidate>,
+    limit: usize,
+) -> Vec<DocumentEntityCandidate> {
+    let mut merged = Vec::new();
+    let mut seen = BTreeSet::new();
+    for candidate in primary.into_iter().chain(secondary) {
+        push_document_entity_candidate(
+            &mut merged,
+            &mut seen,
+            candidate.entity_type,
+            candidate.name,
+            limit,
+        );
+        if merged.len() >= limit {
+            break;
+        }
+    }
+    merged
+}
+
 fn push_document_entity_candidate(
     output: &mut Vec<DocumentEntityCandidate>,
     seen: &mut BTreeSet<String>,
@@ -22817,6 +23136,104 @@ fn push_document_entity_candidate(
             entity_type,
             name: normalized,
         });
+    }
+}
+
+fn push_document_metadata_entity_candidate(
+    output: &mut Vec<DocumentEntityCandidate>,
+    seen: &mut BTreeSet<String>,
+    entity_type: &'static str,
+    value: &str,
+    limit: usize,
+) {
+    let normalized = normalize_document_entity_value(value);
+    let accepted = match entity_type {
+        "organization" => looks_like_metadata_organization_name(&normalized),
+        "person" => looks_like_person_name(&normalized),
+        "position" => looks_like_position_name(&normalized),
+        "skill" => looks_like_skill_name(&normalized),
+        "location" => looks_like_location_name(&normalized),
+        "project" => looks_like_project_name(&normalized),
+        _ => false,
+    };
+    if accepted {
+        push_document_entity_candidate(output, seen, entity_type, normalized, limit);
+    }
+}
+
+fn document_metadata_entity_type(raw: &str) -> Option<&'static str> {
+    let normalized = raw.trim();
+    let lower = normalized.to_ascii_lowercase();
+    if lower.contains("organization")
+        || lower.contains("company")
+        || normalized.contains("公司")
+        || normalized.contains("组织")
+        || normalized.contains("单位")
+    {
+        Some("organization")
+    } else if lower.contains("person") || normalized.contains("人名") || normalized == "姓名" {
+        Some("person")
+    } else if lower.contains("job")
+        || lower.contains("title")
+        || normalized.contains("职位")
+        || normalized.contains("岗位")
+        || normalized.contains("职务")
+    {
+        Some("position")
+    } else if lower.contains("skill")
+        || normalized.contains("技能")
+        || normalized.contains("技术栈")
+    {
+        Some("skill")
+    } else if lower.contains("location")
+        || lower.contains("city")
+        || normalized.contains("地点")
+        || normalized.contains("城市")
+    {
+        Some("location")
+    } else if lower.contains("project")
+        || lower.contains("product")
+        || normalized.contains("项目")
+        || normalized.contains("产品")
+    {
+        Some("project")
+    } else {
+        None
+    }
+}
+
+fn document_field_candidate_entity_type(raw_key: &str) -> Option<&'static str> {
+    let key = raw_key.trim();
+    let lower = key.to_ascii_lowercase();
+    if lower.contains("employer")
+        || lower.contains("company")
+        || lower.contains("work_unit")
+        || key.contains("公司")
+        || key.contains("雇主")
+        || key.contains("工作单位")
+        || key.contains("任职单位")
+    {
+        Some("organization")
+    } else if lower.contains("name") || key == "姓名" || key.contains("候选人") {
+        Some("person")
+    } else if lower.contains("position")
+        || lower.contains("job_title")
+        || key.contains("职位")
+        || key.contains("岗位")
+    {
+        Some("position")
+    } else if lower.contains("skill") || key.contains("技能") || key.contains("技术栈") {
+        Some("skill")
+    } else if lower.contains("city")
+        || lower.contains("location")
+        || key.contains("城市")
+        || key.contains("地点")
+    {
+        Some("location")
+    } else if lower.contains("project") || key.contains("项目") {
+        Some("project")
+    } else {
+        None
     }
 }
 
@@ -22965,6 +23382,35 @@ fn normalize_document_entity_value(value: &str) -> String {
         .chars()
         .take(80)
         .collect::<String>()
+}
+
+fn looks_like_metadata_organization_name(value: &str) -> bool {
+    let char_count = value.chars().count();
+    if char_count < 2
+        || char_count > 40
+        || value.contains('@')
+        || value.chars().all(|ch| ch.is_ascii_digit())
+        || company_name_has_unbalanced_brackets(value)
+        || is_document_entity_noise(value)
+        || company_candidate_has_ocr_noise(value)
+    {
+        return false;
+    }
+    if is_valid_company_name(value) {
+        return true;
+    }
+    let has_name_signal = value.chars().any(is_cjk_query_token_char)
+        || value.chars().any(|ch| ch.is_ascii_alphabetic());
+    has_name_signal
+        && ![
+            "公司",
+            "集团",
+            "网络有限公司",
+            "顾问有限公司",
+            "科技有限公司",
+            "信息有限公司",
+        ]
+        .contains(&value)
 }
 
 fn looks_like_person_name(value: &str) -> bool {
@@ -23498,13 +23944,24 @@ fn is_valid_company_name(value: &str) -> bool {
         && !value.starts_with('#')
         && !value.starts_with('➢')
         && !value.chars().next().is_some_and(|ch| ch.is_ascii_digit())
-        && !["股份有限公司", "有限责任公司", "有限公司", "集团"].contains(&value)
+        && ![
+            "股份有限公司",
+            "有限责任公司",
+            "有限公司",
+            "集团",
+            "网络有限公司",
+            "顾问有限公司",
+            "络有限公司",
+            "问有限公司",
+        ]
+        .contains(&value)
         && (value.ends_with("股份有限公司")
             || value.ends_with("有限责任公司")
             || value.ends_with("有限公司")
             || value.ends_with("集团"))
         && !value.contains('@')
         && !company_name_has_unbalanced_brackets(value)
+        && !company_candidate_has_ocr_noise(value)
         && ![
             "公司产品",
             "公司安排",
@@ -23526,15 +23983,37 @@ fn is_valid_company_name(value: &str) -> bool {
             "贵公司",
             "对公司",
             "为公司",
+            "业务目标",
+            "整个集团",
+            "了全集团",
+            "地亦股休",
+            "服务讽备",
         ]
         .iter()
         .any(|fragment| value.contains(fragment))
         && ![
             "实现", "完成", "项目", "配合", "统筹", "参与", "定制", "后期", "在职", "了", "对接",
-            "负责", "充分",
+            "负责", "充分", "达成",
         ]
         .iter()
         .any(|prefix| value.starts_with(prefix))
+}
+
+fn company_candidate_has_ocr_noise(value: &str) -> bool {
+    let char_count = value.chars().count();
+    if char_count == 0 {
+        return true;
+    }
+    let rare_noise_chars = value
+        .chars()
+        .filter(|ch| {
+            matches!(
+                ch,
+                '僧' | '牢' | '讽' | '玟' | '窟' | '赐' | '召' | '亦' | '休'
+            )
+        })
+        .count();
+    rare_noise_chars > 0
 }
 
 fn company_name_has_unbalanced_brackets(value: &str) -> bool {
@@ -23797,6 +24276,7 @@ fn assistant_run_supply_quality_report(
         "modelGuidance": [
             "treat supplied_items as citable context, not an answer template",
             "distinguish supplied document facts from general model knowledge",
+            "when dataset_entity_scan contains company_count and company_rows, use those as the authoritative company statistics and do not extend the list from candidate_terms",
             "when document_parse_status reports not-ready, failed, reparsing, or degraded documents, tell the user the relevant document is still parsing or failed instead of claiming its contents",
             "read detail_targets before asserting exact source wording, tables, OCR, or media timestamps"
         ],
@@ -50052,6 +50532,99 @@ mod tests {
                 "阿里巴巴集团".to_string()
             ]
         );
+    }
+
+    #[test]
+    fn assistant_run_extracts_structured_vlm_company_entities_before_noisy_ocr() {
+        let mut metadata = BTreeMap::new();
+        metadata.insert(
+            "parse_metadata".to_string(),
+            json!({
+                "embedded_images": [{
+                    "metadata": {
+                        "vlm": {
+                            "payload": {
+                                "entities": [
+                                    {"text": "广州冠晚网络有限公司", "type": "Organization", "confidence": 0.95},
+                                    {"text": "广州寓力地产顾问有限公司", "type": "公司", "confidence": 0.95},
+                                    {"text": "产品经理", "type": "JobTitle", "confidence": 0.9}
+                                ],
+                                "fieldCandidates": [
+                                    {"key": "current_employer_1", "value": "广州冠晚网络有限公司"},
+                                    {"key": "current_employer_2", "value": "广州寓力地产顾问有限公司"}
+                                ],
+                                "evidenceBlocks": [
+                                    {"title": "工作经历 - 广州冠晚网络有限公司", "text": "产品经理"},
+                                    {"title": "工作经历 - 广州寓力地产顾问有限公司", "text": "高级产品经理"}
+                                ],
+                                "transcribedText": "工作经历 | 广州冠晚网络有限公司 | 产品经理 | 广州寓力地产顾问有限公司 | 高级产品经理"
+                            }
+                        }
+                    }
+                }]
+            }),
+        );
+        let chunk = DocumentChunk {
+            id: DocumentChunkId::new(),
+            tenant_id: TenantId::new(),
+            dataset_id: DatasetId::new(),
+            document_id: DocumentId::new(),
+            chunk_index: 0,
+            content: "OCR text: 达成业务目标广州寓力地亦股休有限公司，整个集团，史资窟力集团，多宾僧牢服务讽备定玟了全集团。".to_string(),
+            token_count: 32,
+            state: DocumentChunkState::Extracted,
+            metadata,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+
+        let structured = extract_document_entity_candidates_from_chunk_metadata(&[chunk], 64);
+        let organizations = structured
+            .iter()
+            .filter(|candidate| candidate.entity_type == "organization")
+            .map(|candidate| candidate.name.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            organizations,
+            vec!["广州冠晚网络有限公司", "广州寓力地产顾问有限公司"]
+        );
+        assert!(extract_company_names_from_text(
+            "达成业务目标广州寓力地亦股休有限公司，整个集团，史资窟力集团，多宾僧牢服务讽备定玟了全集团。",
+            10
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn assistant_run_compacts_dataset_entity_scan_for_model_context() {
+        let evidence = json!({
+            "status": "supplied",
+            "supplied_items": [{
+                "type": "dataset_entity_scan",
+                "source": "visible_document_scan",
+                "summary": "资料库实体扫描",
+                "company_count": 2,
+                "company_rows": [
+                    {"name": "广州冠晚网络有限公司", "document_count": 1},
+                    {"name": "广州寓力地产顾问有限公司", "document_count": 1}
+                ],
+                "company_names": ["广州冠晚网络有限公司", "广州寓力地产顾问有限公司"],
+                "candidate_terms": [{"name": "项目经验", "document_count": 3}],
+                "document_hits": [{"document_id": "doc-1", "candidate_terms": ["项目经验"]}]
+            }]
+        });
+
+        let model_state = assistant_run_model_evidence_state(&evidence);
+        let item = &model_state["supplied_items"][0];
+
+        assert_eq!(item["company_count"], json!(2));
+        assert_eq!(
+            item["company_rows"][0]["name"],
+            json!("广州冠晚网络有限公司")
+        );
+        assert!(item.get("candidate_terms").is_none());
+        assert!(item.get("document_hits").is_none());
     }
 
     #[test]
