@@ -15,7 +15,7 @@ use axum::{
     routing::get,
     Json, Router,
 };
-use chrono::{DateTime, Duration, SecondsFormat, Utc};
+use chrono::{DateTime, Datelike, Duration, SecondsFormat, Utc};
 use contracts::{
     AdvanceWorkflowExecutionResponse, ApiErrorResponse, AppendAssistantRunEventRequest,
     AppendAssistantRunEventResponse, AppendChatSessionTurnRequest, AppendChatSessionTurnResponse,
@@ -160,6 +160,7 @@ const ASSISTANT_RUN_DATASET_ENTITY_SCAN_DOCUMENT_LIMIT: usize = 48;
 const ASSISTANT_RUN_DATASET_ENTITY_SCAN_CHUNK_LIMIT: usize = 4;
 const ASSISTANT_RUN_DATASET_ENTITY_SCAN_ENTITY_LIMIT: usize = 80;
 const ASSISTANT_RUN_DATASET_ENTITY_SCAN_ROW_LIMIT: usize = 160;
+const ASSISTANT_RUN_RESUME_PROFILE_ROW_LIMIT: usize = 160;
 const ASSISTANT_RUN_DOCUMENT_PARSE_STATUS_DOCUMENT_LIMIT: usize = 48;
 const EXTERNAL_CHANNEL_DIRECT_REPLY_DEFAULT_TOTAL_BUDGET_MS: u64 = 90_000;
 const EXTERNAL_CHANNEL_DIRECT_REPLY_DEFAULT_ATTEMPT_TIMEOUT_MS: u64 = 45_000;
@@ -18004,11 +18005,18 @@ fn assistant_run_model_dataset_entity_scan_item(item: &Value) -> Value {
         "company_count": item.get("company_count").cloned().unwrap_or(Value::Null),
         "candidate_term_count": item.get("candidate_term_count").cloned().unwrap_or(Value::Null),
         "company_rows": item.get("company_rows").cloned().unwrap_or(Value::Null),
+        "skill_rows": item.get("skill_rows").cloned().unwrap_or(Value::Null),
+        "project_rows": item.get("project_rows").cloned().unwrap_or(Value::Null),
+        "position_rows": item.get("position_rows").cloned().unwrap_or(Value::Null),
+        "location_rows": item.get("location_rows").cloned().unwrap_or(Value::Null),
+        "person_rows": item.get("person_rows").cloned().unwrap_or(Value::Null),
+        "entity_rows_by_type": item.get("entity_rows_by_type").cloned().unwrap_or(Value::Null),
+        "resume_profile_rows": item.get("resume_profile_rows").cloned().unwrap_or(Value::Null),
         "company_names": item.get("company_names").cloned().unwrap_or(Value::Null),
         "entities": item.get("entities").cloned().unwrap_or(Value::Null),
         "answer_guidance": item.get("answer_guidance").cloned().unwrap_or(Value::Null),
         "limits": item.get("limits").cloned().unwrap_or(Value::Null),
-        "model_note": "Use company_count and company_rows as the authoritative company statistic. Use scanned_document_count as the document total; do not sum company_rows.document_count as total documents. Do not extend company lists from candidate_terms or document_hits.",
+        "model_note": "Use *_rows and resume_profile_rows as authoritative structured scan tables when answering entity/resume dimension questions. Use scanned_document_count as the document total; do not sum row document_count as total documents. Do not extend company lists from candidate_terms or document_hits.",
     })
 }
 
@@ -18074,9 +18082,8 @@ fn assistant_run_compact_dataset_entity_scan_payloads(evidence_state: &Value) ->
         .unwrap_or_default()
 }
 
-fn assistant_run_compact_dataset_entity_scan_payload(item: &Value) -> Option<Value> {
-    let company_rows = item
-        .get("company_rows")
+fn assistant_run_compact_entity_scan_rows(item: &Value, key: &str) -> Vec<Value> {
+    item.get(key)
         .and_then(Value::as_array)
         .map(|rows| {
             rows.iter()
@@ -18093,10 +18100,44 @@ fn assistant_run_compact_dataset_entity_scan_payload(item: &Value) -> Option<Val
                 .take(ASSISTANT_RUN_DATASET_ENTITY_SCAN_ROW_LIMIT)
                 .collect::<Vec<_>>()
         })
+        .unwrap_or_default()
+}
+
+fn assistant_run_compact_dataset_entity_scan_payload(item: &Value) -> Option<Value> {
+    let company_rows = assistant_run_compact_entity_scan_rows(item, "company_rows");
+    let skill_rows = assistant_run_compact_entity_scan_rows(item, "skill_rows");
+    let project_rows = assistant_run_compact_entity_scan_rows(item, "project_rows");
+    let position_rows = assistant_run_compact_entity_scan_rows(item, "position_rows");
+    let location_rows = assistant_run_compact_entity_scan_rows(item, "location_rows");
+    let person_rows = assistant_run_compact_entity_scan_rows(item, "person_rows");
+    let resume_profile_rows = item
+        .get("resume_profile_rows")
+        .and_then(Value::as_array)
+        .map(|rows| {
+            rows.iter()
+                .take(ASSISTANT_RUN_RESUME_PROFILE_ROW_LIMIT)
+                .cloned()
+                .collect::<Vec<_>>()
+        })
         .unwrap_or_default();
-    if company_rows.is_empty() {
+    if company_rows.is_empty()
+        && skill_rows.is_empty()
+        && project_rows.is_empty()
+        && position_rows.is_empty()
+        && location_rows.is_empty()
+        && person_rows.is_empty()
+        && resume_profile_rows.is_empty()
+    {
         return None;
     }
+    let entity_rows_by_type = json!({
+        "organization": company_rows.clone(),
+        "skill": skill_rows.clone(),
+        "project": project_rows.clone(),
+        "position": position_rows.clone(),
+        "location": location_rows.clone(),
+        "person": person_rows.clone(),
+    });
 
     Some(json!({
         "type": "dataset_entity_scan",
@@ -18106,14 +18147,34 @@ fn assistant_run_compact_dataset_entity_scan_payload(item: &Value) -> Option<Val
         "scanned_document_count": item.get("scanned_document_count").cloned().unwrap_or(Value::Null),
         "company_count": item.get("company_count").cloned().unwrap_or(Value::Null),
         "company_rows": company_rows,
+        "skill_rows": skill_rows,
+        "project_rows": project_rows,
+        "position_rows": position_rows,
+        "location_rows": location_rows,
+        "person_rows": person_rows,
+        "entity_rows_by_type": entity_rows_by_type,
+        "resume_profile_rows": resume_profile_rows,
         "answer_guidance": item.get("answer_guidance").cloned().unwrap_or(Value::Null),
-        "model_note": "Answer from company_count and company_rows only. Do not use omitted candidate_terms, entities, document_hits, or summed row counts.",
+        "model_note": "Answer entity/resume dimension questions from *_rows and resume_profile_rows only. Do not use omitted candidate_terms, entities, document_hits, or summed row counts.",
     }))
 }
 
 fn assistant_run_dataset_entity_scan_direct_answer(
     request: &CreateAssistantRunRequest,
     evidence_state: &Value,
+) -> Option<String> {
+    let dimension = assistant_run_entity_scan_answer_dimension(&request.prompt)?;
+    assistant_run_dataset_entity_scan_direct_answer_for_dimension(
+        request,
+        evidence_state,
+        dimension,
+    )
+}
+
+fn assistant_run_dataset_entity_scan_direct_answer_for_dimension(
+    request: &CreateAssistantRunRequest,
+    evidence_state: &Value,
+    dimension: AssistantRunEntityScanAnswerDimension,
 ) -> Option<String> {
     let scans = assistant_run_compact_dataset_entity_scan_payloads(evidence_state);
     if scans.is_empty() {
@@ -18128,6 +18189,26 @@ fn assistant_run_dataset_entity_scan_direct_answer(
             "dataset_entity_scans": scans,
         }))
         .ok();
+    }
+
+    if matches!(
+        dimension,
+        AssistantRunEntityScanAnswerDimension::Skill
+            | AssistantRunEntityScanAnswerDimension::Project
+            | AssistantRunEntityScanAnswerDimension::Position
+            | AssistantRunEntityScanAnswerDimension::Person
+            | AssistantRunEntityScanAnswerDimension::Location
+    ) {
+        return assistant_run_entity_rows_direct_answer(&scans, dimension);
+    }
+
+    if matches!(
+        dimension,
+        AssistantRunEntityScanAnswerDimension::Age
+            | AssistantRunEntityScanAnswerDimension::Gender
+            | AssistantRunEntityScanAnswerDimension::Time
+    ) {
+        return assistant_run_resume_profile_direct_answer(&scans, dimension);
     }
 
     let mut lines = Vec::new();
@@ -18184,10 +18265,304 @@ fn assistant_run_preferred_dataset_entity_scan_direct_answer(
     request: &CreateAssistantRunRequest,
     evidence_state: &Value,
 ) -> Option<String> {
-    if !prompt_requests_company_entity_statistics(&request.prompt) {
+    let dimension = assistant_run_entity_scan_answer_dimension(&request.prompt)?;
+    assistant_run_dataset_entity_scan_direct_answer_for_dimension(
+        request,
+        evidence_state,
+        dimension,
+    )
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AssistantRunEntityScanAnswerDimension {
+    Company,
+    Skill,
+    Project,
+    Position,
+    Person,
+    Location,
+    Age,
+    Gender,
+    Time,
+}
+
+fn assistant_run_entity_scan_answer_dimension(
+    prompt: &str,
+) -> Option<AssistantRunEntityScanAnswerDimension> {
+    if prompt_requests_age_statistics(prompt) {
+        return Some(AssistantRunEntityScanAnswerDimension::Age);
+    }
+    if prompt_requests_gender_statistics(prompt) {
+        return Some(AssistantRunEntityScanAnswerDimension::Gender);
+    }
+    if prompt_requests_time_statistics(prompt) {
+        return Some(AssistantRunEntityScanAnswerDimension::Time);
+    }
+    if prompt_requests_skill_statistics(prompt) {
+        return Some(AssistantRunEntityScanAnswerDimension::Skill);
+    }
+    if prompt_requests_project_statistics(prompt) {
+        return Some(AssistantRunEntityScanAnswerDimension::Project);
+    }
+    if prompt_requests_position_statistics(prompt) {
+        return Some(AssistantRunEntityScanAnswerDimension::Position);
+    }
+    if prompt_requests_person_statistics(prompt) {
+        return Some(AssistantRunEntityScanAnswerDimension::Person);
+    }
+    if prompt_requests_location_statistics(prompt) {
+        return Some(AssistantRunEntityScanAnswerDimension::Location);
+    }
+    if prompt_requests_company_entity_statistics(prompt) {
+        return Some(AssistantRunEntityScanAnswerDimension::Company);
+    }
+    None
+}
+
+fn assistant_run_entity_rows_direct_answer(
+    scans: &[Value],
+    dimension: AssistantRunEntityScanAnswerDimension,
+) -> Option<String> {
+    let (title, row_key) = match dimension {
+        AssistantRunEntityScanAnswerDimension::Skill => ("技能", "skill_rows"),
+        AssistantRunEntityScanAnswerDimension::Project => ("项目", "project_rows"),
+        AssistantRunEntityScanAnswerDimension::Position => ("岗位/职位", "position_rows"),
+        AssistantRunEntityScanAnswerDimension::Person => ("人员/候选人", "person_rows"),
+        AssistantRunEntityScanAnswerDimension::Location => ("地点/城市", "location_rows"),
+        _ => return None,
+    };
+    let mut lines = Vec::new();
+    for (scan_index, scan) in scans.iter().enumerate() {
+        let rows = scan
+            .get(row_key)
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        if rows.is_empty() {
+            continue;
+        }
+        if scans.len() > 1 {
+            lines.push(format!("### 数据集 {}", scan_index + 1));
+            lines.push(String::new());
+        }
+        lines.push(format!(
+            "按出现覆盖文档数排序，识别到 {} 个{title}。",
+            rows.len()
+        ));
+        lines.push(String::new());
+        lines.push(format!("| {title} | 覆盖文档数 |"));
+        lines.push("| --- | ---: |".to_string());
+        for row in rows {
+            let Some(name) = row.get("name").and_then(Value::as_str) else {
+                continue;
+            };
+            let document_count = row
+                .get("document_count")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            lines.push(format!(
+                "| {} | {} |",
+                escape_markdown_table_cell(name),
+                document_count
+            ));
+        }
+        lines.push(String::new());
+    }
+    (!lines.is_empty()).then(|| lines.join("\n").trim().to_string())
+}
+
+fn assistant_run_resume_profile_direct_answer(
+    scans: &[Value],
+    dimension: AssistantRunEntityScanAnswerDimension,
+) -> Option<String> {
+    let mut rows = scans
+        .iter()
+        .flat_map(|scan| {
+            scan.get("resume_profile_rows")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default()
+        })
+        .collect::<Vec<_>>();
+    if rows.is_empty() {
         return None;
     }
-    assistant_run_dataset_entity_scan_direct_answer(request, evidence_state)
+
+    match dimension {
+        AssistantRunEntityScanAnswerDimension::Age => {
+            rows.sort_by(|left, right| {
+                right
+                    .get("age")
+                    .and_then(Value::as_u64)
+                    .cmp(&left.get("age").and_then(Value::as_u64))
+                    .then_with(|| {
+                        resume_profile_candidate_name(left)
+                            .cmp(&resume_profile_candidate_name(right))
+                    })
+            });
+            Some(assistant_run_resume_profile_table(
+                &rows,
+                "按年龄排序的候选人简历表",
+                &[
+                    "候选人",
+                    "年龄",
+                    "性别",
+                    "最早年份",
+                    "最近年份",
+                    "技能数",
+                    "项目数",
+                    "文档",
+                ],
+                |row| {
+                    vec![
+                        resume_profile_candidate_name(row),
+                        value_u64_string(row, "age"),
+                        value_string(row, "gender"),
+                        value_i64_string(row, "earliest_year"),
+                        value_i64_string(row, "latest_year"),
+                        value_u64_string(row, "skill_count"),
+                        value_u64_string(row, "project_count"),
+                        value_string(row, "document_title"),
+                    ]
+                },
+            ))
+        }
+        AssistantRunEntityScanAnswerDimension::Gender => {
+            rows.sort_by(|left, right| {
+                value_string(left, "gender")
+                    .cmp(&value_string(right, "gender"))
+                    .then_with(|| {
+                        resume_profile_candidate_name(left)
+                            .cmp(&resume_profile_candidate_name(right))
+                    })
+            });
+            Some(assistant_run_resume_profile_table(
+                &rows,
+                "按性别归类的候选人简历表",
+                &[
+                    "性别",
+                    "候选人",
+                    "年龄",
+                    "最近年份",
+                    "技能数",
+                    "项目数",
+                    "文档",
+                ],
+                |row| {
+                    vec![
+                        value_string(row, "gender"),
+                        resume_profile_candidate_name(row),
+                        value_u64_string(row, "age"),
+                        value_i64_string(row, "latest_year"),
+                        value_u64_string(row, "skill_count"),
+                        value_u64_string(row, "project_count"),
+                        value_string(row, "document_title"),
+                    ]
+                },
+            ))
+        }
+        AssistantRunEntityScanAnswerDimension::Time => {
+            rows.sort_by(|left, right| {
+                right
+                    .get("latest_year")
+                    .and_then(Value::as_i64)
+                    .cmp(&left.get("latest_year").and_then(Value::as_i64))
+                    .then_with(|| {
+                        resume_profile_candidate_name(left)
+                            .cmp(&resume_profile_candidate_name(right))
+                    })
+            });
+            Some(assistant_run_resume_profile_table(
+                &rows,
+                "按最近年份排序的候选人简历表",
+                &[
+                    "候选人",
+                    "最早年份",
+                    "最近年份",
+                    "年份数",
+                    "公司数",
+                    "技能数",
+                    "项目数",
+                    "文档",
+                ],
+                |row| {
+                    vec![
+                        resume_profile_candidate_name(row),
+                        value_i64_string(row, "earliest_year"),
+                        value_i64_string(row, "latest_year"),
+                        value_u64_string(row, "year_count"),
+                        value_u64_string(row, "company_count"),
+                        value_u64_string(row, "skill_count"),
+                        value_u64_string(row, "project_count"),
+                        value_string(row, "document_title"),
+                    ]
+                },
+            ))
+        }
+        _ => None,
+    }
+}
+
+fn assistant_run_resume_profile_table<F>(
+    rows: &[Value],
+    title: &str,
+    headers: &[&str],
+    row_values: F,
+) -> String
+where
+    F: Fn(&Value) -> Vec<String>,
+{
+    let mut lines = vec![
+        format!("{title}（共 {} 份可见简历）：", rows.len()),
+        String::new(),
+    ];
+    lines.push(format!("| {} |", headers.join(" | ")));
+    lines.push(format!(
+        "| {} |",
+        headers
+            .iter()
+            .map(|_| "---")
+            .collect::<Vec<_>>()
+            .join(" | ")
+    ));
+    for row in rows {
+        lines.push(format!(
+            "| {} |",
+            row_values(row)
+                .into_iter()
+                .map(|value| escape_markdown_table_cell(&value))
+                .collect::<Vec<_>>()
+                .join(" | ")
+        ));
+    }
+    lines.join("\n")
+}
+
+fn resume_profile_candidate_name(row: &Value) -> String {
+    value_string(row, "candidate_name")
+}
+
+fn value_string(row: &Value, key: &str) -> String {
+    row.get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("-")
+        .to_string()
+}
+
+fn value_u64_string(row: &Value, key: &str) -> String {
+    row.get(key)
+        .and_then(Value::as_u64)
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "-".to_string())
+}
+
+fn value_i64_string(row: &Value, key: &str) -> String {
+    row.get(key)
+        .and_then(Value::as_i64)
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "-".to_string())
 }
 
 fn prompt_requests_company_entity_statistics(prompt: &str) -> bool {
@@ -18230,6 +18605,114 @@ fn prompt_requests_company_entity_statistics(prompt: &str) -> bool {
     ) || lower_prompt.contains("how many");
 
     has_company_signal && has_stat_signal
+}
+
+fn prompt_requests_skill_statistics(prompt: &str) -> bool {
+    prompt_requests_dimension_statistics(
+        prompt,
+        &["技能", "技术栈", "能力", "专长"],
+        &["skill", "skills", "tech", "stack"],
+    )
+}
+
+fn prompt_requests_project_statistics(prompt: &str) -> bool {
+    prompt_requests_dimension_statistics(
+        prompt,
+        &["项目", "项目经验", "产品"],
+        &["project", "projects"],
+    )
+}
+
+fn prompt_requests_position_statistics(prompt: &str) -> bool {
+    prompt_requests_dimension_statistics(
+        prompt,
+        &["岗位", "职位", "职务", "角色"],
+        &["position", "positions", "role", "roles", "title", "titles"],
+    )
+}
+
+fn prompt_requests_person_statistics(prompt: &str) -> bool {
+    prompt_requests_dimension_statistics(
+        prompt,
+        &["人员", "姓名", "候选人", "联系人"],
+        &[
+            "person",
+            "people",
+            "name",
+            "names",
+            "candidate",
+            "candidates",
+        ],
+    )
+}
+
+fn prompt_requests_location_statistics(prompt: &str) -> bool {
+    prompt_requests_dimension_statistics(
+        prompt,
+        &["地点", "城市", "地区", "所在地", "工作地点"],
+        &[
+            "location",
+            "locations",
+            "city",
+            "cities",
+            "region",
+            "regions",
+        ],
+    )
+}
+
+fn prompt_requests_age_statistics(prompt: &str) -> bool {
+    prompt_requests_dimension_statistics(
+        prompt,
+        &["年龄", "岁数", "出生"],
+        &["age", "ages", "birth"],
+    )
+}
+
+fn prompt_requests_gender_statistics(prompt: &str) -> bool {
+    prompt_requests_dimension_statistics(prompt, &["性别", "男女", "男", "女"], &["gender", "sex"])
+}
+
+fn prompt_requests_time_statistics(prompt: &str) -> bool {
+    prompt_requests_dimension_statistics(
+        prompt,
+        &["时间", "年份", "年限", "工作年限", "最近", "最早"],
+        &["time", "year", "years", "timeline", "recent"],
+    )
+}
+
+fn prompt_requests_dimension_statistics(
+    prompt: &str,
+    dimension_hints: &[&str],
+    ascii_dimension_hints: &[&str],
+) -> bool {
+    let lower_prompt = prompt.to_ascii_lowercase();
+    let has_dimension_signal = prompt_contains_any(prompt, dimension_hints)
+        || ascii_prompt_contains_any(&lower_prompt, ascii_dimension_hints);
+    let has_stat_signal = prompt_contains_any(
+        prompt,
+        &[
+            "多少", "几个", "哪些", "列出", "统计", "汇总", "全部", "所有", "清单", "覆盖", "出现",
+            "提到", "频次", "频率", "排序", "排行", "表", "表格", "按",
+        ],
+    ) || ascii_prompt_contains_any(
+        &lower_prompt,
+        &[
+            "count",
+            "list",
+            "all",
+            "which",
+            "inventory",
+            "coverage",
+            "frequency",
+            "frequencies",
+            "sort",
+            "rank",
+            "table",
+        ],
+    ) || lower_prompt.contains("how many");
+
+    has_dimension_signal && has_stat_signal
 }
 
 fn assistant_run_request_output_format(request: &CreateAssistantRunRequest) -> Option<String> {
@@ -23103,6 +23586,7 @@ async fn build_assistant_run_dataset_entity_scan_supply(
     let mut entities_by_key: BTreeMap<(String, String), BTreeSet<String>> = BTreeMap::new();
     let mut candidate_terms_by_name: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     let mut document_hits = Vec::new();
+    let mut resume_profile_rows = Vec::new();
 
     for document in documents {
         if scanned_document_count >= ASSISTANT_RUN_DATASET_ENTITY_SCAN_DOCUMENT_LIMIT {
@@ -23151,7 +23635,9 @@ async fn build_assistant_run_dataset_entity_scan_supply(
             .map(|candidate| candidate.name.clone())
             .collect::<Vec<_>>();
         let candidate_terms = extract_document_candidate_terms_for_scan(&chunks, &scan_text, 32);
-        if entity_candidates.is_empty() && candidate_terms.is_empty() {
+        let resume_profile =
+            extract_resume_document_profile(&document, &text_scan, &entity_candidates);
+        if entity_candidates.is_empty() && candidate_terms.is_empty() && resume_profile.is_empty() {
             continue;
         }
 
@@ -23166,6 +23652,11 @@ async fn build_assistant_run_dataset_entity_scan_supply(
                 .entry(term.clone())
                 .or_default()
                 .insert(document.id.to_string());
+        }
+        if !resume_profile.is_empty()
+            && resume_profile_rows.len() < ASSISTANT_RUN_RESUME_PROFILE_ROW_LIMIT
+        {
+            resume_profile_rows.push(resume_profile.to_value());
         }
         document_hits.push(json!({
             "document_id": document.id,
@@ -23221,6 +23712,19 @@ async fn build_assistant_run_dataset_entity_scan_supply(
         .take(ASSISTANT_RUN_DATASET_ENTITY_SCAN_ROW_LIMIT)
         .map(|(name, _)| name.clone())
         .collect::<Vec<_>>();
+    let skill_rows = entity_rows_for_type(&entities_by_key, "skill");
+    let project_rows = entity_rows_for_type(&entities_by_key, "project");
+    let position_rows = entity_rows_for_type(&entities_by_key, "position");
+    let location_rows = entity_rows_for_type(&entities_by_key, "location");
+    let person_rows = entity_rows_for_type(&entities_by_key, "person");
+    let entity_rows_by_type = json!({
+        "organization": company_rows.clone(),
+        "skill": skill_rows.clone(),
+        "project": project_rows.clone(),
+        "position": position_rows.clone(),
+        "location": location_rows.clone(),
+        "person": person_rows.clone(),
+    });
     let company_summary = organization_rows
         .iter()
         .take(ASSISTANT_RUN_DATASET_ENTITY_SCAN_ENTITY_LIMIT)
@@ -23300,6 +23804,13 @@ async fn build_assistant_run_dataset_entity_scan_supply(
         "organization_count": organization_count,
         "company_count": organization_count,
         "company_rows": company_rows,
+        "skill_rows": skill_rows,
+        "project_rows": project_rows,
+        "position_rows": position_rows,
+        "location_rows": location_rows,
+        "person_rows": person_rows,
+        "entity_rows_by_type": entity_rows_by_type,
+        "resume_profile_rows": resume_profile_rows,
         "candidate_term_count": candidate_term_count,
         "company_names": company_names,
         "entities": entity_views,
@@ -23309,6 +23820,8 @@ async fn build_assistant_run_dataset_entity_scan_supply(
             "company_count_authoritative": organization_count,
             "scanned_document_count_authoritative": scanned_document_count,
             "company_rows_authoritative": true,
+            "entity_rows_by_type_authoritative": true,
+            "resume_profile_rows_authoritative": true,
             "ignore_candidate_terms_for_company_count": true,
             "do_not_sum_company_row_document_counts_as_total_documents": true,
             "candidate_terms_are_only_noun_hints": true,
@@ -23327,6 +23840,295 @@ async fn build_assistant_run_dataset_entity_scan_supply(
 struct DocumentEntityCandidate {
     entity_type: &'static str,
     name: String,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct ResumeDocumentProfile {
+    document_id: String,
+    document_title: String,
+    candidate_name: Option<String>,
+    gender: Option<String>,
+    age: Option<u64>,
+    birth_year: Option<i32>,
+    earliest_year: Option<i32>,
+    latest_year: Option<i32>,
+    year_count: usize,
+    company_count: usize,
+    skill_count: usize,
+    project_count: usize,
+}
+
+impl ResumeDocumentProfile {
+    fn is_empty(&self) -> bool {
+        self.candidate_name.is_none()
+            && self.gender.is_none()
+            && self.age.is_none()
+            && self.birth_year.is_none()
+            && self.earliest_year.is_none()
+            && self.latest_year.is_none()
+            && self.company_count == 0
+            && self.skill_count == 0
+            && self.project_count == 0
+    }
+
+    fn to_value(&self) -> Value {
+        json!({
+            "document_id": self.document_id,
+            "document_title": self.document_title,
+            "candidate_name": self.candidate_name,
+            "gender": self.gender,
+            "age": self.age,
+            "birth_year": self.birth_year,
+            "earliest_year": self.earliest_year,
+            "latest_year": self.latest_year,
+            "year_count": self.year_count,
+            "company_count": self.company_count,
+            "skill_count": self.skill_count,
+            "project_count": self.project_count,
+        })
+    }
+}
+
+fn entity_rows_for_type(
+    entities_by_key: &BTreeMap<(String, String), BTreeSet<String>>,
+    entity_type: &str,
+) -> Vec<Value> {
+    let mut rows = entities_by_key
+        .iter()
+        .filter(|((candidate_type, _), _)| candidate_type == entity_type)
+        .map(|((_, name), document_ids)| (name.clone(), document_ids.clone()))
+        .collect::<Vec<_>>();
+    rows.sort_by(
+        |(left_name, left_documents), (right_name, right_documents)| {
+            right_documents
+                .len()
+                .cmp(&left_documents.len())
+                .then_with(|| left_name.cmp(right_name))
+        },
+    );
+    rows.iter()
+        .take(ASSISTANT_RUN_DATASET_ENTITY_SCAN_ROW_LIMIT)
+        .map(|(name, document_ids)| {
+            json!({
+                "name": name,
+                "document_count": document_ids.len(),
+                "document_ids": document_ids.iter().take(5).cloned().collect::<Vec<_>>(),
+            })
+        })
+        .collect()
+}
+
+fn extract_resume_document_profile(
+    document: &Document,
+    scan_text: &str,
+    entity_candidates: &[DocumentEntityCandidate],
+) -> ResumeDocumentProfile {
+    let years = extract_resume_timeline_years(scan_text, 32);
+    let mut profile = ResumeDocumentProfile {
+        document_id: document.id.to_string(),
+        document_title: document.title.trim().to_string(),
+        candidate_name: entity_candidates
+            .iter()
+            .find(|candidate| candidate.entity_type == "person")
+            .map(|candidate| candidate.name.clone())
+            .or_else(|| extract_resume_candidate_name(scan_text)),
+        gender: extract_resume_gender(scan_text),
+        age: extract_resume_age(scan_text),
+        birth_year: extract_resume_birth_year(scan_text),
+        earliest_year: years.iter().min().copied(),
+        latest_year: years.iter().max().copied(),
+        year_count: years.len(),
+        company_count: entity_candidates
+            .iter()
+            .filter(|candidate| candidate.entity_type == "organization")
+            .count(),
+        skill_count: entity_candidates
+            .iter()
+            .filter(|candidate| candidate.entity_type == "skill")
+            .count(),
+        project_count: entity_candidates
+            .iter()
+            .filter(|candidate| candidate.entity_type == "project")
+            .count(),
+    };
+    if profile.age.is_none() {
+        if let Some(birth_year) = profile.birth_year {
+            let current_year = Utc::now().year();
+            if (1950..=current_year).contains(&birth_year) {
+                let age = current_year - birth_year;
+                if (16..=80).contains(&age) {
+                    profile.age = Some(age as u64);
+                }
+            }
+        }
+    }
+    profile
+}
+
+fn extract_resume_candidate_name(text: &str) -> Option<String> {
+    extract_labeled_entity_values(text, &["姓名", "候选人"], 4)
+        .into_iter()
+        .find(|value| looks_like_person_name(value))
+}
+
+fn extract_resume_gender(text: &str) -> Option<String> {
+    for value in extract_labeled_resume_values(text, &["性别"], 4) {
+        if let Some(gender) = normalize_resume_gender(&value) {
+            return Some(gender.to_string());
+        }
+    }
+    for line in text.lines().take(24) {
+        let normalized = normalize_document_entity_value(line);
+        if normalized == "男" || normalized == "女" {
+            return Some(normalized);
+        }
+    }
+    None
+}
+
+fn normalize_resume_gender(value: &str) -> Option<&'static str> {
+    let normalized = value.trim();
+    if normalized.contains("男女") || normalized.contains("不限") {
+        return None;
+    }
+    if normalized.starts_with('男') || normalized == "M" || normalized.eq_ignore_ascii_case("male")
+    {
+        Some("男")
+    } else if normalized.starts_with('女')
+        || normalized == "F"
+        || normalized.eq_ignore_ascii_case("female")
+    {
+        Some("女")
+    } else {
+        None
+    }
+}
+
+fn extract_resume_age(text: &str) -> Option<u64> {
+    for value in extract_labeled_resume_values(text, &["年龄"], 4) {
+        if let Some(age) = first_bounded_number(&value, 16, 80) {
+            return Some(age);
+        }
+    }
+    None
+}
+
+fn extract_resume_birth_year(text: &str) -> Option<i32> {
+    for value in extract_labeled_resume_values(text, &["出生年月", "出生日期", "出生年", "生日"], 4)
+    {
+        if let Some(year) = extract_years_from_text(&value, 1).into_iter().next() {
+            if (1950..=Utc::now().year()).contains(&year) {
+                return Some(year);
+            }
+        }
+    }
+    for line in text.lines().take(32) {
+        if !line.contains("出生") {
+            continue;
+        }
+        if let Some(year) = extract_years_from_text(line, 1).into_iter().next() {
+            if (1950..=Utc::now().year()).contains(&year) {
+                return Some(year);
+            }
+        }
+    }
+    None
+}
+
+fn extract_labeled_resume_values(text: &str, labels: &[&str], limit: usize) -> Vec<String> {
+    let mut values = Vec::new();
+    for line in text.lines() {
+        for segment in line.split(|ch: char| matches!(ch, '\t' | '|' | '；' | ';')) {
+            let normalized = segment.trim();
+            if normalized.is_empty() {
+                continue;
+            }
+            for label in labels {
+                if let Some(value) = labeled_entity_value(normalized, label) {
+                    for item in split_entity_value_list(&value) {
+                        let item = normalize_document_entity_value(&item);
+                        if !item.is_empty() && !values.iter().any(|existing| existing == &item) {
+                            values.push(item);
+                        }
+                        if values.len() >= limit {
+                            return values;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    values
+}
+
+fn extract_resume_timeline_years(text: &str, limit: usize) -> Vec<i32> {
+    let timeline_text = text
+        .lines()
+        .filter(|line| {
+            !["出生", "生日", "年龄"]
+                .iter()
+                .any(|label| line.contains(label))
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let years = extract_resume_years(&timeline_text, limit);
+    if years.is_empty() {
+        extract_resume_years(text, limit)
+    } else {
+        years
+    }
+}
+
+fn extract_resume_years(text: &str, limit: usize) -> Vec<i32> {
+    let mut years = extract_years_from_text(text, limit);
+    years.sort_unstable();
+    years.dedup();
+    years
+}
+
+fn extract_years_from_text(text: &str, limit: usize) -> Vec<i32> {
+    let current_year = Utc::now().year();
+    let mut years = Vec::new();
+    let chars = text.chars().collect::<Vec<_>>();
+    for index in 0..chars.len().saturating_sub(3) {
+        if !chars[index..index + 4].iter().all(|ch| ch.is_ascii_digit()) {
+            continue;
+        }
+        let raw = chars[index..index + 4].iter().collect::<String>();
+        let Ok(year) = raw.parse::<i32>() else {
+            continue;
+        };
+        if (1950..=current_year + 1).contains(&year) && !years.contains(&year) {
+            years.push(year);
+            if years.len() >= limit {
+                break;
+            }
+        }
+    }
+    years
+}
+
+fn first_bounded_number(text: &str, min: u64, max: u64) -> Option<u64> {
+    let mut digits = String::new();
+    for ch in text.chars() {
+        if ch.is_ascii_digit() {
+            digits.push(ch);
+            continue;
+        }
+        if let Some(value) = parse_bounded_number(&digits, min, max) {
+            return Some(value);
+        }
+        digits.clear();
+    }
+    parse_bounded_number(&digits, min, max)
+}
+
+fn parse_bounded_number(digits: &str, min: u64, max: u64) -> Option<u64> {
+    if digits.is_empty() {
+        return None;
+    }
+    let value = digits.parse::<u64>().ok()?;
+    (min..=max).contains(&value).then_some(value)
 }
 
 fn dataset_entity_scan_text(document: &Document, chunks: &[DocumentChunk]) -> String {
@@ -51196,6 +51998,25 @@ mod tests {
                     {"name": "广州冠晚网络有限公司", "document_count": 1},
                     {"name": "广州寓力地产顾问有限公司", "document_count": 1}
                 ],
+                "skill_rows": [
+                    {"name": "Java", "document_count": 2},
+                    {"name": "React", "document_count": 1}
+                ],
+                "project_rows": [
+                    {"name": "智能知识库平台", "document_count": 1}
+                ],
+                "resume_profile_rows": [
+                    {
+                        "document_id": "doc-1",
+                        "document_title": "张三简历.docx",
+                        "candidate_name": "张三",
+                        "gender": "男",
+                        "age": 35,
+                        "latest_year": 2024,
+                        "skill_count": 2,
+                        "project_count": 1
+                    }
+                ],
                 "company_names": ["广州冠晚网络有限公司", "广州寓力地产顾问有限公司"],
                 "candidate_terms": [{"name": "项目经验", "document_count": 3}],
                 "document_hits": [{"document_id": "doc-1", "candidate_terms": ["项目经验"]}]
@@ -51209,6 +52030,12 @@ mod tests {
         assert_eq!(
             item["company_rows"][0]["name"],
             json!("广州冠晚网络有限公司")
+        );
+        assert_eq!(item["skill_rows"][0]["name"], json!("Java"));
+        assert_eq!(item["project_rows"][0]["name"], json!("智能知识库平台"));
+        assert_eq!(
+            item["resume_profile_rows"][0]["candidate_name"],
+            json!("张三")
         );
         assert!(item.get("candidate_terms").is_none());
         assert!(item.get("document_hits").is_none());
@@ -51228,6 +52055,37 @@ mod tests {
                 "company_rows": [
                     {"name": "广州冠晚网络有限公司", "document_count": 1, "document_ids": ["doc-1"]},
                     {"name": "广州寓力地产顾问有限公司", "document_count": 2, "document_ids": ["doc-2", "doc-3"]}
+                ],
+                "skill_rows": [
+                    {"name": "Java", "document_count": 2, "document_ids": ["doc-1", "doc-2"]},
+                    {"name": "React", "document_count": 1, "document_ids": ["doc-3"]}
+                ],
+                "project_rows": [
+                    {"name": "智能知识库平台", "document_count": 1, "document_ids": ["doc-1"]}
+                ],
+                "resume_profile_rows": [
+                    {
+                        "document_id": "doc-1",
+                        "document_title": "李四简历.docx",
+                        "candidate_name": "李四",
+                        "gender": "女",
+                        "age": 29,
+                        "earliest_year": 2019,
+                        "latest_year": 2024,
+                        "skill_count": 1,
+                        "project_count": 1
+                    },
+                    {
+                        "document_id": "doc-2",
+                        "document_title": "张三简历.docx",
+                        "candidate_name": "张三",
+                        "gender": "男",
+                        "age": 35,
+                        "earliest_year": 2012,
+                        "latest_year": 2023,
+                        "skill_count": 2,
+                        "project_count": 0
+                    }
                 ],
                 "company_names": ["广州冠晚网络有限公司", "广州寓力地产顾问有限公司"],
                 "entities": [{"name": "噪声实体", "document_ids": ["doc-4"]}],
@@ -51252,6 +52110,8 @@ mod tests {
         assert!(input.contains("\"company_count\":2"));
         assert!(input.contains("\"scanned_document_count\":25"));
         assert!(input.contains("\"name\":\"广州冠晚网络有限公司\""));
+        assert!(input.contains("\"name\":\"Java\""));
+        assert!(input.contains("\"candidate_name\":\"张三\""));
         assert!(!input.contains("document_ids"));
         assert!(!input.contains("\"candidate_terms\""));
         assert!(!input.contains("项目经验"));
@@ -51267,6 +52127,27 @@ mod tests {
             assistant_run_preferred_dataset_entity_scan_direct_answer(&request, &evidence)
                 .is_some()
         );
+
+        let skill_request = CreateAssistantRunRequest {
+            prompt: "按技能出现频次排序出表".to_string(),
+            ..request.clone()
+        };
+        let skill_answer =
+            assistant_run_dataset_entity_scan_direct_answer(&skill_request, &evidence)
+                .expect("skill scan should produce a direct answer");
+        assert!(skill_answer.contains("识别到 2 个技能"));
+        assert!(skill_answer.contains("| Java | 2 |"));
+        assert!(skill_answer.contains("| React | 1 |"));
+
+        let age_request = CreateAssistantRunRequest {
+            prompt: "按年龄排序出表".to_string(),
+            ..request
+        };
+        let age_answer = assistant_run_dataset_entity_scan_direct_answer(&age_request, &evidence)
+            .expect("resume profiles should produce an age table");
+        let zhang_index = age_answer.find("| 张三 | 35 |").unwrap();
+        let li_index = age_answer.find("| 李四 | 29 |").unwrap();
+        assert!(zhang_index < li_index);
     }
 
     #[test]
@@ -51298,6 +52179,48 @@ mod tests {
         assert!(terms.contains(&"知识库平台".to_string()));
         assert!(terms.contains(&"风险识别系统".to_string()));
         assert!(terms.contains(&"数据治理".to_string()));
+    }
+
+    #[test]
+    fn assistant_run_extracts_resume_profile_dimensions() {
+        let now = Utc::now();
+        let document = Document {
+            id: DocumentId::new(),
+            tenant_id: TenantId::new(),
+            dataset_id: DatasetId::new(),
+            owner_user_id: None,
+            title: "张三简历.docx".to_string(),
+            object_key: "documents/resume.docx".to_string(),
+            content_type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                .to_string(),
+            lifecycle: domain_model::DocumentLifecycle::Indexed,
+            secret_binding_ids: vec![],
+            metadata: BTreeMap::new(),
+            created_at: now,
+            updated_at: now,
+        };
+        let text = "姓名：张三\n\
+            性别：男\n\
+            年龄：32岁\n\
+            出生年月：1994年5月\n\
+            应聘岗位：高级Java工程师\n\
+            核心技能：Java、Rust、Kubernetes\n\
+            项目名称：智能知识库平台\n\
+            工作地点：深圳\n\
+            2018.06-2024.03 任职深圳星拓智能科技有限公司";
+        let entities = extract_document_entity_candidates_from_text(text, 32);
+
+        let profile = extract_resume_document_profile(&document, text, &entities);
+
+        assert_eq!(profile.candidate_name.as_deref(), Some("张三"));
+        assert_eq!(profile.gender.as_deref(), Some("男"));
+        assert_eq!(profile.age, Some(32));
+        assert_eq!(profile.birth_year, Some(1994));
+        assert_eq!(profile.earliest_year, Some(2018));
+        assert_eq!(profile.latest_year, Some(2024));
+        assert!(profile.company_count >= 1);
+        assert!(profile.skill_count >= 3);
+        assert!(profile.project_count >= 1);
     }
 
     #[test]
