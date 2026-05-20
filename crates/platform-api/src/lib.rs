@@ -24800,6 +24800,7 @@ fn is_resume_person_name_noise(value: &str) -> bool {
         "女",
         "简历",
         "履历",
+        "个人",
         "个人简历",
         "个人履历",
         "个人优势",
@@ -52344,6 +52345,7 @@ mod tests {
         assert_eq!(profile.gender.as_deref(), Some("男"));
         assert_eq!(profile.age, Some(38));
         assert_eq!(extract_resume_candidate_name_from_title("个人优势"), None);
+        assert_eq!(extract_resume_candidate_name_from_title("个人"), None);
         assert_eq!(extract_resume_candidate_name_from_title("简历"), None);
     }
 
