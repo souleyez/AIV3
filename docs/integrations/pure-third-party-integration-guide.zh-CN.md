@@ -145,13 +145,19 @@ Authorization: Bearer <V3 inbound token>
 | `tenant_external_id` | 是 | 第三方租户、空间或客户 ID |
 | `bot_external_id` | 是 | 第三方侧机器人或应用 ID |
 | `conversation_external_id` | 是 | 会话、群、房间或页面上下文 ID；同一轮、同一页面会话或同一聊天窗口保持不变，V3 会映射为同一个对话上下文 |
-| `sender_external_id` | 是 | 当前提问用户在第三方系统中的稳定 ID |
+| `sender_external_id` | 是 | 当前提问用户在第三方系统中的稳定 ID；V3 会用它做权限主体解析，也会作为“用户历史上下文”的身份键 |
 | `message_external_id` | 是 | 第三方消息 ID，必须稳定 |
 | `message_type` | 是 | `text`、`image`、`file`、`audio`、`video`、`card`、`event` 或 `unknown` |
 | `text` | 文本消息必填 | 用户输入文本 |
 | `attachment_refs` | 否 | 附件引用，文件下载需按项目配置权限和有效期 |
 | `idempotency_key` | 是 | 防重放和重复投递 |
 | `received_at` | 是 | 第三方收到消息的时间 |
+
+关于用户历史上下文：
+
+- V3 会按 `platform + tenant_external_id + bot_external_id + sender_external_id` 维护一个内部隐藏的用户上下文范围，用于沉淀该用户历史对话摘要；
+- 该上下文不是默认供料。只有当用户问题明确引用“刚才、上次、之前、继续”等历史语境时，V3 才会把该用户自己的历史上下文作为可选证据供给模型；
+- `mention_external_user_ids` 只是本条消息中的提及对象，不代表授权读取被提及用户的历史上下文，也不会把被提及用户的历史对话供给模型。
 
 生成回复响应示例：
 

@@ -161,6 +161,11 @@ const ASSISTANT_RUN_DOCUMENT_PARSE_STATUS_DOCUMENT_LIMIT: usize = 48;
 const ASSISTANT_RUN_DOCUMENT_PARSE_STATUS_ATTENTION_LIMIT: usize = 12;
 const ASSISTANT_RUN_CONVERSATION_MEMORY_DEFAULT_LIMIT: i64 = 4;
 const ASSISTANT_RUN_CONVERSATION_MEMORY_MAX_LIMIT: i64 = 8;
+const CONVERSATION_MEMORY_SCOPE_CURRENT_THREAD: &str = "local-thread";
+const CONVERSATION_MEMORY_SCOPE_CURRENT_THREAD_ALIAS: &str = "current_thread";
+const CONVERSATION_MEMORY_SCOPE_LOCAL_THREAD_PREFIX: &str = "local-thread:";
+const CONVERSATION_MEMORY_SCOPE_USER_CONTEXT_PREFIX: &str = "user-context:";
+const CONVERSATION_MEMORY_SCOPE_EXTERNAL_USER_PREFIX: &str = "external-user:";
 const ASSISTANT_RUN_SCOPE_SUMMARY_DOC_LIMIT: usize = 24;
 const ASSISTANT_RUN_MODEL_SUPPLY_BRIEF_ITEM_LIMIT: usize = 4;
 const ASSISTANT_RUN_MODEL_SUPPLY_BRIEF_TEXT_LIMIT: usize = 220;
@@ -6825,25 +6830,62 @@ async fn create_assistant_run(
         .as_ref()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty());
-    let conversation_memory_available = if let Some(local_thread_id) = local_thread_id.as_ref() {
-        state
-            .storage
-            .conversation_memory_items()
-            .list_by_local_thread(state.tenant_id, local_thread_id, None, 1)
-            .await
-            .map_err(ApiError::from_storage)?
-            .into_iter()
-            .any(|item| owner_user_id_is_visible(item.user_id, current_user_id))
+    let current_thread_memory_available = if let Some(local_thread_id) = local_thread_id.as_ref() {
+        conversation_memory_source_has_visible_items(&state, local_thread_id, current_user_id)
+            .await?
     } else {
         false
     };
+    let user_context_memory_key =
+        current_user_id.map(|user_id| global_user_context_memory_key(state.tenant_id, user_id));
+    let user_context_memory_available = if let Some(key) = user_context_memory_key.as_deref() {
+        conversation_memory_source_has_visible_items(&state, key, current_user_id).await?
+    } else {
+        false
+    };
+    let conversation_memory_available =
+        current_thread_memory_available || user_context_memory_available;
     let scope_plan = plan_scope(ScopePlannerInput {
         prompt: &request.prompt,
         visible_datasets: &visible_datasets,
         selected_dataset_id,
         conversation_memory_available,
     });
-    let mut scope_candidates = candidates_to_values(&scope_plan.candidates);
+    let mut selected_scope = assistant_run_scope_with_current_artifact_context(
+        scope_plan.selected_scope.clone(),
+        request.current_artifact.as_ref(),
+        &request.prompt,
+    );
+    let mut scope_candidates = candidates_to_values(&scope_plan.candidates)
+        .into_iter()
+        .filter(|candidate| {
+            candidate.get("type").and_then(Value::as_str) != Some("conversation_memory")
+        })
+        .collect::<Vec<_>>();
+    if selected_scope_requests_conversation_memory(&selected_scope) {
+        let mut memory_scope_ids = Vec::new();
+        if current_thread_memory_available {
+            memory_scope_ids.push(CONVERSATION_MEMORY_SCOPE_CURRENT_THREAD.to_string());
+            scope_candidates.push(conversation_memory_scope_candidate_value(
+                CONVERSATION_MEMORY_SCOPE_CURRENT_THREAD,
+                "本轮对话历史",
+                "用户引用了刚才或已有草稿内容",
+                "scope_planner",
+            ));
+        }
+        if user_context_memory_available {
+            if let Some(key) = user_context_memory_key.as_deref() {
+                memory_scope_ids.push(key.to_string());
+                scope_candidates.push(conversation_memory_scope_candidate_value(
+                    key,
+                    "用户历史上下文",
+                    "用户引用了历史上下文且存在可见用户记忆",
+                    "user_context_scope",
+                ));
+            }
+        }
+        set_selected_scope_conversation_memory(&mut selected_scope, memory_scope_ids);
+    }
     scope_candidates.extend(assistant_run_artifact_scope_candidates(
         &client_scope_candidates,
         request.current_artifact.as_ref(),
@@ -6852,11 +6894,6 @@ async fn create_assistant_run(
         .into_iter()
         .take(5)
         .collect();
-    let selected_scope = assistant_run_scope_with_current_artifact_context(
-        scope_plan.selected_scope.clone(),
-        request.current_artifact.as_ref(),
-        &request.prompt,
-    );
     request.selected_scope = Some(selected_scope.clone());
     let mut evidence_state = build_assistant_run_evidence_state(
         &state,
@@ -10290,6 +10327,13 @@ async fn ingest_external_channel_message_with_connection(
         &mut selected_scope,
     )
     .await?;
+    enrich_external_channel_user_context_scope(
+        state,
+        &message,
+        &mut selected_scope,
+        &mut assistant_request.scope_candidates,
+    )
+    .await?;
     assistant_request.selected_scope = Some(selected_scope.clone());
     for candidate in &mut assistant_request.scope_candidates {
         if candidate.get("type").and_then(Value::as_str) == Some("external_channel") {
@@ -12947,6 +12991,64 @@ async fn load_external_channel_conversation_history_messages(
     Ok(external_channel_conversation_history_messages_from_recent_runs(&runs))
 }
 
+async fn enrich_external_channel_user_context_scope(
+    state: &AppState,
+    message: &ExternalBotMessageView,
+    selected_scope: &mut Value,
+    scope_candidates: &mut Vec<Value>,
+) -> std::result::Result<(), ApiError> {
+    let Some(user_context_key) = external_user_context_key_from_message(message) else {
+        return Ok(());
+    };
+    if !conversation_memory_source_has_visible_items(state, &user_context_key, None).await? {
+        return Ok(());
+    }
+
+    let memory_plan = plan_scope(ScopePlannerInput {
+        prompt: &external_bot_message_prompt(message),
+        visible_datasets: &[],
+        selected_dataset_id: None,
+        conversation_memory_available: true,
+    });
+    if !selected_scope_requests_conversation_memory(&memory_plan.selected_scope) {
+        return Ok(());
+    }
+
+    set_selected_scope_conversation_memory(selected_scope, vec![user_context_key.clone()]);
+    set_payload_value(
+        selected_scope,
+        "user_context_scope",
+        json!({
+            "type": "external_user",
+            "id": user_context_key,
+            "activation": "intent_gated_selected",
+            "sender_external_id": message.sender_external_id,
+            "conversation_external_id": message.conversation_external_id,
+            "history_policy": "not_default_enabled",
+        }),
+    );
+    set_payload_value(
+        selected_scope,
+        "intent",
+        memory_plan
+            .selected_scope
+            .get("intent")
+            .cloned()
+            .unwrap_or_else(|| json!(memory_plan.intent)),
+    );
+    scope_candidates.push(conversation_memory_scope_candidate_value(
+        selected_scope
+            .get("user_context_scope")
+            .and_then(|value| value.get("id"))
+            .and_then(Value::as_str)
+            .unwrap_or_default(),
+        "第三方用户历史上下文",
+        "第三方用户引用了历史上下文且存在该 sender 的可见历史记忆",
+        "external_user_context_scope",
+    ));
+    Ok(())
+}
+
 async fn external_channel_duplicate_reply(
     state: &AppState,
     existing_run_id: AssistantRunId,
@@ -13432,6 +13534,16 @@ async fn external_channel_chat_model_or_acceptance_reply(
             )
             .await
             .map_err(ApiError::from_storage)?;
+        persist_external_user_context_memory_item(
+            state,
+            connection_id,
+            run_id,
+            assistant_request,
+            message,
+            &output_text,
+            now,
+        )
+        .await?;
 
         return Ok(external_channel_text_reply(
             message,
@@ -13465,6 +13577,79 @@ async fn external_channel_chat_model_or_acceptance_reply(
         "external_channel_model_direct_reply_unavailable",
         "external channel ordinary chat requires a model-generated direct reply, but no configured model attempt produced displayable text".to_string(),
     ))
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn persist_external_user_context_memory_item(
+    state: &AppState,
+    connection_id: &str,
+    run_id: AssistantRunId,
+    assistant_request: &CreateAssistantRunRequest,
+    message: &ExternalBotMessageView,
+    output_text: &str,
+    now: DateTime<Utc>,
+) -> std::result::Result<(), ApiError> {
+    let Some(user_context_key) = external_user_context_key_from_message(message) else {
+        return Ok(());
+    };
+    let output_text = output_text.trim();
+    if output_text.is_empty() {
+        return Ok(());
+    }
+    let user_prompt = assistant_request.prompt.trim();
+    if user_prompt.is_empty() {
+        return Ok(());
+    }
+    let summary = external_user_context_memory_summary(user_prompt, output_text);
+    state
+        .storage
+        .conversation_memory_items()
+        .create(
+            state.tenant_id,
+            &NewConversationMemoryItem {
+                user_id: None,
+                local_thread_id: user_context_key,
+                role: ChatMessageRole::User,
+                item_kind: "external_user_context_turn".to_string(),
+                summary,
+                source_message_refs: json!([{
+                    "type": "external_channel_message",
+                    "channel_connection_id": connection_id,
+                    "platform": external_channel_platform_wire_value(&message.platform),
+                    "tenant_external_id": message.tenant_external_id,
+                    "bot_external_id": message.bot_external_id,
+                    "conversation_external_id": message.conversation_external_id,
+                    "sender_external_id": message.sender_external_id,
+                    "message_external_id": message.message_external_id,
+                    "idempotency_key": message.idempotency_key,
+                    "assistant_run_id": run_id,
+                }]),
+                artifact_refs: json!([{
+                    "type": "assistant_run",
+                    "assistant_run_id": run_id,
+                }]),
+                metadata: json!({
+                    "source": "external_channel",
+                    "scope_kind": "external_user_context",
+                    "activation": "intent_gated_not_default",
+                    "channel_connection_id": connection_id,
+                    "conversation_external_id": message.conversation_external_id,
+                    "sender_external_id": message.sender_external_id,
+                    "message_external_id": message.message_external_id,
+                    "assistant_answer_excerpt": truncate_assistant_supply_text(output_text, 800),
+                }),
+                created_at: now,
+            },
+        )
+        .await
+        .map_err(ApiError::from_storage)?;
+    Ok(())
+}
+
+fn external_user_context_memory_summary(user_prompt: &str, output_text: &str) -> String {
+    let prompt = truncate_assistant_supply_text(user_prompt, 600);
+    let answer = truncate_assistant_supply_text(output_text, 800);
+    format!("第三方用户历史回合：用户提到/询问：{prompt}\nV3回答要点：{answer}")
 }
 
 fn external_channel_action_plan_reply(
@@ -13572,6 +13757,37 @@ fn external_bot_message_local_thread_id(message: &ExternalBotMessageView) -> Str
         message.tenant_external_id,
         message.bot_external_id,
         message.conversation_external_id
+    )
+}
+
+fn external_user_context_key(
+    platform: &str,
+    tenant_external_id: &str,
+    bot_external_id: &str,
+    sender_external_id: &str,
+) -> Option<String> {
+    let platform = platform.trim();
+    let tenant_external_id = tenant_external_id.trim();
+    let bot_external_id = bot_external_id.trim();
+    let sender_external_id = sender_external_id.trim();
+    if platform.is_empty()
+        || tenant_external_id.is_empty()
+        || bot_external_id.is_empty()
+        || sender_external_id.is_empty()
+    {
+        return None;
+    }
+    Some(format!(
+        "external-user:{platform}:{tenant_external_id}:{bot_external_id}:{sender_external_id}"
+    ))
+}
+
+fn external_user_context_key_from_message(message: &ExternalBotMessageView) -> Option<String> {
+    external_user_context_key(
+        external_channel_platform_wire_value(&message.platform),
+        &message.tenant_external_id,
+        &message.bot_external_id,
+        &message.sender_external_id,
     )
 }
 
@@ -19862,43 +20078,16 @@ async fn build_assistant_run_evidence_state(
     }
 
     if conversation_memory_requested {
-        if let Some(local_thread_id) = local_thread_id
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        {
-            let items = state
-                .storage
-                .conversation_memory_items()
-                .list_by_local_thread(
-                    state.tenant_id,
-                    local_thread_id,
-                    None,
-                    assistant_run_conversation_memory_limit(),
-                )
-                .await
-                .map_err(ApiError::from_storage)?;
-
-            for item in items
-                .into_iter()
-                .filter(|item| owner_user_id_is_visible(item.user_id, current_user_id))
-                .filter(assistant_run_memory_item_is_supply_eligible)
-            {
-                let supplied_item = json!({
-                    "type": "conversation_memory_item",
-                    "conversation_memory_item_id": item.id,
-                    "local_thread_id": item.local_thread_id,
-                    "role": item.role.as_str(),
-                    "item_kind": item.item_kind,
-                    "summary": item.summary,
-                    "source_message_refs": item.source_message_refs,
-                    "artifact_refs": item.artifact_refs,
-                    "metadata": item.metadata,
-                    "created_at": item.created_at,
-                    "updated_at": item.updated_at,
-                });
-                supplied_memory_items.push(supplied_item.clone());
-                supplied_items.push(supplied_item);
-            }
+        let memory_items = load_selected_conversation_memory_items(
+            state,
+            selected_scope,
+            local_thread_id,
+            current_user_id,
+        )
+        .await?;
+        for supplied_item in memory_items {
+            supplied_memory_items.push(supplied_item.clone());
+            supplied_items.push(supplied_item);
         }
     }
 
@@ -23208,6 +23397,77 @@ fn dedupe_assistant_run_scope_candidate_values(candidates: Vec<Value>) -> Vec<Va
         .collect()
 }
 
+async fn conversation_memory_source_has_visible_items(
+    state: &AppState,
+    local_thread_id: &str,
+    current_user_id: Option<UserId>,
+) -> std::result::Result<bool, ApiError> {
+    let local_thread_id = local_thread_id.trim();
+    if local_thread_id.is_empty() {
+        return Ok(false);
+    }
+    Ok(state
+        .storage
+        .conversation_memory_items()
+        .list_by_local_thread(state.tenant_id, local_thread_id, None, 1)
+        .await
+        .map_err(ApiError::from_storage)?
+        .into_iter()
+        .any(|item| {
+            owner_user_id_is_visible(item.user_id, current_user_id)
+                && assistant_run_memory_item_is_supply_eligible(&item)
+        }))
+}
+
+async fn load_selected_conversation_memory_items(
+    state: &AppState,
+    selected_scope: &Value,
+    current_local_thread_id: Option<&str>,
+    current_user_id: Option<UserId>,
+) -> std::result::Result<Vec<Value>, ApiError> {
+    let mut supplied_items = Vec::new();
+    for local_thread_id in
+        selected_scope_conversation_memory_local_thread_ids(selected_scope, current_local_thread_id)
+    {
+        let items = state
+            .storage
+            .conversation_memory_items()
+            .list_by_local_thread(
+                state.tenant_id,
+                &local_thread_id,
+                None,
+                assistant_run_conversation_memory_limit(),
+            )
+            .await
+            .map_err(ApiError::from_storage)?;
+
+        for item in items
+            .into_iter()
+            .filter(|item| owner_user_id_is_visible(item.user_id, current_user_id))
+            .filter(assistant_run_memory_item_is_supply_eligible)
+        {
+            supplied_items.push(conversation_memory_item_supply_value(item));
+        }
+    }
+    Ok(supplied_items)
+}
+
+fn conversation_memory_item_supply_value(item: ConversationMemoryItem) -> Value {
+    json!({
+        "type": "conversation_memory_item",
+        "conversation_memory_item_id": item.id,
+        "local_thread_id": item.local_thread_id,
+        "role": item.role.as_str(),
+        "item_kind": item.item_kind,
+        "summary": item.summary,
+        "source_message_refs": item.source_message_refs,
+        "artifact_refs": item.artifact_refs,
+        "metadata": item.metadata,
+        "created_at": item.created_at,
+        "updated_at": item.updated_at,
+    })
+}
+
 fn assistant_run_conversation_memory_limit() -> i64 {
     std::env::var("ASSISTANT_RUN_CONVERSATION_MEMORY_LIMIT")
         .ok()
@@ -26074,20 +26334,110 @@ fn selected_document_ids_from_scope(scope: &Value) -> Vec<DocumentId> {
     document_ids
 }
 
-fn selected_scope_requests_conversation_memory(scope: &Value) -> bool {
+fn selected_scope_conversation_memory_ids(scope: &Value) -> Vec<String> {
     scope
         .as_object()
         .and_then(|object| object.get("conversation_memory"))
         .and_then(Value::as_array)
         .map(|items| {
-            items.iter().any(|item| {
-                item.as_str()
+            dedupe_strings(
+                items
+                    .iter()
+                    .filter_map(Value::as_str)
                     .map(str::trim)
-                    .map(|value| !value.is_empty())
-                    .unwrap_or(false)
-            })
+                    .filter(|value| !value.is_empty())
+                    .map(ToOwned::to_owned)
+                    .collect(),
+            )
         })
-        .unwrap_or(false)
+        .unwrap_or_default()
+}
+
+fn selected_scope_requests_conversation_memory(scope: &Value) -> bool {
+    !selected_scope_conversation_memory_ids(scope).is_empty()
+}
+
+fn set_selected_scope_conversation_memory(scope: &mut Value, memory_ids: Vec<String>) {
+    let memory_ids = dedupe_strings(
+        memory_ids
+            .into_iter()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .collect(),
+    );
+    if !scope.is_object() {
+        *scope = json!({});
+    }
+    if let Some(object) = scope.as_object_mut() {
+        object.insert(
+            "conversation_memory".to_string(),
+            Value::Array(memory_ids.into_iter().map(Value::String).collect()),
+        );
+    }
+}
+
+fn conversation_memory_scope_id_to_local_thread_id(
+    scope_id: &str,
+    current_local_thread_id: Option<&str>,
+) -> Option<String> {
+    let scope_id = scope_id.trim();
+    if scope_id.is_empty() {
+        return None;
+    }
+    if matches!(
+        scope_id,
+        CONVERSATION_MEMORY_SCOPE_CURRENT_THREAD | CONVERSATION_MEMORY_SCOPE_CURRENT_THREAD_ALIAS
+    ) {
+        return current_local_thread_id
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned);
+    }
+    if let Some(local_thread_id) =
+        scope_id.strip_prefix(CONVERSATION_MEMORY_SCOPE_LOCAL_THREAD_PREFIX)
+    {
+        return Some(local_thread_id.trim().to_string()).filter(|value| !value.is_empty());
+    }
+    if scope_id.starts_with(CONVERSATION_MEMORY_SCOPE_USER_CONTEXT_PREFIX)
+        || scope_id.starts_with(CONVERSATION_MEMORY_SCOPE_EXTERNAL_USER_PREFIX)
+    {
+        return Some(scope_id.to_string());
+    }
+    None
+}
+
+fn selected_scope_conversation_memory_local_thread_ids(
+    scope: &Value,
+    current_local_thread_id: Option<&str>,
+) -> Vec<String> {
+    dedupe_strings(
+        selected_scope_conversation_memory_ids(scope)
+            .into_iter()
+            .filter_map(|scope_id| {
+                conversation_memory_scope_id_to_local_thread_id(&scope_id, current_local_thread_id)
+            })
+            .collect(),
+    )
+}
+
+fn conversation_memory_scope_candidate_value(
+    id: &str,
+    label: &str,
+    reason: &str,
+    source: &str,
+) -> Value {
+    json!({
+        "type": "conversation_memory",
+        "id": id,
+        "label": label,
+        "confidence": "medium",
+        "reason": reason,
+        "source": source,
+    })
+}
+
+fn global_user_context_memory_key(tenant_id: TenantId, user_id: UserId) -> String {
+    format!("user-context:user:{tenant_id}:{user_id}")
 }
 
 fn assistant_run_scope_intent(scope: &Value) -> &str {
@@ -38674,6 +39024,161 @@ mod tests {
             Some("resolve_external_principal_before_retrieval")
         );
         assert_eq!(request.scope_candidates.len(), 1);
+    }
+
+    #[test]
+    fn external_user_context_key_is_tenant_bot_user_scoped() {
+        let key = external_user_context_key("generic_chat", "tenant-a", "bot-a", "user-a")
+            .expect("external user context key");
+        assert_eq!(key, "external-user:generic_chat:tenant-a:bot-a:user-a");
+        assert_ne!(
+            key,
+            external_user_context_key("generic_chat", "tenant-a", "bot-a", "user-b")
+                .expect("different user key")
+        );
+        assert_ne!(
+            key,
+            external_user_context_key("generic_chat", "tenant-a", "bot-b", "user-a")
+                .expect("different bot key")
+        );
+        assert!(external_user_context_key("generic_chat", "tenant-a", "bot-a", " ").is_none());
+    }
+
+    #[tokio::test]
+    async fn external_user_memory_is_intent_gated_and_supplied() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping external user memory test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("external-user-memory-test-{}", Uuid::new_v4()),
+                "External User Memory Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage,
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+
+        let message = sample_external_bot_message();
+        let user_context_key =
+            external_user_context_key_from_message(&message).expect("external user context key");
+        state
+            .storage
+            .conversation_memory_items()
+            .create(
+                state.tenant_id,
+                &NewConversationMemoryItem {
+                    user_id: None,
+                    local_thread_id: user_context_key.clone(),
+                    role: ChatMessageRole::User,
+                    item_kind: "external_user_context_turn".to_string(),
+                    summary: "第三方用户上次关注订单延期和供应商风险。".to_string(),
+                    source_message_refs: json!([{"message_external_id": "msg-previous"}]),
+                    artifact_refs: json!([]),
+                    metadata: json!({"source": "external_channel"}),
+                    created_at: Utc::now(),
+                },
+            )
+            .await
+            .expect("external user memory should be stored");
+
+        let generic_request =
+            external_bot_message_to_assistant_run_request("generic-chat-main", &message);
+        let mut generic_scope = generic_request
+            .selected_scope
+            .clone()
+            .expect("external selected scope");
+        let mut generic_candidates = generic_request.scope_candidates.clone();
+        enrich_external_channel_user_context_scope(
+            &state,
+            &message,
+            &mut generic_scope,
+            &mut generic_candidates,
+        )
+        .await
+        .expect("generic prompt should evaluate memory scope");
+        assert!(!selected_scope_requests_conversation_memory(&generic_scope));
+        assert_eq!(generic_candidates.len(), 1);
+
+        let mut history_message = sample_external_bot_message();
+        history_message.conversation_external_id = "chat-risk-followup".to_string();
+        history_message.message_external_id = "msg-002".to_string();
+        history_message.idempotency_key = "generic:tenant-ext-001:msg-002".to_string();
+        history_message.text = Some("继续刚才我说的订单延期风险".to_string());
+        let history_request =
+            external_bot_message_to_assistant_run_request("generic-chat-main", &history_message);
+        let mut history_scope = history_request
+            .selected_scope
+            .clone()
+            .expect("history selected scope");
+        let mut history_candidates = history_request.scope_candidates.clone();
+        enrich_external_channel_user_context_scope(
+            &state,
+            &history_message,
+            &mut history_scope,
+            &mut history_candidates,
+        )
+        .await
+        .expect("history prompt should select memory scope");
+        assert_eq!(
+            history_scope["conversation_memory"],
+            json!([user_context_key.clone()])
+        );
+        assert!(history_candidates.iter().any(|candidate| {
+            candidate.get("type").and_then(Value::as_str) == Some("conversation_memory")
+                && candidate.get("id").and_then(Value::as_str) == Some(user_context_key.as_str())
+        }));
+
+        let evidence_state = build_assistant_run_evidence_state(
+            &state,
+            &history_scope,
+            history_request.prompt.trim(),
+            history_request.local_thread_id.as_deref(),
+            &[],
+            None,
+        )
+        .await
+        .expect("selected external user memory should be supplied");
+        assert_eq!(evidence_state["status"], json!("supplied"));
+        assert_eq!(
+            evidence_state["conversation_memory_items"][0]["local_thread_id"],
+            json!(user_context_key)
+        );
+        assert_eq!(
+            evidence_state["conversation_memory_items"][0]["summary"],
+            json!("第三方用户上次关注订单延期和供应商风险。")
+        );
+
+        let mut other_user_message = history_message;
+        other_user_message.sender_external_id = "user-ext-002".to_string();
+        let other_request =
+            external_bot_message_to_assistant_run_request("generic-chat-main", &other_user_message);
+        let mut other_scope = other_request
+            .selected_scope
+            .clone()
+            .expect("other selected scope");
+        let mut other_candidates = other_request.scope_candidates.clone();
+        enrich_external_channel_user_context_scope(
+            &state,
+            &other_user_message,
+            &mut other_scope,
+            &mut other_candidates,
+        )
+        .await
+        .expect("different user should evaluate memory scope");
+        assert!(!selected_scope_requests_conversation_memory(&other_scope));
+        assert_eq!(other_candidates.len(), 1);
     }
 
     #[test]
