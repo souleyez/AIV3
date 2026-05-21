@@ -310,17 +310,26 @@ Content-Type: application/json
 }
 ```
 
-生成响应字段同 2.1。若已生成静态页/报表产物，重点读取：
+生成响应字段同 2.1。若已生成静态页/报表/HTML 产物，重点读取：
 
 | 字段 | 注释 |
 | --- | --- |
 | `reply.reply_type` | `artifact_link` 或 `text` |
 | `reply.text` | 给用户展示的说明 |
-| `reply.artifact_links` | 产物预览/下载链接数组 |
+| `reply.artifact_links` | 产物预览/下载链接数组；模板 HTML 产物会返回 `/v1/external/channels/{connection_id}/html-artifacts/{artifact_id}/files/0` |
 | `reply.card` | 可能包含 `render_output_id`、产物状态或结构化卡片 |
 | `assistant_run_id` | 本次生成运行 ID |
 
 ### 3.4 查询、预览、下载产物
+
+模板 HTML 产物直接下载：
+
+```http
+GET /v1/external/channels/{connection_id}/html-artifacts/{artifact_id}/files/{file_index}
+Authorization: Bearer <V3 inbound token>
+```
+
+静态页/报表渲染产物：
 
 ```http
 GET /v1/external/channels/{connection_id}/static-page-renders/{render_output_id}
@@ -342,7 +351,9 @@ Authorization: Bearer <V3 inbound token>
 | 字段 | 必填 | 注释 |
 | --- | --- | --- |
 | `connection_id` | 是 | V3 分配的第三方通道 ID |
-| `render_output_id` | 是 | V3 生成的静态页/报表渲染 ID |
+| `artifact_id` | HTML 产物下载必填 | `reply.artifact_links` 中的 HTML artifact ID |
+| `file_index` | HTML 产物下载必填 | 文件序号；当前模板 HTML 产物固定传 `0` |
+| `render_output_id` | 静态页/报表必填 | V3 生成的静态页/报表渲染 ID |
 
 ## 4. 枚举与错误
 
@@ -388,4 +399,7 @@ Authorization: Bearer <V3 inbound token>
 | `external_document_content_url_insecure` | 文档下载地址不是 HTTPS |
 | `external_document_download_failed` | V3 下载文档失败 |
 | `external_document_too_large` | 文档超过大小限制 |
+| `html_artifact_not_found` | 找不到 HTML 产物 |
+| `html_artifact_file_not_found` | 找不到 HTML 产物文件 |
+| `html_artifact_file_unavailable` | HTML 产物文件暂不可下载 |
 | `static_page_render_output_not_found` | 找不到产物渲染结果 |

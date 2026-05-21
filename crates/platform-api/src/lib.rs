@@ -1058,6 +1058,10 @@ pub fn router(
             get(download_external_channel_static_page_html),
         )
         .route(
+            "/v1/external/channels/{connection_id}/html-artifacts/{artifact_id}/files/{file_index}",
+            get(download_external_channel_html_artifact_file),
+        )
+        .route(
             "/v1/external/channels/{connection_id}/confirmations",
             axum::routing::post(confirm_external_channel_action),
         )
@@ -11321,6 +11325,91 @@ async fn download_external_channel_static_page_html(
     static_page_html_download_response(output)
 }
 
+async fn download_external_channel_html_artifact_file(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((connection_id, artifact_id, file_index)): Path<(String, String, usize)>,
+) -> std::result::Result<Response, ApiError> {
+    let artifact =
+        load_external_channel_html_artifact(&state, &headers, &connection_id, &artifact_id).await?;
+    let file = html_artifact_downloadable_file(&artifact, file_index)?;
+    let bytes = fs::read(&file.path).map_err(|error| {
+        ApiError::not_found(
+            "html_artifact_file_unavailable",
+            format!("generated artifact file is not available: {error}"),
+        )
+    })?;
+    let mut builder = Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, file.content_type)
+        .header(header::CACHE_CONTROL, "no-store")
+        .header(
+            header::CONTENT_DISPOSITION,
+            format!("attachment; filename=\"{}\"", file.file_name),
+        );
+    if let Ok(length) = HeaderValue::from_str(&bytes.len().to_string()) {
+        builder = builder.header(header::CONTENT_LENGTH, length);
+    }
+    builder
+        .body(axum::body::Body::from(bytes))
+        .map_err(|error| {
+            ApiError::internal(
+                "html_artifact_download_response_failed",
+                format!("failed to build artifact download response: {error}"),
+            )
+        })
+}
+
+async fn load_external_channel_html_artifact(
+    state: &AppState,
+    headers: &HeaderMap,
+    connection_id: &str,
+    artifact_id: &str,
+) -> std::result::Result<HtmlArtifactManifestView, ApiError> {
+    validate_required("connection_id", connection_id)?;
+    validate_required("artifact_id", artifact_id)?;
+    let connection = load_external_channel_connection(state, connection_id).await?;
+    ensure_external_channel_inbound_bearer_auth(headers, &connection)?;
+    ensure_external_channel_enabled(connection_id, &connection)?;
+    let record = state
+        .storage
+        .html_artifacts()
+        .get_by_id(state.tenant_id, artifact_id.trim())
+        .await
+        .map_err(ApiError::from_storage)?
+        .ok_or_else(|| {
+            ApiError::not_found(
+                "html_artifact_not_found",
+                format!("html artifact {} was not found", artifact_id.trim()),
+            )
+        })?;
+    let run_id = record.assistant_run_id.ok_or_else(|| {
+        ApiError::forbidden(
+            "html_artifact_not_external_channel_scoped",
+            "HTML artifact is not attached to an external channel assistant run".to_string(),
+        )
+    })?;
+    let run = state
+        .storage
+        .assistant_runs()
+        .get_by_id(state.tenant_id, run_id)
+        .await
+        .map_err(ApiError::from_storage)?
+        .ok_or_else(|| {
+            ApiError::not_found(
+                "assistant_run_not_found",
+                format!("assistant run {run_id} was not found"),
+            )
+        })?;
+    ensure_assistant_run_belongs_to_external_channel(connection_id, &run)?;
+    serde_json::from_value::<HtmlArtifactManifestView>(record.manifest).map_err(|error| {
+        ApiError::internal(
+            "html_artifact_manifest_invalid",
+            format!("stored HTML artifact manifest is invalid: {error}"),
+        )
+    })
+}
+
 async fn load_external_channel_static_page_render_output(
     state: &AppState,
     headers: &HeaderMap,
@@ -11485,6 +11574,18 @@ fn ensure_static_page_render_belongs_to_external_channel(
     connection_id: &str,
     run: &AssistantRun,
 ) -> std::result::Result<(), ApiError> {
+    ensure_assistant_run_belongs_to_external_channel(connection_id, run).map_err(|_| {
+        ApiError::forbidden(
+            "static_page_render_not_external_channel_scoped",
+            "static page render output does not belong to this external channel".to_string(),
+        )
+    })
+}
+
+fn ensure_assistant_run_belongs_to_external_channel(
+    connection_id: &str,
+    run: &AssistantRun,
+) -> std::result::Result<(), ApiError> {
     if run.service_lane != "external_channel"
         || run
             .selected_scope
@@ -11493,8 +11594,8 @@ fn ensure_static_page_render_belongs_to_external_channel(
             != Some(connection_id)
     {
         return Err(ApiError::forbidden(
-            "static_page_render_not_external_channel_scoped",
-            "static page render output does not belong to this external channel".to_string(),
+            "assistant_run_not_external_channel_scoped",
+            "assistant run does not belong to this external channel".to_string(),
         ));
     }
     Ok(())
@@ -16546,6 +16647,299 @@ fn normalize_external_channel_output_for_rejection(output_text: &str) -> String 
         .collect()
 }
 
+struct ExternalChannelTemplateHtmlArtifact {
+    download_url: String,
+}
+
+async fn maybe_persist_external_channel_template_html_artifact(
+    state: &AppState,
+    connection_id: &str,
+    run_id: AssistantRunId,
+    message: &ExternalBotMessageView,
+    output_text: &str,
+    now: DateTime<Utc>,
+) -> std::result::Result<Option<ExternalChannelTemplateHtmlArtifact>, ApiError> {
+    if !external_channel_message_requests_template_html_artifact(message) {
+        return Ok(None);
+    }
+    let Some(html) = extract_external_template_html_from_model_output(output_text) else {
+        return Ok(None);
+    };
+    validate_external_template_html_artifact_content(&html)?;
+
+    let run = state
+        .storage
+        .assistant_runs()
+        .get_by_id(state.tenant_id, run_id)
+        .await
+        .map_err(ApiError::from_storage)?
+        .ok_or_else(|| {
+            ApiError::not_found(
+                "assistant_run_not_found",
+                format!("assistant run {run_id} was not found"),
+            )
+        })?;
+    let artifact_id = format!("html-artifact-external-template-{run_id}");
+    let session_dir = external_channel_template_html_artifact_root().join(run_id.to_string());
+    fs::create_dir_all(&session_dir).map_err(|error| {
+        ApiError::internal(
+            "external_template_html_artifact_write_failed",
+            format!("failed to create external template HTML artifact directory: {error}"),
+        )
+    })?;
+    let file_path = session_dir.join("index.html");
+    fs::write(&file_path, html.as_bytes()).map_err(|error| {
+        ApiError::internal(
+            "external_template_html_artifact_write_failed",
+            format!("failed to write external template HTML artifact: {error}"),
+        )
+    })?;
+
+    let download_url = external_channel_html_artifact_download_url(connection_id, &artifact_id, 0);
+    let manifest = HtmlArtifactManifestView {
+        kind: "html_artifact".to_string(),
+        version: 1,
+        id: artifact_id.clone(),
+        title: "第三方模板 HTML 产物".to_string(),
+        source_type: contracts::HtmlArtifactSourceTypeView::ExternalIntegration,
+        template_id: contracts::HtmlArtifactTemplateIdView::ThirdPartyHandoffDocument,
+        owner_scope: contracts::HtmlArtifactOwnerScopeView {
+            scope_type: "external_channel".to_string(),
+            id: connection_id.to_string(),
+        },
+        data_refs: external_template_html_artifact_data_refs(message),
+        provenance: contracts::HtmlArtifactProvenanceView {
+            producer: "platform-api-external-channel".to_string(),
+            reason: "document_template_skill_html_output".to_string(),
+            source_run_id: Some(run_id.to_string()),
+        },
+        interaction_mode: HtmlArtifactInteractionModeView::ReadOnly,
+        created_at: now,
+        payload: json!({
+            "generated_artifacts": {
+                "status": "completed",
+                "session_dir": session_dir.display().to_string(),
+                "artifacts_dir": session_dir.display().to_string(),
+                "files": [{
+                    "artifact_kind": "external_template_html",
+                    "format": "text/html; charset=utf-8",
+                    "file_name": format!("v3-external-template-{run_id}.html"),
+                    "path": file_path.display().to_string()
+                }]
+            },
+            "external_channel": {
+                "connection_id": connection_id,
+                "conversation_external_id": message.conversation_external_id,
+                "message_external_id": message.message_external_id,
+                "download_url": download_url
+            }
+        }),
+    };
+    persist_html_artifacts_for_run(state, &run, std::slice::from_ref(&manifest)).await?;
+    let manifest_value = serde_json::to_value(&manifest).map_err(|error| {
+        ApiError::internal(
+            "html_artifact_serialize_failed",
+            format!("failed to serialize HTML artifact manifest: {error}"),
+        )
+    })?;
+    state
+        .storage
+        .assistant_runs()
+        .append_event(
+            state.tenant_id,
+            run_id,
+            &NewAssistantRunEvent {
+                event_name: "assistant_run.external_channel_template_html_artifact_created"
+                    .to_string(),
+                payload: json!({
+                    "channel_connection_id": connection_id,
+                    "platform": external_channel_platform_wire_value(&message.platform),
+                    "message_external_id": message.message_external_id,
+                    "artifact_id": artifact_id,
+                    "download_url": download_url,
+                    "html_artifacts": [manifest_value],
+                }),
+                created_at: now,
+            },
+        )
+        .await
+        .map_err(ApiError::from_storage)?;
+
+    Ok(Some(ExternalChannelTemplateHtmlArtifact { download_url }))
+}
+
+fn external_channel_message_requests_template_html_artifact(
+    message: &ExternalBotMessageView,
+) -> bool {
+    if message.render_mode.as_deref() != Some("artifact") {
+        return false;
+    }
+    message
+        .requested_skills
+        .iter()
+        .filter(|skill| external_requested_skill_mode(skill) != "disabled")
+        .filter(|skill| external_requested_skill_is_document_template(skill))
+        .any(|skill| {
+            let output_type = external_document_template_skill_output_type(skill);
+            output_type == "any"
+                || output_type.contains("html")
+                || output_type.contains("static_page")
+                || output_type.contains("static-page")
+        })
+}
+
+fn external_template_html_artifact_data_refs(
+    message: &ExternalBotMessageView,
+) -> Vec<contracts::HtmlArtifactDataRefView> {
+    message
+        .requested_skills
+        .iter()
+        .filter(|skill| external_requested_skill_mode(skill) != "disabled")
+        .filter(|skill| external_requested_skill_is_document_template(skill))
+        .filter_map(|skill| {
+            external_document_template_skill_external_id(skill)
+                .map(|id| contracts::HtmlArtifactDataRefView {
+                    kind: "template_document_external_id".to_string(),
+                    label: "第三方模板文档".to_string(),
+                    id,
+                })
+                .or_else(|| {
+                    external_document_template_skill_document_id(skill).map(|id| {
+                        contracts::HtmlArtifactDataRefView {
+                            kind: "template_document_id".to_string(),
+                            label: "第三方模板文档".to_string(),
+                            id: id.to_string(),
+                        }
+                    })
+                })
+        })
+        .collect()
+}
+
+fn external_channel_template_html_artifact_root() -> PathBuf {
+    std::env::var("EXTERNAL_CHANNEL_HTML_ARTIFACT_DIR")
+        .ok()
+        .map(|value| PathBuf::from(value.trim()))
+        .filter(|path| path.is_absolute())
+        .unwrap_or_else(|| std::env::temp_dir().join("aidp-v3-external-template-html"))
+}
+
+fn external_channel_html_artifact_download_url(
+    connection_id: &str,
+    artifact_id: &str,
+    file_index: usize,
+) -> String {
+    format!(
+        "/v1/external/channels/{}/html-artifacts/{}/files/{}",
+        encode_url_path_segment(connection_id),
+        encode_url_path_segment(artifact_id),
+        file_index
+    )
+}
+
+fn extract_external_template_html_from_model_output(output_text: &str) -> Option<String> {
+    extract_fenced_external_template_html(output_text)
+        .or_else(|| {
+            let trimmed = output_text.trim();
+            external_template_html_looks_like_html(trimmed).then(|| trimmed.to_string())
+        })
+        .map(|html| html.trim().to_string())
+        .filter(|html| !html.is_empty())
+}
+
+fn extract_fenced_external_template_html(output_text: &str) -> Option<String> {
+    let mut search_from = 0;
+    while let Some(fence_start) = output_text[search_from..].find("```") {
+        let fence_start = search_from + fence_start;
+        let info_start = fence_start + 3;
+        let line_end = output_text[info_start..]
+            .find('\n')
+            .map(|offset| info_start + offset)?;
+        let info = output_text[info_start..line_end]
+            .trim()
+            .to_ascii_lowercase();
+        let body_start = line_end + 1;
+        let close = output_text[body_start..].find("```")?;
+        if info
+            .split_whitespace()
+            .next()
+            .is_some_and(|value| value == "html" || value == "htm" || value == "xhtml")
+        {
+            let body = &output_text[body_start..body_start + close];
+            return external_template_html_looks_like_html(body.trim()).then(|| body.to_string());
+        }
+        search_from = body_start + close + 3;
+    }
+    None
+}
+
+fn external_template_html_looks_like_html(value: &str) -> bool {
+    let trimmed = value.trim_start();
+    let lower = trimmed.to_ascii_lowercase();
+    lower.starts_with("<!doctype")
+        || lower.starts_with("<html")
+        || (trimmed.starts_with('<') && trimmed.contains('>') && trimmed.contains("</"))
+}
+
+fn validate_external_template_html_artifact_content(
+    html: &str,
+) -> std::result::Result<(), ApiError> {
+    const MAX_EXTERNAL_TEMPLATE_HTML_CHARS: usize = 1_000_000;
+    if html.chars().count() > MAX_EXTERNAL_TEMPLATE_HTML_CHARS {
+        return Err(ApiError::bad_request(
+            "external_template_html_artifact_too_large",
+            "template HTML artifact is too large to persist".to_string(),
+        ));
+    }
+    let lower = html.to_ascii_lowercase();
+    let denied_fragments = [
+        "<script",
+        "</script",
+        "<iframe",
+        "<object",
+        "<embed",
+        "<form",
+        "<base",
+        "<link",
+        "javascript:",
+        "data:",
+        "http://",
+        "https://",
+        "srcdoc",
+        "@import",
+        "url(",
+    ];
+    if let Some(fragment) = denied_fragments
+        .iter()
+        .find(|fragment| lower.contains(**fragment))
+    {
+        return Err(ApiError::bad_request(
+            "external_template_html_artifact_unsafe",
+            format!("template HTML artifact contains unsupported content: {fragment}"),
+        ));
+    }
+    let denied_event_attributes = [
+        "onload",
+        "onclick",
+        "onerror",
+        "onmouseover",
+        "onfocus",
+        "onchange",
+        "onsubmit",
+        "onanimation",
+        "ontransition",
+    ];
+    if let Some(attribute) = denied_event_attributes.iter().find(|attribute| {
+        lower.contains(&format!("{attribute}=")) || lower.contains(&format!("{attribute} ="))
+    }) {
+        return Err(ApiError::bad_request(
+            "external_template_html_artifact_unsafe",
+            format!("template HTML artifact contains unsupported event attribute: {attribute}"),
+        ));
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn external_channel_chat_model_or_acceptance_reply(
     state: &AppState,
@@ -16950,6 +17344,25 @@ async fn external_channel_chat_model_or_acceptance_reply(
             )
             .await
             .map_err(ApiError::from_storage)?;
+        let template_html_artifact = match maybe_persist_external_channel_template_html_artifact(
+            state,
+            connection_id,
+            run_id,
+            message,
+            &output_text,
+            now,
+        )
+        .await
+        {
+            Ok(artifact) => artifact,
+            Err(error) => {
+                tracing::warn!(
+                    code = %error.payload.code,
+                    "external channel template HTML artifact creation failed; returning direct model reply"
+                );
+                None
+            }
+        };
         persist_external_user_context_memory_item(
             state,
             connection_id,
@@ -16961,11 +17374,11 @@ async fn external_channel_chat_model_or_acceptance_reply(
         )
         .await?;
 
-        return Ok(external_channel_text_reply(
-            message,
-            output_text,
-            "answered",
-        ));
+        let mut reply = external_channel_text_reply(message, output_text, "answered");
+        if let Some(artifact) = template_html_artifact {
+            reply.artifact_links.push(artifact.download_url);
+        }
+        return Ok(reply);
     }
 
     state
@@ -35084,10 +35497,14 @@ fn html_artifact_downloadable_file(
     artifact: &HtmlArtifactManifestView,
     file_index: usize,
 ) -> std::result::Result<HtmlArtifactDownloadableFile, ApiError> {
-    if artifact.template_id != contracts::HtmlArtifactTemplateIdView::VideoExtractionSummary {
+    if !matches!(
+        artifact.template_id,
+        contracts::HtmlArtifactTemplateIdView::VideoExtractionSummary
+            | contracts::HtmlArtifactTemplateIdView::ThirdPartyHandoffDocument
+    ) {
         return Err(ApiError::bad_request(
             "html_artifact_file_download_unsupported",
-            "only video extraction generated files are downloadable in this slice".to_string(),
+            "this HTML artifact does not expose downloadable generated files".to_string(),
         ));
     }
     let generated_artifacts = artifact
@@ -49443,6 +49860,129 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn external_document_template_skill_html_output_creates_downloadable_artifact() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        clear_assistant_openclaw_env();
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_MODE", "provider");
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_PROVIDER", "scripted");
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_MODEL", "assistant-run-scripted-v1");
+        std::env::set_var(
+            "ASSISTANT_RUN_RUNTIME_OUTPUT_TEXT",
+            "```html\n<!doctype html><html><head><meta charset=\"utf-8\"><title>人员说明报告</title></head><body><h1>人员说明报告</h1><table><tr><th>人员</th><th>身份</th></tr><tr><td>邓工</td><td>技术人员</td></tr></table></body></html>\n```",
+        );
+        let artifact_root = std::env::temp_dir().join(format!(
+            "aidp-v3-external-template-html-test-{}",
+            Uuid::new_v4()
+        ));
+        std::env::set_var("EXTERNAL_CHANNEL_HTML_ARTIFACT_DIR", &artifact_root);
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping external template HTML artifact test: {reason}");
+                clear_assistant_openclaw_env();
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("generic-chat-template-html-test-{}", Uuid::new_v4()),
+                "Generic Chat Template HTML Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage.clone(),
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        insert_generic_external_channel_connection_with_config(
+            &state,
+            "generic-chat-main",
+            json!({
+                "tenant_external_id": "tenant-ext-001",
+                "bot_external_id": "bot-v3",
+                "inbound_bearer_token": "inbound-secret"
+            }),
+        )
+        .await;
+        let app = router(
+            storage.clone(),
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+
+        let mut message = sample_external_bot_message();
+        message.text = Some("按模板生成 HTML 人员说明报告：邓工是谁？".to_string());
+        message.message_external_id = "msg-template-html-001".to_string();
+        message.idempotency_key = "generic:tenant-ext-001:msg-template-html-001".to_string();
+        message.render_mode = Some("artifact".to_string());
+        message.requested_skills = vec![ExternalRequestedSkillView {
+            skill_id: "document_template_skill".to_string(),
+            version: None,
+            mode: Some("required".to_string()),
+            arguments: Some(json!({
+                "template_document_external_id": "tpl-html-001",
+                "source_id": "third-party-source-main",
+                "output_type": "html"
+            })),
+        }];
+        let response = post_json_request_with_authorization(
+            app.clone(),
+            "/v1/external/channels/generic-chat-main/events",
+            &message,
+            Some("Bearer inbound-secret"),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let body: ExternalChannelEventResponse = read_json_response(response).await;
+        assert_eq!(body.reply.reply_type, ExternalBotReplyTypeView::Text);
+        assert_eq!(body.reply.task_status.as_deref(), Some("answered"));
+        assert_eq!(body.reply.artifact_links.len(), 1);
+        let download_url = body.reply.artifact_links[0].clone();
+        assert!(download_url.starts_with(
+            "/v1/external/channels/generic-chat-main/html-artifacts/html-artifact-external-template-"
+        ));
+
+        let run_id = body.assistant_run_id.expect("assistant run id");
+        let events = storage
+            .assistant_runs()
+            .list_events(tenant.id, run_id)
+            .await
+            .expect("events should load");
+        assert!(events.iter().any(|event| {
+            event.event_name == "assistant_run.external_channel_template_html_artifact_created"
+                && event.payload["html_artifacts"]
+                    .as_array()
+                    .is_some_and(|items| items.len() == 1)
+        }));
+
+        let missing = get_request_with_authorization(app.clone(), &download_url, None).await;
+        assert_eq!(missing.status(), StatusCode::UNAUTHORIZED);
+
+        let download =
+            get_request_with_authorization(app, &download_url, Some("Bearer inbound-secret")).await;
+        assert_eq!(download.status(), StatusCode::OK);
+        assert_eq!(
+            download
+                .headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("text/html; charset=utf-8")
+        );
+        let body = axum::body::to_bytes(download.into_body(), usize::MAX)
+            .await
+            .expect("download body should load");
+        let html = String::from_utf8(body.to_vec()).expect("download should be utf-8");
+        assert!(html.contains("人员说明报告"));
+        assert!(html.contains("邓工"));
+        clear_assistant_openclaw_env();
+    }
+
+    #[tokio::test]
     async fn generic_chat_page_event_uses_fallback_when_primary_output_is_rejected() {
         let _guard = shared_local_postgres_test_lock().lock().await;
         clear_assistant_openclaw_env();
@@ -53688,6 +54228,27 @@ mod tests {
         assert_eq!(artifacts[0].id, "html-artifact-new");
         assert_eq!(artifacts[1].id, "html-artifact-old");
         assert_eq!(artifacts[0].payload["mode"], json!("plan_only"));
+    }
+
+    #[test]
+    fn external_template_html_extracts_fenced_html_and_rejects_unsafe_content() {
+        let html = extract_external_template_html_from_model_output(
+            "说明如下：\n```html\n<section><h1>人员说明报告</h1></section>\n```",
+        )
+        .expect("fenced HTML should be extracted");
+        assert!(html.contains("人员说明报告"));
+        validate_external_template_html_artifact_content(&html)
+            .expect("simple HTML should be accepted");
+
+        let unsafe_error = validate_external_template_html_artifact_content(
+            "<section onclick=\"alert(1)\"></section>",
+        )
+        .expect_err("event handlers should be rejected");
+        assert_eq!(
+            unsafe_error.payload.code,
+            "external_template_html_artifact_unsafe"
+        );
+        assert!(extract_external_template_html_from_model_output("普通文字").is_none());
     }
 
     #[test]
@@ -76157,6 +76718,7 @@ mod tests {
             "ASSISTANT_RUN_FALLBACK_RUNTIME_RETRY_BACKOFF_MS",
             "EXTERNAL_CHANNEL_DIRECT_REPLY_TOTAL_BUDGET_MS",
             "EXTERNAL_CHANNEL_DIRECT_REPLY_ATTEMPT_TIMEOUT_MS",
+            "EXTERNAL_CHANNEL_HTML_ARTIFACT_DIR",
             "LLM_GATEWAY_LANE_ASSISTANT_CHAT_MODE",
             "LLM_GATEWAY_LANE_ASSISTANT_CHAT_ROUTING_MODE",
             "LLM_GATEWAY_LANE_ASSISTANT_CHAT_PROFILES",
