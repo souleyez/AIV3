@@ -441,25 +441,11 @@ pub async fn preview_mysql_table(
     config.validate()?;
     let plan = build_mysql_table_preview_query(config, table, limit)?;
     let pool = connect_mysql_pool(config).await?;
-    let mut connection = pool.acquire().await.map_err(sqlx_error)?;
-    sqlx::query("start transaction read only")
-        .execute(&mut *connection)
+    let rows = sqlx::query(&plan.sql)
+        .fetch_all(&pool)
         .await
         .map_err(sqlx_error)?;
-    let query_result = sqlx::query(&plan.sql).fetch_all(&mut *connection).await;
-    match query_result {
-        Ok(rows) => {
-            sqlx::query("commit")
-                .execute(&mut *connection)
-                .await
-                .map_err(sqlx_error)?;
-            build_table_preview(plan, rows)
-        }
-        Err(error) => {
-            let _ = sqlx::query("rollback").execute(&mut *connection).await;
-            Err(sqlx_error(error))
-        }
-    }
+    build_table_preview(plan, rows)
 }
 
 pub async fn aggregate_mysql_table(
