@@ -143,7 +143,7 @@ V3 接收第三方消息后，会按请求内容返回以下几类结果：
 - `requires_confirmation`：需要用户确认的动作；
 - `task_status`：处理中、失败、等待外部条件或无法立即完成。
 
-文档问答场景下，第三方应在请求中传入本轮可用文档范围，例如 `available_document_source_id`、`available_document_external_ids` 或项目约定的资料源默认范围。V3 会基于可用文档生成回答；如果文档尚未解析完成、缺少必要输入或当前能力不可用，会返回任务状态或错误码。
+文档问答场景下，第三方应在请求中传入本轮可用文档范围，建议包含当前问题允许使用的 `available_document_external_ids` 或单文档兼容字段 `documentExternalId`；`available_document_source_id` 只用于限定这些文档所属资料源。连接上的默认资料源只用于补齐资料源 ID，不会在缺少文档 ID 时自动扩大为整源可用。V3 会基于可用文档生成回答；如果文档尚未解析完成、缺少必要输入或当前能力不可用，会返回任务状态或错误码。
 
 当标准化聊天消息明显需要实时网页信息而当前不可用时，通道响应可以使用 `reply_type=task_status`、`task_status=v3_search_evidence_required`，并携带 `type=v3_search_evidence_required` 的安全卡片。第三方自建聊天页面应把它展示为“等待 V3 可用证据”的状态。
 
@@ -286,8 +286,8 @@ Authorization: Bearer <V3 inbound token>
 | `message_external_id` | 是 | 第三方侧消息 ID，必须稳定 |
 | `message_type` | 是 | 消息类型 |
 | `text` | 否 | 文本内容 |
-| `available_document_source_id` | 文档问答建议传 | 本轮可用文档所属资料源 ID；连接配置了默认资料源时可省略 |
-| `available_document_external_ids` | 文档问答建议传 | 本轮允许 V3 使用的第三方文档 ID 列表；只传当前会话或当前问题选中的文档 |
+| `available_document_source_id` | 文档问答建议传 | 本轮可用文档所属资料源 ID；连接配置了默认资料源时可省略，但单独传资料源不会授权整源文档回答 |
+| `available_document_external_ids` | 文档问答建议传 | 本轮允许 V3 使用的第三方文档 ID 列表；只传当前会话或当前问题选中的文档；单文档可用 `documentExternalId`；未传时 V3 不会基于第三方文档内容回答 |
 | `requested_skills` | 否 | 第三方希望本轮应用的结构化 skill 列表 |
 | `requested_skills[].skill_id` | `requested_skills` 有值时必填 | skill 稳定标识，建议使用英文或业务 slug |
 | `requested_skills[].version` | 否 | skill 版本或策略版本，用于版本选择和问题复现 |
