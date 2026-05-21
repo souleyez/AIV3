@@ -1,9 +1,9 @@
 import { NextResponse } from 'next/server';
 import {
   EXTERNAL_OBSERVABILITY_COOKIE,
+  consumeExternalObservabilityAccessKey,
   externalObservabilityCookieOptions,
   externalObservabilityCookieValue,
-  verifyExternalObservabilityKey,
 } from '../../lib/external-observability-access';
 
 function externalIntegrationsUrl(request, search = '') {
@@ -19,7 +19,7 @@ export async function GET(request) {
 export async function POST(request) {
   const form = await request.formData();
   const accessKey = form.get('access_key');
-  if (!verifyExternalObservabilityKey(accessKey)) {
+  if (!consumeExternalObservabilityAccessKey(accessKey)) {
     return NextResponse.redirect(externalIntegrationsUrl(request, '?conversation_tests=1&access_error=1'), 303);
   }
   const response = NextResponse.redirect(externalIntegrationsUrl(request, '?conversation_tests=1'), 303);
