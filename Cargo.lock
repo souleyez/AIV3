@@ -1872,6 +1872,7 @@ dependencies = [
  "contracts",
  "domain-model",
  "event-bus",
+ "external-source-connectors",
  "futures-util",
  "hmac",
  "llm-gateway",

@@ -800,6 +800,51 @@ pub struct CreateExternalSourceSyncResponse {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TestDatabaseSourceConnectionRequest {
+    #[serde(default)]
+    pub database_source: Value,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TestDatabaseSourceConnectionResponse {
+    pub source_id: String,
+    pub connector_kind: String,
+    pub redacted_summary: Value,
+    pub connection: Value,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct InspectDatabaseSourceSchemaRequest {
+    #[serde(default)]
+    pub database_source: Value,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct InspectDatabaseSourceSchemaResponse {
+    pub source_id: String,
+    pub connector_kind: String,
+    pub redacted_summary: Value,
+    pub schema: Value,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PreviewDatabaseSourceTableRequest {
+    pub table: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+    #[serde(default)]
+    pub database_source: Value,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PreviewDatabaseSourceTableResponse {
+    pub source_id: String,
+    pub connector_kind: String,
+    pub redacted_summary: Value,
+    pub preview: Value,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CreateExternalDocumentParseRequest {
     #[serde(default, alias = "sourceId")]
     pub source_id: String,

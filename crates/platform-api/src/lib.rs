@@ -52,26 +52,28 @@ use contracts::{
     ExternalIntegrationAuditResponse, ExternalIntegrationControlRequest,
     ExternalIntegrationControlResponse, ExternalIntegrationSummaryView, ExternalMessageTypeView,
     ExternalRequestedSkillView, GetExternalDocumentParseDetailResponse, HealthResponse,
-    HtmlArtifactInteractionModeView, HtmlArtifactManifestView, KeyLoginRequest, KeyLoginResponse,
-    KeyRotateRequest, KeyRotateResponse, ListExternalConversationTestsResponse,
-    ListExternalIntegrationsResponse, LlmInvocationView, LogoutResponse, MemoryDirectoryView,
-    ModelGatewayLaneStatusView, ModelGatewayPresetView, ModelGatewayProfileCreateRequest,
-    ModelGatewayProfileTestRequest, ModelGatewayProfileTestResponse,
-    ModelGatewayProfileUpdateRequest, ModelGatewayProfileView, ModelGatewayProviderStatusView,
-    ModelGatewayStatusView, PlanReportRequest, PublishReportRequest, PublishReportResponse,
-    PublishedReportDetailView, PublishedReportVersionView, PublishedReportView,
-    RegisterDocumentRequest, RegisterDocumentResponse, ReportPlanAstVersionView, ReportPlanSummary,
-    ReportRenderOutputView, ResolveDatasetSecretBindingsRequest,
-    ResolveDatasetSecretBindingsResponse, RetrievalEvidenceView, RetrievalSearchHitView,
-    RetrievalSearchResponse, RetryWorkflowExecutionRequest, RetryWorkflowExecutionResponse,
-    StartEmailAuthRequest, StartEmailAuthResponse, StaticPageDraftView, StaticPageImageJobView,
+    HtmlArtifactInteractionModeView, HtmlArtifactManifestView, InspectDatabaseSourceSchemaRequest,
+    InspectDatabaseSourceSchemaResponse, KeyLoginRequest, KeyLoginResponse, KeyRotateRequest,
+    KeyRotateResponse, ListExternalConversationTestsResponse, ListExternalIntegrationsResponse,
+    LlmInvocationView, LogoutResponse, MemoryDirectoryView, ModelGatewayLaneStatusView,
+    ModelGatewayPresetView, ModelGatewayProfileCreateRequest, ModelGatewayProfileTestRequest,
+    ModelGatewayProfileTestResponse, ModelGatewayProfileUpdateRequest, ModelGatewayProfileView,
+    ModelGatewayProviderStatusView, ModelGatewayStatusView, PlanReportRequest,
+    PreviewDatabaseSourceTableRequest, PreviewDatabaseSourceTableResponse, PublishReportRequest,
+    PublishReportResponse, PublishedReportDetailView, PublishedReportVersionView,
+    PublishedReportView, RegisterDocumentRequest, RegisterDocumentResponse,
+    ReportPlanAstVersionView, ReportPlanSummary, ReportRenderOutputView,
+    ResolveDatasetSecretBindingsRequest, ResolveDatasetSecretBindingsResponse,
+    RetrievalEvidenceView, RetrievalSearchHitView, RetrievalSearchResponse,
+    RetryWorkflowExecutionRequest, RetryWorkflowExecutionResponse, StartEmailAuthRequest,
+    StartEmailAuthResponse, StaticPageDraftView, StaticPageImageJobView,
     StaticPageRenderOutputView, SubmitHtmlArtifactEventRequest, SubmitHtmlArtifactEventResponse,
-    ToolDefinitionView, ToolExecutionView, UpdateChatSessionReportEntryRequest,
-    UpdateChatSessionReportEntryResponse, UpdateChatSessionRequest, UpdateChatSessionResponse,
-    UpdateDatasetRequest, UpdateDocumentRequest, UpdateStaticPageDraftRequest,
-    UpdateStaticPageDraftResponse, VerifyEmailAuthRequest, VerifyEmailAuthResponse,
-    WorkflowDefinitionView, WorkflowEventView, WorkflowExecutionView, WorkflowRuntimeInspectView,
-    WorkflowSignalRequest, WorkflowTaskView,
+    TestDatabaseSourceConnectionRequest, TestDatabaseSourceConnectionResponse, ToolDefinitionView,
+    ToolExecutionView, UpdateChatSessionReportEntryRequest, UpdateChatSessionReportEntryResponse,
+    UpdateChatSessionRequest, UpdateChatSessionResponse, UpdateDatasetRequest,
+    UpdateDocumentRequest, UpdateStaticPageDraftRequest, UpdateStaticPageDraftResponse,
+    VerifyEmailAuthRequest, VerifyEmailAuthResponse, WorkflowDefinitionView, WorkflowEventView,
+    WorkflowExecutionView, WorkflowRuntimeInspectView, WorkflowSignalRequest, WorkflowTaskView,
 };
 use domain_model::{
     AssistantRun, AssistantRunEvent, AssistantRunId, AuthAuditEvent, AuthAuditOutcome,
@@ -91,6 +93,10 @@ use domain_model::{
 };
 use event_bus::{
     workflow_execution_transition_subject, workflow_task_enqueued_subject, EventBus, EventEnvelope,
+};
+use external_source_connectors::{
+    inspect_mysql_schema, preview_mysql_table, test_mysql_connection, DatabaseSourceError,
+    MySqlSourceConfig,
 };
 use futures_util::{stream, Stream, StreamExt};
 use hmac::{Hmac, Mac};
@@ -1291,6 +1297,18 @@ pub fn router(
         .route(
             "/v1/external/sources/{source_id}/sync",
             axum::routing::post(create_external_source_sync),
+        )
+        .route(
+            "/v1/external/sources/{source_id}/database/test",
+            axum::routing::post(test_database_source_connection),
+        )
+        .route(
+            "/v1/external/sources/{source_id}/database/schema",
+            axum::routing::post(inspect_database_source_schema),
+        )
+        .route(
+            "/v1/external/sources/{source_id}/database/preview",
+            axum::routing::post(preview_database_source_table),
         )
         .route("/v1/model-gateway/presets", get(list_model_gateway_presets))
         .route("/v1/model-gateway/status", get(get_model_gateway_status))
@@ -9547,6 +9565,7 @@ struct ExternalSourceConnectionSummary {
     sync_mode: String,
     permission_mode: String,
     health_status: String,
+    config_redacted: Value,
     disabled_at: Option<DateTime<Utc>>,
 }
 
@@ -11305,6 +11324,70 @@ async fn create_external_source_sync(
 
     let response = enqueue_external_source_sync(&state, &source_id, request).await?;
     Ok((StatusCode::ACCEPTED, Json(response)))
+}
+
+async fn test_database_source_connection(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(source_id): Path<String>,
+    Json(request): Json<TestDatabaseSourceConnectionRequest>,
+) -> std::result::Result<Json<TestDatabaseSourceConnectionResponse>, ApiError> {
+    ensure_main_system_external_source_access(&state, &headers, &source_id).await?;
+    let source = load_enabled_database_source_connection(&state, &source_id).await?;
+    let config = mysql_source_config_for_request(&source, &request.database_source)?;
+    let connection = test_mysql_connection(&config)
+        .await
+        .map_err(database_source_error_to_api)?;
+    Ok(Json(TestDatabaseSourceConnectionResponse {
+        source_id: source.source_id,
+        connector_kind: source.connector_kind,
+        redacted_summary: serde_json::to_value(config.redacted_summary())
+            .unwrap_or_else(|_| json!({})),
+        connection: serde_json::to_value(connection).unwrap_or_else(|_| json!({})),
+    }))
+}
+
+async fn inspect_database_source_schema(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(source_id): Path<String>,
+    Json(request): Json<InspectDatabaseSourceSchemaRequest>,
+) -> std::result::Result<Json<InspectDatabaseSourceSchemaResponse>, ApiError> {
+    ensure_main_system_external_source_access(&state, &headers, &source_id).await?;
+    let source = load_enabled_database_source_connection(&state, &source_id).await?;
+    let config = mysql_source_config_for_request(&source, &request.database_source)?;
+    let schema = inspect_mysql_schema(&config)
+        .await
+        .map_err(database_source_error_to_api)?;
+    Ok(Json(InspectDatabaseSourceSchemaResponse {
+        source_id: source.source_id,
+        connector_kind: source.connector_kind,
+        redacted_summary: serde_json::to_value(config.redacted_summary())
+            .unwrap_or_else(|_| json!({})),
+        schema: serde_json::to_value(schema).unwrap_or_else(|_| json!({})),
+    }))
+}
+
+async fn preview_database_source_table(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(source_id): Path<String>,
+    Json(request): Json<PreviewDatabaseSourceTableRequest>,
+) -> std::result::Result<Json<PreviewDatabaseSourceTableResponse>, ApiError> {
+    ensure_main_system_external_source_access(&state, &headers, &source_id).await?;
+    validate_required("table", &request.table)?;
+    let source = load_enabled_database_source_connection(&state, &source_id).await?;
+    let config = mysql_source_config_for_request(&source, &request.database_source)?;
+    let preview = preview_mysql_table(&config, request.table.trim(), request.limit.unwrap_or(20))
+        .await
+        .map_err(database_source_error_to_api)?;
+    Ok(Json(PreviewDatabaseSourceTableResponse {
+        source_id: source.source_id,
+        connector_kind: source.connector_kind,
+        redacted_summary: serde_json::to_value(config.redacted_summary())
+            .unwrap_or_else(|_| json!({})),
+        preview: serde_json::to_value(preview).unwrap_or_else(|_| json!({})),
+    }))
 }
 
 async fn enqueue_external_source_sync(
@@ -15320,7 +15403,14 @@ async fn load_external_source_connection(
 ) -> std::result::Result<ExternalSourceConnectionSummary, ApiError> {
     let row = sqlx::query(
         r#"
-        select id, connector_kind, display_name, sync_mode, permission_mode, health_status, disabled_at
+        select id,
+               connector_kind,
+               display_name,
+               sync_mode,
+               permission_mode,
+               health_status,
+               config_redacted,
+               disabled_at
         from external_source_connections
         where tenant_id = $1 and id = $2
         "#,
@@ -15345,8 +15435,115 @@ async fn load_external_source_connection(
         sync_mode: row.get("sync_mode"),
         permission_mode: row.get("permission_mode"),
         health_status: row.get("health_status"),
+        config_redacted: row.get("config_redacted"),
         disabled_at: row.get("disabled_at"),
     })
+}
+
+async fn ensure_main_system_external_source_access(
+    state: &AppState,
+    headers: &HeaderMap,
+    source_id: &str,
+) -> std::result::Result<(), ApiError> {
+    validate_required("source_id", source_id)?;
+    let _active_secret_binding_ids = active_secret_binding_ids_from_headers(headers)?;
+    let _current_user_id = current_auth_user_id(state, headers).await?;
+    Ok(())
+}
+
+async fn load_enabled_database_source_connection(
+    state: &AppState,
+    source_id: &str,
+) -> std::result::Result<ExternalSourceConnectionSummary, ApiError> {
+    let source = load_external_source_connection(state, source_id).await?;
+    if source.disabled_at.is_some() {
+        return Err(ApiError::forbidden(
+            "external_source_disabled",
+            format!("external source connection {source_id} is disabled"),
+        ));
+    }
+    let normalized = source.connector_kind.trim().to_ascii_lowercase();
+    if !matches!(
+        normalized.as_str(),
+        "mysql" | "mysql_source" | "database_source"
+    ) {
+        return Err(ApiError::bad_request(
+            "unsupported_database_source_connector",
+            format!("external source connection {source_id} is not a supported database connector"),
+        ));
+    }
+    Ok(source)
+}
+
+fn mysql_source_config_for_request(
+    source: &ExternalSourceConnectionSummary,
+    request_database_source: &Value,
+) -> std::result::Result<MySqlSourceConfig, ApiError> {
+    let merged = merged_database_source_config(&source.config_redacted, request_database_source)?;
+    MySqlSourceConfig::from_value(&merged).map_err(database_source_error_to_api)
+}
+
+fn merged_database_source_config(
+    source_config_redacted: &Value,
+    request_database_source: &Value,
+) -> std::result::Result<Value, ApiError> {
+    let mut merged = source_database_config_fragment(source_config_redacted).unwrap_or_else(|| {
+        if source_config_redacted.is_object() {
+            json!({})
+        } else {
+            Value::Null
+        }
+    });
+    if request_database_source.is_null() {
+        return Ok(merged);
+    }
+    if request_database_source.as_object().is_none() {
+        return Err(ApiError::bad_request(
+            "database_source_config_invalid",
+            "database_source must be an object".to_string(),
+        ));
+    }
+    if merged.is_null() {
+        merged = json!({});
+    }
+    let Some(merged_object) = merged.as_object_mut() else {
+        return Err(ApiError::bad_request(
+            "database_source_config_invalid",
+            "source database_source config must be an object".to_string(),
+        ));
+    };
+    for (key, value) in request_database_source.as_object().into_iter().flatten() {
+        merged_object.insert(key.clone(), value.clone());
+    }
+    Ok(merged)
+}
+
+fn source_database_config_fragment(source_config_redacted: &Value) -> Option<Value> {
+    source_config_redacted
+        .get("database_source")
+        .or_else(|| source_config_redacted.get("databaseSource"))
+        .or_else(|| source_config_redacted.get("mysql_source"))
+        .or_else(|| source_config_redacted.get("mysqlSource"))
+        .cloned()
+}
+
+fn database_source_error_to_api(error: DatabaseSourceError) -> ApiError {
+    match error {
+        DatabaseSourceError::MissingConnectionEnv { env } => ApiError::bad_request(
+            "database_connection_env_missing",
+            format!("database connection environment variable {env} is not configured"),
+        ),
+        DatabaseSourceError::RawSecretField { field } => ApiError::bad_request(
+            "raw_database_secret_rejected",
+            format!("database_source field {field} is not allowed"),
+        ),
+        DatabaseSourceError::Query(_) => ApiError::bad_request(
+            "database_source_query_failed",
+            "database source query failed; check server-side connection env, network, read-only permissions, and mapping"
+                .to_string(),
+        ),
+        other => ApiError::bad_request("database_source_config_invalid", other.to_string()),
+    }
 }
 
 fn normalize_external_source_sync_kind(
@@ -48766,6 +48963,70 @@ mod tests {
             citations: Vec::new(),
             conversation_state: json!({}),
         }
+    }
+
+    fn mysql_source_summary_for_test(config_redacted: Value) -> ExternalSourceConnectionSummary {
+        ExternalSourceConnectionSummary {
+            source_id: "src-mysql".to_string(),
+            connector_kind: "mysql".to_string(),
+            display_name: "MySQL Source".to_string(),
+            sync_mode: "pull".to_string(),
+            permission_mode: "none".to_string(),
+            health_status: "unknown".to_string(),
+            config_redacted,
+            disabled_at: None,
+        }
+    }
+
+    #[test]
+    fn database_source_config_merges_source_defaults_with_request_mapping() {
+        let source = mysql_source_summary_for_test(json!({
+            "database_source": {
+                "connection_env": "THIRD_PARTY_HY_SQL_DATABASE_URL",
+                "database": "hy_sql",
+                "default_dataset_id": "018f0000-0000-7000-9000-000000000001"
+            }
+        }));
+        let request = json!({
+            "tables": [{
+                "table": "documents",
+                "id_column": "id",
+                "content_columns": ["body"]
+            }]
+        });
+
+        let config = mysql_source_config_for_request(&source, &request).expect("config parses");
+
+        assert_eq!(config.connection_env, "THIRD_PARTY_HY_SQL_DATABASE_URL");
+        assert_eq!(config.database, "hy_sql");
+        assert_eq!(config.tables[0].table, "documents");
+        assert_eq!(config.tables[0].content_columns, vec!["body"]);
+        assert_eq!(
+            config.default_dataset_id.as_deref(),
+            Some("018f0000-0000-7000-9000-000000000001")
+        );
+    }
+
+    #[test]
+    fn database_source_config_rejects_raw_secret_override() {
+        let source = mysql_source_summary_for_test(json!({
+            "database_source": {
+                "connection_env": "THIRD_PARTY_HY_SQL_DATABASE_URL",
+                "database": "hy_sql"
+            }
+        }));
+
+        let error = mysql_source_config_for_request(
+            &source,
+            &json!({
+                "password": "secret",
+                "tables": []
+            }),
+        )
+        .expect_err("raw secret must be rejected");
+
+        assert_eq!(error.status, StatusCode::BAD_REQUEST);
+        assert_eq!(error.payload.code, "raw_database_secret_rejected");
     }
 
     #[test]

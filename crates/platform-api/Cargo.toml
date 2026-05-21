@@ -17,6 +17,7 @@ chrono.workspace = true
 contracts = { path = "../contracts" }
 domain-model = { path = "../domain-model" }
 event-bus = { path = "../event-bus" }
+external-source-connectors = { path = "../external-source-connectors" }
 futures-util.workspace = true
 hmac.workspace = true
 llm-gateway = { path = "../llm-gateway" }
