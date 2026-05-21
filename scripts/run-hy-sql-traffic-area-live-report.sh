@@ -51,6 +51,31 @@ post_json_file() {
   fi
 }
 
+node - "$work_dir" "$preferred_table" <<'NODE'
+const fs = require('fs');
+const path = require('path');
+
+const workDir = process.argv[2];
+const preferredTable = process.argv[3];
+fs.writeFileSync(
+  path.join(workDir, 'apply-profile-request.json'),
+  JSON.stringify(
+    {
+      sample_limit: 100,
+      database_source: { tables: [] },
+      tables: [preferredTable],
+    },
+    null,
+    2
+  )
+);
+NODE
+
+post_json_file \
+  "${api_base}/v1/external/sources/${source_id}/database/apply-profile" \
+  "${work_dir}/apply-profile-request.json" \
+  "${work_dir}/apply-profile.json"
+
 post_json \
   "${api_base}/v1/external/sources/${source_id}/database/profile" \
   '{"sample_limit":100,"database_source":{}}' \
@@ -78,7 +103,17 @@ const includes = (items, value) => (items || []).some((item) => item === value);
 const pickBy = (items, preferred, patterns) => {
   const list = uniq(items);
   if (includes(list, preferred)) return preferred;
-  return list.find((item) => patterns.some((pattern) => pattern.test(item))) || list[0] || null;
+  let best = null;
+  let bestScore = Number.POSITIVE_INFINITY;
+  for (const item of list) {
+    for (let index = 0; index < patterns.length; index += 1) {
+      if (patterns[index].test(item) && index < bestScore) {
+        best = item;
+        bestScore = index;
+      }
+    }
+  }
+  return best || list[0] || null;
 };
 
 const mapping = table.suggested_mapping || {};
@@ -89,8 +124,24 @@ const dimensions = uniq([
 ]);
 const metrics = uniq(table.metrics || []);
 const timeDimensions = uniq(table.time_dimensions || []);
-const rankDimension = pickBy(dimensions, 'area_name', [/area/i, /region/i, /city/i, /name/i, /区域/, /地区/, /城市/, /名称/]);
-const metric = pickBy(metrics, 'traffic_count', [/traffic/i, /count/i, /amount/i, /value/i, /流量/, /数量/, /总量/, /金额/, /值/]);
+const rankDimension = pickBy(dimensions, 'areaname', [
+  /^areaname$/i,
+  /^area_name$/i,
+  /area.*name/i,
+  /region.*name/i,
+  /city.*name/i,
+  /name/i,
+  /区域名/,
+  /地区名/,
+  /城市名/,
+  /area/i,
+  /region/i,
+  /city/i,
+  /区域/,
+  /地区/,
+  /城市/,
+]);
+const metric = pickBy(metrics, 'up', [/traffic/i, /count/i, /^up$/i, /^down$/i, /amount/i, /value/i, /流量/, /数量/, /总量/, /金额/, /值/]);
 const timeDimension = pickBy(timeDimensions, 'stat_date', [/date/i, /time/i, /day/i, /month/i, /日期/, /时间/, /月份/, /天/]);
 const aggregation = metric ? 'sum' : 'count';
 const tableName = table.name || preferredTable;
