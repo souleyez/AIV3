@@ -28166,6 +28166,7 @@ async fn build_assistant_run_database_aggregate_supply(
                     "dimensions": result.dimensions,
                     "metric": result.metric,
                     "aggregation": result.aggregation,
+                    "value_label": metric.clone().unwrap_or_else(|| "record_count".to_string()),
                     "columns": result.columns,
                     "rows": result.rows,
                     "row_limit": result.row_limit,
@@ -28252,13 +28253,14 @@ fn assistant_run_database_aggregate_metrics(
     prompt: &str,
 ) -> Vec<String> {
     let mut metrics = Vec::new();
-    if prompt_has_any(prompt, &["down", "下行", "离开", "离场", "出场", "出口"]) {
+    if prompt_has_metric_terms(prompt, &["down", "下行", "离开", "离场", "出场", "出口"])
+    {
         push_database_metric_if_present(mapping, &mut metrics, "down");
     }
-    if prompt_has_any(prompt, &["up", "上行", "进入", "进场", "入口"]) {
+    if prompt_has_metric_terms(prompt, &["up", "上行", "进入", "进场", "入口"]) {
         push_database_metric_if_present(mapping, &mut metrics, "up");
     }
-    if metrics.is_empty() && prompt_has_any(prompt, &["流量", "客流", "traffic"]) {
+    if metrics.is_empty() && prompt_has_metric_terms(prompt, &["流量", "客流", "traffic"]) {
         push_database_metric_if_present(mapping, &mut metrics, "up");
         push_database_metric_if_present(mapping, &mut metrics, "down");
     }
@@ -28390,6 +28392,32 @@ fn prompt_has_any(prompt: &str, needles: &[&str]) -> bool {
     needles.iter().any(|needle| {
         let needle = needle.to_ascii_lowercase();
         !needle.is_empty() && lower.contains(&needle)
+    })
+}
+
+fn prompt_has_metric_terms(prompt: &str, needles: &[&str]) -> bool {
+    let lower = prompt.to_ascii_lowercase();
+    needles.iter().any(|needle| {
+        let needle = needle.to_ascii_lowercase();
+        if needle.is_empty() {
+            return false;
+        }
+        if needle
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+        {
+            return contains_ascii_token(&lower, &needle);
+        }
+        lower.contains(&needle)
+    })
+}
+
+fn contains_ascii_token(haystack: &str, needle: &str) -> bool {
+    haystack.match_indices(needle).any(|(index, _)| {
+        let before = haystack[..index].chars().next_back();
+        let after = haystack[index + needle.len()..].chars().next();
+        !before.is_some_and(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+            && !after.is_some_and(|ch| ch.is_ascii_alphanumeric() || ch == '_')
     })
 }
 
@@ -49773,6 +49801,21 @@ mod tests {
             assistant_run_database_aggregation("按区域统计记录数量", false),
             "count"
         );
+    }
+
+    #[test]
+    fn database_aggregate_heuristics_do_not_read_markdown_as_down_metric() {
+        let mapping = traffic_area_mapping_for_test();
+
+        assert_eq!(
+            assistant_run_database_aggregate_metrics(
+                &mapping,
+                "列出上行 up 最大的前5个区域，输出 Markdown 表格"
+            ),
+            vec!["up".to_string()]
+        );
+        assert!(!contains_ascii_token("markdown table", "down"));
+        assert!(contains_ascii_token("rank by down", "down"));
     }
 
     #[test]
