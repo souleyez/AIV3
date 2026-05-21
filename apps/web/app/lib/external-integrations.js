@@ -260,6 +260,23 @@ export function normalizeExternalConversationTest(raw = {}) {
   const payloadSummary = raw.payload_summary && typeof raw.payload_summary === 'object'
     ? raw.payload_summary
     : {};
+  const questionText = conversationDisplayText(
+    raw.question_text
+      || raw.question
+      || raw.user_text
+      || raw.prompt
+      || payloadSummary.question_text
+      || payloadSummary.text,
+  );
+  const answerText = conversationDisplayText(
+    raw.answer_text
+      || raw.answer
+      || raw.reply_text
+      || raw.response_text
+      || raw.assistant_answer_excerpt
+      || payloadSummary.answer_text
+      || payloadSummary.assistant_answer_excerpt,
+  );
   return {
     eventId: String(raw.event_id || ''),
     integrationId: String(raw.integration_id || ''),
@@ -272,6 +289,9 @@ export function normalizeExternalConversationTest(raw = {}) {
     assistantRunId: raw.assistant_run_id ? String(raw.assistant_run_id) : '',
     assistantStatus: String(raw.assistant_status || 'unknown'),
     assistantEvent: raw.assistant_event ? String(raw.assistant_event) : '',
+    questionText,
+    answerText,
+    durationMs: normalizeConversationDuration(raw.duration_ms ?? raw.latency_ms ?? raw.elapsed_ms),
     createdAt: raw.created_at || null,
     assistantUpdatedAt: raw.assistant_updated_at || null,
     payloadSummary,
@@ -295,6 +315,22 @@ export function externalConversationStatusLabel(status) {
     default:
       return '未知';
   }
+}
+
+export function formatExternalConversationDuration(value) {
+  const ms = normalizeConversationDuration(value);
+  if (ms === null) {
+    return '未完成';
+  }
+  if (ms < 1000) {
+    return `${ms}ms`;
+  }
+  if (ms < 60_000) {
+    return `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)}s`;
+  }
+  const minutes = Math.floor(ms / 60_000);
+  const seconds = Math.round((ms % 60_000) / 1000);
+  return seconds ? `${minutes}m ${seconds}s` : `${minutes}m`;
 }
 
 export function auditItemTypeLabel(itemType) {
@@ -466,6 +502,22 @@ export function actionSignalLabel(signal) {
 export function numberOrZero(value) {
   const number = Number(value);
   return Number.isFinite(number) && number > 0 ? number : 0;
+}
+
+function conversationDisplayText(value) {
+  const text = String(value || '').trim();
+  if (!text || text === '[redacted]') {
+    return '';
+  }
+  return text;
+}
+
+function normalizeConversationDuration(value) {
+  if (value === null || value === undefined || value === '') {
+    return null;
+  }
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 ? Math.round(number) : null;
 }
 
 export function formatObservationTime(value) {

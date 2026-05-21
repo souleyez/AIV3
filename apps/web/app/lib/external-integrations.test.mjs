@@ -15,6 +15,7 @@ import {
   EXTERNAL_INTEGRATION_MODES,
   externalConversationStatusLabel,
   externalActionTraceFilename,
+  formatExternalConversationDuration,
   formatObservationTime,
   latestIntegrationActivity,
   normalizeControlResult,
@@ -268,6 +269,9 @@ test('normalizeExternalConversationTest keeps conversation test fields readable'
     assistant_run_id: 'run-001',
     assistant_status: 'completed',
     assistant_event: 'assistant_run.external_channel_model_reply_completed',
+    question_text: 'V3 怎么解析 docx？',
+    answer_text: '调用 documents/parse，等到 indexed 后即可用于问答。',
+    duration_ms: 2345,
     payload_summary: {
       text_chars: 5,
       output_format: 'markdown_table',
@@ -279,6 +283,11 @@ test('normalizeExternalConversationTest keeps conversation test fields readable'
   assert.equal(item.senderExternalId, 'user-001');
   assert.equal(item.assistantRunId, 'run-001');
   assert.equal(item.payloadSummary.output_format, 'markdown_table');
+  assert.equal(item.questionText, 'V3 怎么解析 docx？');
+  assert.equal(item.answerText, '调用 documents/parse，等到 indexed 后即可用于问答。');
+  assert.equal(item.durationMs, 2345);
+  assert.equal(formatExternalConversationDuration(item.durationMs), '2.3s');
+  assert.equal(formatExternalConversationDuration(null), '未完成');
   assert.equal(externalConversationStatusLabel(item.assistantStatus), '已回复');
   assert.equal(externalConversationStatusLabel('failed'), '失败');
   assert.equal(externalConversationStatusLabel('no_run'), '未建运行');

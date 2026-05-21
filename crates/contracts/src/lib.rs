@@ -489,6 +489,12 @@ pub struct ExternalConversationTestView {
     pub assistant_status: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assistant_event: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub question_text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answer_text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<i64>,
     pub created_at: DateTime<Utc>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assistant_updated_at: Option<DateTime<Utc>>,

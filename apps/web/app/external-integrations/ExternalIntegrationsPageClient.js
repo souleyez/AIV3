@@ -13,8 +13,8 @@ import {
   driftSignalLabel,
   EXTERNAL_AUDIT_FILTERS,
   EXTERNAL_INTEGRATION_MODES,
-  externalConversationStatusLabel,
   externalActionTraceFilename,
+  formatExternalConversationDuration,
   formatObservationTime,
   latestIntegrationActivity,
   normalizeControlResult,
@@ -428,12 +428,6 @@ export default function ExternalIntegrationsPageClient() {
   }, [selectedId, auditFilterKey, selectedActionId]);
 
   const selected = integrations.find((item) => item.id === selectedId) || integrations[0] || null;
-  const conversationTotals = {
-    total: conversationTests.length,
-    completed: conversationTests.filter((item) => item.assistantStatus === 'completed').length,
-    failed: conversationTests.filter((item) => ['failed', 'rejected', 'unavailable'].includes(item.assistantStatus)).length,
-    running: conversationTests.filter((item) => item.assistantStatus === 'running').length,
-  };
   const totals = {
     pending: metricTotal(integrations, 'pendingActionCount'),
     blocked: metricTotal(integrations, 'blockedActionCount'),
@@ -639,17 +633,10 @@ export default function ExternalIntegrationsPageClient() {
               {conversationTestsOpen
                 ? conversationTestsLoading
                   ? '读取中'
-                  : `${selected?.displayName || selectedId || '当前集成'} · ${conversationTotals.total} 条最近消息`
+                  : `${selected?.displayName || selectedId || '当前集成'} · 最近 ${conversationTests.length} 条`
                 : '默认收起，仅用于联调抽查'}
             </p>
           </div>
-          {conversationTestsOpen ? (
-            <div className="external-conversation-totals" aria-label="外部对话测试统计">
-              <span>已回复 {conversationTotals.completed}</span>
-              <span>处理中 {conversationTotals.running}</span>
-              <span>异常 {conversationTotals.failed}</span>
-            </div>
-          ) : null}
           <div className="external-conversation-actions">
             {conversationTestsOpen ? (
               <button
@@ -684,38 +671,26 @@ export default function ExternalIntegrationsPageClient() {
         ) : (
           <div className="external-conversation-table">
             <div className="external-conversation-row external-conversation-head">
-              <span>时间</span>
-              <span>集成</span>
-              <span>会话 / 用户</span>
-              <span>消息</span>
-              <span>状态</span>
-              <span>摘要</span>
+              <span>第三方</span>
+              <span>用户问了什么</span>
+              <span>系统回了什么</span>
+              <span>耗时</span>
             </div>
             {conversationTests.map((test) => (
               <article className="external-conversation-row" key={test.eventId}>
-                <span>{formatObservationTime(test.createdAt)}</span>
                 <span>
                   <strong>{test.integrationDisplayName}</strong>
-                  <small>{test.integrationId} / {test.platform}</small>
+                  <small>{test.platform}</small>
                 </span>
-                <span>
-                  <strong>{test.conversationExternalId || '无会话 ID'}</strong>
-                  <small>{test.senderExternalId || '无用户 ID'}</small>
+                <span className="external-conversation-text">
+                  {test.questionText || '暂无提问内容'}
                 </span>
-                <span>
-                  <strong>{test.messageExternalId}</strong>
-                  <small>{test.assistantRunId || '无 run'}</small>
+                <span className="external-conversation-text external-conversation-answer">
+                  {test.answerText || '暂无回复'}
                 </span>
-                <span className={`external-conversation-status external-conversation-status-${test.assistantStatus}`}>
-                  {externalConversationStatusLabel(test.assistantStatus)}
+                <span className="external-conversation-duration">
+                  {formatExternalConversationDuration(test.durationMs)}
                 </span>
-                <JsonPreview
-                  value={{
-                    direction: test.direction,
-                    assistant_event: test.assistantEvent,
-                    payload_summary: test.payloadSummary,
-                  }}
-                />
               </article>
             ))}
             {!conversationTestsLoading && !conversationTests.length ? (

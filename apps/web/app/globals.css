@@ -6171,7 +6171,7 @@ body {
 }
 
 .external-conversation-mini {
-  width: min(520px, 100%);
+  width: min(980px, 100%);
   margin: 0 auto 12px 0;
   opacity: 0.86;
   box-shadow: none;
@@ -6275,9 +6275,9 @@ body {
 
 .external-conversation-row {
   display: grid;
-  grid-template-columns: minmax(86px, 0.45fr) minmax(150px, 0.8fr) minmax(180px, 1fr) minmax(180px, 1fr) minmax(84px, 0.44fr) minmax(280px, 1.55fr);
+  grid-template-columns: minmax(120px, 0.75fr) minmax(220px, 1.35fr) minmax(260px, 1.55fr) minmax(76px, 0.35fr);
   gap: 10px;
-  align-items: center;
+  align-items: start;
   min-width: 0;
   padding: 12px 14px;
   border-bottom: 1px solid #e5ded2;
@@ -6306,6 +6306,33 @@ body {
   margin-top: 4px;
   color: #64748b;
   font-size: 11px;
+}
+
+.external-conversation-text {
+  max-height: 108px;
+  overflow: auto;
+  white-space: pre-wrap;
+  color: #1f2937;
+  font-size: 12px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.external-conversation-answer {
+  max-height: 132px;
+  color: #334155;
+}
+
+.external-conversation-duration {
+  justify-self: start;
+  padding: 4px 7px;
+  border: 1px solid #d5c9b8;
+  border-radius: 999px;
+  background: #fffaf0;
+  color: #475569;
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
 }
 
 .external-conversation-status {
@@ -6882,7 +6909,7 @@ body {
   }
 
   .external-conversation-row {
-    grid-template-columns: minmax(0, 0.7fr) minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .external-conversation-row .external-json-preview {

@@ -7944,9 +7944,18 @@ async fn list_external_conversation_tests(
                e.message_external_id,
                e.direction,
                e.assistant_run_id,
+               r.user_prompt as question_text,
+               coalesce(r.output_artifacts, '[]'::jsonb) as output_artifacts,
                e.payload_summary,
                e.created_at,
                r.updated_at as assistant_updated_at,
+               case
+                   when latest_reply_event.created_at is null then null
+                   else greatest(
+                       0::bigint,
+                       floor(extract(epoch from (latest_reply_event.created_at - e.created_at)) * 1000)::bigint
+                   )
+               end as duration_ms,
                case
                    when e.assistant_run_id is null then 'no_run'
                    when exists (
@@ -7985,15 +7994,7 @@ async fn list_external_conversation_tests(
                    ) then 'completed'
                    else 'running'
                end as assistant_status,
-               (
-                   select ev.event_name
-                   from assistant_run_events ev
-                   where ev.tenant_id = e.tenant_id
-                     and ev.run_id = e.assistant_run_id
-                     and ev.event_name like 'assistant_run.external_channel_model_reply_%'
-                   order by ev.created_at desc
-                   limit 1
-               ) as assistant_event
+               latest_reply_event.event_name as assistant_event
         from external_message_events e
         left join external_channel_connections c
           on c.tenant_id = e.tenant_id
@@ -8001,6 +8002,16 @@ async fn list_external_conversation_tests(
         left join assistant_runs r
           on r.tenant_id = e.tenant_id
          and r.id = e.assistant_run_id
+        left join lateral (
+            select ev.event_name,
+                   ev.created_at
+            from assistant_run_events ev
+            where ev.tenant_id = e.tenant_id
+              and ev.run_id = e.assistant_run_id
+              and ev.event_name like 'assistant_run.external_channel_model_reply_%'
+            order by ev.created_at desc
+            limit 1
+        ) latest_reply_event on true
         where e.tenant_id = $1
           and ($2::text is null or e.channel_connection_id = $2)
           and ($3::text is null or e.conversation_external_id = $3)
