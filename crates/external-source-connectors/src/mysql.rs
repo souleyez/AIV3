@@ -2410,4 +2410,52 @@ mod tests {
         assert_eq!(preview.table, config.tables[0].table);
         assert!(preview.row_limit <= 2);
     }
+
+    #[tokio::test]
+    #[ignore]
+    async fn live_mysql_aggregate_table() {
+        if std::env::var("MYSQL_SOURCE_TEST_ALLOW_LIVE").as_deref() != Ok("true") {
+            return;
+        }
+        let database_name = std::env::var("MYSQL_SOURCE_TEST_DATABASE_NAME")
+            .expect("MYSQL_SOURCE_TEST_DATABASE_NAME is required for live smoke");
+        let table_name =
+            std::env::var("MYSQL_SOURCE_TEST_TABLE").unwrap_or_else(|_| "bi_traffic_area".into());
+        let dimension =
+            std::env::var("MYSQL_SOURCE_TEST_DIMENSION").unwrap_or_else(|_| "areaname".into());
+        let metric = std::env::var("MYSQL_SOURCE_TEST_METRIC").ok();
+        let lower_name = database_name.to_ascii_lowercase();
+        let allow_non_test =
+            std::env::var("MYSQL_SOURCE_TEST_ALLOW_NON_TEST_DATABASE").as_deref() == Ok("true");
+        assert!(
+            allow_non_test || lower_name.contains("test"),
+            "refusing live aggregate smoke against non-test database without explicit override"
+        );
+        let raw = json!({
+            "connection_env": "MYSQL_SOURCE_TEST_DATABASE_URL",
+            "database": database_name,
+            "tables": [{
+                "table": table_name,
+                "id_column": "areaname",
+                "title_column": "storecode",
+                "content_columns": ["storecode", "areaid", "areatype", "txdate", "modifytime", "up", "down"],
+                "metadata_columns": [],
+            }]
+        });
+        let config = MySqlSourceConfig::from_value(&raw).expect("live config parses");
+        let request = MySqlAggregateRequest {
+            table: config.tables[0].table.clone(),
+            dimensions: vec![dimension],
+            metric,
+            aggregation: "sum".to_string(),
+            limit: Some(5),
+        };
+
+        let result = aggregate_mysql_table(&config, &request)
+            .await
+            .expect("live aggregate succeeds");
+
+        assert_eq!(result.table, config.tables[0].table);
+        assert!(result.row_limit <= 5);
+    }
 }
