@@ -1033,7 +1033,7 @@ fn classify_pdf_candidate(
     usable_candidates: &mut Vec<ExtractedDocumentText>,
     low_quality_candidates: &mut Vec<ExtractedDocumentText>,
 ) {
-    match pdf_parse_quality(&extracted.text) {
+    match pdf_candidate_parse_quality(&extracted) {
         PdfParseQuality::Usable { text_chars } => {
             usable_candidates.push(with_pdf_parse_quality_metadata(
                 extracted,
@@ -1049,6 +1049,24 @@ fn classify_pdf_candidate(
                 text_chars,
                 None,
             ));
+        }
+    }
+}
+
+fn pdf_candidate_parse_quality(extracted: &ExtractedDocumentText) -> PdfParseQuality {
+    match pdf_parse_quality(&extracted.text) {
+        PdfParseQuality::Usable { text_chars } => PdfParseQuality::Usable { text_chars },
+        PdfParseQuality::LowTextCoverage { text_chars } => {
+            let min_chars = pdf_min_usable_text_chars();
+            let has_structure = pdf_candidate_structure_block_count(extracted) >= 4
+                || (pdf_candidate_heading_count(&extracted.text)
+                    + pdf_candidate_table_signal_count(&extracted.text))
+                    >= 2;
+            if has_structure && text_chars >= (min_chars + 1) / 2 {
+                PdfParseQuality::Usable { text_chars }
+            } else {
+                PdfParseQuality::LowTextCoverage { text_chars }
+            }
         }
     }
 }
@@ -1170,8 +1188,12 @@ fn pdf_parse_quality(text: &str) -> PdfParseQuality {
 
 fn pdf_quality_text_chars(text: &str) -> usize {
     text.chars()
-        .filter(|ch| !ch.is_whitespace() && !ch.is_control())
+        .filter(|ch| pdf_quality_char_is_meaningful(*ch))
         .count()
+}
+
+fn pdf_quality_char_is_meaningful(ch: char) -> bool {
+    !ch.is_whitespace() && !ch.is_control() && ch.is_alphanumeric()
 }
 
 fn pdf_min_usable_text_chars() -> usize {
@@ -1248,7 +1270,7 @@ fn pdf_candidate_quality_score(extracted: &ExtractedDocumentText) -> usize {
     };
 
     text_chars
-        + structure_block_count * 8
+        + structure_block_count * 16
         + heading_count * 40
         + table_signal_count * 20
         + method_bonus
@@ -1256,7 +1278,7 @@ fn pdf_candidate_quality_score(extracted: &ExtractedDocumentText) -> usize {
 
 fn pdf_low_quality_candidate_score(extracted: &ExtractedDocumentText) -> usize {
     pdf_quality_text_chars(&extracted.text)
-        + pdf_candidate_structure_block_count(extracted).min(50) * 2
+        + pdf_candidate_structure_block_count(extracted).min(50) * 4
         + pdf_candidate_heading_count(&extracted.text).min(10) * 5
         + pdf_candidate_table_signal_count(&extracted.text).min(10) * 5
 }
@@ -1314,7 +1336,7 @@ fn pdf_low_quality_diagnostic_text(mut extracted: ExtractedDocumentText) -> Extr
         .trim()
         .to_string();
     extracted.text = format!(
-        "PDF parse quality warning: text extraction produced only {text_chars} non-whitespace characters, below the minimum usable threshold. OCR/VLM fallback did not produce displayable text; do not treat the low-quality extract as document content.\n\nLow-quality extract:\n{snippet}"
+        "PDF parse quality warning: text extraction produced only {text_chars} meaningful text characters, below the minimum usable threshold. OCR/VLM fallback did not produce displayable text; do not treat the low-quality extract as document content.\n\nLow-quality extract:\n{snippet}"
     );
     extracted.method = format!("{}+low-quality", extracted.method);
     merge_object_value(
@@ -3508,6 +3530,47 @@ trailer << /Root 1 0 R >>
                 pdf_parse_quality(&"正".repeat(32)),
                 PdfParseQuality::Usable { text_chars: 32 }
             );
+        });
+    }
+
+    #[test]
+    fn pdf_parse_quality_rejects_punctuation_only_extract() {
+        with_env_var("DOCUMENT_PDF_MIN_USABLE_TEXT_CHARS", Some("32"), || {
+            assert_eq!(
+                pdf_parse_quality("---- ----- |||| .... 。。。。 ！！！！"),
+                PdfParseQuality::LowTextCoverage { text_chars: 0 }
+            );
+            assert_eq!(
+                pdf_parse_quality(
+                    "字段 | 类型 | 说明\nA001 | 金额 | 1280\nB002 | 状态 | 已完成\nC003 | 客户 | 深圳公司"
+                ),
+                PdfParseQuality::Usable { text_chars: 35 }
+            );
+        });
+    }
+
+    #[test]
+    fn pdf_candidate_parse_quality_accepts_concise_structured_extract() {
+        with_env_var("DOCUMENT_PDF_MIN_USABLE_TEXT_CHARS", Some("32"), || {
+            let extracted = ExtractedDocumentText {
+                text: "# 工作经历\n\n广东高明中港城商业管理有限公司\n\n| 时间 | 公司 |".to_string(),
+                method: "pdf-paddleocr".to_string(),
+                metadata: json!({
+                    "document_structure": {
+                        "source": "paddleocr_pp_structure_v3",
+                        "block_count": 6,
+                    }
+                }),
+            };
+
+            assert!(matches!(
+                pdf_parse_quality(&extracted.text),
+                PdfParseQuality::LowTextCoverage { .. }
+            ));
+            assert!(matches!(
+                pdf_candidate_parse_quality(&extracted),
+                PdfParseQuality::Usable { .. }
+            ));
         });
     }
 
