@@ -21412,6 +21412,8 @@ fn assistant_run_dataset_entity_scan_direct_answer_for_dimension(
             | AssistantRunEntityScanAnswerDimension::Time
             | AssistantRunEntityScanAnswerDimension::ResumeSkill
             | AssistantRunEntityScanAnswerDimension::ResumeProject
+            | AssistantRunEntityScanAnswerDimension::ResumePosition
+            | AssistantRunEntityScanAnswerDimension::ResumeLocation
             | AssistantRunEntityScanAnswerDimension::ResumeCompany
             | AssistantRunEntityScanAnswerDimension::ResumeEducation
             | AssistantRunEntityScanAnswerDimension::ResumeCertificate
@@ -21504,6 +21506,8 @@ enum AssistantRunEntityScanAnswerDimension {
     Time,
     ResumeSkill,
     ResumeProject,
+    ResumePosition,
+    ResumeLocation,
     ResumeCompany,
     ResumeEducation,
     ResumeCertificate,
@@ -21531,6 +21535,12 @@ fn assistant_run_entity_scan_answer_dimension(
     }
     if prompt_requests_resume_project_ranking(prompt) {
         return Some(AssistantRunEntityScanAnswerDimension::ResumeProject);
+    }
+    if prompt_requests_resume_position_ranking(prompt) {
+        return Some(AssistantRunEntityScanAnswerDimension::ResumePosition);
+    }
+    if prompt_requests_resume_location_ranking(prompt) {
+        return Some(AssistantRunEntityScanAnswerDimension::ResumeLocation);
     }
     if prompt_requests_resume_company_ranking(prompt) {
         return Some(AssistantRunEntityScanAnswerDimension::ResumeCompany);
@@ -21842,6 +21852,82 @@ fn assistant_run_resume_profile_direct_answer(
                 },
             ))
         }
+        AssistantRunEntityScanAnswerDimension::ResumePosition => {
+            let ascending = prompt_requests_ascending_sort(prompt);
+            rows.sort_by(|left, right| {
+                compare_resume_profile_u64_field(left, right, "position_count", ascending)
+                    .then_with(|| {
+                        resume_profile_array_string(left, "position_names", 1)
+                            .cmp(&resume_profile_array_string(right, "position_names", 1))
+                    })
+                    .then_with(|| {
+                        resume_profile_candidate_name(left)
+                            .cmp(&resume_profile_candidate_name(right))
+                    })
+            });
+            Some(assistant_run_resume_profile_table(
+                &rows,
+                "按岗位数排序的候选人简历表",
+                &[
+                    "候选人",
+                    "岗位数",
+                    "岗位/职位",
+                    "地点",
+                    "技能数",
+                    "项目数",
+                    "文档",
+                ],
+                |row| {
+                    vec![
+                        resume_profile_candidate_name(row),
+                        value_u64_string(row, "position_count"),
+                        resume_profile_array_string(row, "position_names", 3),
+                        resume_profile_array_string(row, "location_names", 3),
+                        value_u64_string(row, "skill_count"),
+                        value_u64_string(row, "project_count"),
+                        value_string(row, "document_title"),
+                    ]
+                },
+            ))
+        }
+        AssistantRunEntityScanAnswerDimension::ResumeLocation => {
+            let ascending = prompt_requests_ascending_sort(prompt);
+            rows.sort_by(|left, right| {
+                compare_resume_profile_u64_field(left, right, "location_count", ascending)
+                    .then_with(|| {
+                        resume_profile_array_string(left, "location_names", 1)
+                            .cmp(&resume_profile_array_string(right, "location_names", 1))
+                    })
+                    .then_with(|| {
+                        resume_profile_candidate_name(left)
+                            .cmp(&resume_profile_candidate_name(right))
+                    })
+            });
+            Some(assistant_run_resume_profile_table(
+                &rows,
+                "按地点数排序的候选人简历表",
+                &[
+                    "候选人",
+                    "地点数",
+                    "地点/城市",
+                    "岗位",
+                    "技能数",
+                    "项目数",
+                    "文档",
+                ],
+                |row| {
+                    vec![
+                        resume_profile_candidate_name(row),
+                        value_u64_string(row, "location_count"),
+                        resume_profile_array_string(row, "location_names", 3),
+                        resume_profile_array_string(row, "position_names", 3),
+                        value_u64_string(row, "skill_count"),
+                        value_u64_string(row, "project_count"),
+                        value_string(row, "document_title"),
+                    ]
+                },
+            ))
+        }
         AssistantRunEntityScanAnswerDimension::ResumeCompany => {
             let ascending = prompt_requests_ascending_sort(prompt);
             rows.sort_by(|left, right| {
@@ -22040,6 +22126,8 @@ fn assistant_run_resume_profile_match_answer(mut rows: Vec<Value>, prompt: &str)
             "技能",
             "项目",
             "公司",
+            "岗位",
+            "地点",
             "学历",
             "证书",
             "年龄",
@@ -22053,6 +22141,8 @@ fn assistant_run_resume_profile_match_answer(mut rows: Vec<Value>, prompt: &str)
                 resume_profile_array_string(row, "skill_names", 4),
                 resume_profile_array_string(row, "project_names", 3),
                 resume_profile_array_string(row, "company_names", 3),
+                resume_profile_array_string(row, "position_names", 2),
+                resume_profile_array_string(row, "location_names", 2),
                 resume_profile_array_string(row, "degree_names", 2),
                 resume_profile_array_string(row, "certificate_names", 2),
                 value_u64_string(row, "age"),
@@ -22596,6 +22686,35 @@ fn prompt_requests_resume_project_ranking(prompt: &str) -> bool {
     prompt_requests_resume_profile_sort(prompt) && prompt_requests_project_statistics(prompt)
 }
 
+fn prompt_requests_resume_position_ranking(prompt: &str) -> bool {
+    if !prompt_requests_resume_profile_sort(prompt) {
+        return false;
+    }
+    prompt_requests_position_statistics(prompt)
+        || prompt_contains_any(
+            prompt,
+            &["岗位数", "岗位数量", "职位数", "职位数量", "角色数量"],
+        )
+}
+
+fn prompt_requests_resume_location_ranking(prompt: &str) -> bool {
+    if !prompt_requests_resume_profile_sort(prompt) {
+        return false;
+    }
+    prompt_requests_location_statistics(prompt)
+        || prompt_contains_any(
+            prompt,
+            &[
+                "城市数",
+                "城市数量",
+                "地点数",
+                "地点数量",
+                "地区数",
+                "地区数量",
+            ],
+        )
+}
+
 fn prompt_requests_resume_company_ranking(prompt: &str) -> bool {
     if !prompt_requests_resume_profile_sort(prompt) {
         return false;
@@ -22704,6 +22823,11 @@ fn prompt_requests_resume_profile_match(prompt: &str) -> bool {
             "公司",
             "岗位",
             "职位",
+            "地点",
+            "城市",
+            "地区",
+            "所在地",
+            "地址",
             "学校",
             "院校",
             "学历",
@@ -22724,13 +22848,17 @@ fn prompt_requests_resume_profile_match(prompt: &str) -> bool {
             "company",
             "employer",
             "role",
+            "location",
+            "city",
             "school",
             "university",
             "degree",
             "certificate",
             "certification",
         ],
-    );
+    ) || known_location_names()
+        .iter()
+        .any(|location| prompt.contains(location));
 
     (has_candidate_target || has_resume_search) && has_match_signal
 }
@@ -28381,6 +28509,8 @@ struct ResumeDocumentProfile {
     company_count: usize,
     skill_count: usize,
     project_count: usize,
+    position_count: usize,
+    location_count: usize,
     certificate_count: usize,
     company_names: Vec<String>,
     skill_names: Vec<String>,
@@ -28403,6 +28533,8 @@ impl ResumeDocumentProfile {
             && self.company_count == 0
             && self.skill_count == 0
             && self.project_count == 0
+            && self.position_count == 0
+            && self.location_count == 0
             && self.certificate_count == 0
             && self.school_names.is_empty()
             && self.degree_names.is_empty()
@@ -28422,6 +28554,8 @@ impl ResumeDocumentProfile {
             "company_count": self.company_count,
             "skill_count": self.skill_count,
             "project_count": self.project_count,
+            "position_count": self.position_count,
+            "location_count": self.location_count,
             "certificate_count": self.certificate_count,
             "company_names": &self.company_names,
             "skill_names": &self.skill_names,
@@ -28844,6 +28978,8 @@ fn extract_resume_document_profile(
         company_count: company_names.len(),
         skill_count: skill_names.len(),
         project_count: project_names.len(),
+        position_count: position_names.len(),
+        location_count: location_names.len(),
         certificate_count: certificate_names.len(),
         company_names,
         skill_names,
@@ -58776,6 +58912,8 @@ mod tests {
                         "company_count": 1,
                         "skill_count": 1,
                         "project_count": 1,
+                        "position_count": 1,
+                        "location_count": 1,
                         "certificate_count": 1,
                         "company_names": ["广州寓力地产顾问有限公司"],
                         "skill_names": ["Java"],
@@ -58797,6 +58935,8 @@ mod tests {
                         "company_count": 3,
                         "skill_count": 2,
                         "project_count": 0,
+                        "position_count": 1,
+                        "location_count": 1,
                         "certificate_count": 1,
                         "company_names": ["广州冠晚网络有限公司", "广州寓力地产顾问有限公司", "深圳星拓智能科技有限公司"],
                         "skill_names": ["Java", "Rust"],
@@ -59010,6 +59150,28 @@ mod tests {
         let zhang_project_index = resume_project_answer.find("| 张三 | 0 | 2 | 3 |").unwrap();
         assert!(li_project_index < zhang_project_index);
 
+        let resume_position_request = CreateAssistantRunRequest {
+            prompt: "候选人按岗位排序出表".to_string(),
+            ..age_request.clone()
+        };
+        let resume_position_answer =
+            assistant_run_dataset_entity_scan_direct_answer(&resume_position_request, &evidence)
+                .expect("resume position ranking should produce a candidate table");
+        assert!(resume_position_answer.contains("按岗位数排序的候选人简历表"));
+        assert!(resume_position_answer.contains("| 李四 | 1 | Java工程师 | 深圳 |"));
+        assert!(resume_position_answer.contains("| 张三 | 1 | 架构师 | 广州 |"));
+
+        let resume_location_request = CreateAssistantRunRequest {
+            prompt: "简历按城市排序出表".to_string(),
+            ..age_request.clone()
+        };
+        let resume_location_answer =
+            assistant_run_dataset_entity_scan_direct_answer(&resume_location_request, &evidence)
+                .expect("resume location ranking should produce a candidate table");
+        assert!(resume_location_answer.contains("按地点数排序的候选人简历表"));
+        assert!(resume_location_answer.contains("| 李四 | 1 | 深圳 | Java工程师 |"));
+        assert!(resume_location_answer.contains("| 张三 | 1 | 广州 | 架构师 |"));
+
         let resume_company_request = CreateAssistantRunRequest {
             prompt: "简历按公司数排序出表".to_string(),
             ..age_request.clone()
@@ -59117,6 +59279,17 @@ mod tests {
         assert!(certificate_match_answer.contains("证书=PMP"));
         assert!(certificate_match_answer.contains("| 李四 | 证书:PMP |"));
         assert!(!certificate_match_answer.contains("| 张三 |"));
+
+        let location_match_request = CreateAssistantRunRequest {
+            prompt: "哪些候选人在深圳？".to_string(),
+            ..age_request.clone()
+        };
+        let location_match_answer =
+            assistant_run_dataset_entity_scan_direct_answer(&location_match_request, &evidence)
+                .expect("resume location match should produce a candidate table");
+        assert!(location_match_answer.contains("地点=深圳"));
+        assert!(location_match_answer.contains("| 李四 | 地点:深圳 |"));
+        assert!(!location_match_answer.contains("| 张三 |"));
 
         let experience_request = CreateAssistantRunRequest {
             prompt: "简历按工作年限排序出表".to_string(),
