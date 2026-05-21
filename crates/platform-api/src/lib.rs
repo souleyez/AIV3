@@ -11420,6 +11420,8 @@ async fn enqueue_external_source_sync_for_source(
     let checkpoint = normalize_external_source_sync_object(request.checkpoint, "checkpoint")?;
     let connector_context =
         normalize_external_source_sync_object(request.connector_context, "connector_context")?;
+    let connector_context =
+        external_source_sync_connector_context_for_execution(&source, connector_context)?;
     let sync_run_id = Uuid::new_v4();
     create_external_sync_run(state, sync_run_id, &source, &sync_kind, &checkpoint).await?;
 
@@ -15559,6 +15561,28 @@ fn external_source_sync_uses_mysql(
     ) || database_source_config_from_connector_context(connector_context)
         .as_object()
         .is_some()
+}
+
+fn external_source_sync_connector_context_for_execution(
+    source: &ExternalSourceConnectionSummary,
+    connector_context: Value,
+) -> std::result::Result<Value, ApiError> {
+    if !external_source_sync_uses_mysql(source, &connector_context) {
+        return Ok(connector_context);
+    }
+
+    let database_source = merged_database_source_config(
+        &source.config_redacted,
+        database_source_config_from_connector_context(&connector_context),
+    )?;
+    MySqlSourceConfig::from_value(&database_source).map_err(database_source_error_to_api)?;
+
+    let mut connector_context = match connector_context {
+        Value::Object(map) => map,
+        _ => Map::new(),
+    };
+    connector_context.insert("database_source".to_string(), database_source);
+    Ok(Value::Object(connector_context))
 }
 
 fn database_source_config_from_connector_context(connector_context: &Value) -> &Value {
@@ -49148,6 +49172,77 @@ mod tests {
         assert_eq!(
             dataset_id.map(|id| id.to_string()).as_deref(),
             Some("018f0000-0000-7000-9000-000000000001")
+        );
+    }
+
+    #[test]
+    fn mysql_sync_execution_context_uses_source_database_config() {
+        let source = mysql_source_summary_for_test(json!({
+            "database_source": {
+                "connection_env": "THIRD_PARTY_HY_SQL_DATABASE_URL",
+                "database": "hy_sql",
+                "tables": [{
+                    "table": "bi_traffic_area",
+                    "id_column": "id",
+                    "title_column": "area_name",
+                    "content_columns": ["area_name", "traffic_count"]
+                }]
+            }
+        }));
+
+        let connector_context =
+            external_source_sync_connector_context_for_execution(&source, json!({}))
+                .expect("source database config should be attached to execution context");
+
+        assert_eq!(
+            connector_context.pointer("/database_source/database"),
+            Some(&json!("hy_sql"))
+        );
+        assert_eq!(
+            connector_context.pointer("/database_source/tables/0/table"),
+            Some(&json!("bi_traffic_area"))
+        );
+        assert_eq!(
+            connector_context.pointer("/database_source/tables/0/content_columns/1"),
+            Some(&json!("traffic_count"))
+        );
+    }
+
+    #[test]
+    fn mysql_sync_execution_context_allows_request_table_override() {
+        let source = mysql_source_summary_for_test(json!({
+            "database_source": {
+                "connection_env": "THIRD_PARTY_HY_SQL_DATABASE_URL",
+                "database": "hy_sql",
+                "tables": [{
+                    "table": "old_table",
+                    "id_column": "id",
+                    "content_columns": ["body"]
+                }]
+            }
+        }));
+
+        let connector_context = external_source_sync_connector_context_for_execution(
+            &source,
+            json!({
+                "database_source": {
+                    "tables": [{
+                        "table": "bi_traffic_area",
+                        "id_column": "id",
+                        "content_columns": ["area_name"]
+                    }]
+                }
+            }),
+        )
+        .expect("request table mapping should override source defaults");
+
+        assert_eq!(
+            connector_context.pointer("/database_source/tables/0/table"),
+            Some(&json!("bi_traffic_area"))
+        );
+        assert_eq!(
+            connector_context.pointer("/database_source/tables/0/content_columns/0"),
+            Some(&json!("area_name"))
         );
     }
 
