@@ -1298,7 +1298,10 @@ pub fn build_mysql_aggregate_query(
     let order_by = if dimensions.is_empty() {
         String::new()
     } else {
-        " order by `value` desc".to_string()
+        format!(
+            " order by {} desc",
+            aggregate_order_expression(&aggregation, metric.as_deref())?
+        )
     };
     let row_limit = request
         .limit
@@ -1642,6 +1645,31 @@ fn aggregate_expression(
         }
     };
     Ok(expression)
+}
+
+fn aggregate_order_expression(
+    aggregation: &str,
+    metric: Option<&str>,
+) -> Result<String, DatabaseSourceError> {
+    if aggregation == "count" {
+        return Ok("count(*)".to_string());
+    }
+    let metric = metric.ok_or_else(|| DatabaseSourceError::InvalidField {
+        field: "metric",
+        reason: "metric is required for numeric aggregation".to_string(),
+    })?;
+    let quoted = quote_mysql_identifier(metric)?;
+    let numeric = format!("cast(nullif({quoted}, '') as decimal(30,6))");
+    match aggregation {
+        "sum" => Ok(format!("coalesce(sum({numeric}), 0)")),
+        "avg" => Ok(format!("avg({numeric})")),
+        "min" => Ok(format!("min({numeric})")),
+        "max" => Ok(format!("max({numeric})")),
+        _ => Err(DatabaseSourceError::InvalidField {
+            field: "aggregation",
+            reason: "must be one of count, sum, avg, min, or max".to_string(),
+        }),
+    }
 }
 
 async fn connect_mysql_pool(config: &MySqlSourceConfig) -> Result<MySqlPool, DatabaseSourceError> {
@@ -2287,7 +2315,7 @@ mod tests {
             .sql
             .contains("sum(cast(nullif(`traffic_count`, '') as decimal(30,6)))"));
         assert!(plan.sql.contains(
-            "from `bi_traffic_area` group by `area_name` order by `value` desc limit 10"
+            "from `bi_traffic_area` group by `area_name` order by coalesce(sum(cast(nullif(`traffic_count`, '') as decimal(30,6))), 0) desc limit 10"
         ));
         assert!(!plan.sql.contains(';'));
     }
@@ -2311,6 +2339,7 @@ mod tests {
             vec!["category".to_string(), "value".to_string()]
         );
         assert!(plan.sql.contains("cast(count(*) as char) as `value`"));
+        assert!(plan.sql.contains("order by count(*) desc"));
         assert!(plan.sql.ends_with("limit 5"));
     }
 
