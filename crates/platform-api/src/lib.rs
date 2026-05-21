@@ -24805,14 +24805,16 @@ fn extract_resume_document_profile(
     let mut profile = ResumeDocumentProfile {
         document_id: document.id.to_string(),
         document_title: resume_profile_display_title(document),
-        candidate_name: entity_candidates
-            .iter()
-            .find(|candidate| candidate.entity_type == "person")
-            .map(|candidate| candidate.name.clone())
-            .or_else(|| extract_resume_candidate_name(scan_text))
+        candidate_name: extract_resume_candidate_name(scan_text)
             .or_else(|| extract_resume_candidate_name_from_object_key(&document.object_key))
             .or_else(|| extract_resume_candidate_name_from_title(&document.title))
-            .or_else(|| extract_resume_candidate_name_from_marked_text(scan_text)),
+            .or_else(|| extract_resume_candidate_name_from_marked_text(scan_text))
+            .or_else(|| {
+                entity_candidates
+                    .iter()
+                    .find(|candidate| candidate.entity_type == "person")
+                    .map(|candidate| candidate.name.clone())
+            }),
         gender: extract_resume_gender(scan_text),
         age: extract_resume_age(scan_text),
         birth_year: extract_resume_birth_year(scan_text),
@@ -24927,6 +24929,9 @@ fn extract_resume_candidate_name_from_object_key(object_key: &str) -> Option<Str
         if looks_like_person_name(&normalized) {
             return Some(normalized);
         }
+        if looks_like_resume_ascii_person_name(&raw_segment) {
+            return Some(raw_segment);
+        }
         if let Some(name) = extract_resume_candidate_name_from_heading_text(&normalized, false) {
             return Some(name);
         }
@@ -24934,6 +24939,13 @@ fn extract_resume_candidate_name_from_object_key(object_key: &str) -> Option<Str
             .split_once("简历")
             .map(|(prefix, _)| normalize_resume_file_person_segment(prefix))
             .filter(|value| looks_like_person_name(value))
+        {
+            return Some(prefix);
+        }
+        if let Some(prefix) = raw_segment
+            .split_once("简历")
+            .map(|(prefix, _)| normalize_document_entity_value(prefix))
+            .filter(|value| looks_like_resume_ascii_person_name(value))
         {
             return Some(prefix);
         }
@@ -24946,6 +24958,22 @@ fn normalize_resume_file_person_segment(value: &str) -> String {
         ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-' | ' ' | '　')
     });
     normalize_document_entity_value(trimmed)
+}
+
+fn looks_like_resume_ascii_person_name(value: &str) -> bool {
+    let normalized = value.trim();
+    let lower = normalized.to_ascii_lowercase();
+    let char_count = normalized.chars().count();
+    (2..=32).contains(&char_count)
+        && normalized.chars().any(|ch| ch.is_ascii_alphabetic())
+        && normalized
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_' | ' '))
+        && ![
+            "boss", "cv", "iot", "java", "resume", "title", "profile", "document", "python",
+            "golang", "backend", "frontend", "product", "manager",
+        ]
+        .contains(&lower.as_str())
 }
 
 fn resume_profile_display_title(document: &Document) -> String {
@@ -25517,7 +25545,11 @@ fn push_document_metadata_entity_candidate(
         "position" => looks_like_position_name(&normalized),
         "skill" => looks_like_skill_name(&normalized),
         "location" => looks_like_location_name(&normalized),
-        "project" => looks_like_project_name(&normalized),
+        "project" => {
+            looks_like_project_name(&normalized)
+                && looks_like_project_heading_candidate(&normalized)
+                && !project_heading_is_noise(&normalized)
+        }
         _ => false,
     };
     if accepted {
@@ -25814,6 +25846,12 @@ fn is_resume_person_name_noise(value: &str) -> bool {
         "亮点",
         "优势",
         "简介",
+        "博士",
+        "硕士",
+        "学士",
+        "本科",
+        "大专",
+        "高中",
         "概况",
         "基本信息",
         "联系方式",
@@ -26010,8 +26048,43 @@ fn looks_like_project_heading_candidate(value: &str) -> bool {
             .chars()
             .any(|ch| matches!(ch, '，' | ',' | '。' | '；' | ';' | '、' | '：' | ':'))
         && ![
-            "负责", "参与", "带领", "使用", "采用", "主要", "职责", "团队", "描述", "内容", "经验",
-            "能力", "以上", "以下",
+            "熟悉",
+            "完成",
+            "负责",
+            "参与",
+            "带领",
+            "使用",
+            "采用",
+            "主要",
+            "职责",
+            "团队",
+            "描述",
+            "内容",
+            "经验",
+            "能力",
+            "以上",
+            "以下",
+            "公司",
+            "各类",
+            "项目情况",
+            "项目需求",
+            "项目报价",
+            "项目跟进",
+            "项目投标",
+            "项目为",
+            "项目是",
+            "个主要项目",
+            "实现",
+            "编写",
+            "协调",
+            "挖掘",
+            "记录",
+            "交流",
+            "部署",
+            "角色",
+            "本科",
+            "硕士",
+            "博士",
         ]
         .iter()
         .any(|noise| value.contains(noise))
@@ -26030,6 +26103,9 @@ fn project_heading_is_noise(value: &str) -> bool {
             "项目背景",
             "项目管理",
             "项目列表",
+            "项目名称",
+            "项目情况",
+            "项目主管",
         ]
         .contains(&value)
 }
