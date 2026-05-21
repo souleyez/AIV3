@@ -184,6 +184,7 @@ const ASSISTANT_RUN_DATABASE_AGGREGATE_SCAN_LIMIT_DEFAULT: u32 = 5_000;
 const ASSISTANT_RUN_DATABASE_AGGREGATE_SCAN_LIMIT_MAX: u32 = 50_000;
 const ASSISTANT_RUN_DATABASE_SOURCE_LIMIT: usize = 2;
 const ASSISTANT_RUN_DATABASE_AGGREGATE_METRIC_LIMIT: usize = 2;
+const ASSISTANT_RUN_DATABASE_AGGREGATE_REQUEST_LIMIT: usize = 4;
 const ASSISTANT_RUN_DETAIL_TARGET_LIMIT: usize = 3;
 const ASSISTANT_RUN_DATASET_ENTITY_SCAN_DOCUMENT_LIMIT: usize = 48;
 const ASSISTANT_RUN_DATASET_ENTITY_SCAN_CHUNK_LIMIT: usize = 4;
@@ -28292,7 +28293,7 @@ async fn build_assistant_run_database_aggregate_supply(
         let Some(mapping) = assistant_run_database_mapping_for_prompt(&config, prompt) else {
             continue;
         };
-        let dimensions = assistant_run_database_aggregate_dimensions(mapping, prompt);
+        let aggregate_plans = assistant_run_database_aggregate_dimension_plans(mapping, prompt);
         let metrics = assistant_run_database_aggregate_metrics(mapping, prompt);
         let aggregation = assistant_run_database_aggregation(prompt, !metrics.is_empty());
         let scan_limit = assistant_run_database_aggregate_scan_limit();
@@ -28302,50 +28303,62 @@ async fn build_assistant_run_database_aggregate_supply(
             metrics.into_iter().map(Some).collect::<Vec<_>>()
         };
 
-        for metric in metric_requests
-            .into_iter()
+        let mut aggregate_request_count = 0usize;
+        'metric_requests: for metric in metric_requests
+            .iter()
             .take(ASSISTANT_RUN_DATABASE_AGGREGATE_METRIC_LIMIT)
         {
-            let request = MySqlAggregateRequest {
-                table: mapping.table.clone(),
-                dimensions: dimensions.clone(),
-                metric: metric.clone(),
-                aggregation: aggregation.clone(),
-                limit: Some(ASSISTANT_RUN_DATABASE_AGGREGATE_RESULT_LIMIT),
-                scan_limit: Some(scan_limit),
-            };
-            match aggregate_mysql_table(&config, &request).await {
-                Ok(result) => supplied_items.push(json!({
-                    "type": "database_aggregate",
-                    "dataset_id": dataset.id,
-                    "dataset_key": dataset.key,
-                    "dataset_title": dataset.title,
-                    "source_id": source.source_id,
-                    "connector_kind": source.connector_kind,
-                    "table": result.table,
-                    "dimensions": result.dimensions,
-                    "metric": result.metric,
-                    "aggregation": result.aggregation,
-                    "value_label": metric.clone().unwrap_or_else(|| "record_count".to_string()),
-                    "columns": result.columns,
-                    "rows": result.rows,
-                    "row_limit": result.row_limit,
-                    "scan_limit": result.scan_limit,
-                    "source_scope": "selected_database_source_limited_scan",
-                    "policy": "host_controlled_read_only_aggregate",
-                    "note": "数据库型数据集的结构化聚合供料；scan_limit 表示本次最多扫描的源表行数，模型需要在回答中说明范围。",
-                })),
-                Err(error) => supplied_items.push(json!({
-                    "type": "database_aggregate_error",
-                    "dataset_id": dataset.id,
-                    "dataset_key": dataset.key,
-                    "source_id": source.source_id,
-                    "table": mapping.table,
-                    "metric": metric,
-                    "aggregation": aggregation,
-                    "status": "aggregate_failed",
-                    "message": error.to_string(),
-                })),
+            for aggregate_plan in &aggregate_plans {
+                if aggregate_request_count >= ASSISTANT_RUN_DATABASE_AGGREGATE_REQUEST_LIMIT {
+                    break 'metric_requests;
+                }
+                aggregate_request_count += 1;
+                let request = MySqlAggregateRequest {
+                    table: mapping.table.clone(),
+                    dimensions: aggregate_plan.dimensions.clone(),
+                    metric: metric.clone(),
+                    aggregation: aggregation.clone(),
+                    limit: Some(ASSISTANT_RUN_DATABASE_AGGREGATE_RESULT_LIMIT),
+                    scan_limit: Some(scan_limit),
+                };
+                match aggregate_mysql_table(&config, &request).await {
+                    Ok(result) => supplied_items.push(json!({
+                        "type": "database_aggregate",
+                        "dataset_id": dataset.id,
+                        "dataset_key": dataset.key,
+                        "dataset_title": dataset.title,
+                        "source_id": source.source_id,
+                        "connector_kind": source.connector_kind,
+                        "table": result.table,
+                        "aggregate_role": aggregate_plan.role,
+                        "aggregate_intent": aggregate_plan.intent,
+                        "dimensions": result.dimensions,
+                        "metric": result.metric,
+                        "aggregation": result.aggregation,
+                        "value_label": metric.clone().unwrap_or_else(|| "record_count".to_string()),
+                        "columns": result.columns,
+                        "rows": result.rows,
+                        "row_limit": result.row_limit,
+                        "scan_limit": result.scan_limit,
+                        "source_scope": "selected_database_source_limited_scan",
+                        "policy": "host_controlled_read_only_aggregate",
+                        "note": "数据库型数据集的结构化聚合供料；scan_limit 表示本次最多扫描的源表行数，模型需要在回答中说明范围。",
+                    })),
+                    Err(error) => supplied_items.push(json!({
+                        "type": "database_aggregate_error",
+                        "dataset_id": dataset.id,
+                        "dataset_key": dataset.key,
+                        "source_id": source.source_id,
+                        "table": mapping.table,
+                        "aggregate_role": aggregate_plan.role,
+                        "aggregate_intent": aggregate_plan.intent,
+                        "dimensions": aggregate_plan.dimensions.clone(),
+                        "metric": metric,
+                        "aggregation": aggregation,
+                        "status": "aggregate_failed",
+                        "message": error.to_string(),
+                    })),
+                }
             }
         }
     }
@@ -28406,6 +28419,152 @@ fn assistant_run_database_mapping_for_prompt<'a>(
         .iter()
         .find(|mapping| normalized.contains(&mapping.table.to_ascii_lowercase()))
         .or_else(|| config.tables.first())
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AssistantRunDatabaseAggregatePlan {
+    role: &'static str,
+    intent: &'static str,
+    dimensions: Vec<String>,
+}
+
+fn assistant_run_database_aggregate_dimension_plans(
+    mapping: &MySqlTableMapping,
+    prompt: &str,
+) -> Vec<AssistantRunDatabaseAggregatePlan> {
+    let wants_report = assistant_run_database_prompt_wants_report(prompt);
+    let wants_rank = wants_report
+        || prompt_has_any(
+            prompt,
+            &[
+                "区域", "位置", "楼层", "门", "梯", "点位", "areaname", "area", "top", "排名",
+                "排行", "排序", "前", "最高", "最大",
+            ],
+        );
+    let wants_trend = wants_report
+        || prompt_has_any(
+            prompt,
+            &[
+                "时间", "日期", "小时", "日", "趋势", "变化", "txdate", "date", "time", "by time",
+            ],
+        );
+    let wants_comparison = wants_report
+        || prompt_has_any(
+            prompt,
+            &[
+                "对比", "分类", "类型", "类别", "维度", "areatype", "category", "type",
+            ],
+        );
+
+    let mut plans = Vec::new();
+    if wants_rank {
+        if let Some(dimension) = assistant_run_database_entity_dimension(mapping) {
+            push_assistant_run_database_aggregate_plan(
+                &mut plans,
+                "ranking",
+                "entity_topn",
+                vec![dimension],
+            );
+        }
+    }
+    if wants_trend {
+        if let Some(dimension) = assistant_run_database_time_column(mapping) {
+            push_assistant_run_database_aggregate_plan(
+                &mut plans,
+                "trend",
+                "time_series",
+                vec![dimension],
+            );
+        }
+    }
+    if wants_comparison {
+        if let Some(dimension) = assistant_run_database_category_dimension(mapping) {
+            push_assistant_run_database_aggregate_plan(
+                &mut plans,
+                "comparison",
+                "category_comparison",
+                vec![dimension],
+            );
+        }
+    }
+    if plans.is_empty() {
+        push_assistant_run_database_aggregate_plan(
+            &mut plans,
+            "primary",
+            "prompt_requested",
+            assistant_run_database_aggregate_dimensions(mapping, prompt),
+        );
+    }
+    plans.truncate(ASSISTANT_RUN_DATABASE_AGGREGATE_REQUEST_LIMIT);
+    plans
+}
+
+fn assistant_run_database_prompt_wants_report(prompt: &str) -> bool {
+    prompt_has_any(
+        prompt,
+        &[
+            "报表",
+            "报告",
+            "看板",
+            "仪表盘",
+            "图文",
+            "静态页",
+            "html",
+            "dashboard",
+            "report",
+            "visual",
+        ],
+    )
+}
+
+fn push_assistant_run_database_aggregate_plan(
+    plans: &mut Vec<AssistantRunDatabaseAggregatePlan>,
+    role: &'static str,
+    intent: &'static str,
+    dimensions: Vec<String>,
+) {
+    if dimensions.is_empty()
+        || plans
+            .iter()
+            .any(|existing| existing.dimensions == dimensions)
+    {
+        return;
+    }
+    plans.push(AssistantRunDatabaseAggregatePlan {
+        role,
+        intent,
+        dimensions,
+    });
+}
+
+fn assistant_run_database_entity_dimension(mapping: &MySqlTableMapping) -> Option<String> {
+    mapping
+        .title_column
+        .as_deref()
+        .map(ToOwned::to_owned)
+        .or_else(|| Some(mapping.id_column.clone()))
+}
+
+fn assistant_run_database_category_dimension(mapping: &MySqlTableMapping) -> Option<String> {
+    let columns = assistant_run_database_mapping_columns(mapping);
+    columns
+        .iter()
+        .find(|column| column.eq_ignore_ascii_case("areatype"))
+        .cloned()
+        .or_else(|| {
+            columns
+                .iter()
+                .find(|column| {
+                    let lower = column.to_ascii_lowercase();
+                    lower.contains("category")
+                        || lower.contains("type")
+                        || lower.contains("class")
+                        || lower.contains("kind")
+                        || lower.contains("status")
+                        || lower.contains("level")
+                })
+                .cloned()
+        })
 }
 
 fn assistant_run_database_aggregate_metrics(
@@ -48094,47 +48253,216 @@ fn build_static_page_database_aggregate_sample_points(
         return Vec::new();
     }
 
-    evidence_items
-        .iter()
-        .filter(|item| item.get("type").and_then(Value::as_str) == Some("database_aggregate"))
-        .filter_map(|item| {
-            let rows = item.get("rows").and_then(Value::as_array)?;
-            if rows.is_empty() {
-                return None;
-            }
-            Some((item, rows))
-        })
-        .flat_map(|(item, rows)| {
-            rows.iter()
-                .enumerate()
-                .filter_map(move |(index, row)| {
-                    let value = static_page_database_aggregate_row_value(row, item)?;
-                    Some(json!({
-                        "label": static_page_database_aggregate_row_label(row, item, index),
-                        "value": value,
-                        "kind": "database_aggregate",
-                        "source": "database_aggregate",
-                        "fieldPath": field_path
-                            .map(ToString::to_string)
-                            .unwrap_or_else(|| static_page_database_aggregate_field_path(item)),
-                        "datasetId": item.get("dataset_id").cloned().unwrap_or(Value::Null),
-                        "sourceId": item.get("source_id").cloned().unwrap_or(Value::Null),
-                        "table": item.get("table").cloned().unwrap_or(Value::Null),
-                        "dimensions": item.get("dimensions").cloned().unwrap_or_else(|| json!([])),
-                        "metric": item
-                            .get("metric")
-                            .cloned()
-                            .or_else(|| item.get("value_label").cloned())
-                            .unwrap_or(Value::Null),
-                        "aggregation": item.get("aggregation").cloned().unwrap_or(Value::Null),
-                        "scanLimit": item.get("scan_limit").cloned().unwrap_or(Value::Null),
-                        "rowLimit": item.get("row_limit").cloned().unwrap_or(Value::Null),
-                    }))
-                })
-                .collect::<Vec<_>>()
+    let Some(item) = static_page_database_aggregate_best_item(
+        evidence_items,
+        module,
+        field_path,
+        visualization_type,
+    ) else {
+        return Vec::new();
+    };
+    let Some(rows) = item.get("rows").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+
+    rows.iter()
+        .enumerate()
+        .filter_map(move |(index, row)| {
+            let value = static_page_database_aggregate_row_value(row, item)?;
+            Some(json!({
+                "label": static_page_database_aggregate_row_label(row, item, index),
+                "value": value,
+                "kind": "database_aggregate",
+                "source": "database_aggregate",
+                "fieldPath": field_path
+                    .map(ToString::to_string)
+                    .unwrap_or_else(|| static_page_database_aggregate_field_path(item)),
+                "datasetId": item.get("dataset_id").cloned().unwrap_or(Value::Null),
+                "sourceId": item.get("source_id").cloned().unwrap_or(Value::Null),
+                "table": item.get("table").cloned().unwrap_or(Value::Null),
+                "aggregateRole": item.get("aggregate_role").cloned().unwrap_or(Value::Null),
+                "aggregateIntent": item.get("aggregate_intent").cloned().unwrap_or(Value::Null),
+                "dimensions": item.get("dimensions").cloned().unwrap_or_else(|| json!([])),
+                "metric": item
+                    .get("metric")
+                    .cloned()
+                    .or_else(|| item.get("value_label").cloned())
+                    .unwrap_or(Value::Null),
+                "aggregation": item.get("aggregation").cloned().unwrap_or(Value::Null),
+                "scanLimit": item.get("scan_limit").cloned().unwrap_or(Value::Null),
+                "rowLimit": item.get("row_limit").cloned().unwrap_or(Value::Null),
+            }))
         })
         .take(12)
         .collect()
+}
+
+fn static_page_database_aggregate_best_item<'a>(
+    evidence_items: &'a [Value],
+    module: &Value,
+    field_path: Option<&str>,
+    visualization_type: &str,
+) -> Option<&'a Value> {
+    let module_text = static_page_database_aggregate_module_text(module, field_path);
+    let mut best_item: Option<&Value> = None;
+    let mut best_score = i32::MIN;
+    for item in evidence_items.iter().filter(|item| {
+        item.get("type").and_then(Value::as_str) == Some("database_aggregate")
+            && item
+                .get("rows")
+                .and_then(Value::as_array)
+                .is_some_and(|rows| !rows.is_empty())
+    }) {
+        let score =
+            static_page_database_aggregate_module_score(item, &module_text, visualization_type);
+        if score > best_score {
+            best_score = score;
+            best_item = Some(item);
+        }
+    }
+    best_item
+}
+
+fn static_page_database_aggregate_module_score(
+    item: &Value,
+    module_text: &str,
+    visualization_type: &str,
+) -> i32 {
+    let role = item
+        .get("aggregate_role")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let dimension_text = static_page_database_aggregate_dimensions_text(item);
+    let visualization_type = visualization_type.to_ascii_lowercase();
+    let module_wants_trend = visualization_type == "line-chart"
+        || prompt_has_any(
+            module_text,
+            &[
+                "趋势", "变化", "时间", "日期", "日", "周", "月", "txdate", "date", "time", "trend",
+            ],
+        );
+    let module_wants_comparison = prompt_has_any(
+        module_text,
+        &[
+            "对比",
+            "分类",
+            "类型",
+            "类别",
+            "占比",
+            "分布",
+            "category",
+            "type",
+            "class",
+            "comparison",
+        ],
+    );
+    let module_wants_ranking = visualization_type == "kpi-cards"
+        || prompt_has_any(
+            module_text,
+            &[
+                "top", "排名", "排行", "排序", "前", "最高", "最大", "区域", "门店", "点位",
+                "area", "rank",
+            ],
+        );
+    let aggregate_is_time = role == "trend"
+        || prompt_has_any(
+            &dimension_text,
+            &["txdate", "date", "time", "day", "month", "year"],
+        );
+    let aggregate_is_category = role == "comparison"
+        || prompt_has_any(
+            &dimension_text,
+            &[
+                "areatype", "category", "type", "class", "kind", "status", "level",
+            ],
+        );
+    let aggregate_is_ranking = role == "ranking"
+        || prompt_has_any(
+            &dimension_text,
+            &["areaname", "area", "name", "title", "store", "region"],
+        );
+
+    let mut score = 1;
+    if module_wants_trend {
+        score += if aggregate_is_time { 60 } else { -15 };
+    }
+    if module_wants_comparison {
+        score += if aggregate_is_category { 60 } else { -10 };
+    }
+    if module_wants_ranking {
+        score += if aggregate_is_ranking { 45 } else { -8 };
+    }
+    if !module_wants_trend && !module_wants_comparison && !module_wants_ranking {
+        match role {
+            "ranking" => score += 12,
+            "comparison" => score += 8,
+            "trend" => score += 6,
+            _ => {}
+        }
+    }
+    score
+}
+
+fn static_page_database_aggregate_module_text(module: &Value, field_path: Option<&str>) -> String {
+    let mut parts = Vec::new();
+    for key in ["id", "title", "subtitle", "role", "description", "summary"] {
+        if let Some(value) = module.get(key).and_then(Value::as_str) {
+            parts.push(value);
+        }
+    }
+    if let Some(binding) = module
+        .get("dataBinding")
+        .or_else(|| module.get("data_binding"))
+    {
+        for key in [
+            "sourceId",
+            "source_id",
+            "fieldPath",
+            "field_path",
+            "field",
+            "label",
+        ] {
+            if let Some(value) = binding.get(key).and_then(Value::as_str) {
+                parts.push(value);
+            }
+        }
+    }
+    if let Some(visualization) = module.get("visualization") {
+        if let Some(value) = visualization.get("type").and_then(Value::as_str) {
+            parts.push(value);
+        }
+        if let Some(chart_options) = visualization.get("chartOptions") {
+            for key in ["dataKey", "labelKey", "valueKey", "categoryKey"] {
+                if let Some(value) = chart_options.get(key).and_then(Value::as_str) {
+                    parts.push(value);
+                }
+            }
+        }
+    }
+    if let Some(chart_options) = module.get("chartOptions") {
+        for key in ["dataKey", "labelKey", "valueKey", "categoryKey"] {
+            if let Some(value) = chart_options.get(key).and_then(Value::as_str) {
+                parts.push(value);
+            }
+        }
+    }
+    if let Some(field_path) = field_path {
+        parts.push(field_path);
+    }
+    parts.join(" ")
+}
+
+fn static_page_database_aggregate_dimensions_text(item: &Value) -> String {
+    item.get("dimensions")
+        .and_then(Value::as_array)
+        .map(|dimensions| {
+            dimensions
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .unwrap_or_default()
 }
 
 fn static_page_database_aggregate_field_path(item: &Value) -> String {
@@ -50171,6 +50499,26 @@ mod tests {
         );
         assert!(!contains_ascii_token("markdown table", "down"));
         assert!(contains_ascii_token("rank by down", "down"));
+    }
+
+    #[test]
+    fn database_aggregate_heuristics_plan_report_dimension_slices() {
+        let mapping = traffic_area_mapping_for_test();
+
+        let plans = assistant_run_database_aggregate_dimension_plans(
+            &mapping,
+            "生成一页图文 HTML 流量分析报表，展示区域 Top5、趋势和类型对比",
+        );
+
+        assert!(plans.iter().any(|plan| {
+            plan.role == "ranking" && plan.dimensions == vec!["areaname".to_string()]
+        }));
+        assert!(plans
+            .iter()
+            .any(|plan| { plan.role == "trend" && plan.dimensions == vec!["txdate".to_string()] }));
+        assert!(plans.iter().any(|plan| {
+            plan.role == "comparison" && plan.dimensions == vec!["areatype".to_string()]
+        }));
     }
 
     #[test]
@@ -63753,6 +64101,125 @@ mod tests {
         assert_eq!(sample_data[0]["value"], json!(1856.0));
         assert_eq!(sample_data[0]["kind"], json!("database_aggregate"));
         assert_eq!(sample_data[0]["scanLimit"], json!(5000));
+    }
+
+    #[test]
+    fn static_page_data_snapshot_matches_database_aggregate_to_module_intent() {
+        let dataset_id = DatasetId::new();
+        let selected_scope = json!({
+            "mode": "user_selected",
+            "datasets": [dataset_id.to_string()],
+        });
+        let payload = json!({
+            "modules": [
+                {
+                    "id": "top-area",
+                    "title": "区域流量排行",
+                    "dataBinding": {
+                        "sourceId": "dataset",
+                        "fieldPath": "dataset.metrics_summary"
+                    },
+                    "visualization": {"type": "bar-chart"}
+                },
+                {
+                    "id": "traffic-trend",
+                    "title": "日期趋势变化",
+                    "dataBinding": {
+                        "sourceId": "dataset",
+                        "fieldPath": "dataset.metrics_summary"
+                    },
+                    "visualization": {"type": "line-chart"}
+                },
+                {
+                    "id": "type-comparison",
+                    "title": "类型分类对比",
+                    "dataBinding": {
+                        "sourceId": "dataset",
+                        "fieldPath": "dataset.metrics_summary"
+                    },
+                    "visualization": {"type": "bar-chart"}
+                }
+            ]
+        });
+        let evidence_state = json!({
+            "status": "supplied",
+            "supplied_items": [
+                {
+                    "type": "database_aggregate",
+                    "dataset_id": dataset_id.to_string(),
+                    "source_id": "hy-sql-traffic-area",
+                    "table": "bi_traffic_area",
+                    "aggregate_role": "ranking",
+                    "aggregate_intent": "entity_topn",
+                    "dimensions": ["areaname"],
+                    "metric": "up",
+                    "aggregation": "sum",
+                    "value_label": "up",
+                    "rows": [{"areaname": "百货", "value": "1856"}],
+                    "scan_limit": 5000
+                },
+                {
+                    "type": "database_aggregate",
+                    "dataset_id": dataset_id.to_string(),
+                    "source_id": "hy-sql-traffic-area",
+                    "table": "bi_traffic_area",
+                    "aggregate_role": "trend",
+                    "aggregate_intent": "time_series",
+                    "dimensions": ["txdate"],
+                    "metric": "up",
+                    "aggregation": "sum",
+                    "value_label": "up",
+                    "rows": [{"txdate": "2024-04-10", "value": "9280"}],
+                    "scan_limit": 5000
+                },
+                {
+                    "type": "database_aggregate",
+                    "dataset_id": dataset_id.to_string(),
+                    "source_id": "hy-sql-traffic-area",
+                    "table": "bi_traffic_area",
+                    "aggregate_role": "comparison",
+                    "aggregate_intent": "category_comparison",
+                    "dimensions": ["areatype"],
+                    "metric": "up",
+                    "aggregation": "sum",
+                    "value_label": "up",
+                    "rows": [{"areatype": "入口", "value": "5100"}],
+                    "scan_limit": 5000
+                }
+            ]
+        });
+
+        let snapshot = build_static_page_data_snapshot_with_evidence(
+            &payload,
+            &selected_scope,
+            Some(&evidence_state),
+            "assistant_run",
+        );
+
+        assert_eq!(
+            snapshot["module_bindings"][0]["sampleData"][0]["label"],
+            json!("百货")
+        );
+        assert_eq!(
+            snapshot["module_bindings"][0]["sampleData"][0]["aggregateRole"],
+            json!("ranking")
+        );
+        assert_eq!(
+            snapshot["module_bindings"][1]["sampleData"][0]["label"],
+            json!("2024-04-10")
+        );
+        assert_eq!(
+            snapshot["module_bindings"][1]["sampleData"][0]["aggregateRole"],
+            json!("trend")
+        );
+        assert_eq!(
+            snapshot["module_bindings"][2]["sampleData"][0]["label"],
+            json!("入口")
+        );
+        assert_eq!(
+            snapshot["module_bindings"][2]["sampleData"][0]["aggregateRole"],
+            json!("comparison")
+        );
     }
 
     #[test]
