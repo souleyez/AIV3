@@ -2367,4 +2367,61 @@ mod tests {
         assert_eq!(snapshot.kind, "mysql");
         assert_eq!(snapshot.database, config.database);
     }
+
+    #[tokio::test]
+    #[ignore]
+    async fn live_mysql_preview_table() {
+        if std::env::var("MYSQL_SOURCE_TEST_ALLOW_LIVE").as_deref() != Ok("true") {
+            return;
+        }
+        let database_name = std::env::var("MYSQL_SOURCE_TEST_DATABASE_NAME")
+            .expect("MYSQL_SOURCE_TEST_DATABASE_NAME is required for live smoke");
+        let table_name =
+            std::env::var("MYSQL_SOURCE_TEST_TABLE").unwrap_or_else(|_| "bi_traffic_area".into());
+        let id_column =
+            std::env::var("MYSQL_SOURCE_TEST_ID_COLUMN").unwrap_or_else(|_| "areaname".into());
+        let title_column = std::env::var("MYSQL_SOURCE_TEST_TITLE_COLUMN").ok();
+        let content_columns = std::env::var("MYSQL_SOURCE_TEST_CONTENT_COLUMNS")
+            .unwrap_or_else(|_| "storecode,areaid,areatype,txdate,modifytime,up,down".into())
+            .split(',')
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+            .collect::<Vec<_>>();
+        let metadata_columns = std::env::var("MYSQL_SOURCE_TEST_METADATA_COLUMNS")
+            .unwrap_or_default()
+            .split(',')
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+            .collect::<Vec<_>>();
+        let updated_at_column = std::env::var("MYSQL_SOURCE_TEST_UPDATED_AT_COLUMN").ok();
+        let lower_name = database_name.to_ascii_lowercase();
+        let allow_non_test =
+            std::env::var("MYSQL_SOURCE_TEST_ALLOW_NON_TEST_DATABASE").as_deref() == Ok("true");
+        assert!(
+            allow_non_test || lower_name.contains("test"),
+            "refusing live preview smoke against non-test database without explicit override"
+        );
+        let raw = json!({
+            "connection_env": "MYSQL_SOURCE_TEST_DATABASE_URL",
+            "database": database_name,
+            "tables": [{
+                "table": table_name,
+                "id_column": id_column,
+                "title_column": title_column,
+                "content_columns": content_columns,
+                "metadata_columns": metadata_columns,
+                "updated_at_column": updated_at_column,
+            }]
+        });
+        let config = MySqlSourceConfig::from_value(&raw).expect("live config parses");
+
+        let preview = preview_mysql_table(&config, &config.tables[0].table, 2)
+            .await
+            .expect("live table preview succeeds");
+
+        assert_eq!(preview.table, config.tables[0].table);
+        assert!(preview.row_limit <= 2);
+    }
 }
