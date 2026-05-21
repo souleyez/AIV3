@@ -92,9 +92,11 @@ use event_bus::{
 use futures_util::{stream, Stream, StreamExt};
 use hmac::{Hmac, Mac};
 use llm_gateway::{
-    build_provider_from_env, render_runtime_manifest, resolve_runtime_selection_from_env,
+    build_provider_from_env, build_provider_from_profile_env, model_gateway_lane_env_prefix,
+    model_gateway_profile_env_prefix, render_runtime_manifest, resolve_runtime_selection_from_env,
     LlmFinishReason, LlmProviderError, LlmProviderFailureKind, LlmRequest, LlmResponse,
-    LlmRuntimeMetadata, LlmRuntimeMode, LlmRuntimeSelection, ModelProviderProfile,
+    LlmRuntimeMetadata, LlmRuntimeMode, LlmRuntimeSelection, ModelCapabilityManifest,
+    ModelGatewayLaneLimits, ModelGatewayPoolConfig, ModelProfileWireApi, ModelProviderProfile,
     MODEL_LANE_ASSISTANT_CHAT, MODEL_LANE_ASSISTANT_REACT_JSON, MODEL_LANE_CODEX_CONVERSATION,
 };
 use prompt_registry::bootstrap_default_prompt_registry;
@@ -480,6 +482,52 @@ impl GatewayRuntimeLimiter {
                 queue_timeout,
             )),
         );
+    }
+
+    fn ensure_lane_limit(
+        &self,
+        lane: &str,
+        max_concurrency: Option<u32>,
+        queue_limit: Option<u32>,
+        queue_timeout_ms: Option<u64>,
+    ) {
+        let mut lanes = self.lanes.lock().expect("gateway lane limiter lock");
+        lanes.entry(lane.to_string()).or_insert_with(|| {
+            Arc::new(GatewayLimitBucket::new(
+                max_concurrency
+                    .map(|value| value as usize)
+                    .unwrap_or(self.default_lane_max_concurrency),
+                queue_limit
+                    .map(|value| value as usize)
+                    .unwrap_or(self.default_queue_limit),
+                queue_timeout_ms
+                    .map(StdDuration::from_millis)
+                    .unwrap_or(self.default_queue_timeout),
+            ))
+        });
+    }
+
+    fn ensure_profile_limit(
+        &self,
+        profile_id: &str,
+        max_concurrency: Option<u32>,
+        queue_limit: Option<u32>,
+        queue_timeout_ms: Option<u64>,
+    ) {
+        let mut profiles = self.profiles.lock().expect("gateway profile limiter lock");
+        profiles.entry(profile_id.to_string()).or_insert_with(|| {
+            Arc::new(GatewayLimitBucket::new(
+                max_concurrency
+                    .map(|value| value as usize)
+                    .unwrap_or(self.default_profile_max_concurrency),
+                queue_limit
+                    .map(|value| value as usize)
+                    .unwrap_or(self.default_queue_limit),
+                queue_timeout_ms
+                    .map(StdDuration::from_millis)
+                    .unwrap_or(self.default_queue_timeout),
+            ))
+        });
     }
 
     async fn acquire_lane(&self, lane: &str) -> Result<GatewayRuntimePermit, GatewayLimitError> {
@@ -15616,31 +15664,237 @@ fn external_channel_text_reply(
 
 #[derive(Clone, Debug)]
 struct ExternalChannelChatRuntimeAttempt {
-    env_prefix: &'static str,
-    label: &'static str,
+    env_prefix: String,
+    label: String,
     runtime: LlmRuntimeSelection,
+    profile: Option<ModelProviderProfile>,
+    lane_limits: Option<ModelGatewayLaneLimits>,
 }
 
 fn external_channel_chat_runtime_attempts(
     primary: LlmRuntimeSelection,
 ) -> Vec<ExternalChannelChatRuntimeAttempt> {
     let mut attempts = vec![ExternalChannelChatRuntimeAttempt {
-        env_prefix: "ASSISTANT_RUN",
-        label: "primary",
+        env_prefix: "ASSISTANT_RUN".to_string(),
+        label: "primary".to_string(),
         runtime: primary.clone(),
+        profile: None,
+        lane_limits: None,
     }];
 
     if let Some(fallback) = external_channel_fallback_runtime_selection_from_env() {
         if !external_channel_same_runtime_selection(&primary, &fallback) {
             attempts.push(ExternalChannelChatRuntimeAttempt {
-                env_prefix: "ASSISTANT_RUN_FALLBACK",
-                label: "fallback",
+                env_prefix: "ASSISTANT_RUN_FALLBACK".to_string(),
+                label: "fallback".to_string(),
                 runtime: fallback,
+                profile: None,
+                lane_limits: None,
             });
         }
     }
 
     attempts
+}
+
+async fn external_channel_chat_model_pool_attempts(
+    state: &AppState,
+    connection_id: &str,
+    message: &ExternalBotMessageView,
+) -> std::result::Result<Option<Vec<ExternalChannelChatRuntimeAttempt>>, ApiError> {
+    if !external_channel_model_pool_is_active(connection_id, message) {
+        return Ok(None);
+    }
+
+    let db_profiles = state
+        .storage
+        .model_gateway_profiles()
+        .list_enabled_by_lane(state.tenant_id, MODEL_LANE_ASSISTANT_CHAT)
+        .await
+        .map_err(ApiError::from_storage)?;
+    if !db_profiles.is_empty() {
+        return Ok(Some(
+            db_profiles
+                .into_iter()
+                .map(external_channel_chat_attempt_from_db_profile)
+                .collect(),
+        ));
+    }
+
+    let Some(env_pool) =
+        ModelGatewayPoolConfig::from_env(MODEL_LANE_ASSISTANT_CHAT).map_err(|error| {
+            ApiError::internal(
+                "model_gateway_pool_env_invalid",
+                format!("failed to parse model gateway pool env: {error}"),
+            )
+        })?
+    else {
+        return Ok(None);
+    };
+
+    Ok(Some(
+        env_pool
+            .active_profiles_by_priority()
+            .into_iter()
+            .map(|profile| {
+                external_channel_chat_attempt_from_profile(
+                    profile,
+                    Some(env_pool.lane_limits.clone()),
+                )
+            })
+            .collect(),
+    ))
+}
+
+fn external_channel_chat_attempt_from_db_profile(
+    profile: ModelGatewayProfile,
+) -> ExternalChannelChatRuntimeAttempt {
+    let lane_limits = ModelGatewayLaneLimits::default();
+    let provider_profile = model_gateway_provider_profile_from_record(profile);
+    external_channel_chat_attempt_from_profile(provider_profile, Some(lane_limits))
+}
+
+fn external_channel_chat_attempt_from_profile(
+    profile: ModelProviderProfile,
+    lane_limits: Option<ModelGatewayLaneLimits>,
+) -> ExternalChannelChatRuntimeAttempt {
+    let env_prefix = model_gateway_profile_env_prefix(&profile.profile_id);
+    let runtime = profile.runtime_selection_for_lane(MODEL_LANE_ASSISTANT_CHAT);
+    ExternalChannelChatRuntimeAttempt {
+        label: format!("profile:{}", profile.profile_id),
+        env_prefix,
+        runtime,
+        profile: Some(profile),
+        lane_limits,
+    }
+}
+
+fn model_gateway_provider_profile_from_record(
+    profile: ModelGatewayProfile,
+) -> ModelProviderProfile {
+    let mut provider_profile =
+        ModelProviderProfile::new(profile.profile_id, profile.provider_id, profile.model_id);
+    provider_profile.priority = profile.priority;
+    provider_profile.base_url = profile.base_url;
+    provider_profile.api_path = profile.api_path;
+    provider_profile.wire_api = ModelProfileWireApi::from_env_value(&profile.wire_api)
+        .unwrap_or(ModelProfileWireApi::ChatCompletions);
+    provider_profile.auth_env_key_name = profile.auth_env_key_name;
+    provider_profile.timeout_ms = profile.timeout_ms.map(|value| value as u64);
+    provider_profile.rate_limit.concurrent_requests =
+        profile.max_concurrency.map(|value| value as u32);
+    provider_profile.rate_limit.requests_per_minute = profile.rpm_limit.map(|value| value as u32);
+    provider_profile.rate_limit.tokens_per_minute = profile.tpm_limit.map(|value| value as u32);
+    provider_profile.capabilities =
+        ModelCapabilityManifest::from_names(&model_gateway_capability_names(&profile.capabilities));
+    provider_profile
+}
+
+fn model_gateway_capability_names(capabilities: &Value) -> Vec<String> {
+    if let Some(names) = capabilities.as_array() {
+        return names
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+            .collect();
+    }
+
+    capabilities
+        .as_object()
+        .map(|object| {
+            object
+                .iter()
+                .filter_map(|(key, value)| value.as_bool().filter(|enabled| *enabled).map(|_| key))
+                .map(ToOwned::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn external_channel_model_pool_is_active(
+    connection_id: &str,
+    message: &ExternalBotMessageView,
+) -> bool {
+    model_gateway_lane_routing_mode(MODEL_LANE_ASSISTANT_CHAT) == "active"
+        && external_channel_model_pool_scope_is_active(connection_id, message)
+}
+
+fn model_gateway_lane_routing_mode(lane: &str) -> String {
+    let prefix = model_gateway_lane_env_prefix(lane);
+    std::env::var(format!("{prefix}_MODE"))
+        .or_else(|_| std::env::var(format!("{prefix}_ROUTING_MODE")))
+        .unwrap_or_else(|_| "observe_only".to_string())
+        .trim()
+        .to_ascii_lowercase()
+}
+
+fn external_channel_model_pool_scope_is_active(
+    connection_id: &str,
+    message: &ExternalBotMessageView,
+) -> bool {
+    env_flag("LLM_GATEWAY_EXTERNAL_CHANNEL_ACTIVE", false)
+        || env_csv_contains(
+            "LLM_GATEWAY_EXTERNAL_CHANNEL_ACTIVE_CONNECTIONS",
+            connection_id,
+        )
+        || env_csv_contains(
+            "LLM_GATEWAY_EXTERNAL_CHANNEL_ACTIVE_TENANTS",
+            &message.tenant_external_id,
+        )
+        || env_csv_contains(
+            "LLM_GATEWAY_EXTERNAL_CHANNEL_ACTIVE_PLATFORMS",
+            external_channel_platform_wire_value(&message.platform),
+        )
+}
+
+fn env_csv_contains(key: &str, expected: &str) -> bool {
+    let expected = expected.trim();
+    !expected.is_empty()
+        && std::env::var(key)
+            .ok()
+            .map(|value| {
+                value
+                    .split(',')
+                    .map(str::trim)
+                    .any(|item| item.eq_ignore_ascii_case(expected))
+            })
+            .unwrap_or(false)
+}
+
+async fn external_channel_acquire_gateway_permit(
+    state: &AppState,
+    attempt: &ExternalChannelChatRuntimeAttempt,
+) -> std::result::Result<Option<GatewayRuntimePermit>, GatewayLimitError> {
+    let Some(profile) = attempt.profile.as_ref() else {
+        return Ok(None);
+    };
+    let lane_limits = attempt.lane_limits.clone().unwrap_or_default();
+    state.gateway_limiter.ensure_lane_limit(
+        MODEL_LANE_ASSISTANT_CHAT,
+        lane_limits.max_concurrency,
+        lane_limits.queue_limit,
+        lane_limits.queue_timeout_ms,
+    );
+    state.gateway_limiter.ensure_profile_limit(
+        &profile.profile_id,
+        profile.rate_limit.concurrent_requests,
+        lane_limits.queue_limit,
+        lane_limits.queue_timeout_ms,
+    );
+    state
+        .gateway_limiter
+        .acquire_lane_and_profile(MODEL_LANE_ASSISTANT_CHAT, &profile.profile_id)
+        .await
+        .map(Some)
+}
+
+fn gateway_limit_error_reason(error: GatewayLimitError) -> &'static str {
+    match error {
+        GatewayLimitError::QueueFull => "model_gateway_queue_full",
+        GatewayLimitError::QueueTimeout => "model_gateway_queue_timeout",
+    }
 }
 
 fn external_channel_fallback_runtime_selection_from_env() -> Option<LlmRuntimeSelection> {
@@ -15813,14 +16067,20 @@ async fn external_channel_chat_model_or_acceptance_reply(
     message: &ExternalBotMessageView,
     now: DateTime<Utc>,
 ) -> std::result::Result<ExternalBotReplyView, ApiError> {
-    let chat_runtime = resolve_runtime_selection_from_env(
-        "ASSISTANT_RUN",
-        MODEL_LANE_ASSISTANT_CHAT,
-        DEFAULT_ASSISTANT_RUN_RUNTIME_MODEL,
-    );
     let provider_input =
         build_assistant_run_provider_input_with_evidence(assistant_request, Some(evidence_state));
-    let attempts = external_channel_chat_runtime_attempts(chat_runtime);
+    let attempts = if let Some(pool_attempts) =
+        external_channel_chat_model_pool_attempts(state, connection_id, message).await?
+    {
+        pool_attempts
+    } else {
+        let chat_runtime = resolve_runtime_selection_from_env(
+            "ASSISTANT_RUN",
+            MODEL_LANE_ASSISTANT_CHAT,
+            DEFAULT_ASSISTANT_RUN_RUNTIME_MODEL,
+        );
+        external_channel_chat_runtime_attempts(chat_runtime)
+    };
     let mut rejected_attempts = Vec::new();
     let direct_reply_started_at = Instant::now();
     let direct_reply_total_budget = external_channel_direct_reply_total_budget();
@@ -15829,7 +16089,7 @@ async fn external_channel_chat_model_or_acceptance_reply(
         let elapsed = direct_reply_started_at.elapsed();
         if elapsed >= direct_reply_total_budget {
             rejected_attempts.push(json!({
-                "attempt": attempt.label,
+                "attempt": attempt.label.as_str(),
                 "runtime_mode": attempt.runtime.mode.as_str(),
                 "provider": attempt.runtime.provider.as_str(),
                 "model": attempt.runtime.model.as_str(),
@@ -15850,7 +16110,7 @@ async fn external_channel_chat_model_or_acceptance_reply(
                             "channel_connection_id": connection_id,
                             "platform": external_channel_platform_wire_value(&message.platform),
                             "message_external_id": message.message_external_id.clone(),
-                            "attempt": attempt.label,
+                            "attempt": attempt.label.as_str(),
                             "runtime_mode": attempt.runtime.mode.as_str(),
                             "provider": attempt.runtime.provider.as_str(),
                             "model": attempt.runtime.model.as_str(),
@@ -15869,7 +16129,7 @@ async fn external_channel_chat_model_or_acceptance_reply(
 
         if attempt.runtime.mode == "placeholder" {
             rejected_attempts.push(json!({
-                "attempt": attempt.label,
+                "attempt": attempt.label.as_str(),
                 "runtime_mode": attempt.runtime.mode.as_str(),
                 "provider": attempt.runtime.provider.as_str(),
                 "model": attempt.runtime.model.as_str(),
@@ -15888,7 +16148,7 @@ async fn external_channel_chat_model_or_acceptance_reply(
                             "channel_connection_id": connection_id,
                             "platform": external_channel_platform_wire_value(&message.platform),
                             "message_external_id": message.message_external_id.clone(),
-                            "attempt": attempt.label,
+                            "attempt": attempt.label.as_str(),
                             "runtime_mode": attempt.runtime.mode.as_str(),
                             "provider": attempt.runtime.provider.as_str(),
                             "model": attempt.runtime.model.as_str(),
@@ -15903,25 +16163,80 @@ async fn external_channel_chat_model_or_acceptance_reply(
             continue;
         }
 
+        let _gateway_permit = match external_channel_acquire_gateway_permit(state, &attempt).await {
+            Ok(permit) => permit,
+            Err(error) => {
+                let reason = gateway_limit_error_reason(error);
+                rejected_attempts.push(json!({
+                    "attempt": attempt.label.as_str(),
+                    "runtime_mode": attempt.runtime.mode.as_str(),
+                    "provider": attempt.runtime.provider.as_str(),
+                    "model": attempt.runtime.model.as_str(),
+                    "reason": reason,
+                }));
+                state
+                    .storage
+                    .assistant_runs()
+                    .append_event(
+                        state.tenant_id,
+                        run_id,
+                        &NewAssistantRunEvent {
+                            event_name: "assistant_run.external_channel_model_reply_failed"
+                                .to_string(),
+                            payload: json!({
+                                "channel_connection_id": connection_id,
+                                "platform": external_channel_platform_wire_value(&message.platform),
+                                "message_external_id": message.message_external_id.clone(),
+                                "attempt": attempt.label.as_str(),
+                                "runtime_mode": attempt.runtime.mode.as_str(),
+                                "provider": attempt.runtime.provider.as_str(),
+                                "model": attempt.runtime.model.as_str(),
+                                "reason": reason,
+                                "strict_direct_reply": true,
+                                "retryable": true,
+                            }),
+                            created_at: now,
+                        },
+                    )
+                    .await
+                    .map_err(ApiError::from_storage)?;
+                continue;
+            }
+        };
+
+        let elapsed = direct_reply_started_at.elapsed();
         let remaining_budget = direct_reply_total_budget.saturating_sub(elapsed);
         let attempt_timeout = external_channel_direct_reply_attempt_timeout(remaining_budget);
-        let response = match tokio::time::timeout(
-            attempt_timeout,
-            complete_assistant_run_provider_with_env_prefix(
-                attempt.env_prefix,
-                MODEL_LANE_ASSISTANT_CHAT,
-                attempt.runtime.mode.clone(),
-                attempt.runtime.provider.clone(),
-                attempt.runtime.model.clone(),
-                provider_input.clone(),
-            ),
-        )
-        .await
-        {
+        let response_result = if let Some(profile) = attempt.profile.clone() {
+            tokio::time::timeout(
+                attempt_timeout,
+                complete_assistant_run_provider_with_profile(
+                    attempt.env_prefix.clone(),
+                    MODEL_LANE_ASSISTANT_CHAT,
+                    profile,
+                    provider_input.clone(),
+                ),
+            )
+            .await
+        } else {
+            tokio::time::timeout(
+                attempt_timeout,
+                complete_assistant_run_provider_with_env_prefix(
+                    attempt.env_prefix.clone(),
+                    MODEL_LANE_ASSISTANT_CHAT,
+                    attempt.runtime.mode.clone(),
+                    attempt.runtime.provider.clone(),
+                    attempt.runtime.model.clone(),
+                    provider_input.clone(),
+                ),
+            )
+            .await
+        };
+        let response = match response_result {
             Ok(Ok(response)) => response,
             Ok(Err(error)) => {
                 rejected_attempts.push(json!({
-                    "attempt": attempt.label,
+                    "attempt": attempt.label.as_str(),
                     "runtime_mode": attempt.runtime.mode.as_str(),
                     "provider": attempt.runtime.provider.as_str(),
                     "model": attempt.runtime.model.as_str(),
@@ -15944,7 +16259,7 @@ async fn external_channel_chat_model_or_acceptance_reply(
                                 "channel_connection_id": connection_id,
                                 "platform": external_channel_platform_wire_value(&message.platform),
                                 "message_external_id": message.message_external_id.clone(),
-                                "attempt": attempt.label,
+                                "attempt": attempt.label.as_str(),
                                 "runtime_mode": attempt.runtime.mode.as_str(),
                                 "provider": attempt.runtime.provider.as_str(),
                                 "model": attempt.runtime.model.as_str(),
@@ -15964,7 +16279,7 @@ async fn external_channel_chat_model_or_acceptance_reply(
             }
             Err(_elapsed) => {
                 rejected_attempts.push(json!({
-                    "attempt": attempt.label,
+                    "attempt": attempt.label.as_str(),
                     "runtime_mode": attempt.runtime.mode.as_str(),
                     "provider": attempt.runtime.provider.as_str(),
                     "model": attempt.runtime.model.as_str(),
@@ -15985,7 +16300,7 @@ async fn external_channel_chat_model_or_acceptance_reply(
                                 "channel_connection_id": connection_id,
                                 "platform": external_channel_platform_wire_value(&message.platform),
                                 "message_external_id": message.message_external_id.clone(),
-                                "attempt": attempt.label,
+                                "attempt": attempt.label.as_str(),
                                 "runtime_mode": attempt.runtime.mode.as_str(),
                                 "provider": attempt.runtime.provider.as_str(),
                                 "model": attempt.runtime.model.as_str(),
@@ -16005,10 +16320,22 @@ async fn external_channel_chat_model_or_acceptance_reply(
         };
 
         let output_text = response.output_text.trim().to_string();
-        let runtime_manifest = render_runtime_manifest(&response.runtime);
+        let mut runtime_manifest = render_runtime_manifest(&response.runtime);
+        if let Some(profile) = attempt.profile.as_ref() {
+            set_payload_value(
+                &mut runtime_manifest,
+                "model_gateway_profile_id",
+                json!(profile.profile_id.as_str()),
+            );
+            set_payload_value(
+                &mut runtime_manifest,
+                "model_gateway_attempt",
+                json!(attempt.label.as_str()),
+            );
+        }
         if let Some(reason) = external_channel_model_reply_rejection_reason(&response) {
             rejected_attempts.push(json!({
-                "attempt": attempt.label,
+                "attempt": attempt.label.as_str(),
                 "runtime_mode": attempt.runtime.mode.as_str(),
                 "provider": attempt.runtime.provider.as_str(),
                 "model": attempt.runtime.model.as_str(),
@@ -16028,7 +16355,7 @@ async fn external_channel_chat_model_or_acceptance_reply(
                             "channel_connection_id": connection_id,
                             "platform": external_channel_platform_wire_value(&message.platform),
                             "message_external_id": message.message_external_id.clone(),
-                            "attempt": attempt.label,
+                            "attempt": attempt.label.as_str(),
                             "reason": reason.as_str(),
                             "runtime": runtime_manifest,
                             "strict_direct_reply": true,
@@ -16059,7 +16386,7 @@ async fn external_channel_chat_model_or_acceptance_reply(
         execution_trail.push(json!({
             "status": "completed",
             "label": "外部通道模型自然回答返回",
-            "attempt": attempt.label,
+            "attempt": attempt.label.as_str(),
             "runtime_mode": response.runtime.mode.as_str(),
             "provider": response.runtime.provider.as_str(),
             "model": response.runtime.model.as_str(),
@@ -16091,7 +16418,7 @@ async fn external_channel_chat_model_or_acceptance_reply(
                         "channel_connection_id": connection_id,
                         "platform": external_channel_platform_wire_value(&message.platform),
                         "message_external_id": message.message_external_id.clone(),
-                        "attempt": attempt.label,
+                        "attempt": attempt.label.as_str(),
                         "assistant_message_chars": output_text.chars().count(),
                         "runtime": runtime_manifest,
                     }),
@@ -20622,24 +20949,72 @@ async fn complete_assistant_run_provider(
 }
 
 async fn complete_assistant_run_provider_with_env_prefix(
-    env_prefix: &'static str,
+    env_prefix: impl Into<String>,
     model_lane: &'static str,
     runtime_mode: String,
     runtime_provider: String,
     runtime_model: String,
     provider_input: String,
 ) -> std::result::Result<LlmResponse, ApiError> {
-    let retry_attempts = assistant_run_runtime_retry_attempts(env_prefix);
-    let retry_backoff = assistant_run_runtime_retry_backoff(env_prefix);
+    let env_prefix = env_prefix.into();
+    let retry_attempts = assistant_run_runtime_retry_attempts(&env_prefix);
+    let retry_backoff = assistant_run_runtime_retry_backoff(&env_prefix);
     tokio::task::spawn_blocking(move || {
         let provider = build_provider_from_env(
-            env_prefix,
+            &env_prefix,
             &runtime_mode,
             runtime_provider,
             bootstrap_default_prompt_registry(),
         )?;
         let request = LlmRequest {
             model: runtime_model,
+            lane: Some(model_lane.to_string()),
+            system_prompt_key: None,
+            input: provider_input,
+        };
+        for attempt_index in 0..retry_attempts {
+            match provider.complete(&request) {
+                Ok(response) => return Ok(response),
+                Err(error) => {
+                    let can_retry = assistant_run_provider_error_is_retryable(&error);
+                    if !can_retry || attempt_index + 1 >= retry_attempts {
+                        return Err(error);
+                    }
+                    std::thread::sleep(assistant_run_runtime_retry_delay(
+                        retry_backoff,
+                        attempt_index,
+                    ));
+                }
+            }
+        }
+        unreachable!("retry_attempts is always at least one")
+    })
+    .await
+    .map_err(|error| {
+        ApiError::internal(
+            "assistant_run_join_failed",
+            format!("assistant run worker join failed: {error}"),
+        )
+    })?
+    .map_err(|error| ApiError::internal("assistant_run_provider_failed", error.to_string()))
+}
+
+async fn complete_assistant_run_provider_with_profile(
+    env_prefix: String,
+    model_lane: &'static str,
+    profile: ModelProviderProfile,
+    provider_input: String,
+) -> std::result::Result<LlmResponse, ApiError> {
+    let retry_attempts = assistant_run_runtime_retry_attempts(&env_prefix);
+    let retry_backoff = assistant_run_runtime_retry_backoff(&env_prefix);
+    tokio::task::spawn_blocking(move || {
+        let provider = build_provider_from_profile_env(
+            &env_prefix,
+            &profile,
+            bootstrap_default_prompt_registry(),
+        )?;
+        let request = LlmRequest {
+            model: profile.model_id,
             lane: Some(model_lane.to_string()),
             system_prompt_key: None,
             input: provider_input,
@@ -48642,6 +49017,156 @@ mod tests {
         clear_assistant_openclaw_env();
     }
 
+    #[test]
+    fn external_channel_model_pool_requires_active_lane_and_scoped_channel() {
+        clear_assistant_openclaw_env();
+        let message = sample_external_bot_message();
+        let scoped_connection_id = "pool-scope-test";
+
+        std::env::set_var("LLM_GATEWAY_LANE_ASSISTANT_CHAT_MODE", "active");
+        assert!(!external_channel_model_pool_is_active(
+            scoped_connection_id,
+            &message
+        ));
+
+        std::env::set_var(
+            "LLM_GATEWAY_EXTERNAL_CHANNEL_ACTIVE_CONNECTIONS",
+            scoped_connection_id,
+        );
+
+        assert!(external_channel_model_pool_is_active(
+            scoped_connection_id,
+            &message
+        ));
+        assert!(!external_channel_model_pool_is_active(
+            "other-channel",
+            &message
+        ));
+
+        std::env::set_var("LLM_GATEWAY_LANE_ASSISTANT_CHAT_MODE", "observe_only");
+        assert!(!external_channel_model_pool_is_active(
+            scoped_connection_id,
+            &message
+        ));
+        clear_assistant_openclaw_env();
+    }
+
+    #[tokio::test]
+    async fn external_channel_direct_reply_uses_next_profile_after_retryable_failure() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        clear_assistant_openclaw_env();
+        std::env::set_var("LLM_GATEWAY_LANE_ASSISTANT_CHAT_MODE", "active");
+        std::env::set_var(
+            "LLM_GATEWAY_EXTERNAL_CHANNEL_ACTIVE_CONNECTIONS",
+            "generic-chat-main",
+        );
+        std::env::set_var(
+            "LLM_GATEWAY_LANE_ASSISTANT_CHAT_PROFILES",
+            "POOL_PRIMARY,POOL_SECONDARY",
+        );
+        std::env::set_var("LLM_GATEWAY_LANE_ASSISTANT_CHAT_MAX_CONCURRENCY", "10");
+        std::env::set_var("LLM_GATEWAY_PROFILE_POOL_PRIMARY_PROVIDER_ID", "scripted");
+        std::env::set_var(
+            "LLM_GATEWAY_PROFILE_POOL_PRIMARY_MODEL_ID",
+            "pool-primary-v1",
+        );
+        std::env::set_var("LLM_GATEWAY_PROFILE_POOL_PRIMARY_PRIORITY", "100");
+        std::env::set_var(
+            "LLM_GATEWAY_PROFILE_POOL_PRIMARY_RUNTIME_OUTPUT_TEXT",
+            "已收到指令。系统将结合知识库与数据源进行分析，并为您输出结论。",
+        );
+        std::env::set_var("LLM_GATEWAY_PROFILE_POOL_SECONDARY_PROVIDER_ID", "scripted");
+        std::env::set_var(
+            "LLM_GATEWAY_PROFILE_POOL_SECONDARY_MODEL_ID",
+            "pool-secondary-v1",
+        );
+        std::env::set_var("LLM_GATEWAY_PROFILE_POOL_SECONDARY_PRIORITY", "80");
+        std::env::set_var(
+            "LLM_GATEWAY_PROFILE_POOL_SECONDARY_RUNTIME_OUTPUT_TEXT",
+            "这是模型池第二 profile 的直答。",
+        );
+
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping model pool external channel endpoint test: {reason}");
+                clear_assistant_openclaw_env();
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("generic-chat-model-pool-test-{}", Uuid::new_v4()),
+                "Generic Chat Model Pool Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage.clone(),
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        insert_generic_external_channel_connection(&state, "generic-chat-main").await;
+        let app = router(
+            storage.clone(),
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+
+        let mut message = sample_external_bot_message();
+        message.text = Some("普通问题需要模型池直答".to_string());
+        message.message_external_id = "msg-model-pool-fallback-001".to_string();
+        message.idempotency_key = "generic:tenant-ext-001:msg-model-pool-fallback-001".to_string();
+        let response = post_json_request(
+            app.clone(),
+            "/v1/external/channels/generic-chat-main/events",
+            &message,
+            None,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let body: ExternalChannelEventResponse = read_json_response(response).await;
+        assert_eq!(body.reply.reply_type, ExternalBotReplyTypeView::Text);
+        assert_eq!(body.reply.task_status.as_deref(), Some("answered"));
+        assert_eq!(
+            body.reply.text.as_deref(),
+            Some("这是模型池第二 profile 的直答。")
+        );
+
+        let run_id = body.assistant_run_id.expect("assistant run id");
+        let run = storage
+            .assistant_runs()
+            .get_by_id(tenant.id, run_id)
+            .await
+            .expect("run should load")
+            .expect("run should exist");
+        assert_eq!(
+            run.runtime_manifest["model_gateway_profile_id"],
+            json!("pool-secondary")
+        );
+        assert_eq!(run.runtime_manifest["model"], json!("pool-secondary-v1"));
+
+        let events = storage
+            .assistant_runs()
+            .list_events(tenant.id, run_id)
+            .await
+            .expect("events should load");
+        assert!(events.iter().any(|event| {
+            event.event_name == "assistant_run.external_channel_model_reply_rejected"
+                && event.payload["attempt"] == json!("profile:pool-primary")
+                && event.payload["reason"] == json!("generic_orchestration_ack")
+        }));
+        assert!(events.iter().any(|event| {
+            event.event_name == "assistant_run.external_channel_model_reply_completed"
+                && event.payload["attempt"] == json!("profile:pool-secondary")
+        }));
+        clear_assistant_openclaw_env();
+    }
+
     #[tokio::test]
     async fn generic_chat_page_event_uses_fallback_when_primary_output_is_suppressed() {
         let _guard = shared_local_postgres_test_lock().lock().await;
@@ -75002,6 +75527,50 @@ mod tests {
             "ASSISTANT_RUN_FALLBACK_RUNTIME_RETRY_BACKOFF_MS",
             "EXTERNAL_CHANNEL_DIRECT_REPLY_TOTAL_BUDGET_MS",
             "EXTERNAL_CHANNEL_DIRECT_REPLY_ATTEMPT_TIMEOUT_MS",
+            "LLM_GATEWAY_LANE_ASSISTANT_CHAT_MODE",
+            "LLM_GATEWAY_LANE_ASSISTANT_CHAT_ROUTING_MODE",
+            "LLM_GATEWAY_LANE_ASSISTANT_CHAT_PROFILES",
+            "LLM_GATEWAY_LANE_ASSISTANT_CHAT_MAX_CONCURRENCY",
+            "LLM_GATEWAY_LANE_ASSISTANT_CHAT_QUEUE_LIMIT",
+            "LLM_GATEWAY_LANE_ASSISTANT_CHAT_QUEUE_TIMEOUT_MS",
+            "LLM_GATEWAY_EXTERNAL_CHANNEL_ACTIVE",
+            "LLM_GATEWAY_EXTERNAL_CHANNEL_ACTIVE_CONNECTIONS",
+            "LLM_GATEWAY_EXTERNAL_CHANNEL_ACTIVE_TENANTS",
+            "LLM_GATEWAY_EXTERNAL_CHANNEL_ACTIVE_PLATFORMS",
+            "LLM_GATEWAY_PROFILE_POOL_PRIMARY_PROFILE_ID",
+            "LLM_GATEWAY_PROFILE_POOL_PRIMARY_PROVIDER_ID",
+            "LLM_GATEWAY_PROFILE_POOL_PRIMARY_MODEL_ID",
+            "LLM_GATEWAY_PROFILE_POOL_PRIMARY_PRIORITY",
+            "LLM_GATEWAY_PROFILE_POOL_PRIMARY_BASE_URL",
+            "LLM_GATEWAY_PROFILE_POOL_PRIMARY_API_PATH",
+            "LLM_GATEWAY_PROFILE_POOL_PRIMARY_WIRE_API",
+            "LLM_GATEWAY_PROFILE_POOL_PRIMARY_AUTH_ENV_KEY",
+            "LLM_GATEWAY_PROFILE_POOL_PRIMARY_CAPABILITIES",
+            "LLM_GATEWAY_PROFILE_POOL_PRIMARY_TIMEOUT_MS",
+            "LLM_GATEWAY_PROFILE_POOL_PRIMARY_RATE_LIMIT_RPM",
+            "LLM_GATEWAY_PROFILE_POOL_PRIMARY_RATE_LIMIT_TPM",
+            "LLM_GATEWAY_PROFILE_POOL_PRIMARY_RATE_LIMIT_CONCURRENCY",
+            "LLM_GATEWAY_PROFILE_POOL_PRIMARY_RUNTIME_OUTPUT_TEXT",
+            "LLM_GATEWAY_PROFILE_POOL_PRIMARY_RUNTIME_REQUEST_ID",
+            "LLM_GATEWAY_PROFILE_POOL_PRIMARY_RUNTIME_FINISH_REASON",
+            "LLM_GATEWAY_PROFILE_POOL_PRIMARY_RUNTIME_LATENCY_MS",
+            "LLM_GATEWAY_PROFILE_POOL_SECONDARY_PROFILE_ID",
+            "LLM_GATEWAY_PROFILE_POOL_SECONDARY_PROVIDER_ID",
+            "LLM_GATEWAY_PROFILE_POOL_SECONDARY_MODEL_ID",
+            "LLM_GATEWAY_PROFILE_POOL_SECONDARY_PRIORITY",
+            "LLM_GATEWAY_PROFILE_POOL_SECONDARY_BASE_URL",
+            "LLM_GATEWAY_PROFILE_POOL_SECONDARY_API_PATH",
+            "LLM_GATEWAY_PROFILE_POOL_SECONDARY_WIRE_API",
+            "LLM_GATEWAY_PROFILE_POOL_SECONDARY_AUTH_ENV_KEY",
+            "LLM_GATEWAY_PROFILE_POOL_SECONDARY_CAPABILITIES",
+            "LLM_GATEWAY_PROFILE_POOL_SECONDARY_TIMEOUT_MS",
+            "LLM_GATEWAY_PROFILE_POOL_SECONDARY_RATE_LIMIT_RPM",
+            "LLM_GATEWAY_PROFILE_POOL_SECONDARY_RATE_LIMIT_TPM",
+            "LLM_GATEWAY_PROFILE_POOL_SECONDARY_RATE_LIMIT_CONCURRENCY",
+            "LLM_GATEWAY_PROFILE_POOL_SECONDARY_RUNTIME_OUTPUT_TEXT",
+            "LLM_GATEWAY_PROFILE_POOL_SECONDARY_RUNTIME_REQUEST_ID",
+            "LLM_GATEWAY_PROFILE_POOL_SECONDARY_RUNTIME_FINISH_REASON",
+            "LLM_GATEWAY_PROFILE_POOL_SECONDARY_RUNTIME_LATENCY_MS",
             "ASSISTANT_RUN_REACT_ENABLED",
             "ASSISTANT_RUN_REACT_MAX_STEPS",
             "OPENCLAW_EXTENSION_ENABLED",

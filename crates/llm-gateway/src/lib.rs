@@ -1302,6 +1302,52 @@ pub fn build_provider_from_env(
     }
 }
 
+pub fn build_provider_from_profile_env(
+    env_prefix: &str,
+    profile: &ModelProviderProfile,
+    prompt_registry: InMemoryPromptRegistry,
+) -> Result<Arc<dyn LlmProvider>> {
+    if profile.provider_id == "placeholder" {
+        return build_provider_from_env(
+            env_prefix,
+            "placeholder",
+            profile.provider_id.clone(),
+            prompt_registry,
+        );
+    }
+
+    if let Some(api_base_url) = profile.base_url.as_ref() {
+        let api_path = profile
+            .api_path
+            .clone()
+            .unwrap_or_else(|| "/v1/chat/completions".to_string());
+        let api_key = profile
+            .auth_env_key_name
+            .as_deref()
+            .and_then(|key| std::env::var(key).ok())
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+        let provider = OpenAiCompatibleLlmProvider::new(
+            profile.provider_id.clone(),
+            OpenAiCompatibleLlmProviderConfig {
+                api_base_url: api_base_url.clone(),
+                api_path,
+                api_key,
+                timeout_ms: profile.timeout_ms,
+            },
+        )?
+        .with_prompt_registry(prompt_registry);
+        return Ok(Arc::new(provider));
+    }
+
+    build_provider_from_env(
+        env_prefix,
+        "provider",
+        profile.provider_id.clone(),
+        prompt_registry,
+    )
+}
+
 fn openai_compatible_runtime_config_from_env(
     env_prefix: &str,
     runtime_provider: &str,
@@ -2849,6 +2895,50 @@ mod tests {
         assert!(!serialized.contains("sk-base-secret"));
         assert!(!serialized.contains("127.0.0.1:8999"));
         assert!(!serialized.contains("api_key"));
+    }
+
+    #[test]
+    fn model_provider_profile_env_builder_uses_profile_specific_scripted_output() {
+        let _guard = model_route_env_lock()
+            .lock()
+            .expect("model profile env lock");
+        clear_model_profile_env("LLM_GATEWAY_PROFILE_SCRIPTED_PRIMARY");
+        clear_runtime_env("LLM_GATEWAY_PROFILE_SCRIPTED_PRIMARY");
+        std::env::set_var(
+            "LLM_GATEWAY_PROFILE_SCRIPTED_PRIMARY_PROVIDER_ID",
+            "scripted",
+        );
+        std::env::set_var(
+            "LLM_GATEWAY_PROFILE_SCRIPTED_PRIMARY_MODEL_ID",
+            "scripted-primary-v1",
+        );
+        std::env::set_var(
+            "LLM_GATEWAY_PROFILE_SCRIPTED_PRIMARY_RUNTIME_OUTPUT_TEXT",
+            "profile scripted answer",
+        );
+
+        let profile = ModelProviderProfile::from_env("LLM_GATEWAY_PROFILE_SCRIPTED_PRIMARY")
+            .expect("profile should parse");
+        let provider = build_provider_from_profile_env(
+            "LLM_GATEWAY_PROFILE_SCRIPTED_PRIMARY",
+            &profile,
+            bootstrap_default_prompt_registry(),
+        )
+        .expect("provider should build from profile env");
+        let response = provider
+            .complete(&LlmRequest {
+                model: profile.model_id.clone(),
+                lane: Some(MODEL_LANE_ASSISTANT_CHAT.to_string()),
+                system_prompt_key: None,
+                input: "hello".to_string(),
+            })
+            .expect("scripted provider should answer");
+
+        clear_model_profile_env("LLM_GATEWAY_PROFILE_SCRIPTED_PRIMARY");
+        clear_runtime_env("LLM_GATEWAY_PROFILE_SCRIPTED_PRIMARY");
+        assert_eq!(response.output_text, "profile scripted answer");
+        assert_eq!(response.runtime.provider, "scripted");
+        assert_eq!(response.runtime.model, "scripted-primary-v1");
     }
 
     #[test]
