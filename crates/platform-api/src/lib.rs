@@ -19,7 +19,8 @@ use axum::{
 };
 use chrono::{DateTime, Datelike, Duration, SecondsFormat, Utc};
 use contracts::{
-    AdvanceWorkflowExecutionResponse, ApiErrorResponse, AppendAssistantRunEventRequest,
+    AdvanceWorkflowExecutionResponse, AggregateDatabaseSourceRequest,
+    AggregateDatabaseSourceResponse, ApiErrorResponse, AppendAssistantRunEventRequest,
     AppendAssistantRunEventResponse, AppendChatSessionTurnRequest, AppendChatSessionTurnResponse,
     AppendStaticPageDraftOperationsRequest, AppendStaticPageDraftOperationsResponse,
     ApplyDatabaseSourceProfileRequest, ApplyDatabaseSourceProfileResponse,
@@ -97,8 +98,9 @@ use event_bus::{
     workflow_execution_transition_subject, workflow_task_enqueued_subject, EventBus, EventEnvelope,
 };
 use external_source_connectors::{
-    inspect_mysql_schema, preview_mysql_table, profile_mysql_database, test_mysql_connection,
-    DatabaseSemanticProfile, DatabaseSourceError, MySqlSourceConfig,
+    aggregate_mysql_table, inspect_mysql_schema, preview_mysql_table, profile_mysql_database,
+    test_mysql_connection, DatabaseSemanticProfile, DatabaseSourceError, MySqlAggregateRequest,
+    MySqlSourceConfig,
 };
 use futures_util::{stream, Stream, StreamExt};
 use hmac::{Hmac, Mac};
@@ -1319,6 +1321,10 @@ pub fn router(
         .route(
             "/v1/external/sources/{source_id}/database/apply-profile",
             axum::routing::post(apply_database_source_profile),
+        )
+        .route(
+            "/v1/external/sources/{source_id}/database/aggregate",
+            axum::routing::post(aggregate_database_source),
         )
         .route("/v1/model-gateway/presets", get(list_model_gateway_presets))
         .route("/v1/model-gateway/status", get(get_model_gateway_status))
@@ -11476,6 +11482,35 @@ async fn apply_database_source_profile(
         database_source,
         profile: serde_json::to_value(profile).unwrap_or_else(|_| json!({})),
         updated_at,
+    }))
+}
+
+async fn aggregate_database_source(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(source_id): Path<String>,
+    Json(request): Json<AggregateDatabaseSourceRequest>,
+) -> std::result::Result<Json<AggregateDatabaseSourceResponse>, ApiError> {
+    ensure_main_system_external_source_access(&state, &headers, &source_id).await?;
+    validate_required("table", &request.table)?;
+    let source = load_enabled_database_source_connection(&state, &source_id).await?;
+    let config = mysql_source_config_for_request(&source, &request.database_source)?;
+    let aggregate_request = MySqlAggregateRequest {
+        table: request.table,
+        dimensions: request.dimensions,
+        metric: request.metric,
+        aggregation: request.aggregation,
+        limit: request.limit,
+    };
+    let result = aggregate_mysql_table(&config, &aggregate_request)
+        .await
+        .map_err(database_source_error_to_api)?;
+    Ok(Json(AggregateDatabaseSourceResponse {
+        source_id: source.source_id,
+        connector_kind: source.connector_kind,
+        redacted_summary: serde_json::to_value(config.redacted_summary())
+            .unwrap_or_else(|_| json!({})),
+        result: serde_json::to_value(result).unwrap_or_else(|_| json!({})),
     }))
 }
 

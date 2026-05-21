@@ -154,6 +154,31 @@ pub struct TablePreview {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MySqlAggregateRequest {
+    pub table: String,
+    #[serde(default)]
+    pub dimensions: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metric: Option<String>,
+    #[serde(default = "default_aggregate")]
+    pub aggregation: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DatabaseAggregateResult {
+    pub table: String,
+    pub dimensions: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metric: Option<String>,
+    pub aggregation: String,
+    pub row_limit: u32,
+    pub columns: Vec<String>,
+    pub rows: Vec<Value>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DatabaseSemanticProfile {
     pub kind: String,
     pub database: String,
@@ -435,6 +460,20 @@ pub async fn preview_mysql_table(
             Err(sqlx_error(error))
         }
     }
+}
+
+pub async fn aggregate_mysql_table(
+    config: &MySqlSourceConfig,
+    request: &MySqlAggregateRequest,
+) -> Result<DatabaseAggregateResult, DatabaseSourceError> {
+    config.validate()?;
+    let plan = build_mysql_aggregate_query(config, request)?;
+    let pool = connect_mysql_pool(config).await?;
+    let rows = sqlx::query(&plan.sql)
+        .fetch_all(&pool)
+        .await
+        .map_err(sqlx_error)?;
+    build_aggregate_result(plan, rows)
 }
 
 pub async fn fetch_mysql_documents(
@@ -1045,6 +1084,36 @@ fn build_table_preview(
     })
 }
 
+fn build_aggregate_result(
+    plan: MySqlAggregateQuery,
+    rows: Vec<sqlx::mysql::MySqlRow>,
+) -> Result<DatabaseAggregateResult, DatabaseSourceError> {
+    let mut result_rows = Vec::with_capacity(rows.len());
+    for row in rows {
+        let mut object = Map::new();
+        for column in &plan.columns {
+            let value = row
+                .try_get::<Option<String>, _>(column.as_str())
+                .map_err(sqlx_error)?;
+            object.insert(
+                column.clone(),
+                value.map(Value::String).unwrap_or(Value::Null),
+            );
+        }
+        result_rows.push(Value::Object(object));
+    }
+
+    Ok(DatabaseAggregateResult {
+        table: plan.table,
+        dimensions: plan.dimensions,
+        metric: plan.metric,
+        aggregation: plan.aggregation,
+        row_limit: plan.row_limit,
+        columns: plan.columns,
+        rows: result_rows,
+    })
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MySqlTablePreviewQuery {
     pub table: String,
@@ -1056,6 +1125,17 @@ pub struct MySqlTablePreviewQuery {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MySqlDocumentFetchQuery {
     pub table: String,
+    pub row_limit: u32,
+    pub columns: Vec<String>,
+    pub sql: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MySqlAggregateQuery {
+    pub table: String,
+    pub dimensions: Vec<String>,
+    pub metric: Option<String>,
+    pub aggregation: String,
     pub row_limit: u32,
     pub columns: Vec<String>,
     pub sql: String,
@@ -1098,6 +1178,102 @@ pub fn build_mysql_table_preview_query(
     );
     Ok(MySqlTablePreviewQuery {
         table: table.to_string(),
+        row_limit,
+        columns,
+        sql,
+    })
+}
+
+pub fn build_mysql_aggregate_query(
+    config: &MySqlSourceConfig,
+    request: &MySqlAggregateRequest,
+) -> Result<MySqlAggregateQuery, DatabaseSourceError> {
+    config.validate()?;
+    validate_identifier("table", &request.table)?;
+    let mapping = config
+        .tables
+        .iter()
+        .find(|mapping| mapping.table == request.table)
+        .ok_or_else(|| DatabaseSourceError::InvalidField {
+            field: "table",
+            reason: "table is not in the configured allowlist".to_string(),
+        })?;
+    let allowed_columns = preview_columns(mapping);
+    let dimensions = normalize_identifier_list(request.dimensions.clone());
+    if dimensions.len() > 3 {
+        return Err(DatabaseSourceError::InvalidField {
+            field: "dimensions",
+            reason: "at most 3 dimensions are supported".to_string(),
+        });
+    }
+    for dimension in &dimensions {
+        validate_allowed_query_column("dimensions", dimension, &allowed_columns)?;
+    }
+
+    let aggregation = normalize_aggregate(&request.aggregation)?;
+    let metric = request
+        .metric
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    if aggregation != "count" && metric.is_none() {
+        return Err(DatabaseSourceError::InvalidField {
+            field: "metric",
+            reason: "metric is required for sum, avg, min, and max".to_string(),
+        });
+    }
+    if let Some(metric) = metric.as_deref() {
+        validate_allowed_query_column("metric", metric, &allowed_columns)?;
+    }
+
+    let mut projections = Vec::new();
+    let mut columns = Vec::new();
+    for dimension in &dimensions {
+        let quoted = quote_mysql_identifier(dimension)?;
+        projections.push(format!("cast({quoted} as char) as {quoted}"));
+        columns.push(dimension.clone());
+    }
+    projections.push(format!(
+        "{} as `value`",
+        aggregate_expression(&aggregation, metric.as_deref())?
+    ));
+    columns.push("value".to_string());
+
+    let group_by = if dimensions.is_empty() {
+        String::new()
+    } else {
+        format!(
+            " group by {}",
+            dimensions
+                .iter()
+                .map(|dimension| quote_mysql_identifier(dimension))
+                .collect::<Result<Vec<_>, _>>()?
+                .join(", ")
+        )
+    };
+    let order_by = if dimensions.is_empty() {
+        String::new()
+    } else {
+        " order by `value` desc".to_string()
+    };
+    let row_limit = request
+        .limit
+        .unwrap_or(50)
+        .clamp(1, config.row_limit.min(MAX_ROW_LIMIT));
+    let sql = format!(
+        "select {} from {}{}{} limit {row_limit}",
+        projections.join(", "),
+        quote_mysql_identifier(&mapping.table)?,
+        group_by,
+        order_by
+    );
+
+    Ok(MySqlAggregateQuery {
+        table: mapping.table.clone(),
+        dimensions,
+        metric,
+        aggregation,
         row_limit,
         columns,
         sql,
@@ -1337,6 +1513,62 @@ fn normalize_identifier_list(values: Vec<String>) -> Vec<String> {
         .collect()
 }
 
+fn validate_allowed_query_column(
+    field: &'static str,
+    column: &str,
+    allowed_columns: &[String],
+) -> Result<(), DatabaseSourceError> {
+    validate_identifier(field, column)?;
+    if allowed_columns.iter().any(|allowed| allowed == column) {
+        Ok(())
+    } else {
+        Err(DatabaseSourceError::InvalidField {
+            field,
+            reason: format!("column `{column}` is not in the configured table mapping"),
+        })
+    }
+}
+
+fn normalize_aggregate(value: &str) -> Result<String, DatabaseSourceError> {
+    let normalized = value.trim().to_ascii_lowercase();
+    if matches!(normalized.as_str(), "count" | "sum" | "avg" | "min" | "max") {
+        Ok(normalized)
+    } else {
+        Err(DatabaseSourceError::InvalidField {
+            field: "aggregation",
+            reason: "must be one of count, sum, avg, min, or max".to_string(),
+        })
+    }
+}
+
+fn aggregate_expression(
+    aggregation: &str,
+    metric: Option<&str>,
+) -> Result<String, DatabaseSourceError> {
+    if aggregation == "count" {
+        return Ok("cast(count(*) as char)".to_string());
+    }
+    let metric = metric.ok_or_else(|| DatabaseSourceError::InvalidField {
+        field: "metric",
+        reason: "metric is required for numeric aggregation".to_string(),
+    })?;
+    let quoted = quote_mysql_identifier(metric)?;
+    let numeric = format!("cast(nullif({quoted}, '') as decimal(30,6))");
+    let expression = match aggregation {
+        "sum" => format!("cast(coalesce(sum({numeric}), 0) as char)"),
+        "avg" => format!("cast(avg({numeric}) as char)"),
+        "min" => format!("cast(min({numeric}) as char)"),
+        "max" => format!("cast(max({numeric}) as char)"),
+        _ => {
+            return Err(DatabaseSourceError::InvalidField {
+                field: "aggregation",
+                reason: "must be one of count, sum, avg, min, or max".to_string(),
+            })
+        }
+    };
+    Ok(expression)
+}
+
 async fn connect_mysql_pool(config: &MySqlSourceConfig) -> Result<MySqlPool, DatabaseSourceError> {
     let url = std::env::var(&config.connection_env).map_err(|_| {
         DatabaseSourceError::MissingConnectionEnv {
@@ -1559,6 +1791,10 @@ fn default_row_limit() -> u32 {
 
 fn default_object_type() -> String {
     DEFAULT_OBJECT_TYPE.to_string()
+}
+
+fn default_aggregate() -> String {
+    "count".to_string()
 }
 
 fn default_content_type() -> String {
@@ -1833,6 +2069,91 @@ mod tests {
         assert!(plan.sql.contains("select cast(`id` as char) as `id`"));
         assert!(plan.sql.contains("from `documents` limit 7"));
         assert!(!plan.sql.contains(';'));
+    }
+
+    #[test]
+    fn aggregate_query_groups_metric_by_dimension() {
+        let raw = json!({
+            "connection_env": "THIRD_PARTY_HY_SQL_DATABASE_URL",
+            "database": "hy_sql",
+            "row_limit": 100,
+            "tables": [{
+                "table": "bi_traffic_area",
+                "id_column": "id",
+                "title_column": "area_name",
+                "content_columns": ["area_name", "traffic_count", "stat_date"],
+                "metadata_columns": ["traffic_count", "stat_date"]
+            }]
+        });
+        let config = MySqlSourceConfig::from_value(&raw).expect("config parses");
+        let request = MySqlAggregateRequest {
+            table: "bi_traffic_area".to_string(),
+            dimensions: vec!["area_name".to_string()],
+            metric: Some("traffic_count".to_string()),
+            aggregation: "sum".to_string(),
+            limit: Some(10),
+        };
+
+        let plan = build_mysql_aggregate_query(&config, &request).expect("aggregate query builds");
+
+        assert_eq!(plan.table, "bi_traffic_area");
+        assert_eq!(plan.dimensions, vec!["area_name".to_string()]);
+        assert_eq!(plan.metric.as_deref(), Some("traffic_count"));
+        assert_eq!(plan.aggregation, "sum");
+        assert_eq!(
+            plan.columns,
+            vec!["area_name".to_string(), "value".to_string()]
+        );
+        assert!(plan
+            .sql
+            .contains("select cast(`area_name` as char) as `area_name`"));
+        assert!(plan
+            .sql
+            .contains("sum(cast(nullif(`traffic_count`, '') as decimal(30,6)))"));
+        assert!(plan.sql.contains(
+            "from `bi_traffic_area` group by `area_name` order by `value` desc limit 10"
+        ));
+        assert!(!plan.sql.contains(';'));
+    }
+
+    #[test]
+    fn aggregate_query_supports_count_without_metric() {
+        let config = MySqlSourceConfig::from_value(&valid_config()).expect("config parses");
+        let request = MySqlAggregateRequest {
+            table: "documents".to_string(),
+            dimensions: vec!["category".to_string()],
+            metric: None,
+            aggregation: "count".to_string(),
+            limit: Some(5),
+        };
+
+        let plan = build_mysql_aggregate_query(&config, &request).expect("count query builds");
+
+        assert_eq!(
+            plan.columns,
+            vec!["category".to_string(), "value".to_string()]
+        );
+        assert!(plan.sql.contains("cast(count(*) as char) as `value`"));
+        assert!(plan.sql.ends_with("limit 5"));
+    }
+
+    #[test]
+    fn aggregate_query_rejects_unmapped_columns() {
+        let config = MySqlSourceConfig::from_value(&valid_config()).expect("config parses");
+        let request = MySqlAggregateRequest {
+            table: "documents".to_string(),
+            dimensions: vec!["not_mapped".to_string()],
+            metric: None,
+            aggregation: "count".to_string(),
+            limit: Some(5),
+        };
+
+        let error = build_mysql_aggregate_query(&config, &request)
+            .expect_err("unmapped dimension should be rejected");
+
+        assert!(error
+            .to_string()
+            .contains("not in the configured table mapping"));
     }
 
     #[test]

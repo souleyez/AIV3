@@ -886,6 +886,33 @@ pub struct ApplyDatabaseSourceProfileResponse {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AggregateDatabaseSourceRequest {
+    pub table: String,
+    #[serde(default)]
+    pub dimensions: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metric: Option<String>,
+    #[serde(default = "default_database_aggregation")]
+    pub aggregation: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+    #[serde(default)]
+    pub database_source: Value,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AggregateDatabaseSourceResponse {
+    pub source_id: String,
+    pub connector_kind: String,
+    pub redacted_summary: Value,
+    pub result: Value,
+}
+
+fn default_database_aggregation() -> String {
+    "count".to_string()
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CreateExternalDocumentParseRequest {
     #[serde(default, alias = "sourceId")]
     pub source_id: String,
@@ -4786,6 +4813,32 @@ mod tests {
         assert_eq!(encoded["dry_run"], json!(true));
         assert!(encoded.get("updated_at").is_none());
         assert_eq!(encoded["database_source"]["database"], json!("hy_sql"));
+    }
+
+    #[test]
+    fn aggregate_database_source_contract_defaults_to_count() {
+        let request: AggregateDatabaseSourceRequest = serde_json::from_value(json!({
+            "table": "bi_traffic_area",
+            "dimensions": ["area_name"]
+        }))
+        .expect("aggregate database source request should deserialize");
+
+        assert_eq!(request.table, "bi_traffic_area");
+        assert_eq!(request.dimensions, vec!["area_name".to_string()]);
+        assert_eq!(request.metric, None);
+        assert_eq!(request.aggregation, "count");
+        assert_eq!(request.database_source, Value::Null);
+
+        let response = AggregateDatabaseSourceResponse {
+            source_id: "src-mysql".to_string(),
+            connector_kind: "mysql".to_string(),
+            redacted_summary: json!({"database": "hy_sql"}),
+            result: json!({"rows": []}),
+        };
+        let encoded = serde_json::to_value(response).expect("response should serialize");
+
+        assert_eq!(encoded["source_id"], json!("src-mysql"));
+        assert_eq!(encoded["result"]["rows"], json!([]));
     }
 
     #[test]
