@@ -1314,7 +1314,7 @@ select
   cast(table_name as char) as table_name,
   cast(table_type as char) as table_type,
   cast(table_comment as char) as table_comment,
-  table_rows as table_rows,
+  cast(table_rows as signed) as table_rows,
   date_format(update_time, '%Y-%m-%dT%H:%i:%s') as update_time
 from information_schema.tables
 where table_schema = ?
