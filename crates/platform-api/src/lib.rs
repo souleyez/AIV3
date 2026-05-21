@@ -1,3 +1,5 @@
+#![cfg_attr(test, recursion_limit = "256")]
+
 use assistant_runtime::{
     candidates_to_values, execute_codex_conversation_plan, plan_scope,
     CodexConversationExecutorOutput, ScopePlannerInput,
@@ -20001,6 +20003,9 @@ fn assistant_run_model_dataset_entity_scan_item(item: &Value) -> Value {
         "position_rows": item.get("position_rows").cloned().unwrap_or(Value::Null),
         "location_rows": item.get("location_rows").cloned().unwrap_or(Value::Null),
         "person_rows": item.get("person_rows").cloned().unwrap_or(Value::Null),
+        "school_rows": item.get("school_rows").cloned().unwrap_or(Value::Null),
+        "degree_rows": item.get("degree_rows").cloned().unwrap_or(Value::Null),
+        "certificate_rows": item.get("certificate_rows").cloned().unwrap_or(Value::Null),
         "keyword_rows": item.get("keyword_rows").cloned().unwrap_or(Value::Null),
         "year_rows": item.get("year_rows").cloned().unwrap_or(Value::Null),
         "section_rows": item.get("section_rows").cloned().unwrap_or(Value::Null),
@@ -20106,6 +20111,9 @@ fn assistant_run_compact_dataset_entity_scan_payload(item: &Value) -> Option<Val
     let position_rows = assistant_run_compact_entity_scan_rows(item, "position_rows");
     let location_rows = assistant_run_compact_entity_scan_rows(item, "location_rows");
     let person_rows = assistant_run_compact_entity_scan_rows(item, "person_rows");
+    let school_rows = assistant_run_compact_entity_scan_rows(item, "school_rows");
+    let degree_rows = assistant_run_compact_entity_scan_rows(item, "degree_rows");
+    let certificate_rows = assistant_run_compact_entity_scan_rows(item, "certificate_rows");
     let keyword_rows = assistant_run_compact_entity_scan_rows(item, "keyword_rows");
     let year_rows = assistant_run_compact_entity_scan_rows(item, "year_rows");
     let section_rows = assistant_run_compact_entity_scan_rows(item, "section_rows");
@@ -20127,6 +20135,9 @@ fn assistant_run_compact_dataset_entity_scan_payload(item: &Value) -> Option<Val
         && position_rows.is_empty()
         && location_rows.is_empty()
         && person_rows.is_empty()
+        && school_rows.is_empty()
+        && degree_rows.is_empty()
+        && certificate_rows.is_empty()
         && keyword_rows.is_empty()
         && year_rows.is_empty()
         && section_rows.is_empty()
@@ -20143,6 +20154,9 @@ fn assistant_run_compact_dataset_entity_scan_payload(item: &Value) -> Option<Val
         "position": position_rows.clone(),
         "location": location_rows.clone(),
         "person": person_rows.clone(),
+        "school": school_rows.clone(),
+        "degree": degree_rows.clone(),
+        "certificate": certificate_rows.clone(),
         "keyword": keyword_rows.clone(),
         "year": year_rows.clone(),
         "section": section_rows.clone(),
@@ -20163,6 +20177,9 @@ fn assistant_run_compact_dataset_entity_scan_payload(item: &Value) -> Option<Val
         "position_rows": position_rows,
         "location_rows": location_rows,
         "person_rows": person_rows,
+        "school_rows": school_rows,
+        "degree_rows": degree_rows,
+        "certificate_rows": certificate_rows,
         "keyword_rows": keyword_rows,
         "year_rows": year_rows,
         "section_rows": section_rows,
@@ -20214,6 +20231,9 @@ fn assistant_run_dataset_entity_scan_direct_answer_for_dimension(
             | AssistantRunEntityScanAnswerDimension::Position
             | AssistantRunEntityScanAnswerDimension::Person
             | AssistantRunEntityScanAnswerDimension::Location
+            | AssistantRunEntityScanAnswerDimension::School
+            | AssistantRunEntityScanAnswerDimension::Degree
+            | AssistantRunEntityScanAnswerDimension::Certificate
             | AssistantRunEntityScanAnswerDimension::Keyword
             | AssistantRunEntityScanAnswerDimension::Year
             | AssistantRunEntityScanAnswerDimension::Section
@@ -20231,6 +20251,8 @@ fn assistant_run_dataset_entity_scan_direct_answer_for_dimension(
             | AssistantRunEntityScanAnswerDimension::ResumeSkill
             | AssistantRunEntityScanAnswerDimension::ResumeProject
             | AssistantRunEntityScanAnswerDimension::ResumeCompany
+            | AssistantRunEntityScanAnswerDimension::ResumeEducation
+            | AssistantRunEntityScanAnswerDimension::ResumeCertificate
             | AssistantRunEntityScanAnswerDimension::ResumeExperience
             | AssistantRunEntityScanAnswerDimension::ResumeProfileMatch
     ) {
@@ -20307,6 +20329,9 @@ enum AssistantRunEntityScanAnswerDimension {
     Position,
     Person,
     Location,
+    School,
+    Degree,
+    Certificate,
     Keyword,
     Year,
     Section,
@@ -20318,6 +20343,8 @@ enum AssistantRunEntityScanAnswerDimension {
     ResumeSkill,
     ResumeProject,
     ResumeCompany,
+    ResumeEducation,
+    ResumeCertificate,
     ResumeExperience,
     ResumeProfileMatch,
 }
@@ -20346,6 +20373,12 @@ fn assistant_run_entity_scan_answer_dimension(
     if prompt_requests_resume_company_ranking(prompt) {
         return Some(AssistantRunEntityScanAnswerDimension::ResumeCompany);
     }
+    if prompt_requests_resume_education_ranking(prompt) {
+        return Some(AssistantRunEntityScanAnswerDimension::ResumeEducation);
+    }
+    if prompt_requests_resume_certificate_ranking(prompt) {
+        return Some(AssistantRunEntityScanAnswerDimension::ResumeCertificate);
+    }
     if prompt_requests_resume_profile_match(prompt) {
         return Some(AssistantRunEntityScanAnswerDimension::ResumeProfileMatch);
     }
@@ -20363,6 +20396,15 @@ fn assistant_run_entity_scan_answer_dimension(
     }
     if prompt_requests_location_statistics(prompt) {
         return Some(AssistantRunEntityScanAnswerDimension::Location);
+    }
+    if prompt_requests_school_statistics(prompt) {
+        return Some(AssistantRunEntityScanAnswerDimension::School);
+    }
+    if prompt_requests_degree_statistics(prompt) {
+        return Some(AssistantRunEntityScanAnswerDimension::Degree);
+    }
+    if prompt_requests_certificate_statistics(prompt) {
+        return Some(AssistantRunEntityScanAnswerDimension::Certificate);
     }
     if prompt_requests_keyword_statistics(prompt) {
         return Some(AssistantRunEntityScanAnswerDimension::Keyword);
@@ -20395,6 +20437,9 @@ fn assistant_run_entity_rows_direct_answer(
         AssistantRunEntityScanAnswerDimension::Position => ("岗位/职位", "position_rows"),
         AssistantRunEntityScanAnswerDimension::Person => ("人员/候选人", "person_rows"),
         AssistantRunEntityScanAnswerDimension::Location => ("地点/城市", "location_rows"),
+        AssistantRunEntityScanAnswerDimension::School => ("学校/院校", "school_rows"),
+        AssistantRunEntityScanAnswerDimension::Degree => ("学历/学位", "degree_rows"),
+        AssistantRunEntityScanAnswerDimension::Certificate => ("证书/认证", "certificate_rows"),
         AssistantRunEntityScanAnswerDimension::Keyword => ("关键词/名词", "keyword_rows"),
         AssistantRunEntityScanAnswerDimension::Year => ("年份", "year_rows"),
         AssistantRunEntityScanAnswerDimension::Section => ("标题/章节", "section_rows"),
@@ -20661,6 +20706,72 @@ fn assistant_run_resume_profile_direct_answer(
                 },
             ))
         }
+        AssistantRunEntityScanAnswerDimension::ResumeEducation => {
+            let ascending = prompt_requests_ascending_sort(prompt);
+            rows.sort_by(|left, right| {
+                compare_resume_profile_i64_options(
+                    resume_profile_degree_rank(left),
+                    resume_profile_degree_rank(right),
+                    ascending,
+                )
+                .then_with(|| {
+                    resume_profile_array_string(left, "degree_names", 1)
+                        .cmp(&resume_profile_array_string(right, "degree_names", 1))
+                })
+                .then_with(|| {
+                    resume_profile_candidate_name(left).cmp(&resume_profile_candidate_name(right))
+                })
+            });
+            Some(assistant_run_resume_profile_table(
+                &rows,
+                "按学历排序的候选人简历表",
+                &[
+                    "候选人",
+                    "学历/学位",
+                    "学校/院校",
+                    "证书",
+                    "技能数",
+                    "项目数",
+                    "文档",
+                ],
+                |row| {
+                    vec![
+                        resume_profile_candidate_name(row),
+                        resume_profile_array_string(row, "degree_names", 2),
+                        resume_profile_array_string(row, "school_names", 2),
+                        resume_profile_array_string(row, "certificate_names", 2),
+                        value_u64_string(row, "skill_count"),
+                        value_u64_string(row, "project_count"),
+                        value_string(row, "document_title"),
+                    ]
+                },
+            ))
+        }
+        AssistantRunEntityScanAnswerDimension::ResumeCertificate => {
+            let ascending = prompt_requests_ascending_sort(prompt);
+            rows.sort_by(|left, right| {
+                compare_resume_profile_u64_field(left, right, "certificate_count", ascending)
+                    .then_with(|| {
+                        resume_profile_candidate_name(left)
+                            .cmp(&resume_profile_candidate_name(right))
+                    })
+            });
+            Some(assistant_run_resume_profile_table(
+                &rows,
+                "按证书数排序的候选人简历表",
+                &["候选人", "证书数", "证书", "学历/学位", "学校/院校", "文档"],
+                |row| {
+                    vec![
+                        resume_profile_candidate_name(row),
+                        value_u64_string(row, "certificate_count"),
+                        resume_profile_array_string(row, "certificate_names", 3),
+                        resume_profile_array_string(row, "degree_names", 2),
+                        resume_profile_array_string(row, "school_names", 2),
+                        value_string(row, "document_title"),
+                    ]
+                },
+            ))
+        }
         AssistantRunEntityScanAnswerDimension::ResumeExperience => {
             let ascending = prompt_requests_ascending_sort(prompt);
             rows.sort_by(|left, right| {
@@ -20767,6 +20878,8 @@ fn assistant_run_resume_profile_match_answer(mut rows: Vec<Value>, prompt: &str)
             "技能",
             "项目",
             "公司",
+            "学历",
+            "证书",
             "年龄",
             "最近年份",
             "文档",
@@ -20778,6 +20891,8 @@ fn assistant_run_resume_profile_match_answer(mut rows: Vec<Value>, prompt: &str)
                 resume_profile_array_string(row, "skill_names", 4),
                 resume_profile_array_string(row, "project_names", 3),
                 resume_profile_array_string(row, "company_names", 3),
+                resume_profile_array_string(row, "degree_names", 2),
+                resume_profile_array_string(row, "certificate_names", 2),
                 value_u64_string(row, "age"),
                 value_i64_string(row, "latest_year"),
                 value_string(row, "document_title"),
@@ -20831,6 +20946,21 @@ fn resume_profile_preferred_match_fields(prompt: &str) -> Vec<(&'static str, &'s
     {
         fields.push(("location_names", "地点"));
     }
+    if prompt_requests_school_statistics(prompt)
+        || prompt_contains_any(prompt, &["学校", "院校", "毕业院校", "大学", "学院"])
+    {
+        fields.push(("school_names", "学校"));
+    }
+    if prompt_requests_degree_statistics(prompt)
+        || prompt_contains_any(prompt, &["学历", "学位", "本科", "硕士", "博士", "大专"])
+    {
+        fields.push(("degree_names", "学历"));
+    }
+    if prompt_requests_certificate_statistics(prompt)
+        || prompt_contains_any(prompt, &["证书", "认证", "资质", "资格"])
+    {
+        fields.push(("certificate_names", "证书"));
+    }
     if fields.is_empty() {
         fields.extend([
             ("skill_names", "技能"),
@@ -20838,6 +20968,9 @@ fn resume_profile_preferred_match_fields(prompt: &str) -> Vec<(&'static str, &'s
             ("company_names", "公司"),
             ("position_names", "岗位"),
             ("location_names", "地点"),
+            ("school_names", "学校"),
+            ("degree_names", "学历"),
+            ("certificate_names", "证书"),
         ]);
     }
     dedupe_resume_profile_match_fields(fields)
@@ -21108,6 +21241,13 @@ fn resume_profile_year_span_string(row: &Value) -> String {
         .unwrap_or_else(|| "-".to_string())
 }
 
+fn resume_profile_degree_rank(row: &Value) -> Option<i64> {
+    resume_profile_array_values(row, "degree_names")
+        .into_iter()
+        .filter_map(|degree| degree_rank(&degree))
+        .max()
+}
+
 fn resume_profile_prompt_match_term(prompt: &str, term: &str) -> Option<String> {
     let prompt_text = prompt.to_ascii_lowercase();
     let normalized_term = normalize_document_entity_value(term);
@@ -21303,6 +21443,34 @@ fn prompt_requests_resume_company_ranking(prompt: &str) -> bool {
         || ascii_prompt_contains_any(&lower_prompt, &["company_count", "companies", "employers"])
 }
 
+fn prompt_requests_resume_education_ranking(prompt: &str) -> bool {
+    if !prompt_requests_resume_profile_sort(prompt) {
+        return false;
+    }
+    prompt_requests_school_statistics(prompt)
+        || prompt_requests_degree_statistics(prompt)
+        || prompt_contains_any(
+            prompt,
+            &[
+                "教育经历",
+                "教育背景",
+                "学历",
+                "学位",
+                "学校",
+                "院校",
+                "毕业院校",
+            ],
+        )
+}
+
+fn prompt_requests_resume_certificate_ranking(prompt: &str) -> bool {
+    if !prompt_requests_resume_profile_sort(prompt) {
+        return false;
+    }
+    prompt_requests_certificate_statistics(prompt)
+        || prompt_contains_any(prompt, &["证书数", "证书数量", "资质数量", "认证数量"])
+}
+
 fn prompt_requests_resume_experience_statistics(prompt: &str) -> bool {
     if !prompt_requests_resume_profile_sort(prompt) {
         return false;
@@ -21374,12 +21542,31 @@ fn prompt_requests_resume_profile_match(prompt: &str) -> bool {
             "公司",
             "岗位",
             "职位",
+            "学校",
+            "院校",
+            "学历",
+            "学位",
+            "证书",
+            "认证",
         ],
     ) || ascii_prompt_contains_any(
         &lower_prompt,
         &[
-            "with", "has", "have", "knows", "skill", "skills", "project", "company", "employer",
+            "with",
+            "has",
+            "have",
+            "knows",
+            "skill",
+            "skills",
+            "project",
+            "company",
+            "employer",
             "role",
+            "school",
+            "university",
+            "degree",
+            "certificate",
+            "certification",
         ],
     );
 
@@ -21507,6 +21694,68 @@ fn prompt_requests_location_statistics(prompt: &str) -> bool {
             "cities",
             "region",
             "regions",
+        ],
+    )
+}
+
+fn prompt_requests_school_statistics(prompt: &str) -> bool {
+    prompt_requests_dimension_statistics(
+        prompt,
+        &[
+            "学校",
+            "院校",
+            "毕业院校",
+            "大学",
+            "学院",
+            "教育经历",
+            "教育背景",
+        ],
+        &[
+            "school",
+            "schools",
+            "university",
+            "universities",
+            "college",
+            "colleges",
+        ],
+    )
+}
+
+fn prompt_requests_degree_statistics(prompt: &str) -> bool {
+    prompt_requests_dimension_statistics(
+        prompt,
+        &[
+            "学历",
+            "学位",
+            "本科",
+            "硕士",
+            "博士",
+            "大专",
+            "专科",
+            "研究生",
+        ],
+        &[
+            "degree",
+            "degrees",
+            "education",
+            "bachelor",
+            "master",
+            "phd",
+            "doctorate",
+        ],
+    )
+}
+
+fn prompt_requests_certificate_statistics(prompt: &str) -> bool {
+    prompt_requests_dimension_statistics(
+        prompt,
+        &["证书", "认证", "资质", "资格证", "职业资格"],
+        &[
+            "certificate",
+            "certificates",
+            "certification",
+            "certifications",
+            "credential",
         ],
     )
 }
@@ -26758,6 +27007,9 @@ async fn build_assistant_run_dataset_entity_scan_supply(
     let position_rows = entity_rows_for_type(&entities_by_key, "position");
     let location_rows = entity_rows_for_type(&entities_by_key, "location");
     let person_rows = entity_rows_for_type(&entities_by_key, "person");
+    let school_rows = entity_rows_for_type(&entities_by_key, "school");
+    let degree_rows = entity_rows_for_type(&entities_by_key, "degree");
+    let certificate_rows = entity_rows_for_type(&entities_by_key, "certificate");
     let keyword_rows = candidate_term_rows_for_scan(&candidate_terms_by_name);
     let year_rows = year_rows_for_scan(&years_by_year);
     let section_rows = structure_rows_for_scan(&sections_by_title);
@@ -26770,6 +27022,9 @@ async fn build_assistant_run_dataset_entity_scan_supply(
         "position": position_rows.clone(),
         "location": location_rows.clone(),
         "person": person_rows.clone(),
+        "school": school_rows.clone(),
+        "degree": degree_rows.clone(),
+        "certificate": certificate_rows.clone(),
         "keyword": keyword_rows.clone(),
         "year": year_rows.clone(),
         "section": section_rows.clone(),
@@ -26851,6 +27106,9 @@ async fn build_assistant_run_dataset_entity_scan_supply(
             "skill",
             "location",
             "project",
+            "school",
+            "degree",
+            "certificate",
             "keyword",
             "year",
             "section",
@@ -26875,6 +27133,12 @@ async fn build_assistant_run_dataset_entity_scan_supply(
     item.insert("position_rows".to_string(), Value::Array(position_rows));
     item.insert("location_rows".to_string(), Value::Array(location_rows));
     item.insert("person_rows".to_string(), Value::Array(person_rows));
+    item.insert("school_rows".to_string(), Value::Array(school_rows));
+    item.insert("degree_rows".to_string(), Value::Array(degree_rows));
+    item.insert(
+        "certificate_rows".to_string(),
+        Value::Array(certificate_rows),
+    );
     item.insert("entity_rows_by_type".to_string(), entity_rows_by_type);
     item.insert(
         "resume_profile_rows".to_string(),
@@ -26955,11 +27219,15 @@ struct ResumeDocumentProfile {
     company_count: usize,
     skill_count: usize,
     project_count: usize,
+    certificate_count: usize,
     company_names: Vec<String>,
     skill_names: Vec<String>,
     project_names: Vec<String>,
     position_names: Vec<String>,
     location_names: Vec<String>,
+    school_names: Vec<String>,
+    degree_names: Vec<String>,
+    certificate_names: Vec<String>,
 }
 
 impl ResumeDocumentProfile {
@@ -26973,6 +27241,9 @@ impl ResumeDocumentProfile {
             && self.company_count == 0
             && self.skill_count == 0
             && self.project_count == 0
+            && self.certificate_count == 0
+            && self.school_names.is_empty()
+            && self.degree_names.is_empty()
     }
 
     fn to_value(&self) -> Value {
@@ -26989,11 +27260,15 @@ impl ResumeDocumentProfile {
             "company_count": self.company_count,
             "skill_count": self.skill_count,
             "project_count": self.project_count,
+            "certificate_count": self.certificate_count,
             "company_names": &self.company_names,
             "skill_names": &self.skill_names,
             "project_names": &self.project_names,
             "position_names": &self.position_names,
             "location_names": &self.location_names,
+            "school_names": &self.school_names,
+            "degree_names": &self.degree_names,
+            "certificate_names": &self.certificate_names,
         })
     }
 }
@@ -27382,6 +27657,9 @@ fn extract_resume_document_profile(
     let project_names = resume_profile_entity_names(entity_candidates, "project", 16);
     let position_names = resume_profile_entity_names(entity_candidates, "position", 12);
     let location_names = resume_profile_entity_names(entity_candidates, "location", 12);
+    let school_names = resume_profile_entity_names(entity_candidates, "school", 12);
+    let degree_names = resume_profile_entity_names(entity_candidates, "degree", 8);
+    let certificate_names = resume_profile_entity_names(entity_candidates, "certificate", 12);
     let mut profile = ResumeDocumentProfile {
         document_id: document.id.to_string(),
         document_title: resume_profile_display_title(document),
@@ -27404,11 +27682,15 @@ fn extract_resume_document_profile(
         company_count: company_names.len(),
         skill_count: skill_names.len(),
         project_count: project_names.len(),
+        certificate_count: certificate_names.len(),
         company_names,
         skill_names,
         project_names,
         position_names,
         location_names,
+        school_names,
+        degree_names,
+        certificate_names,
     };
     if profile.age.is_none() {
         if let Some(birth_year) = profile.birth_year {
@@ -27939,6 +28221,50 @@ fn extract_document_entity_candidates_from_text(
     for name in extract_known_location_names(text, limit) {
         push_document_entity_candidate(&mut candidates, &mut seen, "location", name, limit);
     }
+    for name in extract_labeled_entity_values(
+        text,
+        &[
+            "毕业院校",
+            "毕业学校",
+            "就读院校",
+            "学校",
+            "院校",
+            "大学",
+            "学院",
+        ],
+        limit,
+    ) {
+        if looks_like_school_name(&name) {
+            push_document_entity_candidate(&mut candidates, &mut seen, "school", name, limit);
+        }
+    }
+    for name in extract_school_like_terms(text, limit) {
+        push_document_entity_candidate(&mut candidates, &mut seen, "school", name, limit);
+    }
+    for name in extract_labeled_entity_values(
+        text,
+        &["最高学历", "学历", "学位", "教育程度", "教育背景"],
+        limit,
+    ) {
+        if let Some(degree) = normalize_degree_name(&name) {
+            push_document_entity_candidate(&mut candidates, &mut seen, "degree", degree, limit);
+        }
+    }
+    for name in extract_known_degree_names(text, limit) {
+        push_document_entity_candidate(&mut candidates, &mut seen, "degree", name, limit);
+    }
+    for name in extract_labeled_entity_values(
+        text,
+        &["证书", "资格证书", "认证", "资质", "职业资格"],
+        limit,
+    ) {
+        if looks_like_certificate_name(&name) {
+            push_document_entity_candidate(&mut candidates, &mut seen, "certificate", name, limit);
+        }
+    }
+    for name in extract_certificate_like_terms(text, limit) {
+        push_document_entity_candidate(&mut candidates, &mut seen, "certificate", name, limit);
+    }
     for name in
         extract_labeled_entity_values(text, &["项目名称", "项目/产品名称", "产品名称"], limit)
     {
@@ -28102,13 +28428,20 @@ fn push_document_entity_candidate(
     if normalized.is_empty() {
         return;
     }
-    let normalized = if entity_type == "project" {
-        let Some(project_name) = normalize_project_entity_name(&normalized) else {
-            return;
-        };
-        project_name
-    } else {
-        normalized
+    let normalized = match entity_type {
+        "project" => {
+            let Some(project_name) = normalize_project_entity_name(&normalized) else {
+                return;
+            };
+            project_name
+        }
+        "degree" => {
+            let Some(degree_name) = normalize_degree_name(&normalized) else {
+                return;
+            };
+            degree_name
+        }
+        _ => normalized,
     };
     let key = format!("{entity_type}:{normalized}");
     if seen.insert(key) {
@@ -28133,6 +28466,9 @@ fn push_document_metadata_entity_candidate(
         "position" => looks_like_position_name(&normalized),
         "skill" => looks_like_skill_name(&normalized),
         "location" => looks_like_location_name(&normalized),
+        "school" => looks_like_school_name(&normalized),
+        "degree" => normalize_degree_name(&normalized).is_some(),
+        "certificate" => looks_like_certificate_name(&normalized),
         "project" => {
             looks_like_project_name(&normalized)
                 && looks_like_project_heading_candidate(&normalized)
@@ -28175,6 +28511,29 @@ fn document_metadata_entity_type(raw: &str) -> Option<&'static str> {
         || normalized.contains("城市")
     {
         Some("location")
+    } else if lower.contains("school")
+        || lower.contains("university")
+        || lower.contains("college")
+        || normalized.contains("学校")
+        || normalized.contains("院校")
+        || normalized.contains("大学")
+        || normalized.contains("学院")
+    {
+        Some("school")
+    } else if lower.contains("degree")
+        || lower.contains("education")
+        || normalized.contains("学历")
+        || normalized.contains("学位")
+    {
+        Some("degree")
+    } else if lower.contains("certificate")
+        || lower.contains("certification")
+        || lower.contains("credential")
+        || normalized.contains("证书")
+        || normalized.contains("认证")
+        || normalized.contains("资质")
+    {
+        Some("certificate")
     } else if lower.contains("project")
         || lower.contains("product")
         || normalized.contains("项目")
@@ -28214,6 +28573,28 @@ fn document_field_candidate_entity_type(raw_key: &str) -> Option<&'static str> {
         || key.contains("地点")
     {
         Some("location")
+    } else if lower.contains("school")
+        || lower.contains("university")
+        || lower.contains("college")
+        || key.contains("学校")
+        || key.contains("院校")
+        || key.contains("毕业院校")
+    {
+        Some("school")
+    } else if lower.contains("degree")
+        || lower.contains("education")
+        || key.contains("学历")
+        || key.contains("学位")
+    {
+        Some("degree")
+    } else if lower.contains("certificate")
+        || lower.contains("certification")
+        || lower.contains("credential")
+        || key.contains("证书")
+        || key.contains("认证")
+        || key.contains("资质")
+    {
+        Some("certificate")
     } else if lower.contains("project") || key.contains("项目") {
         Some("project")
     } else {
@@ -28511,6 +28892,56 @@ fn looks_like_location_name(value: &str) -> bool {
             || known_location_names().iter().any(|item| value == *item))
 }
 
+fn looks_like_school_name(value: &str) -> bool {
+    let char_count = value.chars().count();
+    if !(2..=40).contains(&char_count)
+        || value.contains('@')
+        || value.chars().all(|ch| ch.is_ascii_digit())
+        || is_document_entity_noise(value)
+    {
+        return false;
+    }
+    let lower = value.to_ascii_lowercase();
+    value.contains("大学")
+        || value.contains("学院")
+        || value.contains("学校")
+        || value.contains("中学")
+        || lower.contains("university")
+        || lower.contains("college")
+        || lower.contains("school")
+}
+
+fn looks_like_certificate_name(value: &str) -> bool {
+    let char_count = value.chars().count();
+    if !(2..=40).contains(&char_count)
+        || value.contains('@')
+        || value.chars().all(|ch| ch.is_ascii_digit())
+        || is_document_entity_noise(value)
+    {
+        return false;
+    }
+    let lower = value.to_ascii_lowercase();
+    value.contains('证')
+        || value.contains("认证")
+        || value.contains("资质")
+        || value.contains("资格")
+        || [
+            "软考",
+            "系统架构设计师",
+            "信息系统项目管理师",
+            "高级项目管理师",
+            "注册会计师",
+            "建造师",
+        ]
+        .iter()
+        .any(|term| value.contains(term))
+        || [
+            "pmp", "cpa", "cfa", "acp", "ocp", "aws", "azure", "cka", "ckad",
+        ]
+        .iter()
+        .any(|term| lower.contains(term))
+}
+
 fn looks_like_project_name(value: &str) -> bool {
     let char_count = value.chars().count();
     char_count >= 3
@@ -28752,6 +29183,179 @@ fn known_location_names() -> &'static [&'static str] {
     ]
 }
 
+fn extract_known_degree_names(text: &str, limit: usize) -> Vec<String> {
+    let mut values = Vec::new();
+    for degree in [
+        "博士研究生",
+        "博士",
+        "硕士研究生",
+        "研究生",
+        "硕士",
+        "本科",
+        "学士",
+        "大专",
+        "专科",
+        "中专",
+        "高中",
+        "MBA",
+        "EMBA",
+        "PhD",
+        "Master",
+        "Bachelor",
+    ] {
+        if text.contains(degree) {
+            if let Some(normalized) = normalize_degree_name(degree) {
+                push_document_candidate_term(&mut values, normalized, limit);
+            }
+        }
+    }
+    values
+}
+
+fn extract_school_like_terms(text: &str, limit: usize) -> Vec<String> {
+    let mut values = Vec::new();
+    for line in text.lines().map(str::trim).filter(|line| !line.is_empty()) {
+        for segment in split_entity_value_list(line) {
+            for suffix in ["职业技术学院", "技术学院", "大学", "学院", "学校", "中学"]
+            {
+                if let Some(name) = extract_suffix_entity_from_segment(&segment, suffix, 40) {
+                    if looks_like_school_name(&name) {
+                        push_document_candidate_term(&mut values, name, limit);
+                    }
+                }
+            }
+            if values.len() >= limit {
+                return values;
+            }
+        }
+    }
+    values
+}
+
+fn extract_certificate_like_terms(text: &str, limit: usize) -> Vec<String> {
+    let mut values = Vec::new();
+    for certificate in [
+        "PMP",
+        "CPA",
+        "CFA",
+        "软考高级",
+        "系统架构设计师",
+        "信息系统项目管理师",
+        "高级项目管理师",
+        "教师资格证",
+        "法律职业资格",
+        "注册会计师",
+        "一级建造师",
+        "二级建造师",
+    ] {
+        if text.contains(certificate) {
+            push_document_candidate_term(&mut values, certificate, limit);
+        }
+    }
+    for line in text.lines().map(str::trim).filter(|line| !line.is_empty()) {
+        if !prompt_contains_any(line, &["证书", "认证", "资质", "资格"]) {
+            continue;
+        }
+        for segment in split_entity_value_list(line) {
+            let candidate = normalize_document_entity_value(
+                segment
+                    .rsplit(|ch: char| matches!(ch, ':' | '：'))
+                    .next()
+                    .unwrap_or(segment.as_str()),
+            );
+            if looks_like_certificate_name(&candidate) {
+                push_document_candidate_term(&mut values, candidate, limit);
+            }
+            if values.len() >= limit {
+                return values;
+            }
+        }
+    }
+    values
+}
+
+fn extract_suffix_entity_from_segment(
+    segment: &str,
+    suffix: &str,
+    max_chars: usize,
+) -> Option<String> {
+    let end = segment.find(suffix)? + suffix.len();
+    let prefix = &segment[..end];
+    let raw = prefix
+        .rsplit(|ch: char| {
+            ch.is_whitespace()
+                || matches!(
+                    ch,
+                    ':' | '：'
+                        | ','
+                        | '，'
+                        | ';'
+                        | '；'
+                        | '|'
+                        | '｜'
+                        | '/'
+                        | '／'
+                        | '('
+                        | '（'
+                        | ')'
+                        | '）'
+                )
+        })
+        .next()
+        .unwrap_or(prefix);
+    let trimmed = raw.trim_start_matches(|ch: char| {
+        ch.is_ascii_digit() || matches!(ch, '-' | '—' | '–' | '.' | '．' | '_' | '年' | '月')
+    });
+    let value = normalize_document_entity_value(trimmed);
+    ((2..=max_chars).contains(&value.chars().count())).then_some(value)
+}
+
+fn normalize_degree_name(value: &str) -> Option<String> {
+    let normalized = normalize_document_entity_value(value);
+    let lower = normalized.to_ascii_lowercase();
+    let degree = if normalized.contains("博士") || lower.contains("phd") || lower.contains("doctor")
+    {
+        "博士"
+    } else if normalized.contains("硕士")
+        || normalized.contains("研究生")
+        || normalized.contains("MBA")
+        || normalized.contains("EMBA")
+        || lower.contains("master")
+    {
+        if normalized.contains("博士") {
+            "博士"
+        } else {
+            "硕士"
+        }
+    } else if normalized.contains("本科")
+        || normalized.contains("学士")
+        || lower.contains("bachelor")
+    {
+        "本科"
+    } else if normalized.contains("大专") || normalized.contains("专科") {
+        "大专"
+    } else if normalized.contains("中专") {
+        "中专"
+    } else if normalized.contains("高中") {
+        "高中"
+    } else {
+        return None;
+    };
+    Some(degree.to_string())
+}
+
+fn degree_rank(value: &str) -> Option<i64> {
+    match normalize_degree_name(value)?.as_str() {
+        "博士" => Some(6),
+        "硕士" => Some(5),
+        "本科" => Some(4),
+        "大专" => Some(3),
+        "中专" => Some(2),
+        "高中" => Some(1),
+        _ => None,
+    }
+}
+
 fn extract_project_like_terms(text: &str, limit: usize) -> Vec<String> {
     let mut values = Vec::new();
     for line in text.lines().map(str::trim).filter(|line| !line.is_empty()) {
@@ -28906,6 +29510,9 @@ fn document_candidate_term_has_signal(value: &str) -> bool {
         && (chunk_like_business_suffix(value)
             || looks_like_position_name(value)
             || looks_like_skill_name(value)
+            || looks_like_school_name(value)
+            || looks_like_certificate_name(value)
+            || normalize_degree_name(value).is_some()
             || looks_like_project_name(value))
 }
 
@@ -28922,6 +29529,15 @@ fn document_candidate_term_score(value: &str) -> usize {
     }
     if looks_like_position_name(value) {
         score += 10;
+    }
+    if looks_like_school_name(value) {
+        score += 10;
+    }
+    if looks_like_certificate_name(value) {
+        score += 10;
+    }
+    if normalize_degree_name(value).is_some() {
+        score += 8;
     }
     score
 }
@@ -28959,6 +29575,12 @@ fn chunk_like_business_suffix(value: &str) -> bool {
         "架构",
         "接口",
         "状态",
+        "学校",
+        "院校",
+        "学历",
+        "学位",
+        "证书",
+        "认证",
     ]
     .iter()
     .any(|suffix| value.ends_with(suffix))
@@ -28977,6 +29599,13 @@ fn is_document_entity_noise(value: &str) -> bool {
             "技能",
             "核心技能",
             "专业技能",
+            "学校",
+            "院校",
+            "学历",
+            "学位",
+            "证书",
+            "认证",
+            "资质",
             "项目",
             "公司",
             "岗位",
@@ -28999,6 +29628,9 @@ fn document_entity_type_label(entity_type: &str) -> &'static str {
         "skill" => "技能",
         "location" => "地点",
         "project" => "项目",
+        "school" => "学校",
+        "degree" => "学历",
+        "certificate" => "证书",
         _ => "实体",
     }
 }
@@ -34432,6 +35064,15 @@ fn prompt_requests_document_entity_scan(prompt: &str) -> bool {
             "城市",
             "地区",
             "地址",
+            "学校",
+            "院校",
+            "大学",
+            "学院",
+            "学历",
+            "学位",
+            "证书",
+            "认证",
+            "资质",
             "实体",
             "名词",
             "专有名词",
@@ -34482,6 +35123,18 @@ fn prompt_requests_document_entity_scan(prompt: &str) -> bool {
             "locations",
             "city",
             "cities",
+            "school",
+            "schools",
+            "university",
+            "universities",
+            "college",
+            "colleges",
+            "degree",
+            "degrees",
+            "education",
+            "certificate",
+            "certificates",
+            "certification",
         ],
     ) || lower_prompt.contains("tech stack");
     let has_coverage_signal = prompt_contains_any(
@@ -56180,6 +56833,18 @@ mod tests {
         ));
         assert!(assistant_run_dataset_entity_scan_requested(
             &selected_scope,
+            "按学历汇总候选人"
+        ));
+        assert!(assistant_run_dataset_entity_scan_requested(
+            &selected_scope,
+            "列出学校和毕业院校"
+        ));
+        assert!(assistant_run_dataset_entity_scan_requested(
+            &selected_scope,
+            "按证书认证统计出表"
+        ));
+        assert!(assistant_run_dataset_entity_scan_requested(
+            &selected_scope,
             "简历按技能数量排序出表"
         ));
         assert!(assistant_run_dataset_entity_scan_requested(
@@ -56483,6 +57148,15 @@ mod tests {
                 "table_rows": [
                     {"name": "字段 | 类型 | 说明", "document_count": 1}
                 ],
+                "school_rows": [
+                    {"name": "华南师范大学", "document_count": 1}
+                ],
+                "degree_rows": [
+                    {"name": "本科", "document_count": 1}
+                ],
+                "certificate_rows": [
+                    {"name": "PMP", "document_count": 1}
+                ],
                 "resume_profile_rows": [
                     {
                         "document_id": "doc-1",
@@ -56492,7 +57166,11 @@ mod tests {
                         "age": 35,
                         "latest_year": 2024,
                         "skill_count": 2,
-                        "project_count": 1
+                        "project_count": 1,
+                        "certificate_count": 1,
+                        "school_names": ["华南师范大学"],
+                        "degree_names": ["本科"],
+                        "certificate_names": ["PMP"]
                     }
                 ],
                 "company_names": ["广州冠晚网络有限公司", "广州寓力地产顾问有限公司"],
@@ -56519,6 +57197,9 @@ mod tests {
             json!("系统需要在上传后快速完成轻解析，并在后台继续执行详细解析。")
         );
         assert_eq!(item["table_rows"][0]["name"], json!("字段 | 类型 | 说明"));
+        assert_eq!(item["school_rows"][0]["name"], json!("华南师范大学"));
+        assert_eq!(item["degree_rows"][0]["name"], json!("本科"));
+        assert_eq!(item["certificate_rows"][0]["name"], json!("PMP"));
         assert_eq!(
             item["resume_profile_rows"][0]["candidate_name"],
             json!("张三")
@@ -56567,6 +57248,18 @@ mod tests {
                 "table_rows": [
                     {"name": "字段 | 类型 | 说明", "document_count": 1, "document_ids": ["doc-1"]}
                 ],
+                "school_rows": [
+                    {"name": "华南师范大学", "document_count": 1, "document_ids": ["doc-1"]},
+                    {"name": "中山大学", "document_count": 1, "document_ids": ["doc-2"]}
+                ],
+                "degree_rows": [
+                    {"name": "硕士", "document_count": 1, "document_ids": ["doc-1"]},
+                    {"name": "本科", "document_count": 1, "document_ids": ["doc-2"]}
+                ],
+                "certificate_rows": [
+                    {"name": "PMP", "document_count": 1, "document_ids": ["doc-1"]},
+                    {"name": "系统架构设计师", "document_count": 1, "document_ids": ["doc-2"]}
+                ],
                 "resume_profile_rows": [
                     {
                         "document_id": "doc-1",
@@ -56579,11 +57272,15 @@ mod tests {
                         "company_count": 1,
                         "skill_count": 1,
                         "project_count": 1,
+                        "certificate_count": 1,
                         "company_names": ["广州寓力地产顾问有限公司"],
                         "skill_names": ["Java"],
                         "project_names": ["智能知识库平台"],
                         "position_names": ["Java工程师"],
-                        "location_names": ["深圳"]
+                        "location_names": ["深圳"],
+                        "school_names": ["华南师范大学"],
+                        "degree_names": ["硕士"],
+                        "certificate_names": ["PMP"]
                     },
                     {
                         "document_id": "doc-2",
@@ -56596,11 +57293,15 @@ mod tests {
                         "company_count": 3,
                         "skill_count": 2,
                         "project_count": 0,
+                        "certificate_count": 1,
                         "company_names": ["广州冠晚网络有限公司", "广州寓力地产顾问有限公司", "深圳星拓智能科技有限公司"],
                         "skill_names": ["Java", "Rust"],
                         "project_names": [],
                         "position_names": ["架构师"],
-                        "location_names": ["广州"]
+                        "location_names": ["广州"],
+                        "school_names": ["中山大学"],
+                        "degree_names": ["本科"],
+                        "certificate_names": ["系统架构设计师"]
                     }
                 ],
                 "company_names": ["广州冠晚网络有限公司", "广州寓力地产顾问有限公司"],
@@ -56631,6 +57332,9 @@ mod tests {
         assert!(input.contains("\"name\":\"2024\""));
         assert!(input.contains("\"name\":\"接口与数据\""));
         assert!(input.contains("\"name\":\"字段 | 类型 | 说明\""));
+        assert!(input.contains("\"name\":\"华南师范大学\""));
+        assert!(input.contains("\"name\":\"硕士\""));
+        assert!(input.contains("\"name\":\"PMP\""));
         assert!(input.contains("\"candidate_name\":\"张三\""));
         assert!(!input.contains("document_ids"));
         assert!(!input.contains("\"candidate_terms\""));
@@ -56700,6 +57404,36 @@ mod tests {
                 .expect("table scan should produce a direct answer");
         assert!(table_answer.contains("识别到 1 个表格信号"));
         assert!(table_answer.contains("| 字段 \\| 类型 \\| 说明 | 1 |"));
+
+        let school_request = CreateAssistantRunRequest {
+            prompt: "按学校出现频次排序出表".to_string(),
+            ..request.clone()
+        };
+        let school_answer =
+            assistant_run_dataset_entity_scan_direct_answer(&school_request, &evidence)
+                .expect("school scan should produce a direct answer");
+        assert!(school_answer.contains("识别到 2 个学校/院校"));
+        assert!(school_answer.contains("| 华南师范大学 | 1 |"));
+
+        let degree_request = CreateAssistantRunRequest {
+            prompt: "按学历统计出表".to_string(),
+            ..request.clone()
+        };
+        let degree_answer =
+            assistant_run_dataset_entity_scan_direct_answer(&degree_request, &evidence)
+                .expect("degree scan should produce a direct answer");
+        assert!(degree_answer.contains("识别到 2 个学历/学位"));
+        assert!(degree_answer.contains("| 硕士 | 1 |"));
+
+        let certificate_request = CreateAssistantRunRequest {
+            prompt: "按证书认证统计出表".to_string(),
+            ..request.clone()
+        };
+        let certificate_answer =
+            assistant_run_dataset_entity_scan_direct_answer(&certificate_request, &evidence)
+                .expect("certificate scan should produce a direct answer");
+        assert!(certificate_answer.contains("识别到 2 个证书/认证"));
+        assert!(certificate_answer.contains("| PMP | 1 |"));
 
         let age_request = CreateAssistantRunRequest {
             prompt: "按年龄排序出表".to_string(),
@@ -56784,6 +57518,35 @@ mod tests {
         let li_company_index = resume_company_answer.find("| 李四 | 1 | 1 | 1 |").unwrap();
         assert!(zhang_company_index < li_company_index);
 
+        let resume_education_request = CreateAssistantRunRequest {
+            prompt: "简历按学历排序出表".to_string(),
+            ..age_request.clone()
+        };
+        let resume_education_answer =
+            assistant_run_dataset_entity_scan_direct_answer(&resume_education_request, &evidence)
+                .expect("resume education ranking should produce a candidate table");
+        assert!(resume_education_answer.contains("按学历排序的候选人简历表"));
+        let li_degree_index = resume_education_answer
+            .find("| 李四 | 硕士 | 华南师范大学 | PMP |")
+            .unwrap();
+        let zhang_degree_index = resume_education_answer
+            .find("| 张三 | 本科 | 中山大学 | 系统架构设计师 |")
+            .unwrap();
+        assert!(li_degree_index < zhang_degree_index);
+
+        let resume_certificate_request = CreateAssistantRunRequest {
+            prompt: "简历按证书数排序出表".to_string(),
+            ..age_request.clone()
+        };
+        let resume_certificate_answer =
+            assistant_run_dataset_entity_scan_direct_answer(&resume_certificate_request, &evidence)
+                .expect("resume certificate ranking should produce a candidate table");
+        assert!(resume_certificate_answer.contains("按证书数排序的候选人简历表"));
+        assert!(resume_certificate_answer.contains("| 李四 | 1 | PMP | 硕士 | 华南师范大学 |"));
+        assert!(
+            resume_certificate_answer.contains("| 张三 | 1 | 系统架构设计师 | 本科 | 中山大学 |")
+        );
+
         let time_earliest_request = CreateAssistantRunRequest {
             prompt: "简历按最早年份从早到晚排序出表".to_string(),
             ..age_request.clone()
@@ -56829,6 +57592,28 @@ mod tests {
         assert!(company_match_answer.contains("| 张三 | 公司:广州冠晚网络有限公司 |"));
         assert!(!company_match_answer.contains("| 李四 |"));
 
+        let degree_match_request = CreateAssistantRunRequest {
+            prompt: "哪些候选人是硕士学历？".to_string(),
+            ..age_request.clone()
+        };
+        let degree_match_answer =
+            assistant_run_dataset_entity_scan_direct_answer(&degree_match_request, &evidence)
+                .expect("resume degree match should produce a candidate table");
+        assert!(degree_match_answer.contains("学历=硕士"));
+        assert!(degree_match_answer.contains("| 李四 | 学历:硕士 |"));
+        assert!(!degree_match_answer.contains("| 张三 |"));
+
+        let certificate_match_request = CreateAssistantRunRequest {
+            prompt: "谁有 PMP 证书？".to_string(),
+            ..age_request.clone()
+        };
+        let certificate_match_answer =
+            assistant_run_dataset_entity_scan_direct_answer(&certificate_match_request, &evidence)
+                .expect("resume certificate match should produce a candidate table");
+        assert!(certificate_match_answer.contains("证书=PMP"));
+        assert!(certificate_match_answer.contains("| 李四 | 证书:PMP |"));
+        assert!(!certificate_match_answer.contains("| 张三 |"));
+
         let experience_request = CreateAssistantRunRequest {
             prompt: "简历按工作年限排序出表".to_string(),
             ..age_request
@@ -56849,6 +57634,9 @@ mod tests {
             核心技能：Rust、Kubernetes、微服务\n\
             项目名称：智能知识库平台\n\
             工作地点：深圳\n\
+            毕业院校：华南师范大学\n\
+            学历：硕士研究生\n\
+            证书：PMP、系统架构设计师\n\
             任职公司：深圳星拓智能科技有限公司\n\
             负责订单风险识别系统和客户数据治理。";
 
@@ -56866,8 +57654,12 @@ mod tests {
         assert!(pairs.contains(&("skill", "微服务")));
         assert!(pairs.contains(&("project", "智能知识库平台")));
         assert!(pairs.contains(&("location", "深圳")));
+        assert!(pairs.contains(&("school", "华南师范大学")));
+        assert!(pairs.contains(&("degree", "硕士")));
+        assert!(pairs.contains(&("certificate", "PMP")));
+        assert!(pairs.contains(&("certificate", "系统架构设计师")));
 
-        let terms = extract_document_candidate_terms_from_text(text, 24);
+        let terms = extract_document_candidate_terms_from_text(text, 32);
         assert!(terms.contains(&"知识库平台".to_string()));
         assert!(terms.contains(&"风险识别系统".to_string()));
         assert!(terms.contains(&"数据治理".to_string()));
@@ -56985,6 +57777,9 @@ mod tests {
             核心技能：Java、Rust、Kubernetes\n\
             项目名称：智能知识库平台\n\
             工作地点：深圳\n\
+            毕业院校：华南师范大学\n\
+            学历：硕士研究生\n\
+            证书：PMP、系统架构设计师\n\
             2018.06-2024.03 任职深圳星拓智能科技有限公司";
         let entities = extract_document_entity_candidates_from_text(text, 32);
 
@@ -57003,6 +57798,13 @@ mod tests {
         assert!(profile
             .project_names
             .contains(&"智能知识库平台".to_string()));
+        assert!(profile.school_names.contains(&"华南师范大学".to_string()));
+        assert!(profile.degree_names.contains(&"硕士".to_string()));
+        assert!(profile.certificate_names.contains(&"PMP".to_string()));
+        assert!(profile
+            .certificate_names
+            .contains(&"系统架构设计师".to_string()));
+        assert_eq!(profile.certificate_count, 2);
     }
 
     #[test]
