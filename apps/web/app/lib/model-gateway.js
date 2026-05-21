@@ -1,3 +1,5 @@
+import { buildApiError } from './api-error.js';
+
 const SENSITIVE_KEY_MARKERS = [
   'secret',
   'token',
@@ -189,6 +191,30 @@ export function modelGatewayProfileStatusSummary(profile = {}, status = {}) {
   };
 }
 
+export function normalizeModelGatewayProfileTestResult(raw = {}) {
+  return {
+    profileId: stringOrEmpty(raw.profile_id || raw.profileId),
+    status: stringOrEmpty(raw.status || 'unknown'),
+    message: stringOrEmpty(raw.message),
+    authConfigured: booleanOrFalse(raw.auth_configured ?? raw.authConfigured),
+    checkedAt: raw.checked_at || raw.checkedAt || null,
+  };
+}
+
+export function modelGatewayProfileTestTone(result = {}) {
+  if (result.status === 'ok') return 'healthy';
+  if (result.status === 'missing_secret') return 'warning';
+  if (result.status === 'failed') return 'critical';
+  return 'neutral';
+}
+
+export function modelGatewayProfileTestLabel(result = {}) {
+  if (result.status === 'ok') return '探测通过';
+  if (result.status === 'missing_secret') return '缺少密钥';
+  if (result.status === 'failed') return '探测失败';
+  return result.status ? '探测完成' : '';
+}
+
 export function buildModelGatewayProfilePayload(draft = {}) {
   const payload = {
     profile_id: stringOrEmpty(draft.profileId),
@@ -227,8 +253,7 @@ async function requestModelGateway(path, options = {}) {
   const contentType = response.headers.get('content-type') || '';
   const payload = contentType.includes('application/json') ? await response.json() : await response.text();
   if (!response.ok) {
-    const message = isPlainObject(payload) ? payload.message || payload.error : payload;
-    throw new Error(message || `model gateway request failed: ${response.status}`);
+    throw buildApiError(payload, `model gateway request failed: ${response.status}`, response.status);
   }
   return payload;
 }
@@ -267,11 +292,13 @@ export async function disableModelGatewayProfile(profileId) {
   return normalizeModelGatewayProfile(payload);
 }
 
-export async function testModelGatewayProfile(profileId) {
-  return requestModelGateway(`${MODEL_GATEWAY_API_PATHS.profiles}/${encodeURIComponent(profileId)}/test`, {
+export async function testModelGatewayProfile(profileId, options = {}) {
+  const timeoutMs = numberOrNull(options.timeoutMs ?? options.timeout_ms);
+  const payload = await requestModelGateway(`${MODEL_GATEWAY_API_PATHS.profiles}/${encodeURIComponent(profileId)}/test`, {
     method: 'POST',
-    body: JSON.stringify({}),
+    body: JSON.stringify(timeoutMs ? { timeout_ms: timeoutMs } : {}),
   });
+  return normalizeModelGatewayProfileTestResult(payload);
 }
 
 export async function fetchModelGatewayStatus() {

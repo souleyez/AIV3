@@ -7,6 +7,8 @@ import {
   fetchModelGatewayPresets,
   fetchModelGatewayProfiles,
   fetchModelGatewayStatus,
+  modelGatewayProfileTestLabel,
+  modelGatewayProfileTestTone,
   modelGatewayProfileStatusSummary,
   testModelGatewayProfile,
   updateModelGatewayProfile,
@@ -116,14 +118,19 @@ function ModelPoolRuntimeSummary({ status, loading }) {
   );
 }
 
-function ProfileCard({ profile, status, onEdit, onDisable, onTest, testing }) {
+function ProfileCard({ profile, status, testResult, onEdit, onDisable, onTest, testing }) {
   const summary = modelGatewayProfileStatusSummary(profile, status);
   const providerStatus = summary.providerStatus || {};
+  const testLabel = testResult ? modelGatewayProfileTestLabel(testResult) : '';
+  const testTone = testResult ? modelGatewayProfileTestTone(testResult) : 'neutral';
   return (
     <article className="model-pool-profile-card">
       <div className="model-pool-profile-main">
         <div>
-          <span className={`model-pool-status status-${summary.tone}`}>{summary.label}</span>
+          <div className="model-pool-status-row">
+            <span className={`model-pool-status status-${summary.tone}`}>{summary.label}</span>
+            {testLabel ? <span className={`model-pool-status status-${testTone}`}>{testLabel}</span> : null}
+          </div>
           <h3>{profile.displayName || profile.profileId}</h3>
           <p>{profile.profileId} · {profile.providerId}/{profile.modelId}</p>
         </div>
@@ -158,6 +165,9 @@ function ProfileCard({ profile, status, onEdit, onDisable, onTest, testing }) {
         <MetricPill label="最近失败" value={providerStatus.lastFailureReason} />
         <MetricPill label="密钥" value={profile.hasSecret ? profile.authEnvKeyName : '未配置'} />
       </div>
+      {testResult?.message ? (
+        <p className={`model-pool-profile-note status-${testTone}`}>{testResult.message}</p>
+      ) : null}
     </article>
   );
 }
@@ -173,6 +183,8 @@ export default function ModelPoolPanel({ accountStatusSummary }) {
   const [statusLoading, setStatusLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [testingProfileId, setTestingProfileId] = useState('');
+  const [profileTestResults, setProfileTestResults] = useState({});
+  const [accessDenied, setAccessDenied] = useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
 
@@ -195,10 +207,14 @@ export default function ModelPoolPanel({ accountStatusSummary }) {
       setPresets(nextPresets);
       setProfiles(nextProfiles);
       setStatus(nextStatus);
+      setAccessDenied(false);
       if (!draft.recommendedPreset && nextPresets.length) {
         setDraft((current) => draftFromPreset(nextPresets[0], current));
       }
     } catch (nextError) {
+      if (nextError?.status === 403 || nextError?.code === 'model_gateway_operator_required') {
+        setAccessDenied(true);
+      }
       setError(nextError instanceof Error ? nextError.message : '模型池读取失败');
     } finally {
       setLoading(false);
@@ -218,8 +234,12 @@ export default function ModelPoolPanel({ accountStatusSummary }) {
         const nextStatus = await fetchModelGatewayStatus();
         if (!cancelled) {
           setStatus(nextStatus);
+          setAccessDenied(false);
         }
       } catch (_nextError) {
+        if (!cancelled && (_nextError?.status === 403 || _nextError?.code === 'model_gateway_operator_required')) {
+          setAccessDenied(true);
+        }
         // Keep the latest visible status; manual refresh surfaces request failures.
       }
     }, 15000);
@@ -291,8 +311,13 @@ export default function ModelPoolPanel({ accountStatusSummary }) {
     setError('');
     setMessage('');
     try {
-      const result = await testModelGatewayProfile(profileId);
-      setMessage(result?.message || '连接检查完成。');
+      const result = await testModelGatewayProfile(profileId, { timeoutMs: 5000 });
+      setProfileTestResults((current) => ({ ...current, [profileId]: result }));
+      if (result.status === 'ok') {
+        setMessage(result.message || '连接检查完成。');
+      } else {
+        setError(result.message || '连接检查未通过。');
+      }
       const nextStatus = await fetchModelGatewayStatus();
       setStatus(nextStatus);
     } catch (nextError) {
@@ -307,6 +332,15 @@ export default function ModelPoolPanel({ accountStatusSummary }) {
       <div className="model-pool-login-state">
         <strong>需要登录主系统</strong>
         <span>模型池配置属于运维面，登录后可添加 profile、查看密钥绑定状态和执行连接检查。</span>
+      </div>
+    );
+  }
+
+  if (accessDenied) {
+    return (
+      <div className="model-pool-login-state">
+        <strong>没有模型池运维权限</strong>
+        <span>当前账号已登录，但未被加入模型池 operator allowlist。请在服务端配置邮箱或角色后刷新页面。</span>
       </div>
     );
   }
@@ -335,6 +369,7 @@ export default function ModelPoolPanel({ accountStatusSummary }) {
               key={profile.profileId}
               profile={profile}
               status={status}
+              testResult={profileTestResults[profile.profileId]}
               onEdit={startEdit}
               onDisable={handleDisable}
               onTest={handleTest}

@@ -2,7 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   buildModelGatewayProfilePayload,
+  modelGatewayProfileTestLabel,
+  modelGatewayProfileTestTone,
   modelGatewayProfileStatusSummary,
+  normalizeModelGatewayProfileTestResult,
   normalizeModelGatewayPreset,
   normalizeModelGatewayProfiles,
   normalizeModelGatewayStatus,
@@ -142,4 +145,28 @@ test('modelGatewayProfileStatusSummary labels enabled and missing-secret states'
   assert.equal(ready.detail, 'active 1/5');
   assert.equal(missing.tone, 'warning');
   assert.equal(missing.label, '缺少密钥');
+});
+
+test('normalizeModelGatewayProfileTestResult maps probe states for UI', () => {
+  const ok = normalizeModelGatewayProfileTestResult({
+    profile_id: 'openclaw-main',
+    status: 'ok',
+    message: '真实连通性检查通过，收到 8 字回复。',
+    auth_configured: true,
+    checked_at: '2026-05-21T09:00:00Z',
+  });
+  const failed = normalizeModelGatewayProfileTestResult({
+    profile_id: 'minimax-fast',
+    status: 'failed',
+    message: '真实连通性检查失败，已隐藏 provider 错误细节。',
+    auth_configured: true,
+  });
+
+  assert.equal(ok.profileId, 'openclaw-main');
+  assert.equal(ok.authConfigured, true);
+  assert.equal(ok.checkedAt, '2026-05-21T09:00:00Z');
+  assert.equal(modelGatewayProfileTestTone(ok), 'healthy');
+  assert.equal(modelGatewayProfileTestLabel(ok), '探测通过');
+  assert.equal(modelGatewayProfileTestTone(failed), 'critical');
+  assert.equal(modelGatewayProfileTestLabel(failed), '探测失败');
 });

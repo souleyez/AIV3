@@ -4732,6 +4732,13 @@ body {
   overflow-wrap: anywhere;
 }
 
+.model-pool-status-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
 .model-pool-status {
   display: inline-flex;
   align-items: center;
@@ -4845,6 +4852,30 @@ body {
 .model-pool-message.error {
   color: #fecaca;
   background: rgba(239, 68, 68, 0.12);
+}
+
+.model-pool-profile-note {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  font-size: 12px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.model-pool-profile-note.status-healthy {
+  color: #99f6e4;
+  background: rgba(20, 184, 166, 0.1);
+}
+
+.model-pool-profile-note.status-warning {
+  color: #fde68a;
+  background: rgba(245, 158, 11, 0.1);
+}
+
+.model-pool-profile-note.status-critical {
+  color: #fecaca;
+  background: rgba(239, 68, 68, 0.1);
 }
 
 .danger-action:not(:disabled) {
