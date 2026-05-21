@@ -89,6 +89,12 @@ pub const DATASET_DOCUMENT_MEMBERSHIPS_SCHEMA: Migration = Migration {
     sql: include_str!("../migrations/0010_dataset_document_memberships.sql"),
 };
 
+pub const MODEL_GATEWAY_PROFILES_SCHEMA: Migration = Migration {
+    version: "0011",
+    description: "model gateway profiles",
+    sql: include_str!("../migrations/0011_model_gateway_profiles.sql"),
+};
+
 pub const MIGRATIONS: &[Migration] = &[
     INITIAL_SCHEMA,
     WORKFLOW_RUNTIME_RECORDS_SCHEMA,
@@ -99,6 +105,7 @@ pub const MIGRATIONS: &[Migration] = &[
     EXTERNAL_INTEGRATIONS_SCHEMA,
     VIDEO_PPT_PUBLISHED_VERSIONS_SCHEMA,
     DATASET_DOCUMENT_MEMBERSHIPS_SCHEMA,
+    MODEL_GATEWAY_PROFILES_SCHEMA,
 ];
 
 pub const TABLES: &[&str] = &[
@@ -138,6 +145,8 @@ pub const TABLES: &[&str] = &[
     "external_message_events",
     "external_action_runs",
     "external_sync_runs",
+    "model_gateway_profiles",
+    "model_gateway_profile_events",
     "published_video_ppt_packages",
     "published_video_ppt_versions",
     "static_page_drafts",
@@ -6535,7 +6544,10 @@ mod tests {
                 .iter()
                 .map(|migration| migration.version)
                 .collect::<Vec<_>>(),
-            vec!["0001", "0002", "0004", "0005", "0006", "0007", "0008", "0009", "0010"]
+            vec![
+                "0001", "0002", "0004", "0005", "0006", "0007", "0008", "0009", "0010",
+                "0011"
+            ]
         );
         assert!(MIGRATIONS
             .iter()
@@ -6558,6 +6570,9 @@ mod tests {
         assert!(MIGRATIONS
             .iter()
             .any(|migration| migration.description == "dataset document memberships"));
+        assert!(MIGRATIONS
+            .iter()
+            .any(|migration| migration.description == "model gateway profiles"));
         assert!(TABLES.contains(&"published_video_ppt_packages"));
         assert!(TABLES.contains(&"published_video_ppt_versions"));
         assert!(VIDEO_PPT_PUBLISHED_VERSIONS_SCHEMA
@@ -6589,6 +6604,48 @@ mod tests {
         assert!(DATASET_DOCUMENT_MEMBERSHIPS_SCHEMA
             .sql
             .contains("dataset_document_memberships_expiry_idx"));
+    }
+
+    #[test]
+    fn model_gateway_profiles_migration_is_registered() {
+        let versions = MIGRATIONS
+            .iter()
+            .map(|migration| migration.version)
+            .collect::<Vec<_>>();
+        let dataset_membership_index = versions
+            .iter()
+            .position(|version| *version == "0010")
+            .expect("dataset document memberships migration registered");
+        let model_gateway_index = versions
+            .iter()
+            .position(|version| *version == "0011")
+            .expect("model gateway profiles migration registered");
+
+        assert!(
+            model_gateway_index > dataset_membership_index,
+            "model gateway profiles migration must run after dataset document memberships"
+        );
+    }
+
+    #[test]
+    fn model_gateway_profiles_schema_mentions_tables_and_indexes() {
+        assert!(TABLES.contains(&"model_gateway_profiles"));
+        assert!(TABLES.contains(&"model_gateway_profile_events"));
+        assert!(MODEL_GATEWAY_PROFILES_SCHEMA
+            .sql
+            .contains("create table if not exists model_gateway_profiles"));
+        assert!(MODEL_GATEWAY_PROFILES_SCHEMA
+            .sql
+            .contains("unique (tenant_id, profile_id)"));
+        assert!(MODEL_GATEWAY_PROFILES_SCHEMA
+            .sql
+            .contains("create table if not exists model_gateway_profile_events"));
+        assert!(MODEL_GATEWAY_PROFILES_SCHEMA
+            .sql
+            .contains("model_gateway_profiles_lane_enabled_idx"));
+        assert!(MODEL_GATEWAY_PROFILES_SCHEMA
+            .sql
+            .contains("model_gateway_profile_events_profile_created_idx"));
     }
 
     #[test]
