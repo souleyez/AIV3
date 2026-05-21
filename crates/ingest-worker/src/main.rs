@@ -986,12 +986,6 @@ fn external_source_documents_from_context(
         .find_map(Value::as_array)
         .ok_or_else(|| anyhow!("external source ingest requires external_documents array"))?;
 
-    if documents.is_empty() {
-        return Err(anyhow!(
-            "external source ingest requires at least one external document"
-        ));
-    }
-
     documents
         .iter()
         .map(external_source_document_from_value)
@@ -1982,6 +1976,20 @@ mod tests {
                 .map(Vec::len),
             Some(1)
         );
+    }
+
+    #[test]
+    fn external_source_documents_allow_empty_ingest_batch() {
+        let context = json!({
+            "last_output": {
+                "external_documents": []
+            }
+        });
+
+        let documents = external_source_documents_from_context(&context, &json!({}))
+            .expect("empty external document batch should be a successful no-op");
+
+        assert!(documents.is_empty());
     }
 
     #[test]
