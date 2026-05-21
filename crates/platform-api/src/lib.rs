@@ -11312,17 +11312,19 @@ async fn create_external_source_sync(
     validate_required("source_id", &source_id)?;
     let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
     let current_user_id = current_auth_user_id(&state, &headers).await?;
-    if let Some(dataset_id) = request.dataset_id {
-        load_visible_dataset_for_user(
-            &state,
-            dataset_id,
-            &active_secret_binding_ids,
-            current_user_id,
-        )
-        .await?;
-    }
+    let source = load_external_source_connection(&state, &source_id).await?;
+    let mut request = request;
+    request.dataset_id = resolve_effective_external_source_sync_dataset_id(
+        &state,
+        &source,
+        request.dataset_id,
+        &request.connector_context,
+        &active_secret_binding_ids,
+        current_user_id,
+    )
+    .await?;
 
-    let response = enqueue_external_source_sync(&state, &source_id, request).await?;
+    let response = enqueue_external_source_sync_for_source(&state, source, request).await?;
     Ok((StatusCode::ACCEPTED, Json(response)))
 }
 
@@ -11396,10 +11398,21 @@ async fn enqueue_external_source_sync(
     request: CreateExternalSourceSyncRequest,
 ) -> std::result::Result<CreateExternalSourceSyncResponse, ApiError> {
     let source = load_external_source_connection(state, source_id).await?;
+    enqueue_external_source_sync_for_source(state, source, request).await
+}
+
+async fn enqueue_external_source_sync_for_source(
+    state: &AppState,
+    source: ExternalSourceConnectionSummary,
+    request: CreateExternalSourceSyncRequest,
+) -> std::result::Result<CreateExternalSourceSyncResponse, ApiError> {
     if source.disabled_at.is_some() {
         return Err(ApiError::forbidden(
             "external_source_disabled",
-            format!("external source connection {source_id} is disabled"),
+            format!(
+                "external source connection {} is disabled",
+                source.source_id
+            ),
         ));
     }
 
@@ -15481,6 +15494,80 @@ fn mysql_source_config_for_request(
 ) -> std::result::Result<MySqlSourceConfig, ApiError> {
     let merged = merged_database_source_config(&source.config_redacted, request_database_source)?;
     MySqlSourceConfig::from_value(&merged).map_err(database_source_error_to_api)
+}
+
+async fn resolve_effective_external_source_sync_dataset_id(
+    state: &AppState,
+    source: &ExternalSourceConnectionSummary,
+    request_dataset_id: Option<DatasetId>,
+    connector_context: &Value,
+    active_secret_binding_ids: &[SecretBindingId],
+    current_user_id: Option<UserId>,
+) -> std::result::Result<Option<DatasetId>, ApiError> {
+    if let Some(dataset_id) = request_dataset_id {
+        load_visible_dataset_for_user(
+            state,
+            dataset_id,
+            active_secret_binding_ids,
+            current_user_id,
+        )
+        .await?;
+        return Ok(Some(dataset_id));
+    }
+    let Some(dataset_id) = mysql_sync_default_dataset_id(source, connector_context)? else {
+        return Ok(None);
+    };
+    load_visible_dataset_for_user(
+        state,
+        dataset_id,
+        active_secret_binding_ids,
+        current_user_id,
+    )
+    .await?;
+    Ok(Some(dataset_id))
+}
+
+fn mysql_sync_default_dataset_id(
+    source: &ExternalSourceConnectionSummary,
+    connector_context: &Value,
+) -> std::result::Result<Option<DatasetId>, ApiError> {
+    if !external_source_sync_uses_mysql(source, connector_context) {
+        return Ok(None);
+    }
+    let config = mysql_source_config_for_request(
+        source,
+        database_source_config_from_connector_context(connector_context),
+    )?;
+    let Some(default_dataset_id) = config.default_dataset_id.as_deref() else {
+        return Err(ApiError::bad_request(
+            "target_dataset_required",
+            "mysql source sync requires request dataset_id or source database_source.default_dataset_id"
+                .to_string(),
+        ));
+    };
+    parse_dataset_id(default_dataset_id).map(Some)
+}
+
+fn external_source_sync_uses_mysql(
+    source: &ExternalSourceConnectionSummary,
+    connector_context: &Value,
+) -> bool {
+    let connector_kind = source.connector_kind.trim().to_ascii_lowercase();
+    matches!(
+        connector_kind.as_str(),
+        "mysql" | "mysql_source" | "database_source"
+    ) || database_source_config_from_connector_context(connector_context)
+        .as_object()
+        .is_some()
+}
+
+fn database_source_config_from_connector_context(connector_context: &Value) -> &Value {
+    connector_context
+        .get("mysql_source")
+        .or_else(|| connector_context.get("mysqlSource"))
+        .or_else(|| connector_context.get("database_source"))
+        .or_else(|| connector_context.get("databaseSource"))
+        .unwrap_or(&Value::Null)
 }
 
 fn merged_database_source_config(
@@ -49027,6 +49114,41 @@ mod tests {
 
         assert_eq!(error.status, StatusCode::BAD_REQUEST);
         assert_eq!(error.payload.code, "raw_database_secret_rejected");
+    }
+
+    #[test]
+    fn mysql_sync_without_request_or_default_dataset_is_rejected() {
+        let source = mysql_source_summary_for_test(json!({
+            "database_source": {
+                "connection_env": "THIRD_PARTY_HY_SQL_DATABASE_URL",
+                "database": "hy_sql"
+            }
+        }));
+
+        let error = mysql_sync_default_dataset_id(&source, &json!({}))
+            .expect_err("mysql sync needs a target dataset");
+
+        assert_eq!(error.status, StatusCode::BAD_REQUEST);
+        assert_eq!(error.payload.code, "target_dataset_required");
+    }
+
+    #[test]
+    fn mysql_sync_uses_source_default_dataset_id() {
+        let source = mysql_source_summary_for_test(json!({
+            "database_source": {
+                "connection_env": "THIRD_PARTY_HY_SQL_DATABASE_URL",
+                "database": "hy_sql",
+                "default_dataset_id": "018f0000-0000-7000-9000-000000000001"
+            }
+        }));
+
+        let dataset_id =
+            mysql_sync_default_dataset_id(&source, &json!({})).expect("default resolves");
+
+        assert_eq!(
+            dataset_id.map(|id| id.to_string()).as_deref(),
+            Some("018f0000-0000-7000-9000-000000000001")
+        );
     }
 
     #[test]
