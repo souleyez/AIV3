@@ -111,10 +111,11 @@ use static_page_runtime::{
     sanitize_static_page_operations, StaticPageIntentOutcome, StaticPageIntentRequest,
 };
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
+    collections::{hash_map::DefaultHasher, BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
     convert::Infallible,
     fmt::Display,
     fs,
+    hash::{Hash, Hasher},
     net::IpAddr,
     path::PathBuf,
     sync::{
@@ -5300,6 +5301,7 @@ async fn model_gateway_status_view(
             ModelGatewayLaneStatusView {
                 lane: lane.clone(),
                 routing_mode: model_gateway_lane_routing_mode(lane),
+                canary_percent: model_gateway_lane_canary_percent(lane),
                 max_concurrency: snapshot.max_concurrency,
                 active: snapshot.active,
                 queued: snapshot.queued,
@@ -16343,8 +16345,14 @@ fn external_channel_model_pool_is_active(
     connection_id: &str,
     message: &ExternalBotMessageView,
 ) -> bool {
-    model_gateway_lane_routing_mode(MODEL_LANE_ASSISTANT_CHAT) == "active"
-        && external_channel_model_pool_scope_is_active(connection_id, message)
+    if !external_channel_model_pool_scope_is_active(connection_id, message) {
+        return false;
+    }
+    match model_gateway_lane_routing_mode(MODEL_LANE_ASSISTANT_CHAT).as_str() {
+        "active" => true,
+        "canary" => external_channel_model_pool_canary_hit(connection_id, message),
+        _ => false,
+    }
 }
 
 fn external_channel_model_pool_is_shadow_eval(
@@ -16362,6 +16370,42 @@ fn model_gateway_lane_routing_mode(lane: &str) -> String {
         .unwrap_or_else(|_| "observe_only".to_string())
         .trim()
         .to_ascii_lowercase()
+}
+
+fn model_gateway_lane_canary_percent(lane: &str) -> Option<u32> {
+    let prefix = model_gateway_lane_env_prefix(lane);
+    std::env::var(format!("{prefix}_CANARY_PERCENT"))
+        .ok()
+        .and_then(|value| value.trim().parse::<u32>().ok())
+        .map(|value| value.min(100))
+}
+
+fn external_channel_model_pool_canary_hit(
+    connection_id: &str,
+    message: &ExternalBotMessageView,
+) -> bool {
+    let Some(percent) = model_gateway_lane_canary_percent(MODEL_LANE_ASSISTANT_CHAT) else {
+        return false;
+    };
+    if percent == 0 {
+        return false;
+    }
+    if percent >= 100 {
+        return true;
+    }
+
+    let prefix = model_gateway_lane_env_prefix(MODEL_LANE_ASSISTANT_CHAT);
+    let salt = std::env::var(format!("{prefix}_CANARY_SALT")).unwrap_or_default();
+    let mut hasher = DefaultHasher::new();
+    MODEL_LANE_ASSISTANT_CHAT.hash(&mut hasher);
+    salt.hash(&mut hasher);
+    connection_id.hash(&mut hasher);
+    message.tenant_external_id.hash(&mut hasher);
+    message.bot_external_id.hash(&mut hasher);
+    message.conversation_external_id.hash(&mut hasher);
+    message.sender_external_id.hash(&mut hasher);
+    let bucket = (hasher.finish() % 100) as u32;
+    bucket < percent
 }
 
 fn external_channel_model_pool_scope_is_active(
@@ -49920,6 +49964,22 @@ mod tests {
             scoped_connection_id,
             &message
         ));
+
+        std::env::set_var("LLM_GATEWAY_LANE_ASSISTANT_CHAT_MODE", "canary");
+        std::env::set_var("LLM_GATEWAY_LANE_ASSISTANT_CHAT_CANARY_PERCENT", "0");
+        assert!(!external_channel_model_pool_is_active(
+            scoped_connection_id,
+            &message
+        ));
+        std::env::set_var("LLM_GATEWAY_LANE_ASSISTANT_CHAT_CANARY_PERCENT", "100");
+        assert!(external_channel_model_pool_is_active(
+            scoped_connection_id,
+            &message
+        ));
+        assert!(!external_channel_model_pool_is_active(
+            "other-channel",
+            &message
+        ));
         clear_assistant_openclaw_env();
     }
 
@@ -76731,6 +76791,8 @@ mod tests {
             "LLM_GATEWAY_LANE_ASSISTANT_CHAT_MAX_CONCURRENCY",
             "LLM_GATEWAY_LANE_ASSISTANT_CHAT_QUEUE_LIMIT",
             "LLM_GATEWAY_LANE_ASSISTANT_CHAT_QUEUE_TIMEOUT_MS",
+            "LLM_GATEWAY_LANE_ASSISTANT_CHAT_CANARY_PERCENT",
+            "LLM_GATEWAY_LANE_ASSISTANT_CHAT_CANARY_SALT",
             "LLM_GATEWAY_EXTERNAL_CHANNEL_ACTIVE",
             "LLM_GATEWAY_EXTERNAL_CHANNEL_ACTIVE_CONNECTIONS",
             "LLM_GATEWAY_EXTERNAL_CHANNEL_ACTIVE_TENANTS",

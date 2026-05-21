@@ -83,6 +83,7 @@ test('normalizeModelGatewayStatus hides secrets and keeps lane counts readable',
     lanes: [{
       lane: 'assistant_chat',
       routing_mode: 'active',
+      canary_percent: 25,
       active: 12,
       queued: 3,
       profile_count: 2,
@@ -110,6 +111,7 @@ test('normalizeModelGatewayStatus hides secrets and keeps lane counts readable',
   assert.equal(status.lanes[0].routingMode, 'active');
   assert.equal(status.lanes[0].activeCount, 12);
   assert.equal(status.lanes[0].queuedCount, 3);
+  assert.equal(status.lanes[0].canaryPercent, 25);
   assert.equal(status.lanes[0].profileCount, 2);
   assert.equal(status.providers[0].profileId, 'OPENCLAW_MAIN');
   assert.equal(status.providers[0].providerId, 'openclaw');

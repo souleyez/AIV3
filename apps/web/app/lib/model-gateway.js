@@ -112,6 +112,7 @@ export function normalizeModelGatewayStatus(raw = {}) {
     lanes: lanes.map((lane) => ({
       lane: stringOrEmpty(lane.lane),
       routingMode: stringOrEmpty(lane.routing_mode || lane.routingMode || 'observe_only'),
+      canaryPercent: numberOrNull(lane.canary_percent ?? lane.canaryPercent),
       maxConcurrency: numberOrNull(lane.max_concurrency ?? lane.maxConcurrency),
       activeCount: numberOrNull(lane.active ?? lane.active_count ?? lane.activeCount) ?? 0,
       queuedCount: numberOrNull(lane.queued ?? lane.queued_count ?? lane.queuedCount) ?? 0,

@@ -98,6 +98,8 @@ pub struct ModelGatewayStatusView {
 pub struct ModelGatewayLaneStatusView {
     pub lane: String,
     pub routing_mode: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub canary_percent: Option<u32>,
     pub max_concurrency: usize,
     pub active: usize,
     pub queued: usize,
@@ -4733,6 +4735,7 @@ mod tests {
             lanes: vec![ModelGatewayLaneStatusView {
                 lane: "assistant_chat".to_string(),
                 routing_mode: "observe_only".to_string(),
+                canary_percent: Some(10),
                 max_concurrency: 64,
                 active: 1,
                 queued: 0,
@@ -4792,6 +4795,7 @@ mod tests {
 
         assert!(serialized.contains("assistant_chat"));
         assert!(serialized.contains("runtime_success_count"));
+        assert!(serialized.contains("canary_percent"));
         assert!(serialized.contains("shadow_eval_pass_count"));
         assert!(!serialized.contains("base_url"));
         assert!(!serialized.contains("auth_env_key"));

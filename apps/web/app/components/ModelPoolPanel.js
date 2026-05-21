@@ -102,10 +102,12 @@ function ModelPoolRuntimeSummary({ status, loading }) {
   const queuedCount = providers.reduce((total, provider) => total + (provider.queuedCount || 0), 0);
   const p95Values = providers.map((provider) => provider.p95LatencyMs).filter((value) => value !== null && value !== undefined);
   const maxP95 = p95Values.length ? Math.max(...p95Values) : null;
+  const canaryLabel = lane.canaryPercent === null || lane.canaryPercent === undefined ? '' : `${lane.canaryPercent}%`;
 
   return (
     <div className="model-pool-runtime-strip">
       <MetricPill label="路由模式" value={lane.routingMode || (loading ? '同步中' : '')} />
+      <MetricPill label="灰度" value={canaryLabel} />
       <MetricPill label="Lane 并发" value={`${lane.activeCount || activeCount}/${lane.maxConcurrency || '-'}`} />
       <MetricPill label="队列" value={`${lane.queuedCount || queuedCount}/${lane.queueLimit ?? '-'}`} />
       <MetricPill label="熔断" value={openCircuitCount} />
