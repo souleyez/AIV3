@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
-use std::fmt;
+use serde_json::{Map, Value};
+use sqlx::{mysql::MySqlPoolOptions, MySqlPool, Row};
+use std::{collections::BTreeMap, fmt, time::Duration};
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -26,6 +27,10 @@ pub enum DatabaseSourceError {
     },
     #[error("invalid mysql source config: {0}")]
     InvalidConfig(String),
+    #[error("mysql source environment variable `{env}` is not set")]
+    MissingConnectionEnv { env: String },
+    #[error("mysql source query failed: {0}")]
+    Query(String),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -82,6 +87,65 @@ pub struct DatabaseSourceRedactedSummary {
     pub default_dataset_id: Option<String>,
     pub table_count: usize,
     pub tables: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DatabaseConnectionHealth {
+    pub kind: String,
+    pub status: String,
+    pub database: String,
+    pub server_version: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DatabaseSchemaSnapshot {
+    pub kind: String,
+    pub database: String,
+    pub server_version: String,
+    pub tables: Vec<DatabaseTableView>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DatabaseTableView {
+    pub name: String,
+    pub table_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub comment: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub approximate_row_count: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub update_time: Option<String>,
+    pub columns: Vec<DatabaseColumnView>,
+    pub primary_key_columns: Vec<String>,
+    pub indexes: Vec<DatabaseIndexView>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DatabaseColumnView {
+    pub name: String,
+    pub ordinal_position: u32,
+    pub data_type: String,
+    pub column_type: String,
+    pub is_nullable: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_value: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub comment: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DatabaseIndexView {
+    pub name: String,
+    pub columns: Vec<String>,
+    pub is_unique: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TablePreview {
+    pub table: String,
+    pub row_limit: u32,
+    pub columns: Vec<String>,
+    pub rows: Vec<Value>,
 }
 
 impl MySqlSourceConfig {
@@ -160,6 +224,257 @@ impl MySqlSourceConfig {
             mapping.normalize();
         }
     }
+}
+
+pub async fn test_mysql_connection(
+    config: &MySqlSourceConfig,
+) -> Result<DatabaseConnectionHealth, DatabaseSourceError> {
+    config.validate()?;
+    let pool = connect_mysql_pool(config).await?;
+    let row = sqlx::query("select version() as server_version, database() as database_name")
+        .fetch_one(&pool)
+        .await
+        .map_err(sqlx_error)?;
+    Ok(DatabaseConnectionHealth {
+        kind: "mysql".to_string(),
+        status: "ok".to_string(),
+        database: row
+            .try_get::<Option<String>, _>("database_name")
+            .map_err(sqlx_error)?
+            .unwrap_or_else(|| config.database.clone()),
+        server_version: row
+            .try_get::<String, _>("server_version")
+            .map_err(sqlx_error)?,
+    })
+}
+
+pub async fn inspect_mysql_schema(
+    config: &MySqlSourceConfig,
+) -> Result<DatabaseSchemaSnapshot, DatabaseSourceError> {
+    config.validate()?;
+    let pool = connect_mysql_pool(config).await?;
+    let health = test_mysql_connection(config).await?;
+
+    let table_rows = sqlx::query(mysql_schema_tables_query())
+        .bind(&config.database)
+        .fetch_all(&pool)
+        .await
+        .map_err(sqlx_error)?;
+    let column_rows = sqlx::query(mysql_schema_columns_query())
+        .bind(&config.database)
+        .fetch_all(&pool)
+        .await
+        .map_err(sqlx_error)?;
+    let statistics_rows = sqlx::query(mysql_schema_statistics_query())
+        .bind(&config.database)
+        .fetch_all(&pool)
+        .await
+        .map_err(sqlx_error)?;
+
+    let mut columns_by_table: BTreeMap<String, Vec<DatabaseColumnView>> = BTreeMap::new();
+    for row in column_rows {
+        let table_name: String = row.try_get("table_name").map_err(sqlx_error)?;
+        columns_by_table
+            .entry(table_name)
+            .or_default()
+            .push(DatabaseColumnView {
+                name: row.try_get("column_name").map_err(sqlx_error)?,
+                ordinal_position: row
+                    .try_get::<u32, _>("ordinal_position")
+                    .map_err(sqlx_error)?,
+                data_type: row.try_get("data_type").map_err(sqlx_error)?,
+                column_type: row.try_get("column_type").map_err(sqlx_error)?,
+                is_nullable: row
+                    .try_get::<String, _>("is_nullable")
+                    .map_err(sqlx_error)?
+                    .eq_ignore_ascii_case("YES"),
+                default_value: row.try_get("column_default").map_err(sqlx_error)?,
+                comment: empty_string_to_none(row.try_get("column_comment").map_err(sqlx_error)?),
+            });
+    }
+
+    let indexes_by_table = index_views_by_table(statistics_rows)?;
+    let mut tables = Vec::new();
+    for row in table_rows {
+        let name: String = row.try_get("table_name").map_err(sqlx_error)?;
+        let indexes = indexes_by_table.get(&name).cloned().unwrap_or_default();
+        let primary_key_columns = indexes
+            .iter()
+            .find(|index| index.name == "PRIMARY")
+            .map(|index| index.columns.clone())
+            .unwrap_or_default();
+        tables.push(DatabaseTableView {
+            name: name.clone(),
+            table_type: row.try_get("table_type").map_err(sqlx_error)?,
+            comment: empty_string_to_none(row.try_get("table_comment").map_err(sqlx_error)?),
+            approximate_row_count: row
+                .try_get::<Option<i64>, _>("table_rows")
+                .map_err(sqlx_error)?
+                .and_then(|value| u64::try_from(value).ok()),
+            update_time: row.try_get("update_time").map_err(sqlx_error)?,
+            columns: columns_by_table.remove(&name).unwrap_or_default(),
+            primary_key_columns,
+            indexes,
+        });
+    }
+
+    Ok(DatabaseSchemaSnapshot {
+        kind: "mysql".to_string(),
+        database: health.database,
+        server_version: health.server_version,
+        tables,
+    })
+}
+
+pub async fn preview_mysql_table(
+    config: &MySqlSourceConfig,
+    table: &str,
+    limit: u32,
+) -> Result<TablePreview, DatabaseSourceError> {
+    config.validate()?;
+    let plan = build_mysql_table_preview_query(config, table, limit)?;
+    let pool = connect_mysql_pool(config).await?;
+    let mut connection = pool.acquire().await.map_err(sqlx_error)?;
+    sqlx::query("start transaction read only")
+        .execute(&mut *connection)
+        .await
+        .map_err(sqlx_error)?;
+    let query_result = sqlx::query(&plan.sql).fetch_all(&mut *connection).await;
+    match query_result {
+        Ok(rows) => {
+            sqlx::query("commit")
+                .execute(&mut *connection)
+                .await
+                .map_err(sqlx_error)?;
+            build_table_preview(plan, rows)
+        }
+        Err(error) => {
+            let _ = sqlx::query("rollback").execute(&mut *connection).await;
+            Err(sqlx_error(error))
+        }
+    }
+}
+
+fn build_table_preview(
+    plan: MySqlTablePreviewQuery,
+    rows: Vec<sqlx::mysql::MySqlRow>,
+) -> Result<TablePreview, DatabaseSourceError> {
+    let mut preview_rows = Vec::with_capacity(rows.len());
+    for row in rows {
+        let mut object = Map::new();
+        for column in &plan.columns {
+            let value = row
+                .try_get::<Option<String>, _>(column.as_str())
+                .map_err(sqlx_error)?;
+            object.insert(
+                column.clone(),
+                value.map(Value::String).unwrap_or(Value::Null),
+            );
+        }
+        preview_rows.push(Value::Object(object));
+    }
+    Ok(TablePreview {
+        table: plan.table,
+        row_limit: plan.row_limit,
+        columns: plan.columns,
+        rows: preview_rows,
+    })
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MySqlTablePreviewQuery {
+    pub table: String,
+    pub row_limit: u32,
+    pub columns: Vec<String>,
+    pub sql: String,
+}
+
+pub fn build_mysql_table_preview_query(
+    config: &MySqlSourceConfig,
+    table: &str,
+    limit: u32,
+) -> Result<MySqlTablePreviewQuery, DatabaseSourceError> {
+    config.validate()?;
+    validate_identifier("table", table)?;
+    let mapping = config
+        .tables
+        .iter()
+        .find(|mapping| mapping.table == table)
+        .ok_or_else(|| DatabaseSourceError::InvalidField {
+            field: "table",
+            reason: "table is not in the configured allowlist".to_string(),
+        })?;
+    let columns = preview_columns(mapping);
+    if columns.is_empty() {
+        return Err(DatabaseSourceError::InvalidField {
+            field: "columns",
+            reason: "at least one preview column is required".to_string(),
+        });
+    }
+    let projections = columns
+        .iter()
+        .map(|column| {
+            let quoted = quote_mysql_identifier(column)?;
+            Ok(format!("cast({quoted} as char) as {quoted}"))
+        })
+        .collect::<Result<Vec<_>, DatabaseSourceError>>()?
+        .join(", ");
+    let row_limit = limit.clamp(1, config.row_limit.min(MAX_ROW_LIMIT));
+    let sql = format!(
+        "select {projections} from {} limit {row_limit}",
+        quote_mysql_identifier(table)?
+    );
+    Ok(MySqlTablePreviewQuery {
+        table: table.to_string(),
+        row_limit,
+        columns,
+        sql,
+    })
+}
+
+pub fn mysql_schema_tables_query() -> &'static str {
+    r#"
+select
+  table_name,
+  table_type,
+  table_comment,
+  table_rows,
+  date_format(update_time, '%Y-%m-%dT%H:%i:%s') as update_time
+from information_schema.tables
+where table_schema = ?
+order by table_name
+"#
+}
+
+pub fn mysql_schema_columns_query() -> &'static str {
+    r#"
+select
+  table_name,
+  column_name,
+  ordinal_position,
+  column_default,
+  is_nullable,
+  data_type,
+  column_type,
+  column_comment
+from information_schema.columns
+where table_schema = ?
+order by table_name, ordinal_position
+"#
+}
+
+pub fn mysql_schema_statistics_query() -> &'static str {
+    r#"
+select
+  table_name,
+  index_name,
+  column_name,
+  seq_in_index,
+  non_unique
+from information_schema.statistics
+where table_schema = ?
+order by table_name, index_name, seq_in_index
+"#
 }
 
 impl MySqlTableMapping {
@@ -320,6 +635,90 @@ fn normalize_identifier_list(values: Vec<String>) -> Vec<String> {
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
         .collect()
+}
+
+async fn connect_mysql_pool(config: &MySqlSourceConfig) -> Result<MySqlPool, DatabaseSourceError> {
+    let url = std::env::var(&config.connection_env).map_err(|_| {
+        DatabaseSourceError::MissingConnectionEnv {
+            env: config.connection_env.clone(),
+        }
+    })?;
+    MySqlPoolOptions::new()
+        .max_connections(2)
+        .acquire_timeout(Duration::from_millis(config.timeout_ms))
+        .connect(&url)
+        .await
+        .map_err(sqlx_error)
+}
+
+fn preview_columns(mapping: &MySqlTableMapping) -> Vec<String> {
+    let mut columns = Vec::new();
+    push_unique_column(&mut columns, &mapping.id_column);
+    if let Some(column) = mapping.title_column.as_deref() {
+        push_unique_column(&mut columns, column);
+    }
+    for column in &mapping.content_columns {
+        push_unique_column(&mut columns, column);
+    }
+    if let Some(column) = mapping.updated_at_column.as_deref() {
+        push_unique_column(&mut columns, column);
+    }
+    if let Some(column) = mapping.version_column.as_deref() {
+        push_unique_column(&mut columns, column);
+    }
+    for column in &mapping.metadata_columns {
+        push_unique_column(&mut columns, column);
+    }
+    columns
+}
+
+fn push_unique_column(columns: &mut Vec<String>, column: &str) {
+    if !columns.iter().any(|existing| existing == column) {
+        columns.push(column.to_string());
+    }
+}
+
+fn index_views_by_table(
+    rows: Vec<sqlx::mysql::MySqlRow>,
+) -> Result<BTreeMap<String, Vec<DatabaseIndexView>>, DatabaseSourceError> {
+    let mut index_columns: BTreeMap<(String, String), (bool, Vec<(u32, String)>)> = BTreeMap::new();
+    for row in rows {
+        let table_name: String = row.try_get("table_name").map_err(sqlx_error)?;
+        let index_name: String = row.try_get("index_name").map_err(sqlx_error)?;
+        let column_name: String = row.try_get("column_name").map_err(sqlx_error)?;
+        let seq_in_index: u32 = row.try_get("seq_in_index").map_err(sqlx_error)?;
+        let non_unique: u8 = row.try_get("non_unique").map_err(sqlx_error)?;
+        let entry = index_columns
+            .entry((table_name, index_name))
+            .or_insert_with(|| (non_unique == 0, Vec::new()));
+        entry.1.push((seq_in_index, column_name));
+    }
+
+    let mut by_table: BTreeMap<String, Vec<DatabaseIndexView>> = BTreeMap::new();
+    for ((table_name, index_name), (is_unique, mut columns)) in index_columns {
+        columns.sort_by_key(|(seq, _)| *seq);
+        by_table
+            .entry(table_name)
+            .or_default()
+            .push(DatabaseIndexView {
+                name: index_name,
+                columns: columns.into_iter().map(|(_, column)| column).collect(),
+                is_unique,
+            });
+    }
+    Ok(by_table)
+}
+
+fn empty_string_to_none(value: Option<String>) -> Option<String> {
+    value
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn sqlx_error(error: sqlx::Error) -> DatabaseSourceError {
+    DatabaseSourceError::Query(error.to_string())
 }
 
 fn default_timeout_ms() -> u64 {
@@ -519,5 +918,106 @@ mod tests {
     fn quote_mysql_identifier_requires_safe_identifier() {
         assert_eq!(quote_mysql_identifier("documents").unwrap(), "`documents`");
         assert!(quote_mysql_identifier("documents.name").is_err());
+    }
+
+    #[test]
+    fn schema_queries_bind_schema_parameter() {
+        assert!(mysql_schema_tables_query().contains("where table_schema = ?"));
+        assert!(mysql_schema_columns_query().contains("where table_schema = ?"));
+        assert!(mysql_schema_statistics_query().contains("where table_schema = ?"));
+    }
+
+    #[test]
+    fn table_preview_query_uses_allowlisted_quoted_identifiers() {
+        let config = MySqlSourceConfig::from_value(&valid_config()).expect("config parses");
+
+        let plan = build_mysql_table_preview_query(&config, "documents", 5).expect("query builds");
+
+        assert_eq!(plan.table, "documents");
+        assert_eq!(plan.row_limit, 5);
+        assert_eq!(
+            plan.columns,
+            vec![
+                "id",
+                "title",
+                "content",
+                "summary",
+                "updated_at",
+                "category",
+                "owner_id"
+            ]
+        );
+        assert!(plan.sql.contains("from `documents` limit 5"));
+        assert!(plan.sql.contains("cast(`id` as char) as `id`"));
+        assert!(!plan.sql.contains(';'));
+    }
+
+    #[test]
+    fn table_preview_query_rejects_unmapped_table() {
+        let config = MySqlSourceConfig::from_value(&valid_config()).expect("config parses");
+
+        let error =
+            build_mysql_table_preview_query(&config, "other_documents", 5).expect_err("not mapped");
+
+        assert!(matches!(
+            error,
+            DatabaseSourceError::InvalidField { field: "table", .. }
+        ));
+    }
+
+    #[test]
+    fn table_preview_query_rejects_unsafe_table() {
+        let config = MySqlSourceConfig::from_value(&valid_config()).expect("config parses");
+
+        let error =
+            build_mysql_table_preview_query(&config, "documents;drop", 5).expect_err("unsafe");
+
+        assert!(matches!(
+            error,
+            DatabaseSourceError::InvalidIdentifier { field: "table", .. }
+        ));
+    }
+
+    #[test]
+    fn table_preview_query_clamps_limit_to_configured_row_limit() {
+        let mut raw = valid_config();
+        raw["row_limit"] = json!(3);
+        let config = MySqlSourceConfig::from_value(&raw).expect("config parses");
+
+        let plan =
+            build_mysql_table_preview_query(&config, "documents", 100).expect("query builds");
+
+        assert_eq!(plan.row_limit, 3);
+        assert!(plan.sql.ends_with("limit 3"));
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn live_mysql_schema_inspect() {
+        if std::env::var("MYSQL_SOURCE_TEST_ALLOW_LIVE").as_deref() != Ok("true") {
+            return;
+        }
+        let database_name = std::env::var("MYSQL_SOURCE_TEST_DATABASE_NAME")
+            .expect("MYSQL_SOURCE_TEST_DATABASE_NAME is required for live smoke");
+        let lower_name = database_name.to_ascii_lowercase();
+        let allow_non_test =
+            std::env::var("MYSQL_SOURCE_TEST_ALLOW_NON_TEST_DATABASE").as_deref() == Ok("true");
+        assert!(
+            allow_non_test || lower_name.contains("test"),
+            "refusing live schema smoke against non-test database without explicit override"
+        );
+        let raw = json!({
+            "connection_env": "MYSQL_SOURCE_TEST_DATABASE_URL",
+            "database": database_name,
+            "tables": []
+        });
+        let config = MySqlSourceConfig::from_value(&raw).expect("live config parses");
+
+        let snapshot = inspect_mysql_schema(&config)
+            .await
+            .expect("live schema inspection succeeds");
+
+        assert_eq!(snapshot.kind, "mysql");
+        assert_eq!(snapshot.database, config.database);
     }
 }

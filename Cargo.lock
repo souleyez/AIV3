@@ -772,7 +772,9 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+ "sqlx",
  "thiserror 2.0.18",
+ "tokio",
  "uuid",
 ]
 
