@@ -392,6 +392,7 @@ pub struct ModelProviderProfile {
     pub profile_id: String,
     pub provider_id: String,
     pub model_id: String,
+    pub priority: i32,
     pub base_url: Option<String>,
     pub api_path: Option<String>,
     pub wire_api: ModelProfileWireApi,
@@ -413,6 +414,7 @@ impl ModelProviderProfile {
             profile_id: profile_id.into(),
             provider_id: provider_id.into(),
             model_id: model_id.into(),
+            priority: 100,
             base_url: None,
             api_path: None,
             wire_api: ModelProfileWireApi::ChatCompletions,
@@ -431,6 +433,7 @@ impl ModelProviderProfile {
         let profile_id = optional_env_string(env_prefix, "PROFILE_ID")
             .unwrap_or_else(|| format!("{provider_id}:{model_id}"));
         let mut profile = Self::new(profile_id, provider_id, model_id);
+        profile.priority = optional_env_i32(env_prefix, "PRIORITY")?.unwrap_or(100);
         profile.base_url = optional_env_string(env_prefix, "BASE_URL");
         profile.api_path = optional_env_string(env_prefix, "API_PATH");
         profile.auth_env_key_name = optional_env_string(env_prefix, "AUTH_ENV_KEY");
@@ -512,6 +515,7 @@ impl ModelProviderProfile {
             "profile_id": self.profile_id.as_str(),
             "provider_id": self.provider_id.as_str(),
             "model_id": self.model_id.as_str(),
+            "priority": self.priority,
             "wire_api": self.wire_api.as_str(),
             "base_url": self.base_url.as_deref().map(redact_provider_error),
             "api_path": self.api_path.as_deref(),
@@ -576,6 +580,66 @@ impl ModelProviderProfile {
         health: ProviderShimHealthView,
     ) -> ProviderShimObservabilitySnapshotView {
         ProviderShimObservabilitySnapshotView::new(health, self.provider_shim_profile_snapshot())
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModelGatewayLaneLimits {
+    pub max_concurrency: Option<u32>,
+    pub queue_limit: Option<u32>,
+    pub queue_timeout_ms: Option<u64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModelGatewayPoolConfig {
+    pub lane: String,
+    pub lane_env_prefix: String,
+    pub lane_limits: ModelGatewayLaneLimits,
+    pub profiles: Vec<ModelProviderProfile>,
+}
+
+impl ModelGatewayPoolConfig {
+    pub fn from_env(lane: &str) -> Result<Option<Self>> {
+        let lane_env_prefix = model_gateway_lane_env_prefix(lane);
+        let profile_names = optional_env_string(&lane_env_prefix, "PROFILES")
+            .map(|value| split_csv_env(&value))
+            .unwrap_or_default();
+        if profile_names.is_empty() {
+            return Ok(None);
+        }
+
+        let mut profiles = Vec::with_capacity(profile_names.len());
+        for profile_name in profile_names {
+            let profile_env_prefix = model_gateway_profile_env_prefix(&profile_name);
+            let mut profile = ModelProviderProfile::from_env(&profile_env_prefix)
+                .with_context(|| format!("failed to load model gateway profile {profile_name}"))?;
+            if optional_env_string(&profile_env_prefix, "PROFILE_ID").is_none() {
+                profile.profile_id = profile_name.to_ascii_lowercase().replace('_', "-");
+            }
+            profiles.push(profile);
+        }
+
+        Ok(Some(Self {
+            lane: lane.to_string(),
+            lane_env_prefix: lane_env_prefix.clone(),
+            lane_limits: ModelGatewayLaneLimits {
+                max_concurrency: optional_env_u32(&lane_env_prefix, "MAX_CONCURRENCY")?,
+                queue_limit: optional_env_u32(&lane_env_prefix, "QUEUE_LIMIT")?,
+                queue_timeout_ms: optional_env_u64(&lane_env_prefix, "QUEUE_TIMEOUT_MS")?,
+            },
+            profiles,
+        }))
+    }
+
+    pub fn active_profiles_by_priority(&self) -> Vec<ModelProviderProfile> {
+        let mut profiles = self.profiles.clone();
+        profiles.sort_by(|left, right| {
+            right
+                .priority
+                .cmp(&left.priority)
+                .then_with(|| left.profile_id.cmp(&right.profile_id))
+        });
+        profiles
     }
 }
 
@@ -851,7 +915,28 @@ fn model_route_from_env(lane: &str) -> Option<ModelRoute> {
 }
 
 fn model_route_env_prefix(lane: &str) -> String {
-    let normalized_lane: String = lane
+    format!(
+        "LLM_GATEWAY_ROUTE_{}",
+        normalize_model_gateway_env_segment(lane)
+    )
+}
+
+pub fn model_gateway_lane_env_prefix(lane: &str) -> String {
+    format!(
+        "LLM_GATEWAY_LANE_{}",
+        normalize_model_gateway_env_segment(lane)
+    )
+}
+
+pub fn model_gateway_profile_env_prefix(profile_name: &str) -> String {
+    format!(
+        "LLM_GATEWAY_PROFILE_{}",
+        normalize_model_gateway_env_segment(profile_name)
+    )
+}
+
+fn normalize_model_gateway_env_segment(value: &str) -> String {
+    value
         .chars()
         .map(|ch| {
             if ch.is_ascii_alphanumeric() {
@@ -860,8 +945,7 @@ fn model_route_env_prefix(lane: &str) -> String {
                 '_'
             }
         })
-        .collect();
-    format!("LLM_GATEWAY_ROUTE_{normalized_lane}")
+        .collect()
 }
 
 fn split_csv_env(value: &str) -> Vec<String> {
@@ -890,6 +974,16 @@ fn optional_env_u32(env_prefix: &str, suffix: &str) -> Result<Option<u32>> {
         .map(|value| {
             value
                 .parse::<u32>()
+                .map_err(|error| anyhow!("invalid {env_prefix}_{suffix} value {value}: {error}"))
+        })
+        .transpose()
+}
+
+fn optional_env_i32(env_prefix: &str, suffix: &str) -> Result<Option<i32>> {
+    optional_env_string(env_prefix, suffix)
+        .map(|value| {
+            value
+                .parse::<i32>()
                 .map_err(|error| anyhow!("invalid {env_prefix}_{suffix} value {value}: {error}"))
         })
         .transpose()
@@ -2515,6 +2609,79 @@ mod tests {
     }
 
     #[test]
+    fn model_gateway_pool_config_absent_without_lane_profiles_env() {
+        let _guard = model_route_env_lock()
+            .lock()
+            .expect("model gateway pool env lock");
+        clear_model_gateway_pool_env(MODEL_LANE_ASSISTANT_CHAT, &["OPENCLAW_MAIN"]);
+
+        let config =
+            ModelGatewayPoolConfig::from_env(MODEL_LANE_ASSISTANT_CHAT).expect("pool config");
+
+        assert!(config.is_none());
+    }
+
+    #[test]
+    fn model_gateway_lane_pool_reads_profile_list_from_env() {
+        let _guard = model_route_env_lock()
+            .lock()
+            .expect("model gateway pool env lock");
+        clear_model_gateway_pool_env(
+            MODEL_LANE_ASSISTANT_CHAT,
+            &["OPENCLAW_MAIN", "MINIMAX_FAST"],
+        );
+        std::env::set_var(
+            "LLM_GATEWAY_LANE_ASSISTANT_CHAT_PROFILES",
+            "OPENCLAW_MAIN,MINIMAX_FAST",
+        );
+        std::env::set_var("LLM_GATEWAY_LANE_ASSISTANT_CHAT_MAX_CONCURRENCY", "30");
+        std::env::set_var("LLM_GATEWAY_LANE_ASSISTANT_CHAT_QUEUE_LIMIT", "200");
+        std::env::set_var("LLM_GATEWAY_LANE_ASSISTANT_CHAT_QUEUE_TIMEOUT_MS", "3000");
+        std::env::set_var("LLM_GATEWAY_PROFILE_OPENCLAW_MAIN_PROVIDER_ID", "openclaw");
+        std::env::set_var("LLM_GATEWAY_PROFILE_OPENCLAW_MAIN_MODEL_ID", "default");
+        std::env::set_var("LLM_GATEWAY_PROFILE_OPENCLAW_MAIN_PRIORITY", "100");
+        std::env::set_var(
+            "LLM_GATEWAY_PROFILE_OPENCLAW_MAIN_RATE_LIMIT_CONCURRENCY",
+            "20",
+        );
+        std::env::set_var("LLM_GATEWAY_PROFILE_MINIMAX_FAST_PROVIDER_ID", "minimax");
+        std::env::set_var("LLM_GATEWAY_PROFILE_MINIMAX_FAST_MODEL_ID", "MiniMax-M2.7");
+        std::env::set_var("LLM_GATEWAY_PROFILE_MINIMAX_FAST_PRIORITY", "80");
+        std::env::set_var(
+            "LLM_GATEWAY_PROFILE_MINIMAX_FAST_RATE_LIMIT_CONCURRENCY",
+            "10",
+        );
+
+        let config = ModelGatewayPoolConfig::from_env(MODEL_LANE_ASSISTANT_CHAT)
+            .expect("pool config")
+            .expect("pool should be present");
+        let priority_order = config.active_profiles_by_priority();
+
+        clear_model_gateway_pool_env(
+            MODEL_LANE_ASSISTANT_CHAT,
+            &["OPENCLAW_MAIN", "MINIMAX_FAST"],
+        );
+        assert_eq!(config.lane, MODEL_LANE_ASSISTANT_CHAT);
+        assert_eq!(config.lane_env_prefix, "LLM_GATEWAY_LANE_ASSISTANT_CHAT");
+        assert_eq!(config.lane_limits.max_concurrency, Some(30));
+        assert_eq!(config.lane_limits.queue_limit, Some(200));
+        assert_eq!(config.lane_limits.queue_timeout_ms, Some(3000));
+        assert_eq!(config.profiles.len(), 2);
+        assert_eq!(config.profiles[0].profile_id, "openclaw-main");
+        assert_eq!(config.profiles[0].provider_id, "openclaw");
+        assert_eq!(config.profiles[0].model_id, "default");
+        assert_eq!(config.profiles[0].priority, 100);
+        assert_eq!(config.profiles[0].rate_limit.concurrent_requests, Some(20));
+        assert_eq!(config.profiles[1].profile_id, "minimax-fast");
+        assert_eq!(config.profiles[1].provider_id, "minimax");
+        assert_eq!(config.profiles[1].model_id, "MiniMax-M2.7");
+        assert_eq!(config.profiles[1].priority, 80);
+        assert_eq!(config.profiles[1].rate_limit.concurrent_requests, Some(10));
+        assert_eq!(priority_order[0].profile_id, "openclaw-main");
+        assert_eq!(priority_order[1].profile_id, "minimax-fast");
+    }
+
+    #[test]
     fn model_provider_profile_from_env_builds_redacted_gpt_manifest() {
         let _guard = model_route_env_lock()
             .lock()
@@ -3644,11 +3811,27 @@ mod tests {
         }
     }
 
+    fn clear_model_gateway_pool_env(lane: &str, profile_names: &[&str]) {
+        let lane_prefix = model_gateway_lane_env_prefix(lane);
+        for suffix in [
+            "PROFILES",
+            "MAX_CONCURRENCY",
+            "QUEUE_LIMIT",
+            "QUEUE_TIMEOUT_MS",
+        ] {
+            std::env::remove_var(format!("{lane_prefix}_{suffix}"));
+        }
+        for profile_name in profile_names {
+            clear_model_profile_env(&model_gateway_profile_env_prefix(profile_name));
+        }
+    }
+
     fn clear_model_profile_env(prefix: &str) {
         for suffix in [
             "PROFILE_ID",
             "PROVIDER_ID",
             "MODEL_ID",
+            "PRIORITY",
             "BASE_URL",
             "API_PATH",
             "WIRE_API",
