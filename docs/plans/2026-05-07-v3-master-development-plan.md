@@ -24,6 +24,7 @@ Older plan files are now detailed references, not independent roadmaps:
 - `docs/plans/2026-05-03-codex-gateway-model-proxy-plan.md`: detailed model routing and Codex Host bridge plan.
 - `docs/plans/2026-05-07-v3-codex-host-architecture-alignment-plan.md`: detailed module-boundary plan for Codex Host.
 - `docs/plans/2026-05-07-v3-email-account-auth-plan.md`: detailed account/email auth plan; account work is paused after current hardening unless explicitly resumed.
+- `docs/plans/2026-05-21-database-source-integration-plan.md`: detailed MySQL database-source connector, schema inspection, mapping, sync, UI, observability, and 8-server smoke plan.
 
 When old documents conflict with this one, follow this master plan.
 
@@ -39,6 +40,7 @@ V3 is not a generic file manager and not a standalone page builder. It is a data
 - Let users adjust modules by natural language and lightweight direct manipulation.
 - Open safe HTML artifacts for planning handoff, execution reports, code review summaries, and lightweight JSON-patch editors.
 - Expose the same AssistantRun, retrieval, permission, artifact, and action-validation capabilities through external bot and third-party chat surfaces, including Feishu/Lark, WeCom, and customer-hosted pages.
+- Ingest read-only external database sources through V3-owned source connectors, mapping rules, workflow sync, parsing, indexing, and dataset visibility checks rather than direct chat-time database access.
 - Preserve finished outputs and drafts in the right shelf.
 - Keep permissions, memory, and artifacts scoped to user/account/local-key visibility.
 
@@ -63,6 +65,7 @@ V3 is not a generic file manager and not a standalone page builder. It is a data
 - Codex real execution must not run on this developer workstation. Real execution validation is only for the jump host or later Mac host.
 - OpenClaw is optional and should not distract from the product mainline unless a concrete bug appears.
 - External bot and third-party integrations are surfaces, not new authorities. V3 must still own effective permissions, AssistantRun state, retrieval supply, artifact access, action validation, and audit.
+- Database sources are external-source inputs, not direct model tools. Store only redacted connection metadata and server-side environment variable names in V3; never store raw database URLs, passwords, tokens, or arbitrary SQL in V3 PostgreSQL, logs, browser state, workflow events, assistant messages, or repository files.
 
 ## Current Baseline
 
@@ -316,9 +319,10 @@ The next highest leverage order is:
 4. Continue direct-upload / publicly resolvable video PPT extraction as a media-quality subtrack: complete the public video URL/page resolver, remote media registration, background media parsing, transcript/PPT extraction artifacts, and no host-composed fallback answers. Uploaded video evidence supply through ReAct already exists.
 5. Strengthen the model-gateway profile system and ordinary AssistantRun provider path; keep the Codex executor bridge frozen.
 6. Add the external bot and third-party integration core: generic channel/source contracts, ACL-aware third-party retrieval, Feishu/Lark and WeCom adapters, external artifact/action runtime, and observe-first management UI.
-7. Add the safe HTML artifact viewer as a common review/report surface, starting with static-page planning handoffs, third-party handoff docs, and existing historical Codex execution report templates.
-8. Do not validate real Codex execution while frozen; browser/external-page fetching work should use non-Codex product paths unless explicitly reopened.
-9. Resume account expansion only when product workflows need it.
+7. Add database-source integration as a data-source subtrack: MySQL read-only connector, schema inspection, table-to-document mapping, external-source workflow sync, document parse/index reuse, source health/drift observability, and main-system UI. Keep raw credentials out of V3 storage and keep arbitrary SQL out of MVP.
+8. Add the safe HTML artifact viewer as a common review/report surface, starting with static-page planning handoffs, third-party handoff docs, and existing historical Codex execution report templates.
+9. Do not validate real Codex execution while frozen; browser/external-page fetching work should use non-Codex product paths unless explicitly reopened.
+10. Resume account expansion only when product workflows need it.
 
 The main architectural risk is letting too many "brains/builders" compete: direct model calls, frozen Codex executor designs, static-page renderer, and HTML artifact renderer. While Codex is frozen, the boundary is simpler: V3 provider routing handles model-authored answers/actions, V3 validates and supplies data, static-page renderer produces customer report pages, and HTML artifact renderer displays review/control artifacts.
 
@@ -872,6 +876,80 @@ The next development thread should keep the current UI shell stable and continue
 - Static-page final delivery still uses the deterministic static-page renderer/export package.
 - Existing dry-run/plan-only Codex Host reports can remain readable without exposing secrets or needing local workstation execution; no new real-execution report path is required while frozen.
 - Any user edit from an HTML artifact is converted into V3-validated JSON patch/action intent, never direct DOM/database mutation.
+
+### Task 10: Add Database Source Integration
+
+**Status:** Planned. Detailed execution steps live in `docs/plans/2026-05-21-database-source-integration-plan.md`. This task is part of the product/data-source mainline, not the frozen Codex substrate and not the third-party chat interface itself.
+
+**Goal:** Add a safe MySQL database-source connector so an external database can be inspected, mapped, synchronized into V3 datasets, parsed, indexed, and queried through existing V3 document/retrieval workflows.
+
+**Architecture:** Extend `external_source_connections`, `external-source-worker`, normal V3 workflow state, and the main-system data-source page. Do not add database reads to chat endpoints. Do not expose database credentials to models or browsers.
+
+**Files:**
+
+- Create: `crates/external-source-connectors/Cargo.toml`
+- Create: `crates/external-source-connectors/src/lib.rs`
+- Create: `crates/external-source-connectors/src/mysql.rs`
+- Modify: `Cargo.toml`
+- Modify: `crates/contracts/src/lib.rs`
+- Modify: `crates/platform-api/Cargo.toml`
+- Modify: `crates/platform-api/src/lib.rs`
+- Modify: `crates/external-source-worker/Cargo.toml`
+- Modify: `crates/external-source-worker/src/main.rs`
+- Modify: `crates/workflow-definitions/src/lib.rs`
+- Create: `apps/web/app/lib/database-source.js`
+- Create: `apps/web/app/lib/database-source.test.mjs`
+- Create: `apps/web/app/components/DatabaseSourcePanel.js`
+- Modify: `apps/web/app/components/WorkspaceDirectoryPanel.js`
+- Modify: `apps/web/app/HomePageClient.js`
+- Modify: `apps/web/app/globals.css`
+- Create: `docs/integrations/database-source-integration.zh-CN.md`
+- Create: `docs/integrations/database-source-integration.zh-CN.html`
+
+**Steps:**
+
+1. Add shared `external-source-connectors` crate with MySQL config validation, redacted summaries, safe identifier validation, and tests rejecting raw `password`, raw `url`, `connection_string`, and token-like fields.
+2. Add MySQL schema inspector and table preview helpers using SQLx MySQL, bind parameters for schema, whitelisted/quoted identifiers, read-only transactions when supported, row limits, timeouts, and optional live-test guards.
+3. Add main-system API contracts/routes for connection test, schema inspection, and table preview under `/v1/external/sources/{source_id}/database/...`; responses must be secret-free.
+4. Add main-system database source UI inside the existing data-source page: connection env binding, redacted host/database summary, test connection, inspect schema, table/column view, mapping form, preview, sync, and status.
+5. Add MySQL source fetcher to `external-source-worker`, mapping configured rows into V3 external document shape with `document_external_id`, `revision_external_id`, title, body, content type, and metadata.
+6. Wire database sync into the existing external-source workflow, preserving metadata/content/ingest/index stages and supporting full sync plus simple incremental sync by `updated_at`, numeric id, or explicit version column.
+7. Add observability and drift checks: table count, row count, document count, skipped/failed rows, checkpoint, last schema inspect, mapped table count, missing table/column drift, and source health without secrets.
+8. Document the database-source integration with required read-only account, connection-env contract, table mapping, sync examples, field comments, error codes, and security restrictions.
+9. Deploy only to 8 after local tests pass. Add `THIRD_PARTY_HY_SQL_DATABASE_URL` only on the server environment or secret file; never commit it. Smoke schema inspection against `hy_sql`, confirm current copied test DB table `s` is visible and empty, then run an empty sync without source DB writes.
+
+**Security Rules:**
+
+- Never store raw database passwords, URLs, connection strings, tokens, or arbitrary SQL in repository files, V3 PostgreSQL rows, browser state, workflow events, logs, or assistant messages.
+- Store only `connection_env`, redacted host/port/database summaries, table allowlists, mapping rules, sync status, and health/drift summaries.
+- Allow only read-only `SELECT` against whitelisted tables and columns in MVP.
+- Enforce row limits, timeout limits, maximum text field size, safe identifier regex, and dedicated read-only accounts for production-like databases.
+- Keep database source data entering the model only after it has become V3 documents/evidence through existing parse/index/retrieval visibility checks.
+
+**Validation:**
+
+```powershell
+cargo test -p external-source-connectors
+cargo check -p external-source-connectors
+cargo test -p platform-api database_source
+cargo check -p platform-api
+cargo test -p external-source-worker mysql_source
+cargo check -p external-source-worker
+cargo test -p workflow-definitions external_source_sync
+node --test apps/web/app/lib/database-source.test.mjs
+Push-Location apps/web
+npm run build
+Pop-Location
+```
+
+**Acceptance:**
+
+- V3 can store and manage a MySQL source connection without storing raw credentials.
+- Main system data-source page can test connection, inspect schema, preview allowed tables, configure mapping, start sync, and show status/drift.
+- Operators can map one or more MySQL tables into V3 external documents.
+- Full sync and simple incremental sync create/update V3 external documents and pass them through existing parse/index workflow.
+- Existing HTTP third-party source sync, chat, document parse, model pool, and external integration endpoints remain unchanged unless a database sync is explicitly started.
+- Current test database state is supported: `hy_sql` on MySQL 8.0.24 may initially contain only empty table `s(a varchar(255))`; real business mapping waits for real DDL/tables.
 
 ## Verification Commands
 
