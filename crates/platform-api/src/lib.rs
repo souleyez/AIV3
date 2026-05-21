@@ -53,15 +53,16 @@ use contracts::{
     HtmlArtifactInteractionModeView, HtmlArtifactManifestView, KeyLoginRequest, KeyLoginResponse,
     KeyRotateRequest, KeyRotateResponse, ListExternalConversationTestsResponse,
     ListExternalIntegrationsResponse, LlmInvocationView, LogoutResponse, MemoryDirectoryView,
-    ModelGatewayPresetView, ModelGatewayProfileCreateRequest, ModelGatewayProfileTestRequest,
-    ModelGatewayProfileTestResponse, ModelGatewayProfileUpdateRequest, ModelGatewayProfileView,
-    PlanReportRequest, PublishReportRequest, PublishReportResponse, PublishedReportDetailView,
-    PublishedReportVersionView, PublishedReportView, RegisterDocumentRequest,
-    RegisterDocumentResponse, ReportPlanAstVersionView, ReportPlanSummary, ReportRenderOutputView,
-    ResolveDatasetSecretBindingsRequest, ResolveDatasetSecretBindingsResponse,
-    RetrievalEvidenceView, RetrievalSearchHitView, RetrievalSearchResponse,
-    RetryWorkflowExecutionRequest, RetryWorkflowExecutionResponse, StartEmailAuthRequest,
-    StartEmailAuthResponse, StaticPageDraftView, StaticPageImageJobView,
+    ModelGatewayLaneStatusView, ModelGatewayPresetView, ModelGatewayProfileCreateRequest,
+    ModelGatewayProfileTestRequest, ModelGatewayProfileTestResponse,
+    ModelGatewayProfileUpdateRequest, ModelGatewayProfileView, ModelGatewayProviderStatusView,
+    ModelGatewayStatusView, PlanReportRequest, PublishReportRequest, PublishReportResponse,
+    PublishedReportDetailView, PublishedReportVersionView, PublishedReportView,
+    RegisterDocumentRequest, RegisterDocumentResponse, ReportPlanAstVersionView, ReportPlanSummary,
+    ReportRenderOutputView, ResolveDatasetSecretBindingsRequest,
+    ResolveDatasetSecretBindingsResponse, RetrievalEvidenceView, RetrievalSearchHitView,
+    RetrievalSearchResponse, RetryWorkflowExecutionRequest, RetryWorkflowExecutionResponse,
+    StartEmailAuthRequest, StartEmailAuthResponse, StaticPageDraftView, StaticPageImageJobView,
     StaticPageRenderOutputView, SubmitHtmlArtifactEventRequest, SubmitHtmlArtifactEventResponse,
     ToolDefinitionView, ToolExecutionView, UpdateChatSessionReportEntryRequest,
     UpdateChatSessionReportEntryResponse, UpdateChatSessionRequest, UpdateChatSessionResponse,
@@ -110,7 +111,7 @@ use static_page_runtime::{
     sanitize_static_page_operations, StaticPageIntentOutcome, StaticPageIntentRequest,
 };
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
     convert::Infallible,
     fmt::Display,
     fs,
@@ -123,12 +124,12 @@ use std::{
     time::{Duration as StdDuration, Instant},
 };
 use storage::{
-    ModelGatewayProfile, ModelGatewayProfileUpdate, NewAssistantRun, NewAssistantRunEvent,
-    NewAuthAuditEvent, NewChatMessage, NewChatSession, NewConversationMemoryItem, NewDataset,
-    NewDatasetDocumentMembership, NewDocument, NewHtmlArtifact, NewModelGatewayProfile,
-    NewPublishedReport, NewPublishedReportVersion, NewReportPlan, NewSecretBinding,
-    NewStaticPageDraft, NewStaticPageImageJob, NewStaticPageRenderOutput, NewUserSession,
-    NewWorkflowTask, PgStorage,
+    ModelGatewayProfile, ModelGatewayProfileUpdate, ModelGatewayProfileUsageSummary,
+    NewAssistantRun, NewAssistantRunEvent, NewAuthAuditEvent, NewChatMessage, NewChatSession,
+    NewConversationMemoryItem, NewDataset, NewDatasetDocumentMembership, NewDocument,
+    NewHtmlArtifact, NewModelGatewayProfile, NewPublishedReport, NewPublishedReportVersion,
+    NewReportPlan, NewSecretBinding, NewStaticPageDraft, NewStaticPageImageJob,
+    NewStaticPageRenderOutput, NewUserSession, NewWorkflowTask, PgStorage,
 };
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tool_registry::{
@@ -407,16 +408,60 @@ impl AppState {
 enum GatewayLimitError {
     QueueFull,
     QueueTimeout,
+    CircuitOpen,
 }
 
 #[allow(dead_code)]
 struct GatewayRuntimeLimiter {
     lanes: Mutex<HashMap<String, Arc<GatewayLimitBucket>>>,
     profiles: Mutex<HashMap<String, Arc<GatewayLimitBucket>>>,
+    provider_stats: Mutex<HashMap<String, GatewayProviderRuntimeStats>>,
     default_lane_max_concurrency: usize,
     default_profile_max_concurrency: usize,
     default_queue_limit: usize,
     default_queue_timeout: StdDuration,
+    circuit_breaker_failure_threshold: u32,
+    circuit_breaker_cooldown: StdDuration,
+}
+
+#[derive(Clone, Debug, Default)]
+struct GatewayLimitBucketSnapshot {
+    max_concurrency: usize,
+    active: usize,
+    queued: usize,
+    queue_limit: usize,
+    queue_timeout_ms: u64,
+}
+
+#[derive(Clone, Debug, Default)]
+struct GatewayProviderStatsSnapshot {
+    consecutive_failures: u32,
+    success_count: u64,
+    failure_count: u64,
+    timeout_count: u64,
+    rate_limit_count: u64,
+    p50_latency_ms: Option<u64>,
+    p95_latency_ms: Option<u64>,
+    circuit_open: bool,
+    opened_until: Option<DateTime<Utc>>,
+    last_success_at: Option<DateTime<Utc>>,
+    last_failure_at: Option<DateTime<Utc>>,
+    last_failure_reason: Option<String>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct GatewayProviderRuntimeStats {
+    consecutive_failures: u32,
+    success_count: u64,
+    failure_count: u64,
+    timeout_count: u64,
+    rate_limit_count: u64,
+    latency_samples_ms: VecDeque<u64>,
+    opened_until: Option<Instant>,
+    opened_until_wall_time: Option<DateTime<Utc>>,
+    last_success_at: Option<DateTime<Utc>>,
+    last_failure_at: Option<DateTime<Utc>>,
+    last_failure_reason: Option<String>,
 }
 
 #[allow(dead_code)]
@@ -425,10 +470,13 @@ impl GatewayRuntimeLimiter {
         Self {
             lanes: Mutex::new(HashMap::new()),
             profiles: Mutex::new(HashMap::new()),
+            provider_stats: Mutex::new(HashMap::new()),
             default_lane_max_concurrency: 64,
             default_profile_max_concurrency: 16,
             default_queue_limit: 256,
             default_queue_timeout: StdDuration::from_millis(3_000),
+            circuit_breaker_failure_threshold: 3,
+            circuit_breaker_cooldown: StdDuration::from_secs(60),
         }
     }
 
@@ -445,6 +493,29 @@ impl GatewayRuntimeLimiter {
             queue_limit,
             self.default_queue_timeout,
         );
+        self
+    }
+
+    #[cfg(test)]
+    fn with_profile_limit(
+        self,
+        profile_id: &str,
+        max_concurrency: usize,
+        queue_limit: usize,
+    ) -> Self {
+        self.set_profile_limit(
+            profile_id,
+            max_concurrency,
+            queue_limit,
+            self.default_queue_timeout,
+        );
+        self
+    }
+
+    #[cfg(test)]
+    fn with_circuit_breaker(mut self, failure_threshold: u32, cooldown: StdDuration) -> Self {
+        self.circuit_breaker_failure_threshold = failure_threshold.max(1);
+        self.circuit_breaker_cooldown = cooldown;
         self
     }
 
@@ -572,6 +643,77 @@ impl GatewayRuntimeLimiter {
         })
     }
 
+    fn provider_available(&self, profile_id: &str) -> Option<GatewayProviderStatsSnapshot> {
+        let now = Instant::now();
+        let mut stats_by_profile = self
+            .provider_stats
+            .lock()
+            .expect("gateway provider stats lock");
+        let Some(stats) = stats_by_profile.get_mut(profile_id) else {
+            return Some(GatewayProviderStatsSnapshot::default());
+        };
+        if stats.circuit_open(now) {
+            return None;
+        }
+        stats.clear_expired_circuit(now);
+        Some(stats.snapshot(now))
+    }
+
+    fn record_provider_success(&self, profile_id: &str, latency_ms: Option<u64>) {
+        let mut stats_by_profile = self
+            .provider_stats
+            .lock()
+            .expect("gateway provider stats lock");
+        stats_by_profile
+            .entry(profile_id.to_string())
+            .or_default()
+            .record_success(latency_ms);
+    }
+
+    fn record_provider_failure(&self, profile_id: &str, reason: &str) {
+        let now = Instant::now();
+        let now_wall_time = Utc::now();
+        let opened_until_wall_time = Duration::from_std(self.circuit_breaker_cooldown)
+            .ok()
+            .map(|duration| now_wall_time + duration);
+        let mut stats_by_profile = self
+            .provider_stats
+            .lock()
+            .expect("gateway provider stats lock");
+        stats_by_profile
+            .entry(profile_id.to_string())
+            .or_default()
+            .record_failure(
+                reason,
+                now,
+                now_wall_time,
+                self.circuit_breaker_failure_threshold,
+                self.circuit_breaker_cooldown,
+                opened_until_wall_time,
+            );
+    }
+
+    fn lane_snapshot(&self, lane: &str) -> GatewayLimitBucketSnapshot {
+        self.lane_bucket(lane).snapshot()
+    }
+
+    fn profile_snapshot(&self, profile_id: &str) -> GatewayLimitBucketSnapshot {
+        self.profile_bucket(profile_id).snapshot()
+    }
+
+    fn provider_stats_snapshot(&self, profile_id: &str) -> GatewayProviderStatsSnapshot {
+        let now = Instant::now();
+        let mut stats_by_profile = self
+            .provider_stats
+            .lock()
+            .expect("gateway provider stats lock");
+        let Some(stats) = stats_by_profile.get_mut(profile_id) else {
+            return GatewayProviderStatsSnapshot::default();
+        };
+        stats.clear_expired_circuit(now);
+        stats.snapshot(now)
+    }
+
     fn lane_bucket(&self, lane: &str) -> Arc<GatewayLimitBucket> {
         let mut lanes = self.lanes.lock().expect("gateway lane limiter lock");
         lanes
@@ -601,8 +743,106 @@ impl GatewayRuntimeLimiter {
     }
 }
 
+impl GatewayProviderRuntimeStats {
+    fn circuit_open(&self, now: Instant) -> bool {
+        self.opened_until
+            .map(|opened_until| opened_until > now)
+            .unwrap_or(false)
+    }
+
+    fn clear_expired_circuit(&mut self, now: Instant) {
+        if self
+            .opened_until
+            .map(|opened_until| opened_until <= now)
+            .unwrap_or(false)
+        {
+            self.opened_until = None;
+            self.opened_until_wall_time = None;
+        }
+    }
+
+    fn record_success(&mut self, latency_ms: Option<u64>) {
+        self.consecutive_failures = 0;
+        self.success_count = self.success_count.saturating_add(1);
+        self.opened_until = None;
+        self.opened_until_wall_time = None;
+        self.last_success_at = Some(Utc::now());
+        if let Some(latency_ms) = latency_ms {
+            self.latency_samples_ms.push_back(latency_ms);
+            while self.latency_samples_ms.len() > 256 {
+                self.latency_samples_ms.pop_front();
+            }
+        }
+    }
+
+    fn record_failure(
+        &mut self,
+        reason: &str,
+        now: Instant,
+        now_wall_time: DateTime<Utc>,
+        failure_threshold: u32,
+        cooldown: StdDuration,
+        opened_until_wall_time: Option<DateTime<Utc>>,
+    ) {
+        self.consecutive_failures = self.consecutive_failures.saturating_add(1);
+        self.failure_count = self.failure_count.saturating_add(1);
+        if gateway_provider_failure_is_timeout(reason) {
+            self.timeout_count = self.timeout_count.saturating_add(1);
+        }
+        if gateway_provider_failure_is_rate_limit(reason) {
+            self.rate_limit_count = self.rate_limit_count.saturating_add(1);
+        }
+        self.last_failure_at = Some(now_wall_time);
+        self.last_failure_reason = Some(reason.to_string());
+        if self.consecutive_failures >= failure_threshold {
+            self.opened_until = Some(now + cooldown);
+            self.opened_until_wall_time = opened_until_wall_time;
+        }
+    }
+
+    fn snapshot(&self, now: Instant) -> GatewayProviderStatsSnapshot {
+        let circuit_open = self.circuit_open(now);
+        let mut latencies: Vec<u64> = self.latency_samples_ms.iter().copied().collect();
+        latencies.sort_unstable();
+        GatewayProviderStatsSnapshot {
+            consecutive_failures: self.consecutive_failures,
+            success_count: self.success_count,
+            failure_count: self.failure_count,
+            timeout_count: self.timeout_count,
+            rate_limit_count: self.rate_limit_count,
+            p50_latency_ms: percentile_latency(&latencies, 50),
+            p95_latency_ms: percentile_latency(&latencies, 95),
+            circuit_open,
+            opened_until: circuit_open
+                .then(|| self.opened_until_wall_time.clone())
+                .flatten(),
+            last_success_at: self.last_success_at.clone(),
+            last_failure_at: self.last_failure_at.clone(),
+            last_failure_reason: self.last_failure_reason.clone(),
+        }
+    }
+}
+
+fn percentile_latency(sorted_latencies: &[u64], percentile: usize) -> Option<u64> {
+    if sorted_latencies.is_empty() {
+        return None;
+    }
+    let percentile = percentile.min(100);
+    let index = ((sorted_latencies.len().saturating_sub(1)) * percentile + 99) / 100;
+    sorted_latencies.get(index).copied()
+}
+
+fn gateway_provider_failure_is_timeout(reason: &str) -> bool {
+    reason.contains("timeout")
+}
+
+fn gateway_provider_failure_is_rate_limit(reason: &str) -> bool {
+    reason.contains("429") || reason.contains("rate_limit") || reason.contains("too_many_requests")
+}
+
 #[allow(dead_code)]
 struct GatewayLimitBucket {
+    max_concurrency: usize,
     semaphore: Arc<Semaphore>,
     queue_limit: usize,
     queue_timeout: StdDuration,
@@ -612,8 +852,10 @@ struct GatewayLimitBucket {
 #[allow(dead_code)]
 impl GatewayLimitBucket {
     fn new(max_concurrency: usize, queue_limit: usize, queue_timeout: StdDuration) -> Self {
+        let max_concurrency = max_concurrency.max(1);
         Self {
-            semaphore: Arc::new(Semaphore::new(max_concurrency.max(1))),
+            max_concurrency,
+            semaphore: Arc::new(Semaphore::new(max_concurrency)),
             queue_limit,
             queue_timeout,
             queued: AtomicUsize::new(0),
@@ -643,6 +885,19 @@ impl GatewayLimitBucket {
             Ok(Ok(permit)) => Ok(permit),
             Ok(Err(_closed)) => Err(GatewayLimitError::QueueFull),
             Err(_elapsed) => Err(GatewayLimitError::QueueTimeout),
+        }
+    }
+
+    fn snapshot(&self) -> GatewayLimitBucketSnapshot {
+        let active = self
+            .max_concurrency
+            .saturating_sub(self.semaphore.available_permits().min(self.max_concurrency));
+        GatewayLimitBucketSnapshot {
+            max_concurrency: self.max_concurrency,
+            active,
+            queued: self.queued.load(Ordering::Acquire),
+            queue_limit: self.queue_limit,
+            queue_timeout_ms: self.queue_timeout.as_millis() as u64,
         }
     }
 }
@@ -823,6 +1078,7 @@ pub fn router(
             axum::routing::post(create_external_source_sync),
         )
         .route("/v1/model-gateway/presets", get(list_model_gateway_presets))
+        .route("/v1/model-gateway/status", get(get_model_gateway_status))
         .route(
             "/v1/model-gateway/profiles",
             get(list_model_gateway_profiles).post(create_model_gateway_profile),
@@ -4950,6 +5206,232 @@ async fn list_model_gateway_profiles(
             .map(model_gateway_profile_view)
             .collect(),
     ))
+}
+
+#[derive(Clone, Debug)]
+struct ModelGatewayStatusProviderSource {
+    profile_id: String,
+    display_name: String,
+    lane: String,
+    provider_id: String,
+    model_id: String,
+    wire_api: String,
+    source: String,
+    priority: i32,
+    enabled: bool,
+    max_concurrency: Option<u32>,
+    rpm_limit: Option<i32>,
+    tpm_limit: Option<i32>,
+}
+
+async fn get_model_gateway_status(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> std::result::Result<Json<ModelGatewayStatusView>, ApiError> {
+    let _user = require_model_gateway_operator_session(&state, &headers).await?;
+    Ok(Json(model_gateway_status_view(&state).await?))
+}
+
+async fn model_gateway_status_view(
+    state: &AppState,
+) -> std::result::Result<ModelGatewayStatusView, ApiError> {
+    let generated_at = Utc::now();
+    let profiles = state
+        .storage
+        .model_gateway_profiles()
+        .list_all(state.tenant_id)
+        .await
+        .map_err(ApiError::from_storage)?;
+    let usage_by_profile: HashMap<String, ModelGatewayProfileUsageSummary> = state
+        .storage
+        .model_gateway_profiles()
+        .summarize_recent_usage(state.tenant_id, generated_at - Duration::hours(1))
+        .await
+        .map_err(ApiError::from_storage)?
+        .into_iter()
+        .map(|summary| (summary.profile_id.clone(), summary))
+        .collect();
+
+    let mut sources = Vec::new();
+    let mut seen_profile_ids = HashSet::new();
+    for profile in profiles {
+        seen_profile_ids.insert(profile.profile_id.clone());
+        sources.push(model_gateway_status_source_from_record(profile));
+    }
+
+    if let Some(config) =
+        ModelGatewayPoolConfig::from_env(MODEL_LANE_ASSISTANT_CHAT).map_err(|error| {
+            ApiError::internal(
+                "model_gateway_pool_env_invalid",
+                format!("failed to load assistant chat model gateway pool: {error}"),
+            )
+        })?
+    {
+        state.gateway_limiter.ensure_lane_limit(
+            &config.lane,
+            config.lane_limits.max_concurrency,
+            config.lane_limits.queue_limit,
+            config.lane_limits.queue_timeout_ms,
+        );
+        for profile in config.active_profiles_by_priority() {
+            if seen_profile_ids.insert(profile.profile_id.clone()) {
+                sources.push(model_gateway_status_source_from_env_profile(
+                    &config.lane,
+                    profile,
+                ));
+            }
+        }
+    }
+
+    let mut profile_counts_by_lane = BTreeMap::<String, usize>::new();
+    profile_counts_by_lane
+        .entry(MODEL_LANE_ASSISTANT_CHAT.to_string())
+        .or_default();
+    for source in &sources {
+        *profile_counts_by_lane
+            .entry(source.lane.clone())
+            .or_default() += 1;
+    }
+
+    let lanes = profile_counts_by_lane
+        .iter()
+        .map(|(lane, profile_count)| {
+            let snapshot = state.gateway_limiter.lane_snapshot(lane);
+            ModelGatewayLaneStatusView {
+                lane: lane.clone(),
+                routing_mode: model_gateway_lane_routing_mode(lane),
+                max_concurrency: snapshot.max_concurrency,
+                active: snapshot.active,
+                queued: snapshot.queued,
+                queue_limit: snapshot.queue_limit,
+                queue_timeout_ms: snapshot.queue_timeout_ms,
+                profile_count: *profile_count,
+            }
+        })
+        .collect();
+
+    let providers = sources
+        .into_iter()
+        .map(|source| {
+            state.gateway_limiter.ensure_profile_limit(
+                &source.profile_id,
+                source.max_concurrency,
+                None,
+                None,
+            );
+            let limit_snapshot = state.gateway_limiter.profile_snapshot(&source.profile_id);
+            let stats = state
+                .gateway_limiter
+                .provider_stats_snapshot(&source.profile_id);
+            let usage = usage_by_profile.get(&source.profile_id);
+            ModelGatewayProviderStatusView {
+                profile_id: source.profile_id,
+                display_name: source.display_name,
+                lane: source.lane,
+                provider_id: source.provider_id,
+                model_id: source.model_id,
+                wire_api: source.wire_api,
+                source: source.source,
+                priority: source.priority,
+                enabled: source.enabled,
+                max_concurrency: limit_snapshot.max_concurrency,
+                active: limit_snapshot.active,
+                queued: limit_snapshot.queued,
+                queue_limit: limit_snapshot.queue_limit,
+                queue_timeout_ms: limit_snapshot.queue_timeout_ms,
+                rpm_limit: source.rpm_limit,
+                tpm_limit: source.tpm_limit,
+                request_count: usage
+                    .map(|summary| summary.request_count as u64)
+                    .unwrap_or(0),
+                success_count: usage
+                    .map(|summary| summary.success_count as u64)
+                    .unwrap_or(0),
+                failure_count: usage
+                    .map(|summary| summary.failure_count as u64)
+                    .unwrap_or(0),
+                timeout_count: usage
+                    .map(|summary| summary.timeout_count as u64)
+                    .unwrap_or(0),
+                rate_limit_count: usage
+                    .map(|summary| summary.rate_limit_count as u64)
+                    .unwrap_or(0),
+                input_tokens: usage
+                    .map(|summary| summary.input_tokens as u64)
+                    .unwrap_or(0),
+                output_tokens: usage
+                    .map(|summary| summary.output_tokens as u64)
+                    .unwrap_or(0),
+                runtime_success_count: stats.success_count,
+                runtime_failure_count: stats.failure_count,
+                runtime_timeout_count: stats.timeout_count,
+                runtime_rate_limit_count: stats.rate_limit_count,
+                consecutive_failures: stats.consecutive_failures,
+                p50_latency_ms: stats.p50_latency_ms,
+                p95_latency_ms: stats.p95_latency_ms,
+                circuit_open: stats.circuit_open,
+                opened_until: stats.opened_until,
+                last_success_at: stats.last_success_at,
+                last_failure_at: stats.last_failure_at,
+                last_failure_reason: stats.last_failure_reason,
+            }
+        })
+        .collect();
+
+    Ok(ModelGatewayStatusView {
+        generated_at,
+        lanes,
+        providers,
+    })
+}
+
+fn model_gateway_status_source_from_record(
+    profile: ModelGatewayProfile,
+) -> ModelGatewayStatusProviderSource {
+    ModelGatewayStatusProviderSource {
+        profile_id: profile.profile_id,
+        display_name: profile.display_name,
+        lane: profile.lane,
+        provider_id: profile.provider_id,
+        model_id: profile.model_id,
+        wire_api: profile.wire_api,
+        source: "database".to_string(),
+        priority: profile.priority,
+        enabled: profile.enabled,
+        max_concurrency: model_gateway_i32_to_u32(profile.max_concurrency),
+        rpm_limit: profile.rpm_limit,
+        tpm_limit: profile.tpm_limit,
+    }
+}
+
+fn model_gateway_status_source_from_env_profile(
+    lane: &str,
+    profile: ModelProviderProfile,
+) -> ModelGatewayStatusProviderSource {
+    ModelGatewayStatusProviderSource {
+        profile_id: profile.profile_id.clone(),
+        display_name: profile.profile_id,
+        lane: lane.to_string(),
+        provider_id: profile.provider_id,
+        model_id: profile.model_id,
+        wire_api: profile.wire_api.as_str().to_string(),
+        source: "env".to_string(),
+        priority: profile.priority,
+        enabled: true,
+        max_concurrency: profile.rate_limit.concurrent_requests,
+        rpm_limit: model_gateway_u32_to_i32(profile.rate_limit.requests_per_minute),
+        tpm_limit: model_gateway_u32_to_i32(profile.rate_limit.tokens_per_minute),
+    }
+}
+
+fn model_gateway_i32_to_u32(value: Option<i32>) -> Option<u32> {
+    value
+        .and_then(|value| u32::try_from(value).ok())
+        .filter(|value| *value > 0)
+}
+
+fn model_gateway_u32_to_i32(value: Option<u32>) -> Option<i32> {
+    value.and_then(|value| i32::try_from(value).ok())
 }
 
 async fn create_model_gateway_profile(
@@ -15883,6 +16365,13 @@ async fn external_channel_acquire_gateway_permit(
         lane_limits.queue_limit,
         lane_limits.queue_timeout_ms,
     );
+    if state
+        .gateway_limiter
+        .provider_available(&profile.profile_id)
+        .is_none()
+    {
+        return Err(GatewayLimitError::CircuitOpen);
+    }
     state
         .gateway_limiter
         .acquire_lane_and_profile(MODEL_LANE_ASSISTANT_CHAT, &profile.profile_id)
@@ -15894,6 +16383,7 @@ fn gateway_limit_error_reason(error: GatewayLimitError) -> &'static str {
     match error {
         GatewayLimitError::QueueFull => "model_gateway_queue_full",
         GatewayLimitError::QueueTimeout => "model_gateway_queue_timeout",
+        GatewayLimitError::CircuitOpen => "model_gateway_circuit_open",
     }
 }
 
@@ -16207,6 +16697,7 @@ async fn external_channel_chat_model_or_acceptance_reply(
         let elapsed = direct_reply_started_at.elapsed();
         let remaining_budget = direct_reply_total_budget.saturating_sub(elapsed);
         let attempt_timeout = external_channel_direct_reply_attempt_timeout(remaining_budget);
+        let attempt_started_at = Instant::now();
         let response_result = if let Some(profile) = attempt.profile.clone() {
             tokio::time::timeout(
                 attempt_timeout,
@@ -16235,6 +16726,16 @@ async fn external_channel_chat_model_or_acceptance_reply(
         let response = match response_result {
             Ok(Ok(response)) => response,
             Ok(Err(error)) => {
+                if let Some(profile) = attempt.profile.as_ref() {
+                    let reason = format!(
+                        "provider_error:{}:{}",
+                        error.status.as_u16(),
+                        error.payload.code.as_str()
+                    );
+                    state
+                        .gateway_limiter
+                        .record_provider_failure(&profile.profile_id, &reason);
+                }
                 rejected_attempts.push(json!({
                     "attempt": attempt.label.as_str(),
                     "runtime_mode": attempt.runtime.mode.as_str(),
@@ -16278,6 +16779,12 @@ async fn external_channel_chat_model_or_acceptance_reply(
                 continue;
             }
             Err(_elapsed) => {
+                if let Some(profile) = attempt.profile.as_ref() {
+                    state.gateway_limiter.record_provider_failure(
+                        &profile.profile_id,
+                        "direct_reply_attempt_timeout",
+                    );
+                }
                 rejected_attempts.push(json!({
                     "attempt": attempt.label.as_str(),
                     "runtime_mode": attempt.runtime.mode.as_str(),
@@ -16334,6 +16841,13 @@ async fn external_channel_chat_model_or_acceptance_reply(
             );
         }
         if let Some(reason) = external_channel_model_reply_rejection_reason(&response) {
+            if reason.starts_with("provider_failure:") {
+                if let Some(profile) = attempt.profile.as_ref() {
+                    state
+                        .gateway_limiter
+                        .record_provider_failure(&profile.profile_id, &reason);
+                }
+            }
             rejected_attempts.push(json!({
                 "attempt": attempt.label.as_str(),
                 "runtime_mode": attempt.runtime.mode.as_str(),
@@ -16367,6 +16881,15 @@ async fn external_channel_chat_model_or_acceptance_reply(
                 .await
                 .map_err(ApiError::from_storage)?;
             continue;
+        }
+        if let Some(profile) = attempt.profile.as_ref() {
+            state.gateway_limiter.record_provider_success(
+                &profile.profile_id,
+                response
+                    .runtime
+                    .latency_ms
+                    .or(Some(attempt_started_at.elapsed().as_millis() as u64)),
+            );
         }
 
         let assistant_artifact = json!({
@@ -64862,6 +65385,34 @@ mod tests {
     }
 
     #[test]
+    fn gateway_limiter_skips_provider_during_circuit_breaker_cooldown() {
+        let limiter = GatewayRuntimeLimiter::for_test()
+            .with_profile_limit("openclaw-main", 1, 0)
+            .with_circuit_breaker(2, StdDuration::from_secs(60));
+
+        assert!(limiter.provider_available("openclaw-main").is_some());
+        limiter.record_provider_failure("openclaw-main", "direct_reply_attempt_timeout");
+        assert!(limiter.provider_available("openclaw-main").is_some());
+        limiter.record_provider_failure("openclaw-main", "provider_error:429:rate_limit");
+
+        assert!(limiter.provider_available("openclaw-main").is_none());
+        let stats = limiter.provider_stats_snapshot("openclaw-main");
+        assert!(stats.circuit_open);
+        assert_eq!(stats.failure_count, 2);
+        assert_eq!(stats.timeout_count, 1);
+        assert_eq!(stats.rate_limit_count, 1);
+
+        limiter.record_provider_success("openclaw-main", Some(42));
+        let stats = limiter
+            .provider_available("openclaw-main")
+            .expect("success should close circuit");
+        assert!(!stats.circuit_open);
+        assert_eq!(stats.consecutive_failures, 0);
+        assert_eq!(stats.success_count, 1);
+        assert_eq!(stats.p50_latency_ms, Some(42));
+    }
+
+    #[test]
     fn model_gateway_profile_presets_include_safe_defaults() {
         let presets = model_gateway_presets();
 
@@ -64877,6 +65428,85 @@ mod tests {
         let serialized = serde_json::to_string(&presets).expect("presets should serialize");
         assert!(!serialized.contains("api_key"));
         assert!(!serialized.contains("sk-"));
+    }
+
+    #[tokio::test]
+    async fn gateway_status_exposes_lane_and_provider_counts_without_secrets() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let Some(harness) = build_auth_api_test_harness().await else {
+            return;
+        };
+        let cookie = issue_email_session_cookie(&harness, "model-pool-status@example.com").await;
+        let profile_id = format!("openclaw-status-{}", Uuid::new_v4().simple());
+        let secret_env_name = format!(
+            "MODEL_GATEWAY_STATUS_SECRET_{}",
+            Uuid::new_v4()
+                .to_string()
+                .replace('-', "_")
+                .to_ascii_uppercase()
+        );
+        std::env::set_var(&secret_env_name, "sk-status-secret-value");
+        harness
+            .storage
+            .model_gateway_profiles()
+            .create(
+                harness.tenant_id,
+                NewModelGatewayProfile {
+                    id: Uuid::new_v4(),
+                    profile_id: profile_id.clone(),
+                    display_name: "OpenClaw Status Test".to_string(),
+                    lane: MODEL_LANE_ASSISTANT_CHAT.to_string(),
+                    provider_id: "openclaw".to_string(),
+                    model_id: "status-model-v1".to_string(),
+                    base_url: Some("https://token:secret@example.invalid/v1".to_string()),
+                    api_path: Some("/chat/completions".to_string()),
+                    wire_api: "chat_completions".to_string(),
+                    auth_mode: "bearer_env".to_string(),
+                    auth_env_key_name: Some(secret_env_name.clone()),
+                    recommended_preset: Some("openclaw/default".to_string()),
+                    max_concurrency: Some(2),
+                    rpm_limit: Some(30),
+                    tpm_limit: Some(60_000),
+                    timeout_ms: Some(30_000),
+                    priority: 50,
+                    enabled: true,
+                    capabilities: json!(["chat"]),
+                },
+            )
+            .await
+            .expect("profile should be stored");
+
+        let response = get_request(
+            harness.app.clone(),
+            "/v1/model-gateway/status",
+            Some(&cookie),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let status: ModelGatewayStatusView = read_json_response(response).await;
+        let lane = status
+            .lanes
+            .iter()
+            .find(|lane| lane.lane == MODEL_LANE_ASSISTANT_CHAT)
+            .expect("assistant chat lane should be exposed");
+        assert!(lane.profile_count >= 1);
+        let provider = status
+            .providers
+            .iter()
+            .find(|provider| provider.profile_id == profile_id)
+            .expect("created provider should be exposed");
+        assert_eq!(provider.source, "database");
+        assert_eq!(provider.max_concurrency, 2);
+        assert_eq!(provider.active, 0);
+        assert_eq!(provider.queued, 0);
+        assert_eq!(provider.rpm_limit, Some(30));
+        assert_eq!(provider.tpm_limit, Some(60_000));
+        assert!(!provider.circuit_open);
+        let serialized = serde_json::to_string(&status).expect("status should serialize");
+        assert!(!serialized.contains("secret@example"));
+        assert!(!serialized.contains("sk-status-secret-value"));
+        assert!(!serialized.contains(&secret_env_name));
+        std::env::remove_var(secret_env_name);
     }
 
     #[tokio::test]

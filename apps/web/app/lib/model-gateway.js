@@ -108,26 +108,57 @@ export function normalizeModelGatewayStatus(raw = {}) {
   const lanes = Array.isArray(raw.lanes) ? raw.lanes : [];
   const providers = Array.isArray(raw.providers) ? raw.providers : [];
   return {
+    generatedAt: raw.generated_at || raw.generatedAt || null,
     lanes: lanes.map((lane) => ({
       lane: stringOrEmpty(lane.lane),
+      routingMode: stringOrEmpty(lane.routing_mode || lane.routingMode || 'observe_only'),
       maxConcurrency: numberOrNull(lane.max_concurrency ?? lane.maxConcurrency),
-      activeCount: numberOrNull(lane.active_count ?? lane.activeCount) ?? 0,
-      queuedCount: numberOrNull(lane.queued_count ?? lane.queuedCount) ?? 0,
+      activeCount: numberOrNull(lane.active ?? lane.active_count ?? lane.activeCount) ?? 0,
+      queuedCount: numberOrNull(lane.queued ?? lane.queued_count ?? lane.queuedCount) ?? 0,
       queueLimit: numberOrNull(lane.queue_limit ?? lane.queueLimit),
+      queueTimeoutMs: numberOrNull(lane.queue_timeout_ms ?? lane.queueTimeoutMs),
+      profileCount: numberOrNull(lane.profile_count ?? lane.profileCount) ?? 0,
     })),
     providers: providers.map((provider) => redactModelGatewaySecrets({
       profileId: stringOrEmpty(provider.profile_id || provider.profileId),
       displayName: stringOrEmpty(provider.display_name || provider.displayName || provider.profile_id),
+      lane: stringOrEmpty(provider.lane || 'assistant_chat'),
+      source: stringOrEmpty(provider.source || 'database'),
       provider: stringOrEmpty(provider.provider || provider.provider_id || provider.providerId),
+      providerId: stringOrEmpty(provider.provider_id || provider.providerId || provider.provider),
       model: stringOrEmpty(provider.model || provider.model_id || provider.modelId),
-      activeCount: numberOrNull(provider.active_count ?? provider.activeCount) ?? 0,
+      modelId: stringOrEmpty(provider.model_id || provider.modelId || provider.model),
+      wireApi: stringOrEmpty(provider.wire_api || provider.wireApi),
+      priority: numberOrNull(provider.priority) ?? 100,
+      activeCount: numberOrNull(provider.active ?? provider.active_count ?? provider.activeCount) ?? 0,
+      queuedCount: numberOrNull(provider.queued ?? provider.queued_count ?? provider.queuedCount) ?? 0,
       maxConcurrency: numberOrNull(provider.max_concurrency ?? provider.maxConcurrency),
+      queueLimit: numberOrNull(provider.queue_limit ?? provider.queueLimit),
+      queueTimeoutMs: numberOrNull(provider.queue_timeout_ms ?? provider.queueTimeoutMs),
+      rpmLimit: numberOrNull(provider.rpm_limit ?? provider.rpmLimit),
+      tpmLimit: numberOrNull(provider.tpm_limit ?? provider.tpmLimit),
       requestCount: numberOrNull(provider.request_count ?? provider.requestCount) ?? 0,
       successCount: numberOrNull(provider.success_count ?? provider.successCount) ?? 0,
       failureCount: numberOrNull(provider.failure_count ?? provider.failureCount) ?? 0,
+      timeoutCount: numberOrNull(provider.timeout_count ?? provider.timeoutCount) ?? 0,
+      rateLimitCount: numberOrNull(provider.rate_limit_count ?? provider.rateLimitCount) ?? 0,
+      inputTokens: numberOrNull(provider.input_tokens ?? provider.inputTokens) ?? 0,
+      outputTokens: numberOrNull(provider.output_tokens ?? provider.outputTokens) ?? 0,
+      runtimeSuccessCount: numberOrNull(provider.runtime_success_count ?? provider.runtimeSuccessCount) ?? 0,
+      runtimeFailureCount: numberOrNull(provider.runtime_failure_count ?? provider.runtimeFailureCount) ?? 0,
+      runtimeTimeoutCount: numberOrNull(provider.runtime_timeout_count ?? provider.runtimeTimeoutCount) ?? 0,
+      runtimeRateLimitCount: numberOrNull(provider.runtime_rate_limit_count ?? provider.runtimeRateLimitCount) ?? 0,
+      consecutiveFailures: numberOrNull(provider.consecutive_failures ?? provider.consecutiveFailures) ?? 0,
       p50LatencyMs: numberOrNull(provider.p50_latency_ms ?? provider.p50LatencyMs),
       p95LatencyMs: numberOrNull(provider.p95_latency_ms ?? provider.p95LatencyMs),
-      circuitState: stringOrEmpty(provider.circuit_state || provider.circuitState || 'closed'),
+      circuitOpen: booleanOrFalse(provider.circuit_open ?? provider.circuitOpen),
+      circuitState: booleanOrFalse(provider.circuit_open ?? provider.circuitOpen)
+        ? 'open'
+        : stringOrEmpty(provider.circuit_state || provider.circuitState || 'closed'),
+      openedUntil: provider.opened_until || provider.openedUntil || null,
+      lastSuccessAt: provider.last_success_at || provider.lastSuccessAt || null,
+      lastFailureAt: provider.last_failure_at || provider.lastFailureAt || null,
+      lastFailureReason: stringOrEmpty(provider.last_failure_reason || provider.lastFailureReason),
       enabled: provider.enabled !== false,
     })),
   };
@@ -135,12 +166,13 @@ export function normalizeModelGatewayStatus(raw = {}) {
 
 export function modelGatewayProfileStatusSummary(profile = {}, status = {}) {
   const providerStatus = (status.providers || []).find((item) => item.profileId === profile.profileId) || {};
-  const circuit = providerStatus.circuitState || 'closed';
+  const circuit = providerStatus.circuitOpen || providerStatus.circuitState === 'open' ? 'open' : 'closed';
   const enabled = profile.enabled !== false;
   return {
     tone: !enabled ? 'neutral' : circuit === 'open' ? 'critical' : profile.hasSecret ? 'healthy' : 'warning',
     label: !enabled ? '已停用' : circuit === 'open' ? '熔断中' : profile.hasSecret ? '可用' : '缺少密钥',
     detail: `active ${providerStatus.activeCount || 0}/${profile.maxConcurrency || providerStatus.maxConcurrency || '-'}`,
+    providerStatus,
   };
 }
 

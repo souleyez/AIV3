@@ -79,26 +79,44 @@ test('buildModelGatewayProfilePayload omits blank update fields', () => {
 
 test('normalizeModelGatewayStatus hides secrets and keeps lane counts readable', () => {
   const status = normalizeModelGatewayStatus({
-    lanes: [{ lane: 'assistant_chat', active_count: 12, queued_count: 3 }],
+    generated_at: '2026-05-21T08:00:00Z',
+    lanes: [{
+      lane: 'assistant_chat',
+      routing_mode: 'active',
+      active: 12,
+      queued: 3,
+      profile_count: 2,
+      queue_timeout_ms: 3000,
+    }],
     providers: [{
       profile_id: 'OPENCLAW_MAIN',
-      provider: 'openclaw',
-      model: 'default',
-      active_count: 2,
+      provider_id: 'openclaw',
+      model_id: 'default',
+      active: 2,
+      queued: 1,
+      runtime_failure_count: 4,
+      circuit_open: true,
       api_key: 'sk-hidden',
     }],
   });
 
+  assert.equal(status.generatedAt, '2026-05-21T08:00:00Z');
+  assert.equal(status.lanes[0].routingMode, 'active');
   assert.equal(status.lanes[0].activeCount, 12);
   assert.equal(status.lanes[0].queuedCount, 3);
+  assert.equal(status.lanes[0].profileCount, 2);
   assert.equal(status.providers[0].profileId, 'OPENCLAW_MAIN');
+  assert.equal(status.providers[0].providerId, 'openclaw');
+  assert.equal(status.providers[0].queuedCount, 1);
+  assert.equal(status.providers[0].runtimeFailureCount, 4);
+  assert.equal(status.providers[0].circuitState, 'open');
   assert.equal(JSON.stringify(status).includes('sk-hidden'), false);
 });
 
 test('modelGatewayProfileStatusSummary labels enabled and missing-secret states', () => {
   const ready = modelGatewayProfileStatusSummary(
     { profileId: 'p1', enabled: true, hasSecret: true, maxConcurrency: 5 },
-    { providers: [{ profileId: 'p1', activeCount: 1, circuitState: 'closed' }] },
+    { providers: [{ profileId: 'p1', activeCount: 1, circuitOpen: false }] },
   );
   const missing = modelGatewayProfileStatusSummary({ profileId: 'p2', enabled: true, hasSecret: false }, { providers: [] });
 

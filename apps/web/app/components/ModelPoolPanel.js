@@ -6,6 +6,7 @@ import {
   disableModelGatewayProfile,
   fetchModelGatewayPresets,
   fetchModelGatewayProfiles,
+  fetchModelGatewayStatus,
   modelGatewayProfileStatusSummary,
   testModelGatewayProfile,
   updateModelGatewayProfile,
@@ -80,13 +81,38 @@ function MetricPill({ label, value }) {
   return (
     <span className="model-pool-pill">
       <small>{label}</small>
-      <strong>{value || '-'}</strong>
+      <strong>{value === null || value === undefined || value === '' ? '-' : value}</strong>
     </span>
   );
 }
 
-function ProfileCard({ profile, onEdit, onDisable, onTest, testing }) {
-  const summary = modelGatewayProfileStatusSummary(profile, { providers: [] });
+function formatLatency(value) {
+  return value === null || value === undefined ? '' : `${value}ms`;
+}
+
+function ModelPoolRuntimeSummary({ status, loading }) {
+  const lane = (status.lanes || []).find((item) => item.lane === 'assistant_chat') || (status.lanes || [])[0] || {};
+  const providers = status.providers || [];
+  const openCircuitCount = providers.filter((provider) => provider.circuitOpen || provider.circuitState === 'open').length;
+  const activeCount = providers.reduce((total, provider) => total + (provider.activeCount || 0), 0);
+  const queuedCount = providers.reduce((total, provider) => total + (provider.queuedCount || 0), 0);
+  const p95Values = providers.map((provider) => provider.p95LatencyMs).filter((value) => value !== null && value !== undefined);
+  const maxP95 = p95Values.length ? Math.max(...p95Values) : null;
+
+  return (
+    <div className="model-pool-runtime-strip">
+      <MetricPill label="路由模式" value={lane.routingMode || (loading ? '同步中' : '')} />
+      <MetricPill label="Lane 并发" value={`${lane.activeCount || activeCount}/${lane.maxConcurrency || '-'}`} />
+      <MetricPill label="队列" value={`${lane.queuedCount || queuedCount}/${lane.queueLimit ?? '-'}`} />
+      <MetricPill label="熔断" value={openCircuitCount} />
+      <MetricPill label="P95" value={formatLatency(maxP95)} />
+    </div>
+  );
+}
+
+function ProfileCard({ profile, status, onEdit, onDisable, onTest, testing }) {
+  const summary = modelGatewayProfileStatusSummary(profile, status);
+  const providerStatus = summary.providerStatus || {};
   return (
     <article className="model-pool-profile-card">
       <div className="model-pool-profile-main">
@@ -109,9 +135,14 @@ function ProfileCard({ profile, onEdit, onDisable, onTest, testing }) {
       </div>
       <div className="model-pool-metrics">
         <MetricPill label="Lane" value={profile.lane} />
-        <MetricPill label="并发" value={profile.maxConcurrency} />
+        <MetricPill label="运行" value={`${providerStatus.activeCount || 0}/${profile.maxConcurrency || providerStatus.maxConcurrency || '-'}`} />
+        <MetricPill label="排队" value={providerStatus.queuedCount || 0} />
+        <MetricPill label="P95" value={formatLatency(providerStatus.p95LatencyMs)} />
+        <MetricPill label="失败" value={providerStatus.runtimeFailureCount || providerStatus.failureCount || 0} />
         <MetricPill label="超时" value={profile.timeoutMs ? `${profile.timeoutMs}ms` : ''} />
         <MetricPill label="优先级" value={profile.priority} />
+        <MetricPill label="请求" value={providerStatus.requestCount || 0} />
+        <MetricPill label="最近失败" value={providerStatus.lastFailureReason} />
         <MetricPill label="密钥" value={profile.hasSecret ? profile.authEnvKeyName : '未配置'} />
       </div>
     </article>
@@ -122,9 +153,11 @@ export default function ModelPoolPanel({ accountStatusSummary }) {
   const signedIn = Boolean(accountStatusSummary?.signedIn);
   const [presets, setPresets] = useState([]);
   const [profiles, setProfiles] = useState([]);
+  const [status, setStatus] = useState({ lanes: [], providers: [] });
   const [draft, setDraft] = useState(DEFAULT_DRAFT);
   const [editingProfileId, setEditingProfileId] = useState('');
   const [loading, setLoading] = useState(false);
+  const [statusLoading, setStatusLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [testingProfileId, setTestingProfileId] = useState('');
   const [message, setMessage] = useState('');
@@ -138,14 +171,17 @@ export default function ModelPoolPanel({ accountStatusSummary }) {
   async function loadModelPool() {
     if (!signedIn) return;
     setLoading(true);
+    setStatusLoading(true);
     setError('');
     try {
-      const [nextPresets, nextProfiles] = await Promise.all([
+      const [nextPresets, nextProfiles, nextStatus] = await Promise.all([
         fetchModelGatewayPresets(),
         fetchModelGatewayProfiles(),
+        fetchModelGatewayStatus(),
       ]);
       setPresets(nextPresets);
       setProfiles(nextProfiles);
+      setStatus(nextStatus);
       if (!draft.recommendedPreset && nextPresets.length) {
         setDraft((current) => draftFromPreset(nextPresets[0], current));
       }
@@ -153,11 +189,31 @@ export default function ModelPoolPanel({ accountStatusSummary }) {
       setError(nextError instanceof Error ? nextError.message : '模型池读取失败');
     } finally {
       setLoading(false);
+      setStatusLoading(false);
     }
   }
 
   useEffect(() => {
     loadModelPool();
+  }, [signedIn]);
+
+  useEffect(() => {
+    if (!signedIn) return undefined;
+    let cancelled = false;
+    const interval = window.setInterval(async () => {
+      try {
+        const nextStatus = await fetchModelGatewayStatus();
+        if (!cancelled) {
+          setStatus(nextStatus);
+        }
+      } catch (_nextError) {
+        // Keep the latest visible status; manual refresh surfaces request failures.
+      }
+    }, 15000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
   }, [signedIn]);
 
   function updateDraft(field, value) {
@@ -224,6 +280,8 @@ export default function ModelPoolPanel({ accountStatusSummary }) {
     try {
       const result = await testModelGatewayProfile(profileId);
       setMessage(result?.message || '连接检查完成。');
+      const nextStatus = await fetchModelGatewayStatus();
+      setStatus(nextStatus);
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : '测试失败');
     } finally {
@@ -257,11 +315,13 @@ export default function ModelPoolPanel({ accountStatusSummary }) {
             </button>
           </div>
         </div>
+        <ModelPoolRuntimeSummary status={status} loading={statusLoading || loading} />
         <div className="model-pool-profile-list">
           {profiles.length ? profiles.map((profile) => (
             <ProfileCard
               key={profile.profileId}
               profile={profile}
+              status={status}
               onEdit={startEdit}
               onDisable={handleDisable}
               onTest={handleTest}

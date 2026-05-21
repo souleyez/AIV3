@@ -88,6 +88,72 @@ pub struct ModelGatewayProfileView {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ModelGatewayStatusView {
+    pub generated_at: DateTime<Utc>,
+    pub lanes: Vec<ModelGatewayLaneStatusView>,
+    pub providers: Vec<ModelGatewayProviderStatusView>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ModelGatewayLaneStatusView {
+    pub lane: String,
+    pub routing_mode: String,
+    pub max_concurrency: usize,
+    pub active: usize,
+    pub queued: usize,
+    pub queue_limit: usize,
+    pub queue_timeout_ms: u64,
+    pub profile_count: usize,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ModelGatewayProviderStatusView {
+    pub profile_id: String,
+    pub display_name: String,
+    pub lane: String,
+    pub provider_id: String,
+    pub model_id: String,
+    pub wire_api: String,
+    pub source: String,
+    pub priority: i32,
+    pub enabled: bool,
+    pub max_concurrency: usize,
+    pub active: usize,
+    pub queued: usize,
+    pub queue_limit: usize,
+    pub queue_timeout_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rpm_limit: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tpm_limit: Option<i32>,
+    pub request_count: u64,
+    pub success_count: u64,
+    pub failure_count: u64,
+    pub timeout_count: u64,
+    pub rate_limit_count: u64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub runtime_success_count: u64,
+    pub runtime_failure_count: u64,
+    pub runtime_timeout_count: u64,
+    pub runtime_rate_limit_count: u64,
+    pub consecutive_failures: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub p50_latency_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub p95_latency_ms: Option<u64>,
+    pub circuit_open: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opened_until: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_success_at: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_failure_at: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_failure_reason: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ModelGatewayProfileCreateRequest {
     pub profile_id: String,
     pub display_name: String,
@@ -4645,6 +4711,68 @@ mod tests {
         assert!(!serialized.contains("sk-"));
         assert!(!serialized.contains("bearer_token"));
         assert!(!serialized.contains("api_key_value"));
+    }
+
+    #[test]
+    fn model_gateway_status_view_serializes_runtime_only_fields() {
+        let status = ModelGatewayStatusView {
+            generated_at: Utc::now(),
+            lanes: vec![ModelGatewayLaneStatusView {
+                lane: "assistant_chat".to_string(),
+                routing_mode: "observe_only".to_string(),
+                max_concurrency: 64,
+                active: 1,
+                queued: 0,
+                queue_limit: 256,
+                queue_timeout_ms: 3_000,
+                profile_count: 1,
+            }],
+            providers: vec![ModelGatewayProviderStatusView {
+                profile_id: "openclaw-main".to_string(),
+                display_name: "OpenClaw Main".to_string(),
+                lane: "assistant_chat".to_string(),
+                provider_id: "openclaw".to_string(),
+                model_id: "default".to_string(),
+                wire_api: "chat_completions".to_string(),
+                source: "database".to_string(),
+                priority: 100,
+                enabled: true,
+                max_concurrency: 15,
+                active: 1,
+                queued: 0,
+                queue_limit: 256,
+                queue_timeout_ms: 3_000,
+                rpm_limit: Some(120),
+                tpm_limit: Some(120_000),
+                request_count: 10,
+                success_count: 8,
+                failure_count: 2,
+                timeout_count: 1,
+                rate_limit_count: 1,
+                input_tokens: 200,
+                output_tokens: 100,
+                runtime_success_count: 3,
+                runtime_failure_count: 1,
+                runtime_timeout_count: 0,
+                runtime_rate_limit_count: 1,
+                consecutive_failures: 1,
+                p50_latency_ms: Some(240),
+                p95_latency_ms: Some(900),
+                circuit_open: false,
+                opened_until: None,
+                last_success_at: Some(Utc::now()),
+                last_failure_at: None,
+                last_failure_reason: None,
+            }],
+        };
+
+        let serialized = serde_json::to_string(&status).expect("status should serialize");
+
+        assert!(serialized.contains("assistant_chat"));
+        assert!(serialized.contains("runtime_success_count"));
+        assert!(!serialized.contains("base_url"));
+        assert!(!serialized.contains("auth_env_key"));
+        assert!(!serialized.contains("sk-"));
     }
 
     #[test]

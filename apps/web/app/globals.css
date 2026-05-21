@@ -4710,6 +4710,13 @@ body {
   padding-right: 2px;
 }
 
+.model-pool-runtime-strip {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
 .model-pool-profile-main {
   display: flex;
   justify-content: space-between;
@@ -5730,6 +5737,7 @@ body {
 
   .model-pool-form-grid,
   .model-pool-metrics,
+  .model-pool-runtime-strip,
   .model-pool-preset-preview {
     grid-template-columns: 1fr;
   }
