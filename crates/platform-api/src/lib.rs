@@ -11069,7 +11069,23 @@ fn external_integration_config_summary(config: &Value) -> Value {
             ],
         )
         .is_some(),
+        "database_source": external_database_source_config_summary(config),
     })
+}
+
+fn external_database_source_config_summary(config: &Value) -> Value {
+    let Some(database_source) = source_database_config_fragment(config) else {
+        return json!({ "configured": false });
+    };
+    match MySqlSourceConfig::from_value(&database_source) {
+        Ok(config) => serde_json::to_value(config.redacted_summary())
+            .unwrap_or_else(|_| json!({ "configured": true, "valid": true })),
+        Err(error) => json!({
+            "configured": true,
+            "valid": false,
+            "error": error.to_string(),
+        }),
+    }
 }
 
 fn external_channel_drift_summary(
@@ -50531,6 +50547,33 @@ mod tests {
         assert!(!summary_text.contains("dispatch-token"));
         assert!(!summary_text.contains("callback-token"));
         assert!(!summary_text.contains("hidden"));
+    }
+
+    #[test]
+    fn external_integration_config_summary_exposes_database_source_shape() {
+        let summary = external_integration_config_summary(&json!({
+            "database_source": {
+                "connection_env": "THIRD_PARTY_HY_SQL_DATABASE_URL",
+                "database": "hy_sql",
+                "default_dataset_id": "018f0000-0000-7000-9000-000000000001",
+                "tables": [{
+                    "table": "bi_traffic_area",
+                    "id_column": "id",
+                    "content_columns": ["area_name"]
+                }]
+            }
+        }));
+        let database_source = &summary["database_source"];
+
+        assert_eq!(database_source["kind"], json!("mysql"));
+        assert_eq!(database_source["database"], json!("hy_sql"));
+        assert_eq!(
+            database_source["connection_env"],
+            json!("THIRD_PARTY_HY_SQL_DATABASE_URL")
+        );
+        assert_eq!(database_source["table_count"], json!(1));
+        assert_eq!(database_source["tables"][0], json!("bi_traffic_area"));
+        assert!(!summary.to_string().contains("password"));
     }
 
     #[test]
