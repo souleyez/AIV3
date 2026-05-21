@@ -24375,6 +24375,11 @@ struct ResumeDocumentProfile {
     company_count: usize,
     skill_count: usize,
     project_count: usize,
+    company_names: Vec<String>,
+    skill_names: Vec<String>,
+    project_names: Vec<String>,
+    position_names: Vec<String>,
+    location_names: Vec<String>,
 }
 
 impl ResumeDocumentProfile {
@@ -24404,6 +24409,11 @@ impl ResumeDocumentProfile {
             "company_count": self.company_count,
             "skill_count": self.skill_count,
             "project_count": self.project_count,
+            "company_names": &self.company_names,
+            "skill_names": &self.skill_names,
+            "project_names": &self.project_names,
+            "position_names": &self.position_names,
+            "location_names": &self.location_names,
         })
     }
 }
@@ -24787,14 +24797,20 @@ fn extract_resume_document_profile(
     entity_candidates: &[DocumentEntityCandidate],
 ) -> ResumeDocumentProfile {
     let years = extract_resume_timeline_years(scan_text, 32);
+    let company_names = resume_profile_entity_names(entity_candidates, "organization", 16);
+    let skill_names = resume_profile_entity_names(entity_candidates, "skill", 24);
+    let project_names = resume_profile_entity_names(entity_candidates, "project", 16);
+    let position_names = resume_profile_entity_names(entity_candidates, "position", 12);
+    let location_names = resume_profile_entity_names(entity_candidates, "location", 12);
     let mut profile = ResumeDocumentProfile {
         document_id: document.id.to_string(),
-        document_title: document.title.trim().to_string(),
+        document_title: resume_profile_display_title(document),
         candidate_name: entity_candidates
             .iter()
             .find(|candidate| candidate.entity_type == "person")
             .map(|candidate| candidate.name.clone())
             .or_else(|| extract_resume_candidate_name(scan_text))
+            .or_else(|| extract_resume_candidate_name_from_object_key(&document.object_key))
             .or_else(|| extract_resume_candidate_name_from_title(&document.title))
             .or_else(|| extract_resume_candidate_name_from_marked_text(scan_text)),
         gender: extract_resume_gender(scan_text),
@@ -24803,18 +24819,14 @@ fn extract_resume_document_profile(
         earliest_year: years.iter().min().copied(),
         latest_year: years.iter().max().copied(),
         year_count: years.len(),
-        company_count: entity_candidates
-            .iter()
-            .filter(|candidate| candidate.entity_type == "organization")
-            .count(),
-        skill_count: entity_candidates
-            .iter()
-            .filter(|candidate| candidate.entity_type == "skill")
-            .count(),
-        project_count: entity_candidates
-            .iter()
-            .filter(|candidate| candidate.entity_type == "project")
-            .count(),
+        company_count: company_names.len(),
+        skill_count: skill_names.len(),
+        project_count: project_names.len(),
+        company_names,
+        skill_names,
+        project_names,
+        position_names,
+        location_names,
     };
     if profile.age.is_none() {
         if let Some(birth_year) = profile.birth_year {
@@ -24833,6 +24845,23 @@ fn extract_resume_document_profile(
     profile
 }
 
+fn resume_profile_entity_names(
+    entity_candidates: &[DocumentEntityCandidate],
+    entity_type: &str,
+    limit: usize,
+) -> Vec<String> {
+    let mut names = Vec::new();
+    for candidate in entity_candidates {
+        if candidate.entity_type == entity_type {
+            push_document_candidate_term(&mut names, &candidate.name, limit);
+        }
+        if names.len() >= limit {
+            break;
+        }
+    }
+    names
+}
+
 fn resume_profile_has_document_signal(
     document: &Document,
     scan_text: &str,
@@ -24842,6 +24871,7 @@ fn resume_profile_has_document_signal(
         || profile.gender.is_some()
         || profile.birth_year.is_some()
         || resume_profile_text_has_signal(&document.title)
+        || resume_profile_text_has_signal(&document.object_key)
         || resume_profile_text_has_signal(scan_text)
 }
 
@@ -24882,6 +24912,69 @@ fn extract_resume_candidate_name_from_title(text: &str) -> Option<String> {
 
 fn extract_resume_candidate_name_from_marked_text(text: &str) -> Option<String> {
     extract_resume_candidate_name_from_heading_text(text, false)
+}
+
+fn extract_resume_candidate_name_from_object_key(object_key: &str) -> Option<String> {
+    let file_label = resume_profile_object_key_label(object_key)?;
+    for segment in file_label.split(['-', '_', ' ', '　']) {
+        let raw_segment = normalize_document_entity_value(
+            segment
+                .split(['(', '（', '[', '【'])
+                .next()
+                .unwrap_or(segment),
+        );
+        let normalized = normalize_resume_file_person_segment(&raw_segment);
+        if looks_like_person_name(&normalized) {
+            return Some(normalized);
+        }
+        if let Some(name) = extract_resume_candidate_name_from_heading_text(&normalized, false) {
+            return Some(name);
+        }
+        if let Some(prefix) = raw_segment
+            .split_once("简历")
+            .map(|(prefix, _)| normalize_resume_file_person_segment(prefix))
+            .filter(|value| looks_like_person_name(value))
+        {
+            return Some(prefix);
+        }
+    }
+    extract_resume_candidate_name_from_heading_text(&file_label, false)
+}
+
+fn normalize_resume_file_person_segment(value: &str) -> String {
+    let trimmed = value.trim().trim_start_matches(|ch: char| {
+        ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-' | ' ' | '　')
+    });
+    normalize_document_entity_value(trimmed)
+}
+
+fn resume_profile_display_title(document: &Document) -> String {
+    resume_profile_object_key_label(&document.object_key)
+        .unwrap_or_else(|| document.title.trim().to_string())
+}
+
+fn resume_profile_object_key_label(object_key: &str) -> Option<String> {
+    let file_name = object_key
+        .rsplit(['/', '\\'])
+        .next()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    let stem = file_name
+        .rsplit_once('.')
+        .map(|(prefix, _)| prefix)
+        .unwrap_or(file_name);
+    let parts = stem.splitn(4, '-').collect::<Vec<_>>();
+    let label = if parts.len() == 4
+        && parts[0].chars().all(|ch| ch.is_ascii_digit())
+        && parts[1].chars().all(|ch| ch.is_ascii_hexdigit())
+        && parts[2].chars().all(|ch| ch.is_ascii_digit())
+    {
+        parts[3]
+    } else {
+        stem
+    };
+    let normalized = normalize_document_entity_value(label);
+    (!normalized.is_empty()).then_some(normalized)
 }
 
 fn extract_resume_candidate_name_from_heading_text(
@@ -25015,18 +25108,25 @@ fn extract_labeled_resume_values(text: &str, labels: &[&str], limit: usize) -> V
 }
 
 fn extract_resume_timeline_years(text: &str, limit: usize) -> Vec<i32> {
+    let birth_year = extract_resume_birth_year(text);
     let timeline_text = text
         .lines()
         .filter(|line| {
-            !["出生", "生日", "年龄"]
+            !["出生", "生日", "年龄", "身份证"]
                 .iter()
                 .any(|label| line.contains(label))
         })
         .collect::<Vec<_>>()
         .join("\n");
-    let years = extract_resume_years(&timeline_text, limit);
+    let years = extract_resume_years(&timeline_text, limit)
+        .into_iter()
+        .filter(|year| *year >= 1990 && Some(*year) != birth_year)
+        .collect::<Vec<_>>();
     if years.is_empty() {
         extract_resume_years(text, limit)
+            .into_iter()
+            .filter(|year| *year >= 1990 && Some(*year) != birth_year)
+            .collect()
     } else {
         years
     }
@@ -25231,7 +25331,8 @@ fn extract_document_entity_candidates_from_text(
     for name in extract_known_location_names(text, limit) {
         push_document_entity_candidate(&mut candidates, &mut seen, "location", name, limit);
     }
-    for name in extract_labeled_entity_values(text, &["项目名称", "项目", "项目经验"], limit)
+    for name in
+        extract_labeled_entity_values(text, &["项目名称", "项目/产品名称", "产品名称"], limit)
     {
         if looks_like_project_name(&name) {
             push_document_entity_candidate(&mut candidates, &mut seen, "project", name, limit);
@@ -25683,6 +25784,7 @@ fn looks_like_person_name(value: &str) -> bool {
         && value.chars().all(is_cjk_query_token_char)
         && !is_document_entity_noise(value)
         && !is_resume_person_name_noise(value)
+        && !looks_like_position_name(value)
         && ![
             "姓名",
             "候选人",
@@ -25842,15 +25944,94 @@ fn known_location_names() -> &'static [&'static str] {
 
 fn extract_project_like_terms(text: &str, limit: usize) -> Vec<String> {
     let mut values = Vec::new();
-    for token in lexical_query_tokens(text) {
-        if looks_like_project_name(&token) {
-            push_document_candidate_term(&mut values, token, limit);
+    for line in text.lines().map(str::trim).filter(|line| !line.is_empty()) {
+        if let Some(name) = project_name_from_heading_line(line) {
+            push_document_candidate_term(&mut values, name, limit);
         }
         if values.len() >= limit {
             break;
         }
     }
     values
+}
+
+fn project_name_from_heading_line(line: &str) -> Option<String> {
+    let normalized = normalize_document_entity_value(line);
+    if normalized.is_empty() {
+        return None;
+    }
+    for label in ["项目名称", "项目名", "产品名称", "项目"] {
+        if let Some(name) = labeled_project_name_from_line(&normalized, label) {
+            return Some(name);
+        }
+    }
+    let heading =
+        normalize_section_title_hint(&normalized).unwrap_or_else(|| normalized.to_string());
+    if project_heading_is_noise(&heading) || !looks_like_project_heading_candidate(&heading) {
+        return None;
+    }
+    looks_like_project_name(&heading).then_some(heading)
+}
+
+fn labeled_project_name_from_line(line: &str, label: &str) -> Option<String> {
+    let trimmed = line.trim();
+    let label_position = trimmed.find(label)?;
+    if label_position > 4 {
+        return None;
+    }
+    let after_label = trimmed[label_position + label.len()..].trim_start();
+    if !after_label
+        .chars()
+        .next()
+        .is_some_and(|ch| matches!(ch, ':' | '：' | '-' | '—' | '–' | '='))
+    {
+        return None;
+    }
+    let value = labeled_entity_value(trimmed, label)?;
+    let candidate = normalize_document_entity_value(
+        value
+            .split(|ch: char| matches!(ch, '，' | ',' | '。' | '；' | ';' | '\n' | '\r'))
+            .next()
+            .unwrap_or(&value),
+    );
+    if looks_like_project_heading_candidate(&candidate) && looks_like_project_name(&candidate) {
+        Some(candidate)
+    } else {
+        None
+    }
+}
+
+fn looks_like_project_heading_candidate(value: &str) -> bool {
+    let char_count = value.chars().count();
+    (3..=48).contains(&char_count)
+        && !value.contains('@')
+        && value.chars().filter(|ch| ch.is_ascii_digit()).count() < 8
+        && !value
+            .chars()
+            .any(|ch| matches!(ch, '，' | ',' | '。' | '；' | ';' | '、' | '：' | ':'))
+        && ![
+            "负责", "参与", "带领", "使用", "采用", "主要", "职责", "团队", "描述", "内容", "经验",
+            "能力", "以上", "以下",
+        ]
+        .iter()
+        .any(|noise| value.contains(noise))
+}
+
+fn project_heading_is_noise(value: &str) -> bool {
+    is_document_entity_noise(value)
+        || [
+            "项目经验",
+            "项目经历",
+            "项目介绍",
+            "项目描述",
+            "项目职责",
+            "项目业绩",
+            "项目成果",
+            "项目背景",
+            "项目管理",
+            "项目列表",
+        ]
+        .contains(&value)
 }
 
 fn document_candidate_term_has_signal(value: &str) -> bool {
@@ -53350,6 +53531,53 @@ mod tests {
     }
 
     #[test]
+    fn assistant_run_extracts_resume_file_name_and_project_headings_conservatively() {
+        assert_eq!(
+            extract_resume_candidate_name_from_object_key(
+                "documents/0002-f2b9ff07478e-1777027714711-吴启伟-Java(中规中矩，做开发类型.pdf"
+            )
+            .as_deref(),
+            Some("吴启伟")
+        );
+        assert_eq!(
+            extract_resume_candidate_name_from_object_key(
+                "documents/0005-f2b9ff07478e-1777027714709-龙念祖简历(做过物联网平台）.pdf"
+            )
+            .as_deref(),
+            Some("龙念祖")
+        );
+        assert_eq!(
+            extract_resume_candidate_name_from_object_key(
+                "documents/产品经理-朱亚光_简历-BOSS-蓝月亮及金发-华南师范硕士.pdf"
+            )
+            .as_deref(),
+            Some("朱亚光")
+        );
+        assert_eq!(
+            extract_resume_candidate_name_from_object_key("documents/a孙武钊-简历.pdf").as_deref(),
+            Some("孙武钊")
+        );
+
+        let text = "项目经验\n\
+            1的2B/2C项目，带领五人团队，展现项目管理能力。\n\
+            项目名称：智能知识库平台\n\
+            ## 订单风险识别系统";
+        let entities = extract_document_entity_candidates_from_text(text, 32);
+        let projects = entities
+            .iter()
+            .filter(|candidate| candidate.entity_type == "project")
+            .map(|candidate| candidate.name.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(projects.contains(&"智能知识库平台"));
+        assert!(projects.contains(&"订单风险识别系统"));
+        assert!(!projects
+            .iter()
+            .any(|project| project.contains("带领五人团队")));
+        assert!(projects.len() <= 2);
+    }
+
+    #[test]
     fn assistant_run_extracts_resume_profile_dimensions() {
         let now = Utc::now();
         let document = Document {
@@ -53389,6 +53617,22 @@ mod tests {
         assert!(profile.company_count >= 1);
         assert!(profile.skill_count >= 3);
         assert!(profile.project_count >= 1);
+        assert!(profile.skill_names.contains(&"Java".to_string()));
+        assert!(profile
+            .project_names
+            .contains(&"智能知识库平台".to_string()));
+    }
+
+    #[test]
+    fn assistant_run_resume_timeline_excludes_birth_and_identity_years() {
+        let years = extract_resume_timeline_years(
+            "1973年出生\n身份证：440106197312120019\n2006.01-2024.03 任职某公司",
+            8,
+        );
+
+        assert!(!years.contains(&1973));
+        assert_eq!(years.first().copied(), Some(2006));
+        assert_eq!(years.last().copied(), Some(2024));
     }
 
     #[test]
