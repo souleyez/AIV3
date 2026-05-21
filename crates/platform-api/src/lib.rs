@@ -1111,6 +1111,12 @@ struct GatewayRuntimePermit {
     _profile: Option<OwnedSemaphorePermit>,
 }
 
+#[allow(dead_code)]
+struct GatewayModelPermit {
+    _runtime: Option<GatewayRuntimePermit>,
+    rate_reservation: Option<GatewayRateLimitReservation>,
+}
+
 pub fn router(
     storage: PgStorage,
     workflow_catalog: WorkflowCatalog,
@@ -5290,7 +5296,42 @@ async fn require_model_gateway_operator_session(
         ));
     };
 
+    ensure_model_gateway_operator(&user)?;
     Ok(user)
+}
+
+fn ensure_model_gateway_operator(user: &User) -> std::result::Result<(), ApiError> {
+    if env_flag("MODEL_GATEWAY_OPERATOR_ALLOW_ANY_SIGNED_IN", false) {
+        return Ok(());
+    }
+    if model_gateway_operator_email_allowed(&user.email)
+        || model_gateway_operator_role_allowed(user)
+    {
+        return Ok(());
+    }
+    Err(ApiError::forbidden(
+        "model_gateway_operator_required",
+        "当前账号没有模型池运维权限".to_string(),
+    ))
+}
+
+fn model_gateway_operator_email_allowed(email: &str) -> bool {
+    env_csv_contains("MODEL_GATEWAY_OPERATOR_EMAILS", email)
+        || env_csv_contains("MODEL_GATEWAY_OPERATOR_EMAIL_ALLOWLIST", email)
+}
+
+fn model_gateway_operator_role_allowed(user: &User) -> bool {
+    user.roles.iter().any(|role| {
+        model_gateway_builtin_operator_role(role)
+            || env_csv_contains("MODEL_GATEWAY_OPERATOR_ROLES", role)
+    })
+}
+
+fn model_gateway_builtin_operator_role(role: &str) -> bool {
+    matches!(
+        role.trim().to_ascii_lowercase().as_str(),
+        "admin" | "operator" | "model_gateway_operator" | "model-gateway-operator"
+    )
 }
 
 fn model_gateway_presets() -> Vec<ModelGatewayPresetView> {
@@ -5751,10 +5792,11 @@ async fn test_model_gateway_profile(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(profile_id): Path<String>,
-    Json(_request): Json<ModelGatewayProfileTestRequest>,
+    Json(request): Json<ModelGatewayProfileTestRequest>,
 ) -> std::result::Result<Json<ModelGatewayProfileTestResponse>, ApiError> {
     let _user = require_model_gateway_operator_session(&state, &headers).await?;
     let profile_id = validate_model_gateway_profile_id(&profile_id)?;
+    validate_model_gateway_numeric("timeout_ms", request.timeout_ms)?;
     let profile = state
         .storage
         .model_gateway_profiles()
@@ -5767,15 +5809,41 @@ async fn test_model_gateway_profile(
         .as_deref()
         .map(model_gateway_auth_env_is_configured)
         .unwrap_or(false);
-    let (status, message) = if profile.auth_mode == "env_key" && !auth_configured {
-        (
-            "missing_secret".to_string(),
-            "未找到该 profile 绑定的环境变量，请先在服务端配置 API Key。".to_string(),
-        )
+    if profile.auth_mode == "env_key" && !auth_configured {
+        return Ok(Json(ModelGatewayProfileTestResponse {
+            profile_id: profile.profile_id,
+            status: "missing_secret".to_string(),
+            message: "未找到该 profile 绑定的环境变量，请先在服务端配置 API Key。".to_string(),
+            auth_configured,
+            checked_at: Utc::now(),
+        }));
+    }
+
+    let probe_timeout_ms = request
+        .timeout_ms
+        .map(|value| value as u64)
+        .unwrap_or(5_000)
+        .clamp(1_000, 30_000);
+    let mut provider_profile = model_gateway_provider_profile_from_record(profile.clone());
+    provider_profile.timeout_ms = Some(probe_timeout_ms);
+    let probe_result = run_model_gateway_profile_probe(provider_profile).await;
+    let (status, message) = if let Ok(response) = probe_result {
+        let reply_chars = response.output_text.trim().chars().count();
+        if reply_chars == 0 {
+            (
+                "failed".to_string(),
+                "真实连通性检查失败：provider 返回空回复。".to_string(),
+            )
+        } else {
+            (
+                "ok".to_string(),
+                format!("真实连通性检查通过，收到 {reply_chars} 字回复。"),
+            )
+        }
     } else {
         (
-            "configured".to_string(),
-            "profile 配置可用于后续真实连通性检查，未返回任何密钥内容。".to_string(),
+            "failed".to_string(),
+            "真实连通性检查失败，已隐藏 provider 错误细节。".to_string(),
         )
     };
 
@@ -5786,6 +5854,40 @@ async fn test_model_gateway_profile(
         auth_configured,
         checked_at: Utc::now(),
     }))
+}
+
+async fn run_model_gateway_profile_probe(
+    profile: ModelProviderProfile,
+) -> std::result::Result<LlmResponse, ApiError> {
+    tokio::task::spawn_blocking(move || {
+        let env_prefix = model_gateway_profile_env_prefix(&profile.profile_id);
+        let model = profile.model_id.clone();
+        let provider = build_provider_from_profile_env(
+            &env_prefix,
+            &profile,
+            bootstrap_default_prompt_registry(),
+        )?;
+        let request = LlmRequest {
+            model,
+            lane: Some(MODEL_LANE_ASSISTANT_CHAT.to_string()),
+            system_prompt_key: None,
+            input: "请用一句话回复：model gateway profile smoke test".to_string(),
+        };
+        provider.complete(&request)
+    })
+    .await
+    .map_err(|error| {
+        ApiError::internal(
+            "model_gateway_profile_probe_join_failed",
+            format!("model gateway profile probe worker join failed: {error}"),
+        )
+    })?
+    .map_err(|_error| {
+        ApiError::bad_request(
+            "model_gateway_profile_probe_failed",
+            "model gateway profile probe failed".to_string(),
+        )
+    })
 }
 
 fn model_gateway_new_profile_from_request(
@@ -66736,7 +66838,9 @@ mod tests {
         let Some(harness) = build_auth_api_test_harness().await else {
             return;
         };
-        let cookie = issue_email_session_cookie(&harness, "model-pool-status@example.com").await;
+        let operator_email = "model-pool-status@example.com";
+        std::env::set_var("MODEL_GATEWAY_OPERATOR_EMAILS", operator_email);
+        let cookie = issue_email_session_cookie(&harness, operator_email).await;
         let profile_id = format!("openclaw-status-{}", Uuid::new_v4().simple());
         let secret_env_name = format!(
             "MODEL_GATEWAY_STATUS_SECRET_{}",
@@ -66806,7 +66910,40 @@ mod tests {
         assert!(!serialized.contains("secret@example"));
         assert!(!serialized.contains("sk-status-secret-value"));
         assert!(!serialized.contains(&secret_env_name));
+        std::env::remove_var("MODEL_GATEWAY_OPERATOR_EMAILS");
         std::env::remove_var(secret_env_name);
+    }
+
+    #[tokio::test]
+    async fn model_gateway_routes_require_configured_operator() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let Some(harness) = build_auth_api_test_harness().await else {
+            return;
+        };
+        std::env::set_var(
+            "MODEL_GATEWAY_OPERATOR_EMAILS",
+            "model-operator@example.com",
+        );
+        let non_operator_cookie =
+            issue_email_session_cookie(&harness, "ordinary-user@example.com").await;
+        let denied = get_request(
+            harness.app.clone(),
+            "/v1/model-gateway/presets",
+            Some(&non_operator_cookie),
+        )
+        .await;
+        assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+
+        let operator_cookie =
+            issue_email_session_cookie(&harness, "model-operator@example.com").await;
+        let allowed = get_request(
+            harness.app.clone(),
+            "/v1/model-gateway/presets",
+            Some(&operator_cookie),
+        )
+        .await;
+        assert_eq!(allowed.status(), StatusCode::OK);
+        std::env::remove_var("MODEL_GATEWAY_OPERATOR_EMAILS");
     }
 
     #[tokio::test]
@@ -66815,7 +66952,9 @@ mod tests {
         let Some(harness) = build_auth_api_test_harness().await else {
             return;
         };
-        let cookie = issue_email_session_cookie(&harness, "model-pool@example.com").await;
+        let operator_email = "model-pool@example.com";
+        std::env::set_var("MODEL_GATEWAY_OPERATOR_EMAILS", operator_email);
+        let cookie = issue_email_session_cookie(&harness, operator_email).await;
         let secret_env_name = format!(
             "MODEL_GATEWAY_TEST_SECRET_{}",
             Uuid::new_v4()
@@ -66886,6 +67025,7 @@ mod tests {
             harness.app.clone(),
             &format!("/v1/model-gateway/profiles/{profile_id}"),
             &ModelGatewayProfileUpdateRequest {
+                base_url: Some(String::new()),
                 max_concurrency: Some(3),
                 timeout_ms: Some(20_000),
                 ..ModelGatewayProfileUpdateRequest::default()
@@ -66901,14 +67041,16 @@ mod tests {
         let test_response = post_json_request(
             harness.app.clone(),
             &format!("/v1/model-gateway/profiles/{profile_id}/test"),
-            &ModelGatewayProfileTestRequest::default(),
+            &ModelGatewayProfileTestRequest {
+                timeout_ms: Some(1_000),
+            },
             Some(&cookie),
         )
         .await;
         assert_eq!(test_response.status(), StatusCode::OK);
         let test_result: ModelGatewayProfileTestResponse = read_json_response(test_response).await;
         assert_eq!(test_result.profile_id, profile_id);
-        assert_eq!(test_result.status, "configured");
+        assert_eq!(test_result.status, "failed");
         assert!(test_result.auth_configured);
         let serialized_test =
             serde_json::to_string(&test_result).expect("test result should serialize");
@@ -66937,7 +67079,86 @@ mod tests {
             .iter()
             .any(|profile| profile.profile_id == profile_id && !profile.enabled));
 
+        std::env::remove_var("MODEL_GATEWAY_OPERATOR_EMAILS");
         std::env::remove_var(secret_env_name);
+    }
+
+    #[tokio::test]
+    async fn model_gateway_profile_test_runs_real_probe_without_returning_secrets() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        clear_assistant_openclaw_env();
+        let Some(harness) = build_auth_api_test_harness().await else {
+            return;
+        };
+        let operator_email = "model-pool-probe@example.com";
+        std::env::set_var("MODEL_GATEWAY_OPERATOR_EMAILS", operator_email);
+        let cookie = issue_email_session_cookie(&harness, operator_email).await;
+        let profile_id = format!("probe-ok-{}", Uuid::new_v4().simple());
+        let profile_env_prefix = model_gateway_profile_env_prefix(&profile_id);
+        let secret_env_name = format!(
+            "MODEL_GATEWAY_PROBE_SECRET_{}",
+            Uuid::new_v4()
+                .to_string()
+                .replace('-', "_")
+                .to_ascii_uppercase()
+        );
+        std::env::set_var(&secret_env_name, "sk-probe-secret-value");
+        std::env::set_var(
+            format!("{profile_env_prefix}_RUNTIME_OUTPUT_TEXT"),
+            "probe ok",
+        );
+        harness
+            .storage
+            .model_gateway_profiles()
+            .create(
+                harness.tenant_id,
+                NewModelGatewayProfile {
+                    id: Uuid::new_v4(),
+                    profile_id: profile_id.clone(),
+                    display_name: "Probe OK".to_string(),
+                    lane: MODEL_LANE_ASSISTANT_CHAT.to_string(),
+                    provider_id: "scripted".to_string(),
+                    model_id: "probe-scripted-v1".to_string(),
+                    base_url: None,
+                    api_path: None,
+                    wire_api: "chat_completions".to_string(),
+                    auth_mode: "env_key".to_string(),
+                    auth_env_key_name: Some(secret_env_name.clone()),
+                    recommended_preset: None,
+                    max_concurrency: Some(1),
+                    rpm_limit: None,
+                    tpm_limit: None,
+                    timeout_ms: Some(5_000),
+                    priority: 100,
+                    enabled: true,
+                    capabilities: json!(["chat"]),
+                },
+            )
+            .await
+            .expect("profile should be stored");
+
+        let response = post_json_request(
+            harness.app.clone(),
+            &format!("/v1/model-gateway/profiles/{profile_id}/test"),
+            &ModelGatewayProfileTestRequest {
+                timeout_ms: Some(1_000),
+            },
+            Some(&cookie),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let test_result: ModelGatewayProfileTestResponse = read_json_response(response).await;
+        assert_eq!(test_result.status, "ok");
+        assert!(test_result.auth_configured);
+        assert!(test_result.message.contains("真实连通性检查通过"));
+        let serialized = serde_json::to_string(&test_result).expect("test result should serialize");
+        assert!(!serialized.contains("probe ok"));
+        assert!(!serialized.contains("sk-probe-secret-value"));
+
+        std::env::remove_var(format!("{profile_env_prefix}_RUNTIME_OUTPUT_TEXT"));
+        std::env::remove_var("MODEL_GATEWAY_OPERATOR_EMAILS");
+        std::env::remove_var(secret_env_name);
+        clear_assistant_openclaw_env();
     }
 
     #[tokio::test]
@@ -77457,6 +77678,10 @@ mod tests {
             "ASSISTANT_RUN_FALLBACK_RUNTIME_RETRY_BACKOFF_MS",
             "EXTERNAL_CHANNEL_DIRECT_REPLY_TOTAL_BUDGET_MS",
             "EXTERNAL_CHANNEL_DIRECT_REPLY_ATTEMPT_TIMEOUT_MS",
+            "MODEL_GATEWAY_OPERATOR_ALLOW_ANY_SIGNED_IN",
+            "MODEL_GATEWAY_OPERATOR_EMAILS",
+            "MODEL_GATEWAY_OPERATOR_EMAIL_ALLOWLIST",
+            "MODEL_GATEWAY_OPERATOR_ROLES",
             "LLM_GATEWAY_LANE_ASSISTANT_CHAT_MODE",
             "LLM_GATEWAY_LANE_ASSISTANT_CHAT_ROUTING_MODE",
             "LLM_GATEWAY_LANE_ASSISTANT_CHAT_PROFILES",
