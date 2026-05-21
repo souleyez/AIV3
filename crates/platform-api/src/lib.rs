@@ -8032,6 +8032,15 @@ async fn list_external_conversation_tests(
         .map(|row| {
             let payload_summary =
                 external_integration_redacted_summary(row.get::<Value, _>("payload_summary"));
+            let question_text = row
+                .get::<Option<String>, _>("question_text")
+                .map(|text| truncate_assistant_supply_text(&text, 800))
+                .filter(|text| !text.is_empty());
+            let output_artifacts = row.get::<Value, _>("output_artifacts");
+            let answer_text =
+                external_channel_assistant_reply_from_output_artifacts(&output_artifacts)
+                    .map(|text| truncate_assistant_supply_text(&text, 1200))
+                    .filter(|text| !text.is_empty());
             ExternalConversationTestView {
                 event_id: row.get("event_id"),
                 integration_id: row.get("channel_connection_id"),
@@ -8049,6 +8058,9 @@ async fn list_external_conversation_tests(
                     .map(AssistantRunId),
                 assistant_status: row.get("assistant_status"),
                 assistant_event: row.get("assistant_event"),
+                question_text,
+                answer_text,
+                duration_ms: row.get("duration_ms"),
                 created_at: row.get("created_at"),
                 assistant_updated_at: row.get("assistant_updated_at"),
                 payload_summary,
@@ -14813,7 +14825,13 @@ fn external_channel_conversation_history_messages_from_recent_runs(
 }
 
 fn external_channel_assistant_reply_from_run(run: &AssistantRun) -> Option<String> {
-    run.output_artifacts
+    external_channel_assistant_reply_from_output_artifacts(&run.output_artifacts)
+}
+
+fn external_channel_assistant_reply_from_output_artifacts(
+    output_artifacts: &Value,
+) -> Option<String> {
+    output_artifacts
         .as_array()?
         .iter()
         .rev()
