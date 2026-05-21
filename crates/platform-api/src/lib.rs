@@ -114,7 +114,11 @@ use std::{
     fs,
     net::IpAddr,
     path::PathBuf,
-    time::Instant,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, Mutex,
+    },
+    time::{Duration as StdDuration, Instant},
 };
 use storage::{
     ModelGatewayProfile, ModelGatewayProfileUpdate, NewAssistantRun, NewAssistantRunEvent,
@@ -124,6 +128,7 @@ use storage::{
     NewStaticPageDraft, NewStaticPageImageJob, NewStaticPageRenderOutput, NewUserSession,
     NewWorkflowTask, PgStorage,
 };
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tool_registry::{
     bootstrap_default_tool_registry, ToolCliOutputMode, ToolDefinition, ToolInvocationMode,
 };
@@ -351,6 +356,8 @@ pub struct AppState {
     workflow_catalog: WorkflowCatalog,
     storage: PgStorage,
     tenant_id: TenantId,
+    #[allow(dead_code)]
+    gateway_limiter: Arc<GatewayRuntimeLimiter>,
 }
 
 impl AppState {
@@ -388,8 +395,214 @@ impl AppState {
             workflow_catalog,
             storage,
             tenant_id,
+            gateway_limiter: Arc::new(GatewayRuntimeLimiter::new()),
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
+enum GatewayLimitError {
+    QueueFull,
+    QueueTimeout,
+}
+
+#[allow(dead_code)]
+struct GatewayRuntimeLimiter {
+    lanes: Mutex<HashMap<String, Arc<GatewayLimitBucket>>>,
+    profiles: Mutex<HashMap<String, Arc<GatewayLimitBucket>>>,
+    default_lane_max_concurrency: usize,
+    default_profile_max_concurrency: usize,
+    default_queue_limit: usize,
+    default_queue_timeout: StdDuration,
+}
+
+#[allow(dead_code)]
+impl GatewayRuntimeLimiter {
+    fn new() -> Self {
+        Self {
+            lanes: Mutex::new(HashMap::new()),
+            profiles: Mutex::new(HashMap::new()),
+            default_lane_max_concurrency: 64,
+            default_profile_max_concurrency: 16,
+            default_queue_limit: 256,
+            default_queue_timeout: StdDuration::from_millis(3_000),
+        }
+    }
+
+    #[cfg(test)]
+    fn for_test() -> Self {
+        Self::new()
+    }
+
+    #[cfg(test)]
+    fn with_lane_limit(self, lane: &str, max_concurrency: usize, queue_limit: usize) -> Self {
+        self.set_lane_limit(
+            lane,
+            max_concurrency,
+            queue_limit,
+            self.default_queue_timeout,
+        );
+        self
+    }
+
+    fn set_lane_limit(
+        &self,
+        lane: &str,
+        max_concurrency: usize,
+        queue_limit: usize,
+        queue_timeout: StdDuration,
+    ) {
+        let mut lanes = self.lanes.lock().expect("gateway lane limiter lock");
+        lanes.insert(
+            lane.to_string(),
+            Arc::new(GatewayLimitBucket::new(
+                max_concurrency,
+                queue_limit,
+                queue_timeout,
+            )),
+        );
+    }
+
+    fn set_profile_limit(
+        &self,
+        profile_id: &str,
+        max_concurrency: usize,
+        queue_limit: usize,
+        queue_timeout: StdDuration,
+    ) {
+        let mut profiles = self.profiles.lock().expect("gateway profile limiter lock");
+        profiles.insert(
+            profile_id.to_string(),
+            Arc::new(GatewayLimitBucket::new(
+                max_concurrency,
+                queue_limit,
+                queue_timeout,
+            )),
+        );
+    }
+
+    async fn acquire_lane(&self, lane: &str) -> Result<GatewayRuntimePermit, GatewayLimitError> {
+        let bucket = self.lane_bucket(lane);
+        let permit = bucket.acquire().await?;
+        Ok(GatewayRuntimePermit {
+            _lane: Some(permit),
+            _profile: None,
+        })
+    }
+
+    async fn acquire_profile(
+        &self,
+        profile_id: &str,
+    ) -> Result<GatewayRuntimePermit, GatewayLimitError> {
+        let bucket = self.profile_bucket(profile_id);
+        let permit = bucket.acquire().await?;
+        Ok(GatewayRuntimePermit {
+            _lane: None,
+            _profile: Some(permit),
+        })
+    }
+
+    async fn acquire_lane_and_profile(
+        &self,
+        lane: &str,
+        profile_id: &str,
+    ) -> Result<GatewayRuntimePermit, GatewayLimitError> {
+        let lane_bucket = self.lane_bucket(lane);
+        let profile_bucket = self.profile_bucket(profile_id);
+        let lane_permit = lane_bucket.acquire().await?;
+        let profile_permit = match profile_bucket.acquire().await {
+            Ok(permit) => permit,
+            Err(error) => {
+                drop(lane_permit);
+                return Err(error);
+            }
+        };
+        Ok(GatewayRuntimePermit {
+            _lane: Some(lane_permit),
+            _profile: Some(profile_permit),
+        })
+    }
+
+    fn lane_bucket(&self, lane: &str) -> Arc<GatewayLimitBucket> {
+        let mut lanes = self.lanes.lock().expect("gateway lane limiter lock");
+        lanes
+            .entry(lane.to_string())
+            .or_insert_with(|| {
+                Arc::new(GatewayLimitBucket::new(
+                    self.default_lane_max_concurrency,
+                    self.default_queue_limit,
+                    self.default_queue_timeout,
+                ))
+            })
+            .clone()
+    }
+
+    fn profile_bucket(&self, profile_id: &str) -> Arc<GatewayLimitBucket> {
+        let mut profiles = self.profiles.lock().expect("gateway profile limiter lock");
+        profiles
+            .entry(profile_id.to_string())
+            .or_insert_with(|| {
+                Arc::new(GatewayLimitBucket::new(
+                    self.default_profile_max_concurrency,
+                    self.default_queue_limit,
+                    self.default_queue_timeout,
+                ))
+            })
+            .clone()
+    }
+}
+
+#[allow(dead_code)]
+struct GatewayLimitBucket {
+    semaphore: Arc<Semaphore>,
+    queue_limit: usize,
+    queue_timeout: StdDuration,
+    queued: AtomicUsize,
+}
+
+#[allow(dead_code)]
+impl GatewayLimitBucket {
+    fn new(max_concurrency: usize, queue_limit: usize, queue_timeout: StdDuration) -> Self {
+        Self {
+            semaphore: Arc::new(Semaphore::new(max_concurrency.max(1))),
+            queue_limit,
+            queue_timeout,
+            queued: AtomicUsize::new(0),
+        }
+    }
+
+    async fn acquire(&self) -> Result<OwnedSemaphorePermit, GatewayLimitError> {
+        if let Ok(permit) = self.semaphore.clone().try_acquire_owned() {
+            return Ok(permit);
+        }
+
+        if self.queue_limit == 0 {
+            return Err(GatewayLimitError::QueueFull);
+        }
+
+        let queued = self.queued.fetch_add(1, Ordering::AcqRel);
+        if queued >= self.queue_limit {
+            self.queued.fetch_sub(1, Ordering::AcqRel);
+            return Err(GatewayLimitError::QueueFull);
+        }
+
+        let permit_result =
+            tokio::time::timeout(self.queue_timeout, self.semaphore.clone().acquire_owned()).await;
+        self.queued.fetch_sub(1, Ordering::AcqRel);
+
+        match permit_result {
+            Ok(Ok(permit)) => Ok(permit),
+            Ok(Err(_closed)) => Err(GatewayLimitError::QueueFull),
+            Err(_elapsed) => Err(GatewayLimitError::QueueTimeout),
+        }
+    }
+}
+
+#[allow(dead_code)]
+struct GatewayRuntimePermit {
+    _lane: Option<OwnedSemaphorePermit>,
+    _profile: Option<OwnedSemaphorePermit>,
 }
 
 pub fn router(
@@ -18990,15 +19203,11 @@ fn assistant_run_resume_profile_direct_answer(
 
     match dimension {
         AssistantRunEntityScanAnswerDimension::Age => {
+            let ascending = prompt_requests_ascending_sort(prompt);
             rows.sort_by(|left, right| {
-                right
-                    .get("age")
-                    .and_then(Value::as_u64)
-                    .cmp(&left.get("age").and_then(Value::as_u64))
-                    .then_with(|| {
-                        resume_profile_candidate_name(left)
-                            .cmp(&resume_profile_candidate_name(right))
-                    })
+                compare_resume_profile_u64_field(left, right, "age", ascending).then_with(|| {
+                    resume_profile_candidate_name(left).cmp(&resume_profile_candidate_name(right))
+                })
             });
             Some(assistant_run_resume_profile_table(
                 &rows,
@@ -19029,14 +19238,15 @@ fn assistant_run_resume_profile_direct_answer(
         }
         AssistantRunEntityScanAnswerDimension::Gender => {
             rows.sort_by(|left, right| {
-                value_string(left, "gender")
-                    .cmp(&value_string(right, "gender"))
+                resume_profile_gender_sort_rank(left)
+                    .cmp(&resume_profile_gender_sort_rank(right))
                     .then_with(|| {
                         resume_profile_candidate_name(left)
                             .cmp(&resume_profile_candidate_name(right))
                     })
             });
-            Some(assistant_run_resume_profile_table(
+            let (male_count, female_count, unknown_count) = resume_profile_gender_counts(&rows);
+            let table = assistant_run_resume_profile_table(
                 &rows,
                 "按性别归类的候选人简历表",
                 &[
@@ -19059,18 +19269,24 @@ fn assistant_run_resume_profile_direct_answer(
                         value_string(row, "document_title"),
                     ]
                 },
+            );
+            Some(format!(
+                "性别分布：男 {male_count}，女 {female_count}，未知 {unknown_count}。\n\n{table}"
             ))
         }
         AssistantRunEntityScanAnswerDimension::Time => {
+            let sort_by_earliest = prompt_contains_any(prompt, &["最早", "从早", "早到晚"])
+                || ascii_prompt_contains_any(&prompt.to_ascii_lowercase(), &["earliest"]);
+            let sort_key = if sort_by_earliest {
+                "earliest_year"
+            } else {
+                "latest_year"
+            };
+            let ascending = sort_by_earliest || prompt_requests_ascending_sort(prompt);
             rows.sort_by(|left, right| {
-                right
-                    .get("latest_year")
-                    .and_then(Value::as_i64)
-                    .cmp(&left.get("latest_year").and_then(Value::as_i64))
-                    .then_with(|| {
-                        resume_profile_candidate_name(left)
-                            .cmp(&resume_profile_candidate_name(right))
-                    })
+                compare_resume_profile_i64_field(left, right, sort_key, ascending).then_with(|| {
+                    resume_profile_candidate_name(left).cmp(&resume_profile_candidate_name(right))
+                })
             });
             Some(assistant_run_resume_profile_table(
                 &rows,
@@ -19100,15 +19316,14 @@ fn assistant_run_resume_profile_direct_answer(
             ))
         }
         AssistantRunEntityScanAnswerDimension::ResumeSkill => {
+            let ascending = prompt_requests_ascending_sort(prompt);
             rows.sort_by(|left, right| {
-                right
-                    .get("skill_count")
-                    .and_then(Value::as_u64)
-                    .cmp(&left.get("skill_count").and_then(Value::as_u64))
-                    .then_with(|| {
+                compare_resume_profile_u64_field(left, right, "skill_count", ascending).then_with(
+                    || {
                         resume_profile_candidate_name(left)
                             .cmp(&resume_profile_candidate_name(right))
-                    })
+                    },
+                )
             });
             Some(assistant_run_resume_profile_table(
                 &rows,
@@ -19127,15 +19342,14 @@ fn assistant_run_resume_profile_direct_answer(
             ))
         }
         AssistantRunEntityScanAnswerDimension::ResumeProject => {
+            let ascending = prompt_requests_ascending_sort(prompt);
             rows.sort_by(|left, right| {
-                right
-                    .get("project_count")
-                    .and_then(Value::as_u64)
-                    .cmp(&left.get("project_count").and_then(Value::as_u64))
-                    .then_with(|| {
+                compare_resume_profile_u64_field(left, right, "project_count", ascending).then_with(
+                    || {
                         resume_profile_candidate_name(left)
                             .cmp(&resume_profile_candidate_name(right))
-                    })
+                    },
+                )
             });
             Some(assistant_run_resume_profile_table(
                 &rows,
@@ -19154,15 +19368,14 @@ fn assistant_run_resume_profile_direct_answer(
             ))
         }
         AssistantRunEntityScanAnswerDimension::ResumeCompany => {
+            let ascending = prompt_requests_ascending_sort(prompt);
             rows.sort_by(|left, right| {
-                right
-                    .get("company_count")
-                    .and_then(Value::as_u64)
-                    .cmp(&left.get("company_count").and_then(Value::as_u64))
-                    .then_with(|| {
+                compare_resume_profile_u64_field(left, right, "company_count", ascending).then_with(
+                    || {
                         resume_profile_candidate_name(left)
                             .cmp(&resume_profile_candidate_name(right))
-                    })
+                    },
+                )
             });
             Some(assistant_run_resume_profile_table(
                 &rows,
@@ -19181,19 +19394,17 @@ fn assistant_run_resume_profile_direct_answer(
             ))
         }
         AssistantRunEntityScanAnswerDimension::ResumeExperience => {
+            let ascending = prompt_requests_ascending_sort(prompt);
             rows.sort_by(|left, right| {
-                resume_profile_year_span(right)
-                    .cmp(&resume_profile_year_span(left))
-                    .then_with(|| {
-                        right
-                            .get("latest_year")
-                            .and_then(Value::as_i64)
-                            .cmp(&left.get("latest_year").and_then(Value::as_i64))
-                    })
-                    .then_with(|| {
-                        resume_profile_candidate_name(left)
-                            .cmp(&resume_profile_candidate_name(right))
-                    })
+                compare_resume_profile_i64_options(
+                    resume_profile_year_span(left),
+                    resume_profile_year_span(right),
+                    ascending,
+                )
+                .then_with(|| compare_resume_profile_i64_field(left, right, "latest_year", false))
+                .then_with(|| {
+                    resume_profile_candidate_name(left).cmp(&resume_profile_candidate_name(right))
+                })
             });
             Some(assistant_run_resume_profile_table(
                 &rows,
@@ -19530,6 +19741,93 @@ fn value_i64_string(row: &Value, key: &str) -> String {
         .unwrap_or_else(|| "-".to_string())
 }
 
+fn compare_resume_profile_u64_field(
+    left: &Value,
+    right: &Value,
+    key: &str,
+    ascending: bool,
+) -> std::cmp::Ordering {
+    compare_resume_profile_u64_options(
+        left.get(key).and_then(Value::as_u64),
+        right.get(key).and_then(Value::as_u64),
+        ascending,
+    )
+}
+
+fn compare_resume_profile_i64_field(
+    left: &Value,
+    right: &Value,
+    key: &str,
+    ascending: bool,
+) -> std::cmp::Ordering {
+    compare_resume_profile_i64_options(
+        left.get(key).and_then(Value::as_i64),
+        right.get(key).and_then(Value::as_i64),
+        ascending,
+    )
+}
+
+fn compare_resume_profile_u64_options(
+    left: Option<u64>,
+    right: Option<u64>,
+    ascending: bool,
+) -> std::cmp::Ordering {
+    match (left, right) {
+        (Some(left), Some(right)) => {
+            if ascending {
+                left.cmp(&right)
+            } else {
+                right.cmp(&left)
+            }
+        }
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => std::cmp::Ordering::Equal,
+    }
+}
+
+fn compare_resume_profile_i64_options(
+    left: Option<i64>,
+    right: Option<i64>,
+    ascending: bool,
+) -> std::cmp::Ordering {
+    match (left, right) {
+        (Some(left), Some(right)) => {
+            if ascending {
+                left.cmp(&right)
+            } else {
+                right.cmp(&left)
+            }
+        }
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => std::cmp::Ordering::Equal,
+    }
+}
+
+fn resume_profile_gender_sort_rank(row: &Value) -> usize {
+    match row.get("gender").and_then(Value::as_str).map(str::trim) {
+        Some("男") => 0,
+        Some("女") => 1,
+        Some(value) if !value.is_empty() => 2,
+        _ => 3,
+    }
+}
+
+fn resume_profile_gender_counts(rows: &[Value]) -> (usize, usize, usize) {
+    let mut male_count = 0;
+    let mut female_count = 0;
+    let mut unknown_count = 0;
+    for row in rows {
+        match row.get("gender").and_then(Value::as_str).map(str::trim) {
+            Some("男") => male_count += 1,
+            Some("女") => female_count += 1,
+            _ => unknown_count += 1,
+        }
+    }
+    (male_count, female_count, unknown_count)
+}
+
 fn resume_profile_year_span(row: &Value) -> Option<i64> {
     let earliest_year = row.get("earliest_year").and_then(Value::as_i64)?;
     let latest_year = row.get("latest_year").and_then(Value::as_i64)?;
@@ -19838,6 +20136,28 @@ fn prompt_requests_resume_profile_sort(prompt: &str) -> bool {
             "人才",
         ],
     ) || ascii_prompt_contains_any(&lower_prompt, &["sort", "rank", "table", "by"])
+}
+
+fn prompt_requests_ascending_sort(prompt: &str) -> bool {
+    let lower_prompt = prompt.to_ascii_lowercase();
+    prompt_contains_any(
+        prompt,
+        &[
+            "升序",
+            "从小到大",
+            "小到大",
+            "低到高",
+            "少到多",
+            "从少到多",
+            "从早到晚",
+            "早到晚",
+            "最年轻",
+            "年轻",
+            "年龄小",
+        ],
+    ) || ascii_prompt_contains_any(&lower_prompt, &["asc", "ascending", "youngest"])
+        || lower_prompt.contains("low to high")
+        || lower_prompt.contains("small to large")
 }
 
 fn prompt_prefers_entity_frequency(prompt: &str) -> bool {
@@ -54777,6 +55097,28 @@ mod tests {
         let li_index = age_answer.find("| 李四 | 29 |").unwrap();
         assert!(zhang_index < li_index);
 
+        let age_ascending_request = CreateAssistantRunRequest {
+            prompt: "按年龄从小到大排序出表".to_string(),
+            ..age_request.clone()
+        };
+        let age_ascending_answer =
+            assistant_run_dataset_entity_scan_direct_answer(&age_ascending_request, &evidence)
+                .expect("resume profiles should produce an age ascending table");
+        let li_young_index = age_ascending_answer.find("| 李四 | 29 |").unwrap();
+        let zhang_old_index = age_ascending_answer.find("| 张三 | 35 |").unwrap();
+        assert!(li_young_index < zhang_old_index);
+
+        let gender_request = CreateAssistantRunRequest {
+            prompt: "按性别统计出表".to_string(),
+            ..age_request.clone()
+        };
+        let gender_answer =
+            assistant_run_dataset_entity_scan_direct_answer(&gender_request, &evidence)
+                .expect("resume gender statistics should produce a candidate table");
+        assert!(gender_answer.contains("性别分布：男 1，女 1，未知 0。"));
+        assert!(gender_answer.contains("| 男 | 张三 | 35 |"));
+        assert!(gender_answer.contains("| 女 | 李四 | 29 |"));
+
         let resume_skill_request = CreateAssistantRunRequest {
             prompt: "简历按技能数量排序出表".to_string(),
             ..age_request.clone()
@@ -54787,6 +55129,23 @@ mod tests {
         assert!(resume_skill_answer.contains("按技能数排序的候选人简历表"));
         assert!(resume_skill_answer.contains("| 张三 | 2 | 0 | 3 | 2023 | 张三简历.docx |"));
         assert!(resume_skill_answer.contains("| 李四 | 1 | 1 | 1 | 2024 | 李四简历.docx |"));
+
+        let resume_skill_ascending_request = CreateAssistantRunRequest {
+            prompt: "简历按技能数量从少到多排序出表".to_string(),
+            ..age_request.clone()
+        };
+        let resume_skill_ascending_answer = assistant_run_dataset_entity_scan_direct_answer(
+            &resume_skill_ascending_request,
+            &evidence,
+        )
+        .expect("resume skill ascending ranking should produce a candidate table");
+        let li_skill_index = resume_skill_ascending_answer
+            .find("| 李四 | 1 | 1 | 1 |")
+            .unwrap();
+        let zhang_skill_index = resume_skill_ascending_answer
+            .find("| 张三 | 2 | 0 | 3 |")
+            .unwrap();
+        assert!(li_skill_index < zhang_skill_index);
 
         let resume_project_request = CreateAssistantRunRequest {
             prompt: "候选人按项目数量排序出表".to_string(),
@@ -54810,6 +55169,17 @@ mod tests {
         let zhang_company_index = resume_company_answer.find("| 张三 | 3 | 2 | 0 |").unwrap();
         let li_company_index = resume_company_answer.find("| 李四 | 1 | 1 | 1 |").unwrap();
         assert!(zhang_company_index < li_company_index);
+
+        let time_earliest_request = CreateAssistantRunRequest {
+            prompt: "简历按最早年份从早到晚排序出表".to_string(),
+            ..age_request.clone()
+        };
+        let time_earliest_answer =
+            assistant_run_dataset_entity_scan_direct_answer(&time_earliest_request, &evidence)
+                .expect("resume earliest-year ranking should produce a candidate table");
+        let zhang_time_index = time_earliest_answer.find("| 张三 | 2012 | 2023 |").unwrap();
+        let li_time_index = time_earliest_answer.find("| 李四 | 2019 | 2024 |").unwrap();
+        assert!(zhang_time_index < li_time_index);
 
         let rust_match_request = CreateAssistantRunRequest {
             prompt: "谁会 Rust？".to_string(),
@@ -63941,6 +64311,25 @@ mod tests {
         cookie_pair_from_set_cookie(&response)
     }
 
+    #[tokio::test]
+    async fn gateway_limiter_rejects_when_lane_queue_is_full() {
+        let limiter =
+            GatewayRuntimeLimiter::for_test().with_lane_limit(MODEL_LANE_ASSISTANT_CHAT, 1, 0);
+
+        let first = limiter
+            .acquire_lane(MODEL_LANE_ASSISTANT_CHAT)
+            .await
+            .expect("first lane permit should be granted");
+        let second = limiter.acquire_lane(MODEL_LANE_ASSISTANT_CHAT).await;
+
+        assert!(matches!(second, Err(GatewayLimitError::QueueFull)));
+        drop(first);
+        assert!(limiter
+            .acquire_lane(MODEL_LANE_ASSISTANT_CHAT)
+            .await
+            .is_ok());
+    }
+
     #[test]
     fn model_gateway_profile_presets_include_safe_defaults() {
         let presets = model_gateway_presets();
@@ -63978,8 +64367,12 @@ mod tests {
         let anonymous = get_request(harness.app.clone(), "/v1/model-gateway/presets", None).await;
         assert_eq!(anonymous.status(), StatusCode::UNAUTHORIZED);
 
-        let presets_response =
-            get_request(harness.app.clone(), "/v1/model-gateway/presets", Some(&cookie)).await;
+        let presets_response = get_request(
+            harness.app.clone(),
+            "/v1/model-gateway/presets",
+            Some(&cookie),
+        )
+        .await;
         assert_eq!(presets_response.status(), StatusCode::OK);
         let presets: Vec<ModelGatewayPresetView> = read_json_response(presets_response).await;
         assert!(presets
@@ -64071,8 +64464,12 @@ mod tests {
         let disabled: ModelGatewayProfileView = read_json_response(disable_response).await;
         assert!(!disabled.enabled);
 
-        let list_response =
-            get_request(harness.app.clone(), "/v1/model-gateway/profiles", Some(&cookie)).await;
+        let list_response = get_request(
+            harness.app.clone(),
+            "/v1/model-gateway/profiles",
+            Some(&cookie),
+        )
+        .await;
         assert_eq!(list_response.status(), StatusCode::OK);
         let profiles: Vec<ModelGatewayProfileView> = read_json_response(list_response).await;
         assert!(profiles
