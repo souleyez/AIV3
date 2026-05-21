@@ -3,6 +3,7 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source_id="${HY_SQL_TRAFFIC_SOURCE_ID:-hy-sql-traffic-area}"
+preferred_table="${HY_SQL_TRAFFIC_TABLE:-bi_traffic_area}"
 api_base="${PLATFORM_API_BASE_URL:-http://127.0.0.1:3000}"
 stamp="$(date -u +%Y%m%dT%H%M%SZ)"
 work_dir="${HY_SQL_TRAFFIC_REPORT_DIR:-${repo_root}/target/database-static-pages/hy-sql-bi-traffic-area-live-${stamp}}"
@@ -30,19 +31,109 @@ post_json() {
   fi
 }
 
+post_json_file() {
+  local url="$1"
+  local body_file="$2"
+  local output="$3"
+  local status
+  status="$(
+    curl -sS -m 60 \
+      -H 'Content-Type: application/json' \
+      -o "$output" \
+      -w '%{http_code}' \
+      -X POST "$url" \
+      -d @"$body_file"
+  )"
+  if [[ "$status" -lt 200 || "$status" -ge 300 ]]; then
+    echo "Request failed: ${url} HTTP ${status}" >&2
+    cat "$output" >&2
+    exit 1
+  fi
+}
+
 post_json \
   "${api_base}/v1/external/sources/${source_id}/database/profile" \
   '{"sample_limit":100,"database_source":{}}' \
   "${work_dir}/profile.json"
 
-post_json \
+node - "$work_dir" "$preferred_table" <<'NODE'
+const fs = require('fs');
+const path = require('path');
+
+const workDir = process.argv[2];
+const preferredTable = process.argv[3];
+const profileResponse = JSON.parse(fs.readFileSync(path.join(workDir, 'profile.json'), 'utf8'));
+const profile = profileResponse.profile || {};
+const tables = profile.tables || [];
+
+const scoreTable = (table) =>
+  (table.name === preferredTable ? 100 : 0) +
+  ((table.metrics || []).length ? 10 : 0) +
+  ((table.dimensions || []).length ? 6 : 0) +
+  ((table.time_dimensions || []).length ? 4 : 0);
+const table = [...tables].sort((a, b) => scoreTable(b) - scoreTable(a))[0] || {};
+
+const uniq = (items) => [...new Set((items || []).filter(Boolean))];
+const includes = (items, value) => (items || []).some((item) => item === value);
+const pickBy = (items, preferred, patterns) => {
+  const list = uniq(items);
+  if (includes(list, preferred)) return preferred;
+  return list.find((item) => patterns.some((pattern) => pattern.test(item))) || list[0] || null;
+};
+
+const mapping = table.suggested_mapping || {};
+const dimensions = uniq([
+  ...(table.dimensions || []),
+  ...(table.entity_columns || []),
+  mapping.title_column,
+]);
+const metrics = uniq(table.metrics || []);
+const timeDimensions = uniq(table.time_dimensions || []);
+const rankDimension = pickBy(dimensions, 'area_name', [/area/i, /region/i, /city/i, /name/i, /区域/, /地区/, /城市/, /名称/]);
+const metric = pickBy(metrics, 'traffic_count', [/traffic/i, /count/i, /amount/i, /value/i, /流量/, /数量/, /总量/, /金额/, /值/]);
+const timeDimension = pickBy(timeDimensions, 'stat_date', [/date/i, /time/i, /day/i, /month/i, /日期/, /时间/, /月份/, /天/]);
+const aggregation = metric ? 'sum' : 'count';
+const tableName = table.name || preferredTable;
+
+const aggregateRequest = (dimensionsForRequest, limit) => ({
+  table: tableName,
+  dimensions: dimensionsForRequest.filter(Boolean),
+  metric,
+  aggregation,
+  limit,
+  database_source: {},
+});
+
+const plan = {
+  database: profile.database,
+  table: tableName,
+  preferredTable,
+  rankDimension,
+  metric,
+  aggregation,
+  timeDimension,
+  dimensions,
+  metrics,
+  timeDimensions,
+  sourceProfile: {
+    tableCount: tables.length,
+    selectedTableColumnCount: table.column_count || 0,
+  },
+};
+
+fs.writeFileSync(path.join(workDir, 'aggregate-plan.json'), JSON.stringify(plan, null, 2));
+fs.writeFileSync(path.join(workDir, 'area-aggregate-request.json'), JSON.stringify(aggregateRequest(rankDimension ? [rankDimension] : [], 10), null, 2));
+fs.writeFileSync(path.join(workDir, 'trend-aggregate-request.json'), JSON.stringify(aggregateRequest(timeDimension ? [timeDimension] : rankDimension ? [rankDimension] : [], timeDimension ? 30 : 10), null, 2));
+NODE
+
+post_json_file \
   "${api_base}/v1/external/sources/${source_id}/database/aggregate" \
-  '{"table":"bi_traffic_area","dimensions":["area_name"],"metric":"traffic_count","aggregation":"sum","limit":10,"database_source":{}}' \
+  "${work_dir}/area-aggregate-request.json" \
   "${work_dir}/area-ranking.json"
 
-post_json \
+post_json_file \
   "${api_base}/v1/external/sources/${source_id}/database/aggregate" \
-  '{"table":"bi_traffic_area","dimensions":["stat_date"],"metric":"traffic_count","aggregation":"sum","limit":30,"database_source":{}}' \
+  "${work_dir}/trend-aggregate-request.json" \
   "${work_dir}/date-trend.json"
 
 node - "$work_dir" "$source_id" "$stamp" <<'NODE'
@@ -56,19 +147,27 @@ const readJson = (name) => JSON.parse(fs.readFileSync(path.join(workDir, name), 
 const profileResponse = readJson('profile.json');
 const areaResponse = readJson('area-ranking.json');
 const trendResponse = readJson('date-trend.json');
+const aggregatePlan = readJson('aggregate-plan.json');
 
 const profile = profileResponse.profile || {};
 const table =
-  (profile.tables || []).find((item) => item.name === 'bi_traffic_area') ||
+  (profile.tables || []).find((item) => item.name === aggregatePlan.table) ||
   (profile.tables || [])[0] ||
   {};
+const labelFromRow = (row, dimension, fallback) =>
+  String(
+    (dimension && row[dimension] != null ? row[dimension] : undefined) ??
+      row.dimension ??
+      row.label ??
+      fallback
+  );
 const areaRows = ((areaResponse.result || {}).rows || []).map((row) => ({
-  label: String(row.area_name ?? row.areaName ?? row.dimension ?? '未命名区域'),
+  label: labelFromRow(row, aggregatePlan.rankDimension, '总计'),
   value: Number(row.value ?? 0),
   kind: 'evidence_value',
 }));
 const trendRows = ((trendResponse.result || {}).rows || []).map((row) => ({
-  label: String(row.stat_date ?? row.statDate ?? row.dimension ?? '未命名日期'),
+  label: labelFromRow(row, aggregatePlan.timeDimension || aggregatePlan.rankDimension, '总计'),
   value: Number(row.value ?? 0),
   kind: 'evidence_value',
 }));
@@ -82,7 +181,7 @@ const request = {
   draft_payload: {
     styleDirection: 'client-delivery',
     modelSummary:
-      '基于 hy_sql.bi_traffic_area 的真实数据库 profile 与 aggregate 结果生成。V3 将数据库 source 作为数据集理解入口，先识别字段语义，再按区域与日期生成经营报表。',
+      `基于 ${profile.database || '数据库'}.${aggregatePlan.table} 的真实数据库 profile 与 aggregate 结果生成。V3 将数据库 source 作为数据集理解入口，先识别字段语义，再按维度、指标和时间轴生成经营报表。`,
     visualSpec: {
       palette: {
         background: '#f7faf8',
@@ -124,7 +223,7 @@ const request = {
             { label: '字段数', value: String(table.column_count ?? 0) },
             { label: '维度数', value: String((table.dimensions || []).length) },
             { label: '指标数', value: String((table.metrics || []).length) },
-            { label: 'Top 区域', value: topArea },
+            { label: 'Top 对象', value: topArea },
           ],
         },
         layout: { x: 0, y: 0, w: 4, h: 3 },
@@ -133,19 +232,19 @@ const request = {
         id: 'area-ranking',
         title: '区域流量排行',
         content:
-          '按 area_name 聚合 traffic_count，展示区域经营贡献。可继续扩展为 TopN、区域筛选和异常区域追踪。',
+          `按 ${aggregatePlan.rankDimension || '全表'} 聚合 ${aggregatePlan.metric || '记录数'}，展示核心对象贡献。可继续扩展为 TopN、筛选和异常对象追踪。`,
         dataBinding: {
-          label: '区域总流量',
+          label: '维度排行',
           sourceId,
-          fieldPath: 'aggregate.area_name.sum_traffic_count',
+          fieldPath: `aggregate.${aggregatePlan.rankDimension || 'all'}.${aggregatePlan.aggregation}_${aggregatePlan.metric || 'records'}`,
           evidenceIds: ['aggregate-area-ranking'],
         },
         visualization: {
           type: 'bar-chart',
-          label: '区域流量排行',
+          label: '维度排行',
           chartRuntime: 'echarts',
           chartOptions: {
-            title: { text: '区域流量排行' },
+            title: { text: '维度排行' },
             xAxis: { type: 'category' },
             yAxis: { type: 'value' },
             series: [{ type: 'bar', data: areaRows.map((row) => row.value) }],
@@ -157,11 +256,11 @@ const request = {
         id: 'traffic-trend',
         title: '日期趋势',
         content:
-          '按 stat_date 聚合 traffic_count，观察整体流量走势。后续可加入同比、环比、节假日和异常点解释。',
+          `按 ${aggregatePlan.timeDimension || aggregatePlan.rankDimension || '全表'} 聚合 ${aggregatePlan.metric || '记录数'}，观察整体变化。后续可加入同比、环比和异常点解释。`,
         dataBinding: {
           label: '日期趋势',
           sourceId,
-          fieldPath: 'aggregate.stat_date.sum_traffic_count',
+          fieldPath: `aggregate.${aggregatePlan.timeDimension || aggregatePlan.rankDimension || 'all'}.${aggregatePlan.aggregation}_${aggregatePlan.metric || 'records'}`,
           evidenceIds: ['aggregate-date-trend'],
         },
         visualization: {
@@ -201,6 +300,10 @@ const request = {
         dimensions: table.dimensions || [],
         metrics: table.metrics || [],
         timeDimensions: table.time_dimensions || [],
+        selectedRankDimension: aggregatePlan.rankDimension,
+        selectedMetric: aggregatePlan.metric,
+        selectedAggregation: aggregatePlan.aggregation,
+        selectedTimeDimension: aggregatePlan.timeDimension,
         suggestedQuestions: table.suggested_questions || [],
       },
       module_bindings: [
@@ -245,7 +348,7 @@ const request = {
     mode: 'database_source_live',
     sourceId,
     database: profile.database,
-    tables: [table.name || 'bi_traffic_area'],
+    tables: [table.name || aggregatePlan.table],
   },
   visibility_snapshot: {
     policy: 'database_source_live_profile_aggregate',
