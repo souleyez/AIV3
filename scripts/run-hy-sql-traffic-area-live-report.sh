@@ -4,6 +4,7 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source_id="${HY_SQL_TRAFFIC_SOURCE_ID:-hy-sql-traffic-area}"
 preferred_table="${HY_SQL_TRAFFIC_TABLE:-bi_traffic_area}"
+scan_limit="${HY_SQL_TRAFFIC_SCAN_LIMIT:-50000}"
 api_base="${PLATFORM_API_BASE_URL:-http://127.0.0.1:3000}"
 stamp="$(date -u +%Y%m%dT%H%M%SZ)"
 work_dir="${HY_SQL_TRAFFIC_REPORT_DIR:-${repo_root}/target/database-static-pages/hy-sql-bi-traffic-area-live-${stamp}}"
@@ -81,12 +82,13 @@ post_json \
   '{"sample_limit":100,"database_source":{}}' \
   "${work_dir}/profile.json"
 
-node - "$work_dir" "$preferred_table" <<'NODE'
+node - "$work_dir" "$preferred_table" "$scan_limit" <<'NODE'
 const fs = require('fs');
 const path = require('path');
 
 const workDir = process.argv[2];
 const preferredTable = process.argv[3];
+const scanLimit = Number(process.argv[4] || 50000);
 const profileResponse = JSON.parse(fs.readFileSync(path.join(workDir, 'profile.json'), 'utf8'));
 const profile = profileResponse.profile || {};
 const tables = profile.tables || [];
@@ -152,6 +154,7 @@ const aggregateRequest = (dimensionsForRequest, limit) => ({
   metric,
   aggregation,
   limit,
+  scan_limit: scanLimit,
   database_source: {},
 });
 
@@ -159,6 +162,7 @@ const plan = {
   database: profile.database,
   table: tableName,
   preferredTable,
+  scanLimit,
   rankDimension,
   metric,
   aggregation,
@@ -232,7 +236,7 @@ const request = {
   draft_payload: {
     styleDirection: 'client-delivery',
     modelSummary:
-      `基于 ${profile.database || '数据库'}.${aggregatePlan.table} 的真实数据库 profile 与 aggregate 结果生成。V3 将数据库 source 作为数据集理解入口，先识别字段语义，再按维度、指标和时间轴生成经营报表。`,
+      `基于 ${profile.database || '数据库'}.${aggregatePlan.table} 的真实数据库 profile 与采样 aggregate 结果生成；本次聚合扫描预算为 ${aggregatePlan.scanLimit} 行，避免对 3800 万级明细表做无索引全表分组。V3 将数据库 source 作为数据集理解入口，先识别字段语义，再按维度、指标和时间轴生成经营报表。`,
     visualSpec: {
       palette: {
         background: '#f7faf8',
@@ -275,6 +279,7 @@ const request = {
             { label: '维度数', value: String((table.dimensions || []).length) },
             { label: '指标数', value: String((table.metrics || []).length) },
             { label: 'Top 对象', value: topArea },
+            { label: '扫描预算', value: String(aggregatePlan.scanLimit) },
           ],
         },
         layout: { x: 0, y: 0, w: 4, h: 3 },
@@ -283,7 +288,7 @@ const request = {
         id: 'area-ranking',
         title: '区域流量排行',
         content:
-          `按 ${aggregatePlan.rankDimension || '全表'} 聚合 ${aggregatePlan.metric || '记录数'}，展示核心对象贡献。可继续扩展为 TopN、筛选和异常对象追踪。`,
+          `按 ${aggregatePlan.rankDimension || '全表'} 聚合 ${aggregatePlan.metric || '记录数'}，展示采样窗口内核心对象贡献。可继续扩展为 TopN、时间过滤和异常对象追踪。`,
         dataBinding: {
           label: '维度排行',
           sourceId,
@@ -307,7 +312,7 @@ const request = {
         id: 'traffic-trend',
         title: '日期趋势',
         content:
-          `按 ${aggregatePlan.timeDimension || aggregatePlan.rankDimension || '全表'} 聚合 ${aggregatePlan.metric || '记录数'}，观察整体变化。后续可加入同比、环比和异常点解释。`,
+          `按 ${aggregatePlan.timeDimension || aggregatePlan.rankDimension || '全表'} 聚合 ${aggregatePlan.metric || '记录数'}，观察采样窗口内变化。后续可加入日期范围、同比、环比和异常点解释。`,
         dataBinding: {
           label: '日期趋势',
           sourceId,
@@ -355,6 +360,7 @@ const request = {
         selectedMetric: aggregatePlan.metric,
         selectedAggregation: aggregatePlan.aggregation,
         selectedTimeDimension: aggregatePlan.timeDimension,
+        scanLimit: aggregatePlan.scanLimit,
         suggestedQuestions: table.suggested_questions || [],
       },
       module_bindings: [

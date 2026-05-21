@@ -11501,6 +11501,7 @@ async fn aggregate_database_source(
         metric: request.metric,
         aggregation: request.aggregation,
         limit: request.limit,
+        scan_limit: request.scan_limit,
     };
     let result = aggregate_mysql_table(&config, &aggregate_request)
         .await

@@ -164,6 +164,8 @@ pub struct MySqlAggregateRequest {
     pub aggregation: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scan_limit: Option<u32>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -174,6 +176,8 @@ pub struct DatabaseAggregateResult {
     pub metric: Option<String>,
     pub aggregation: String,
     pub row_limit: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scan_limit: Option<u32>,
     pub columns: Vec<String>,
     pub rows: Vec<Value>,
 }
@@ -1095,6 +1099,7 @@ fn build_aggregate_result(
         metric: plan.metric,
         aggregation: plan.aggregation,
         row_limit: plan.row_limit,
+        scan_limit: plan.scan_limit,
         columns: plan.columns,
         rows: result_rows,
     })
@@ -1123,6 +1128,7 @@ pub struct MySqlAggregateQuery {
     pub metric: Option<String>,
     pub aggregation: String,
     pub row_limit: u32,
+    pub scan_limit: Option<u32>,
     pub columns: Vec<String>,
     pub sql: String,
 }
@@ -1247,10 +1253,37 @@ pub fn build_mysql_aggregate_query(
         .limit
         .unwrap_or(50)
         .clamp(1, config.row_limit.min(MAX_ROW_LIMIT));
+    let scan_limit = request
+        .scan_limit
+        .map(|limit| limit.clamp(1, MAX_ROW_LIMIT));
+    let table_source = if let Some(scan_limit) = scan_limit {
+        let mut scan_columns = Vec::new();
+        for dimension in &dimensions {
+            push_unique_column(&mut scan_columns, dimension);
+        }
+        if let Some(metric) = metric.as_deref() {
+            push_unique_column(&mut scan_columns, metric);
+        }
+        let inner_projections = if scan_columns.is_empty() {
+            "1 as `__v3_row`".to_string()
+        } else {
+            scan_columns
+                .iter()
+                .map(|column| quote_mysql_identifier(column))
+                .collect::<Result<Vec<_>, _>>()?
+                .join(", ")
+        };
+        format!(
+            "(select {inner_projections} from {} limit {scan_limit}) as `__v3_scan`",
+            quote_mysql_identifier(&mapping.table)?
+        )
+    } else {
+        quote_mysql_identifier(&mapping.table)?
+    };
     let sql = format!(
         "select {} from {}{}{} limit {row_limit}",
         projections.join(", "),
-        quote_mysql_identifier(&mapping.table)?,
+        table_source,
         group_by,
         order_by
     );
@@ -1261,6 +1294,7 @@ pub fn build_mysql_aggregate_query(
         metric,
         aggregation,
         row_limit,
+        scan_limit,
         columns,
         sql,
     })
@@ -2081,6 +2115,7 @@ mod tests {
             metric: Some("traffic_count".to_string()),
             aggregation: "sum".to_string(),
             limit: Some(10),
+            scan_limit: None,
         };
 
         let plan = build_mysql_aggregate_query(&config, &request).expect("aggregate query builds");
@@ -2114,6 +2149,7 @@ mod tests {
             metric: None,
             aggregation: "count".to_string(),
             limit: Some(5),
+            scan_limit: None,
         };
 
         let plan = build_mysql_aggregate_query(&config, &request).expect("count query builds");
@@ -2135,6 +2171,7 @@ mod tests {
             metric: None,
             aggregation: "count".to_string(),
             limit: Some(5),
+            scan_limit: None,
         };
 
         let error = build_mysql_aggregate_query(&config, &request)
@@ -2143,6 +2180,27 @@ mod tests {
         assert!(error
             .to_string()
             .contains("not in the configured table mapping"));
+    }
+
+    #[test]
+    fn aggregate_query_supports_scan_limit_subquery() {
+        let config = MySqlSourceConfig::from_value(&valid_config()).expect("config parses");
+        let request = MySqlAggregateRequest {
+            table: "documents".to_string(),
+            dimensions: vec!["category".to_string()],
+            metric: None,
+            aggregation: "count".to_string(),
+            limit: Some(5),
+            scan_limit: Some(25),
+        };
+
+        let plan = build_mysql_aggregate_query(&config, &request).expect("count query builds");
+
+        assert_eq!(plan.scan_limit, Some(25));
+        assert!(plan
+            .sql
+            .contains("from (select `category` from `documents` limit 25) as `__v3_scan`"));
+        assert!(plan.sql.ends_with("limit 5"));
     }
 
     #[test]
@@ -2449,6 +2507,7 @@ mod tests {
             metric,
             aggregation: "sum".to_string(),
             limit: Some(5),
+            scan_limit: Some(50_000),
         };
 
         let result = aggregate_mysql_table(&config, &request)

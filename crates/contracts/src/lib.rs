@@ -896,6 +896,8 @@ pub struct AggregateDatabaseSourceRequest {
     pub aggregation: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scan_limit: Option<u32>,
     #[serde(default)]
     pub database_source: Value,
 }
