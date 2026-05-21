@@ -40,7 +40,7 @@ V3 is not a generic file manager and not a standalone page builder. It is a data
 - Let users adjust modules by natural language and lightweight direct manipulation.
 - Open safe HTML artifacts for planning handoff, execution reports, code review summaries, and lightweight JSON-patch editors.
 - Expose the same AssistantRun, retrieval, permission, artifact, and action-validation capabilities through external bot and third-party chat surfaces, including Feishu/Lark, WeCom, and customer-hosted pages.
-- Ingest read-only external database sources through V3-owned source connectors, mapping rules, workflow sync, parsing, indexing, and dataset visibility checks rather than direct chat-time database access.
+- Ingest read-only external database sources into explicit V3 datasets through V3-owned source connectors, mapping rules, workflow sync, parsing, indexing, and dataset visibility checks, then reuse the normal dataset question-answering, report, template, and static-page chains rather than direct chat-time database access.
 - Preserve finished outputs and drafts in the right shelf.
 - Keep permissions, memory, and artifacts scoped to user/account/local-key visibility.
 
@@ -65,7 +65,7 @@ V3 is not a generic file manager and not a standalone page builder. It is a data
 - Codex real execution must not run on this developer workstation. Real execution validation is only for the jump host or later Mac host.
 - OpenClaw is optional and should not distract from the product mainline unless a concrete bug appears.
 - External bot and third-party integrations are surfaces, not new authorities. V3 must still own effective permissions, AssistantRun state, retrieval supply, artifact access, action validation, and audit.
-- Database sources are external-source inputs, not direct model tools. Store only redacted connection metadata and server-side environment variable names in V3; never store raw database URLs, passwords, tokens, or arbitrary SQL in V3 PostgreSQL, logs, browser state, workflow events, assistant messages, or repository files.
+- Database sources are external-source inputs, not direct model tools. Every database sync must resolve to a V3 dataset before rows can affect answers or reports. Store only redacted connection metadata and server-side environment variable names in V3; never store raw database URLs, passwords, tokens, or arbitrary SQL in V3 PostgreSQL, logs, browser state, workflow events, assistant messages, or repository files.
 
 ## Current Baseline
 
@@ -319,7 +319,7 @@ The next highest leverage order is:
 4. Continue direct-upload / publicly resolvable video PPT extraction as a media-quality subtrack: complete the public video URL/page resolver, remote media registration, background media parsing, transcript/PPT extraction artifacts, and no host-composed fallback answers. Uploaded video evidence supply through ReAct already exists.
 5. Strengthen the model-gateway profile system and ordinary AssistantRun provider path; keep the Codex executor bridge frozen.
 6. Add the external bot and third-party integration core: generic channel/source contracts, ACL-aware third-party retrieval, Feishu/Lark and WeCom adapters, external artifact/action runtime, and observe-first management UI.
-7. Add database-source integration as a data-source subtrack: MySQL read-only connector, schema inspection, table-to-document mapping, external-source workflow sync, document parse/index reuse, source health/drift observability, and main-system UI. Keep raw credentials out of V3 storage and keep arbitrary SQL out of MVP.
+7. Add database-source integration as a data-source subtrack: MySQL read-only connector, schema inspection, target-dataset binding, table-to-document mapping, external-source workflow sync, document parse/index reuse, source health/drift observability, and main-system UI. Keep raw credentials out of V3 storage, keep arbitrary SQL out of MVP, and make database rows usable only after they become visible dataset documents/evidence.
 8. Add the safe HTML artifact viewer as a common review/report surface, starting with static-page planning handoffs, third-party handoff docs, and existing historical Codex execution report templates.
 9. Do not validate real Codex execution while frozen; browser/external-page fetching work should use non-Codex product paths unless explicitly reopened.
 10. Resume account expansion only when product workflows need it.
@@ -881,9 +881,9 @@ The next development thread should keep the current UI shell stable and continue
 
 **Status:** Planned. Detailed execution steps live in `docs/plans/2026-05-21-database-source-integration-plan.md`. This task is part of the product/data-source mainline, not the frozen Codex substrate and not the third-party chat interface itself.
 
-**Goal:** Add a safe MySQL database-source connector so an external database can be inspected, mapped, synchronized into V3 datasets, parsed, indexed, and queried through existing V3 document/retrieval workflows.
+**Goal:** Add a safe MySQL database-source connector so an external database can be inspected, mapped, synchronized into an explicit V3 dataset, parsed, indexed, and then used by existing dataset question-answering, report, template, and static-page workflows.
 
-**Architecture:** Extend `external_source_connections`, `external-source-worker`, normal V3 workflow state, and the main-system data-source page. Do not add database reads to chat endpoints. Do not expose database credentials to models or browsers.
+**Architecture:** Extend `external_source_connections`, `external-source-worker`, normal V3 workflow state, and the main-system data-source page. Database sync must resolve a target dataset from the sync request or a configured default dataset, and ingestion must write database-derived documents under that dataset's normal visibility and indexing rules. Do not add database reads to chat endpoints. Do not expose database credentials to models or browsers.
 
 **Files:**
 
@@ -912,11 +912,12 @@ The next development thread should keep the current UI shell stable and continue
 2. Add MySQL schema inspector and table preview helpers using SQLx MySQL, bind parameters for schema, whitelisted/quoted identifiers, read-only transactions when supported, row limits, timeouts, and optional live-test guards.
 3. Add main-system API contracts/routes for connection test, schema inspection, and table preview under `/v1/external/sources/{source_id}/database/...`; responses must be secret-free.
 4. Add main-system database source UI inside the existing data-source page: connection env binding, redacted host/database summary, test connection, inspect schema, table/column view, mapping form, preview, sync, and status.
-5. Add MySQL source fetcher to `external-source-worker`, mapping configured rows into V3 external document shape with `document_external_id`, `revision_external_id`, title, body, content type, and metadata.
-6. Wire database sync into the existing external-source workflow, preserving metadata/content/ingest/index stages and supporting full sync plus simple incremental sync by `updated_at`, numeric id, or explicit version column.
-7. Add observability and drift checks: table count, row count, document count, skipped/failed rows, checkpoint, last schema inspect, mapped table count, missing table/column drift, and source health without secrets.
-8. Document the database-source integration with required read-only account, connection-env contract, table mapping, sync examples, field comments, error codes, and security restrictions.
-9. Deploy only to 8 after local tests pass. Add `THIRD_PARTY_HY_SQL_DATABASE_URL` only on the server environment or secret file; never commit it. Smoke schema inspection against `hy_sql`, confirm current copied test DB table `s` is visible and empty, then run an empty sync without source DB writes.
+5. Add MySQL source fetcher to `external-source-worker`, mapping configured rows into V3 external document shape with `document_external_id`, `revision_external_id`, title, body, content type, and metadata; the workflow `dataset_id` remains the authoritative dataset membership.
+6. Wire database sync into the existing external-source workflow, preserving metadata/content/ingest/index stages, requiring an effective target dataset for MySQL sync, and supporting full sync plus simple incremental sync by `updated_at`, numeric id, or explicit version column.
+7. Add dataset compatibility checks: source UI can bind a database source to an existing dataset or create/select a target dataset for each sync; AssistantRun, report generation, template-skill output, and static-page planning must consume database-derived content only through selected/visible dataset evidence.
+8. Add observability and drift checks: target dataset, table count, row count, document count, skipped/failed rows, checkpoint, last schema inspect, mapped table count, missing table/column drift, source health, and dataset indexing readiness without secrets.
+9. Document the database-source integration with required read-only account, connection-env contract, target-dataset binding, table mapping, sync examples, field comments, error codes, and security restrictions.
+10. Deploy only to 8 after local tests pass. Add `THIRD_PARTY_HY_SQL_DATABASE_URL` only on the server environment or secret file; never commit it. Smoke schema inspection against `hy_sql`, confirm current copied test DB table `s` is visible and empty, then run an empty sync into a test V3 dataset without source DB writes.
 
 **Security Rules:**
 
@@ -945,9 +946,11 @@ Pop-Location
 **Acceptance:**
 
 - V3 can store and manage a MySQL source connection without storing raw credentials.
-- Main system data-source page can test connection, inspect schema, preview allowed tables, configure mapping, start sync, and show status/drift.
+- Main system data-source page can test connection, inspect schema, preview allowed tables, configure mapping, bind/select a target V3 dataset, start sync, and show status/drift.
 - Operators can map one or more MySQL tables into V3 external documents.
 - Full sync and simple incremental sync create/update V3 external documents and pass them through existing parse/index workflow.
+- Database-derived rows are visible to questions, reports, template skills, and static-page generation only after they have become documents/evidence in the selected target dataset.
+- MySQL sync fails clearly when no effective target dataset is supplied or configured.
 - Existing HTTP third-party source sync, chat, document parse, model pool, and external integration endpoints remain unchanged unless a database sync is explicitly started.
 - Current test database state is supported: `hy_sql` on MySQL 8.0.24 may initially contain only empty table `s(a varchar(255))`; real business mapping waits for real DDL/tables.
 

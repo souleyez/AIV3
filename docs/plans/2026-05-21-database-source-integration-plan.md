@@ -1,8 +1,8 @@
 # Database Source Integration Implementation Plan
 
-**Goal:** Add a safe database-source connector to V3 so an external MySQL database can be inspected, mapped, synchronized into V3 datasets, parsed, and indexed through the existing external source workflow.
+**Goal:** Add a safe database-source connector to V3 so an external MySQL database can be inspected, mapped, synchronized into an explicit V3 dataset, parsed, indexed, and then used through the existing dataset question-answering, report, template, and static-page workflows.
 
-**Architecture:** Extend the existing `external_source_connections` and `external-source-worker` pipeline instead of adding database logic to chat or document parse endpoints. Store only redacted connection metadata and environment variable names in V3; keep raw database credentials in server-side environment or secret files. Add a main-system database source UI for connection testing, schema inspection, table-to-document mapping, sync launch, and sync observability.
+**Architecture:** Extend the existing `external_source_connections` and `external-source-worker` pipeline instead of adding database logic to chat or document parse endpoints. A database source is only a data-source input: each real sync must resolve an effective target V3 dataset from the sync request or a configured default dataset, then create/update normal dataset documents that flow through parse, retrieval, question-answering, report, template, and static-page chains. Store only redacted connection metadata and environment variable names in V3; keep raw database credentials in server-side environment or secret files. Add a main-system database source UI for connection testing, schema inspection, target-dataset binding, table-to-document mapping, sync launch, and sync observability.
 
 **Tech Stack:** Rust, Axum, Tokio, SQLx MySQL, PostgreSQL storage, existing `external-source-worker`, Next.js main system data source page.
 
@@ -28,8 +28,10 @@ Included for MVP:
 - Read-only schema inspection.
 - Read-only table preview with row limit.
 - Single-table and multi-table row-to-document mapping.
+- Target dataset binding for every sync; schema inspection and table preview can run without a target dataset, but row sync cannot.
 - Full sync and simple incremental sync by `updated_at`, numeric `id`, or explicit version column.
 - Reuse existing external source workflow stages: metadata, content, ingest, index.
+- Reuse existing dataset question-answering, report generation, template skill, and static-page evidence supply after database rows become indexed dataset documents.
 - Data source UI for configuration, testing, schema view, mapping, sync, and status.
 
 Excluded for MVP:
@@ -39,12 +41,14 @@ Excluded for MVP:
 - Automatic semantic inference of all business objects.
 - CDC/binlog streaming.
 - Direct vector indexing from MySQL without V3 document ingestion.
+- Answering questions or generating reports directly from live MySQL rows without dataset ingestion and visibility checks.
 - Storing raw database credentials in V3 PostgreSQL.
 
 ## Security Rules
 
 - Never store raw database passwords in repository files, migration files, V3 PostgreSQL rows, logs, browser state, workflow events, or assistant messages.
 - Database config stored in V3 may include only `connection_env`, host/port/database redacted summary, table allowlist, and mapping rules.
+- Database-derived content may enter model context only after it has become visible V3 dataset documents, retrieval evidence, report evidence, or static-page evidence.
 - The connector must run `START TRANSACTION READ ONLY` or equivalent before source reads when the server supports it.
 - Only allow `SELECT` against whitelisted tables and columns.
 - Do not accept arbitrary SQL in the first version.
@@ -69,34 +73,39 @@ External source connection:
       "port": 23306,
       "database": "hy_sql",
       "connection_env": "THIRD_PARTY_HY_SQL_DATABASE_URL",
+      "default_dataset_id": "018f0000-0000-7000-9000-000000000001",
       "table_count": 1
     }
   }
 }
 ```
 
-Sync request `connector_context`:
+Sync request:
 
 ```json
 {
-  "mysql_source": {
-    "connection_env": "THIRD_PARTY_HY_SQL_DATABASE_URL",
-    "database": "hy_sql",
-    "timeout_ms": 10000,
-    "row_limit": 1000,
-    "tables": [
-      {
-        "table": "documents",
-        "object_type": "document",
-        "id_column": "id",
-        "title_column": "title",
-        "content_columns": ["content"],
-        "content_type": "text/markdown",
-        "updated_at_column": "updated_at",
-        "revision_strategy": "updated_at_hash",
-        "metadata_columns": ["category", "owner_id"]
-      }
-    ]
+  "sync_kind": "full",
+  "dataset_id": "018f0000-0000-7000-9000-000000000001",
+  "connector_context": {
+    "mysql_source": {
+      "connection_env": "THIRD_PARTY_HY_SQL_DATABASE_URL",
+      "database": "hy_sql",
+      "timeout_ms": 10000,
+      "row_limit": 1000,
+      "tables": [
+        {
+          "table": "documents",
+          "object_type": "document",
+          "id_column": "id",
+          "title_column": "title",
+          "content_columns": ["content"],
+          "content_type": "text/markdown",
+          "updated_at_column": "updated_at",
+          "revision_strategy": "updated_at_hash",
+          "metadata_columns": ["category", "owner_id"]
+        }
+      ]
+    }
   }
 }
 ```
@@ -118,6 +127,15 @@ Generated V3 external document shape:
 }
 ```
 
+Dataset binding contract:
+
+- `CreateExternalSourceSyncRequest.dataset_id` is the preferred target dataset binding.
+- A database source may also carry `config_redacted.database_source.default_dataset_id`; sync may use it when the request omits `dataset_id`.
+- MySQL sync must fail with `target_dataset_required` when neither request nor source config resolves an effective visible dataset.
+- The effective dataset id is written to the workflow execution, and `ingest-worker` remains responsible for creating/updating V3 documents under that dataset.
+- `document_external_id` stays source-stable across datasets, but document identity is scoped by `(tenant_id, dataset_id, source_id, document_external_id)` so the same source row can be synced into different datasets when required.
+- AssistantRun, report generation, template skills, and static-page planning must not receive live database rows; they only receive indexed chunks, detail evidence, report data, or artifact inputs supplied through selected/visible datasets.
+
 ---
 
 ### Task 1: Add Shared Database Source Connector Crate
@@ -135,6 +153,7 @@ Add tests for:
 - parsing a `mysql_source` config with `connection_env`;
 - rejecting raw `password`, raw `url`, or `connection_string` fields in JSON config;
 - validating table names and column names;
+- accepting optional `default_dataset_id` only as a dataset binding hint, not as a credential or query selector;
 - preserving only redacted connection summary.
 
 Example test:
@@ -302,6 +321,8 @@ Add tests for:
 - database source test route rejects raw secrets;
 - schema route returns redacted schema snapshot;
 - preview route requires table allowlist;
+- MySQL sync route rejects requests without `dataset_id` when the source has no `default_dataset_id`;
+- MySQL sync route resolves `default_dataset_id` only after normal dataset visibility checks;
 - disabled source returns `external_source_disabled`.
 
 **Step 2: Run tests to verify they fail**
@@ -326,6 +347,7 @@ Add:
 - `DatabaseSourceTableView`
 - `DatabaseSourceColumnView`
 - `DatabaseSourceMappingView`
+- `DatabaseSourceDatasetBindingView`
 
 All response types must be secret-free.
 
@@ -347,6 +369,8 @@ Route behavior:
 - load `external_source_connections` by `source_id`;
 - ensure source is enabled;
 - normalize request config;
+- resolve effective target dataset for sync requests from request `dataset_id` first, then source `default_dataset_id`;
+- verify the effective dataset is visible to the current user before enqueuing sync;
 - call `external-source-connectors` MySQL helper;
 - record a redacted audit event or update source health status;
 - never store raw secrets.
@@ -386,6 +410,8 @@ Add tests for:
 - normalizing schema snapshot;
 - hiding secret-looking fields;
 - building mapping payload;
+- building sync payload with an explicit `dataset_id`;
+- showing `target_dataset_required` as a configuration problem, not a parsing failure;
 - summarizing empty schema safely.
 
 **Step 2: Run tests to verify they fail**
@@ -405,6 +431,7 @@ Add:
 - `normalizeDatabaseSchema`
 - `normalizeDatabasePreview`
 - `buildDatabaseMappingPayload`
+- `buildDatabaseSyncPayload`
 - `summarizeDatabaseSourceHealth`
 
 Fetchers:
@@ -419,6 +446,8 @@ Use `/api/v3/external/sources/{source_id}/database/...` proxy paths.
 
 In the main "数据源" page, add a database source area:
 - connection binding field: `connection_env`;
+- target dataset selector and optional default dataset binding;
+- create/select dataset affordance for database sync;
 - host/port/database redacted display;
 - test connection button;
 - schema inspect button;
@@ -435,6 +464,7 @@ In the main "数据源" page, add a database source area:
 - preview button;
 - start sync button;
 - last sync status.
+- a readiness hint that database rows become usable for Q&A/report/templates only after the target dataset has synced, parsed, and indexed.
 
 Do not add a visible raw password input in MVP.
 
@@ -469,6 +499,7 @@ git commit -m "Add database source UI"
 Add tests for:
 - `connector_fixture_for` recognizes `mysql_source`;
 - a row maps to external document shape;
+- the mapper refuses to emit sync content when workflow `dataset_id` is missing;
 - missing id column fails clearly;
 - incremental checkpoint filters generated query;
 - content output contains `external_documents`.
@@ -532,6 +563,7 @@ Mapping logic:
 - `body` joins configured content columns with section headers;
 - `revision_external_id` from version column, updated_at, or hash of mapped content;
 - `metadata` includes table, primary key, and configured metadata columns.
+- dataset membership is not encoded in the row document payload; it comes from the workflow execution `dataset_id` so the same database row can be synced into different V3 datasets.
 
 **Step 6: Add incremental checkpoint**
 
@@ -580,8 +612,11 @@ git commit -m "Add MySQL external source fetcher"
 **Step 1: Write failing tests**
 
 Add tests that enqueue a MySQL source sync request and assert:
+- MySQL sync without request `dataset_id` and without source default dataset fails with `target_dataset_required`;
+- MySQL sync with a source default dataset resolves that dataset through the same visibility check used by explicit `dataset_id`;
 - workflow starts at `sync_users`;
 - task context includes `connector_kind=mysql`;
+- workflow execution carries the effective `dataset_id`;
 - metadata/content stages receive `mysql_source` connector context;
 - ingest and index stages remain unchanged.
 
@@ -602,6 +637,7 @@ Rules:
 - `connection_env` allowed;
 - raw `password`, `url`, `connection_string`, `token` rejected;
 - table mapping required for sync;
+- effective target dataset required for MySQL sync;
 - empty mapping allowed only for schema inspection, not sync.
 
 **Step 4: Preserve existing behavior**
@@ -645,6 +681,7 @@ Add tests for:
 **Step 2: Implement status fields**
 
 Extend redacted status summaries with:
+- target dataset id/title/indexing readiness;
 - last schema inspect time;
 - mapped table count;
 - row count;
@@ -699,6 +736,7 @@ Include:
 - credential handling;
 - required read-only account;
 - connection env example;
+- target dataset binding and the rule that Q&A/reporting read from datasets, not live database rows;
 - table mapping example;
 - full sync example;
 - incremental sync example;
@@ -770,6 +808,7 @@ Expected:
 - sync accepted;
 - worker completes;
 - document count is `0`;
+- target dataset remains valid and empty;
 - no ingest/index errors;
 - no source DB writes.
 
@@ -782,6 +821,7 @@ After third party imports real test tables:
 - run full sync into a test V3 dataset;
 - confirm documents parse and become `indexed`;
 - test chat over selected dataset.
+- generate a simple report/table from the selected dataset to confirm the report path sees database-derived evidence.
 
 ---
 
@@ -798,10 +838,13 @@ After third party imports real test tables:
 
 - V3 can store a MySQL source connection without storing raw credentials.
 - Main system data source page can test connection and inspect schema.
+- Main system data source page can bind/select the target V3 dataset before sync.
 - Unsafe raw secrets and arbitrary SQL are rejected.
 - Operators can map one or more MySQL tables to V3 external documents.
 - Full sync can create V3 external documents and pass them into existing parse/index workflow.
 - Incremental sync can use `updated_at`, numeric id, or version columns.
+- Database-derived content can answer questions and generate reports only through selected/visible datasets after indexing.
+- MySQL sync fails clearly when no effective target dataset is supplied or configured.
 - Sync status shows row/document counts, failures, checkpoint, and drift warnings.
 - Existing HTTP third-party source sync remains unchanged.
 - Current chat, document parse, model pool, and external integration endpoints are unaffected unless a database sync is explicitly started.
