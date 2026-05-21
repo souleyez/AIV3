@@ -47283,6 +47283,14 @@ fn build_static_page_field_candidates(
 
     for item in evidence_items {
         match item.get("type").and_then(Value::as_str).unwrap_or_default() {
+            "database_aggregate" => {
+                push_static_page_database_aggregate_field_candidates(
+                    &mut candidates,
+                    &mut seen,
+                    item,
+                    FIELD_CANDIDATE_LIMIT,
+                );
+            }
             "retrieval_evidence" => {
                 let evidence_ref = static_page_evidence_ref(item);
                 let evidence_ids = static_page_evidence_ids(item);
@@ -47465,6 +47473,73 @@ fn build_static_page_field_candidates(
     }
 
     Value::Array(candidates)
+}
+
+fn push_static_page_database_aggregate_field_candidates(
+    candidates: &mut Vec<Value>,
+    seen: &mut BTreeSet<String>,
+    item: &Value,
+    limit: usize,
+) {
+    let rows = item
+        .get("rows")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0);
+    if rows == 0 {
+        return;
+    }
+    let table = static_page_artifact_string(item, &["table"]).unwrap_or_else(|| "database".into());
+    let aggregation =
+        static_page_artifact_string(item, &["aggregation"]).unwrap_or_else(|| "sum".into());
+    let metric = static_page_artifact_string(item, &["metric", "value_label"])
+        .unwrap_or_else(|| "record_count".into());
+    let field_path = static_page_database_aggregate_field_path(item);
+    let label = format!("数据库聚合：{table} {aggregation}({metric})");
+
+    push_static_page_field_candidate(
+        candidates,
+        seen,
+        json!({
+            "sourceId": "database_aggregate",
+            "fieldPath": field_path,
+            "label": label,
+            "kind": "metric",
+            "recommendedAggregation": aggregation,
+            "confidence": 0.92,
+            "datasetId": item.get("dataset_id").cloned().unwrap_or(Value::Null),
+            "sourceDatabaseId": item.get("source_id").cloned().unwrap_or(Value::Null),
+            "table": table,
+            "dimensions": item.get("dimensions").cloned().unwrap_or_else(|| json!([])),
+            "metric": metric,
+            "columns": item.get("columns").cloned().unwrap_or_else(|| json!([])),
+            "sampleRows": rows,
+            "scanLimit": item.get("scan_limit").cloned().unwrap_or(Value::Null),
+            "rowLimit": item.get("row_limit").cloned().unwrap_or(Value::Null),
+        }),
+        limit,
+    );
+
+    push_static_page_field_candidate(
+        candidates,
+        seen,
+        json!({
+            "sourceId": "dataset",
+            "fieldPath": "dataset.metrics_summary",
+            "label": format!("数据集聚合指标：{metric}"),
+            "kind": "metric",
+            "recommendedAggregation": aggregation,
+            "confidence": 0.88,
+            "datasetId": item.get("dataset_id").cloned().unwrap_or(Value::Null),
+            "sourceIdAlias": "database_aggregate",
+            "table": table,
+            "dimensions": item.get("dimensions").cloned().unwrap_or_else(|| json!([])),
+            "metric": metric,
+            "sampleRows": rows,
+            "scanLimit": item.get("scan_limit").cloned().unwrap_or(Value::Null),
+        }),
+        limit,
+    );
 }
 
 fn static_page_module_binding_quality(
@@ -47705,21 +47780,28 @@ fn build_static_page_module_sample_data(module: &Value, evidence_state: Option<&
     if !explicit_points.is_empty() {
         return Value::Array(explicit_points);
     }
-    let Some(field_path) = field_path else {
-        return json!([]);
-    };
     let Some(evidence_items) = evidence_state
         .and_then(|state| state.get("supplied_items"))
         .and_then(Value::as_array)
     else {
         return json!([]);
     };
-    if field_path.starts_with("media.") {
+    if let Some(field_path) = field_path.filter(|field_path| field_path.starts_with("media.")) {
         let media_points = build_static_page_media_sample_points(evidence_items, field_path);
         if !media_points.is_empty() {
             return Value::Array(media_points);
         }
     }
+
+    let database_points =
+        build_static_page_database_aggregate_sample_points(evidence_items, module, field_path);
+    if !database_points.is_empty() {
+        return Value::Array(database_points);
+    }
+
+    let Some(field_path) = field_path else {
+        return json!([]);
+    };
 
     let keywords = static_page_field_keywords(field_path);
     if keywords.is_empty() {
@@ -47828,6 +47910,113 @@ fn build_static_page_media_sample_points(evidence_items: &[Value], field_path: &
         })
         .take(6)
         .collect()
+}
+
+fn build_static_page_database_aggregate_sample_points(
+    evidence_items: &[Value],
+    module: &Value,
+    field_path: Option<&str>,
+) -> Vec<Value> {
+    let visualization_type = module
+        .get("visualization")
+        .and_then(|visualization| visualization.get("type"))
+        .and_then(Value::as_str)
+        .unwrap_or("text-insight");
+    let can_drive_module = static_page_visualization_needs_sample_rows(visualization_type)
+        || field_path
+            .map(|path| {
+                path.starts_with("database.aggregate")
+                    || path == "dataset.metrics_summary"
+                    || path == "selected_scope.metrics_summary"
+            })
+            .unwrap_or(false);
+    if !can_drive_module {
+        return Vec::new();
+    }
+
+    evidence_items
+        .iter()
+        .filter(|item| item.get("type").and_then(Value::as_str) == Some("database_aggregate"))
+        .filter_map(|item| {
+            let rows = item.get("rows").and_then(Value::as_array)?;
+            if rows.is_empty() {
+                return None;
+            }
+            Some((item, rows))
+        })
+        .flat_map(|(item, rows)| {
+            rows.iter()
+                .enumerate()
+                .filter_map(move |(index, row)| {
+                    let value = static_page_database_aggregate_row_value(row, item)?;
+                    Some(json!({
+                        "label": static_page_database_aggregate_row_label(row, item, index),
+                        "value": value,
+                        "kind": "database_aggregate",
+                        "source": "database_aggregate",
+                        "fieldPath": field_path
+                            .map(ToString::to_string)
+                            .unwrap_or_else(|| static_page_database_aggregate_field_path(item)),
+                        "datasetId": item.get("dataset_id").cloned().unwrap_or(Value::Null),
+                        "sourceId": item.get("source_id").cloned().unwrap_or(Value::Null),
+                        "table": item.get("table").cloned().unwrap_or(Value::Null),
+                        "dimensions": item.get("dimensions").cloned().unwrap_or_else(|| json!([])),
+                        "metric": item
+                            .get("metric")
+                            .cloned()
+                            .or_else(|| item.get("value_label").cloned())
+                            .unwrap_or(Value::Null),
+                        "aggregation": item.get("aggregation").cloned().unwrap_or(Value::Null),
+                        "scanLimit": item.get("scan_limit").cloned().unwrap_or(Value::Null),
+                        "rowLimit": item.get("row_limit").cloned().unwrap_or(Value::Null),
+                    }))
+                })
+                .collect::<Vec<_>>()
+        })
+        .take(12)
+        .collect()
+}
+
+fn static_page_database_aggregate_field_path(item: &Value) -> String {
+    static_page_artifact_string(item, &["metric", "value_label"])
+        .map(|metric| format!("database.aggregate.{metric}"))
+        .unwrap_or_else(|| "database.aggregate.value".to_string())
+}
+
+fn static_page_database_aggregate_row_value(row: &Value, item: &Value) -> Option<f64> {
+    let object = row.as_object()?;
+    if let Some(value) = object.get("value").and_then(static_page_json_number) {
+        return Some(value);
+    }
+    if let Some(metric) = static_page_artifact_string(item, &["metric", "value_label"]) {
+        if let Some(value) = object
+            .get(metric.as_str())
+            .and_then(static_page_json_number)
+        {
+            return Some(value);
+        }
+    }
+    object.values().find_map(static_page_json_number)
+}
+
+fn static_page_database_aggregate_row_label(row: &Value, item: &Value, index: usize) -> String {
+    let Some(object) = row.as_object() else {
+        return format!("数据 {}", index + 1);
+    };
+    if let Some(dimensions) = item.get("dimensions").and_then(Value::as_array) {
+        let label_parts = dimensions
+            .iter()
+            .filter_map(Value::as_str)
+            .filter_map(|dimension| object.get(dimension).and_then(Value::as_str))
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+            .collect::<Vec<_>>();
+        if !label_parts.is_empty() {
+            return label_parts.join(" / ").chars().take(32).collect();
+        }
+    }
+    static_page_explicit_point_label(row, index)
 }
 
 fn static_page_media_sample_array_key(field_path: &str) -> Option<&'static str> {
@@ -48144,6 +48333,12 @@ fn static_page_sample_data_quality(sample_data: &Value) -> &'static str {
     if items
         .iter()
         .any(|item| item.get("kind").and_then(Value::as_str) == Some("evidence_value"))
+    {
+        return "evidence_value";
+    }
+    if items
+        .iter()
+        .any(|item| item.get("kind").and_then(Value::as_str) == Some("database_aggregate"))
     {
         return "evidence_value";
     }
@@ -63078,6 +63273,95 @@ mod tests {
                 .unwrap_or_default()
                 > 0.0
         );
+    }
+
+    #[test]
+    fn static_page_data_snapshot_binds_database_aggregate_rows() {
+        let dataset_id = DatasetId::new();
+        let selected_scope = json!({
+            "mode": "user_selected",
+            "datasets": [dataset_id.to_string()],
+        });
+        let payload = json!({
+            "modules": [
+                {
+                    "id": "top-area",
+                    "title": "区域上行 Top5",
+                    "dataBinding": {
+                        "sourceId": "dataset",
+                        "fieldPath": "dataset.metrics_summary"
+                    },
+                    "visualization": {
+                        "type": "bar-chart",
+                        "chartOptions": {
+                            "dataKey": "dataset.metrics_summary"
+                        }
+                    }
+                }
+            ]
+        });
+        let evidence_state = json!({
+            "status": "supplied",
+            "supplied_items": [
+                {
+                    "type": "database_aggregate",
+                    "dataset_id": dataset_id.to_string(),
+                    "dataset_key": "hy-sql-traffic-area",
+                    "dataset_title": "HY SQL Traffic Area",
+                    "source_id": "hy-sql-traffic-area",
+                    "connector_kind": "mysql",
+                    "table": "bi_traffic_area",
+                    "dimensions": ["areaname"],
+                    "metric": "up",
+                    "aggregation": "sum",
+                    "value_label": "up",
+                    "columns": ["areaname", "value"],
+                    "rows": [
+                        {"areaname": "百货", "value": "1856"},
+                        {"areaname": "超市", "value": "1565"}
+                    ],
+                    "row_limit": 8,
+                    "scan_limit": 5000,
+                    "source_scope": "selected_database_source_limited_scan",
+                    "policy": "host_controlled_read_only_aggregate"
+                }
+            ]
+        });
+
+        let snapshot = build_static_page_data_snapshot_with_evidence(
+            &payload,
+            &selected_scope,
+            Some(&evidence_state),
+            "assistant_run",
+        );
+        let candidates = value_array(snapshot["field_candidates"].clone());
+        let sample_data = value_array(snapshot["module_bindings"][0]["sampleData"].clone());
+
+        assert!(candidates.iter().any(|candidate| {
+            candidate["sourceId"] == json!("database_aggregate")
+                && candidate["fieldPath"] == json!("database.aggregate.up")
+                && candidate["sampleRows"] == json!(2)
+        }));
+        assert!(candidates.iter().any(|candidate| {
+            candidate["sourceId"] == json!("dataset")
+                && candidate["fieldPath"] == json!("dataset.metrics_summary")
+        }));
+        assert_eq!(
+            snapshot["module_bindings"][0]["dataQuality"],
+            json!("evidence_value")
+        );
+        assert_eq!(
+            snapshot["module_bindings"][0]["bindingQualityStatus"],
+            json!("confirmed")
+        );
+        assert_eq!(
+            snapshot["module_bindings"][0]["chartDataFit"],
+            json!("ready")
+        );
+        assert_eq!(sample_data[0]["label"], json!("百货"));
+        assert_eq!(sample_data[0]["value"], json!(1856.0));
+        assert_eq!(sample_data[0]["kind"], json!("database_aggregate"));
+        assert_eq!(sample_data[0]["scanLimit"], json!(5000));
     }
 
     #[test]
