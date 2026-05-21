@@ -18826,11 +18826,11 @@ fn resume_profile_match_criteria(prompt: &str, rows: &[Value]) -> Vec<ResumeProf
     let mut criteria = Vec::new();
     for (field_key, field_label) in preferred_fields {
         for term in resume_profile_unique_field_terms(rows, field_key) {
-            if resume_profile_prompt_matches_term(prompt, &term) {
+            if let Some(matched_term) = resume_profile_prompt_match_term(prompt, &term) {
                 criteria.push(ResumeProfileMatchCriterion {
                     field_key,
                     field_label,
-                    term,
+                    term: matched_term,
                 });
                 break;
             }
@@ -19056,25 +19056,37 @@ fn resume_profile_year_span_string(row: &Value) -> String {
         .unwrap_or_else(|| "-".to_string())
 }
 
-fn resume_profile_prompt_matches_term(prompt: &str, term: &str) -> bool {
+fn resume_profile_prompt_match_term(prompt: &str, term: &str) -> Option<String> {
     let prompt_text = prompt.to_ascii_lowercase();
-    let term_text = normalize_document_entity_value(term).to_ascii_lowercase();
+    let normalized_term = normalize_document_entity_value(term);
+    let term_text = normalized_term.to_ascii_lowercase();
     if term_text.is_empty() || !resume_profile_term_can_filter(&term_text) {
-        return false;
+        return None;
     }
-    if is_valid_company_name(&normalize_document_entity_value(term)) {
-        return prompt_text.contains(&term_text);
+    if is_valid_company_name(&normalized_term) {
+        return prompt_text.contains(&term_text).then_some(normalized_term);
     }
     if resume_profile_term_is_ascii(&term_text) {
         return lexical_query_tokens(&prompt_text)
             .into_iter()
-            .any(|token| token == term_text);
+            .any(|token| token == term_text)
+            .then_some(normalized_term);
     }
-    prompt_text.contains(&term_text)
-        || lexical_query_tokens(&prompt_text)
-            .into_iter()
-            .filter(|token| resume_profile_query_token_can_filter(token))
-            .any(|token| term_text.contains(&token))
+    if prompt_text.contains(&term_text) {
+        return Some(normalized_term);
+    }
+    let mut tokens = lexical_query_tokens(&prompt_text)
+        .into_iter()
+        .filter(|token| resume_profile_query_token_can_filter(token))
+        .collect::<Vec<_>>();
+    tokens.sort_by(|left, right| {
+        right
+            .chars()
+            .count()
+            .cmp(&left.chars().count())
+            .then_with(|| left.cmp(right))
+    });
+    tokens.into_iter().find(|token| term_text.contains(token))
 }
 
 fn resume_profile_terms_match(value: &str, term: &str) -> bool {
@@ -19160,6 +19172,10 @@ fn resume_profile_query_token_can_filter(token: &str) -> bool {
             "经验",
             "技能",
             "公司",
+            "平台",
+            "系统",
+            "产品",
+            "经理",
             "候选",
             "候选人",
             "简历",
