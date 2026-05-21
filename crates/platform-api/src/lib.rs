@@ -18266,6 +18266,10 @@ fn assistant_run_dataset_entity_scan_direct_answer_for_dimension(
         AssistantRunEntityScanAnswerDimension::Age
             | AssistantRunEntityScanAnswerDimension::Gender
             | AssistantRunEntityScanAnswerDimension::Time
+            | AssistantRunEntityScanAnswerDimension::ResumeSkill
+            | AssistantRunEntityScanAnswerDimension::ResumeProject
+            | AssistantRunEntityScanAnswerDimension::ResumeCompany
+            | AssistantRunEntityScanAnswerDimension::ResumeExperience
     ) {
         return assistant_run_resume_profile_direct_answer(&scans, dimension);
     }
@@ -18348,6 +18352,10 @@ enum AssistantRunEntityScanAnswerDimension {
     Age,
     Gender,
     Time,
+    ResumeSkill,
+    ResumeProject,
+    ResumeCompany,
+    ResumeExperience,
 }
 
 fn assistant_run_entity_scan_answer_dimension(
@@ -18359,8 +18367,20 @@ fn assistant_run_entity_scan_answer_dimension(
     if prompt_requests_gender_statistics(prompt) {
         return Some(AssistantRunEntityScanAnswerDimension::Gender);
     }
+    if prompt_requests_resume_experience_statistics(prompt) {
+        return Some(AssistantRunEntityScanAnswerDimension::ResumeExperience);
+    }
     if prompt_requests_resume_time_statistics(prompt) {
         return Some(AssistantRunEntityScanAnswerDimension::Time);
+    }
+    if prompt_requests_resume_skill_ranking(prompt) {
+        return Some(AssistantRunEntityScanAnswerDimension::ResumeSkill);
+    }
+    if prompt_requests_resume_project_ranking(prompt) {
+        return Some(AssistantRunEntityScanAnswerDimension::ResumeProject);
+    }
+    if prompt_requests_resume_company_ranking(prompt) {
+        return Some(AssistantRunEntityScanAnswerDimension::ResumeCompany);
     }
     if prompt_requests_skill_statistics(prompt) {
         return Some(AssistantRunEntityScanAnswerDimension::Skill);
@@ -18587,6 +18607,129 @@ fn assistant_run_resume_profile_direct_answer(
                 },
             ))
         }
+        AssistantRunEntityScanAnswerDimension::ResumeSkill => {
+            rows.sort_by(|left, right| {
+                right
+                    .get("skill_count")
+                    .and_then(Value::as_u64)
+                    .cmp(&left.get("skill_count").and_then(Value::as_u64))
+                    .then_with(|| {
+                        resume_profile_candidate_name(left)
+                            .cmp(&resume_profile_candidate_name(right))
+                    })
+            });
+            Some(assistant_run_resume_profile_table(
+                &rows,
+                "按技能数排序的候选人简历表",
+                &["候选人", "技能数", "项目数", "公司数", "最近年份", "文档"],
+                |row| {
+                    vec![
+                        resume_profile_candidate_name(row),
+                        value_u64_string(row, "skill_count"),
+                        value_u64_string(row, "project_count"),
+                        value_u64_string(row, "company_count"),
+                        value_i64_string(row, "latest_year"),
+                        value_string(row, "document_title"),
+                    ]
+                },
+            ))
+        }
+        AssistantRunEntityScanAnswerDimension::ResumeProject => {
+            rows.sort_by(|left, right| {
+                right
+                    .get("project_count")
+                    .and_then(Value::as_u64)
+                    .cmp(&left.get("project_count").and_then(Value::as_u64))
+                    .then_with(|| {
+                        resume_profile_candidate_name(left)
+                            .cmp(&resume_profile_candidate_name(right))
+                    })
+            });
+            Some(assistant_run_resume_profile_table(
+                &rows,
+                "按项目数排序的候选人简历表",
+                &["候选人", "项目数", "技能数", "公司数", "最近年份", "文档"],
+                |row| {
+                    vec![
+                        resume_profile_candidate_name(row),
+                        value_u64_string(row, "project_count"),
+                        value_u64_string(row, "skill_count"),
+                        value_u64_string(row, "company_count"),
+                        value_i64_string(row, "latest_year"),
+                        value_string(row, "document_title"),
+                    ]
+                },
+            ))
+        }
+        AssistantRunEntityScanAnswerDimension::ResumeCompany => {
+            rows.sort_by(|left, right| {
+                right
+                    .get("company_count")
+                    .and_then(Value::as_u64)
+                    .cmp(&left.get("company_count").and_then(Value::as_u64))
+                    .then_with(|| {
+                        resume_profile_candidate_name(left)
+                            .cmp(&resume_profile_candidate_name(right))
+                    })
+            });
+            Some(assistant_run_resume_profile_table(
+                &rows,
+                "按公司数排序的候选人简历表",
+                &["候选人", "公司数", "技能数", "项目数", "最近年份", "文档"],
+                |row| {
+                    vec![
+                        resume_profile_candidate_name(row),
+                        value_u64_string(row, "company_count"),
+                        value_u64_string(row, "skill_count"),
+                        value_u64_string(row, "project_count"),
+                        value_i64_string(row, "latest_year"),
+                        value_string(row, "document_title"),
+                    ]
+                },
+            ))
+        }
+        AssistantRunEntityScanAnswerDimension::ResumeExperience => {
+            rows.sort_by(|left, right| {
+                resume_profile_year_span(right)
+                    .cmp(&resume_profile_year_span(left))
+                    .then_with(|| {
+                        right
+                            .get("latest_year")
+                            .and_then(Value::as_i64)
+                            .cmp(&left.get("latest_year").and_then(Value::as_i64))
+                    })
+                    .then_with(|| {
+                        resume_profile_candidate_name(left)
+                            .cmp(&resume_profile_candidate_name(right))
+                    })
+            });
+            Some(assistant_run_resume_profile_table(
+                &rows,
+                "按工作年限排序的候选人简历表",
+                &[
+                    "候选人",
+                    "工作年限",
+                    "最早年份",
+                    "最近年份",
+                    "公司数",
+                    "技能数",
+                    "项目数",
+                    "文档",
+                ],
+                |row| {
+                    vec![
+                        resume_profile_candidate_name(row),
+                        resume_profile_year_span_string(row),
+                        value_i64_string(row, "earliest_year"),
+                        value_i64_string(row, "latest_year"),
+                        value_u64_string(row, "company_count"),
+                        value_u64_string(row, "skill_count"),
+                        value_u64_string(row, "project_count"),
+                        value_string(row, "document_title"),
+                    ]
+                },
+            ))
+        }
         _ => None,
     }
 }
@@ -18653,6 +18796,18 @@ fn value_i64_string(row: &Value, key: &str) -> String {
         .unwrap_or_else(|| "-".to_string())
 }
 
+fn resume_profile_year_span(row: &Value) -> Option<i64> {
+    let earliest_year = row.get("earliest_year").and_then(Value::as_i64)?;
+    let latest_year = row.get("latest_year").and_then(Value::as_i64)?;
+    (latest_year >= earliest_year).then_some(latest_year - earliest_year + 1)
+}
+
+fn resume_profile_year_span_string(row: &Value) -> String {
+    resume_profile_year_span(row)
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "-".to_string())
+}
+
 fn prompt_requests_company_entity_statistics(prompt: &str) -> bool {
     if prompt_requests_resume_company_entity_scan(prompt) {
         return true;
@@ -18693,6 +18848,81 @@ fn prompt_requests_company_entity_statistics(prompt: &str) -> bool {
     ) || lower_prompt.contains("how many");
 
     has_company_signal && has_stat_signal
+}
+
+fn prompt_requests_resume_skill_ranking(prompt: &str) -> bool {
+    prompt_requests_resume_profile_sort(prompt) && prompt_requests_skill_statistics(prompt)
+}
+
+fn prompt_requests_resume_project_ranking(prompt: &str) -> bool {
+    prompt_requests_resume_profile_sort(prompt) && prompt_requests_project_statistics(prompt)
+}
+
+fn prompt_requests_resume_company_ranking(prompt: &str) -> bool {
+    if !prompt_requests_resume_profile_sort(prompt) {
+        return false;
+    }
+    let lower_prompt = prompt.to_ascii_lowercase();
+    prompt_contains_any(prompt, &["公司数", "公司数量", "任职公司", "工作公司"])
+        || ascii_prompt_contains_any(&lower_prompt, &["company_count", "companies", "employers"])
+}
+
+fn prompt_requests_resume_experience_statistics(prompt: &str) -> bool {
+    if !prompt_requests_resume_profile_sort(prompt) {
+        return false;
+    }
+    let lower_prompt = prompt.to_ascii_lowercase();
+    prompt_contains_any(prompt, &["工作年限", "经验年限", "年限", "履历年限"])
+        || ascii_prompt_contains_any(&lower_prompt, &["experience", "tenure", "duration"])
+}
+
+fn prompt_requests_resume_profile_sort(prompt: &str) -> bool {
+    if !prompt_has_resume_signal(prompt) || prompt_prefers_entity_frequency(prompt) {
+        return false;
+    }
+    let lower_prompt = prompt.to_ascii_lowercase();
+    prompt_contains_any(
+        prompt,
+        &[
+            "排序",
+            "排行",
+            "排名",
+            "出表",
+            "表格",
+            "按",
+            "候选人",
+            "人才",
+        ],
+    ) || ascii_prompt_contains_any(&lower_prompt, &["sort", "rank", "table", "by"])
+}
+
+fn prompt_prefers_entity_frequency(prompt: &str) -> bool {
+    let lower_prompt = prompt.to_ascii_lowercase();
+    prompt_contains_any(
+        prompt,
+        &[
+            "出现频次",
+            "频次",
+            "频率",
+            "覆盖",
+            "覆盖文档",
+            "哪些",
+            "有哪些",
+            "清单",
+            "去重",
+            "提到",
+        ],
+    ) || ascii_prompt_contains_any(
+        &lower_prompt,
+        &[
+            "frequency",
+            "frequencies",
+            "coverage",
+            "which",
+            "list",
+            "dedupe",
+        ],
+    )
 }
 
 fn prompt_requests_skill_statistics(prompt: &str) -> bool {
@@ -52528,6 +52758,22 @@ mod tests {
         ));
         assert!(assistant_run_dataset_entity_scan_requested(
             &selected_scope,
+            "简历按技能数量排序出表"
+        ));
+        assert!(assistant_run_dataset_entity_scan_requested(
+            &selected_scope,
+            "候选人按项目数量排序出表"
+        ));
+        assert!(assistant_run_dataset_entity_scan_requested(
+            &selected_scope,
+            "简历按公司数排序出表"
+        ));
+        assert!(assistant_run_dataset_entity_scan_requested(
+            &selected_scope,
+            "简历按工作年限排序出表"
+        ));
+        assert!(assistant_run_dataset_entity_scan_requested(
+            &selected_scope,
             "按最近年份排序简历"
         ));
         assert!(assistant_run_dataset_entity_scan_requested(
@@ -52900,6 +53146,7 @@ mod tests {
                         "age": 29,
                         "earliest_year": 2019,
                         "latest_year": 2024,
+                        "company_count": 1,
                         "skill_count": 1,
                         "project_count": 1
                     },
@@ -52911,6 +53158,7 @@ mod tests {
                         "age": 35,
                         "earliest_year": 2012,
                         "latest_year": 2023,
+                        "company_count": 3,
                         "skill_count": 2,
                         "project_count": 0
                     }
@@ -52970,6 +53218,7 @@ mod tests {
         assert!(skill_answer.contains("识别到 2 个技能"));
         assert!(skill_answer.contains("| Java | 2 |"));
         assert!(skill_answer.contains("| React | 1 |"));
+        assert!(!skill_answer.contains("张三简历.docx"));
 
         let keyword_request = CreateAssistantRunRequest {
             prompt: "按关键词出现频次排序出表".to_string(),
@@ -53021,6 +53270,52 @@ mod tests {
         let zhang_index = age_answer.find("| 张三 | 35 |").unwrap();
         let li_index = age_answer.find("| 李四 | 29 |").unwrap();
         assert!(zhang_index < li_index);
+
+        let resume_skill_request = CreateAssistantRunRequest {
+            prompt: "简历按技能数量排序出表".to_string(),
+            ..age_request.clone()
+        };
+        let resume_skill_answer =
+            assistant_run_dataset_entity_scan_direct_answer(&resume_skill_request, &evidence)
+                .expect("resume skill ranking should produce a candidate table");
+        assert!(resume_skill_answer.contains("按技能数排序的候选人简历表"));
+        assert!(resume_skill_answer.contains("| 张三 | 2 | 0 | 3 | 2023 | 张三简历.docx |"));
+        assert!(resume_skill_answer.contains("| 李四 | 1 | 1 | 1 | 2024 | 李四简历.docx |"));
+
+        let resume_project_request = CreateAssistantRunRequest {
+            prompt: "候选人按项目数量排序出表".to_string(),
+            ..age_request.clone()
+        };
+        let resume_project_answer =
+            assistant_run_dataset_entity_scan_direct_answer(&resume_project_request, &evidence)
+                .expect("resume project ranking should produce a candidate table");
+        let li_project_index = resume_project_answer.find("| 李四 | 1 | 1 | 1 |").unwrap();
+        let zhang_project_index = resume_project_answer.find("| 张三 | 0 | 2 | 3 |").unwrap();
+        assert!(li_project_index < zhang_project_index);
+
+        let resume_company_request = CreateAssistantRunRequest {
+            prompt: "简历按公司数排序出表".to_string(),
+            ..age_request.clone()
+        };
+        let resume_company_answer =
+            assistant_run_dataset_entity_scan_direct_answer(&resume_company_request, &evidence)
+                .expect("resume company ranking should produce a candidate table");
+        assert!(resume_company_answer.contains("按公司数排序的候选人简历表"));
+        let zhang_company_index = resume_company_answer.find("| 张三 | 3 | 2 | 0 |").unwrap();
+        let li_company_index = resume_company_answer.find("| 李四 | 1 | 1 | 1 |").unwrap();
+        assert!(zhang_company_index < li_company_index);
+
+        let experience_request = CreateAssistantRunRequest {
+            prompt: "简历按工作年限排序出表".to_string(),
+            ..age_request
+        };
+        let experience_answer =
+            assistant_run_dataset_entity_scan_direct_answer(&experience_request, &evidence)
+                .expect("resume experience ranking should produce a candidate table");
+        assert!(experience_answer.contains("按工作年限排序的候选人简历表"));
+        let zhang_experience_index = experience_answer.find("| 张三 | 12 |").unwrap();
+        let li_experience_index = experience_answer.find("| 李四 | 6 |").unwrap();
+        assert!(zhang_experience_index < li_experience_index);
     }
 
     #[test]
