@@ -15676,6 +15676,9 @@ fn database_source_table_mapping_value(
         json!(mapping.object_type.clone()),
     );
     object.insert("id_column".to_string(), json!(mapping.id_column.clone()));
+    if !mapping.id_columns.is_empty() {
+        object.insert("id_columns".to_string(), json!(mapping.id_columns.clone()));
+    }
     if let Some(title_column) = mapping.title_column.as_deref() {
         object.insert("title_column".to_string(), json!(title_column));
     }
@@ -49498,6 +49501,7 @@ mod tests {
                     table: "bi_traffic_area".to_string(),
                     object_type: "document".to_string(),
                     id_column: "id".to_string(),
+                    id_columns: vec!["id".to_string()],
                     title_column: Some("area_name".to_string()),
                     content_columns: vec![
                         "area_name".to_string(),

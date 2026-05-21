@@ -58,6 +58,8 @@ pub struct MySqlTableMapping {
     #[serde(default = "default_object_type")]
     pub object_type: String,
     pub id_column: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub id_columns: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title_column: Option<String>,
     #[serde(default)]
@@ -246,6 +248,8 @@ pub struct DatabaseTableMappingSuggestion {
     pub table: String,
     pub object_type: String,
     pub id_column: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub id_columns: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title_column: Option<String>,
     pub content_columns: Vec<String>,
@@ -745,6 +749,14 @@ fn suggested_table_mapping(
         .chain(text_columns.iter())
         .find(|column| *column != &id_column)
         .cloned();
+    let id_columns = suggested_identity_columns(
+        &id_column,
+        primary_key_columns,
+        title_column.as_deref(),
+        dimensions,
+        time_dimensions,
+        columns,
+    );
     let updated_at_column = time_dimensions
         .iter()
         .find(|column| {
@@ -809,6 +821,7 @@ fn suggested_table_mapping(
         table: table.to_string(),
         object_type: DEFAULT_OBJECT_TYPE.to_string(),
         id_column,
+        id_columns,
         title_column,
         content_columns,
         content_type: DEFAULT_CONTENT_TYPE.to_string(),
@@ -820,6 +833,42 @@ fn suggested_table_mapping(
             "基于主键、字段名称、数据类型和样本值推断，可作为数据库表同步到数据集文档的默认映射。"
                 .to_string(),
     }
+}
+
+fn suggested_identity_columns(
+    id_column: &str,
+    primary_key_columns: &[String],
+    title_column: Option<&str>,
+    dimensions: &[String],
+    time_dimensions: &[String],
+    columns: &[DatabaseColumnSemanticProfile],
+) -> Vec<String> {
+    if !primary_key_columns.is_empty() {
+        return primary_key_columns.to_vec();
+    }
+    let mut id_columns = vec![id_column.to_string()];
+    for column in columns {
+        if looks_like_identifier(&column.name.to_ascii_lowercase()) {
+            push_unique_column(&mut id_columns, &column.name);
+        }
+        if id_columns.len() >= 2 {
+            break;
+        }
+    }
+    if let Some(time_column) = time_dimensions.first() {
+        push_unique_column(&mut id_columns, time_column);
+    }
+    if id_columns.len() < 3 {
+        if let Some(title_column) = title_column {
+            push_unique_column(&mut id_columns, title_column);
+        }
+    }
+    if id_columns.len() < 3 {
+        if let Some(dimension) = dimensions.first() {
+            push_unique_column(&mut id_columns, dimension);
+        }
+    }
+    id_columns
 }
 
 fn push_unique_column_if_not(columns: &mut Vec<String>, column: &str, excluded: &str) {
@@ -997,6 +1046,8 @@ fn is_boolean_type(data_type: &str, column_type: &str, name: &str) -> bool {
 
 fn looks_like_identifier(name: &str) -> bool {
     name == "id"
+        || (name.len() > 2 && name.ends_with("id"))
+        || (name.len() > 4 && name.ends_with("code"))
         || name.ends_with("_id")
         || name.ends_with("_code")
         || name.ends_with("_no")
@@ -1379,6 +1430,9 @@ impl MySqlTableMapping {
         validate_identifier("table", &self.table)?;
         validate_non_empty("id_column", &self.id_column)?;
         validate_identifier("id_column", &self.id_column)?;
+        for column in &self.id_columns {
+            validate_identifier("id_columns", column)?;
+        }
 
         if let Some(title_column) = self.title_column.as_deref() {
             validate_identifier("title_column", title_column)?;
@@ -1410,6 +1464,7 @@ impl MySqlTableMapping {
         self.table = self.table.trim().to_string();
         self.object_type = self.object_type.trim().to_string();
         self.id_column = self.id_column.trim().to_string();
+        self.id_columns = normalize_identifier_list(std::mem::take(&mut self.id_columns));
         self.title_column = normalize_optional_identifier(self.title_column.take());
         self.content_columns = normalize_identifier_list(std::mem::take(&mut self.content_columns));
         self.content_type = self.content_type.trim().to_string();
@@ -1605,7 +1660,9 @@ async fn connect_mysql_pool(config: &MySqlSourceConfig) -> Result<MySqlPool, Dat
 
 fn preview_columns(mapping: &MySqlTableMapping) -> Vec<String> {
     let mut columns = Vec::new();
-    push_unique_column(&mut columns, &mapping.id_column);
+    for column in mapping_identity_columns(mapping) {
+        push_unique_column(&mut columns, &column);
+    }
     if let Some(column) = mapping.title_column.as_deref() {
         push_unique_column(&mut columns, column);
     }
@@ -1624,6 +1681,14 @@ fn preview_columns(mapping: &MySqlTableMapping) -> Vec<String> {
     columns
 }
 
+fn mapping_identity_columns(mapping: &MySqlTableMapping) -> Vec<String> {
+    if mapping.id_columns.is_empty() {
+        vec![mapping.id_column.clone()]
+    } else {
+        mapping.id_columns.clone()
+    }
+}
+
 fn mysql_row_to_external_document(
     mapping: &MySqlTableMapping,
     columns: &[String],
@@ -1639,18 +1704,8 @@ fn mysql_row_to_external_document(
         values.insert(column.clone(), value);
     }
 
-    let primary_key = values
-        .get(&mapping.id_column)
-        .map(|value| value.trim())
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| DatabaseSourceError::InvalidField {
-            field: "id_column",
-            reason: format!(
-                "mapped table {} has a row with empty id_column {}",
-                mapping.table, mapping.id_column
-            ),
-        })?
-        .to_string();
+    let identity_columns = mapping_identity_columns(mapping);
+    let primary_key = mysql_row_primary_key(mapping, &identity_columns, &values)?;
     let title = mapping
         .title_column
         .as_deref()
@@ -1665,6 +1720,16 @@ fn mysql_row_to_external_document(
     metadata.insert("source_kind".to_string(), json_string("mysql"));
     metadata.insert("source_table".to_string(), json_string(&mapping.table));
     metadata.insert("source_primary_key".to_string(), json_string(&primary_key));
+    metadata.insert(
+        "source_primary_key_columns".to_string(),
+        Value::Array(
+            identity_columns
+                .iter()
+                .cloned()
+                .map(Value::String)
+                .collect(),
+        ),
+    );
     metadata.insert("object_type".to_string(), json_string(&mapping.object_type));
     for column in &mapping.metadata_columns {
         if let Some(value) = values.get(column) {
@@ -1675,7 +1740,11 @@ fn mysql_row_to_external_document(
     let mut object = Map::new();
     object.insert(
         "document_external_id".to_string(),
-        json_string(&format!("mysql:{}:{}", mapping.table, primary_key)),
+        json_string(&mysql_document_external_id(
+            &mapping.table,
+            &primary_key,
+            mapping_identity_columns(mapping).len() > 1,
+        )),
     );
     object.insert(
         "revision_external_id".to_string(),
@@ -1691,6 +1760,56 @@ fn mysql_row_to_external_document(
         object.insert("body".to_string(), json_string(&body));
     }
     Ok(Value::Object(object))
+}
+
+fn mysql_row_primary_key(
+    mapping: &MySqlTableMapping,
+    identity_columns: &[String],
+    values: &BTreeMap<String, String>,
+) -> Result<String, DatabaseSourceError> {
+    let mut has_non_empty_value = false;
+    let parts = identity_columns
+        .iter()
+        .map(|column| {
+            let value = values
+                .get(column)
+                .map(|value| value.trim())
+                .unwrap_or_default();
+            if !value.is_empty() {
+                has_non_empty_value = true;
+            }
+            format!("{column}={value}")
+        })
+        .collect::<Vec<_>>();
+    if !has_non_empty_value {
+        return Err(DatabaseSourceError::InvalidField {
+            field: "id_columns",
+            reason: format!(
+                "mapped table {} has a row with empty identity columns {}",
+                mapping.table,
+                identity_columns.join(",")
+            ),
+        });
+    }
+    if identity_columns.len() == 1 {
+        Ok(values
+            .get(&identity_columns[0])
+            .map(|value| value.trim().to_string())
+            .unwrap_or_default())
+    } else {
+        Ok(parts.join("|"))
+    }
+}
+
+fn mysql_document_external_id(table: &str, primary_key: &str, hashed: bool) -> String {
+    if !hashed {
+        return format!("mysql:{table}:{primary_key}");
+    }
+    let mut hasher = Sha256::new();
+    hasher.update(table.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(primary_key.as_bytes());
+    format!("mysql:{table}:sha256:{:x}", hasher.finalize())
 }
 
 fn build_mysql_document_body(
@@ -1869,7 +1988,25 @@ mod tests {
             config.tables[0].revision_strategy,
             MySqlRevisionStrategy::UpdatedAtHash
         );
+        assert!(config.tables[0].id_columns.is_empty());
         assert_eq!(config.tables[0].content_columns, vec!["content", "summary"]);
+    }
+
+    #[test]
+    fn mysql_source_config_parses_composite_id_columns() {
+        let mut raw = valid_config();
+        raw["tables"][0]["id_columns"] = json!([" tenant_id ", " id "]);
+
+        let config = MySqlSourceConfig::from_value(&raw).expect("config parses");
+
+        assert_eq!(
+            config.tables[0].id_columns,
+            vec!["tenant_id".to_string(), "id".to_string()]
+        );
+        assert_eq!(
+            mapping_identity_columns(&config.tables[0]),
+            vec!["tenant_id".to_string(), "id".to_string()]
+        );
     }
 
     #[test]
@@ -2095,6 +2232,21 @@ mod tests {
     }
 
     #[test]
+    fn document_fetch_query_includes_composite_identity_columns() {
+        let mut raw = valid_config();
+        raw["tables"][0]["id_columns"] = json!(["category", "id"]);
+        let config = MySqlSourceConfig::from_value(&raw).expect("config parses");
+
+        let plan = build_mysql_document_fetch_query(&config, &config.tables[0])
+            .expect("document fetch query builds");
+
+        assert_eq!(plan.columns[0], "category");
+        assert_eq!(plan.columns[1], "id");
+        assert!(plan.sql.contains("cast(`category` as char) as `category`"));
+        assert!(plan.sql.contains("cast(`id` as char) as `id`"));
+    }
+
+    #[test]
     fn aggregate_query_groups_metric_by_dimension() {
         let raw = json!({
             "connection_env": "THIRD_PARTY_HY_SQL_DATABASE_URL",
@@ -2234,6 +2386,21 @@ mod tests {
     }
 
     #[test]
+    fn mysql_document_external_id_hashes_composite_identity() {
+        let external_id = mysql_document_external_id("traffic", "storecode=1101|areaid=20", true);
+
+        assert!(external_id.starts_with("mysql:traffic:sha256:"));
+        assert_ne!(
+            external_id,
+            mysql_document_external_id("traffic", "storecode=1101|areaid=21", true)
+        );
+        assert_eq!(
+            mysql_document_external_id("traffic", "42", false),
+            "mysql:traffic:42"
+        );
+    }
+
+    #[test]
     fn database_semantic_profile_detects_metrics_dimensions_and_charts() {
         let schema = DatabaseSchemaSnapshot {
             kind: "mysql".to_string(),
@@ -2310,6 +2477,7 @@ mod tests {
         assert!(table.time_dimensions.contains(&"stat_date".to_string()));
         assert_eq!(table.suggested_mapping.table, "bi_traffic_area");
         assert_eq!(table.suggested_mapping.id_column, "id");
+        assert_eq!(table.suggested_mapping.id_columns, vec!["id".to_string()]);
         assert_eq!(
             table.suggested_mapping.title_column.as_deref(),
             Some("area_name")
@@ -2375,11 +2543,88 @@ mod tests {
         assert!(table.entity_columns.contains(&"area_code".to_string()));
         assert!(table.dimensions.contains(&"area_name".to_string()));
         assert_eq!(table.suggested_mapping.id_column, "area_code");
+        assert_eq!(
+            table.suggested_mapping.id_columns,
+            vec!["area_code".to_string()]
+        );
         assert!(table
             .suggested_mapping
             .content_columns
             .contains(&"area_name".to_string()));
         assert_eq!(table.suggested_visualizations[0].metrics[0], "record_count");
+    }
+
+    #[test]
+    fn database_semantic_profile_suggests_composite_identity_for_heap_fact_table() {
+        let schema = DatabaseSchemaSnapshot {
+            kind: "mysql".to_string(),
+            database: "hy_sql".to_string(),
+            server_version: "8.0".to_string(),
+            tables: vec![DatabaseTableView {
+                name: "bi_traffic_area".to_string(),
+                table_type: "BASE TABLE".to_string(),
+                comment: None,
+                approximate_row_count: Some(38_000_000),
+                update_time: None,
+                primary_key_columns: Vec::new(),
+                indexes: Vec::new(),
+                columns: vec![
+                    DatabaseColumnView {
+                        name: "storecode".to_string(),
+                        ordinal_position: 1,
+                        data_type: "text".to_string(),
+                        column_type: "text".to_string(),
+                        is_nullable: true,
+                        default_value: None,
+                        comment: None,
+                    },
+                    DatabaseColumnView {
+                        name: "areaid".to_string(),
+                        ordinal_position: 2,
+                        data_type: "text".to_string(),
+                        column_type: "text".to_string(),
+                        is_nullable: true,
+                        default_value: None,
+                        comment: None,
+                    },
+                    DatabaseColumnView {
+                        name: "areaname".to_string(),
+                        ordinal_position: 3,
+                        data_type: "text".to_string(),
+                        column_type: "text".to_string(),
+                        is_nullable: true,
+                        default_value: None,
+                        comment: None,
+                    },
+                    DatabaseColumnView {
+                        name: "txdate".to_string(),
+                        ordinal_position: 4,
+                        data_type: "datetime".to_string(),
+                        column_type: "datetime".to_string(),
+                        is_nullable: true,
+                        default_value: None,
+                        comment: None,
+                    },
+                    DatabaseColumnView {
+                        name: "up".to_string(),
+                        ordinal_position: 5,
+                        data_type: "bigint".to_string(),
+                        column_type: "bigint".to_string(),
+                        is_nullable: true,
+                        default_value: None,
+                        comment: None,
+                    },
+                ],
+            }],
+        };
+
+        let profile = build_database_semantic_profile(schema, Vec::new());
+        let mapping = &profile.tables[0].suggested_mapping;
+
+        assert_eq!(mapping.id_column, "storecode");
+        assert!(mapping.id_columns.contains(&"storecode".to_string()));
+        assert!(mapping.id_columns.contains(&"areaid".to_string()));
+        assert!(mapping.id_columns.contains(&"txdate".to_string()));
     }
 
     #[tokio::test]
