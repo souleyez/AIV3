@@ -206,6 +206,101 @@ pub struct DatasetDocumentMembership {
 }
 
 #[derive(Clone, Debug)]
+pub struct ModelGatewayProfile {
+    pub id: Uuid,
+    pub tenant_id: TenantId,
+    pub profile_id: String,
+    pub display_name: String,
+    pub lane: String,
+    pub provider_id: String,
+    pub model_id: String,
+    pub base_url: Option<String>,
+    pub api_path: Option<String>,
+    pub wire_api: String,
+    pub auth_mode: String,
+    pub auth_env_key_name: Option<String>,
+    pub recommended_preset: Option<String>,
+    pub max_concurrency: Option<i32>,
+    pub rpm_limit: Option<i32>,
+    pub tpm_limit: Option<i32>,
+    pub timeout_ms: Option<i32>,
+    pub priority: i32,
+    pub enabled: bool,
+    pub capabilities: Value,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug)]
+pub struct NewModelGatewayProfile {
+    pub id: Uuid,
+    pub profile_id: String,
+    pub display_name: String,
+    pub lane: String,
+    pub provider_id: String,
+    pub model_id: String,
+    pub base_url: Option<String>,
+    pub api_path: Option<String>,
+    pub wire_api: String,
+    pub auth_mode: String,
+    pub auth_env_key_name: Option<String>,
+    pub recommended_preset: Option<String>,
+    pub max_concurrency: Option<i32>,
+    pub rpm_limit: Option<i32>,
+    pub tpm_limit: Option<i32>,
+    pub timeout_ms: Option<i32>,
+    pub priority: i32,
+    pub enabled: bool,
+    pub capabilities: Value,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct ModelGatewayProfileUpdate {
+    pub display_name: Option<String>,
+    pub lane: Option<String>,
+    pub provider_id: Option<String>,
+    pub model_id: Option<String>,
+    pub base_url: Option<String>,
+    pub api_path: Option<String>,
+    pub wire_api: Option<String>,
+    pub auth_mode: Option<String>,
+    pub auth_env_key_name: Option<String>,
+    pub recommended_preset: Option<String>,
+    pub max_concurrency: Option<i32>,
+    pub rpm_limit: Option<i32>,
+    pub tpm_limit: Option<i32>,
+    pub timeout_ms: Option<i32>,
+    pub priority: Option<i32>,
+    pub enabled: Option<bool>,
+    pub capabilities: Option<Value>,
+}
+
+#[derive(Clone, Debug)]
+pub struct NewModelGatewayProfileEvent {
+    pub profile_id: String,
+    pub lane: String,
+    pub event_type: String,
+    pub latency_ms: Option<i32>,
+    pub input_tokens: Option<i32>,
+    pub output_tokens: Option<i32>,
+    pub error_kind: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ModelGatewayProfileUsageSummary {
+    pub profile_id: String,
+    pub lane: String,
+    pub request_count: i64,
+    pub success_count: i64,
+    pub failure_count: i64,
+    pub timeout_count: i64,
+    pub rate_limit_count: i64,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+}
+
+#[derive(Clone, Debug)]
 pub struct NewSecretBinding {
     pub dataset_id: DatasetId,
     pub document_id: Option<DocumentId>,
@@ -628,6 +723,12 @@ impl PgStorage {
         }
     }
 
+    pub fn model_gateway_profiles(&self) -> PgModelGatewayProfileRepository {
+        PgModelGatewayProfileRepository {
+            pool: self.pool.clone(),
+        }
+    }
+
     pub fn secret_bindings(&self) -> PgSecretBindingRepository {
         PgSecretBindingRepository {
             pool: self.pool.clone(),
@@ -993,6 +1094,11 @@ pub struct PgDocumentRepository {
 
 #[derive(Clone)]
 pub struct PgDatasetDocumentMembershipRepository {
+    pool: PgPool,
+}
+
+#[derive(Clone)]
+pub struct PgModelGatewayProfileRepository {
     pool: PgPool,
 }
 
@@ -1710,6 +1816,273 @@ impl PgDatasetDocumentMembershipRepository {
         .await?;
 
         Ok(result.rows_affected())
+    }
+}
+
+impl PgModelGatewayProfileRepository {
+    pub async fn list_enabled_by_lane(
+        &self,
+        tenant_id: TenantId,
+        lane: &str,
+    ) -> Result<Vec<ModelGatewayProfile>> {
+        let rows = sqlx::query(
+            r#"
+            select id, tenant_id, profile_id, display_name, lane, provider_id, model_id,
+                   base_url, api_path, wire_api, auth_mode, auth_env_key_name,
+                   recommended_preset, max_concurrency, rpm_limit, tpm_limit, timeout_ms,
+                   priority, enabled, capabilities, created_at, updated_at
+            from model_gateway_profiles
+            where tenant_id = $1 and lane = $2 and enabled = true
+            order by priority desc, profile_id asc
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(lane)
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.iter().map(map_model_gateway_profile_row).collect()
+    }
+
+    pub async fn list_all(&self, tenant_id: TenantId) -> Result<Vec<ModelGatewayProfile>> {
+        let rows = sqlx::query(
+            r#"
+            select id, tenant_id, profile_id, display_name, lane, provider_id, model_id,
+                   base_url, api_path, wire_api, auth_mode, auth_env_key_name,
+                   recommended_preset, max_concurrency, rpm_limit, tpm_limit, timeout_ms,
+                   priority, enabled, capabilities, created_at, updated_at
+            from model_gateway_profiles
+            where tenant_id = $1
+            order by lane asc, priority desc, profile_id asc
+            "#,
+        )
+        .bind(tenant_id.0)
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.iter().map(map_model_gateway_profile_row).collect()
+    }
+
+    pub async fn get_by_profile_id(
+        &self,
+        tenant_id: TenantId,
+        profile_id: &str,
+    ) -> Result<Option<ModelGatewayProfile>> {
+        let row = sqlx::query(
+            r#"
+            select id, tenant_id, profile_id, display_name, lane, provider_id, model_id,
+                   base_url, api_path, wire_api, auth_mode, auth_env_key_name,
+                   recommended_preset, max_concurrency, rpm_limit, tpm_limit, timeout_ms,
+                   priority, enabled, capabilities, created_at, updated_at
+            from model_gateway_profiles
+            where tenant_id = $1 and profile_id = $2
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(profile_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        row.as_ref().map(map_model_gateway_profile_row).transpose()
+    }
+
+    pub async fn create(
+        &self,
+        tenant_id: TenantId,
+        profile: NewModelGatewayProfile,
+    ) -> Result<ModelGatewayProfile> {
+        let row = sqlx::query(
+            r#"
+            insert into model_gateway_profiles (
+                id, tenant_id, profile_id, display_name, lane, provider_id, model_id,
+                base_url, api_path, wire_api, auth_mode, auth_env_key_name,
+                recommended_preset, max_concurrency, rpm_limit, tpm_limit, timeout_ms,
+                priority, enabled, capabilities
+            )
+            values (
+                $1, $2, $3, $4, $5, $6, $7,
+                $8, $9, $10, $11, $12,
+                $13, $14, $15, $16, $17,
+                $18, $19, $20
+            )
+            returning id, tenant_id, profile_id, display_name, lane, provider_id, model_id,
+                      base_url, api_path, wire_api, auth_mode, auth_env_key_name,
+                      recommended_preset, max_concurrency, rpm_limit, tpm_limit, timeout_ms,
+                      priority, enabled, capabilities, created_at, updated_at
+            "#,
+        )
+        .bind(profile.id)
+        .bind(tenant_id.0)
+        .bind(profile.profile_id)
+        .bind(profile.display_name)
+        .bind(profile.lane)
+        .bind(profile.provider_id)
+        .bind(profile.model_id)
+        .bind(profile.base_url)
+        .bind(profile.api_path)
+        .bind(profile.wire_api)
+        .bind(profile.auth_mode)
+        .bind(profile.auth_env_key_name)
+        .bind(profile.recommended_preset)
+        .bind(profile.max_concurrency)
+        .bind(profile.rpm_limit)
+        .bind(profile.tpm_limit)
+        .bind(profile.timeout_ms)
+        .bind(profile.priority)
+        .bind(profile.enabled)
+        .bind(profile.capabilities)
+        .fetch_one(&self.pool)
+        .await?;
+
+        map_model_gateway_profile_row(&row)
+    }
+
+    pub async fn update(
+        &self,
+        tenant_id: TenantId,
+        profile_id: &str,
+        update: ModelGatewayProfileUpdate,
+    ) -> Result<Option<ModelGatewayProfile>> {
+        let row = sqlx::query(
+            r#"
+            update model_gateway_profiles
+            set display_name = coalesce($3, display_name),
+                lane = coalesce($4, lane),
+                provider_id = coalesce($5, provider_id),
+                model_id = coalesce($6, model_id),
+                base_url = case when $7::text is null then base_url else nullif($7, '') end,
+                api_path = case when $8::text is null then api_path else nullif($8, '') end,
+                wire_api = coalesce($9, wire_api),
+                auth_mode = coalesce($10, auth_mode),
+                auth_env_key_name = case when $11::text is null then auth_env_key_name else nullif($11, '') end,
+                recommended_preset = case when $12::text is null then recommended_preset else nullif($12, '') end,
+                max_concurrency = coalesce($13, max_concurrency),
+                rpm_limit = coalesce($14, rpm_limit),
+                tpm_limit = coalesce($15, tpm_limit),
+                timeout_ms = coalesce($16, timeout_ms),
+                priority = coalesce($17, priority),
+                enabled = coalesce($18, enabled),
+                capabilities = coalesce($19, capabilities),
+                updated_at = now()
+            where tenant_id = $1 and profile_id = $2
+            returning id, tenant_id, profile_id, display_name, lane, provider_id, model_id,
+                      base_url, api_path, wire_api, auth_mode, auth_env_key_name,
+                      recommended_preset, max_concurrency, rpm_limit, tpm_limit, timeout_ms,
+                      priority, enabled, capabilities, created_at, updated_at
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(profile_id)
+        .bind(update.display_name)
+        .bind(update.lane)
+        .bind(update.provider_id)
+        .bind(update.model_id)
+        .bind(update.base_url)
+        .bind(update.api_path)
+        .bind(update.wire_api)
+        .bind(update.auth_mode)
+        .bind(update.auth_env_key_name)
+        .bind(update.recommended_preset)
+        .bind(update.max_concurrency)
+        .bind(update.rpm_limit)
+        .bind(update.tpm_limit)
+        .bind(update.timeout_ms)
+        .bind(update.priority)
+        .bind(update.enabled)
+        .bind(update.capabilities)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        row.as_ref().map(map_model_gateway_profile_row).transpose()
+    }
+
+    pub async fn disable(
+        &self,
+        tenant_id: TenantId,
+        profile_id: &str,
+    ) -> Result<Option<ModelGatewayProfile>> {
+        self.update(
+            tenant_id,
+            profile_id,
+            ModelGatewayProfileUpdate {
+                enabled: Some(false),
+                ..ModelGatewayProfileUpdate::default()
+            },
+        )
+        .await
+    }
+
+    pub async fn record_event(
+        &self,
+        tenant_id: TenantId,
+        event: NewModelGatewayProfileEvent,
+    ) -> Result<()> {
+        sqlx::query(
+            r#"
+            insert into model_gateway_profile_events (
+                id, tenant_id, profile_id, lane, event_type, latency_ms,
+                input_tokens, output_tokens, error_kind, created_at
+            )
+            values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            "#,
+        )
+        .bind(Uuid::new_v4())
+        .bind(tenant_id.0)
+        .bind(event.profile_id)
+        .bind(event.lane)
+        .bind(event.event_type)
+        .bind(event.latency_ms)
+        .bind(event.input_tokens)
+        .bind(event.output_tokens)
+        .bind(event.error_kind)
+        .bind(event.created_at)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    pub async fn summarize_recent_usage(
+        &self,
+        tenant_id: TenantId,
+        since: DateTime<Utc>,
+    ) -> Result<Vec<ModelGatewayProfileUsageSummary>> {
+        let rows = sqlx::query(
+            r#"
+            select profile_id,
+                   lane,
+                   count(*)::bigint as request_count,
+                   count(*) filter (where event_type = 'success')::bigint as success_count,
+                   count(*) filter (where event_type in ('failure', 'timeout', 'rate_limit'))::bigint as failure_count,
+                   count(*) filter (where event_type = 'timeout')::bigint as timeout_count,
+                   count(*) filter (where event_type = 'rate_limit')::bigint as rate_limit_count,
+                   coalesce(sum(input_tokens), 0)::bigint as input_tokens,
+                   coalesce(sum(output_tokens), 0)::bigint as output_tokens
+            from model_gateway_profile_events
+            where tenant_id = $1 and created_at >= $2
+            group by profile_id, lane
+            order by lane asc, profile_id asc
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(since)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .iter()
+            .map(|row| ModelGatewayProfileUsageSummary {
+                profile_id: row.get("profile_id"),
+                lane: row.get("lane"),
+                request_count: row.get("request_count"),
+                success_count: row.get("success_count"),
+                failure_count: row.get("failure_count"),
+                timeout_count: row.get("timeout_count"),
+                rate_limit_count: row.get("rate_limit_count"),
+                input_tokens: row.get("input_tokens"),
+                output_tokens: row.get("output_tokens"),
+            })
+            .collect())
     }
 }
 
@@ -5335,6 +5708,33 @@ fn map_dataset_document_membership_row(
     })
 }
 
+fn map_model_gateway_profile_row(row: &sqlx::postgres::PgRow) -> Result<ModelGatewayProfile> {
+    Ok(ModelGatewayProfile {
+        id: row.get("id"),
+        tenant_id: TenantId(row.get::<Uuid, _>("tenant_id")),
+        profile_id: row.get("profile_id"),
+        display_name: row.get("display_name"),
+        lane: row.get("lane"),
+        provider_id: row.get("provider_id"),
+        model_id: row.get("model_id"),
+        base_url: row.get("base_url"),
+        api_path: row.get("api_path"),
+        wire_api: row.get("wire_api"),
+        auth_mode: row.get("auth_mode"),
+        auth_env_key_name: row.get("auth_env_key_name"),
+        recommended_preset: row.get("recommended_preset"),
+        max_concurrency: row.get("max_concurrency"),
+        rpm_limit: row.get("rpm_limit"),
+        tpm_limit: row.get("tpm_limit"),
+        timeout_ms: row.get("timeout_ms"),
+        priority: row.get("priority"),
+        enabled: row.get("enabled"),
+        capabilities: row.get("capabilities"),
+        created_at: row.get("created_at"),
+        updated_at: row.get("updated_at"),
+    })
+}
+
 fn map_secret_binding_row(row: &sqlx::postgres::PgRow) -> Result<SecretBinding> {
     let scope_level = row.get::<String, _>("scope_level");
 
@@ -6544,10 +6944,7 @@ mod tests {
                 .iter()
                 .map(|migration| migration.version)
                 .collect::<Vec<_>>(),
-            vec![
-                "0001", "0002", "0004", "0005", "0006", "0007", "0008", "0009", "0010",
-                "0011"
-            ]
+            vec!["0001", "0002", "0004", "0005", "0006", "0007", "0008", "0009", "0010", "0011"]
         );
         assert!(MIGRATIONS
             .iter()
@@ -6646,6 +7043,15 @@ mod tests {
         assert!(MODEL_GATEWAY_PROFILES_SCHEMA
             .sql
             .contains("model_gateway_profile_events_profile_created_idx"));
+    }
+
+    #[test]
+    fn model_gateway_profile_update_defaults_to_no_field_changes() {
+        let update = ModelGatewayProfileUpdate::default();
+
+        assert!(update.display_name.is_none());
+        assert!(update.enabled.is_none());
+        assert!(update.capabilities.is_none());
     }
 
     #[test]

@@ -53,6 +53,8 @@ use contracts::{
     HtmlArtifactInteractionModeView, HtmlArtifactManifestView, KeyLoginRequest, KeyLoginResponse,
     KeyRotateRequest, KeyRotateResponse, ListExternalConversationTestsResponse,
     ListExternalIntegrationsResponse, LlmInvocationView, LogoutResponse, MemoryDirectoryView,
+    ModelGatewayPresetView, ModelGatewayProfileCreateRequest, ModelGatewayProfileTestRequest,
+    ModelGatewayProfileTestResponse, ModelGatewayProfileUpdateRequest, ModelGatewayProfileView,
     PlanReportRequest, PublishReportRequest, PublishReportResponse, PublishedReportDetailView,
     PublishedReportVersionView, PublishedReportView, RegisterDocumentRequest,
     RegisterDocumentResponse, ReportPlanAstVersionView, ReportPlanSummary, ReportRenderOutputView,
@@ -115,11 +117,12 @@ use std::{
     time::Instant,
 };
 use storage::{
-    NewAssistantRun, NewAssistantRunEvent, NewAuthAuditEvent, NewChatMessage, NewChatSession,
-    NewConversationMemoryItem, NewDataset, NewDatasetDocumentMembership, NewDocument,
-    NewHtmlArtifact, NewPublishedReport, NewPublishedReportVersion, NewReportPlan,
-    NewSecretBinding, NewStaticPageDraft, NewStaticPageImageJob, NewStaticPageRenderOutput,
-    NewUserSession, NewWorkflowTask, PgStorage,
+    ModelGatewayProfile, ModelGatewayProfileUpdate, NewAssistantRun, NewAssistantRunEvent,
+    NewAuthAuditEvent, NewChatMessage, NewChatSession, NewConversationMemoryItem, NewDataset,
+    NewDatasetDocumentMembership, NewDocument, NewHtmlArtifact, NewModelGatewayProfile,
+    NewPublishedReport, NewPublishedReportVersion, NewReportPlan, NewSecretBinding,
+    NewStaticPageDraft, NewStaticPageImageJob, NewStaticPageRenderOutput, NewUserSession,
+    NewWorkflowTask, PgStorage,
 };
 use tool_registry::{
     bootstrap_default_tool_registry, ToolCliOutputMode, ToolDefinition, ToolInvocationMode,
@@ -289,6 +292,7 @@ const AUTH_AUDIT_KEY_ROTATE: &str = "auth.key_rotate";
 const AUTH_AUDIT_EMAIL_BIND_START: &str = "auth.email_bind_start";
 const AUTH_AUDIT_LOCAL_DATA_CLAIM: &str = "auth.local_data_claim";
 const PUBLIC_DATASET_WARNING: &str = "该数据集是公开数据集，所有用户可见";
+const MODEL_GATEWAY_DEFAULT_LANE: &str = MODEL_LANE_ASSISTANT_CHAT;
 
 const DEFAULT_PUBLIC_DATASETS: &[(&str, &str, &str)] = &[
     ("orders", "订单", "默认公开订单数据集。"),
@@ -556,6 +560,23 @@ pub fn router(
         .route(
             "/v1/external/sources/{source_id}/sync",
             axum::routing::post(create_external_source_sync),
+        )
+        .route("/v1/model-gateway/presets", get(list_model_gateway_presets))
+        .route(
+            "/v1/model-gateway/profiles",
+            get(list_model_gateway_profiles).post(create_model_gateway_profile),
+        )
+        .route(
+            "/v1/model-gateway/profiles/{profile_id}",
+            axum::routing::patch(update_model_gateway_profile),
+        )
+        .route(
+            "/v1/model-gateway/profiles/{profile_id}/disable",
+            axum::routing::post(disable_model_gateway_profile),
+        )
+        .route(
+            "/v1/model-gateway/profiles/{profile_id}/test",
+            axum::routing::post(test_model_gateway_profile),
         )
         .route("/v1/assistant-runs/{run_id}", get(get_assistant_run))
         .route(
@@ -4536,6 +4557,471 @@ async fn current_auth_user_id(
     Ok(current_auth_session(state, headers)
         .await?
         .map(|(user, _session)| user.id))
+}
+
+async fn require_model_gateway_operator_session(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> std::result::Result<User, ApiError> {
+    let Some((user, _session)) = current_auth_session(state, headers).await? else {
+        return Err(ApiError::unauthorized(
+            "auth_session_required",
+            "请先登录主系统后再管理模型池".to_string(),
+        ));
+    };
+
+    Ok(user)
+}
+
+fn model_gateway_presets() -> Vec<ModelGatewayPresetView> {
+    vec![
+        ModelGatewayPresetView {
+            preset_id: "openclaw/default".to_string(),
+            display_name: "OpenClaw 默认模型".to_string(),
+            provider_id: "openclaw".to_string(),
+            model_id: "default".to_string(),
+            lane: MODEL_GATEWAY_DEFAULT_LANE.to_string(),
+            wire_api: "openai-compatible".to_string(),
+            base_url: None,
+            api_path: Some("/v1/chat/completions".to_string()),
+            max_concurrency: 15,
+            rpm_limit: None,
+            tpm_limit: None,
+            timeout_ms: 30_000,
+            priority: 100,
+            capabilities: json!({
+                "chat": true,
+                "streaming": true,
+                "json_mode": true
+            }),
+        },
+        ModelGatewayPresetView {
+            preset_id: "minimax/MiniMax-M2.7".to_string(),
+            display_name: "MiniMax M2.7 快速通道".to_string(),
+            provider_id: "minimax".to_string(),
+            model_id: "MiniMax-M2.7".to_string(),
+            lane: MODEL_GATEWAY_DEFAULT_LANE.to_string(),
+            wire_api: "openai-compatible".to_string(),
+            base_url: None,
+            api_path: Some("/v1/chat/completions".to_string()),
+            max_concurrency: 5,
+            rpm_limit: None,
+            tpm_limit: None,
+            timeout_ms: 30_000,
+            priority: 80,
+            capabilities: json!({
+                "chat": true,
+                "streaming": true,
+                "json_mode": true,
+                "long_context": true
+            }),
+        },
+        ModelGatewayPresetView {
+            preset_id: "openai-compatible/chat".to_string(),
+            display_name: "OpenAI 兼容 Chat".to_string(),
+            provider_id: "openai-compatible".to_string(),
+            model_id: "chat".to_string(),
+            lane: MODEL_GATEWAY_DEFAULT_LANE.to_string(),
+            wire_api: "openai-compatible".to_string(),
+            base_url: None,
+            api_path: Some("/v1/chat/completions".to_string()),
+            max_concurrency: 5,
+            rpm_limit: None,
+            tpm_limit: None,
+            timeout_ms: 30_000,
+            priority: 60,
+            capabilities: json!({
+                "chat": true,
+                "streaming": true,
+                "json_mode": true
+            }),
+        },
+        ModelGatewayPresetView {
+            preset_id: "custom".to_string(),
+            display_name: "自定义 OpenAI 兼容端点".to_string(),
+            provider_id: "custom".to_string(),
+            model_id: "custom".to_string(),
+            lane: MODEL_GATEWAY_DEFAULT_LANE.to_string(),
+            wire_api: "openai-compatible".to_string(),
+            base_url: None,
+            api_path: Some("/v1/chat/completions".to_string()),
+            max_concurrency: 2,
+            rpm_limit: None,
+            tpm_limit: None,
+            timeout_ms: 30_000,
+            priority: 10,
+            capabilities: json!({
+                "chat": true
+            }),
+        },
+    ]
+}
+
+fn model_gateway_preset_by_id(preset_id: &str) -> Option<ModelGatewayPresetView> {
+    model_gateway_presets()
+        .into_iter()
+        .find(|preset| preset.preset_id == preset_id)
+}
+
+async fn list_model_gateway_presets(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> std::result::Result<Json<Vec<ModelGatewayPresetView>>, ApiError> {
+    let _user = require_model_gateway_operator_session(&state, &headers).await?;
+    Ok(Json(model_gateway_presets()))
+}
+
+async fn list_model_gateway_profiles(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> std::result::Result<Json<Vec<ModelGatewayProfileView>>, ApiError> {
+    let _user = require_model_gateway_operator_session(&state, &headers).await?;
+    let profiles = state
+        .storage
+        .model_gateway_profiles()
+        .list_all(state.tenant_id)
+        .await
+        .map_err(ApiError::from_storage)?;
+
+    Ok(Json(
+        profiles
+            .into_iter()
+            .map(model_gateway_profile_view)
+            .collect(),
+    ))
+}
+
+async fn create_model_gateway_profile(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<ModelGatewayProfileCreateRequest>,
+) -> std::result::Result<(StatusCode, Json<ModelGatewayProfileView>), ApiError> {
+    let _user = require_model_gateway_operator_session(&state, &headers).await?;
+    let profile = model_gateway_new_profile_from_request(request)?;
+    let created = state
+        .storage
+        .model_gateway_profiles()
+        .create(state.tenant_id, profile)
+        .await
+        .map_err(ApiError::from_storage)?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(model_gateway_profile_view(created)),
+    ))
+}
+
+async fn update_model_gateway_profile(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(profile_id): Path<String>,
+    Json(request): Json<ModelGatewayProfileUpdateRequest>,
+) -> std::result::Result<Json<ModelGatewayProfileView>, ApiError> {
+    let _user = require_model_gateway_operator_session(&state, &headers).await?;
+    let profile_id = validate_model_gateway_profile_id(&profile_id)?;
+    let update = model_gateway_update_from_request(request)?;
+    let updated = state
+        .storage
+        .model_gateway_profiles()
+        .update(state.tenant_id, &profile_id, update)
+        .await
+        .map_err(ApiError::from_storage)?
+        .ok_or_else(|| model_gateway_profile_not_found(&profile_id))?;
+
+    Ok(Json(model_gateway_profile_view(updated)))
+}
+
+async fn disable_model_gateway_profile(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(profile_id): Path<String>,
+) -> std::result::Result<Json<ModelGatewayProfileView>, ApiError> {
+    let _user = require_model_gateway_operator_session(&state, &headers).await?;
+    let profile_id = validate_model_gateway_profile_id(&profile_id)?;
+    let disabled = state
+        .storage
+        .model_gateway_profiles()
+        .disable(state.tenant_id, &profile_id)
+        .await
+        .map_err(ApiError::from_storage)?
+        .ok_or_else(|| model_gateway_profile_not_found(&profile_id))?;
+
+    Ok(Json(model_gateway_profile_view(disabled)))
+}
+
+async fn test_model_gateway_profile(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(profile_id): Path<String>,
+    Json(_request): Json<ModelGatewayProfileTestRequest>,
+) -> std::result::Result<Json<ModelGatewayProfileTestResponse>, ApiError> {
+    let _user = require_model_gateway_operator_session(&state, &headers).await?;
+    let profile_id = validate_model_gateway_profile_id(&profile_id)?;
+    let profile = state
+        .storage
+        .model_gateway_profiles()
+        .get_by_profile_id(state.tenant_id, &profile_id)
+        .await
+        .map_err(ApiError::from_storage)?
+        .ok_or_else(|| model_gateway_profile_not_found(&profile_id))?;
+    let auth_configured = profile
+        .auth_env_key_name
+        .as_deref()
+        .map(model_gateway_auth_env_is_configured)
+        .unwrap_or(false);
+    let (status, message) = if profile.auth_mode == "env_key" && !auth_configured {
+        (
+            "missing_secret".to_string(),
+            "未找到该 profile 绑定的环境变量，请先在服务端配置 API Key。".to_string(),
+        )
+    } else {
+        (
+            "configured".to_string(),
+            "profile 配置可用于后续真实连通性检查，未返回任何密钥内容。".to_string(),
+        )
+    };
+
+    Ok(Json(ModelGatewayProfileTestResponse {
+        profile_id: profile.profile_id,
+        status,
+        message,
+        auth_configured,
+        checked_at: Utc::now(),
+    }))
+}
+
+fn model_gateway_new_profile_from_request(
+    request: ModelGatewayProfileCreateRequest,
+) -> std::result::Result<NewModelGatewayProfile, ApiError> {
+    let preset = request
+        .recommended_preset
+        .as_deref()
+        .and_then(model_gateway_preset_by_id);
+    let profile_id = validate_model_gateway_profile_id(&request.profile_id)?;
+    let display_name = validate_model_gateway_required_text("display_name", &request.display_name)?;
+    let lane = model_gateway_optional_text(request.lane)
+        .or_else(|| preset.as_ref().map(|preset| preset.lane.clone()))
+        .unwrap_or_else(|| MODEL_GATEWAY_DEFAULT_LANE.to_string());
+    let provider_id = model_gateway_optional_text(request.provider_id)
+        .or_else(|| preset.as_ref().map(|preset| preset.provider_id.clone()))
+        .unwrap_or_else(|| "custom".to_string());
+    let model_id = model_gateway_optional_text(request.model_id)
+        .or_else(|| preset.as_ref().map(|preset| preset.model_id.clone()))
+        .unwrap_or_else(|| "custom".to_string());
+    let wire_api = model_gateway_optional_text(request.wire_api)
+        .or_else(|| preset.as_ref().map(|preset| preset.wire_api.clone()))
+        .unwrap_or_else(|| "openai-compatible".to_string());
+    let capabilities = request
+        .capabilities
+        .or_else(|| preset.as_ref().map(|preset| preset.capabilities.clone()))
+        .unwrap_or_else(|| json!({}));
+
+    validate_model_gateway_numeric("max_concurrency", request.max_concurrency)?;
+    validate_model_gateway_numeric("rpm_limit", request.rpm_limit)?;
+    validate_model_gateway_numeric("tpm_limit", request.tpm_limit)?;
+    validate_model_gateway_numeric("timeout_ms", request.timeout_ms)?;
+
+    Ok(NewModelGatewayProfile {
+        id: Uuid::new_v4(),
+        profile_id,
+        display_name,
+        lane,
+        provider_id,
+        model_id,
+        base_url: model_gateway_optional_text(request.base_url),
+        api_path: model_gateway_optional_text(request.api_path)
+            .or_else(|| preset.as_ref().and_then(|preset| preset.api_path.clone())),
+        wire_api,
+        auth_mode: model_gateway_optional_text(request.auth_mode)
+            .unwrap_or_else(|| "env_key".to_string()),
+        auth_env_key_name: model_gateway_optional_text(request.auth_env_key_name),
+        recommended_preset: model_gateway_optional_text(request.recommended_preset)
+            .or_else(|| preset.as_ref().map(|preset| preset.preset_id.clone())),
+        max_concurrency: request
+            .max_concurrency
+            .or_else(|| preset.as_ref().map(|preset| preset.max_concurrency)),
+        rpm_limit: request
+            .rpm_limit
+            .or_else(|| preset.as_ref().and_then(|preset| preset.rpm_limit)),
+        tpm_limit: request
+            .tpm_limit
+            .or_else(|| preset.as_ref().and_then(|preset| preset.tpm_limit)),
+        timeout_ms: request
+            .timeout_ms
+            .or_else(|| preset.as_ref().map(|preset| preset.timeout_ms)),
+        priority: request
+            .priority
+            .or_else(|| preset.as_ref().map(|preset| preset.priority))
+            .unwrap_or(100),
+        enabled: request.enabled.unwrap_or(true),
+        capabilities,
+    })
+}
+
+fn model_gateway_update_from_request(
+    request: ModelGatewayProfileUpdateRequest,
+) -> std::result::Result<ModelGatewayProfileUpdate, ApiError> {
+    validate_model_gateway_numeric("max_concurrency", request.max_concurrency)?;
+    validate_model_gateway_numeric("rpm_limit", request.rpm_limit)?;
+    validate_model_gateway_numeric("tpm_limit", request.tpm_limit)?;
+    validate_model_gateway_numeric("timeout_ms", request.timeout_ms)?;
+
+    Ok(ModelGatewayProfileUpdate {
+        display_name: request
+            .display_name
+            .map(|value| validate_model_gateway_required_text("display_name", &value))
+            .transpose()?,
+        lane: request
+            .lane
+            .map(|value| validate_model_gateway_required_text("lane", &value))
+            .transpose()?,
+        provider_id: request
+            .provider_id
+            .map(|value| validate_model_gateway_required_text("provider_id", &value))
+            .transpose()?,
+        model_id: request
+            .model_id
+            .map(|value| validate_model_gateway_required_text("model_id", &value))
+            .transpose()?,
+        base_url: request.base_url.map(|value| value.trim().to_string()),
+        api_path: request.api_path.map(|value| value.trim().to_string()),
+        wire_api: request
+            .wire_api
+            .map(|value| validate_model_gateway_required_text("wire_api", &value))
+            .transpose()?,
+        auth_mode: request
+            .auth_mode
+            .map(|value| validate_model_gateway_required_text("auth_mode", &value))
+            .transpose()?,
+        auth_env_key_name: request
+            .auth_env_key_name
+            .map(|value| value.trim().to_string()),
+        recommended_preset: request
+            .recommended_preset
+            .map(|value| value.trim().to_string()),
+        max_concurrency: request.max_concurrency,
+        rpm_limit: request.rpm_limit,
+        tpm_limit: request.tpm_limit,
+        timeout_ms: request.timeout_ms,
+        priority: request.priority,
+        enabled: request.enabled,
+        capabilities: request.capabilities,
+    })
+}
+
+fn model_gateway_profile_view(profile: ModelGatewayProfile) -> ModelGatewayProfileView {
+    let has_secret = profile
+        .auth_env_key_name
+        .as_deref()
+        .map(model_gateway_auth_env_is_configured)
+        .unwrap_or(false);
+
+    ModelGatewayProfileView {
+        id: profile.id.to_string(),
+        profile_id: profile.profile_id,
+        display_name: profile.display_name,
+        lane: profile.lane,
+        provider_id: profile.provider_id,
+        model_id: profile.model_id,
+        base_url: profile.base_url.map(|url| redact_model_gateway_url(&url)),
+        api_path: profile.api_path,
+        wire_api: profile.wire_api,
+        auth_mode: profile.auth_mode,
+        auth_env_key_name: profile.auth_env_key_name,
+        has_secret,
+        recommended_preset: profile.recommended_preset,
+        max_concurrency: profile.max_concurrency,
+        rpm_limit: profile.rpm_limit,
+        tpm_limit: profile.tpm_limit,
+        timeout_ms: profile.timeout_ms,
+        priority: profile.priority,
+        enabled: profile.enabled,
+        capabilities: profile.capabilities,
+        created_at: profile.created_at,
+        updated_at: profile.updated_at,
+    }
+}
+
+fn model_gateway_optional_text(value: Option<String>) -> Option<String> {
+    value
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn validate_model_gateway_profile_id(value: &str) -> std::result::Result<String, ApiError> {
+    let normalized = value.trim();
+    if normalized.is_empty() || normalized.len() > 128 {
+        return Err(ApiError::bad_request(
+            "invalid_model_gateway_profile_id",
+            "profile_id 不能为空，且长度不能超过 128".to_string(),
+        ));
+    }
+    if !normalized
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'))
+    {
+        return Err(ApiError::bad_request(
+            "invalid_model_gateway_profile_id",
+            "profile_id 只能包含字母、数字、短横线、下划线或点号".to_string(),
+        ));
+    }
+
+    Ok(normalized.to_string())
+}
+
+fn validate_model_gateway_required_text(
+    field: &'static str,
+    value: &str,
+) -> std::result::Result<String, ApiError> {
+    let normalized = value.trim();
+    if normalized.is_empty() {
+        return Err(ApiError::bad_request(
+            "validation_error",
+            format!("{field} is required"),
+        ));
+    }
+    Ok(normalized.to_string())
+}
+
+fn validate_model_gateway_numeric(
+    field: &'static str,
+    value: Option<i32>,
+) -> std::result::Result<(), ApiError> {
+    if value.is_some_and(|value| value <= 0) {
+        return Err(ApiError::bad_request(
+            "validation_error",
+            format!("{field} must be greater than 0"),
+        ));
+    }
+    Ok(())
+}
+
+fn model_gateway_auth_env_is_configured(env_key_name: &str) -> bool {
+    std::env::var(env_key_name)
+        .ok()
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false)
+}
+
+fn redact_model_gateway_url(url: &str) -> String {
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return url.to_string();
+    };
+    let Some(at_index) = rest.find('@') else {
+        return url.to_string();
+    };
+    let slash_index = rest.find('/').unwrap_or(rest.len());
+    if at_index > slash_index {
+        return url.to_string();
+    }
+    format!("{scheme}://[redacted]@{}", &rest[at_index + 1..])
+}
+
+fn model_gateway_profile_not_found(profile_id: &str) -> ApiError {
+    ApiError::not_found(
+        "model_gateway_profile_not_found",
+        format!("model gateway profile {profile_id} was not found"),
+    )
 }
 
 fn auth_session_token_from_headers(headers: &HeaderMap) -> Option<String> {
@@ -26435,6 +26921,8 @@ fn normalize_project_entity_segment(value: &str) -> Option<String> {
     candidate = normalize_section_title_hint(&candidate).unwrap_or(candidate);
     candidate = strip_project_numeric_prefix(&candidate);
     candidate = trim_project_role_suffix(&candidate);
+    candidate = trim_project_descriptive_suffix(&candidate);
+    candidate = compact_project_descriptive_phrase(&candidate);
     candidate = normalize_document_entity_value(&candidate);
     if project_heading_is_noise(&candidate)
         || !looks_like_project_heading_candidate(&candidate)
@@ -26482,6 +26970,7 @@ fn trim_project_role_suffix(value: &str) -> String {
         "研发负责人",
         "服务端研发",
         "技术管理",
+        "版本研发",
         "产品开发",
         "平台工作",
         "系统工作",
@@ -26499,6 +26988,60 @@ fn trim_project_role_suffix(value: &str) -> String {
         if looks_like_project_name(&prefix) && prefix.chars().count() >= 3 {
             candidate = prefix;
             break;
+        }
+    }
+    candidate
+}
+
+fn trim_project_descriptive_suffix(value: &str) -> String {
+    let mut candidate = normalize_document_entity_value(value);
+    for suffix in [
+        "的技术可行性研究",
+        "技术可行性研究",
+        "可行性研究",
+        "的数据链路",
+        "数据链路",
+        "的研发",
+        "研发",
+        "的研究",
+        "研究",
+        "解决方案研究",
+        "解决方案研究与评估",
+        "解决方案",
+        "技术方案",
+    ] {
+        if !candidate.ends_with(suffix) {
+            continue;
+        }
+        let prefix = normalize_document_entity_value(
+            candidate
+                .strip_suffix(suffix)
+                .unwrap_or(&candidate)
+                .trim_end_matches(|ch: char| {
+                    matches!(ch, '-' | '—' | '–' | '_' | ' ' | '　' | '的')
+                }),
+        );
+        if prefix.chars().count() >= 3 {
+            candidate = prefix;
+            break;
+        }
+    }
+    candidate
+}
+
+fn compact_project_descriptive_phrase(value: &str) -> String {
+    let candidate = normalize_document_entity_value(value);
+    if !candidate.contains('的') {
+        return candidate;
+    }
+    for segment in candidate.split('的').rev() {
+        let segment = normalize_document_entity_value(segment);
+        if segment.chars().count() >= 3
+            && looks_like_project_name(&segment)
+            && looks_like_project_heading_candidate(&segment)
+            && !project_heading_is_noise(&segment)
+        {
+            return segment;
         }
     }
     candidate
@@ -26659,6 +27202,11 @@ fn looks_like_project_heading_candidate(value: &str) -> bool {
             "以下",
             "公司",
             "各类",
+            "入驻",
+            "打通",
+            "目的",
+            "旨在",
+            "面向",
             "项目情况",
             "项目需求",
             "项目报价",
@@ -26676,6 +27224,7 @@ fn looks_like_project_heading_candidate(value: &str) -> bool {
             "记录",
             "交流",
             "部署",
+            "链路",
             "调试",
             "交付阶段",
             "交付保障",
@@ -44713,6 +45262,85 @@ mod tests {
     }
 
     #[test]
+    fn model_gateway_profile_create_uses_preset_defaults_and_redacts_secret_material() {
+        std::env::remove_var("TEST_MODEL_GATEWAY_PROFILE_KEY");
+        let request = ModelGatewayProfileCreateRequest {
+            profile_id: "minimax-fast".to_string(),
+            display_name: "MiniMax 快速".to_string(),
+            lane: None,
+            provider_id: None,
+            model_id: None,
+            base_url: Some("https://user:secret@llm.example.com/v1".to_string()),
+            api_path: None,
+            wire_api: None,
+            auth_mode: None,
+            auth_env_key_name: Some("TEST_MODEL_GATEWAY_PROFILE_KEY".to_string()),
+            recommended_preset: Some("minimax/MiniMax-M2.7".to_string()),
+            max_concurrency: None,
+            rpm_limit: None,
+            tpm_limit: None,
+            timeout_ms: None,
+            priority: None,
+            enabled: None,
+            capabilities: None,
+        };
+
+        let profile =
+            model_gateway_new_profile_from_request(request).expect("profile should normalize");
+
+        assert_eq!(profile.profile_id, "minimax-fast");
+        assert_eq!(profile.provider_id, "minimax");
+        assert_eq!(profile.model_id, "MiniMax-M2.7");
+        assert_eq!(profile.max_concurrency, Some(5));
+        assert_eq!(profile.timeout_ms, Some(30_000));
+
+        let view = model_gateway_profile_view(ModelGatewayProfile {
+            id: profile.id,
+            tenant_id: TenantId(Uuid::new_v4()),
+            profile_id: profile.profile_id,
+            display_name: profile.display_name,
+            lane: profile.lane,
+            provider_id: profile.provider_id,
+            model_id: profile.model_id,
+            base_url: profile.base_url,
+            api_path: profile.api_path,
+            wire_api: profile.wire_api,
+            auth_mode: profile.auth_mode,
+            auth_env_key_name: profile.auth_env_key_name,
+            recommended_preset: profile.recommended_preset,
+            max_concurrency: profile.max_concurrency,
+            rpm_limit: profile.rpm_limit,
+            tpm_limit: profile.tpm_limit,
+            timeout_ms: profile.timeout_ms,
+            priority: profile.priority,
+            enabled: profile.enabled,
+            capabilities: profile.capabilities,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        });
+
+        assert!(!view.has_secret);
+        assert_eq!(
+            view.base_url.as_deref(),
+            Some("https://[redacted]@llm.example.com/v1")
+        );
+    }
+
+    #[test]
+    fn model_gateway_profile_validation_rejects_unsafe_ids_and_limits() {
+        let id_error =
+            validate_model_gateway_profile_id("bad/profile").expect_err("slash should fail");
+        assert_eq!(id_error.payload.code, "invalid_model_gateway_profile_id");
+
+        let limit_error = model_gateway_update_from_request(ModelGatewayProfileUpdateRequest {
+            timeout_ms: Some(0),
+            ..ModelGatewayProfileUpdateRequest::default()
+        })
+        .expect_err("zero timeout should fail");
+        assert_eq!(limit_error.payload.code, "validation_error");
+    }
+
+    #[test]
     fn docs_page_missing_evidence_is_ready_when_section_title_hints_are_supplied() {
         let reference = resolve_static_page_template_reference(Some("docs-page"))
             .expect("docs-page reference should resolve")
@@ -54322,6 +54950,26 @@ mod tests {
             normalize_project_entity_name("自动化监控平台工作").as_deref(),
             Some("自动化监控平台")
         );
+        assert_eq!(
+            normalize_project_entity_name(
+                "基于Knime的面向大数据平台的趋势分析平台的技术可行性研究"
+            )
+            .as_deref(),
+            Some("趋势分析平台")
+        );
+        assert_eq!(
+            normalize_project_entity_name("基于区块链的cue币交易平台").as_deref(),
+            Some("cue币交易平台")
+        );
+        assert_eq!(
+            normalize_project_entity_name("netgain监控平台V6版本研发").as_deref(),
+            Some("netgain监控平台V6")
+        );
+        assert_eq!(
+            normalize_project_entity_name("打通商户数据与溯源平台的数据链路"),
+            None
+        );
+        assert_eq!(normalize_project_entity_name("入驻“腾讯课程”平台"), None);
         assert_eq!(normalize_project_entity_name("该项目的研发"), None);
         assert_eq!(normalize_project_entity_name("讲平台"), None);
     }
@@ -63165,6 +63813,30 @@ mod tests {
             .expect("request should return a response")
     }
 
+    async fn patch_json_request<T: serde::Serialize>(
+        app: Router,
+        uri: &str,
+        payload: &T,
+        cookie: Option<&str>,
+    ) -> axum::response::Response {
+        let mut builder = axum::http::Request::builder()
+            .method("PATCH")
+            .uri(uri)
+            .header(axum::http::header::CONTENT_TYPE, "application/json");
+        if let Some(cookie) = cookie {
+            builder = builder.header(axum::http::header::COOKIE, cookie);
+        }
+        let request = builder
+            .body(axum::body::Body::from(
+                serde_json::to_vec(payload).expect("request should serialize"),
+            ))
+            .expect("request should build");
+
+        app.oneshot(request)
+            .await
+            .expect("request should return a response")
+    }
+
     async fn get_request(app: Router, uri: &str, cookie: Option<&str>) -> axum::response::Response {
         let mut builder = axum::http::Request::builder().method("GET").uri(uri);
         if let Some(cookie) = cookie {
@@ -63267,6 +63939,147 @@ mod tests {
         .await;
         assert_eq!(response.status(), StatusCode::CREATED);
         cookie_pair_from_set_cookie(&response)
+    }
+
+    #[test]
+    fn model_gateway_profile_presets_include_safe_defaults() {
+        let presets = model_gateway_presets();
+
+        assert!(presets
+            .iter()
+            .any(|preset| preset.preset_id == "openclaw/default"
+                && preset.max_concurrency == 15
+                && preset.timeout_ms == 30_000));
+        assert!(presets
+            .iter()
+            .any(|preset| preset.preset_id == "minimax/MiniMax-M2.7"
+                && preset.provider_id == "minimax"));
+        let serialized = serde_json::to_string(&presets).expect("presets should serialize");
+        assert!(!serialized.contains("api_key"));
+        assert!(!serialized.contains("sk-"));
+    }
+
+    #[tokio::test]
+    async fn model_gateway_profile_management_lifecycle_hides_secrets() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let Some(harness) = build_auth_api_test_harness().await else {
+            return;
+        };
+        let cookie = issue_email_session_cookie(&harness, "model-pool@example.com").await;
+        let secret_env_name = format!(
+            "MODEL_GATEWAY_TEST_SECRET_{}",
+            Uuid::new_v4()
+                .to_string()
+                .replace('-', "_")
+                .to_ascii_uppercase()
+        );
+        std::env::set_var(&secret_env_name, "sk-test-secret-value");
+
+        let anonymous = get_request(harness.app.clone(), "/v1/model-gateway/presets", None).await;
+        assert_eq!(anonymous.status(), StatusCode::UNAUTHORIZED);
+
+        let presets_response =
+            get_request(harness.app.clone(), "/v1/model-gateway/presets", Some(&cookie)).await;
+        assert_eq!(presets_response.status(), StatusCode::OK);
+        let presets: Vec<ModelGatewayPresetView> = read_json_response(presets_response).await;
+        assert!(presets
+            .iter()
+            .any(|preset| preset.preset_id == "openclaw/default"));
+
+        let profile_id = format!("openclaw-main-{}", Uuid::new_v4().simple());
+        let create_response = post_json_request(
+            harness.app.clone(),
+            "/v1/model-gateway/profiles",
+            &ModelGatewayProfileCreateRequest {
+                profile_id: profile_id.clone(),
+                display_name: "OpenClaw Main Test".to_string(),
+                lane: None,
+                provider_id: None,
+                model_id: None,
+                base_url: Some("https://token:secret@example.invalid/v1".to_string()),
+                api_path: None,
+                wire_api: None,
+                auth_mode: None,
+                auth_env_key_name: Some(secret_env_name.clone()),
+                recommended_preset: Some("openclaw/default".to_string()),
+                max_concurrency: None,
+                rpm_limit: None,
+                tpm_limit: None,
+                timeout_ms: None,
+                priority: None,
+                enabled: None,
+                capabilities: None,
+            },
+            Some(&cookie),
+        )
+        .await;
+        assert_eq!(create_response.status(), StatusCode::CREATED);
+        let created: ModelGatewayProfileView = read_json_response(create_response).await;
+        assert_eq!(created.profile_id, profile_id);
+        assert_eq!(created.provider_id, "openclaw");
+        assert_eq!(created.max_concurrency, Some(15));
+        assert!(created.has_secret);
+        assert_eq!(
+            created.base_url.as_deref(),
+            Some("https://[redacted]@example.invalid/v1")
+        );
+        let serialized_created =
+            serde_json::to_string(&created).expect("created profile should serialize");
+        assert!(!serialized_created.contains("sk-test-secret-value"));
+        assert!(!serialized_created.contains("token:secret"));
+
+        let update_response = patch_json_request(
+            harness.app.clone(),
+            &format!("/v1/model-gateway/profiles/{profile_id}"),
+            &ModelGatewayProfileUpdateRequest {
+                max_concurrency: Some(3),
+                timeout_ms: Some(20_000),
+                ..ModelGatewayProfileUpdateRequest::default()
+            },
+            Some(&cookie),
+        )
+        .await;
+        assert_eq!(update_response.status(), StatusCode::OK);
+        let updated: ModelGatewayProfileView = read_json_response(update_response).await;
+        assert_eq!(updated.max_concurrency, Some(3));
+        assert_eq!(updated.timeout_ms, Some(20_000));
+
+        let test_response = post_json_request(
+            harness.app.clone(),
+            &format!("/v1/model-gateway/profiles/{profile_id}/test"),
+            &ModelGatewayProfileTestRequest::default(),
+            Some(&cookie),
+        )
+        .await;
+        assert_eq!(test_response.status(), StatusCode::OK);
+        let test_result: ModelGatewayProfileTestResponse = read_json_response(test_response).await;
+        assert_eq!(test_result.profile_id, profile_id);
+        assert_eq!(test_result.status, "configured");
+        assert!(test_result.auth_configured);
+        let serialized_test =
+            serde_json::to_string(&test_result).expect("test result should serialize");
+        assert!(!serialized_test.contains("sk-test-secret-value"));
+
+        let disable_response = post_json_request(
+            harness.app.clone(),
+            &format!("/v1/model-gateway/profiles/{profile_id}/disable"),
+            &json!({}),
+            Some(&cookie),
+        )
+        .await;
+        assert_eq!(disable_response.status(), StatusCode::OK);
+        let disabled: ModelGatewayProfileView = read_json_response(disable_response).await;
+        assert!(!disabled.enabled);
+
+        let list_response =
+            get_request(harness.app.clone(), "/v1/model-gateway/profiles", Some(&cookie)).await;
+        assert_eq!(list_response.status(), StatusCode::OK);
+        let profiles: Vec<ModelGatewayProfileView> = read_json_response(list_response).await;
+        assert!(profiles
+            .iter()
+            .any(|profile| profile.profile_id == profile_id && !profile.enabled));
+
+        std::env::remove_var(secret_env_name);
     }
 
     #[tokio::test]

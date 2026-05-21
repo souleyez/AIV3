@@ -30,6 +30,155 @@ pub struct ApiErrorResponse {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ModelGatewayPresetView {
+    pub preset_id: String,
+    pub display_name: String,
+    pub provider_id: String,
+    pub model_id: String,
+    pub lane: String,
+    pub wire_api: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_path: Option<String>,
+    pub max_concurrency: i32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rpm_limit: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tpm_limit: Option<i32>,
+    pub timeout_ms: i32,
+    pub priority: i32,
+    #[serde(default)]
+    pub capabilities: Value,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ModelGatewayProfileView {
+    pub id: String,
+    pub profile_id: String,
+    pub display_name: String,
+    pub lane: String,
+    pub provider_id: String,
+    pub model_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_path: Option<String>,
+    pub wire_api: String,
+    pub auth_mode: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth_env_key_name: Option<String>,
+    pub has_secret: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recommended_preset: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_concurrency: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rpm_limit: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tpm_limit: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<i32>,
+    pub priority: i32,
+    pub enabled: bool,
+    #[serde(default)]
+    pub capabilities: Value,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ModelGatewayProfileCreateRequest {
+    pub profile_id: String,
+    pub display_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lane: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wire_api: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth_env_key_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recommended_preset: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_concurrency: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rpm_limit: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tpm_limit: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub priority: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capabilities: Option<Value>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ModelGatewayProfileUpdateRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lane: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wire_api: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth_env_key_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recommended_preset: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_concurrency: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rpm_limit: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tpm_limit: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub priority: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capabilities: Option<Value>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ModelGatewayProfileTestRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<i32>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ModelGatewayProfileTestResponse {
+    pub profile_id: String,
+    pub status: String,
+    pub message: String,
+    pub auth_configured: bool,
+    pub checked_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ExternalChannelPlatformView {
     Feishu,
@@ -4461,6 +4610,41 @@ mod tests {
         .expect("missing pretty_summaries should deserialize");
 
         assert!(view.pretty_summaries.is_empty());
+    }
+
+    #[test]
+    fn model_gateway_profile_view_serializes_without_raw_secrets() {
+        let profile = ModelGatewayProfileView {
+            id: "2f9e1d32-8633-4b2c-97e1-e4f211585a30".to_string(),
+            profile_id: "openclaw-main".to_string(),
+            display_name: "OpenClaw Main".to_string(),
+            lane: "assistant_chat".to_string(),
+            provider_id: "openclaw".to_string(),
+            model_id: "default".to_string(),
+            base_url: Some("https://llm.example.com".to_string()),
+            api_path: Some("/v1/chat/completions".to_string()),
+            wire_api: "openai-compatible".to_string(),
+            auth_mode: "env_key".to_string(),
+            auth_env_key_name: Some("OPENCLAW_API_KEY".to_string()),
+            has_secret: true,
+            recommended_preset: Some("openclaw/default".to_string()),
+            max_concurrency: Some(15),
+            rpm_limit: Some(120),
+            tpm_limit: Some(120_000),
+            timeout_ms: Some(30_000),
+            priority: 100,
+            enabled: true,
+            capabilities: json!({"chat": true, "json_mode": true}),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+
+        let serialized = serde_json::to_string(&profile).expect("profile should serialize");
+
+        assert!(serialized.contains("OPENCLAW_API_KEY"));
+        assert!(!serialized.contains("sk-"));
+        assert!(!serialized.contains("bearer_token"));
+        assert!(!serialized.contains("api_key_value"));
     }
 
     #[test]
