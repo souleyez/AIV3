@@ -25980,6 +25980,14 @@ fn push_document_entity_candidate(
     if normalized.is_empty() {
         return;
     }
+    let normalized = if entity_type == "project" {
+        let Some(project_name) = normalize_project_entity_name(&normalized) else {
+            return;
+        };
+        project_name
+    } else {
+        normalized
+    };
     let key = format!("{entity_type}:{normalized}");
     if seen.insert(key) {
         output.push(DocumentEntityCandidate {
@@ -26391,6 +26399,133 @@ fn looks_like_project_name(value: &str) -> bool {
             .any(|suffix| value.ends_with(suffix) || value.contains(suffix))
 }
 
+fn normalize_project_entity_name(value: &str) -> Option<String> {
+    let mut best: Option<(usize, String)> = None;
+    for segment in project_entity_candidate_segments(value) {
+        let Some(candidate) = normalize_project_entity_segment(&segment) else {
+            continue;
+        };
+        let score = project_entity_candidate_score(&candidate);
+        if best.as_ref().is_none_or(|(best_score, best_value)| {
+            score > *best_score
+                || (score == *best_score && candidate.chars().count() > best_value.chars().count())
+        }) {
+            best = Some((score, candidate));
+        }
+    }
+    best.map(|(_, value)| value)
+}
+
+fn project_entity_candidate_segments(value: &str) -> Vec<String> {
+    let normalized = normalize_document_entity_value(value);
+    let mut segments = normalized
+        .split(|ch: char| matches!(ch, '|' | '｜' | '\t' | '\r' | '\n'))
+        .map(normalize_document_entity_value)
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>();
+    if segments.is_empty() && !normalized.is_empty() {
+        segments.push(normalized);
+    }
+    segments
+}
+
+fn normalize_project_entity_segment(value: &str) -> Option<String> {
+    let mut candidate = normalize_document_entity_value(value);
+    candidate = strip_project_numeric_prefix(&candidate);
+    candidate = normalize_section_title_hint(&candidate).unwrap_or(candidate);
+    candidate = strip_project_numeric_prefix(&candidate);
+    candidate = trim_project_role_suffix(&candidate);
+    candidate = normalize_document_entity_value(&candidate);
+    if project_heading_is_noise(&candidate)
+        || !looks_like_project_heading_candidate(&candidate)
+        || !looks_like_project_name(&candidate)
+    {
+        return None;
+    }
+    Some(candidate)
+}
+
+fn strip_project_numeric_prefix(value: &str) -> String {
+    let trimmed = value.trim().trim_start_matches(|ch: char| {
+        ch.is_whitespace() || matches!(ch, '#' | '*' | '•' | '·' | '●' | '➢')
+    });
+    let chars = trimmed.chars().collect::<Vec<_>>();
+    if chars.is_empty() || !chars[0].is_ascii_digit() {
+        return trimmed.to_string();
+    }
+    let mut index = 0usize;
+    while index < chars.len()
+        && (chars[index].is_ascii_digit()
+            || matches!(chars[index], '.' | '．' | '-' | '_' | ' ' | '　'))
+    {
+        index += 1;
+    }
+    if index == 0 || index > 12 || index >= chars.len() {
+        return trimmed.to_string();
+    }
+    chars[index..].iter().collect::<String>().trim().to_string()
+}
+
+fn trim_project_role_suffix(value: &str) -> String {
+    let mut candidate = normalize_document_entity_value(value);
+    for suffix in [
+        "Java工程师",
+        "研发工程师",
+        "软件工程师",
+        "架构师",
+        "系统架构师",
+        "产品经理",
+        "项目经理",
+        "销售经理",
+        "销售专员",
+        "研发主管",
+        "研发负责人",
+        "服务端研发",
+        "技术管理",
+        "产品开发",
+        "平台工作",
+        "系统工作",
+        "工作",
+    ] {
+        if !candidate.ends_with(suffix) {
+            continue;
+        }
+        let prefix = normalize_document_entity_value(
+            candidate
+                .strip_suffix(suffix)
+                .unwrap_or(&candidate)
+                .trim_end_matches(|ch: char| matches!(ch, '-' | '—' | '–' | '_' | ' ' | '　')),
+        );
+        if looks_like_project_name(&prefix) && prefix.chars().count() >= 3 {
+            candidate = prefix;
+            break;
+        }
+    }
+    candidate
+}
+
+fn project_entity_candidate_score(value: &str) -> usize {
+    let mut score = value.chars().count();
+    for signal in [
+        "物联网",
+        "IOT",
+        "系统",
+        "平台",
+        "项目",
+        "小程序",
+        "网站",
+        "中台",
+    ] {
+        if value.contains(signal) {
+            score += 20;
+        }
+    }
+    if looks_like_position_name(value) {
+        score = score.saturating_sub(40);
+    }
+    score
+}
+
 fn extract_known_skill_names(text: &str, limit: usize) -> Vec<String> {
     let mut values = Vec::new();
     for skill in [
@@ -26533,12 +26668,18 @@ fn looks_like_project_heading_candidate(value: &str) -> bool {
             "项目是",
             "个主要项目",
             "实现",
+            "协助",
+            "落地",
             "编写",
             "协调",
             "挖掘",
             "记录",
             "交流",
             "部署",
+            "调试",
+            "交付阶段",
+            "交付保障",
+            "执行力",
             "角色",
             "本科",
             "硕士",
@@ -26550,6 +26691,9 @@ fn looks_like_project_heading_candidate(value: &str) -> bool {
 
 fn project_heading_is_noise(value: &str) -> bool {
     is_document_entity_noise(value)
+        || value.starts_with("该项目")
+        || value.starts_with("此项目")
+        || value.starts_with("本项目")
         || [
             "项目经验",
             "项目经历",
@@ -26564,6 +26708,7 @@ fn project_heading_is_noise(value: &str) -> bool {
             "项目名称",
             "项目情况",
             "项目主管",
+            "讲平台",
         ]
         .contains(&value)
 }
@@ -54160,6 +54305,25 @@ mod tests {
             .iter()
             .any(|project| project.contains("带领五人团队")));
         assert!(projects.len() <= 2);
+
+        assert_eq!(
+            normalize_project_entity_name("产品经理|物联网设备监管平台").as_deref(),
+            Some("物联网设备监管平台")
+        );
+        assert_eq!(
+            normalize_project_entity_name("1.3 自助彩票销售系统").as_deref(),
+            Some("自助彩票销售系统")
+        );
+        assert_eq!(
+            normalize_project_entity_name("广东电信大数据实时计算平台Java工程师").as_deref(),
+            Some("广东电信大数据实时计算平台")
+        );
+        assert_eq!(
+            normalize_project_entity_name("自动化监控平台工作").as_deref(),
+            Some("自动化监控平台")
+        );
+        assert_eq!(normalize_project_entity_name("该项目的研发"), None);
+        assert_eq!(normalize_project_entity_name("讲平台"), None);
     }
 
     #[test]
