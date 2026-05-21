@@ -172,8 +172,8 @@ Content-Type: application/json
 | `default_prompt` | 否 | 本轮默认提示词；会供给模型但不越过权限和证据规则 |
 | `output_format` | 否 | `rich_text` 富文本；`image_text` 图文排版；`markdown_table` MD 表格；`json` JSON |
 | `render_mode` | 否 | `normal` 普通回答；`artifact` 生成产物 |
-| `available_document_source_id` | 文档问答建议必填 | 本轮文档源 ID；只传此字段时，V3 按该资料源已入库文档检索 |
-| `available_document_external_ids` | 文档问答建议必填 | 本轮允许 V3 使用的文档 ID；也可用 `documentExternalId` 传单个文档 |
+| `available_document_source_id` | 文档问答建议填 | 本轮文档源 ID；连接配置默认文档源时可省略，但单独传此字段不会授权整源文档回答 |
+| `available_document_external_ids` | 文档问答建议填 | 本轮允许 V3 使用的文档 ID；也可用 `documentExternalId` 传单个文档；未传时 V3 不会基于第三方文档内容回答 |
 | `requested_skills` | 否 | 本轮 skill 列表 |
 | `mention_external_user_ids` | 否 | 被 @ 的第三方用户 ID |
 | `attachment_refs` | 否 | 附件引用列表 |

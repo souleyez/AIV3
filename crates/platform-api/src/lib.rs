@@ -15309,6 +15309,19 @@ fn external_channel_default_source_id_from_config(config: &Value) -> Option<Stri
     )
 }
 
+fn external_channel_source_document_scope_enabled(config: &Value) -> bool {
+    external_config_bool(
+        config,
+        &[
+            "allow_source_document_scope",
+            "allowSourceDocumentScope",
+            "enable_source_document_scope",
+            "enableSourceDocumentScope",
+        ],
+        false,
+    )
+}
+
 fn authorization_bearer_token(headers: &HeaderMap) -> Option<&str> {
     let value = headers.get(header::AUTHORIZATION)?.to_str().ok()?.trim();
     let mut parts = value.split_whitespace();
@@ -15517,6 +15530,23 @@ fn external_config_i64(config: &Value, keys: &[&str]) -> Option<i64> {
                 .or_else(|| value.as_str().and_then(|text| text.trim().parse().ok()))
         })
     })
+}
+
+fn external_config_bool(config: &Value, keys: &[&str], default_value: bool) -> bool {
+    keys.iter()
+        .find_map(|key| {
+            config.get(*key).and_then(|value| {
+                value.as_bool().or_else(|| {
+                    value.as_str().map(|text| {
+                        matches!(
+                            text.trim().to_ascii_lowercase().as_str(),
+                            "1" | "true" | "yes" | "on"
+                        )
+                    })
+                })
+            })
+        })
+        .unwrap_or(default_value)
 }
 
 fn external_platform_callback_response(
@@ -16080,17 +16110,24 @@ async fn enrich_external_channel_document_scope(
     let explicit_source_id = message
         .available_document_source_id
         .as_deref()
-        .and_then(non_empty_trimmed_string)
-        .or_else(|| external_channel_default_source_id_from_config(&connection.config_redacted));
+        .and_then(non_empty_trimmed_string);
+    let default_source_id =
+        external_channel_default_source_id_from_config(&connection.config_redacted);
     if requested_external_ids.is_empty() {
-        if let Some(source_id) = explicit_source_id {
-            enrich_external_channel_source_document_scope(state, &source_id, selected_scope)
-                .await?;
+        let source_id = explicit_source_id.clone().or(default_source_id);
+        if let Some(source_id) = source_id {
+            set_external_channel_document_scope_missing_documents(selected_scope, &source_id);
+            if explicit_source_id.is_some()
+                && external_channel_source_document_scope_enabled(&connection.config_redacted)
+            {
+                enrich_external_channel_source_document_scope(state, &source_id, selected_scope)
+                    .await?;
+            }
         }
         return Ok(());
     }
 
-    let source_id = match explicit_source_id {
+    let source_id = match explicit_source_id.or(default_source_id) {
         Some(source_id) => Some(source_id),
         None => infer_external_document_scope_source_id(state, &requested_external_ids).await?,
     };
@@ -16213,6 +16250,33 @@ async fn enrich_external_channel_document_scope(
     }
 
     Ok(())
+}
+
+fn set_external_channel_document_scope_missing_documents(
+    selected_scope: &mut Value,
+    source_id: &str,
+) {
+    set_payload_value(
+        selected_scope,
+        "available_document_source_id",
+        json!(source_id),
+    );
+    set_payload_value(selected_scope, "available_document_external_ids", json!([]));
+    set_payload_value(
+        selected_scope,
+        "unresolved_document_external_ids",
+        json!([]),
+    );
+    set_payload_value(
+        selected_scope,
+        "external_document_scope_status",
+        json!("document_ids_missing"),
+    );
+    set_payload_value(
+        selected_scope,
+        "external_document_scope_summary",
+        json!("A document source was configured, but this request did not include available_document_external_ids/documentExternalId. V3 will not broaden the request to the whole source."),
+    );
 }
 
 async fn enrich_external_channel_source_document_scope(
@@ -18554,6 +18618,76 @@ fn validate_external_template_html_artifact_content(
     Ok(())
 }
 
+fn external_channel_document_scope_guard_should_block(
+    request: &CreateAssistantRunRequest,
+    evidence_state: &Value,
+) -> bool {
+    let selected_scope = request.selected_scope.as_ref();
+    if !assistant_run_scope_is_external_channel(selected_scope) {
+        return false;
+    }
+    let Some(selected_scope) = selected_scope else {
+        return false;
+    };
+    if selected_scope
+        .get("external_document_scope_status")
+        .and_then(Value::as_str)
+        != Some("document_ids_missing")
+    {
+        return false;
+    }
+    let no_evidence = evidence_state
+        .get("status")
+        .and_then(Value::as_str)
+        .map_or(true, |status| matches!(status, "not_requested" | "empty"))
+        && assistant_run_evidence_supplied_count(evidence_state) == 0;
+    no_evidence && external_channel_prompt_requires_document_scope(&request.prompt)
+}
+
+fn external_channel_prompt_requires_document_scope(prompt: &str) -> bool {
+    let compact = prompt
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .collect::<String>()
+        .to_ascii_lowercase();
+    if compact.is_empty() {
+        return false;
+    }
+    let document_markers = [
+        "文档",
+        "资料",
+        "附件",
+        "简历",
+        "合同",
+        "制度",
+        "手册",
+        "这份",
+        "该文件",
+        "这篇",
+        "原文",
+        "来源",
+    ];
+    if document_markers
+        .iter()
+        .any(|marker| compact.contains(marker))
+    {
+        return true;
+    }
+    let identity_markers = [
+        "是谁",
+        "谁是",
+        "哪位",
+        "什么人",
+        "什么身份",
+        "何人",
+        "whois",
+        "who's",
+    ];
+    identity_markers
+        .iter()
+        .any(|marker| compact.contains(marker))
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn external_channel_chat_model_or_acceptance_reply(
     state: &AppState,
@@ -18565,6 +18699,32 @@ async fn external_channel_chat_model_or_acceptance_reply(
     message: &ExternalBotMessageView,
     now: DateTime<Utc>,
 ) -> std::result::Result<ExternalBotReplyView, ApiError> {
+    if external_channel_document_scope_guard_should_block(assistant_request, evidence_state) {
+        let reply = "当前没有收到本轮可用的文档 ID，无法基于第三方文档确认这个问题。请在请求中传入对应的 available_document_external_ids 或 documentExternalId 后再问。";
+        state
+            .storage
+            .assistant_runs()
+            .append_event(
+                state.tenant_id,
+                run_id,
+                &NewAssistantRunEvent {
+                    event_name: "assistant_run.external_channel_document_scope_required"
+                        .to_string(),
+                    payload: json!({
+                        "channel_connection_id": connection_id,
+                        "platform": external_channel_platform_wire_value(&message.platform),
+                        "message_external_id": message.message_external_id.clone(),
+                        "reason": "document_ids_missing",
+                        "evidence_status": evidence_state.get("status").and_then(Value::as_str).unwrap_or("unknown"),
+                        "strict_direct_reply": true,
+                    }),
+                    created_at: now,
+                },
+            )
+            .await
+            .map_err(ApiError::from_storage)?;
+        return Ok(external_channel_text_reply(message, reply, "failed"));
+    }
     let provider_input =
         build_assistant_run_provider_input_with_evidence(assistant_request, Some(evidence_state));
     let attempts = if let Some(pool_attempts) =
@@ -52619,7 +52779,9 @@ mod tests {
         let connection = ExternalChannelConnectionSummary {
             platform: ExternalChannelPlatformView::GenericChat,
             status: "enabled".to_string(),
-            config_redacted: json!({}),
+            config_redacted: json!({
+                "allow_source_document_scope": true
+            }),
         };
         let mut message = sample_external_bot_message();
         message.available_document_source_id = Some("src-docs".to_string());
@@ -52653,6 +52815,104 @@ mod tests {
         assert!(selected_scope["temporary_dataset"].is_null());
         assert!(
             selected_scope_allows_external_document_range_without_acl_snapshot(&selected_scope)
+        );
+    }
+
+    #[tokio::test]
+    async fn external_channel_default_source_does_not_broaden_without_document_ids() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping external default source boundary test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+        let tenant = storage
+            .ensure_tenant(
+                &format!("external-default-source-boundary-test-{}", Uuid::new_v4()),
+                "External Default Source Boundary Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage,
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        let dataset = state
+            .storage
+            .datasets()
+            .create(
+                state.tenant_id,
+                NewDataset {
+                    key: format!("external-default-source-boundary-{}", Uuid::new_v4()),
+                    title: "External Default Source Boundary".to_string(),
+                    description: None,
+                    owner_user_id: None,
+                },
+            )
+            .await
+            .expect("dataset should be created");
+        state
+            .storage
+            .documents()
+            .create(
+                state.tenant_id,
+                NewDocument {
+                    dataset_id: dataset.id,
+                    title: "Deng profile".to_string(),
+                    object_key: "external-default-source-boundary/doc-deng.md".to_string(),
+                    content_type: "text/markdown".to_string(),
+                    secret_binding_ids: Vec::new(),
+                    owner_user_id: None,
+                    metadata: json!({
+                        "external_source": {
+                            "source_id": "src-docs",
+                            "document_external_id": "doc-deng"
+                        }
+                    }),
+                },
+            )
+            .await
+            .expect("document should be created");
+        let connection = ExternalChannelConnectionSummary {
+            platform: ExternalChannelPlatformView::GenericChat,
+            status: "enabled".to_string(),
+            config_redacted: json!({
+                "default_source_id": "src-docs"
+            }),
+        };
+        let mut message = sample_external_bot_message();
+        message.available_document_source_id = None;
+        message.available_document_external_ids.clear();
+        let mut selected_scope = json!({"type": "external_channel"});
+
+        enrich_external_channel_document_scope(
+            &state,
+            "generic-chat-main",
+            &connection,
+            &message,
+            &mut selected_scope,
+        )
+        .await
+        .expect("default source should not broaden without document ids");
+
+        assert_eq!(
+            selected_scope["available_document_source_id"],
+            json!("src-docs")
+        );
+        assert_eq!(
+            selected_scope["external_document_scope_status"],
+            json!("document_ids_missing")
+        );
+        assert_eq!(selected_scope["available_document_external_ids"], json!([]));
+        assert!(selected_scope["documents"].is_null());
+        assert!(selected_scope["datasets"].is_null());
+        assert!(
+            !selected_scope_allows_external_document_range_without_acl_snapshot(&selected_scope)
         );
     }
 
@@ -53339,6 +53599,137 @@ mod tests {
             .await
             .expect("events should load");
         assert!(events.iter().any(|event| {
+            event.event_name == "assistant_run.external_channel_model_reply_completed"
+        }));
+        clear_assistant_openclaw_env();
+    }
+
+    #[tokio::test]
+    async fn external_channel_identity_question_requires_document_ids_before_model_reply() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        clear_assistant_openclaw_env();
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_MODE", "provider");
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_PROVIDER", "scripted");
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_MODEL", "assistant-run-scripted-v1");
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_OUTPUT_TEXT", "邓工是平台负责人。");
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping external document scope guard endpoint test: {reason}");
+                clear_assistant_openclaw_env();
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("generic-chat-doc-scope-guard-test-{}", Uuid::new_v4()),
+                "Generic Chat Document Scope Guard Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage.clone(),
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        insert_generic_external_channel_connection_with_config(
+            &state,
+            "generic-chat-main",
+            json!({
+                "tenant_external_id": "tenant-ext-001",
+                "bot_external_id": "bot-v3",
+                "default_source_id": "src-docs"
+            }),
+        )
+        .await;
+        let dataset = state
+            .storage
+            .datasets()
+            .create(
+                state.tenant_id,
+                NewDataset {
+                    key: format!("generic-chat-doc-scope-guard-{}", Uuid::new_v4()),
+                    title: "Generic Chat Document Scope Guard".to_string(),
+                    description: None,
+                    owner_user_id: None,
+                },
+            )
+            .await
+            .expect("dataset should be created");
+        state
+            .storage
+            .documents()
+            .create(
+                state.tenant_id,
+                NewDocument {
+                    dataset_id: dataset.id,
+                    title: "Deng profile".to_string(),
+                    object_key: "generic-chat-doc-scope-guard/doc-deng.md".to_string(),
+                    content_type: "text/markdown".to_string(),
+                    secret_binding_ids: Vec::new(),
+                    owner_user_id: None,
+                    metadata: json!({
+                        "external_source": {
+                            "source_id": "src-docs",
+                            "document_external_id": "doc-deng"
+                        }
+                    }),
+                },
+            )
+            .await
+            .expect("document should be created");
+        let app = router(
+            storage.clone(),
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+
+        let mut message = sample_external_bot_message();
+        message.text = Some("邓工是谁".to_string());
+        message.message_external_id = "msg-doc-scope-guard-001".to_string();
+        message.idempotency_key = "generic:tenant-ext-001:msg-doc-scope-guard-001".to_string();
+        message.available_document_source_id = None;
+        message.available_document_external_ids.clear();
+        let response = post_json_request(
+            app,
+            "/v1/external/channels/generic-chat-main/events",
+            &message,
+            None,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let body: ExternalChannelEventResponse = read_json_response(response).await;
+        assert_eq!(body.reply.reply_type, ExternalBotReplyTypeView::Text);
+        assert_eq!(body.reply.task_status.as_deref(), Some("failed"));
+        let reply_text = body.reply.text.as_deref().expect("guard reply text");
+        assert!(reply_text.contains("当前没有收到本轮可用的文档 ID"));
+        assert!(!reply_text.contains("平台负责人"));
+
+        let run_id = body.assistant_run_id.expect("assistant run id");
+        let run = storage
+            .assistant_runs()
+            .get_by_id(tenant.id, run_id)
+            .await
+            .expect("run should load")
+            .expect("run should exist");
+        assert_eq!(
+            run.selected_scope["external_document_scope_status"],
+            json!("document_ids_missing")
+        );
+        assert!(run.selected_scope["datasets"].is_null());
+        let events = storage
+            .assistant_runs()
+            .list_events(tenant.id, run_id)
+            .await
+            .expect("events should load");
+        assert!(events.iter().any(|event| {
+            event.event_name == "assistant_run.external_channel_document_scope_required"
+        }));
+        assert!(!events.iter().any(|event| {
             event.event_name == "assistant_run.external_channel_model_reply_completed"
         }));
         clear_assistant_openclaw_env();
