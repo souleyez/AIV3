@@ -3,7 +3,7 @@ import fs from 'node:fs';
 
 export const EXTERNAL_OBSERVABILITY_COOKIE = 'v3_external_observability_access';
 
-const ACCESS_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 12;
+const ACCESS_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 400;
 const ACCESS_COOKIE_SALT = 'ai-data-platform-v3:external-observability';
 const ONE_TIME_KEY_SALT = 'ai-data-platform-v3:external-observability:one-time';
 
