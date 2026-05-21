@@ -18041,13 +18041,16 @@ fn assistant_run_model_dataset_entity_scan_item(item: &Value) -> Value {
         "person_rows": item.get("person_rows").cloned().unwrap_or(Value::Null),
         "keyword_rows": item.get("keyword_rows").cloned().unwrap_or(Value::Null),
         "year_rows": item.get("year_rows").cloned().unwrap_or(Value::Null),
+        "section_rows": item.get("section_rows").cloned().unwrap_or(Value::Null),
+        "paragraph_rows": item.get("paragraph_rows").cloned().unwrap_or(Value::Null),
+        "table_rows": item.get("table_rows").cloned().unwrap_or(Value::Null),
         "entity_rows_by_type": item.get("entity_rows_by_type").cloned().unwrap_or(Value::Null),
         "resume_profile_rows": item.get("resume_profile_rows").cloned().unwrap_or(Value::Null),
         "company_names": item.get("company_names").cloned().unwrap_or(Value::Null),
         "entities": item.get("entities").cloned().unwrap_or(Value::Null),
         "answer_guidance": item.get("answer_guidance").cloned().unwrap_or(Value::Null),
         "limits": item.get("limits").cloned().unwrap_or(Value::Null),
-        "model_note": "Use *_rows, keyword_rows, year_rows, and resume_profile_rows as authoritative structured scan tables when answering entity/document dimension questions. Use scanned_document_count as the document total; do not sum row document_count as total documents. Do not extend company lists from candidate_terms or document_hits.",
+        "model_note": "Use *_rows, keyword_rows, year_rows, section_rows, paragraph_rows, table_rows, and resume_profile_rows as authoritative structured scan tables when answering entity/document dimension questions. Use scanned_document_count as the document total; do not sum row document_count as total documents. Do not extend company lists from candidate_terms or document_hits.",
     })
 }
 
@@ -18063,7 +18066,7 @@ fn assistant_run_compact_provider_retry_input(
     let mut sections = vec![
         "你是 AI 数据智能助手里的模型回答运行时。完整供料请求刚才未完成；现在系统只给你紧凑结构化供料，请直接回答用户问题。".to_string(),
         "禁止回复“已收到/处理中/稍后分析/系统将结合知识库与数据源”；如果结构化供料已经给出统计值，就按统计值直接输出。".to_string(),
-        "统计规则：company_count 是公司/组织总数；scanned_document_count 是扫描文档总数；*_rows[].document_count 是该行覆盖的文档数，不能把这些覆盖数相加当作文档总数。关键词/年份问题优先使用 keyword_rows/year_rows。".to_string(),
+        "统计规则：company_count 是公司/组织总数；scanned_document_count 是扫描文档总数；*_rows[].document_count 是该行覆盖的文档数，不能把这些覆盖数相加当作文档总数。关键词/年份/标题/段落/表格问题优先使用 keyword_rows/year_rows/section_rows/paragraph_rows/table_rows。".to_string(),
         format!("用户问题：{}", request.prompt.trim()),
         format!(
             "紧凑结构化供料：{}",
@@ -18143,6 +18146,9 @@ fn assistant_run_compact_dataset_entity_scan_payload(item: &Value) -> Option<Val
     let person_rows = assistant_run_compact_entity_scan_rows(item, "person_rows");
     let keyword_rows = assistant_run_compact_entity_scan_rows(item, "keyword_rows");
     let year_rows = assistant_run_compact_entity_scan_rows(item, "year_rows");
+    let section_rows = assistant_run_compact_entity_scan_rows(item, "section_rows");
+    let paragraph_rows = assistant_run_compact_entity_scan_rows(item, "paragraph_rows");
+    let table_rows = assistant_run_compact_entity_scan_rows(item, "table_rows");
     let resume_profile_rows = item
         .get("resume_profile_rows")
         .and_then(Value::as_array)
@@ -18161,6 +18167,9 @@ fn assistant_run_compact_dataset_entity_scan_payload(item: &Value) -> Option<Val
         && person_rows.is_empty()
         && keyword_rows.is_empty()
         && year_rows.is_empty()
+        && section_rows.is_empty()
+        && paragraph_rows.is_empty()
+        && table_rows.is_empty()
         && resume_profile_rows.is_empty()
     {
         return None;
@@ -18174,6 +18183,9 @@ fn assistant_run_compact_dataset_entity_scan_payload(item: &Value) -> Option<Val
         "person": person_rows.clone(),
         "keyword": keyword_rows.clone(),
         "year": year_rows.clone(),
+        "section": section_rows.clone(),
+        "paragraph": paragraph_rows.clone(),
+        "table": table_rows.clone(),
     });
 
     Some(json!({
@@ -18191,10 +18203,13 @@ fn assistant_run_compact_dataset_entity_scan_payload(item: &Value) -> Option<Val
         "person_rows": person_rows,
         "keyword_rows": keyword_rows,
         "year_rows": year_rows,
+        "section_rows": section_rows,
+        "paragraph_rows": paragraph_rows,
+        "table_rows": table_rows,
         "entity_rows_by_type": entity_rows_by_type,
         "resume_profile_rows": resume_profile_rows,
         "answer_guidance": item.get("answer_guidance").cloned().unwrap_or(Value::Null),
-        "model_note": "Answer entity/document dimension questions from *_rows, keyword_rows, year_rows, and resume_profile_rows only. Do not use omitted candidate_terms, entities, document_hits, or summed row counts.",
+        "model_note": "Answer entity/document dimension questions from *_rows, keyword_rows, year_rows, section_rows, paragraph_rows, table_rows, and resume_profile_rows only. Do not use omitted candidate_terms, entities, document_hits, or summed row counts.",
     }))
 }
 
@@ -18239,6 +18254,9 @@ fn assistant_run_dataset_entity_scan_direct_answer_for_dimension(
             | AssistantRunEntityScanAnswerDimension::Location
             | AssistantRunEntityScanAnswerDimension::Keyword
             | AssistantRunEntityScanAnswerDimension::Year
+            | AssistantRunEntityScanAnswerDimension::Section
+            | AssistantRunEntityScanAnswerDimension::Paragraph
+            | AssistantRunEntityScanAnswerDimension::Table
     ) {
         return assistant_run_entity_rows_direct_answer(&scans, dimension);
     }
@@ -18324,6 +18342,9 @@ enum AssistantRunEntityScanAnswerDimension {
     Location,
     Keyword,
     Year,
+    Section,
+    Paragraph,
+    Table,
     Age,
     Gender,
     Time,
@@ -18362,6 +18383,15 @@ fn assistant_run_entity_scan_answer_dimension(
     if prompt_requests_year_statistics(prompt) || prompt_requests_time_statistics(prompt) {
         return Some(AssistantRunEntityScanAnswerDimension::Year);
     }
+    if prompt_requests_section_statistics(prompt) {
+        return Some(AssistantRunEntityScanAnswerDimension::Section);
+    }
+    if prompt_requests_paragraph_statistics(prompt) {
+        return Some(AssistantRunEntityScanAnswerDimension::Paragraph);
+    }
+    if prompt_requests_table_statistics(prompt) {
+        return Some(AssistantRunEntityScanAnswerDimension::Table);
+    }
     if prompt_requests_company_entity_statistics(prompt) {
         return Some(AssistantRunEntityScanAnswerDimension::Company);
     }
@@ -18380,6 +18410,9 @@ fn assistant_run_entity_rows_direct_answer(
         AssistantRunEntityScanAnswerDimension::Location => ("地点/城市", "location_rows"),
         AssistantRunEntityScanAnswerDimension::Keyword => ("关键词/名词", "keyword_rows"),
         AssistantRunEntityScanAnswerDimension::Year => ("年份", "year_rows"),
+        AssistantRunEntityScanAnswerDimension::Section => ("标题/章节", "section_rows"),
+        AssistantRunEntityScanAnswerDimension::Paragraph => ("段落", "paragraph_rows"),
+        AssistantRunEntityScanAnswerDimension::Table => ("表格信号", "table_rows"),
         _ => return None,
     };
     let mut lines = Vec::new();
@@ -18732,6 +18765,70 @@ fn prompt_requests_year_statistics(prompt: &str) -> bool {
         &["年份", "年度", "日期", "时间线"],
         &["year", "years", "date", "dates", "timeline"],
     )
+}
+
+fn prompt_requests_section_statistics(prompt: &str) -> bool {
+    prompt_requests_dimension_statistics(
+        prompt,
+        &["标题", "章节", "小节", "目录", "大纲", "文档结构", "层级"],
+        &[
+            "heading",
+            "headings",
+            "section",
+            "sections",
+            "outline",
+            "toc",
+            "structure",
+        ],
+    )
+}
+
+fn prompt_requests_paragraph_statistics(prompt: &str) -> bool {
+    prompt_requests_dimension_statistics(
+        prompt,
+        &["段落", "分段", "正文段", "段落结构"],
+        &["paragraph", "paragraphs", "segment", "segments"],
+    )
+}
+
+fn prompt_requests_table_statistics(prompt: &str) -> bool {
+    let lower_prompt = prompt.to_ascii_lowercase();
+    let has_table_signal =
+        prompt_contains_any(
+            prompt,
+            &["表格", "数据表", "明细表", "表格结构", "表格信号"],
+        ) || ascii_prompt_contains_any(&lower_prompt, &["table", "tables", "tabular"]);
+    let has_doc_signal = prompt_contains_any(
+        prompt,
+        &[
+            "文档",
+            "资料",
+            "知识库",
+            "解析",
+            "抽取",
+            "提取",
+            "识别",
+            "扫描",
+            "有哪些",
+            "哪些",
+            "列出",
+            "统计",
+            "汇总",
+            "结构",
+        ],
+    ) || ascii_prompt_contains_any(
+        &lower_prompt,
+        &[
+            "document",
+            "documents",
+            "extract",
+            "scan",
+            "identify",
+            "list",
+            "structure",
+        ],
+    );
+    has_table_signal && has_doc_signal
 }
 
 fn prompt_requests_age_statistics(prompt: &str) -> bool {
@@ -23673,6 +23770,9 @@ async fn build_assistant_run_dataset_entity_scan_supply(
     let mut entities_by_key: BTreeMap<(String, String), BTreeSet<String>> = BTreeMap::new();
     let mut candidate_terms_by_name: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     let mut years_by_year: BTreeMap<i32, BTreeSet<String>> = BTreeMap::new();
+    let mut sections_by_title: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut paragraphs_by_excerpt: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut tables_by_signal: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     let mut document_hits = Vec::new();
     let mut resume_profile_rows = Vec::new();
 
@@ -23724,11 +23824,17 @@ async fn build_assistant_run_dataset_entity_scan_supply(
             .collect::<Vec<_>>();
         let candidate_terms = extract_document_candidate_terms_for_scan(&chunks, &scan_text, 32);
         let document_years = extract_resume_years(&scan_text, 32);
+        let section_titles = extract_document_section_titles_for_scan(&chunks, &scan_text, 32);
+        let paragraph_samples = extract_document_paragraphs_for_scan(&chunks, 16);
+        let table_signals = extract_document_table_signals_for_scan(&chunks, &scan_text, 16);
         let resume_profile =
             extract_resume_document_profile(&document, &text_scan, &entity_candidates);
         if entity_candidates.is_empty()
             && candidate_terms.is_empty()
             && document_years.is_empty()
+            && section_titles.is_empty()
+            && paragraph_samples.is_empty()
+            && table_signals.is_empty()
             && resume_profile.is_empty()
         {
             continue;
@@ -23752,6 +23858,24 @@ async fn build_assistant_run_dataset_entity_scan_supply(
                 .or_default()
                 .insert(document.id.to_string());
         }
+        for title in &section_titles {
+            sections_by_title
+                .entry(title.clone())
+                .or_default()
+                .insert(document.id.to_string());
+        }
+        for paragraph in &paragraph_samples {
+            paragraphs_by_excerpt
+                .entry(paragraph.clone())
+                .or_default()
+                .insert(document.id.to_string());
+        }
+        for table_signal in &table_signals {
+            tables_by_signal
+                .entry(table_signal.clone())
+                .or_default()
+                .insert(document.id.to_string());
+        }
         if !resume_profile.is_empty()
             && resume_profile_rows.len() < ASSISTANT_RUN_RESUME_PROFILE_ROW_LIMIT
         {
@@ -23770,6 +23894,9 @@ async fn build_assistant_run_dataset_entity_scan_supply(
                 .collect::<Vec<_>>(),
             "candidate_terms": candidate_terms,
             "years": document_years,
+            "section_titles": section_titles,
+            "paragraph_samples": paragraph_samples,
+            "table_signals": table_signals,
         }));
     }
 
@@ -23784,6 +23911,9 @@ async fn build_assistant_run_dataset_entity_scan_supply(
         .count();
     let candidate_term_count = candidate_terms_by_name.len();
     let year_count = years_by_year.len();
+    let section_count = sections_by_title.len();
+    let paragraph_count = paragraphs_by_excerpt.len();
+    let table_signal_count = tables_by_signal.len();
     let mut organization_rows = entities_by_key
         .iter()
         .filter(|((entity_type, _), _)| entity_type == "organization")
@@ -23820,6 +23950,9 @@ async fn build_assistant_run_dataset_entity_scan_supply(
     let person_rows = entity_rows_for_type(&entities_by_key, "person");
     let keyword_rows = candidate_term_rows_for_scan(&candidate_terms_by_name);
     let year_rows = year_rows_for_scan(&years_by_year);
+    let section_rows = structure_rows_for_scan(&sections_by_title);
+    let paragraph_rows = structure_rows_for_scan(&paragraphs_by_excerpt);
+    let table_rows = structure_rows_for_scan(&tables_by_signal);
     let entity_rows_by_type = json!({
         "organization": company_rows.clone(),
         "skill": skill_rows.clone(),
@@ -23829,6 +23962,9 @@ async fn build_assistant_run_dataset_entity_scan_supply(
         "person": person_rows.clone(),
         "keyword": keyword_rows.clone(),
         "year": year_rows.clone(),
+        "section": section_rows.clone(),
+        "paragraph": paragraph_rows.clone(),
+        "table": table_rows.clone(),
     });
     let company_summary = organization_rows
         .iter()
@@ -23887,57 +24023,106 @@ async fn build_assistant_run_dataset_entity_scan_supply(
         )
     };
 
-    Ok(vec![json!({
-        "type": "dataset_entity_scan",
-        "source": "visible_document_scan",
-        "dataset_id": dataset.id,
-        "entity_type": "document_entity_scan",
-        "legacy_entity_type": "company_or_organization",
-        "entity_types": ["organization", "person", "position", "skill", "location", "project", "keyword", "year"],
-        "summary": summary,
-        "score": 1.0,
-        "lexical_score": 1.0,
-        "recall_score": 1.0,
-        "scanned_document_count": scanned_document_count,
-        "entity_count": entity_count,
-        "organization_count": organization_count,
-        "company_count": organization_count,
-        "company_rows": company_rows,
-        "skill_rows": skill_rows,
-        "project_rows": project_rows,
-        "position_rows": position_rows,
-        "location_rows": location_rows,
-        "person_rows": person_rows,
-        "entity_rows_by_type": entity_rows_by_type,
-        "resume_profile_rows": resume_profile_rows,
-        "candidate_term_count": candidate_term_count,
-        "year_count": year_count,
-        "keyword_rows": keyword_rows,
-        "year_rows": year_rows,
-        "company_names": company_names,
-        "entities": entity_views,
-        "candidate_terms": candidate_term_views,
-        "document_hits": document_hits.into_iter().take(24).collect::<Vec<_>>(),
-        "answer_guidance": {
+    let mut item = Map::new();
+    item.insert("type".to_string(), json!("dataset_entity_scan"));
+    item.insert("source".to_string(), json!("visible_document_scan"));
+    item.insert("dataset_id".to_string(), json!(dataset.id));
+    item.insert("entity_type".to_string(), json!("document_entity_scan"));
+    item.insert(
+        "legacy_entity_type".to_string(),
+        json!("company_or_organization"),
+    );
+    item.insert(
+        "entity_types".to_string(),
+        json!([
+            "organization",
+            "person",
+            "position",
+            "skill",
+            "location",
+            "project",
+            "keyword",
+            "year",
+            "section",
+            "paragraph",
+            "table"
+        ]),
+    );
+    item.insert("summary".to_string(), json!(summary));
+    item.insert("score".to_string(), json!(1.0));
+    item.insert("lexical_score".to_string(), json!(1.0));
+    item.insert("recall_score".to_string(), json!(1.0));
+    item.insert(
+        "scanned_document_count".to_string(),
+        json!(scanned_document_count),
+    );
+    item.insert("entity_count".to_string(), json!(entity_count));
+    item.insert("organization_count".to_string(), json!(organization_count));
+    item.insert("company_count".to_string(), json!(organization_count));
+    item.insert("company_rows".to_string(), Value::Array(company_rows));
+    item.insert("skill_rows".to_string(), Value::Array(skill_rows));
+    item.insert("project_rows".to_string(), Value::Array(project_rows));
+    item.insert("position_rows".to_string(), Value::Array(position_rows));
+    item.insert("location_rows".to_string(), Value::Array(location_rows));
+    item.insert("person_rows".to_string(), Value::Array(person_rows));
+    item.insert("entity_rows_by_type".to_string(), entity_rows_by_type);
+    item.insert(
+        "resume_profile_rows".to_string(),
+        Value::Array(resume_profile_rows),
+    );
+    item.insert(
+        "candidate_term_count".to_string(),
+        json!(candidate_term_count),
+    );
+    item.insert("year_count".to_string(), json!(year_count));
+    item.insert("section_count".to_string(), json!(section_count));
+    item.insert("paragraph_count".to_string(), json!(paragraph_count));
+    item.insert("table_signal_count".to_string(), json!(table_signal_count));
+    item.insert("keyword_rows".to_string(), Value::Array(keyword_rows));
+    item.insert("year_rows".to_string(), Value::Array(year_rows));
+    item.insert("section_rows".to_string(), Value::Array(section_rows));
+    item.insert("paragraph_rows".to_string(), Value::Array(paragraph_rows));
+    item.insert("table_rows".to_string(), Value::Array(table_rows));
+    item.insert("company_names".to_string(), json!(company_names));
+    item.insert("entities".to_string(), Value::Array(entity_views));
+    item.insert(
+        "candidate_terms".to_string(),
+        Value::Array(candidate_term_views),
+    );
+    item.insert(
+        "document_hits".to_string(),
+        Value::Array(document_hits.into_iter().take(24).collect::<Vec<_>>()),
+    );
+    item.insert(
+        "answer_guidance".to_string(),
+        json!({
             "company_count_authoritative": organization_count,
             "scanned_document_count_authoritative": scanned_document_count,
             "company_rows_authoritative": true,
             "entity_rows_by_type_authoritative": true,
             "keyword_rows_authoritative": true,
             "year_rows_authoritative": true,
+            "section_rows_authoritative": true,
+            "paragraph_rows_authoritative": true,
+            "table_rows_authoritative": true,
             "resume_profile_rows_authoritative": true,
             "ignore_candidate_terms_for_company_count": true,
             "do_not_sum_company_row_document_counts_as_total_documents": true,
             "candidate_terms_are_only_noun_hints": true,
-        },
-        "limits": {
+        }),
+    );
+    item.insert(
+        "limits".to_string(),
+        json!({
             "maxDocuments": ASSISTANT_RUN_DATASET_ENTITY_SCAN_DOCUMENT_LIMIT,
             "maxChunksPerDocument": ASSISTANT_RUN_DATASET_ENTITY_SCAN_CHUNK_LIMIT,
             "maxEntities": ASSISTANT_RUN_DATASET_ENTITY_SCAN_ENTITY_LIMIT,
             "maxCompanyRows": ASSISTANT_RUN_DATASET_ENTITY_SCAN_ROW_LIMIT,
             "limitedByDocumentLimit": limited_by_document_limit,
-        },
-    })])
+        }),
+    );
+
+    Ok(vec![Value::Object(item)])
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -24067,6 +24252,303 @@ fn year_rows_for_scan(years_by_year: &BTreeMap<i32, BTreeSet<String>>) -> Vec<Va
             })
         })
         .collect()
+}
+
+fn structure_rows_for_scan(rows_by_name: &BTreeMap<String, BTreeSet<String>>) -> Vec<Value> {
+    let mut rows = rows_by_name
+        .iter()
+        .map(|(name, document_ids)| (name.clone(), document_ids.clone()))
+        .collect::<Vec<_>>();
+    rows.sort_by(
+        |(left_name, left_documents), (right_name, right_documents)| {
+            right_documents
+                .len()
+                .cmp(&left_documents.len())
+                .then_with(|| left_name.cmp(right_name))
+        },
+    );
+    rows.iter()
+        .take(ASSISTANT_RUN_DATASET_ENTITY_SCAN_ROW_LIMIT)
+        .map(|(name, document_ids)| {
+            json!({
+                "name": name,
+                "document_count": document_ids.len(),
+                "document_ids": document_ids.iter().take(5).cloned().collect::<Vec<_>>(),
+            })
+        })
+        .collect()
+}
+
+fn extract_document_section_titles_for_scan(
+    chunks: &[DocumentChunk],
+    scan_text: &str,
+    limit: usize,
+) -> Vec<String> {
+    let mut titles = Vec::new();
+    for chunk in chunks
+        .iter()
+        .take(ASSISTANT_RUN_DATASET_ENTITY_SCAN_CHUNK_LIMIT)
+    {
+        for title in document_chunk_section_title_hints(chunk) {
+            push_document_structure_signal(&mut titles, title, limit);
+        }
+    }
+    for title in infer_section_title_hints_from_text(scan_text, limit) {
+        push_document_structure_signal(&mut titles, title, limit);
+    }
+    titles
+}
+
+fn extract_document_paragraphs_for_scan(chunks: &[DocumentChunk], limit: usize) -> Vec<String> {
+    let mut paragraphs = Vec::new();
+    for chunk in chunks
+        .iter()
+        .take(ASSISTANT_RUN_DATASET_ENTITY_SCAN_CHUNK_LIMIT)
+    {
+        if let Some(value) = chunk
+            .metadata
+            .get("parse_metadata")
+            .and_then(|value| value.get("document_structure"))
+        {
+            for paragraph in document_structure_paragraph_samples(value, limit) {
+                push_document_paragraph_sample(&mut paragraphs, paragraph, limit);
+            }
+        }
+        for paragraph in infer_paragraph_samples_from_text(&chunk.content, limit) {
+            push_document_paragraph_sample(&mut paragraphs, paragraph, limit);
+        }
+        if paragraphs.len() >= limit {
+            break;
+        }
+    }
+    paragraphs
+}
+
+fn extract_document_table_signals_for_scan(
+    chunks: &[DocumentChunk],
+    scan_text: &str,
+    limit: usize,
+) -> Vec<String> {
+    let mut signals = Vec::new();
+    for chunk in chunks
+        .iter()
+        .take(ASSISTANT_RUN_DATASET_ENTITY_SCAN_CHUNK_LIMIT)
+    {
+        for signal in document_chunk_table_signals(chunk, limit) {
+            push_document_structure_signal(&mut signals, signal, limit);
+        }
+        if signals.len() >= limit {
+            return signals;
+        }
+    }
+    for signal in infer_table_signals_from_text(scan_text, limit) {
+        push_document_structure_signal(&mut signals, signal, limit);
+    }
+    signals
+}
+
+fn document_chunk_table_signals(chunk: &DocumentChunk, limit: usize) -> Vec<String> {
+    let mut signals = Vec::new();
+    for key in [
+        "table_signals",
+        "tableSignals",
+        "table_like_signals",
+        "tableLikeSignals",
+    ] {
+        if let Some(value) = chunk.metadata.get(key) {
+            collect_string_list(value, &mut signals);
+        }
+    }
+    if let Some(value) = chunk
+        .metadata
+        .get("parse_metadata")
+        .and_then(|value| value.get("table_like_signals"))
+    {
+        collect_string_list(value, &mut signals);
+    }
+    if let Some(value) = chunk
+        .metadata
+        .get("parse_metadata")
+        .and_then(|value| value.get("document_structure"))
+    {
+        for signal in document_structure_table_signals(value, limit) {
+            push_document_structure_signal(&mut signals, signal, limit);
+        }
+    }
+    visit_document_vlm_payloads(&chunk.metadata, |payload| {
+        if let Some(value) = payload
+            .get("tableLikeSignals")
+            .or_else(|| payload.get("table_like_signals"))
+        {
+            collect_string_list(value, &mut signals);
+        }
+        if payload
+            .get("chartOrTableDetected")
+            .or_else(|| payload.get("chart_or_table_detected"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
+            if let Some(summary) = payload
+                .get("visualSummary")
+                .or_else(|| payload.get("summary"))
+                .and_then(Value::as_str)
+            {
+                push_document_structure_signal(&mut signals, summary, limit);
+            }
+        }
+    });
+    signals.truncate(limit);
+    signals
+}
+
+fn document_structure_paragraph_samples(structure: &Value, limit: usize) -> Vec<String> {
+    let mut paragraphs = Vec::new();
+    let Some(blocks) = structure.get("blocks").and_then(Value::as_array) else {
+        return paragraphs;
+    };
+    for block in blocks {
+        if document_structure_block_is_title(block)
+            || document_structure_block_is_term_source(block)
+        {
+            continue;
+        }
+        let block_type = document_structure_block_type(block);
+        if !block_type.is_empty()
+            && ![
+                "text",
+                "paragraph",
+                "plain_text",
+                "body",
+                "content",
+                "list",
+                "list_item",
+            ]
+            .iter()
+            .any(|value| block_type.contains(value))
+        {
+            continue;
+        }
+        let Some(text) = document_structure_block_text(block) else {
+            continue;
+        };
+        push_document_paragraph_sample(&mut paragraphs, text, limit);
+        if paragraphs.len() >= limit {
+            break;
+        }
+    }
+    paragraphs
+}
+
+fn document_structure_table_signals(structure: &Value, limit: usize) -> Vec<String> {
+    let mut signals = Vec::new();
+    let Some(blocks) = structure.get("blocks").and_then(Value::as_array) else {
+        return signals;
+    };
+    for block in blocks {
+        let block_type = document_structure_block_type(block);
+        if !["table", "cell", "table_title"]
+            .iter()
+            .any(|value| block_type.contains(value))
+        {
+            continue;
+        }
+        let Some(text) = document_structure_block_text(block) else {
+            continue;
+        };
+        push_document_structure_signal(&mut signals, text, limit);
+        if signals.len() >= limit {
+            break;
+        }
+    }
+    signals
+}
+
+fn infer_paragraph_samples_from_text(text: &str, limit: usize) -> Vec<String> {
+    let mut paragraphs = Vec::new();
+    for raw in text.split("\n\n") {
+        let normalized = raw
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .collect::<Vec<_>>()
+            .join(" ");
+        if normalized.is_empty() {
+            continue;
+        }
+        if normalize_section_title_hint(&normalized).is_some()
+            || looks_like_table_signal_line(&normalized)
+        {
+            continue;
+        }
+        push_document_paragraph_sample(&mut paragraphs, normalized, limit);
+        if paragraphs.len() >= limit {
+            break;
+        }
+    }
+    paragraphs
+}
+
+fn infer_table_signals_from_text(text: &str, limit: usize) -> Vec<String> {
+    let mut signals = Vec::new();
+    for line in text.lines().map(str::trim).filter(|line| !line.is_empty()) {
+        if !looks_like_table_signal_line(line) {
+            continue;
+        }
+        push_document_structure_signal(&mut signals, line, limit);
+        if signals.len() >= limit {
+            break;
+        }
+    }
+    signals
+}
+
+fn looks_like_table_signal_line(line: &str) -> bool {
+    let pipe_count = line.matches('|').count();
+    pipe_count >= 2
+        || line.matches('\t').count() >= 2
+        || (line.contains("｜") && line.matches('｜').count() >= 2)
+}
+
+fn push_document_structure_signal(output: &mut Vec<String>, value: impl AsRef<str>, limit: usize) {
+    if output.len() >= limit {
+        return;
+    }
+    let normalized_value = normalize_document_entity_value(value.as_ref());
+    let normalized = normalized_value
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let char_count = normalized.chars().count();
+    if !(2..=120).contains(&char_count)
+        || is_document_entity_noise(&normalized)
+        || output.iter().any(|existing| existing == &normalized)
+    {
+        return;
+    }
+    output.push(normalized);
+}
+
+fn push_document_paragraph_sample(output: &mut Vec<String>, value: impl AsRef<str>, limit: usize) {
+    if output.len() >= limit {
+        return;
+    }
+    let normalized = value
+        .as_ref()
+        .trim()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(180)
+        .collect::<String>();
+    let char_count = normalized.chars().count();
+    if !(12..=180).contains(&char_count)
+        || is_document_entity_noise(&normalized)
+        || output.iter().any(|existing| existing == &normalized)
+    {
+        return;
+    }
+    output.push(normalized);
 }
 
 fn extract_resume_document_profile(
@@ -52056,6 +52538,18 @@ mod tests {
             &selected_scope,
             "按年份排序出表"
         ));
+        assert!(assistant_run_dataset_entity_scan_requested(
+            &selected_scope,
+            "列出文档标题和章节结构"
+        ));
+        assert!(assistant_run_dataset_entity_scan_requested(
+            &selected_scope,
+            "按段落分段整理正文"
+        ));
+        assert!(assistant_run_dataset_entity_scan_requested(
+            &selected_scope,
+            "识别文档里的表格结构"
+        ));
         assert_eq!(
             assistant_run_recommended_supply_actions(&selected_scope, true, true),
             vec!["retrieve_evidence", "scan_dataset_entities"]
@@ -52303,6 +52797,16 @@ mod tests {
                     {"name": "2024", "year": 2024, "document_count": 2},
                     {"name": "2023", "year": 2023, "document_count": 1}
                 ],
+                "section_rows": [
+                    {"name": "接口与数据", "document_count": 2},
+                    {"name": "校验与交付", "document_count": 1}
+                ],
+                "paragraph_rows": [
+                    {"name": "系统需要在上传后快速完成轻解析，并在后台继续执行详细解析。", "document_count": 1}
+                ],
+                "table_rows": [
+                    {"name": "字段 | 类型 | 说明", "document_count": 1}
+                ],
                 "resume_profile_rows": [
                     {
                         "document_id": "doc-1",
@@ -52333,6 +52837,12 @@ mod tests {
         assert_eq!(item["project_rows"][0]["name"], json!("智能知识库平台"));
         assert_eq!(item["keyword_rows"][0]["name"], json!("风险识别系统"));
         assert_eq!(item["year_rows"][0]["name"], json!("2024"));
+        assert_eq!(item["section_rows"][0]["name"], json!("接口与数据"));
+        assert_eq!(
+            item["paragraph_rows"][0]["name"],
+            json!("系统需要在上传后快速完成轻解析，并在后台继续执行详细解析。")
+        );
+        assert_eq!(item["table_rows"][0]["name"], json!("字段 | 类型 | 说明"));
         assert_eq!(
             item["resume_profile_rows"][0]["candidate_name"],
             json!("张三")
@@ -52370,6 +52880,16 @@ mod tests {
                 "year_rows": [
                     {"name": "2024", "year": 2024, "document_count": 2, "document_ids": ["doc-1", "doc-2"]},
                     {"name": "2023", "year": 2023, "document_count": 1, "document_ids": ["doc-3"]}
+                ],
+                "section_rows": [
+                    {"name": "接口与数据", "document_count": 2, "document_ids": ["doc-1", "doc-2"]},
+                    {"name": "校验与交付", "document_count": 1, "document_ids": ["doc-3"]}
+                ],
+                "paragraph_rows": [
+                    {"name": "系统需要在上传后快速完成轻解析，并在后台继续执行详细解析。", "document_count": 1, "document_ids": ["doc-1"]}
+                ],
+                "table_rows": [
+                    {"name": "字段 | 类型 | 说明", "document_count": 1, "document_ids": ["doc-1"]}
                 ],
                 "resume_profile_rows": [
                     {
@@ -52421,6 +52941,8 @@ mod tests {
         assert!(input.contains("\"name\":\"Java\""));
         assert!(input.contains("\"name\":\"风险识别系统\""));
         assert!(input.contains("\"name\":\"2024\""));
+        assert!(input.contains("\"name\":\"接口与数据\""));
+        assert!(input.contains("\"name\":\"字段 | 类型 | 说明\""));
         assert!(input.contains("\"candidate_name\":\"张三\""));
         assert!(!input.contains("document_ids"));
         assert!(!input.contains("\"candidate_terms\""));
@@ -52469,6 +52991,26 @@ mod tests {
         assert!(year_answer.contains("识别到 2 个年份"));
         assert!(year_answer.contains("| 2024 | 2 |"));
         assert!(year_answer.contains("| 2023 | 1 |"));
+
+        let section_request = CreateAssistantRunRequest {
+            prompt: "按标题章节排序出表".to_string(),
+            ..request.clone()
+        };
+        let section_answer =
+            assistant_run_dataset_entity_scan_direct_answer(&section_request, &evidence)
+                .expect("section scan should produce a direct answer");
+        assert!(section_answer.contains("识别到 2 个标题/章节"));
+        assert!(section_answer.contains("| 接口与数据 | 2 |"));
+
+        let table_request = CreateAssistantRunRequest {
+            prompt: "列出文档里的表格结构".to_string(),
+            ..request.clone()
+        };
+        let table_answer =
+            assistant_run_dataset_entity_scan_direct_answer(&table_request, &evidence)
+                .expect("table scan should produce a direct answer");
+        assert!(table_answer.contains("识别到 1 个表格信号"));
+        assert!(table_answer.contains("| 字段 \\| 类型 \\| 说明 | 1 |"));
 
         let age_request = CreateAssistantRunRequest {
             prompt: "按年龄排序出表".to_string(),
@@ -52599,6 +53141,45 @@ mod tests {
         let year_rows = year_rows_for_scan(&years_by_year);
         assert_eq!(year_rows[0]["name"], json!("2024"));
         assert_eq!(year_rows[1]["name"], json!("2023"));
+
+        let chunk = DocumentChunk {
+            id: DocumentChunkId::new(),
+            tenant_id: document.tenant_id,
+            dataset_id: document.dataset_id,
+            document_id: document.id,
+            chunk_index: 0,
+            content: "# 采购风险概览\n\n系统需要在上传后快速完成轻解析，并在后台继续执行详细解析。\n\n字段 | 类型 | 说明\n--- | --- | ---\nsource | string | 来源".to_string(),
+            token_count: 80,
+            state: DocumentChunkState::Extracted,
+            metadata: BTreeMap::from([(
+                "parse_metadata".to_string(),
+                json!({
+                    "document_structure": {
+                        "blocks": [
+                            {"type": "paragraph_title", "text": "采购风险概览"},
+                            {"type": "paragraph", "text": "系统需要在上传后快速完成轻解析，并在后台继续执行详细解析。"},
+                            {"type": "table", "text": "字段 | 类型 | 说明"}
+                        ]
+                    }
+                }),
+            )]),
+            created_at: now,
+            updated_at: now,
+        };
+        let chunks = vec![chunk];
+
+        let section_titles = extract_document_section_titles_for_scan(&chunks, text, 8);
+        assert!(section_titles.contains(&"采购风险概览".to_string()));
+
+        let paragraph_samples = extract_document_paragraphs_for_scan(&chunks, 8);
+        assert!(paragraph_samples
+            .iter()
+            .any(|sample| sample.contains("轻解析")));
+
+        let table_signals = extract_document_table_signals_for_scan(&chunks, text, 8);
+        assert!(table_signals
+            .iter()
+            .any(|signal| signal == "字段 | 类型 | 说明"));
     }
 
     #[test]
