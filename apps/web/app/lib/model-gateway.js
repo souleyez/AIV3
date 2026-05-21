@@ -120,7 +120,7 @@ export function normalizeModelGatewayStatus(raw = {}) {
       queueTimeoutMs: numberOrNull(lane.queue_timeout_ms ?? lane.queueTimeoutMs),
       profileCount: numberOrNull(lane.profile_count ?? lane.profileCount) ?? 0,
     })),
-    providers: providers.map((provider) => redactModelGatewaySecrets({
+    providers: providers.map((provider) => ({
       profileId: stringOrEmpty(provider.profile_id || provider.profileId),
       displayName: stringOrEmpty(provider.display_name || provider.displayName || provider.profile_id),
       lane: stringOrEmpty(provider.lane || 'assistant_chat'),
@@ -138,11 +138,14 @@ export function normalizeModelGatewayStatus(raw = {}) {
       queueTimeoutMs: numberOrNull(provider.queue_timeout_ms ?? provider.queueTimeoutMs),
       rpmLimit: numberOrNull(provider.rpm_limit ?? provider.rpmLimit),
       tpmLimit: numberOrNull(provider.tpm_limit ?? provider.tpmLimit),
+      minuteRequestCount: numberOrNull(provider.minute_request_count ?? provider.minuteRequestCount) ?? 0,
+      minuteTokenCount: numberOrNull(provider.minute_token_count ?? provider.minuteTokenCount) ?? 0,
       requestCount: numberOrNull(provider.request_count ?? provider.requestCount) ?? 0,
       successCount: numberOrNull(provider.success_count ?? provider.successCount) ?? 0,
       failureCount: numberOrNull(provider.failure_count ?? provider.failureCount) ?? 0,
       timeoutCount: numberOrNull(provider.timeout_count ?? provider.timeoutCount) ?? 0,
       rateLimitCount: numberOrNull(provider.rate_limit_count ?? provider.rateLimitCount) ?? 0,
+      wouldThrottleCount: numberOrNull(provider.would_throttle_count ?? provider.wouldThrottleCount) ?? 0,
       inputTokens: numberOrNull(provider.input_tokens ?? provider.inputTokens) ?? 0,
       outputTokens: numberOrNull(provider.output_tokens ?? provider.outputTokens) ?? 0,
       runtimeSuccessCount: numberOrNull(provider.runtime_success_count ?? provider.runtimeSuccessCount) ?? 0,

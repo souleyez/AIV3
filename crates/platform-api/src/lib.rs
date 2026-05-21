@@ -410,12 +410,15 @@ enum GatewayLimitError {
     QueueFull,
     QueueTimeout,
     CircuitOpen,
+    RequestRateLimit,
+    TokenRateLimit,
 }
 
 #[allow(dead_code)]
 struct GatewayRuntimeLimiter {
     lanes: Mutex<HashMap<String, Arc<GatewayLimitBucket>>>,
     profiles: Mutex<HashMap<String, Arc<GatewayLimitBucket>>>,
+    profile_rate_budgets: Mutex<HashMap<String, GatewayProfileRateBudget>>,
     provider_stats: Mutex<HashMap<String, GatewayProviderRuntimeStats>>,
     default_lane_max_concurrency: usize,
     default_profile_max_concurrency: usize,
@@ -432,6 +435,18 @@ struct GatewayLimitBucketSnapshot {
     queued: usize,
     queue_limit: usize,
     queue_timeout_ms: u64,
+}
+
+#[derive(Clone, Debug, Default)]
+struct GatewayRateLimitBudgetSnapshot {
+    request_count: u64,
+    token_count: u64,
+}
+
+#[derive(Clone, Debug)]
+struct GatewayRateLimitReservation {
+    profile_id: String,
+    estimated_tokens: u64,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -471,6 +486,7 @@ impl GatewayRuntimeLimiter {
         Self {
             lanes: Mutex::new(HashMap::new()),
             profiles: Mutex::new(HashMap::new()),
+            profile_rate_budgets: Mutex::new(HashMap::new()),
             provider_stats: Mutex::new(HashMap::new()),
             default_lane_max_concurrency: 64,
             default_profile_max_concurrency: 16,
@@ -510,6 +526,17 @@ impl GatewayRuntimeLimiter {
             queue_limit,
             self.default_queue_timeout,
         );
+        self
+    }
+
+    #[cfg(test)]
+    fn with_profile_rate_limit(
+        self,
+        profile_id: &str,
+        requests_per_minute: Option<u32>,
+        tokens_per_minute: Option<u32>,
+    ) -> Self {
+        self.ensure_profile_rate_limit(profile_id, requests_per_minute, tokens_per_minute);
         self
     }
 
@@ -600,6 +627,99 @@ impl GatewayRuntimeLimiter {
                     .unwrap_or(self.default_queue_timeout),
             ))
         });
+    }
+
+    fn ensure_profile_rate_limit(
+        &self,
+        profile_id: &str,
+        requests_per_minute: Option<u32>,
+        tokens_per_minute: Option<u32>,
+    ) {
+        let mut budgets = self
+            .profile_rate_budgets
+            .lock()
+            .expect("gateway profile rate budget lock");
+        budgets
+            .entry(profile_id.to_string())
+            .or_default()
+            .configure(requests_per_minute, tokens_per_minute);
+    }
+
+    fn reserve_profile_rate_budget(
+        &self,
+        profile_id: &str,
+        estimated_tokens: u64,
+    ) -> Result<GatewayRateLimitReservation, GatewayLimitError> {
+        let mut budgets = self
+            .profile_rate_budgets
+            .lock()
+            .expect("gateway profile rate budget lock");
+        budgets.entry(profile_id.to_string()).or_default().reserve(
+            profile_id,
+            estimated_tokens,
+            Instant::now(),
+        )
+    }
+
+    fn record_profile_actual_token_usage(
+        &self,
+        reservation: &GatewayRateLimitReservation,
+        actual_tokens: u64,
+    ) {
+        let additional_tokens = actual_tokens.saturating_sub(reservation.estimated_tokens);
+        if additional_tokens == 0 {
+            return;
+        }
+        let mut budgets = self
+            .profile_rate_budgets
+            .lock()
+            .expect("gateway profile rate budget lock");
+        budgets
+            .entry(reservation.profile_id.clone())
+            .or_default()
+            .add_tokens(additional_tokens, Instant::now());
+    }
+
+    fn profile_rate_snapshot(&self, profile_id: &str) -> GatewayRateLimitBudgetSnapshot {
+        let mut budgets = self
+            .profile_rate_budgets
+            .lock()
+            .expect("gateway profile rate budget lock");
+        budgets
+            .entry(profile_id.to_string())
+            .or_default()
+            .snapshot(Instant::now())
+    }
+
+    fn would_throttle_lane_and_profile(
+        &self,
+        lane: &str,
+        profile_id: &str,
+        estimated_tokens: u64,
+    ) -> Option<GatewayLimitError> {
+        if self.provider_available(profile_id).is_none() {
+            return Some(GatewayLimitError::CircuitOpen);
+        }
+        let lane_snapshot = self.lane_snapshot(lane);
+        if lane_snapshot.active >= lane_snapshot.max_concurrency
+            && lane_snapshot.queued >= lane_snapshot.queue_limit
+        {
+            return Some(GatewayLimitError::QueueFull);
+        }
+        let profile_snapshot = self.profile_snapshot(profile_id);
+        if profile_snapshot.active >= profile_snapshot.max_concurrency
+            && profile_snapshot.queued >= profile_snapshot.queue_limit
+        {
+            return Some(GatewayLimitError::QueueFull);
+        }
+        let mut budgets = self
+            .profile_rate_budgets
+            .lock()
+            .expect("gateway profile rate budget lock");
+        budgets
+            .entry(profile_id.to_string())
+            .or_default()
+            .would_limit(estimated_tokens, Instant::now())
     }
 
     async fn acquire_lane(&self, lane: &str) -> Result<GatewayRuntimePermit, GatewayLimitError> {
@@ -820,6 +940,88 @@ impl GatewayProviderRuntimeStats {
             last_success_at: self.last_success_at.clone(),
             last_failure_at: self.last_failure_at.clone(),
             last_failure_reason: self.last_failure_reason.clone(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+struct GatewayProfileRateBudget {
+    requests_per_minute: Option<u32>,
+    tokens_per_minute: Option<u32>,
+    window_started_at: Option<Instant>,
+    request_count: u32,
+    token_count: u64,
+}
+
+impl GatewayProfileRateBudget {
+    fn configure(&mut self, requests_per_minute: Option<u32>, tokens_per_minute: Option<u32>) {
+        self.requests_per_minute = requests_per_minute.filter(|value| *value > 0);
+        self.tokens_per_minute = tokens_per_minute.filter(|value| *value > 0);
+    }
+
+    fn reserve(
+        &mut self,
+        profile_id: &str,
+        estimated_tokens: u64,
+        now: Instant,
+    ) -> Result<GatewayRateLimitReservation, GatewayLimitError> {
+        self.reset_elapsed_window(now);
+        if let Some(limit) = self.requests_per_minute {
+            if self.request_count.saturating_add(1) > limit {
+                return Err(GatewayLimitError::RequestRateLimit);
+            }
+        }
+        let estimated_tokens = estimated_tokens.max(1);
+        if let Some(limit) = self.tokens_per_minute {
+            if self.token_count.saturating_add(estimated_tokens) > limit as u64 {
+                return Err(GatewayLimitError::TokenRateLimit);
+            }
+        }
+        self.request_count = self.request_count.saturating_add(1);
+        self.token_count = self.token_count.saturating_add(estimated_tokens);
+        Ok(GatewayRateLimitReservation {
+            profile_id: profile_id.to_string(),
+            estimated_tokens,
+        })
+    }
+
+    fn add_tokens(&mut self, additional_tokens: u64, now: Instant) {
+        self.reset_elapsed_window(now);
+        self.token_count = self.token_count.saturating_add(additional_tokens);
+    }
+
+    fn would_limit(&mut self, estimated_tokens: u64, now: Instant) -> Option<GatewayLimitError> {
+        self.reset_elapsed_window(now);
+        if let Some(limit) = self.requests_per_minute {
+            if self.request_count.saturating_add(1) > limit {
+                return Some(GatewayLimitError::RequestRateLimit);
+            }
+        }
+        if let Some(limit) = self.tokens_per_minute {
+            if self.token_count.saturating_add(estimated_tokens.max(1)) > limit as u64 {
+                return Some(GatewayLimitError::TokenRateLimit);
+            }
+        }
+        None
+    }
+
+    fn snapshot(&mut self, now: Instant) -> GatewayRateLimitBudgetSnapshot {
+        self.reset_elapsed_window(now);
+        GatewayRateLimitBudgetSnapshot {
+            request_count: self.request_count as u64,
+            token_count: self.token_count,
+        }
+    }
+
+    fn reset_elapsed_window(&mut self, now: Instant) {
+        let should_reset = self
+            .window_started_at
+            .map(|started_at| now.duration_since(started_at) >= StdDuration::from_secs(60))
+            .unwrap_or(true);
+        if should_reset {
+            self.window_started_at = Some(now);
+            self.request_count = 0;
+            self.token_count = 0;
         }
     }
 }
@@ -5321,7 +5523,15 @@ async fn model_gateway_status_view(
                 None,
                 None,
             );
+            state.gateway_limiter.ensure_profile_rate_limit(
+                &source.profile_id,
+                model_gateway_i32_to_u32(source.rpm_limit),
+                model_gateway_i32_to_u32(source.tpm_limit),
+            );
             let limit_snapshot = state.gateway_limiter.profile_snapshot(&source.profile_id);
+            let rate_snapshot = state
+                .gateway_limiter
+                .profile_rate_snapshot(&source.profile_id);
             let stats = state
                 .gateway_limiter
                 .provider_stats_snapshot(&source.profile_id);
@@ -5355,6 +5565,8 @@ async fn model_gateway_status_view(
                 queue_timeout_ms: limit_snapshot.queue_timeout_ms,
                 rpm_limit: source.rpm_limit,
                 tpm_limit: source.tpm_limit,
+                minute_request_count: rate_snapshot.request_count,
+                minute_token_count: rate_snapshot.token_count,
                 request_count: usage
                     .map(|summary| summary.request_count as u64)
                     .unwrap_or(0),
@@ -5369,6 +5581,9 @@ async fn model_gateway_status_view(
                     .unwrap_or(0),
                 rate_limit_count: usage
                     .map(|summary| summary.rate_limit_count as u64)
+                    .unwrap_or(0),
+                would_throttle_count: usage
+                    .map(|summary| summary.would_throttle_count as u64)
                     .unwrap_or(0),
                 input_tokens: usage
                     .map(|summary| summary.input_tokens as u64)
@@ -16363,6 +16578,14 @@ fn external_channel_model_pool_is_shadow_eval(
         && external_channel_model_pool_scope_is_active(connection_id, message)
 }
 
+fn external_channel_model_pool_is_observe_only(
+    connection_id: &str,
+    message: &ExternalBotMessageView,
+) -> bool {
+    model_gateway_lane_routing_mode(MODEL_LANE_ASSISTANT_CHAT) == "observe_only"
+        && external_channel_model_pool_scope_is_active(connection_id, message)
+}
+
 fn model_gateway_lane_routing_mode(lane: &str) -> String {
     let prefix = model_gateway_lane_env_prefix(lane);
     std::env::var(format!("{prefix}_MODE"))
@@ -16444,9 +16667,13 @@ fn env_csv_contains(key: &str, expected: &str) -> bool {
 async fn external_channel_acquire_gateway_permit(
     state: &AppState,
     attempt: &ExternalChannelChatRuntimeAttempt,
-) -> std::result::Result<Option<GatewayRuntimePermit>, GatewayLimitError> {
+    provider_input: &str,
+) -> std::result::Result<GatewayModelPermit, GatewayLimitError> {
     let Some(profile) = attempt.profile.as_ref() else {
-        return Ok(None);
+        return Ok(GatewayModelPermit {
+            _runtime: None,
+            rate_reservation: None,
+        });
     };
     let lane_limits = attempt.lane_limits.clone().unwrap_or_default();
     state.gateway_limiter.ensure_lane_limit(
@@ -16461,6 +16688,11 @@ async fn external_channel_acquire_gateway_permit(
         lane_limits.queue_limit,
         lane_limits.queue_timeout_ms,
     );
+    state.gateway_limiter.ensure_profile_rate_limit(
+        &profile.profile_id,
+        profile.rate_limit.requests_per_minute,
+        profile.rate_limit.tokens_per_minute,
+    );
     if state
         .gateway_limiter
         .provider_available(&profile.profile_id)
@@ -16468,11 +16700,25 @@ async fn external_channel_acquire_gateway_permit(
     {
         return Err(GatewayLimitError::CircuitOpen);
     }
-    state
+    let runtime_permit = state
         .gateway_limiter
         .acquire_lane_and_profile(MODEL_LANE_ASSISTANT_CHAT, &profile.profile_id)
-        .await
-        .map(Some)
+        .await?;
+    let estimated_tokens = model_gateway_estimated_input_tokens(provider_input);
+    let rate_reservation = match state
+        .gateway_limiter
+        .reserve_profile_rate_budget(&profile.profile_id, estimated_tokens)
+    {
+        Ok(reservation) => reservation,
+        Err(error) => {
+            drop(runtime_permit);
+            return Err(error);
+        }
+    };
+    Ok(GatewayModelPermit {
+        _runtime: Some(runtime_permit),
+        rate_reservation: Some(rate_reservation),
+    })
 }
 
 fn gateway_limit_error_reason(error: GatewayLimitError) -> &'static str {
@@ -16480,7 +16726,13 @@ fn gateway_limit_error_reason(error: GatewayLimitError) -> &'static str {
         GatewayLimitError::QueueFull => "model_gateway_queue_full",
         GatewayLimitError::QueueTimeout => "model_gateway_queue_timeout",
         GatewayLimitError::CircuitOpen => "model_gateway_circuit_open",
+        GatewayLimitError::RequestRateLimit => "model_gateway_request_rate_limit",
+        GatewayLimitError::TokenRateLimit => "model_gateway_token_rate_limit",
     }
+}
+
+fn model_gateway_estimated_input_tokens(input: &str) -> u64 {
+    ((input.chars().count() as u64) / 4).max(1)
 }
 
 fn external_channel_fallback_runtime_selection_from_env() -> Option<LlmRuntimeSelection> {
@@ -16642,6 +16894,124 @@ fn normalize_external_channel_output_for_rejection(output_text: &str) -> String 
         .collect()
 }
 
+fn spawn_external_channel_observe_only_would_throttle(
+    state: &AppState,
+    connection_id: &str,
+    run_id: AssistantRunId,
+    message: &ExternalBotMessageView,
+    provider_input: &str,
+    now: DateTime<Utc>,
+) {
+    if !external_channel_model_pool_is_observe_only(connection_id, message) {
+        return;
+    }
+    let state = state.clone();
+    let connection_id = connection_id.to_string();
+    let message = message.clone();
+    let provider_input = provider_input.to_string();
+    tokio::spawn(async move {
+        if let Err(error) = record_external_channel_observe_only_would_throttle(
+            &state,
+            &connection_id,
+            run_id,
+            &message,
+            &provider_input,
+            now,
+        )
+        .await
+        {
+            tracing::warn!(
+                code = %error.payload.code,
+                "model gateway observe-only throttle evaluation failed"
+            );
+        }
+    });
+}
+
+async fn record_external_channel_observe_only_would_throttle(
+    state: &AppState,
+    connection_id: &str,
+    run_id: AssistantRunId,
+    message: &ExternalBotMessageView,
+    provider_input: &str,
+    now: DateTime<Utc>,
+) -> std::result::Result<(), ApiError> {
+    let Some(attempts) = load_external_channel_chat_model_pool_attempts(state).await? else {
+        return Ok(());
+    };
+    let estimated_tokens = model_gateway_estimated_input_tokens(provider_input);
+    for attempt in attempts
+        .into_iter()
+        .filter(|attempt| attempt.profile.is_some())
+    {
+        let Some(profile) = attempt.profile.as_ref() else {
+            continue;
+        };
+        let lane_limits = attempt.lane_limits.clone().unwrap_or_default();
+        state.gateway_limiter.ensure_lane_limit(
+            MODEL_LANE_ASSISTANT_CHAT,
+            lane_limits.max_concurrency,
+            lane_limits.queue_limit,
+            lane_limits.queue_timeout_ms,
+        );
+        state.gateway_limiter.ensure_profile_limit(
+            &profile.profile_id,
+            profile.rate_limit.concurrent_requests,
+            lane_limits.queue_limit,
+            lane_limits.queue_timeout_ms,
+        );
+        state.gateway_limiter.ensure_profile_rate_limit(
+            &profile.profile_id,
+            profile.rate_limit.requests_per_minute,
+            profile.rate_limit.tokens_per_minute,
+        );
+        let Some(error) = state.gateway_limiter.would_throttle_lane_and_profile(
+            MODEL_LANE_ASSISTANT_CHAT,
+            &profile.profile_id,
+            estimated_tokens,
+        ) else {
+            continue;
+        };
+        let reason = gateway_limit_error_reason(error);
+        record_model_gateway_profile_event(
+            state,
+            profile,
+            "would_throttle",
+            None,
+            None,
+            Some(reason),
+            now,
+        )
+        .await?;
+        state
+            .storage
+            .assistant_runs()
+            .append_event(
+                state.tenant_id,
+                run_id,
+                &NewAssistantRunEvent {
+                    event_name: "assistant_run.model_gateway_observe_only_would_throttle"
+                        .to_string(),
+                    payload: json!({
+                        "channel_connection_id": connection_id,
+                        "platform": external_channel_platform_wire_value(&message.platform),
+                        "message_external_id": message.message_external_id.clone(),
+                        "profile_id": profile.profile_id.as_str(),
+                        "attempt": attempt.label.as_str(),
+                        "provider": profile.provider_id.as_str(),
+                        "model": profile.model_id.as_str(),
+                        "reason": reason,
+                        "estimated_input_tokens": estimated_tokens,
+                    }),
+                    created_at: now,
+                },
+            )
+            .await
+            .map_err(ApiError::from_storage)?;
+    }
+    Ok(())
+}
+
 fn spawn_external_channel_shadow_quality_eval(
     state: &AppState,
     connection_id: &str,
@@ -16740,26 +17110,27 @@ async fn record_external_channel_shadow_quality_attempt(
         return Ok(());
     }
 
-    let _permit = match external_channel_acquire_gateway_permit(state, &attempt).await {
-        Ok(permit) => permit,
-        Err(error) => {
-            record_model_gateway_shadow_quality_event(
-                state,
-                run_id,
-                connection_id,
-                message,
-                &attempt,
-                &profile,
-                "shadow_quality_fail",
-                None,
-                None,
-                Some(gateway_limit_error_reason(error)),
-                now,
-            )
-            .await?;
-            return Ok(());
-        }
-    };
+    let permit =
+        match external_channel_acquire_gateway_permit(state, &attempt, &provider_input).await {
+            Ok(permit) => permit,
+            Err(error) => {
+                record_model_gateway_shadow_quality_event(
+                    state,
+                    run_id,
+                    connection_id,
+                    message,
+                    &attempt,
+                    &profile,
+                    "shadow_quality_fail",
+                    None,
+                    None,
+                    Some(gateway_limit_error_reason(error)),
+                    now,
+                )
+                .await?;
+                return Ok(());
+            }
+        };
 
     let started_at = Instant::now();
     let result = tokio::time::timeout(
@@ -16774,6 +17145,14 @@ async fn record_external_channel_shadow_quality_attempt(
     .await;
     match result {
         Ok(Ok(response)) => {
+            if let (Some(reservation), Some(usage)) = (
+                permit.rate_reservation.as_ref(),
+                response.runtime.usage.as_ref(),
+            ) {
+                state
+                    .gateway_limiter
+                    .record_profile_actual_token_usage(reservation, usage.total_tokens as u64);
+            }
             let latency_ms = response
                 .runtime
                 .latency_ms
@@ -16838,6 +17217,39 @@ async fn record_external_channel_shadow_quality_attempt(
         }
     }
     Ok(())
+}
+
+async fn record_model_gateway_profile_event(
+    state: &AppState,
+    profile: &ModelProviderProfile,
+    event_type: &str,
+    latency_ms: Option<u64>,
+    usage: Option<&llm_gateway::LlmTokenUsage>,
+    error_kind: Option<&str>,
+    now: DateTime<Utc>,
+) -> std::result::Result<(), ApiError> {
+    state
+        .storage
+        .model_gateway_profiles()
+        .record_event(
+            state.tenant_id,
+            NewModelGatewayProfileEvent {
+                profile_id: profile.profile_id.clone(),
+                lane: MODEL_LANE_ASSISTANT_CHAT.to_string(),
+                event_type: event_type.to_string(),
+                latency_ms: latency_ms.and_then(model_gateway_u64_to_i32),
+                input_tokens: usage
+                    .map(|usage| usage.input_tokens as u64)
+                    .and_then(model_gateway_u64_to_i32),
+                output_tokens: usage
+                    .map(|usage| usage.output_tokens as u64)
+                    .and_then(model_gateway_u64_to_i32),
+                error_kind: error_kind.map(model_gateway_sanitized_error_kind),
+                created_at: now,
+            },
+        )
+        .await
+        .map_err(ApiError::from_storage)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -16932,7 +17344,6 @@ fn model_gateway_sanitized_error_kind(reason: &str) -> String {
         .take(120)
         .collect()
 }
-
 
 #[allow(clippy::too_many_arguments)]
 async fn external_channel_chat_model_or_acceptance_reply(
@@ -17041,18 +17452,42 @@ async fn external_channel_chat_model_or_acceptance_reply(
             continue;
         }
 
-        let _gateway_permit = match external_channel_acquire_gateway_permit(state, &attempt).await {
-            Ok(permit) => permit,
-            Err(error) => {
-                let reason = gateway_limit_error_reason(error);
-                rejected_attempts.push(json!({
-                    "attempt": attempt.label.as_str(),
-                    "runtime_mode": attempt.runtime.mode.as_str(),
-                    "provider": attempt.runtime.provider.as_str(),
-                    "model": attempt.runtime.model.as_str(),
-                    "reason": reason,
-                }));
-                state
+        let gateway_permit =
+            match external_channel_acquire_gateway_permit(state, &attempt, &provider_input).await {
+                Ok(permit) => permit,
+                Err(error) => {
+                    let reason = gateway_limit_error_reason(error);
+                    if let Some(profile) = attempt.profile.as_ref() {
+                        state
+                            .gateway_limiter
+                            .record_provider_failure(&profile.profile_id, reason);
+                        let event_type = if matches!(
+                            error,
+                            GatewayLimitError::RequestRateLimit | GatewayLimitError::TokenRateLimit
+                        ) {
+                            "rate_limit"
+                        } else {
+                            "failure"
+                        };
+                        record_model_gateway_profile_event(
+                            state,
+                            profile,
+                            event_type,
+                            None,
+                            None,
+                            Some(reason),
+                            now,
+                        )
+                        .await?;
+                    }
+                    rejected_attempts.push(json!({
+                        "attempt": attempt.label.as_str(),
+                        "runtime_mode": attempt.runtime.mode.as_str(),
+                        "provider": attempt.runtime.provider.as_str(),
+                        "model": attempt.runtime.model.as_str(),
+                        "reason": reason,
+                    }));
+                    state
                     .storage
                     .assistant_runs()
                     .append_event(
@@ -17078,9 +17513,9 @@ async fn external_channel_chat_model_or_acceptance_reply(
                     )
                     .await
                     .map_err(ApiError::from_storage)?;
-                continue;
-            }
-        };
+                    continue;
+                }
+            };
 
         let elapsed = direct_reply_started_at.elapsed();
         let remaining_budget = direct_reply_total_budget.saturating_sub(elapsed);
@@ -17114,15 +17549,30 @@ async fn external_channel_chat_model_or_acceptance_reply(
         let response = match response_result {
             Ok(Ok(response)) => response,
             Ok(Err(error)) => {
+                let reason = format!(
+                    "provider_error:{}:{}",
+                    error.status.as_u16(),
+                    error.payload.code.as_str()
+                );
                 if let Some(profile) = attempt.profile.as_ref() {
-                    let reason = format!(
-                        "provider_error:{}:{}",
-                        error.status.as_u16(),
-                        error.payload.code.as_str()
-                    );
                     state
                         .gateway_limiter
                         .record_provider_failure(&profile.profile_id, &reason);
+                    let event_type = if gateway_provider_failure_is_rate_limit(&reason) {
+                        "rate_limit"
+                    } else {
+                        "failure"
+                    };
+                    record_model_gateway_profile_event(
+                        state,
+                        profile,
+                        event_type,
+                        Some(attempt_started_at.elapsed().as_millis() as u64),
+                        None,
+                        Some(&reason),
+                        now,
+                    )
+                    .await?;
                 }
                 rejected_attempts.push(json!({
                     "attempt": attempt.label.as_str(),
@@ -17172,6 +17622,16 @@ async fn external_channel_chat_model_or_acceptance_reply(
                         &profile.profile_id,
                         "direct_reply_attempt_timeout",
                     );
+                    record_model_gateway_profile_event(
+                        state,
+                        profile,
+                        "timeout",
+                        Some(attempt_timeout.as_millis() as u64),
+                        None,
+                        Some("direct_reply_attempt_timeout"),
+                        now,
+                    )
+                    .await?;
                 }
                 rejected_attempts.push(json!({
                     "attempt": attempt.label.as_str(),
@@ -17229,12 +17689,25 @@ async fn external_channel_chat_model_or_acceptance_reply(
             );
         }
         if let Some(reason) = external_channel_model_reply_rejection_reason(&response) {
-            if reason.starts_with("provider_failure:") {
-                if let Some(profile) = attempt.profile.as_ref() {
+            if let Some(profile) = attempt.profile.as_ref() {
+                if reason.starts_with("provider_failure:") {
                     state
                         .gateway_limiter
                         .record_provider_failure(&profile.profile_id, &reason);
                 }
+                record_model_gateway_profile_event(
+                    state,
+                    profile,
+                    "failure",
+                    response
+                        .runtime
+                        .latency_ms
+                        .or(Some(attempt_started_at.elapsed().as_millis() as u64)),
+                    response.runtime.usage.as_ref(),
+                    Some(&reason),
+                    now,
+                )
+                .await?;
             }
             rejected_attempts.push(json!({
                 "attempt": attempt.label.as_str(),
@@ -17271,6 +17744,14 @@ async fn external_channel_chat_model_or_acceptance_reply(
             continue;
         }
         if let Some(profile) = attempt.profile.as_ref() {
+            if let (Some(reservation), Some(usage)) = (
+                gateway_permit.rate_reservation.as_ref(),
+                response.runtime.usage.as_ref(),
+            ) {
+                state
+                    .gateway_limiter
+                    .record_profile_actual_token_usage(reservation, usage.total_tokens as u64);
+            }
             state.gateway_limiter.record_provider_success(
                 &profile.profile_id,
                 response
@@ -17278,6 +17759,19 @@ async fn external_channel_chat_model_or_acceptance_reply(
                     .latency_ms
                     .or(Some(attempt_started_at.elapsed().as_millis() as u64)),
             );
+            record_model_gateway_profile_event(
+                state,
+                profile,
+                "success",
+                response
+                    .runtime
+                    .latency_ms
+                    .or(Some(attempt_started_at.elapsed().as_millis() as u64)),
+                response.runtime.usage.as_ref(),
+                None,
+                now,
+            )
+            .await?;
         }
 
         let assistant_artifact = json!({
@@ -17351,6 +17845,14 @@ async fn external_channel_chat_model_or_acceptance_reply(
 
         let reply = external_channel_text_reply(message, output_text, "answered");
         spawn_external_channel_shadow_quality_eval(
+            state,
+            connection_id,
+            run_id,
+            message,
+            &provider_input,
+            now,
+        );
+        spawn_external_channel_observe_only_would_throttle(
             state,
             connection_id,
             run_id,
@@ -50100,6 +50602,135 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn model_gateway_active_rpm_limit_falls_back_to_next_profile() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        clear_assistant_openclaw_env();
+        std::env::set_var("LLM_GATEWAY_LANE_ASSISTANT_CHAT_MODE", "active");
+        std::env::set_var(
+            "LLM_GATEWAY_EXTERNAL_CHANNEL_ACTIVE_CONNECTIONS",
+            "generic-chat-main",
+        );
+        std::env::set_var(
+            "LLM_GATEWAY_LANE_ASSISTANT_CHAT_PROFILES",
+            "POOL_PRIMARY,POOL_SECONDARY",
+        );
+        std::env::set_var("LLM_GATEWAY_PROFILE_POOL_PRIMARY_PROVIDER_ID", "scripted");
+        std::env::set_var(
+            "LLM_GATEWAY_PROFILE_POOL_PRIMARY_MODEL_ID",
+            "pool-primary-v1",
+        );
+        std::env::set_var("LLM_GATEWAY_PROFILE_POOL_PRIMARY_PRIORITY", "100");
+        std::env::set_var("LLM_GATEWAY_PROFILE_POOL_PRIMARY_RATE_LIMIT_RPM", "1");
+        std::env::set_var(
+            "LLM_GATEWAY_PROFILE_POOL_PRIMARY_RUNTIME_OUTPUT_TEXT",
+            "这是模型池主 profile 的直答。",
+        );
+        std::env::set_var("LLM_GATEWAY_PROFILE_POOL_SECONDARY_PROVIDER_ID", "scripted");
+        std::env::set_var(
+            "LLM_GATEWAY_PROFILE_POOL_SECONDARY_MODEL_ID",
+            "pool-secondary-v1",
+        );
+        std::env::set_var("LLM_GATEWAY_PROFILE_POOL_SECONDARY_PRIORITY", "80");
+        std::env::set_var(
+            "LLM_GATEWAY_PROFILE_POOL_SECONDARY_RUNTIME_OUTPUT_TEXT",
+            "这是 RPM 限流后的第二 profile 直答。",
+        );
+
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping model pool rpm fallback endpoint test: {reason}");
+                clear_assistant_openclaw_env();
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+        let tenant = storage
+            .ensure_tenant(
+                &format!("generic-chat-rpm-fallback-test-{}", Uuid::new_v4()),
+                "Generic Chat RPM Fallback Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage.clone(),
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        insert_generic_external_channel_connection(&state, "generic-chat-main").await;
+        let app = router(
+            storage.clone(),
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+
+        let mut first_message = sample_external_bot_message();
+        first_message.text = Some("第一次走主 profile".to_string());
+        first_message.message_external_id = "msg-rpm-fallback-001".to_string();
+        first_message.idempotency_key = "generic:tenant-ext-001:msg-rpm-fallback-001".to_string();
+        let first_response = post_json_request(
+            app.clone(),
+            "/v1/external/channels/generic-chat-main/events",
+            &first_message,
+            None,
+        )
+        .await;
+        assert_eq!(first_response.status(), StatusCode::ACCEPTED);
+        let first_body: ExternalChannelEventResponse = read_json_response(first_response).await;
+        assert_eq!(
+            first_body.reply.text.as_deref(),
+            Some("这是模型池主 profile 的直答。")
+        );
+
+        let mut second_message = sample_external_bot_message();
+        second_message.text = Some("第二次应跳过被限流的主 profile".to_string());
+        second_message.message_external_id = "msg-rpm-fallback-002".to_string();
+        second_message.idempotency_key = "generic:tenant-ext-001:msg-rpm-fallback-002".to_string();
+        let second_response = post_json_request(
+            app.clone(),
+            "/v1/external/channels/generic-chat-main/events",
+            &second_message,
+            None,
+        )
+        .await;
+        assert_eq!(second_response.status(), StatusCode::ACCEPTED);
+        let second_body: ExternalChannelEventResponse = read_json_response(second_response).await;
+        assert_eq!(
+            second_body.reply.text.as_deref(),
+            Some("这是 RPM 限流后的第二 profile 直答。")
+        );
+
+        let run_id = second_body.assistant_run_id.expect("assistant run id");
+        let events = storage
+            .assistant_runs()
+            .list_events(tenant.id, run_id)
+            .await
+            .expect("events should load");
+        assert!(events.iter().any(|event| {
+            event.event_name == "assistant_run.external_channel_model_reply_failed"
+                && event.payload["attempt"] == json!("profile:pool-primary")
+                && event.payload["reason"] == json!("model_gateway_request_rate_limit")
+        }));
+        assert!(events.iter().any(|event| {
+            event.event_name == "assistant_run.external_channel_model_reply_completed"
+                && event.payload["attempt"] == json!("profile:pool-secondary")
+        }));
+        let summaries = storage
+            .model_gateway_profiles()
+            .summarize_recent_usage(tenant.id, Utc::now() - Duration::minutes(5))
+            .await
+            .expect("usage summary should load");
+        let primary_summary = summaries
+            .iter()
+            .find(|summary| summary.profile_id == "pool-primary")
+            .expect("primary profile summary should exist");
+        assert_eq!(primary_summary.rate_limit_count, 1);
+        clear_assistant_openclaw_env();
+    }
+
+    #[tokio::test]
     async fn model_gateway_shadow_quality_records_events_without_changing_reply() {
         let _guard = shared_local_postgres_test_lock().lock().await;
         clear_assistant_openclaw_env();
@@ -66038,6 +66669,47 @@ mod tests {
         assert_eq!(stats.consecutive_failures, 0);
         assert_eq!(stats.success_count, 1);
         assert_eq!(stats.p50_latency_ms, Some(42));
+    }
+
+    #[test]
+    fn gateway_limiter_enforces_profile_rpm_and_tpm_windows() {
+        let limiter = GatewayRuntimeLimiter::for_test().with_profile_rate_limit(
+            "limited-profile",
+            Some(1),
+            Some(10),
+        );
+
+        let first = limiter
+            .reserve_profile_rate_budget("limited-profile", 4)
+            .expect("first request should fit");
+        limiter.record_profile_actual_token_usage(&first, 8);
+        let snapshot = limiter.profile_rate_snapshot("limited-profile");
+        assert_eq!(snapshot.request_count, 1);
+        assert_eq!(snapshot.token_count, 8);
+
+        assert!(matches!(
+            limiter.would_throttle_lane_and_profile(
+                MODEL_LANE_ASSISTANT_CHAT,
+                "limited-profile",
+                1
+            ),
+            Some(GatewayLimitError::RequestRateLimit)
+        ));
+
+        assert!(matches!(
+            limiter.reserve_profile_rate_budget("limited-profile", 1),
+            Err(GatewayLimitError::RequestRateLimit)
+        ));
+
+        let token_limiter = GatewayRuntimeLimiter::for_test().with_profile_rate_limit(
+            "token-limited-profile",
+            None,
+            Some(5),
+        );
+        assert!(matches!(
+            token_limiter.reserve_profile_rate_budget("token-limited-profile", 6),
+            Err(GatewayLimitError::TokenRateLimit)
+        ));
     }
 
     #[test]

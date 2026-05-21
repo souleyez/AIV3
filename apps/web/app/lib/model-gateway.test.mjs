@@ -95,7 +95,10 @@ test('normalizeModelGatewayStatus hides secrets and keeps lane counts readable',
       model_id: 'default',
       active: 2,
       queued: 1,
+      minute_request_count: 7,
+      minute_token_count: 900,
       runtime_failure_count: 4,
+      would_throttle_count: 2,
       shadow_eval_count: 5,
       shadow_eval_pass_count: 4,
       quality_score: 80,
@@ -116,7 +119,10 @@ test('normalizeModelGatewayStatus hides secrets and keeps lane counts readable',
   assert.equal(status.providers[0].profileId, 'OPENCLAW_MAIN');
   assert.equal(status.providers[0].providerId, 'openclaw');
   assert.equal(status.providers[0].queuedCount, 1);
+  assert.equal(status.providers[0].minuteRequestCount, 7);
+  assert.equal(status.providers[0].minuteTokenCount, 900);
   assert.equal(status.providers[0].runtimeFailureCount, 4);
+  assert.equal(status.providers[0].wouldThrottleCount, 2);
   assert.equal(status.providers[0].shadowEvalCount, 5);
   assert.equal(status.providers[0].qualityScore, 80);
   assert.equal(status.providers[0].formatPassRate, 80);

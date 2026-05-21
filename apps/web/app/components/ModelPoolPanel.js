@@ -143,11 +143,14 @@ function ProfileCard({ profile, status, onEdit, onDisable, onTest, testing }) {
         <MetricPill label="Lane" value={profile.lane} />
         <MetricPill label="运行" value={`${providerStatus.activeCount || 0}/${profile.maxConcurrency || providerStatus.maxConcurrency || '-'}`} />
         <MetricPill label="排队" value={providerStatus.queuedCount || 0} />
+        <MetricPill label="分钟请求" value={`${providerStatus.minuteRequestCount || 0}/${profile.rpmLimit || providerStatus.rpmLimit || '-'}`} />
+        <MetricPill label="分钟Token" value={`${providerStatus.minuteTokenCount || 0}/${profile.tpmLimit || providerStatus.tpmLimit || '-'}`} />
         <MetricPill label="P95" value={formatLatency(providerStatus.p95LatencyMs)} />
         <MetricPill label="质量" value={formatPercent(providerStatus.qualityScore)} />
         <MetricPill label="格式" value={formatPercent(providerStatus.formatPassRate)} />
         <MetricPill label="修复率" value={formatPercent(providerStatus.repairRate)} />
         <MetricPill label="Shadow" value={providerStatus.shadowEvalCount || 0} />
+        <MetricPill label="观测限流" value={providerStatus.wouldThrottleCount || 0} />
         <MetricPill label="失败" value={providerStatus.runtimeFailureCount || providerStatus.failureCount || 0} />
         <MetricPill label="超时" value={profile.timeoutMs ? `${profile.timeoutMs}ms` : ''} />
         <MetricPill label="优先级" value={profile.priority} />

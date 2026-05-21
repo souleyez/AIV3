@@ -128,11 +128,14 @@ pub struct ModelGatewayProviderStatusView {
     pub rpm_limit: Option<i32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tpm_limit: Option<i32>,
+    pub minute_request_count: u64,
+    pub minute_token_count: u64,
     pub request_count: u64,
     pub success_count: u64,
     pub failure_count: u64,
     pub timeout_count: u64,
     pub rate_limit_count: u64,
+    pub would_throttle_count: u64,
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub runtime_success_count: u64,
@@ -4760,11 +4763,14 @@ mod tests {
                 queue_timeout_ms: 3_000,
                 rpm_limit: Some(120),
                 tpm_limit: Some(120_000),
+                minute_request_count: 9,
+                minute_token_count: 1_200,
                 request_count: 10,
                 success_count: 8,
                 failure_count: 2,
                 timeout_count: 1,
                 rate_limit_count: 1,
+                would_throttle_count: 2,
                 input_tokens: 200,
                 output_tokens: 100,
                 runtime_success_count: 3,
@@ -4796,6 +4802,7 @@ mod tests {
         assert!(serialized.contains("assistant_chat"));
         assert!(serialized.contains("runtime_success_count"));
         assert!(serialized.contains("canary_percent"));
+        assert!(serialized.contains("would_throttle_count"));
         assert!(serialized.contains("shadow_eval_pass_count"));
         assert!(!serialized.contains("base_url"));
         assert!(!serialized.contains("auth_env_key"));
