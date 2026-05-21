@@ -19282,6 +19282,11 @@ fn assistant_run_resume_profile_direct_answer(
             } else {
                 "latest_year"
             };
+            let title = if sort_by_earliest {
+                "按最早年份排序的候选人简历表"
+            } else {
+                "按最近年份排序的候选人简历表"
+            };
             let ascending = sort_by_earliest || prompt_requests_ascending_sort(prompt);
             rows.sort_by(|left, right| {
                 compare_resume_profile_i64_field(left, right, sort_key, ascending).then_with(|| {
@@ -19290,7 +19295,7 @@ fn assistant_run_resume_profile_direct_answer(
             });
             Some(assistant_run_resume_profile_table(
                 &rows,
-                "按最近年份排序的候选人简历表",
+                title,
                 &[
                     "候选人",
                     "最早年份",
@@ -55177,6 +55182,7 @@ mod tests {
         let time_earliest_answer =
             assistant_run_dataset_entity_scan_direct_answer(&time_earliest_request, &evidence)
                 .expect("resume earliest-year ranking should produce a candidate table");
+        assert!(time_earliest_answer.contains("按最早年份排序的候选人简历表"));
         let zhang_time_index = time_earliest_answer.find("| 张三 | 2012 | 2023 |").unwrap();
         let li_time_index = time_earliest_answer.find("| 李四 | 2019 | 2024 |").unwrap();
         assert!(zhang_time_index < li_time_index);
