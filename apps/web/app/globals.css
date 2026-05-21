@@ -4712,7 +4712,7 @@ body {
 
 .model-pool-runtime-strip {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(108px, 1fr));
   gap: 8px;
   margin-bottom: 10px;
 }

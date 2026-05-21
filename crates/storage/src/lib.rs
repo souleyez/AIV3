@@ -305,6 +305,8 @@ pub struct ModelGatewayProfileUsageSummary {
     pub shadow_eval_format_pass_count: i64,
     pub shadow_eval_repair_count: i64,
     pub last_shadow_eval_at: Option<DateTime<Utc>>,
+    pub last_profile_test_status: Option<String>,
+    pub last_profile_test_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Clone, Debug)]
@@ -2058,7 +2060,7 @@ impl PgModelGatewayProfileRepository {
             r#"
             select profile_id,
                    lane,
-                   count(*) filter (where event_type <> 'would_throttle')::bigint as request_count,
+                   count(*) filter (where event_type in ('success', 'failure', 'timeout', 'rate_limit'))::bigint as request_count,
                    count(*) filter (where event_type = 'success')::bigint as success_count,
                    count(*) filter (where event_type in ('failure', 'timeout', 'rate_limit'))::bigint as failure_count,
                    count(*) filter (where event_type = 'timeout')::bigint as timeout_count,
@@ -2071,7 +2073,19 @@ impl PgModelGatewayProfileRepository {
                    count(*) filter (where event_type = 'shadow_quality_fail')::bigint as shadow_eval_fail_count,
                    count(*) filter (where event_type = 'shadow_quality_pass')::bigint as shadow_eval_format_pass_count,
                    count(*) filter (where error_kind = 'repair')::bigint as shadow_eval_repair_count,
-                   max(created_at) filter (where event_type in ('shadow_quality_pass', 'shadow_quality_fail')) as last_shadow_eval_at
+                   max(created_at) filter (where event_type in ('shadow_quality_pass', 'shadow_quality_fail')) as last_shadow_eval_at,
+                   (
+                     array_agg(
+                       case event_type
+                         when 'profile_test_ok' then 'ok'
+                         when 'profile_test_failed' then 'failed'
+                         when 'profile_test_missing_secret' then 'missing_secret'
+                         else null
+                       end
+                       order by created_at desc
+                     ) filter (where event_type in ('profile_test_ok', 'profile_test_failed', 'profile_test_missing_secret'))
+                   )[1] as last_profile_test_status,
+                   max(created_at) filter (where event_type in ('profile_test_ok', 'profile_test_failed', 'profile_test_missing_secret')) as last_profile_test_at
             from model_gateway_profile_events
             where tenant_id = $1 and created_at >= $2
             group by profile_id, lane
@@ -2102,6 +2116,8 @@ impl PgModelGatewayProfileRepository {
                 shadow_eval_format_pass_count: row.get("shadow_eval_format_pass_count"),
                 shadow_eval_repair_count: row.get("shadow_eval_repair_count"),
                 last_shadow_eval_at: row.get("last_shadow_eval_at"),
+                last_profile_test_status: row.get("last_profile_test_status"),
+                last_profile_test_at: row.get("last_profile_test_at"),
             })
             .collect())
     }

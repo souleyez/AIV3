@@ -86,16 +86,22 @@ test('normalizeModelGatewayStatus hides secrets and keeps lane counts readable',
     lanes: [{
       lane: 'assistant_chat',
       routing_mode: 'active',
+      active_source: 'database',
       canary_percent: 25,
       active: 12,
       queued: 3,
       profile_count: 2,
+      active_profile_count: 1,
+      database_profile_count: 2,
+      env_profile_count: 1,
       queue_timeout_ms: 3000,
     }],
     providers: [{
       profile_id: 'OPENCLAW_MAIN',
       provider_id: 'openclaw',
       model_id: 'default',
+      eligible: false,
+      dormant_reason: 'profile_disabled',
       active: 2,
       queued: 1,
       minute_request_count: 7,
@@ -108,6 +114,8 @@ test('normalizeModelGatewayStatus hides secrets and keeps lane counts readable',
       format_pass_rate: 80,
       repair_rate: 0,
       last_shadow_eval_at: '2026-05-21T08:01:00Z',
+      last_profile_test_status: 'ok',
+      last_profile_test_at: '2026-05-21T08:02:00Z',
       circuit_open: true,
       api_key: 'sk-hidden',
     }],
@@ -119,8 +127,14 @@ test('normalizeModelGatewayStatus hides secrets and keeps lane counts readable',
   assert.equal(status.lanes[0].queuedCount, 3);
   assert.equal(status.lanes[0].canaryPercent, 25);
   assert.equal(status.lanes[0].profileCount, 2);
+  assert.equal(status.lanes[0].activeSource, 'database');
+  assert.equal(status.lanes[0].activeProfileCount, 1);
+  assert.equal(status.lanes[0].databaseProfileCount, 2);
+  assert.equal(status.lanes[0].envProfileCount, 1);
   assert.equal(status.providers[0].profileId, 'OPENCLAW_MAIN');
   assert.equal(status.providers[0].providerId, 'openclaw');
+  assert.equal(status.providers[0].eligible, false);
+  assert.equal(status.providers[0].dormantReason, 'profile_disabled');
   assert.equal(status.providers[0].queuedCount, 1);
   assert.equal(status.providers[0].minuteRequestCount, 7);
   assert.equal(status.providers[0].minuteTokenCount, 900);
@@ -130,6 +144,8 @@ test('normalizeModelGatewayStatus hides secrets and keeps lane counts readable',
   assert.equal(status.providers[0].qualityScore, 80);
   assert.equal(status.providers[0].formatPassRate, 80);
   assert.equal(status.providers[0].lastShadowEvalAt, '2026-05-21T08:01:00Z');
+  assert.equal(status.providers[0].lastProfileTestStatus, 'ok');
+  assert.equal(status.providers[0].lastProfileTestAt, '2026-05-21T08:02:00Z');
   assert.equal(status.providers[0].circuitState, 'open');
   assert.equal(JSON.stringify(status).includes('sk-hidden'), false);
 });

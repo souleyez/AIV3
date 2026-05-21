@@ -98,6 +98,7 @@ pub struct ModelGatewayStatusView {
 pub struct ModelGatewayLaneStatusView {
     pub lane: String,
     pub routing_mode: String,
+    pub active_source: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub canary_percent: Option<u32>,
     pub max_concurrency: usize,
@@ -106,6 +107,9 @@ pub struct ModelGatewayLaneStatusView {
     pub queue_limit: usize,
     pub queue_timeout_ms: u64,
     pub profile_count: usize,
+    pub active_profile_count: usize,
+    pub database_profile_count: usize,
+    pub env_profile_count: usize,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -117,6 +121,9 @@ pub struct ModelGatewayProviderStatusView {
     pub model_id: String,
     pub wire_api: String,
     pub source: String,
+    pub eligible: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dormant_reason: Option<String>,
     pub priority: i32,
     pub enabled: bool,
     pub max_concurrency: usize,
@@ -155,6 +162,10 @@ pub struct ModelGatewayProviderStatusView {
     pub repair_rate: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_shadow_eval_at: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_profile_test_status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_profile_test_at: Option<DateTime<Utc>>,
     pub consecutive_failures: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub p50_latency_ms: Option<u64>,
@@ -4738,6 +4749,7 @@ mod tests {
             lanes: vec![ModelGatewayLaneStatusView {
                 lane: "assistant_chat".to_string(),
                 routing_mode: "observe_only".to_string(),
+                active_source: "database".to_string(),
                 canary_percent: Some(10),
                 max_concurrency: 64,
                 active: 1,
@@ -4745,6 +4757,9 @@ mod tests {
                 queue_limit: 256,
                 queue_timeout_ms: 3_000,
                 profile_count: 1,
+                active_profile_count: 1,
+                database_profile_count: 1,
+                env_profile_count: 0,
             }],
             providers: vec![ModelGatewayProviderStatusView {
                 profile_id: "openclaw-main".to_string(),
@@ -4754,6 +4769,8 @@ mod tests {
                 model_id: "default".to_string(),
                 wire_api: "chat_completions".to_string(),
                 source: "database".to_string(),
+                eligible: true,
+                dormant_reason: None,
                 priority: 100,
                 enabled: true,
                 max_concurrency: 15,
@@ -4786,6 +4803,8 @@ mod tests {
                 format_pass_rate: Some(80),
                 repair_rate: Some(0),
                 last_shadow_eval_at: Some(Utc::now()),
+                last_profile_test_status: Some("ok".to_string()),
+                last_profile_test_at: Some(Utc::now()),
                 consecutive_failures: 1,
                 p50_latency_ms: Some(240),
                 p95_latency_ms: Some(900),

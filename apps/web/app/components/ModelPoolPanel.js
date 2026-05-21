@@ -13,6 +13,7 @@ import {
   testModelGatewayProfile,
   updateModelGatewayProfile,
 } from '../lib/model-gateway';
+import { formatDateTime } from '../lib/formatters';
 
 const DEFAULT_DRAFT = {
   profileId: '',
@@ -96,6 +97,20 @@ function formatPercent(value) {
   return value === null || value === undefined ? '' : `${value}%`;
 }
 
+function activeSourceLabel(source) {
+  if (source === 'database') return 'DB 配置';
+  if (source === 'env') return 'Env 回退';
+  return '未启用';
+}
+
+function dormantReasonLabel(reason) {
+  if (reason === 'profile_disabled') return '已停用';
+  if (reason === 'database_profiles_active') return 'DB 接管';
+  if (reason === 'lane_uses_env_profiles') return 'Env 接管';
+  if (reason === 'lane_has_no_active_source') return '未启用';
+  return reason ? '未入候选' : '未入候选';
+}
+
 function ModelPoolRuntimeSummary({ status, loading }) {
   const lane = (status.lanes || []).find((item) => item.lane === 'assistant_chat') || (status.lanes || [])[0] || {};
   const providers = status.providers || [];
@@ -109,6 +124,8 @@ function ModelPoolRuntimeSummary({ status, loading }) {
   return (
     <div className="model-pool-runtime-strip">
       <MetricPill label="路由模式" value={lane.routingMode || (loading ? '同步中' : '')} />
+      <MetricPill label="候选源" value={activeSourceLabel(lane.activeSource)} />
+      <MetricPill label="候选数" value={`${lane.activeProfileCount ?? 0}/${lane.databaseProfileCount ?? 0}+${lane.envProfileCount ?? 0}`} />
       <MetricPill label="灰度" value={canaryLabel} />
       <MetricPill label="Lane 并发" value={`${lane.activeCount || activeCount}/${lane.maxConcurrency || '-'}`} />
       <MetricPill label="队列" value={`${lane.queuedCount || queuedCount}/${lane.queueLimit ?? '-'}`} />
@@ -121,8 +138,18 @@ function ModelPoolRuntimeSummary({ status, loading }) {
 function ProfileCard({ profile, status, testResult, onEdit, onDisable, onTest, testing }) {
   const summary = modelGatewayProfileStatusSummary(profile, status);
   const providerStatus = summary.providerStatus || {};
-  const testLabel = testResult ? modelGatewayProfileTestLabel(testResult) : '';
-  const testTone = testResult ? modelGatewayProfileTestTone(testResult) : 'neutral';
+  const persistedTestResult = providerStatus.lastProfileTestStatus ? {
+    status: providerStatus.lastProfileTestStatus,
+    message: providerStatus.lastProfileTestAt ? `最近探测：${formatDateTime(providerStatus.lastProfileTestAt)}` : '最近探测已记录',
+    checkedAt: providerStatus.lastProfileTestAt,
+  } : null;
+  const effectiveTestResult = testResult || persistedTestResult;
+  const testLabel = effectiveTestResult ? modelGatewayProfileTestLabel(effectiveTestResult) : '';
+  const testTone = effectiveTestResult ? modelGatewayProfileTestTone(effectiveTestResult) : 'neutral';
+  let candidateLabel = '同步中';
+  if (providerStatus.profileId) {
+    candidateLabel = providerStatus.eligible ? '当前候选' : dormantReasonLabel(providerStatus.dormantReason);
+  }
   return (
     <article className="model-pool-profile-card">
       <div className="model-pool-profile-main">
@@ -148,6 +175,7 @@ function ProfileCard({ profile, status, testResult, onEdit, onDisable, onTest, t
       </div>
       <div className="model-pool-metrics">
         <MetricPill label="Lane" value={profile.lane} />
+        <MetricPill label="候选" value={candidateLabel} />
         <MetricPill label="运行" value={`${providerStatus.activeCount || 0}/${profile.maxConcurrency || providerStatus.maxConcurrency || '-'}`} />
         <MetricPill label="排队" value={providerStatus.queuedCount || 0} />
         <MetricPill label="分钟请求" value={`${providerStatus.minuteRequestCount || 0}/${profile.rpmLimit || providerStatus.rpmLimit || '-'}`} />
@@ -165,8 +193,8 @@ function ProfileCard({ profile, status, testResult, onEdit, onDisable, onTest, t
         <MetricPill label="最近失败" value={providerStatus.lastFailureReason} />
         <MetricPill label="密钥" value={profile.hasSecret ? profile.authEnvKeyName : '未配置'} />
       </div>
-      {testResult?.message ? (
-        <p className={`model-pool-profile-note status-${testTone}`}>{testResult.message}</p>
+      {effectiveTestResult?.message ? (
+        <p className={`model-pool-profile-note status-${testTone}`}>{effectiveTestResult.message}</p>
       ) : null}
     </article>
   );

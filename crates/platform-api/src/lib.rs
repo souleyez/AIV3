@@ -5504,11 +5504,22 @@ async fn model_gateway_status_view(
 
     let mut sources = Vec::new();
     let mut seen_profile_ids = HashSet::new();
+    let mut database_profile_count_by_lane = BTreeMap::<String, usize>::new();
+    let mut enabled_database_profile_count_by_lane = BTreeMap::<String, usize>::new();
     for profile in profiles {
+        *database_profile_count_by_lane
+            .entry(profile.lane.clone())
+            .or_default() += 1;
+        if profile.enabled {
+            *enabled_database_profile_count_by_lane
+                .entry(profile.lane.clone())
+                .or_default() += 1;
+        }
         seen_profile_ids.insert(profile.profile_id.clone());
         sources.push(model_gateway_status_source_from_record(profile));
     }
 
+    let mut env_profile_count_by_lane = BTreeMap::<String, usize>::new();
     if let Some(config) =
         ModelGatewayPoolConfig::from_env(MODEL_LANE_ASSISTANT_CHAT).map_err(|error| {
             ApiError::internal(
@@ -5517,13 +5528,15 @@ async fn model_gateway_status_view(
             )
         })?
     {
+        let env_profiles = config.active_profiles_by_priority();
+        env_profile_count_by_lane.insert(config.lane.clone(), env_profiles.len());
         state.gateway_limiter.ensure_lane_limit(
             &config.lane,
             config.lane_limits.max_concurrency,
             config.lane_limits.queue_limit,
             config.lane_limits.queue_timeout_ms,
         );
-        for profile in config.active_profiles_by_priority() {
+        for profile in env_profiles {
             if seen_profile_ids.insert(profile.profile_id.clone()) {
                 sources.push(model_gateway_status_source_from_env_profile(
                     &config.lane,
@@ -5547,9 +5560,21 @@ async fn model_gateway_status_view(
         .iter()
         .map(|(lane, profile_count)| {
             let snapshot = state.gateway_limiter.lane_snapshot(lane);
+            let database_profile_count = database_profile_count_by_lane
+                .get(lane)
+                .copied()
+                .unwrap_or(0);
+            let enabled_database_profile_count = enabled_database_profile_count_by_lane
+                .get(lane)
+                .copied()
+                .unwrap_or(0);
+            let env_profile_count = env_profile_count_by_lane.get(lane).copied().unwrap_or(0);
+            let active_source =
+                model_gateway_lane_active_source(enabled_database_profile_count, env_profile_count);
             ModelGatewayLaneStatusView {
                 lane: lane.clone(),
                 routing_mode: model_gateway_lane_routing_mode(lane),
+                active_source: active_source.to_string(),
                 canary_percent: model_gateway_lane_canary_percent(lane),
                 max_concurrency: snapshot.max_concurrency,
                 active: snapshot.active,
@@ -5557,9 +5582,20 @@ async fn model_gateway_status_view(
                 queue_limit: snapshot.queue_limit,
                 queue_timeout_ms: snapshot.queue_timeout_ms,
                 profile_count: *profile_count,
+                active_profile_count: model_gateway_lane_active_profile_count(
+                    active_source,
+                    enabled_database_profile_count,
+                    env_profile_count,
+                ),
+                database_profile_count,
+                env_profile_count,
             }
         })
-        .collect();
+        .collect::<Vec<_>>();
+    let active_source_by_lane = lanes
+        .iter()
+        .map(|lane| (lane.lane.clone(), lane.active_source.clone()))
+        .collect::<BTreeMap<_, _>>();
 
     let providers = sources
         .into_iter()
@@ -5583,6 +5619,13 @@ async fn model_gateway_status_view(
                 .gateway_limiter
                 .provider_stats_snapshot(&source.profile_id);
             let usage = usage_by_profile.get(&source.profile_id);
+            let active_source = active_source_by_lane
+                .get(&source.lane)
+                .map(String::as_str)
+                .unwrap_or("none");
+            let eligible = model_gateway_provider_source_eligible(&source, active_source);
+            let dormant_reason =
+                model_gateway_provider_dormant_reason(&source, active_source).map(str::to_string);
             let quality_score = usage.and_then(|summary| {
                 model_gateway_percent(summary.shadow_eval_pass_count, summary.shadow_eval_count)
             });
@@ -5603,6 +5646,8 @@ async fn model_gateway_status_view(
                 model_id: source.model_id,
                 wire_api: source.wire_api,
                 source: source.source,
+                eligible,
+                dormant_reason,
                 priority: source.priority,
                 enabled: source.enabled,
                 max_concurrency: limit_snapshot.max_concurrency,
@@ -5661,6 +5706,10 @@ async fn model_gateway_status_view(
                 format_pass_rate,
                 repair_rate,
                 last_shadow_eval_at: usage.and_then(|summary| summary.last_shadow_eval_at.clone()),
+                last_profile_test_status: usage
+                    .and_then(|summary| summary.last_profile_test_status.clone()),
+                last_profile_test_at: usage
+                    .and_then(|summary| summary.last_profile_test_at.clone()),
                 consecutive_failures: stats.consecutive_failures,
                 p50_latency_ms: stats.p50_latency_ms,
                 p95_latency_ms: stats.p95_latency_ms,
@@ -5734,6 +5783,58 @@ fn model_gateway_percent(numerator: i64, denominator: i64) -> Option<u32> {
         return None;
     }
     Some(((numerator * 100) / denominator).clamp(0, 100) as u32)
+}
+
+fn model_gateway_lane_active_source(
+    enabled_database_profile_count: usize,
+    env_profile_count: usize,
+) -> &'static str {
+    if enabled_database_profile_count > 0 {
+        return "database";
+    }
+    if env_profile_count > 0 {
+        return "env";
+    }
+    "none"
+}
+
+fn model_gateway_lane_active_profile_count(
+    active_source: &str,
+    enabled_database_profile_count: usize,
+    env_profile_count: usize,
+) -> usize {
+    match active_source {
+        "database" => enabled_database_profile_count,
+        "env" => env_profile_count,
+        _ => 0,
+    }
+}
+
+fn model_gateway_provider_source_eligible(
+    source: &ModelGatewayStatusProviderSource,
+    active_source: &str,
+) -> bool {
+    match source.source.as_str() {
+        "database" => source.enabled && active_source == "database",
+        "env" => active_source == "env",
+        _ => false,
+    }
+}
+
+fn model_gateway_provider_dormant_reason(
+    source: &ModelGatewayStatusProviderSource,
+    active_source: &str,
+) -> Option<&'static str> {
+    if model_gateway_provider_source_eligible(source, active_source) {
+        return None;
+    }
+    match source.source.as_str() {
+        "database" if !source.enabled => Some("profile_disabled"),
+        "database" => Some("lane_uses_env_profiles"),
+        "env" if active_source == "database" => Some("database_profiles_active"),
+        "env" => Some("lane_has_no_active_source"),
+        _ => Some("unknown_source"),
+    }
 }
 
 async fn create_model_gateway_profile(
@@ -5815,13 +5916,23 @@ async fn test_model_gateway_profile(
         .as_deref()
         .map(model_gateway_auth_env_is_configured)
         .unwrap_or(false);
-    if profile.auth_mode == "env_key" && !auth_configured {
+    if model_gateway_profile_requires_configured_auth_env(&profile) && !auth_configured {
+        let checked_at = Utc::now();
+        record_model_gateway_profile_test_event(
+            &state,
+            &profile,
+            "missing_secret",
+            None,
+            Some("missing_secret"),
+            checked_at,
+        )
+        .await?;
         return Ok(Json(ModelGatewayProfileTestResponse {
             profile_id: profile.profile_id,
             status: "missing_secret".to_string(),
             message: "未找到该 profile 绑定的环境变量，请先在服务端配置 API Key。".to_string(),
             auth_configured,
-            checked_at: Utc::now(),
+            checked_at,
         }));
     }
 
@@ -5832,34 +5943,85 @@ async fn test_model_gateway_profile(
         .clamp(1_000, 30_000);
     let mut provider_profile = model_gateway_provider_profile_from_record(profile.clone());
     provider_profile.timeout_ms = Some(probe_timeout_ms);
+    let probe_started_at = Instant::now();
     let probe_result = run_model_gateway_profile_probe(provider_profile).await;
-    let (status, message) = if let Ok(response) = probe_result {
+    let latency_ms = Some(probe_started_at.elapsed().as_millis() as u64);
+    let (status, message, error_kind) = if let Ok(response) = probe_result {
         let reply_chars = response.output_text.trim().chars().count();
         if reply_chars == 0 {
             (
                 "failed".to_string(),
                 "真实连通性检查失败：provider 返回空回复。".to_string(),
+                Some("empty_provider_reply"),
             )
         } else {
             (
                 "ok".to_string(),
                 format!("真实连通性检查通过，收到 {reply_chars} 字回复。"),
+                None,
             )
         }
     } else {
         (
             "failed".to_string(),
             "真实连通性检查失败，已隐藏 provider 错误细节。".to_string(),
+            Some("provider_probe_failed"),
         )
     };
+    let checked_at = Utc::now();
+    record_model_gateway_profile_test_event(
+        &state, &profile, &status, latency_ms, error_kind, checked_at,
+    )
+    .await?;
 
     Ok(Json(ModelGatewayProfileTestResponse {
         profile_id: profile.profile_id,
         status,
         message,
         auth_configured,
-        checked_at: Utc::now(),
+        checked_at,
     }))
+}
+
+fn model_gateway_profile_requires_configured_auth_env(profile: &ModelGatewayProfile) -> bool {
+    let auth_mode = profile.auth_mode.trim().to_ascii_lowercase();
+    if auth_mode.is_empty() || auth_mode == "none" {
+        return false;
+    }
+    auth_mode == "env_key" || auth_mode.ends_with("_env") || auth_mode.contains("env_key")
+}
+
+async fn record_model_gateway_profile_test_event(
+    state: &AppState,
+    profile: &ModelGatewayProfile,
+    status: &str,
+    latency_ms: Option<u64>,
+    error_kind: Option<&str>,
+    now: DateTime<Utc>,
+) -> std::result::Result<(), ApiError> {
+    let event_type = match status {
+        "ok" => "profile_test_ok",
+        "missing_secret" => "profile_test_missing_secret",
+        _ => "profile_test_failed",
+    };
+    state
+        .storage
+        .model_gateway_profiles()
+        .record_event(
+            state.tenant_id,
+            NewModelGatewayProfileEvent {
+                profile_id: profile.profile_id.clone(),
+                lane: profile.lane.clone(),
+                event_type: event_type.to_string(),
+                latency_ms: latency_ms.and_then(model_gateway_u64_to_i32),
+                input_tokens: None,
+                output_tokens: None,
+                error_kind: error_kind.map(model_gateway_sanitized_error_kind),
+                created_at: now,
+            },
+        )
+        .await
+        .map_err(ApiError::from_storage)
 }
 
 async fn run_model_gateway_profile_probe(
@@ -68260,12 +68422,17 @@ mod tests {
             .find(|lane| lane.lane == MODEL_LANE_ASSISTANT_CHAT)
             .expect("assistant chat lane should be exposed");
         assert!(lane.profile_count >= 1);
+        assert_eq!(lane.active_source, "database");
+        assert!(lane.active_profile_count >= 1);
+        assert!(lane.database_profile_count >= 1);
         let provider = status
             .providers
             .iter()
             .find(|provider| provider.profile_id == profile_id)
             .expect("created provider should be exposed");
         assert_eq!(provider.source, "database");
+        assert!(provider.eligible);
+        assert_eq!(provider.dormant_reason, None);
         assert_eq!(provider.max_concurrency, 2);
         assert_eq!(provider.active, 0);
         assert_eq!(provider.queued, 0);
@@ -68421,6 +68588,18 @@ mod tests {
         let serialized_test =
             serde_json::to_string(&test_result).expect("test result should serialize");
         assert!(!serialized_test.contains("sk-test-secret-value"));
+        let summaries = harness
+            .storage
+            .model_gateway_profiles()
+            .summarize_recent_usage(harness.tenant_id, Utc::now() - Duration::minutes(5))
+            .await
+            .expect("usage summary should load");
+        let summary = summaries
+            .iter()
+            .find(|summary| summary.profile_id == profile_id)
+            .expect("failed probe event should be summarized");
+        assert_eq!(summary.last_profile_test_status.as_deref(), Some("failed"));
+        assert_eq!(summary.request_count, 0);
 
         let disable_response = post_json_request(
             harness.app.clone(),
@@ -68520,6 +68699,86 @@ mod tests {
         let serialized = serde_json::to_string(&test_result).expect("test result should serialize");
         assert!(!serialized.contains("probe ok"));
         assert!(!serialized.contains("sk-probe-secret-value"));
+        let summaries = harness
+            .storage
+            .model_gateway_profiles()
+            .summarize_recent_usage(harness.tenant_id, Utc::now() - Duration::minutes(5))
+            .await
+            .expect("usage summary should load");
+        let summary = summaries
+            .iter()
+            .find(|summary| summary.profile_id == profile_id)
+            .expect("probe event should be summarized");
+        assert_eq!(summary.last_profile_test_status.as_deref(), Some("ok"));
+        assert!(summary.last_profile_test_at.is_some());
+        assert_eq!(summary.request_count, 0);
+
+        let missing_profile_id = format!("probe-missing-{}", Uuid::new_v4().simple());
+        let missing_secret_env_name = format!(
+            "MODEL_GATEWAY_MISSING_SECRET_{}",
+            Uuid::new_v4()
+                .to_string()
+                .replace('-', "_")
+                .to_ascii_uppercase()
+        );
+        harness
+            .storage
+            .model_gateway_profiles()
+            .create(
+                harness.tenant_id,
+                NewModelGatewayProfile {
+                    id: Uuid::new_v4(),
+                    profile_id: missing_profile_id.clone(),
+                    display_name: "Probe Missing Secret".to_string(),
+                    lane: MODEL_LANE_ASSISTANT_CHAT.to_string(),
+                    provider_id: "scripted".to_string(),
+                    model_id: "probe-scripted-v1".to_string(),
+                    base_url: None,
+                    api_path: None,
+                    wire_api: "chat_completions".to_string(),
+                    auth_mode: "bearer_env".to_string(),
+                    auth_env_key_name: Some(missing_secret_env_name),
+                    recommended_preset: None,
+                    max_concurrency: Some(1),
+                    rpm_limit: None,
+                    tpm_limit: None,
+                    timeout_ms: Some(5_000),
+                    priority: 100,
+                    enabled: true,
+                    capabilities: json!(["chat"]),
+                },
+            )
+            .await
+            .expect("missing secret profile should be stored");
+        let missing_response = post_json_request(
+            harness.app.clone(),
+            &format!("/v1/model-gateway/profiles/{missing_profile_id}/test"),
+            &ModelGatewayProfileTestRequest {
+                timeout_ms: Some(1_000),
+            },
+            Some(&cookie),
+        )
+        .await;
+        assert_eq!(missing_response.status(), StatusCode::OK);
+        let missing_result: ModelGatewayProfileTestResponse =
+            read_json_response(missing_response).await;
+        assert_eq!(missing_result.status, "missing_secret");
+        assert!(!missing_result.auth_configured);
+        let summaries = harness
+            .storage
+            .model_gateway_profiles()
+            .summarize_recent_usage(harness.tenant_id, Utc::now() - Duration::minutes(5))
+            .await
+            .expect("usage summary should load");
+        let missing_summary = summaries
+            .iter()
+            .find(|summary| summary.profile_id == missing_profile_id)
+            .expect("missing secret probe event should be summarized");
+        assert_eq!(
+            missing_summary.last_profile_test_status.as_deref(),
+            Some("missing_secret")
+        );
+        assert_eq!(missing_summary.request_count, 0);
 
         std::env::remove_var(format!("{profile_env_prefix}_RUNTIME_OUTPUT_TEXT"));
         std::env::remove_var("MODEL_GATEWAY_OPERATOR_EMAILS");

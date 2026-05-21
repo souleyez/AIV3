@@ -114,6 +114,7 @@ export function normalizeModelGatewayStatus(raw = {}) {
     lanes: lanes.map((lane) => ({
       lane: stringOrEmpty(lane.lane),
       routingMode: stringOrEmpty(lane.routing_mode || lane.routingMode || 'observe_only'),
+      activeSource: stringOrEmpty(lane.active_source || lane.activeSource || 'none'),
       canaryPercent: numberOrNull(lane.canary_percent ?? lane.canaryPercent),
       maxConcurrency: numberOrNull(lane.max_concurrency ?? lane.maxConcurrency),
       activeCount: numberOrNull(lane.active ?? lane.active_count ?? lane.activeCount) ?? 0,
@@ -121,6 +122,9 @@ export function normalizeModelGatewayStatus(raw = {}) {
       queueLimit: numberOrNull(lane.queue_limit ?? lane.queueLimit),
       queueTimeoutMs: numberOrNull(lane.queue_timeout_ms ?? lane.queueTimeoutMs),
       profileCount: numberOrNull(lane.profile_count ?? lane.profileCount) ?? 0,
+      activeProfileCount: numberOrNull(lane.active_profile_count ?? lane.activeProfileCount) ?? 0,
+      databaseProfileCount: numberOrNull(lane.database_profile_count ?? lane.databaseProfileCount) ?? 0,
+      envProfileCount: numberOrNull(lane.env_profile_count ?? lane.envProfileCount) ?? 0,
     })),
     providers: providers.map((provider) => ({
       profileId: stringOrEmpty(provider.profile_id || provider.profileId),
@@ -133,6 +137,10 @@ export function normalizeModelGatewayStatus(raw = {}) {
       modelId: stringOrEmpty(provider.model_id || provider.modelId || provider.model),
       wireApi: stringOrEmpty(provider.wire_api || provider.wireApi),
       priority: numberOrNull(provider.priority) ?? 100,
+      eligible: provider.eligible === undefined && provider.active_candidate === undefined && provider.activeCandidate === undefined
+        ? provider.enabled !== false
+        : booleanOrFalse(provider.eligible ?? provider.active_candidate ?? provider.activeCandidate),
+      dormantReason: stringOrEmpty(provider.dormant_reason || provider.dormantReason),
       activeCount: numberOrNull(provider.active ?? provider.active_count ?? provider.activeCount) ?? 0,
       queuedCount: numberOrNull(provider.queued ?? provider.queued_count ?? provider.queuedCount) ?? 0,
       maxConcurrency: numberOrNull(provider.max_concurrency ?? provider.maxConcurrency),
@@ -163,6 +171,8 @@ export function normalizeModelGatewayStatus(raw = {}) {
       formatPassRate: numberOrNull(provider.format_pass_rate ?? provider.formatPassRate),
       repairRate: numberOrNull(provider.repair_rate ?? provider.repairRate),
       lastShadowEvalAt: provider.last_shadow_eval_at || provider.lastShadowEvalAt || null,
+      lastProfileTestStatus: stringOrEmpty(provider.last_profile_test_status || provider.lastProfileTestStatus),
+      lastProfileTestAt: provider.last_profile_test_at || provider.lastProfileTestAt || null,
       consecutiveFailures: numberOrNull(provider.consecutive_failures ?? provider.consecutiveFailures) ?? 0,
       p50LatencyMs: numberOrNull(provider.p50_latency_ms ?? provider.p50LatencyMs),
       p95LatencyMs: numberOrNull(provider.p95_latency_ms ?? provider.p95LatencyMs),
