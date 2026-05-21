@@ -6,8 +6,23 @@ import {
   externalObservabilityCookieValue,
 } from '../../lib/external-observability-access';
 
+function firstForwardedHeaderValue(value) {
+  return String(value || '').split(',')[0].trim();
+}
+
+function externalIntegrationsOrigin(request) {
+  const forwardedHost = firstForwardedHeaderValue(request.headers.get('x-forwarded-host'));
+  const forwardedProto = firstForwardedHeaderValue(request.headers.get('x-forwarded-proto'));
+  const host = forwardedHost || request.headers.get('host');
+  if (host) {
+    const proto = forwardedProto || request.nextUrl.protocol.replace(':', '') || 'https';
+    return `${proto}://${host}`;
+  }
+  return request.url;
+}
+
 function externalIntegrationsUrl(request, search = '') {
-  const url = new URL('/external-integrations', request.url);
+  const url = new URL('/external-integrations', externalIntegrationsOrigin(request));
   url.search = search;
   return url;
 }
