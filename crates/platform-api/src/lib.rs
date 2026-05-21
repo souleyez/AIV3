@@ -59,7 +59,8 @@ use contracts::{
     ModelGatewayPresetView, ModelGatewayProfileCreateRequest, ModelGatewayProfileTestRequest,
     ModelGatewayProfileTestResponse, ModelGatewayProfileUpdateRequest, ModelGatewayProfileView,
     ModelGatewayProviderStatusView, ModelGatewayStatusView, PlanReportRequest,
-    PreviewDatabaseSourceTableRequest, PreviewDatabaseSourceTableResponse, PublishReportRequest,
+    PreviewDatabaseSourceTableRequest, PreviewDatabaseSourceTableResponse,
+    ProfileDatabaseSourceRequest, ProfileDatabaseSourceResponse, PublishReportRequest,
     PublishReportResponse, PublishedReportDetailView, PublishedReportVersionView,
     PublishedReportView, RegisterDocumentRequest, RegisterDocumentResponse,
     ReportPlanAstVersionView, ReportPlanSummary, ReportRenderOutputView,
@@ -96,7 +97,7 @@ use event_bus::{
 };
 use external_source_connectors::{
     inspect_mysql_schema, preview_mysql_table, test_mysql_connection, DatabaseSourceError,
-    MySqlSourceConfig,
+    profile_mysql_database, MySqlSourceConfig,
 };
 use futures_util::{stream, Stream, StreamExt};
 use hmac::{Hmac, Mac};
@@ -1309,6 +1310,10 @@ pub fn router(
         .route(
             "/v1/external/sources/{source_id}/database/preview",
             axum::routing::post(preview_database_source_table),
+        )
+        .route(
+            "/v1/external/sources/{source_id}/database/profile",
+            axum::routing::post(profile_database_source),
         )
         .route("/v1/model-gateway/presets", get(list_model_gateway_presets))
         .route("/v1/model-gateway/status", get(get_model_gateway_status))
@@ -11405,6 +11410,27 @@ async fn preview_database_source_table(
         redacted_summary: serde_json::to_value(config.redacted_summary())
             .unwrap_or_else(|_| json!({})),
         preview: serde_json::to_value(preview).unwrap_or_else(|_| json!({})),
+    }))
+}
+
+async fn profile_database_source(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(source_id): Path<String>,
+    Json(request): Json<ProfileDatabaseSourceRequest>,
+) -> std::result::Result<Json<ProfileDatabaseSourceResponse>, ApiError> {
+    ensure_main_system_external_source_access(&state, &headers, &source_id).await?;
+    let source = load_enabled_database_source_connection(&state, &source_id).await?;
+    let config = mysql_source_config_for_request(&source, &request.database_source)?;
+    let profile = profile_mysql_database(&config, request.sample_limit.unwrap_or(100))
+        .await
+        .map_err(database_source_error_to_api)?;
+    Ok(Json(ProfileDatabaseSourceResponse {
+        source_id: source.source_id,
+        connector_kind: source.connector_kind,
+        redacted_summary: serde_json::to_value(config.redacted_summary())
+            .unwrap_or_else(|_| json!({})),
+        profile: serde_json::to_value(profile).unwrap_or_else(|_| json!({})),
     }))
 }
 

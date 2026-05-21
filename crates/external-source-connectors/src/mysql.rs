@@ -2,7 +2,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use sqlx::{mysql::MySqlPoolOptions, MySqlPool, Row};
-use std::{collections::BTreeMap, fmt, time::Duration};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt,
+    time::Duration,
+};
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -147,6 +151,64 @@ pub struct TablePreview {
     pub row_limit: u32,
     pub columns: Vec<String>,
     pub rows: Vec<Value>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DatabaseSemanticProfile {
+    pub kind: String,
+    pub database: String,
+    pub tables: Vec<DatabaseTableSemanticProfile>,
+    pub report_suggestions: Vec<DatabaseReportSuggestion>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DatabaseTableSemanticProfile {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub approximate_row_count: Option<u64>,
+    pub column_count: usize,
+    pub primary_key_columns: Vec<String>,
+    pub columns: Vec<DatabaseColumnSemanticProfile>,
+    pub dimensions: Vec<String>,
+    pub metrics: Vec<String>,
+    pub time_dimensions: Vec<String>,
+    pub entity_columns: Vec<String>,
+    pub text_columns: Vec<String>,
+    pub suggested_questions: Vec<String>,
+    pub suggested_visualizations: Vec<DatabaseVisualizationSuggestion>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DatabaseColumnSemanticProfile {
+    pub name: String,
+    pub data_type: String,
+    pub column_type: String,
+    pub semantic_role: String,
+    pub role_confidence: u8,
+    pub nullable: bool,
+    pub sample_values: Vec<String>,
+    pub distinct_sample_count: usize,
+    pub null_sample_count: usize,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DatabaseVisualizationSuggestion {
+    pub title: String,
+    pub chart_type: String,
+    pub table: String,
+    pub dimensions: Vec<String>,
+    pub metrics: Vec<String>,
+    pub rationale: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DatabaseReportSuggestion {
+    pub title: String,
+    pub objective: String,
+    pub table: String,
+    pub visualization: String,
+    pub dimensions: Vec<String>,
+    pub metrics: Vec<String>,
 }
 
 impl MySqlSourceConfig {
@@ -379,6 +441,398 @@ pub async fn fetch_mysql_documents(
         }
     }
     Ok(documents)
+}
+
+pub async fn profile_mysql_database(
+    config: &MySqlSourceConfig,
+    sample_limit: u32,
+) -> Result<DatabaseSemanticProfile, DatabaseSourceError> {
+    let schema = inspect_mysql_schema(config).await?;
+    let mut previews = Vec::new();
+    for mapping in &config.tables {
+        previews.push(preview_mysql_table(config, &mapping.table, sample_limit).await?);
+    }
+    Ok(build_database_semantic_profile(schema, previews))
+}
+
+pub fn build_database_semantic_profile(
+    schema: DatabaseSchemaSnapshot,
+    previews: Vec<TablePreview>,
+) -> DatabaseSemanticProfile {
+    let previews_by_table = previews
+        .into_iter()
+        .map(|preview| (preview.table.clone(), preview))
+        .collect::<BTreeMap<_, _>>();
+    let tables = schema
+        .tables
+        .into_iter()
+        .map(|table| {
+            let table_name = table.name.clone();
+            build_table_semantic_profile(table, previews_by_table.get(&table_name))
+        })
+        .collect::<Vec<_>>();
+    let report_suggestions = tables
+        .iter()
+        .flat_map(table_report_suggestions)
+        .collect::<Vec<_>>();
+
+    DatabaseSemanticProfile {
+        kind: schema.kind,
+        database: schema.database,
+        tables,
+        report_suggestions,
+    }
+}
+
+fn build_table_semantic_profile(
+    table: DatabaseTableView,
+    preview: Option<&TablePreview>,
+) -> DatabaseTableSemanticProfile {
+    let columns = table
+        .columns
+        .iter()
+        .map(|column| build_column_semantic_profile(column, &table.primary_key_columns, preview))
+        .collect::<Vec<_>>();
+    let dimensions = columns_by_role(&columns, &["dimension", "entity", "boolean"]);
+    let metrics = columns_by_role(&columns, &["metric"]);
+    let time_dimensions = columns_by_role(&columns, &["time"]);
+    let entity_columns = columns_by_role(&columns, &["entity", "primary_key"]);
+    let text_columns = columns_by_role(&columns, &["text"]);
+    let suggested_visualizations = table_visualization_suggestions(
+        &table.name,
+        &dimensions,
+        &metrics,
+        &time_dimensions,
+    );
+    let suggested_questions =
+        table_suggested_questions(&table.name, &dimensions, &metrics, &time_dimensions);
+
+    DatabaseTableSemanticProfile {
+        name: table.name,
+        approximate_row_count: table.approximate_row_count,
+        column_count: columns.len(),
+        primary_key_columns: table.primary_key_columns,
+        columns,
+        dimensions,
+        metrics,
+        time_dimensions,
+        entity_columns,
+        text_columns,
+        suggested_questions,
+        suggested_visualizations,
+    }
+}
+
+fn build_column_semantic_profile(
+    column: &DatabaseColumnView,
+    primary_key_columns: &[String],
+    preview: Option<&TablePreview>,
+) -> DatabaseColumnSemanticProfile {
+    let sample = column_sample(preview, &column.name);
+    let (semantic_role, role_confidence) =
+        classify_column_semantic_role(column, primary_key_columns, &sample);
+    DatabaseColumnSemanticProfile {
+        name: column.name.clone(),
+        data_type: column.data_type.clone(),
+        column_type: column.column_type.clone(),
+        semantic_role: semantic_role.to_string(),
+        role_confidence,
+        nullable: column.is_nullable,
+        sample_values: sample.sample_values,
+        distinct_sample_count: sample.distinct_count,
+        null_sample_count: sample.null_count,
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+struct ColumnSample {
+    sample_values: Vec<String>,
+    distinct_count: usize,
+    null_count: usize,
+    non_null_count: usize,
+    average_len: usize,
+}
+
+fn column_sample(preview: Option<&TablePreview>, column_name: &str) -> ColumnSample {
+    let Some(preview) = preview else {
+        return ColumnSample::default();
+    };
+    let mut distinct = BTreeSet::new();
+    let mut sample_values = Vec::new();
+    let mut null_count = 0usize;
+    let mut non_null_count = 0usize;
+    let mut total_len = 0usize;
+    for row in &preview.rows {
+        let Some(value) = row.as_object().and_then(|object| object.get(column_name)) else {
+            null_count += 1;
+            continue;
+        };
+        let normalized = match value {
+            Value::Null => None,
+            Value::String(value) => Some(value.trim().to_string()),
+            other => Some(other.to_string()),
+        }
+        .filter(|value| !value.is_empty());
+        match normalized {
+            Some(value) => {
+                non_null_count += 1;
+                total_len += value.chars().count();
+                distinct.insert(value.clone());
+                if sample_values.len() < 5 && !sample_values.iter().any(|item| item == &value) {
+                    sample_values.push(value);
+                }
+            }
+            None => null_count += 1,
+        }
+    }
+    ColumnSample {
+        sample_values,
+        distinct_count: distinct.len(),
+        null_count,
+        non_null_count,
+        average_len: if non_null_count == 0 {
+            0
+        } else {
+            total_len / non_null_count
+        },
+    }
+}
+
+fn classify_column_semantic_role(
+    column: &DatabaseColumnView,
+    primary_key_columns: &[String],
+    sample: &ColumnSample,
+) -> (&'static str, u8) {
+    let name = column.name.to_ascii_lowercase();
+    let data_type = column.data_type.to_ascii_lowercase();
+    let column_type = column.column_type.to_ascii_lowercase();
+    if primary_key_columns.iter().any(|candidate| candidate == &column.name) {
+        return ("primary_key", 100);
+    }
+    if is_boolean_type(&data_type, &column_type, &name) {
+        return ("boolean", 90);
+    }
+    if is_time_type(&data_type) || name_has_any(&name, &["date", "time", "year", "month", "day"]) {
+        return ("time", 90);
+    }
+    if is_numeric_type(&data_type) {
+        if looks_like_identifier(&name) {
+            return ("entity", 85);
+        }
+        if looks_like_metric(&name) {
+            return ("metric", 90);
+        }
+        if sample.non_null_count > 0 && sample.distinct_count <= 20 {
+            return ("dimension", 72);
+        }
+        return ("metric", 78);
+    }
+    if is_text_type(&data_type) {
+        if looks_like_entity(&name) {
+            return ("entity", 82);
+        }
+        if looks_like_dimension(&name)
+            || (sample.non_null_count > 0
+                && sample.distinct_count <= 50
+                && sample.average_len <= 60)
+        {
+            return ("dimension", 78);
+        }
+        if sample.average_len > 80 || name_has_any(&name, &["content", "desc", "detail", "remark", "memo", "note"]) {
+            return ("text", 76);
+        }
+        return ("dimension", 65);
+    }
+    ("unknown", 40)
+}
+
+fn columns_by_role(columns: &[DatabaseColumnSemanticProfile], roles: &[&str]) -> Vec<String> {
+    columns
+        .iter()
+        .filter(|column| roles.iter().any(|role| *role == column.semantic_role))
+        .map(|column| column.name.clone())
+        .collect()
+}
+
+fn table_visualization_suggestions(
+    table: &str,
+    dimensions: &[String],
+    metrics: &[String],
+    time_dimensions: &[String],
+) -> Vec<DatabaseVisualizationSuggestion> {
+    let mut suggestions = Vec::new();
+    if let (Some(metric), Some(dimension)) = (metrics.first(), dimensions.first()) {
+        suggestions.push(DatabaseVisualizationSuggestion {
+            title: format!("按 {dimension} 对 {metric} 排名"),
+            chart_type: "bar".to_string(),
+            table: table.to_string(),
+            dimensions: vec![dimension.clone()],
+            metrics: vec![metric.clone()],
+            rationale: "适合回答分组汇总、TopN 排名和横向对比问题。".to_string(),
+        });
+    }
+    if let (Some(metric), Some(time_dimension)) = (metrics.first(), time_dimensions.first()) {
+        suggestions.push(DatabaseVisualizationSuggestion {
+            title: format!("{metric} 随 {time_dimension} 的趋势"),
+            chart_type: "line".to_string(),
+            table: table.to_string(),
+            dimensions: vec![time_dimension.clone()],
+            metrics: vec![metric.clone()],
+            rationale: "适合观察时间变化、周期波动和增长趋势。".to_string(),
+        });
+    }
+    if let (Some(metric), Some(time_dimension), Some(dimension)) =
+        (metrics.first(), time_dimensions.first(), dimensions.first())
+    {
+        suggestions.push(DatabaseVisualizationSuggestion {
+            title: format!("按 {time_dimension} 和 {dimension} 对比 {metric}"),
+            chart_type: "heatmap".to_string(),
+            table: table.to_string(),
+            dimensions: vec![time_dimension.clone(), dimension.clone()],
+            metrics: vec![metric.clone()],
+            rationale: "适合交叉维度对比，快速定位高低值区域。".to_string(),
+        });
+    }
+    if metrics.is_empty() {
+        if let Some(dimension) = dimensions.first() {
+            suggestions.push(DatabaseVisualizationSuggestion {
+                title: format!("按 {dimension} 统计记录数"),
+                chart_type: "bar".to_string(),
+                table: table.to_string(),
+                dimensions: vec![dimension.clone()],
+                metrics: vec!["record_count".to_string()],
+                rationale: "没有明显数值指标时，可先做类别分布分析。".to_string(),
+            });
+        }
+    }
+    suggestions
+}
+
+fn table_suggested_questions(
+    table: &str,
+    dimensions: &[String],
+    metrics: &[String],
+    time_dimensions: &[String],
+) -> Vec<String> {
+    let mut questions = Vec::new();
+    if let (Some(metric), Some(dimension)) = (metrics.first(), dimensions.first()) {
+        questions.push(format!("按 {dimension} 汇总 {metric} 并给出 Top 10 排名。"));
+        questions.push(format!("不同 {dimension} 的 {metric} 差异主要在哪里？"));
+    }
+    if let (Some(metric), Some(time_dimension)) = (metrics.first(), time_dimensions.first()) {
+        questions.push(format!("{metric} 按 {time_dimension} 的趋势如何？"));
+    }
+    if let Some(metric) = metrics.first() {
+        questions.push(format!("找出 {table} 中 {metric} 明显偏高或偏低的记录。"));
+    }
+    if questions.is_empty() {
+        questions.push(format!("概括 {table} 表的主要字段、可用维度和可分析问题。"));
+    }
+    questions
+}
+
+fn table_report_suggestions(table: &DatabaseTableSemanticProfile) -> Vec<DatabaseReportSuggestion> {
+    table
+        .suggested_visualizations
+        .iter()
+        .map(|visualization| DatabaseReportSuggestion {
+            title: visualization.title.clone(),
+            objective: visualization.rationale.clone(),
+            table: table.name.clone(),
+            visualization: visualization.chart_type.clone(),
+            dimensions: visualization.dimensions.clone(),
+            metrics: visualization.metrics.clone(),
+        })
+        .collect()
+}
+
+fn is_numeric_type(data_type: &str) -> bool {
+    matches!(
+        data_type,
+        "tinyint"
+            | "smallint"
+            | "mediumint"
+            | "int"
+            | "integer"
+            | "bigint"
+            | "decimal"
+            | "numeric"
+            | "float"
+            | "double"
+            | "real"
+    )
+}
+
+fn is_time_type(data_type: &str) -> bool {
+    matches!(
+        data_type,
+        "date" | "datetime" | "timestamp" | "time" | "year"
+    )
+}
+
+fn is_text_type(data_type: &str) -> bool {
+    matches!(
+        data_type,
+        "char"
+            | "varchar"
+            | "tinytext"
+            | "text"
+            | "mediumtext"
+            | "longtext"
+            | "enum"
+            | "set"
+            | "json"
+    )
+}
+
+fn is_boolean_type(data_type: &str, column_type: &str, name: &str) -> bool {
+    data_type == "boolean"
+        || data_type == "bool"
+        || column_type == "tinyint(1)"
+        || name_has_any(name, &["is_", "has_", "enabled", "disabled", "active", "flag"])
+}
+
+fn looks_like_identifier(name: &str) -> bool {
+    name == "id"
+        || name.ends_with("_id")
+        || name.ends_with("_code")
+        || name.ends_with("_no")
+        || name_has_any(name, &["uuid", "guid", "serial", "number"])
+}
+
+fn looks_like_metric(name: &str) -> bool {
+    name_has_any(
+        name,
+        &[
+            "count", "num", "amount", "total", "sum", "rate", "ratio", "score", "value",
+            "price", "cost", "traffic", "flow", "volume", "qty", "avg", "min", "max",
+            "duration", "distance", "area",
+        ],
+    )
+}
+
+fn looks_like_entity(name: &str) -> bool {
+    name_has_any(
+        name,
+        &[
+            "user", "person", "employee", "customer", "company", "org", "organization",
+            "supplier", "vendor", "client", "project", "name",
+        ],
+    )
+}
+
+fn looks_like_dimension(name: &str) -> bool {
+    name_has_any(
+        name,
+        &[
+            "type", "status", "category", "class", "level", "gender", "sex", "city",
+            "province", "district", "region", "area", "source", "channel", "skill", "tag",
+        ],
+    )
+}
+
+fn name_has_any(name: &str, needles: &[&str]) -> bool {
+    needles.iter().any(|needle| name.contains(needle))
 }
 
 fn build_table_preview(
@@ -1225,6 +1679,140 @@ mod tests {
 
         assert!(body.contains("## content\n\n第一段"));
         assert!(body.contains("## summary\n\n摘要"));
+    }
+
+    #[test]
+    fn database_semantic_profile_detects_metrics_dimensions_and_charts() {
+        let schema = DatabaseSchemaSnapshot {
+            kind: "mysql".to_string(),
+            database: "hy_sql".to_string(),
+            server_version: "8.0".to_string(),
+            tables: vec![DatabaseTableView {
+                name: "bi_traffic_area".to_string(),
+                table_type: "BASE TABLE".to_string(),
+                comment: Some("traffic by area".to_string()),
+                approximate_row_count: Some(3),
+                update_time: None,
+                primary_key_columns: vec!["id".to_string()],
+                indexes: Vec::new(),
+                columns: vec![
+                    DatabaseColumnView {
+                        name: "id".to_string(),
+                        ordinal_position: 1,
+                        data_type: "bigint".to_string(),
+                        column_type: "bigint".to_string(),
+                        is_nullable: false,
+                        default_value: None,
+                        comment: None,
+                    },
+                    DatabaseColumnView {
+                        name: "area_name".to_string(),
+                        ordinal_position: 2,
+                        data_type: "varchar".to_string(),
+                        column_type: "varchar(64)".to_string(),
+                        is_nullable: false,
+                        default_value: None,
+                        comment: None,
+                    },
+                    DatabaseColumnView {
+                        name: "traffic_count".to_string(),
+                        ordinal_position: 3,
+                        data_type: "int".to_string(),
+                        column_type: "int".to_string(),
+                        is_nullable: true,
+                        default_value: None,
+                        comment: None,
+                    },
+                    DatabaseColumnView {
+                        name: "stat_date".to_string(),
+                        ordinal_position: 4,
+                        data_type: "date".to_string(),
+                        column_type: "date".to_string(),
+                        is_nullable: false,
+                        default_value: None,
+                        comment: None,
+                    },
+                ],
+            }],
+        };
+        let preview = TablePreview {
+            table: "bi_traffic_area".to_string(),
+            row_limit: 3,
+            columns: vec![
+                "id".to_string(),
+                "area_name".to_string(),
+                "traffic_count".to_string(),
+                "stat_date".to_string(),
+            ],
+            rows: vec![
+                json!({"id": "1", "area_name": "A区", "traffic_count": "10", "stat_date": "2026-05-01"}),
+                json!({"id": "2", "area_name": "B区", "traffic_count": "20", "stat_date": "2026-05-01"}),
+            ],
+        };
+
+        let profile = build_database_semantic_profile(schema, vec![preview]);
+        let table = &profile.tables[0];
+
+        assert!(table.dimensions.contains(&"area_name".to_string()));
+        assert!(table.metrics.contains(&"traffic_count".to_string()));
+        assert!(table.time_dimensions.contains(&"stat_date".to_string()));
+        assert!(
+            table
+                .suggested_visualizations
+                .iter()
+                .any(|item| item.chart_type == "bar")
+        );
+        assert!(
+            profile
+                .report_suggestions
+                .iter()
+                .any(|item| item.table == "bi_traffic_area")
+        );
+    }
+
+    #[test]
+    fn database_semantic_profile_handles_dimension_only_tables() {
+        let schema = DatabaseSchemaSnapshot {
+            kind: "mysql".to_string(),
+            database: "hy_sql".to_string(),
+            server_version: "8.0".to_string(),
+            tables: vec![DatabaseTableView {
+                name: "area_lookup".to_string(),
+                table_type: "BASE TABLE".to_string(),
+                comment: None,
+                approximate_row_count: Some(2),
+                update_time: None,
+                primary_key_columns: vec!["area_code".to_string()],
+                indexes: Vec::new(),
+                columns: vec![
+                    DatabaseColumnView {
+                        name: "area_code".to_string(),
+                        ordinal_position: 1,
+                        data_type: "varchar".to_string(),
+                        column_type: "varchar(32)".to_string(),
+                        is_nullable: false,
+                        default_value: None,
+                        comment: None,
+                    },
+                    DatabaseColumnView {
+                        name: "area_name".to_string(),
+                        ordinal_position: 2,
+                        data_type: "varchar".to_string(),
+                        column_type: "varchar(64)".to_string(),
+                        is_nullable: false,
+                        default_value: None,
+                        comment: None,
+                    },
+                ],
+            }],
+        };
+
+        let profile = build_database_semantic_profile(schema, Vec::new());
+        let table = &profile.tables[0];
+
+        assert!(table.entity_columns.contains(&"area_code".to_string()));
+        assert!(table.dimensions.contains(&"area_name".to_string()));
+        assert_eq!(table.suggested_visualizations[0].metrics[0], "record_count");
     }
 
     #[tokio::test]

@@ -845,6 +845,22 @@ pub struct PreviewDatabaseSourceTableResponse {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ProfileDatabaseSourceRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sample_limit: Option<u32>,
+    #[serde(default)]
+    pub database_source: Value,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ProfileDatabaseSourceResponse {
+    pub source_id: String,
+    pub connector_kind: String,
+    pub redacted_summary: Value,
+    pub profile: Value,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CreateExternalDocumentParseRequest {
     #[serde(default, alias = "sourceId")]
     pub source_id: String,
@@ -4694,6 +4710,28 @@ mod tests {
             json!("ExternalSourceSync")
         );
         assert!(encoded.get("enqueued_tasks").is_none());
+    }
+
+    #[test]
+    fn database_source_profile_contract_defaults_database_source() {
+        let request: ProfileDatabaseSourceRequest = serde_json::from_value(json!({
+            "sample_limit": 25
+        }))
+        .expect("database profile request should deserialize");
+
+        assert_eq!(request.sample_limit, Some(25));
+        assert_eq!(request.database_source, Value::Null);
+
+        let response = ProfileDatabaseSourceResponse {
+            source_id: "src-mysql".to_string(),
+            connector_kind: "mysql".to_string(),
+            redacted_summary: json!({"database": "hy_sql"}),
+            profile: json!({"kind": "mysql", "tables": []}),
+        };
+        let encoded = serde_json::to_value(response).expect("response should serialize");
+
+        assert_eq!(encoded["source_id"], json!("src-mysql"));
+        assert_eq!(encoded["profile"]["kind"], json!("mysql"));
     }
 
     #[test]
