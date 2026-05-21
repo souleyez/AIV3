@@ -95,6 +95,12 @@ test('normalizeModelGatewayStatus hides secrets and keeps lane counts readable',
       active: 2,
       queued: 1,
       runtime_failure_count: 4,
+      shadow_eval_count: 5,
+      shadow_eval_pass_count: 4,
+      quality_score: 80,
+      format_pass_rate: 80,
+      repair_rate: 0,
+      last_shadow_eval_at: '2026-05-21T08:01:00Z',
       circuit_open: true,
       api_key: 'sk-hidden',
     }],
@@ -109,6 +115,10 @@ test('normalizeModelGatewayStatus hides secrets and keeps lane counts readable',
   assert.equal(status.providers[0].providerId, 'openclaw');
   assert.equal(status.providers[0].queuedCount, 1);
   assert.equal(status.providers[0].runtimeFailureCount, 4);
+  assert.equal(status.providers[0].shadowEvalCount, 5);
+  assert.equal(status.providers[0].qualityScore, 80);
+  assert.equal(status.providers[0].formatPassRate, 80);
+  assert.equal(status.providers[0].lastShadowEvalAt, '2026-05-21T08:01:00Z');
   assert.equal(status.providers[0].circuitState, 'open');
   assert.equal(JSON.stringify(status).includes('sk-hidden'), false);
 });

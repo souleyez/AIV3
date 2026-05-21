@@ -298,6 +298,12 @@ pub struct ModelGatewayProfileUsageSummary {
     pub rate_limit_count: i64,
     pub input_tokens: i64,
     pub output_tokens: i64,
+    pub shadow_eval_count: i64,
+    pub shadow_eval_pass_count: i64,
+    pub shadow_eval_fail_count: i64,
+    pub shadow_eval_format_pass_count: i64,
+    pub shadow_eval_repair_count: i64,
+    pub last_shadow_eval_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Clone, Debug)]
@@ -2057,7 +2063,13 @@ impl PgModelGatewayProfileRepository {
                    count(*) filter (where event_type = 'timeout')::bigint as timeout_count,
                    count(*) filter (where event_type = 'rate_limit')::bigint as rate_limit_count,
                    coalesce(sum(input_tokens), 0)::bigint as input_tokens,
-                   coalesce(sum(output_tokens), 0)::bigint as output_tokens
+                   coalesce(sum(output_tokens), 0)::bigint as output_tokens,
+                   count(*) filter (where event_type in ('shadow_quality_pass', 'shadow_quality_fail'))::bigint as shadow_eval_count,
+                   count(*) filter (where event_type = 'shadow_quality_pass')::bigint as shadow_eval_pass_count,
+                   count(*) filter (where event_type = 'shadow_quality_fail')::bigint as shadow_eval_fail_count,
+                   count(*) filter (where event_type = 'shadow_quality_pass')::bigint as shadow_eval_format_pass_count,
+                   count(*) filter (where error_kind = 'repair')::bigint as shadow_eval_repair_count,
+                   max(created_at) filter (where event_type in ('shadow_quality_pass', 'shadow_quality_fail')) as last_shadow_eval_at
             from model_gateway_profile_events
             where tenant_id = $1 and created_at >= $2
             group by profile_id, lane
@@ -2081,6 +2093,12 @@ impl PgModelGatewayProfileRepository {
                 rate_limit_count: row.get("rate_limit_count"),
                 input_tokens: row.get("input_tokens"),
                 output_tokens: row.get("output_tokens"),
+                shadow_eval_count: row.get("shadow_eval_count"),
+                shadow_eval_pass_count: row.get("shadow_eval_pass_count"),
+                shadow_eval_fail_count: row.get("shadow_eval_fail_count"),
+                shadow_eval_format_pass_count: row.get("shadow_eval_format_pass_count"),
+                shadow_eval_repair_count: row.get("shadow_eval_repair_count"),
+                last_shadow_eval_at: row.get("last_shadow_eval_at"),
             })
             .collect())
     }

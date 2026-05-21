@@ -137,6 +137,19 @@ pub struct ModelGatewayProviderStatusView {
     pub runtime_failure_count: u64,
     pub runtime_timeout_count: u64,
     pub runtime_rate_limit_count: u64,
+    pub shadow_eval_count: u64,
+    pub shadow_eval_pass_count: u64,
+    pub shadow_eval_fail_count: u64,
+    pub shadow_eval_format_pass_count: u64,
+    pub shadow_eval_repair_count: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quality_score: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format_pass_rate: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repair_rate: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_shadow_eval_at: Option<DateTime<Utc>>,
     pub consecutive_failures: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub p50_latency_ms: Option<u64>,
@@ -4755,6 +4768,15 @@ mod tests {
                 runtime_failure_count: 1,
                 runtime_timeout_count: 0,
                 runtime_rate_limit_count: 1,
+                shadow_eval_count: 5,
+                shadow_eval_pass_count: 4,
+                shadow_eval_fail_count: 1,
+                shadow_eval_format_pass_count: 4,
+                shadow_eval_repair_count: 0,
+                quality_score: Some(80),
+                format_pass_rate: Some(80),
+                repair_rate: Some(0),
+                last_shadow_eval_at: Some(Utc::now()),
                 consecutive_failures: 1,
                 p50_latency_ms: Some(240),
                 p95_latency_ms: Some(900),
@@ -4770,6 +4792,7 @@ mod tests {
 
         assert!(serialized.contains("assistant_chat"));
         assert!(serialized.contains("runtime_success_count"));
+        assert!(serialized.contains("shadow_eval_pass_count"));
         assert!(!serialized.contains("base_url"));
         assert!(!serialized.contains("auth_env_key"));
         assert!(!serialized.contains("sk-"));

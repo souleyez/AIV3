@@ -127,9 +127,9 @@ use storage::{
     ModelGatewayProfile, ModelGatewayProfileUpdate, ModelGatewayProfileUsageSummary,
     NewAssistantRun, NewAssistantRunEvent, NewAuthAuditEvent, NewChatMessage, NewChatSession,
     NewConversationMemoryItem, NewDataset, NewDatasetDocumentMembership, NewDocument,
-    NewHtmlArtifact, NewModelGatewayProfile, NewPublishedReport, NewPublishedReportVersion,
-    NewReportPlan, NewSecretBinding, NewStaticPageDraft, NewStaticPageImageJob,
-    NewStaticPageRenderOutput, NewUserSession, NewWorkflowTask, PgStorage,
+    NewHtmlArtifact, NewModelGatewayProfile, NewModelGatewayProfileEvent, NewPublishedReport,
+    NewPublishedReportVersion, NewReportPlan, NewSecretBinding, NewStaticPageDraft,
+    NewStaticPageImageJob, NewStaticPageRenderOutput, NewUserSession, NewWorkflowTask, PgStorage,
 };
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tool_registry::{
@@ -5324,6 +5324,18 @@ async fn model_gateway_status_view(
                 .gateway_limiter
                 .provider_stats_snapshot(&source.profile_id);
             let usage = usage_by_profile.get(&source.profile_id);
+            let quality_score = usage.and_then(|summary| {
+                model_gateway_percent(summary.shadow_eval_pass_count, summary.shadow_eval_count)
+            });
+            let format_pass_rate = usage.and_then(|summary| {
+                model_gateway_percent(
+                    summary.shadow_eval_format_pass_count,
+                    summary.shadow_eval_count,
+                )
+            });
+            let repair_rate = usage.and_then(|summary| {
+                model_gateway_percent(summary.shadow_eval_repair_count, summary.shadow_eval_count)
+            });
             ModelGatewayProviderStatusView {
                 profile_id: source.profile_id,
                 display_name: source.display_name,
@@ -5366,6 +5378,25 @@ async fn model_gateway_status_view(
                 runtime_failure_count: stats.failure_count,
                 runtime_timeout_count: stats.timeout_count,
                 runtime_rate_limit_count: stats.rate_limit_count,
+                shadow_eval_count: usage
+                    .map(|summary| summary.shadow_eval_count as u64)
+                    .unwrap_or(0),
+                shadow_eval_pass_count: usage
+                    .map(|summary| summary.shadow_eval_pass_count as u64)
+                    .unwrap_or(0),
+                shadow_eval_fail_count: usage
+                    .map(|summary| summary.shadow_eval_fail_count as u64)
+                    .unwrap_or(0),
+                shadow_eval_format_pass_count: usage
+                    .map(|summary| summary.shadow_eval_format_pass_count as u64)
+                    .unwrap_or(0),
+                shadow_eval_repair_count: usage
+                    .map(|summary| summary.shadow_eval_repair_count as u64)
+                    .unwrap_or(0),
+                quality_score,
+                format_pass_rate,
+                repair_rate,
+                last_shadow_eval_at: usage.and_then(|summary| summary.last_shadow_eval_at.clone()),
                 consecutive_failures: stats.consecutive_failures,
                 p50_latency_ms: stats.p50_latency_ms,
                 p95_latency_ms: stats.p95_latency_ms,
@@ -5432,6 +5463,13 @@ fn model_gateway_i32_to_u32(value: Option<i32>) -> Option<u32> {
 
 fn model_gateway_u32_to_i32(value: Option<u32>) -> Option<i32> {
     value.and_then(|value| i32::try_from(value).ok())
+}
+
+fn model_gateway_percent(numerator: i64, denominator: i64) -> Option<u32> {
+    if denominator <= 0 || numerator < 0 {
+        return None;
+    }
+    Some(((numerator * 100) / denominator).clamp(0, 100) as u32)
 }
 
 async fn create_model_gateway_profile(
@@ -16188,6 +16226,12 @@ async fn external_channel_chat_model_pool_attempts(
         return Ok(None);
     }
 
+    load_external_channel_chat_model_pool_attempts(state).await
+}
+
+async fn load_external_channel_chat_model_pool_attempts(
+    state: &AppState,
+) -> std::result::Result<Option<Vec<ExternalChannelChatRuntimeAttempt>>, ApiError> {
     let db_profiles = state
         .storage
         .model_gateway_profiles()
@@ -16300,6 +16344,14 @@ fn external_channel_model_pool_is_active(
     message: &ExternalBotMessageView,
 ) -> bool {
     model_gateway_lane_routing_mode(MODEL_LANE_ASSISTANT_CHAT) == "active"
+        && external_channel_model_pool_scope_is_active(connection_id, message)
+}
+
+fn external_channel_model_pool_is_shadow_eval(
+    connection_id: &str,
+    message: &ExternalBotMessageView,
+) -> bool {
+    model_gateway_lane_routing_mode(MODEL_LANE_ASSISTANT_CHAT) == "shadow_eval"
         && external_channel_model_pool_scope_is_active(connection_id, message)
 }
 
@@ -16545,6 +16597,298 @@ fn normalize_external_channel_output_for_rejection(output_text: &str) -> String 
         })
         .collect()
 }
+
+fn spawn_external_channel_shadow_quality_eval(
+    state: &AppState,
+    connection_id: &str,
+    run_id: AssistantRunId,
+    message: &ExternalBotMessageView,
+    provider_input: &str,
+    now: DateTime<Utc>,
+) {
+    if !external_channel_model_pool_is_shadow_eval(connection_id, message) {
+        return;
+    }
+    let state = state.clone();
+    let connection_id = connection_id.to_string();
+    let message = message.clone();
+    let provider_input = provider_input.to_string();
+    tokio::spawn(async move {
+        if let Err(error) = record_external_channel_shadow_quality_eval(
+            &state,
+            &connection_id,
+            run_id,
+            &message,
+            provider_input,
+            now,
+        )
+        .await
+        {
+            tracing::warn!(
+                code = %error.payload.code,
+                "model gateway shadow quality evaluation failed"
+            );
+        }
+    });
+}
+
+async fn record_external_channel_shadow_quality_eval(
+    state: &AppState,
+    connection_id: &str,
+    run_id: AssistantRunId,
+    message: &ExternalBotMessageView,
+    provider_input: String,
+    now: DateTime<Utc>,
+) -> std::result::Result<(), ApiError> {
+    let Some(attempts) = load_external_channel_chat_model_pool_attempts(state).await? else {
+        return Ok(());
+    };
+    let timeout = model_gateway_shadow_eval_timeout();
+    for attempt in attempts
+        .into_iter()
+        .filter(|attempt| attempt.profile.is_some())
+        .take(model_gateway_shadow_eval_max_profiles())
+    {
+        record_external_channel_shadow_quality_attempt(
+            state,
+            connection_id,
+            run_id,
+            message,
+            attempt,
+            provider_input.clone(),
+            timeout,
+            now,
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn record_external_channel_shadow_quality_attempt(
+    state: &AppState,
+    connection_id: &str,
+    run_id: AssistantRunId,
+    message: &ExternalBotMessageView,
+    attempt: ExternalChannelChatRuntimeAttempt,
+    provider_input: String,
+    timeout: StdDuration,
+    now: DateTime<Utc>,
+) -> std::result::Result<(), ApiError> {
+    let Some(profile) = attempt.profile.clone() else {
+        return Ok(());
+    };
+    if attempt.runtime.mode == "placeholder" {
+        record_model_gateway_shadow_quality_event(
+            state,
+            run_id,
+            connection_id,
+            message,
+            &attempt,
+            &profile,
+            "shadow_quality_fail",
+            None,
+            None,
+            Some("placeholder_runtime"),
+            now,
+        )
+        .await?;
+        return Ok(());
+    }
+
+    let _permit = match external_channel_acquire_gateway_permit(state, &attempt).await {
+        Ok(permit) => permit,
+        Err(error) => {
+            record_model_gateway_shadow_quality_event(
+                state,
+                run_id,
+                connection_id,
+                message,
+                &attempt,
+                &profile,
+                "shadow_quality_fail",
+                None,
+                None,
+                Some(gateway_limit_error_reason(error)),
+                now,
+            )
+            .await?;
+            return Ok(());
+        }
+    };
+
+    let started_at = Instant::now();
+    let result = tokio::time::timeout(
+        timeout,
+        complete_assistant_run_provider_with_profile(
+            attempt.env_prefix.clone(),
+            MODEL_LANE_ASSISTANT_CHAT,
+            profile.clone(),
+            provider_input,
+        ),
+    )
+    .await;
+    match result {
+        Ok(Ok(response)) => {
+            let latency_ms = response
+                .runtime
+                .latency_ms
+                .or(Some(started_at.elapsed().as_millis() as u64));
+            let reason = external_channel_model_reply_rejection_reason(&response);
+            let event_type = if reason.is_some() {
+                "shadow_quality_fail"
+            } else {
+                "shadow_quality_pass"
+            };
+            record_model_gateway_shadow_quality_event(
+                state,
+                run_id,
+                connection_id,
+                message,
+                &attempt,
+                &profile,
+                event_type,
+                latency_ms,
+                response.runtime.usage.as_ref(),
+                reason.as_deref(),
+                now,
+            )
+            .await?;
+        }
+        Ok(Err(error)) => {
+            let reason = format!(
+                "provider_error:{}:{}",
+                error.status.as_u16(),
+                error.payload.code.as_str()
+            );
+            record_model_gateway_shadow_quality_event(
+                state,
+                run_id,
+                connection_id,
+                message,
+                &attempt,
+                &profile,
+                "shadow_quality_fail",
+                Some(started_at.elapsed().as_millis() as u64),
+                None,
+                Some(&reason),
+                now,
+            )
+            .await?;
+        }
+        Err(_elapsed) => {
+            record_model_gateway_shadow_quality_event(
+                state,
+                run_id,
+                connection_id,
+                message,
+                &attempt,
+                &profile,
+                "shadow_quality_fail",
+                Some(timeout.as_millis() as u64),
+                None,
+                Some("shadow_eval_timeout"),
+                now,
+            )
+            .await?;
+        }
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn record_model_gateway_shadow_quality_event(
+    state: &AppState,
+    run_id: AssistantRunId,
+    connection_id: &str,
+    message: &ExternalBotMessageView,
+    attempt: &ExternalChannelChatRuntimeAttempt,
+    profile: &ModelProviderProfile,
+    event_type: &str,
+    latency_ms: Option<u64>,
+    usage: Option<&llm_gateway::LlmTokenUsage>,
+    error_kind: Option<&str>,
+    now: DateTime<Utc>,
+) -> std::result::Result<(), ApiError> {
+    state
+        .storage
+        .model_gateway_profiles()
+        .record_event(
+            state.tenant_id,
+            NewModelGatewayProfileEvent {
+                profile_id: profile.profile_id.clone(),
+                lane: MODEL_LANE_ASSISTANT_CHAT.to_string(),
+                event_type: event_type.to_string(),
+                latency_ms: latency_ms.and_then(model_gateway_u64_to_i32),
+                input_tokens: usage
+                    .map(|usage| usage.input_tokens as u64)
+                    .and_then(model_gateway_u64_to_i32),
+                output_tokens: usage
+                    .map(|usage| usage.output_tokens as u64)
+                    .and_then(model_gateway_u64_to_i32),
+                error_kind: error_kind.map(model_gateway_sanitized_error_kind),
+                created_at: now,
+            },
+        )
+        .await
+        .map_err(ApiError::from_storage)?;
+    state
+        .storage
+        .assistant_runs()
+        .append_event(
+            state.tenant_id,
+            run_id,
+            &NewAssistantRunEvent {
+                event_name: "assistant_run.model_gateway_shadow_quality_evaluated".to_string(),
+                payload: json!({
+                    "channel_connection_id": connection_id,
+                    "platform": external_channel_platform_wire_value(&message.platform),
+                    "message_external_id": message.message_external_id.clone(),
+                    "profile_id": profile.profile_id.as_str(),
+                    "attempt": attempt.label.as_str(),
+                    "provider": profile.provider_id.as_str(),
+                    "model": profile.model_id.as_str(),
+                    "event_type": event_type,
+                    "latency_ms": latency_ms,
+                    "format_passed": event_type == "shadow_quality_pass",
+                    "failure_reason": error_kind.map(model_gateway_sanitized_error_kind),
+                }),
+                created_at: now,
+            },
+        )
+        .await
+        .map_err(ApiError::from_storage)?;
+    Ok(())
+}
+
+fn model_gateway_shadow_eval_timeout() -> StdDuration {
+    StdDuration::from_millis(external_channel_direct_reply_env_ms(
+        "LLM_GATEWAY_SHADOW_EVAL_TIMEOUT_MS",
+        3_000,
+    ))
+}
+
+fn model_gateway_shadow_eval_max_profiles() -> usize {
+    std::env::var("LLM_GATEWAY_SHADOW_EVAL_MAX_PROFILES")
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .map(|value| value.min(4))
+        .unwrap_or(1)
+}
+
+fn model_gateway_u64_to_i32(value: u64) -> Option<i32> {
+    i32::try_from(value).ok()
+}
+
+fn model_gateway_sanitized_error_kind(reason: &str) -> String {
+    reason
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | ':' | '.'))
+        .take(120)
+        .collect()
+}
+
 
 #[allow(clippy::too_many_arguments)]
 async fn external_channel_chat_model_or_acceptance_reply(
@@ -16961,11 +17305,16 @@ async fn external_channel_chat_model_or_acceptance_reply(
         )
         .await?;
 
-        return Ok(external_channel_text_reply(
+        let reply = external_channel_text_reply(message, output_text, "answered");
+        spawn_external_channel_shadow_quality_eval(
+            state,
+            connection_id,
+            run_id,
             message,
-            output_text,
-            "answered",
-        ));
+            &provider_input,
+            now,
+        );
+        return Ok(reply);
     }
 
     state
@@ -49691,6 +50040,203 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn model_gateway_shadow_quality_records_events_without_changing_reply() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        clear_assistant_openclaw_env();
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_MODE", "provider");
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_PROVIDER", "scripted");
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_MODEL", "assistant-run-primary-v1");
+        std::env::set_var(
+            "ASSISTANT_RUN_RUNTIME_OUTPUT_TEXT",
+            "这是主路由的用户可见回复。",
+        );
+        std::env::set_var("LLM_GATEWAY_LANE_ASSISTANT_CHAT_MODE", "shadow_eval");
+        std::env::set_var(
+            "LLM_GATEWAY_EXTERNAL_CHANNEL_ACTIVE_CONNECTIONS",
+            "generic-chat-main",
+        );
+        std::env::set_var("LLM_GATEWAY_LANE_ASSISTANT_CHAT_PROFILES", "POOL_PRIMARY");
+        std::env::set_var("LLM_GATEWAY_PROFILE_POOL_PRIMARY_PROVIDER_ID", "scripted");
+        std::env::set_var(
+            "LLM_GATEWAY_PROFILE_POOL_PRIMARY_MODEL_ID",
+            "shadow-primary-v1",
+        );
+        std::env::set_var(
+            "LLM_GATEWAY_PROFILE_POOL_PRIMARY_RUNTIME_OUTPUT_TEXT",
+            "这是 shadow eval 的旁路输出，不应返回给用户。",
+        );
+        std::env::set_var("LLM_GATEWAY_PROFILE_POOL_PRIMARY_RUNTIME_LATENCY_MS", "123");
+        std::env::set_var(
+            "LLM_GATEWAY_PROFILE_POOL_PRIMARY_RUNTIME_USAGE_JSON",
+            r#"{"input_tokens":11,"output_tokens":7,"total_tokens":18}"#,
+        );
+        let secret_env_name = format!(
+            "MODEL_GATEWAY_SHADOW_SECRET_{}",
+            Uuid::new_v4()
+                .to_string()
+                .replace('-', "_")
+                .to_ascii_uppercase()
+        );
+        std::env::set_var(
+            "LLM_GATEWAY_PROFILE_POOL_PRIMARY_AUTH_ENV_KEY",
+            &secret_env_name,
+        );
+        std::env::set_var(&secret_env_name, "sk-shadow-secret-value");
+
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping model pool shadow quality endpoint test: {reason}");
+                std::env::remove_var(secret_env_name);
+                clear_assistant_openclaw_env();
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+        let tenant = storage
+            .ensure_tenant(
+                &format!("generic-chat-shadow-quality-test-{}", Uuid::new_v4()),
+                "Generic Chat Shadow Quality Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage.clone(),
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        insert_generic_external_channel_connection(&state, "generic-chat-main").await;
+        let app = router(
+            storage.clone(),
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+
+        let mut message = sample_external_bot_message();
+        message.text = Some("普通问题需要旁路质量评估".to_string());
+        message.message_external_id = "msg-shadow-quality-001".to_string();
+        message.idempotency_key = "generic:tenant-ext-001:msg-shadow-quality-001".to_string();
+        let response = post_json_request(
+            app.clone(),
+            "/v1/external/channels/generic-chat-main/events",
+            &message,
+            None,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let body: ExternalChannelEventResponse = read_json_response(response).await;
+        assert_eq!(
+            body.reply.text.as_deref(),
+            Some("这是主路由的用户可见回复。")
+        );
+
+        let summary =
+            wait_for_model_gateway_shadow_summary(&storage, tenant.id, "pool-primary").await;
+        let summary = summary.expect("shadow quality event should be recorded");
+        assert_eq!(summary.shadow_eval_count, 1);
+        assert_eq!(summary.shadow_eval_pass_count, 1);
+        assert_eq!(summary.shadow_eval_fail_count, 0);
+        assert_eq!(summary.shadow_eval_format_pass_count, 1);
+        assert_eq!(summary.input_tokens, 11);
+        assert_eq!(summary.output_tokens, 7);
+
+        let run_id = body.assistant_run_id.expect("assistant run id");
+        let events = storage
+            .assistant_runs()
+            .list_events(tenant.id, run_id)
+            .await
+            .expect("events should load");
+        let serialized_events = serde_json::to_string(&events).expect("events should serialize");
+        assert!(serialized_events.contains("model_gateway_shadow_quality_evaluated"));
+        assert!(!serialized_events.contains("sk-shadow-secret-value"));
+        assert!(!serialized_events.contains(&secret_env_name));
+        assert!(!serialized_events.contains("旁路输出"));
+
+        std::env::remove_var(secret_env_name);
+        clear_assistant_openclaw_env();
+    }
+
+    #[tokio::test]
+    async fn model_gateway_shadow_quality_disabled_stops_new_events() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        clear_assistant_openclaw_env();
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_MODE", "provider");
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_PROVIDER", "scripted");
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_MODEL", "assistant-run-primary-v1");
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_OUTPUT_TEXT", "这是主路由直答。");
+        std::env::set_var("LLM_GATEWAY_LANE_ASSISTANT_CHAT_MODE", "observe_only");
+        std::env::set_var(
+            "LLM_GATEWAY_EXTERNAL_CHANNEL_ACTIVE_CONNECTIONS",
+            "generic-chat-main",
+        );
+        std::env::set_var("LLM_GATEWAY_LANE_ASSISTANT_CHAT_PROFILES", "POOL_PRIMARY");
+        std::env::set_var("LLM_GATEWAY_PROFILE_POOL_PRIMARY_PROVIDER_ID", "scripted");
+        std::env::set_var(
+            "LLM_GATEWAY_PROFILE_POOL_PRIMARY_MODEL_ID",
+            "shadow-primary-v1",
+        );
+        std::env::set_var(
+            "LLM_GATEWAY_PROFILE_POOL_PRIMARY_RUNTIME_OUTPUT_TEXT",
+            "这条 shadow 输出不应被调用。",
+        );
+
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping disabled shadow quality endpoint test: {reason}");
+                clear_assistant_openclaw_env();
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+        let tenant = storage
+            .ensure_tenant(
+                &format!("generic-chat-shadow-disabled-test-{}", Uuid::new_v4()),
+                "Generic Chat Shadow Disabled Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage.clone(),
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        insert_generic_external_channel_connection(&state, "generic-chat-main").await;
+        let app = router(
+            storage.clone(),
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+
+        let mut message = sample_external_bot_message();
+        message.text = Some("普通问题不启用 shadow eval".to_string());
+        message.message_external_id = "msg-shadow-disabled-001".to_string();
+        message.idempotency_key = "generic:tenant-ext-001:msg-shadow-disabled-001".to_string();
+        let response = post_json_request(
+            app.clone(),
+            "/v1/external/channels/generic-chat-main/events",
+            &message,
+            None,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        tokio::time::sleep(StdDuration::from_millis(100)).await;
+        let summaries = storage
+            .model_gateway_profiles()
+            .summarize_recent_usage(tenant.id, Utc::now() - Duration::minutes(5))
+            .await
+            .expect("usage summary should load");
+        assert!(summaries
+            .iter()
+            .all(|summary| summary.shadow_eval_count == 0));
+        clear_assistant_openclaw_env();
+    }
+
+    #[tokio::test]
     async fn generic_chat_page_event_uses_fallback_when_primary_output_is_suppressed() {
         let _guard = shared_local_postgres_test_lock().lock().await;
         clear_assistant_openclaw_env();
@@ -65315,6 +65861,28 @@ mod tests {
             .expect("request should return a response")
     }
 
+    async fn wait_for_model_gateway_shadow_summary(
+        storage: &PgStorage,
+        tenant_id: TenantId,
+        profile_id: &str,
+    ) -> Option<ModelGatewayProfileUsageSummary> {
+        for _ in 0..20 {
+            let summaries = storage
+                .model_gateway_profiles()
+                .summarize_recent_usage(tenant_id, Utc::now() - Duration::minutes(5))
+                .await
+                .expect("usage summary should load");
+            if let Some(summary) = summaries
+                .into_iter()
+                .find(|summary| summary.profile_id == profile_id && summary.shadow_eval_count > 0)
+            {
+                return Some(summary);
+            }
+            tokio::time::sleep(StdDuration::from_millis(50)).await;
+        }
+        None
+    }
+
     fn cookie_pair_from_set_cookie(response: &axum::response::Response) -> String {
         response
             .headers()
@@ -76167,6 +76735,8 @@ mod tests {
             "LLM_GATEWAY_EXTERNAL_CHANNEL_ACTIVE_CONNECTIONS",
             "LLM_GATEWAY_EXTERNAL_CHANNEL_ACTIVE_TENANTS",
             "LLM_GATEWAY_EXTERNAL_CHANNEL_ACTIVE_PLATFORMS",
+            "LLM_GATEWAY_SHADOW_EVAL_TIMEOUT_MS",
+            "LLM_GATEWAY_SHADOW_EVAL_MAX_PROFILES",
             "LLM_GATEWAY_PROFILE_POOL_PRIMARY_PROFILE_ID",
             "LLM_GATEWAY_PROFILE_POOL_PRIMARY_PROVIDER_ID",
             "LLM_GATEWAY_PROFILE_POOL_PRIMARY_MODEL_ID",
@@ -76184,6 +76754,8 @@ mod tests {
             "LLM_GATEWAY_PROFILE_POOL_PRIMARY_RUNTIME_REQUEST_ID",
             "LLM_GATEWAY_PROFILE_POOL_PRIMARY_RUNTIME_FINISH_REASON",
             "LLM_GATEWAY_PROFILE_POOL_PRIMARY_RUNTIME_LATENCY_MS",
+            "LLM_GATEWAY_PROFILE_POOL_PRIMARY_RUNTIME_USAGE_JSON",
+            "LLM_GATEWAY_PROFILE_POOL_PRIMARY_RUNTIME_TOOL_TRACE_JSON",
             "LLM_GATEWAY_PROFILE_POOL_SECONDARY_PROFILE_ID",
             "LLM_GATEWAY_PROFILE_POOL_SECONDARY_PROVIDER_ID",
             "LLM_GATEWAY_PROFILE_POOL_SECONDARY_MODEL_ID",
@@ -76201,6 +76773,8 @@ mod tests {
             "LLM_GATEWAY_PROFILE_POOL_SECONDARY_RUNTIME_REQUEST_ID",
             "LLM_GATEWAY_PROFILE_POOL_SECONDARY_RUNTIME_FINISH_REASON",
             "LLM_GATEWAY_PROFILE_POOL_SECONDARY_RUNTIME_LATENCY_MS",
+            "LLM_GATEWAY_PROFILE_POOL_SECONDARY_RUNTIME_USAGE_JSON",
+            "LLM_GATEWAY_PROFILE_POOL_SECONDARY_RUNTIME_TOOL_TRACE_JSON",
             "ASSISTANT_RUN_REACT_ENABLED",
             "ASSISTANT_RUN_REACT_MAX_STEPS",
             "OPENCLAW_EXTENSION_ENABLED",
