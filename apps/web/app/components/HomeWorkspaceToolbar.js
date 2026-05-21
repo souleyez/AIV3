@@ -9,6 +9,7 @@ const PAGE_LINKS = [
   { key: 'sources', label: '数据源' },
   { key: 'members', label: '成员' },
   { key: 'audit', label: '审计' },
+  { key: 'model-pool', label: '模型池' },
 ];
 
 function StatusCount({ children, tone = 'neutral' }) {

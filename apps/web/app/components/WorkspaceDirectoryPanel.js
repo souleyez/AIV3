@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { buildDocumentDetailViewModel, chunkSectionHints } from '../lib/document-detail-view';
 import { formatDateTime, formatRelativeTime, formatSnakeCaseLabel, truncateText } from '../lib/formatters';
+import ModelPoolPanel from './ModelPoolPanel';
 
 const PAGE_COPY = {
   datasets: {
@@ -24,6 +25,10 @@ const PAGE_COPY = {
   audit: {
     title: '审计',
     subtitle: '运行观测、工作流状态、产物和本终端操作记录。',
+  },
+  'model-pool': {
+    title: '模型池',
+    subtitle: '统一配置模型 API、并发额度、健康状态和故障切换策略。',
   },
 };
 
@@ -682,6 +687,7 @@ export default function WorkspaceDirectoryPanel({
       {activePage === 'sources' ? <SourcesPage documents={documents} datasets={datasets} /> : null}
       {activePage === 'members' ? <MembersPage accountStatusSummary={accountStatusSummary} /> : null}
       {activePage === 'audit' ? <AuditPage stats={stats} activityEvents={activityEvents} htmlArtifacts={htmlArtifacts} /> : null}
+      {activePage === 'model-pool' ? <ModelPoolPanel accountStatusSummary={accountStatusSummary} /> : null}
     </section>
   );
 }
