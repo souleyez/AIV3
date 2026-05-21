@@ -18270,8 +18270,9 @@ fn assistant_run_dataset_entity_scan_direct_answer_for_dimension(
             | AssistantRunEntityScanAnswerDimension::ResumeProject
             | AssistantRunEntityScanAnswerDimension::ResumeCompany
             | AssistantRunEntityScanAnswerDimension::ResumeExperience
+            | AssistantRunEntityScanAnswerDimension::ResumeProfileMatch
     ) {
-        return assistant_run_resume_profile_direct_answer(&scans, dimension);
+        return assistant_run_resume_profile_direct_answer(&scans, dimension, &request.prompt);
     }
 
     let mut lines = Vec::new();
@@ -18356,6 +18357,7 @@ enum AssistantRunEntityScanAnswerDimension {
     ResumeProject,
     ResumeCompany,
     ResumeExperience,
+    ResumeProfileMatch,
 }
 
 fn assistant_run_entity_scan_answer_dimension(
@@ -18381,6 +18383,9 @@ fn assistant_run_entity_scan_answer_dimension(
     }
     if prompt_requests_resume_company_ranking(prompt) {
         return Some(AssistantRunEntityScanAnswerDimension::ResumeCompany);
+    }
+    if prompt_requests_resume_profile_match(prompt) {
+        return Some(AssistantRunEntityScanAnswerDimension::ResumeProfileMatch);
     }
     if prompt_requests_skill_statistics(prompt) {
         return Some(AssistantRunEntityScanAnswerDimension::Skill);
@@ -18482,6 +18487,7 @@ fn assistant_run_entity_rows_direct_answer(
 fn assistant_run_resume_profile_direct_answer(
     scans: &[Value],
     dimension: AssistantRunEntityScanAnswerDimension,
+    prompt: &str,
 ) -> Option<String> {
     let mut rows = scans
         .iter()
@@ -18730,7 +18736,222 @@ fn assistant_run_resume_profile_direct_answer(
                 },
             ))
         }
+        AssistantRunEntityScanAnswerDimension::ResumeProfileMatch => {
+            assistant_run_resume_profile_match_answer(rows, prompt)
+        }
         _ => None,
+    }
+}
+
+#[derive(Clone, Debug)]
+struct ResumeProfileMatchCriterion {
+    field_key: &'static str,
+    field_label: &'static str,
+    term: String,
+}
+
+fn assistant_run_resume_profile_match_answer(mut rows: Vec<Value>, prompt: &str) -> Option<String> {
+    let criteria = resume_profile_match_criteria(prompt, &rows);
+    if criteria.is_empty() {
+        return None;
+    }
+
+    rows.retain(|row| {
+        criteria
+            .iter()
+            .all(|criterion| resume_profile_row_matches_criterion(row, criterion))
+    });
+    rows.sort_by(|left, right| {
+        resume_profile_row_match_score(right, &criteria)
+            .cmp(&resume_profile_row_match_score(left, &criteria))
+            .then_with(|| {
+                right
+                    .get("latest_year")
+                    .and_then(Value::as_i64)
+                    .cmp(&left.get("latest_year").and_then(Value::as_i64))
+            })
+            .then_with(|| {
+                right
+                    .get("skill_count")
+                    .and_then(Value::as_u64)
+                    .cmp(&left.get("skill_count").and_then(Value::as_u64))
+            })
+            .then_with(|| {
+                resume_profile_candidate_name(left).cmp(&resume_profile_candidate_name(right))
+            })
+    });
+
+    let criteria_label = criteria
+        .iter()
+        .map(|criterion| format!("{}={}", criterion.field_label, criterion.term))
+        .collect::<Vec<_>>()
+        .join("，");
+    if rows.is_empty() {
+        return Some(format!(
+            "未在可见简历结构化扫描中找到匹配“{}”的候选人。",
+            escape_markdown_table_cell(&criteria_label)
+        ));
+    }
+
+    Some(assistant_run_resume_profile_table(
+        &rows,
+        &format!("匹配“{criteria_label}”的候选人简历表"),
+        &[
+            "候选人",
+            "匹配项",
+            "技能",
+            "项目",
+            "公司",
+            "年龄",
+            "最近年份",
+            "文档",
+        ],
+        |row| {
+            vec![
+                resume_profile_candidate_name(row),
+                resume_profile_row_match_summary(row, &criteria),
+                resume_profile_array_string(row, "skill_names", 4),
+                resume_profile_array_string(row, "project_names", 3),
+                resume_profile_array_string(row, "company_names", 3),
+                value_u64_string(row, "age"),
+                value_i64_string(row, "latest_year"),
+                value_string(row, "document_title"),
+            ]
+        },
+    ))
+}
+
+fn resume_profile_match_criteria(prompt: &str, rows: &[Value]) -> Vec<ResumeProfileMatchCriterion> {
+    let preferred_fields = resume_profile_preferred_match_fields(prompt);
+    let mut criteria = Vec::new();
+    for (field_key, field_label) in preferred_fields {
+        for term in resume_profile_unique_field_terms(rows, field_key) {
+            if resume_profile_prompt_matches_term(prompt, &term) {
+                criteria.push(ResumeProfileMatchCriterion {
+                    field_key,
+                    field_label,
+                    term,
+                });
+                break;
+            }
+        }
+    }
+    criteria
+}
+
+fn resume_profile_preferred_match_fields(prompt: &str) -> Vec<(&'static str, &'static str)> {
+    let mut fields = Vec::new();
+    if prompt_requests_skill_statistics(prompt)
+        || prompt_contains_any(prompt, &["会", "懂", "熟悉", "掌握", "技术栈"])
+    {
+        fields.push(("skill_names", "技能"));
+    }
+    if prompt_requests_project_statistics(prompt)
+        || prompt_contains_any(prompt, &["做过", "项目", "产品", "案例", "经历", "参与"])
+    {
+        fields.push(("project_names", "项目"));
+    }
+    if prompt_contains_any(prompt, &["公司", "任职", "雇主", "工作过", "待过"])
+        || ascii_prompt_contains_any(&prompt.to_ascii_lowercase(), &["company", "employer"])
+    {
+        fields.push(("company_names", "公司"));
+    }
+    if prompt_requests_position_statistics(prompt)
+        || prompt_contains_any(prompt, &["岗位", "职位", "职务", "角色"])
+    {
+        fields.push(("position_names", "岗位"));
+    }
+    if prompt_requests_location_statistics(prompt)
+        || prompt_contains_any(prompt, &["城市", "地点", "地区", "所在地"])
+    {
+        fields.push(("location_names", "地点"));
+    }
+    if fields.is_empty() {
+        fields.extend([
+            ("skill_names", "技能"),
+            ("project_names", "项目"),
+            ("company_names", "公司"),
+            ("position_names", "岗位"),
+            ("location_names", "地点"),
+        ]);
+    }
+    dedupe_resume_profile_match_fields(fields)
+}
+
+fn dedupe_resume_profile_match_fields(
+    fields: Vec<(&'static str, &'static str)>,
+) -> Vec<(&'static str, &'static str)> {
+    let mut deduped = Vec::new();
+    for field in fields {
+        if !deduped
+            .iter()
+            .any(|(field_key, _): &(&str, &str)| *field_key == field.0)
+        {
+            deduped.push(field);
+        }
+    }
+    deduped
+}
+
+fn resume_profile_unique_field_terms(rows: &[Value], field_key: &str) -> Vec<String> {
+    let mut terms = Vec::new();
+    for row in rows {
+        for value in resume_profile_array_values(row, field_key) {
+            if resume_profile_term_can_filter(&value) && !terms.iter().any(|term| term == &value) {
+                terms.push(value);
+            }
+        }
+    }
+    terms.sort_by(|left, right| {
+        right
+            .chars()
+            .count()
+            .cmp(&left.chars().count())
+            .then_with(|| left.cmp(right))
+    });
+    terms
+}
+
+fn resume_profile_row_matches_criterion(
+    row: &Value,
+    criterion: &ResumeProfileMatchCriterion,
+) -> bool {
+    resume_profile_array_values(row, criterion.field_key)
+        .into_iter()
+        .any(|value| resume_profile_terms_match(&value, &criterion.term))
+}
+
+fn resume_profile_row_match_score(row: &Value, criteria: &[ResumeProfileMatchCriterion]) -> usize {
+    criteria
+        .iter()
+        .map(|criterion| {
+            resume_profile_array_values(row, criterion.field_key)
+                .into_iter()
+                .filter(|value| resume_profile_terms_match(value, &criterion.term))
+                .count()
+        })
+        .sum()
+}
+
+fn resume_profile_row_match_summary(
+    row: &Value,
+    criteria: &[ResumeProfileMatchCriterion],
+) -> String {
+    let mut matches = Vec::new();
+    for criterion in criteria {
+        for value in resume_profile_array_values(row, criterion.field_key) {
+            if resume_profile_terms_match(&value, &criterion.term) {
+                let item = format!("{}:{}", criterion.field_label, value);
+                if !matches.iter().any(|existing| existing == &item) {
+                    matches.push(item);
+                }
+            }
+        }
+    }
+    if matches.is_empty() {
+        "-".to_string()
+    } else {
+        matches.into_iter().take(5).collect::<Vec<_>>().join("；")
     }
 }
 
@@ -18773,6 +18994,33 @@ fn resume_profile_candidate_name(row: &Value) -> String {
     value_string(row, "candidate_name")
 }
 
+fn resume_profile_array_values(row: &Value, key: &str) -> Vec<String> {
+    row.get(key)
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(normalize_document_entity_value)
+                .filter(|value| !value.is_empty())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+}
+
+fn resume_profile_array_string(row: &Value, key: &str, limit: usize) -> String {
+    let values = resume_profile_array_values(row, key);
+    if values.is_empty() {
+        "-".to_string()
+    } else {
+        values
+            .into_iter()
+            .take(limit)
+            .collect::<Vec<_>>()
+            .join("；")
+    }
+}
+
 fn value_string(row: &Value, key: &str) -> String {
     row.get(key)
         .and_then(Value::as_str)
@@ -18806,6 +19054,126 @@ fn resume_profile_year_span_string(row: &Value) -> String {
     resume_profile_year_span(row)
         .map(|value| value.to_string())
         .unwrap_or_else(|| "-".to_string())
+}
+
+fn resume_profile_prompt_matches_term(prompt: &str, term: &str) -> bool {
+    let prompt_text = prompt.to_ascii_lowercase();
+    let term_text = normalize_document_entity_value(term).to_ascii_lowercase();
+    if term_text.is_empty() || !resume_profile_term_can_filter(&term_text) {
+        return false;
+    }
+    if is_valid_company_name(&normalize_document_entity_value(term)) {
+        return prompt_text.contains(&term_text);
+    }
+    if resume_profile_term_is_ascii(&term_text) {
+        return lexical_query_tokens(&prompt_text)
+            .into_iter()
+            .any(|token| token == term_text);
+    }
+    prompt_text.contains(&term_text)
+        || lexical_query_tokens(&prompt_text)
+            .into_iter()
+            .filter(|token| resume_profile_query_token_can_filter(token))
+            .any(|token| term_text.contains(&token))
+}
+
+fn resume_profile_terms_match(value: &str, term: &str) -> bool {
+    let value_text = normalize_document_entity_value(value).to_ascii_lowercase();
+    let term_text = normalize_document_entity_value(term).to_ascii_lowercase();
+    if value_text.is_empty() || term_text.is_empty() {
+        return false;
+    }
+    if is_valid_company_name(&normalize_document_entity_value(term)) {
+        return value_text == term_text;
+    }
+    if resume_profile_term_is_ascii(&term_text) {
+        return lexical_query_tokens(&value_text)
+            .into_iter()
+            .any(|token| token == term_text);
+    }
+    value_text == term_text
+        || value_text.contains(&term_text)
+        || term_text.contains(&value_text)
+        || lexical_query_tokens(&term_text)
+            .into_iter()
+            .filter(|token| resume_profile_query_token_can_filter(token))
+            .any(|token| value_text.contains(&token))
+}
+
+fn resume_profile_term_is_ascii(value: &str) -> bool {
+    value
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || is_ascii_connector_token_char(ch))
+}
+
+fn resume_profile_term_can_filter(value: &str) -> bool {
+    let normalized = normalize_document_entity_value(value);
+    let lower = normalized.to_ascii_lowercase();
+    let char_count = normalized.chars().count();
+    (2..=80).contains(&char_count)
+        && !is_document_entity_noise(&normalized)
+        && ![
+            "候选人",
+            "简历",
+            "人才",
+            "人员",
+            "项目",
+            "项目经验",
+            "技能",
+            "公司",
+            "岗位",
+            "职位",
+            "经验",
+            "熟悉",
+            "掌握",
+            "负责",
+            "参与",
+            "做过",
+            "会",
+            "懂",
+            "with",
+            "has",
+            "have",
+        ]
+        .contains(&lower.as_str())
+}
+
+fn resume_profile_query_token_can_filter(token: &str) -> bool {
+    let char_count = token.chars().count();
+    char_count >= 2
+        && resume_profile_term_can_filter(token)
+        && !known_location_names()
+            .iter()
+            .any(|location| token == *location)
+        && ![
+            "哪些",
+            "哪个",
+            "哪位",
+            "谁会",
+            "谁有",
+            "有无",
+            "有没有",
+            "做过",
+            "熟悉",
+            "掌握",
+            "项目",
+            "经验",
+            "技能",
+            "公司",
+            "候选",
+            "候选人",
+            "简历",
+            "人才",
+            "人员",
+            "有限",
+            "有限公",
+            "有限公司",
+            "网络",
+            "科技",
+            "顾问",
+            "地产",
+        ]
+        .contains(&token)
 }
 
 fn prompt_requests_company_entity_statistics(prompt: &str) -> bool {
@@ -18874,6 +19242,80 @@ fn prompt_requests_resume_experience_statistics(prompt: &str) -> bool {
     let lower_prompt = prompt.to_ascii_lowercase();
     prompt_contains_any(prompt, &["工作年限", "经验年限", "年限", "履历年限"])
         || ascii_prompt_contains_any(&lower_prompt, &["experience", "tenure", "duration"])
+}
+
+fn prompt_requests_resume_profile_match(prompt: &str) -> bool {
+    let lower_prompt = prompt.to_ascii_lowercase();
+    if prompt_requests_resume_profile_sort(prompt)
+        || prompt_contains_any(
+            prompt,
+            &["出现频次", "频次", "频率", "覆盖文档", "覆盖", "去重"],
+        )
+        || ascii_prompt_contains_any(
+            &lower_prompt,
+            &["frequency", "frequencies", "coverage", "dedupe"],
+        )
+    {
+        return false;
+    }
+
+    let has_candidate_target = prompt_contains_any(
+        prompt,
+        &[
+            "谁",
+            "哪位",
+            "哪些人",
+            "哪些候选人",
+            "候选人",
+            "人才",
+            "人选",
+            "人员",
+            "求职者",
+        ],
+    ) || ascii_prompt_contains_any(
+        &lower_prompt,
+        &["who", "candidate", "candidates", "person", "people"],
+    );
+    let has_resume_search = prompt_has_resume_signal(prompt)
+        && (prompt_contains_any(
+            prompt,
+            &["找", "筛", "筛选", "匹配", "推荐", "符合", "满足"],
+        ) || ascii_prompt_contains_any(
+            &lower_prompt,
+            &["find", "match", "filter", "recommend"],
+        ));
+    let has_match_signal = prompt_contains_any(
+        prompt,
+        &[
+            "会",
+            "懂",
+            "熟悉",
+            "掌握",
+            "具备",
+            "有",
+            "做过",
+            "参与",
+            "负责",
+            "任职",
+            "工作过",
+            "待过",
+            "经验",
+            "技能",
+            "技术栈",
+            "项目",
+            "公司",
+            "岗位",
+            "职位",
+        ],
+    ) || ascii_prompt_contains_any(
+        &lower_prompt,
+        &[
+            "with", "has", "have", "knows", "skill", "skills", "project", "company", "employer",
+            "role",
+        ],
+    );
+
+    (has_candidate_target || has_resume_search) && has_match_signal
 }
 
 fn prompt_requests_resume_profile_sort(prompt: &str) -> bool {
@@ -53031,6 +53473,14 @@ mod tests {
         ));
         assert!(assistant_run_dataset_entity_scan_requested(
             &selected_scope,
+            "谁会 Java？"
+        ));
+        assert!(assistant_run_dataset_entity_scan_requested(
+            &selected_scope,
+            "哪些候选人做过物联网项目？"
+        ));
+        assert!(assistant_run_dataset_entity_scan_requested(
+            &selected_scope,
             "按最近年份排序简历"
         ));
         assert!(assistant_run_dataset_entity_scan_requested(
@@ -53405,7 +53855,12 @@ mod tests {
                         "latest_year": 2024,
                         "company_count": 1,
                         "skill_count": 1,
-                        "project_count": 1
+                        "project_count": 1,
+                        "company_names": ["广州寓力地产顾问有限公司"],
+                        "skill_names": ["Java"],
+                        "project_names": ["智能知识库平台"],
+                        "position_names": ["Java工程师"],
+                        "location_names": ["深圳"]
                     },
                     {
                         "document_id": "doc-2",
@@ -53417,7 +53872,12 @@ mod tests {
                         "latest_year": 2023,
                         "company_count": 3,
                         "skill_count": 2,
-                        "project_count": 0
+                        "project_count": 0,
+                        "company_names": ["广州冠晚网络有限公司", "广州寓力地产顾问有限公司", "深圳星拓智能科技有限公司"],
+                        "skill_names": ["Java", "Rust"],
+                        "project_names": [],
+                        "position_names": ["架构师"],
+                        "location_names": ["广州"]
                     }
                 ],
                 "company_names": ["广州冠晚网络有限公司", "广州寓力地产顾问有限公司"],
@@ -53561,6 +54021,39 @@ mod tests {
         let zhang_company_index = resume_company_answer.find("| 张三 | 3 | 2 | 0 |").unwrap();
         let li_company_index = resume_company_answer.find("| 李四 | 1 | 1 | 1 |").unwrap();
         assert!(zhang_company_index < li_company_index);
+
+        let rust_match_request = CreateAssistantRunRequest {
+            prompt: "谁会 Rust？".to_string(),
+            ..age_request.clone()
+        };
+        let rust_match_answer =
+            assistant_run_dataset_entity_scan_direct_answer(&rust_match_request, &evidence)
+                .expect("resume skill match should produce a candidate table");
+        assert!(rust_match_answer.contains("匹配“技能=Rust”的候选人简历表"));
+        assert!(rust_match_answer.contains("| 张三 | 技能:Rust |"));
+        assert!(!rust_match_answer.contains("| 李四 |"));
+
+        let project_match_request = CreateAssistantRunRequest {
+            prompt: "哪些候选人做过智能知识库平台项目？".to_string(),
+            ..age_request.clone()
+        };
+        let project_match_answer =
+            assistant_run_dataset_entity_scan_direct_answer(&project_match_request, &evidence)
+                .expect("resume project match should produce a candidate table");
+        assert!(project_match_answer.contains("项目=智能知识库平台"));
+        assert!(project_match_answer.contains("| 李四 | 项目:智能知识库平台 |"));
+        assert!(!project_match_answer.contains("| 张三 |"));
+
+        let company_match_request = CreateAssistantRunRequest {
+            prompt: "哪些候选人在广州冠晚网络有限公司任职？".to_string(),
+            ..age_request.clone()
+        };
+        let company_match_answer =
+            assistant_run_dataset_entity_scan_direct_answer(&company_match_request, &evidence)
+                .expect("resume company match should produce a candidate table");
+        assert!(company_match_answer.contains("公司=广州冠晚网络有限公司"));
+        assert!(company_match_answer.contains("| 张三 | 公司:广州冠晚网络有限公司 |"));
+        assert!(!company_match_answer.contains("| 李四 |"));
 
         let experience_request = CreateAssistantRunRequest {
             prompt: "简历按工作年限排序出表".to_string(),
