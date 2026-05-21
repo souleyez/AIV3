@@ -35534,6 +35534,13 @@ pub async fn apply_workflow_signal_with_dependencies(
         )
         .await
         .map_err(ApiError::from_storage)?;
+    update_external_sync_run_workflow_status(
+        storage,
+        tenant_id,
+        &next_execution,
+        persisted_event.created_at,
+    )
+    .await?;
     publish_workflow_transition_events(
         event_bus,
         &next_execution,
@@ -35550,6 +35557,64 @@ pub async fn apply_workflow_signal_with_dependencies(
             .map(to_workflow_task_view)
             .collect(),
     })
+}
+
+async fn update_external_sync_run_workflow_status(
+    storage: &PgStorage,
+    tenant_id: TenantId,
+    execution: &WorkflowExecution,
+    occurred_at: DateTime<Utc>,
+) -> std::result::Result<(), ApiError> {
+    if execution.kind != WorkflowKind::ExternalSourceSync {
+        return Ok(());
+    }
+    let Some(sync_run_id) = execution
+        .context
+        .get("external_sync_run_id")
+        .and_then(Value::as_str)
+        .and_then(|raw| Uuid::parse_str(raw).ok())
+    else {
+        return Ok(());
+    };
+    let failure_kind = match execution.status {
+        WorkflowStatus::Failed => Some(
+            execution
+                .context
+                .get("failed_task_key")
+                .and_then(Value::as_str)
+                .unwrap_or("workflow_failed")
+                .to_string(),
+        ),
+        WorkflowStatus::Cancelled => Some("cancelled".to_string()),
+        WorkflowStatus::DeadLettered => Some("dead_lettered".to_string()),
+        WorkflowStatus::Pending | WorkflowStatus::Running | WorkflowStatus::Succeeded => None,
+    };
+
+    sqlx::query(
+        r#"
+        update external_sync_runs
+        set status = $3,
+            checkpoint = checkpoint || $4,
+            failure_kind = $5,
+            updated_at = $6
+        where tenant_id = $1 and id = $2
+        "#,
+    )
+    .bind(tenant_id.0)
+    .bind(sync_run_id)
+    .bind(execution.status.as_str())
+    .bind(json!({
+        "workflow_execution_id": execution.id,
+        "workflow_stage": execution.stage,
+        "workflow_status": execution.status.as_str(),
+    }))
+    .bind(failure_kind)
+    .bind(occurred_at)
+    .execute(storage.pool())
+    .await
+    .map_err(|error| ApiError::from_storage(anyhow::Error::new(error)))?;
+
+    Ok(())
 }
 
 async fn publish_workflow_transition_events(
@@ -55238,6 +55303,51 @@ mod tests {
             json!(response.workflow_execution.id.to_string())
         );
         assert_eq!(counts["enqueued_task_count"], json!(1));
+
+        let mut completed = None;
+        for task_key in [
+            "sync_external_users",
+            "sync_external_acl",
+            "sync_external_metadata",
+            "fetch_external_content",
+            "ingest_external_content",
+            "index_external_retrieval",
+        ] {
+            completed = Some(
+                apply_workflow_signal(
+                    &state,
+                    response.workflow_execution.id,
+                    WorkflowSignal::StepCompleted {
+                        task_key: task_key.to_string(),
+                        output: Some(json!({ "task_key": task_key })),
+                    },
+                )
+                .await
+                .expect("workflow step should advance"),
+            );
+        }
+
+        let completed = completed.expect("workflow should complete");
+        assert_eq!(completed.execution.status, WorkflowStatus::Succeeded);
+        assert_eq!(completed.execution.stage, "completed");
+
+        let row = sqlx::query(
+            r#"
+            select status, failure_kind, checkpoint
+            from external_sync_runs
+            where tenant_id = $1 and id = $2
+            "#,
+        )
+        .bind(state.tenant_id.0)
+        .bind(sync_run_id)
+        .fetch_one(state.storage.pool())
+        .await
+        .expect("external sync run should track completed workflow");
+        let checkpoint: Value = row.get("checkpoint");
+        assert_eq!(row.get::<String, _>("status"), "succeeded");
+        assert!(row.get::<Option<String>, _>("failure_kind").is_none());
+        assert_eq!(checkpoint["workflow_stage"], json!("completed"));
+        assert_eq!(checkpoint["workflow_status"], json!("succeeded"));
     }
 
     #[test]
