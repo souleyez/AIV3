@@ -100,7 +100,7 @@ use event_bus::{
 use external_source_connectors::{
     aggregate_mysql_table, inspect_mysql_schema, preview_mysql_table, profile_mysql_database,
     test_mysql_connection, DatabaseSemanticProfile, DatabaseSourceError, MySqlAggregateRequest,
-    MySqlSourceConfig,
+    MySqlSourceConfig, MySqlTableMapping,
 };
 use futures_util::{stream, Stream, StreamExt};
 use hmac::{Hmac, Mac};
@@ -179,6 +179,11 @@ const DEFAULT_STATIC_PAGE_INTENT_RUNTIME_MODEL: &str = "static-page-intent-v1";
 const ASSISTANT_RUN_EVIDENCE_DEFAULT_LIMIT: usize = 4;
 const ASSISTANT_RUN_EVIDENCE_MAX_LIMIT: usize = 8;
 const ASSISTANT_RUN_EVIDENCE_DATASET_LIMIT: usize = 2;
+const ASSISTANT_RUN_DATABASE_AGGREGATE_RESULT_LIMIT: u32 = 8;
+const ASSISTANT_RUN_DATABASE_AGGREGATE_SCAN_LIMIT_DEFAULT: u32 = 5_000;
+const ASSISTANT_RUN_DATABASE_AGGREGATE_SCAN_LIMIT_MAX: u32 = 50_000;
+const ASSISTANT_RUN_DATABASE_SOURCE_LIMIT: usize = 2;
+const ASSISTANT_RUN_DATABASE_AGGREGATE_METRIC_LIMIT: usize = 2;
 const ASSISTANT_RUN_DETAIL_TARGET_LIMIT: usize = 3;
 const ASSISTANT_RUN_DATASET_ENTITY_SCAN_DOCUMENT_LIMIT: usize = 48;
 const ASSISTANT_RUN_DATASET_ENTITY_SCAN_CHUNK_LIMIT: usize = 4;
@@ -27390,6 +27395,10 @@ fn assistant_run_codex_shadow_comparison_status(
 }
 
 fn push_unique_string(items: &mut Vec<String>, item: &str) {
+    let item = item.trim();
+    if item.is_empty() {
+        return;
+    }
     if !items.iter().any(|existing| existing == item) {
         items.push(item.to_string());
     }
@@ -27942,6 +27951,10 @@ async fn build_assistant_run_evidence_state(
             supplied_items.extend(scan_items);
         }
 
+        let database_supply_items =
+            build_assistant_run_database_aggregate_supply(state, &dataset, prompt).await?;
+        supplied_items.extend(database_supply_items);
+
         let evidences = state
             .storage
             .retrieval_evidences()
@@ -28077,6 +28090,307 @@ async fn build_assistant_run_evidence_state(
         "fallback_supply_policy": if fallback_supply_count > 0 { "visible_document_chunks_when_retrieval_evidence_missing" } else { "not_used" },
         "limit": limit,
     }))
+}
+
+async fn build_assistant_run_database_aggregate_supply(
+    state: &AppState,
+    dataset: &Dataset,
+    prompt: &str,
+) -> std::result::Result<Vec<Value>, ApiError> {
+    if !assistant_run_database_aggregate_requested(prompt) {
+        return Ok(Vec::new());
+    }
+
+    let source_ids = load_dataset_external_source_ids(state, dataset.id).await?;
+    if source_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut supplied_items = Vec::new();
+    for source_id in source_ids
+        .into_iter()
+        .take(ASSISTANT_RUN_DATABASE_SOURCE_LIMIT)
+    {
+        let source = match load_enabled_database_source_connection(state, &source_id).await {
+            Ok(source) => source,
+            Err(_) => continue,
+        };
+        let config = match mysql_source_config_for_request(&source, &Value::Null) {
+            Ok(config) => config,
+            Err(error) => {
+                supplied_items.push(json!({
+                    "type": "database_aggregate_error",
+                    "dataset_id": dataset.id,
+                    "source_id": source_id,
+                    "status": "config_unavailable",
+                    "error_code": error.payload.code,
+                    "message": error.payload.message,
+                }));
+                continue;
+            }
+        };
+        let Some(mapping) = assistant_run_database_mapping_for_prompt(&config, prompt) else {
+            continue;
+        };
+        let dimensions = assistant_run_database_aggregate_dimensions(mapping, prompt);
+        let metrics = assistant_run_database_aggregate_metrics(mapping, prompt);
+        let aggregation = assistant_run_database_aggregation(prompt, !metrics.is_empty());
+        let scan_limit = assistant_run_database_aggregate_scan_limit();
+        let metric_requests = if metrics.is_empty() {
+            vec![None]
+        } else {
+            metrics.into_iter().map(Some).collect::<Vec<_>>()
+        };
+
+        for metric in metric_requests
+            .into_iter()
+            .take(ASSISTANT_RUN_DATABASE_AGGREGATE_METRIC_LIMIT)
+        {
+            let request = MySqlAggregateRequest {
+                table: mapping.table.clone(),
+                dimensions: dimensions.clone(),
+                metric: metric.clone(),
+                aggregation: aggregation.clone(),
+                limit: Some(ASSISTANT_RUN_DATABASE_AGGREGATE_RESULT_LIMIT),
+                scan_limit: Some(scan_limit),
+            };
+            match aggregate_mysql_table(&config, &request).await {
+                Ok(result) => supplied_items.push(json!({
+                    "type": "database_aggregate",
+                    "dataset_id": dataset.id,
+                    "dataset_key": dataset.key,
+                    "dataset_title": dataset.title,
+                    "source_id": source.source_id,
+                    "connector_kind": source.connector_kind,
+                    "table": result.table,
+                    "dimensions": result.dimensions,
+                    "metric": result.metric,
+                    "aggregation": result.aggregation,
+                    "columns": result.columns,
+                    "rows": result.rows,
+                    "row_limit": result.row_limit,
+                    "scan_limit": result.scan_limit,
+                    "source_scope": "selected_database_source_limited_scan",
+                    "policy": "host_controlled_read_only_aggregate",
+                    "note": "数据库型数据集的结构化聚合供料；scan_limit 表示本次最多扫描的源表行数，模型需要在回答中说明范围。",
+                })),
+                Err(error) => supplied_items.push(json!({
+                    "type": "database_aggregate_error",
+                    "dataset_id": dataset.id,
+                    "dataset_key": dataset.key,
+                    "source_id": source.source_id,
+                    "table": mapping.table,
+                    "metric": metric,
+                    "aggregation": aggregation,
+                    "status": "aggregate_failed",
+                    "message": error.to_string(),
+                })),
+            }
+        }
+    }
+
+    Ok(supplied_items)
+}
+
+async fn load_dataset_external_source_ids(
+    state: &AppState,
+    dataset_id: DatasetId,
+) -> std::result::Result<Vec<String>, ApiError> {
+    let rows = sqlx::query(
+        r#"
+        select metadata #>> '{external_source,source_id}' as source_id,
+               count(*)::bigint as document_count
+        from documents
+        where tenant_id = $1
+          and dataset_id = $2
+          and metadata #>> '{external_source,source_id}' is not null
+        group by source_id
+        order by document_count desc, source_id asc
+        limit $3
+        "#,
+    )
+    .bind(state.tenant_id.0)
+    .bind(dataset_id.0)
+    .bind(ASSISTANT_RUN_DATABASE_SOURCE_LIMIT as i64)
+    .fetch_all(state.storage.pool())
+    .await
+    .map_err(|error| ApiError::from_storage(anyhow::Error::new(error)))?;
+
+    Ok(rows
+        .into_iter()
+        .filter_map(|row| row.try_get::<Option<String>, _>("source_id").ok().flatten())
+        .map(|source_id| source_id.trim().to_string())
+        .filter(|source_id| !source_id.is_empty())
+        .collect())
+}
+
+fn assistant_run_database_aggregate_requested(prompt: &str) -> bool {
+    prompt_has_any(
+        prompt,
+        &[
+            "统计", "汇总", "合计", "排序", "排名", "排行", "前", "最高", "最大", "最低", "最小",
+            "平均", "趋势", "维度", "报表", "表格", "top", "rank", "sum", "avg", "max", "min",
+            "up", "down", "上行", "下行", "流量", "区域", "楼层",
+        ],
+    )
+}
+
+fn assistant_run_database_mapping_for_prompt<'a>(
+    config: &'a MySqlSourceConfig,
+    prompt: &str,
+) -> Option<&'a MySqlTableMapping> {
+    let normalized = prompt.to_ascii_lowercase();
+    config
+        .tables
+        .iter()
+        .find(|mapping| normalized.contains(&mapping.table.to_ascii_lowercase()))
+        .or_else(|| config.tables.first())
+}
+
+fn assistant_run_database_aggregate_metrics(
+    mapping: &MySqlTableMapping,
+    prompt: &str,
+) -> Vec<String> {
+    let mut metrics = Vec::new();
+    if prompt_has_any(prompt, &["down", "下行", "离开", "离场", "出场", "出口"]) {
+        push_database_metric_if_present(mapping, &mut metrics, "down");
+    }
+    if prompt_has_any(prompt, &["up", "上行", "进入", "进场", "入口"]) {
+        push_database_metric_if_present(mapping, &mut metrics, "up");
+    }
+    if metrics.is_empty() && prompt_has_any(prompt, &["流量", "客流", "traffic"]) {
+        push_database_metric_if_present(mapping, &mut metrics, "up");
+        push_database_metric_if_present(mapping, &mut metrics, "down");
+    }
+    metrics.truncate(ASSISTANT_RUN_DATABASE_AGGREGATE_METRIC_LIMIT);
+    metrics
+}
+
+fn push_database_metric_if_present(
+    mapping: &MySqlTableMapping,
+    metrics: &mut Vec<String>,
+    column: &str,
+) {
+    if metrics.iter().any(|metric| metric == column) {
+        return;
+    }
+    if assistant_run_database_mapping_columns(mapping)
+        .iter()
+        .any(|candidate| candidate == column)
+    {
+        metrics.push(column.to_string());
+    }
+}
+
+fn assistant_run_database_aggregate_dimensions(
+    mapping: &MySqlTableMapping,
+    prompt: &str,
+) -> Vec<String> {
+    let mut dimensions = Vec::new();
+    let wants_time = prompt_has_any(
+        prompt,
+        &[
+            "时间", "日期", "小时", "日", "趋势", "txdate", "date", "time", "by time",
+        ],
+    );
+    let wants_entity = prompt_has_any(
+        prompt,
+        &[
+            "区域", "位置", "楼层", "门", "梯", "点位", "areaname", "area", "top", "排名", "排行",
+            "排序", "前",
+        ],
+    );
+    if wants_entity {
+        if let Some(title_column) = mapping.title_column.as_deref() {
+            push_unique_string(&mut dimensions, title_column);
+        } else {
+            push_unique_string(&mut dimensions, &mapping.id_column);
+        }
+    }
+    if wants_time {
+        if let Some(time_column) = assistant_run_database_time_column(mapping) {
+            push_unique_string(&mut dimensions, &time_column);
+        }
+    }
+    if dimensions.is_empty() {
+        if let Some(title_column) = mapping.title_column.as_deref() {
+            push_unique_string(&mut dimensions, title_column);
+        }
+    }
+    dimensions.truncate(3);
+    dimensions
+}
+
+fn assistant_run_database_time_column(mapping: &MySqlTableMapping) -> Option<String> {
+    let columns = assistant_run_database_mapping_columns(mapping);
+    columns
+        .iter()
+        .find(|column| column.eq_ignore_ascii_case("txdate"))
+        .cloned()
+        .or_else(|| {
+            columns
+                .iter()
+                .find(|column| {
+                    let lower = column.to_ascii_lowercase();
+                    lower.contains("date") || lower.contains("time")
+                })
+                .cloned()
+        })
+}
+
+fn assistant_run_database_aggregation(prompt: &str, has_metric: bool) -> String {
+    if !has_metric {
+        return "count".to_string();
+    }
+    if prompt_has_any(prompt, &["平均", "avg", "average"]) {
+        "avg".to_string()
+    } else if prompt_has_any(prompt, &["最低", "最小", "min"]) {
+        "min".to_string()
+    } else if prompt_has_any(prompt, &["单点最大", "最大值", "max"]) {
+        "max".to_string()
+    } else {
+        "sum".to_string()
+    }
+}
+
+fn assistant_run_database_mapping_columns(mapping: &MySqlTableMapping) -> Vec<String> {
+    let mut columns = Vec::new();
+    push_unique_string(&mut columns, &mapping.id_column);
+    for column in &mapping.id_columns {
+        push_unique_string(&mut columns, column);
+    }
+    if let Some(column) = mapping.title_column.as_deref() {
+        push_unique_string(&mut columns, column);
+    }
+    for column in &mapping.content_columns {
+        push_unique_string(&mut columns, column);
+    }
+    if let Some(column) = mapping.updated_at_column.as_deref() {
+        push_unique_string(&mut columns, column);
+    }
+    if let Some(column) = mapping.version_column.as_deref() {
+        push_unique_string(&mut columns, column);
+    }
+    for column in &mapping.metadata_columns {
+        push_unique_string(&mut columns, column);
+    }
+    columns
+}
+
+fn assistant_run_database_aggregate_scan_limit() -> u32 {
+    std::env::var("ASSISTANT_RUN_DATABASE_AGGREGATE_SCAN_LIMIT")
+        .ok()
+        .and_then(|value| value.parse::<u32>().ok())
+        .unwrap_or(ASSISTANT_RUN_DATABASE_AGGREGATE_SCAN_LIMIT_DEFAULT)
+        .clamp(1, ASSISTANT_RUN_DATABASE_AGGREGATE_SCAN_LIMIT_MAX)
+}
+
+fn prompt_has_any(prompt: &str, needles: &[&str]) -> bool {
+    let lower = prompt.to_ascii_lowercase();
+    needles.iter().any(|needle| {
+        let needle = needle.to_ascii_lowercase();
+        !needle.is_empty() && lower.contains(&needle)
+    })
 }
 
 async fn build_assistant_run_document_parse_status_supply(
@@ -49388,6 +49702,77 @@ mod tests {
             config_redacted,
             disabled_at: None,
         }
+    }
+
+    fn traffic_area_mapping_for_test() -> MySqlTableMapping {
+        MySqlTableMapping {
+            table: "bi_traffic_area".to_string(),
+            object_type: "document".to_string(),
+            id_column: "storecode".to_string(),
+            id_columns: vec![
+                "storecode".to_string(),
+                "areaid".to_string(),
+                "txdate".to_string(),
+            ],
+            title_column: Some("areaname".to_string()),
+            content_columns: vec![
+                "areaname".to_string(),
+                "areaid".to_string(),
+                "areatype".to_string(),
+                "up".to_string(),
+                "down".to_string(),
+                "txdate".to_string(),
+                "modifytime".to_string(),
+            ],
+            content_type: "text/markdown".to_string(),
+            updated_at_column: Some("modifytime".to_string()),
+            version_column: None,
+            metadata_columns: vec![
+                "storecode".to_string(),
+                "areaid".to_string(),
+                "areatype".to_string(),
+                "txdate".to_string(),
+            ],
+            revision_strategy: external_source_connectors::MySqlRevisionStrategy::UpdatedAtHash,
+        }
+    }
+
+    #[test]
+    fn database_aggregate_heuristics_pick_traffic_metric_and_dimensions() {
+        let mapping = traffic_area_mapping_for_test();
+
+        assert!(assistant_run_database_aggregate_requested(
+            "列出上行 up 最大的前5个区域，带时间"
+        ));
+        assert_eq!(
+            assistant_run_database_aggregate_metrics(&mapping, "列出上行 up 最大的前5个区域"),
+            vec!["up".to_string()]
+        );
+        assert_eq!(
+            assistant_run_database_aggregate_dimensions(
+                &mapping,
+                "列出上行 up 最大的前5个区域，带时间"
+            ),
+            vec!["areaname".to_string(), "txdate".to_string()]
+        );
+        assert_eq!(
+            assistant_run_database_aggregation("列出上行 up 最大的前5个区域", true),
+            "sum"
+        );
+    }
+
+    #[test]
+    fn database_aggregate_heuristics_support_count_and_down_metric() {
+        let mapping = traffic_area_mapping_for_test();
+
+        assert_eq!(
+            assistant_run_database_aggregate_metrics(&mapping, "按区域统计下行流量排行"),
+            vec!["down".to_string()]
+        );
+        assert_eq!(
+            assistant_run_database_aggregation("按区域统计记录数量", false),
+            "count"
+        );
     }
 
     #[test]
