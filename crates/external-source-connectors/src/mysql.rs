@@ -527,12 +527,8 @@ fn build_table_semantic_profile(
         &entity_columns,
         &text_columns,
     );
-    let suggested_visualizations = table_visualization_suggestions(
-        &table.name,
-        &dimensions,
-        &metrics,
-        &time_dimensions,
-    );
+    let suggested_visualizations =
+        table_visualization_suggestions(&table.name, &dimensions, &metrics, &time_dimensions);
     let suggested_questions =
         table_suggested_questions(&table.name, &dimensions, &metrics, &time_dimensions);
 
@@ -636,7 +632,10 @@ fn classify_column_semantic_role(
     let name = column.name.to_ascii_lowercase();
     let data_type = column.data_type.to_ascii_lowercase();
     let column_type = column.column_type.to_ascii_lowercase();
-    if primary_key_columns.iter().any(|candidate| candidate == &column.name) {
+    if primary_key_columns
+        .iter()
+        .any(|candidate| candidate == &column.name)
+    {
         return ("primary_key", 100);
     }
     if is_boolean_type(&data_type, &column_type, &name) {
@@ -668,7 +667,12 @@ fn classify_column_semantic_role(
         {
             return ("dimension", 78);
         }
-        if sample.average_len > 80 || name_has_any(&name, &["content", "desc", "detail", "remark", "memo", "note"]) {
+        if sample.average_len > 80
+            || name_has_any(
+                &name,
+                &["content", "desc", "detail", "remark", "memo", "note"],
+            )
+        {
             return ("text", 76);
         }
         return ("dimension", 65);
@@ -716,7 +720,10 @@ fn suggested_table_mapping(
         .iter()
         .find(|column| {
             let normalized = column.to_ascii_lowercase();
-            name_has_any(&normalized, &["updated", "modified", "changed", "time", "date"])
+            name_has_any(
+                &normalized,
+                &["updated", "modified", "changed", "time", "date"],
+            )
         })
         .cloned()
         .or_else(|| time_dimensions.first().cloned());
@@ -780,8 +787,9 @@ fn suggested_table_mapping(
         version_column,
         metadata_columns,
         confidence,
-        rationale: "基于主键、字段名称、数据类型和样本值推断，可作为数据库表同步到数据集文档的默认映射。"
-            .to_string(),
+        rationale:
+            "基于主键、字段名称、数据类型和样本值推断，可作为数据库表同步到数据集文档的默认映射。"
+                .to_string(),
     }
 }
 
@@ -808,7 +816,10 @@ fn mapping_confidence(
     if !content_columns.is_empty() {
         confidence += 20;
     }
-    if columns.iter().any(|column| column.semantic_role == "metric") {
+    if columns
+        .iter()
+        .any(|column| column.semantic_role == "metric")
+    {
         confidence += 5;
     }
     confidence.min(95)
@@ -949,7 +960,10 @@ fn is_boolean_type(data_type: &str, column_type: &str, name: &str) -> bool {
     data_type == "boolean"
         || data_type == "bool"
         || column_type == "tinyint(1)"
-        || name_has_any(name, &["is_", "has_", "enabled", "disabled", "active", "flag"])
+        || name_has_any(
+            name,
+            &["is_", "has_", "enabled", "disabled", "active", "flag"],
+        )
 }
 
 fn looks_like_identifier(name: &str) -> bool {
@@ -964,9 +978,9 @@ fn looks_like_metric(name: &str) -> bool {
     name_has_any(
         name,
         &[
-            "count", "num", "amount", "total", "sum", "rate", "ratio", "score", "value",
-            "price", "cost", "traffic", "flow", "volume", "qty", "avg", "min", "max",
-            "duration", "distance", "area",
+            "count", "num", "amount", "total", "sum", "rate", "ratio", "score", "value", "price",
+            "cost", "traffic", "flow", "volume", "qty", "avg", "min", "max", "duration",
+            "distance", "area",
         ],
     )
 }
@@ -975,8 +989,18 @@ fn looks_like_entity(name: &str) -> bool {
     name_has_any(
         name,
         &[
-            "user", "person", "employee", "customer", "company", "org", "organization",
-            "supplier", "vendor", "client", "project", "name",
+            "user",
+            "person",
+            "employee",
+            "customer",
+            "company",
+            "org",
+            "organization",
+            "supplier",
+            "vendor",
+            "client",
+            "project",
+            "name",
         ],
     )
 }
@@ -985,8 +1009,8 @@ fn looks_like_dimension(name: &str) -> bool {
     name_has_any(
         name,
         &[
-            "type", "status", "category", "class", "level", "gender", "sex", "city",
-            "province", "district", "region", "area", "source", "channel", "skill", "tag",
+            "type", "status", "category", "class", "level", "gender", "sex", "city", "province",
+            "district", "region", "area", "source", "channel", "skill", "tag",
         ],
     )
 }
@@ -1922,28 +1946,22 @@ mod tests {
             table.suggested_mapping.title_column.as_deref(),
             Some("area_name")
         );
-        assert!(
-            table
-                .suggested_mapping
-                .content_columns
-                .contains(&"traffic_count".to_string())
-        );
+        assert!(table
+            .suggested_mapping
+            .content_columns
+            .contains(&"traffic_count".to_string()));
         assert_eq!(
             table.suggested_mapping.updated_at_column.as_deref(),
             Some("stat_date")
         );
-        assert!(
-            table
-                .suggested_visualizations
-                .iter()
-                .any(|item| item.chart_type == "bar")
-        );
-        assert!(
-            profile
-                .report_suggestions
-                .iter()
-                .any(|item| item.table == "bi_traffic_area")
-        );
+        assert!(table
+            .suggested_visualizations
+            .iter()
+            .any(|item| item.chart_type == "bar"));
+        assert!(profile
+            .report_suggestions
+            .iter()
+            .any(|item| item.table == "bi_traffic_area"));
     }
 
     #[test]
@@ -1989,12 +2007,10 @@ mod tests {
         assert!(table.entity_columns.contains(&"area_code".to_string()));
         assert!(table.dimensions.contains(&"area_name".to_string()));
         assert_eq!(table.suggested_mapping.id_column, "area_code");
-        assert!(
-            table
-                .suggested_mapping
-                .content_columns
-                .contains(&"area_name".to_string())
-        );
+        assert!(table
+            .suggested_mapping
+            .content_columns
+            .contains(&"area_name".to_string()));
         assert_eq!(table.suggested_visualizations[0].metrics[0], "record_count");
     }
 

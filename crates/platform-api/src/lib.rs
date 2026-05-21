@@ -22,6 +22,7 @@ use contracts::{
     AdvanceWorkflowExecutionResponse, ApiErrorResponse, AppendAssistantRunEventRequest,
     AppendAssistantRunEventResponse, AppendChatSessionTurnRequest, AppendChatSessionTurnResponse,
     AppendStaticPageDraftOperationsRequest, AppendStaticPageDraftOperationsResponse,
+    ApplyDatabaseSourceProfileRequest, ApplyDatabaseSourceProfileResponse,
     ApplyStaticPageDraftIntentRequest, ApplyStaticPageDraftIntentResponse,
     AssistantRunCodexActionContractView, AssistantRunCodexContextBudgetItemView,
     AssistantRunCodexContextBudgetView, AssistantRunCodexContextPackageView,
@@ -96,8 +97,8 @@ use event_bus::{
     workflow_execution_transition_subject, workflow_task_enqueued_subject, EventBus, EventEnvelope,
 };
 use external_source_connectors::{
-    inspect_mysql_schema, preview_mysql_table, test_mysql_connection, DatabaseSourceError,
-    profile_mysql_database, MySqlSourceConfig,
+    inspect_mysql_schema, preview_mysql_table, profile_mysql_database, test_mysql_connection,
+    DatabaseSemanticProfile, DatabaseSourceError, MySqlSourceConfig,
 };
 use futures_util::{stream, Stream, StreamExt};
 use hmac::{Hmac, Mac};
@@ -1314,6 +1315,10 @@ pub fn router(
         .route(
             "/v1/external/sources/{source_id}/database/profile",
             axum::routing::post(profile_database_source),
+        )
+        .route(
+            "/v1/external/sources/{source_id}/database/apply-profile",
+            axum::routing::post(apply_database_source_profile),
         )
         .route("/v1/model-gateway/presets", get(list_model_gateway_presets))
         .route("/v1/model-gateway/status", get(get_model_gateway_status))
@@ -11434,6 +11439,46 @@ async fn profile_database_source(
     }))
 }
 
+async fn apply_database_source_profile(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(source_id): Path<String>,
+    Json(request): Json<ApplyDatabaseSourceProfileRequest>,
+) -> std::result::Result<Json<ApplyDatabaseSourceProfileResponse>, ApiError> {
+    ensure_main_system_external_source_access(&state, &headers, &source_id).await?;
+    let source = load_enabled_database_source_connection(&state, &source_id).await?;
+    let config = mysql_source_config_for_request(&source, &request.database_source)?;
+    let profile = profile_mysql_database(&config, request.sample_limit.unwrap_or(100))
+        .await
+        .map_err(database_source_error_to_api)?;
+    let database_source =
+        database_source_config_with_profile_mappings(&config, &profile, &request.tables)?;
+    let updated_at = if request.dry_run {
+        None
+    } else {
+        Some(
+            update_database_source_config_redacted(&state, &source.source_id, &database_source)
+                .await?,
+        )
+    };
+
+    Ok(Json(ApplyDatabaseSourceProfileResponse {
+        accepted: true,
+        source_id: source.source_id,
+        connector_kind: source.connector_kind,
+        dry_run: request.dry_run,
+        redacted_summary: serde_json::to_value(
+            MySqlSourceConfig::from_value(&database_source)
+                .map_err(database_source_error_to_api)?
+                .redacted_summary(),
+        )
+        .unwrap_or_else(|_| json!({})),
+        database_source,
+        profile: serde_json::to_value(profile).unwrap_or_else(|_| json!({})),
+        updated_at,
+    }))
+}
+
 async fn enqueue_external_source_sync(
     state: &AppState,
     source_id: &str,
@@ -15538,6 +15583,116 @@ fn mysql_source_config_for_request(
 ) -> std::result::Result<MySqlSourceConfig, ApiError> {
     let merged = merged_database_source_config(&source.config_redacted, request_database_source)?;
     MySqlSourceConfig::from_value(&merged).map_err(database_source_error_to_api)
+}
+
+fn database_source_config_with_profile_mappings(
+    config: &MySqlSourceConfig,
+    profile: &DatabaseSemanticProfile,
+    requested_tables: &[String],
+) -> std::result::Result<Value, ApiError> {
+    let requested_tables = requested_tables
+        .iter()
+        .map(|table| table.trim().to_string())
+        .filter(|table| !table.is_empty())
+        .collect::<Vec<_>>();
+    let mut mapped_tables = Vec::new();
+    for table in &profile.tables {
+        if !requested_tables.is_empty() && !requested_tables.iter().any(|name| name == &table.name)
+        {
+            continue;
+        }
+        mapped_tables.push(database_source_table_mapping_value(table)?);
+    }
+    if mapped_tables.is_empty() {
+        return Err(ApiError::bad_request_with_details(
+            "database_profile_mapping_empty",
+            "database profile did not produce any table mappings for the requested tables"
+                .to_string(),
+            json!({ "requested_tables": requested_tables }),
+        ));
+    }
+
+    let mut database_source = serde_json::to_value(config).map_err(|error| {
+        ApiError::internal(
+            "database_source_config_serialize_failed",
+            format!("failed to serialize database source config: {error}"),
+        )
+    })?;
+    let Some(object) = database_source.as_object_mut() else {
+        return Err(ApiError::internal(
+            "database_source_config_invalid",
+            "database source config did not serialize to an object".to_string(),
+        ));
+    };
+    object.insert("tables".to_string(), Value::Array(mapped_tables));
+    MySqlSourceConfig::from_value(&database_source).map_err(database_source_error_to_api)?;
+    Ok(database_source)
+}
+
+fn database_source_table_mapping_value(
+    table: &external_source_connectors::DatabaseTableSemanticProfile,
+) -> std::result::Result<Value, ApiError> {
+    let mapping = &table.suggested_mapping;
+    let mut object = Map::new();
+    object.insert("table".to_string(), json!(mapping.table.clone()));
+    object.insert(
+        "object_type".to_string(),
+        json!(mapping.object_type.clone()),
+    );
+    object.insert("id_column".to_string(), json!(mapping.id_column.clone()));
+    if let Some(title_column) = mapping.title_column.as_deref() {
+        object.insert("title_column".to_string(), json!(title_column));
+    }
+    object.insert(
+        "content_columns".to_string(),
+        json!(mapping.content_columns.clone()),
+    );
+    object.insert(
+        "content_type".to_string(),
+        json!(mapping.content_type.clone()),
+    );
+    if let Some(updated_at_column) = mapping.updated_at_column.as_deref() {
+        object.insert("updated_at_column".to_string(), json!(updated_at_column));
+    }
+    if let Some(version_column) = mapping.version_column.as_deref() {
+        object.insert("version_column".to_string(), json!(version_column));
+    }
+    object.insert(
+        "metadata_columns".to_string(),
+        json!(mapping.metadata_columns.clone()),
+    );
+    Ok(Value::Object(object))
+}
+
+async fn update_database_source_config_redacted(
+    state: &AppState,
+    source_id: &str,
+    database_source: &Value,
+) -> std::result::Result<DateTime<Utc>, ApiError> {
+    let now = Utc::now();
+    let row = sqlx::query(
+        r#"
+        update external_source_connections
+        set config_redacted = config_redacted || $3,
+            updated_at = $4
+        where tenant_id = $1 and id = $2
+        returning updated_at
+        "#,
+    )
+    .bind(state.tenant_id.0)
+    .bind(source_id)
+    .bind(json!({ "database_source": database_source }))
+    .bind(now)
+    .fetch_optional(state.storage.pool())
+    .await
+    .map_err(|error| ApiError::from_storage(anyhow::Error::new(error)))?;
+    let row = row.ok_or_else(|| {
+        ApiError::not_found(
+            "external_source_not_found",
+            format!("external source connection {source_id} was not found"),
+        )
+    })?;
+    Ok(row.get("updated_at"))
 }
 
 async fn resolve_effective_external_source_sync_dataset_id(
@@ -49286,6 +49441,110 @@ mod tests {
             connector_context.pointer("/database_source/tables/0/content_columns/0"),
             Some(&json!("area_name"))
         );
+    }
+
+    fn database_profile_for_mapping_test() -> DatabaseSemanticProfile {
+        DatabaseSemanticProfile {
+            kind: "mysql".to_string(),
+            database: "hy_sql".to_string(),
+            tables: vec![external_source_connectors::DatabaseTableSemanticProfile {
+                name: "bi_traffic_area".to_string(),
+                approximate_row_count: Some(2),
+                column_count: 4,
+                primary_key_columns: vec!["id".to_string()],
+                columns: Vec::new(),
+                dimensions: vec!["area_name".to_string()],
+                metrics: vec!["traffic_count".to_string()],
+                time_dimensions: vec!["stat_date".to_string()],
+                entity_columns: vec!["id".to_string(), "area_name".to_string()],
+                text_columns: Vec::new(),
+                suggested_mapping: external_source_connectors::DatabaseTableMappingSuggestion {
+                    table: "bi_traffic_area".to_string(),
+                    object_type: "document".to_string(),
+                    id_column: "id".to_string(),
+                    title_column: Some("area_name".to_string()),
+                    content_columns: vec![
+                        "area_name".to_string(),
+                        "traffic_count".to_string(),
+                        "stat_date".to_string(),
+                    ],
+                    content_type: "text/markdown".to_string(),
+                    updated_at_column: Some("stat_date".to_string()),
+                    version_column: None,
+                    metadata_columns: vec![
+                        "area_name".to_string(),
+                        "traffic_count".to_string(),
+                        "stat_date".to_string(),
+                    ],
+                    confidence: 95,
+                    rationale: "test mapping".to_string(),
+                },
+                suggested_questions: Vec::new(),
+                suggested_visualizations: Vec::new(),
+            }],
+            report_suggestions: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn database_source_config_with_profile_mappings_preserves_safe_defaults() {
+        let config = MySqlSourceConfig::from_value(&json!({
+            "connection_env": "THIRD_PARTY_HY_SQL_DATABASE_URL",
+            "database": "hy_sql",
+            "row_limit": 500,
+            "default_dataset_id": "018f0000-0000-7000-9000-000000000001",
+            "tables": []
+        }))
+        .expect("config parses");
+
+        let database_source = database_source_config_with_profile_mappings(
+            &config,
+            &database_profile_for_mapping_test(),
+            &[],
+        )
+        .expect("profile mapping should build database source config");
+
+        assert_eq!(
+            database_source.pointer("/connection_env"),
+            Some(&json!("THIRD_PARTY_HY_SQL_DATABASE_URL"))
+        );
+        assert_eq!(database_source.pointer("/database"), Some(&json!("hy_sql")));
+        assert_eq!(database_source.pointer("/row_limit"), Some(&json!(500)));
+        assert_eq!(
+            database_source.pointer("/tables/0/table"),
+            Some(&json!("bi_traffic_area"))
+        );
+        assert_eq!(
+            database_source.pointer("/tables/0/id_column"),
+            Some(&json!("id"))
+        );
+        assert_eq!(
+            database_source.pointer("/tables/0/title_column"),
+            Some(&json!("area_name"))
+        );
+        assert!(database_source.pointer("/tables/0/confidence").is_none());
+        MySqlSourceConfig::from_value(&database_source)
+            .expect("generated database source should remain valid");
+    }
+
+    #[test]
+    fn database_source_config_with_profile_mappings_rejects_unmatched_table_filter() {
+        let config = MySqlSourceConfig::from_value(&json!({
+            "connection_env": "THIRD_PARTY_HY_SQL_DATABASE_URL",
+            "database": "hy_sql",
+            "tables": []
+        }))
+        .expect("config parses");
+
+        let error = database_source_config_with_profile_mappings(
+            &config,
+            &database_profile_for_mapping_test(),
+            &["missing_table".to_string()],
+        )
+        .expect_err("unmatched table filter should be rejected");
+
+        assert_eq!(error.status, StatusCode::BAD_REQUEST);
+        assert_eq!(error.payload.code, "database_profile_mapping_empty");
     }
 
     #[test]

@@ -861,6 +861,31 @@ pub struct ProfileDatabaseSourceResponse {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ApplyDatabaseSourceProfileRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sample_limit: Option<u32>,
+    #[serde(default)]
+    pub tables: Vec<String>,
+    #[serde(default)]
+    pub dry_run: bool,
+    #[serde(default)]
+    pub database_source: Value,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ApplyDatabaseSourceProfileResponse {
+    pub accepted: bool,
+    pub source_id: String,
+    pub connector_kind: String,
+    pub dry_run: bool,
+    pub redacted_summary: Value,
+    pub database_source: Value,
+    pub profile: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CreateExternalDocumentParseRequest {
     #[serde(default, alias = "sourceId")]
     pub source_id: String,
@@ -4732,6 +4757,35 @@ mod tests {
 
         assert_eq!(encoded["source_id"], json!("src-mysql"));
         assert_eq!(encoded["profile"]["kind"], json!("mysql"));
+    }
+
+    #[test]
+    fn apply_database_source_profile_contract_defaults_safely() {
+        let request: ApplyDatabaseSourceProfileRequest = serde_json::from_value(json!({
+            "dry_run": true,
+            "tables": ["bi_traffic_area"]
+        }))
+        .expect("database apply profile request should deserialize");
+
+        assert!(request.dry_run);
+        assert_eq!(request.tables, vec!["bi_traffic_area".to_string()]);
+        assert_eq!(request.database_source, Value::Null);
+
+        let response = ApplyDatabaseSourceProfileResponse {
+            accepted: true,
+            source_id: "src-mysql".to_string(),
+            connector_kind: "mysql".to_string(),
+            dry_run: true,
+            redacted_summary: json!({"database": "hy_sql"}),
+            database_source: json!({"database": "hy_sql", "tables": []}),
+            profile: json!({"kind": "mysql", "tables": []}),
+            updated_at: None,
+        };
+        let encoded = serde_json::to_value(response).expect("response should serialize");
+
+        assert_eq!(encoded["dry_run"], json!(true));
+        assert!(encoded.get("updated_at").is_none());
+        assert_eq!(encoded["database_source"]["database"], json!("hy_sql"));
     }
 
     #[test]
