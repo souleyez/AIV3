@@ -174,6 +174,7 @@ pub struct DatabaseTableSemanticProfile {
     pub time_dimensions: Vec<String>,
     pub entity_columns: Vec<String>,
     pub text_columns: Vec<String>,
+    pub suggested_mapping: DatabaseTableMappingSuggestion,
     pub suggested_questions: Vec<String>,
     pub suggested_visualizations: Vec<DatabaseVisualizationSuggestion>,
 }
@@ -209,6 +210,24 @@ pub struct DatabaseReportSuggestion {
     pub visualization: String,
     pub dimensions: Vec<String>,
     pub metrics: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DatabaseTableMappingSuggestion {
+    pub table: String,
+    pub object_type: String,
+    pub id_column: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title_column: Option<String>,
+    pub content_columns: Vec<String>,
+    pub content_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub updated_at_column: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version_column: Option<String>,
+    pub metadata_columns: Vec<String>,
+    pub confidence: u8,
+    pub rationale: String,
 }
 
 impl MySqlSourceConfig {
@@ -498,6 +517,16 @@ fn build_table_semantic_profile(
     let time_dimensions = columns_by_role(&columns, &["time"]);
     let entity_columns = columns_by_role(&columns, &["entity", "primary_key"]);
     let text_columns = columns_by_role(&columns, &["text"]);
+    let suggested_mapping = suggested_table_mapping(
+        &table.name,
+        &table.primary_key_columns,
+        &columns,
+        &dimensions,
+        &metrics,
+        &time_dimensions,
+        &entity_columns,
+        &text_columns,
+    );
     let suggested_visualizations = table_visualization_suggestions(
         &table.name,
         &dimensions,
@@ -518,6 +547,7 @@ fn build_table_semantic_profile(
         time_dimensions,
         entity_columns,
         text_columns,
+        suggested_mapping,
         suggested_questions,
         suggested_visualizations,
     }
@@ -652,6 +682,136 @@ fn columns_by_role(columns: &[DatabaseColumnSemanticProfile], roles: &[&str]) ->
         .filter(|column| roles.iter().any(|role| *role == column.semantic_role))
         .map(|column| column.name.clone())
         .collect()
+}
+
+fn suggested_table_mapping(
+    table: &str,
+    primary_key_columns: &[String],
+    columns: &[DatabaseColumnSemanticProfile],
+    dimensions: &[String],
+    metrics: &[String],
+    time_dimensions: &[String],
+    entity_columns: &[String],
+    text_columns: &[String],
+) -> DatabaseTableMappingSuggestion {
+    let id_column = primary_key_columns
+        .first()
+        .cloned()
+        .or_else(|| {
+            columns
+                .iter()
+                .find(|column| looks_like_identifier(&column.name.to_ascii_lowercase()))
+                .map(|column| column.name.clone())
+        })
+        .or_else(|| entity_columns.first().cloned())
+        .or_else(|| columns.first().map(|column| column.name.clone()))
+        .unwrap_or_else(|| "id".to_string());
+    let title_column = entity_columns
+        .iter()
+        .chain(dimensions.iter())
+        .chain(text_columns.iter())
+        .find(|column| *column != &id_column)
+        .cloned();
+    let updated_at_column = time_dimensions
+        .iter()
+        .find(|column| {
+            let normalized = column.to_ascii_lowercase();
+            name_has_any(&normalized, &["updated", "modified", "changed", "time", "date"])
+        })
+        .cloned()
+        .or_else(|| time_dimensions.first().cloned());
+    let version_column = columns
+        .iter()
+        .find(|column| {
+            let normalized = column.name.to_ascii_lowercase();
+            name_has_any(&normalized, &["version", "revision", "rev"])
+        })
+        .map(|column| column.name.clone());
+
+    let mut content_columns = Vec::new();
+    for column in text_columns
+        .iter()
+        .chain(entity_columns.iter())
+        .chain(dimensions.iter())
+        .chain(time_dimensions.iter())
+        .chain(metrics.iter())
+    {
+        push_unique_column_if_not(&mut content_columns, column, &id_column);
+        if content_columns.len() >= 24 {
+            break;
+        }
+    }
+    if content_columns.is_empty() {
+        for column in columns {
+            push_unique_column_if_not(&mut content_columns, &column.name, &id_column);
+            if content_columns.len() >= 12 {
+                break;
+            }
+        }
+    }
+    if content_columns.is_empty() {
+        content_columns.push(id_column.clone());
+    }
+
+    let mut metadata_columns = Vec::new();
+    for column in dimensions
+        .iter()
+        .chain(entity_columns.iter())
+        .chain(time_dimensions.iter())
+        .chain(metrics.iter())
+    {
+        if column != &id_column {
+            push_unique_column(&mut metadata_columns, column);
+        }
+        if metadata_columns.len() >= 32 {
+            break;
+        }
+    }
+
+    let confidence = mapping_confidence(primary_key_columns, &content_columns, columns);
+    DatabaseTableMappingSuggestion {
+        table: table.to_string(),
+        object_type: DEFAULT_OBJECT_TYPE.to_string(),
+        id_column,
+        title_column,
+        content_columns,
+        content_type: DEFAULT_CONTENT_TYPE.to_string(),
+        updated_at_column,
+        version_column,
+        metadata_columns,
+        confidence,
+        rationale: "基于主键、字段名称、数据类型和样本值推断，可作为数据库表同步到数据集文档的默认映射。"
+            .to_string(),
+    }
+}
+
+fn push_unique_column_if_not(columns: &mut Vec<String>, column: &str, excluded: &str) {
+    if column != excluded {
+        push_unique_column(columns, column);
+    }
+}
+
+fn mapping_confidence(
+    primary_key_columns: &[String],
+    content_columns: &[String],
+    columns: &[DatabaseColumnSemanticProfile],
+) -> u8 {
+    let mut confidence = 45u8;
+    if !primary_key_columns.is_empty() {
+        confidence += 30;
+    } else if columns
+        .iter()
+        .any(|column| looks_like_identifier(&column.name.to_ascii_lowercase()))
+    {
+        confidence += 15;
+    }
+    if !content_columns.is_empty() {
+        confidence += 20;
+    }
+    if columns.iter().any(|column| column.semantic_role == "metric") {
+        confidence += 5;
+    }
+    confidence.min(95)
 }
 
 fn table_visualization_suggestions(
@@ -1756,6 +1916,22 @@ mod tests {
         assert!(table.dimensions.contains(&"area_name".to_string()));
         assert!(table.metrics.contains(&"traffic_count".to_string()));
         assert!(table.time_dimensions.contains(&"stat_date".to_string()));
+        assert_eq!(table.suggested_mapping.table, "bi_traffic_area");
+        assert_eq!(table.suggested_mapping.id_column, "id");
+        assert_eq!(
+            table.suggested_mapping.title_column.as_deref(),
+            Some("area_name")
+        );
+        assert!(
+            table
+                .suggested_mapping
+                .content_columns
+                .contains(&"traffic_count".to_string())
+        );
+        assert_eq!(
+            table.suggested_mapping.updated_at_column.as_deref(),
+            Some("stat_date")
+        );
         assert!(
             table
                 .suggested_visualizations
@@ -1812,6 +1988,13 @@ mod tests {
 
         assert!(table.entity_columns.contains(&"area_code".to_string()));
         assert!(table.dimensions.contains(&"area_name".to_string()));
+        assert_eq!(table.suggested_mapping.id_column, "area_code");
+        assert!(
+            table
+                .suggested_mapping
+                .content_columns
+                .contains(&"area_name".to_string())
+        );
         assert_eq!(table.suggested_visualizations[0].metrics[0], "record_count");
     }
 

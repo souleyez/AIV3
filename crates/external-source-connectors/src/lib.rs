@@ -8,7 +8,7 @@ pub use mysql::{
     test_mysql_connection, DatabaseColumnSemanticProfile, DatabaseColumnView,
     DatabaseConnectionHealth, DatabaseIndexView, DatabaseReportSuggestion, DatabaseSchemaSnapshot,
     DatabaseSemanticProfile, DatabaseSourceError, DatabaseSourceRedactedSummary,
-    DatabaseTableSemanticProfile, DatabaseTableView, DatabaseVisualizationSuggestion,
-    MySqlDocumentFetchQuery, MySqlRevisionStrategy, MySqlSourceConfig, MySqlTableMapping,
-    TablePreview,
+    DatabaseTableMappingSuggestion, DatabaseTableSemanticProfile, DatabaseTableView,
+    DatabaseVisualizationSuggestion, MySqlDocumentFetchQuery, MySqlRevisionStrategy,
+    MySqlSourceConfig, MySqlTableMapping, TablePreview,
 };
