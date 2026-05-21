@@ -772,6 +772,7 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+ "sha2",
  "sqlx",
  "thiserror 2.0.18",
  "tokio",
@@ -786,6 +787,7 @@ dependencies = [
  "chrono",
  "domain-model",
  "event-bus",
+ "external-source-connectors",
  "observability",
  "platform-api",
  "reqwest",

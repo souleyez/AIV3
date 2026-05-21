@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use sha2::{Digest, Sha256};
 use sqlx::{mysql::MySqlPoolOptions, MySqlPool, Row};
 use std::{collections::BTreeMap, fmt, time::Duration};
 use thiserror::Error;
@@ -355,6 +356,31 @@ pub async fn preview_mysql_table(
     }
 }
 
+pub async fn fetch_mysql_documents(
+    config: &MySqlSourceConfig,
+    include_body: bool,
+) -> Result<Vec<Value>, DatabaseSourceError> {
+    config.validate()?;
+    let pool = connect_mysql_pool(config).await?;
+    let mut documents = Vec::new();
+    for mapping in &config.tables {
+        let plan = build_mysql_document_fetch_query(config, mapping)?;
+        let rows = sqlx::query(&plan.sql)
+            .fetch_all(&pool)
+            .await
+            .map_err(sqlx_error)?;
+        for row in rows {
+            documents.push(mysql_row_to_external_document(
+                mapping,
+                &plan.columns,
+                row,
+                include_body,
+            )?);
+        }
+    }
+    Ok(documents)
+}
+
 fn build_table_preview(
     plan: MySqlTablePreviewQuery,
     rows: Vec<sqlx::mysql::MySqlRow>,
@@ -383,6 +409,14 @@ fn build_table_preview(
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MySqlTablePreviewQuery {
+    pub table: String,
+    pub row_limit: u32,
+    pub columns: Vec<String>,
+    pub sql: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MySqlDocumentFetchQuery {
     pub table: String,
     pub row_limit: u32,
     pub columns: Vec<String>,
@@ -427,6 +461,34 @@ pub fn build_mysql_table_preview_query(
     Ok(MySqlTablePreviewQuery {
         table: table.to_string(),
         row_limit,
+        columns,
+        sql,
+    })
+}
+
+pub fn build_mysql_document_fetch_query(
+    config: &MySqlSourceConfig,
+    mapping: &MySqlTableMapping,
+) -> Result<MySqlDocumentFetchQuery, DatabaseSourceError> {
+    config.validate()?;
+    mapping.validate()?;
+    let columns = preview_columns(mapping);
+    let projections = columns
+        .iter()
+        .map(|column| {
+            let quoted = quote_mysql_identifier(column)?;
+            Ok(format!("cast({quoted} as char) as {quoted}"))
+        })
+        .collect::<Result<Vec<_>, DatabaseSourceError>>()?
+        .join(", ");
+    let sql = format!(
+        "select {projections} from {} limit {}",
+        quote_mysql_identifier(&mapping.table)?,
+        config.row_limit.min(MAX_ROW_LIMIT)
+    );
+    Ok(MySqlDocumentFetchQuery {
+        table: mapping.table.clone(),
+        row_limit: config.row_limit.min(MAX_ROW_LIMIT),
         columns,
         sql,
     })
@@ -670,6 +732,134 @@ fn preview_columns(mapping: &MySqlTableMapping) -> Vec<String> {
         push_unique_column(&mut columns, column);
     }
     columns
+}
+
+fn mysql_row_to_external_document(
+    mapping: &MySqlTableMapping,
+    columns: &[String],
+    row: sqlx::mysql::MySqlRow,
+    include_body: bool,
+) -> Result<Value, DatabaseSourceError> {
+    let mut values = BTreeMap::new();
+    for column in columns {
+        let value = row
+            .try_get::<Option<String>, _>(column.as_str())
+            .map_err(sqlx_error)?
+            .unwrap_or_default();
+        values.insert(column.clone(), value);
+    }
+
+    let primary_key = values
+        .get(&mapping.id_column)
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| DatabaseSourceError::InvalidField {
+            field: "id_column",
+            reason: format!(
+                "mapped table {} has a row with empty id_column {}",
+                mapping.table, mapping.id_column
+            ),
+        })?
+        .to_string();
+    let title = mapping
+        .title_column
+        .as_deref()
+        .and_then(|column| values.get(column))
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| format!("{} #{}", mapping.table, primary_key));
+    let body = build_mysql_document_body(mapping, &values, &title, &primary_key);
+    let revision_external_id = build_mysql_revision_external_id(mapping, &values, &body);
+    let mut metadata = Map::new();
+    metadata.insert("source_kind".to_string(), json_string("mysql"));
+    metadata.insert("source_table".to_string(), json_string(&mapping.table));
+    metadata.insert("source_primary_key".to_string(), json_string(&primary_key));
+    metadata.insert("object_type".to_string(), json_string(&mapping.object_type));
+    for column in &mapping.metadata_columns {
+        if let Some(value) = values.get(column) {
+            metadata.insert(column.clone(), json_string(value));
+        }
+    }
+
+    let mut object = Map::new();
+    object.insert(
+        "document_external_id".to_string(),
+        json_string(&format!("mysql:{}:{}", mapping.table, primary_key)),
+    );
+    object.insert(
+        "revision_external_id".to_string(),
+        json_string(&revision_external_id),
+    );
+    object.insert("title".to_string(), json_string(&title));
+    object.insert(
+        "content_type".to_string(),
+        json_string(&mapping.content_type),
+    );
+    object.insert("metadata".to_string(), Value::Object(metadata));
+    if include_body {
+        object.insert("body".to_string(), json_string(&body));
+    }
+    Ok(Value::Object(object))
+}
+
+fn build_mysql_document_body(
+    mapping: &MySqlTableMapping,
+    values: &BTreeMap<String, String>,
+    title: &str,
+    primary_key: &str,
+) -> String {
+    let mut sections = Vec::new();
+    for column in &mapping.content_columns {
+        if let Some(value) = values
+            .get(column)
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+        {
+            sections.push(format!("## {column}\n\n{value}"));
+        }
+    }
+    if sections.is_empty() {
+        sections.push(format!(
+            "source_table: {}\nsource_primary_key: {}\ntitle: {}",
+            mapping.table, primary_key, title
+        ));
+    }
+    sections.join("\n\n")
+}
+
+fn build_mysql_revision_external_id(
+    mapping: &MySqlTableMapping,
+    values: &BTreeMap<String, String>,
+    body: &str,
+) -> String {
+    if let Some(column) = mapping.version_column.as_deref() {
+        if let Some(value) = values
+            .get(column)
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+        {
+            return format!("version:{value}");
+        }
+    }
+    if let Some(column) = mapping.updated_at_column.as_deref() {
+        if let Some(value) = values
+            .get(column)
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+        {
+            return format!("updated_at:{value}");
+        }
+    }
+    let mut hasher = Sha256::new();
+    hasher.update(mapping.table.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(body.as_bytes());
+    format!("content_sha256:{:x}", hasher.finalize())
+}
+
+fn json_string(value: &str) -> Value {
+    Value::String(value.to_string())
 }
 
 fn push_unique_column(columns: &mut Vec<String>, column: &str) {
@@ -989,6 +1179,52 @@ mod tests {
 
         assert_eq!(plan.row_limit, 3);
         assert!(plan.sql.ends_with("limit 3"));
+    }
+
+    #[test]
+    fn document_fetch_query_uses_mapping_and_row_limit() {
+        let mut raw = valid_config();
+        raw["row_limit"] = json!(7);
+        let config = MySqlSourceConfig::from_value(&raw).expect("config parses");
+
+        let plan = build_mysql_document_fetch_query(&config, &config.tables[0])
+            .expect("document fetch query builds");
+
+        assert_eq!(plan.table, "documents");
+        assert_eq!(plan.row_limit, 7);
+        assert!(plan.sql.contains("select cast(`id` as char) as `id`"));
+        assert!(plan.sql.contains("from `documents` limit 7"));
+        assert!(!plan.sql.contains(';'));
+    }
+
+    #[test]
+    fn mysql_revision_prefers_updated_at_then_hash() {
+        let config = MySqlSourceConfig::from_value(&valid_config()).expect("config parses");
+        let mapping = &config.tables[0];
+        let mut values = BTreeMap::new();
+        values.insert("updated_at".to_string(), "2026-05-21 10:00:00".to_string());
+
+        let revision = build_mysql_revision_external_id(mapping, &values, "body");
+
+        assert_eq!(revision, "updated_at:2026-05-21 10:00:00");
+
+        values.clear();
+        let hash_revision = build_mysql_revision_external_id(mapping, &values, "body");
+        assert!(hash_revision.starts_with("content_sha256:"));
+    }
+
+    #[test]
+    fn mysql_document_body_uses_content_sections() {
+        let config = MySqlSourceConfig::from_value(&valid_config()).expect("config parses");
+        let mapping = &config.tables[0];
+        let mut values = BTreeMap::new();
+        values.insert("content".to_string(), "第一段".to_string());
+        values.insert("summary".to_string(), "摘要".to_string());
+
+        let body = build_mysql_document_body(mapping, &values, "标题", "42");
+
+        assert!(body.contains("## content\n\n第一段"));
+        assert!(body.contains("## summary\n\n摘要"));
     }
 
     #[tokio::test]

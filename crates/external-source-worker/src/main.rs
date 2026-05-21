@@ -2,6 +2,7 @@ use anyhow::{anyhow, Result};
 use chrono::Utc;
 use domain_model::{TenantId, WorkflowExecution, WorkflowTask};
 use event_bus::{workflow_task_enqueued_subject, EventBus, EventSubscription};
+use external_source_connectors::{fetch_mysql_documents, MySqlSourceConfig};
 use reqwest::blocking::Client;
 use serde_json::{json, Map, Value};
 use std::time::Duration as StdDuration;
@@ -93,8 +94,8 @@ async fn process_task(
     let result = match task.task_key.as_str() {
         SYNC_USERS_TASK_KEY => sync_external_users(storage, &execution).await,
         SYNC_ACL_TASK_KEY => sync_external_acl(storage, &execution).await,
-        SYNC_METADATA_TASK_KEY => sync_external_metadata(&execution),
-        FETCH_CONTENT_TASK_KEY => fetch_external_content(&execution),
+        SYNC_METADATA_TASK_KEY => sync_external_metadata(&execution).await,
+        FETCH_CONTENT_TASK_KEY => fetch_external_content(&execution).await,
         unknown => Err(anyhow!("unsupported external source task key: {unknown}")),
     };
 
@@ -155,7 +156,7 @@ async fn process_task(
 }
 
 async fn sync_external_users(storage: &PgStorage, execution: &WorkflowExecution) -> Result<Value> {
-    let connector = connector_fixture_for(&execution.context, ConnectorFetchScope::Users)?;
+    let connector = connector_fixture_for(&execution.context, ConnectorFetchScope::Users).await?;
     let platform = connector_platform(&connector);
     let users = value_array(connector.get("users"));
 
@@ -250,7 +251,7 @@ async fn sync_external_users(storage: &PgStorage, execution: &WorkflowExecution)
 }
 
 async fn sync_external_acl(storage: &PgStorage, execution: &WorkflowExecution) -> Result<Value> {
-    let connector = connector_fixture_for(&execution.context, ConnectorFetchScope::Acl)?;
+    let connector = connector_fixture_for(&execution.context, ConnectorFetchScope::Acl).await?;
     let source_id = context_required_string(&execution.context, "source_id")?;
     let snapshots = acl_snapshots_from_connector(&connector)?;
 
@@ -268,8 +269,9 @@ async fn sync_external_acl(storage: &PgStorage, execution: &WorkflowExecution) -
     Ok(output)
 }
 
-fn sync_external_metadata(execution: &WorkflowExecution) -> Result<Value> {
-    let connector = connector_fixture_for(&execution.context, ConnectorFetchScope::Metadata)?;
+async fn sync_external_metadata(execution: &WorkflowExecution) -> Result<Value> {
+    let connector =
+        connector_fixture_for(&execution.context, ConnectorFetchScope::Metadata).await?;
     let documents = external_document_metadata_from_connector(&connector)?;
 
     Ok(json!({
@@ -280,8 +282,8 @@ fn sync_external_metadata(execution: &WorkflowExecution) -> Result<Value> {
     }))
 }
 
-fn fetch_external_content(execution: &WorkflowExecution) -> Result<Value> {
-    let connector = connector_fixture_for(&execution.context, ConnectorFetchScope::Content)?;
+async fn fetch_external_content(execution: &WorkflowExecution) -> Result<Value> {
+    let connector = connector_fixture_for(&execution.context, ConnectorFetchScope::Content).await?;
     let documents = external_documents_from_connector(&connector)?;
 
     Ok(json!({
@@ -308,17 +310,27 @@ enum ConnectorFetchScope {
     Content,
 }
 
-fn connector_fixture(context: &Value) -> Result<Value> {
-    connector_fixture_for(context, ConnectorFetchScope::Content)
+#[cfg(test)]
+async fn connector_fixture(context: &Value) -> Result<Value> {
+    connector_fixture_for(context, ConnectorFetchScope::Content).await
 }
 
-fn connector_fixture_for(context: &Value, scope: ConnectorFetchScope) -> Result<Value> {
+async fn connector_fixture_for(context: &Value, scope: ConnectorFetchScope) -> Result<Value> {
     let connector_context = context
         .get("connector_context")
         .filter(|value| value.is_object())
         .ok_or_else(|| anyhow!("external source workflow missing connector_context"))?;
+    if let Some(mysql_source) = mysql_source_config_value(connector_context) {
+        return fetch_mysql_source_connector(mysql_source, scope).await;
+    }
     if let Some(http_source) = http_source_config_value(connector_context) {
-        return fetch_http_source_connector(context, http_source, scope);
+        let context = context.clone();
+        let http_source = http_source.clone();
+        return tokio::task::spawn_blocking(move || {
+            fetch_http_source_connector(&context, &http_source, scope)
+        })
+        .await
+        .map_err(|error| anyhow!("http_source connector join failed: {error}"))?;
     }
     Ok(connector_context
         .get("mock_https_connector")
@@ -326,6 +338,57 @@ fn connector_fixture_for(context: &Value, scope: ConnectorFetchScope) -> Result<
         .filter(|value| value.is_object())
         .cloned()
         .unwrap_or_else(|| connector_context.clone()))
+}
+
+fn mysql_source_config_value(connector_context: &Value) -> Option<&Value> {
+    connector_context
+        .get("mysql_source")
+        .or_else(|| connector_context.get("mysqlSource"))
+        .or_else(|| connector_context.get("database_source"))
+        .or_else(|| connector_context.get("databaseSource"))
+        .filter(|value| value.is_object())
+}
+
+async fn fetch_mysql_source_connector(
+    raw_config: &Value,
+    scope: ConnectorFetchScope,
+) -> Result<Value> {
+    let fetch_documents = matches!(
+        scope,
+        ConnectorFetchScope::Metadata | ConnectorFetchScope::Content
+    );
+    let include_body = matches!(scope, ConnectorFetchScope::Content);
+    let config = MySqlSourceConfig::from_value(raw_config)
+        .map_err(|error| anyhow!("invalid mysql_source connector config: {error}"))?;
+    let documents = if fetch_documents {
+        fetch_mysql_documents(&config, include_body)
+            .await
+            .map_err(|error| anyhow!("mysql_source connector fetch failed: {error}"))?
+    } else {
+        Vec::new()
+    };
+    let tables = config
+        .tables
+        .iter()
+        .map(|mapping| mapping.table.clone())
+        .collect::<Vec<_>>();
+
+    Ok(json!({
+        "platform": "mysql",
+        "users": [],
+        "groups": [],
+        "departments": [],
+        "roles": [],
+        "documents": documents,
+        "acl_snapshots": [],
+        "connector_summary": {
+            "kind": "mysql_source",
+            "database": config.database,
+            "document_count": documents.len(),
+            "table_count": tables.len(),
+            "tables": tables,
+        }
+    }))
 }
 
 #[derive(Clone, Debug)]
@@ -842,10 +905,10 @@ fn connector_platform(connector: &Value) -> String {
 }
 
 fn external_document_metadata_from_connector(connector: &Value) -> Result<Vec<Value>> {
-    let documents = value_array(connector.get("documents"));
-    if documents.is_empty() {
-        return Err(anyhow!("external connector requires documents array"));
-    }
+    let documents_value = connector
+        .get("documents")
+        .ok_or_else(|| anyhow!("external connector requires documents array"))?;
+    let documents = value_array(Some(documents_value));
 
     documents
         .into_iter()
@@ -870,10 +933,10 @@ fn external_document_metadata_from_connector(connector: &Value) -> Result<Vec<Va
 }
 
 fn external_documents_from_connector(connector: &Value) -> Result<Vec<Value>> {
-    let documents = value_array(connector.get("documents"));
-    if documents.is_empty() {
-        return Err(anyhow!("external connector requires documents array"));
-    }
+    let documents_value = connector
+        .get("documents")
+        .ok_or_else(|| anyhow!("external connector requires documents array"))?;
+    let documents = value_array(Some(documents_value));
 
     documents
         .iter()
@@ -1209,18 +1272,22 @@ mod tests {
         })
     }
 
-    #[test]
-    fn connector_fixture_accepts_mock_https_connector_shape() {
-        let connector = connector_fixture(&sample_context()).expect("connector fixture");
+    #[tokio::test]
+    async fn connector_fixture_accepts_mock_https_connector_shape() {
+        let connector = connector_fixture(&sample_context())
+            .await
+            .expect("connector fixture");
 
         assert_eq!(connector_platform(&connector), "generic_chat");
         assert_eq!(value_array(connector.get("users")).len(), 1);
         assert_eq!(value_array(connector.get("documents")).len(), 1);
     }
 
-    #[test]
-    fn acl_snapshots_can_be_built_from_direct_acl_fields() {
-        let connector = connector_fixture(&sample_context()).expect("connector fixture");
+    #[tokio::test]
+    async fn acl_snapshots_can_be_built_from_direct_acl_fields() {
+        let connector = connector_fixture(&sample_context())
+            .await
+            .expect("connector fixture");
         let snapshots = acl_snapshots_from_connector(&connector).expect("ACL snapshots");
 
         assert_eq!(snapshots.len(), 1);
@@ -1236,8 +1303,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn fetch_content_output_includes_body_and_matching_acl_snapshot() {
+    #[tokio::test]
+    async fn fetch_content_output_includes_body_and_matching_acl_snapshot() {
         let execution = WorkflowExecution {
             id: domain_model::WorkflowExecutionId::new(),
             tenant_id: TenantId::new(),
@@ -1253,7 +1320,9 @@ mod tests {
             updated_at: Utc::now(),
         };
 
-        let output = fetch_external_content(&execution).expect("content output");
+        let output = fetch_external_content(&execution)
+            .await
+            .expect("content output");
 
         assert_eq!(output["document_count"], json!(1));
         assert_eq!(
@@ -1270,8 +1339,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn metadata_output_redacts_body_before_workflow_event() {
+    #[tokio::test]
+    async fn metadata_output_redacts_body_before_workflow_event() {
         let execution = WorkflowExecution {
             id: domain_model::WorkflowExecutionId::new(),
             tenant_id: TenantId::new(),
@@ -1287,7 +1356,9 @@ mod tests {
             updated_at: Utc::now(),
         };
 
-        let output = sync_external_metadata(&execution).expect("metadata output");
+        let output = sync_external_metadata(&execution)
+            .await
+            .expect("metadata output");
 
         assert_eq!(output["document_count"], json!(1));
         assert!(output["external_document_metadata"][0]
@@ -1302,7 +1373,47 @@ mod tests {
     }
 
     #[test]
-    fn http_source_connector_fetches_users_documents_content_and_acl() {
+    fn external_document_metadata_allows_empty_documents_array() {
+        let metadata = external_document_metadata_from_connector(&json!({
+            "platform": "mysql",
+            "documents": []
+        }))
+        .expect("empty metadata should be valid");
+
+        assert!(metadata.is_empty());
+    }
+
+    #[tokio::test]
+    async fn mysql_source_users_scope_returns_empty_principals_without_live_connection() {
+        let context = json!({
+            "connector_context": {
+                "mysql_source": {
+                    "connection_env": "THIRD_PARTY_HY_SQL_DATABASE_URL",
+                    "database": "hy_sql",
+                    "tables": [{
+                        "table": "bi_traffic_area",
+                        "id_column": "id",
+                        "content_columns": ["name"]
+                    }]
+                }
+            }
+        });
+
+        let connector = connector_fixture_for(&context, ConnectorFetchScope::Users)
+            .await
+            .expect("users scope does not connect to mysql");
+
+        assert_eq!(connector["platform"], json!("mysql"));
+        assert!(value_array(connector.get("users")).is_empty());
+        assert!(value_array(connector.get("documents")).is_empty());
+        assert_eq!(
+            connector["connector_summary"]["tables"],
+            json!(["bi_traffic_area"])
+        );
+    }
+
+    #[tokio::test]
+    async fn http_source_connector_fetches_users_documents_content_and_acl() {
         let (base_url, stop, handle) = start_http_source_fixture_server();
         std::env::set_var("AIV3_TEST_HTTP_SOURCE_TOKEN", "test-source-token");
         let context = json!({
@@ -1328,8 +1439,10 @@ mod tests {
         });
 
         let users_connector = connector_fixture_for(&context, ConnectorFetchScope::Users)
+            .await
             .expect("HTTP source users connector");
         let connector = connector_fixture_for(&context, ConnectorFetchScope::Content)
+            .await
             .expect("HTTP source content connector");
         stop.store(true, Ordering::Relaxed);
         handle.join().expect("fixture server should stop");
@@ -1357,8 +1470,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn http_source_metadata_scope_fetches_document_list_without_content_endpoint() {
+    #[tokio::test]
+    async fn http_source_metadata_scope_fetches_document_list_without_content_endpoint() {
         let (base_url, stop, handle) = start_http_source_fixture_server();
         std::env::set_var("AIV3_TEST_HTTP_SOURCE_TOKEN", "test-source-token");
         let context = json!({
@@ -1378,6 +1491,7 @@ mod tests {
         });
 
         let connector = connector_fixture_for(&context, ConnectorFetchScope::Metadata)
+            .await
             .expect("HTTP source metadata connector");
         let metadata =
             external_document_metadata_from_connector(&connector).expect("metadata documents");
@@ -1390,8 +1504,8 @@ mod tests {
         assert!(metadata[0].get("body").is_none());
     }
 
-    #[test]
-    fn http_source_connector_rejects_raw_bearer_token_in_context() {
+    #[tokio::test]
+    async fn http_source_connector_rejects_raw_bearer_token_in_context() {
         let context = json!({
             "connector_context": {
                 "http_source": {
@@ -1404,7 +1518,9 @@ mod tests {
             }
         });
 
-        let error = connector_fixture(&context).expect_err("raw token should be rejected");
+        let error = connector_fixture(&context)
+            .await
+            .expect_err("raw token should be rejected");
 
         assert!(error
             .to_string()
