@@ -1311,10 +1311,10 @@ pub fn build_mysql_document_fetch_query(
 pub fn mysql_schema_tables_query() -> &'static str {
     r#"
 select
-  table_name,
-  table_type,
-  table_comment,
-  table_rows,
+  table_name as table_name,
+  table_type as table_type,
+  table_comment as table_comment,
+  table_rows as table_rows,
   date_format(update_time, '%Y-%m-%dT%H:%i:%s') as update_time
 from information_schema.tables
 where table_schema = ?
@@ -1325,14 +1325,14 @@ order by table_name
 pub fn mysql_schema_columns_query() -> &'static str {
     r#"
 select
-  table_name,
-  column_name,
-  ordinal_position,
-  column_default,
-  is_nullable,
-  data_type,
-  column_type,
-  column_comment
+  table_name as table_name,
+  column_name as column_name,
+  ordinal_position as ordinal_position,
+  column_default as column_default,
+  is_nullable as is_nullable,
+  data_type as data_type,
+  column_type as column_type,
+  column_comment as column_comment
 from information_schema.columns
 where table_schema = ?
 order by table_name, ordinal_position
@@ -1342,11 +1342,11 @@ order by table_name, ordinal_position
 pub fn mysql_schema_statistics_query() -> &'static str {
     r#"
 select
-  table_name,
-  index_name,
-  column_name,
-  seq_in_index,
-  non_unique
+  table_name as table_name,
+  index_name as index_name,
+  column_name as column_name,
+  seq_in_index as seq_in_index,
+  non_unique as non_unique
 from information_schema.statistics
 where table_schema = ?
 order by table_name, index_name, seq_in_index
@@ -1989,6 +1989,9 @@ mod tests {
         assert!(mysql_schema_tables_query().contains("where table_schema = ?"));
         assert!(mysql_schema_columns_query().contains("where table_schema = ?"));
         assert!(mysql_schema_statistics_query().contains("where table_schema = ?"));
+        assert!(mysql_schema_tables_query().contains("table_name as table_name"));
+        assert!(mysql_schema_columns_query().contains("column_name as column_name"));
+        assert!(mysql_schema_statistics_query().contains("index_name as index_name"));
     }
 
     #[test]
