@@ -25755,6 +25755,18 @@ fn assistant_run_answer_contains_insufficient_evidence_marker(output_text: &str)
             "仅基于当前可见",
             "只基于当前可见",
             "只能基于当前可见",
+            "需要执行一次",
+            "需要先检索",
+            "需要先读取",
+            "需要先获取",
+            "请允许我先",
+            "请回复\"继续\"",
+            "请回复“继续”",
+            "建议发起检索",
+            "建议重新检索",
+            "没有全量",
+            "未全量",
+            "完整、无遗漏",
             "需要补充资料",
             "建议补充资料",
             "建议上传",
@@ -30459,6 +30471,18 @@ fn assistant_run_attendance_analysis_rows(
     prompt: &str,
     rows: &[AssistantRunAttendanceRow],
 ) -> Option<(&'static str, Vec<Value>, String)> {
+    let requests_absence = prompt_contains_any(prompt, &["缺勤", "未打卡", "没打卡"]);
+    let requests_work_hours = prompt_contains_any(prompt, &["最长", "最短", "长短", "工时"]);
+    if requests_absence && requests_work_hours {
+        let mut analysis_rows = assistant_run_absence_attendance_rows(rows);
+        analysis_rows.extend(assistant_run_work_hour_extreme_rows(rows));
+        let content_excerpt = assistant_run_combined_attendance_rows_markdown(&analysis_rows);
+        return Some((
+            "absence_and_work_hour_extremes",
+            analysis_rows,
+            content_excerpt,
+        ));
+    }
     if prompt_contains_any(prompt, &["最早", "上班"]) {
         let analysis_rows = assistant_run_daily_earliest_attendance_rows(rows);
         let content_excerpt = assistant_run_attendance_rows_markdown(
@@ -30473,7 +30497,7 @@ fn assistant_run_attendance_analysis_rows(
             assistant_run_attendance_rows_markdown("类别 | 日期 | 员工 | 工时", &analysis_rows);
         return Some(("work_hour_extremes", analysis_rows, content_excerpt));
     }
-    if prompt_contains_any(prompt, &["缺勤", "未打卡", "没打卡"]) {
+    if requests_absence {
         let analysis_rows = assistant_run_absence_attendance_rows(rows);
         let content_excerpt =
             assistant_run_attendance_rows_markdown("日期 | 员工 | 班次 | 状态", &analysis_rows);
@@ -30601,6 +30625,33 @@ fn assistant_run_attendance_rows_markdown(header: &str, rows: &[Value]) -> Strin
         } else {
             lines.push(format!(
                 "{} | {} | {} | {}",
+                row.get("date").and_then(Value::as_str).unwrap_or(""),
+                row.get("employee").and_then(Value::as_str).unwrap_or(""),
+                row.get("shift").and_then(Value::as_str).unwrap_or(""),
+                row.get("status").and_then(Value::as_str).unwrap_or("")
+            ));
+        }
+    }
+    lines.join("\n")
+}
+
+fn assistant_run_combined_attendance_rows_markdown(rows: &[Value]) -> String {
+    let mut lines = vec!["类型 | 日期 | 员工 | 明细 | 状态".to_string()];
+    for row in rows.iter().take(82) {
+        if let Some(category) = row.get("category").and_then(Value::as_str) {
+            lines.push(format!(
+                "{} | {} | {} | {} | {}",
+                category,
+                row.get("date").and_then(Value::as_str).unwrap_or(""),
+                row.get("employee").and_then(Value::as_str).unwrap_or(""),
+                row.get("work_hours_text")
+                    .and_then(Value::as_str)
+                    .unwrap_or(""),
+                row.get("status").and_then(Value::as_str).unwrap_or("")
+            ));
+        } else {
+            lines.push(format!(
+                "absence_candidate | {} | {} | {} | {}",
                 row.get("date").and_then(Value::as_str).unwrap_or(""),
                 row.get("employee").and_then(Value::as_str).unwrap_or(""),
                 row.get("shift").and_then(Value::as_str).unwrap_or(""),
@@ -58752,6 +58803,46 @@ mod tests {
     }
 
     #[test]
+    fn assistant_run_answer_quality_gate_retries_deferred_retrieval_language() {
+        let request = CreateAssistantRunRequest {
+            prompt: "这份考勤表里有哪些缺勤？工时最长和最短分别是谁？".to_string(),
+            local_thread_id: None,
+            startup_briefing: None,
+            selected_scope: Some(json!({"datasets": ["00000000-0000-0000-0000-000000000001"]})),
+            scope_candidates: Vec::new(),
+            context_policy_hint: None,
+            current_artifact: None,
+            messages: Vec::new(),
+        };
+        let evidence_state = json!({
+            "status": "supplied",
+            "supply_quality": {
+                "selectedDatasetCount": 1,
+                "suppliedItemCount": 20,
+                "indexedEvidenceCount": 19,
+                "spreadsheetRowAnalysisCount": 1,
+                "fallbackChunkCount": 0,
+                "datasetEntityScanCount": 0,
+                "mediaContextCount": 0,
+                "conversationMemoryItemCount": 0,
+                "documentNotReadyCount": 0,
+                "documentFailedCount": 0,
+                "documentReparsingCount": 0,
+                "notes": ["spreadsheet_row_analysis_available"]
+            }
+        });
+
+        assert_eq!(
+            assistant_run_answer_quality_retry_reason(
+                "要获取完整、无遗漏的缺勤列表，需要执行一次针对“不考勤”记录的检索筛选。",
+                &evidence_state,
+                &request,
+            ),
+            Some("insufficient_or_uncertain_answer")
+        );
+    }
+
+    #[test]
     fn assistant_run_sanitizes_raw_parse_status_identifiers_for_customer_text() {
         let sanitized = assistant_run_sanitize_customer_facing_answer_text(
             "当前解析状态为 parse_degraded，原因是 low_text_coverage。",
@@ -65279,6 +65370,7 @@ mod tests {
         let rows = [
             "A3 2026-05-14 坐班0900 08:51 18:10 9.32小时 正常考勤",
             "A4 2026-05-14 坐班0900 08:56 18:02 9.10小时 正常考勤",
+            "A5 2026-05-13 坐班0900 未打卡 不考勤",
             "A8 2026-02-07 休息 08:18 20:51 12.55小时 正常考勤",
             "A8 2026-02-25 坐班0930 09:25 13:43 4.30小时 正常考勤",
         ]
@@ -65299,6 +65391,18 @@ mod tests {
         assert_eq!(hour_rows[0]["date"], json!("2026-02-07"));
         assert_eq!(hour_rows[1]["category"], json!("shortest"));
         assert_eq!(hour_rows[1]["date"], json!("2026-02-25"));
+
+        let (analysis_kind, combined_rows, excerpt) =
+            assistant_run_attendance_analysis_rows(&"列出缺勤，并找工时最长和最短", &rows)
+                .expect("combined attendance analysis should be computed");
+        assert_eq!(analysis_kind, "absence_and_work_hour_extremes");
+        assert!(combined_rows
+            .iter()
+            .any(|row| row.get("employee") == Some(&json!("A5"))));
+        assert!(combined_rows
+            .iter()
+            .any(|row| row.get("category") == Some(&json!("longest"))));
+        assert!(excerpt.contains("absence_candidate | 2026-05-13 | A5"));
     }
 
     #[test]
