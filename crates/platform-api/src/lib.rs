@@ -183,6 +183,7 @@ const ASSISTANT_RUN_DATABASE_AGGREGATE_RESULT_LIMIT: u32 = 8;
 const ASSISTANT_RUN_DATABASE_AGGREGATE_SCAN_LIMIT_DEFAULT: u32 = 5_000;
 const ASSISTANT_RUN_DATABASE_AGGREGATE_SCAN_LIMIT_MAX: u32 = 50_000;
 const ASSISTANT_RUN_DATABASE_SOURCE_LIMIT: usize = 2;
+const ASSISTANT_RUN_DATABASE_SCHEMA_TABLE_LIMIT: usize = 4;
 const ASSISTANT_RUN_DATABASE_AGGREGATE_METRIC_LIMIT: usize = 2;
 const ASSISTANT_RUN_DATABASE_AGGREGATE_REQUEST_LIMIT: usize = 4;
 const ASSISTANT_RUN_DETAIL_TARGET_LIMIT: usize = 3;
@@ -220,6 +221,7 @@ const ASSISTANT_RUN_SCOPE_SUMMARY_DOC_LIMIT: usize = 24;
 const ASSISTANT_RUN_MODEL_SUPPLY_BRIEF_ITEM_LIMIT: usize = 4;
 const ASSISTANT_RUN_MODEL_SUPPLY_BRIEF_TEXT_LIMIT: usize = 220;
 const ASSISTANT_RUN_MODEL_SCAN_BRIEF_TEXT_LIMIT: usize = 900;
+const ASSISTANT_RUN_RETRIEVAL_SUPPLY_EXCERPT_CHARS: usize = 1200;
 const EXTERNAL_CHANNEL_CONVERSATION_HISTORY_RUN_LIMIT: i64 = 6;
 const EXTERNAL_CHANNEL_CONVERSATION_HISTORY_TEXT_LIMIT: usize = 1200;
 const ASSISTANT_RUN_LEXICAL_CJK_NGRAM_MAX: usize = 6;
@@ -10156,6 +10158,17 @@ async fn list_external_integrations(
 
     let source_rows = sqlx::query(
         r#"
+        with source_base as (
+            select s.*,
+                   coalesce(
+                       s.config_redacted #>> '{database_source,default_dataset_id}',
+                       s.config_redacted #>> '{databaseSource,defaultDatasetId}',
+                       s.config_redacted #>> '{mysql_source,default_dataset_id}',
+                       s.config_redacted #>> '{mysqlSource,defaultDatasetId}'
+                   ) as database_default_dataset_id
+            from external_source_connections s
+            where s.tenant_id = $1
+        )
         select s.id,
                s.connector_kind,
                s.display_name,
@@ -10165,6 +10178,7 @@ async fn list_external_integrations(
                s.last_failure_at,
                s.disabled_at,
                s.config_redacted,
+               s.database_default_dataset_id,
                coalesce((
                    select count(*)
                    from external_permission_snapshots ps
@@ -10198,9 +10212,92 @@ async fn list_external_integrations(
                      and r.source_id = s.id
                    order by r.updated_at desc
                    limit 1
-               ) as latest_sync_status
-        from external_source_connections s
-        where s.tenant_id = $1
+               ) as latest_sync_status,
+               coalesce((
+                   select count(*)
+                   from documents d
+                   where d.tenant_id = s.tenant_id
+                     and d.lifecycle <> 'archived'
+                     and d.metadata #>> '{external_source,source_id}' = s.id
+                     and (
+                        s.database_default_dataset_id is null
+                        or d.dataset_id::text = s.database_default_dataset_id
+                     )
+               ), 0)::bigint as database_document_count,
+               coalesce((
+                   select count(*)
+                   from documents d
+                   where d.tenant_id = s.tenant_id
+                     and d.lifecycle = 'indexed'
+                     and d.metadata #>> '{external_source,source_id}' = s.id
+                     and (
+                        s.database_default_dataset_id is null
+                        or d.dataset_id::text = s.database_default_dataset_id
+                     )
+               ), 0)::bigint as database_indexed_document_count,
+               coalesce((
+                   select count(*)
+                   from documents d
+                   where d.tenant_id = s.tenant_id
+                     and d.lifecycle = 'failed'
+                     and d.metadata #>> '{external_source,source_id}' = s.id
+                     and (
+                        s.database_default_dataset_id is null
+                        or d.dataset_id::text = s.database_default_dataset_id
+                     )
+               ), 0)::bigint as database_failed_document_count,
+               coalesce((
+                   select count(*)
+                   from documents d
+                   where d.tenant_id = s.tenant_id
+                     and d.lifecycle in ('received', 'extracted')
+                     and d.metadata #>> '{external_source,source_id}' = s.id
+                     and (
+                        s.database_default_dataset_id is null
+                        or d.dataset_id::text = s.database_default_dataset_id
+                     )
+               ), 0)::bigint as database_processing_document_count,
+               coalesce((
+                   select count(*)
+                   from documents d
+                   join document_chunks c
+                     on c.tenant_id = d.tenant_id
+                    and c.document_id = d.id
+                   where d.tenant_id = s.tenant_id
+                     and d.lifecycle <> 'archived'
+                     and d.metadata #>> '{external_source,source_id}' = s.id
+                     and (
+                        s.database_default_dataset_id is null
+                        or d.dataset_id::text = s.database_default_dataset_id
+                     )
+               ), 0)::bigint as database_chunk_count,
+               coalesce((
+                   select count(*)
+                   from documents d
+                   join document_chunks c
+                     on c.tenant_id = d.tenant_id
+                    and c.document_id = d.id
+                   where d.tenant_id = s.tenant_id
+                     and d.lifecycle <> 'archived'
+                     and c.state = 'indexed'
+                     and d.metadata #>> '{external_source,source_id}' = s.id
+                     and (
+                        s.database_default_dataset_id is null
+                        or d.dataset_id::text = s.database_default_dataset_id
+                     )
+               ), 0)::bigint as database_indexed_chunk_count,
+               (
+                   select max(d.updated_at)
+                   from documents d
+                   where d.tenant_id = s.tenant_id
+                     and d.lifecycle <> 'archived'
+                     and d.metadata #>> '{external_source,source_id}' = s.id
+                     and (
+                        s.database_default_dataset_id is null
+                        or d.dataset_id::text = s.database_default_dataset_id
+                     )
+               ) as database_latest_document_updated_at
+        from source_base s
         order by s.updated_at desc
         "#,
     )
@@ -10212,6 +10309,20 @@ async fn list_external_integrations(
     for row in source_rows {
         let disabled_at = row.get::<Option<DateTime<Utc>>, _>("disabled_at");
         let config_redacted = row.get::<Value, _>("config_redacted");
+        let database_readiness = if source_database_config_fragment(&config_redacted).is_some() {
+            external_database_dataset_readiness_summary(
+                row.get("database_default_dataset_id"),
+                row.get("database_document_count"),
+                row.get("database_indexed_document_count"),
+                row.get("database_failed_document_count"),
+                row.get("database_processing_document_count"),
+                row.get("database_chunk_count"),
+                row.get("database_indexed_chunk_count"),
+                row.get("database_latest_document_updated_at"),
+            )
+        } else {
+            Value::Null
+        };
         integrations.push(ExternalIntegrationSummaryView {
             integration_id: row.get("id"),
             integration_kind: "source".to_string(),
@@ -10238,12 +10349,13 @@ async fn list_external_integrations(
             ),
             config_summary: external_integration_config_summary(&config_redacted),
             search_summary: external_search_evidence_summary(0, None),
-            drift_summary: external_source_drift_summary(
+            drift_summary: external_source_drift_summary_with_database_readiness(
                 row.get("acl_snapshot_count"),
                 row.get("stale_acl_snapshot_count"),
                 row.get("failed_sync_count"),
                 row.get("latest_sync_status"),
                 row.get("latest_acl_captured_at"),
+                database_readiness,
             ),
             artifact_summary: external_artifact_summary(0, 0, 0, 0, 0, 0, 0, 0, None),
         });
@@ -11130,12 +11242,31 @@ fn external_channel_drift_summary(
     })
 }
 
+#[cfg(test)]
 fn external_source_drift_summary(
     acl_snapshot_count: i64,
     stale_acl_snapshot_count: i64,
     failed_sync_count: i64,
     latest_sync_status: Option<String>,
     latest_acl_captured_at: Option<DateTime<Utc>>,
+) -> Value {
+    external_source_drift_summary_with_database_readiness(
+        acl_snapshot_count,
+        stale_acl_snapshot_count,
+        failed_sync_count,
+        latest_sync_status,
+        latest_acl_captured_at,
+        Value::Null,
+    )
+}
+
+fn external_source_drift_summary_with_database_readiness(
+    acl_snapshot_count: i64,
+    stale_acl_snapshot_count: i64,
+    failed_sync_count: i64,
+    latest_sync_status: Option<String>,
+    latest_acl_captured_at: Option<DateTime<Utc>>,
+    database_dataset_readiness: Value,
 ) -> Value {
     let latest_sync_status_lower = latest_sync_status.as_deref().map(str::to_ascii_lowercase);
     let signal = if acl_snapshot_count <= 0 {
@@ -11156,13 +11287,59 @@ fn external_source_drift_summary(
     } else {
         "ok"
     };
-    json!({
+    let mut summary = json!({
         "signal": signal,
         "acl_snapshot_count": acl_snapshot_count.max(0),
         "stale_acl_snapshot_count": stale_acl_snapshot_count.max(0),
         "failed_sync_count": failed_sync_count.max(0),
         "latest_sync_status": latest_sync_status,
         "latest_acl_captured_at": latest_acl_captured_at,
+    });
+    if !database_dataset_readiness.is_null() {
+        summary["database_dataset_readiness"] = database_dataset_readiness;
+    }
+    summary
+}
+
+fn external_database_dataset_readiness_summary(
+    default_dataset_id: Option<String>,
+    document_count: i64,
+    indexed_document_count: i64,
+    failed_document_count: i64,
+    processing_document_count: i64,
+    chunk_count: i64,
+    indexed_chunk_count: i64,
+    latest_document_updated_at: Option<DateTime<Utc>>,
+) -> Value {
+    let document_count = document_count.max(0);
+    let indexed_document_count = indexed_document_count.max(0);
+    let failed_document_count = failed_document_count.max(0);
+    let processing_document_count = processing_document_count.max(0);
+    let chunk_count = chunk_count.max(0);
+    let indexed_chunk_count = indexed_chunk_count.max(0);
+    let signal = if document_count == 0 {
+        "no_documents"
+    } else if indexed_document_count > 0 && indexed_chunk_count > 0 {
+        if failed_document_count > 0 || processing_document_count > 0 {
+            "partial_ready"
+        } else {
+            "ready"
+        }
+    } else if failed_document_count > 0 && processing_document_count == 0 {
+        "failed"
+    } else {
+        "processing"
+    };
+    json!({
+        "signal": signal,
+        "default_dataset_id": default_dataset_id,
+        "document_count": document_count,
+        "indexed_document_count": indexed_document_count,
+        "failed_document_count": failed_document_count,
+        "processing_document_count": processing_document_count,
+        "chunk_count": chunk_count,
+        "indexed_chunk_count": indexed_chunk_count,
+        "latest_document_updated_at": latest_document_updated_at,
     })
 }
 
@@ -28068,6 +28245,7 @@ async fn build_assistant_run_evidence_state(
     let mut supplied_datasets = Vec::new();
     let mut supplied_memory_items = Vec::new();
     let mut media_context_by_document: HashMap<DocumentId, Option<Value>> = HashMap::new();
+    let mut retrieval_chunks_by_document: HashMap<DocumentId, Vec<DocumentChunk>> = HashMap::new();
 
     for dataset_id in dataset_ids
         .into_iter()
@@ -28169,6 +28347,13 @@ async fn build_assistant_run_evidence_state(
                 &mut media_context_by_document,
             )
             .await?;
+            let content_excerpt = assistant_run_retrieval_supply_excerpt(
+                state,
+                ranked.evidence,
+                prompt,
+                &mut retrieval_chunks_by_document,
+            )
+            .await?;
             let mut supplied_item = json!({
                 "type": "retrieval_evidence",
                 "dataset_id": ranked.evidence.dataset_id,
@@ -28178,7 +28363,7 @@ async fn build_assistant_run_evidence_state(
                 "chunk_index": ranked.evidence.chunk_index,
                 "source_locator": ranked.evidence.source_locator.clone(),
                 "summary": ranked.evidence.summary.clone(),
-                "content_excerpt": ranked.evidence.content_excerpt.clone(),
+                "content_excerpt": content_excerpt,
                 "payload_filter_key": ranked.evidence.payload_filter_key.clone(),
                 "score": ranked.score,
                 "lexical_score": ranked.lexical_score,
@@ -28258,7 +28443,8 @@ async fn build_assistant_run_database_aggregate_supply(
     dataset: &Dataset,
     prompt: &str,
 ) -> std::result::Result<Vec<Value>, ApiError> {
-    if !assistant_run_database_aggregate_requested(prompt) {
+    let aggregate_requested = assistant_run_database_aggregate_requested(prompt);
+    if !assistant_run_database_schema_context_requested(prompt) {
         return Ok(Vec::new());
     }
 
@@ -28290,13 +28476,29 @@ async fn build_assistant_run_database_aggregate_supply(
                 continue;
             }
         };
+        let scan_limit = assistant_run_database_aggregate_scan_limit();
+        if !aggregate_requested {
+            for mapping in assistant_run_database_schema_mappings_for_prompt(&config, prompt) {
+                let aggregate_plans =
+                    assistant_run_database_aggregate_dimension_plans(mapping, prompt);
+                let metrics = assistant_run_database_metric_columns(mapping);
+                supplied_items.push(assistant_run_database_schema_context_item(
+                    dataset,
+                    &source,
+                    mapping,
+                    &aggregate_plans,
+                    &metrics,
+                    scan_limit,
+                ));
+            }
+            continue;
+        }
         let Some(mapping) = assistant_run_database_mapping_for_prompt(&config, prompt) else {
             continue;
         };
         let aggregate_plans = assistant_run_database_aggregate_dimension_plans(mapping, prompt);
         let metrics = assistant_run_database_aggregate_metrics(mapping, prompt);
         let aggregation = assistant_run_database_aggregation(prompt, !metrics.is_empty());
-        let scan_limit = assistant_run_database_aggregate_scan_limit();
         supplied_items.push(assistant_run_database_schema_context_item(
             dataset,
             &source,
@@ -28732,14 +28934,43 @@ async fn load_dataset_external_source_ids(
 ) -> std::result::Result<Vec<String>, ApiError> {
     let rows = sqlx::query(
         r#"
-        select metadata #>> '{external_source,source_id}' as source_id,
-               count(*)::bigint as document_count
-        from documents
-        where tenant_id = $1
-          and dataset_id = $2
-          and metadata #>> '{external_source,source_id}' is not null
+        with document_sources as (
+            select metadata #>> '{external_source,source_id}' as source_id,
+                   count(*)::bigint as document_count,
+                   0 as source_priority
+            from documents
+            where tenant_id = $1
+              and dataset_id = $2
+              and metadata #>> '{external_source,source_id}' is not null
+            group by source_id
+        ),
+        configured_database_sources as (
+            select id as source_id,
+                   0::bigint as document_count,
+                   1 as source_priority
+            from external_source_connections
+            where tenant_id = $1
+              and disabled_at is null
+              and lower(trim(connector_kind)) in ('mysql', 'mysql_source', 'database_source')
+              and coalesce(
+                    config_redacted #>> '{database_source,default_dataset_id}',
+                    config_redacted #>> '{databaseSource,defaultDatasetId}',
+                    config_redacted #>> '{mysql_source,default_dataset_id}',
+                    config_redacted #>> '{mysqlSource,defaultDatasetId}'
+                  ) = $2::text
+        ),
+        combined_sources as (
+            select source_id, document_count, source_priority
+            from document_sources
+            union all
+            select source_id, document_count, source_priority
+            from configured_database_sources
+        )
+        select source_id
+        from combined_sources
+        where source_id is not null and btrim(source_id) <> ''
         group by source_id
-        order by document_count desc, source_id asc
+        order by min(source_priority) asc, max(document_count) desc, source_id asc
         limit $3
         "#,
     )
@@ -28769,6 +29000,34 @@ fn assistant_run_database_aggregate_requested(prompt: &str) -> bool {
     )
 }
 
+fn assistant_run_database_schema_context_requested(prompt: &str) -> bool {
+    assistant_run_database_aggregate_requested(prompt)
+        || prompt_has_any(
+            prompt,
+            &[
+                "数据库",
+                "数据表",
+                "表结构",
+                "字段",
+                "指标",
+                "维度",
+                "口径",
+                "数据源",
+                "数据集",
+                "内容",
+                "是什么",
+                "有什么",
+                "分析",
+                "schema",
+                "field",
+                "metric",
+                "dimension",
+                "source",
+                "dataset",
+            ],
+        )
+}
+
 fn assistant_run_database_mapping_for_prompt<'a>(
     config: &'a MySqlSourceConfig,
     prompt: &str,
@@ -28779,6 +29038,27 @@ fn assistant_run_database_mapping_for_prompt<'a>(
         .iter()
         .find(|mapping| normalized.contains(&mapping.table.to_ascii_lowercase()))
         .or_else(|| config.tables.first())
+}
+
+fn assistant_run_database_schema_mappings_for_prompt<'a>(
+    config: &'a MySqlSourceConfig,
+    prompt: &str,
+) -> Vec<&'a MySqlTableMapping> {
+    let normalized = prompt.to_ascii_lowercase();
+    let mut mappings = config
+        .tables
+        .iter()
+        .filter(|mapping| normalized.contains(&mapping.table.to_ascii_lowercase()))
+        .take(ASSISTANT_RUN_DATABASE_SCHEMA_TABLE_LIMIT)
+        .collect::<Vec<_>>();
+    if mappings.is_empty() {
+        mappings = config
+            .tables
+            .iter()
+            .take(ASSISTANT_RUN_DATABASE_SCHEMA_TABLE_LIMIT)
+            .collect();
+    }
+    mappings
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -33619,6 +33899,103 @@ fn truncate_assistant_supply_text(value: &str, max_chars: usize) -> String {
         .chars()
         .take(max_chars)
         .collect()
+}
+
+async fn assistant_run_retrieval_supply_excerpt(
+    state: &AppState,
+    evidence: &RetrievalEvidence,
+    prompt: &str,
+    chunk_cache: &mut HashMap<DocumentId, Vec<DocumentChunk>>,
+) -> std::result::Result<String, ApiError> {
+    if !chunk_cache.contains_key(&evidence.document_id) {
+        let chunks = state
+            .storage
+            .document_chunks()
+            .list_by_document(state.tenant_id, evidence.document_id)
+            .await
+            .map_err(ApiError::from_storage)?;
+        chunk_cache.insert(evidence.document_id, chunks);
+    }
+
+    let Some(chunks) = chunk_cache.get(&evidence.document_id) else {
+        return Ok(evidence.content_excerpt.clone());
+    };
+    let Some(chunk) = chunks
+        .iter()
+        .find(|chunk| chunk.id == evidence.document_chunk_id)
+        .or_else(|| {
+            chunks
+                .iter()
+                .find(|chunk| chunk.chunk_index == evidence.chunk_index)
+        })
+    else {
+        return Ok(evidence.content_excerpt.clone());
+    };
+
+    let excerpt = assistant_run_query_centered_supply_excerpt(
+        &chunk.content,
+        prompt,
+        ASSISTANT_RUN_RETRIEVAL_SUPPLY_EXCERPT_CHARS,
+    );
+    if excerpt.trim().is_empty() {
+        Ok(evidence.content_excerpt.clone())
+    } else {
+        Ok(excerpt)
+    }
+}
+
+fn assistant_run_query_centered_supply_excerpt(
+    content: &str,
+    prompt: &str,
+    max_chars: usize,
+) -> String {
+    let normalized = content
+        .trim()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let total_chars = normalized.chars().count();
+    if total_chars <= max_chars {
+        return normalized;
+    }
+
+    let start = assistant_run_prompt_match_char_index(&normalized, prompt)
+        .map(|index| index.saturating_sub(max_chars / 4))
+        .unwrap_or(0);
+    let mut excerpt = normalized
+        .chars()
+        .skip(start)
+        .take(max_chars)
+        .collect::<String>();
+    if start > 0 {
+        excerpt = format!("...{excerpt}");
+    }
+    if start + max_chars < total_chars {
+        excerpt.push_str("...");
+    }
+    excerpt
+}
+
+fn assistant_run_prompt_match_char_index(content: &str, prompt: &str) -> Option<usize> {
+    let content_lower = content.to_lowercase();
+    let mut tokens = lexical_query_tokens(prompt)
+        .into_iter()
+        .filter(|token| token.chars().count() >= 2)
+        .collect::<Vec<_>>();
+    tokens.sort_by(|left, right| {
+        right
+            .chars()
+            .count()
+            .cmp(&left.chars().count())
+            .then_with(|| left.cmp(right))
+    });
+    tokens.dedup();
+    tokens.into_iter().find_map(|token| {
+        let token_lower = token.to_lowercase();
+        content_lower
+            .find(&token_lower)
+            .map(|byte_index| content_lower[..byte_index].chars().count())
+    })
 }
 
 fn assistant_run_detail_targets_for_scope(
@@ -47623,7 +48000,8 @@ fn build_static_page_data_snapshot_with_evidence(
     evidence_state: Option<&Value>,
     source: &str,
 ) -> Value {
-    let data_source_candidates = build_static_page_data_source_candidates(selected_scope);
+    let data_source_candidates =
+        build_static_page_data_source_candidates(selected_scope, evidence_state);
     let field_candidates = build_static_page_field_candidates(selected_scope, evidence_state);
     let is_docs_page_template =
         static_page_template_reference_id_from_payload(payload) == Some("docs-page");
@@ -47883,7 +48261,10 @@ fn docs_page_structure_module_uses_heading_hints(module: &Value) -> bool {
     false
 }
 
-fn build_static_page_data_source_candidates(selected_scope: &Value) -> Value {
+fn build_static_page_data_source_candidates(
+    selected_scope: &Value,
+    evidence_state: Option<&Value>,
+) -> Value {
     let mut candidates = vec![
         json!({
             "sourceId": "model",
@@ -47924,7 +48305,84 @@ fn build_static_page_data_source_candidates(selected_scope: &Value) -> Value {
         }));
     }
 
+    push_static_page_database_data_source_candidates(&mut candidates, evidence_state);
+
     Value::Array(candidates)
+}
+
+fn push_static_page_database_data_source_candidates(
+    candidates: &mut Vec<Value>,
+    evidence_state: Option<&Value>,
+) {
+    let Some(evidence_items) = evidence_state
+        .and_then(|state| state.get("supplied_items"))
+        .and_then(Value::as_array)
+    else {
+        return;
+    };
+
+    let mut schema_dataset_ids = BTreeSet::new();
+    let mut schema_source_ids = BTreeSet::new();
+    let mut schema_tables = BTreeSet::new();
+    let mut aggregate_dataset_ids = BTreeSet::new();
+    let mut aggregate_source_ids = BTreeSet::new();
+    let mut aggregate_tables = BTreeSet::new();
+    let mut aggregate_fields = BTreeSet::new();
+
+    for item in evidence_items {
+        match item.get("type").and_then(Value::as_str).unwrap_or_default() {
+            "database_schema_context" => {
+                collect_static_page_candidate_string(item, "dataset_id", &mut schema_dataset_ids);
+                collect_static_page_candidate_string(item, "source_id", &mut schema_source_ids);
+                collect_static_page_candidate_string(item, "table", &mut schema_tables);
+            }
+            "database_aggregate" => {
+                collect_static_page_candidate_string(
+                    item,
+                    "dataset_id",
+                    &mut aggregate_dataset_ids,
+                );
+                collect_static_page_candidate_string(item, "source_id", &mut aggregate_source_ids);
+                collect_static_page_candidate_string(item, "table", &mut aggregate_tables);
+                collect_static_page_candidate_string(item, "value_label", &mut aggregate_fields);
+                collect_static_page_candidate_string(item, "metric", &mut aggregate_fields);
+            }
+            _ => {}
+        }
+    }
+
+    if !schema_tables.is_empty() {
+        candidates.push(json!({
+            "sourceId": "database_schema",
+            "type": "database_schema_context",
+            "label": "数据库结构语义",
+            "available": true,
+            "datasetIds": schema_dataset_ids.into_iter().collect::<Vec<_>>(),
+            "sourceDatabaseIds": schema_source_ids.into_iter().collect::<Vec<_>>(),
+            "tables": schema_tables.into_iter().collect::<Vec<_>>(),
+        }));
+    }
+    if !aggregate_tables.is_empty() {
+        candidates.push(json!({
+            "sourceId": "database_aggregate",
+            "type": "database_aggregate",
+            "label": "数据库聚合样本",
+            "available": true,
+            "datasetIds": aggregate_dataset_ids.into_iter().collect::<Vec<_>>(),
+            "sourceDatabaseIds": aggregate_source_ids.into_iter().collect::<Vec<_>>(),
+            "tables": aggregate_tables.into_iter().collect::<Vec<_>>(),
+            "fields": aggregate_fields.into_iter().collect::<Vec<_>>(),
+        }));
+    }
+}
+
+fn collect_static_page_candidate_string(item: &Value, key: &str, output: &mut BTreeSet<String>) {
+    if let Some(value) = item.get(key).and_then(Value::as_str) {
+        let value = value.trim();
+        if !value.is_empty() {
+            output.insert(value.to_string());
+        }
+    }
 }
 
 fn build_static_page_field_candidates(
@@ -48321,8 +48779,12 @@ fn static_page_module_binding_quality(
             || field_path.is_some()
             || static_page_binding_string(binding, &["label"]).is_some());
     let has_confirmed_rows = (sample_rows > 0
-        && matches!(data_quality, "module_data" | "evidence_value"))
-        || static_page_sample_data_contains_kind(sample_data, "media_window");
+        && matches!(
+            data_quality,
+            "module_data" | "evidence_value" | "schema_context"
+        ))
+        || static_page_sample_data_contains_kind(sample_data, "media_window")
+        || static_page_sample_data_contains_kind(sample_data, "database_schema");
     let has_inferred_rows = sample_rows > 0 && !has_confirmed_rows;
 
     let (status, reason, chart_data_fit, recommended_action) = if has_confirmed_rows {
@@ -48546,6 +49008,12 @@ fn build_static_page_module_sample_data(module: &Value, evidence_state: Option<&
         }
     }
 
+    let schema_points =
+        build_static_page_database_schema_sample_points(evidence_items, module, field_path);
+    if !schema_points.is_empty() {
+        return Value::Array(schema_points);
+    }
+
     let database_points =
         build_static_page_database_aggregate_sample_points(evidence_items, module, field_path);
     if !database_points.is_empty() {
@@ -48663,6 +49131,188 @@ fn build_static_page_media_sample_points(evidence_items: &[Value], field_path: &
         })
         .take(6)
         .collect()
+}
+
+fn build_static_page_database_schema_sample_points(
+    evidence_items: &[Value],
+    module: &Value,
+    field_path: Option<&str>,
+) -> Vec<Value> {
+    let requested_schema = field_path.and_then(static_page_database_schema_field_path_parts);
+    if requested_schema.is_none()
+        && !static_page_module_requests_database_schema_overview(module, field_path)
+    {
+        return Vec::new();
+    }
+
+    let mut points = Vec::new();
+    for item in evidence_items
+        .iter()
+        .filter(|item| item.get("type").and_then(Value::as_str) == Some("database_schema_context"))
+    {
+        let table =
+            static_page_artifact_string(item, &["table"]).unwrap_or_else(|| "database".to_string());
+        if let Some((requested_table, requested_group)) = requested_schema.as_ref() {
+            if requested_table != &table {
+                continue;
+            }
+            let fields = static_page_database_schema_group_fields(item, requested_group);
+            if fields.is_empty() {
+                continue;
+            }
+            points.push(static_page_database_schema_group_sample_point(
+                item,
+                &table,
+                requested_group,
+                fields,
+                field_path,
+            ));
+        } else {
+            points.push(static_page_database_schema_overview_sample_point(
+                item, &table,
+            ));
+        }
+        if points.len() >= 8 {
+            break;
+        }
+    }
+    points
+}
+
+fn static_page_database_schema_field_path_parts(field_path: &str) -> Option<(String, String)> {
+    let mut parts = field_path.split('.');
+    match (parts.next(), parts.next(), parts.next(), parts.next()) {
+        (Some("database"), Some("schema"), Some(table), Some(group))
+            if !table.trim().is_empty() && !group.trim().is_empty() =>
+        {
+            Some((table.trim().to_string(), group.trim().to_string()))
+        }
+        _ => None,
+    }
+}
+
+fn static_page_module_requests_database_schema_overview(
+    module: &Value,
+    field_path: Option<&str>,
+) -> bool {
+    if field_path.is_some_and(|path| path.starts_with("database.schema")) {
+        return true;
+    }
+    let module_text =
+        static_page_database_aggregate_module_text(module, field_path).to_ascii_lowercase();
+    static_page_text_contains_any(
+        &module_text,
+        &[
+            "数据库",
+            "数据表",
+            "结构",
+            "字段",
+            "指标",
+            "维度",
+            "口径",
+            "schema",
+            "table",
+            "field",
+            "metric",
+            "dimension",
+        ],
+    )
+}
+
+fn static_page_database_schema_group_fields(item: &Value, group: &str) -> Vec<String> {
+    let mut fields = Vec::new();
+    if group == "field_roles" {
+        if let Some(roles) = item.get("field_roles").and_then(Value::as_array) {
+            for role in roles {
+                if let Some(name) = role.get("name").and_then(Value::as_str) {
+                    push_string_hint(&mut fields, name);
+                }
+            }
+        }
+        return fields;
+    }
+    if let Some(value) = item.get(group) {
+        collect_string_list(value, &mut fields);
+    }
+    fields
+}
+
+fn static_page_database_schema_group_sample_point(
+    item: &Value,
+    table: &str,
+    group: &str,
+    fields: Vec<String>,
+    field_path: Option<&str>,
+) -> Value {
+    json!({
+        "label": format!("{table} {}", static_page_database_schema_group_label(group)),
+        "value": fields.len() as f64,
+        "kind": "database_schema",
+        "source": "database_schema",
+        "fieldPath": field_path.map(ToString::to_string).unwrap_or_else(|| format!("database.schema.{table}.{group}")),
+        "datasetId": item.get("dataset_id").cloned().unwrap_or(Value::Null),
+        "sourceId": item.get("source_id").cloned().unwrap_or(Value::Null),
+        "table": table,
+        "fieldGroup": group,
+        "fields": fields,
+        "summary": item.get("summary").cloned().unwrap_or(Value::Null),
+        "text": static_page_database_schema_group_text(item, table, group),
+    })
+}
+
+fn static_page_database_schema_overview_sample_point(item: &Value, table: &str) -> Value {
+    let metrics = static_page_database_schema_group_fields(item, "metrics");
+    let entity_dimensions = static_page_database_schema_group_fields(item, "entity_dimensions");
+    let time_dimensions = static_page_database_schema_group_fields(item, "time_dimensions");
+    let category_dimensions = static_page_database_schema_group_fields(item, "category_dimensions");
+    let field_count =
+        metrics.len() + entity_dimensions.len() + time_dimensions.len() + category_dimensions.len();
+    json!({
+        "label": table,
+        "value": field_count as f64,
+        "kind": "database_schema",
+        "source": "database_schema",
+        "fieldPath": format!("database.schema.{table}.overview"),
+        "datasetId": item.get("dataset_id").cloned().unwrap_or(Value::Null),
+        "sourceId": item.get("source_id").cloned().unwrap_or(Value::Null),
+        "table": table,
+        "summary": item.get("summary").cloned().unwrap_or(Value::Null),
+        "fieldGroups": {
+            "metrics": metrics,
+            "entityDimensions": entity_dimensions,
+            "timeDimensions": time_dimensions,
+            "categoryDimensions": category_dimensions,
+        },
+        "text": item
+            .get("summary")
+            .and_then(Value::as_str)
+            .map(ToString::to_string)
+            .unwrap_or_else(|| format!("数据库表 {table} 的结构语义。")),
+    })
+}
+
+fn static_page_database_schema_group_label(group: &str) -> &'static str {
+    match group {
+        "metrics" => "指标字段",
+        "entity_dimensions" => "实体维度",
+        "time_dimensions" => "时间维度",
+        "category_dimensions" => "分类维度",
+        "field_roles" => "字段角色",
+        _ => "字段",
+    }
+}
+
+fn static_page_database_schema_group_text(item: &Value, table: &str, group: &str) -> String {
+    let fields = static_page_database_schema_group_fields(item, group);
+    let fields = if fields.is_empty() {
+        "-".to_string()
+    } else {
+        fields.join(" / ")
+    };
+    format!(
+        "数据库表 {table} 的{}：{fields}。",
+        static_page_database_schema_group_label(group)
+    )
 }
 
 fn build_static_page_database_aggregate_sample_points(
@@ -49269,6 +49919,12 @@ fn static_page_sample_data_quality(sample_data: &Value) -> &'static str {
         .any(|item| item.get("kind").and_then(Value::as_str) == Some("module_data"))
     {
         return "module_data";
+    }
+    if items
+        .iter()
+        .any(|item| item.get("kind").and_then(Value::as_str) == Some("database_schema"))
+    {
+        return "schema_context";
     }
     "evidence_signal"
 }
@@ -50882,6 +51538,28 @@ mod tests {
         }
     }
 
+    fn traffic_store_mapping_for_test() -> MySqlTableMapping {
+        MySqlTableMapping {
+            table: "bi_store".to_string(),
+            object_type: "document".to_string(),
+            id_column: "storecode".to_string(),
+            id_columns: vec!["storecode".to_string()],
+            title_column: Some("storename".to_string()),
+            content_columns: vec![
+                "storecode".to_string(),
+                "storename".to_string(),
+                "city".to_string(),
+                "district".to_string(),
+                "open_date".to_string(),
+            ],
+            content_type: "text/markdown".to_string(),
+            updated_at_column: None,
+            version_column: None,
+            metadata_columns: vec!["city".to_string(), "district".to_string()],
+            revision_strategy: external_source_connectors::MySqlRevisionStrategy::ContentHash,
+        }
+    }
+
     #[test]
     fn database_aggregate_heuristics_pick_traffic_metric_and_dimensions() {
         let mapping = traffic_area_mapping_for_test();
@@ -50987,6 +51665,310 @@ mod tests {
         assert!(summary.contains("时间趋势"));
         assert!(summary.contains("分类对比"));
         assert!(summary.contains("up/down"));
+    }
+
+    #[tokio::test]
+    async fn database_schema_context_supplies_without_running_aggregate_prompt() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping database schema context supply test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+        let tenant = storage
+            .ensure_tenant(
+                &format!("database-schema-supply-test-{}", Uuid::new_v4()),
+                "Database Schema Supply Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage,
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        let dataset = state
+            .storage
+            .datasets()
+            .create(
+                state.tenant_id,
+                NewDataset {
+                    key: format!("database-schema-supply-{}", Uuid::new_v4()),
+                    title: "HY SQL 交通区域库".to_string(),
+                    description: None,
+                    owner_user_id: None,
+                },
+            )
+            .await
+            .expect("dataset should be created");
+        sqlx::query(
+            r#"
+            insert into external_source_connections (
+                id,
+                tenant_id,
+                connector_kind,
+                source_key,
+                display_name,
+                base_url_redacted,
+                config_redacted,
+                sync_mode,
+                permission_mode,
+                health_status
+            )
+            values ($1, $2, 'mysql', $1, 'HY SQL', 'mysql://8.155.12.154:23306/[redacted]', $3, 'pull', 'none', 'healthy')
+            "#,
+        )
+        .bind("hy-sql-schema")
+        .bind(state.tenant_id.0)
+        .bind(json!({
+            "database_source": {
+                "connection_env": "THIRD_PARTY_HY_SQL_DATABASE_URL",
+                "database": "hy_sql",
+                "default_dataset_id": dataset.id.to_string(),
+                "tables": [traffic_area_mapping_for_test()]
+            }
+        }))
+        .execute(state.storage.pool())
+        .await
+        .expect("database source connection should be inserted");
+        state
+            .storage
+            .documents()
+            .create(
+                state.tenant_id,
+                NewDocument {
+                    dataset_id: dataset.id,
+                    title: "bi_traffic_area row sample".to_string(),
+                    object_key: format!("database-schema-supply/{}/row.md", Uuid::new_v4()),
+                    content_type: "text/markdown".to_string(),
+                    secret_binding_ids: Vec::new(),
+                    owner_user_id: None,
+                    metadata: json!({
+                        "external_source": {
+                            "source_id": "hy-sql-schema",
+                            "document_external_id": "bi_traffic_area:001"
+                        }
+                    }),
+                },
+            )
+            .await
+            .expect("database-derived document should be created");
+
+        let supplied_items = build_assistant_run_database_aggregate_supply(
+            &state,
+            &dataset,
+            "这个数据库是什么内容，字段分别代表什么",
+        )
+        .await
+        .expect("schema context should build");
+
+        assert!(supplied_items
+            .iter()
+            .any(|item| item["type"] == json!("database_schema_context")));
+        assert!(!supplied_items
+            .iter()
+            .any(|item| item["type"] == json!("database_aggregate")));
+        let schema_context = supplied_items
+            .iter()
+            .find(|item| item["type"] == json!("database_schema_context"))
+            .expect("schema context should be supplied");
+        assert_eq!(schema_context["table"], json!("bi_traffic_area"));
+        assert_eq!(schema_context["metrics"], json!(["up", "down"]));
+        assert!(schema_context["summary"]
+            .as_str()
+            .is_some_and(|summary| summary.contains("实体维度 areaname")));
+    }
+
+    #[tokio::test]
+    async fn database_schema_context_uses_default_dataset_binding_without_synced_documents() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping database default dataset binding supply test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+        let tenant = storage
+            .ensure_tenant(
+                &format!("database-default-binding-supply-test-{}", Uuid::new_v4()),
+                "Database Default Binding Supply Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage,
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        let dataset = state
+            .storage
+            .datasets()
+            .create(
+                state.tenant_id,
+                NewDataset {
+                    key: format!("database-default-binding-supply-{}", Uuid::new_v4()),
+                    title: "HY SQL 默认绑定库".to_string(),
+                    description: None,
+                    owner_user_id: None,
+                },
+            )
+            .await
+            .expect("dataset should be created");
+        sqlx::query(
+            r#"
+            insert into external_source_connections (
+                id,
+                tenant_id,
+                connector_kind,
+                source_key,
+                display_name,
+                base_url_redacted,
+                config_redacted,
+                sync_mode,
+                permission_mode,
+                health_status
+            )
+            values ($1, $2, 'mysql', $1, 'HY SQL', 'mysql://8.155.12.154:23306/[redacted]', $3, 'pull', 'none', 'healthy')
+            "#,
+        )
+        .bind("hy-sql-default-binding")
+        .bind(state.tenant_id.0)
+        .bind(json!({
+            "database_source": {
+                "connection_env": "THIRD_PARTY_HY_SQL_DATABASE_URL",
+                "database": "hy_sql",
+                "default_dataset_id": dataset.id.to_string(),
+                "tables": [traffic_area_mapping_for_test()]
+            }
+        }))
+        .execute(state.storage.pool())
+        .await
+        .expect("database source connection should be inserted");
+
+        let supplied_items = build_assistant_run_database_aggregate_supply(
+            &state,
+            &dataset,
+            "这个数据源有哪些字段和指标",
+        )
+        .await
+        .expect("schema context should build from source default dataset binding");
+
+        assert_eq!(
+            supplied_items
+                .iter()
+                .filter(|item| item["type"] == json!("database_schema_context"))
+                .count(),
+            1
+        );
+        let schema_context = supplied_items
+            .iter()
+            .find(|item| item["type"] == json!("database_schema_context"))
+            .expect("schema context should be supplied");
+        assert_eq!(schema_context["source_id"], json!("hy-sql-default-binding"));
+        assert_eq!(schema_context["table"], json!("bi_traffic_area"));
+        assert!(!supplied_items
+            .iter()
+            .any(|item| item["type"] == json!("database_aggregate")));
+    }
+
+    #[tokio::test]
+    async fn database_schema_context_supplies_multiple_tables_for_general_prompt() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping database multi-table schema supply test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+        let tenant = storage
+            .ensure_tenant(
+                &format!("database-multi-table-supply-test-{}", Uuid::new_v4()),
+                "Database Multi Table Supply Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage,
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        let dataset = state
+            .storage
+            .datasets()
+            .create(
+                state.tenant_id,
+                NewDataset {
+                    key: format!("database-multi-table-supply-{}", Uuid::new_v4()),
+                    title: "HY SQL 多表库".to_string(),
+                    description: None,
+                    owner_user_id: None,
+                },
+            )
+            .await
+            .expect("dataset should be created");
+        sqlx::query(
+            r#"
+            insert into external_source_connections (
+                id,
+                tenant_id,
+                connector_kind,
+                source_key,
+                display_name,
+                base_url_redacted,
+                config_redacted,
+                sync_mode,
+                permission_mode,
+                health_status
+            )
+            values ($1, $2, 'mysql', $1, 'HY SQL', 'mysql://8.155.12.154:23306/[redacted]', $3, 'pull', 'none', 'healthy')
+            "#,
+        )
+        .bind("hy-sql-multi-table")
+        .bind(state.tenant_id.0)
+        .bind(json!({
+            "database_source": {
+                "connection_env": "THIRD_PARTY_HY_SQL_DATABASE_URL",
+                "database": "hy_sql",
+                "default_dataset_id": dataset.id.to_string(),
+                "tables": [
+                    traffic_area_mapping_for_test(),
+                    traffic_store_mapping_for_test()
+                ]
+            }
+        }))
+        .execute(state.storage.pool())
+        .await
+        .expect("database source connection should be inserted");
+
+        let supplied_items = build_assistant_run_database_aggregate_supply(
+            &state,
+            &dataset,
+            "这个数据库有哪些表和字段",
+        )
+        .await
+        .expect("schema context should build for multiple mapped tables");
+        let schema_tables = supplied_items
+            .iter()
+            .filter(|item| item["type"] == json!("database_schema_context"))
+            .map(|item| item["table"].as_str().unwrap_or_default().to_string())
+            .collect::<BTreeSet<_>>();
+
+        assert_eq!(schema_tables.len(), 2);
+        assert!(schema_tables.contains("bi_traffic_area"));
+        assert!(schema_tables.contains("bi_store"));
+        assert!(!supplied_items
+            .iter()
+            .any(|item| item["type"] == json!("database_aggregate")));
     }
 
     #[test]
@@ -52664,6 +53646,64 @@ mod tests {
 
         let recovering = external_source_drift_summary(4, 0, 0, Some("running".to_string()), None);
         assert_eq!(recovering["signal"], json!("sync_recovering"));
+    }
+
+    #[test]
+    fn external_database_dataset_readiness_summary_reports_answer_readiness() {
+        let now = Utc::now();
+        let empty = external_database_dataset_readiness_summary(
+            Some("018f0000-0000-7000-9000-000000000001".to_string()),
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            None,
+        );
+        assert_eq!(empty["signal"], json!("no_documents"));
+        assert_eq!(
+            empty["default_dataset_id"],
+            json!("018f0000-0000-7000-9000-000000000001")
+        );
+
+        let ready =
+            external_database_dataset_readiness_summary(None, 12, 12, 0, 0, 48, 48, Some(now));
+        assert_eq!(ready["signal"], json!("ready"));
+        assert_eq!(ready["indexed_document_count"], json!(12));
+        assert_eq!(ready["indexed_chunk_count"], json!(48));
+        assert_eq!(ready["latest_document_updated_at"], json!(now));
+
+        let partial =
+            external_database_dataset_readiness_summary(None, 12, 9, 1, 2, 40, 32, Some(now));
+        assert_eq!(partial["signal"], json!("partial_ready"));
+
+        let failed = external_database_dataset_readiness_summary(None, 3, 0, 3, 0, 0, 0, None);
+        assert_eq!(failed["signal"], json!("failed"));
+
+        let processing = external_database_dataset_readiness_summary(None, 3, 0, 1, 2, 2, 0, None);
+        assert_eq!(processing["signal"], json!("processing"));
+    }
+
+    #[test]
+    fn external_source_drift_summary_can_embed_database_readiness() {
+        let summary = external_source_drift_summary_with_database_readiness(
+            1,
+            0,
+            0,
+            Some("completed".to_string()),
+            None,
+            json!({
+                "signal": "ready",
+                "document_count": 2,
+            }),
+        );
+
+        assert_eq!(summary["signal"], json!("ok"));
+        assert_eq!(
+            summary["database_dataset_readiness"]["signal"],
+            json!("ready")
+        );
     }
 
     #[test]
@@ -54772,8 +55812,9 @@ mod tests {
         clear_assistant_openclaw_env();
     }
 
-    #[test]
-    fn external_channel_model_pool_requires_active_lane_and_scoped_channel() {
+    #[tokio::test]
+    async fn external_channel_model_pool_requires_active_lane_and_scoped_channel() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
         clear_assistant_openclaw_env();
         let message = sample_external_bot_message();
         let scoped_connection_id = "pool-scope-test";
@@ -57014,6 +58055,197 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn external_source_sync_mysql_requires_effective_target_dataset() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping mysql external source sync dataset test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("mysql-sync-dataset-test-{}", Uuid::new_v4()),
+                "MySQL Sync Dataset Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage,
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        sqlx::query(
+            r#"
+            insert into external_source_connections (
+                id,
+                tenant_id,
+                connector_kind,
+                source_key,
+                display_name,
+                base_url_redacted,
+                config_redacted,
+                sync_mode,
+                permission_mode,
+                health_status
+            )
+            values ($1, $2, 'mysql', $1, 'HY SQL', 'mysql://8.155.12.154:23306/[redacted]', $3, 'pull', 'none', 'healthy')
+            "#,
+        )
+        .bind("hy-sql")
+        .bind(state.tenant_id.0)
+        .bind(json!({
+            "database_source": {
+                "connection_env": "THIRD_PARTY_HY_SQL_DATABASE_URL",
+                "database": "hy_sql",
+                "tables": [{
+                    "table": "bi_traffic_area",
+                    "id_column": "id",
+                    "content_columns": ["areaname"]
+                }]
+            }
+        }))
+        .execute(state.storage.pool())
+        .await
+        .expect("database source connection should be inserted");
+
+        let error = create_external_source_sync(
+            State(state),
+            HeaderMap::new(),
+            Path("hy-sql".to_string()),
+            Json(CreateExternalSourceSyncRequest {
+                sync_kind: Some("full".to_string()),
+                dataset_id: None,
+                checkpoint: json!({}),
+                connector_context: json!({}),
+            }),
+        )
+        .await
+        .expect_err("mysql source sync must require a target dataset");
+
+        assert_eq!(error.status, StatusCode::BAD_REQUEST);
+        assert_eq!(error.payload.code, "target_dataset_required");
+    }
+
+    #[tokio::test]
+    async fn external_source_sync_mysql_uses_source_default_dataset() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping mysql external source sync default dataset test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("mysql-sync-default-dataset-test-{}", Uuid::new_v4()),
+                "MySQL Sync Default Dataset Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage,
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        let dataset = state
+            .storage
+            .datasets()
+            .create(
+                state.tenant_id,
+                NewDataset {
+                    key: format!("mysql-sync-default-{}", Uuid::new_v4()),
+                    title: "HY SQL 交通区域库".to_string(),
+                    description: Some("数据库源同步默认目标数据集。".to_string()),
+                    owner_user_id: None,
+                },
+            )
+            .await
+            .expect("dataset should be created");
+        sqlx::query(
+            r#"
+            insert into external_source_connections (
+                id,
+                tenant_id,
+                connector_kind,
+                source_key,
+                display_name,
+                base_url_redacted,
+                config_redacted,
+                sync_mode,
+                permission_mode,
+                health_status
+            )
+            values ($1, $2, 'mysql', $1, 'HY SQL', 'mysql://8.155.12.154:23306/[redacted]', $3, 'pull', 'none', 'healthy')
+            "#,
+        )
+        .bind("hy-sql-default")
+        .bind(state.tenant_id.0)
+        .bind(json!({
+            "database_source": {
+                "connection_env": "THIRD_PARTY_HY_SQL_DATABASE_URL",
+                "database": "hy_sql",
+                "default_dataset_id": dataset.id.to_string(),
+                "tables": [{
+                    "table": "bi_traffic_area",
+                    "id_column": "id",
+                    "content_columns": ["areaname"]
+                }]
+            }
+        }))
+        .execute(state.storage.pool())
+        .await
+        .expect("database source connection should be inserted");
+
+        let (status, Json(response)) = create_external_source_sync(
+            State(state.clone()),
+            HeaderMap::new(),
+            Path("hy-sql-default".to_string()),
+            Json(CreateExternalSourceSyncRequest {
+                sync_kind: Some("full".to_string()),
+                dataset_id: None,
+                checkpoint: json!({}),
+                connector_context: json!({}),
+            }),
+        )
+        .await
+        .expect("mysql external source sync should use source default dataset");
+
+        assert_eq!(status, StatusCode::ACCEPTED);
+        assert!(response.accepted);
+        assert_eq!(response.source_id, "hy-sql-default");
+        let persisted_execution = state
+            .storage
+            .workflow_executions()
+            .get_by_id(state.tenant_id, response.workflow_execution.id)
+            .await
+            .expect("workflow execution should load")
+            .expect("workflow execution should exist");
+        assert_eq!(persisted_execution.dataset_id, Some(dataset.id));
+        assert_eq!(
+            persisted_execution.context["dataset_id"],
+            json!(dataset.id.to_string())
+        );
+        assert_eq!(
+            persisted_execution.context["connector_context"]["database_source"]["database"],
+            json!("hy_sql")
+        );
+        assert_eq!(
+            persisted_execution.context["connector_context"]["database_source"]["tables"][0]
+                ["table"],
+            json!("bi_traffic_area")
+        );
+    }
+
+    #[tokio::test]
     async fn external_source_sync_endpoint_enqueues_workflow_and_records_run() {
         let _guard = shared_local_postgres_test_lock().lock().await;
         let storage = match local_postgres_storage().await {
@@ -57178,6 +58410,167 @@ mod tests {
         assert!(row.get::<Option<String>, _>("failure_kind").is_none());
         assert_eq!(checkpoint["workflow_stage"], json!("completed"));
         assert_eq!(checkpoint["workflow_status"], json!("succeeded"));
+    }
+
+    #[tokio::test]
+    async fn external_integrations_list_exposes_database_dataset_readiness() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping database readiness integration list test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("database-readiness-list-test-{}", Uuid::new_v4()),
+                "Database Readiness List Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage,
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        let dataset = state
+            .storage
+            .datasets()
+            .create(
+                state.tenant_id,
+                NewDataset {
+                    key: "hy-sql-readiness".to_string(),
+                    title: "HY SQL Readiness".to_string(),
+                    description: None,
+                    owner_user_id: None,
+                },
+            )
+            .await
+            .expect("dataset should be created");
+        sqlx::query(
+            r#"
+            insert into external_source_connections (
+                id,
+                tenant_id,
+                connector_kind,
+                source_key,
+                display_name,
+                base_url_redacted,
+                config_redacted,
+                sync_mode,
+                permission_mode,
+                health_status
+            )
+            values ($1, $2, 'mysql', $1, 'HY SQL', 'mysql://8.155.12.154:23306/[redacted]', $3, 'pull', 'none', 'healthy')
+            "#,
+        )
+        .bind("hy-sql-readiness")
+        .bind(state.tenant_id.0)
+        .bind(json!({
+            "database_source": {
+                "connection_env": "THIRD_PARTY_HY_SQL_DATABASE_URL",
+                "database": "hy_sql",
+                "default_dataset_id": dataset.id.to_string(),
+                "tables": [{
+                    "table": "bi_traffic_area",
+                    "id_column": "id",
+                    "content_columns": ["area_name"]
+                }]
+            }
+        }))
+        .execute(state.storage.pool())
+        .await
+        .expect("database source connection should be inserted");
+
+        let document = state
+            .storage
+            .documents()
+            .create(
+                state.tenant_id,
+                NewDocument {
+                    dataset_id: dataset.id,
+                    title: "bi_traffic_area row 1".to_string(),
+                    object_key: "db/bi_traffic_area/1.json".to_string(),
+                    content_type: "application/json".to_string(),
+                    secret_binding_ids: Vec::new(),
+                    owner_user_id: None,
+                    metadata: json!({
+                        "external_source": {
+                            "source_id": "hy-sql-readiness",
+                            "document_external_id": "bi_traffic_area:1",
+                            "revision_external_id": "rev-1"
+                        },
+                        "parse_status": "parsed"
+                    }),
+                },
+            )
+            .await
+            .expect("document should be created");
+        sqlx::query(
+            r#"
+            update documents
+            set lifecycle = 'indexed'
+            where tenant_id = $1 and id = $2
+            "#,
+        )
+        .bind(state.tenant_id.0)
+        .bind(document.id.0)
+        .execute(state.storage.pool())
+        .await
+        .expect("document lifecycle should be updated");
+        state
+            .storage
+            .document_chunks()
+            .replace_for_document(
+                state.tenant_id,
+                document.id,
+                &[storage::NewDocumentChunk {
+                    dataset_id: dataset.id,
+                    document_id: document.id,
+                    chunk_index: 0,
+                    content: "area_name: 华东 region traffic data".to_string(),
+                    token_count: 8,
+                    metadata: json!({}),
+                    created_at: Utc::now(),
+                }],
+            )
+            .await
+            .expect("chunk should be inserted");
+        sqlx::query(
+            r#"
+            update document_chunks
+            set state = 'indexed'
+            where tenant_id = $1 and document_id = $2
+            "#,
+        )
+        .bind(state.tenant_id.0)
+        .bind(document.id.0)
+        .execute(state.storage.pool())
+        .await
+        .expect("chunk state should be updated");
+
+        let Json(response) = list_external_integrations(State(state))
+            .await
+            .expect("integrations should list");
+        let source = response
+            .integrations
+            .iter()
+            .find(|item| item.integration_id == "hy-sql-readiness")
+            .expect("source should be listed");
+        let readiness = &source.drift_summary["database_dataset_readiness"];
+
+        assert_eq!(readiness["signal"], json!("ready"));
+        assert_eq!(
+            readiness["default_dataset_id"],
+            json!(dataset.id.to_string())
+        );
+        assert_eq!(readiness["document_count"], json!(1));
+        assert_eq!(readiness["indexed_document_count"], json!(1));
+        assert_eq!(readiness["indexed_chunk_count"], json!(1));
     }
 
     #[test]
@@ -64735,6 +66128,8 @@ mod tests {
             "assistant_run",
         );
         let candidates = value_array(snapshot["field_candidates"].clone());
+        let data_sources = value_array(snapshot["data_source_candidates"].clone());
+        let sample_data = value_array(snapshot["module_bindings"][0]["sampleData"].clone());
 
         assert!(candidates.iter().any(|candidate| {
             candidate["sourceId"] == json!("database_schema")
@@ -64747,6 +66142,104 @@ mod tests {
                     == json!("database.schema.bi_traffic_area.category_dimensions")
                 && candidate["kind"] == json!("dimension")
         }));
+        assert!(data_sources.iter().any(|candidate| {
+            candidate["sourceId"] == json!("database_schema")
+                && candidate["available"] == json!(true)
+                && candidate["tables"] == json!(["bi_traffic_area"])
+        }));
+        assert_eq!(sample_data[0]["kind"], json!("database_schema"));
+        assert_eq!(sample_data[0]["table"], json!("bi_traffic_area"));
+        assert_eq!(sample_data[0]["fieldGroup"], json!("metrics"));
+        assert_eq!(sample_data[0]["fields"], json!(["up", "down"]));
+        assert_eq!(
+            snapshot["module_bindings"][0]["dataQuality"],
+            json!("schema_context")
+        );
+        assert_eq!(
+            snapshot["module_bindings"][0]["bindingQualityStatus"],
+            json!("confirmed")
+        );
+    }
+
+    #[test]
+    fn static_page_data_snapshot_exposes_multi_table_database_schema_sources() {
+        let dataset_id = DatasetId::new();
+        let selected_scope = json!({
+            "mode": "user_selected",
+            "datasets": [dataset_id.to_string()],
+        });
+        let payload = json!({
+            "modules": [{
+                "id": "schema-overview",
+                "title": "数据库结构概览",
+                "visualization": {"type": "text-insight"}
+            }]
+        });
+        let evidence_state = json!({
+            "status": "supplied",
+            "supplied_items": [
+                {
+                    "type": "database_schema_context",
+                    "dataset_id": dataset_id.to_string(),
+                    "source_id": "hy-sql",
+                    "table": "bi_traffic_area",
+                    "summary": "区域流量表",
+                    "metrics": ["up", "down"],
+                    "entity_dimensions": ["areaname"],
+                    "time_dimensions": ["txdate"],
+                    "category_dimensions": ["areatype"]
+                },
+                {
+                    "type": "database_schema_context",
+                    "dataset_id": dataset_id.to_string(),
+                    "source_id": "hy-sql",
+                    "table": "bi_store",
+                    "summary": "门店主数据表",
+                    "metrics": [],
+                    "entity_dimensions": ["storename"],
+                    "time_dimensions": ["open_date"],
+                    "category_dimensions": ["city", "district"]
+                }
+            ]
+        });
+
+        let snapshot = build_static_page_data_snapshot_with_evidence(
+            &payload,
+            &selected_scope,
+            Some(&evidence_state),
+            "assistant_run",
+        );
+        let candidates = value_array(snapshot["field_candidates"].clone());
+        let data_sources = value_array(snapshot["data_source_candidates"].clone());
+        let sample_data = value_array(snapshot["module_bindings"][0]["sampleData"].clone());
+
+        assert!(candidates.iter().any(|candidate| {
+            candidate["sourceId"] == json!("database_schema")
+                && candidate["fieldPath"] == json!("database.schema.bi_traffic_area.metrics")
+        }));
+        assert!(candidates.iter().any(|candidate| {
+            candidate["sourceId"] == json!("database_schema")
+                && candidate["fieldPath"] == json!("database.schema.bi_store.entity_dimensions")
+        }));
+        assert!(data_sources.iter().any(|candidate| {
+            candidate["sourceId"] == json!("database_schema")
+                && candidate["sourceDatabaseIds"] == json!(["hy-sql"])
+                && candidate["tables"] == json!(["bi_store", "bi_traffic_area"])
+        }));
+        let sample_tables = sample_data
+            .iter()
+            .map(|point| point["table"].as_str().unwrap_or_default().to_string())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(sample_tables.len(), 2);
+        assert!(sample_tables.contains("bi_traffic_area"));
+        assert!(sample_tables.contains("bi_store"));
+        assert!(sample_data
+            .iter()
+            .all(|point| point["kind"] == json!("database_schema")));
+        assert_eq!(
+            snapshot["module_bindings"][0]["dataQuality"],
+            json!("schema_context")
+        );
     }
 
     #[test]
@@ -68069,6 +69562,10 @@ mod tests {
             WorkflowKind::UploadIngest,
         )
         .await;
+        let long_order_chunk = format!(
+            "{}Order delay risk rises when warehouse handoff exceeds two days.",
+            "General context. ".repeat(120)
+        );
         let chunks = state
             .storage
             .document_chunks()
@@ -68080,8 +69577,7 @@ mod tests {
                         dataset_id: dataset.id,
                         document_id: document.id,
                         chunk_index: 0,
-                        content: "Order delay risk rises when warehouse handoff exceeds two days."
-                            .to_string(),
+                        content: long_order_chunk,
                         token_count: 12,
                         metadata: json!({"section": "risk"}),
                         created_at: now,
@@ -68112,9 +69608,7 @@ mod tests {
                         document_chunk_id: chunks[0].id,
                         chunk_index: chunks[0].chunk_index,
                         source_locator: "documents/order-risk-notes.md#chunk=0".to_string(),
-                        content_excerpt:
-                            "Order delay risk rises when warehouse handoff exceeds two days."
-                                .to_string(),
+                        content_excerpt: "General context.".to_string(),
                         summary: "Order delay risk evidence".to_string(),
                         payload_filter_key: "dataset/order-risk".to_string(),
                         embedding_model: "placeholder-minilm".to_string(),
@@ -68198,6 +69692,12 @@ mod tests {
         assert_eq!(
             response.evidence_state["supplied_items"][0]["retrieval_evidence_id"],
             json!(evidences[0].id)
+        );
+        assert!(
+            response.evidence_state["supplied_items"][0]["content_excerpt"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("warehouse handoff exceeds two days")
         );
         assert!(response
             .assistant_message
@@ -75686,6 +77186,68 @@ mod tests {
     }
 
     #[test]
+    fn document_parse_status_supply_marks_low_quality_parsed_document_as_degraded() {
+        let now = Utc::now();
+        let document = Document {
+            id: DocumentId::new(),
+            tenant_id: TenantId::new(),
+            dataset_id: DatasetId::new(),
+            owner_user_id: None,
+            title: "One character PDF".to_string(),
+            object_key: "documents/one-character.pdf".to_string(),
+            content_type: "application/pdf".to_string(),
+            lifecycle: domain_model::DocumentLifecycle::Indexed,
+            secret_binding_ids: vec![],
+            metadata: BTreeMap::from_iter([
+                ("parse_status".to_string(), json!("parsed")),
+                (
+                    "ingest".to_string(),
+                    json!({
+                        "parse_method": "pdf-python+low-quality",
+                        "parse_status": "parse_degraded",
+                        "parse_quality_status": "low_text_coverage",
+                        "parse_metadata": {
+                            "parse_quality": {
+                                "kind": "pdf_text_extraction",
+                                "status": "low_text_coverage",
+                                "text_chars": 1,
+                                "min_usable_text_chars": 32
+                            }
+                        }
+                    }),
+                ),
+            ]),
+            created_at: now,
+            updated_at: now,
+        };
+
+        let parse_status = assistant_scope_document_parse_status(&document, &[]);
+        let parse_quality_status = assistant_run_document_parse_quality_status(&document);
+        let model_status = assistant_run_document_parse_model_status(
+            &document,
+            &parse_status,
+            0,
+            parse_quality_status.as_deref(),
+            None,
+        );
+        let parse_state = build_document_parse_status_view(&document, &[], 0, None);
+
+        assert_eq!(parse_status, "parsed");
+        assert_eq!(parse_quality_status.as_deref(), Some("low_text_coverage"));
+        assert_eq!(model_status, "parse_degraded");
+        assert_eq!(parse_state.parse_status, "parsed");
+        assert_eq!(parse_state.model_status, "parse_degraded");
+        assert_eq!(
+            parse_state
+                .parse_quality_summary
+                .as_ref()
+                .and_then(|summary| summary.get("status"))
+                .and_then(Value::as_str),
+            Some("low_text_coverage")
+        );
+    }
+
+    #[test]
     fn document_archived_lifecycle_is_wire_visible() {
         let now = Utc::now();
         let document = Document {
@@ -76043,6 +77605,24 @@ mod tests {
             .signals
             .iter()
             .any(|signal| *signal == format!("confirmed_report_plan_id={report_plan_id}")));
+    }
+
+    #[test]
+    fn assistant_run_query_centered_supply_excerpt_keeps_answer_after_prompt_match() {
+        let content = format!(
+            "{}可视对讲分机上默认配置有6个场景：回家、离家、用餐、会客、观影、休息。{}",
+            "项目背景说明。".repeat(120),
+            "其他介绍。".repeat(40)
+        );
+
+        let excerpt = assistant_run_query_centered_supply_excerpt(
+            &content,
+            "可视对讲分机上默认配置有几个场景",
+            220,
+        );
+
+        assert!(excerpt.contains("默认配置有6个场景"));
+        assert!(excerpt.contains("回家、离家、用餐、会客、观影、休息"));
     }
 
     #[test]

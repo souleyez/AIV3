@@ -6919,6 +6919,11 @@ body {
   padding-top: 0;
 }
 
+.external-database-strip {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  padding-top: 0;
+}
+
 .external-action-strip {
   grid-template-columns: repeat(4, minmax(0, 1fr));
   padding-top: 0;
@@ -6953,6 +6958,180 @@ body {
   color: #e5e7eb;
   font-size: 11px;
   line-height: 1.55;
+}
+
+.external-database-observation {
+  border-top: 1px solid #e5ded2;
+}
+
+.external-database-observation-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+  padding: 12px 14px;
+}
+
+.external-database-observation-head div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.external-database-observation-head span,
+.external-database-table-list small,
+.external-database-warning {
+  color: #667085;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.external-database-observation-head strong {
+  color: #111827;
+  font-size: 15px;
+  overflow-wrap: anywhere;
+}
+
+.external-database-observation-head small {
+  justify-self: end;
+  min-width: 70px;
+  padding: 4px 7px;
+  border: 1px solid #bfd0cb;
+  border-radius: 999px;
+  background: #eef8f4;
+  color: #17633a;
+  font-size: 11px;
+  font-weight: 900;
+  text-align: center;
+}
+
+.external-database-observation-head small.is-invalid {
+  border-color: #d29a8d;
+  background: #fff4f0;
+  color: #9f2d18;
+}
+
+.external-database-warning {
+  margin: 0;
+  padding: 0 14px 10px;
+  color: #9f2d18;
+}
+
+.external-database-readiness {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 8px;
+  padding: 0 14px 14px;
+}
+
+.external-database-readiness div {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+  padding: 9px;
+  border: 1px solid #e0d8cc;
+  border-radius: 8px;
+  background: #fffcf6;
+}
+
+.external-database-readiness span {
+  color: #667085;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.external-database-readiness strong {
+  min-width: 0;
+  color: #1f2937;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.external-database-readiness-signal {
+  border-color: #bfd0cb !important;
+  background: #eef8f4 !important;
+}
+
+.external-database-readiness-partial_ready,
+.external-database-readiness-processing {
+  border-color: #e7cf92 !important;
+  background: #fff8df !important;
+}
+
+.external-database-readiness-failed {
+  border-color: #d29a8d !important;
+  background: #fff4f0 !important;
+}
+
+.external-database-readiness-no_documents,
+.external-database-readiness-unknown {
+  border-color: #d7cdbc !important;
+  background: #f8fafc !important;
+}
+
+.external-database-table-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 0 14px 14px;
+}
+
+.external-database-table-list span {
+  min-width: 0;
+  max-width: 100%;
+  padding: 5px 8px;
+  border: 1px solid #d7cdbc;
+  border-radius: 6px;
+  background: #fff8ec;
+  color: #394150;
+  font-size: 12px;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
+.external-database-sync-list {
+  display: grid;
+  gap: 8px;
+  padding: 0 14px 14px;
+}
+
+.external-database-sync-list > small {
+  color: #667085;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.external-database-sync-list article {
+  display: grid;
+  grid-template-columns: minmax(90px, 1fr) repeat(3, minmax(52px, 0.45fr)) minmax(92px, 0.75fr);
+  gap: 8px;
+  align-items: center;
+  padding: 9px 10px;
+  border: 1px solid #e0d8cc;
+  border-radius: 8px;
+  background: #fffdf8;
+}
+
+.external-database-sync-list article > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.external-database-sync-list span,
+.external-database-sync-list small {
+  min-width: 0;
+  color: #667085;
+  font-size: 11px;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
+.external-database-sync-list strong {
+  min-width: 0;
+  color: #1f2937;
+  font-size: 12px;
+  overflow-wrap: anywhere;
 }
 
 .external-audit-list {
@@ -7190,6 +7369,7 @@ body {
 
   .external-hero-metrics,
   .external-detail-strip,
+  .external-database-readiness,
   .external-control-row,
   .external-action-detail-strip {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -7201,6 +7381,14 @@ body {
 
   .external-table-row {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .external-database-sync-list article {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .external-database-sync-list article > small {
+    grid-column: 1 / -1;
   }
 
   .external-table-head,

@@ -298,6 +298,148 @@ export function normalizeExternalConversationTest(raw = {}) {
   };
 }
 
+export function databaseSourceSummary(integration = {}) {
+  const configSummary = integration?.configSummary && typeof integration.configSummary === 'object'
+    ? integration.configSummary
+    : integration?.config_summary && typeof integration.config_summary === 'object'
+      ? integration.config_summary
+      : {};
+  const raw = configSummary.database_source && typeof configSummary.database_source === 'object'
+    ? configSummary.database_source
+    : configSummary.databaseSource && typeof configSummary.databaseSource === 'object'
+      ? configSummary.databaseSource
+    : {};
+  const tables = Array.isArray(raw.tables)
+    ? raw.tables.map((table) => String(table || '').trim()).filter(Boolean)
+    : [];
+  const configured = raw.configured !== false && Boolean(
+    raw.kind
+      || raw.database
+      || raw.connection_env
+      || raw.connectionEnv
+      || tables.length
+      || Number(raw.table_count || raw.tableCount) > 0,
+  );
+  if (!configured) {
+    return {
+      configured: false,
+      valid: true,
+      kind: '',
+      database: '',
+      connectionEnv: '',
+      defaultDatasetId: '',
+      tableCount: 0,
+      tables: [],
+      error: '',
+    };
+  }
+  return {
+    configured: true,
+    valid: raw.valid !== false,
+    kind: String(raw.kind || 'database'),
+    database: String(raw.database || ''),
+    connectionEnv: String(raw.connection_env || raw.connectionEnv || ''),
+    defaultDatasetId: String(raw.default_dataset_id || raw.defaultDatasetId || ''),
+    tableCount: numberOrZero(raw.table_count ?? raw.tableCount) || tables.length,
+    tables,
+    error: String(raw.error || ''),
+  };
+}
+
+export function databaseSourceMetrics(integration = {}) {
+  const source = databaseSourceSummary(integration);
+  if (!source.configured) {
+    return [];
+  }
+  const driftSummary = integration?.driftSummary && typeof integration.driftSummary === 'object'
+    ? integration.driftSummary
+    : integration?.drift_summary && typeof integration.drift_summary === 'object'
+      ? integration.drift_summary
+      : {};
+  const readiness = databaseSourceReadiness(integration);
+  return [
+    { label: '问答就绪', value: readiness.label },
+    { label: '数据库', value: source.database || '未配置' },
+    { label: '连接引用', value: source.connectionEnv || '未配置' },
+    { label: '默认数据集', value: readiness.defaultDatasetId || source.defaultDatasetId || '未绑定' },
+    { label: '表数量', value: source.tableCount },
+    { label: '最近同步', value: driftSummary.latest_sync_status || '无记录' },
+    { label: '失败同步', value: numberOrZero(driftSummary.failed_sync_count) },
+  ];
+}
+
+export function databaseSourceReadiness(integration = {}) {
+  const driftSummary = integration?.driftSummary && typeof integration.driftSummary === 'object'
+    ? integration.driftSummary
+    : integration?.drift_summary && typeof integration.drift_summary === 'object'
+      ? integration.drift_summary
+      : {};
+  const raw = driftSummary.database_dataset_readiness && typeof driftSummary.database_dataset_readiness === 'object'
+    ? driftSummary.database_dataset_readiness
+    : {};
+  const signal = String(raw.signal || 'unknown').toLowerCase();
+  return {
+    configured: Boolean(raw.signal),
+    signal,
+    label: databaseSourceReadinessLabel(signal),
+    defaultDatasetId: String(raw.default_dataset_id || raw.defaultDatasetId || ''),
+    documentCount: numberOrZero(raw.document_count ?? raw.documentCount),
+    indexedDocumentCount: numberOrZero(raw.indexed_document_count ?? raw.indexedDocumentCount),
+    failedDocumentCount: numberOrZero(raw.failed_document_count ?? raw.failedDocumentCount),
+    processingDocumentCount: numberOrZero(raw.processing_document_count ?? raw.processingDocumentCount),
+    chunkCount: numberOrZero(raw.chunk_count ?? raw.chunkCount),
+    indexedChunkCount: numberOrZero(raw.indexed_chunk_count ?? raw.indexedChunkCount),
+    latestDocumentUpdatedAt: raw.latest_document_updated_at || raw.latestDocumentUpdatedAt || null,
+  };
+}
+
+export function databaseSourceReadinessLabel(signal) {
+  switch (String(signal || '').toLowerCase()) {
+    case 'ready':
+      return '可问';
+    case 'partial_ready':
+      return '部分可问';
+    case 'processing':
+      return '处理中';
+    case 'failed':
+      return '失败';
+    case 'no_documents':
+      return '未入库';
+    default:
+      return '未知';
+  }
+}
+
+export function databaseSourceTablePreview(integration = {}, limit = 8) {
+  const source = databaseSourceSummary(integration);
+  const max = Math.max(0, Math.floor(Number(limit) || 0));
+  const tables = source.tables.slice(0, max);
+  return {
+    tables,
+    hiddenCount: Math.max(0, source.tableCount - tables.length),
+  };
+}
+
+export function databaseSourceSyncRuns(auditItems = [], limit = 3) {
+  const max = Math.max(0, Math.floor(Number(limit) || 0));
+  return (Array.isArray(auditItems) ? auditItems : [])
+    .filter((item) => String(item?.itemType || item?.item_type || '').toLowerCase() === 'sync')
+    .slice(0, max)
+    .map((item) => {
+      const summary = item.summary && typeof item.summary === 'object' ? item.summary : {};
+      const counts = summary.counts && typeof summary.counts === 'object' ? summary.counts : {};
+      return {
+        status: String(item.status || summary.status || 'unknown'),
+        syncKind: String(summary.sync_kind || ''),
+        updatedAt: item.createdAt || item.created_at || null,
+        failureKind: item.failureKind || item.failure_kind || '',
+        documentCount: numberOrZero(counts.document_count),
+        aclSnapshotCount: numberOrZero(counts.acl_snapshot_count),
+        enqueuedTaskCount: numberOrZero(counts.enqueued_task_count),
+      };
+    });
+}
+
 export function externalConversationStatusLabel(status) {
   switch (String(status || '').toLowerCase()) {
     case 'completed':

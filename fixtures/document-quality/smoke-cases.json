@@ -1,0 +1,133 @@
+[
+  {
+    "id": "one-character-pdf",
+    "label": "One-character PDF",
+    "fixture_kind": "pdf",
+    "prompt": "这份 PDF 能正常解析吗？",
+    "expected": [
+      "parse_quality_status=low_text_coverage or low_text_coverage_fallback_unavailable",
+      "model_status=parse_degraded",
+      "direct answer does not cite the one extracted character as content"
+    ],
+    "local_tests": [
+      {
+        "package": "ingest-worker",
+        "filter": "pdf_parse_quality_marks_one_character_extract_as_low_coverage"
+      },
+      {
+        "package": "ingest-worker",
+        "filter": "pdf_low_quality_diagnostic_does_not_treat_single_character_as_content"
+      },
+      {
+        "package": "platform-api",
+        "filter": "document_parse_status_supply_marks_low_quality_parsed_document_as_degraded"
+      }
+    ]
+  },
+  {
+    "id": "third-party-doc-deng-engineer",
+    "label": "Third-party DOC/DOCX Deng engineer question",
+    "fixture_kind": "docx",
+    "prompt": "邓工是谁？",
+    "expected": [
+      "selected document evidence is supplied",
+      "answer is provider-authored direct text",
+      "source refs point at the selected document"
+    ],
+    "local_tests": [
+      {
+        "package": "platform-api",
+        "filter": "assistant_run_external_document_scope_supplies_selected_doc_without_acl_snapshot"
+      }
+    ]
+  },
+  {
+    "id": "resume-company-statistics",
+    "label": "Resume company name statistics",
+    "fixture_kind": "resume_set",
+    "prompt": "简历库里一共提到了多少个公司名？",
+    "expected": [
+      "company_count comes from company_rows",
+      "company rows include document evidence",
+      "candidate_terms are not used as extra company names"
+    ],
+    "local_tests": [
+      {
+        "package": "platform-api",
+        "filter": "assistant_run_compact_retry_input_keeps_only_authoritative_company_rows"
+      }
+    ]
+  },
+  {
+    "id": "resume-multidimension-ranking",
+    "label": "Multi-dimension resume ranking table",
+    "fixture_kind": "resume_set",
+    "prompt": "简历按技能数量排序出表；简历按公司数排序出表；简历按工作年限排序出表",
+    "expected": [
+      "sorted tables are produced from resume_profile_rows",
+      "skills, companies, projects, ages, genders, education, certificates, cities, and time ranges remain available",
+      "document titles or refs remain visible in table rows"
+    ],
+    "local_tests": [
+      {
+        "package": "platform-api",
+        "filter": "assistant_run_compact_retry_input_keeps_only_authoritative_company_rows"
+      }
+    ]
+  },
+  {
+    "id": "table-heavy-document",
+    "label": "Table-heavy PDF or DOCX",
+    "fixture_kind": "document",
+    "prompt": "列出文档里的表格结构",
+    "expected": [
+      "table rows are supplied as structured scan rows",
+      "section/table counts are printed by smoke report"
+    ],
+    "local_tests": [
+      {
+        "package": "platform-api",
+        "filter": "assistant_run_compact_retry_input_keeps_only_authoritative_company_rows"
+      }
+    ]
+  },
+  {
+    "id": "attendance-xlsx-date-format",
+    "label": "Attendance XLSX date and work-hour formatting",
+    "fixture_kind": "xlsx",
+    "prompt": "最近有没缺勤的人？工时最长和最短分别是谁？",
+    "expected": [
+      "Excel serial dates are normalized to YYYY-MM-DD",
+      "first/last punch serial timestamps are normalized to HH:MM",
+      "blank punch columns stay aligned with work-hour columns",
+      "work-hour values include an hour unit for model-facing context"
+    ],
+    "local_tests": [
+      {
+        "package": "ingest-worker",
+        "filter": "local_ingest_processor_formats_xlsx_attendance_serial_dates"
+      }
+    ]
+  },
+  {
+    "id": "scanned-visual-pdf",
+    "label": "Scanned or visual PDF fallback",
+    "fixture_kind": "pdf",
+    "prompt": "这份扫描件的主要内容是什么？",
+    "expected": [
+      "PaddleOCR structured fallback is preferred when configured",
+      "MiniMax VLM fallback is visible only when OCR is unavailable or insufficient",
+      "fallback state is model-visible"
+    ],
+    "local_tests": [
+      {
+        "package": "ingest-worker",
+        "filter": "pdf_vlm_rescue"
+      },
+      {
+        "package": "ingest-worker",
+        "filter": "build_document_chunks_uses_paddleocr_structure_title_blocks"
+      }
+    ]
+  }
+]

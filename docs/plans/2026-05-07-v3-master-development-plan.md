@@ -16,6 +16,10 @@ This is the current active plan as of 2026-05-18.
 
 2026-05-18 update: the Codex substrate track is frozen. 8 server has Codex CLI installed but not logged in; online V3 AssistantRun still uses the MiniMax/provider path; Codex Host remains plan-only with real execution disabled. Continue backend/static-page/retrieval/ordinary-chat quality work without promoting Codex until the operator explicitly resumes that track.
 
+2026-05-22 update: the active product mainline is now the dataset-centered assistant chain across third-party documents, document understanding, ordinary AssistantRun reliability, report/template/static-page artifacts, and database sources. Static-page generation remains important, but it is no longer the only next execution focus. The immediate order is to stabilize third-party answer/data-scope behavior first, then improve parsing/document understanding, then strengthen answer/report/template outputs, then bring database sources through the same dataset pipeline. Refactoring should be incremental around touched hotspots, not a broad pause for a system rewrite.
+
+2026-05-22 thread split: parsing quality and answer quality now have a dedicated parallel plan at `docs/plans/2026-05-22-v3-parsing-answer-quality-plan.md`. Run that plan in a separate thread for parser quality gates, PaddleOCR/MiniMax fallback, document structure/entity/term extraction, retrieval/evidence quality, and model-authored answer reliability. Keep this master/feature thread on database sources, third-party integration surfaces, template/static-page/report artifacts, observability, docs, deployment, and incremental feature decomposition. Do not change third-party public interfaces in either thread without an explicit operator decision.
+
 Older plan files are now detailed references, not independent roadmaps:
 
 - `docs/plans/2026-04-27-static-page-generation-studio-plan.md`: detailed static-page, assistant shell, ingest, media, and renderer history.
@@ -24,7 +28,9 @@ Older plan files are now detailed references, not independent roadmaps:
 - `docs/plans/2026-05-03-codex-gateway-model-proxy-plan.md`: detailed model routing and Codex Host bridge plan.
 - `docs/plans/2026-05-07-v3-codex-host-architecture-alignment-plan.md`: detailed module-boundary plan for Codex Host.
 - `docs/plans/2026-05-07-v3-email-account-auth-plan.md`: detailed account/email auth plan; account work is paused after current hardening unless explicitly resumed.
+- `docs/plans/2026-05-20-v3-context-document-understanding-p0.md`: detailed third-party document scope, async parse, parse-quality, direct-reply, user-context, and document-understanding P0 plan.
 - `docs/plans/2026-05-21-database-source-integration-plan.md`: detailed MySQL database-source connector, schema inspection, mapping, sync, UI, observability, and 8-server smoke plan.
+- `docs/plans/2026-05-22-v3-parsing-answer-quality-plan.md`: active parallel quality plan for parser quality, document understanding, retrieval supply, and answer reliability.
 
 When old documents conflict with this one, follow this master plan.
 
@@ -313,22 +319,48 @@ The product track must remain safe without real local host execution. V3 still a
 
 The next highest leverage order is:
 
-1. Preserve the current overall UI and stop broad shell redesign.
-2. Finish static-page module editability, planning quality, final-render fidelity, export diagnostics, and data-quality handling.
-3. Improve parsing, retrieval, hidden conversation memory, media understanding, and AssistantRun context supply so the model sees better evidence and current draft state.
-4. Continue direct-upload / publicly resolvable video PPT extraction as a media-quality subtrack: complete the public video URL/page resolver, remote media registration, background media parsing, transcript/PPT extraction artifacts, and no host-composed fallback answers. Uploaded video evidence supply through ReAct already exists.
-5. Strengthen the model-gateway profile system and ordinary AssistantRun provider path; keep the Codex executor bridge frozen.
-6. Add the external bot and third-party integration core: generic channel/source contracts, ACL-aware third-party retrieval, Feishu/Lark and WeCom adapters, external artifact/action runtime, and observe-first management UI.
-7. Add database-source integration as a data-source subtrack: MySQL read-only connector, schema inspection, target-dataset binding, table-to-document mapping, external-source workflow sync, document parse/index reuse, source health/drift observability, and main-system UI. Keep raw credentials out of V3 storage, keep arbitrary SQL out of MVP, and make database rows usable only after they become visible dataset documents/evidence.
-8. Add the safe HTML artifact viewer as a common review/report surface, starting with static-page planning handoffs, third-party handoff docs, and existing historical Codex execution report templates.
-9. Do not validate real Codex execution while frozen; browser/external-page fetching work should use non-Codex product paths unless explicitly reopened.
-10. Resume account expansion only when product workflows need it.
+1. Preserve the current overall UI shell and stop broad shell redesign.
+2. Stabilize the third-party close loop: document parse into V3 datasets/scopes, conversation-scoped document ranges, requested skills, template skill output, selected output format, parser status supply, and model-authored direct replies. The old fixed "已收到指令..." style fallback must not be the normal failure mode.
+3. Improve parsing and answer quality in the dedicated parallel quality thread: async parse lifecycle, parse-quality detection, PaddleOCR structured parse, MiniMax VLM fallback, paragraph/section segmentation, heading hierarchy, table structure, entities, noun terms, retrieval/evidence quality, and direct model-authored answers are now governed by `docs/plans/2026-05-22-v3-parsing-answer-quality-plan.md`.
+4. Strengthen dataset Q&A, reports, and template outputs in this feature thread only where they consume existing quality-thread supply contracts. Resume dimensions such as time, skill, project, age, gender, company, ranking, and table output should become general document/dataset capabilities through the quality plan; this thread continues the artifact/output surfaces: rich text, image-text layout, Markdown table, JSON, HTML/report artifacts, and template-driven generation.
+5. Bring database sources through the same dataset chain in P0 managed mode: V3 operators configure the database source, bind a dataset, inspect/profile/sync rows, and third-party conversations consume only selected/visible dataset evidence and aggregates.
+6. Improve integration observability without idle resource cost: third-party conversation tests, document parse status, database sync status, artifact generation, and smoke evidence should load only when the protected observability page and selected item are open. Current feature slice has centralized the database-source summary and dataset readiness counts on the selected integration; next observability slices should add deeper table/schema/sync checkpoint drilldowns without opening persistent database connections.
+7. Add database-source P1 self-service after P0 is reliable: third-party-safe source registration, encrypted credential references or connector tokens, schema/profile/sync/status APIs, incremental checkpoints, and tenant-scoped responses.
+8. Continue static-page/report quality as the artifact branch of the same data chain: module binding quality, planning quality, image-preview prompt quality, chart/data fidelity, final-render fidelity, export diagnostics, and safe HTML artifact review.
+9. Strengthen the model-gateway profile system and ordinary AssistantRun provider path; keep the Codex executor bridge frozen.
+10. Do not validate real Codex execution while frozen; browser/external-page fetching work should use non-Codex product paths unless explicitly reopened. Resume account expansion only when product workflows need it.
+
+## Incremental Code Decomposition Policy
+
+Do not pause the product mainline for a broad rewrite. Split code when a touched area is already blocking feature work, testing, or review.
+
+Preferred split boundaries:
+
+- `platform-api` route groups: assistant runs, external channels, database sources, documents/datasets, static pages, HTML artifacts, and integration observability.
+- AssistantRun context supply: scope planning, dataset evidence, parser status evidence, requested skills, output format, user-context memory, and database schema/aggregate context.
+- Document understanding: raw parser output, OCR/VLM fallback, section/paragraph segmentation, table extraction, entity/term extraction, and chunk/index emission.
+- Database source integration: connector config, schema inspector, profiler/semantic profile, sync mapper, aggregate planner, and third-party source registration.
+- Frontend domains: integrations docs/observability, data-source/database panel, artifact viewer, dataset/document detail, static-page workspace, and shared API normalization helpers.
+
+Refactoring rule:
+
+- Each feature slice may extract the nearest 1-2 hotspots behind tests.
+- Keep behavior-preserving moves separate from functional changes when practical.
+- Do not change public API shape, permissions, or model-facing context wording as part of a pure file split.
+- Keep existing third-party, AssistantRun, static-page, and database smoke paths runnable after each slice.
 
 The main architectural risk is letting too many "brains/builders" compete: direct model calls, frozen Codex executor designs, static-page renderer, and HTML artifact renderer. While Codex is frozen, the boundary is simpler: V3 provider routing handles model-authored answers/actions, V3 validates and supplies data, static-page renderer produces customer report pages, and HTML artifact renderer displays review/control artifacts.
 
 ## Immediate Execution Track
 
-The next development thread should keep the current UI shell stable and continue with backend/static-page quality: parsing quality, retrieval/context supply, planning quality, image-preview prompt quality, chart/data fidelity, final-render fidelity, ordinary AssistantRun provider quality, and export diagnostics. Do not continue the model-gateway/Codex conversation executor foundation unless the operator explicitly resumes the frozen Codex substrate track.
+The next development threads should stay split:
+
+- **Quality thread:** run `docs/plans/2026-05-22-v3-parsing-answer-quality-plan.md` only. It owns parsing quality, PaddleOCR/MiniMax fallback, document structure/entity/term extraction, retrieval/evidence quality, and answer reliability.
+- **Feature thread:** continue this master plan for database-source P0/P1, third-party integration surfaces, requested skills/templates/output format, static-page/report artifacts, protected observability, docs, deployment, and incremental code decomposition.
+
+The feature thread should keep the current UI shell stable and continue the dataset-centered assistant mainline. Start with third-party document/dataset scope reliability that does not require parser-quality internals, requested skills/templates/output format, database-source P0 managed sync into datasets, protected integration observability, and artifact/report/template outputs. Static-page and report generation should improve as artifact consumers of the same dataset evidence chain. Do not continue the model-gateway/Codex conversation executor foundation unless the operator explicitly resumes the frozen Codex substrate track.
+
+Parallel execution rule: when a task crosses from feature surface into parse/retrieval/answer quality internals, stop and hand it to the quality thread instead of mixing the work into this feature thread. When a quality-thread change needs third-party public API changes, ask the operator first.
 
 ### Task 0: Make This Master Plan The Entry Point
 
@@ -879,7 +911,7 @@ The next development thread should keep the current UI shell stable and continue
 
 ### Task 10: Add Database Source Integration
 
-**Status:** Planned. Detailed execution steps live in `docs/plans/2026-05-21-database-source-integration-plan.md`. This task is part of the product/data-source mainline, not the frozen Codex substrate and not the third-party chat interface itself.
+**Status:** Planned. Detailed execution steps live in `docs/plans/2026-05-21-database-source-integration-plan.md`, including the third-party database access sub-plan added on 2026-05-22. This task is part of the product/data-source mainline, not the frozen Codex substrate. Third-party access must still flow through database source registration, dataset binding, sync, parsing/indexing, and selected/visible dataset evidence; do not turn third-party chat into direct database access.
 
 **Goal:** Add a safe MySQL database-source connector so an external database can be inspected, mapped, synchronized into an explicit V3 dataset, parsed, indexed, and then used by existing dataset question-answering, report, template, and static-page workflows.
 
@@ -916,8 +948,9 @@ The next development thread should keep the current UI shell stable and continue
 6. Wire database sync into the existing external-source workflow, preserving metadata/content/ingest/index stages, requiring an effective target dataset for MySQL sync, and supporting full sync plus simple incremental sync by `updated_at`, numeric id, or explicit version column.
 7. Add dataset compatibility checks: source UI can bind a database source to an existing dataset or create/select a target dataset for each sync; AssistantRun, report generation, template-skill output, and static-page planning must consume database-derived content only through selected/visible dataset evidence.
 8. Add observability and drift checks: target dataset, table count, row count, document count, skipped/failed rows, checkpoint, last schema inspect, mapped table count, missing table/column drift, source health, and dataset indexing readiness without secrets.
-9. Document the database-source integration with required read-only account, connection-env contract, target-dataset binding, table mapping, sync examples, field comments, error codes, and security restrictions.
-10. Deploy only to 8 after local tests pass. Add `THIRD_PARTY_HY_SQL_DATABASE_URL` only on the server environment or secret file; never commit it. Smoke schema inspection against `hy_sql`, confirm current copied test DB table `s` is visible and empty, then run an empty sync into a test V3 dataset without source DB writes.
+9. Add the third-party database access contract in two phases: P0 managed/pre-provisioned source binding where V3 operators configure credentials and third parties pass dataset scope; P1 self-service source registration with encrypted credential references, schema/profile/sync/status operations, and tenant-scoped responses.
+10. Document the database-source integration with required read-only account, connection-env contract, third-party managed-mode contract, future self-service API shape, target-dataset binding, table mapping, sync examples, field comments, error codes, and security restrictions.
+11. Deploy only to 8 after local tests pass. Add `THIRD_PARTY_HY_SQL_DATABASE_URL` only on the server environment or secret file; never commit it. Smoke schema inspection against `hy_sql`, confirm current copied test DB table `s` is visible and empty, then run an empty sync into a test V3 dataset without source DB writes.
 
 **Security Rules:**
 
@@ -951,6 +984,8 @@ Pop-Location
 - Full sync and simple incremental sync create/update V3 external documents and pass them through existing parse/index workflow.
 - Database-derived rows are visible to questions, reports, template skills, and static-page generation only after they have become documents/evidence in the selected target dataset.
 - MySQL sync fails clearly when no effective target dataset is supplied or configured.
+- Third-party database access has a clear P0 managed path and a P1 self-service path; neither path exposes raw credentials or live database querying to chat/model turns.
+- Third-party conversations use dataset scope or V3-resolved source-derived dataset scope for database-derived knowledge.
 - Existing HTTP third-party source sync, chat, document parse, model pool, and external integration endpoints remain unchanged unless a database sync is explicitly started.
 - Current test database state is supported: `hy_sql` on MySQL 8.0.24 may initially contain only empty table `s(a varchar(255))`; real business mapping waits for real DDL/tables.
 
@@ -1022,7 +1057,7 @@ Use this prompt for the next development thread:
 Continue AI Data Platform V3 from docs/plans/2026-05-07-v3-master-development-plan.md.
 Treat that file as the active master plan; older plans are source references only.
 Keep the current overall UI shell stable. Do not redesign the left dataset rail, top toolbar, home-only composer, right output shelf, static-page entry card, or single `效果图——生成页面` CTA unless fixing a blocking bug.
-Product mainline is static-page generation quality: module editing correctness, data snapshots, ECharts advanced runtime, effect-image preview, durable final render/export, planning quality, parsing quality, retrieval/context quality, and generation quality.
+Product mainline is the dataset-centered assistant chain: third-party documents and conversation-scoped document ranges, parser status supply, document understanding, retrieval/context quality, ordinary AssistantRun reliability, report/template/static-page artifacts, and database sources synced into explicit datasets. Static-page generation remains an artifact-quality branch, not the only next focus.
 The Codex substrate is frozen as of 2026-05-18. Do not promote Codex, log the 8 server Codex CLI into the operator GPT account, enable real transports, or route normal assistant/external-bot/third-party chat turns through Codex unless the operator explicitly reopens that track. Keep current Codex executor/Host work as dormant diagnostic/reference infrastructure only.
 Gateway model profiles must support multiple provider APIs such as GPT-family and MiniMax-compatible providers through explicit capability manifests, redacted credentials, and fallback policy.
 Every model-facing turn must receive V3 awareness as additive context: V3 identity, product capabilities, visible permission-scoped datasets/tools, and unavailable evidence state. This must not restrict normal model ability; if V3 has no visible evidence or permission for a topic, the answer should say it is `当前不可见/未供料` and may then continue with clearly labeled general knowledge.
@@ -1031,5 +1066,5 @@ Safe HTML artifacts are a shared review/control surface for Codex reports, plann
 Video/PPT extraction is temporarily frozen as of 2026-05-15 unless the operator explicitly resumes it. Do not continue richer PPTX/OCR reconstruction or related media work while frozen.
 Do not resume account expansion unless fixing a security/access regression.
 Do not run or validate real Codex execution while the Codex substrate is frozen; earlier jump-host/Mac-host validation notes are historical reference.
-Continue with backend/static-page quality, parsing/retrieval quality, ordinary AssistantRun provider quality, and V3 awareness/tool-supply work without changing the visible static-page workflow.
+Continue with third-party close-loop reliability, parsing/document-understanding quality, dataset Q&A/report/template robustness, database-source P0 managed dataset sync, protected integration observability, ordinary AssistantRun provider quality, and V3 awareness/tool-supply work without changing the visible static-page workflow.
 ```

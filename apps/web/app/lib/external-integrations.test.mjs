@@ -11,6 +11,11 @@ import {
   buildExternalActionTrace,
   buildThirdPartyApiUrl,
   controlResultLabel,
+  databaseSourceMetrics,
+  databaseSourceReadiness,
+  databaseSourceSummary,
+  databaseSourceSyncRuns,
+  databaseSourceTablePreview,
   driftSignalLabel,
   EXTERNAL_INTEGRATION_MODES,
   externalConversationStatusLabel,
@@ -216,6 +221,117 @@ test('normalizeIntegrationSummary marks result failures as operational failures'
   assert.equal(integration.signal, 'failed');
   assert.equal(integration.actionSignal, 'result_failed');
   assert.equal(actionSignalLabel(integration.actionSignal), '结果失败');
+});
+
+test('database source observability helpers normalize redacted source summary', () => {
+  const integration = normalizeIntegrationSummary({
+    integration_id: 'hy-sql-source',
+    integration_kind: 'source',
+    provider: 'mysql',
+    config_summary: {
+      database_source: {
+        kind: 'mysql',
+        database: 'hy_sql',
+        connection_env: 'THIRD_PARTY_HY_SQL_DATABASE_URL',
+        default_dataset_id: '018f0000-0000-7000-9000-000000000001',
+        table_count: 3,
+        tables: ['bi_traffic_area', 'bi_order_day', 'bi_user_region'],
+      },
+    },
+    drift_summary: {
+      latest_sync_status: 'completed',
+      failed_sync_count: 0,
+      database_dataset_readiness: {
+        signal: 'partial_ready',
+        default_dataset_id: '018f0000-0000-7000-9000-000000000001',
+        document_count: 128,
+        indexed_document_count: 120,
+        failed_document_count: 1,
+        processing_document_count: 7,
+        chunk_count: 480,
+        indexed_chunk_count: 460,
+        latest_document_updated_at: '2026-05-22T01:00:00Z',
+      },
+    },
+  });
+
+  const source = databaseSourceSummary(integration);
+  assert.equal(source.configured, true);
+  assert.equal(source.valid, true);
+  assert.equal(source.kind, 'mysql');
+  assert.equal(source.database, 'hy_sql');
+  assert.equal(source.defaultDatasetId, '018f0000-0000-7000-9000-000000000001');
+  assert.equal(source.tableCount, 3);
+  assert.deepEqual(source.tables, ['bi_traffic_area', 'bi_order_day', 'bi_user_region']);
+
+  const metrics = databaseSourceMetrics(integration);
+  assert.deepEqual(metrics.map((metric) => metric.label), [
+    '问答就绪',
+    '数据库',
+    '连接引用',
+    '默认数据集',
+    '表数量',
+    '最近同步',
+    '失败同步',
+  ]);
+  assert.equal(metrics.find((metric) => metric.label === '问答就绪').value, '部分可问');
+  assert.equal(metrics.find((metric) => metric.label === '最近同步').value, 'completed');
+  const readiness = databaseSourceReadiness(integration);
+  assert.equal(readiness.signal, 'partial_ready');
+  assert.equal(readiness.label, '部分可问');
+  assert.equal(readiness.documentCount, 128);
+  assert.equal(readiness.indexedChunkCount, 460);
+  assert.equal(readiness.latestDocumentUpdatedAt, '2026-05-22T01:00:00Z');
+
+  const tablePreview = databaseSourceTablePreview(integration, 2);
+  assert.deepEqual(tablePreview.tables, ['bi_traffic_area', 'bi_order_day']);
+  assert.equal(tablePreview.hiddenCount, 1);
+
+  const syncRuns = databaseSourceSyncRuns([
+    normalizeAuditItem({
+      item_type: 'sync',
+      status: 'completed',
+      created_at: '2026-05-22T01:00:00Z',
+      summary: {
+        sync_kind: 'full',
+        counts: {
+          document_count: 128,
+          acl_snapshot_count: 12,
+          enqueued_task_count: 1,
+        },
+      },
+    }),
+    normalizeAuditItem({
+      item_type: 'action',
+      status: 'external_action_succeeded',
+    }),
+  ]);
+  assert.deepEqual(syncRuns, [{
+    status: 'completed',
+    syncKind: 'full',
+    updatedAt: '2026-05-22T01:00:00Z',
+    failureKind: '',
+    documentCount: 128,
+    aclSnapshotCount: 12,
+    enqueuedTaskCount: 1,
+  }]);
+});
+
+test('database source observability helpers keep unconfigured sources quiet', () => {
+  const integration = normalizeIntegrationSummary({
+    integration_id: 'plain-source',
+    integration_kind: 'source',
+    config_summary: {
+      database_source: {
+        configured: false,
+      },
+    },
+  });
+
+  const source = databaseSourceSummary(integration);
+  assert.equal(source.configured, false);
+  assert.deepEqual(databaseSourceMetrics(integration), []);
+  assert.deepEqual(databaseSourceTablePreview(integration), { tables: [], hiddenCount: 0 });
 });
 
 test('driftSignalLabel covers source recovery states', () => {

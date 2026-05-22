@@ -2,6 +2,8 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use `superpowers:executing-plans` to implement this plan task-by-task.
 
+> 2026-05-22 note: parsing quality, document understanding, retrieval quality, and answer reliability have been split into the active parallel plan `docs/plans/2026-05-22-v3-parsing-answer-quality-plan.md`. Keep this older P0 document as context for third-party scope/user-context behavior and historical gaps.
+
 **Goal:** Close the remaining V3 P0 gaps around third-party document scope, direct replies, async parsing, document understanding, and global intent-gated user context.
 
 **Architecture:** Treat V3 context as explicit, typed scopes: selected document datasets, temporary external document scopes, global hidden user-context scopes, current conversation history, parser status, and artifact state. The model should receive only the scopes selected by the planner or explicitly requested by the user; user history and cross-conversation context must be intent-gated. Parsing should become asynchronous and quality-aware, with PaddleOCR as the preferred structured parser when available and MiniMax VLM as the low-quality fallback.

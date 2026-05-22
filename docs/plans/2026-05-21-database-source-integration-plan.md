@@ -138,6 +138,104 @@ Dataset binding contract:
 
 ---
 
+## Third-Party Database Access Plan
+
+Third-party database access should reuse the same source-to-dataset architecture instead of adding live database reads to chat or report endpoints.
+
+Target rule:
+
+- A third-party database is an external source, not a model tool.
+- Database credentials are configured once, tested, profiled, and synchronized into one or more V3 datasets.
+- Third-party conversations pass dataset scope or source-derived dataset scope; AssistantRun, reports, template skills, and static pages consume only V3 dataset evidence, aggregate evidence, or persisted semantic profiles.
+- The model must never receive raw database connection strings, passwords, tokens, arbitrary SQL, or permission to query customer databases directly.
+
+### Current Boundary
+
+Currently available:
+
+- Main-system database routes exist for connection test, schema inspection, preview, profile, apply-profile, aggregate, and source sync under `/v1/external/sources/{source_id}/database/...`.
+- Database sync can resolve an effective target dataset from request `dataset_id` or source `database_source.default_dataset_id`.
+- AssistantRun can already receive database-derived dataset context, schema semantics, and aggregate samples after the source is bound/synced into a visible dataset.
+- AssistantRun now supplies database schema/field semantics for ordinary dataset understanding prompts without running live aggregate queries; aggregate samples remain gated by explicit statistics/report/ranking intent.
+- Database source discovery for AssistantRun now recognizes both synced document metadata and `database_source.default_dataset_id`, so a configured/bound source can supply schema context before the first row document is ingested.
+- Ordinary database understanding prompts can now receive schema context for multiple mapped tables from the selected database source; explicit aggregate/report/ranking prompts still keep live aggregate execution bounded to the prompt-selected table and request limits.
+- Static-page/report data snapshots now expose database schema and aggregate evidence as explicit data source candidates, so artifact planning can bind to database tables/fields instead of only generic dataset/evidence sources.
+- Static-page/report module bindings can now materialize database schema context as `sampleData` for text/table structure modules, letting schema-only artifacts render table/field summaries even when no aggregate rows were requested.
+- The centralized external integration observability page now surfaces selected database-source summaries from existing redacted integration metadata, selected audit rows, and dataset readiness counts: database kind/name, connection env reference, default dataset binding, mapped table count/list, latest sync status, failed sync count, recent sync run counts, document count, indexed document count, indexed chunk count, and processing/failed document count. This uses the existing lightweight integration summary plus the already-selected audit timeline; it does not open a separate data-observation page or keep database connections hot.
+- Document parse third-party API can auto-create/reuse datasets from `dataset_external_id`, but this behavior is not yet generalized to database sources.
+
+Important limitation:
+
+- The database routes are main-system/admin-facing today. They use normal V3 source access checks, not external channel inbound bearer auth. They should not be treated as pure third-party public APIs until a separate credential, tenant, dataset-binding, and rate-limit contract exists.
+
+### Recommended Integration Modes
+
+P0 managed mode:
+
+1. V3 operator or trusted admin creates a database `external_source_connection`.
+2. Raw credentials stay in server-side secrets or encrypted credential storage; source config stores only `connection_env`, redacted host/database summary, table allowlist, mapping, and `default_dataset_id`.
+3. The source is tested, schema-inspected, profiled, and mapped in the main system.
+4. Sync writes database rows into the bound V3 dataset as normal external documents.
+5. Third-party chat starts with dataset scope, dataset external id, or source-derived dataset scope.
+6. AssistantRun, report generation, template skills, and static-page generation answer only from selected/visible dataset evidence and aggregate/profile evidence.
+
+This mode is enough for the first customer database rollout because it avoids exposing database credential management to third-party callers.
+
+P1 third-party self-service mode:
+
+1. Add a third-party-safe source registration endpoint that creates or updates a database source under the caller's tenant/channel.
+2. Accept only encrypted credential references, one-time setup tokens, or customer-side connector tokens. Reject raw passwords/URLs in public request bodies unless they are immediately encrypted and never returned/logged.
+3. Let the third party bind the source to `dataset_external_id`, `dataset_title`, or an existing visible `dataset_id`.
+4. Expose safe operations: test connection, inspect schema, preview whitelisted tables, generate profile, apply profile, start sync, query sync status.
+5. Keep all responses secret-free and tenant-scoped.
+
+Suggested third-party API shape for P1:
+
+```text
+POST /v1/external/channels/{connection_id}/database-sources
+POST /v1/external/channels/{connection_id}/database-sources/{source_external_id}/test
+POST /v1/external/channels/{connection_id}/database-sources/{source_external_id}/schema
+POST /v1/external/channels/{connection_id}/database-sources/{source_external_id}/profile
+POST /v1/external/channels/{connection_id}/database-sources/{source_external_id}/apply-profile
+POST /v1/external/channels/{connection_id}/database-sources/{source_external_id}/sync
+GET  /v1/external/channels/{connection_id}/database-sources/{source_external_id}/syncs/{sync_id}
+```
+
+The P1 API should mirror document parse semantics where possible:
+
+- `source_external_id`: third-party stable database source id.
+- `dataset_external_id`: third-party stable target dataset id.
+- `dataset_title`: target dataset title when auto-creating the dataset.
+- `table_allowlist`: allowed tables.
+- `field_profile`: persisted business field semantics.
+- `sync_mode`: `full` or `incremental`.
+- `idempotency_key`: retry-safe request id.
+
+### Gap Checklist
+
+- Third-party database source registration and update API does not exist yet.
+- Third-party database API auth boundary is not defined; current database routes are main-system/admin-facing.
+- Long-term secret storage needs encrypted credentials, secret references, customer tokens, or customer-side connector agents.
+- Database source auto-bind/auto-create dataset behavior should match document parse `dataset_external_id` behavior.
+- Sync status needs a third-party-safe query surface: queued/running/completed/failed, table count, row count, document count, skipped rows, failed rows, checkpoint, last error, and dataset indexing readiness.
+- Incremental sync needs table-level primary key, `updated_at`, version, delete handling, dedupe, and high-water checkpoints.
+- Chat scope needs a stable contract: third-party should pass dataset scope, not raw database ids, unless V3 resolves those ids to visible datasets first.
+- Aggregate/profile evidence needs stricter limits for third-party callers: allowlisted tables/columns, scan limits, timeout limits, no arbitrary SQL, and audit events.
+- Field glossary, business metrics, table relationships, dimensions, and report-ready semantic profile should be persisted on the source/dataset instead of recomputed only during AssistantRun.
+- Integration observability still needs deeper database drilldowns after the centralized summary: table/schema drift, full sync checkpoint/error detail, table-level sync readiness, and third-party-safe status views.
+- Public third-party docs need a minimal database section after the managed P0 path is finalized.
+
+### Third-Party Acceptance Criteria
+
+- A third-party database can be represented as a V3 external source and safely synchronized into an explicit V3 dataset.
+- Third-party conversations can use database-derived knowledge by passing dataset scope, with no direct model/database access.
+- The same database source can be synced into different datasets when explicitly configured and permission-checked.
+- Raw credentials never appear in API responses, logs, browser state, assistant messages, workflow events, or docs examples.
+- The third party can observe whether database data is ready for Q&A/reporting without needing V3 internal admin access.
+- Report/template/static-page generation can reuse database-derived dataset evidence, schema profile, and aggregates through the normal V3 artifact chain.
+
+---
+
 ### Task 1: Add Shared Database Source Connector Crate
 
 **Files:**

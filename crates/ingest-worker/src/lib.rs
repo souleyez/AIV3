@@ -1,3 +1,4 @@
+use chrono::{Duration as ChronoDuration, NaiveDate};
 use document_vlm_runtime::{
     build_enriched_image_text, probe_minimax_media_capabilities_from_env,
     run_document_image_vlm_from_env, DocumentImageVlmConfig, DocumentImageVlmPayload,
@@ -3033,18 +3034,51 @@ fn extract_shared_strings(xml: &str) -> Vec<String> {
 }
 
 fn extract_sheet_text(xml: &str, shared_strings: &[String]) -> Option<String> {
-    let rows = split_xml_segments(xml, "row")
+    let raw_rows = split_xml_segments(xml, "row")
         .into_iter()
-        .filter_map(|row| {
-            let cells = split_xml_elements(&row, "c")
-                .into_iter()
-                .filter_map(|cell| extract_cell_text(&cell, shared_strings))
-                .collect::<Vec<_>>();
-            (!cells.is_empty()).then(|| cells.join("\t"))
+        .map(|row| extract_sheet_row_cells(&row, shared_strings))
+        .filter(|cells| !cells.is_empty())
+        .collect::<Vec<_>>();
+    let header_row_count = sheet_header_row_count(&raw_rows);
+    let column_hints = sheet_column_hints(&raw_rows, header_row_count);
+    let rows = raw_rows
+        .iter()
+        .enumerate()
+        .map(|(row_index, cells)| {
+            cells
+                .iter()
+                .enumerate()
+                .map(|(column_index, value)| {
+                    if row_index < header_row_count {
+                        value.clone()
+                    } else {
+                        format_sheet_cell_text(value, column_hints.get(column_index))
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\t")
         })
         .collect::<Vec<_>>();
 
     normalize_extracted_text(&rows.join("\n"))
+}
+
+fn extract_sheet_row_cells(row_xml: &str, shared_strings: &[String]) -> Vec<String> {
+    let mut cells = Vec::new();
+    for (position, cell) in split_xml_elements(row_xml, "c").into_iter().enumerate() {
+        let column_index = xml_attribute_value(&cell, "r")
+            .as_deref()
+            .and_then(cell_reference_column_index)
+            .unwrap_or(position);
+        if cells.len() <= column_index {
+            cells.resize(column_index + 1, String::new());
+        }
+        cells[column_index] = extract_cell_text(&cell, shared_strings).unwrap_or_default();
+    }
+    while cells.last().is_some_and(|value| value.trim().is_empty()) {
+        cells.pop();
+    }
+    cells
 }
 
 fn extract_cell_text(cell_xml: &str, shared_strings: &[String]) -> Option<String> {
@@ -3065,6 +3099,159 @@ fn extract_cell_text(cell_xml: &str, shared_strings: &[String]) -> Option<String
         .parse::<usize>()
         .ok()?;
     shared_strings.get(index).cloned()
+}
+
+fn sheet_header_row_count(rows: &[Vec<String>]) -> usize {
+    rows.iter()
+        .take(3)
+        .take_while(|row| sheet_row_is_header_like(row))
+        .count()
+        .max(1)
+        .min(rows.len())
+}
+
+fn sheet_row_is_header_like(row: &[String]) -> bool {
+    let non_empty = row
+        .iter()
+        .filter(|value| !value.trim().is_empty())
+        .collect::<Vec<_>>();
+    if non_empty.len() < 2 {
+        return false;
+    }
+    let numeric_count = non_empty
+        .iter()
+        .filter(|value| value.trim().parse::<f64>().is_ok())
+        .count();
+    numeric_count == 0
+}
+
+fn sheet_column_hints(rows: &[Vec<String>], header_row_count: usize) -> Vec<String> {
+    let max_columns = rows.iter().map(Vec::len).max().unwrap_or_default();
+    (0..max_columns)
+        .map(|column_index| {
+            rows.iter()
+                .take(header_row_count)
+                .filter_map(|row| row.get(column_index))
+                .map(|value| value.trim())
+                .filter(|value| !value.is_empty())
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .collect()
+}
+
+fn format_sheet_cell_text(value: &str, header_hint: Option<&String>) -> String {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    let hint = header_hint.map(String::as_str).unwrap_or_default();
+    let lower_hint = hint.to_ascii_lowercase();
+    let Some(number) = parse_excel_serial_number(trimmed) else {
+        return value.to_string();
+    };
+
+    if sheet_header_is_clock_time(&lower_hint, hint) {
+        return format_excel_serial_clock_time(number).unwrap_or_else(|| value.to_string());
+    }
+    if sheet_header_is_date(&lower_hint, hint) {
+        return format_excel_serial_date(number).unwrap_or_else(|| value.to_string());
+    }
+    if sheet_header_is_work_duration(&lower_hint, hint) {
+        return format!("{}小时", format_decimal_hours(number));
+    }
+    value.to_string()
+}
+
+fn sheet_header_is_date(lower_hint: &str, hint: &str) -> bool {
+    (lower_hint.contains("date") || hint.contains("日期"))
+        && !sheet_header_is_clock_time(lower_hint, hint)
+}
+
+fn sheet_header_is_clock_time(lower_hint: &str, hint: &str) -> bool {
+    lower_hint.contains("card")
+        || lower_hint.contains("clock")
+        || lower_hint.contains("punch")
+        || hint.contains("打卡")
+        || hint.contains("上班")
+        || hint.contains("下班")
+        || hint.contains("签到")
+        || hint.contains("签退")
+}
+
+fn sheet_header_is_work_duration(lower_hint: &str, hint: &str) -> bool {
+    lower_hint.contains("workperiod")
+        || lower_hint.contains("work_period")
+        || lower_hint.contains("duration")
+        || hint.contains("工作时长")
+        || hint.contains("工时")
+}
+
+fn parse_excel_serial_number(value: &str) -> Option<f64> {
+    let number = value.parse::<f64>().ok()?;
+    number.is_finite().then_some(number)
+}
+
+fn format_excel_serial_date(serial: f64) -> Option<String> {
+    if !(1.0..100_000.0).contains(&serial) {
+        return None;
+    }
+    let days = serial.floor() as i64;
+    let base = NaiveDate::from_ymd_opt(1899, 12, 30)?;
+    Some(
+        (base + ChronoDuration::days(days))
+            .format("%Y-%m-%d")
+            .to_string(),
+    )
+}
+
+fn format_excel_serial_clock_time(serial: f64) -> Option<String> {
+    if serial == 0.0 {
+        return Some("未打卡".to_string());
+    }
+    if !(1.0..100_000.0).contains(&serial) {
+        return None;
+    }
+    let fraction = serial.fract();
+    let total_seconds = (fraction * 86_400.0).round().clamp(0.0, 86_399.0) as u32;
+    let hour = total_seconds / 3600;
+    let minute = (total_seconds % 3600) / 60;
+    Some(format!("{hour:02}:{minute:02}"))
+}
+
+fn format_decimal_hours(value: f64) -> String {
+    let formatted = format!("{value:.2}");
+    formatted
+        .trim_end_matches('0')
+        .trim_end_matches('.')
+        .to_string()
+}
+
+fn cell_reference_column_index(reference: &str) -> Option<usize> {
+    let mut index = 0usize;
+    let mut has_column = false;
+    for value in reference.chars() {
+        if !value.is_ascii_alphabetic() {
+            break;
+        }
+        has_column = true;
+        index = index * 26 + (value.to_ascii_uppercase() as u8 - b'A' + 1) as usize;
+    }
+    has_column.then_some(index.saturating_sub(1))
+}
+
+fn xml_attribute_value(xml: &str, name: &str) -> Option<String> {
+    let double_quote_pattern = format!("{name}=\"");
+    if let Some(start) = xml.find(&double_quote_pattern) {
+        let value_start = start + double_quote_pattern.len();
+        let value_end = xml[value_start..].find('"')?;
+        return Some(xml[value_start..value_start + value_end].to_string());
+    }
+    let single_quote_pattern = format!("{name}='");
+    let start = xml.find(&single_quote_pattern)?;
+    let value_start = start + single_quote_pattern.len();
+    let value_end = xml[value_start..].find('\'')?;
+    Some(xml[value_start..value_start + value_end].to_string())
 }
 
 fn split_xml_segments(xml: &str, tag: &str) -> Vec<String> {
@@ -3355,7 +3542,11 @@ fn split_sentence_units(text: &str) -> Vec<String> {
         if matches!(ch, '。' | '！' | '？' | '；' | '!' | '?' | ';' | '\n') {
             let unit = current.trim().to_string();
             if !unit.is_empty() {
-                units.push(unit);
+                if ch == '\n' {
+                    units.push(format!("{unit}\n"));
+                } else {
+                    units.push(unit);
+                }
             }
             current.clear();
         }
@@ -4204,6 +4395,16 @@ trailer << /Root 1 0 R >>
     }
 
     #[test]
+    fn split_long_text_preserves_newline_boundaries_between_table_rows() {
+        let text = format!("{}\n{}\n{}", "A\t1".repeat(200), "B\t2".repeat(200), "C\t3");
+        let chunks = split_text_chunks(&text, 600);
+        let body = chunks.join("\n");
+
+        assert!(body.contains("\nB\t2"));
+        assert!(!body.contains("1B\t2"));
+    }
+
+    #[test]
     fn split_extracted_document_chunks_breaks_on_structure_headings() {
         let extracted = ExtractedDocumentText {
             text: "工作经历\n负责智能知识库平台。\n\n项目经验\n建设订单风险识别系统。".to_string(),
@@ -4417,6 +4618,40 @@ trailer << /Root 1 0 R >>
         assert_eq!(outcome.parse_method, "xlsx-ooxml");
         assert!(body.contains("订单号\t金额"));
         assert!(body.contains("A001\t1280"));
+        let _ = fs::remove_file(file_path);
+    }
+
+    #[test]
+    fn local_ingest_processor_formats_xlsx_attendance_serial_dates() {
+        let file_path = write_temp_zip(
+            "attendance.xlsx",
+            &[
+                (
+                    "xl/sharedStrings.xml",
+                    r#"<sst><si><t>UserId-ExportName</t></si><si><t>Date</t></si><si><t>OIdShift</t></si><si><t>LookupPrefix_UserId_FirstCardIncludeFillCheck</t></si><si><t>LookupPrefix_UserId_LastCardIncludeFillCheck</t></si><si><t>WorkPeriod</t></si><si><t>AttendanceType</t></si><si><t>员工</t></si><si><t>日期</t></si><si><t>班次</t></si><si><t>首打卡(含补签)</t></si><si><t>末打卡(含补签)</t></si><si><t>工作时长</t></si><si><t>考勤方式</t></si><si><t>A3</t></si><si><t>坐班0900</t></si><si><t>正常考勤</t></si></sst>"#,
+                ),
+                (
+                    "xl/worksheets/sheet1.xml",
+                    r#"<worksheet><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c><c r="C1" t="s"><v>2</v></c><c r="D1" t="s"><v>3</v></c><c r="E1" t="s"><v>4</v></c><c r="F1" t="s"><v>5</v></c><c r="G1" t="s"><v>6</v></c></row><row r="2"><c r="A2" t="s"><v>7</v></c><c r="B2" t="s"><v>8</v></c><c r="C2" t="s"><v>9</v></c><c r="D2" t="s"><v>10</v></c><c r="E2" t="s"><v>11</v></c><c r="F2" t="s"><v>12</v></c><c r="G2" t="s"><v>13</v></c></row><row r="3"><c r="A3" t="s"><v>14</v></c><c r="B3"><v>46162</v></c><c r="C3" t="s"><v>15</v></c><c r="D3"><v>46162.3743055556</v></c><c r="E3"><v>46162.7604166667</v></c><c r="F3"><v>9.27</v></c><c r="G3" t="s"><v>16</v></c></row><row r="4"><c r="A4" t="s"><v>14</v></c><c r="B4"><v>46155</v></c><c r="C4" t="s"><v>15</v></c><c r="F4"><v>0</v></c><c r="G4" t="s"><v>16</v></c></row></sheetData></worksheet>"#,
+                ),
+            ],
+        );
+
+        let outcome = LocalIngestProcessor.process(&IngestJob {
+            dataset_id: DatasetId::new(),
+            document_id: DocumentId::new(),
+            title: "attendance.xlsx".to_string(),
+            object_key: file_path.to_string_lossy().to_string(),
+            content_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                .to_string(),
+        });
+
+        let body = outcome.chunks.join("\n");
+        assert!(!outcome.used_placeholder);
+        assert_eq!(outcome.parse_method, "xlsx-ooxml");
+        assert!(body.contains("A3\t2026-05-20\t坐班0900\t08:59\t18:15\t9.27小时\t正常考勤"));
+        assert!(body.contains("A3\t2026-05-13\t坐班0900\t\t\t0小时\t正常考勤"));
+        assert!(!body.contains("46162.3743055556"));
         let _ = fs::remove_file(file_path);
     }
 

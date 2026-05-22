@@ -10,6 +10,11 @@ import {
   buildExternalActionTrace,
   buildThirdPartyApiUrl,
   controlResultLabel,
+  databaseSourceMetrics,
+  databaseSourceReadiness,
+  databaseSourceSummary,
+  databaseSourceSyncRuns,
+  databaseSourceTablePreview,
   driftSignalLabel,
   EXTERNAL_AUDIT_FILTERS,
   EXTERNAL_INTEGRATION_MODES,
@@ -344,6 +349,7 @@ export default function ExternalIntegrationsPageClient() {
     setSelectedId(integrationId);
     setSelectedActionId('');
     setActionDetail(null);
+    setAuditItems([]);
   }
 
   function selectAuditFilter(filterKey) {
@@ -428,6 +434,11 @@ export default function ExternalIntegrationsPageClient() {
   }, [selectedId, auditFilterKey, selectedActionId]);
 
   const selected = integrations.find((item) => item.id === selectedId) || integrations[0] || null;
+  const selectedDatabaseSource = databaseSourceSummary(selected || {});
+  const selectedDatabaseReadiness = databaseSourceReadiness(selected || {});
+  const selectedDatabaseMetrics = databaseSourceMetrics(selected || {});
+  const selectedDatabaseTables = databaseSourceTablePreview(selected || {}, 8);
+  const selectedDatabaseSyncRuns = databaseSourceSyncRuns(auditItems, 3);
   const totals = {
     pending: metricTotal(integrations, 'pendingActionCount'),
     blocked: metricTotal(integrations, 'blockedActionCount'),
@@ -825,6 +836,102 @@ export default function ExternalIntegrationsPageClient() {
                   </div>
                 ))}
               </div>
+              {selectedDatabaseSource.configured ? (
+                <section className="external-database-observation" aria-label="数据库源观测">
+                  <div className="external-database-observation-head">
+                    <div>
+                      <span>数据库源</span>
+                      <strong>{selectedDatabaseSource.kind}</strong>
+                    </div>
+                    <small className={selectedDatabaseSource.valid ? '' : 'is-invalid'}>
+                      {selectedDatabaseSource.valid ? '配置可观测' : '配置需检查'}
+                    </small>
+                  </div>
+                  <div className="external-detail-strip external-database-strip">
+                    {selectedDatabaseMetrics.map((metric) => (
+                      <div key={metric.label}>
+                        <span>{metric.label}</span>
+                        <strong>{metric.value}</strong>
+                      </div>
+                    ))}
+                  </div>
+                  {selectedDatabaseSource.valid ? null : (
+                    <p className="external-database-warning">
+                      {selectedDatabaseSource.error || '数据库源配置未通过校验'}
+                    </p>
+                  )}
+                  {selectedDatabaseReadiness.configured ? (
+                    <div className="external-database-readiness" aria-label="数据库数据集就绪度">
+                      <div className={`external-database-readiness-signal external-database-readiness-${selectedDatabaseReadiness.signal}`}>
+                        <span>数据集问答</span>
+                        <strong>{selectedDatabaseReadiness.label}</strong>
+                      </div>
+                      <div>
+                        <span>文档</span>
+                        <strong>{selectedDatabaseReadiness.documentCount}</strong>
+                      </div>
+                      <div>
+                        <span>已索引文档</span>
+                        <strong>{selectedDatabaseReadiness.indexedDocumentCount}</strong>
+                      </div>
+                      <div>
+                        <span>已索引分块</span>
+                        <strong>{selectedDatabaseReadiness.indexedChunkCount}</strong>
+                      </div>
+                      <div>
+                        <span>处理中/失败</span>
+                        <strong>
+                          {selectedDatabaseReadiness.processingDocumentCount}/{selectedDatabaseReadiness.failedDocumentCount}
+                        </strong>
+                      </div>
+                      <div>
+                        <span>最近文档</span>
+                        <strong>{formatObservationTime(selectedDatabaseReadiness.latestDocumentUpdatedAt)}</strong>
+                      </div>
+                    </div>
+                  ) : null}
+                  <div className="external-database-table-list" aria-label="已映射数据库表">
+                    {selectedDatabaseTables.tables.map((table) => (
+                      <span key={table}>{table}</span>
+                    ))}
+                    {selectedDatabaseTables.hiddenCount > 0 ? (
+                      <span>+{selectedDatabaseTables.hiddenCount}</span>
+                    ) : null}
+                    {!selectedDatabaseTables.tables.length ? (
+                      <small>暂无已映射表</small>
+                    ) : null}
+                  </div>
+                  <div className="external-database-sync-list" aria-label="数据库同步运行">
+                    {auditLoading ? (
+                      <small>同步记录读取中</small>
+                    ) : selectedDatabaseSyncRuns.length ? (
+                      selectedDatabaseSyncRuns.map((run, index) => (
+                        <article key={`${run.updatedAt || index}:${run.status}`}>
+                          <div>
+                            <strong>{run.status}</strong>
+                            <span>{run.syncKind || 'sync'}</span>
+                          </div>
+                          <div>
+                            <span>文档</span>
+                            <strong>{run.documentCount}</strong>
+                          </div>
+                          <div>
+                            <span>ACL</span>
+                            <strong>{run.aclSnapshotCount}</strong>
+                          </div>
+                          <div>
+                            <span>任务</span>
+                            <strong>{run.enqueuedTaskCount}</strong>
+                          </div>
+                          <small>{run.failureKind || formatObservationTime(run.updatedAt)}</small>
+                        </article>
+                      ))
+                    ) : (
+                      <small>暂无同步运行记录</small>
+                    )}
+                  </div>
+                </section>
+              ) : null}
               {selected.kind === 'channel' ? (
                 <>
                   <div className="external-detail-strip external-action-strip">
