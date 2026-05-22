@@ -28297,6 +28297,14 @@ async fn build_assistant_run_database_aggregate_supply(
         let metrics = assistant_run_database_aggregate_metrics(mapping, prompt);
         let aggregation = assistant_run_database_aggregation(prompt, !metrics.is_empty());
         let scan_limit = assistant_run_database_aggregate_scan_limit();
+        supplied_items.push(assistant_run_database_schema_context_item(
+            dataset,
+            &source,
+            mapping,
+            &aggregate_plans,
+            &metrics,
+            scan_limit,
+        ));
         let metric_requests = if metrics.is_empty() {
             vec![None]
         } else {
@@ -28324,6 +28332,7 @@ async fn build_assistant_run_database_aggregate_supply(
                 match aggregate_mysql_table(&config, &request).await {
                     Ok(result) => supplied_items.push(json!({
                         "type": "database_aggregate",
+                        "source": "database_source",
                         "dataset_id": dataset.id,
                         "dataset_key": dataset.key,
                         "dataset_title": dataset.title,
@@ -28336,6 +28345,16 @@ async fn build_assistant_run_database_aggregate_supply(
                         "metric": result.metric,
                         "aggregation": result.aggregation,
                         "value_label": metric.clone().unwrap_or_else(|| "record_count".to_string()),
+                        "field_semantics": assistant_run_database_field_semantics_for_columns(mapping, &result.columns),
+                        "summary": assistant_run_database_aggregate_summary(
+                            mapping,
+                            aggregate_plan.role,
+                            &result.dimensions,
+                            result.metric.as_deref().or_else(|| metric.as_deref()),
+                            &result.aggregation,
+                            result.rows.len(),
+                            result.scan_limit,
+                        ),
                         "columns": result.columns,
                         "rows": result.rows,
                         "row_limit": result.row_limit,
@@ -28346,6 +28365,7 @@ async fn build_assistant_run_database_aggregate_supply(
                     })),
                     Err(error) => supplied_items.push(json!({
                         "type": "database_aggregate_error",
+                        "source": "database_source",
                         "dataset_id": dataset.id,
                         "dataset_key": dataset.key,
                         "source_id": source.source_id,
@@ -28364,6 +28384,346 @@ async fn build_assistant_run_database_aggregate_supply(
     }
 
     Ok(supplied_items)
+}
+
+fn assistant_run_database_schema_context_item(
+    dataset: &Dataset,
+    source: &ExternalSourceConnectionSummary,
+    mapping: &MySqlTableMapping,
+    aggregate_plans: &[AssistantRunDatabaseAggregatePlan],
+    metrics: &[String],
+    scan_limit: u32,
+) -> Value {
+    let field_roles = assistant_run_database_mapping_field_roles(mapping);
+    let metrics = if metrics.is_empty() {
+        assistant_run_database_metric_columns(mapping)
+    } else {
+        metrics.to_vec()
+    };
+    let analysis_views = aggregate_plans
+        .iter()
+        .map(|plan| {
+            json!({
+                "role": plan.role,
+                "intent": plan.intent,
+                "dimensions": plan.dimensions,
+            })
+        })
+        .collect::<Vec<_>>();
+    json!({
+        "type": "database_schema_context",
+        "source": "database_source",
+        "dataset_id": dataset.id,
+        "dataset_key": dataset.key,
+        "dataset_title": dataset.title,
+        "source_id": source.source_id,
+        "connector_kind": source.connector_kind,
+        "table": mapping.table,
+        "summary": assistant_run_database_schema_summary(mapping, &metrics, aggregate_plans, scan_limit),
+        "field_roles": field_roles,
+        "entity_dimensions": assistant_run_database_entity_dimensions(mapping),
+        "time_dimensions": assistant_run_database_time_dimensions(mapping),
+        "category_dimensions": assistant_run_database_category_dimensions(mapping),
+        "metrics": metrics,
+        "analysis_views": analysis_views,
+        "answer_guidance": {
+            "scope": "database_source_dataset_mapping",
+            "metric_rule": "指标字段用于聚合，回答时说明 aggregation 和 scan_limit；若字段含义来自字段名启发式，应提示按业务口径确认。",
+            "report_rule": "报表优先拆成实体排行、时间趋势、分类对比；不要把不同维度的聚合样本混成同一张图。",
+            "scan_limit": scan_limit,
+        },
+    })
+}
+
+fn assistant_run_database_schema_summary(
+    mapping: &MySqlTableMapping,
+    metrics: &[String],
+    aggregate_plans: &[AssistantRunDatabaseAggregatePlan],
+    scan_limit: u32,
+) -> String {
+    let entity_dimensions = assistant_run_database_entity_dimensions(mapping);
+    let time_dimensions = assistant_run_database_time_dimensions(mapping);
+    let category_dimensions = assistant_run_database_category_dimensions(mapping);
+    let view_labels = aggregate_plans
+        .iter()
+        .map(|plan| match plan.role {
+            "ranking" => "实体排行",
+            "trend" => "时间趋势",
+            "comparison" => "分类对比",
+            _ => "聚合分析",
+        })
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    format!(
+        "数据库表 {}：实体维度 {}；时间维度 {}；分类维度 {}；指标 {}。本轮适合做 {}；聚合扫描上限 {} 行，回答或报表需说明聚合口径和采样范围。",
+        mapping.table,
+        assistant_run_database_join_or_dash(&entity_dimensions),
+        assistant_run_database_join_or_dash(&time_dimensions),
+        assistant_run_database_join_or_dash(&category_dimensions),
+        assistant_run_database_join_or_dash(metrics),
+        assistant_run_database_join_or_dash(&view_labels),
+        scan_limit,
+    )
+}
+
+fn assistant_run_database_join_or_dash<T: AsRef<str>>(items: &[T]) -> String {
+    if items.is_empty() {
+        "-".to_string()
+    } else {
+        items
+            .iter()
+            .map(|item| item.as_ref())
+            .collect::<Vec<_>>()
+            .join("/")
+    }
+}
+
+fn assistant_run_database_mapping_field_roles(mapping: &MySqlTableMapping) -> Vec<Value> {
+    assistant_run_database_mapping_columns(mapping)
+        .into_iter()
+        .map(|column| assistant_run_database_field_role(mapping, &column))
+        .collect()
+}
+
+fn assistant_run_database_field_semantics_for_columns(
+    mapping: &MySqlTableMapping,
+    columns: &[String],
+) -> Vec<Value> {
+    columns
+        .iter()
+        .map(|column| {
+            if column == "value" {
+                json!({
+                    "name": column,
+                    "role": "aggregate_value",
+                    "meaning": "聚合后的指标值",
+                    "confidence": 95,
+                    "source": "aggregate_result",
+                })
+            } else {
+                assistant_run_database_field_role(mapping, column)
+            }
+        })
+        .collect()
+}
+
+fn assistant_run_database_field_role(mapping: &MySqlTableMapping, column: &str) -> Value {
+    let (role, confidence) = assistant_run_database_column_role(mapping, column);
+    json!({
+        "name": column,
+        "role": role,
+        "meaning": assistant_run_database_field_meaning(column, role),
+        "confidence": confidence,
+        "source": "mapping_and_name_heuristic",
+    })
+}
+
+fn assistant_run_database_column_role(
+    mapping: &MySqlTableMapping,
+    column: &str,
+) -> (&'static str, u8) {
+    if mapping.id_column == column {
+        return ("primary_key", 96);
+    }
+    if mapping.title_column.as_deref() == Some(column) {
+        return ("entity", 92);
+    }
+    if assistant_run_database_time_dimensions(mapping)
+        .iter()
+        .any(|candidate| candidate == column)
+    {
+        return ("time", 90);
+    }
+    if assistant_run_database_metric_column_name(column) {
+        return ("metric", 88);
+    }
+    if mapping
+        .id_columns
+        .iter()
+        .any(|candidate| candidate == column)
+    {
+        return ("primary_key", 86);
+    }
+    if assistant_run_database_category_dimensions(mapping)
+        .iter()
+        .any(|candidate| candidate == column)
+    {
+        return ("dimension", 84);
+    }
+    if mapping
+        .metadata_columns
+        .iter()
+        .any(|candidate| candidate == column)
+    {
+        return ("dimension", 74);
+    }
+    if mapping
+        .content_columns
+        .iter()
+        .any(|candidate| candidate == column)
+    {
+        return ("attribute", 64);
+    }
+    ("unknown", 42)
+}
+
+fn assistant_run_database_field_meaning(column: &str, role: &str) -> String {
+    let lower = column.to_ascii_lowercase();
+    if lower == "up" {
+        return "上行/进入/进场方向的流量指标，具体业务口径需以客户定义为准。".to_string();
+    }
+    if lower == "down" {
+        return "下行/离开/出场方向的流量指标，具体业务口径需以客户定义为准。".to_string();
+    }
+    if lower == "areaname" || lower.ends_with("area_name") || lower.contains("area_name") {
+        return "区域或位置名称，适合作为排行、对比和筛选维度。".to_string();
+    }
+    if lower == "areatype" || lower.contains("area_type") {
+        return "区域类型或分类，适合作为分类对比维度。".to_string();
+    }
+    if lower == "txdate" || lower.contains("date") || lower.contains("time") {
+        return "业务发生时间或统计时间，适合作为趋势维度。".to_string();
+    }
+    if lower.ends_with("code") || lower.ends_with("_code") {
+        return "业务编码字段，通常用于唯一识别或关联，不宜直接作为展示名称。".to_string();
+    }
+    if lower.ends_with("id") || lower.ends_with("_id") {
+        return "业务 ID 字段，通常用于唯一识别或关联。".to_string();
+    }
+    match role {
+        "metric" => "可聚合的数值指标，可用于汇总、排序、趋势和对比。".to_string(),
+        "time" => "时间维度，可用于趋势、周期和时间范围分析。".to_string(),
+        "entity" => "实体名称或对象名称，适合展示、排行和分组。".to_string(),
+        "dimension" => "分类或属性维度，适合分组、筛选和对比。".to_string(),
+        "primary_key" => "主键或近似主键，主要用于定位记录。".to_string(),
+        "attribute" => "同步到数据集文档的属性字段，可用于补充上下文。".to_string(),
+        _ => "字段语义暂不明确，使用时应结合样本值或业务说明确认。".to_string(),
+    }
+}
+
+fn assistant_run_database_entity_dimensions(mapping: &MySqlTableMapping) -> Vec<String> {
+    let mut dimensions = Vec::new();
+    if let Some(title_column) = mapping.title_column.as_deref() {
+        push_unique_string(&mut dimensions, title_column);
+    }
+    for column in assistant_run_database_mapping_columns(mapping) {
+        let lower = column.to_ascii_lowercase();
+        if lower.contains("name") || lower.ends_with("title") {
+            push_unique_string(&mut dimensions, &column);
+        }
+        if dimensions.len() >= 4 {
+            break;
+        }
+    }
+    if dimensions.is_empty() {
+        push_unique_string(&mut dimensions, &mapping.id_column);
+    }
+    dimensions
+}
+
+fn assistant_run_database_time_dimensions(mapping: &MySqlTableMapping) -> Vec<String> {
+    let mut dimensions = Vec::new();
+    if let Some(time_column) = assistant_run_database_time_column(mapping) {
+        push_unique_string(&mut dimensions, &time_column);
+    }
+    if let Some(updated_at_column) = mapping.updated_at_column.as_deref() {
+        push_unique_string(&mut dimensions, updated_at_column);
+    }
+    dimensions
+}
+
+fn assistant_run_database_category_dimensions(mapping: &MySqlTableMapping) -> Vec<String> {
+    let mut dimensions = Vec::new();
+    if let Some(category_column) = assistant_run_database_category_dimension(mapping) {
+        push_unique_string(&mut dimensions, &category_column);
+    }
+    let time_dimensions = assistant_run_database_time_dimensions(mapping);
+    for column in assistant_run_database_mapping_columns(mapping) {
+        if mapping.id_column == column
+            || mapping
+                .id_columns
+                .iter()
+                .any(|candidate| candidate == &column)
+            || mapping.title_column.as_deref() == Some(column.as_str())
+            || time_dimensions.iter().any(|candidate| candidate == &column)
+            || assistant_run_database_metric_column_name(&column)
+        {
+            continue;
+        }
+        if assistant_run_database_dimension_column_name(&column) {
+            push_unique_string(&mut dimensions, &column);
+        }
+        if dimensions.len() >= 6 {
+            break;
+        }
+    }
+    dimensions
+}
+
+fn assistant_run_database_metric_columns(mapping: &MySqlTableMapping) -> Vec<String> {
+    let mut metrics = Vec::new();
+    for column in assistant_run_database_mapping_columns(mapping) {
+        if assistant_run_database_metric_column_name(&column) {
+            push_unique_string(&mut metrics, &column);
+        }
+        if metrics.len() >= 8 {
+            break;
+        }
+    }
+    metrics
+}
+
+fn assistant_run_database_metric_column_name(column: &str) -> bool {
+    let lower = column.to_ascii_lowercase();
+    matches!(lower.as_str(), "up" | "down")
+        || prompt_has_any(
+            &lower,
+            &[
+                "count", "num", "amount", "total", "sum", "rate", "ratio", "score", "value",
+                "price", "cost", "traffic", "flow", "volume", "qty", "avg", "duration",
+            ],
+        )
+}
+
+fn assistant_run_database_dimension_column_name(column: &str) -> bool {
+    let lower = column.to_ascii_lowercase();
+    prompt_has_any(
+        &lower,
+        &[
+            "type", "status", "category", "class", "level", "gender", "city", "province",
+            "district", "region", "area", "source", "channel", "tag",
+        ],
+    )
+}
+
+fn assistant_run_database_aggregate_summary(
+    mapping: &MySqlTableMapping,
+    role: &str,
+    dimensions: &[String],
+    metric: Option<&str>,
+    aggregation: &str,
+    row_count: usize,
+    scan_limit: Option<u32>,
+) -> String {
+    let role_label = match role {
+        "ranking" => "实体排行",
+        "trend" => "时间趋势",
+        "comparison" => "分类对比",
+        _ => "聚合分析",
+    };
+    format!(
+        "{}：表 {} 按 {} 对 {} 做 {} 聚合，返回 {} 行样本，扫描上限 {}。",
+        role_label,
+        mapping.table,
+        assistant_run_database_join_or_dash(dimensions),
+        metric.unwrap_or("record_count"),
+        aggregation,
+        row_count,
+        scan_limit
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "-".to_string())
+    )
 }
 
 async fn load_dataset_external_source_ids(
@@ -47571,7 +47931,7 @@ fn build_static_page_field_candidates(
     selected_scope: &Value,
     evidence_state: Option<&Value>,
 ) -> Value {
-    const FIELD_CANDIDATE_LIMIT: usize = 16;
+    const FIELD_CANDIDATE_LIMIT: usize = 24;
 
     let mut candidates = Vec::new();
     let mut seen = BTreeSet::new();
@@ -47602,6 +47962,14 @@ fn build_static_page_field_candidates(
 
     for item in evidence_items {
         match item.get("type").and_then(Value::as_str).unwrap_or_default() {
+            "database_schema_context" => {
+                push_static_page_database_schema_field_candidates(
+                    &mut candidates,
+                    &mut seen,
+                    item,
+                    FIELD_CANDIDATE_LIMIT,
+                );
+            }
             "database_aggregate" => {
                 push_static_page_database_aggregate_field_candidates(
                     &mut candidates,
@@ -47792,6 +48160,72 @@ fn build_static_page_field_candidates(
     }
 
     Value::Array(candidates)
+}
+
+fn push_static_page_database_schema_field_candidates(
+    candidates: &mut Vec<Value>,
+    seen: &mut BTreeSet<String>,
+    item: &Value,
+    limit: usize,
+) {
+    let table = static_page_artifact_string(item, &["table"]).unwrap_or_else(|| "database".into());
+    let dataset_id = item.get("dataset_id").cloned().unwrap_or(Value::Null);
+    let source_id = item.get("source_id").cloned().unwrap_or(Value::Null);
+    let mut push_role_group = |group_key: &str,
+                               label: &str,
+                               kind: &str,
+                               confidence: f64,
+                               recommended_aggregation: Value| {
+        let fields = item
+            .get(group_key)
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        if fields.is_empty() {
+            return;
+        }
+        push_static_page_field_candidate(
+            candidates,
+            seen,
+            json!({
+                "sourceId": "database_schema",
+                "fieldPath": format!("database.schema.{table}.{group_key}"),
+                "label": format!("{label}：{}", fields.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(" / ")),
+                "kind": kind,
+                "recommendedAggregation": recommended_aggregation,
+                "confidence": confidence,
+                "datasetId": dataset_id.clone(),
+                "sourceDatabaseId": source_id.clone(),
+                "table": table.clone(),
+                "fields": fields,
+                "summary": item.get("summary").cloned().unwrap_or(Value::Null),
+            }),
+            limit,
+        );
+    };
+
+    push_role_group("metrics", "数据库指标字段", "metric", 0.86, json!("sum"));
+    push_role_group(
+        "entity_dimensions",
+        "数据库实体维度",
+        "dimension",
+        0.82,
+        Value::Null,
+    );
+    push_role_group(
+        "time_dimensions",
+        "数据库时间维度",
+        "dimension",
+        0.82,
+        Value::Null,
+    );
+    push_role_group(
+        "category_dimensions",
+        "数据库分类维度",
+        "dimension",
+        0.80,
+        Value::Null,
+    );
 }
 
 fn push_static_page_database_aggregate_field_candidates(
@@ -50519,6 +50953,40 @@ mod tests {
         assert!(plans.iter().any(|plan| {
             plan.role == "comparison" && plan.dimensions == vec!["areatype".to_string()]
         }));
+    }
+
+    #[test]
+    fn database_schema_context_summarizes_traffic_field_roles() {
+        let mapping = traffic_area_mapping_for_test();
+        let plans = assistant_run_database_aggregate_dimension_plans(
+            &mapping,
+            "生成流量分析报表，展示区域排行、日期趋势和类型对比",
+        );
+        let metrics = assistant_run_database_metric_columns(&mapping);
+        let roles = assistant_run_database_mapping_field_roles(&mapping);
+
+        assert!(roles
+            .iter()
+            .any(|role| { role["name"] == json!("areaname") && role["role"] == json!("entity") }));
+        assert!(roles
+            .iter()
+            .any(|role| { role["name"] == json!("txdate") && role["role"] == json!("time") }));
+        assert!(roles.iter().any(|role| {
+            role["name"] == json!("areatype") && role["role"] == json!("dimension")
+        }));
+        assert!(roles
+            .iter()
+            .any(|role| { role["name"] == json!("up") && role["role"] == json!("metric") }));
+        assert_eq!(metrics, vec!["up".to_string(), "down".to_string()]);
+        assert_eq!(
+            assistant_run_database_category_dimensions(&mapping),
+            vec!["areatype".to_string()]
+        );
+        let summary = assistant_run_database_schema_summary(&mapping, &metrics, &plans, 5000);
+        assert!(summary.contains("实体排行"));
+        assert!(summary.contains("时间趋势"));
+        assert!(summary.contains("分类对比"));
+        assert!(summary.contains("up/down"));
     }
 
     #[test]
@@ -64220,6 +64688,65 @@ mod tests {
             snapshot["module_bindings"][2]["sampleData"][0]["aggregateRole"],
             json!("comparison")
         );
+    }
+
+    #[test]
+    fn static_page_data_snapshot_exposes_database_schema_field_candidates() {
+        let dataset_id = DatasetId::new();
+        let selected_scope = json!({
+            "mode": "user_selected",
+            "datasets": [dataset_id.to_string()],
+        });
+        let payload = json!({
+            "modules": [{
+                "id": "schema-aware-chart",
+                "title": "数据库指标口径",
+                "dataBinding": {
+                    "sourceId": "database_schema",
+                    "fieldPath": "database.schema.bi_traffic_area.metrics"
+                },
+                "visualization": {"type": "text-insight"}
+            }]
+        });
+        let evidence_state = json!({
+            "status": "supplied",
+            "supplied_items": [{
+                "type": "database_schema_context",
+                "source": "database_source",
+                "dataset_id": dataset_id.to_string(),
+                "source_id": "hy-sql-traffic-area",
+                "table": "bi_traffic_area",
+                "summary": "数据库表 bi_traffic_area：实体维度 areaname；时间维度 txdate；分类维度 areatype；指标 up/down。",
+                "metrics": ["up", "down"],
+                "entity_dimensions": ["areaname"],
+                "time_dimensions": ["txdate"],
+                "category_dimensions": ["areatype"],
+                "field_roles": [
+                    {"name": "up", "role": "metric", "meaning": "上行流量"},
+                    {"name": "areatype", "role": "dimension", "meaning": "区域类型"}
+                ]
+            }]
+        });
+
+        let snapshot = build_static_page_data_snapshot_with_evidence(
+            &payload,
+            &selected_scope,
+            Some(&evidence_state),
+            "assistant_run",
+        );
+        let candidates = value_array(snapshot["field_candidates"].clone());
+
+        assert!(candidates.iter().any(|candidate| {
+            candidate["sourceId"] == json!("database_schema")
+                && candidate["fieldPath"] == json!("database.schema.bi_traffic_area.metrics")
+                && candidate["kind"] == json!("metric")
+        }));
+        assert!(candidates.iter().any(|candidate| {
+            candidate["sourceId"] == json!("database_schema")
+                && candidate["fieldPath"]
+                    == json!("database.schema.bi_traffic_area.category_dimensions")
+                && candidate["kind"] == json!("dimension")
+        }));
     }
 
     #[test]
