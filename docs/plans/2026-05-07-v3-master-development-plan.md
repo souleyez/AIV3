@@ -911,7 +911,9 @@ Parallel execution rule: when a task crosses from feature surface into parse/ret
 
 ### Task 10: Add Database Source Integration
 
-**Status:** Planned. Detailed execution steps live in `docs/plans/2026-05-21-database-source-integration-plan.md`, including the third-party database access sub-plan added on 2026-05-22. This task is part of the product/data-source mainline, not the frozen Codex substrate. Third-party access must still flow through database source registration, dataset binding, sync, parsing/indexing, and selected/visible dataset evidence; do not turn third-party chat into direct database access.
+**Status:** In progress. Detailed execution steps live in `docs/plans/2026-05-21-database-source-integration-plan.md`, including the third-party database access sub-plan added on 2026-05-22. This task is part of the product/data-source mainline, not the frozen Codex substrate. Third-party access must still flow through database source registration, dataset binding, sync, parsing/indexing, and selected/visible dataset evidence; do not turn third-party chat into direct database access.
+
+**Current slice:** Added the selected-source internal database status route and centralized observability lazy-load panel for database sources. Operators can inspect config validity, default dataset binding, dataset Q&A readiness, per-table document/index/chunk readiness, recent sync workflow status, stage-level table sync counts, ingest document/row/chunk counts, skipped/failed row counters, safe checkpoint summaries, redacted failure excerpts, persisted semantic profile summary counts, and a derived `sync_readiness` signal without exposing raw credentials, source cursors, or adding a separate always-on data observation page.
 
 **Goal:** Add a safe MySQL database-source connector so an external database can be inspected, mapped, synchronized into an explicit V3 dataset, parsed, indexed, and then used by existing dataset question-answering, report, template, and static-page workflows.
 

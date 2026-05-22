@@ -377,19 +377,258 @@ export function databaseSourceReadiness(integration = {}) {
   const raw = driftSummary.database_dataset_readiness && typeof driftSummary.database_dataset_readiness === 'object'
     ? driftSummary.database_dataset_readiness
     : {};
-  const signal = String(raw.signal || 'unknown').toLowerCase();
+  return normalizeDatabaseReadiness(raw);
+}
+
+export function normalizeDatabaseSourceStatus(raw = {}) {
+  const status = raw?.status && typeof raw.status === 'object' ? raw.status : raw;
+  const dataset = status?.dataset && typeof status.dataset === 'object' ? status.dataset : {};
+  const tableReadiness = Array.isArray(status?.table_readiness)
+    ? status.table_readiness.map((table) => ({
+      ...normalizeDatabaseReadiness(table),
+      table: String(table?.table || ''),
+    })).filter((table) => table.table)
+    : [];
+  const recentSyncRuns = Array.isArray(status?.recent_sync_runs)
+    ? status.recent_sync_runs.map((run) => {
+      const counts = run?.counts && typeof run.counts === 'object' ? run.counts : {};
+      const checkpoint = run?.checkpoint && typeof run.checkpoint === 'object' ? run.checkpoint : {};
+      const checkpointSummary = normalizeDatabaseCheckpointSummary(run?.checkpoint_summary || run?.checkpointSummary || {});
+      return {
+        syncRunId: String(run?.sync_run_id || run?.syncRunId || ''),
+        syncKind: String(run?.sync_kind || run?.syncKind || ''),
+        status: String(run?.status || 'unknown'),
+        failureKind: run?.failure_kind || run?.failureKind || '',
+        lastError: String(counts.last_error || counts.lastError || ''),
+        failedTaskKey: String(counts.failed_task_key || counts.failedTaskKey || ''),
+        documentCount: numberOrZero(
+          counts.documents_ingested
+          ?? counts.documentsIngested
+          ?? counts.content_document_count
+          ?? counts.contentDocumentCount
+          ?? counts.metadata_document_count
+          ?? counts.metadataDocumentCount
+          ?? counts.document_count
+          ?? counts.documentCount,
+        ),
+        rowCount: numberOrZero(
+          counts.row_count
+          ?? counts.rowCount
+          ?? counts.content_row_count
+          ?? counts.contentRowCount
+          ?? counts.metadata_row_count
+          ?? counts.metadataRowCount
+          ?? counts.documents_ingested
+          ?? counts.documentsIngested
+          ?? counts.content_document_count
+          ?? counts.contentDocumentCount
+          ?? counts.metadata_document_count
+          ?? counts.metadataDocumentCount
+          ?? counts.document_count
+          ?? counts.documentCount,
+        ),
+        skippedRowCount: numberOrZero(counts.skipped_row_count ?? counts.skippedRowCount),
+        failedRowCount: numberOrZero(counts.failed_row_count ?? counts.failedRowCount),
+        aclSnapshotCount: numberOrZero(counts.acl_snapshot_count ?? counts.aclSnapshotCount),
+        enqueuedTaskCount: numberOrZero(counts.enqueued_task_count ?? counts.enqueuedTaskCount),
+        tableCounts: normalizeDatabaseSyncTableCounts(counts),
+        checkpointSummary,
+        workflowStage: String(checkpoint.workflow_stage || checkpoint.workflowStage || ''),
+        workflowStatus: String(checkpoint.workflow_status || checkpoint.workflowStatus || ''),
+        createdAt: run?.created_at || run?.createdAt || null,
+        updatedAt: run?.updated_at || run?.updatedAt || null,
+      };
+    })
+    : [];
+  const syncReadiness = normalizeDatabaseSyncReadiness(status?.sync_readiness || status?.syncReadiness || {});
   return {
-    configured: Boolean(raw.signal),
+    loaded: Boolean(raw?.status || raw?.dataset_readiness || raw?.table_readiness),
+    configValid: status?.config_valid !== false,
+    configError: String(status?.config_error || ''),
+    dataset: {
+      datasetId: String(dataset.dataset_id || dataset.datasetId || ''),
+      key: String(dataset.key || ''),
+      title: String(dataset.title || ''),
+      lifecycle: String(dataset.lifecycle || ''),
+      updatedAt: dataset.updated_at || dataset.updatedAt || null,
+    },
+    datasetReadiness: normalizeDatabaseReadiness(status?.dataset_readiness || {}),
+    syncReadiness,
+    semanticProfile: normalizeDatabaseSemanticProfile(status?.semantic_profile || status?.semanticProfile || {}),
+    tableReadiness,
+    recentSyncRuns,
+    generatedAt: status?.generated_at || status?.generatedAt || null,
+  };
+}
+
+function normalizeDatabaseSemanticProfile(raw = {}) {
+  const tables = Array.isArray(raw?.tables)
+    ? raw.tables.map((table) => ({
+      table: String(table?.table || table?.name || ''),
+      columnCount: numberOrZero(table?.column_count ?? table?.columnCount),
+      approximateRowCount: numberOrZero(table?.approximate_row_count ?? table?.approximateRowCount),
+      dimensionCount: numberOrZero(table?.dimension_count ?? table?.dimensionCount),
+      metricCount: numberOrZero(table?.metric_count ?? table?.metricCount),
+      timeDimensionCount: numberOrZero(table?.time_dimension_count ?? table?.timeDimensionCount),
+      entityColumnCount: numberOrZero(table?.entity_column_count ?? table?.entityColumnCount),
+      textColumnCount: numberOrZero(table?.text_column_count ?? table?.textColumnCount),
+      suggestedQuestionCount: numberOrZero(table?.suggested_question_count ?? table?.suggestedQuestionCount),
+      suggestedVisualizationCount: numberOrZero(table?.suggested_visualization_count ?? table?.suggestedVisualizationCount),
+      mappingConfidence: numberOrZero(table?.mapping_confidence ?? table?.mappingConfidence),
+    })).filter((table) => table.table)
+    : [];
+  return {
+    configured: Boolean(raw?.table_count ?? raw?.tableCount ?? tables.length),
+    kind: String(raw?.kind || ''),
+    database: String(raw?.database || ''),
+    tableCount: numberOrZero(raw?.table_count ?? raw?.tableCount ?? tables.length),
+    columnCount: numberOrZero(raw?.column_count ?? raw?.columnCount),
+    metricCount: numberOrZero(raw?.metric_count ?? raw?.metricCount),
+    dimensionCount: numberOrZero(raw?.dimension_count ?? raw?.dimensionCount),
+    timeDimensionCount: numberOrZero(raw?.time_dimension_count ?? raw?.timeDimensionCount),
+    entityColumnCount: numberOrZero(raw?.entity_column_count ?? raw?.entityColumnCount),
+    textColumnCount: numberOrZero(raw?.text_column_count ?? raw?.textColumnCount),
+    reportSuggestionCount: numberOrZero(raw?.report_suggestion_count ?? raw?.reportSuggestionCount),
+    tables,
+  };
+}
+
+function normalizeDatabaseSyncReadiness(raw = {}) {
+  const signal = String(raw?.signal || 'unknown').toLowerCase();
+  return {
+    configured: Boolean(raw?.signal),
+    signal,
+    label: databaseSourceSyncReadinessLabel(signal),
+    datasetSignal: String(raw?.dataset_signal || raw?.datasetSignal || '').toLowerCase(),
+    hasSyncRun: Boolean(raw?.has_sync_run ?? raw?.hasSyncRun),
+    latestStatus: String(raw?.latest_status || raw?.latestStatus || ''),
+    workflowStage: String(raw?.workflow_stage || raw?.workflowStage || ''),
+    workflowStatus: String(raw?.workflow_status || raw?.workflowStatus || ''),
+    failureKind: String(raw?.failure_kind || raw?.failureKind || ''),
+    lastError: String(raw?.last_error || raw?.lastError || ''),
+    failedTaskKey: String(raw?.failed_task_key || raw?.failedTaskKey || ''),
+    documentCount: numberOrZero(raw?.document_count ?? raw?.documentCount),
+    rowCount: numberOrZero(raw?.row_count ?? raw?.rowCount ?? raw?.document_count ?? raw?.documentCount),
+    chunkCount: numberOrZero(raw?.chunk_count ?? raw?.chunkCount),
+    skippedRowCount: numberOrZero(raw?.skipped_row_count ?? raw?.skippedRowCount),
+    failedRowCount: numberOrZero(raw?.failed_row_count ?? raw?.failedRowCount),
+    enqueuedTaskCount: numberOrZero(raw?.enqueued_task_count ?? raw?.enqueuedTaskCount),
+    tableCounts: normalizeDatabaseSyncTableCountRows(raw?.table_counts || raw?.tableCounts),
+    checkpointSummary: normalizeDatabaseCheckpointSummary(raw?.checkpoint_summary || raw?.checkpointSummary || {}),
+    updatedAt: raw?.updated_at || raw?.updatedAt || null,
+  };
+}
+
+function normalizeDatabaseCheckpointSummary(raw = {}) {
+  const tableCheckpoints = Array.isArray(raw?.table_checkpoints || raw?.tableCheckpoints)
+    ? (raw.table_checkpoints || raw.tableCheckpoints).map((row) => ({
+      table: String(row?.table || ''),
+      updatedAfterPresent: Boolean(row?.updated_after_present ?? row?.updatedAfterPresent),
+      lastIdPresent: Boolean(row?.last_id_present ?? row?.lastIdPresent),
+      versionAfterPresent: Boolean(row?.version_after_present ?? row?.versionAfterPresent),
+    })).filter((row) => row.table)
+    : [];
+  const hasCheckpoint = Boolean(raw?.has_checkpoint ?? raw?.hasCheckpoint);
+  const cursorPresent = Boolean(raw?.cursor_present ?? raw?.cursorPresent);
+  const topLevelIncrementalPresent = Boolean(raw?.top_level_incremental_present ?? raw?.topLevelIncrementalPresent);
+  const tableCount = numberOrZero(raw?.table_count ?? raw?.tableCount ?? tableCheckpoints.length);
+  const label = databaseCheckpointSummaryLabel({
+    hasCheckpoint,
+    cursorPresent,
+    topLevelIncrementalPresent,
+    tableCount,
+  });
+  return {
+    configured: hasCheckpoint || cursorPresent || topLevelIncrementalPresent || tableCount > 0,
+    hasCheckpoint,
+    cursorPresent,
+    topLevelIncrementalPresent,
+    tableCount,
+    tableCheckpoints,
+    label,
+  };
+}
+
+function databaseCheckpointSummaryLabel(summary) {
+  if (!summary.hasCheckpoint) {
+    return '无检查点';
+  }
+  const parts = [];
+  if (summary.tableCount > 0) {
+    parts.push(`表检查点 ${summary.tableCount}`);
+  }
+  if (summary.topLevelIncrementalPresent) {
+    parts.push('增量条件');
+  }
+  if (summary.cursorPresent) {
+    parts.push('游标已隐藏');
+  }
+  return parts.length ? parts.join(' · ') : '检查点已记录';
+}
+
+function normalizeDatabaseSyncTableCounts(counts = {}) {
+  const candidates = [
+    counts.ingest_table_counts,
+    counts.ingestTableCounts,
+    counts.content_table_counts,
+    counts.contentTableCounts,
+    counts.metadata_table_counts,
+    counts.metadataTableCounts,
+  ];
+  const rows = candidates.find((candidate) => Array.isArray(candidate)) || [];
+  return normalizeDatabaseSyncTableCountRows(rows);
+}
+
+function normalizeDatabaseSyncTableCountRows(rows = []) {
+  return (Array.isArray(rows) ? rows : []).map((row) => ({
+    table: String(row?.table || ''),
+    documentCount: numberOrZero(
+      row?.documents_ingested
+      ?? row?.documentsIngested
+      ?? row?.content_document_count
+      ?? row?.contentDocumentCount
+      ?? row?.metadata_document_count
+      ?? row?.metadataDocumentCount
+      ?? row?.document_count
+      ?? row?.documentCount,
+    ),
+    rowCount: numberOrZero(
+      row?.row_count
+      ?? row?.rowCount
+      ?? row?.documents_ingested
+      ?? row?.documentsIngested
+      ?? row?.content_document_count
+      ?? row?.contentDocumentCount
+      ?? row?.metadata_document_count
+      ?? row?.metadataDocumentCount
+      ?? row?.document_count
+      ?? row?.documentCount,
+    ),
+    chunkCount: numberOrZero(
+      row?.chunks_ingested
+      ?? row?.chunksIngested
+      ?? row?.chunk_count
+      ?? row?.chunkCount,
+    ),
+    skippedRowCount: numberOrZero(row?.skipped_row_count ?? row?.skippedRowCount),
+    failedRowCount: numberOrZero(row?.failed_row_count ?? row?.failedRowCount),
+  })).filter((row) => row.table);
+}
+
+function normalizeDatabaseReadiness(raw = {}) {
+  const signal = String(raw?.signal || 'unknown').toLowerCase();
+  return {
+    configured: Boolean(raw?.signal),
     signal,
     label: databaseSourceReadinessLabel(signal),
-    defaultDatasetId: String(raw.default_dataset_id || raw.defaultDatasetId || ''),
-    documentCount: numberOrZero(raw.document_count ?? raw.documentCount),
-    indexedDocumentCount: numberOrZero(raw.indexed_document_count ?? raw.indexedDocumentCount),
-    failedDocumentCount: numberOrZero(raw.failed_document_count ?? raw.failedDocumentCount),
-    processingDocumentCount: numberOrZero(raw.processing_document_count ?? raw.processingDocumentCount),
-    chunkCount: numberOrZero(raw.chunk_count ?? raw.chunkCount),
-    indexedChunkCount: numberOrZero(raw.indexed_chunk_count ?? raw.indexedChunkCount),
-    latestDocumentUpdatedAt: raw.latest_document_updated_at || raw.latestDocumentUpdatedAt || null,
+    defaultDatasetId: String(raw?.default_dataset_id || raw?.defaultDatasetId || ''),
+    documentCount: numberOrZero(raw?.document_count ?? raw?.documentCount),
+    indexedDocumentCount: numberOrZero(raw?.indexed_document_count ?? raw?.indexedDocumentCount),
+    failedDocumentCount: numberOrZero(raw?.failed_document_count ?? raw?.failedDocumentCount),
+    processingDocumentCount: numberOrZero(raw?.processing_document_count ?? raw?.processingDocumentCount),
+    chunkCount: numberOrZero(raw?.chunk_count ?? raw?.chunkCount),
+    indexedChunkCount: numberOrZero(raw?.indexed_chunk_count ?? raw?.indexedChunkCount),
+    latestDocumentUpdatedAt: raw?.latest_document_updated_at || raw?.latestDocumentUpdatedAt || null,
   };
 }
 
@@ -403,6 +642,33 @@ export function databaseSourceReadinessLabel(signal) {
       return '处理中';
     case 'failed':
       return '失败';
+    case 'no_documents':
+      return '未入库';
+    default:
+      return '未知';
+  }
+}
+
+export function databaseSourceSyncReadinessLabel(signal) {
+  switch (String(signal || '').toLowerCase()) {
+    case 'ready':
+      return '可问';
+    case 'partial_ready':
+      return '部分可问';
+    case 'sync_running':
+      return '同步中';
+    case 'sync_queued':
+      return '排队中';
+    case 'sync_failed':
+      return '同步失败';
+    case 'indexing':
+      return '索引中';
+    case 'index_failed':
+      return '索引失败';
+    case 'synced_no_documents':
+      return '已同步无文档';
+    case 'no_sync':
+      return '未同步';
     case 'no_documents':
       return '未入库';
     default:
@@ -433,9 +699,39 @@ export function databaseSourceSyncRuns(auditItems = [], limit = 3) {
         syncKind: String(summary.sync_kind || ''),
         updatedAt: item.createdAt || item.created_at || null,
         failureKind: item.failureKind || item.failure_kind || '',
-        documentCount: numberOrZero(counts.document_count),
+        lastError: String(counts.last_error || counts.lastError || ''),
+        failedTaskKey: String(counts.failed_task_key || counts.failedTaskKey || ''),
+        documentCount: numberOrZero(
+          counts.documents_ingested
+          ?? counts.documentsIngested
+          ?? counts.content_document_count
+          ?? counts.contentDocumentCount
+          ?? counts.metadata_document_count
+          ?? counts.metadataDocumentCount
+          ?? counts.document_count,
+        ),
+        rowCount: numberOrZero(
+          counts.row_count
+          ?? counts.rowCount
+          ?? counts.content_row_count
+          ?? counts.contentRowCount
+          ?? counts.metadata_row_count
+          ?? counts.metadataRowCount
+          ?? counts.documents_ingested
+          ?? counts.documentsIngested
+          ?? counts.content_document_count
+          ?? counts.contentDocumentCount
+          ?? counts.metadata_document_count
+          ?? counts.metadataDocumentCount
+          ?? counts.document_count
+          ?? counts.documentCount,
+        ),
+        skippedRowCount: numberOrZero(counts.skipped_row_count ?? counts.skippedRowCount),
+        failedRowCount: numberOrZero(counts.failed_row_count ?? counts.failedRowCount),
         aclSnapshotCount: numberOrZero(counts.acl_snapshot_count),
         enqueuedTaskCount: numberOrZero(counts.enqueued_task_count),
+        tableCounts: normalizeDatabaseSyncTableCounts(counts),
+        checkpointSummary: normalizeDatabaseCheckpointSummary(summary.checkpoint_summary || summary.checkpointSummary || {}),
       };
     });
 }

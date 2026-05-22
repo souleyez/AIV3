@@ -1217,6 +1217,7 @@ fn with_pdf_parse_quality_metadata(
             "text_chars": pdf_quality_text_chars(&candidate.text),
         })
     });
+    let (fallback_status, recommended_fallback) = pdf_parse_quality_fallback_policy(status);
     merge_object_value(
         &mut extracted.metadata,
         "parse_quality",
@@ -1225,10 +1226,24 @@ fn with_pdf_parse_quality_metadata(
             "status": status,
             "text_chars": text_chars,
             "min_usable_text_chars": pdf_min_usable_text_chars(),
+            "fallback_status": fallback_status,
+            "recommended_fallback": recommended_fallback,
             "fallback_from": fallback_from,
         }),
     );
     extracted
+}
+
+fn pdf_parse_quality_fallback_policy(status: &str) -> (&'static str, Value) {
+    match status {
+        "usable_text" => ("not_required", Value::Null),
+        "vlm_fallback_used" => ("used", json!("minimax_vlm")),
+        "low_text_coverage" => ("recommended", json!("paddleocr_or_minimax_vlm")),
+        "low_text_coverage_fallback_unavailable" => {
+            ("unavailable", json!("paddleocr_or_minimax_vlm"))
+        }
+        _ => ("unknown", Value::Null),
+    }
 }
 
 fn merge_parse_quality_field(target: &mut Value, key: &str, value: Value) {
@@ -1349,6 +1364,7 @@ fn pdf_low_quality_diagnostic_text(mut extracted: ExtractedDocumentText) -> Extr
             "text_chars": text_chars,
             "min_usable_text_chars": pdf_min_usable_text_chars(),
             "fallback_status": "unavailable",
+            "recommended_fallback": "paddleocr_or_minimax_vlm",
         }),
     );
     extracted
@@ -3787,6 +3803,14 @@ trailer << /Root 1 0 R >>
                 json!("low_text_coverage_fallback_unavailable")
             );
             assert_eq!(diagnostic.metadata["parse_quality"]["text_chars"], json!(1));
+            assert_eq!(
+                diagnostic.metadata["parse_quality"]["fallback_status"],
+                json!("unavailable")
+            );
+            assert_eq!(
+                diagnostic.metadata["parse_quality"]["recommended_fallback"],
+                json!("paddleocr_or_minimax_vlm")
+            );
         });
     }
 
@@ -3957,6 +3981,14 @@ trailer << /Root 1 0 R >>
         let selected = select_pdf_vlm_rescue_candidate(existing, vlm);
 
         assert_eq!(selected.method, "pdf-vlm");
+        assert_eq!(
+            selected.metadata["parse_quality"]["fallback_status"],
+            json!("used")
+        );
+        assert_eq!(
+            selected.metadata["parse_quality"]["recommended_fallback"],
+            json!("minimax_vlm")
+        );
         assert_eq!(
             selected.metadata["parse_quality"]["vlm_rescue"]["selected"],
             json!("vlm")

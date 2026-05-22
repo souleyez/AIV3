@@ -53,8 +53,9 @@ use contracts::{
     ExternalDocumentParseDocumentView, ExternalIntegrationAuditItemView,
     ExternalIntegrationAuditResponse, ExternalIntegrationControlRequest,
     ExternalIntegrationControlResponse, ExternalIntegrationSummaryView, ExternalMessageTypeView,
-    ExternalRequestedSkillView, GetExternalDocumentParseDetailResponse, HealthResponse,
-    HtmlArtifactInteractionModeView, HtmlArtifactManifestView, InspectDatabaseSourceSchemaRequest,
+    ExternalRequestedSkillView, GetDatabaseSourceStatusResponse,
+    GetExternalDocumentParseDetailResponse, HealthResponse, HtmlArtifactInteractionModeView,
+    HtmlArtifactManifestView, InspectDatabaseSourceSchemaRequest,
     InspectDatabaseSourceSchemaResponse, KeyLoginRequest, KeyLoginResponse, KeyRotateRequest,
     KeyRotateResponse, ListExternalConversationTestsResponse, ListExternalIntegrationsResponse,
     LlmInvocationView, LogoutResponse, MemoryDirectoryView, ModelGatewayLaneStatusView,
@@ -178,6 +179,7 @@ const DEFAULT_ASSISTANT_RUN_CODEX_RUNTIME_MODEL: &str = "codex-conversation-plac
 const DEFAULT_STATIC_PAGE_INTENT_RUNTIME_MODEL: &str = "static-page-intent-v1";
 const ASSISTANT_RUN_EVIDENCE_DEFAULT_LIMIT: usize = 4;
 const ASSISTANT_RUN_EVIDENCE_MAX_LIMIT: usize = 8;
+const ASSISTANT_RUN_SELECTED_DOCUMENT_ROW_EVIDENCE_LIMIT: usize = RETRIEVAL_SEARCH_MAX_LIMIT;
 const ASSISTANT_RUN_EVIDENCE_DATASET_LIMIT: usize = 2;
 const ASSISTANT_RUN_DATABASE_AGGREGATE_RESULT_LIMIT: u32 = 8;
 const ASSISTANT_RUN_DATABASE_AGGREGATE_SCAN_LIMIT_DEFAULT: u32 = 5_000;
@@ -193,6 +195,7 @@ const ASSISTANT_RUN_DATASET_ENTITY_SCAN_ENTITY_LIMIT: usize = 80;
 const ASSISTANT_RUN_DATASET_ENTITY_SCAN_ROW_LIMIT: usize = 160;
 const ASSISTANT_RUN_RESUME_PROFILE_ROW_LIMIT: usize = 160;
 const ASSISTANT_RUN_DOCUMENT_PARSE_STATUS_DOCUMENT_LIMIT: usize = 48;
+const ASSISTANT_RUN_INFERRED_LOW_TEXT_PARSE_MIN_CHARS: usize = 20;
 const EXTERNAL_CHANNEL_DIRECT_REPLY_DEFAULT_TOTAL_BUDGET_MS: u64 = 90_000;
 const EXTERNAL_CHANNEL_DIRECT_REPLY_DEFAULT_ATTEMPT_TIMEOUT_MS: u64 = 45_000;
 const ASSISTANT_RUN_RUNTIME_RETRY_DEFAULT_ATTEMPTS: usize = 3;
@@ -231,6 +234,9 @@ const ASSISTANT_RUN_REACT_DEFAULT_MAX_STEPS: usize = 3;
 const ASSISTANT_RUN_REACT_MAX_STEPS: usize = 5;
 const ASSISTANT_RUN_REACT_REASON_TRACE_LIMIT: usize = 240;
 const ASSISTANT_RUN_REACT_MESSAGE_TRACE_LIMIT: usize = 240;
+const ASSISTANT_RUN_ANSWER_QUALITY_DEFAULT_RETRY_BUDGET: usize = 1;
+const ASSISTANT_RUN_ANSWER_QUALITY_DISSATISFIED_RETRY_BUDGET: usize = 3;
+const ASSISTANT_RUN_ANSWER_QUALITY_MAX_RETRY_BUDGET: usize = 4;
 
 #[derive(Clone, Debug)]
 struct AssistantRunReactOutcome {
@@ -1333,6 +1339,10 @@ pub fn router(
         .route(
             "/v1/external/sources/{source_id}/database/aggregate",
             axum::routing::post(aggregate_database_source),
+        )
+        .route(
+            "/v1/external/sources/{source_id}/database/status",
+            get(get_database_source_status),
         )
         .route("/v1/model-gateway/presets", get(list_model_gateway_presets))
         .route("/v1/model-gateway/status", get(get_model_gateway_status))
@@ -8912,8 +8922,8 @@ async fn create_assistant_run(
     let visible_datasets =
         enrich_visible_datasets_for_scope_planning(&state, visible_datasets, current_user_id)
             .await?;
-    let selected_dataset_id = request
-        .selected_scope
+    let requested_selected_scope = request.selected_scope.clone();
+    let selected_dataset_id = requested_selected_scope
         .as_ref()
         .and_then(selected_dataset_id_from_scope);
     let local_thread_id = request
@@ -8942,8 +8952,12 @@ async fn create_assistant_run(
         selected_dataset_id,
         conversation_memory_available,
     });
-    let mut selected_scope = assistant_run_scope_with_current_artifact_context(
+    let selected_scope = assistant_run_scope_with_requested_document_scope(
         scope_plan.selected_scope.clone(),
+        requested_selected_scope.as_ref(),
+    );
+    let mut selected_scope = assistant_run_scope_with_current_artifact_context(
+        selected_scope,
         request.current_artifact.as_ref(),
         &request.prompt,
     );
@@ -9352,16 +9366,40 @@ async fn create_assistant_run(
                         }
                     }
                 };
-                let runtime_manifest = render_runtime_manifest(&response.runtime);
+                let mut runtime_manifest = render_runtime_manifest(&response.runtime);
+                let mut retry_trail_steps = Vec::new();
+                let mut retry_events = Vec::new();
+                let mut output_artifacts = vec![json!({
+                    "type": "assistant_message",
+                    "role": ChatMessageRole::Assistant.as_str(),
+                    "content": assistant_run_sanitize_customer_facing_answer_text(&response.output_text),
+                })];
+                if let Some(outcome) = maybe_run_assistant_run_answer_quality_retry_for_create(
+                    &state,
+                    &request,
+                    run.id,
+                    &selected_scope,
+                    &evidence_state,
+                    &response,
+                    local_thread_id.as_deref(),
+                    &active_secret_binding_ids,
+                    current_user_id,
+                    &react_runtime,
+                    &chat_runtime,
+                )
+                .await?
+                {
+                    evidence_state = outcome.evidence_state;
+                    runtime_manifest = outcome.runtime_manifest;
+                    retry_trail_steps = outcome.execution_trail_steps;
+                    output_artifacts = outcome.output_artifacts;
+                    retry_events = outcome.events;
+                }
                 (
                     runtime_manifest,
-                    Vec::new(),
-                    vec![json!({
-                        "type": "assistant_message",
-                        "role": ChatMessageRole::Assistant.as_str(),
-                        "content": response.output_text,
-                    })],
-                    Vec::new(),
+                    retry_trail_steps,
+                    output_artifacts,
+                    retry_events,
                 )
             }
         };
@@ -9385,6 +9423,17 @@ async fn create_assistant_run(
             "model": runtime_model_for_trail,
             "at": now,
         }));
+        if !react_trail_steps.is_empty() {
+            execution_trail.push(json!({
+                "status": "completed",
+                "label": "回答质量门禁扩供料",
+                "runtime_mode": react_runtime.mode.as_str(),
+                "provider": react_runtime.provider.as_str(),
+                "model": react_runtime.model.as_str(),
+                "at": Utc::now(),
+            }));
+            execution_trail.append(&mut react_trail_steps);
+        }
     }
     state
         .storage
@@ -9408,6 +9457,7 @@ async fn create_assistant_run(
         )
         .await
         .map_err(ApiError::from_storage)?;
+    output_artifacts = assistant_run_sanitize_customer_facing_output_artifacts(output_artifacts);
     let run = state
         .storage
         .assistant_runs()
@@ -11695,6 +11745,23 @@ async fn aggregate_database_source(
         redacted_summary: serde_json::to_value(config.redacted_summary())
             .unwrap_or_else(|_| json!({})),
         result: serde_json::to_value(result).unwrap_or_else(|_| json!({})),
+    }))
+}
+
+async fn get_database_source_status(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(source_id): Path<String>,
+) -> std::result::Result<Json<GetDatabaseSourceStatusResponse>, ApiError> {
+    ensure_main_system_external_source_access(&state, &headers, &source_id).await?;
+    let source = load_enabled_database_source_connection(&state, &source_id).await?;
+    let redacted_summary = external_database_source_config_summary(&source.config_redacted);
+    let status = database_source_status_summary(&state, &source).await?;
+    Ok(Json(GetDatabaseSourceStatusResponse {
+        source_id: source.source_id,
+        connector_kind: source.connector_kind,
+        redacted_summary,
+        status,
     }))
 }
 
@@ -15874,8 +15941,59 @@ fn database_source_config_with_profile_mappings(
         ));
     };
     object.insert("tables".to_string(), Value::Array(mapped_tables));
+    object.insert(
+        "semantic_profile".to_string(),
+        database_source_semantic_profile_summary(profile),
+    );
     MySqlSourceConfig::from_value(&database_source).map_err(database_source_error_to_api)?;
     Ok(database_source)
+}
+
+fn database_source_semantic_profile_summary(profile: &DatabaseSemanticProfile) -> Value {
+    let tables = profile
+        .tables
+        .iter()
+        .map(|table| {
+            json!({
+                "table": table.name,
+                "column_count": table.column_count,
+                "approximate_row_count": table.approximate_row_count,
+                "dimension_count": table.dimensions.len(),
+                "metric_count": table.metrics.len(),
+                "time_dimension_count": table.time_dimensions.len(),
+                "entity_column_count": table.entity_columns.len(),
+                "text_column_count": table.text_columns.len(),
+                "suggested_question_count": table.suggested_questions.len(),
+                "suggested_visualization_count": table.suggested_visualizations.len(),
+                "mapping_confidence": table.suggested_mapping.confidence,
+            })
+        })
+        .collect::<Vec<_>>();
+    json!({
+        "kind": profile.kind,
+        "database": profile.database,
+        "table_count": profile.tables.len(),
+        "column_count": profile.tables.iter().map(|table| table.column_count).sum::<usize>(),
+        "metric_count": profile.tables.iter().map(|table| table.metrics.len()).sum::<usize>(),
+        "dimension_count": profile.tables.iter().map(|table| table.dimensions.len()).sum::<usize>(),
+        "time_dimension_count": profile.tables.iter().map(|table| table.time_dimensions.len()).sum::<usize>(),
+        "entity_column_count": profile.tables.iter().map(|table| table.entity_columns.len()).sum::<usize>(),
+        "text_column_count": profile.tables.iter().map(|table| table.text_columns.len()).sum::<usize>(),
+        "report_suggestion_count": profile.report_suggestions.len(),
+        "tables": tables,
+    })
+}
+
+fn database_source_semantic_profile_from_config(source_config_redacted: &Value) -> Option<Value> {
+    source_database_config_fragment(source_config_redacted)
+        .and_then(|database_source| {
+            database_source
+                .get("semantic_profile")
+                .or_else(|| database_source.get("semanticProfile"))
+                .cloned()
+        })
+        .filter(Value::is_object)
+        .map(external_integration_redacted_summary)
 }
 
 fn database_source_table_mapping_value(
@@ -15945,6 +16063,556 @@ async fn update_database_source_config_redacted(
         )
     })?;
     Ok(row.get("updated_at"))
+}
+
+async fn database_source_status_summary(
+    state: &AppState,
+    source: &ExternalSourceConnectionSummary,
+) -> std::result::Result<Value, ApiError> {
+    let mut config_error = None;
+    let config = match source_database_config_fragment(&source.config_redacted) {
+        Some(value) => match MySqlSourceConfig::from_value(&value) {
+            Ok(config) => Some(config),
+            Err(error) => {
+                config_error = Some(error.to_string());
+                None
+            }
+        },
+        None => {
+            config_error = Some("database_source config is missing".to_string());
+            None
+        }
+    };
+    let default_dataset_uuid = config
+        .as_ref()
+        .and_then(|config| config.default_dataset_id.as_deref())
+        .and_then(|value| Uuid::parse_str(value).ok());
+    let default_dataset_id = default_dataset_uuid.map(|id| id.to_string());
+    let configured_tables = config
+        .as_ref()
+        .map(|config| {
+            config
+                .tables
+                .iter()
+                .map(|mapping| mapping.table.clone())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let dataset = load_database_source_default_dataset_summary(state, default_dataset_uuid).await?;
+    let table_readiness = load_database_source_table_readiness(
+        state,
+        &source.source_id,
+        default_dataset_uuid,
+        &configured_tables,
+    )
+    .await?;
+    let dataset_readiness =
+        database_source_dataset_readiness_from_tables(default_dataset_id, &table_readiness);
+    let recent_sync_runs = load_database_source_recent_sync_runs(state, &source.source_id).await?;
+    let sync_readiness =
+        database_source_sync_readiness_summary(&dataset_readiness, &recent_sync_runs);
+    let semantic_profile = database_source_semantic_profile_from_config(&source.config_redacted)
+        .unwrap_or(Value::Null);
+
+    Ok(json!({
+        "config_valid": config.is_some(),
+        "config_error": config_error,
+        "dataset": dataset,
+        "dataset_readiness": dataset_readiness,
+        "table_readiness": table_readiness,
+        "recent_sync_runs": recent_sync_runs,
+        "sync_readiness": sync_readiness,
+        "semantic_profile": semantic_profile,
+        "generated_at": Utc::now(),
+    }))
+}
+
+async fn load_database_source_default_dataset_summary(
+    state: &AppState,
+    dataset_id: Option<Uuid>,
+) -> std::result::Result<Value, ApiError> {
+    let Some(dataset_id) = dataset_id else {
+        return Ok(Value::Null);
+    };
+    let row = sqlx::query(
+        r#"
+        select id, key, title, lifecycle, updated_at
+        from datasets
+        where tenant_id = $1 and id = $2
+        "#,
+    )
+    .bind(state.tenant_id.0)
+    .bind(dataset_id)
+    .fetch_optional(state.storage.pool())
+    .await
+    .map_err(|error| ApiError::from_storage(anyhow::Error::new(error)))?;
+
+    Ok(row
+        .map(|row| {
+            json!({
+                "dataset_id": row.get::<Uuid, _>("id"),
+                "key": row.get::<String, _>("key"),
+                "title": row.get::<String, _>("title"),
+                "lifecycle": row.get::<String, _>("lifecycle"),
+                "updated_at": row.get::<DateTime<Utc>, _>("updated_at"),
+            })
+        })
+        .unwrap_or(Value::Null))
+}
+
+async fn load_database_source_table_readiness(
+    state: &AppState,
+    source_id: &str,
+    default_dataset_id: Option<Uuid>,
+    configured_tables: &[String],
+) -> std::result::Result<Value, ApiError> {
+    let rows = sqlx::query(
+        r#"
+        with docs as (
+            select d.id,
+                   d.lifecycle,
+                   d.updated_at,
+                   nullif(d.metadata #>> '{external_metadata,source_table}', '') as source_table
+            from documents d
+            where d.tenant_id = $1
+              and d.lifecycle <> 'archived'
+              and d.metadata #>> '{external_source,source_id}' = $2
+              and ($3::uuid is null or d.dataset_id = $3)
+        ),
+        doc_counts as (
+            select coalesce(source_table, '[unmapped]') as source_table,
+                   count(*)::bigint as document_count,
+                   count(*) filter (where lifecycle = 'indexed')::bigint as indexed_document_count,
+                   count(*) filter (where lifecycle = 'failed')::bigint as failed_document_count,
+                   count(*) filter (where lifecycle in ('received', 'extracted'))::bigint as processing_document_count,
+                   max(updated_at) as latest_document_updated_at
+            from docs
+            group by coalesce(source_table, '[unmapped]')
+        ),
+        chunk_counts as (
+            select coalesce(d.source_table, '[unmapped]') as source_table,
+                   count(c.id)::bigint as chunk_count,
+                   count(c.id) filter (where c.state = 'indexed')::bigint as indexed_chunk_count
+            from docs d
+            left join document_chunks c
+              on c.tenant_id = $1
+             and c.document_id = d.id
+            group by coalesce(d.source_table, '[unmapped]')
+        )
+        select dc.source_table,
+               dc.document_count,
+               dc.indexed_document_count,
+               dc.failed_document_count,
+               dc.processing_document_count,
+               coalesce(cc.chunk_count, 0)::bigint as chunk_count,
+               coalesce(cc.indexed_chunk_count, 0)::bigint as indexed_chunk_count,
+               dc.latest_document_updated_at
+        from doc_counts dc
+        left join chunk_counts cc on cc.source_table = dc.source_table
+        order by dc.source_table asc
+        "#,
+    )
+    .bind(state.tenant_id.0)
+    .bind(source_id)
+    .bind(default_dataset_id)
+    .fetch_all(state.storage.pool())
+    .await
+    .map_err(|error| ApiError::from_storage(anyhow::Error::new(error)))?;
+
+    let mut by_table = BTreeMap::new();
+    for row in rows {
+        let table = row.get::<String, _>("source_table");
+        by_table.insert(
+            table.clone(),
+            database_source_table_readiness_value(
+                &table,
+                row.get("document_count"),
+                row.get("indexed_document_count"),
+                row.get("failed_document_count"),
+                row.get("processing_document_count"),
+                row.get("chunk_count"),
+                row.get("indexed_chunk_count"),
+                row.get("latest_document_updated_at"),
+            ),
+        );
+    }
+    for table in configured_tables {
+        by_table.entry(table.clone()).or_insert_with(|| {
+            database_source_table_readiness_value(table, 0, 0, 0, 0, 0, 0, None)
+        });
+    }
+
+    Ok(Value::Array(by_table.into_values().collect()))
+}
+
+fn database_source_table_readiness_value(
+    table: &str,
+    document_count: i64,
+    indexed_document_count: i64,
+    failed_document_count: i64,
+    processing_document_count: i64,
+    chunk_count: i64,
+    indexed_chunk_count: i64,
+    latest_document_updated_at: Option<DateTime<Utc>>,
+) -> Value {
+    let mut readiness = external_database_dataset_readiness_summary(
+        None,
+        document_count,
+        indexed_document_count,
+        failed_document_count,
+        processing_document_count,
+        chunk_count,
+        indexed_chunk_count,
+        latest_document_updated_at,
+    );
+    if let Some(object) = readiness.as_object_mut() {
+        object.insert("table".to_string(), json!(table));
+    }
+    readiness
+}
+
+fn database_source_dataset_readiness_from_tables(
+    default_dataset_id: Option<String>,
+    table_readiness: &Value,
+) -> Value {
+    let mut document_count = 0;
+    let mut indexed_document_count = 0;
+    let mut failed_document_count = 0;
+    let mut processing_document_count = 0;
+    let mut chunk_count = 0;
+    let mut indexed_chunk_count = 0;
+    let mut latest_document_updated_at = None;
+    for table in table_readiness.as_array().into_iter().flatten() {
+        document_count += value_i64(table, "document_count");
+        indexed_document_count += value_i64(table, "indexed_document_count");
+        failed_document_count += value_i64(table, "failed_document_count");
+        processing_document_count += value_i64(table, "processing_document_count");
+        chunk_count += value_i64(table, "chunk_count");
+        indexed_chunk_count += value_i64(table, "indexed_chunk_count");
+        if let Some(updated_at) = table
+            .get("latest_document_updated_at")
+            .and_then(|value| serde_json::from_value::<DateTime<Utc>>(value.clone()).ok())
+        {
+            latest_document_updated_at = latest_document_updated_at
+                .map(|current: DateTime<Utc>| current.max(updated_at))
+                .or(Some(updated_at));
+        }
+    }
+    external_database_dataset_readiness_summary(
+        default_dataset_id,
+        document_count,
+        indexed_document_count,
+        failed_document_count,
+        processing_document_count,
+        chunk_count,
+        indexed_chunk_count,
+        latest_document_updated_at,
+    )
+}
+
+async fn load_database_source_recent_sync_runs(
+    state: &AppState,
+    source_id: &str,
+) -> std::result::Result<Value, ApiError> {
+    let rows = sqlx::query(
+        r#"
+        select id,
+               sync_kind,
+               status,
+               checkpoint,
+               counts,
+               failure_kind,
+               created_at,
+               updated_at
+        from external_sync_runs
+        where tenant_id = $1 and source_id = $2
+        order by updated_at desc
+        limit 10
+        "#,
+    )
+    .bind(state.tenant_id.0)
+    .bind(source_id)
+    .fetch_all(state.storage.pool())
+    .await
+    .map_err(|error| ApiError::from_storage(anyhow::Error::new(error)))?;
+
+    Ok(Value::Array(
+        rows.into_iter()
+            .map(|row| {
+                let checkpoint = row.get::<Value, _>("checkpoint");
+                let checkpoint_summary = database_source_checkpoint_summary(&checkpoint);
+                json!({
+                    "sync_run_id": row.get::<Uuid, _>("id"),
+                    "sync_kind": row.get::<String, _>("sync_kind"),
+                    "status": row.get::<String, _>("status"),
+                    "failure_kind": row.get::<Option<String>, _>("failure_kind"),
+                    "counts": external_integration_redacted_summary(row.get::<Value, _>("counts")),
+                    "checkpoint_summary": checkpoint_summary,
+                    "checkpoint": {
+                        "workflow_execution_id": checkpoint.get("workflow_execution_id").cloned().unwrap_or(Value::Null),
+                        "workflow_stage": checkpoint.get("workflow_stage").cloned().unwrap_or(Value::Null),
+                        "workflow_status": checkpoint.get("workflow_status").cloned().unwrap_or(Value::Null),
+                    },
+                    "created_at": row.get::<DateTime<Utc>, _>("created_at"),
+                    "updated_at": row.get::<DateTime<Utc>, _>("updated_at"),
+                })
+            })
+            .collect(),
+    ))
+}
+
+fn database_source_checkpoint_summary(checkpoint: &Value) -> Value {
+    if !checkpoint.is_object() {
+        return json!({
+            "has_checkpoint": false,
+            "table_count": 0,
+            "cursor_present": false,
+            "table_checkpoints": [],
+        });
+    }
+    let table_checkpoints = checkpoint
+        .get("tables")
+        .and_then(Value::as_object)
+        .map(|tables| {
+            tables
+                .iter()
+                .filter_map(|(table, value)| {
+                    let object = value.as_object()?;
+                    Some(json!({
+                        "table": table,
+                        "updated_after_present": object.contains_key("updated_after")
+                            || object.contains_key("updatedAfter"),
+                        "last_id_present": object.contains_key("last_id")
+                            || object.contains_key("lastId"),
+                        "version_after_present": object.contains_key("version_after")
+                            || object.contains_key("versionAfter"),
+                    }))
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let top_level_incremental_present = checkpoint.get("updated_after").is_some()
+        || checkpoint.get("updatedAfter").is_some()
+        || checkpoint.get("last_id").is_some()
+        || checkpoint.get("lastId").is_some()
+        || checkpoint.get("version_after").is_some()
+        || checkpoint.get("versionAfter").is_some();
+    json!({
+        "has_checkpoint": checkpoint
+            .as_object()
+            .map(|object| !object.is_empty())
+            .unwrap_or(false),
+        "table_count": table_checkpoints.len(),
+        "cursor_present": checkpoint.get("cursor").is_some()
+            || checkpoint.get("next_cursor").is_some()
+            || checkpoint.get("nextCursor").is_some(),
+        "top_level_incremental_present": top_level_incremental_present,
+        "table_checkpoints": table_checkpoints,
+    })
+}
+
+fn database_source_sync_readiness_summary(
+    dataset_readiness: &Value,
+    recent_sync_runs: &Value,
+) -> Value {
+    let dataset_signal = dataset_readiness
+        .get("signal")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown")
+        .to_ascii_lowercase();
+    let latest_run = recent_sync_runs
+        .as_array()
+        .and_then(|runs| runs.first())
+        .and_then(Value::as_object);
+    let Some(latest_run) = latest_run else {
+        let signal = if matches!(dataset_signal.as_str(), "ready" | "partial_ready") {
+            dataset_signal.as_str()
+        } else {
+            "no_sync"
+        };
+        return json!({
+            "signal": signal,
+            "dataset_signal": dataset_signal,
+            "has_sync_run": false,
+        });
+    };
+
+    let counts = latest_run.get("counts").unwrap_or(&Value::Null);
+    let checkpoint = latest_run.get("checkpoint").unwrap_or(&Value::Null);
+    let checkpoint_summary = latest_run
+        .get("checkpoint_summary")
+        .cloned()
+        .unwrap_or_else(|| database_source_checkpoint_summary(checkpoint));
+    let status = latest_run
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown")
+        .to_ascii_lowercase();
+    let workflow_stage = checkpoint
+        .get("workflow_stage")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let workflow_status = checkpoint
+        .get("workflow_status")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let failure_kind = latest_run
+        .get("failure_kind")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let last_error = counts
+        .get("last_error")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let failed_task_key = counts
+        .get("failed_task_key")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let failed = matches!(status.as_str(), "failed" | "dead_lettered" | "cancelled")
+        || matches!(
+            workflow_status.as_str(),
+            "failed" | "dead_lettered" | "cancelled"
+        )
+        || !failure_kind.is_empty()
+        || !last_error.is_empty()
+        || !failed_task_key.is_empty();
+    let running = matches!(status.as_str(), "running" | "in_progress" | "processing")
+        || matches!(
+            workflow_status.as_str(),
+            "running" | "in_progress" | "processing"
+        );
+    let queued = matches!(status.as_str(), "queued" | "pending")
+        || matches!(workflow_status.as_str(), "queued" | "pending");
+    let signal = if failed {
+        "sync_failed"
+    } else if running {
+        "sync_running"
+    } else if queued {
+        "sync_queued"
+    } else if matches!(dataset_signal.as_str(), "ready" | "partial_ready") {
+        dataset_signal.as_str()
+    } else if dataset_signal == "processing" {
+        "indexing"
+    } else if dataset_signal == "failed" {
+        "index_failed"
+    } else if dataset_signal == "no_documents"
+        && matches!(status.as_str(), "succeeded" | "completed")
+    {
+        "synced_no_documents"
+    } else {
+        dataset_signal.as_str()
+    };
+
+    let table_counts = database_source_sync_table_counts_from_counts(counts);
+    json!({
+        "signal": signal,
+        "dataset_signal": dataset_signal,
+        "has_sync_run": true,
+        "latest_status": status,
+        "workflow_stage": workflow_stage,
+        "workflow_status": workflow_status,
+        "failure_kind": failure_kind,
+        "last_error": last_error,
+        "failed_task_key": failed_task_key,
+        "document_count": database_source_count_from_keys(
+            counts,
+            &[
+                "documents_ingested",
+                "content_document_count",
+                "metadata_document_count",
+                "document_count",
+            ],
+        ),
+        "row_count": database_source_count_from_keys(
+            counts,
+            &[
+                "row_count",
+                "content_row_count",
+                "metadata_row_count",
+                "documents_ingested",
+                "content_document_count",
+                "metadata_document_count",
+                "document_count",
+            ],
+        ),
+        "chunk_count": database_source_count_from_keys(counts, &["chunks_ingested", "chunk_count"]),
+        "skipped_row_count": database_source_count_from_keys(counts, &["skipped_row_count"]),
+        "failed_row_count": database_source_count_from_keys(counts, &["failed_row_count"]),
+        "enqueued_task_count": database_source_count_from_keys(counts, &["enqueued_task_count"]),
+        "table_counts": table_counts,
+        "checkpoint_summary": checkpoint_summary,
+        "updated_at": latest_run.get("updated_at").cloned().unwrap_or(Value::Null),
+    })
+}
+
+fn database_source_sync_table_counts_from_counts(counts: &Value) -> Value {
+    let rows = [
+        "ingest_table_counts",
+        "content_table_counts",
+        "metadata_table_counts",
+    ]
+    .iter()
+    .find_map(|key| counts.get(key).and_then(Value::as_array));
+    let Some(rows) = rows else {
+        return Value::Array(Vec::new());
+    };
+    Value::Array(
+        rows.iter()
+            .filter_map(|row| {
+                let table = row.get("table").and_then(Value::as_str)?.trim();
+                if table.is_empty() {
+                    return None;
+                }
+                Some(json!({
+                    "table": table,
+                    "document_count": database_source_count_from_keys(
+                        row,
+                        &[
+                            "documents_ingested",
+                            "content_document_count",
+                            "metadata_document_count",
+                            "document_count",
+                        ],
+                    ),
+                    "row_count": database_source_count_from_keys(
+                        row,
+                        &[
+                            "row_count",
+                            "documents_ingested",
+                            "content_document_count",
+                            "metadata_document_count",
+                            "document_count",
+                        ],
+                    ),
+                    "chunk_count": database_source_count_from_keys(row, &["chunks_ingested", "chunk_count"]),
+                    "skipped_row_count": database_source_count_from_keys(row, &["skipped_row_count"]),
+                    "failed_row_count": database_source_count_from_keys(row, &["failed_row_count"]),
+                }))
+            })
+            .collect(),
+    )
+}
+
+fn database_source_count_from_keys(value: &Value, keys: &[&str]) -> i64 {
+    keys.iter()
+        .find_map(|key| {
+            value.get(*key).and_then(|number| {
+                number
+                    .as_i64()
+                    .or_else(|| number.as_u64().map(|value| value as i64))
+            })
+        })
+        .unwrap_or(0)
+        .max(0)
+}
+
+fn value_i64(value: &Value, key: &str) -> i64 {
+    value.get(key).and_then(Value::as_i64).unwrap_or(0).max(0)
 }
 
 async fn resolve_effective_external_source_sync_dataset_id(
@@ -20046,6 +20714,7 @@ async fn continue_assistant_run_loaded(
         }
         artifact
     }));
+    output_artifacts = assistant_run_sanitize_customer_facing_output_artifacts(output_artifacts);
 
     if selected_scope != run.selected_scope {
         state
@@ -24599,11 +25268,55 @@ fn assistant_run_react_output_contains_internal_marker(output_text: &str) -> boo
         "provider_raw",
         "safe_error_code",
         "requires_confirmation",
+        "parse_degraded",
+        "low_text_coverage",
+        "model_status",
         "\"action_type\"",
         "\"actiontype\"",
     ]
     .iter()
     .any(|marker| normalized.contains(marker))
+}
+
+fn assistant_run_sanitize_customer_facing_output_artifacts(
+    output_artifacts: Vec<Value>,
+) -> Vec<Value> {
+    output_artifacts
+        .into_iter()
+        .map(|mut artifact| {
+            if artifact.get("type").and_then(Value::as_str) == Some("assistant_message") {
+                if let Some(content) = artifact
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned)
+                {
+                    set_payload_string(
+                        &mut artifact,
+                        "content",
+                        &assistant_run_sanitize_customer_facing_answer_text(&content),
+                    );
+                }
+            }
+            artifact
+        })
+        .collect()
+}
+
+fn assistant_run_sanitize_customer_facing_answer_text(output_text: &str) -> String {
+    let mut sanitized = output_text.trim().to_string();
+    for (raw, replacement) in [
+        (
+            "low_text_coverage_fallback_unavailable",
+            "解析质量较低，正文未成功提取",
+        ),
+        ("low_text_coverage", "解析质量较低"),
+        ("parse_degraded", "解析质量较低"),
+        ("document_parse_status", "文档解析状态"),
+        ("model_status", "解析状态"),
+    ] {
+        sanitized = sanitized.replace(raw, replacement);
+    }
+    sanitized
 }
 
 fn build_assistant_run_react_natural_fallback_input(
@@ -24651,6 +25364,541 @@ async fn complete_assistant_run_react_natural_answer_fallback(
         return None;
     }
     Some((answer, render_runtime_manifest(&response.runtime)))
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn maybe_run_assistant_run_answer_quality_retry_for_create(
+    state: &AppState,
+    request: &CreateAssistantRunRequest,
+    active_assistant_run_id: AssistantRunId,
+    selected_scope: &Value,
+    initial_evidence_state: &Value,
+    initial_response: &LlmResponse,
+    local_thread_id: Option<&str>,
+    active_secret_binding_ids: &[SecretBindingId],
+    current_user_id: Option<UserId>,
+    react_runtime: &LlmRuntimeSelection,
+    chat_runtime: &LlmRuntimeSelection,
+) -> std::result::Result<Option<AssistantRunReactOutcome>, ApiError> {
+    if chat_runtime.mode == "placeholder" || react_runtime.mode == "placeholder" {
+        return Ok(None);
+    }
+    let budget = assistant_run_answer_quality_retry_budget(request);
+    if budget == 0 {
+        return Ok(None);
+    }
+
+    let mut current_answer = initial_response.output_text.trim().to_string();
+    let mut current_evidence_state = initial_evidence_state.clone();
+    let mut last_outcome = None;
+
+    for attempt_index in 1..=budget {
+        let Some(reason) = assistant_run_answer_quality_retry_reason(
+            &current_answer,
+            &current_evidence_state,
+            request,
+        ) else {
+            break;
+        };
+        let retry_scope = assistant_run_answer_quality_retry_scope(
+            selected_scope,
+            &request.prompt,
+            attempt_index,
+        );
+        let mut retry_request = assistant_run_answer_quality_retry_request(
+            request,
+            &retry_scope,
+            attempt_index,
+            budget,
+            reason,
+            &current_answer,
+        );
+        let mut retry_evidence_state = build_assistant_run_evidence_state(
+            state,
+            &retry_scope,
+            &request.prompt,
+            local_thread_id,
+            active_secret_binding_ids,
+            current_user_id,
+        )
+        .await?;
+        retry_evidence_state = assistant_run_answer_quality_retry_evidence_state(
+            retry_evidence_state,
+            attempt_index,
+            budget,
+            reason,
+        );
+        retry_request.selected_scope = Some(retry_scope.clone());
+
+        let started_event = AssistantRunReactEvent {
+            event_name: "assistant_run.answer_quality_gate.retry_started".to_string(),
+            payload: json!({
+                "attempt": attempt_index,
+                "budget": budget,
+                "reason": reason,
+                "strategy": "react_expand_supply",
+            }),
+        };
+        let outcome = match run_assistant_run_react_for_create(
+            state,
+            &retry_request,
+            active_assistant_run_id,
+            &retry_scope,
+            retry_evidence_state,
+            local_thread_id,
+            active_secret_binding_ids,
+            current_user_id,
+            &react_runtime.mode,
+            &react_runtime.provider,
+            &react_runtime.model,
+            chat_runtime,
+        )
+        .await
+        {
+            Ok(mut outcome) => {
+                outcome.events.insert(0, started_event);
+                outcome
+            }
+            Err(error) => {
+                state
+                    .storage
+                    .assistant_runs()
+                    .append_event(
+                        state.tenant_id,
+                        active_assistant_run_id,
+                        &NewAssistantRunEvent {
+                            event_name: "assistant_run.answer_quality_gate.retry_failed"
+                                .to_string(),
+                            payload: json!({
+                                "attempt": attempt_index,
+                                "budget": budget,
+                                "reason": reason,
+                                "error_code": error.payload.code.as_str(),
+                                "error_status": error.status.as_u16(),
+                            }),
+                            created_at: Utc::now(),
+                        },
+                    )
+                    .await
+                    .map_err(ApiError::from_storage)?;
+                return Ok(last_outcome);
+            }
+        };
+
+        let next_answer =
+            assistant_run_assistant_message_content_from_artifacts(&outcome.output_artifacts)
+                .unwrap_or_default();
+        let next_reason = assistant_run_answer_quality_retry_reason(
+            &next_answer,
+            &outcome.evidence_state,
+            request,
+        );
+        let mut outcome = outcome;
+        outcome.events.push(AssistantRunReactEvent {
+            event_name: if next_reason.is_some() && attempt_index >= budget {
+                "assistant_run.answer_quality_gate.retry_exhausted".to_string()
+            } else {
+                "assistant_run.answer_quality_gate.retry_completed".to_string()
+            },
+            payload: json!({
+                "attempt": attempt_index,
+                "budget": budget,
+                "previous_reason": reason,
+                "remaining_reason": next_reason,
+                "accepted": next_reason.is_none(),
+                "assistant_message_chars": next_answer.chars().count(),
+            }),
+        });
+        outcome.output_artifacts =
+            assistant_run_sanitize_customer_facing_output_artifacts(outcome.output_artifacts);
+
+        current_answer = next_answer;
+        current_evidence_state = outcome.evidence_state.clone();
+        let accepted = next_reason.is_none() || attempt_index >= budget;
+        last_outcome = Some(outcome);
+        if accepted {
+            break;
+        }
+    }
+
+    Ok(last_outcome)
+}
+
+fn assistant_run_answer_quality_retry_budget(request: &CreateAssistantRunRequest) -> usize {
+    let default_budget = if assistant_run_request_expresses_dissatisfaction(request) {
+        ASSISTANT_RUN_ANSWER_QUALITY_DISSATISFIED_RETRY_BUDGET
+    } else {
+        ASSISTANT_RUN_ANSWER_QUALITY_DEFAULT_RETRY_BUDGET
+    };
+    std::env::var("ASSISTANT_RUN_ANSWER_QUALITY_RETRY_BUDGET")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(default_budget)
+        .min(ASSISTANT_RUN_ANSWER_QUALITY_MAX_RETRY_BUDGET)
+}
+
+fn assistant_run_request_expresses_dissatisfaction(request: &CreateAssistantRunRequest) -> bool {
+    let mut texts = vec![request.prompt.as_str()];
+    texts.extend(
+        request
+            .messages
+            .iter()
+            .rev()
+            .take(6)
+            .map(|message| message.content.as_str()),
+    );
+    texts.into_iter().any(|text| {
+        let lower = text.to_ascii_lowercase();
+        prompt_contains_any(
+            text,
+            &[
+                "不满意",
+                "不太满意",
+                "客户不满",
+                "客户有些不满意",
+                "观感差",
+                "回答很差",
+                "回答太差",
+                "答得差",
+                "答非所问",
+                "不准确",
+                "不准",
+                "不对",
+                "错了",
+                "错误",
+                "乱答",
+                "瞎答",
+                "投诉",
+            ],
+        ) || ascii_prompt_contains_any(
+            &lower,
+            &[
+                "dissatisfied",
+                "unsatisfied",
+                "unhappy",
+                "wrong",
+                "incorrect",
+                "inaccurate",
+                "poor",
+                "bad",
+                "complaint",
+            ],
+        )
+    })
+}
+
+fn assistant_run_answer_quality_retry_reason(
+    output_text: &str,
+    evidence_state: &Value,
+    request: &CreateAssistantRunRequest,
+) -> Option<&'static str> {
+    let output_text = output_text.trim();
+    if output_text.is_empty() {
+        return assistant_run_answer_quality_retry_allowed(output_text, evidence_state)
+            .then_some("empty_answer");
+    }
+    if assistant_run_react_output_contains_internal_marker(output_text) {
+        return assistant_run_answer_quality_retry_allowed(output_text, evidence_state)
+            .then_some("internal_marker_answer");
+    }
+    if external_channel_output_is_generic_orchestration_ack(output_text) {
+        return assistant_run_answer_quality_retry_allowed(output_text, evidence_state)
+            .then_some("generic_orchestration_ack");
+    }
+    if assistant_run_answer_contains_insufficient_evidence_marker(output_text)
+        && assistant_run_answer_quality_retry_allowed(output_text, evidence_state)
+    {
+        return Some("insufficient_or_uncertain_answer");
+    }
+    if assistant_run_request_expresses_dissatisfaction(request)
+        && assistant_run_answer_contains_weak_confidence_marker(output_text)
+        && assistant_run_answer_quality_retry_allowed(output_text, evidence_state)
+    {
+        return Some("dissatisfied_user_weak_confidence_answer");
+    }
+    None
+}
+
+fn assistant_run_answer_quality_retry_allowed(output_text: &str, evidence_state: &Value) -> bool {
+    if evidence_state.get("status").and_then(Value::as_str) == Some("not_requested") {
+        return false;
+    }
+    let Some(supply_quality) = evidence_state.get("supply_quality") else {
+        return false;
+    };
+    let selected_dataset_count = supply_quality
+        .get("selectedDatasetCount")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let supplied_item_count = supply_quality
+        .get("suppliedItemCount")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let conversation_memory_count = supply_quality
+        .get("conversationMemoryItemCount")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    if selected_dataset_count == 0 && supplied_item_count == 0 && conversation_memory_count == 0 {
+        return false;
+    }
+    if assistant_run_answer_reports_actual_parse_unavailable(output_text, supply_quality) {
+        return false;
+    }
+    true
+}
+
+fn assistant_run_answer_reports_actual_parse_unavailable(
+    output_text: &str,
+    supply_quality: &Value,
+) -> bool {
+    let unavailable_count = [
+        "documentNotReadyCount",
+        "documentFailedCount",
+        "documentReparsingCount",
+    ]
+    .iter()
+    .filter_map(|key| supply_quality.get(*key).and_then(Value::as_u64))
+    .sum::<u64>();
+    let low_text_evidence_present = supply_quality
+        .get("lowTextEvidenceCount")
+        .and_then(Value::as_u64)
+        .map(|count| count > 0)
+        .unwrap_or_else(|| {
+            supply_quality
+                .get("notes")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .any(|note| note.as_str() == Some("low_text_document_evidence"))
+        });
+    if unavailable_count == 0 && !low_text_evidence_present {
+        return false;
+    }
+    let answerable_supply_count = [
+        "indexedEvidenceCount",
+        "fallbackChunkCount",
+        "datasetEntityScanCount",
+        "spreadsheetRowAnalysisCount",
+        "mediaContextCount",
+        "conversationMemoryItemCount",
+    ]
+    .iter()
+    .filter_map(|key| supply_quality.get(*key).and_then(Value::as_u64))
+    .sum::<u64>();
+    let low_text_only_answerable_limit = u64::from(low_text_evidence_present);
+    if answerable_supply_count > low_text_only_answerable_limit {
+        return false;
+    }
+    prompt_contains_any(
+        output_text,
+        &[
+            "正在解析",
+            "解析中",
+            "解析失败",
+            "解析未完成",
+            "未解析完成",
+            "资料不足",
+            "信息不足",
+            "无法回答",
+            "无法确认",
+            "重解析",
+            "重试中",
+            "文档未就绪",
+            "低质量",
+            "解析质量",
+            "解析不完整",
+            "仅返回了标题字段",
+            "只返回了标题字段",
+            "原文内容尚未被平台解析",
+        ],
+    )
+}
+
+fn assistant_run_answer_contains_insufficient_evidence_marker(output_text: &str) -> bool {
+    let lower = output_text.to_ascii_lowercase();
+    prompt_contains_any(
+        output_text,
+        &[
+            "资料不足",
+            "材料不足",
+            "信息不足",
+            "证据不足",
+            "数据不足",
+            "上下文不足",
+            "供料不足",
+            "没有足够",
+            "未提供足够",
+            "不够回答",
+            "不足以回答",
+            "无法回答",
+            "无法确认",
+            "无法判断",
+            "无法确定",
+            "不能确认",
+            "不能确定",
+            "暂无法",
+            "暂时无法",
+            "未找到相关",
+            "没有找到相关",
+            "当前可见信息不足",
+            "当前资料不足",
+            "当前资料无法",
+            "当前信息无法",
+            "基于当前可见",
+            "当前可见",
+            "部分解析状态",
+            "部分解析",
+            "解析不完整",
+            "仅返回了标题字段",
+            "只返回了标题字段",
+            "原文内容尚未被平台解析",
+            "仅基于当前可见",
+            "只基于当前可见",
+            "只能基于当前可见",
+            "需要补充资料",
+            "建议补充资料",
+            "建议上传",
+        ],
+    ) || [
+        "insufficient information",
+        "not enough information",
+        "insufficient evidence",
+        "cannot determine",
+        "can't determine",
+        "unable to determine",
+        "unable to answer",
+        "cannot answer",
+        "not enough context",
+    ]
+    .iter()
+    .any(|marker| lower.contains(marker))
+}
+
+fn assistant_run_answer_contains_weak_confidence_marker(output_text: &str) -> bool {
+    let lower = output_text.to_ascii_lowercase();
+    prompt_contains_any(
+        output_text,
+        &[
+            "可能",
+            "大概",
+            "似乎",
+            "推测",
+            "猜测",
+            "不确定",
+            "不完整",
+            "部分数据",
+            "部分资料",
+        ],
+    ) || ["maybe", "probably", "likely", "uncertain", "partial"]
+        .iter()
+        .any(|marker| lower.contains(marker))
+}
+
+fn assistant_run_answer_quality_retry_scope(
+    selected_scope: &Value,
+    prompt: &str,
+    attempt_index: usize,
+) -> Value {
+    let mut retry_scope = selected_scope.clone();
+    ensure_json_object(&mut retry_scope);
+    let mut supply_policy = assistant_run_scope_supply_policy(&retry_scope);
+    set_payload_value(&mut supply_policy, "retrievalPolicy", json!("detail_first"));
+    set_payload_value(&mut supply_policy, "preferDetail", json!(true));
+    set_payload_value(
+        &mut supply_policy,
+        "contextBudgetPolicy",
+        json!("quality_first_token_tolerant"),
+    );
+
+    let mut actions = assistant_run_scope_recommended_tool_actions(selected_scope);
+    actions.push("retrieval.search".to_string());
+    actions.push("retrieval.read_detail".to_string());
+    if prompt_requests_document_entity_scan(prompt) {
+        actions.push("retrieval.scan_documents".to_string());
+    }
+    set_payload_value(
+        &mut supply_policy,
+        "recommendedActions",
+        Value::Array(
+            dedupe_strings(actions)
+                .into_iter()
+                .map(Value::String)
+                .collect(),
+        ),
+    );
+    set_payload_value(&mut retry_scope, "supply_policy", supply_policy);
+    set_payload_value(
+        &mut retry_scope,
+        "answer_quality_gate",
+        json!({
+            "status": "retrying",
+            "attempt": attempt_index,
+            "strategy": "detail_first_react_expand_supply",
+        }),
+    );
+    retry_scope
+}
+
+fn assistant_run_answer_quality_retry_request(
+    request: &CreateAssistantRunRequest,
+    retry_scope: &Value,
+    attempt_index: usize,
+    budget: usize,
+    reason: &str,
+    previous_answer: &str,
+) -> CreateAssistantRunRequest {
+    let mut retry_request = request.clone();
+    retry_request.selected_scope = Some(retry_scope.clone());
+    let mut startup_briefing = retry_request
+        .startup_briefing
+        .clone()
+        .unwrap_or_else(|| json!({}));
+    ensure_json_object(&mut startup_briefing);
+    set_payload_value(
+        &mut startup_briefing,
+        "answerQualityGate",
+        json!({
+            "status": "retrying",
+            "attempt": attempt_index,
+            "budget": budget,
+            "reason": reason,
+            "strategy": "Run ReAct to expand supply/read detail before producing customer-visible text.",
+            "previousAnswerExcerpt": truncate_assistant_supply_text(previous_answer, 600),
+            "instruction": "Do not repeat an insufficient/uncertain answer if supplied evidence can answer the question. Retrieve or read detail first, then answer directly from observations.",
+        }),
+    );
+    retry_request.startup_briefing = Some(startup_briefing);
+    retry_request
+}
+
+fn assistant_run_answer_quality_retry_evidence_state(
+    mut evidence_state: Value,
+    attempt_index: usize,
+    budget: usize,
+    reason: &str,
+) -> Value {
+    set_payload_value(
+        &mut evidence_state,
+        "answer_quality_gate",
+        json!({
+            "status": "retrying",
+            "attempt": attempt_index,
+            "budget": budget,
+            "reason": reason,
+            "strategy": "detail_first_react_expand_supply",
+        }),
+    );
+    evidence_state
+}
+
+fn assistant_run_assistant_message_content_from_artifacts(artifacts: &[Value]) -> Option<String> {
+    artifacts
+        .iter()
+        .find(|artifact| artifact.get("type").and_then(Value::as_str) == Some("assistant_message"))
+        .and_then(|artifact| artifact.get("content").and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 fn assistant_run_react_attach_natural_fallback_runtime(
@@ -28234,7 +29482,7 @@ async fn build_assistant_run_evidence_state(
     }
 
     let prefer_detail = assistant_run_scope_prefers_detail(selected_scope);
-    let limit = assistant_run_evidence_limit_for_scope(selected_scope);
+    let limit = assistant_run_evidence_limit_for_scope_and_prompt(selected_scope, prompt);
     let dataset_entity_scan_requested =
         assistant_run_dataset_entity_scan_requested(selected_scope, prompt);
     let external_acl_filter = load_external_acl_filter_context(state, selected_scope).await?;
@@ -28293,6 +29541,18 @@ async fn build_assistant_run_evidence_state(
         let database_supply_items =
             build_assistant_run_database_aggregate_supply(state, &dataset, prompt).await?;
         supplied_items.extend(database_supply_items);
+
+        let spreadsheet_row_analysis_items = build_assistant_run_spreadsheet_row_analysis_supply(
+            state,
+            &dataset,
+            prompt,
+            current_user_id,
+            external_acl_filter.as_ref(),
+            &evidence_document_ids,
+            allow_selected_documents_without_acl_snapshot,
+        )
+        .await?;
+        supplied_items.extend(spreadsheet_row_analysis_items);
 
         let evidences = state
             .storage
@@ -28989,6 +30249,368 @@ async fn load_dataset_external_source_ids(
         .collect())
 }
 
+#[derive(Clone, Debug)]
+struct AssistantRunAttendanceRow {
+    employee: String,
+    date: String,
+    shift: String,
+    first_punch: Option<String>,
+    last_punch: Option<String>,
+    work_hours: Option<f64>,
+    status: String,
+    source_locator: String,
+}
+
+async fn build_assistant_run_spreadsheet_row_analysis_supply(
+    state: &AppState,
+    dataset: &Dataset,
+    prompt: &str,
+    current_user_id: Option<UserId>,
+    external_acl_filter: Option<&ExternalAclFilterContext>,
+    selected_document_ids: &[DocumentId],
+    allow_selected_documents_without_acl_snapshot: bool,
+) -> std::result::Result<Vec<Value>, ApiError> {
+    if selected_document_ids.is_empty()
+        || !prompt_requests_spreadsheet_row_level_analysis(prompt)
+        || prompt_has_resume_signal(prompt)
+    {
+        return Ok(Vec::new());
+    }
+
+    let documents = list_documents_for_dataset_scope(state, dataset.id)
+        .await?
+        .into_iter()
+        .filter(|document| owner_user_id_is_visible(document.owner_user_id, current_user_id))
+        .filter(|document| selected_document_ids.contains(&document.id))
+        .collect::<Vec<_>>();
+    let mut rows = Vec::new();
+    let mut document_refs = Vec::new();
+    for document in documents {
+        if !document_is_visible_for_external_acl(
+            state,
+            external_acl_filter,
+            &document,
+            selected_document_ids,
+            allow_selected_documents_without_acl_snapshot,
+        )
+        .await?
+        {
+            continue;
+        }
+        document_refs.push(json!({
+            "document_id": document.id,
+            "title": document.title.clone(),
+        }));
+        let chunks = state
+            .storage
+            .document_chunks()
+            .list_by_document(state.tenant_id, document.id)
+            .await
+            .map_err(ApiError::from_storage)?;
+        for chunk in chunks {
+            let source_locator = document_chunk_fallback_source_locator(&document, &chunk);
+            for line in chunk.content.lines() {
+                if let Some(row) = parse_assistant_run_attendance_row(line, source_locator.clone())
+                {
+                    rows.push(row);
+                }
+            }
+        }
+    }
+    if rows.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let Some((analysis_kind, analysis_rows, content_excerpt)) =
+        assistant_run_attendance_analysis_rows(prompt, &rows)
+    else {
+        return Ok(Vec::new());
+    };
+    if analysis_rows.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    Ok(vec![json!({
+        "type": "spreadsheet_row_analysis",
+        "source": "selected_document_table_rows",
+        "dataset_id": dataset.id,
+        "analysis_kind": analysis_kind,
+        "summary": format!(
+            "已从选中文档解析 {} 条考勤明细行，并按用户问题预计算 {} 条结果行。",
+            rows.len(),
+            analysis_rows.len()
+        ),
+        "content_excerpt": content_excerpt,
+        "row_count": rows.len(),
+        "result_row_count": analysis_rows.len(),
+        "rows": analysis_rows,
+        "documents": document_refs,
+        "source_locator": format!("dataset://{}/spreadsheet-row-analysis/{}", dataset.id, analysis_kind),
+        "score": 1.0,
+        "lexical_score": 1.0,
+        "recall_score": 1.0,
+        "model_guidance": [
+            "For attendance, work-hour, absence, and daily earliest-clock-in questions, treat spreadsheet_row_analysis.rows as the deterministic computed table.",
+            "Use retrieval_evidence only to cross-check source wording; do not recompute maxima, minima, or earliest times from raw chunks when this item is present.",
+            "Keep dates in YYYY-MM-DD and times in HH:MM."
+        ]
+    })])
+}
+
+fn parse_assistant_run_attendance_row(
+    line: &str,
+    source_locator: String,
+) -> Option<AssistantRunAttendanceRow> {
+    let tokens = line
+        .split_whitespace()
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+        .collect::<Vec<_>>();
+    let date_index = tokens
+        .iter()
+        .position(|token| assistant_run_token_is_iso_date(token))?;
+    if date_index == 0 || date_index + 1 >= tokens.len() {
+        return None;
+    }
+    let employee = tokens[date_index - 1].trim_matches('|').to_string();
+    let date = tokens[date_index].to_string();
+    let shift = tokens[date_index + 1].to_string();
+    if employee.is_empty() || employee == "员工" || shift == "班次" {
+        return None;
+    }
+
+    let mut first_punch = None;
+    let mut last_punch = None;
+    let mut work_hours = None;
+    let mut status_parts = Vec::new();
+    for token in tokens.into_iter().skip(date_index + 2) {
+        if let Some(time) = assistant_run_normalize_hhmm_token(token) {
+            if first_punch.is_none() {
+                first_punch = Some(time);
+            } else if last_punch.is_none() {
+                last_punch = Some(time);
+            }
+            continue;
+        }
+        if work_hours.is_none() {
+            if let Some(hours) = assistant_run_parse_work_hours_token(token) {
+                work_hours = Some(hours);
+                continue;
+            }
+        }
+        if token != "|" {
+            status_parts.push(token.trim_matches('|').to_string());
+        }
+    }
+
+    Some(AssistantRunAttendanceRow {
+        employee,
+        date,
+        shift,
+        first_punch,
+        last_punch,
+        work_hours,
+        status: status_parts.join(" "),
+        source_locator,
+    })
+}
+
+fn assistant_run_token_is_iso_date(token: &str) -> bool {
+    let bytes = token.as_bytes();
+    bytes.len() == 10
+        && bytes[4] == b'-'
+        && bytes[7] == b'-'
+        && bytes
+            .iter()
+            .enumerate()
+            .all(|(index, byte)| matches!(index, 4 | 7) || byte.is_ascii_digit())
+}
+
+fn assistant_run_normalize_hhmm_token(token: &str) -> Option<String> {
+    let token = token.trim_matches(|ch: char| ch == '|' || ch == ',' || ch == ';');
+    let (hour, minute) = token.split_once(':')?;
+    if hour.len() > 2 || minute.len() != 2 {
+        return None;
+    }
+    let hour = hour.parse::<u32>().ok()?;
+    let minute = minute.parse::<u32>().ok()?;
+    if hour > 23 || minute > 59 {
+        return None;
+    }
+    Some(format!("{hour:02}:{minute:02}"))
+}
+
+fn assistant_run_parse_work_hours_token(token: &str) -> Option<f64> {
+    let token = token.trim_matches('|').trim_end_matches("小时");
+    if token.is_empty() || token == "未打卡" {
+        return None;
+    }
+    token.parse::<f64>().ok()
+}
+
+fn assistant_run_hhmm_minutes(value: &str) -> Option<u32> {
+    let (hour, minute) = value.split_once(':')?;
+    let hour = hour.parse::<u32>().ok()?;
+    let minute = minute.parse::<u32>().ok()?;
+    Some(hour * 60 + minute)
+}
+
+fn assistant_run_attendance_analysis_rows(
+    prompt: &str,
+    rows: &[AssistantRunAttendanceRow],
+) -> Option<(&'static str, Vec<Value>, String)> {
+    if prompt_contains_any(prompt, &["最早", "上班"]) {
+        let analysis_rows = assistant_run_daily_earliest_attendance_rows(rows);
+        let content_excerpt = assistant_run_attendance_rows_markdown(
+            "日期 | 最早上班员工 | 首打卡时间",
+            &analysis_rows,
+        );
+        return Some(("daily_earliest_first_punch", analysis_rows, content_excerpt));
+    }
+    if prompt_contains_any(prompt, &["最长", "最短", "长短", "工时"]) {
+        let analysis_rows = assistant_run_work_hour_extreme_rows(rows);
+        let content_excerpt =
+            assistant_run_attendance_rows_markdown("类别 | 日期 | 员工 | 工时", &analysis_rows);
+        return Some(("work_hour_extremes", analysis_rows, content_excerpt));
+    }
+    if prompt_contains_any(prompt, &["缺勤", "未打卡", "没打卡"]) {
+        let analysis_rows = assistant_run_absence_attendance_rows(rows);
+        let content_excerpt =
+            assistant_run_attendance_rows_markdown("日期 | 员工 | 班次 | 状态", &analysis_rows);
+        return Some(("absence_candidates", analysis_rows, content_excerpt));
+    }
+    None
+}
+
+fn assistant_run_daily_earliest_attendance_rows(rows: &[AssistantRunAttendanceRow]) -> Vec<Value> {
+    let mut by_date = BTreeMap::<String, (&AssistantRunAttendanceRow, u32)>::new();
+    for row in rows {
+        let Some(first_punch) = row.first_punch.as_deref() else {
+            continue;
+        };
+        let Some(minutes) = assistant_run_hhmm_minutes(first_punch) else {
+            continue;
+        };
+        match by_date.get(&row.date) {
+            Some((_, current_minutes)) if *current_minutes <= minutes => {}
+            _ => {
+                by_date.insert(row.date.clone(), (row, minutes));
+            }
+        }
+    }
+    by_date
+        .into_iter()
+        .rev()
+        .map(|(date, (row, _))| {
+            json!({
+                "date": date,
+                "employee": row.employee.clone(),
+                "first_punch": row.first_punch.clone(),
+                "shift": row.shift.clone(),
+                "source_locator": row.source_locator.clone(),
+            })
+        })
+        .collect()
+}
+
+fn assistant_run_work_hour_extreme_rows(rows: &[AssistantRunAttendanceRow]) -> Vec<Value> {
+    let hour_rows = rows
+        .iter()
+        .filter_map(|row| row.work_hours.map(|hours| (row, hours)))
+        .collect::<Vec<_>>();
+    let Some((shortest_row, shortest_hours)) = hour_rows
+        .iter()
+        .min_by(|left, right| left.1.total_cmp(&right.1))
+        .copied()
+    else {
+        return Vec::new();
+    };
+    let Some((longest_row, longest_hours)) = hour_rows
+        .iter()
+        .max_by(|left, right| left.1.total_cmp(&right.1))
+        .copied()
+    else {
+        return Vec::new();
+    };
+    vec![
+        assistant_run_work_hour_extreme_value("longest", longest_row, longest_hours),
+        assistant_run_work_hour_extreme_value("shortest", shortest_row, shortest_hours),
+    ]
+}
+
+fn assistant_run_work_hour_extreme_value(
+    category: &str,
+    row: &AssistantRunAttendanceRow,
+    hours: f64,
+) -> Value {
+    json!({
+        "category": category,
+        "date": row.date.clone(),
+        "employee": row.employee.clone(),
+        "work_hours": hours,
+        "work_hours_text": format!("{hours:.2}小时"),
+        "shift": row.shift.clone(),
+        "first_punch": row.first_punch.clone(),
+        "last_punch": row.last_punch.clone(),
+        "status": row.status.clone(),
+        "source_locator": row.source_locator.clone(),
+    })
+}
+
+fn assistant_run_absence_attendance_rows(rows: &[AssistantRunAttendanceRow]) -> Vec<Value> {
+    rows.iter()
+        .filter(|row| row.first_punch.is_none() && row.status.contains("未打卡"))
+        .filter(|row| row.shift.contains("坐班"))
+        .map(|row| {
+            json!({
+                "date": row.date.clone(),
+                "employee": row.employee.clone(),
+                "shift": row.shift.clone(),
+                "status": row.status.clone(),
+                "counts_as_absence": !row.status.contains("不考勤"),
+                "source_locator": row.source_locator.clone(),
+            })
+        })
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .take(80)
+        .collect()
+}
+
+fn assistant_run_attendance_rows_markdown(header: &str, rows: &[Value]) -> String {
+    let mut lines = vec![header.to_string()];
+    for row in rows.iter().take(80) {
+        if let Some(category) = row.get("category").and_then(Value::as_str) {
+            lines.push(format!(
+                "{} | {} | {} | {}",
+                category,
+                row.get("date").and_then(Value::as_str).unwrap_or(""),
+                row.get("employee").and_then(Value::as_str).unwrap_or(""),
+                row.get("work_hours_text")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+            ));
+        } else if let Some(first_punch) = row.get("first_punch").and_then(Value::as_str) {
+            lines.push(format!(
+                "{} | {} | {}",
+                row.get("date").and_then(Value::as_str).unwrap_or(""),
+                row.get("employee").and_then(Value::as_str).unwrap_or(""),
+                first_punch
+            ));
+        } else {
+            lines.push(format!(
+                "{} | {} | {} | {}",
+                row.get("date").and_then(Value::as_str).unwrap_or(""),
+                row.get("employee").and_then(Value::as_str).unwrap_or(""),
+                row.get("shift").and_then(Value::as_str).unwrap_or(""),
+                row.get("status").and_then(Value::as_str).unwrap_or("")
+            ));
+        }
+    }
+    lines.join("\n")
+}
+
 fn assistant_run_database_aggregate_requested(prompt: &str) -> bool {
     prompt_has_any(
         prompt,
@@ -29451,7 +31073,20 @@ async fn build_assistant_run_document_parse_status_supply(
             .await
             .map_err(ApiError::from_storage)?;
         let parse_status = assistant_scope_document_parse_status(&document, &chunks);
-        let parse_quality_status = assistant_run_document_parse_quality_status(&document);
+        let inferred_parse_quality_summary =
+            assistant_run_inferred_low_text_parse_quality_summary(&document, &chunks);
+        let parse_quality_summary = assistant_run_document_parse_quality_summary(&document)
+            .or_else(|| inferred_parse_quality_summary.clone());
+        let parse_quality_status =
+            assistant_run_document_parse_quality_status(&document).or_else(|| {
+                parse_quality_summary
+                    .as_ref()
+                    .and_then(|summary| value_at_any_key(summary, &["status"]))
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(ToOwned::to_owned)
+            });
         let workflow = workflow_by_document.get(&document.id);
         let model_status = assistant_run_document_parse_model_status(
             &document,
@@ -29490,9 +31125,7 @@ async fn build_assistant_run_document_parse_status_supply(
             if let Some(parse_quality_status) = parse_quality_status {
                 set_payload_string(&mut item, "parse_quality_status", &parse_quality_status);
             }
-            if let Some(parse_quality_summary) =
-                assistant_run_document_parse_quality_summary(&document)
-            {
+            if let Some(parse_quality_summary) = parse_quality_summary {
                 set_payload_value(&mut item, "parse_quality_summary", parse_quality_summary);
             }
             if let Some(workflow) = workflow {
@@ -29538,6 +31171,7 @@ async fn build_assistant_run_document_parse_status_supply(
             .collect::<Vec<_>>(),
         "model_guidance": [
             "When a relevant document is parsing, queued, indexing, failed, reparsing, or parse_degraded, say the document content is not fully ready instead of guessing.",
+            "Translate internal status codes such as parse_degraded or low_text_coverage into plain Chinese; do not show raw status identifiers to the user.",
             "If reparsing or reparse_queued is present, explain that a retry is already underway or queued.",
             "If parse_quality_summary.vlm_rescue is present, mention whether MiniMax VLM rescue was selected or whether the local parse was kept.",
             "Use ready retrieval evidence and fallback chunks for facts; use this item for document availability/status only."
@@ -29749,7 +31383,14 @@ fn assistant_run_document_parse_quality_summary(document: &Document) -> Option<V
     copy_json_fields(
         parse_quality,
         &mut summary,
-        &["kind", "status", "text_chars", "min_usable_text_chars"],
+        &[
+            "kind",
+            "status",
+            "text_chars",
+            "min_usable_text_chars",
+            "fallback_status",
+            "recommended_fallback",
+        ],
     );
     if let Some(fallback_from) = value_at_any_key(parse_quality, &["fallback_from", "fallbackFrom"])
         .and_then(compact_parse_quality_candidate_report)
@@ -29775,6 +31416,71 @@ fn assistant_run_document_parse_quality_summary(document: &Document) -> Option<V
     } else {
         Some(Value::Object(summary))
     }
+}
+
+fn assistant_run_inferred_low_text_parse_quality_summary(
+    document: &Document,
+    chunks: &[DocumentChunk],
+) -> Option<Value> {
+    if !assistant_run_document_is_pdf_like(document) || chunks.is_empty() {
+        return None;
+    }
+    let text_chars = chunks
+        .iter()
+        .map(|chunk| assistant_run_low_text_parse_signal_chars(&chunk.content))
+        .sum::<usize>();
+    if text_chars >= ASSISTANT_RUN_INFERRED_LOW_TEXT_PARSE_MIN_CHARS {
+        return None;
+    }
+    Some(json!({
+        "kind": "pdf_text_extraction",
+        "status": "low_text_coverage",
+        "text_chars": text_chars,
+        "min_usable_text_chars": ASSISTANT_RUN_INFERRED_LOW_TEXT_PARSE_MIN_CHARS,
+        "inferred_from": "stored_document_chunks",
+        "fallback_status": "recommended",
+        "recommended_fallback": "ocr_reparse"
+    }))
+}
+
+fn assistant_run_document_is_pdf_like(document: &Document) -> bool {
+    document
+        .content_type
+        .eq_ignore_ascii_case("application/pdf")
+        || document.title.to_ascii_lowercase().ends_with(".pdf")
+        || document.object_key.to_ascii_lowercase().ends_with(".pdf")
+}
+
+fn assistant_run_low_text_parse_signal_chars(text: &str) -> usize {
+    text.chars()
+        .filter(|ch| {
+            !ch.is_whitespace()
+                && !ch.is_ascii_punctuation()
+                && !matches!(
+                    *ch,
+                    '。' | '，'
+                        | '、'
+                        | '；'
+                        | '：'
+                        | '！'
+                        | '？'
+                        | '（'
+                        | '）'
+                        | '【'
+                        | '】'
+                        | '《'
+                        | '》'
+                        | '“'
+                        | '”'
+                        | '‘'
+                        | '’'
+                        | '-'
+                        | '—'
+                        | '_'
+                        | '|'
+                )
+        })
+        .count()
 }
 
 fn assistant_run_parse_quality_candidate_selection_summary(parse_quality: &Value) -> Option<Value> {
@@ -30805,9 +32511,9 @@ fn extract_resume_document_profile(
         document_id: document.id.to_string(),
         document_title: resume_profile_display_title(document),
         candidate_name: extract_resume_candidate_name(scan_text)
-            .or_else(|| extract_resume_candidate_name_from_object_key(&document.object_key))
             .or_else(|| extract_resume_candidate_name_from_title(&document.title))
             .or_else(|| extract_resume_candidate_name_from_marked_text(scan_text))
+            .or_else(|| extract_resume_candidate_name_from_object_key(&document.object_key))
             .or_else(|| {
                 entity_candidates
                     .iter()
@@ -30915,6 +32621,7 @@ fn extract_resume_candidate_name(text: &str) -> Option<String> {
 
 fn extract_resume_candidate_name_from_title(text: &str) -> Option<String> {
     extract_resume_candidate_name_from_heading_text(text, true)
+        .or_else(|| extract_resume_candidate_name_from_object_key(text))
 }
 
 fn extract_resume_candidate_name_from_marked_text(text: &str) -> Option<String> {
@@ -30969,8 +32676,12 @@ fn looks_like_resume_ascii_person_name(value: &str) -> bool {
     let normalized = value.trim();
     let lower = normalized.to_ascii_lowercase();
     let char_count = normalized.chars().count();
+    let alpha_count = normalized
+        .chars()
+        .filter(|ch| ch.is_ascii_alphabetic())
+        .count();
     (2..=32).contains(&char_count)
-        && normalized.chars().any(|ch| ch.is_ascii_alphabetic())
+        && alpha_count >= 2
         && normalized
             .chars()
             .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_' | ' '))
@@ -30982,8 +32693,27 @@ fn looks_like_resume_ascii_person_name(value: &str) -> bool {
 }
 
 fn resume_profile_display_title(document: &Document) -> String {
+    let title = normalize_document_entity_value(&document.title);
+    if !title.is_empty() && !resume_profile_generic_version_label(&title) {
+        return title;
+    }
     resume_profile_object_key_label(&document.object_key)
-        .unwrap_or_else(|| document.title.trim().to_string())
+        .filter(|value| !resume_profile_generic_version_label(value))
+        .unwrap_or(title)
+}
+
+fn resume_profile_generic_version_label(value: &str) -> bool {
+    let normalized = value.trim().to_ascii_lowercase();
+    if normalized.is_empty() {
+        return true;
+    }
+    if normalized == "v" || normalized == "version" || normalized == "版本" {
+        return true;
+    }
+    normalized
+        .strip_prefix('v')
+        .filter(|suffix| !suffix.is_empty())
+        .is_some_and(|suffix| suffix.chars().all(|ch| ch.is_ascii_digit()))
 }
 
 fn resume_profile_object_key_label(object_key: &str) -> Option<String> {
@@ -33286,6 +35016,10 @@ fn assistant_run_supply_quality_report(
         .iter()
         .filter(|item| item.get("type").and_then(Value::as_str) == Some("dataset_entity_scan"))
         .count();
+    let spreadsheet_row_analysis_count = supplied_items
+        .iter()
+        .filter(|item| item.get("type").and_then(Value::as_str) == Some("spreadsheet_row_analysis"))
+        .count();
     let document_parse_status_count = supplied_items
         .iter()
         .filter(|item| item.get("type").and_then(Value::as_str) == Some("document_parse_status"))
@@ -33314,6 +35048,7 @@ fn assistant_run_supply_quality_report(
         .filter_map(|item| item.get("degraded_parse_count").and_then(Value::as_u64))
         .map(|value| value as usize)
         .sum();
+    let low_text_evidence_count = assistant_run_low_text_evidence_count(supplied_items);
     let citation_locators = assistant_run_supply_citation_locators(supplied_items, 8);
     let prefer_detail = assistant_run_scope_prefers_detail(selected_scope);
     let status = if !supply_requested {
@@ -33321,7 +35056,10 @@ fn assistant_run_supply_quality_report(
     } else if supplied_item_count == 0 {
         "missing"
     } else if document_not_ready_count > 0
-        || fallback_supply_count > 0
+        || document_failed_count > 0
+        || document_reparsing_count > 0
+        || document_degraded_parse_count > 0
+        || low_text_evidence_count > 0
         || (prefer_detail && !detail_targets.is_empty())
     {
         "partial"
@@ -33338,11 +35076,17 @@ fn assistant_run_supply_quality_report(
     if fallback_supply_count > 0 {
         notes.push("fallback_visible_document_chunks_used");
     }
+    if low_text_evidence_count > 0 {
+        notes.push("low_text_document_evidence");
+    }
     if !detail_targets.is_empty() {
         notes.push("detail_read_recommended_before_high_confidence_claims");
     }
     if dataset_entity_scan_count > 0 {
         notes.push("dataset_entity_scan_available");
+    }
+    if spreadsheet_row_analysis_count > 0 {
+        notes.push("spreadsheet_row_analysis_available");
     }
     if document_parse_status_count > 0 {
         notes.push("document_parse_status_available");
@@ -33382,6 +35126,7 @@ fn assistant_run_supply_quality_report(
         "conversationMemoryItemCount": supplied_memory_items.len(),
         "mediaContextCount": media_context_count,
         "datasetEntityScanCount": dataset_entity_scan_count,
+        "spreadsheetRowAnalysisCount": spreadsheet_row_analysis_count,
         "documentParseStatusCount": document_parse_status_count,
         "documentNotReadyCount": document_not_ready_count,
         "documentFailedCount": document_failed_count,
@@ -33397,10 +35142,32 @@ fn assistant_run_supply_quality_report(
             "distinguish supplied document facts from general model knowledge",
             "when dataset_entity_scan contains company_count and company_rows, use those as the authoritative company statistics and do not extend the list from candidate_terms",
             "when dataset_entity_scan contains scanned_document_count, use it as the total scanned document count and do not sum company_rows.document_count as total documents",
+            "when spreadsheet_row_analysis is present, use its rows as the deterministic computed table for attendance, work-hour, absence, and date/time row questions",
             "when document_parse_status reports not-ready, failed, reparsing, or degraded documents, tell the user the relevant document is still parsing or failed instead of claiming its contents",
+            "fallback_visible_document_chunks_used means indexed retrieval was expanded with visible document chunks; do not describe that as parser-not-ready unless document_parse_status or low_text_document_evidence says so",
+            "when low_text_document_evidence is present, treat the document extraction as too sparse or low quality, avoid inferring contents from the title, and recommend OCR/reparse/manual review if needed",
             "read detail_targets before asserting exact source wording, tables, OCR, or media timestamps"
         ],
     })
+}
+
+fn assistant_run_low_text_evidence_count(supplied_items: &[Value]) -> usize {
+    supplied_items
+        .iter()
+        .filter(|item| {
+            item.get("type").and_then(Value::as_str) == Some("retrieval_evidence")
+                && item.get("source").and_then(Value::as_str) != Some("document_chunk_fallback")
+        })
+        .filter(|item| {
+            let excerpt = item
+                .get("content_excerpt")
+                .and_then(Value::as_str)
+                .or_else(|| item.get("summary").and_then(Value::as_str))
+                .unwrap_or_default();
+            let signal_chars = excerpt.chars().filter(|ch| !ch.is_whitespace()).count();
+            signal_chars > 0 && signal_chars < 20
+        })
+        .count()
 }
 
 fn assistant_run_supply_citation_locators(items: &[Value], limit: usize) -> Vec<String> {
@@ -33426,7 +35193,21 @@ fn assistant_run_supply_citation_locators(items: &[Value], limit: usize) -> Vec<
     locators
 }
 
+#[cfg(test)]
 fn assistant_run_evidence_limit_for_scope(selected_scope: &Value) -> usize {
+    assistant_run_evidence_limit_for_scope_and_prompt(selected_scope, "")
+}
+
+fn assistant_run_evidence_limit_for_scope_and_prompt(
+    selected_scope: &Value,
+    prompt: &str,
+) -> usize {
+    if !selected_document_ids_for_evidence_from_scope(selected_scope).is_empty()
+        && prompt_requests_spreadsheet_row_level_analysis(prompt)
+        && !prompt_has_resume_signal(prompt)
+    {
+        return ASSISTANT_RUN_SELECTED_DOCUMENT_ROW_EVIDENCE_LIMIT;
+    }
     if assistant_run_scope_prefers_detail(selected_scope)
         && !selected_dataset_ids_from_scope(selected_scope).is_empty()
     {
@@ -34205,6 +35986,53 @@ fn assistant_run_scope_with_current_artifact_context(
         );
     }
     selected_scope
+}
+
+fn assistant_run_scope_with_requested_document_scope(
+    mut selected_scope: Value,
+    requested_scope: Option<&Value>,
+) -> Value {
+    let Some(requested_scope) = requested_scope else {
+        return selected_scope;
+    };
+    if !selected_scope_has_document_selection(requested_scope) {
+        return selected_scope;
+    }
+
+    ensure_json_object(&mut selected_scope);
+    if selected_dataset_ids_from_scope(&selected_scope).is_empty() {
+        if let Some(datasets) = requested_scope.get("datasets").cloned() {
+            set_payload_value(&mut selected_scope, "datasets", datasets);
+        }
+    }
+    for key in [
+        "documents",
+        "selected",
+        "canonical_datasets",
+        "temporary_dataset",
+        "available_document_source_id",
+        "available_document_external_ids",
+        "unresolved_document_external_ids",
+        "external_document_scope_status",
+        "external_document_scope_summary",
+    ] {
+        if let Some(value) = requested_scope.get(key).cloned() {
+            set_payload_value(&mut selected_scope, key, value);
+        }
+    }
+    selected_scope
+}
+
+fn selected_scope_has_document_selection(scope: &Value) -> bool {
+    !selected_document_ids_from_scope(scope).is_empty()
+        || scope
+            .get("documents")
+            .and_then(Value::as_array)
+            .is_some_and(|documents| !documents.is_empty())
+        || scope
+            .get("available_document_external_ids")
+            .and_then(Value::as_array)
+            .is_some_and(|document_ids| !document_ids.is_empty())
 }
 
 fn assistant_run_active_static_page_supply_policy(has_dataset: bool, has_memory: bool) -> Value {
@@ -38326,9 +40154,77 @@ fn assistant_run_scope_requests_dataset_entity_scan(scope: &Value) -> bool {
 }
 
 fn assistant_run_dataset_entity_scan_requested(scope: &Value, prompt: &str) -> bool {
-    !selected_dataset_ids_from_scope(scope).is_empty()
-        && (assistant_run_scope_requests_dataset_entity_scan(scope)
-            || prompt_requests_document_entity_scan(prompt))
+    if selected_dataset_ids_from_scope(scope).is_empty() {
+        return false;
+    }
+    if assistant_run_scope_requests_dataset_entity_scan(scope) {
+        return true;
+    }
+    if !selected_document_ids_for_evidence_from_scope(scope).is_empty()
+        && prompt_requests_spreadsheet_row_level_analysis(prompt)
+        && !prompt_has_resume_signal(prompt)
+    {
+        return false;
+    }
+    prompt_requests_document_entity_scan(prompt)
+}
+
+fn prompt_requests_spreadsheet_row_level_analysis(prompt: &str) -> bool {
+    let lower_prompt = prompt.to_ascii_lowercase();
+    let has_row_context = prompt_contains_any(
+        prompt,
+        &[
+            "考勤", "缺勤", "出勤", "工时", "打卡", "上班", "下班", "迟到", "早退", "请假", "排班",
+            "班次", "每天", "日期", "记录", "明细",
+        ],
+    ) || ascii_prompt_contains_any(
+        &lower_prompt,
+        &[
+            "attendance",
+            "absence",
+            "absent",
+            "workhour",
+            "workhours",
+            "hours",
+            "clock",
+            "checkin",
+            "checkout",
+            "date",
+            "daily",
+            "row",
+            "rows",
+            "record",
+            "records",
+        ],
+    );
+    let has_row_question = prompt_contains_any(
+        prompt,
+        &[
+            "最长",
+            "最短",
+            "最早",
+            "最晚",
+            "多少",
+            "谁",
+            "哪个",
+            "哪些",
+            "列出",
+            "表格",
+            "排序",
+            "长短",
+            "有没",
+            "有没有",
+            "人",
+            "人员",
+        ],
+    ) || ascii_prompt_contains_any(
+        &lower_prompt,
+        &[
+            "longest", "shortest", "earliest", "latest", "who", "which", "list", "table", "sort",
+            "rank",
+        ],
+    );
+    has_row_context && has_row_question
 }
 
 fn prompt_requests_document_entity_scan(prompt: &str) -> bool {
@@ -38366,6 +40262,20 @@ fn prompt_requests_document_entity_scan(prompt: &str) -> bool {
             "系统",
             "平台",
             "地点",
+            "位置",
+            "点位",
+            "楼层",
+            "区域",
+            "入口",
+            "出口",
+            "出入口",
+            "门禁",
+            "梯控",
+            "电梯",
+            "直梯",
+            "扶梯",
+            "手扶梯",
+            "观光电梯",
             "城市",
             "地区",
             "地址",
@@ -38426,6 +40336,21 @@ fn prompt_requests_document_entity_scan(prompt: &str) -> bool {
             "platforms",
             "location",
             "locations",
+            "point",
+            "points",
+            "site",
+            "sites",
+            "floor",
+            "floors",
+            "area",
+            "areas",
+            "entrance",
+            "entrances",
+            "exit",
+            "exits",
+            "access",
+            "elevator",
+            "elevators",
             "city",
             "cities",
             "school",
@@ -38465,6 +40390,9 @@ fn prompt_requests_document_entity_scan(prompt: &str) -> bool {
             "归纳",
             "整理",
             "清单",
+            "出表",
+            "表格",
+            "成表",
             "去重",
             "频次",
             "频率",
@@ -38873,8 +40801,18 @@ fn build_document_parse_status_view(
     workflow: Option<&Value>,
 ) -> contracts::DocumentParseStatusView {
     let parse_status = assistant_scope_document_parse_status(document, chunks);
-    let parse_quality_status = assistant_run_document_parse_quality_status(document);
-    let parse_quality_summary = assistant_run_document_parse_quality_summary(document);
+    let parse_quality_summary = assistant_run_document_parse_quality_summary(document)
+        .or_else(|| assistant_run_inferred_low_text_parse_quality_summary(document, chunks));
+    let parse_quality_status =
+        assistant_run_document_parse_quality_status(document).or_else(|| {
+            parse_quality_summary
+                .as_ref()
+                .and_then(|summary| value_at_any_key(summary, &["status"]))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+        });
     let model_status = assistant_run_document_parse_model_status(
         document,
         &parse_status,
@@ -52208,6 +54146,18 @@ mod tests {
             database_source.pointer("/tables/0/title_column"),
             Some(&json!("area_name"))
         );
+        assert_eq!(
+            database_source.pointer("/semantic_profile/table_count"),
+            Some(&json!(1))
+        );
+        assert_eq!(
+            database_source.pointer("/semantic_profile/metric_count"),
+            Some(&json!(1))
+        );
+        assert_eq!(
+            database_source.pointer("/semantic_profile/tables/0/mapping_confidence"),
+            Some(&json!(95))
+        );
         assert!(database_source.pointer("/tables/0/confidence").is_none());
         MySqlSourceConfig::from_value(&database_source)
             .expect("generated database source should remain valid");
@@ -56603,6 +58553,325 @@ mod tests {
         );
     }
 
+    #[test]
+    fn assistant_run_answer_quality_gate_detects_expandable_insufficient_answer() {
+        let request = CreateAssistantRunRequest {
+            prompt: "这份考勤表里最近有没缺勤的人".to_string(),
+            local_thread_id: None,
+            startup_briefing: None,
+            selected_scope: Some(json!({"datasets": ["00000000-0000-0000-0000-000000000001"]})),
+            scope_candidates: Vec::new(),
+            context_policy_hint: None,
+            current_artifact: None,
+            messages: Vec::new(),
+        };
+        let evidence_state = json!({
+            "status": "supplied",
+            "supply_quality": {
+                "selectedDatasetCount": 1,
+                "suppliedItemCount": 4,
+                "indexedEvidenceCount": 4,
+                "fallbackChunkCount": 0,
+                "datasetEntityScanCount": 0,
+                "spreadsheetRowAnalysisCount": 0,
+                "mediaContextCount": 0,
+                "conversationMemoryItemCount": 0,
+                "documentNotReadyCount": 0,
+                "documentFailedCount": 0,
+                "documentReparsingCount": 0
+            }
+        });
+
+        assert_eq!(
+            assistant_run_answer_quality_retry_reason(
+                "当前资料不足，无法确认是否有人缺勤。",
+                &evidence_state,
+                &request,
+            ),
+            Some("insufficient_or_uncertain_answer")
+        );
+    }
+
+    #[test]
+    fn assistant_run_answer_quality_gate_allows_actual_parse_unavailable_answer() {
+        let request = CreateAssistantRunRequest {
+            prompt: "这份 PDF 写了什么".to_string(),
+            local_thread_id: None,
+            startup_briefing: None,
+            selected_scope: Some(json!({"datasets": ["00000000-0000-0000-0000-000000000001"]})),
+            scope_candidates: Vec::new(),
+            context_policy_hint: None,
+            current_artifact: None,
+            messages: Vec::new(),
+        };
+        let evidence_state = json!({
+            "status": "supplied",
+            "supply_quality": {
+                "selectedDatasetCount": 1,
+                "suppliedItemCount": 1,
+                "indexedEvidenceCount": 0,
+                "fallbackChunkCount": 0,
+                "datasetEntityScanCount": 0,
+                "spreadsheetRowAnalysisCount": 0,
+                "mediaContextCount": 0,
+                "conversationMemoryItemCount": 0,
+                "documentNotReadyCount": 1,
+                "documentFailedCount": 0,
+                "documentReparsingCount": 1
+            }
+        });
+
+        assert_eq!(
+            assistant_run_answer_quality_retry_reason(
+                "文档正在解析中，目前无法确认完整内容。",
+                &evidence_state,
+                &request,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn assistant_run_answer_quality_gate_allows_honest_low_text_parse_answer() {
+        let request = CreateAssistantRunRequest {
+            prompt: "这份采购审批制度讲了什么？请直接总结。".to_string(),
+            local_thread_id: None,
+            startup_briefing: None,
+            selected_scope: Some(json!({"datasets": ["00000000-0000-0000-0000-000000000001"]})),
+            scope_candidates: Vec::new(),
+            context_policy_hint: None,
+            current_artifact: None,
+            messages: Vec::new(),
+        };
+        let evidence_state = json!({
+            "status": "supplied",
+            "supply_quality": {
+                "selectedDatasetCount": 1,
+                "suppliedItemCount": 1,
+                "indexedEvidenceCount": 1,
+                "fallbackChunkCount": 0,
+                "datasetEntityScanCount": 0,
+                "spreadsheetRowAnalysisCount": 0,
+                "mediaContextCount": 0,
+                "conversationMemoryItemCount": 0,
+                "documentNotReadyCount": 0,
+                "documentFailedCount": 0,
+                "documentReparsingCount": 0,
+                "notes": ["low_text_document_evidence"]
+            }
+        });
+
+        assert_eq!(
+            assistant_run_answer_quality_retry_reason(
+                "当前可见的文档仅返回了标题字段，原文内容尚未被平台解析，不能据此总结制度正文。",
+                &evidence_state,
+                &request,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn assistant_run_answer_quality_gate_retries_unnecessary_partial_parse_language() {
+        let request = CreateAssistantRunRequest {
+            prompt: "智能家居系统有哪些功能？请基于这份讲解词回答。".to_string(),
+            local_thread_id: None,
+            startup_briefing: None,
+            selected_scope: Some(json!({"datasets": ["00000000-0000-0000-0000-000000000001"]})),
+            scope_candidates: Vec::new(),
+            context_policy_hint: None,
+            current_artifact: None,
+            messages: Vec::new(),
+        };
+        let evidence_state = json!({
+            "status": "supplied",
+            "supply_quality": {
+                "selectedDatasetCount": 1,
+                "suppliedItemCount": 4,
+                "indexedEvidenceCount": 3,
+                "fallbackChunkCount": 1,
+                "datasetEntityScanCount": 0,
+                "spreadsheetRowAnalysisCount": 0,
+                "mediaContextCount": 0,
+                "conversationMemoryItemCount": 0,
+                "documentNotReadyCount": 0,
+                "documentFailedCount": 0,
+                "documentReparsingCount": 0,
+                "notes": []
+            }
+        });
+
+        assert_eq!(
+            assistant_run_answer_quality_retry_reason(
+                "基于当前可见内容，智能家居包含场景联动；当前文档为部分解析状态。",
+                &evidence_state,
+                &request,
+            ),
+            Some("insufficient_or_uncertain_answer")
+        );
+    }
+
+    #[test]
+    fn assistant_run_answer_quality_gate_retries_raw_parse_status_identifiers() {
+        let request = CreateAssistantRunRequest {
+            prompt: "这份采购审批制度讲了什么？请直接总结。".to_string(),
+            local_thread_id: None,
+            startup_briefing: None,
+            selected_scope: Some(json!({"datasets": ["00000000-0000-0000-0000-000000000001"]})),
+            scope_candidates: Vec::new(),
+            context_policy_hint: None,
+            current_artifact: None,
+            messages: Vec::new(),
+        };
+        let evidence_state = json!({
+            "status": "supplied",
+            "supply_quality": {
+                "selectedDatasetCount": 1,
+                "suppliedItemCount": 2,
+                "indexedEvidenceCount": 1,
+                "fallbackChunkCount": 0,
+                "datasetEntityScanCount": 0,
+                "spreadsheetRowAnalysisCount": 0,
+                "mediaContextCount": 0,
+                "conversationMemoryItemCount": 0,
+                "documentNotReadyCount": 1,
+                "documentFailedCount": 0,
+                "documentReparsingCount": 0,
+                "notes": ["low_text_document_evidence"]
+            }
+        });
+
+        assert_eq!(
+            assistant_run_answer_quality_retry_reason(
+                "当前采购审批制度.pdf的解析状态为 parse_degraded，无法总结。",
+                &evidence_state,
+                &request,
+            ),
+            Some("internal_marker_answer")
+        );
+    }
+
+    #[test]
+    fn assistant_run_sanitizes_raw_parse_status_identifiers_for_customer_text() {
+        let sanitized = assistant_run_sanitize_customer_facing_answer_text(
+            "当前解析状态为 parse_degraded，原因是 low_text_coverage。",
+        );
+
+        assert!(!sanitized.contains("parse_degraded"));
+        assert!(!sanitized.contains("low_text_coverage"));
+        assert!(sanitized.contains("解析质量较低"));
+    }
+
+    #[test]
+    fn assistant_run_sanitizes_raw_parse_status_identifiers_in_message_artifacts() {
+        let artifacts = vec![
+            json!({
+                "type": "assistant_message",
+                "content": "当前解析状态为 parse_degraded，原因是 low_text_coverage。"
+            }),
+            json!({
+                "type": "html_artifact",
+                "content": "parse_degraded"
+            }),
+        ];
+
+        let sanitized = assistant_run_sanitize_customer_facing_output_artifacts(artifacts);
+        let assistant_content = sanitized[0]["content"].as_str().unwrap_or_default();
+
+        assert!(!assistant_content.contains("parse_degraded"));
+        assert!(!assistant_content.contains("low_text_coverage"));
+        assert!(assistant_content.contains("解析质量较低"));
+        assert_eq!(sanitized[1]["content"], json!("parse_degraded"));
+    }
+
+    #[test]
+    fn assistant_run_supply_quality_distinguishes_fallback_chunks_from_parse_failure() {
+        let report = assistant_run_supply_quality_report(
+            &json!({"mode": "user_selected"}),
+            true,
+            &[json!({
+                "type": "retrieval_evidence",
+                "source": "document_chunk_fallback",
+                "content_excerpt": "邓工是技术人员"
+            })],
+            &[],
+            &[],
+            &[],
+            1,
+            4,
+        );
+
+        assert_eq!(report["status"], json!("grounded"));
+        assert_eq!(report["fallbackChunkCount"], json!(1));
+        assert!(report.get("lowTextEvidenceCount").is_none());
+        assert!(report["notes"]
+            .as_array()
+            .expect("notes should be present")
+            .iter()
+            .any(|note| note.as_str() == Some("fallback_visible_document_chunks_used")));
+        assert!(report["modelGuidance"]
+            .as_array()
+            .expect("guidance should be present")
+            .iter()
+            .any(|note| note
+                .as_str()
+                .unwrap_or_default()
+                .contains("do not describe that as parser-not-ready")));
+    }
+
+    #[test]
+    fn assistant_run_supply_quality_flags_low_text_document_evidence() {
+        let report = assistant_run_supply_quality_report(
+            &json!({"mode": "user_selected"}),
+            true,
+            &[json!({
+                "type": "retrieval_evidence",
+                "content_excerpt": "采购审批制度"
+            })],
+            &[],
+            &[],
+            &[],
+            0,
+            4,
+        );
+
+        assert_eq!(report["status"], json!("partial"));
+        assert!(report.get("lowTextEvidenceCount").is_none());
+        assert!(report["notes"]
+            .as_array()
+            .expect("notes should be present")
+            .iter()
+            .any(|note| note.as_str() == Some("low_text_document_evidence")));
+    }
+
+    #[test]
+    fn assistant_run_document_entity_scan_detects_elevator_point_lists() {
+        assert!(prompt_requests_document_entity_scan(
+            "智能梯控/电梯点位有哪些？请按楼层和位置出表。"
+        ));
+    }
+
+    #[test]
+    fn assistant_run_answer_quality_gate_increases_budget_for_dissatisfaction() {
+        std::env::remove_var("ASSISTANT_RUN_ANSWER_QUALITY_RETRY_BUDGET");
+        let request = CreateAssistantRunRequest {
+            prompt: "客户有些不满意，回答不准确，再查一次".to_string(),
+            local_thread_id: None,
+            startup_briefing: None,
+            selected_scope: None,
+            scope_candidates: Vec::new(),
+            context_policy_hint: None,
+            current_artifact: None,
+            messages: Vec::new(),
+        };
+
+        assert!(assistant_run_request_expresses_dissatisfaction(&request));
+        assert_eq!(
+            assistant_run_answer_quality_retry_budget(&request),
+            ASSISTANT_RUN_ANSWER_QUALITY_DISSATISFIED_RETRY_BUDGET
+        );
+    }
+
     #[tokio::test]
     async fn generic_chat_page_event_without_model_returns_unavailable_error_not_accepted_reply() {
         let _guard = shared_local_postgres_test_lock().lock().await;
@@ -58571,6 +60840,347 @@ mod tests {
         assert_eq!(readiness["document_count"], json!(1));
         assert_eq!(readiness["indexed_document_count"], json!(1));
         assert_eq!(readiness["indexed_chunk_count"], json!(1));
+    }
+
+    #[tokio::test]
+    async fn database_source_status_reports_table_readiness_and_sync_runs() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping database source status test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("database-source-status-test-{}", Uuid::new_v4()),
+                "Database Source Status Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage,
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        let dataset = state
+            .storage
+            .datasets()
+            .create(
+                state.tenant_id,
+                NewDataset {
+                    key: "hy-sql-status".to_string(),
+                    title: "HY SQL Status".to_string(),
+                    description: None,
+                    owner_user_id: None,
+                },
+            )
+            .await
+            .expect("dataset should be created");
+        sqlx::query(
+            r#"
+            insert into external_source_connections (
+                id,
+                tenant_id,
+                connector_kind,
+                source_key,
+                display_name,
+                base_url_redacted,
+                config_redacted,
+                sync_mode,
+                permission_mode,
+                health_status
+            )
+            values ($1, $2, 'mysql', $1, 'HY SQL Status', 'mysql://8.155.12.154:23306/[redacted]', $3, 'pull', 'none', 'healthy')
+            "#,
+        )
+        .bind("hy-sql-status")
+        .bind(state.tenant_id.0)
+        .bind(json!({
+            "database_source": {
+                "connection_env": "THIRD_PARTY_HY_SQL_DATABASE_URL",
+                "database": "hy_sql",
+                "default_dataset_id": dataset.id.to_string(),
+                "tables": [
+                    {
+                        "table": "bi_traffic_area",
+                        "id_column": "id",
+                        "content_columns": ["area_name"]
+                    },
+                    {
+                        "table": "empty_table",
+                        "id_column": "id",
+                        "content_columns": ["name"]
+                    }
+                ],
+                "semantic_profile": {
+                    "kind": "mysql",
+                    "database": "hy_sql",
+                    "table_count": 2,
+                    "column_count": 6,
+                    "metric_count": 1,
+                    "dimension_count": 2,
+                    "time_dimension_count": 1,
+                    "entity_column_count": 2,
+                    "text_column_count": 1,
+                    "report_suggestion_count": 1,
+                    "tables": [{
+                        "table": "bi_traffic_area",
+                        "column_count": 4,
+                        "dimension_count": 1,
+                        "metric_count": 1,
+                        "time_dimension_count": 1,
+                        "entity_column_count": 2,
+                        "text_column_count": 0,
+                        "suggested_question_count": 2,
+                        "suggested_visualization_count": 1,
+                        "mapping_confidence": 92
+                    }]
+                }
+            }
+        }))
+        .execute(state.storage.pool())
+        .await
+        .expect("database source connection should be inserted");
+
+        let sync_run_id = Uuid::new_v4();
+        sqlx::query(
+            r#"
+            insert into external_sync_runs (
+                id,
+                tenant_id,
+                source_id,
+                sync_kind,
+                status,
+                checkpoint,
+                counts
+            )
+            values ($1, $2, $3, 'full', 'succeeded', $4, $5)
+            "#,
+        )
+        .bind(sync_run_id)
+        .bind(state.tenant_id.0)
+        .bind("hy-sql-status")
+        .bind(json!({
+            "workflow_execution_id": Uuid::new_v4(),
+            "workflow_stage": "completed",
+            "workflow_status": "succeeded",
+            "cursor": "private-source-cursor",
+            "tables": {
+                "bi_traffic_area": {
+                    "updated_after": "2026-05-21T10:00:00Z",
+                    "last_id": 42
+                }
+            }
+        }))
+        .bind(json!({
+            "documents_ingested": 1,
+            "row_count": 1,
+            "chunks_ingested": 1,
+            "skipped_row_count": 0,
+            "failed_row_count": 0,
+            "enqueued_task_count": 6,
+            "ingest_table_counts": [{
+                "table": "bi_traffic_area",
+                "documents_ingested": 1,
+                "row_count": 1,
+                "chunks_ingested": 1,
+                "skipped_row_count": 0,
+                "failed_row_count": 0
+            }]
+        }))
+        .execute(state.storage.pool())
+        .await
+        .expect("sync run should be inserted");
+
+        let document = state
+            .storage
+            .documents()
+            .create(
+                state.tenant_id,
+                NewDocument {
+                    dataset_id: dataset.id,
+                    title: "bi_traffic_area row 1".to_string(),
+                    object_key: "db/bi_traffic_area/1.json".to_string(),
+                    content_type: "application/json".to_string(),
+                    secret_binding_ids: Vec::new(),
+                    owner_user_id: None,
+                    metadata: json!({
+                        "external_source": {
+                            "source_id": "hy-sql-status",
+                            "document_external_id": "bi_traffic_area:1",
+                            "revision_external_id": "rev-1"
+                        },
+                        "external_metadata": {
+                            "source_kind": "mysql",
+                            "source_table": "bi_traffic_area",
+                            "source_primary_key": "id=1"
+                        },
+                        "parse_status": "parsed"
+                    }),
+                },
+            )
+            .await
+            .expect("document should be created");
+        sqlx::query(
+            r#"
+            update documents
+            set lifecycle = 'indexed'
+            where tenant_id = $1 and id = $2
+            "#,
+        )
+        .bind(state.tenant_id.0)
+        .bind(document.id.0)
+        .execute(state.storage.pool())
+        .await
+        .expect("document lifecycle should be updated");
+        state
+            .storage
+            .document_chunks()
+            .replace_for_document(
+                state.tenant_id,
+                document.id,
+                &[storage::NewDocumentChunk {
+                    dataset_id: dataset.id,
+                    document_id: document.id,
+                    chunk_index: 0,
+                    content: "area_name: 华东 region traffic data".to_string(),
+                    token_count: 8,
+                    metadata: json!({}),
+                    created_at: Utc::now(),
+                }],
+            )
+            .await
+            .expect("chunk should be inserted");
+        sqlx::query(
+            r#"
+            update document_chunks
+            set state = 'indexed'
+            where tenant_id = $1 and document_id = $2
+            "#,
+        )
+        .bind(state.tenant_id.0)
+        .bind(document.id.0)
+        .execute(state.storage.pool())
+        .await
+        .expect("chunk state should be updated");
+
+        let Json(response) = get_database_source_status(
+            State(state),
+            HeaderMap::new(),
+            Path("hy-sql-status".to_string()),
+        )
+        .await
+        .expect("database status should load");
+
+        assert_eq!(response.source_id, "hy-sql-status");
+        assert_eq!(response.status["config_valid"], json!(true));
+        assert_eq!(
+            response.status["dataset"]["dataset_id"],
+            json!(dataset.id.to_string())
+        );
+        assert_eq!(
+            response.status["dataset_readiness"]["signal"],
+            json!("ready")
+        );
+        assert_eq!(
+            response.status["recent_sync_runs"][0]["sync_run_id"],
+            json!(sync_run_id.to_string())
+        );
+        assert_eq!(
+            response.status["recent_sync_runs"][0]["checkpoint"]["workflow_stage"],
+            json!("completed")
+        );
+        assert_eq!(
+            response.status["recent_sync_runs"][0]["checkpoint_summary"]["cursor_present"],
+            json!(true)
+        );
+        assert_eq!(
+            response.status["recent_sync_runs"][0]["checkpoint_summary"]["table_count"],
+            json!(1)
+        );
+        assert_eq!(
+            response.status["recent_sync_runs"][0]["checkpoint_summary"]["table_checkpoints"][0]
+                ["table"],
+            json!("bi_traffic_area")
+        );
+        assert_eq!(
+            response.status["recent_sync_runs"][0]["checkpoint_summary"]["table_checkpoints"][0]
+                ["updated_after_present"],
+            json!(true)
+        );
+        assert_eq!(
+            response.status["recent_sync_runs"][0]["checkpoint_summary"]["table_checkpoints"][0]
+                ["last_id_present"],
+            json!(true)
+        );
+        assert_eq!(response.status["sync_readiness"]["signal"], json!("ready"));
+        assert_eq!(response.status["semantic_profile"]["table_count"], json!(2));
+        assert_eq!(
+            response.status["semantic_profile"]["metric_count"],
+            json!(1)
+        );
+        assert_eq!(
+            response.status["semantic_profile"]["tables"][0]["mapping_confidence"],
+            json!(92)
+        );
+        assert_eq!(
+            response.status["sync_readiness"]["workflow_stage"],
+            json!("completed")
+        );
+        assert_eq!(
+            response.status["sync_readiness"]["document_count"],
+            json!(1)
+        );
+        assert_eq!(response.status["sync_readiness"]["row_count"], json!(1));
+        assert_eq!(
+            response.status["sync_readiness"]["skipped_row_count"],
+            json!(0)
+        );
+        assert_eq!(
+            response.status["sync_readiness"]["failed_row_count"],
+            json!(0)
+        );
+        assert_eq!(
+            response.status["sync_readiness"]["table_counts"][0]["table"],
+            json!("bi_traffic_area")
+        );
+        assert_eq!(
+            response.status["sync_readiness"]["table_counts"][0]["row_count"],
+            json!(1)
+        );
+        assert_eq!(
+            response.status["sync_readiness"]["table_counts"][0]["chunk_count"],
+            json!(1)
+        );
+        assert_eq!(
+            response.status["sync_readiness"]["checkpoint_summary"]["cursor_present"],
+            json!(true)
+        );
+        assert!(
+            response.status["recent_sync_runs"][0]["checkpoint"]
+                .get("cursor")
+                .is_none(),
+            "raw source cursor should not be exposed in status checkpoint"
+        );
+        let tables = response.status["table_readiness"]
+            .as_array()
+            .expect("table readiness should be an array");
+        let bi_table = tables
+            .iter()
+            .find(|table| table["table"] == json!("bi_traffic_area"))
+            .expect("bi_traffic_area readiness should be present");
+        assert_eq!(bi_table["signal"], json!("ready"));
+        assert_eq!(bi_table["document_count"], json!(1));
+        let empty_table = tables
+            .iter()
+            .find(|table| table["table"] == json!("empty_table"))
+            .expect("configured empty table readiness should be present");
+        assert_eq!(empty_table["signal"], json!("no_documents"));
     }
 
     #[test]
@@ -62626,6 +65236,72 @@ mod tests {
     }
 
     #[test]
+    fn assistant_run_selected_document_attendance_prompts_skip_generic_entity_scan() {
+        let selected_scope = json!({
+            "mode": "user_selected",
+            "datasets": [DatasetId::new()],
+            "documents": [{"type": "document", "id": DocumentId::new()}],
+            "intent": "data_question",
+            "supply_policy": {
+                "retrievalPolicy": "search",
+                "preferDetail": false,
+                "noFakeData": true
+            }
+        });
+
+        assert!(!assistant_run_dataset_entity_scan_requested(
+            &selected_scope,
+            "每天最早上班的是谁？请用日期表格列出"
+        ));
+        assert!(!assistant_run_dataset_entity_scan_requested(
+            &selected_scope,
+            "这份考勤表里工时最长和最短分别是谁？请列出日期、员工、工时"
+        ));
+        assert!(!assistant_run_dataset_entity_scan_requested(
+            &selected_scope,
+            "最近有没缺勤的人"
+        ));
+        assert_eq!(
+            assistant_run_evidence_limit_for_scope_and_prompt(
+                &selected_scope,
+                "每天最早上班的是谁？请用日期表格列出"
+            ),
+            ASSISTANT_RUN_SELECTED_DOCUMENT_ROW_EVIDENCE_LIMIT
+        );
+        assert!(assistant_run_dataset_entity_scan_requested(
+            &selected_scope,
+            "简历按工作年限排序出表"
+        ));
+    }
+
+    #[test]
+    fn assistant_run_attendance_row_analysis_computes_earliest_and_extremes() {
+        let rows = [
+            "A3 2026-05-14 坐班0900 08:51 18:10 9.32小时 正常考勤",
+            "A4 2026-05-14 坐班0900 08:56 18:02 9.10小时 正常考勤",
+            "A8 2026-02-07 休息 08:18 20:51 12.55小时 正常考勤",
+            "A8 2026-02-25 坐班0930 09:25 13:43 4.30小时 正常考勤",
+        ]
+        .into_iter()
+        .filter_map(|line| {
+            parse_assistant_run_attendance_row(line, "document://demo/chunks/0".to_string())
+        })
+        .collect::<Vec<_>>();
+
+        let daily_rows = assistant_run_daily_earliest_attendance_rows(&rows);
+        assert_eq!(daily_rows[0]["date"], json!("2026-05-14"));
+        assert_eq!(daily_rows[0]["employee"], json!("A3"));
+        assert_eq!(daily_rows[0]["first_punch"], json!("08:51"));
+
+        let hour_rows = assistant_run_work_hour_extreme_rows(&rows);
+        assert_eq!(hour_rows[0]["category"], json!("longest"));
+        assert_eq!(hour_rows[0]["employee"], json!("A8"));
+        assert_eq!(hour_rows[0]["date"], json!("2026-02-07"));
+        assert_eq!(hour_rows[1]["category"], json!("shortest"));
+        assert_eq!(hour_rows[1]["date"], json!("2026-02-25"));
+    }
+
+    #[test]
     fn assistant_run_general_entity_scan_prompts_request_dataset_scan() {
         let selected_scope = json!({
             "mode": "user_selected",
@@ -63548,6 +66224,16 @@ mod tests {
             extract_resume_candidate_name_from_object_key("documents/a孙武钊-简历.pdf").as_deref(),
             Some("孙武钊")
         );
+        assert_eq!(
+            extract_resume_candidate_name_from_title("陈京-深圳简历.pdf").as_deref(),
+            Some("陈京")
+        );
+        assert_eq!(
+            extract_resume_candidate_name_from_object_key(
+                "/srv/aiv3/shared/objects/external-documents/source/doc-id/v1.pdf"
+            ),
+            None
+        );
 
         let text = "项目经验\n\
             1的2B/2C项目，带领五人团队，展现项目管理能力。\n\
@@ -63661,6 +66347,16 @@ mod tests {
             .certificate_names
             .contains(&"系统架构设计师".to_string()));
         assert_eq!(profile.certificate_count, 2);
+
+        let external_version_document = Document {
+            title: "郑宇宁简历.pdf".to_string(),
+            object_key: "/srv/aiv3/shared/objects/external-documents/source/doc-id/v1.pdf"
+                .to_string(),
+            ..document.clone()
+        };
+        let external_profile = extract_resume_document_profile(&external_version_document, "", &[]);
+        assert_eq!(external_profile.candidate_name.as_deref(), Some("郑宇宁"));
+        assert_eq!(external_profile.document_title, "郑宇宁简历.pdf");
     }
 
     #[test]
@@ -69725,6 +72421,223 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn assistant_run_preserves_selected_document_scope_after_scope_planning() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_MODE", "placeholder");
+        std::env::remove_var("ASSISTANT_RUN_EVIDENCE_LIMIT");
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping assistant selected document create test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("assistant-selected-document-create-test-{}", Uuid::new_v4()),
+                "Assistant Selected Document Create Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage,
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        let dataset = state
+            .storage
+            .datasets()
+            .create(
+                state.tenant_id,
+                NewDataset {
+                    key: format!("selected-document-create-{}", Uuid::new_v4()),
+                    title: "考勤资料".to_string(),
+                    description: Some("考勤表和销售表混合数据集。".to_string()),
+                    owner_user_id: None,
+                },
+            )
+            .await
+            .expect("dataset should be created");
+        let attendance_document = state
+            .storage
+            .documents()
+            .create(
+                state.tenant_id,
+                NewDocument {
+                    dataset_id: dataset.id,
+                    title: "Attendance table".to_string(),
+                    object_key: "selected-doc/attendance.xlsx".to_string(),
+                    content_type:
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                            .to_string(),
+                    secret_binding_ids: Vec::new(),
+                    owner_user_id: None,
+                    metadata: json!({}),
+                },
+            )
+            .await
+            .expect("attendance document should be created");
+        let sales_document = state
+            .storage
+            .documents()
+            .create(
+                state.tenant_id,
+                NewDocument {
+                    dataset_id: dataset.id,
+                    title: "Sales table".to_string(),
+                    object_key: "selected-doc/sales.xlsx".to_string(),
+                    content_type:
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                            .to_string(),
+                    secret_binding_ids: Vec::new(),
+                    owner_user_id: None,
+                    metadata: json!({}),
+                },
+            )
+            .await
+            .expect("sales document should be created");
+        let now = Utc::now();
+        let attendance_chunk = state
+            .storage
+            .document_chunks()
+            .replace_for_document(
+                state.tenant_id,
+                attendance_document.id,
+                &[storage::NewDocumentChunk {
+                    dataset_id: dataset.id,
+                    document_id: attendance_document.id,
+                    chunk_index: 0,
+                    content: "A3 2026-05-20 坐班0900 08:59 18:15 9.27小时 正常考勤".to_string(),
+                    token_count: 10,
+                    metadata: json!({}),
+                    created_at: now,
+                }],
+            )
+            .await
+            .expect("attendance chunk should be created")
+            .remove(0);
+        let sales_chunk = state
+            .storage
+            .document_chunks()
+            .replace_for_document(
+                state.tenant_id,
+                sales_document.id,
+                &[storage::NewDocumentChunk {
+                    dataset_id: dataset.id,
+                    document_id: sales_document.id,
+                    chunk_index: 0,
+                    content: "2026 年销售额 1000 万，区域增长排名第一。".to_string(),
+                    token_count: 8,
+                    metadata: json!({}),
+                    created_at: now,
+                }],
+            )
+            .await
+            .expect("sales chunk should be created")
+            .remove(0);
+        let evidence_execution = create_test_workflow_execution(
+            &state.storage,
+            state.tenant_id,
+            dataset.id,
+            WorkflowKind::UploadIngest,
+        )
+        .await;
+        state
+            .storage
+            .retrieval_evidences()
+            .create_many(
+                state.tenant_id,
+                &[
+                    storage::NewRetrievalEvidence {
+                        execution_id: evidence_execution.id,
+                        dataset_id: dataset.id,
+                        document_id: attendance_document.id,
+                        document_chunk_id: attendance_chunk.id,
+                        chunk_index: 0,
+                        source_locator: "selected-doc/attendance.xlsx#chunk=0".to_string(),
+                        content_excerpt: "A3 2026-05-20 坐班0900 08:59 18:15 9.27小时 正常考勤"
+                            .to_string(),
+                        summary: "Attendance evidence".to_string(),
+                        payload_filter_key: "dataset/attendance".to_string(),
+                        embedding_model: "local-lexical-v1".to_string(),
+                        recall_score: 0.5,
+                        evidence_manifest: json!({
+                            "embedding": {"term_weights": {"考勤": 1.0, "上班": 1.0, "工时": 1.0}}
+                        }),
+                        created_at: now,
+                    },
+                    storage::NewRetrievalEvidence {
+                        execution_id: evidence_execution.id,
+                        dataset_id: dataset.id,
+                        document_id: sales_document.id,
+                        document_chunk_id: sales_chunk.id,
+                        chunk_index: 0,
+                        source_locator: "selected-doc/sales.xlsx#chunk=0".to_string(),
+                        content_excerpt: "2026 年销售额 1000 万，区域增长排名第一。".to_string(),
+                        summary: "Sales evidence".to_string(),
+                        payload_filter_key: "dataset/sales".to_string(),
+                        embedding_model: "local-lexical-v1".to_string(),
+                        recall_score: 0.99,
+                        evidence_manifest: json!({
+                            "embedding": {"term_weights": {"2026": 1.0, "销售额": 1.0, "排名": 1.0}}
+                        }),
+                        created_at: now,
+                    },
+                ],
+            )
+            .await
+            .expect("retrieval evidences should be created");
+
+        let (_, Json(response)) = create_assistant_run(
+            State(state),
+            HeaderMap::new(),
+            Json(CreateAssistantRunRequest {
+                prompt: "每天最早上班的是谁？请用日期表格列出".to_string(),
+                local_thread_id: Some("assistant-selected-document-create-thread".to_string()),
+                startup_briefing: Some(json!({})),
+                selected_scope: Some(json!({
+                    "mode": "user_selected",
+                    "datasets": [dataset.id],
+                    "documents": [{"type": "document", "id": attendance_document.id}],
+                })),
+                scope_candidates: Vec::new(),
+                context_policy_hint: None,
+                current_artifact: None,
+                messages: Vec::new(),
+            }),
+        )
+        .await
+        .expect("assistant run should be created");
+
+        assert_eq!(
+            response.selected_scope["documents"][0]["id"],
+            json!(attendance_document.id)
+        );
+        assert_eq!(
+            response.evidence_state["selected_scope"]["documents"][0]["id"],
+            json!(attendance_document.id)
+        );
+        assert!(response
+            .evidence_state
+            .get("supplied_items")
+            .and_then(Value::as_array)
+            .expect("supplied items should exist")
+            .iter()
+            .all(|item| item.get("document_id").is_none()
+                || item.get("document_id") == Some(&json!(attendance_document.id))));
+        assert!(!response
+            .evidence_state
+            .get("supplied_items")
+            .and_then(Value::as_array)
+            .expect("supplied items should exist")
+            .iter()
+            .any(|item| item.get("type").and_then(Value::as_str) == Some("dataset_entity_scan")));
+    }
+
+    #[tokio::test]
     async fn assistant_run_external_temporary_scope_retrieval_limits_to_selected_documents() {
         let _guard = shared_local_postgres_test_lock().lock().await;
         std::env::set_var("ASSISTANT_RUN_RUNTIME_MODE", "placeholder");
@@ -70685,7 +73598,7 @@ mod tests {
         assert_eq!(response.evidence_state["fallback_supply_count"], json!(2));
         assert_eq!(
             response.evidence_state["supply_quality"]["status"],
-            json!("partial")
+            json!("grounded")
         );
         assert_eq!(
             response.evidence_state["supply_quality"]["fallbackChunkCount"],
@@ -77134,6 +80047,8 @@ mod tests {
                             "status": "vlm_fallback_used",
                             "text_chars": 420,
                             "min_usable_text_chars": 32,
+                            "fallback_status": "used",
+                            "recommended_fallback": "minimax_vlm",
                             "candidate_selection": {
                                 "policy": "score_text_structure_and_layout",
                                 "selected_method": "pdf-pypdf",
@@ -77175,6 +80090,8 @@ mod tests {
             assistant_run_document_parse_quality_summary(&document).expect("summary exists");
 
         assert_eq!(summary["status"], json!("vlm_fallback_used"));
+        assert_eq!(summary["fallback_status"], json!("used"));
+        assert_eq!(summary["recommended_fallback"], json!("minimax_vlm"));
         assert_eq!(summary["parse_method"], json!("pdf-vlm"));
         assert_eq!(
             summary["candidate_selection"]["selected_method"],
@@ -77244,6 +80161,71 @@ mod tests {
                 .and_then(|summary| summary.get("status"))
                 .and_then(Value::as_str),
             Some("low_text_coverage")
+        );
+    }
+
+    #[test]
+    fn document_parse_status_infers_low_quality_for_legacy_tiny_pdf_chunks() {
+        let now = Utc::now();
+        let document = Document {
+            id: DocumentId::new(),
+            tenant_id: TenantId::new(),
+            dataset_id: DatasetId::new(),
+            owner_user_id: None,
+            title: "采购审批制度.pdf".to_string(),
+            object_key: "documents/purchase-approval.pdf".to_string(),
+            content_type: "application/pdf".to_string(),
+            lifecycle: domain_model::DocumentLifecycle::Indexed,
+            secret_binding_ids: vec![],
+            metadata: BTreeMap::from_iter([("parse_status".to_string(), json!("parsed"))]),
+            created_at: now,
+            updated_at: now,
+        };
+        let chunks = vec![DocumentChunk {
+            id: DocumentChunkId::new(),
+            tenant_id: document.tenant_id,
+            dataset_id: document.dataset_id,
+            document_id: document.id,
+            chunk_index: 0,
+            content: "采购审批制度".to_string(),
+            token_count: 8,
+            state: DocumentChunkState::Indexed,
+            metadata: BTreeMap::new(),
+            created_at: now,
+            updated_at: now,
+        }];
+
+        let parse_state = build_document_parse_status_view(&document, &chunks, 1, None);
+
+        assert_eq!(parse_state.parse_status, "parsed");
+        assert_eq!(
+            parse_state.parse_quality_status.as_deref(),
+            Some("low_text_coverage")
+        );
+        assert_eq!(parse_state.model_status, "parse_degraded");
+        assert_eq!(
+            parse_state
+                .parse_quality_summary
+                .as_ref()
+                .and_then(|summary| summary.get("inferred_from"))
+                .and_then(Value::as_str),
+            Some("stored_document_chunks")
+        );
+        assert_eq!(
+            parse_state
+                .parse_quality_summary
+                .as_ref()
+                .and_then(|summary| summary.get("fallback_status"))
+                .and_then(Value::as_str),
+            Some("recommended")
+        );
+        assert_eq!(
+            parse_state
+                .parse_quality_summary
+                .as_ref()
+                .and_then(|summary| summary.get("recommended_fallback"))
+                .and_then(Value::as_str),
+            Some("ocr_reparse")
         );
     }
 

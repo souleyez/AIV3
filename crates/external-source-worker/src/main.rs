@@ -5,7 +5,7 @@ use event_bus::{workflow_task_enqueued_subject, EventBus, EventSubscription};
 use external_source_connectors::{fetch_mysql_documents, MySqlSourceConfig};
 use reqwest::blocking::Client;
 use serde_json::{json, Map, Value};
-use std::time::Duration as StdDuration;
+use std::{collections::BTreeMap, time::Duration as StdDuration};
 use storage::{PgStorage, DEFAULT_LOCAL_DATABASE_URL};
 use tokio::time::Duration;
 use workflow_engine::{WorkflowCatalog, WorkflowSignal};
@@ -94,8 +94,8 @@ async fn process_task(
     let result = match task.task_key.as_str() {
         SYNC_USERS_TASK_KEY => sync_external_users(storage, &execution).await,
         SYNC_ACL_TASK_KEY => sync_external_acl(storage, &execution).await,
-        SYNC_METADATA_TASK_KEY => sync_external_metadata(&execution).await,
-        FETCH_CONTENT_TASK_KEY => fetch_external_content(&execution).await,
+        SYNC_METADATA_TASK_KEY => sync_external_metadata(storage, &execution).await,
+        FETCH_CONTENT_TASK_KEY => fetch_external_content(storage, &execution).await,
         unknown => Err(anyhow!("unsupported external source task key: {unknown}")),
     };
 
@@ -127,6 +127,14 @@ async fn process_task(
         }
         Err(error) => {
             let error_message = error.to_string();
+            update_external_sync_failure_summary(
+                storage,
+                task.tenant_id,
+                &execution.context,
+                &task.task_key,
+                &error_message,
+            )
+            .await?;
             if let Err(signal_error) = platform_api::apply_workflow_signal_with_dependencies(
                 storage,
                 workflow_catalog,
@@ -269,27 +277,59 @@ async fn sync_external_acl(storage: &PgStorage, execution: &WorkflowExecution) -
     Ok(output)
 }
 
-async fn sync_external_metadata(execution: &WorkflowExecution) -> Result<Value> {
+async fn sync_external_metadata(
+    storage: &PgStorage,
+    execution: &WorkflowExecution,
+) -> Result<Value> {
+    let output = build_sync_external_metadata_output(execution).await?;
+    update_external_sync_counts(storage, execution.tenant_id, &output).await?;
+    Ok(output)
+}
+
+async fn build_sync_external_metadata_output(execution: &WorkflowExecution) -> Result<Value> {
     let connector =
         connector_fixture_for(&execution.context, ConnectorFetchScope::Metadata).await?;
     let documents = external_document_metadata_from_connector(&connector)?;
+    let table_counts = summarize_external_documents_by_table(&documents, "metadata_document_count");
 
     Ok(json!({
         "source_id": context_required_string(&execution.context, "source_id")?,
         "external_sync_run_id": context_string(&execution.context, "external_sync_run_id")?,
         "document_count": documents.len(),
+        "row_count": documents.len(),
+        "metadata_document_count": documents.len(),
+        "metadata_row_count": documents.len(),
+        "skipped_row_count": 0,
+        "failed_row_count": 0,
+        "metadata_table_counts": table_counts,
         "external_document_metadata": documents,
     }))
 }
 
-async fn fetch_external_content(execution: &WorkflowExecution) -> Result<Value> {
+async fn fetch_external_content(
+    storage: &PgStorage,
+    execution: &WorkflowExecution,
+) -> Result<Value> {
+    let output = build_fetch_external_content_output(execution).await?;
+    update_external_sync_counts(storage, execution.tenant_id, &output).await?;
+    Ok(output)
+}
+
+async fn build_fetch_external_content_output(execution: &WorkflowExecution) -> Result<Value> {
     let connector = connector_fixture_for(&execution.context, ConnectorFetchScope::Content).await?;
     let documents = external_documents_from_connector(&connector)?;
+    let table_counts = summarize_external_documents_by_table(&documents, "content_document_count");
 
     Ok(json!({
         "source_id": context_required_string(&execution.context, "source_id")?,
         "external_sync_run_id": context_string(&execution.context, "external_sync_run_id")?,
         "document_count": documents.len(),
+        "row_count": documents.len(),
+        "content_document_count": documents.len(),
+        "content_row_count": documents.len(),
+        "skipped_row_count": 0,
+        "failed_row_count": 0,
+        "content_table_counts": table_counts,
         "external_documents": documents,
     }))
 }
@@ -1132,9 +1172,21 @@ async fn update_external_sync_counts(
         "group_count",
         "acl_snapshot_count",
         "document_count",
+        "row_count",
+        "metadata_document_count",
+        "metadata_row_count",
+        "content_document_count",
+        "content_row_count",
+        "skipped_row_count",
+        "failed_row_count",
     ] {
         if let Some(value) = output.get(key).and_then(Value::as_u64) {
             counts.insert(key.to_string(), json!(value));
+        }
+    }
+    for key in ["metadata_table_counts", "content_table_counts"] {
+        if let Some(value) = output.get(key).filter(|value| value.is_array()) {
+            counts.insert(key.to_string(), value.clone());
         }
     }
     if counts.is_empty() {
@@ -1157,6 +1209,90 @@ async fn update_external_sync_counts(
     .await?;
 
     Ok(())
+}
+
+async fn update_external_sync_failure_summary(
+    storage: &PgStorage,
+    tenant_id: TenantId,
+    context: &Value,
+    task_key: &str,
+    error_message: &str,
+) -> Result<()> {
+    let Some(sync_run_id) = context
+        .get("external_sync_run_id")
+        .and_then(Value::as_str)
+        .and_then(|raw| uuid::Uuid::parse_str(raw).ok())
+    else {
+        return Ok(());
+    };
+    let error_excerpt = external_sync_error_excerpt(error_message);
+    sqlx::query(
+        r#"
+        update external_sync_runs
+        set counts = counts || $3,
+            updated_at = $4
+        where tenant_id = $1 and id = $2
+        "#,
+    )
+    .bind(tenant_id.0)
+    .bind(sync_run_id)
+    .bind(json!({
+        "failed_task_key": task_key,
+        "last_error": error_excerpt,
+    }))
+    .bind(Utc::now())
+    .execute(storage.pool())
+    .await?;
+    Ok(())
+}
+
+fn external_sync_error_excerpt(error_message: &str) -> String {
+    error_message
+        .chars()
+        .filter(|ch| !ch.is_control() || ch.is_whitespace())
+        .collect::<String>()
+        .trim()
+        .chars()
+        .take(240)
+        .collect()
+}
+
+fn summarize_external_documents_by_table(documents: &[Value], count_key: &str) -> Value {
+    let mut counts = BTreeMap::<String, u64>::new();
+    for document in documents {
+        let table = external_document_source_table(document);
+        *counts.entry(table).or_default() += 1;
+    }
+    Value::Array(
+        counts
+            .into_iter()
+            .map(|(table, count)| {
+                json!({
+                    "table": table,
+                    count_key: count,
+                    "row_count": count,
+                    "skipped_row_count": 0,
+                    "failed_row_count": 0,
+                })
+            })
+            .collect(),
+    )
+}
+
+fn external_document_source_table(document: &Value) -> String {
+    document
+        .get("metadata")
+        .filter(|value| value.is_object())
+        .and_then(|metadata| {
+            string_field(
+                metadata,
+                &["source_table", "sourceTable", "table", "source_table_name"],
+            )
+        })
+        .or_else(|| string_field(document, &["source_table", "sourceTable", "table"]))
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "[unmapped]".to_string())
 }
 
 fn value_array(value: Option<&Value>) -> Vec<Value> {
@@ -1264,7 +1400,8 @@ mod tests {
                         "content_type": "text/markdown",
                         "body": "订单延期超过两天需要升级处理。",
                         "metadata": {
-                            "path": "/risk/doc-001"
+                            "path": "/risk/doc-001",
+                            "source_table": "risk_policy"
                         }
                     }]
                 }
@@ -1320,11 +1457,14 @@ mod tests {
             updated_at: Utc::now(),
         };
 
-        let output = fetch_external_content(&execution)
+        let output = build_fetch_external_content_output(&execution)
             .await
             .expect("content output");
 
         assert_eq!(output["document_count"], json!(1));
+        assert_eq!(output["row_count"], json!(1));
+        assert_eq!(output["skipped_row_count"], json!(0));
+        assert_eq!(output["failed_row_count"], json!(0));
         assert_eq!(
             output["external_documents"][0]["document_external_id"],
             json!("doc-001")
@@ -1336,6 +1476,16 @@ mod tests {
         assert_eq!(
             output["external_documents"][0]["acl_snapshot"]["allowed_group_external_ids"],
             json!(["group-risk"])
+        );
+        assert_eq!(
+            output["content_table_counts"],
+            json!([{
+                "table": "risk_policy",
+                "content_document_count": 1,
+                "row_count": 1,
+                "skipped_row_count": 0,
+                "failed_row_count": 0
+            }])
         );
     }
 
@@ -1356,11 +1506,14 @@ mod tests {
             updated_at: Utc::now(),
         };
 
-        let output = sync_external_metadata(&execution)
+        let output = build_sync_external_metadata_output(&execution)
             .await
             .expect("metadata output");
 
         assert_eq!(output["document_count"], json!(1));
+        assert_eq!(output["row_count"], json!(1));
+        assert_eq!(output["skipped_row_count"], json!(0));
+        assert_eq!(output["failed_row_count"], json!(0));
         assert!(output["external_document_metadata"][0]
             .get("body")
             .is_none());
@@ -1370,6 +1523,16 @@ mod tests {
         assert!(output["external_document_metadata"][0]
             .get("text")
             .is_none());
+        assert_eq!(
+            output["metadata_table_counts"],
+            json!([{
+                "table": "risk_policy",
+                "metadata_document_count": 1,
+                "row_count": 1,
+                "skipped_row_count": 0,
+                "failed_row_count": 0
+            }])
+        );
     }
 
     #[test]

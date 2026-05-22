@@ -23,6 +23,7 @@ import {
   formatObservationTime,
   latestIntegrationActivity,
   normalizeControlResult,
+  normalizeDatabaseSourceStatus,
   normalizeAuditItem,
   normalizeExternalConversationTest,
   normalizeIntegrationSummary,
@@ -203,10 +204,13 @@ export default function ExternalIntegrationsPageClient() {
   const [auditFilterKey, setAuditFilterKey] = useState('all');
   const [selectedActionId, setSelectedActionId] = useState('');
   const [actionDetail, setActionDetail] = useState(null);
+  const [databaseStatusById, setDatabaseStatusById] = useState({});
   const [loading, setLoading] = useState(true);
   const [conversationTestsLoading, setConversationTestsLoading] = useState(false);
   const [auditLoading, setAuditLoading] = useState(false);
   const [actionDetailLoading, setActionDetailLoading] = useState(false);
+  const [databaseStatusLoading, setDatabaseStatusLoading] = useState(false);
+  const [databaseStatusError, setDatabaseStatusError] = useState('');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [controlBusy, setControlBusy] = useState('');
@@ -253,6 +257,27 @@ export default function ExternalIntegrationsPageClient() {
       setAuditItems([]);
     } finally {
       setAuditLoading(false);
+    }
+  }
+
+  async function loadDatabaseStatus(integrationId) {
+    if (!integrationId) {
+      return;
+    }
+    setDatabaseStatusLoading(true);
+    setDatabaseStatusError('');
+    try {
+      const payload = await fetchJson(
+        `/api/v3/external/sources/${encodeURIComponent(integrationId)}/database/status`,
+      );
+      setDatabaseStatusById((current) => ({
+        ...current,
+        [integrationId]: normalizeDatabaseSourceStatus(payload),
+      }));
+    } catch (loadError) {
+      setDatabaseStatusError(loadError instanceof Error ? loadError.message : '数据库源状态读取失败');
+    } finally {
+      setDatabaseStatusLoading(false);
     }
   }
 
@@ -350,6 +375,7 @@ export default function ExternalIntegrationsPageClient() {
     setSelectedActionId('');
     setActionDetail(null);
     setAuditItems([]);
+    setDatabaseStatusError('');
   }
 
   function selectAuditFilter(filterKey) {
@@ -436,9 +462,22 @@ export default function ExternalIntegrationsPageClient() {
   const selected = integrations.find((item) => item.id === selectedId) || integrations[0] || null;
   const selectedDatabaseSource = databaseSourceSummary(selected || {});
   const selectedDatabaseReadiness = databaseSourceReadiness(selected || {});
-  const selectedDatabaseMetrics = databaseSourceMetrics(selected || {});
+  const selectedDatabaseStatus = selected ? databaseStatusById[selected.id] || null : null;
+  const selectedEffectiveDatabaseReadiness = selectedDatabaseStatus?.datasetReadiness?.configured
+    ? selectedDatabaseStatus.datasetReadiness
+    : selectedDatabaseReadiness;
+  const selectedDatabaseMetrics = databaseSourceMetrics(selected || {}).map((metric) => (
+    metric.label === '问答就绪'
+      ? { ...metric, value: selectedEffectiveDatabaseReadiness.label }
+      : metric
+  ));
   const selectedDatabaseTables = databaseSourceTablePreview(selected || {}, 8);
-  const selectedDatabaseSyncRuns = databaseSourceSyncRuns(auditItems, 3);
+  const selectedDatabaseTableReadiness = selectedDatabaseStatus?.tableReadiness || [];
+  const selectedDatabaseSyncReadiness = selectedDatabaseStatus?.syncReadiness || null;
+  const selectedDatabaseSemanticProfile = selectedDatabaseStatus?.semanticProfile || null;
+  const selectedDatabaseSyncRuns = selectedDatabaseStatus?.recentSyncRuns?.length
+    ? selectedDatabaseStatus.recentSyncRuns.slice(0, 5)
+    : databaseSourceSyncRuns(auditItems, 3);
   const totals = {
     pending: metricTotal(integrations, 'pendingActionCount'),
     blocked: metricTotal(integrations, 'blockedActionCount'),
@@ -450,6 +489,16 @@ export default function ExternalIntegrationsPageClient() {
     waitingResults: integrations.reduce((sum, item) => sum + numberOrZero(item.actionSummary?.waiting_result_count), 0),
     searchEvidenceRequired: integrations.reduce((sum, item) => sum + numberOrZero(item.searchSummary?.required_count), 0),
   };
+
+  useEffect(() => {
+    if (!selected?.id || !selectedDatabaseSource.configured) {
+      setDatabaseStatusError('');
+      return;
+    }
+    if (!databaseStatusById[selected.id] && !databaseStatusLoading) {
+      loadDatabaseStatus(selected.id);
+    }
+  }, [selected?.id, selectedDatabaseSource.configured]);
 
   return (
     <main className="external-observability-shell">
@@ -843,9 +892,18 @@ export default function ExternalIntegrationsPageClient() {
                       <span>数据库源</span>
                       <strong>{selectedDatabaseSource.kind}</strong>
                     </div>
-                    <small className={selectedDatabaseSource.valid ? '' : 'is-invalid'}>
-                      {selectedDatabaseSource.valid ? '配置可观测' : '配置需检查'}
-                    </small>
+                    <div className="external-database-head-actions">
+                      <small className={selectedDatabaseSource.valid && selectedDatabaseStatus?.configValid !== false ? '' : 'is-invalid'}>
+                        {selectedDatabaseSource.valid && selectedDatabaseStatus?.configValid !== false ? '配置可观测' : '配置需检查'}
+                      </small>
+                      <button
+                        type="button"
+                        onClick={() => loadDatabaseStatus(selected.id)}
+                        disabled={databaseStatusLoading}
+                      >
+                        {databaseStatusLoading ? '读取中' : '刷新明细'}
+                      </button>
+                    </div>
                   </div>
                   <div className="external-detail-strip external-database-strip">
                     {selectedDatabaseMetrics.map((metric) => (
@@ -860,33 +918,66 @@ export default function ExternalIntegrationsPageClient() {
                       {selectedDatabaseSource.error || '数据库源配置未通过校验'}
                     </p>
                   )}
-                  {selectedDatabaseReadiness.configured ? (
+                  {databaseStatusError ? (
+                    <p className="external-database-warning">{databaseStatusError}</p>
+                  ) : null}
+                  {selectedDatabaseStatus?.configError ? (
+                    <p className="external-database-warning">{selectedDatabaseStatus.configError}</p>
+                  ) : null}
+                  {selectedEffectiveDatabaseReadiness.configured ? (
                     <div className="external-database-readiness" aria-label="数据库数据集就绪度">
-                      <div className={`external-database-readiness-signal external-database-readiness-${selectedDatabaseReadiness.signal}`}>
+                      <div className={`external-database-readiness-signal external-database-readiness-${selectedEffectiveDatabaseReadiness.signal}`}>
                         <span>数据集问答</span>
-                        <strong>{selectedDatabaseReadiness.label}</strong>
+                        <strong>{selectedEffectiveDatabaseReadiness.label}</strong>
                       </div>
                       <div>
                         <span>文档</span>
-                        <strong>{selectedDatabaseReadiness.documentCount}</strong>
+                        <strong>{selectedEffectiveDatabaseReadiness.documentCount}</strong>
                       </div>
                       <div>
                         <span>已索引文档</span>
-                        <strong>{selectedDatabaseReadiness.indexedDocumentCount}</strong>
+                        <strong>{selectedEffectiveDatabaseReadiness.indexedDocumentCount}</strong>
                       </div>
                       <div>
                         <span>已索引分块</span>
-                        <strong>{selectedDatabaseReadiness.indexedChunkCount}</strong>
+                        <strong>{selectedEffectiveDatabaseReadiness.indexedChunkCount}</strong>
                       </div>
                       <div>
                         <span>处理中/失败</span>
                         <strong>
-                          {selectedDatabaseReadiness.processingDocumentCount}/{selectedDatabaseReadiness.failedDocumentCount}
+                          {selectedEffectiveDatabaseReadiness.processingDocumentCount}/{selectedEffectiveDatabaseReadiness.failedDocumentCount}
                         </strong>
                       </div>
                       <div>
                         <span>最近文档</span>
-                        <strong>{formatObservationTime(selectedDatabaseReadiness.latestDocumentUpdatedAt)}</strong>
+                        <strong>{formatObservationTime(selectedEffectiveDatabaseReadiness.latestDocumentUpdatedAt)}</strong>
+                      </div>
+                    </div>
+                  ) : null}
+                  {selectedDatabaseStatus?.dataset?.datasetId ? (
+                    <div className="external-database-dataset-ref">
+                      <span>默认数据集</span>
+                      <strong>{selectedDatabaseStatus.dataset.title || selectedDatabaseStatus.dataset.key}</strong>
+                      <small>{selectedDatabaseStatus.dataset.datasetId}</small>
+                    </div>
+                  ) : null}
+                  {selectedDatabaseSemanticProfile?.configured ? (
+                    <div className="external-database-profile" aria-label="数据库语义画像">
+                      <div>
+                        <span>语义表</span>
+                        <strong>{selectedDatabaseSemanticProfile.tableCount}</strong>
+                      </div>
+                      <div>
+                        <span>指标/维度</span>
+                        <strong>{selectedDatabaseSemanticProfile.metricCount}/{selectedDatabaseSemanticProfile.dimensionCount}</strong>
+                      </div>
+                      <div>
+                        <span>时间维度</span>
+                        <strong>{selectedDatabaseSemanticProfile.timeDimensionCount}</strong>
+                      </div>
+                      <div>
+                        <span>报表建议</span>
+                        <strong>{selectedDatabaseSemanticProfile.reportSuggestionCount}</strong>
                       </div>
                     </div>
                   ) : null}
@@ -901,12 +992,59 @@ export default function ExternalIntegrationsPageClient() {
                       <small>暂无已映射表</small>
                     ) : null}
                   </div>
+                  {selectedDatabaseTableReadiness.length ? (
+                    <div className="external-database-table-readiness" aria-label="数据库表就绪度">
+                      {selectedDatabaseTableReadiness.map((table) => (
+                        <article key={table.table}>
+                          <div>
+                            <strong>{table.table}</strong>
+                            <span className={`external-database-readiness-${table.signal}`}>{table.label}</span>
+                          </div>
+                          <small>
+                            文档 {table.documentCount} · 索引 {table.indexedDocumentCount}/{table.indexedChunkCount}
+                          </small>
+                        </article>
+                      ))}
+                    </div>
+                  ) : databaseStatusLoading ? (
+                    <small className="external-database-muted">数据库表就绪度读取中</small>
+                  ) : null}
+                  {selectedDatabaseSyncReadiness?.configured ? (
+                    <div className="external-database-sync-readiness" aria-label="数据库同步可用状态">
+                      <div>
+                        <span>同步可用状态</span>
+                        <strong className={`external-database-readiness-${selectedDatabaseSyncReadiness.signal}`}>
+                          {selectedDatabaseSyncReadiness.label}
+                        </strong>
+                      </div>
+                      <div>
+                        <span>最近阶段</span>
+                        <strong>{selectedDatabaseSyncReadiness.workflowStage || selectedDatabaseSyncReadiness.latestStatus || '无'}</strong>
+                      </div>
+                      <div>
+                        <span>行/分块</span>
+                        <strong>
+                          {selectedDatabaseSyncReadiness.rowCount || selectedDatabaseSyncReadiness.documentCount}/{selectedDatabaseSyncReadiness.chunkCount}
+                        </strong>
+                      </div>
+                      <small>
+                        {selectedDatabaseSyncReadiness.failedRowCount || selectedDatabaseSyncReadiness.skippedRowCount
+                          ? `异常/跳过 ${selectedDatabaseSyncReadiness.failedRowCount}/${selectedDatabaseSyncReadiness.skippedRowCount}`
+                          : selectedDatabaseSyncReadiness.lastError
+                          || selectedDatabaseSyncReadiness.failureKind
+                          || selectedDatabaseSyncReadiness.failedTaskKey
+                          || selectedDatabaseSyncReadiness.checkpointSummary?.label
+                          || selectedDatabaseSyncReadiness.workflowStatus
+                          || formatObservationTime(selectedDatabaseSyncReadiness.updatedAt)}
+                      </small>
+                    </div>
+                  ) : null}
                   <div className="external-database-sync-list" aria-label="数据库同步运行">
-                    {auditLoading ? (
+                    {auditLoading && !selectedDatabaseStatus?.recentSyncRuns?.length ? (
                       <small>同步记录读取中</small>
                     ) : selectedDatabaseSyncRuns.length ? (
                       selectedDatabaseSyncRuns.map((run, index) => (
-                        <article key={`${run.updatedAt || index}:${run.status}`}>
+                        <article key={`${run.syncRunId || run.updatedAt || index}:${run.status}`}>
                           <div>
                             <strong>{run.status}</strong>
                             <span>{run.syncKind || 'sync'}</span>
@@ -923,7 +1061,15 @@ export default function ExternalIntegrationsPageClient() {
                             <span>任务</span>
                             <strong>{run.enqueuedTaskCount}</strong>
                           </div>
-                          <small>{run.failureKind || formatObservationTime(run.updatedAt)}</small>
+                          <small>
+                            {run.lastError
+                              || run.failureKind
+                              || run.failedTaskKey
+                              || run.checkpointSummary?.label
+                              || run.workflowStage
+                              || formatObservationTime(run.updatedAt)}
+                            {run.tableCounts?.length ? ` · ${run.tableCounts.map((table) => `${table.table}:${table.documentCount}`).join(' ')}` : ''}
+                          </small>
                         </article>
                       ))
                     ) : (

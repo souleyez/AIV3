@@ -910,6 +910,14 @@ pub struct AggregateDatabaseSourceResponse {
     pub result: Value,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct GetDatabaseSourceStatusResponse {
+    pub source_id: String,
+    pub connector_kind: String,
+    pub redacted_summary: Value,
+    pub status: Value,
+}
+
 fn default_database_aggregation() -> String {
     "count".to_string()
 }
@@ -4841,6 +4849,40 @@ mod tests {
 
         assert_eq!(encoded["source_id"], json!("src-mysql"));
         assert_eq!(encoded["result"]["rows"], json!([]));
+    }
+
+    #[test]
+    fn database_source_status_contract_keeps_status_payload_open() {
+        let response = GetDatabaseSourceStatusResponse {
+            source_id: "hy-sql".to_string(),
+            connector_kind: "mysql".to_string(),
+            redacted_summary: json!({
+                "kind": "mysql",
+                "database": "hy_sql",
+                "connection_env": "THIRD_PARTY_HY_SQL_DATABASE_URL"
+            }),
+            status: json!({
+                "dataset_readiness": {
+                    "signal": "ready",
+                    "document_count": 12
+                },
+                "table_readiness": [{
+                    "table": "bi_traffic_area",
+                    "signal": "ready"
+                }]
+            }),
+        };
+        let encoded = serde_json::to_value(response).expect("response should serialize");
+
+        assert_eq!(encoded["source_id"], json!("hy-sql"));
+        assert_eq!(
+            encoded["status"]["dataset_readiness"]["signal"],
+            json!("ready")
+        );
+        assert_eq!(
+            encoded["status"]["table_readiness"][0]["table"],
+            json!("bi_traffic_area")
+        );
     }
 
     #[test]

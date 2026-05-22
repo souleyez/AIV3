@@ -25,6 +25,7 @@ import {
   latestIntegrationActivity,
   normalizeControlResult,
   normalizeAuditItem,
+  normalizeDatabaseSourceStatus,
   normalizeExternalConversationTest,
   normalizeIntegrationSummary,
   searchEvidenceSignalLabel,
@@ -295,9 +296,14 @@ test('database source observability helpers normalize redacted source summary', 
       summary: {
         sync_kind: 'full',
         counts: {
-          document_count: 128,
+          documents_ingested: 128,
           acl_snapshot_count: 12,
           enqueued_task_count: 1,
+          ingest_table_counts: [{
+            table: 'bi_traffic_area',
+            documents_ingested: 128,
+            chunks_ingested: 480,
+          }],
         },
       },
     }),
@@ -311,9 +317,31 @@ test('database source observability helpers normalize redacted source summary', 
     syncKind: 'full',
     updatedAt: '2026-05-22T01:00:00Z',
     failureKind: '',
+    lastError: '',
+    failedTaskKey: '',
     documentCount: 128,
+    rowCount: 128,
+    skippedRowCount: 0,
+    failedRowCount: 0,
     aclSnapshotCount: 12,
     enqueuedTaskCount: 1,
+    checkpointSummary: {
+      configured: false,
+      hasCheckpoint: false,
+      cursorPresent: false,
+      topLevelIncrementalPresent: false,
+      tableCount: 0,
+      tableCheckpoints: [],
+      label: '无检查点',
+    },
+    tableCounts: [{
+      table: 'bi_traffic_area',
+      documentCount: 128,
+      rowCount: 128,
+      chunkCount: 480,
+      skippedRowCount: 0,
+      failedRowCount: 0,
+    }],
   }]);
 });
 
@@ -332,6 +360,166 @@ test('database source observability helpers keep unconfigured sources quiet', ()
   assert.equal(source.configured, false);
   assert.deepEqual(databaseSourceMetrics(integration), []);
   assert.deepEqual(databaseSourceTablePreview(integration), { tables: [], hiddenCount: 0 });
+});
+
+test('database source status helper normalizes selected-only detail payload', () => {
+  const status = normalizeDatabaseSourceStatus({
+    source_id: 'hy-sql-source',
+    status: {
+      config_valid: true,
+      dataset: {
+        dataset_id: '018f0000-0000-7000-9000-000000000001',
+        key: 'hy-sql',
+        title: 'HY SQL',
+      },
+      dataset_readiness: {
+        signal: 'ready',
+        document_count: 2,
+        indexed_document_count: 2,
+        indexed_chunk_count: 8,
+      },
+      table_readiness: [{
+        table: 'bi_traffic_area',
+        signal: 'ready',
+        document_count: 2,
+        indexed_document_count: 2,
+        indexed_chunk_count: 8,
+      }, {
+        table: 'empty_table',
+        signal: 'no_documents',
+      }],
+      semantic_profile: {
+        kind: 'mysql',
+        database: 'hy_sql',
+        table_count: 1,
+        column_count: 12,
+        metric_count: 3,
+        dimension_count: 4,
+        time_dimension_count: 1,
+        report_suggestion_count: 2,
+        tables: [{
+          table: 'bi_traffic_area',
+          column_count: 12,
+          approximate_row_count: 320,
+          metric_count: 3,
+          dimension_count: 4,
+          time_dimension_count: 1,
+          mapping_confidence: 92,
+        }],
+      },
+      recent_sync_runs: [{
+        sync_run_id: 'run-001',
+        sync_kind: 'full',
+        status: 'succeeded',
+        counts: {
+          documents_ingested: 2,
+          row_count: 2,
+          enqueued_task_count: 6,
+          skipped_row_count: 0,
+          failed_row_count: 0,
+          ingest_table_counts: [{
+            table: 'bi_traffic_area',
+            documents_ingested: 2,
+            row_count: 2,
+            chunks_ingested: 8,
+            skipped_row_count: 0,
+            failed_row_count: 0,
+          }],
+        },
+        checkpoint: {
+          workflow_stage: 'completed',
+          workflow_status: 'succeeded',
+        },
+        checkpoint_summary: {
+          has_checkpoint: true,
+          table_count: 1,
+          cursor_present: true,
+          table_checkpoints: [{
+            table: 'bi_traffic_area',
+            updated_after_present: true,
+            last_id_present: true,
+            version_after_present: false,
+          }],
+        },
+        updated_at: '2026-05-22T02:00:00Z',
+      }],
+      sync_readiness: {
+        signal: 'ready',
+        dataset_signal: 'ready',
+        has_sync_run: true,
+        latest_status: 'succeeded',
+        workflow_stage: 'completed',
+        workflow_status: 'succeeded',
+        document_count: 2,
+        row_count: 2,
+        chunk_count: 8,
+        skipped_row_count: 0,
+        failed_row_count: 0,
+        enqueued_task_count: 6,
+        table_counts: [{
+          table: 'bi_traffic_area',
+          document_count: 2,
+          row_count: 2,
+          chunk_count: 8,
+          skipped_row_count: 0,
+          failed_row_count: 0,
+        }],
+        checkpoint_summary: {
+          has_checkpoint: true,
+          table_count: 1,
+          cursor_present: true,
+          table_checkpoints: [{
+            table: 'bi_traffic_area',
+            updated_after_present: true,
+            last_id_present: true,
+          }],
+        },
+        updated_at: '2026-05-22T02:00:00Z',
+      },
+    },
+  });
+
+  assert.equal(status.loaded, true);
+  assert.equal(status.dataset.title, 'HY SQL');
+  assert.equal(status.datasetReadiness.label, '可问');
+  assert.equal(status.syncReadiness.label, '可问');
+  assert.equal(status.syncReadiness.workflowStage, 'completed');
+  assert.equal(status.syncReadiness.enqueuedTaskCount, 6);
+  assert.equal(status.syncReadiness.rowCount, 2);
+  assert.equal(status.syncReadiness.skippedRowCount, 0);
+  assert.equal(status.syncReadiness.failedRowCount, 0);
+  assert.equal(status.syncReadiness.checkpointSummary.label, '表检查点 1 · 游标已隐藏');
+  assert.equal(status.syncReadiness.checkpointSummary.tableCheckpoints[0].updatedAfterPresent, true);
+  assert.equal(status.semanticProfile.configured, true);
+  assert.equal(status.semanticProfile.tableCount, 1);
+  assert.equal(status.semanticProfile.metricCount, 3);
+  assert.equal(status.semanticProfile.dimensionCount, 4);
+  assert.equal(status.semanticProfile.reportSuggestionCount, 2);
+  assert.equal(status.semanticProfile.tables[0].mappingConfidence, 92);
+  assert.deepEqual(status.syncReadiness.tableCounts, [{
+    table: 'bi_traffic_area',
+    documentCount: 2,
+    rowCount: 2,
+    chunkCount: 8,
+    skippedRowCount: 0,
+    failedRowCount: 0,
+  }]);
+  assert.equal(status.tableReadiness[0].table, 'bi_traffic_area');
+  assert.equal(status.tableReadiness[1].label, '未入库');
+  assert.equal(status.recentSyncRuns[0].syncRunId, 'run-001');
+  assert.equal(status.recentSyncRuns[0].workflowStage, 'completed');
+  assert.equal(status.recentSyncRuns[0].enqueuedTaskCount, 6);
+  assert.equal(status.recentSyncRuns[0].rowCount, 2);
+  assert.equal(status.recentSyncRuns[0].checkpointSummary.cursorPresent, true);
+  assert.equal(status.recentSyncRuns[0].checkpointSummary.tableCount, 1);
+  assert.deepEqual(status.recentSyncRuns[0].tableCounts, [{
+    table: 'bi_traffic_area',
+    documentCount: 2,
+    rowCount: 2,
+    chunkCount: 8,
+    skippedRowCount: 0,
+    failedRowCount: 0,
+  }]);
 });
 
 test('driftSignalLabel covers source recovery states', () => {

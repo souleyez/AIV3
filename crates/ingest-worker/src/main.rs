@@ -589,6 +589,7 @@ async fn process_external_source_ingest_task(
     let process_result: Result<Value> = async {
         let mut document_summaries = Vec::with_capacity(documents.len());
         let mut total_chunks = 0usize;
+        let mut table_counts = BTreeMap::<String, (usize, usize)>::new();
         for input in documents {
             let document = upsert_external_source_document(
                 storage,
@@ -613,6 +614,10 @@ async fn process_external_source_ingest_task(
             let chunks =
                 build_external_source_document_chunks(dataset_id, document.id, &source_id, &input);
             total_chunks += chunks.len();
+            let source_table = external_source_input_table(&input);
+            let table_count = table_counts.entry(source_table.clone()).or_default();
+            table_count.0 += 1;
+            table_count.1 += chunks.len();
             storage
                 .document_chunks()
                 .replace_for_document(task.tenant_id, document.id, &chunks)
@@ -645,6 +650,7 @@ async fn process_external_source_ingest_task(
                 "document_id": updated_document.id,
                 "document_external_id": input.document_external_id,
                 "revision_external_id": input.revision_external_id,
+                "source_table": source_table,
                 "chunk_count": chunks.len(),
                 "lifecycle": updated_document.lifecycle.as_str(),
             }));
@@ -654,7 +660,11 @@ async fn process_external_source_ingest_task(
             "source_id": source_id,
             "external_sync_run_id": sync_run_id,
             "document_count": document_summaries.len(),
+            "row_count": document_summaries.len(),
             "chunk_count": total_chunks,
+            "skipped_row_count": 0,
+            "failed_row_count": 0,
+            "ingest_table_counts": external_source_ingest_table_counts(table_counts),
             "document_ids": document_summaries
                 .iter()
                 .filter_map(|summary| summary.get("document_id").cloned())
@@ -695,6 +705,14 @@ async fn process_external_source_ingest_task(
         }
         Err(error) => {
             let error_message = error.to_string();
+            update_external_sync_run_failure_summary(
+                storage,
+                task.tenant_id,
+                sync_run_id.as_deref(),
+                &task.task_key,
+                &error_message,
+            )
+            .await?;
             if let Err(signal_error) = platform_api::apply_workflow_signal_with_dependencies(
                 storage,
                 workflow_catalog,
@@ -958,16 +976,102 @@ async fn update_external_sync_run_counts(
             .get("document_count")
             .and_then(Value::as_u64)
             .unwrap_or(0),
+        "row_count": signal_output
+            .get("row_count")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
         "chunks_ingested": signal_output
             .get("chunk_count")
             .and_then(Value::as_u64)
             .unwrap_or(0),
+        "skipped_row_count": signal_output
+            .get("skipped_row_count")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+        "failed_row_count": signal_output
+            .get("failed_row_count")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+        "ingest_table_counts": signal_output
+            .get("ingest_table_counts")
+            .filter(|value| value.is_array())
+            .cloned()
+            .unwrap_or_else(|| json!([])),
     }))
     .bind(Utc::now())
     .execute(storage.pool())
     .await?;
 
     Ok(())
+}
+
+async fn update_external_sync_run_failure_summary(
+    storage: &PgStorage,
+    tenant_id: domain_model::TenantId,
+    sync_run_id: Option<&str>,
+    task_key: &str,
+    error_message: &str,
+) -> Result<()> {
+    let Some(sync_run_id) = sync_run_id.and_then(|raw| uuid::Uuid::parse_str(raw).ok()) else {
+        return Ok(());
+    };
+    sqlx::query(
+        r#"
+        update external_sync_runs
+        set counts = counts || $3,
+            updated_at = $4
+        where tenant_id = $1 and id = $2
+        "#,
+    )
+    .bind(tenant_id.0)
+    .bind(sync_run_id)
+    .bind(json!({
+        "failed_task_key": task_key,
+        "last_error": external_sync_error_excerpt(error_message),
+    }))
+    .bind(Utc::now())
+    .execute(storage.pool())
+    .await?;
+    Ok(())
+}
+
+fn external_sync_error_excerpt(error_message: &str) -> String {
+    error_message
+        .chars()
+        .filter(|ch| !ch.is_control() || ch.is_whitespace())
+        .collect::<String>()
+        .trim()
+        .chars()
+        .take(240)
+        .collect()
+}
+
+fn external_source_input_table(input: &ExternalSourceDocumentInput) -> String {
+    string_field(
+        &input.metadata,
+        &["source_table", "sourceTable", "table", "source_table_name"],
+    )
+    .map(|value| value.trim().to_string())
+    .filter(|value| !value.is_empty())
+    .unwrap_or_else(|| "[unmapped]".to_string())
+}
+
+fn external_source_ingest_table_counts(table_counts: BTreeMap<String, (usize, usize)>) -> Value {
+    Value::Array(
+        table_counts
+            .into_iter()
+            .map(|(table, (documents_ingested, chunks_ingested))| {
+                json!({
+                    "table": table,
+                    "documents_ingested": documents_ingested,
+                    "row_count": documents_ingested,
+                    "chunks_ingested": chunks_ingested,
+                    "skipped_row_count": 0,
+                    "failed_row_count": 0,
+                })
+            })
+            .collect(),
+    )
 }
 
 fn external_source_documents_from_context(
@@ -1990,6 +2094,39 @@ mod tests {
             .expect("empty external document batch should be a successful no-op");
 
         assert!(documents.is_empty());
+    }
+
+    #[test]
+    fn external_source_ingest_table_counts_summarize_database_rows() {
+        let input = ExternalSourceDocumentInput {
+            document_external_id: "bi_traffic_area:1".to_string(),
+            revision_external_id: Some("rev-1".to_string()),
+            title: "bi_traffic_area row 1".to_string(),
+            content_type: "text/markdown".to_string(),
+            body: "area_name: 华东".to_string(),
+            metadata: json!({
+                "source_kind": "mysql",
+                "source_table": "bi_traffic_area",
+                "source_primary_key": "id=1"
+            }),
+            acl_snapshot: None,
+            acl_hash: None,
+        };
+        assert_eq!(external_source_input_table(&input), "bi_traffic_area");
+
+        let mut table_counts = BTreeMap::new();
+        table_counts.insert("bi_traffic_area".to_string(), (2, 5));
+        assert_eq!(
+            external_source_ingest_table_counts(table_counts),
+            json!([{
+                "table": "bi_traffic_area",
+                "documents_ingested": 2,
+                "row_count": 2,
+                "chunks_ingested": 5,
+                "skipped_row_count": 0,
+                "failed_row_count": 0
+            }])
+        );
     }
 
     #[test]
