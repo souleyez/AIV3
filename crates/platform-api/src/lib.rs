@@ -31690,6 +31690,7 @@ async fn build_assistant_run_spreadsheet_row_analysis_supply(
         "model_guidance": [
             "For attendance, work-hour, absence, and daily earliest-clock-in questions, treat spreadsheet_row_analysis.rows as the deterministic computed table.",
             "Use retrieval_evidence only to cross-check source wording; do not recompute maxima, minima, or earliest times from raw chunks when this item is present.",
+            "For work-hour extremes, use rows whose category is longest/shortest; do not treat missing-punch, non-attendance, or 0-hour absence rows as shortest work time.",
             "Keep dates in YYYY-MM-DD and times in HH:MM."
         ]
     })])
@@ -31866,7 +31867,11 @@ fn assistant_run_daily_earliest_attendance_rows(rows: &[AssistantRunAttendanceRo
 fn assistant_run_work_hour_extreme_rows(rows: &[AssistantRunAttendanceRow]) -> Vec<Value> {
     let hour_rows = rows
         .iter()
-        .filter_map(|row| row.work_hours.map(|hours| (row, hours)))
+        .filter_map(|row| {
+            row.work_hours
+                .filter(|hours| assistant_run_attendance_row_has_countable_work_hours(row, *hours))
+                .map(|hours| (row, hours))
+        })
         .collect::<Vec<_>>();
     let Some((shortest_row, shortest_hours)) = hour_rows
         .iter()
@@ -31886,6 +31891,17 @@ fn assistant_run_work_hour_extreme_rows(rows: &[AssistantRunAttendanceRow]) -> V
         assistant_run_work_hour_extreme_value("longest", longest_row, longest_hours),
         assistant_run_work_hour_extreme_value("shortest", shortest_row, shortest_hours),
     ]
+}
+
+fn assistant_run_attendance_row_has_countable_work_hours(
+    row: &AssistantRunAttendanceRow,
+    hours: f64,
+) -> bool {
+    hours > 0.0
+        && row.first_punch.is_some()
+        && row.last_punch.is_some()
+        && !row.status.contains("未打卡")
+        && !row.status.contains("不考勤")
 }
 
 fn assistant_run_work_hour_extreme_value(
@@ -67093,6 +67109,7 @@ mod tests {
             "A3 2026-05-14 坐班0900 08:51 18:10 9.32小时 正常考勤",
             "A4 2026-05-14 坐班0900 08:56 18:02 9.10小时 正常考勤",
             "A5 2026-05-13 坐班0900 未打卡 不考勤",
+            "A5 2026-05-19 坐班0900 0.00小时 不考勤",
             "A8 2026-02-07 休息 08:18 20:51 12.55小时 正常考勤",
             "A8 2026-02-25 坐班0930 09:25 13:43 4.30小时 正常考勤",
         ]
@@ -67132,6 +67149,8 @@ mod tests {
         let rows = [
             "A3 2026-05-20 坐班0900 08:59 18:15 9.27小时 正常考勤",
             "A5 2026-05-13 坐班0900 未打卡 不考勤",
+            "A5 2026-05-19 坐班0900 0.00小时 不考勤",
+            "A8 2026-05-15 坐班0930 未打卡 0.00小时 正常考勤",
             "A8 2026-02-07 休息 08:18 20:51 12.55小时 正常考勤",
             "A8 2026-02-25 坐班0930 09:25 13:43 4.30小时 正常考勤",
             "A9 2026-02-25 坐班0930 09:31 18:01 8.50小时 正常考勤",
@@ -67149,20 +67168,26 @@ mod tests {
         .expect("frequent attendance prompt should compute deterministic rows");
 
         assert_eq!(analysis_kind, "absence_and_work_hour_extremes");
-        assert_eq!(analysis_rows.len(), 3);
+        assert_eq!(analysis_rows.len(), 4);
         assert!(analysis_rows
             .iter()
             .any(|row| row.get("employee") == Some(&json!("A5"))
                 && row.get("counts_as_absence") == Some(&json!(false))));
-        assert!(analysis_rows.iter().any(|row| row.get("category") == Some(&json!("longest"))
-            && row.get("employee") == Some(&json!("A8"))
-            && row.get("date") == Some(&json!("2026-02-07"))));
-        assert!(analysis_rows.iter().any(|row| row.get("category") == Some(&json!("shortest"))
-            && row.get("employee") == Some(&json!("A8"))
-            && row.get("date") == Some(&json!("2026-02-25"))));
+        assert!(analysis_rows
+            .iter()
+            .any(|row| row.get("category") == Some(&json!("longest"))
+                && row.get("employee") == Some(&json!("A8"))
+                && row.get("date") == Some(&json!("2026-02-07"))));
+        assert!(analysis_rows
+            .iter()
+            .any(|row| row.get("category") == Some(&json!("shortest"))
+                && row.get("employee") == Some(&json!("A8"))
+                && row.get("date") == Some(&json!("2026-02-25"))));
         assert!(excerpt.contains("absence_candidate | 2026-05-13 | A5 | 坐班0900 | 未打卡 不考勤"));
         assert!(excerpt.contains("longest | 2026-02-07 | A8 | 12.55小时"));
         assert!(excerpt.contains("shortest | 2026-02-25 | A8 | 4.30小时"));
+        assert!(!excerpt.contains("shortest | 2026-05-19"));
+        assert!(!excerpt.contains("shortest | 2026-05-15"));
         assert!(!excerpt.contains("46162"));
     }
 
