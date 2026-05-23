@@ -50,6 +50,11 @@
   - `scripts/run-v3-quality-gate-smoke.ps1`
   - `fixtures/document-quality/smoke-cases.json`
   - `fixtures/document-quality/README.md`
+- Pre-deploy server smoke is now config-driven through `-ServerCaseConfigPath`: without private case config it only records skipped cases and sends no requests; with config it calls the existing AssistantRun API and reads run detail events for quality-gate/ReAct observability.
+- Verified the pre-deploy smoke script path without touching 8 server:
+  - `.\scripts\run-v3-quality-gate-smoke.ps1 -BaseUrl http://127.0.0.1:9 -Case attendance_final -Json`
+  - `.\scripts\run-v3-quality-gate-smoke.ps1 -Local -Case attendance_final`
+- Added the high-frequency attendance workbook query as `attendance_frequent` / `attendance_hot`, covering absence plus longest/shortest work hours with required final-answer terms.
 - Full local quality smoke passed:
   - `.\scripts\run-v3-quality-gate-smoke.ps1 -Local -Case all`
   - Covered one-character PDF, DOC/DOCX "邓工是谁", resume company statistics, multi-dimensional resume ranking table, table-heavy documents, attendance date/work-hour formatting, scanned visual PDF fallback, smart-home dissatisfied-customer answers, and smart-elevator point-list table answers.
@@ -452,6 +457,12 @@ cargo test -p platform-api assistant_run_react --lib
 .\scripts\run-v3-quality-gate-smoke.ps1 -BaseUrl <8-server-url> -Case attendance_final
 .\scripts\run-v3-quality-gate-smoke.ps1 -BaseUrl <8-server-url> -Case low_text_pdf_final
 .\scripts\run-v3-quality-gate-smoke.ps1 -BaseUrl <8-server-url> -Case resume_ranking_table
+```
+
+For real 8-server document validation, pass private selected-scope mappings:
+
+```powershell
+.\scripts\run-v3-quality-gate-smoke.ps1 -BaseUrl <8-server-url> -BearerToken <token> -ServerCaseConfigPath <private-server-cases.json> -Case attendance_final
 ```
 
 Expected: final answers are customer-safe, evidence-grounded, and no leak markers appear.

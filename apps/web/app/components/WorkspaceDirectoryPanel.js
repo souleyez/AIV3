@@ -1,6 +1,14 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import {
+  fetchDatabaseSourceOptions,
+  fetchDatabaseSourceStatus,
+  inspectDatabaseSourceSchema,
+  profileDatabaseSource,
+  startDatabaseSourceSync,
+  testDatabaseSourceConnection,
+} from '../lib/database-source';
 import { buildDocumentDetailViewModel, chunkSectionHints } from '../lib/document-detail-view';
 import { formatDateTime, formatRelativeTime, formatSnakeCaseLabel, truncateText } from '../lib/formatters';
 import ModelPoolPanel from './ModelPoolPanel';
@@ -64,6 +72,244 @@ function MiniMetric({ label, value }) {
       <span>{label}</span>
       <strong>{value}</strong>
     </div>
+  );
+}
+
+function DatabaseSourcePanel({ datasets }) {
+  const [sources, setSources] = useState([]);
+  const [selectedSourceId, setSelectedSourceId] = useState('');
+  const [selectedDatasetId, setSelectedDatasetId] = useState('');
+  const [status, setStatus] = useState(null);
+  const [schema, setSchema] = useState(null);
+  const [profile, setProfile] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [actionBusy, setActionBusy] = useState('');
+  const [notice, setNotice] = useState('');
+  const [error, setError] = useState('');
+
+  const selectedSource = sources.find((item) => item.id === selectedSourceId) || null;
+
+  async function loadSources() {
+    setLoading(true);
+    setError('');
+    try {
+      const nextSources = await fetchDatabaseSourceOptions();
+      setSources(nextSources);
+      setSelectedSourceId((current) => (
+        current && nextSources.some((item) => item.id === current)
+          ? current
+          : nextSources[0]?.id || ''
+      ));
+    } catch (loadError) {
+      setSources([]);
+      setError(loadError instanceof Error ? loadError.message : '数据库源不可用');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function loadStatus(sourceId = selectedSourceId) {
+    if (!sourceId) {
+      setStatus(null);
+      return;
+    }
+    setActionBusy('status');
+    try {
+      setStatus(await fetchDatabaseSourceStatus(sourceId));
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : '数据库源状态读取失败');
+    } finally {
+      setActionBusy('');
+    }
+  }
+
+  async function runAction(kind) {
+    if (!selectedSourceId) return;
+    setActionBusy(kind);
+    setNotice('');
+    setError('');
+    try {
+      if (kind === 'test') {
+        const result = await testDatabaseSourceConnection(selectedSourceId);
+        setNotice(`连接正常 · ${result?.connection?.server_version || result?.connection?.database || '已通过'}`);
+      } else if (kind === 'schema') {
+        const nextSchema = await inspectDatabaseSourceSchema(selectedSourceId);
+        setSchema(nextSchema);
+        setNotice(`结构已读取 · ${nextSchema.tableCount} 张表`);
+      } else if (kind === 'profile') {
+        const nextProfile = await profileDatabaseSource(selectedSourceId);
+        setProfile(nextProfile);
+        setNotice(`语义画像已更新 · 指标 ${nextProfile.metricCount} · 维度 ${nextProfile.dimensionCount}`);
+      } else if (kind === 'full' || kind === 'incremental') {
+        const datasetId = selectedDatasetId || selectedSource?.source?.defaultDatasetId || '';
+        if (!datasetId) {
+          throw new Error('请先选择目标数据集');
+        }
+        const result = await startDatabaseSourceSync(selectedSourceId, kind, datasetId);
+        setNotice(`同步已提交 · ${result?.sync_run_id || result?.syncRunId || '运行中'}`);
+        await loadStatus(selectedSourceId);
+      }
+    } catch (actionError) {
+      setError(actionError instanceof Error ? actionError.message : '数据库源操作失败');
+    } finally {
+      setActionBusy('');
+    }
+  }
+
+  useEffect(() => {
+    loadSources();
+  }, []);
+
+  useEffect(() => {
+    if (selectedSourceId) {
+      setStatus(null);
+      setSchema(null);
+      setProfile(null);
+      loadStatus(selectedSourceId);
+    }
+  }, [selectedSourceId]);
+
+  useEffect(() => {
+    const defaultDatasetId = selectedSource?.source?.defaultDatasetId || '';
+    setSelectedDatasetId(defaultDatasetId || datasets[0]?.id || '');
+  }, [selectedSourceId, datasets.map((dataset) => dataset.id).join('|')]);
+
+  const datasetReadiness = status?.datasetReadiness || null;
+  const syncReadiness = status?.syncReadiness || null;
+  const tableReadiness = status?.tableReadiness || [];
+  const recentSyncRuns = status?.recentSyncRuns || [];
+  const busy = Boolean(actionBusy);
+
+  return (
+    <section className="directory-card database-source-card">
+      <div className="directory-section-head">
+        <div>
+          <h3>数据库源</h3>
+          <p>数据库先同步到目标数据集，再进入问答、报表和模板产物链路。</p>
+        </div>
+        <button type="button" className="ghost-btn compact-action-btn" onClick={loadSources} disabled={loading || busy}>
+          {loading ? '刷新中' : '刷新'}
+        </button>
+      </div>
+
+      {sources.length ? (
+        <>
+          <div className="database-source-controls">
+            <label>
+              <span>连接</span>
+              <select value={selectedSourceId} onChange={(event) => setSelectedSourceId(event.target.value)} disabled={busy}>
+                {sources.map((source) => (
+                  <option key={source.id} value={source.id}>
+                    {source.displayName}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              <span>目标数据集</span>
+              <select value={selectedDatasetId} onChange={(event) => setSelectedDatasetId(event.target.value)} disabled={busy || !datasets.length}>
+                {datasets.map((dataset) => (
+                  <option key={dataset.id} value={dataset.id}>
+                    {dataset.title || dataset.key}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+
+          <div className="directory-metric-grid database-source-metrics">
+            <MiniMetric label="数据库" value={selectedSource?.source?.database || '未配置'} />
+            <MiniMetric label="映射表" value={selectedSource?.source?.tableCount || 0} />
+            <MiniMetric label="问答状态" value={datasetReadiness?.label || '未知'} />
+            <MiniMetric label="同步状态" value={syncReadiness?.label || '未同步'} />
+          </div>
+
+          <div className="database-source-actions">
+            <button type="button" className="ghost-btn compact-action-btn" onClick={() => runAction('test')} disabled={busy}>
+              {actionBusy === 'test' ? '测试中' : '测试连接'}
+            </button>
+            <button type="button" className="ghost-btn compact-action-btn" onClick={() => runAction('schema')} disabled={busy}>
+              {actionBusy === 'schema' ? '读取中' : '读取结构'}
+            </button>
+            <button type="button" className="ghost-btn compact-action-btn" onClick={() => runAction('profile')} disabled={busy}>
+              {actionBusy === 'profile' ? '画像中' : '语义画像'}
+            </button>
+            <button type="button" className="primary-btn compact-action-btn" onClick={() => runAction('incremental')} disabled={busy || !selectedDatasetId}>
+              {actionBusy === 'incremental' ? '提交中' : '增量同步'}
+            </button>
+            <button type="button" className="ghost-btn compact-action-btn" onClick={() => runAction('full')} disabled={busy || !selectedDatasetId}>
+              {actionBusy === 'full' ? '提交中' : '全量同步'}
+            </button>
+          </div>
+
+          {notice ? <div className="database-source-notice">{notice}</div> : null}
+          {error ? <div className="database-source-error">{error}</div> : null}
+
+          <div className="database-source-detail-grid">
+            <article>
+              <strong>配置摘要</strong>
+              <span>{selectedSource?.source?.kind || 'database'} · {selectedSource?.source?.connectionEnv || '未配置连接引用'}</span>
+              <span>默认数据集：{selectedSource?.source?.defaultDatasetId || '未绑定'}</span>
+              {selectedSource?.source?.tables?.length ? <span>表：{selectedSource.source.tables.slice(0, 6).join('、')}</span> : null}
+            </article>
+            <article>
+              <strong>同步摘要</strong>
+              <span>{syncReadiness?.latestStatus || '暂无同步'} · 行 {syncReadiness?.rowCount || 0} · 文档 {syncReadiness?.documentCount || 0}</span>
+              <span>失败行 {syncReadiness?.failedRowCount || 0} · 跳过行 {syncReadiness?.skippedRowCount || 0}</span>
+              <span>检查点：{syncReadiness?.checkpointSummary?.label || '无'}</span>
+            </article>
+          </div>
+
+          {tableReadiness.length ? (
+            <div className="database-source-table-list">
+              {tableReadiness.slice(0, 6).map((table) => (
+                <article key={table.table}>
+                  <strong>{table.table}</strong>
+                  <span>{table.label} · 文档 {table.documentCount || 0} · 索引 {table.indexedDocumentCount || 0}</span>
+                </article>
+              ))}
+            </div>
+          ) : null}
+
+          {schema?.tables?.length ? (
+            <div className="database-source-table-list">
+              {schema.tables.slice(0, 6).map((table) => (
+                <article key={table.table || table.name}>
+                  <strong>{table.table || table.name}</strong>
+                  <span>列 {table.columnCount} · 预估行 {table.approximateRowCount}</span>
+                </article>
+              ))}
+            </div>
+          ) : null}
+
+          {profile?.tables?.length ? (
+            <div className="database-source-table-list">
+              {profile.tables.slice(0, 6).map((table) => (
+                <article key={table.table}>
+                  <strong>{table.table}</strong>
+                  <span>指标 {table.metricCount} · 维度 {table.dimensionCount} · 置信 {table.mappingConfidence}</span>
+                </article>
+              ))}
+            </div>
+          ) : null}
+
+          {recentSyncRuns.length ? (
+            <div className="database-source-table-list">
+              {recentSyncRuns.slice(0, 4).map((run) => (
+                <article key={run.syncRunId}>
+                  <strong>{run.status} · {run.syncKind}</strong>
+                  <span>{formatRelativeTime(run.updatedAt || run.createdAt)} · 行 {run.rowCount} · 文档 {run.documentCount}</span>
+                </article>
+              ))}
+            </div>
+          ) : null}
+        </>
+      ) : (
+        <div className="directory-empty">
+          {loading ? '正在读取数据库源。' : '暂无已配置数据库源。'}
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -500,6 +746,7 @@ function SourcesPage({ documents, datasets }) {
   const groups = sourceGroups(documents);
   return (
     <div className="directory-grid-cards">
+      <DatabaseSourcePanel datasets={datasets} />
       {groups.length ? groups.map((group) => (
         <section className="directory-card" key={group.kind}>
           <div className="directory-section-head">

@@ -1720,6 +1720,41 @@ impl PgDocumentRepository {
 
         map_document_row(&row)
     }
+
+    pub async fn move_to_dataset(
+        &self,
+        tenant_id: TenantId,
+        document_id: DocumentId,
+        dataset_id: DatasetId,
+        metadata_updates: &Value,
+        updated_at: DateTime<Utc>,
+    ) -> Result<Document> {
+        let current = self
+            .get_by_id(tenant_id, document_id)
+            .await?
+            .ok_or_else(|| anyhow!("document {document_id} not found for tenant {tenant_id}"))?;
+        let merged_metadata = merge_document_metadata(&current.metadata, metadata_updates)?;
+
+        let row = sqlx::query(
+            r#"
+            update documents
+            set dataset_id = $3,
+                metadata = $4,
+                updated_at = $5
+            where tenant_id = $1 and id = $2
+            returning id, tenant_id, dataset_id, owner_user_id, title, object_key, content_type, lifecycle, metadata, created_at, updated_at
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(document_id.0)
+        .bind(dataset_id.0)
+        .bind(merged_metadata)
+        .bind(updated_at)
+        .fetch_one(&self.pool)
+        .await?;
+
+        map_document_row(&row)
+    }
 }
 
 impl PgDatasetDocumentMembershipRepository {

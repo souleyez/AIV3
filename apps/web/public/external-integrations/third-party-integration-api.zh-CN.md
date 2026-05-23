@@ -741,6 +741,52 @@ Authorization: Bearer <V3 inbound token>
 | `documents[].created_at` | V3 文档记录创建时间 |
 | `documents[].updated_at` | V3 文档记录更新时间 |
 
+### 11.5 第三方移动文档分组
+
+第三方把文档从一个资料库/分组移动到另一个资料库/分组时，可以按 `document_external_id` 修改 V3 侧归属的数据集。该接口不重新下载文档、不重新解析文档。
+
+```http
+PATCH /v1/external/channels/{connection_id}/documents/{document_external_id}/dataset
+Host: v3.elepcloud.com
+Content-Type: application/json
+Authorization: Bearer <V3 inbound token>
+```
+
+请求示例：
+
+```json
+{
+  "source_id": "third-party-source-main",
+  "dataset_external_id": "dataset-third-party-archive",
+  "dataset_title": "第三方归档资料库",
+  "revision_external_id": "rev-20260515-01"
+}
+```
+
+请求字段说明：
+
+| 字段 | 必填 | 说明 |
+| --- | --- | --- |
+| `source_id` | 条件必填 | V3 资料源 ID；连接配置了默认资料源或 V3 可从文档记录推断时可省略 |
+| `dataset_external_id` | 条件必填 | 目标第三方数据集或资料库稳定 ID；和 `dataset_id` 二选一。目标不存在时 V3 自动创建 |
+| `dataset_id` | 条件必填 | 目标 V3 数据集 UUID；和 `dataset_external_id` 二选一 |
+| `dataset_title` | 否 | 目标数据集展示名；自动创建目标数据集时使用 |
+| `revision_external_id` | 否 | 第三方文档版本 ID；不传则移动同一 `document_external_id` 下的全部版本 |
+
+响应字段说明：
+
+| 字段 | 说明 |
+| --- | --- |
+| `accepted` | 是否完成移动 |
+| `source_id` | V3 回显的资料源 ID |
+| `document_external_id` | V3 回显的第三方文档 ID |
+| `revision_external_id` | 本次限定的第三方版本 ID；未限定时为空 |
+| `dataset_id` | 移动后的 V3 数据集 UUID |
+| `dataset_external_id` | 移动后的第三方数据集或资料库 ID |
+| `moved_count` | 实际移动的 V3 文档记录数量 |
+| `previous_dataset_ids` | 移动前的 V3 数据集 UUID 列表 |
+| `documents` | 移动后的 V3 文档摘要列表 |
+
 ## 12. 用户与组织接口
 
 第三方需要让 V3 能够识别外部用户是谁，以及该用户属于哪些组织和角色。

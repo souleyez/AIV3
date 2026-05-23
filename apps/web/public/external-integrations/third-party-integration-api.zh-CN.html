@@ -369,18 +369,18 @@
 <a href="#section-14">幂等规则</a>
 <a href="#section-15">聊天通道接口</a>
 <a href="#section-20">第三方文档库接口</a>
-<a href="#section-25">用户与组织接口</a>
-<a href="#section-26">产物发布接口</a>
-<a href="#section-27">业务动作接口</a>
-<a href="#section-28">回复格式</a>
-<a href="#section-29">管理观测接口</a>
-<a href="#section-30">错误格式</a>
-<a href="#section-31">数据安全要求</a>
-<a href="#section-32">部署方式</a>
-<a href="#section-36">飞书、Lark、企业微信说明</a>
-<a href="#section-37">第三方联调准备清单</a>
-<a href="#section-39">版本与变更</a>
-<a href="#section-40">推荐联调顺序</a>
+<a href="#section-26">用户与组织接口</a>
+<a href="#section-27">产物发布接口</a>
+<a href="#section-28">业务动作接口</a>
+<a href="#section-29">回复格式</a>
+<a href="#section-30">管理观测接口</a>
+<a href="#section-31">错误格式</a>
+<a href="#section-32">数据安全要求</a>
+<a href="#section-33">部署方式</a>
+<a href="#section-37">飞书、Lark、企业微信说明</a>
+<a href="#section-38">第三方联调准备清单</a>
+<a href="#section-40">版本与变更</a>
+<a href="#section-41">推荐联调顺序</a>
       </nav>
     </aside>
     <main>
@@ -887,7 +887,30 @@ Authorization: Bearer &lt;V3 inbound token&gt;</code></pre>
   </figure>
 <p>解析详情响应字段说明：</p>
 <div class="table-shell"><table><thead><tr><th>字段</th><th>说明</th></tr></thead><tbody><tr><td><code>source_id</code></td><td>查询的资料源 ID</td></tr><tr><td><code>document_external_id</code></td><td>查询的第三方文档 ID</td></tr><tr><td><code>lifecycle</code></td><td>当前聚合生命周期；<code>indexed</code> 表示文档已完成索引</td></tr><tr><td><code>chunk_count</code> / <code>chunkCount</code></td><td>已生成的文本分块数量</td></tr><tr><td><code>retrieval_evidence_count</code> / <code>retrievalEvidenceCount</code></td><td>可用于文档问答的证据数量</td></tr><tr><td><code>parse_status</code> / <code>parseStatus</code></td><td>文档解析状态</td></tr><tr><td><code>parse_quality_status</code> / <code>parseQualityStatus</code></td><td>解析质量状态</td></tr><tr><td><code>parse_quality_summary</code> / <code>parseQualitySummary</code></td><td>解析质量摘要对象</td></tr><tr><td><code>model_status</code> / <code>modelStatus</code></td><td>问答可用状态摘要</td></tr><tr><td><code>ingest</code></td><td>解析入库摘要，例如标题、内容类型和分块数</td></tr><tr><td><code>workflow</code></td><td>可选排查状态摘要；正常对接可忽略</td></tr><tr><td><code>latest</code></td><td>最新版本对应的文档详情对象</td></tr><tr><td><code>documents</code></td><td>与该外部文档 ID 匹配的 V3 文档记录列表</td></tr><tr><td><code>documents[].document_id</code></td><td>V3 返回的文档 ID</td></tr><tr><td><code>documents[].dataset_id</code></td><td>V3 数据集 UUID</td></tr><tr><td><code>documents[].title</code></td><td>V3 文档标题</td></tr><tr><td><code>documents[].content_type</code></td><td>V3 文档 MIME 类型</td></tr><tr><td><code>documents[].lifecycle</code></td><td>单条文档记录生命周期</td></tr><tr><td><code>documents[].revision_external_id</code></td><td>第三方版本 ID</td></tr><tr><td><code>documents[].created_at</code></td><td>V3 文档记录创建时间</td></tr><tr><td><code>documents[].updated_at</code></td><td>V3 文档记录更新时间</td></tr></tbody></table></div>
-<h2 id="section-25">12. 用户与组织接口</h2>
+<h3 id="section-25">11.5 第三方移动文档分组</h3>
+<p>第三方把文档从一个资料库/分组移动到另一个资料库/分组时，可以按 <code>document_external_id</code> 修改 V3 侧归属的数据集。该接口不重新下载文档、不重新解析文档。</p>
+<figure class="code-card">
+    <figcaption><span>http</span><button type="button" class="copy-code">复制</button></figcaption>
+    <pre><code>PATCH /v1/external/channels/{connection_id}/documents/{document_external_id}/dataset
+Host: v3.elepcloud.com
+Content-Type: application/json
+Authorization: Bearer &lt;V3 inbound token&gt;</code></pre>
+  </figure>
+<p>请求示例：</p>
+<figure class="code-card">
+    <figcaption><span>json</span><button type="button" class="copy-code">复制</button></figcaption>
+    <pre><code>{
+  &quot;source_id&quot;: &quot;third-party-source-main&quot;,
+  &quot;dataset_external_id&quot;: &quot;dataset-third-party-archive&quot;,
+  &quot;dataset_title&quot;: &quot;第三方归档资料库&quot;,
+  &quot;revision_external_id&quot;: &quot;rev-20260515-01&quot;
+}</code></pre>
+  </figure>
+<p>请求字段说明：</p>
+<div class="table-shell"><table><thead><tr><th>字段</th><th>必填</th><th>说明</th></tr></thead><tbody><tr><td><code>source_id</code></td><td>条件必填</td><td>V3 资料源 ID；连接配置了默认资料源或 V3 可从文档记录推断时可省略</td></tr><tr><td><code>dataset_external_id</code></td><td>条件必填</td><td>目标第三方数据集或资料库稳定 ID；和 <code>dataset_id</code> 二选一。目标不存在时 V3 自动创建</td></tr><tr><td><code>dataset_id</code></td><td>条件必填</td><td>目标 V3 数据集 UUID；和 <code>dataset_external_id</code> 二选一</td></tr><tr><td><code>dataset_title</code></td><td>否</td><td>目标数据集展示名；自动创建目标数据集时使用</td></tr><tr><td><code>revision_external_id</code></td><td>否</td><td>第三方文档版本 ID；不传则移动同一 <code>document_external_id</code> 下的全部版本</td></tr></tbody></table></div>
+<p>响应字段说明：</p>
+<div class="table-shell"><table><thead><tr><th>字段</th><th>说明</th></tr></thead><tbody><tr><td><code>accepted</code></td><td>是否完成移动</td></tr><tr><td><code>source_id</code></td><td>V3 回显的资料源 ID</td></tr><tr><td><code>document_external_id</code></td><td>V3 回显的第三方文档 ID</td></tr><tr><td><code>revision_external_id</code></td><td>本次限定的第三方版本 ID；未限定时为空</td></tr><tr><td><code>dataset_id</code></td><td>移动后的 V3 数据集 UUID</td></tr><tr><td><code>dataset_external_id</code></td><td>移动后的第三方数据集或资料库 ID</td></tr><tr><td><code>moved_count</code></td><td>实际移动的 V3 文档记录数量</td></tr><tr><td><code>previous_dataset_ids</code></td><td>移动前的 V3 数据集 UUID 列表</td></tr><tr><td><code>documents</code></td><td>移动后的 V3 文档摘要列表</td></tr></tbody></table></div>
+<h2 id="section-26">12. 用户与组织接口</h2>
 <p>第三方需要让 V3 能够识别外部用户是谁，以及该用户属于哪些组织和角色。</p>
 <p>建议提供以下接口：</p>
 <figure class="code-card">
@@ -931,7 +954,7 @@ GET /users/{user_external_id}/memberships</code></pre>
 <li>用户是否已停用；</li>
 <li>文档版本和访问范围时间。</li>
 </ul>
-<h2 id="section-26">13. 产物发布接口</h2>
+<h2 id="section-27">13. 产物发布接口</h2>
 <p>当 V3 生成报告、页面、文档、表格、图片或其他产物时，可按项目配置发布到第三方系统。</p>
 <p>V3 支持产物发布、状态查询和撤销。撤销属于高风险动作，必须先完成用户确认；确认后或无需确认的动作，会由 V3 发送到第三方配置的产物 endpoint。观测接口会返回 <code>artifact_summary</code>，用于查看发布、撤销、失败和待确认数量。</p>
 <p>页面类产物支持快速 HTML 交付模式：V3 可以按模板和聊天要求生成可浏览器打开的 HTML，并返回预览和下载地址。</p>
@@ -1033,7 +1056,7 @@ POST /artifacts/{artifact_external_id}/revoke</code></pre>
 <li>发布、查看、下载、撤销都应可追溯。</li>
 <li>观测接口会展示发布、撤销、阻断、失败和待确认数量，但不会展示原始产物正文、原始下载地址或密钥。</li>
 </ul>
-<h2 id="section-27">14. 业务动作接口</h2>
+<h2 id="section-28">14. 业务动作接口</h2>
 <p>V3 可以在用户授权和系统校验后调用第三方业务接口，例如：</p>
 <ul>
 <li>创建或更新工单；</li>
@@ -1125,7 +1148,7 @@ X-V3-Signature: sha256=&lt;HMAC-SHA256 hex&gt;</code></pre>
 <p>出站请求头字段说明：</p>
 <div class="table-shell"><table><thead><tr><th>请求头</th><th>说明</th></tr></thead><tbody><tr><td><code>Authorization</code></td><td>V3 派发动作时使用的专用 Bearer Token；只在配置了派发 token 时发送</td></tr><tr><td><code>X-V3-Connection-Id</code></td><td>V3 外部连接 ID</td></tr><tr><td><code>X-V3-Timestamp</code></td><td>V3 发起请求时间，第三方应校验时间窗口</td></tr><tr><td><code>X-V3-Nonce</code></td><td>一次性随机值，第三方应防重放</td></tr><tr><td><code>X-V3-Content-SHA256</code></td><td>JSON 原始请求体的 SHA-256 摘要</td></tr><tr><td><code>X-V3-Signature</code></td><td>基于签名原文和派发签名密钥生成的 HMAC-SHA256</td></tr></tbody></table></div>
 <p>只有配置派发 Bearer Token 时才会发送 <code>Authorization</code>。只有配置派发签名密钥时才会发送 <code>X-V3-Signature</code>。两者都配置时，V3 会同时发送。</p>
-<h2 id="section-28">15. 回复格式</h2>
+<h2 id="section-29">15. 回复格式</h2>
 <p>V3 返回给第三方通道的内容会统一封装为回复对象。</p>
 <p>常见回复类型：</p>
 <ul>
@@ -1160,7 +1183,7 @@ X-V3-Signature: sha256=&lt;HMAC-SHA256 hex&gt;</code></pre>
   </figure>
 <p>确认回复字段说明：</p>
 <div class="table-shell"><table><thead><tr><th>字段</th><th>说明</th></tr></thead><tbody><tr><td><code>reply_type</code></td><td>当前为 <code>requires_confirmation</code>，表示需要用户确认</td></tr><tr><td><code>confirmation_id</code></td><td>确认请求 ID</td></tr><tr><td><code>title</code></td><td>给用户展示的确认标题</td></tr><tr><td><code>summary</code></td><td>给用户展示的确认摘要</td></tr><tr><td><code>risk_level</code></td><td>动作风险等级</td></tr><tr><td><code>actions</code></td><td>第三方页面可展示的操作按钮，例如 <code>approve</code> 和 <code>reject</code></td></tr></tbody></table></div>
-<h2 id="section-29">16. 管理观测接口</h2>
+<h2 id="section-30">16. 管理观测接口</h2>
 <p>V3 提供观测优先的管理接口，供运营人员和 V3 控制台使用。这些接口不是第三方聊天页面，也不会暴露原始凭证、原始 provider payload 或文档正文。</p>
 <figure class="code-card">
     <figcaption><span>http</span><button type="button" class="copy-code">复制</button></figcaption>
@@ -1218,7 +1241,7 @@ X-V3-Signature: sha256=&lt;HMAC-SHA256 hex&gt;</code></pre>
     <pre><code>POST /v1/external/integrations/{integration_id}/rotate-secret</code></pre>
   </figure>
 <p>记录一次密钥轮换请求标记。该接口不会在公开响应、观测页面或配置摘要中返回原始密钥材料。</p>
-<h2 id="section-30">17. 错误格式</h2>
+<h2 id="section-31">17. 错误格式</h2>
 <p>错误响应统一使用：</p>
 <figure class="code-card">
     <figcaption><span>json</span><button type="button" class="copy-code">复制</button></figcaption>
@@ -1234,7 +1257,7 @@ X-V3-Signature: sha256=&lt;HMAC-SHA256 hex&gt;</code></pre>
 <div class="table-shell"><table><thead><tr><th>字段</th><th>说明</th></tr></thead><tbody><tr><td><code>code</code></td><td>稳定错误码，第三方应优先按该字段做分支处理</td></tr><tr><td><code>message</code></td><td>面向调试或展示的错误说明，不包含密钥和敏感正文</td></tr><tr><td><code>details</code></td><td>可选结构化错误详情，例如字段名、约束或安全错误码</td></tr><tr><td><code>details.field</code></td><td>出错字段名；仅在字段级错误时返回</td></tr></tbody></table></div>
 <p>常见错误码：</p>
 <div class="table-shell"><table><thead><tr><th>错误码</th><th>含义</th></tr></thead><tbody><tr><td><code>bad_request</code></td><td>请求格式或必填字段错误</td></tr><tr><td><code>unauthorized</code></td><td>鉴权失败</td></tr><tr><td><code>signature_invalid</code></td><td>签名错误</td></tr><tr><td><code>replay_rejected</code></td><td>重放请求被拒绝</td></tr><tr><td><code>external_channel_connection_not_found</code></td><td>未找到聊天通道连接</td></tr><tr><td><code>external_channel_disabled</code></td><td>连接已停用</td></tr><tr><td><code>external_channel_platform_mismatch</code></td><td>请求平台与连接配置不一致</td></tr><tr><td><code>permission_denied</code></td><td>当前用户无权访问相关资源</td></tr><tr><td><code>conflict</code></td><td>幂等键或唯一约束冲突</td></tr><tr><td><code>rate_limited</code></td><td>请求过于频繁</td></tr><tr><td><code>storage_error</code></td><td>服务端存储错误</td></tr></tbody></table></div>
-<h2 id="section-31">18. 数据安全要求</h2>
+<h2 id="section-32">18. 数据安全要求</h2>
 <p>第三方和 V3 联调时，应共同遵守：</p>
 <ul>
 <li>不在 URL 中传递长期有效密钥；</li>
@@ -1247,19 +1270,19 @@ X-V3-Signature: sha256=&lt;HMAC-SHA256 hex&gt;</code></pre>
 <li>跨租户数据必须物理或逻辑隔离；</li>
 <li>错误信息只返回排查所需内容，不返回服务端堆栈和密钥细节。</li>
 </ul>
-<h2 id="section-32">19. 部署方式</h2>
-<h3 id="section-33">19.1 V3 托管接入</h3>
+<h2 id="section-33">19. 部署方式</h2>
+<h3 id="section-34">19.1 V3 托管接入</h3>
 <p>第三方系统通过公网或专线访问 V3 接口。适用于标准 SaaS 或托管交付。</p>
-<h3 id="section-34">19.2 第三方网关接入</h3>
+<h3 id="section-35">19.2 第三方网关接入</h3>
 <p>第三方在自己的网络中部署网关：</p>
 <ul>
 <li>网关连接文档库、用户系统和业务系统；</li>
 <li>网关与 V3 通过 HTTPS 通信；</li>
 <li>源系统无需直接暴露给 V3。</li>
 </ul>
-<h3 id="section-35">19.3 私有化或混合部署</h3>
+<h3 id="section-36">19.3 私有化或混合部署</h3>
 <p>V3、文档源、聊天通道和业务系统可以部署在同一内网或多个网络区域。具体网络、密钥、证书、回调和留痕策略在项目实施阶段确认。</p>
-<h2 id="section-36">20. 飞书、Lark、企业微信说明</h2>
+<h2 id="section-37">20. 飞书、Lark、企业微信说明</h2>
 <p>标准平台机器人接入时，第三方通常需要提供：</p>
 <ul>
 <li>应用或机器人 ID；</li>
@@ -1271,7 +1294,7 @@ X-V3-Signature: sha256=&lt;HMAC-SHA256 hex&gt;</code></pre>
 <li>平台侧可访问范围和安全策略。</li>
 </ul>
 <p>V3 会优先按平台官方规则完成验签、事件解析、消息发送和回调处理，再转换成统一的 V3 事件与回复格式。</p>
-<h2 id="section-37">21. 第三方联调准备清单</h2>
+<h2 id="section-38">21. 第三方联调准备清单</h2>
 <p>正式联调前，请第三方准备：</p>
 <ul>
 <li>测试环境 API 域名；</li>
@@ -1289,7 +1312,7 @@ X-V3-Signature: sha256=&lt;HMAC-SHA256 hex&gt;</code></pre>
 <li>业务动作接口和确认规则，如需要；</li>
 <li>联调负责人和故障联系渠道。</li>
 </ul>
-<h3 id="section-38">21.1 文档入口与版本规则</h3>
+<h3 id="section-39">21.1 文档入口与版本规则</h3>
 <p>联调文档只以 V3 外部集成观测页的“对接方式与文档”区域为准。HTML 用于直接打开评审，Markdown 用于下载留档；旧的第一阶段文档、交接包说明、历史计划和历史验证收据不再作为对外材料维护。</p>
 <p>当前保留的公开入口：</p>
 <ul>
@@ -1299,7 +1322,7 @@ X-V3-Signature: sha256=&lt;HMAC-SHA256 hex&gt;</code></pre>
 <li>纯第三方简单版 MD：<code>/external-integrations/pure-third-party-integration-guide.zh-CN.md</code></li>
 </ul>
 <p>后续新增或变更对接文档时，先更新仓库内对应 Markdown 源文件，再通过生成脚本同步 HTML 和 Web public 发布文件，最后在观测页保持同一组最新入口。</p>
-<h2 id="section-39">22. 版本与变更</h2>
+<h2 id="section-40">22. 版本与变更</h2>
 <p>本文为 v0.1 对外草案。后续如接口路径、字段、鉴权、幂等、权限模型、回复格式或部署方式发生变化，应同步更新文档版本。</p>
 <p>建议版本策略：</p>
 <ul>
@@ -1309,7 +1332,7 @@ X-V3-Signature: sha256=&lt;HMAC-SHA256 hex&gt;</code></pre>
 <li>安全策略变化：需要重新联调；</li>
 <li>平台官方接口变化：以平台官方最新规则和双方联调结果为准。</li>
 </ul>
-<h2 id="section-40">23. 推荐联调顺序</h2>
+<h2 id="section-41">23. 推荐联调顺序</h2>
 <p>建议按以下顺序推进：</p>
 <ol>
 <li>确认接入模式和部署方式；</li>

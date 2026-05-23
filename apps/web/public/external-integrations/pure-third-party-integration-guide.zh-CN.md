@@ -117,6 +117,53 @@ Authorization: Bearer <V3 inbound token>
 | `parse_quality_status` | `ok` 或为空 | `attention_required` 表示解析质量需要人工或 VLM 兜底 |
 | `model_status` | `ready` | 可供模型使用 |
 
+### 1.3 移动文档分组
+
+第三方需要把已解析文档移动到另一个资料库/分组时调用。V3 不重新下载、不重新解析，只修改该 `document_external_id` 对应文档的归属数据集。
+
+```http
+PATCH /v1/external/channels/{connection_id}/documents/{document_external_id}/dataset
+Authorization: Bearer <V3 inbound token>
+Content-Type: application/json
+```
+
+```jsonc
+{
+  "source_id": "third-party-source-main",       // 文档源 ID；连接已配置默认源时可省略
+  "dataset_external_id": "workspace-docs-new",  // 目标第三方数据集/资料库 ID；不存在时 V3 自动创建
+  "dataset_title": "新资料库",                   // 目标数据集展示名；自动创建时使用
+  "revision_external_id": "rev-20260520-01"     // 可选；只移动指定版本。不传则移动同一文档 ID 下所有版本
+}
+```
+
+字段说明：
+
+| 字段 | 必填 | 注释 |
+| --- | --- | --- |
+| `source_id` | 条件必填 | 文档源 ID；V3 无法从连接或文档 ID 推断时必填 |
+| `dataset_external_id` | 条件必填 | 目标第三方数据集/资料库 ID；和 `dataset_id` 二选一 |
+| `dataset_id` | 条件必填 | 目标 V3 数据集 UUID；和 `dataset_external_id` 二选一 |
+| `dataset_title` | 否 | 目标数据集名称；自动创建数据集时使用 |
+| `revision_external_id` | 否 | 第三方文档版本 ID；不传则移动同一外部文档 ID 的全部版本 |
+
+响应：
+
+```jsonc
+{
+  "accepted": true,                              // 是否已完成移动
+  "source_id": "third-party-source-main",        // 文档源 ID
+  "document_external_id": "doc-20260520-0001",   // 第三方文档 ID
+  "revision_external_id": "rev-20260520-01",     // 本次移动限定的版本 ID；未传则为空
+  "dataset_id": "5af2f8a6-0d3c-4a12-a77a-333333333333", // 目标 V3 数据集 ID
+  "dataset_external_id": "workspace-docs-new",   // 目标第三方数据集 ID
+  "moved_count": 1,                              // 移动的 V3 文档记录数量
+  "previous_dataset_ids": [                      // 移动前的 V3 数据集 ID 列表
+    "5af2f8a6-0d3c-4a12-a77a-222222222222"
+  ],
+  "documents": []                                // 移动后的文档摘要列表
+}
+```
+
 ## 2. 聊天同步
 
 ### 2.1 普通聊天

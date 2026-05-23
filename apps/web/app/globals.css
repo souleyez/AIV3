@@ -4289,6 +4289,10 @@ body {
   grid-column: 1 / -1;
 }
 
+.database-source-card {
+  grid-column: 1 / -1;
+}
+
 .directory-grid-cards {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -4469,6 +4473,88 @@ body {
 .directory-mini-metric strong {
   color: #f8fbff;
   font-size: 22px;
+}
+
+.database-source-controls {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.database-source-controls label {
+  display: grid;
+  gap: 6px;
+  color: #9aa7b9;
+  font-size: 12px;
+}
+
+.database-source-controls select {
+  min-width: 0;
+  min-height: 40px;
+  border-radius: 14px;
+  padding: 0 12px;
+  background: rgba(10, 15, 22, 0.74);
+  color: #f8fbff;
+  border: 1px solid rgba(255, 255, 255, 0.11);
+}
+
+.database-source-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.database-source-detail-grid,
+.database-source-table-list {
+  display: grid;
+  gap: 9px;
+}
+
+.database-source-detail-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.database-source-detail-grid article,
+.database-source-table-list article {
+  display: grid;
+  gap: 5px;
+  padding: 12px;
+  border-radius: 17px;
+  background: rgba(10, 15, 22, 0.3);
+}
+
+.database-source-detail-grid strong,
+.database-source-table-list strong {
+  color: #f8fbff;
+  font-size: 13px;
+}
+
+.database-source-detail-grid span,
+.database-source-table-list span {
+  color: #9aa7b9;
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.database-source-notice,
+.database-source-error {
+  padding: 10px 12px;
+  border-radius: 15px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.database-source-notice {
+  background: rgba(16, 185, 129, 0.12);
+  color: #a7f3d0;
+  box-shadow: inset 0 0 0 1px rgba(52, 211, 153, 0.18);
+}
+
+.database-source-error {
+  background: rgba(239, 68, 68, 0.12);
+  color: #fecaca;
+  box-shadow: inset 0 0 0 1px rgba(248, 113, 113, 0.18);
 }
 
 .directory-detail-block,
@@ -5748,6 +5834,7 @@ body {
 
   .directory-detail-card,
   .audit-layout .directory-card:first-child,
+  .database-source-card,
   .document-analysis-card {
     grid-column: auto;
   }
@@ -5755,6 +5842,11 @@ body {
 
 @media (max-width: 760px) {
   .directory-create-row {
+    grid-template-columns: 1fr;
+  }
+
+  .database-source-controls,
+  .database-source-detail-grid {
     grid-template-columns: 1fr;
   }
 

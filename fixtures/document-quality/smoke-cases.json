@@ -163,6 +163,50 @@
     ]
   },
   {
+    "id": "attendance-frequent-absence-workhours",
+    "label": "Frequent attendance absence and work-hour query",
+    "fixture_kind": "xlsx",
+    "prompt": "这份考勤表里最近有没缺勤的人？工时最长和最短分别是谁？请按日期、员工、班次、工时出表。",
+    "expected": [
+      "frequent attendance prompt uses deterministic spreadsheet_row_analysis rows",
+      "absence candidate rows remain visible with counts_as_absence",
+      "longest and shortest work-hour rows include normalized YYYY-MM-DD dates and hour units",
+      "final answer includes the key employees/dates/hours from the high-frequency table query"
+    ],
+    "requires_table": true,
+    "requires_normalized_dates": true,
+    "required_final_answer_terms": [
+      "缺勤",
+      "最长工时",
+      "最短工时",
+      "2026-05-13",
+      "2026-02-07",
+      "2026-02-25",
+      "A5",
+      "A8",
+      "12.55小时",
+      "4.30小时"
+    ],
+    "observability": {
+      "original_parse_status": "xlsx_structured",
+      "parse_quality_status": "usable",
+      "quality_gate_triggered_reason": "attendance_frequent_query_guard",
+      "retry_attempts": 1,
+      "react_actions_used": ["retrieve_evidence"],
+      "premium_action": "not_used"
+    },
+    "local_tests": [
+      {
+        "package": "ingest-worker",
+        "filter": "local_ingest_processor_formats_xlsx_attendance_serial_dates"
+      },
+      {
+        "package": "platform-api",
+        "filter": "assistant_run_attendance_row_analysis_handles_frequent_absence_workhour_prompt"
+      }
+    ]
+  },
+  {
     "id": "scanned-visual-pdf",
     "label": "Scanned or visual PDF fallback",
     "fixture_kind": "pdf",

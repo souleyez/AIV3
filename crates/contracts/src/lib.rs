@@ -1034,6 +1034,56 @@ pub struct CreateExternalDocumentParseResponse {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct UpdateExternalDocumentDatasetRequest {
+    #[serde(default, alias = "sourceId")]
+    pub source_id: String,
+    #[serde(
+        default,
+        alias = "datasetId",
+        deserialize_with = "deserialize_optional_dataset_id_lenient",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub dataset_id: Option<DatasetId>,
+    #[serde(
+        default,
+        alias = "datasetExternalId",
+        alias = "datasetKey",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub dataset_external_id: Option<String>,
+    #[serde(
+        default,
+        alias = "datasetTitle",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub dataset_title: Option<String>,
+    #[serde(
+        default,
+        alias = "revisionExternalId",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub revision_external_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct UpdateExternalDocumentDatasetResponse {
+    pub accepted: bool,
+    pub source_id: String,
+    pub document_external_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revision_external_id: Option<String>,
+    pub dataset_id: DatasetId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dataset_external_id: Option<String>,
+    #[serde(default)]
+    pub moved_count: u32,
+    #[serde(default)]
+    pub previous_dataset_ids: Vec<DatasetId>,
+    #[serde(default)]
+    pub documents: Vec<ExternalDocumentParseDocumentView>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ExternalDocumentParseDetailItemView {
     pub document_id: DocumentId,
     pub dataset_id: DatasetId,
@@ -4378,6 +4428,29 @@ mod tests {
             Some("Third-party Main Docs")
         );
         assert_eq!(decoded.document_external_id, "doc-java-002");
+    }
+
+    #[test]
+    fn external_document_dataset_update_request_accepts_java_camel_case_payload() {
+        let decoded: UpdateExternalDocumentDatasetRequest = serde_json::from_value(json!({
+            "sourceId": "src-docs",
+            "datasetExternalId": "workspace-new-group",
+            "datasetTitle": "New Workspace Group",
+            "revisionExternalId": "rev-2"
+        }))
+        .expect("camelCase dataset update payload should deserialize");
+
+        assert_eq!(decoded.source_id, "src-docs");
+        assert_eq!(decoded.dataset_id, None);
+        assert_eq!(
+            decoded.dataset_external_id.as_deref(),
+            Some("workspace-new-group")
+        );
+        assert_eq!(
+            decoded.dataset_title.as_deref(),
+            Some("New Workspace Group")
+        );
+        assert_eq!(decoded.revision_external_id.as_deref(), Some("rev-2"));
     }
 
     #[test]

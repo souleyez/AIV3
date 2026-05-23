@@ -75,9 +75,11 @@ use contracts::{
     TestDatabaseSourceConnectionRequest, TestDatabaseSourceConnectionResponse, ToolDefinitionView,
     ToolExecutionView, UpdateChatSessionReportEntryRequest, UpdateChatSessionReportEntryResponse,
     UpdateChatSessionRequest, UpdateChatSessionResponse, UpdateDatasetRequest,
-    UpdateDocumentRequest, UpdateStaticPageDraftRequest, UpdateStaticPageDraftResponse,
-    VerifyEmailAuthRequest, VerifyEmailAuthResponse, WorkflowDefinitionView, WorkflowEventView,
-    WorkflowExecutionView, WorkflowRuntimeInspectView, WorkflowSignalRequest, WorkflowTaskView,
+    UpdateDocumentRequest, UpdateExternalDocumentDatasetRequest,
+    UpdateExternalDocumentDatasetResponse, UpdateStaticPageDraftRequest,
+    UpdateStaticPageDraftResponse, VerifyEmailAuthRequest, VerifyEmailAuthResponse,
+    WorkflowDefinitionView, WorkflowEventView, WorkflowExecutionView, WorkflowRuntimeInspectView,
+    WorkflowSignalRequest, WorkflowTaskView,
 };
 use domain_model::{
     AssistantRun, AssistantRunEvent, AssistantRunId, AuthAuditEvent, AuthAuditOutcome,
@@ -1289,6 +1291,10 @@ pub fn router(
         .route(
             "/v1/external/channels/{connection_id}/documents/{document_external_id}/parse-detail",
             get(get_external_document_parse_detail),
+        )
+        .route(
+            "/v1/external/channels/{connection_id}/documents/{document_external_id}/dataset",
+            axum::routing::patch(update_external_document_dataset),
         )
         .route(
             "/v1/external/channels/{connection_id}/static-page-renders/{render_output_id}",
@@ -12318,6 +12324,210 @@ async fn get_external_document_parse_detail(
         latest,
         documents: details,
     }))
+}
+
+async fn update_external_document_dataset(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((connection_id, document_external_id)): Path<(String, String)>,
+    Json(request): Json<UpdateExternalDocumentDatasetRequest>,
+) -> std::result::Result<Json<UpdateExternalDocumentDatasetResponse>, ApiError> {
+    validate_required("connection_id", &connection_id)?;
+    validate_required("document_external_id", &document_external_id)?;
+    if request.dataset_id.is_none() && trim_optional(request.dataset_external_id.clone()).is_none()
+    {
+        return Err(ApiError::bad_request(
+            "validation_error",
+            "dataset_external_id or dataset_id is required".to_string(),
+        ));
+    }
+
+    let connection = load_external_channel_connection(&state, &connection_id).await?;
+    ensure_external_channel_inbound_bearer_auth(&headers, &connection)?;
+    ensure_external_channel_enabled(&connection_id, &connection)?;
+
+    let revision_external_id = trim_optional(request.revision_external_id.clone());
+    let inferred_source_id = infer_external_document_source_id(
+        &state,
+        &document_external_id,
+        revision_external_id.as_deref(),
+    )
+    .await?;
+    let source_id = non_empty_trimmed_string(&request.source_id)
+        .or_else(|| external_channel_default_source_id_from_config(&connection.config_redacted))
+        .or(inferred_source_id)
+        .ok_or_else(|| {
+            ApiError::bad_request(
+                "validation_error",
+                "source_id is required when V3 cannot infer a unique source from document_external_id"
+                    .to_string(),
+            )
+        })?;
+    let source = load_external_source_connection(&state, &source_id).await?;
+    if source.disabled_at.is_some() {
+        return Err(ApiError::forbidden(
+            "external_source_disabled",
+            format!("external source connection {} is disabled", source_id),
+        ));
+    }
+
+    let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
+    let current_user_id = current_auth_user_id(&state, &headers).await?;
+    let resolve_request = CreateExternalDocumentParseRequest {
+        source_id: source_id.clone(),
+        dataset_id: request.dataset_id,
+        dataset_external_id: request.dataset_external_id.clone(),
+        dataset_title: request.dataset_title.clone(),
+        document_external_id: document_external_id.clone(),
+        revision_external_id: revision_external_id.clone(),
+        title: None,
+        content_type: None,
+        content_url: "https://third-party.example/document-dataset-move".to_string(),
+        metadata: json!({}),
+        idempotency_key: None,
+        allow_http_loopback: false,
+    };
+    let resolved_dataset = resolve_external_document_parse_dataset(
+        &state,
+        &resolve_request,
+        &source,
+        &active_secret_binding_ids,
+        current_user_id,
+    )
+    .await?;
+
+    let documents = find_external_documents_by_external_id(
+        &state,
+        &source_id,
+        &document_external_id,
+        revision_external_id.as_deref(),
+    )
+    .await?;
+    if documents.is_empty() {
+        return Err(ApiError::not_found(
+            "external_document_not_found",
+            format!("external document {document_external_id} was not found"),
+        ));
+    }
+
+    let mut previous_dataset_ids = BTreeSet::new();
+    let mut moved_documents = Vec::new();
+    for document in documents {
+        previous_dataset_ids.insert(document.dataset_id);
+        let metadata_updates = external_document_dataset_move_metadata(
+            &document,
+            &source,
+            &resolved_dataset,
+            &document_external_id,
+        );
+        let updated = state
+            .storage
+            .documents()
+            .move_to_dataset(
+                state.tenant_id,
+                document.id,
+                resolved_dataset.dataset.id,
+                &metadata_updates,
+                Utc::now(),
+            )
+            .await
+            .map_err(ApiError::from_storage)?;
+        moved_documents.push(to_external_document_parse_document_view(updated));
+    }
+    moved_documents.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+
+    Ok(Json(UpdateExternalDocumentDatasetResponse {
+        accepted: true,
+        source_id,
+        document_external_id,
+        revision_external_id,
+        dataset_id: resolved_dataset.dataset.id,
+        dataset_external_id: resolved_dataset.dataset_external_id,
+        moved_count: moved_documents.len() as u32,
+        previous_dataset_ids: previous_dataset_ids.into_iter().collect(),
+        documents: moved_documents,
+    }))
+}
+
+fn external_document_dataset_move_metadata(
+    document: &Document,
+    source: &ExternalSourceConnectionSummary,
+    resolved_dataset: &ResolvedExternalDocumentParseDataset,
+    document_external_id: &str,
+) -> Value {
+    let moved_at = Utc::now();
+    let mut external_source = document
+        .metadata
+        .get("external_source")
+        .or_else(|| document.metadata.get("externalSource"))
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    set_payload_value(
+        &mut external_source,
+        "source_id",
+        json!(source.source_id.clone()),
+    );
+    set_payload_value(
+        &mut external_source,
+        "source_display_name",
+        json!(source.display_name.clone()),
+    );
+    set_payload_value(
+        &mut external_source,
+        "dataset_id",
+        json!(resolved_dataset.dataset.id),
+    );
+    set_payload_value(
+        &mut external_source,
+        "dataset_key",
+        json!(resolved_dataset.dataset.key.clone()),
+    );
+    set_payload_value(
+        &mut external_source,
+        "dataset_external_id",
+        json!(resolved_dataset.dataset_external_id.clone()),
+    );
+    set_payload_value(
+        &mut external_source,
+        "document_external_id",
+        json!(document_external_id),
+    );
+    set_payload_value(
+        &mut external_source,
+        "previous_dataset_id",
+        json!(document.dataset_id),
+    );
+    let previous_dataset_external_id = document
+        .metadata
+        .get("external_source")
+        .or_else(|| document.metadata.get("externalSource"))
+        .and_then(Value::as_object)
+        .and_then(|object| {
+            object
+                .get("dataset_external_id")
+                .or_else(|| object.get("datasetExternalId"))
+        })
+        .cloned()
+        .unwrap_or(Value::Null);
+    set_payload_value(
+        &mut external_source,
+        "previous_dataset_external_id",
+        previous_dataset_external_id,
+    );
+    set_payload_value(&mut external_source, "moved_at", json!(moved_at));
+
+    json!({
+        "external_source": external_source,
+        "external_document_dataset_move": {
+            "moved_at": moved_at,
+            "previous_dataset_id": document.dataset_id,
+            "target_dataset_id": resolved_dataset.dataset.id,
+            "target_dataset_key": resolved_dataset.dataset.key.clone(),
+            "target_dataset_external_id": resolved_dataset.dataset_external_id.clone(),
+            "resolution_mode": resolved_dataset.resolution_mode,
+            "auto_created_dataset": resolved_dataset.auto_created
+        }
+    })
 }
 
 async fn get_external_channel_static_page_render_output(
@@ -66918,6 +67128,45 @@ mod tests {
     }
 
     #[test]
+    fn assistant_run_attendance_row_analysis_handles_frequent_absence_workhour_prompt() {
+        let rows = [
+            "A3 2026-05-20 坐班0900 08:59 18:15 9.27小时 正常考勤",
+            "A5 2026-05-13 坐班0900 未打卡 不考勤",
+            "A8 2026-02-07 休息 08:18 20:51 12.55小时 正常考勤",
+            "A8 2026-02-25 坐班0930 09:25 13:43 4.30小时 正常考勤",
+            "A9 2026-02-25 坐班0930 09:31 18:01 8.50小时 正常考勤",
+        ]
+        .into_iter()
+        .filter_map(|line| {
+            parse_assistant_run_attendance_row(line, "document://attendance/chunks/0".to_string())
+        })
+        .collect::<Vec<_>>();
+
+        let (analysis_kind, analysis_rows, excerpt) = assistant_run_attendance_analysis_rows(
+            &"这份考勤表里最近有没缺勤的人？工时最长和最短分别是谁？请按日期、员工、班次、工时出表。",
+            &rows,
+        )
+        .expect("frequent attendance prompt should compute deterministic rows");
+
+        assert_eq!(analysis_kind, "absence_and_work_hour_extremes");
+        assert_eq!(analysis_rows.len(), 3);
+        assert!(analysis_rows
+            .iter()
+            .any(|row| row.get("employee") == Some(&json!("A5"))
+                && row.get("counts_as_absence") == Some(&json!(false))));
+        assert!(analysis_rows.iter().any(|row| row.get("category") == Some(&json!("longest"))
+            && row.get("employee") == Some(&json!("A8"))
+            && row.get("date") == Some(&json!("2026-02-07"))));
+        assert!(analysis_rows.iter().any(|row| row.get("category") == Some(&json!("shortest"))
+            && row.get("employee") == Some(&json!("A8"))
+            && row.get("date") == Some(&json!("2026-02-25"))));
+        assert!(excerpt.contains("absence_candidate | 2026-05-13 | A5 | 坐班0900 | 未打卡 不考勤"));
+        assert!(excerpt.contains("longest | 2026-02-07 | A8 | 12.55小时"));
+        assert!(excerpt.contains("shortest | 2026-02-25 | A8 | 4.30小时"));
+        assert!(!excerpt.contains("46162"));
+    }
+
+    #[test]
     fn assistant_run_general_entity_scan_prompts_request_dataset_scan() {
         let selected_scope = json!({
             "mode": "user_selected",
@@ -76348,6 +76597,178 @@ mod tests {
         .expect("source dataset should be reused");
         assert_eq!(resolved_again.dataset.id, created_dataset.id);
         assert_eq!(resolved_again.resolution_mode, "source_dataset_reused");
+    }
+
+    #[tokio::test]
+    async fn external_document_dataset_update_moves_document_by_external_id() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping external document dataset move test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("external-document-move-test-{}", Uuid::new_v4()),
+                "External Document Move Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage,
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        sqlx::query(
+            r#"
+            insert into external_channel_connections (
+                id, tenant_id, platform, connection_key, display_name, config_redacted, status
+            )
+            values ('generic-chat-main', $1, 'generic_chat', 'generic-chat-main', 'Generic Chat', $2, 'enabled')
+            "#,
+        )
+        .bind(state.tenant_id.0)
+        .bind(json!({
+            "inbound_bearer_token": "move-token",
+            "default_source_id": "src-move-docs"
+        }))
+        .execute(state.storage.pool())
+        .await
+        .expect("external channel connection should be inserted");
+        sqlx::query(
+            r#"
+            insert into external_source_connections (
+                id, tenant_id, connector_kind, source_key, display_name, base_url_redacted,
+                config_redacted, sync_mode, permission_mode
+            )
+            values ('src-move-docs', $1, 'document', 'src-move-docs', 'Move Docs',
+                    'https://docs.example/[redacted]', '{}', 'push', 'source_acl_snapshot')
+            "#,
+        )
+        .bind(state.tenant_id.0)
+        .execute(state.storage.pool())
+        .await
+        .expect("external source connection should be inserted");
+
+        let old_dataset = state
+            .storage
+            .datasets()
+            .create(
+                state.tenant_id,
+                NewDataset {
+                    key: format!("external-move-old-{}", Uuid::new_v4()),
+                    title: "Old Group".to_string(),
+                    description: None,
+                    owner_user_id: None,
+                },
+            )
+            .await
+            .expect("old dataset should be created");
+        let document = state
+            .storage
+            .documents()
+            .create(
+                state.tenant_id,
+                NewDocument {
+                    dataset_id: old_dataset.id,
+                    title: "Move me".to_string(),
+                    object_key: "external/move-me.md".to_string(),
+                    content_type: "text/markdown".to_string(),
+                    secret_binding_ids: Vec::new(),
+                    owner_user_id: None,
+                    metadata: json!({
+                        "external_source": {
+                            "source_id": "src-move-docs",
+                            "source_display_name": "Move Docs",
+                            "dataset_id": old_dataset.id,
+                            "dataset_key": old_dataset.key,
+                            "dataset_external_id": "old-group",
+                            "document_external_id": "doc-move",
+                            "revision_external_id": "rev-1"
+                        }
+                    }),
+                },
+            )
+            .await
+            .expect("document should be created");
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer move-token"),
+        );
+        let Json(response) = update_external_document_dataset(
+            State(state.clone()),
+            headers.clone(),
+            Path(("generic-chat-main".to_string(), "doc-move".to_string())),
+            Json(UpdateExternalDocumentDatasetRequest {
+                source_id: String::new(),
+                dataset_id: None,
+                dataset_external_id: Some("new-group".to_string()),
+                dataset_title: Some("New Group".to_string()),
+                revision_external_id: Some("rev-1".to_string()),
+            }),
+        )
+        .await
+        .expect("document dataset update should succeed");
+
+        assert!(response.accepted);
+        assert_eq!(response.source_id, "src-move-docs");
+        assert_eq!(response.document_external_id, "doc-move");
+        assert_eq!(response.revision_external_id.as_deref(), Some("rev-1"));
+        assert_eq!(response.dataset_external_id.as_deref(), Some("new-group"));
+        assert_eq!(response.moved_count, 1);
+        assert_eq!(response.previous_dataset_ids, vec![old_dataset.id]);
+        assert_eq!(response.documents[0].id, document.id);
+        assert_eq!(response.documents[0].dataset_id, response.dataset_id);
+
+        let moved_document = state
+            .storage
+            .documents()
+            .get_by_id(state.tenant_id, document.id)
+            .await
+            .expect("document lookup should succeed")
+            .expect("document should exist");
+        assert_eq!(moved_document.dataset_id, response.dataset_id);
+        let external_source = moved_document
+            .metadata
+            .get("external_source")
+            .and_then(Value::as_object)
+            .expect("external source metadata should be updated");
+        assert_eq!(
+            external_source
+                .get("dataset_external_id")
+                .and_then(Value::as_str),
+            Some("new-group")
+        );
+        assert_eq!(
+            external_source
+                .get("previous_dataset_external_id")
+                .and_then(Value::as_str),
+            Some("old-group")
+        );
+        assert_eq!(
+            external_source.get("dataset_key").and_then(Value::as_str),
+            Some("external-source-src-move-docs-dataset-new-group")
+        );
+
+        let Json(detail) = get_external_document_parse_detail(
+            State(state.clone()),
+            headers,
+            Path(("generic-chat-main".to_string(), "doc-move".to_string())),
+            Query(BTreeMap::from([(
+                "source_id".to_string(),
+                "src-move-docs".to_string(),
+            )])),
+        )
+        .await
+        .expect("parse detail should still find moved document");
+        assert_eq!(detail.latest.unwrap().dataset_id, response.dataset_id);
     }
 
     #[tokio::test]

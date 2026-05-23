@@ -3,6 +3,8 @@ param(
     [switch] $Local,
     [string] $BaseUrl = "",
     [string] $BearerToken = "",
+    [string] $ServerCaseConfigPath = "",
+    [int] $ServerTimeoutSec = 180,
     [string] $ReportDir = "",
     [string] $CargoBin = "cargo",
     [switch] $ListCases,
@@ -19,6 +21,8 @@ $arguments = @{
     CaseId = $Case
     BaseUrl = $BaseUrl
     BearerToken = $BearerToken
+    ServerCaseConfigPath = $ServerCaseConfigPath
+    ServerTimeoutSec = $ServerTimeoutSec
     ReportDir = $ReportDir
     CargoBin = $CargoBin
     ListCases = $ListCases
