@@ -787,6 +787,88 @@ Authorization: Bearer <V3 inbound token>
 | `previous_dataset_ids` | 移动前的 V3 数据集 UUID 列表 |
 | `documents` | 移动后的 V3 文档摘要列表 |
 
+### 11.6 第三方查询数据库源状态
+
+数据库源由 V3 侧先完成连接、表映射、画像和同步配置。第三方通道只能查询通道配置中允许的数据库源状态：`default_source_id` / `defaultSourceId`，或 `allowed_database_source_ids` / `allowedDatabaseSourceIds` / `database_source_ids` / `databaseSourceIds` / `allowed_source_ids` / `allowedSourceIds` / `database_sources`。该接口只读，不接收数据库密码，不执行 SQL，不返回原始连接串、密码、token 或原始同步游标。
+
+```http
+GET /v1/external/channels/{connection_id}/database-sources/{source_external_id}/status
+Host: v3.elepcloud.com
+Authorization: Bearer <V3 inbound token>
+```
+
+路径字段说明：
+
+| 字段 | 必填 | 说明 |
+| --- | --- | --- |
+| `connection_id` | 是 | V3 分配的第三方通道 ID |
+| `source_external_id` | 是 | 已授权给该通道的 V3 数据库源 ID；通常也是第三方侧登记的数据库源稳定 ID |
+
+响应示例：
+
+```json
+{
+  "source_id": "hy-sql-main",
+  "connector_kind": "mysql",
+  "redacted_summary": {
+    "kind": "mysql",
+    "database": "hy_sql",
+    "connection_env": "THIRD_PARTY_HY_SQL_DATABASE_URL",
+    "default_dataset_id": "5af2f8a6-0d3c-4a12-a77a-333333333333",
+    "table_count": 1,
+    "tables": ["bi_traffic_area"]
+  },
+  "status": {
+    "config_valid": true,
+    "dataset": {
+      "dataset_id": "5af2f8a6-0d3c-4a12-a77a-333333333333",
+      "key": "external-source-hy-sql-main-dataset-workspace-main",
+      "title": "HY SQL 主数据集",
+      "lifecycle": "active",
+      "is_default": false,
+      "dataset_external_id": "workspace-main"
+    },
+    "datasets": [],
+    "dataset_readiness": {
+      "signal": "ready",
+      "document_count": 20,
+      "indexed_document_count": 20,
+      "indexed_chunk_count": 20
+    },
+    "table_readiness": [],
+    "recent_sync_runs": [],
+    "sync_readiness": {
+      "signal": "ready",
+      "status": "succeeded",
+      "row_count": 20,
+      "failed_row_count": 0
+    },
+    "semantic_profile": {},
+    "health_findings": {
+      "signal": "ok",
+      "items": []
+    }
+  }
+}
+```
+
+响应字段说明：
+
+| 字段 | 说明 |
+| --- | --- |
+| `source_id` | V3 数据库源 ID |
+| `connector_kind` | 数据源类型；当前主要为 `mysql` |
+| `redacted_summary` | 脱敏连接摘要，只包含数据库名、服务端密钥引用、映射表数量和表名 |
+| `status.config_valid` | 数据库源脱敏配置是否可解析 |
+| `status.dataset` | 当前默认或显式目标数据集摘要 |
+| `status.datasets` | 该数据库源已发现的目标数据集列表 |
+| `status.dataset_readiness.signal` | 数据集问答可用状态；`ready` 表示可用于问答/报表 |
+| `status.table_readiness` | 各映射表的文档、索引、分块状态 |
+| `status.recent_sync_runs` | 最近同步任务摘要；checkpoint 只返回安全摘要，不返回原始游标 |
+| `status.sync_readiness.signal` | 综合同步状态；常见值：`ready`、`sync_running`、`sync_failed`、`no_documents`、`indexing` |
+| `status.semantic_profile` | 表字段、指标、维度、时间字段、实体字段等语义摘要 |
+| `status.health_findings` | 配置、同步、索引、行转换失败等问题摘要 |
+
 ## 12. 用户与组织接口
 
 第三方需要让 V3 能够识别外部用户是谁，以及该用户属于哪些组织和角色。

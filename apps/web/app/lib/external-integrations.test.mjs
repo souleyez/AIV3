@@ -373,7 +373,16 @@ test('database source status helper normalizes selected-only detail payload', ()
         dataset_id: '018f0000-0000-7000-9000-000000000001',
         key: 'hy-sql',
         title: 'HY SQL',
+        dataset_external_id: 'hy-sql-main',
+        is_default: false,
       },
+      datasets: [{
+        dataset_id: '018f0000-0000-7000-9000-000000000001',
+        key: 'hy-sql',
+        title: 'HY SQL',
+        dataset_external_id: 'hy-sql-main',
+        is_default: false,
+      }],
       dataset_readiness: {
         signal: 'ready',
         document_count: 2,
@@ -521,6 +530,9 @@ test('database source status helper normalizes selected-only detail payload', ()
 
   assert.equal(status.loaded, true);
   assert.equal(status.dataset.title, 'HY SQL');
+  assert.equal(status.dataset.datasetExternalId, 'hy-sql-main');
+  assert.equal(status.datasets.length, 1);
+  assert.equal(status.datasets[0].datasetExternalId, 'hy-sql-main');
   assert.equal(status.datasetReadiness.label, '可问');
   assert.equal(status.syncReadiness.label, '可问');
   assert.equal(status.syncReadiness.workflowStage, 'completed');

@@ -133,14 +133,34 @@ export async function profileDatabaseSource(sourceId) {
   return normalizeDatabaseProfile(payload);
 }
 
-export async function startDatabaseSourceSync(sourceId, syncKind = 'incremental', datasetId = '') {
+export function databaseSourceSyncRequestBody(syncKind = 'incremental', target = '') {
   const body = {
     sync_kind: syncKind,
     connector_context: {},
   };
+  if (target && typeof target === 'object') {
+    const datasetId = String(target.datasetId || target.dataset_id || '').trim();
+    const datasetExternalId = String(target.datasetExternalId || target.dataset_external_id || '').trim();
+    const datasetTitle = String(target.datasetTitle || target.dataset_title || '').trim();
+    if (datasetId) {
+      body.dataset_id = datasetId;
+    } else if (datasetExternalId) {
+      body.dataset_external_id = datasetExternalId;
+      if (datasetTitle) {
+        body.dataset_title = datasetTitle;
+      }
+    }
+    return body;
+  }
+  const datasetId = String(target || '').trim();
   if (datasetId) {
     body.dataset_id = datasetId;
   }
+  return body;
+}
+
+export async function startDatabaseSourceSync(sourceId, syncKind = 'incremental', target = '') {
+  const body = databaseSourceSyncRequestBody(syncKind, target);
   return fetchJson(`/api/v3/external/sources/${encodeURIComponent(sourceId)}/sync`, {
     method: 'POST',
     body,

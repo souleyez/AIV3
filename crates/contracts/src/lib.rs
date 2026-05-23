@@ -779,8 +779,21 @@ pub struct ExternalIntegrationControlResponse {
 pub struct CreateExternalSourceSyncRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sync_kind: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, alias = "datasetId", skip_serializing_if = "Option::is_none")]
     pub dataset_id: Option<DatasetId>,
+    #[serde(
+        default,
+        alias = "datasetExternalId",
+        alias = "datasetKey",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub dataset_external_id: Option<String>,
+    #[serde(
+        default,
+        alias = "datasetTitle",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub dataset_title: Option<String>,
     #[serde(default)]
     pub checkpoint: Value,
     #[serde(default)]
@@ -4812,12 +4825,19 @@ mod tests {
             "dataset_id": dataset_id.to_string(),
             "checkpoint": {
                 "cursor": "page-2"
-            }
+            },
+            "datasetExternalId": "warehouse-main",
+            "datasetTitle": "Warehouse Main"
         }))
         .expect("external source sync request should deserialize");
 
         assert_eq!(request.sync_kind.as_deref(), Some("full"));
         assert_eq!(request.dataset_id, Some(dataset_id));
+        assert_eq!(
+            request.dataset_external_id.as_deref(),
+            Some("warehouse-main")
+        );
+        assert_eq!(request.dataset_title.as_deref(), Some("Warehouse Main"));
         assert_eq!(request.checkpoint["cursor"], json!("page-2"));
         assert_eq!(request.connector_context, Value::Null);
 

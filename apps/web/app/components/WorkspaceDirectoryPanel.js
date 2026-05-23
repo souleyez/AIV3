@@ -79,6 +79,9 @@ function DatabaseSourcePanel({ datasets }) {
   const [sources, setSources] = useState([]);
   const [selectedSourceId, setSelectedSourceId] = useState('');
   const [selectedDatasetId, setSelectedDatasetId] = useState('');
+  const [syncTargetMode, setSyncTargetMode] = useState('existing');
+  const [targetExternalId, setTargetExternalId] = useState('');
+  const [targetExternalTitle, setTargetExternalTitle] = useState('');
   const [status, setStatus] = useState(null);
   const [schema, setSchema] = useState(null);
   const [profile, setProfile] = useState(null);
@@ -142,10 +145,20 @@ function DatabaseSourcePanel({ datasets }) {
         setNotice(`语义画像已更新 · 指标 ${nextProfile.metricCount} · 维度 ${nextProfile.dimensionCount}`);
       } else if (kind === 'full' || kind === 'incremental') {
         const datasetId = selectedDatasetId || selectedSource?.source?.defaultDatasetId || '';
-        if (!datasetId) {
+        const datasetExternalId = targetExternalId.trim();
+        const syncTarget = syncTargetMode === 'external'
+          ? {
+            datasetExternalId,
+            datasetTitle: targetExternalTitle.trim() || selectedSource?.source?.database || selectedSource?.displayName || '',
+          }
+          : datasetId;
+        if (syncTargetMode === 'external' && !datasetExternalId) {
+          throw new Error('请填写目标分组 ID');
+        }
+        if (syncTargetMode === 'existing' && !datasetId) {
           throw new Error('请先选择目标数据集');
         }
-        const result = await startDatabaseSourceSync(selectedSourceId, kind, datasetId);
+        const result = await startDatabaseSourceSync(selectedSourceId, kind, syncTarget);
         setNotice(`同步已提交 · ${result?.sync_run_id || result?.syncRunId || '运行中'}`);
         await loadStatus(selectedSourceId);
       }
@@ -172,6 +185,9 @@ function DatabaseSourcePanel({ datasets }) {
   useEffect(() => {
     const defaultDatasetId = selectedSource?.source?.defaultDatasetId || '';
     setSelectedDatasetId(defaultDatasetId || datasets[0]?.id || '');
+    if (!defaultDatasetId && !datasets.length) {
+      setSyncTargetMode('external');
+    }
   }, [selectedSourceId, datasets.map((dataset) => dataset.id).join('|')]);
 
   const datasetReadiness = status?.datasetReadiness || null;
@@ -179,6 +195,9 @@ function DatabaseSourcePanel({ datasets }) {
   const tableReadiness = status?.tableReadiness || [];
   const recentSyncRuns = status?.recentSyncRuns || [];
   const busy = Boolean(actionBusy);
+  const canSync = syncTargetMode === 'external'
+    ? Boolean(targetExternalId.trim())
+    : Boolean(selectedDatasetId);
 
   return (
     <section className="directory-card database-source-card">
@@ -206,15 +225,45 @@ function DatabaseSourcePanel({ datasets }) {
               </select>
             </label>
             <label>
-              <span>目标数据集</span>
-              <select value={selectedDatasetId} onChange={(event) => setSelectedDatasetId(event.target.value)} disabled={busy || !datasets.length}>
-                {datasets.map((dataset) => (
-                  <option key={dataset.id} value={dataset.id}>
-                    {dataset.title || dataset.key}
-                  </option>
-                ))}
+              <span>目标方式</span>
+              <select value={syncTargetMode} onChange={(event) => setSyncTargetMode(event.target.value)} disabled={busy}>
+                <option value="existing">已有数据集</option>
+                <option value="external">外部分组 ID</option>
               </select>
             </label>
+            {syncTargetMode === 'existing' ? (
+              <label>
+                <span>目标数据集</span>
+                <select value={selectedDatasetId} onChange={(event) => setSelectedDatasetId(event.target.value)} disabled={busy || !datasets.length}>
+                  {datasets.map((dataset) => (
+                    <option key={dataset.id} value={dataset.id}>
+                      {dataset.title || dataset.key}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : (
+              <>
+                <label>
+                  <span>目标分组 ID</span>
+                  <input
+                    value={targetExternalId}
+                    onChange={(event) => setTargetExternalId(event.target.value)}
+                    placeholder="workspace-db-main"
+                    disabled={busy}
+                  />
+                </label>
+                <label>
+                  <span>数据集名称</span>
+                  <input
+                    value={targetExternalTitle}
+                    onChange={(event) => setTargetExternalTitle(event.target.value)}
+                    placeholder={selectedSource?.source?.database || selectedSource?.displayName || '数据库数据集'}
+                    disabled={busy}
+                  />
+                </label>
+              </>
+            )}
           </div>
 
           <div className="directory-metric-grid database-source-metrics">
@@ -234,10 +283,10 @@ function DatabaseSourcePanel({ datasets }) {
             <button type="button" className="ghost-btn compact-action-btn" onClick={() => runAction('profile')} disabled={busy}>
               {actionBusy === 'profile' ? '画像中' : '语义画像'}
             </button>
-            <button type="button" className="primary-btn compact-action-btn" onClick={() => runAction('incremental')} disabled={busy || !selectedDatasetId}>
+            <button type="button" className="primary-btn compact-action-btn" onClick={() => runAction('incremental')} disabled={busy || !canSync}>
               {actionBusy === 'incremental' ? '提交中' : '增量同步'}
             </button>
-            <button type="button" className="ghost-btn compact-action-btn" onClick={() => runAction('full')} disabled={busy || !selectedDatasetId}>
+            <button type="button" className="ghost-btn compact-action-btn" onClick={() => runAction('full')} disabled={busy || !canSync}>
               {actionBusy === 'full' ? '提交中' : '全量同步'}
             </button>
           </div>

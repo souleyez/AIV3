@@ -477,6 +477,7 @@ export default function ExternalIntegrationsPageClient() {
   const selectedDatabaseSyncReadiness = selectedDatabaseStatus?.syncReadiness || null;
   const selectedDatabaseSemanticProfile = selectedDatabaseStatus?.semanticProfile || null;
   const selectedDatabaseHealthFindings = selectedDatabaseStatus?.healthFindings || null;
+  const selectedDatabaseDatasets = selectedDatabaseStatus?.datasets || [];
   const selectedDatabaseSyncRuns = selectedDatabaseStatus?.recentSyncRuns?.length
     ? selectedDatabaseStatus.recentSyncRuns.slice(0, 5)
     : databaseSourceSyncRuns(auditItems, 3);
@@ -958,9 +959,23 @@ export default function ExternalIntegrationsPageClient() {
                   ) : null}
                   {selectedDatabaseStatus?.dataset?.datasetId ? (
                     <div className="external-database-dataset-ref">
-                      <span>默认数据集</span>
+                      <span>{selectedDatabaseStatus.dataset.isDefault ? '默认数据集' : '目标数据集'}</span>
                       <strong>{selectedDatabaseStatus.dataset.title || selectedDatabaseStatus.dataset.key}</strong>
-                      <small>{selectedDatabaseStatus.dataset.datasetId}</small>
+                      <small>
+                        {selectedDatabaseStatus.dataset.datasetExternalId
+                          ? `${selectedDatabaseStatus.dataset.datasetExternalId} · ${selectedDatabaseStatus.dataset.datasetId}`
+                          : selectedDatabaseStatus.dataset.datasetId}
+                      </small>
+                    </div>
+                  ) : null}
+                  {selectedDatabaseDatasets.length > 1 ? (
+                    <div className="external-database-dataset-list" aria-label="数据库目标数据集列表">
+                      {selectedDatabaseDatasets.slice(0, 4).map((dataset) => (
+                        <article key={dataset.datasetId}>
+                          <strong>{dataset.title || dataset.key}</strong>
+                          <span>{dataset.isDefault ? '默认' : dataset.datasetExternalId || '显式目标'}</span>
+                        </article>
+                      ))}
                     </div>
                   ) : null}
                   {selectedDatabaseSemanticProfile?.configured ? (

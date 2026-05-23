@@ -1297,6 +1297,10 @@ pub fn router(
             axum::routing::patch(update_external_document_dataset),
         )
         .route(
+            "/v1/external/channels/{connection_id}/database-sources/{source_external_id}/status",
+            get(get_external_channel_database_source_status),
+        )
+        .route(
             "/v1/external/channels/{connection_id}/static-page-renders/{render_output_id}",
             get(get_external_channel_static_page_render_output),
         )
@@ -10693,6 +10697,8 @@ async fn retry_external_integration(
                 CreateExternalSourceSyncRequest {
                     sync_kind,
                     dataset_id: None,
+                    dataset_external_id: None,
+                    dataset_title: None,
                     checkpoint: json!({
                         "management_retry": true,
                     }),
@@ -11632,6 +11638,8 @@ async fn create_external_source_sync(
         &state,
         &source,
         request.dataset_id,
+        request.dataset_external_id.clone(),
+        request.dataset_title.clone(),
         &request.connector_context,
         &active_secret_binding_ids,
         current_user_id,
@@ -11803,6 +11811,36 @@ async fn get_database_source_status(
     Path(source_id): Path<String>,
 ) -> std::result::Result<Json<GetDatabaseSourceStatusResponse>, ApiError> {
     ensure_main_system_external_source_access(&state, &headers, &source_id).await?;
+    let source = load_enabled_database_source_connection(&state, &source_id).await?;
+    let redacted_summary = external_database_source_config_summary(&source.config_redacted);
+    let status = database_source_status_summary(&state, &source).await?;
+    Ok(Json(GetDatabaseSourceStatusResponse {
+        source_id: source.source_id,
+        connector_kind: source.connector_kind,
+        redacted_summary,
+        status,
+    }))
+}
+
+async fn get_external_channel_database_source_status(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((connection_id, source_external_id)): Path<(String, String)>,
+) -> std::result::Result<Json<GetDatabaseSourceStatusResponse>, ApiError> {
+    validate_required("connection_id", &connection_id)?;
+    validate_required("source_external_id", &source_external_id)?;
+
+    let connection = load_external_channel_connection(&state, &connection_id).await?;
+    ensure_external_channel_inbound_bearer_auth(&headers, &connection)?;
+    ensure_external_channel_enabled(&connection_id, &connection)?;
+    let source_id = non_empty_trimmed_string(&source_external_id).ok_or_else(|| {
+        ApiError::bad_request(
+            "validation_error",
+            "source_external_id is required".to_string(),
+        )
+    })?;
+    ensure_external_channel_database_source_allowed(&connection, &source_id)?;
+
     let source = load_enabled_database_source_connection(&state, &source_id).await?;
     let redacted_summary = external_database_source_config_summary(&source.config_redacted);
     let status = database_source_status_summary(&state, &source).await?;
@@ -15817,6 +15855,102 @@ fn external_channel_default_source_id_from_config(config: &Value) -> Option<Stri
     )
 }
 
+fn ensure_external_channel_database_source_allowed(
+    connection: &ExternalChannelConnectionSummary,
+    source_id: &str,
+) -> std::result::Result<(), ApiError> {
+    if external_channel_database_source_allowed(&connection.config_redacted, source_id) {
+        return Ok(());
+    }
+    Err(ApiError::forbidden(
+        "database_source_not_allowed",
+        "database source is not allowed for this external channel".to_string(),
+    ))
+}
+
+fn external_channel_database_source_allowed(config: &Value, source_id: &str) -> bool {
+    let Some(source_id) = non_empty_trimmed_string(source_id) else {
+        return false;
+    };
+    if external_channel_default_source_id_from_config(config)
+        .as_deref()
+        .is_some_and(|default_source_id| default_source_id == source_id)
+    {
+        return true;
+    }
+    external_channel_allowed_database_source_ids(config)
+        .iter()
+        .any(|allowed| allowed == &source_id)
+}
+
+fn external_channel_allowed_database_source_ids(config: &Value) -> BTreeSet<String> {
+    let mut source_ids = BTreeSet::new();
+    for key in [
+        "allowed_database_source_ids",
+        "allowedDatabaseSourceIds",
+        "database_source_ids",
+        "databaseSourceIds",
+        "allowed_source_ids",
+        "allowedSourceIds",
+    ] {
+        collect_external_config_string_values(config.get(key), &mut source_ids);
+    }
+    if let Some(database_sources) = config
+        .get("database_sources")
+        .or_else(|| config.get("databaseSources"))
+        .and_then(Value::as_array)
+    {
+        for source in database_sources {
+            match source {
+                Value::String(value) => {
+                    if let Some(value) = non_empty_trimmed_string(value) {
+                        source_ids.insert(value);
+                    }
+                }
+                Value::Object(object) => {
+                    for key in [
+                        "source_external_id",
+                        "sourceExternalId",
+                        "source_id",
+                        "sourceId",
+                    ] {
+                        if let Some(value) = object
+                            .get(key)
+                            .and_then(Value::as_str)
+                            .and_then(non_empty_trimmed_string)
+                        {
+                            source_ids.insert(value);
+                            break;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    source_ids
+}
+
+fn collect_external_config_string_values(value: Option<&Value>, output: &mut BTreeSet<String>) {
+    match value {
+        Some(Value::String(text)) => {
+            for part in text.split(',') {
+                if let Some(value) = non_empty_trimmed_string(part) {
+                    output.insert(value);
+                }
+            }
+        }
+        Some(Value::Array(items)) => {
+            for item in items {
+                if let Some(value) = item.as_str().and_then(non_empty_trimmed_string) {
+                    output.insert(value);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
 fn external_channel_source_document_scope_enabled(config: &Value) -> bool {
     external_config_bool(
         config,
@@ -16361,7 +16495,21 @@ async fn database_source_status_summary(
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
-    let dataset = load_database_source_default_dataset_summary(state, default_dataset_uuid).await?;
+    let datasets = load_database_source_target_dataset_summaries(
+        state,
+        &source.source_id,
+        default_dataset_uuid,
+    )
+    .await?;
+    let dataset = datasets
+        .as_array()
+        .and_then(|items| items.first())
+        .cloned()
+        .unwrap_or(Value::Null);
+    let effective_dataset_id = dataset
+        .get("dataset_id")
+        .and_then(Value::as_str)
+        .map(str::to_string);
     let table_readiness = load_database_source_table_readiness(
         state,
         &source.source_id,
@@ -16369,8 +16517,10 @@ async fn database_source_status_summary(
         &configured_tables,
     )
     .await?;
-    let dataset_readiness =
-        database_source_dataset_readiness_from_tables(default_dataset_id.clone(), &table_readiness);
+    let dataset_readiness = database_source_dataset_readiness_from_tables(
+        effective_dataset_id.clone().or(default_dataset_id.clone()),
+        &table_readiness,
+    );
     let recent_sync_runs = load_database_source_recent_sync_runs(state, &source.source_id).await?;
     let sync_readiness =
         database_source_sync_readiness_summary(&dataset_readiness, &recent_sync_runs);
@@ -16380,6 +16530,7 @@ async fn database_source_status_summary(
         config.is_some(),
         config_error.as_deref(),
         default_dataset_id.as_deref(),
+        effective_dataset_id.as_deref(),
         &dataset,
         &table_readiness,
         &sync_readiness,
@@ -16391,6 +16542,7 @@ async fn database_source_status_summary(
         "config_valid": config.is_some(),
         "config_error": config_error,
         "dataset": dataset,
+        "datasets": datasets,
         "dataset_readiness": dataset_readiness,
         "table_readiness": table_readiness,
         "recent_sync_runs": recent_sync_runs,
@@ -16405,6 +16557,7 @@ fn database_source_health_findings(
     config_valid: bool,
     config_error: Option<&str>,
     default_dataset_id: Option<&str>,
+    effective_dataset_id: Option<&str>,
     dataset: &Value,
     table_readiness: &Value,
     sync_readiness: &Value,
@@ -16423,13 +16576,23 @@ fn database_source_health_findings(
             None,
         );
     }
-    if default_dataset_id.is_none() {
+    if default_dataset_id.is_none() && effective_dataset_id.is_none() {
         database_source_push_health_finding(
             &mut findings,
             "warning",
             "target_dataset_unbound",
             "未绑定默认数据集",
             "数据库同步需要请求显式传入数据集，或先绑定默认数据集后再同步。",
+            None,
+            None,
+        );
+    } else if default_dataset_id.is_none() && effective_dataset_id.is_some() {
+        database_source_push_health_finding(
+            &mut findings,
+            "info",
+            "explicit_target_dataset_detected",
+            "使用显式目标数据集",
+            "数据库源没有默认数据集，但已有同步请求创建或使用了显式目标数据集。",
             None,
             None,
         );
@@ -16723,37 +16886,67 @@ fn database_source_health_message_excerpt(message: &str) -> String {
         .collect()
 }
 
-async fn load_database_source_default_dataset_summary(
+async fn load_database_source_target_dataset_summaries(
     state: &AppState,
-    dataset_id: Option<Uuid>,
+    source_id: &str,
+    default_dataset_id: Option<Uuid>,
 ) -> std::result::Result<Value, ApiError> {
-    let Some(dataset_id) = dataset_id else {
-        return Ok(Value::Null);
-    };
-    let row = sqlx::query(
+    let rows = sqlx::query(
         r#"
-        select id, key, title, lifecycle, updated_at
-        from datasets
-        where tenant_id = $1 and id = $2
+        with source_dataset_ids as (
+            select $3::uuid as dataset_id, true as is_default
+            where $3::uuid is not null
+            union
+            select d.id as dataset_id, false as is_default
+            from datasets d
+            where d.tenant_id = $1
+              and d.lifecycle <> 'archived'
+              and d.metadata #>> '{external_source,source_id}' = $2
+            union
+            select doc.dataset_id as dataset_id, false as is_default
+            from documents doc
+            where doc.tenant_id = $1
+              and doc.lifecycle <> 'archived'
+              and doc.metadata #>> '{external_source,source_id}' = $2
+        )
+        select d.id,
+               d.key,
+               d.title,
+               d.lifecycle,
+               d.updated_at,
+               bool_or(coalesce(s.is_default, false)) as is_default,
+               nullif(d.metadata #>> '{external_source,dataset_external_id}', '') as dataset_external_id
+        from datasets d
+        join source_dataset_ids s on s.dataset_id = d.id
+        where d.tenant_id = $1
+          and d.lifecycle <> 'archived'
+        group by d.id, d.key, d.title, d.lifecycle, d.updated_at, d.metadata
+        order by bool_or(coalesce(s.is_default, false)) desc, d.updated_at desc, d.title asc
+        limit 10
         "#,
     )
     .bind(state.tenant_id.0)
-    .bind(dataset_id)
-    .fetch_optional(state.storage.pool())
+    .bind(source_id)
+    .bind(default_dataset_id)
+    .fetch_all(state.storage.pool())
     .await
     .map_err(|error| ApiError::from_storage(anyhow::Error::new(error)))?;
 
-    Ok(row
-        .map(|row| {
-            json!({
-                "dataset_id": row.get::<Uuid, _>("id"),
-                "key": row.get::<String, _>("key"),
-                "title": row.get::<String, _>("title"),
-                "lifecycle": row.get::<String, _>("lifecycle"),
-                "updated_at": row.get::<DateTime<Utc>, _>("updated_at"),
+    Ok(Value::Array(
+        rows.into_iter()
+            .map(|row| {
+                json!({
+                    "dataset_id": row.get::<Uuid, _>("id"),
+                    "key": row.get::<String, _>("key"),
+                    "title": row.get::<String, _>("title"),
+                    "lifecycle": row.get::<String, _>("lifecycle"),
+                    "updated_at": row.get::<DateTime<Utc>, _>("updated_at"),
+                    "is_default": row.get::<bool, _>("is_default"),
+                    "dataset_external_id": row.get::<Option<String>, _>("dataset_external_id"),
+                })
             })
-        })
-        .unwrap_or(Value::Null))
+            .collect(),
+    ))
 }
 
 async fn load_database_source_table_readiness(
@@ -17262,6 +17455,8 @@ async fn resolve_effective_external_source_sync_dataset_id(
     state: &AppState,
     source: &ExternalSourceConnectionSummary,
     request_dataset_id: Option<DatasetId>,
+    request_dataset_external_id: Option<String>,
+    request_dataset_title: Option<String>,
     connector_context: &Value,
     active_secret_binding_ids: &[SecretBindingId],
     current_user_id: Option<UserId>,
@@ -17276,6 +17471,19 @@ async fn resolve_effective_external_source_sync_dataset_id(
         .await?;
         return Ok(Some(dataset_id));
     }
+    if let Some(dataset_external_id) = trim_optional(request_dataset_external_id) {
+        let dataset = resolve_external_source_sync_dataset_by_external_id(
+            state,
+            source,
+            &dataset_external_id,
+            trim_optional(request_dataset_title).as_deref(),
+            connector_context,
+            active_secret_binding_ids,
+            current_user_id,
+        )
+        .await?;
+        return Ok(Some(dataset.id));
+    }
     let Some(dataset_id) = mysql_sync_default_dataset_id(source, connector_context)? else {
         return Ok(None);
     };
@@ -17287,6 +17495,82 @@ async fn resolve_effective_external_source_sync_dataset_id(
     )
     .await?;
     Ok(Some(dataset_id))
+}
+
+async fn resolve_external_source_sync_dataset_by_external_id(
+    state: &AppState,
+    source: &ExternalSourceConnectionSummary,
+    dataset_external_id: &str,
+    dataset_title: Option<&str>,
+    connector_context: &Value,
+    active_secret_binding_ids: &[SecretBindingId],
+    current_user_id: Option<UserId>,
+) -> std::result::Result<Dataset, ApiError> {
+    let requested_dataset_key =
+        external_document_parse_dataset_key(&source.source_id, Some(dataset_external_id));
+    if let Some(dataset) = state
+        .storage
+        .datasets()
+        .list_by_tenant(state.tenant_id)
+        .await
+        .map_err(ApiError::from_storage)?
+        .into_iter()
+        .find(|dataset| dataset.key == requested_dataset_key)
+    {
+        return load_visible_dataset_for_user(
+            state,
+            dataset.id,
+            active_secret_binding_ids,
+            current_user_id,
+        )
+        .await;
+    }
+
+    let database_summary = if external_source_sync_uses_mysql(source, connector_context) {
+        let database_source = merged_database_source_config(
+            &source.config_redacted,
+            database_source_config_from_connector_context(connector_context),
+        )?;
+        external_database_source_config_summary(&json!({
+            "database_source": database_source
+        }))
+    } else {
+        Value::Null
+    };
+    let title = dataset_title
+        .and_then(non_empty_trimmed_string)
+        .or_else(|| non_empty_trimmed_string(&source.display_name))
+        .unwrap_or_else(|| format!("External source {}", source.source_id));
+    state
+        .storage
+        .datasets()
+        .create_with_metadata(
+            state.tenant_id,
+            NewDataset {
+                key: requested_dataset_key,
+                title,
+                description: Some(format!(
+                    "Auto-created for external source {} sync.",
+                    source.source_id
+                )),
+                owner_user_id: current_user_id,
+            },
+            json!({
+                "visibility": DatasetVisibility::Public.as_str(),
+                "default_secret_binding_ids": [],
+                "external_source": {
+                    "source_id": source.source_id.clone(),
+                    "connector_kind": source.connector_kind.clone(),
+                    "display_name": source.display_name.clone(),
+                    "dataset_external_id": dataset_external_id,
+                    "created_by": "external_source_sync",
+                    "created_at": Utc::now(),
+                },
+                "database_source": database_summary,
+            }),
+        )
+        .await
+        .map_err(ApiError::from_storage)
 }
 
 fn mysql_sync_default_dataset_id(
@@ -62604,6 +62888,8 @@ mod tests {
             Json(CreateExternalSourceSyncRequest {
                 sync_kind: Some("full".to_string()),
                 dataset_id: None,
+                dataset_external_id: None,
+                dataset_title: None,
                 checkpoint: json!({}),
                 connector_context: json!({}),
             }),
@@ -62696,6 +62982,8 @@ mod tests {
             Json(CreateExternalSourceSyncRequest {
                 sync_kind: Some("full".to_string()),
                 dataset_id: None,
+                dataset_external_id: None,
+                dataset_title: None,
                 checkpoint: json!({}),
                 connector_context: json!({}),
             }),
@@ -62726,6 +63014,125 @@ mod tests {
             persisted_execution.context["connector_context"]["database_source"]["tables"][0]
                 ["table"],
             json!("bi_traffic_area")
+        );
+    }
+
+    #[tokio::test]
+    async fn external_source_sync_mysql_auto_creates_dataset_from_external_id() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping mysql external dataset sync test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("mysql-sync-external-dataset-test-{}", Uuid::new_v4()),
+                "MySQL Sync External Dataset Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage,
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        sqlx::query(
+            r#"
+            insert into external_source_connections (
+                id,
+                tenant_id,
+                connector_kind,
+                source_key,
+                display_name,
+                base_url_redacted,
+                config_redacted,
+                sync_mode,
+                permission_mode,
+                health_status
+            )
+            values ($1, $2, 'mysql', $1, 'HY SQL', 'mysql://8.155.12.154:23306/[redacted]', $3, 'pull', 'none', 'healthy')
+            "#,
+        )
+        .bind("hy-sql-auto")
+        .bind(state.tenant_id.0)
+        .bind(json!({
+            "database_source": {
+                "connection_env": "THIRD_PARTY_HY_SQL_DATABASE_URL",
+                "database": "hy_sql",
+                "tables": [{
+                    "table": "bi_traffic_area",
+                    "id_column": "id",
+                    "content_columns": ["areaname"]
+                }]
+            }
+        }))
+        .execute(state.storage.pool())
+        .await
+        .expect("database source connection should be inserted");
+
+        let (status, Json(response)) = create_external_source_sync(
+            State(state.clone()),
+            HeaderMap::new(),
+            Path("hy-sql-auto".to_string()),
+            Json(CreateExternalSourceSyncRequest {
+                sync_kind: Some("full".to_string()),
+                dataset_id: None,
+                dataset_external_id: Some("hy-sql-main".to_string()),
+                dataset_title: Some("HY SQL 主数据集".to_string()),
+                checkpoint: json!({}),
+                connector_context: json!({}),
+            }),
+        )
+        .await
+        .expect("mysql external source sync should create dataset from external id");
+
+        assert_eq!(status, StatusCode::ACCEPTED);
+        assert!(response.accepted);
+        let persisted_execution = state
+            .storage
+            .workflow_executions()
+            .get_by_id(state.tenant_id, response.workflow_execution.id)
+            .await
+            .expect("workflow execution should load")
+            .expect("workflow execution should exist");
+        let dataset_id = persisted_execution
+            .dataset_id
+            .expect("workflow should target the created dataset");
+        let dataset = state
+            .storage
+            .datasets()
+            .get_by_id(state.tenant_id, dataset_id)
+            .await
+            .expect("dataset lookup should succeed")
+            .expect("dataset should exist");
+
+        assert_eq!(dataset.title, "HY SQL 主数据集");
+        assert_eq!(
+            dataset.key,
+            "external-source-hy-sql-auto-dataset-hy-sql-main"
+        );
+        assert_eq!(
+            dataset
+                .metadata
+                .get("external_source")
+                .and_then(Value::as_object)
+                .and_then(|object| object.get("dataset_external_id"))
+                .and_then(Value::as_str),
+            Some("hy-sql-main")
+        );
+        assert_eq!(
+            persisted_execution.context["dataset_id"],
+            json!(dataset_id.to_string())
+        );
+        assert_eq!(
+            persisted_execution.context["connector_context"]["database_source"]["database"],
+            json!("hy_sql")
         );
     }
 
@@ -62840,6 +63247,8 @@ mod tests {
             Json(CreateExternalSourceSyncRequest {
                 sync_kind: Some("incremental".to_string()),
                 dataset_id: None,
+                dataset_external_id: None,
+                dataset_title: None,
                 checkpoint: json!({}),
                 connector_context: json!({}),
             }),
@@ -62934,6 +63343,8 @@ mod tests {
             Json(CreateExternalSourceSyncRequest {
                 sync_kind: Some("full".to_string()),
                 dataset_id: Some(dataset.id),
+                dataset_external_id: None,
+                dataset_title: None,
                 checkpoint: json!({"cursor": "page-1"}),
                 connector_context: json!({"fixture": "mock_https_connector"}),
             }),
@@ -63574,6 +63985,349 @@ mod tests {
             .find(|table| table["table"] == json!("empty_table"))
             .expect("configured empty table readiness should be present");
         assert_eq!(empty_table["signal"], json!("no_documents"));
+    }
+
+    #[tokio::test]
+    async fn database_source_status_discovers_explicit_external_target_dataset() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping database source explicit target status test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("database-source-explicit-status-test-{}", Uuid::new_v4()),
+                "Database Source Explicit Status Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage,
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        sqlx::query(
+            r#"
+            insert into external_source_connections (
+                id,
+                tenant_id,
+                connector_kind,
+                source_key,
+                display_name,
+                base_url_redacted,
+                config_redacted,
+                sync_mode,
+                permission_mode,
+                health_status
+            )
+            values ($1, $2, 'mysql', $1, 'HY SQL Explicit', 'mysql://8.155.12.154:23306/[redacted]', $3, 'pull', 'none', 'healthy')
+            "#,
+        )
+        .bind("hy-sql-explicit")
+        .bind(state.tenant_id.0)
+        .bind(json!({
+            "database_source": {
+                "connection_env": "THIRD_PARTY_HY_SQL_DATABASE_URL",
+                "database": "hy_sql",
+                "tables": [{
+                    "table": "bi_traffic_area",
+                    "id_column": "id",
+                    "content_columns": ["area_name"]
+                }],
+                "semantic_profile": {
+                    "kind": "mysql",
+                    "database": "hy_sql",
+                    "table_count": 1,
+                    "tables": [{
+                        "table": "bi_traffic_area",
+                        "mapping_confidence": 91
+                    }]
+                }
+            }
+        }))
+        .execute(state.storage.pool())
+        .await
+        .expect("database source connection should be inserted");
+
+        let dataset = state
+            .storage
+            .datasets()
+            .create(
+                state.tenant_id,
+                NewDataset {
+                    key: "external-source-hy-sql-explicit-dataset-hy-sql-main".to_string(),
+                    title: "HY SQL Main".to_string(),
+                    description: None,
+                    owner_user_id: None,
+                },
+            )
+            .await
+            .expect("explicit target dataset should be created");
+        sqlx::query(
+            r#"
+            update datasets
+            set metadata = $3
+            where tenant_id = $1 and id = $2
+            "#,
+        )
+        .bind(state.tenant_id.0)
+        .bind(dataset.id.0)
+        .bind(json!({
+            "visibility": "public",
+            "default_secret_binding_ids": [],
+            "external_source": {
+                "source_id": "hy-sql-explicit",
+                "connector_kind": "mysql",
+                "display_name": "HY SQL Explicit",
+                "dataset_external_id": "hy-sql-main",
+                "created_by": "external_source_sync"
+            }
+        }))
+        .execute(state.storage.pool())
+        .await
+        .expect("dataset metadata should be updated");
+
+        let document = state
+            .storage
+            .documents()
+            .create(
+                state.tenant_id,
+                NewDocument {
+                    dataset_id: dataset.id,
+                    title: "bi_traffic_area row 1".to_string(),
+                    object_key: "db/bi_traffic_area/1.json".to_string(),
+                    content_type: "application/json".to_string(),
+                    secret_binding_ids: Vec::new(),
+                    owner_user_id: None,
+                    metadata: json!({
+                        "external_source": {
+                            "source_id": "hy-sql-explicit",
+                            "document_external_id": "bi_traffic_area:1",
+                            "revision_external_id": "rev-1"
+                        },
+                        "external_metadata": {
+                            "source_kind": "mysql",
+                            "source_table": "bi_traffic_area",
+                            "source_primary_key": "id=1"
+                        },
+                        "parse_status": "parsed"
+                    }),
+                },
+            )
+            .await
+            .expect("document should be created");
+        sqlx::query(
+            r#"
+            update documents
+            set lifecycle = 'indexed'
+            where tenant_id = $1 and id = $2
+            "#,
+        )
+        .bind(state.tenant_id.0)
+        .bind(document.id.0)
+        .execute(state.storage.pool())
+        .await
+        .expect("document lifecycle should be updated");
+        state
+            .storage
+            .document_chunks()
+            .replace_for_document(
+                state.tenant_id,
+                document.id,
+                &[storage::NewDocumentChunk {
+                    dataset_id: dataset.id,
+                    document_id: document.id,
+                    chunk_index: 0,
+                    content: "area_name: 华东 region traffic data".to_string(),
+                    token_count: 8,
+                    metadata: json!({}),
+                    created_at: Utc::now(),
+                }],
+            )
+            .await
+            .expect("chunk should be inserted");
+        sqlx::query(
+            r#"
+            update document_chunks
+            set state = 'indexed'
+            where tenant_id = $1 and document_id = $2
+            "#,
+        )
+        .bind(state.tenant_id.0)
+        .bind(document.id.0)
+        .execute(state.storage.pool())
+        .await
+        .expect("chunk state should be updated");
+
+        let Json(response) = get_database_source_status(
+            State(state),
+            HeaderMap::new(),
+            Path("hy-sql-explicit".to_string()),
+        )
+        .await
+        .expect("database status should load");
+
+        assert_eq!(
+            response.status["dataset"]["dataset_id"],
+            json!(dataset.id.to_string())
+        );
+        assert_eq!(
+            response.status["dataset"]["dataset_external_id"],
+            json!("hy-sql-main")
+        );
+        assert_eq!(
+            response.status["datasets"][0]["dataset_id"],
+            json!(dataset.id.to_string())
+        );
+        assert_eq!(
+            response.status["dataset_readiness"]["default_dataset_id"],
+            json!(dataset.id.to_string())
+        );
+        assert_eq!(
+            response.status["dataset_readiness"]["signal"],
+            json!("ready")
+        );
+
+        let findings = response.status["health_findings"]["items"]
+            .as_array()
+            .expect("health findings should be an array");
+        assert!(
+            findings
+                .iter()
+                .any(|item| item["code"] == json!("explicit_target_dataset_detected")),
+            "explicit target datasets should be shown as an informational finding"
+        );
+        assert!(
+            findings
+                .iter()
+                .all(|item| item["code"] != json!("target_dataset_unbound")),
+            "source should not be reported as unbound once an explicit target dataset exists"
+        );
+    }
+
+    #[tokio::test]
+    async fn external_channel_database_source_status_is_bearer_auth_and_source_scoped() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping external database source status test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("external-channel-database-status-test-{}", Uuid::new_v4()),
+                "External Channel Database Status Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage,
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        insert_generic_external_channel_connection_with_config(
+            &state,
+            "generic-chat-main",
+            json!({
+                "tenant_external_id": "tenant-ext-001",
+                "bot_external_id": "bot-v3",
+                "inbound_bearer_token": "inbound-secret",
+                "allowed_database_source_ids": ["hy-sql-public"]
+            }),
+        )
+        .await;
+        sqlx::query(
+            r#"
+            insert into external_source_connections (
+                id,
+                tenant_id,
+                connector_kind,
+                source_key,
+                display_name,
+                base_url_redacted,
+                config_redacted,
+                sync_mode,
+                permission_mode,
+                health_status
+            )
+            values ($1, $2, 'mysql', $1, 'HY SQL Public', 'mysql://8.155.12.154:23306/[redacted]', $3, 'pull', 'none', 'healthy')
+            "#,
+        )
+        .bind("hy-sql-public")
+        .bind(state.tenant_id.0)
+        .bind(json!({
+            "database_source": {
+                "connection_env": "THIRD_PARTY_HY_SQL_DATABASE_URL",
+                "database": "hy_sql",
+                "tables": [{
+                    "table": "bi_traffic_area",
+                    "id_column": "id",
+                    "content_columns": ["area_name"]
+                }]
+            }
+        }))
+        .execute(state.storage.pool())
+        .await
+        .expect("database source connection should be inserted");
+
+        let missing_auth = get_external_channel_database_source_status(
+            State(state.clone()),
+            HeaderMap::new(),
+            Path(("generic-chat-main".to_string(), "hy-sql-public".to_string())),
+        )
+        .await
+        .expect_err("missing bearer auth should be rejected");
+        assert_eq!(missing_auth.status, StatusCode::UNAUTHORIZED);
+        assert_eq!(missing_auth.payload.code, "external_channel_auth_failed");
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer inbound-secret"),
+        );
+        let Json(response) = get_external_channel_database_source_status(
+            State(state.clone()),
+            headers.clone(),
+            Path(("generic-chat-main".to_string(), "hy-sql-public".to_string())),
+        )
+        .await
+        .expect("allowed source status should load");
+        assert_eq!(response.source_id, "hy-sql-public");
+        assert_eq!(response.connector_kind, "mysql");
+        assert_eq!(response.status["config_valid"], json!(true));
+        assert_eq!(response.redacted_summary["database"], json!("hy_sql"));
+        assert!(
+            response
+                .redacted_summary
+                .get("connection_url")
+                .and_then(Value::as_str)
+                .is_none(),
+            "database status should not expose a connection URL"
+        );
+
+        let denied = get_external_channel_database_source_status(
+            State(state),
+            headers,
+            Path((
+                "generic-chat-main".to_string(),
+                "hy-sql-private".to_string(),
+            )),
+        )
+        .await
+        .expect_err("unlisted source should be rejected");
+        assert_eq!(denied.status, StatusCode::FORBIDDEN);
+        assert_eq!(denied.payload.code, "database_source_not_allowed");
     }
 
     #[test]

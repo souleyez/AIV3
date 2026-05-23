@@ -383,6 +383,17 @@ export function databaseSourceReadiness(integration = {}) {
 export function normalizeDatabaseSourceStatus(raw = {}) {
   const status = raw?.status && typeof raw.status === 'object' ? raw.status : raw;
   const dataset = status?.dataset && typeof status.dataset === 'object' ? status.dataset : {};
+  const datasets = Array.isArray(status?.datasets)
+    ? status.datasets.map((item) => ({
+      datasetId: String(item?.dataset_id || item?.datasetId || ''),
+      key: String(item?.key || ''),
+      title: String(item?.title || ''),
+      lifecycle: String(item?.lifecycle || ''),
+      datasetExternalId: String(item?.dataset_external_id || item?.datasetExternalId || ''),
+      isDefault: item?.is_default === true || item?.isDefault === true,
+      updatedAt: item?.updated_at || item?.updatedAt || null,
+    })).filter((item) => item.datasetId)
+    : [];
   const tableReadiness = Array.isArray(status?.table_readiness)
     ? status.table_readiness.map((table) => ({
       ...normalizeDatabaseReadiness(table),
@@ -451,8 +462,11 @@ export function normalizeDatabaseSourceStatus(raw = {}) {
       key: String(dataset.key || ''),
       title: String(dataset.title || ''),
       lifecycle: String(dataset.lifecycle || ''),
+      datasetExternalId: String(dataset.dataset_external_id || dataset.datasetExternalId || ''),
+      isDefault: dataset?.is_default === true || dataset?.isDefault === true,
       updatedAt: dataset.updated_at || dataset.updatedAt || null,
     },
+    datasets,
     datasetReadiness: normalizeDatabaseReadiness(status?.dataset_readiness || {}),
     syncReadiness,
     semanticProfile: normalizeDatabaseSemanticProfile(status?.semantic_profile || status?.semanticProfile || {}),

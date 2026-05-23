@@ -11,6 +11,8 @@
 2. 聊天同步：每轮传用户 ID、会话 ID、本轮文档范围、默认提示词和输出格式。
 3. 生成产物：从模板列表选择模板，解析模板，按模板生成报表/HTML 产物。
 
+可选补充：数据库源由 V3 先配置和同步，第三方只查状态并在聊天时传对应数据集范围。
+
 ## 1. 文档解析
 
 ### 1.1 发起解析
@@ -163,6 +165,52 @@ Content-Type: application/json
   "documents": []                                // 移动后的文档摘要列表
 }
 ```
+
+### 1.4 查询数据库源状态
+
+数据库账号、表映射和同步由 V3 侧配置。第三方只用通道 token 查询已授权数据库源的状态，不传数据库密码，不发 SQL。
+
+```http
+GET /v1/external/channels/{connection_id}/database-sources/{source_external_id}/status
+Authorization: Bearer <V3 inbound token>
+```
+
+响应：
+
+```jsonc
+{
+  "source_id": "hy-sql-main",                     // V3 数据库源 ID；路径中的 source_external_id
+  "connector_kind": "mysql",                      // 数据库连接类型
+  "redacted_summary": {                           // 脱敏配置摘要
+    "kind": "mysql",                              // 数据库类型
+    "database": "hy_sql",                         // 数据库名
+    "connection_env": "THIRD_PARTY_HY_SQL_DATABASE_URL", // 服务端密钥引用，不是密码
+    "table_count": 1,                             // 已映射表数量
+    "tables": ["bi_traffic_area"]                 // 已映射表名
+  },
+  "status": {
+    "config_valid": true,                         // 配置是否可用
+    "dataset": {},                                // 当前默认或显式目标数据集摘要
+    "datasets": [],                               // 该数据库源已同步过的目标数据集列表
+    "dataset_readiness": {},                      // 数据集问答可用状态
+    "table_readiness": [],                        // 各表文档/索引/分块状态
+    "recent_sync_runs": [],                       // 最近同步任务
+    "sync_readiness": {},                         // 综合同步可用状态
+    "semantic_profile": {},                       // 表字段/指标/维度语义摘要
+    "health_findings": {}                         // 可给运维看的问题摘要
+  }
+}
+```
+
+字段说明：
+
+| 字段 | 必填 | 注释 |
+| --- | --- | --- |
+| `connection_id` | 是 | V3 分配的第三方通道 ID |
+| `source_external_id` | 是 | V3 已授权给该通道的数据库源 ID |
+| `status.sync_readiness.signal` | 否 | `ready` 表示数据库同步数据可用于问答/报表；`sync_running`、`sync_failed`、`no_documents` 表示仍需等待或排查 |
+| `status.dataset_readiness.signal` | 否 | `ready` 表示目标数据集已具备可检索证据 |
+| `status.health_findings.items` | 否 | 配置、同步、索引、行转换失败等问题列表 |
 
 ## 2. 聊天同步
 

@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  databaseSourceSyncRequestBody,
   databaseSourceOptionsFromIntegrations,
   normalizeDatabaseProfile,
   normalizeDatabaseSchema,
@@ -87,4 +88,22 @@ test('normalizeDatabaseProfile compacts semantic counts for UI', () => {
   assert.equal(profile.metricCount, 3);
   assert.equal(profile.dimensionCount, 4);
   assert.equal(profile.tables[0].mappingConfidence, 86);
+});
+
+test('databaseSourceSyncRequestBody supports dataset id and external dataset binding', () => {
+  assert.deepEqual(databaseSourceSyncRequestBody('full', 'dataset-1'), {
+    sync_kind: 'full',
+    connector_context: {},
+    dataset_id: 'dataset-1',
+  });
+
+  assert.deepEqual(databaseSourceSyncRequestBody('incremental', {
+    datasetExternalId: 'workspace-db-main',
+    datasetTitle: '工作区数据库',
+  }), {
+    sync_kind: 'incremental',
+    connector_context: {},
+    dataset_external_id: 'workspace-db-main',
+    dataset_title: '工作区数据库',
+  });
 });
