@@ -8,6 +8,7 @@ import {
   buildExternalActionPermalink,
   buildExternalAuditQuery,
   buildExternalActionTrace,
+  buildDatabaseSourceStatusExport,
   buildThirdPartyApiUrl,
   controlResultLabel,
   databaseSourceHealthSignalLabel,
@@ -20,6 +21,7 @@ import {
   EXTERNAL_AUDIT_FILTERS,
   EXTERNAL_INTEGRATION_MODES,
   externalActionTraceFilename,
+  databaseSourceStatusExportFilename,
   formatExternalConversationDuration,
   formatObservationTime,
   latestIntegrationActivity,
@@ -33,6 +35,7 @@ import {
   signalLabel,
   thirdPartyApiBaseUrl,
 } from '../lib/external-integrations';
+import { applyDatabaseSourceProfile } from '../lib/database-source';
 
 const REFRESH_INTERVAL_MS = 15000;
 
@@ -211,6 +214,7 @@ export default function ExternalIntegrationsPageClient() {
   const [auditLoading, setAuditLoading] = useState(false);
   const [actionDetailLoading, setActionDetailLoading] = useState(false);
   const [databaseStatusLoading, setDatabaseStatusLoading] = useState(false);
+  const [databaseProfileBusy, setDatabaseProfileBusy] = useState(false);
   const [databaseStatusError, setDatabaseStatusError] = useState('');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -419,6 +423,45 @@ export default function ExternalIntegrationsPageClient() {
     anchor.remove();
     window.URL.revokeObjectURL(url);
     setNotice('脱敏 trace 已导出');
+  }
+
+  function exportDatabaseSourceStatus() {
+    if (!selected || !selectedDatabaseStatus?.loaded || typeof window === 'undefined') {
+      return;
+    }
+    const report = buildDatabaseSourceStatusExport({
+      integration: selected,
+      status: selectedDatabaseStatus,
+    });
+    const blob = new Blob([`${JSON.stringify(report, null, 2)}\n`], { type: 'application/json' });
+    const url = window.URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = databaseSourceStatusExportFilename(selected);
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    window.URL.revokeObjectURL(url);
+    setNotice('数据库状态摘要已导出');
+  }
+
+  async function refreshDatabaseSemanticProfile() {
+    if (!selected?.id) {
+      return;
+    }
+    setDatabaseProfileBusy(true);
+    setError('');
+    setNotice('');
+    try {
+      const profile = await applyDatabaseSourceProfile(selected.id);
+      setNotice(`数据库语义画像已刷新 · 表 ${profile.tableCount} · 指标 ${profile.metricCount} · 维度 ${profile.dimensionCount}`);
+      await loadIntegrations({ silent: true });
+      await loadDatabaseStatus(selected.id);
+    } catch (profileError) {
+      setError(profileError instanceof Error ? profileError.message : '数据库语义画像刷新失败');
+    } finally {
+      setDatabaseProfileBusy(false);
+    }
   }
 
   useEffect(() => {
@@ -906,6 +949,20 @@ export default function ExternalIntegrationsPageClient() {
                       >
                         {databaseStatusLoading ? '读取中' : '刷新明细'}
                       </button>
+                      <button
+                        type="button"
+                        onClick={exportDatabaseSourceStatus}
+                        disabled={!selectedDatabaseStatus?.loaded}
+                      >
+                        导出状态
+                      </button>
+                      <button
+                        type="button"
+                        onClick={refreshDatabaseSemanticProfile}
+                        disabled={databaseProfileBusy || databaseStatusLoading}
+                      >
+                        {databaseProfileBusy ? '刷新中' : '刷新画像'}
+                      </button>
                     </div>
                   </div>
                   <div className="external-detail-strip external-database-strip">
@@ -1086,6 +1143,20 @@ export default function ExternalIntegrationsPageClient() {
                       </div>
                     </div>
                   ) : null}
+                  {selectedDatabaseSyncReadiness?.rowFailureGroups?.length ? (
+                    <div className="external-database-row-failure-groups" aria-label="数据库失败行分组">
+                      {selectedDatabaseSyncReadiness.rowFailureGroups.map((group, index) => (
+                        <article key={`${group.table}:${group.reason}:${index}`}>
+                          <strong>{group.table}</strong>
+                          <span>{group.reportedFailedRowCount || group.sampleCount} 行失败</span>
+                          <small>
+                            {group.sampleSourcePrimaryKeys?.length ? `样例 ${group.sampleSourcePrimaryKeys.join(', ')} · ` : ''}
+                            {group.reason || 'row_conversion_failed'}
+                          </small>
+                        </article>
+                      ))}
+                    </div>
+                  ) : null}
                   {selectedDatabaseSyncReadiness?.rowFailureSamples?.length ? (
                     <div className="external-database-row-failures" aria-label="数据库失败行样例">
                       {selectedDatabaseSyncReadiness.rowFailureSamples.map((sample, index) => (
@@ -1126,6 +1197,7 @@ export default function ExternalIntegrationsPageClient() {
                             {run.lastError
                               || run.failureKind
                               || run.failedTaskKey
+                              || run.rowFailureGroups?.[0]?.reason
                               || run.rowFailureSamples?.[0]?.reason
                               || run.checkpointSummary?.label
                               || run.workflowStage

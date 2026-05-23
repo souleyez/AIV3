@@ -184,6 +184,81 @@ export function buildExternalActionTrace({ integration = {}, action = {}, genera
   };
 }
 
+export function buildDatabaseSourceStatusExport({
+  integration = {},
+  status = {},
+  generatedAt = new Date().toISOString(),
+} = {}) {
+  const source = databaseSourceSummary(integration);
+  const normalized = status?.loaded ? status : normalizeDatabaseSourceStatus(status);
+  return {
+    report_type: 'database_source_status_summary',
+    generated_at: generatedAt,
+    source: {
+      id: integration.id || '',
+      kind: integration.kind || '',
+      provider: integration.provider || '',
+      display_name: integration.displayName || '',
+      health_status: integration.healthStatus || '',
+      drift_signal: integration.driftSignal || '',
+    },
+    database_source: {
+      configured: source.configured,
+      valid: source.valid,
+      kind: source.kind,
+      database: source.database,
+      connection_env: source.connectionEnv,
+      default_dataset_id: source.defaultDatasetId,
+      table_count: source.tableCount,
+      tables: source.tables,
+    },
+    dataset: normalized.dataset || {},
+    dataset_readiness: normalized.datasetReadiness || {},
+    sync_readiness: {
+      ...(normalized.syncReadiness || {}),
+      rowFailureGroups: normalized.syncReadiness?.rowFailureGroups || [],
+      rowFailureSamples: normalized.syncReadiness?.rowFailureSamples || [],
+      tableCounts: normalized.syncReadiness?.tableCounts || [],
+    },
+    semantic_profile: normalized.semanticProfile || {},
+    health_findings: normalized.healthFindings || {},
+    table_readiness: normalized.tableReadiness || [],
+    recent_sync_runs: (normalized.recentSyncRuns || []).map((run) => ({
+      syncRunId: run.syncRunId || '',
+      syncKind: run.syncKind || '',
+      status: run.status || '',
+      failureKind: run.failureKind || '',
+      lastError: run.lastError || '',
+      failedTaskKey: run.failedTaskKey || '',
+      documentCount: run.documentCount || 0,
+      rowCount: run.rowCount || 0,
+      skippedRowCount: run.skippedRowCount || 0,
+      failedRowCount: run.failedRowCount || 0,
+      enqueuedTaskCount: run.enqueuedTaskCount || 0,
+      tableCounts: run.tableCounts || [],
+      rowFailureGroups: run.rowFailureGroups || [],
+      checkpointSummary: run.checkpointSummary || {},
+      workflowStage: run.workflowStage || '',
+      workflowStatus: run.workflowStatus || '',
+      updatedAt: run.updatedAt || null,
+    })),
+    redaction: {
+      raw_database_credentials_included: false,
+      raw_sql_included: false,
+      raw_source_cursors_included: false,
+      source: 'v3_selected_database_source_status',
+    },
+  };
+}
+
+export function databaseSourceStatusExportFilename(integration = {}) {
+  const sourceId = String(integration.id || integration.source_id || 'database-source')
+    .replace(/[^a-zA-Z0-9._-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80) || 'database-source';
+  return `${sourceId}-database-status.json`;
+}
+
 export function externalActionTraceFilename(action = {}) {
   const actionId = String(action.actionId || action.action_id || 'external-action')
     .replace(/[^a-zA-Z0-9._-]+/g, '-')
@@ -441,6 +516,12 @@ export function normalizeDatabaseSourceStatus(raw = {}) {
         skippedRowCount: numberOrZero(counts.skipped_row_count ?? counts.skippedRowCount),
         failedRowCount: numberOrZero(counts.failed_row_count ?? counts.failedRowCount),
         rowFailureSamples: normalizeDatabaseRowFailureSamples(counts.row_failure_samples || counts.rowFailureSamples),
+        rowFailureGroups: normalizeDatabaseRowFailureGroups(
+          run?.row_failure_groups
+          || run?.rowFailureGroups
+          || counts.row_failure_groups
+          || counts.rowFailureGroups,
+        ),
         aclSnapshotCount: numberOrZero(counts.acl_snapshot_count ?? counts.aclSnapshotCount),
         enqueuedTaskCount: numberOrZero(counts.enqueued_task_count ?? counts.enqueuedTaskCount),
         tableCounts: normalizeDatabaseSyncTableCounts(counts),
@@ -567,6 +648,7 @@ function normalizeDatabaseSyncReadiness(raw = {}) {
     skippedRowCount: numberOrZero(raw?.skipped_row_count ?? raw?.skippedRowCount),
     failedRowCount: numberOrZero(raw?.failed_row_count ?? raw?.failedRowCount),
     rowFailureSamples: normalizeDatabaseRowFailureSamples(raw?.row_failure_samples || raw?.rowFailureSamples),
+    rowFailureGroups: normalizeDatabaseRowFailureGroups(raw?.row_failure_groups || raw?.rowFailureGroups),
     enqueuedTaskCount: numberOrZero(raw?.enqueued_task_count ?? raw?.enqueuedTaskCount),
     tableCounts: normalizeDatabaseSyncTableCountRows(raw?.table_counts || raw?.tableCounts),
     checkpointSummary: normalizeDatabaseCheckpointSummary(raw?.checkpoint_summary || raw?.checkpointSummary || {}),
@@ -627,6 +709,22 @@ function normalizeDatabaseRowFailureSamples(rows = []) {
     rowIndex: numberOrZero(row?.row_index ?? row?.rowIndex),
     reason: String(row?.reason || ''),
     sourcePrimaryKey: String(row?.source_primary_key || row?.sourcePrimaryKey || ''),
+  })).filter((row) => row.table).slice(0, 8);
+}
+
+function normalizeDatabaseRowFailureGroups(rows = []) {
+  return (Array.isArray(rows) ? rows : []).map((row) => ({
+    table: String(row?.table || ''),
+    reason: String(row?.reason || 'row_conversion_failed'),
+    sampleCount: numberOrZero(row?.sample_count ?? row?.sampleCount),
+    reportedFailedRowCount: numberOrZero(row?.reported_failed_row_count ?? row?.reportedFailedRowCount),
+    firstRowIndex: numberOrZero(row?.first_row_index ?? row?.firstRowIndex),
+    sampleSourcePrimaryKeys: Array.isArray(row?.sample_source_primary_keys || row?.sampleSourcePrimaryKeys)
+      ? (row.sample_source_primary_keys || row.sampleSourcePrimaryKeys)
+        .map((value) => String(value || '').trim())
+        .filter(Boolean)
+        .slice(0, 3)
+      : [],
   })).filter((row) => row.table).slice(0, 8);
 }
 

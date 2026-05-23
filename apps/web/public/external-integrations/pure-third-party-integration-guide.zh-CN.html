@@ -527,15 +527,17 @@ Authorization: Bearer &lt;V3 inbound token&gt;</code></pre>
     &quot;datasets&quot;: [],                               // 该数据库源已同步过的目标数据集列表
     &quot;dataset_readiness&quot;: {},                      // 数据集问答可用状态
     &quot;table_readiness&quot;: [],                        // 各表文档/索引/分块状态
-    &quot;recent_sync_runs&quot;: [],                       // 最近同步任务
-    &quot;sync_readiness&quot;: {},                         // 综合同步可用状态
+    &quot;recent_sync_runs&quot;: [],                       // 最近同步任务；可含 row_failure_groups
+    &quot;sync_readiness&quot;: {                           // 综合同步可用状态
+      &quot;row_failure_groups&quot;: []                    // 行转换失败按表/原因聚合
+    },
     &quot;semantic_profile&quot;: {},                       // 表字段/指标/维度语义摘要
     &quot;health_findings&quot;: {}                         // 可给运维看的问题摘要
   }
 }</code></pre>
   </figure>
 <p>字段说明：</p>
-<div class="table-shell"><table><thead><tr><th>字段</th><th>必填</th><th>注释</th></tr></thead><tbody><tr><td><code>connection_id</code></td><td>是</td><td>V3 分配的第三方通道 ID</td></tr><tr><td><code>source_external_id</code></td><td>是</td><td>V3 已授权给该通道的数据库源 ID</td></tr><tr><td><code>status.sync_readiness.signal</code></td><td>否</td><td><code>ready</code> 表示数据库同步数据可用于问答/报表；<code>sync_running</code>、<code>sync_failed</code>、<code>no_documents</code> 表示仍需等待或排查</td></tr><tr><td><code>status.dataset_readiness.signal</code></td><td>否</td><td><code>ready</code> 表示目标数据集已具备可检索证据</td></tr><tr><td><code>status.health_findings.items</code></td><td>否</td><td>配置、同步、索引、行转换失败等问题列表</td></tr></tbody></table></div>
+<div class="table-shell"><table><thead><tr><th>字段</th><th>必填</th><th>注释</th></tr></thead><tbody><tr><td><code>connection_id</code></td><td>是</td><td>V3 分配的第三方通道 ID</td></tr><tr><td><code>source_external_id</code></td><td>是</td><td>V3 已授权给该通道的数据库源 ID</td></tr><tr><td><code>status.sync_readiness.signal</code></td><td>否</td><td><code>ready</code> 表示数据库同步数据可用于问答/报表；<code>sync_running</code>、<code>sync_failed</code>、<code>no_documents</code> 表示仍需等待或排查</td></tr><tr><td><code>status.sync_readiness.row_failure_groups</code></td><td>否</td><td>数据库行转换失败分组；包含 <code>table</code>、<code>reason</code>、<code>reported_failed_row_count</code>、<code>sample_count</code>、<code>sample_source_primary_keys</code></td></tr><tr><td><code>status.recent_sync_runs[].row_failure_groups</code></td><td>否</td><td>最近同步任务中的失败行分组，便于判断本次同步哪个表/原因失败较多</td></tr><tr><td><code>status.dataset_readiness.signal</code></td><td>否</td><td><code>ready</code> 表示目标数据集已具备可检索证据</td></tr><tr><td><code>status.health_findings.items</code></td><td>否</td><td>配置、同步、索引、行转换失败等问题列表</td></tr></tbody></table></div>
 <h2 id="section-06">2. 聊天同步</h2>
 <h3 id="section-07">2.1 普通聊天</h3>
 <figure class="code-card">

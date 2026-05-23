@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import {
+  applyDatabaseSourceProfile,
   fetchDatabaseSourceOptions,
   fetchDatabaseSourceStatus,
   inspectDatabaseSourceSchema,
@@ -143,6 +144,12 @@ function DatabaseSourcePanel({ datasets }) {
         const nextProfile = await profileDatabaseSource(selectedSourceId);
         setProfile(nextProfile);
         setNotice(`语义画像已更新 · 指标 ${nextProfile.metricCount} · 维度 ${nextProfile.dimensionCount}`);
+      } else if (kind === 'applyProfile') {
+        const nextProfile = await applyDatabaseSourceProfile(selectedSourceId);
+        setProfile(nextProfile);
+        setNotice(`语义画像已应用 · 表 ${nextProfile.tableCount} · 指标 ${nextProfile.metricCount} · 维度 ${nextProfile.dimensionCount}`);
+        await loadStatus(selectedSourceId);
+        await loadSources();
       } else if (kind === 'full' || kind === 'incremental') {
         const datasetId = selectedDatasetId || selectedSource?.source?.defaultDatasetId || '';
         const datasetExternalId = targetExternalId.trim();
@@ -282,6 +289,9 @@ function DatabaseSourcePanel({ datasets }) {
             </button>
             <button type="button" className="ghost-btn compact-action-btn" onClick={() => runAction('profile')} disabled={busy}>
               {actionBusy === 'profile' ? '画像中' : '语义画像'}
+            </button>
+            <button type="button" className="ghost-btn compact-action-btn" onClick={() => runAction('applyProfile')} disabled={busy}>
+              {actionBusy === 'applyProfile' ? '应用中' : '应用画像'}
             </button>
             <button type="button" className="primary-btn compact-action-btn" onClick={() => runAction('incremental')} disabled={busy || !canSync}>
               {actionBusy === 'incremental' ? '提交中' : '增量同步'}

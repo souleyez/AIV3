@@ -841,7 +841,8 @@ Authorization: Bearer <V3 inbound token>
       "signal": "ready",
       "status": "succeeded",
       "row_count": 20,
-      "failed_row_count": 0
+      "failed_row_count": 0,
+      "row_failure_groups": []
     },
     "semantic_profile": {},
     "health_findings": {
@@ -865,7 +866,9 @@ Authorization: Bearer <V3 inbound token>
 | `status.dataset_readiness.signal` | 数据集问答可用状态；`ready` 表示可用于问答/报表 |
 | `status.table_readiness` | 各映射表的文档、索引、分块状态 |
 | `status.recent_sync_runs` | 最近同步任务摘要；checkpoint 只返回安全摘要，不返回原始游标 |
+| `status.recent_sync_runs[].row_failure_groups` | 最近同步任务中的行转换失败分组，按表和原因聚合 |
 | `status.sync_readiness.signal` | 综合同步状态；常见值：`ready`、`sync_running`、`sync_failed`、`no_documents`、`indexing` |
+| `status.sync_readiness.row_failure_groups` | 当前同步可用状态中的行转换失败分组；包含表、原因、失败行数和少量主键样例 |
 | `status.semantic_profile` | 表字段、指标、维度、时间字段、实体字段等语义摘要 |
 | `status.health_findings` | 配置、同步、索引、行转换失败等问题摘要 |
 

@@ -128,9 +128,46 @@ export async function inspectDatabaseSourceSchema(sourceId) {
 export async function profileDatabaseSource(sourceId) {
   const payload = await fetchJson(`/api/v3/external/sources/${encodeURIComponent(sourceId)}/database/profile`, {
     method: 'POST',
-    body: { sample_limit: 100, database_source: {} },
+    body: databaseSourceProfileRequestBody(),
   });
   return normalizeDatabaseProfile(payload);
+}
+
+export function databaseSourceProfileRequestBody({
+  sampleLimit = 100,
+  tables = [],
+  dryRun = false,
+} = {}) {
+  const body = {
+    sample_limit: Number.isFinite(Number(sampleLimit)) && Number(sampleLimit) > 0
+      ? Math.floor(Number(sampleLimit))
+      : 100,
+    database_source: {},
+  };
+  const normalizedTables = Array.isArray(tables)
+    ? tables.map((table) => String(table || '').trim()).filter(Boolean)
+    : [];
+  if (normalizedTables.length) {
+    body.tables = normalizedTables;
+  }
+  if (dryRun) {
+    body.dry_run = true;
+  }
+  return body;
+}
+
+export async function applyDatabaseSourceProfile(sourceId, options = {}) {
+  const payload = await fetchJson(`/api/v3/external/sources/${encodeURIComponent(sourceId)}/database/apply-profile`, {
+    method: 'POST',
+    body: databaseSourceProfileRequestBody(options),
+  });
+  const profile = normalizeDatabaseProfile(payload);
+  return {
+    ...profile,
+    accepted: payload?.accepted === true,
+    dryRun: payload?.dry_run === true || payload?.dryRun === true,
+    updatedAt: payload?.updated_at || payload?.updatedAt || null,
+  };
 }
 
 export function databaseSourceSyncRequestBody(syncKind = 'incremental', target = '') {

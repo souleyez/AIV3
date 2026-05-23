@@ -194,8 +194,10 @@ Authorization: Bearer <V3 inbound token>
     "datasets": [],                               // 该数据库源已同步过的目标数据集列表
     "dataset_readiness": {},                      // 数据集问答可用状态
     "table_readiness": [],                        // 各表文档/索引/分块状态
-    "recent_sync_runs": [],                       // 最近同步任务
-    "sync_readiness": {},                         // 综合同步可用状态
+    "recent_sync_runs": [],                       // 最近同步任务；可含 row_failure_groups
+    "sync_readiness": {                           // 综合同步可用状态
+      "row_failure_groups": []                    // 行转换失败按表/原因聚合
+    },
     "semantic_profile": {},                       // 表字段/指标/维度语义摘要
     "health_findings": {}                         // 可给运维看的问题摘要
   }
@@ -209,6 +211,8 @@ Authorization: Bearer <V3 inbound token>
 | `connection_id` | 是 | V3 分配的第三方通道 ID |
 | `source_external_id` | 是 | V3 已授权给该通道的数据库源 ID |
 | `status.sync_readiness.signal` | 否 | `ready` 表示数据库同步数据可用于问答/报表；`sync_running`、`sync_failed`、`no_documents` 表示仍需等待或排查 |
+| `status.sync_readiness.row_failure_groups` | 否 | 数据库行转换失败分组；包含 `table`、`reason`、`reported_failed_row_count`、`sample_count`、`sample_source_primary_keys` |
+| `status.recent_sync_runs[].row_failure_groups` | 否 | 最近同步任务中的失败行分组，便于判断本次同步哪个表/原因失败较多 |
 | `status.dataset_readiness.signal` | 否 | `ready` 表示目标数据集已具备可检索证据 |
 | `status.health_findings.items` | 否 | 配置、同步、索引、行转换失败等问题列表 |
 

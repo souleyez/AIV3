@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  databaseSourceProfileRequestBody,
   databaseSourceSyncRequestBody,
   databaseSourceOptionsFromIntegrations,
   normalizeDatabaseProfile,
@@ -105,5 +106,28 @@ test('databaseSourceSyncRequestBody supports dataset id and external dataset bin
     connector_context: {},
     dataset_external_id: 'workspace-db-main',
     dataset_title: '工作区数据库',
+  });
+});
+
+test('databaseSourceProfileRequestBody keeps apply-profile payload bounded', () => {
+  assert.deepEqual(databaseSourceProfileRequestBody(), {
+    sample_limit: 100,
+    database_source: {},
+  });
+
+  assert.deepEqual(databaseSourceProfileRequestBody({
+    sampleLimit: 25.8,
+    tables: [' bi_traffic_area ', '', 'bi_store'],
+    dryRun: true,
+  }), {
+    sample_limit: 25,
+    tables: ['bi_traffic_area', 'bi_store'],
+    dry_run: true,
+    database_source: {},
+  });
+
+  assert.deepEqual(databaseSourceProfileRequestBody({ sampleLimit: -1 }), {
+    sample_limit: 100,
+    database_source: {},
   });
 });

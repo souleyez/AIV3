@@ -9,6 +9,7 @@ import {
   buildExternalActionPermalink,
   buildExternalAuditQuery,
   buildExternalActionTrace,
+  buildDatabaseSourceStatusExport,
   buildThirdPartyApiUrl,
   controlResultLabel,
   databaseSourceHealthSignalLabel,
@@ -21,6 +22,7 @@ import {
   EXTERNAL_INTEGRATION_MODES,
   externalConversationStatusLabel,
   externalActionTraceFilename,
+  databaseSourceStatusExportFilename,
   formatExternalConversationDuration,
   formatObservationTime,
   latestIntegrationActivity,
@@ -147,6 +149,99 @@ test('buildExternalActionTrace produces redacted operator export', () => {
   assert.equal(trace.redaction.raw_third_party_payload_included, false);
   assert.equal(trace.action.summary.result_callback_received, true);
   assert.equal(externalActionTraceFilename({ actionId: 'act/001 secret?' }), 'act-001-secret-trace.json');
+});
+
+test('buildDatabaseSourceStatusExport produces redacted database status summary', () => {
+  const status = normalizeDatabaseSourceStatus({
+    status: {
+      dataset: {
+        dataset_id: 'ds-001',
+        title: 'HY SQL',
+        dataset_external_id: 'hy-sql-main',
+      },
+      dataset_readiness: {
+        signal: 'ready',
+        document_count: 2,
+        indexed_document_count: 2,
+        indexed_chunk_count: 8,
+      },
+      sync_readiness: {
+        signal: 'ready',
+        row_count: 2,
+        failed_row_count: 1,
+        row_failure_groups: [{
+          table: 'bi_traffic_area',
+          reason: 'mapped row has empty identity columns',
+          sample_count: 1,
+          reported_failed_row_count: 1,
+          sample_source_primary_keys: ['42'],
+        }],
+      },
+      recent_sync_runs: [{
+        sync_run_id: 'run-001',
+        sync_kind: 'full',
+        status: 'succeeded',
+        row_failure_groups: [{
+          table: 'bi_traffic_area',
+          reason: 'mapped row has empty identity columns',
+          sample_count: 1,
+          reported_failed_row_count: 1,
+        }],
+        counts: {
+          documents_ingested: 2,
+          row_count: 2,
+          failed_row_count: 1,
+        },
+        checkpoint_summary: {
+          has_checkpoint: true,
+          cursor_present: true,
+        },
+      }],
+      health_findings: {
+        signal: 'attention',
+        warning_count: 1,
+        items: [{
+          severity: 'warning',
+          code: 'row_conversion_failures',
+          title: '存在行级转换失败',
+          message: '部分数据库行未能转换为文档。',
+          count: 1,
+        }],
+      },
+    },
+  });
+  const report = buildDatabaseSourceStatusExport({
+    generatedAt: '2026-05-23T10:00:00Z',
+    integration: {
+      id: 'hy-sql-status',
+      kind: 'source',
+      provider: 'database',
+      displayName: 'HY SQL',
+      healthStatus: 'healthy',
+      driftSignal: 'ok',
+      configSummary: {
+        database_source: {
+          kind: 'mysql',
+          database: 'hy_sql',
+          connection_env: 'THIRD_PARTY_HY_SQL_DATABASE_URL',
+          default_dataset_id: 'ds-001',
+          table_count: 1,
+          tables: ['bi_traffic_area'],
+        },
+      },
+    },
+    status,
+  });
+
+  assert.equal(report.report_type, 'database_source_status_summary');
+  assert.equal(report.generated_at, '2026-05-23T10:00:00Z');
+  assert.equal(report.database_source.connection_env, 'THIRD_PARTY_HY_SQL_DATABASE_URL');
+  assert.equal(report.dataset.datasetExternalId, 'hy-sql-main');
+  assert.equal(report.sync_readiness.rowFailureGroups[0].reportedFailedRowCount, 1);
+  assert.equal(report.recent_sync_runs[0].checkpointSummary.cursorPresent, true);
+  assert.equal(report.redaction.raw_database_credentials_included, false);
+  assert.equal(report.redaction.raw_source_cursors_included, false);
+  assert.equal(databaseSourceStatusExportFilename({ id: 'hy/sql status?' }), 'hy-sql-status-database-status.json');
 });
 
 test('normalizeIntegrationSummary derives operational signal and counts', () => {
@@ -422,6 +517,14 @@ test('database source status helper normalizes selected-only detail payload', ()
         sync_run_id: 'run-001',
         sync_kind: 'full',
         status: 'succeeded',
+        row_failure_groups: [{
+          table: 'bi_traffic_area',
+          reason: 'mapped row has empty identity columns',
+          sample_count: 1,
+          reported_failed_row_count: 1,
+          first_row_index: 3,
+          sample_source_primary_keys: ['42'],
+        }],
         counts: {
           documents_ingested: 2,
           row_count: 2,
@@ -473,6 +576,14 @@ test('database source status helper normalizes selected-only detail payload', ()
         skipped_row_count: 0,
         failed_row_count: 1,
         enqueued_task_count: 6,
+        row_failure_groups: [{
+          table: 'bi_traffic_area',
+          reason: 'mapped row has empty identity columns',
+          sample_count: 1,
+          reported_failed_row_count: 1,
+          first_row_index: 3,
+          sample_source_primary_keys: ['42'],
+        }],
         row_failure_samples: [{
           table: 'bi_traffic_area',
           row_index: 3,
@@ -546,6 +657,14 @@ test('database source status helper normalizes selected-only detail payload', ()
     reason: 'mapped row has empty identity columns',
     sourcePrimaryKey: '42',
   }]);
+  assert.deepEqual(status.syncReadiness.rowFailureGroups, [{
+    table: 'bi_traffic_area',
+    reason: 'mapped row has empty identity columns',
+    sampleCount: 1,
+    reportedFailedRowCount: 1,
+    firstRowIndex: 3,
+    sampleSourcePrimaryKeys: ['42'],
+  }]);
   assert.equal(status.syncReadiness.checkpointSummary.label, '表检查点 1 · 游标已隐藏');
   assert.equal(status.syncReadiness.checkpointSummary.tableCheckpoints[0].updatedAfterPresent, true);
   assert.equal(status.healthFindings.signal, 'attention');
@@ -575,6 +694,7 @@ test('database source status helper normalizes selected-only detail payload', ()
   assert.equal(status.recentSyncRuns[0].enqueuedTaskCount, 6);
   assert.equal(status.recentSyncRuns[0].rowCount, 2);
   assert.equal(status.recentSyncRuns[0].rowFailureSamples[0].sourcePrimaryKey, '42');
+  assert.equal(status.recentSyncRuns[0].rowFailureGroups[0].reportedFailedRowCount, 1);
   assert.equal(status.recentSyncRuns[0].checkpointSummary.cursorPresent, true);
   assert.equal(status.recentSyncRuns[0].checkpointSummary.tableCount, 1);
   assert.deepEqual(status.recentSyncRuns[0].tableCounts, [{

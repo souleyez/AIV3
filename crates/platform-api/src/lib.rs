@@ -17129,13 +17129,16 @@ async fn load_database_source_recent_sync_runs(
         rows.into_iter()
             .map(|row| {
                 let checkpoint = row.get::<Value, _>("checkpoint");
+                let counts = external_integration_redacted_summary(row.get::<Value, _>("counts"));
                 let checkpoint_summary = database_source_checkpoint_summary(&checkpoint);
+                let row_failure_groups = database_source_row_failure_groups_from_counts(&counts);
                 json!({
                     "sync_run_id": row.get::<Uuid, _>("id"),
                     "sync_kind": row.get::<String, _>("sync_kind"),
                     "status": row.get::<String, _>("status"),
                     "failure_kind": row.get::<Option<String>, _>("failure_kind"),
-                    "counts": external_integration_redacted_summary(row.get::<Value, _>("counts")),
+                    "counts": counts,
+                    "row_failure_groups": row_failure_groups,
                     "checkpoint_summary": checkpoint_summary,
                     "checkpoint": {
                         "workflow_execution_id": checkpoint.get("workflow_execution_id").cloned().unwrap_or(Value::Null),
@@ -17299,6 +17302,7 @@ fn database_source_sync_readiness_summary(
 
     let table_counts = database_source_sync_table_counts_from_counts(counts);
     let row_failure_samples = database_source_row_failure_samples_from_counts(counts);
+    let row_failure_groups = database_source_row_failure_groups_from_counts(counts);
     json!({
         "signal": signal,
         "dataset_signal": dataset_signal,
@@ -17335,6 +17339,7 @@ fn database_source_sync_readiness_summary(
         "failed_row_count": database_source_count_from_keys(counts, &["failed_row_count"]),
         "enqueued_task_count": database_source_count_from_keys(counts, &["enqueued_task_count"]),
         "table_counts": table_counts,
+        "row_failure_groups": row_failure_groups,
         "row_failure_samples": row_failure_samples,
         "checkpoint_summary": checkpoint_summary,
         "updated_at": latest_run.get("updated_at").cloned().unwrap_or(Value::Null),
@@ -17431,6 +17436,113 @@ fn database_source_row_failure_samples_from_counts(counts: &Value) -> Value {
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default(),
+    )
+}
+
+fn database_source_row_failure_groups_from_counts(counts: &Value) -> Value {
+    #[derive(Default)]
+    struct RowFailureGroup {
+        sample_count: i64,
+        first_row_index: Option<u64>,
+        sample_source_primary_keys: Vec<String>,
+    }
+
+    let mut table_failed_row_counts = BTreeMap::new();
+    for row in database_source_sync_table_counts_from_counts(counts)
+        .as_array()
+        .into_iter()
+        .flatten()
+    {
+        let Some(table) = row
+            .get("table")
+            .and_then(Value::as_str)
+            .and_then(non_empty_trimmed_string)
+        else {
+            continue;
+        };
+        let failed_row_count = value_i64(row, "failed_row_count");
+        if failed_row_count > 0 {
+            table_failed_row_counts.insert(table, failed_row_count);
+        }
+    }
+
+    let mut groups: BTreeMap<(String, String), RowFailureGroup> = BTreeMap::new();
+    for sample in counts
+        .get("row_failure_samples")
+        .or_else(|| counts.get("rowFailureSamples"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let Some(table) = sample
+            .get("table")
+            .and_then(Value::as_str)
+            .and_then(non_empty_trimmed_string)
+        else {
+            continue;
+        };
+        let reason = sample
+            .get("reason")
+            .and_then(Value::as_str)
+            .map(database_source_health_message_excerpt)
+            .and_then(|value| non_empty_trimmed_string(&value))
+            .unwrap_or_else(|| "row_conversion_failed".to_string());
+        let entry = groups.entry((table, reason)).or_default();
+        entry.sample_count += 1;
+        if entry.first_row_index.is_none() {
+            entry.first_row_index = sample
+                .get("row_index")
+                .or_else(|| sample.get("rowIndex"))
+                .and_then(Value::as_u64);
+        }
+        if entry.sample_source_primary_keys.len() < 3 {
+            if let Some(source_primary_key) = sample
+                .get("source_primary_key")
+                .or_else(|| sample.get("sourcePrimaryKey"))
+                .and_then(Value::as_str)
+                .and_then(non_empty_trimmed_string)
+            {
+                if !entry
+                    .sample_source_primary_keys
+                    .iter()
+                    .any(|existing| existing == &source_primary_key)
+                {
+                    entry.sample_source_primary_keys.push(source_primary_key);
+                }
+            }
+        }
+    }
+
+    for table in table_failed_row_counts.keys() {
+        if groups.keys().any(|(group_table, _)| group_table == table) {
+            continue;
+        }
+        groups
+            .entry((table.clone(), "row_conversion_failed".to_string()))
+            .or_insert(RowFailureGroup {
+                sample_count: 0,
+                first_row_index: None,
+                sample_source_primary_keys: Vec::new(),
+            });
+    }
+
+    Value::Array(
+        groups
+            .into_iter()
+            .take(8)
+            .map(|((table, reason), group)| {
+                let reported_failed_row_count =
+                    table_failed_row_counts.get(&table).copied().unwrap_or(0);
+                json!({
+                    "table": table,
+                    "reason": reason,
+                    "sample_count": group.sample_count,
+                    "reported_failed_row_count": reported_failed_row_count,
+                    "first_row_index": group.first_row_index.unwrap_or(0),
+                    "sample_source_primary_keys": group.sample_source_primary_keys,
+                })
+            })
+            .collect(),
     )
 }
 
@@ -63919,6 +64031,32 @@ mod tests {
         assert_eq!(
             response.status["sync_readiness"]["row_failure_samples"][0]["reason"],
             json!("mapped row has empty identity columns")
+        );
+        assert_eq!(
+            response.status["sync_readiness"]["row_failure_groups"][0]["table"],
+            json!("bi_traffic_area")
+        );
+        assert_eq!(
+            response.status["sync_readiness"]["row_failure_groups"][0]["reason"],
+            json!("mapped row has empty identity columns")
+        );
+        assert_eq!(
+            response.status["sync_readiness"]["row_failure_groups"][0]["sample_count"],
+            json!(1)
+        );
+        assert_eq!(
+            response.status["sync_readiness"]["row_failure_groups"][0]["reported_failed_row_count"],
+            json!(1)
+        );
+        assert_eq!(
+            response.status["sync_readiness"]["row_failure_groups"][0]
+                ["sample_source_primary_keys"][0],
+            json!("42")
+        );
+        assert_eq!(
+            response.status["recent_sync_runs"][0]["row_failure_groups"][0]
+                ["reported_failed_row_count"],
+            json!(1)
         );
         assert_eq!(
             response.status["health_findings"]["signal"],

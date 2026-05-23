@@ -7489,12 +7489,14 @@ body {
   background: rgba(255, 255, 255, 0.66);
 }
 
+.external-database-row-failure-groups,
 .external-database-row-failures {
   display: grid;
   gap: 8px;
   margin: 0 14px 14px;
 }
 
+.external-database-row-failure-groups article,
 .external-database-row-failures article {
   min-width: 0;
   display: grid;
@@ -7507,6 +7509,14 @@ body {
   background: #fff4f0;
 }
 
+.external-database-row-failure-groups article {
+  border-color: #d0a25f;
+  background: #fff8eb;
+}
+
+.external-database-row-failure-groups strong,
+.external-database-row-failure-groups span,
+.external-database-row-failure-groups small,
 .external-database-row-failures strong,
 .external-database-row-failures span,
 .external-database-row-failures small {
@@ -7514,11 +7524,14 @@ body {
   overflow-wrap: anywhere;
 }
 
+.external-database-row-failure-groups strong,
 .external-database-row-failures strong {
   color: #7a2e1e;
   font-size: 12px;
 }
 
+.external-database-row-failure-groups span,
+.external-database-row-failure-groups small,
 .external-database-row-failures span,
 .external-database-row-failures small {
   color: #8a4a38;
@@ -7834,6 +7847,7 @@ body {
     grid-template-columns: minmax(0, 1fr);
   }
 
+  .external-database-row-failure-groups article,
   .external-database-row-failures article {
     grid-template-columns: minmax(0, 1fr);
   }
