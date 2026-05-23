@@ -421,6 +421,32 @@ function Get-ServerCaseConfig {
     return $null
 }
 
+function Copy-CaseWithServerAssertionOverrides {
+    param(
+        [object] $Case,
+        [object] $CaseConfig
+    )
+
+    $caseForAssertions = $Case | ConvertTo-Json -Depth 30 | ConvertFrom-Json
+    foreach ($pair in @(
+        @{ Out = "failure_markers"; Names = @("failure_markers", "failureMarkers") },
+        @{ Out = "requires_normalized_dates"; Names = @("requires_normalized_dates", "requiresNormalizedDates") },
+        @{ Out = "requires_table"; Names = @("requires_table", "requiresTable") },
+        @{ Out = "required_final_answer_terms"; Names = @("required_final_answer_terms", "requiredFinalAnswerTerms") }
+    )) {
+        $value = Get-PropertyByNames -Object $CaseConfig -Names $pair.Names -Default $null
+        if ($null -ne $value) {
+            $property = $caseForAssertions.PSObject.Properties[$pair.Out]
+            if ($null -ne $property) {
+                $property.Value = $value
+            } else {
+                $caseForAssertions | Add-Member -NotePropertyName $pair.Out -NotePropertyValue $value
+            }
+        }
+    }
+    return $caseForAssertions
+}
+
 function Join-AssistantRunApiUrl {
     param(
         [string] $Root,
@@ -568,6 +594,7 @@ function Invoke-ServerAssistantRunCase {
     if ($null -eq $selectedScope -and -not $allowAutoScope) {
         return New-ServerSkippedCaseResult -Case $Case -Reason "server_selected_scope_missing; provide selected_scope in ServerCaseConfigPath or set allow_auto_scope=true"
     }
+    $assertionCase = Copy-CaseWithServerAssertionOverrides -Case $Case -CaseConfig $CaseConfig
 
     $payload = [ordered]@{
         prompt = if (-not [string]::IsNullOrWhiteSpace($promptOverride)) { "$promptOverride" } else { "$($Case.prompt)" }
@@ -607,7 +634,7 @@ function Invoke-ServerAssistantRunCase {
             (New-SmokeAssertionCheck -Name "server_final_answer_present" -Passed (-not [string]::IsNullOrWhiteSpace($finalAnswer)) -Message "requires non-empty assistant_message.content")
         )
         $observed = Convert-ServerObservability -Response $response -Detail $detail
-        return New-CaseResult -Case $Case -Checks $checks -FinalAnswerText $finalAnswer -Observed $observed -PreferObserved
+        return New-CaseResult -Case $assertionCase -Checks $checks -FinalAnswerText $finalAnswer -Observed $observed -PreferObserved
     } catch {
         $checks = @(
             (New-SmokeAssertionCheck -Name "server_create_assistant_run" -Passed $false -Message "$($_.Exception.Message)")
@@ -621,7 +648,7 @@ function Invoke-ServerAssistantRunCase {
             react_actions_used = @()
             premium_action = "server_error"
         }
-        return New-CaseResult -Case $Case -Checks $checks -FinalAnswerText "" -Observed $observed -PreferObserved
+        return New-CaseResult -Case $assertionCase -Checks $checks -FinalAnswerText "" -Observed $observed -PreferObserved
     }
 }
 

@@ -26394,6 +26394,12 @@ fn assistant_run_answer_quality_exhausted_controlled_answer(
     request: &CreateAssistantRunRequest,
     _remaining_reason: &str,
 ) -> String {
+    if let Some(answer) =
+        assistant_run_answer_quality_spreadsheet_controlled_answer(evidence_state, request)
+    {
+        return answer;
+    }
+
     let supplied_count = evidence_state
         .get("supply_quality")
         .and_then(|quality| quality.get("suppliedItemCount"))
@@ -26407,6 +26413,130 @@ fn assistant_run_answer_quality_exhausted_controlled_answer(
         return "我已重新核对当前可见材料，但这轮仍未形成可核验结论。为避免误判，我先不编造结论；可以指定材料、页码或表格范围继续核对。".to_string();
     }
     "我已尝试重新获取可见材料，但这轮没有形成可核验结论。为避免误判，我先不编造结论；可以指定材料范围或稍后再试。".to_string()
+}
+
+fn assistant_run_answer_quality_spreadsheet_controlled_answer(
+    evidence_state: &Value,
+    request: &CreateAssistantRunRequest,
+) -> Option<String> {
+    if !prompt_requests_spreadsheet_row_level_analysis(&request.prompt) {
+        return None;
+    }
+    let rows = assistant_run_spreadsheet_row_analysis_rows(evidence_state)?;
+    let requests_absence = prompt_contains_any(&request.prompt, &["缺勤", "未打卡", "没打卡"]);
+    let requests_work_hours =
+        prompt_contains_any(&request.prompt, &["最长", "最短", "长短", "工时"]);
+    let mut absence_rows = rows
+        .iter()
+        .copied()
+        .filter(|row| row.get("category").is_none())
+        .collect::<Vec<_>>();
+    absence_rows.sort_by(|left, right| {
+        assistant_run_spreadsheet_row_text(right, "date")
+            .cmp(assistant_run_spreadsheet_row_text(left, "date"))
+            .then_with(|| {
+                assistant_run_spreadsheet_row_text(left, "employee")
+                    .cmp(assistant_run_spreadsheet_row_text(right, "employee"))
+            })
+    });
+    let longest = rows
+        .iter()
+        .copied()
+        .find(|row| row.get("category").and_then(Value::as_str) == Some("longest"));
+    let shortest = rows
+        .iter()
+        .copied()
+        .find(|row| row.get("category").and_then(Value::as_str) == Some("shortest"));
+    if (!requests_absence || absence_rows.is_empty())
+        && (!requests_work_hours || (longest.is_none() && shortest.is_none()))
+    {
+        return None;
+    }
+
+    let mut lines = vec!["根据已解析的考勤明细，结果如下：".to_string()];
+    if requests_absence && !absence_rows.is_empty() {
+        lines.push(String::new());
+        lines.push("| 类别 | 日期 | 员工 | 班次 | 状态 |".to_string());
+        lines.push("|---|---|---|---|---|".to_string());
+        for row in absence_rows.into_iter().take(20) {
+            let category = if row
+                .get("counts_as_absence")
+                .and_then(Value::as_bool)
+                .unwrap_or(true)
+            {
+                "缺勤/未打卡"
+            } else {
+                "未打卡/不考勤"
+            };
+            lines.push(format!(
+                "| {category} | {} | {} | {} | {} |",
+                assistant_run_spreadsheet_row_text(row, "date"),
+                assistant_run_spreadsheet_row_text(row, "employee"),
+                assistant_run_spreadsheet_row_text(row, "shift"),
+                assistant_run_spreadsheet_row_text(row, "status"),
+            ));
+        }
+    }
+    if requests_work_hours && (longest.is_some() || shortest.is_some()) {
+        lines.push(String::new());
+        lines.push("| 类型 | 日期 | 员工 | 班次 | 工时 | 状态 |".to_string());
+        lines.push("|---|---|---|---|---|---|".to_string());
+        if let Some(row) = longest {
+            lines.push(assistant_run_spreadsheet_work_hour_result_row(
+                "最长工时",
+                row,
+            ));
+        }
+        if let Some(row) = shortest {
+            lines.push(assistant_run_spreadsheet_work_hour_result_row(
+                "最短工时",
+                row,
+            ));
+        }
+    }
+    let titles = assistant_run_spreadsheet_row_analysis_document_titles(evidence_state);
+    if !titles.is_empty() {
+        lines.push(String::new());
+        lines.push(format!("来源：{}", titles.join("、")));
+    }
+    Some(lines.join("\n"))
+}
+
+fn assistant_run_spreadsheet_work_hour_result_row(label: &str, row: &Value) -> String {
+    format!(
+        "| {label} | {} | {} | {} | {} | {} |",
+        assistant_run_spreadsheet_row_text(row, "date"),
+        assistant_run_spreadsheet_row_text(row, "employee"),
+        assistant_run_spreadsheet_row_text(row, "shift"),
+        assistant_run_spreadsheet_row_text(row, "work_hours_text"),
+        assistant_run_spreadsheet_row_text(row, "status"),
+    )
+}
+
+fn assistant_run_spreadsheet_row_text<'a>(row: &'a Value, key: &str) -> &'a str {
+    row.get(key).and_then(Value::as_str).unwrap_or("")
+}
+
+fn assistant_run_spreadsheet_row_analysis_document_titles(evidence_state: &Value) -> Vec<String> {
+    evidence_state
+        .get("supplied_items")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|item| item.get("type").and_then(Value::as_str) == Some("spreadsheet_row_analysis"))
+        .flat_map(|item| {
+            item.get("documents")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+        })
+        .filter_map(|document| document.get("title").and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|title| !title.is_empty())
+        .map(ToOwned::to_owned)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
 }
 
 #[cfg(test)]
@@ -26666,6 +26796,10 @@ fn assistant_run_answer_quality_judge_should_run(
     if assistant_run_answer_contains_weak_confidence_marker(output_text) {
         return true;
     }
+    if assistant_run_answer_satisfies_spreadsheet_row_analysis(output_text, request, evidence_state)
+    {
+        return false;
+    }
     if assistant_run_prompt_is_high_risk_quality_task(&request.prompt) {
         return true;
     }
@@ -26773,6 +26907,88 @@ fn assistant_run_answer_is_short_for_structured_request(
         .and_then(Value::as_u64)
         .unwrap_or(0);
     supplied_count > 0 && output_text.chars().count() < 80
+}
+
+fn assistant_run_answer_satisfies_spreadsheet_row_analysis(
+    output_text: &str,
+    request: &CreateAssistantRunRequest,
+    evidence_state: &Value,
+) -> bool {
+    if !prompt_requests_spreadsheet_row_level_analysis(&request.prompt) {
+        return false;
+    }
+    if assistant_run_answer_contains_insufficient_evidence_marker(output_text)
+        || assistant_run_react_output_contains_internal_marker(output_text)
+    {
+        return false;
+    }
+    let Some(rows) = assistant_run_spreadsheet_row_analysis_rows(evidence_state) else {
+        return false;
+    };
+    if !output_text.contains('|') {
+        return false;
+    }
+
+    let requests_absence = prompt_contains_any(&request.prompt, &["缺勤", "未打卡", "没打卡"]);
+    let requests_work_hours =
+        prompt_contains_any(&request.prompt, &["最长", "最短", "长短", "工时"]);
+    let mut saw_absence_answer = !requests_absence;
+    let mut saw_longest_answer = !requests_work_hours;
+    let mut saw_shortest_answer = !requests_work_hours;
+
+    for row in rows {
+        match row.get("category").and_then(Value::as_str) {
+            Some("longest") => {
+                saw_longest_answer = assistant_run_answer_contains_row_terms(
+                    output_text,
+                    row,
+                    &["最长", "最长工时"],
+                );
+            }
+            Some("shortest") => {
+                saw_shortest_answer = assistant_run_answer_contains_row_terms(
+                    output_text,
+                    row,
+                    &["最短", "最短工时"],
+                );
+            }
+            _ if requests_absence && !saw_absence_answer => {
+                saw_absence_answer =
+                    assistant_run_answer_contains_row_terms(output_text, row, &["缺勤", "未打卡"]);
+            }
+            _ => {}
+        }
+    }
+
+    saw_absence_answer && saw_longest_answer && saw_shortest_answer
+}
+
+fn assistant_run_spreadsheet_row_analysis_rows(evidence_state: &Value) -> Option<Vec<&Value>> {
+    let rows = evidence_state
+        .get("supplied_items")
+        .and_then(Value::as_array)?
+        .iter()
+        .filter(|item| item.get("type").and_then(Value::as_str) == Some("spreadsheet_row_analysis"))
+        .filter_map(|item| item.get("rows").and_then(Value::as_array))
+        .flatten()
+        .collect::<Vec<_>>();
+    (!rows.is_empty()).then_some(rows)
+}
+
+fn assistant_run_answer_contains_row_terms(
+    output_text: &str,
+    row: &Value,
+    category_terms: &[&str],
+) -> bool {
+    let has_category = category_terms.iter().any(|term| output_text.contains(term));
+    if !has_category {
+        return false;
+    }
+    ["date", "employee", "work_hours_text"]
+        .iter()
+        .filter_map(|key| row.get(*key).and_then(Value::as_str))
+        .filter(|term| !term.trim().is_empty())
+        .all(|term| output_text.contains(term))
 }
 
 async fn complete_assistant_run_answer_quality_judge(
@@ -60185,6 +60401,33 @@ mod tests {
     }
 
     #[test]
+    fn assistant_run_answer_quality_judge_skips_satisfied_spreadsheet_table() {
+        let request = CreateAssistantRunRequest {
+            prompt: "这份考勤表里有哪些缺勤？工时最长和最短分别是谁？".to_string(),
+            local_thread_id: None,
+            startup_briefing: None,
+            selected_scope: Some(json!({"datasets": ["00000000-0000-0000-0000-000000000001"]})),
+            scope_candidates: Vec::new(),
+            context_policy_hint: None,
+            current_artifact: None,
+            messages: Vec::new(),
+        };
+        let evidence_state = assistant_run_test_spreadsheet_row_analysis_evidence_state();
+        let answer = "| 类型 | 日期 | 员工 | 工时 |\n| 缺勤 | 2026-05-13 | A5 | 未打卡 |\n| 最长工时 | 2026-02-07 | A8 | 12.55小时 |\n| 最短工时 | 2026-02-25 | A8 | 4.30小时 |";
+
+        assert!(assistant_run_answer_satisfies_spreadsheet_row_analysis(
+            answer,
+            &request,
+            &evidence_state
+        ));
+        assert!(!assistant_run_answer_quality_judge_should_run(
+            answer,
+            &evidence_state,
+            &request
+        ));
+    }
+
+    #[test]
     fn assistant_run_sanitizes_raw_parse_status_identifiers_for_customer_text() {
         let sanitized = assistant_run_sanitize_customer_facing_answer_text(
             "当前解析状态为 parse_degraded，原因是 low_text_coverage。",
@@ -60429,6 +60672,88 @@ mod tests {
         assert!(!fallback.contains("内部"));
         assert!(!fallback.contains("需要先检索"));
         assert!(!fallback.contains("请继续"));
+    }
+
+    #[test]
+    fn assistant_run_answer_quality_gate_uses_spreadsheet_rows_when_retry_exhausted() {
+        let request = CreateAssistantRunRequest {
+            prompt: "这份考勤表里最近有没缺勤的人？工时最长和最短分别是谁？请按日期、员工、班次、工时出表。"
+                .to_string(),
+            local_thread_id: None,
+            startup_briefing: None,
+            selected_scope: Some(json!({"datasets": ["00000000-0000-0000-0000-000000000001"]})),
+            scope_candidates: Vec::new(),
+            context_policy_hint: None,
+            current_artifact: None,
+            messages: Vec::new(),
+        };
+        let evidence_state = assistant_run_test_spreadsheet_row_analysis_evidence_state();
+
+        let fallback = assistant_run_answer_quality_exhausted_controlled_answer(
+            &evidence_state,
+            &request,
+            "model_judge_customer_unsafe_answer",
+        );
+
+        assert!(fallback.contains("| 类别 | 日期 | 员工 | 班次 | 状态 |"));
+        assert!(fallback.contains("| 最长工时 | 2026-02-07 | A8 | 休息 | 12.55小时 | 正常考勤 |"));
+        assert!(
+            fallback.contains("| 最短工时 | 2026-02-25 | A8 | 坐班0930 | 4.30小时 | 正常考勤 |")
+        );
+        assert!(fallback.contains("来源：A3-坐班0900考勤记录.xlsx"));
+        assert!(!fallback.contains("未形成可核验结论"));
+    }
+
+    fn assistant_run_test_spreadsheet_row_analysis_evidence_state() -> Value {
+        json!({
+            "status": "supplied",
+            "supply_quality": {
+                "selectedDatasetCount": 1,
+                "suppliedItemCount": 20,
+                "indexedEvidenceCount": 19,
+                "spreadsheetRowAnalysisCount": 1,
+                "fallbackChunkCount": 0,
+                "datasetEntityScanCount": 0,
+                "mediaContextCount": 0,
+                "conversationMemoryItemCount": 0,
+                "documentNotReadyCount": 0,
+                "documentFailedCount": 0,
+                "documentReparsingCount": 0,
+                "notes": ["spreadsheet_row_analysis_available"]
+            },
+            "supplied_items": [{
+                "type": "spreadsheet_row_analysis",
+                "analysis_kind": "absence_and_work_hour_extremes",
+                "documents": [{
+                    "title": "A3-坐班0900考勤记录.xlsx"
+                }],
+                "rows": [
+                    {
+                        "date": "2026-05-13",
+                        "employee": "A5",
+                        "shift": "坐班0900",
+                        "status": "未打卡 不考勤",
+                        "counts_as_absence": false
+                    },
+                    {
+                        "category": "longest",
+                        "date": "2026-02-07",
+                        "employee": "A8",
+                        "shift": "休息",
+                        "work_hours_text": "12.55小时",
+                        "status": "正常考勤"
+                    },
+                    {
+                        "category": "shortest",
+                        "date": "2026-02-25",
+                        "employee": "A8",
+                        "shift": "坐班0930",
+                        "work_hours_text": "4.30小时",
+                        "status": "正常考勤"
+                    }
+                ]
+            }]
+        })
     }
 
     #[test]

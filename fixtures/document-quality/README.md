@@ -68,4 +68,4 @@ Private config shape:
 }
 ```
 
-Each case entry may also use `selectedScope`, `scopeCandidates`, `startupBriefing`, `contextPolicyHint`, `currentArtifact`, and `messages`. Set `allow_auto_scope` to `true` only when the server should intentionally choose scope from visible datasets.
+Each case entry may also use `selectedScope`, `scopeCandidates`, `startupBriefing`, `contextPolicyHint`, `currentArtifact`, and `messages`. Server configs may override assertion fields such as `required_final_answer_terms`, `requires_table`, `requires_normalized_dates`, and `failure_markers` for real private materials whose exact row values differ from committed fixtures. Set `allow_auto_scope` to `true` only when the server should intentionally choose scope from visible datasets.
